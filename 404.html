@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pi-Bolt crash report</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="icon" href="/logo.svg">
+<style>
+  :root { color-scheme: light dark; --fg: #1d2330; --bg: #fbfaf7; --muted: #6a7282; --accent: #2a78d6; --box: #f0efe9; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #e6e8ee; --bg: #15181f; --muted: #9aa3b2; --accent: #6aa6f2; --box: #1f242e; } }
+  body { margin: 0; padding: 48px 16px; font: 16px/1.55 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+  main { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin: 0 0 8px; }
+  p { margin: 12px 0; }
+  code, pre { font: 0.9rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre { padding: 12px 14px; background: var(--box); border-radius: 8px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+  a { color: var(--accent); }
+  .button { display: inline-block; padding: 10px 16px; border-radius: 8px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; }
+  .muted { color: var(--muted); }
+  img { width: 56px; height: 56px; vertical-align: middle; margin-right: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <p><img src="/logo.svg" alt=""><strong>Pi-Bolt</strong></p>
+  <div id="crash" hidden>
+    <h1>Pi-Bolt crashed. Sorry about that.</h1>
+    <p>This page's address holds an encoded stack trace of the crash, and nothing else: no file names, paths or data of yours.
+    Pi-Bolt's maintainers decode it against the symbols of your release.</p>
+    <p><a class="button" id="issue" href="https://github.com/opensec-git/Pi-Bolt/issues/new">Open an issue with this trace</a></p>
+    <p class="muted">Please add what you were doing when it crashed, and the output of <code>pi-bolt --version</code>. The trace:</p>
+    <pre id="trace"></pre>
+  </div>
+  <div id="notfound">
+    <h1>Not found</h1>
+    <p>There is no page here. Pi-Bolt lives at <a href="https://github.com/opensec-git/Pi-Bolt">github.com/opensec-git/Pi-Bolt</a>,
+    and installs with:</p>
+    <pre>curl -fsSL https://pi-bolt.opensec.in/install.sh | sh</pre>
+  </div>
+</main>
+<script>
+  // https://pi-bolt.opensec.in/crash/<bun version>/<encoded trace>: what a Pi-Bolt executable prints when it crashes.
+  var match = /^\/crash\/([^/]+)\/(.+)$/.exec(location.pathname);
+  if (match) {
+    var trace = location.href;
+    document.getElementById("trace").textContent = trace;
+    var body = "**What happened**\n\n(what you were doing)\n\n**Version**\n\n```\n(output of pi-bolt --version)\n```\n\n**Trace**\n\n" + trace + "\n";
+    document.getElementById("issue").href = "https://github.com/opensec-git/Pi-Bolt/issues/new?title=" +
+      encodeURIComponent("Crash: ") + "&body=" + encodeURIComponent(body);
+    document.getElementById("crash").hidden = false;
+    document.getElementById("notfound").hidden = true;
+    document.title = "Pi-Bolt crash report";
+  }
+</script>
+</body>
+</html>

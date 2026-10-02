@@ -15,6 +15,10 @@
 #   PIBOLT_LAUNCHER=1  used by the npm package's first run: download only, no menu, link or prompts
 #   PIBOLT_CONNECTIONS  connections to download over at once (default: 4; 1 for a single connection)
 
+# The public key that releases are signed with (keys/release.pub in the repository; scripts/sign-release.sh). Empty until the
+# first signed release: then signatures are not checked.
+RELEASE_KEY=""
+
 ESC=$(printf '\033')
 CR=$(printf '\r')
 ETX=$(printf '\003')
@@ -360,7 +364,22 @@ rate_and_eta() {
 	}'
 }
 
+# The checksums are signed by Pi-Bolt's release key: a signature that does not verify means the files are not Pi-Bolt's.
+# Checked when the key is known and openssl is there; a release from before signing began has no signature, which is said.
+verify_signature() {
+	[ -n "$RELEASE_KEY" ] && command -v openssl >/dev/null 2>&1 || return 0
+	if ! fetch "$TMP/SHA256SUMS.sig" "$BASE/SHA256SUMS.sig" 2>/dev/null; then
+		UNSIGNED=1
+		return 0
+	fi
+	printf '%s\n' "$RELEASE_KEY" >"$TMP/release.pub"
+	openssl pkeyutl -verify -pubin -inkey "$TMP/release.pub" -rawin -in "$TMP/SHA256SUMS" -sigfile "$TMP/SHA256SUMS.sig" >/dev/null 2>&1 ||
+		fail "the release's signature does not verify: the download is not Pi-Bolt's. Nothing was installed."
+	SIGNED=1
+}
+
 install_release() {
+	SIGNED="" UNSIGNED=""
 	TMP="$(mktemp -d)"
 	PIDS=""
 	trap 'kill $PIDS 2>/dev/null; rm -rf "$TMP"; finish_progress; exit 130' INT TERM
@@ -419,6 +438,7 @@ install_release() {
 	draw_progress "$step" 10000 "${dim}verifying checksum$reset"
 	(cd "$TMP" && grep " $NAME.$ext\$" SHA256SUMS | sha256sum -c --quiet - >/dev/null 2>&1) ||
 		fail "checksum mismatch: the download is corrupt or incomplete"
+	verify_signature
 	if [ "$ext" = tar.xz ]; then
 		(xz -T0 -dc "$TMP/$NAME.$ext" 2>/dev/null || xz -dc "$TMP/$NAME.$ext") | tar -C "$TMP" -xf - &
 	else
@@ -441,7 +461,8 @@ install_release() {
 	rm -rf "$INSTALL/$NAME.old" "$TMP"
 	trap - INT TERM
 	finish_progress
-	printf '  %s%s%s install complete %s(%s, %s MB)%s\n' "$green" "$CHECK" "$reset" "$dim" "linux-$VARIANT" "$(mb "${total:-0}")" "$reset"
+	printf '  %s%s%s install complete %s(%s, %s MB%s)%s\n' "$green" "$CHECK" "$reset" "$dim" "linux-$VARIANT" "$(mb "${total:-0}")" "${SIGNED:+, signature verified}" "$reset"
+	[ -z "$UNSIGNED" ] || printf '  %snote: this release is not signed (it is from before Pi-Bolt signed releases); its checksum was verified%s\n' "$dim" "$reset"
 }
 
 uninstall() {
@@ -470,7 +491,13 @@ read_key() {
 choose_action() {
 	if [ -n "$EXISTING" ]; then default=reinstall; else default=install; fi
 	if [ -n "$EXISTING" ]; then
-		printf '%sPi-Bolt is already installed at:%s\n\n  %s\n\n' "$bold" "$reset" "$(tilde "$EXISTING")"
+		installed=""
+		[ -f "$EXISTING/pi-bolt.txt" ] && installed=$(sed -n 's/^Pi-Bolt \([0-9.]*\) .*/\1/p' "$EXISTING/pi-bolt.txt")
+		if [ -n "$installed" ] && [ "$installed" != "$SHOWN_VERSION" ]; then
+			printf '%sPi-Bolt %s is installed at:%s\n\n  %s\n\n' "$bold" "$installed" "$reset" "$(tilde "$EXISTING")"
+		else
+			printf '%sPi-Bolt is already installed at:%s\n\n  %s\n\n' "$bold" "$reset" "$(tilde "$EXISTING")"
+		fi
 	fi
 	case "$VARIANT" in
 	x64) cpu="for CPUs with AVX2" ;;
@@ -483,7 +510,8 @@ choose_action() {
 	printf '  %scommand%s      %s\n\n' "$dim" "$reset" "$(tilde "$BIN_DIR/pi-bolt")"
 	printf '%sChoose an action:%s\n\n' "$bold" "$reset"
 	if [ -n "$EXISTING" ]; then
-		printf '  %s%-4s%s %sReinstall Pi-Bolt%s %s(default)%s\n' "$cyan" y "$reset" "$green" "$reset" "$dim" "$reset"
+		if [ -n "$installed" ] && [ "$installed" != "$SHOWN_VERSION" ]; then action="Update to Pi-Bolt $SHOWN_VERSION"; else action="Reinstall Pi-Bolt"; fi
+		printf '  %s%-4s%s %s%s%s %s(default)%s\n' "$cyan" y "$reset" "$green" "$action" "$reset" "$dim" "$reset"
 		printf '  %s%-4s%s %sUninstall Pi-Bolt%s\n' "$cyan" u "$reset" "$red" "$reset"
 	else
 		printf '  %s%-4s%s %sInstall Pi-Bolt%s %s(default)%s\n' "$cyan" y "$reset" "$green" "$reset" "$dim" "$reset"
