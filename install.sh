@@ -13,6 +13,7 @@
 #   PIBOLT_BIN_DIR   where to link the `pi-bolt` command (default: ~/.local/bin)
 #   PIBOLT_YES=1     do not ask: take the default action and do not offer to start Pi-Bolt
 #   PIBOLT_LAUNCHER=1  used by the npm package's first run: download only, no menu, link or prompts
+#   PIBOLT_CONNECTIONS  connections to download over at once (default: 4; 1 for a single connection)
 
 ESC=$(printf '\033')
 CR=$(printf '\r')
@@ -96,12 +97,12 @@ main() {
 setup_style() {
 	reset="" dim="" bold="" cyan="" green="" red=""
 	amber="" amber2="" blue="" blue2="" white=""
-	FULL="#" EMPTY="-" FRAMES=4 CHECK="ok"
+	FULL="#" EMPTY="-" FRAMES=4 CHECK="ok" EIGHTHS=0
 	if [ -t 1 ] && [ "${TERM:-}" != dumb ]; then
 		reset="${ESC}[0m" dim="${ESC}[2m" bold="${ESC}[1m" cyan="${ESC}[36m" green="${ESC}[32m" red="${ESC}[31m"
 		amber="${ESC}[38;2;247;192;74m" amber2="${ESC}[38;2;233;164;44m"
 		blue="${ESC}[38;2;76;150;234m" blue2="${ESC}[38;2;42;120;214m" white="${ESC}[38;2;255;255;255m"
-		if unicode_terminal; then FULL="█" EMPTY="░" FRAMES=10 CHECK="✓"; fi
+		if unicode_terminal; then FULL="█" EMPTY="░" FRAMES=10 CHECK="✓" EIGHTHS=1; fi
 	fi
 }
 
@@ -192,16 +193,21 @@ spinner() {
 	fi
 }
 
-# draw_progress STEP PERCENT LABEL: PERCENT is 0-100, or -1 when the total is not known (a moving comet instead).
+# draw_progress STEP FRACTION LABEL: FRACTION is 0-10000 (hundredths of a percent), or -1 when the total is not known (a
+# moving comet instead). The bar fills in eighths of a cell, so that it moves however slow the download is.
+BAR_WIDTH=28
 draw_progress() {
-	width=28
 	bar=""
 	i=0
 	if [ "$2" -ge 0 ]; then
-		filled=$(($2 * width / 100))
-		while [ "$i" -lt "$width" ]; do
-			if [ "$i" -lt "$filled" ]; then
-				if [ "$i" -lt $((width / 2)) ]; then bar="$bar$amber$FULL"; else bar="$bar$blue$FULL"; fi
+		eighths=$(($2 * BAR_WIDTH * 8 / 10000))
+		while [ "$i" -lt "$BAR_WIDTH" ]; do
+			if [ "$i" -lt $((BAR_WIDTH / 2)) ]; then color=$amber; else color=$blue; fi
+			left=$((eighths - i * 8))
+			if [ "$left" -ge 8 ]; then
+				bar="$bar$color$FULL"
+			elif [ "$left" -gt 0 ] && [ "$EIGHTHS" = 1 ]; then
+				bar="$bar$color$(eighth "$left")"
 			else
 				bar="$bar$dim$EMPTY"
 			fi
@@ -209,8 +215,8 @@ draw_progress() {
 			i=$((i + 1))
 		done
 	else
-		head=$(($1 % (width + 6)))
-		while [ "$i" -lt "$width" ]; do
+		head=$(($1 % (BAR_WIDTH + 6)))
+		while [ "$i" -lt "$BAR_WIDTH" ]; do
 			age=$((head - i))
 			if [ "$age" -ge 0 ] && [ "$age" -lt 2 ]; then bar="$bar$white$FULL"
 			elif [ "$age" -ge 2 ] && [ "$age" -lt 4 ]; then bar="$bar$amber$FULL"
@@ -221,6 +227,11 @@ draw_progress() {
 		done
 	fi
 	printf '\r%s[K  %s%s%s %s %sInstalling Pi-Bolt%s %s' "$ESC" "$amber" "$(spinner "$1")" "$reset" "$bar" "$bold" "$reset" "$3"
+}
+
+# A cell filled N eighths from the left.
+eighth() {
+	case $1 in 1) printf '▏' ;; 2) printf '▎' ;; 3) printf '▍' ;; 4) printf '▌' ;; 5) printf '▋' ;; 6) printf '▊' ;; *) printf '▉' ;; esac
 }
 
 finish_progress() { printf '\r%s[K' "$ESC"; [ -t 1 ] && printf '%s[?25h' "$ESC"; return 0; }
@@ -268,50 +279,160 @@ fetch() { # fetch FILE URL
 	if command -v curl >/dev/null 2>&1; then curl -fsSL -o "$1" "$2"; else wget -q -O "$1" "$2"; fi
 }
 
-remote_size() {
+# probe URL: prints "FINAL SIZE RANGES": where the download ends up after redirects ("-" if not known), its size in bytes (0 if
+# not known), and 1 if that server sends parts of it (Range requests).
+probe() {
 	if command -v curl >/dev/null 2>&1; then
-		curl -fsSIL "$1" 2>/dev/null | tr -d '\r' | awk 'tolower($1) == "content-length:" { n = $2 } END { print n + 0 }'
+		curl -fsSIL -w 'url %{url_effective}\n' "$1" 2>/dev/null | tr -d '\r' | awk '
+			/^HTTP\// { n = 0; r = 0 }
+			tolower($1) == "content-length:" { n = $2 }
+			tolower($1) == "accept-ranges:" { r = (tolower($2) == "bytes") }
+			$1 == "url" { u = $2 }
+			END { print (u == "" ? "-" : u), n + 0, r + 0 }'
 	else
-		wget -q --spider -S "$1" 2>&1 | tr -d '\r' | awk 'tolower($1) == "content-length:" { n = $2 } END { print n + 0 }'
+		wget -q --spider -S "$1" 2>&1 | tr -d '\r' | awk 'tolower($1) == "content-length:" { n = $2 } END { print "-", n + 0, 0 }'
 	fi
+}
+
+# What to download, worked out in the background while the bar moves: the checksums, then the smaller .tar.xz if the release
+# has one and xz is installed (otherwise .tar.gz), and where and how big it is. Writes "EXT FINAL SIZE RANGES" to $TMP/plan.
+plan_download() {
+	if ! fetch "$TMP/SHA256SUMS" "$BASE/SHA256SUMS" 2>/dev/null; then
+		echo fail >"$TMP/plan"
+		return
+	fi
+	ext=tar.gz
+	if command -v xz >/dev/null 2>&1 && grep -q " $NAME.tar.xz\$" "$TMP/SHA256SUMS"; then ext=tar.xz; fi
+	printf '%s %s\n' "$ext" "$(probe "$BASE/$NAME.$ext")" >"$TMP/plan.part" && mv "$TMP/plan.part" "$TMP/plan"
+}
+
+# start_download URL FINAL SIZE RANGES: starts fetching into $TMP/part.N in the background, the process IDs in $PIDS. A big file
+# from a server that sends parts comes in PIBOLT_CONNECTIONS parts at once (default 4): over a long distance, one connection
+# is limited by the round trip and several are faster.
+start_download() {
+	PIDS=""
+	rm -f "$TMP"/part.*
+	connections=${PIBOLT_CONNECTIONS:-4}
+	if command -v curl >/dev/null 2>&1 && [ "$4" = 1 ] && [ "$2" != - ] && [ "$3" -ge 16777216 ] && [ "$connections" -gt 1 ]; then
+		chunk=$((($3 + connections - 1) / connections))
+		n=0
+		while [ "$n" -lt "$connections" ]; do
+			from=$((n * chunk))
+			to=$((from + chunk - 1))
+			[ "$to" -lt "$3" ] || to=$(($3 - 1))
+			curl -fsS --retry 2 -r "$from-$to" -o "$TMP/part.$n" "$2" 2>>"$TMP/fetch.log" &
+			PIDS="$PIDS $!"
+			n=$((n + 1))
+		done
+	else
+		fetch "$TMP/part.0" "$1" 2>>"$TMP/fetch.log" &
+		PIDS=$!
+	fi
+}
+
+running() {
+	for pid in $PIDS; do kill -0 "$pid" 2>/dev/null && return 0; done
+	return 1
+}
+
+all_succeeded() { # true if every process in $PIDS succeeded
+	ok=0
+	for pid in $PIDS; do wait "$pid" || ok=1; done
+	return "$ok"
+}
+
+# shellcheck disable=SC2012 # the installer's own file names
+received() { ls -ln "$TMP"/part.* 2>/dev/null | awk '{ n += $5 } END { print n + 0 }'; }
+
+# Hundredths of a second since boot (Linux).
+centiseconds() { awk '{ printf "%d", $1 * 100 }' /proc/uptime 2>/dev/null || echo 0; }
+
+# rate_and_eta GOT TOTAL CENTISECONDS: "3.2 MB/s, 12s left", from the average so far.
+rate_and_eta() {
+	[ "$3" -ge 50 ] && [ "$1" -gt 0 ] || return 0
+	awk -v got="$1" -v total="$2" -v t="$3" 'BEGIN {
+		rate = got / (t / 100)
+		printf "  %.1f MB/s", rate / 1048576
+		if (total > got) {
+			left = int((total - got) / rate + 0.5)
+			if (left >= 60) printf ", %dm %02ds left", left / 60, left % 60; else printf ", %ds left", left
+		}
+	}'
 }
 
 install_release() {
 	TMP="$(mktemp -d)"
-	trap 'rm -rf "$TMP"; finish_progress; exit 130' INT TERM
+	PIDS=""
+	trap 'kill $PIDS 2>/dev/null; rm -rf "$TMP"; finish_progress; exit 130' INT TERM
 	[ -t 1 ] && printf '%s[?25l' "$ESC"
-	url="$BASE/$NAME.tar.gz"
-	total=$(remote_size "$url")
 	if [ ! -t 1 ]; then
 		# Not a terminal (a log, CI): plain lines instead of an animated bar.
 		draw_progress() { printf '%s\n' "$3" | sed "s/${ESC}\\[[0-9;]*m//g"; }
 		finish_progress() { :; }
-		printf 'downloading %s (%s MB)\n' "$url" "$(mb "${total:-0}")"
 	fi
-	fetch "$TMP/$NAME.tar.gz" "$url" 2>"$TMP/fetch.log" &
-	fetch_pid=$!
 	step=0
-	while [ -t 1 ] && kill -0 "$fetch_pid" 2>/dev/null; do
-		got=0
-		if [ -f "$TMP/$NAME.tar.gz" ]; then got=$(wc -c <"$TMP/$NAME.tar.gz"); fi
+	plan_download &
+	plan_pid=$!
+	while [ -t 1 ] && [ ! -f "$TMP/plan" ] && kill -0 "$plan_pid" 2>/dev/null; do
+		draw_progress "$step" -1 "${dim}connecting$reset"
+		step=$((step + 1))
+		sleep 0.08
+	done
+	wait "$plan_pid" 2>/dev/null
+	read -r ext final total ranges <"$TMP/plan" 2>/dev/null || ext=fail
+	[ "$ext" != fail ] || fail "download failed: $BASE/SHA256SUMS"
+	url="$BASE/$NAME.$ext"
+	[ -t 1 ] || printf 'downloading %s (%s MB)\n' "$url" "$(mb "$total")"
+
+	start_download "$url" "$final" "$total" "$ranges"
+	began=$(centiseconds)
+	while [ -t 1 ] && running; do
+		got=$(received)
+		extra=$(rate_and_eta "$got" "$total" $(($(centiseconds) - began)))
 		if [ "$total" -gt 0 ]; then
-			pct=$((got * 100 / total))
-			[ "$pct" -le 100 ] || pct=100
-			draw_progress "$step" "$pct" "${dim}downloading $(mb "$got") / $(mb "$total") MB$reset"
+			fraction=$((got * 10000 / total))
+			[ "$fraction" -le 10000 ] || fraction=10000
+			draw_progress "$step" "$fraction" "${dim}downloading $(mb "$got") / $(mb "$total") MB$extra$reset"
 		else
-			draw_progress "$step" -1 "${dim}downloading $(mb "$got") MB$reset"
+			draw_progress "$step" -1 "${dim}downloading $(mb "$got") MB$extra$reset"
 		fi
 		step=$((step + 1))
 		sleep 0.08
 	done
-	wait "$fetch_pid" || fail "download failed: $url"
-	draw_progress "$step" 100 "${dim}verifying checksum$reset"
-	fetch "$TMP/SHA256SUMS" "$BASE/SHA256SUMS" || fail "download failed: $BASE/SHA256SUMS"
-	(cd "$TMP" && grep " $NAME.tar.gz\$" SHA256SUMS | sha256sum -c --quiet - >/dev/null 2>&1) ||
+	if ! all_succeeded || { [ "$PIDS" != "${PIDS% *}" ] && [ "$(received)" != "$total" ]; }; then
+		# The parts did not all arrive, or not as asked for (a proxy may send the whole file for each): once more, in one piece.
+		[ "$PIDS" = "${PIDS% *}" ] && fail "download failed: $url"
+		start_download "$url" - 0 0
+		while [ -t 1 ] && running; do
+			draw_progress "$step" -1 "${dim}downloading $(mb "$(received)") MB, again in one piece$reset"
+			step=$((step + 1))
+			sleep 0.08
+		done
+		all_succeeded || fail "download failed: $url"
+	fi
+	n=0
+	while [ -f "$TMP/part.$n" ]; do
+		cat "$TMP/part.$n" >>"$TMP/$NAME.$ext"
+		rm -f "$TMP/part.$n"
+		n=$((n + 1))
+	done
+	draw_progress "$step" 10000 "${dim}verifying checksum$reset"
+	(cd "$TMP" && grep " $NAME.$ext\$" SHA256SUMS | sha256sum -c --quiet - >/dev/null 2>&1) ||
 		fail "checksum mismatch: the download is corrupt or incomplete"
-	draw_progress "$((step + 1))" 100 "${dim}extracting$reset"
-	tar -C "$TMP" -xzf "$TMP/$NAME.tar.gz" || fail "could not extract $NAME.tar.gz"
-	draw_progress "$((step + 2))" 100 "${dim}checking the executable$reset"
+	if [ "$ext" = tar.xz ]; then
+		(xz -T0 -dc "$TMP/$NAME.$ext" 2>/dev/null || xz -dc "$TMP/$NAME.$ext") | tar -C "$TMP" -xf - &
+	else
+		tar -C "$TMP" -xzf "$TMP/$NAME.$ext" &
+	fi
+	PIDS=$!
+	draw_progress "$step" 10000 "${dim}extracting$reset"
+	while [ -t 1 ] && running; do
+		step=$((step + 1))
+		draw_progress "$step" 10000 "${dim}extracting$reset"
+		sleep 0.08
+	done
+	all_succeeded || fail "could not extract $NAME.$ext"
+	draw_progress "$((step + 2))" 10000 "${dim}checking the executable$reset"
 	"$TMP/$NAME/pi" --version >/dev/null 2>&1 || fail "the downloaded executable does not run on this system"
 	mkdir -p "$INSTALL"
 	rm -rf "$INSTALL/$NAME.old"
