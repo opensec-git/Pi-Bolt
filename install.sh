@@ -1,7 +1,7 @@
 #!/bin/sh
 # Pi-Bolt installer.
 #
-#   curl -fsSL https://opensec-git.github.io/Pi-Bolt/install.sh | sh
+#   curl -fsSL https://pi-bolt.opensec.in/install.sh | sh
 #
 # Downloads a release from GitHub, verifies its SHA-256 checksum, installs it to ~/.pi-bolt and links `pi-bolt` into
 # ~/.local/bin. Run it again to reinstall, update or uninstall.
