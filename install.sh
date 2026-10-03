@@ -270,6 +270,16 @@ preflight() {
 		printf 'error: Pi-Bolt needs glibc; musl-based systems such as Alpine are not supported.\n'
 		status=1
 	fi
+	glibc=$(ldd --version 2>/dev/null | sed -n '1s/.* \([0-9][0-9]*\)\.\([0-9][0-9]*\)$/\1 \2/p')
+	if [ -n "$glibc" ] && [ "$(echo "$glibc" | awk '{ print ($1 < 2 || ($1 == 2 && $2 < 17)) }')" = 1 ]; then
+		printf 'error: Pi-Bolt needs glibc 2.17 or later (this system has %s).\n' "$(echo "$glibc" | tr ' ' .)"
+		status=1
+	fi
+	# Every build needs SSE4.2 (the runtime itself does): without it the executable stops with "Illegal instruction".
+	if [ -r /proc/cpuinfo ] && grep -q '^flags' /proc/cpuinfo && ! grep -qw sse4_2 /proc/cpuinfo; then
+		printf 'error: Pi-Bolt needs a CPU with SSE4.2: Intel Nehalem (2008) or later, AMD Bulldozer (2011) or later.\n'
+		status=1
+	fi
 	for tool in tar sha256sum; do
 		command -v "$tool" >/dev/null 2>&1 || { printf 'error: %s is required.\n' "$tool"; status=1; }
 	done
