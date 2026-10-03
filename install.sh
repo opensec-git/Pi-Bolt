@@ -86,7 +86,9 @@ main() {
 	install_release
 	mkdir -p "$BIN_DIR"
 	ln -sfn "$INSTALL/$NAME/pi" "$BIN_DIR/pi-bolt"
-	if [ "$ACTION" = reinstall ]; then word=reinstalled; else word=installed; fi
+	if [ "$ACTION" = reinstall ] && [ -n "${installed:-}" ] && [ "${installed:-}" != "$SHOWN_VERSION" ]; then word=updated
+	elif [ "$ACTION" = reinstall ]; then word=reinstalled
+	else word=installed; fi
 	printf '\nPi-Bolt %s was %s successfully %s(Pi %s)%s.\n' "$SHOWN_VERSION" "$word" "$dim" "$("$INSTALL/$NAME/pi" --version)" "$reset"
 	if [ "$(command -v pi-bolt 2>/dev/null || true)" = "$BIN_DIR/pi-bolt" ]; then
 		printf '\nRun it with: %spi-bolt%s\n' "$bold" "$reset"
