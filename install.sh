@@ -3,8 +3,9 @@
 #
 #   curl -fsSL https://pi-bolt.opensec.in/install.sh | sh
 #
-# Downloads a release from GitHub, verifies its SHA-256 checksum, installs it to ~/.pi-bolt and links `pi-bolt` into
-# ~/.local/bin. Run it again to reinstall, update or uninstall.
+# Downloads a release, verifies its SHA-256 checksum, installs it to ~/.pi-bolt and links `pi-bolt` into ~/.local/bin. Run
+# it again to reinstall, update or uninstall. The executable comes from the npm registry (a CDN, fast in most places) and
+# falls back to GitHub; the checksums always come from the GitHub release, so a download from npm is checked against them.
 #
 # Environment:
 #   PIBOLT_VERSION   a release tag such as bolt-v0.2.0 (default: the latest release)
@@ -14,6 +15,8 @@
 #   PIBOLT_YES=1     do not ask: take the default action and do not offer to start Pi-Bolt
 #   PIBOLT_LAUNCHER=1  used by the npm package's first run: download only, no menu, link or prompts
 #   PIBOLT_CONNECTIONS  connections to download over at once (default: 4; 1 for a single connection)
+#   PIBOLT_SOURCE    where to download the executable from: auto (npm, then GitHub; the default), npm or github
+#   PIBOLT_NPM_REGISTRY  the npm registry or mirror to use (default: https://registry.npmjs.org)
 
 # The public key that releases are signed with (keys/release.pub in the repository; scripts/sign-release.sh). Empty until the
 # first signed release: then signatures are not checked.
@@ -23,6 +26,7 @@ ESC=$(printf '\033')
 CR=$(printf '\r')
 ETX=$(printf '\003')
 REPO="https://github.com/opensec-git/Pi-Bolt"
+NPM_REGISTRY="${PIBOLT_NPM_REGISTRY:-https://registry.npmjs.org}"
 
 main() {
 	set -eu
@@ -61,6 +65,10 @@ main() {
 	case "$VARIANT" in
 	x64 | x64-baseline | x64-jit) ;;
 	*) fail "PIBOLT_VARIANT must be x64, x64-baseline or x64-jit" ;;
+	esac
+	case "${PIBOLT_SOURCE:-auto}" in
+	auto | npm | github) ;;
+	*) fail "PIBOLT_SOURCE must be auto, npm or github" ;;
 	esac
 	NAME="pi-bolt-linux-$VARIANT"
 	if [ "$VERSION" = latest ]; then BASE="$REPO/releases/latest/download"; else BASE="$REPO/releases/download/$VERSION"; fi
@@ -310,8 +318,19 @@ probe() {
 	fi
 }
 
+# npm_probe URL: like probe, for a file on the npm registry, which sends no size for a HEAD request: asks for its first byte
+# and reads the size from the reply. Fails if the registry does not have it.
+npm_probe() {
+	command -v curl >/dev/null 2>&1 || return 1
+	curl -fsSL -r 0-0 -D - -o /dev/null -w 'url %{url_effective}\n' "$1" 2>/dev/null | tr -d '\r' | awk '
+		tolower($1) == "content-range:" { split($3, a, "/"); n = a[2] }
+		$1 == "url" { u = $2 }
+		END { if (u == "" || n + 0 == 0) exit 1; print u, n + 0, 1 }'
+}
+
 # What to download, worked out in the background while the bar moves: the checksums, then the smaller .tar.xz if the release
-# has one and xz is installed (otherwise .tar.gz), and where and how big it is. Writes "EXT FINAL SIZE RANGES" to $TMP/plan.
+# has one and xz is installed (otherwise .tar.gz), where from and how big it is. The .tar.xz is also published on npm, as the
+# package pi-bolt-linux-VARIANT of the same version: that is tried first. Writes "SOURCE EXT FINAL SIZE RANGES" to $TMP/plan.
 plan_download() {
 	if ! fetch "$TMP/SHA256SUMS" "$BASE/SHA256SUMS" 2>/dev/null; then
 		echo fail >"$TMP/plan"
@@ -319,8 +338,22 @@ plan_download() {
 	fi
 	ext=tar.gz
 	if command -v xz >/dev/null 2>&1 && grep -q " $NAME.tar.xz\$" "$TMP/SHA256SUMS"; then ext=tar.xz; fi
-	printf '%s %s\n' "$ext" "$(probe "$BASE/$NAME.$ext")" >"$TMP/plan.part" && mv "$TMP/plan.part" "$TMP/plan"
+	where=""
+	if [ "$ext" = tar.xz ] && [ "${PIBOLT_SOURCE:-auto}" != github ] && [ -z "${PIBOLT_DOWNLOAD_BASE:-}" ]; then
+		case "$SHOWN_VERSION" in
+		[0-9]*.[0-9]*.[0-9]*) where=$(npm_probe "$(npm_url)") && where="npm $where" || where="" ;;
+		esac
+	fi
+	if [ -z "$where" ] && [ "${PIBOLT_SOURCE:-auto}" = npm ]; then
+		echo fail-npm >"$TMP/plan"
+		return
+	fi
+	[ -n "$where" ] || where="github $(probe "$BASE/$NAME.$ext")"
+	printf '%s\n' "${where%% *} $ext ${where#* }" >"$TMP/plan.part" && mv "$TMP/plan.part" "$TMP/plan"
 }
+
+# The npm package that holds this release's .tar.xz.
+npm_url() { printf '%s/%s/-/%s-%s.tgz' "$NPM_REGISTRY" "$NAME" "$NAME" "$SHOWN_VERSION"; }
 
 # start_download URL FINAL SIZE RANGES: starts fetching into $TMP/part.N in the background, the process IDs in $PIDS. A big file
 # from a server that sends parts comes in PIBOLT_CONNECTIONS parts at once (default 4): over a long distance, one connection
@@ -390,6 +423,46 @@ verify_signature() {
 	SIGNED=1
 }
 
+# download URL FINAL SIZE RANGES FILE: fetches URL into FILE with the progress bar, in parts if the server allows; false if it
+# could not.
+download() {
+	[ -t 1 ] || printf 'downloading %s (%s MB)\n' "$1" "$(mb "$3")"
+	start_download "$1" "$2" "$3" "$4"
+	began=$(centiseconds)
+	while [ -t 1 ] && running; do
+		got=$(received)
+		extra=$(rate_and_eta "$got" "$3" $(($(centiseconds) - began)))
+		if [ "$3" -gt 0 ]; then
+			fraction=$((got * 10000 / $3))
+			[ "$fraction" -le 10000 ] || fraction=10000
+			draw_progress "$step" "$fraction" "${dim}downloading $(mb "$got") / $(mb "$3") MB$extra$reset"
+		else
+			draw_progress "$step" -1 "${dim}downloading $(mb "$got") MB$extra$reset"
+		fi
+		step=$((step + 1))
+		sleep 0.08
+	done
+	if ! all_succeeded || { [ "$PIDS" != "${PIDS% *}" ] && [ "$(received)" != "$3" ]; }; then
+		# The parts did not all arrive, or not as asked for (a proxy may send the whole file for each): once more, in one piece.
+		[ "$PIDS" = "${PIDS% *}" ] && return 1
+		start_download "$1" - 0 0
+		while [ -t 1 ] && running; do
+			draw_progress "$step" -1 "${dim}downloading $(mb "$(received)") MB, again in one piece$reset"
+			step=$((step + 1))
+			sleep 0.08
+		done
+		all_succeeded || return 1
+	fi
+	rm -f "$5"
+	n=0
+	while [ -f "$TMP/part.$n" ]; do
+		cat "$TMP/part.$n" >>"$5"
+		rm -f "$TMP/part.$n"
+		n=$((n + 1))
+	done
+	total=$(wc -c <"$5" | tr -d ' ')
+}
+
 install_release() {
 	SIGNED="" UNSIGNED=""
 	TMP="$(mktemp -d)"
@@ -410,43 +483,31 @@ install_release() {
 		sleep 0.08
 	done
 	wait "$plan_pid" 2>/dev/null
-	read -r ext final total ranges <"$TMP/plan" 2>/dev/null || ext=fail
-	[ "$ext" != fail ] || fail "download failed: $BASE/SHA256SUMS"
-	url="$BASE/$NAME.$ext"
-	[ -t 1 ] || printf 'downloading %s (%s MB)\n' "$url" "$(mb "$total")"
-
-	start_download "$url" "$final" "$total" "$ranges"
-	began=$(centiseconds)
-	while [ -t 1 ] && running; do
-		got=$(received)
-		extra=$(rate_and_eta "$got" "$total" $(($(centiseconds) - began)))
-		if [ "$total" -gt 0 ]; then
-			fraction=$((got * 10000 / total))
-			[ "$fraction" -le 10000 ] || fraction=10000
-			draw_progress "$step" "$fraction" "${dim}downloading $(mb "$got") / $(mb "$total") MB$extra$reset"
+	read -r source ext final total ranges <"$TMP/plan" 2>/dev/null || source=fail
+	[ "$source" != fail ] || fail "download failed: $BASE/SHA256SUMS"
+	[ "$source" != fail-npm ] || fail "npm does not have Pi-Bolt $SHOWN_VERSION: $(npm_url)"
+	if [ "$source" = npm ]; then
+		# The package is a .tgz with the release's .tar.xz in it, checked against the release's checksums like any download.
+		if download "$final" "$final" "$total" "$ranges" "$TMP/npm.tgz" &&
+			tar -C "$TMP" -xzf "$TMP/npm.tgz" "package/$NAME.$ext" 2>/dev/null &&
+			mv "$TMP/package/$NAME.$ext" "$TMP/$NAME.$ext" &&
+			(cd "$TMP" && grep " $NAME.$ext\$" SHA256SUMS | sha256sum -c --quiet - >/dev/null 2>&1); then
+			FROM=npm
 		else
-			draw_progress "$step" -1 "${dim}downloading $(mb "$got") MB$extra$reset"
+			[ "${PIBOLT_SOURCE:-auto}" != npm ] || fail "download failed: $final"
+			rm -rf "$TMP/npm.tgz" "$TMP/package" "$TMP/$NAME.$ext"
+			finish_progress
+			printf '  %sthe download from npm failed; downloading from GitHub instead%s\n' "$dim" "$reset"
+			source=github
+			# shellcheck disable=SC2046 # three words
+			set -- $(probe "$BASE/$NAME.$ext")
+			final=$1 total=$2 ranges=$3
 		fi
-		step=$((step + 1))
-		sleep 0.08
-	done
-	if ! all_succeeded || { [ "$PIDS" != "${PIDS% *}" ] && [ "$(received)" != "$total" ]; }; then
-		# The parts did not all arrive, or not as asked for (a proxy may send the whole file for each): once more, in one piece.
-		[ "$PIDS" = "${PIDS% *}" ] && fail "download failed: $url"
-		start_download "$url" - 0 0
-		while [ -t 1 ] && running; do
-			draw_progress "$step" -1 "${dim}downloading $(mb "$(received)") MB, again in one piece$reset"
-			step=$((step + 1))
-			sleep 0.08
-		done
-		all_succeeded || fail "download failed: $url"
 	fi
-	n=0
-	while [ -f "$TMP/part.$n" ]; do
-		cat "$TMP/part.$n" >>"$TMP/$NAME.$ext"
-		rm -f "$TMP/part.$n"
-		n=$((n + 1))
-	done
+	if [ "$source" = github ]; then
+		download "$BASE/$NAME.$ext" "$final" "$total" "$ranges" "$TMP/$NAME.$ext" || fail "download failed: $BASE/$NAME.$ext"
+		FROM=GitHub
+	fi
 	draw_progress "$step" 10000 "${dim}verifying checksum$reset"
 	(cd "$TMP" && grep " $NAME.$ext\$" SHA256SUMS | sha256sum -c --quiet - >/dev/null 2>&1) ||
 		fail "checksum mismatch: the download is corrupt or incomplete"
@@ -473,7 +534,7 @@ install_release() {
 	rm -rf "$INSTALL/$NAME.old" "$TMP"
 	trap - INT TERM
 	finish_progress
-	printf '  %s%s%s install complete %s(%s, %s MB%s)%s\n' "$green" "$CHECK" "$reset" "$dim" "linux-$VARIANT" "$(mb "${total:-0}")" "${SIGNED:+, signature verified}" "$reset"
+	printf '  %s%s%s install complete %s(%s, %s MB from %s%s)%s\n' "$green" "$CHECK" "$reset" "$dim" "linux-$VARIANT" "$(mb "${total:-0}")" "$FROM" "${SIGNED:+, signature verified}" "$reset"
 	[ -z "$UNSIGNED" ] || printf '  %snote: this release is not signed (it is from before Pi-Bolt signed releases); its checksum was verified%s\n' "$dim" "$reset"
 }
 
