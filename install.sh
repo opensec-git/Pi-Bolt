@@ -507,6 +507,7 @@ install_release() {
 	if [ "$source" = github ]; then
 		download "$BASE/$NAME.$ext" "$final" "$total" "$ranges" "$TMP/$NAME.$ext" || fail "download failed: $BASE/$NAME.$ext"
 		FROM=GitHub
+		[ -z "${PIBOLT_DOWNLOAD_BASE:-}" ] || FROM="$PIBOLT_DOWNLOAD_BASE"
 	fi
 	draw_progress "$step" 10000 "${dim}verifying checksum$reset"
 	(cd "$TMP" && grep " $NAME.$ext\$" SHA256SUMS | sha256sum -c --quiet - >/dev/null 2>&1) ||
