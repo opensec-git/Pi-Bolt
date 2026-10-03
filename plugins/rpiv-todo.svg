@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" role="img" aria-label="Todo">
+  <title>Todo</title>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#13233A"/><stop offset="1" stop-color="#0A1424"/></linearGradient>
+    <linearGradient id="gold" gradientUnits="userSpaceOnUse" x1="0" y1="20" x2="0" y2="108"><stop offset="0" stop-color="#F7C04A"/><stop offset="1" stop-color="#E9A42C"/></linearGradient>
+    <linearGradient id="blue" gradientUnits="userSpaceOnUse" x1="0" y1="20" x2="0" y2="108"><stop offset="0" stop-color="#4C96EA"/><stop offset="1" stop-color="#2A78D6"/></linearGradient>
+  </defs>
+  <rect x="2" y="2" width="124" height="124" rx="28" fill="url(#bg)"/>
+  <rect x="2.5" y="2.5" width="123" height="123" rx="27.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08"/>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="26" y="34" width="14" height="14" rx="3" stroke="url(#blue)" stroke-width="4"/><path d="M29 41 L33 45 L38 38" stroke="url(#gold)" stroke-width="4"/>
+    <rect x="26" y="58" width="14" height="14" rx="3" stroke="url(#blue)" stroke-width="4"/><path d="M29 65 L33 69 L38 62" stroke="url(#gold)" stroke-width="4"/>
+    <rect x="26" y="82" width="14" height="14" rx="3" stroke="#9FB3CC" stroke-width="4"/>
+    <path d="M52 41 H100 M52 65 H92 M52 89 H96" stroke="#9FB3CC" stroke-width="6"/>
+  </g>
+  <g transform="translate(100 12) scale(0.034)">
+    <polygon fill="#F7C04A" points="540,100 220,460 390,460"/><polygon fill="#E9A42C" points="540,100 390,460 430,320"/>
+    <polygon fill="#4C96EA" points="430,320 390,460 300,700"/><polygon fill="#2A78D6" points="430,320 300,700 600,320"/>
+  </g>
+</svg>
