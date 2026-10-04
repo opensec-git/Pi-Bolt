@@ -18,6 +18,9 @@
 #   PIBOLT_CONNECTIONS  connections to download over at once (default: 4; 1 for a single connection)
 #   PIBOLT_SOURCE    where to download the executable from: auto (npm, then GitHub; the default), npm or github
 #   PIBOLT_NPM_REGISTRY  the npm registry or mirror to use (default: https://registry.npmjs.org)
+#   PIBOLT_EXTENSIONS  yes or no: whether to install OpenSec's optional extensions (opensec-pi-subagents, opensec-pi-todo)
+#                    without asking. Without it the installer asks when it can; a run that cannot ask, or PIBOLT_YES=1,
+#                    installs none.
 
 # The public key that releases are signed with (keys/release.pub in the repository; scripts/sign-release.sh), from 0.6.0. A
 # release from before has no signature, which is said.
@@ -104,6 +107,7 @@ main() {
 	elif [ "$ACTION" = reinstall ]; then word=reinstalled
 	else word=installed; fi
 	printf '\nPi-Bolt %s was %s successfully %s(Pi %s)%s.\n' "$SHOWN_VERSION" "$word" "$dim" "$("$INSTALL/$NAME/pi" --version)" "$reset"
+	offer_extensions
 	if [ "$(command -v pi-bolt 2>/dev/null || true)" = "$BIN_DIR/pi-bolt" ]; then
 		printf '\nRun it with: %spi-bolt%s\n' "$bold" "$reset"
 	else
@@ -709,6 +713,63 @@ path_hint() {
 		esac
 	fi
 	printf 'Add this to %s, then restart your shell:\n\n  %s\n' "$(tilde "$config")" "$line"
+}
+
+# OpenSec's optional extensions: Bun builds that load fast in Pi-Bolt (see their READMEs on npm). Pi-Bolt installs them
+# itself, with npm where it is installed and otherwise with the package manager built into Pi-Bolt: nothing else is needed.
+EXTENSIONS="opensec-pi-subagents:run specialized agents in separate sessions:@tintinweb/pi-subagents
+opensec-pi-todo:a todo list for the model, shown above the editor:@juicesharp/rpiv-todo"
+
+offer_extensions() {
+	choice="${PIBOLT_EXTENSIONS:-}"
+	case "$choice" in
+	"" | yes | no) ;;
+	*) printf '  %sPIBOLT_EXTENSIONS must be yes or no: no extensions installed%s\n' "$dim" "$reset"; return 0 ;;
+	esac
+	if [ -z "$choice" ] && ! has_tty; then return 0; fi
+	[ "$choice" != no ] || return 0
+	sources=$("$INSTALL/$NAME/pi" list 2>/dev/null || true)
+	wanted=""
+	newline='
+'
+	old_ifs=$IFS
+	IFS=$newline
+	for entry in $EXTENSIONS; do
+		package=${entry%%:*} upstream=${entry##*:}
+		if printf '%s\n' "$sources" | grep -Eq "npm:$package(@.*)?\$"; then continue; fi
+		if printf '%s\n' "$sources" | grep -Fq "npm:$upstream"; then
+			printf '  %s%s is not offered: %s is installed and registers the same tools%s\n' "$dim" "$package" "$upstream" "$reset"
+			continue
+		fi
+		wanted="$wanted $package"
+	done
+	IFS=$old_ifs
+	[ -n "$wanted" ] || return 0
+	if [ -z "$choice" ]; then
+		printf '\n%sOptional extensions by OpenSec%s %s(Apache-2.0, built for Pi-Bolt)%s\n\n' "$bold" "$reset" "$dim" "$reset"
+		IFS=$newline
+		for entry in $EXTENSIONS; do
+			package=${entry%%:*} rest=${entry#*:}
+			case " $wanted " in *" $package "*) printf '  %s%-22s%s %s\n' "$cyan" "$package" "$reset" "${rest%:*}" ;; esac
+		done
+		IFS=$old_ifs
+		printf '\nInstall them? [Y/n] '
+		answer=$(head -n 1 </dev/tty || true)
+		case "$answer" in
+		n | N | no | NO)
+			printf '%sYou can install them later with: pi-bolt install npm:<name>%s\n' "$dim" "$reset"
+			return 0
+			;;
+		esac
+	fi
+	for package in $wanted; do
+		if out=$(NPM_CONFIG_REGISTRY="$NPM_REGISTRY" "$INSTALL/$NAME/pi" install "npm:$package" 2>&1); then
+			printf '  %s%s%s %s installed\n' "$green" "$CHECK" "$reset" "$package"
+		else
+			printf '  %scould not install %s (Pi-Bolt itself is installed): %s%s\n' "$red" "$package" "$(printf '%s' "$out" | tail -1)" "$reset"
+			printf '  %sInstall it later with: pi-bolt install npm:%s%s\n' "$dim" "$package" "$reset"
+		fi
+	done
 }
 
 offer_start() {
