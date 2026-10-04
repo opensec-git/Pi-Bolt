@@ -5,24 +5,30 @@
 <title>Pi-Bolt crash report</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="icon" href="/logo.svg">
+<meta name="color-scheme" content="dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-  :root { color-scheme: light dark; --fg: #1d2330; --bg: #fbfaf7; --muted: #6a7282; --accent: #2a78d6; --box: #f0efe9; }
-  @media (prefers-color-scheme: dark) { :root { --fg: #e6e8ee; --bg: #15181f; --muted: #9aa3b2; --accent: #6aa6f2; --box: #1f242e; } }
-  body { margin: 0; padding: 48px 16px; font: 16px/1.55 system-ui, sans-serif; color: var(--fg); background: var(--bg); }
+  :root { color-scheme: dark; --fg: #f1f3ef; --bg: #050505; --muted: #a4aaa2; --accent: #bafc6b; --on-accent: #10150d; --box: #0a0b0a; --rule: #2a302a; }
+  body { margin: 0; padding: 48px 16px; font: 16px/1.6 "Space Grotesk", system-ui, sans-serif; color: var(--fg); background: var(--bg); }
   main { max-width: 640px; margin: 0 auto; }
-  h1 { font-size: 1.5rem; margin: 0 0 8px; }
+  h1 { font-size: 1.6rem; font-weight: 500; letter-spacing: -0.02em; margin: 0 0 8px; }
   p { margin: 12px 0; }
-  code, pre { font: 0.9rem/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
-  pre { padding: 12px 14px; background: var(--box); border-radius: 8px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+  code, pre { font: 0.9rem/1.5 "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
+  pre { padding: 12px 14px; background: var(--box); border: 1px solid var(--rule); border-radius: 4px; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
   a { color: var(--accent); }
-  .button { display: inline-block; padding: 10px 16px; border-radius: 8px; background: var(--accent); color: #fff; text-decoration: none; font-weight: 600; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .button { display: inline-block; padding: 10px 16px; border-radius: 3px; background: var(--accent); color: var(--on-accent); text-decoration: none; font-weight: 600; }
   .muted { color: var(--muted); }
-  img { width: 56px; height: 56px; vertical-align: middle; margin-right: 12px; }
+  img { width: 40px; height: 40px; vertical-align: middle; margin-right: 10px; }
+  .brand { font-size: 1.15rem; }
+  .brand a { color: var(--fg); text-decoration: none; font-weight: 600; }
 </style>
 </head>
 <body>
 <main>
-  <p><img src="/logo.svg" alt=""><strong>Pi-Bolt</strong></p>
+  <p class="brand"><a href="/"><img src="/logo.svg" alt="">Pi-Bolt</a></p>
   <div id="crash" hidden>
     <h1>Pi-Bolt crashed. Sorry about that.</h1>
     <p>This page's address holds an encoded stack trace of the crash, and nothing else: no file names, paths or data of yours.
@@ -33,8 +39,7 @@
   </div>
   <div id="notfound">
     <h1>Not found</h1>
-    <p>There is no page here. Pi-Bolt lives at <a href="https://github.com/opensec-git/Pi-Bolt">github.com/opensec-git/Pi-Bolt</a>,
-    and installs with:</p>
+    <p>There is no page at this address. Go to the <a href="/">Pi-Bolt home page</a>, or install Pi-Bolt with:</p>
     <pre>curl -fsSL https://pi-bolt.opensec.in/install.sh | sh</pre>
   </div>
 </main>

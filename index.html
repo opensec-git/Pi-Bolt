@@ -2,13 +2,430 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Pi-Bolt</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="0; url=https://github.com/opensec-git/Pi-Bolt">
-<link rel="icon" href="logo.svg">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#050505">
+<title>Pi-Bolt: the Pi coding agent, compiled to machine code</title>
+<meta name="description" content="Pi-Bolt is the Pi coding agent compiled ahead of time into one native executable for Linux x86-64 and macOS on Apple silicon. It starts two to three times sooner than Pi on Bun and uses about a third of its CPU.">
+<meta property="og:title" content="Pi-Bolt: the Pi coding agent, compiled to machine code">
+<meta property="og:description" content="One native executable for Linux and macOS. Starts two to three times sooner than Pi on Bun and uses about a third of its CPU.">
+<meta property="og:url" content="https://pi-bolt.opensec.in/">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="preload" href="departure-mono.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+  /* Departure Mono by Helena Zhang, SIL Open Font License 1.1 (departure-mono-LICENSE.txt). */
+  @font-face { font-family: "Departure Mono"; src: url("departure-mono.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+  :root {
+    color-scheme: dark;
+    /* OpenSec's palette (opensec.in). */
+    --black: #050505;
+    --black-2: #0a0b0a;
+    --panel: #0e100e;
+    --lime: #bafc6b;
+    --lime-deep: #9fe04d;
+    --on-lime: #10150d;
+    --text: #f1f3ef;
+    --text-soft: #a4aaa2;
+    --text-dim: #7d8980;
+    --rule: #1d211d;
+    --rule-2: #2a302a;
+    --bar: #3d433d;
+    --sans: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --pixel: "Departure Mono", "IBM Plex Mono", ui-monospace, monospace;
+    accent-color: var(--lime);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; background: var(--black); }
+  body { margin: 0; background: var(--black); color: var(--text); font: 400 1.0625rem/1.6 var(--sans); }
+  ::selection { background: rgba(186, 252, 107, 0.3); color: #fff; }
+  a { color: var(--lime); text-underline-offset: 0.18em; }
+  a:hover { text-decoration-thickness: 2px; }
+  :focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; border-radius: 3px; }
+  code, kbd, pre { font-family: var(--mono); font-size: 0.9em; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
+
+  /* Header */
+  header.site { padding: 20px 0; border-bottom: 1px solid var(--rule); background: #080808; }
+  header.site .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-weight: 700; font-size: 1.2rem; letter-spacing: -0.01em; }
+  .brand img { width: 30px; height: 30px; }
+  nav.top { display: flex; align-items: center; gap: 26px; font-size: 0.95rem; }
+  nav.top a { color: var(--text-soft); text-decoration: none; }
+  nav.top a:hover { color: var(--text); }
+  nav.top a.gh { color: var(--on-lime); background: var(--lime); padding: 7px 14px; border-radius: 3px; font-weight: 600; }
+  nav.top a.gh:hover { background: var(--lime-deep); color: var(--on-lime); }
+
+  /* Hero */
+  .hero { padding: 76px 0 88px; }
+  .hero .wrap { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); gap: 56px; align-items: center; }
+  h1 {
+    font-size: clamp(2.5rem, 4.9vw, 4.1rem);
+    line-height: 1.02;
+    letter-spacing: -0.03em;
+    font-weight: 500;
+    margin: 0 0 24px;
+    text-wrap: balance;
+  }
+  h1 .pix { font-family: var(--pixel); font-weight: 400; color: var(--lime); letter-spacing: 0; font-size: 0.92em; }
+  .lede { font-size: 1.15rem; line-height: 1.6; color: var(--text-soft); max-width: 34em; margin: 0 0 32px; text-wrap: pretty; }
+  .install { display: flex; align-items: stretch; max-width: 40em; border: 1px solid var(--rule-2); border-radius: 4px; background: var(--black-2); overflow: hidden; }
+  .install code { flex: 1; padding: 15px 16px; font-size: 0.84rem; white-space: nowrap; overflow-x: auto; scrollbar-width: thin; color: var(--text); }
+  .install code::before { content: "$ "; color: var(--lime); }
+  .copy { border: 0; background: var(--lime); color: var(--on-lime); font: 600 0.95rem var(--sans); padding: 0 16px; cursor: pointer; min-width: 84px; }
+  .copy:hover { background: var(--lime-deep); }
+  .alt { margin: 14px 0 0; font-size: 0.95rem; color: var(--text-dim); }
+  .alt code { color: var(--text); }
+
+  /* The startup race, framed the way opensec.in frames its panels. */
+  .race { position: relative; padding: 26px 24px 20px; background: var(--black-2); border: 1px solid var(--rule); }
+  .race::before, .race::after { content: ""; position: absolute; width: 16px; height: 16px; border: 2px solid var(--lime); pointer-events: none; }
+  .race::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+  .race::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+  .race-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 18px; }
+  .race-head h2 { margin: 0; font: 500 0.78rem var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-soft); }
+  .replay { border: 1px solid var(--rule-2); background: transparent; color: var(--text); border-radius: 3px; padding: 6px 12px; font: 500 0.78rem var(--mono); cursor: pointer; }
+  .replay:hover { border-color: var(--lime); color: var(--lime); }
+  .lane { display: grid; grid-template-columns: 9.5em 1fr 4.6em; align-items: center; gap: 12px; padding: 10px 0; font-family: var(--mono); font-size: 0.85rem; }
+  .lane + .lane { border-top: 1px solid var(--rule); }
+  .lane .who { color: var(--text-dim); }
+  .lane.bolt .who { color: var(--text); font-weight: 500; }
+  .track { position: relative; height: 8px; background: #151815; overflow: hidden; }
+  .fill { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--bar); }
+  .lane.bolt .fill { background: var(--lime); }
+  .lane .ms { text-align: right; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+  .lane.bolt .ms { color: var(--lime); font-weight: 500; }
+  .lane .ready { visibility: hidden; }
+  .race-foot { margin: 16px 0 0; font-size: 0.82rem; color: var(--text-dim); line-height: 1.55; }
+
+  /* Sections */
+  section { padding: 84px 0; border-top: 1px solid var(--rule); }
+  h2.sec { font-size: clamp(1.8rem, 3.2vw, 2.5rem); line-height: 1.1; letter-spacing: -0.025em; font-weight: 500; margin: 0 0 14px; text-wrap: balance; }
+  .sec-lede { color: var(--text-soft); max-width: 40em; margin: 0 0 44px; font-size: 1.08rem; text-wrap: pretty; }
+  .sec-lede code { color: var(--text); }
+
+  .facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; border-top: 1px solid var(--rule); }
+  .facts > div { padding: 28px 28px 8px 0; }
+  .facts > div + div { padding-left: 28px; border-left: 1px solid var(--rule); }
+  .facts h3 { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.01em; margin: 0 0 10px; }
+  .facts p { margin: 0; color: var(--text-soft); max-width: 30em; }
+  .facts .mark { display: block; width: 8px; height: 8px; background: var(--lime); margin-bottom: 18px; }
+
+  /* Benchmarks */
+  .bench { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px 56px; }
+  .metric h3 { font-size: 1rem; font-weight: 600; margin: 0 0 12px; }
+  .bars { display: grid; gap: 8px; }
+  .bar { display: grid; grid-template-columns: 7.2em 1fr; align-items: center; gap: 12px; font-size: 0.92rem; }
+  .bar .name { color: var(--text-dim); }
+  .bar.bolt .name { color: var(--text); font-weight: 600; }
+  .bar .line { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .bar .b { height: 12px; background: var(--bar); flex: none; }
+  .bar.bolt .b { background: var(--lime); }
+  .bar .v { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-soft); font-size: 0.9rem; }
+  .bar.bolt .v { color: var(--text); font-weight: 600; }
+  .ratio { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 3px; background: rgba(186, 252, 107, 0.12); color: var(--lime); font: 500 0.78rem var(--mono); }
+  .platforms { display: flex; gap: 8px; margin: 0 0 40px; }
+  .platforms button { border: 1px solid var(--rule-2); background: transparent; color: var(--text-soft); border-radius: 3px; padding: 7px 14px; font: 500 0.92rem var(--sans); cursor: pointer; }
+  .platforms button:hover { color: var(--text); }
+  .platforms button[aria-pressed="true"] { background: var(--text); color: var(--black); border-color: var(--text); }
+  .note { margin: 48px 0 0; padding: 18px 20px; border-left: 2px solid var(--lime); background: var(--black-2); color: var(--text-soft); max-width: 52em; font-size: 0.97rem; }
+  .note strong { color: var(--text); font-weight: 600; }
+
+  /* Extensions */
+  .ext { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 56px; }
+  .ext article { padding: 24px 0; border-top: 1px solid var(--rule); }
+  .ext h3 { margin: 0 0 6px; font-size: 1.12rem; font-weight: 600; }
+  .ext h3 a { color: var(--text); text-decoration: none; }
+  .ext h3 a:hover { color: var(--lime); }
+  .ext p { margin: 0 0 14px; color: var(--text-soft); }
+  .ext pre { margin: 0; padding: 11px 14px; border: 1px solid var(--rule-2); border-radius: 4px; background: var(--black-2); overflow-x: auto; font-size: 0.85rem; color: var(--text); }
+
+  /* Footer */
+  footer { border-top: 1px solid var(--rule); background: #080808; padding: 48px 0 60px; color: var(--text-dim); font-size: 0.93rem; }
+  footer .wrap { display: grid; grid-template-columns: 1.3fr 1fr 1fr; gap: 32px; }
+  footer h4 { margin: 0 0 12px; color: var(--text); font-size: 0.95rem; font-weight: 600; }
+  footer ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 7px; }
+  footer a { color: var(--text-soft); text-decoration: none; }
+  footer a:hover { color: var(--lime); }
+  footer p { margin: 0 0 10px; max-width: 30em; }
+  footer p a { color: var(--text); text-decoration: underline; text-decoration-color: var(--rule-2); }
+
+  @media (max-width: 900px) {
+    .hero { padding: 48px 0 64px; }
+    .hero .wrap, .bench, .ext { grid-template-columns: minmax(0, 1fr); }
+    .facts { grid-template-columns: minmax(0, 1fr); }
+    .facts > div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--rule); }
+    footer .wrap { grid-template-columns: minmax(0, 1fr); }
+    nav.top a:not(.gh) { display: none; }
+  }
+  @media (max-width: 520px) {
+    .lane { grid-template-columns: 6.6em 1fr 4em; font-size: 0.78rem; }
+    .install code { font-size: 0.78rem; padding: 14px 12px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
 </head>
 <body>
-<p>Pi-Bolt: <a href="https://github.com/opensec-git/Pi-Bolt">github.com/opensec-git/Pi-Bolt</a></p>
-<pre>curl -fsSL https://pi-bolt.opensec.in/install.sh | sh</pre>
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="./"><img src="logo.svg" alt="">Pi-Bolt</a>
+    <nav class="top" aria-label="Main">
+      <a href="#benchmarks">Benchmarks</a>
+      <a href="#extensions">Extensions</a>
+      <a href="https://github.com/opensec-git/Pi-Bolt/tree/pi-bolt/docs">Docs</a>
+      <a class="gh" href="https://github.com/opensec-git/Pi-Bolt">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="hero">
+    <div class="wrap">
+      <div>
+        <h1>The Pi coding agent, compiled to <span class="pix">machine&nbsp;code.</span></h1>
+        <p class="lede">Pi-Bolt is Pi as one native executable for Linux and macOS. Every function is compiled before you run it, so
+          nothing is parsed or JIT-compiled at launch: it starts two to three times sooner than Pi on Bun and uses about a third of
+          its CPU.</p>
+        <div class="install">
+          <code id="cmd">curl -fsSL https://pi-bolt.opensec.in/install.sh | sh</code>
+          <button class="copy" type="button" data-copy="cmd" aria-label="Copy the install command">Copy</button>
+        </div>
+        <p class="alt">Or <code>npm install -g pi-bolt</code>. Then run <code>pi-bolt</code> in your project.</p>
+      </div>
+
+      <div class="race" aria-labelledby="race-title">
+        <div class="race-head">
+          <h2 id="race-title">Launch to prompt</h2>
+          <button class="replay" type="button" id="replay">Run again</button>
+        </div>
+        <div class="lane bolt" data-ms="45"><span class="who">Pi-Bolt</span><span class="track"><span class="fill"></span></span><span class="ms"><span class="ready">45 ms</span></span></div>
+        <div class="lane" data-ms="128"><span class="who">Pi on Bun 1.4.2</span><span class="track"><span class="fill"></span></span><span class="ms"><span class="ready">128 ms</span></span></div>
+        <div class="lane" data-ms="303"><span class="who">Pi on Node 22</span><span class="track"><span class="fill"></span></span><span class="ms"><span class="ready">303 ms</span></span></div>
+        <p class="race-foot">Pi 1.0.0, from launch to an interactive prompt, measured on an AMD EPYC 7B13 server and replayed ten times
+          slower. On your machine the times differ; the order does not.</p>
+      </div>
+    </div>
+  </div>
+
+  <section aria-labelledby="what">
+    <div class="wrap">
+      <h2 class="sec" id="what">The Pi you already use, without the wait</h2>
+      <p class="sec-lede">Your providers, settings, sessions and extensions carry over from <code>~/.pi/agent</code>. Pi-Bolt changes
+        how Pi runs, not what it does.</p>
+      <div class="facts">
+        <div>
+          <span class="mark" aria-hidden="true"></span>
+          <h3>Compiled ahead of time</h3>
+          <p>Every function is turned into x86-64 or ARM64 machine code when the executable is built, and Pi's modules are stored
+            already loaded. Launching maps them from the file.</p>
+        </div>
+        <div>
+          <span class="mark" aria-hidden="true"></span>
+          <h3>Less CPU over a session</h3>
+          <p>Long answers are drawn incrementally and large files are written without freezing the screen, so a session costs about
+            a third of the CPU of Pi on Bun.</p>
+        </div>
+        <div>
+          <span class="mark" aria-hidden="true"></span>
+          <h3>Self-contained</h3>
+          <p>One executable, no Node.js or Bun required. Releases are signed, the installer checks them, and extensions install with
+            Pi-Bolt's own package manager when npm is absent.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="benchmarks" aria-labelledby="bench-title">
+    <div class="wrap">
+      <h2 class="sec" id="bench-title">Benchmarks</h2>
+      <p class="sec-lede">The same Pi 1.0.0 run three ways: compiled by Pi-Bolt, as released on stock Bun, and from its npm package
+        on Node. Medians of fresh processes, interleaved across the runtimes. Lower is better.</p>
+      <div class="platforms" role="group" aria-label="Platform">
+        <button type="button" data-platform="linux" aria-pressed="true">Linux x86-64</button>
+        <button type="button" data-platform="mac" aria-pressed="false">macOS on Apple silicon</button>
+      </div>
+      <div class="bench" id="bench"></div>
+      <p class="note"><strong>These are measurements, not guarantees.</strong> Each set comes from one machine: an AMD EPYC 7B13
+        server for Linux, an M5 MacBook Air for macOS. On other hardware the times differ; what carries over is the comparison.
+        Every figure, the method and the raw data are in <a href="https://github.com/opensec-git/Pi-Bolt/blob/pi-bolt/docs/BENCHMARKS.md">BENCHMARKS.md</a>.</p>
+    </div>
+  </section>
+
+  <section id="extensions" aria-labelledby="ext-title">
+    <div class="wrap">
+      <h2 class="sec" id="ext-title">Extensions</h2>
+      <p class="sec-lede">Pi extensions and Pi packages work as they do in Pi. The installer offers two that OpenSec maintains for
+        Pi-Bolt, prebuilt for Bun so that they load without being transpiled.</p>
+      <div class="ext">
+        <article>
+          <h3><a href="https://www.npmjs.com/package/opensec-pi-subagents">opensec-pi-subagents</a></h3>
+          <p>Specialized agents in separate sessions that inherit the parent's model and thinking level, with parallel workflows and
+            scheduled jobs.</p>
+          <pre><code>pi-bolt install npm:opensec-pi-subagents</code></pre>
+        </article>
+        <article>
+          <h3><a href="https://www.npmjs.com/package/opensec-pi-todo">opensec-pi-todo</a></h3>
+          <p>A todo list for the model, shown as a live panel above the editor. It survives <code>/reload</code> and conversation
+            compaction.</p>
+          <pre><code>pi-bolt install npm:opensec-pi-todo</code></pre>
+        </article>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>
+      <p><strong>Pi-Bolt</strong> is an independent fork of <a href="https://github.com/earendil-works/pi">Pi</a>, not affiliated
+        with Pi's authors or with Oven. Built on Pi by Mario Zechner and contributors, and on Bun by Oven.</p>
+      <p>MIT licensed. Linux x86-64 with glibc 2.17 or later; macOS 13 or later on Apple silicon.</p>
+    </div>
+    <div>
+      <h4>Use it</h4>
+      <ul>
+        <li><a href="https://github.com/opensec-git/Pi-Bolt#getting-started">Getting started</a></li>
+        <li><a href="https://github.com/opensec-git/Pi-Bolt/releases/latest">Latest release</a></li>
+        <li><a href="https://www.npmjs.com/package/pi-bolt">npm package</a></li>
+        <li><a href="https://github.com/opensec-git/Pi-Bolt/blob/pi-bolt/docs/TROUBLESHOOTING.md">Troubleshooting</a></li>
+      </ul>
+    </div>
+    <div>
+      <h4>Learn more</h4>
+      <ul>
+        <li><a href="https://github.com/opensec-git/Pi-Bolt/blob/pi-bolt/docs/ARCHITECTURE.md">How it works</a></li>
+        <li><a href="https://github.com/opensec-git/Pi-Bolt/blob/pi-bolt/docs/PLUGINS.md">Compiling plugins in</a></li>
+        <li><a href="https://github.com/opensec-git/Pi-Bolt">Source on GitHub</a></li>
+        <li><a href="https://github.com/opensec-git/Pi-Bolt/security/advisories/new">Report a vulnerability</a></li>
+      </ul>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Copy buttons.
+  document.querySelectorAll("[data-copy]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var text = document.getElementById(button.dataset.copy).textContent;
+      var done = function () {
+        button.textContent = "Copied";
+        setTimeout(function () { button.textContent = "Copy"; }, 1600);
+      };
+      if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, function () {});
+    });
+  });
+
+  // The startup race: each lane fills in its measured time, ten times slower.
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)");
+  function race() {
+    var lanes = document.querySelectorAll(".lane");
+    var longest = 0;
+    lanes.forEach(function (lane) { longest = Math.max(longest, +lane.dataset.ms); });
+    lanes.forEach(function (lane) {
+      var ms = +lane.dataset.ms;
+      var fill = lane.querySelector(".fill");
+      var ready = lane.querySelector(".ready");
+      var width = (100 * ms / longest).toFixed(1) + "%";
+      fill.getAnimations().forEach(function (a) { a.cancel(); });
+      ready.style.visibility = "hidden";
+      if (reduce.matches) {
+        fill.style.width = width;
+        ready.style.visibility = "visible";
+        return;
+      }
+      fill.style.width = "0";
+      var animation = fill.animate([{ width: "0" }, { width: width }], { duration: ms * 10, easing: "linear", fill: "forwards", delay: 250 });
+      animation.onfinish = function () { fill.style.width = width; ready.style.visibility = "visible"; };
+    });
+  }
+  document.getElementById("replay").addEventListener("click", race);
+  race();
+
+  // Benchmarks, from docs/BENCHMARKS.md (Pi-Bolt 0.6.1, Pi 1.0.0). [Pi-Bolt, Bun, Node]
+  var data = {
+    linux: {
+      runtimes: ["Pi-Bolt", "Bun 1.4.2", "Node 22"],
+      metrics: [
+        ["Ready to type", "ms", [45, 128, 303], "faster"],
+        ["One prompt (pi -p), CPU", "ms", [81, 329, 572], "less"],
+        ["Interactive session, CPU", "ms", [303, 844, 1242], "less"],
+        ["Streaming a 60,000-character answer, CPU", "s", [3.8, 43.1, 43.7], "less"],
+        ["Writing a 200 KB file through a tool call", "s", [0.8, 27.8, 44.3], "faster"],
+        ["A tool turn with a real model, CPU", "s", [0.20, 0.49, 0.77], "less"]
+      ]
+    },
+    mac: {
+      runtimes: ["Pi-Bolt", "Bun 1.4.2", "Node 26"],
+      metrics: [
+        ["Ready to type", "ms", [31, 63, 193], "faster"],
+        ["One prompt (pi -p), CPU", "ms", [32, 138, 290], "less"],
+        ["Interactive session, CPU", "ms", [126, 363, 544], "less"],
+        ["Streaming a 60,000-character answer, CPU", "s", [6.9, 25.3, 24.0], "less"],
+        ["Writing a 200 KB file through a tool call", "s", [0.3, 12.0, 14.2], "faster"],
+        ["Memory after a 4.2M-token session", "MB", [64, 95, 1890], "less"]
+      ]
+    }
+  };
+  // Seconds get one decimal, or two when a value of the metric needs them (0.20 s beside 0.49 s, not 0.2 s).
+  function fmt(v, unit, places) {
+    var n = unit === "s" ? v.toFixed(places) : v.toLocaleString("en-US");
+    return n + " " + unit;
+  }
+  function render(platform) {
+    var set = data[platform];
+    var root = document.getElementById("bench");
+    root.textContent = "";
+    set.metrics.forEach(function (m) {
+      var values = m[2], top = Math.max.apply(null, values);
+      var places = values.some(function (v) { return Math.round(v * 10) !== v * 10; }) ? 2 : 1;
+      var box = document.createElement("div");
+      box.className = "metric";
+      var h = document.createElement("h3");
+      h.textContent = m[0];
+      box.appendChild(h);
+      var bars = document.createElement("div");
+      bars.className = "bars";
+      values.forEach(function (v, i) {
+        var row = document.createElement("div");
+        row.className = "bar" + (i === 0 ? " bolt" : "");
+        var name = document.createElement("span");
+        name.className = "name";
+        name.textContent = set.runtimes[i];
+        var line = document.createElement("span");
+        line.className = "line";
+        var b = document.createElement("span");
+        b.className = "b";
+        b.style.width = "calc((100% - 8.5em) * " + (v / top).toFixed(4) + ")";
+        var val = document.createElement("span");
+        val.className = "v";
+        val.textContent = fmt(v, m[1], places);
+        if (i === 0) {
+          var r = values[1] / v;
+          var pill = document.createElement("span");
+          pill.className = "ratio";
+          pill.textContent = (r >= 10 ? r.toFixed(0) : r.toFixed(1)) + "× " + m[3] + " than Bun";
+          val.appendChild(pill);
+        }
+        line.appendChild(b);
+        line.appendChild(val);
+        row.appendChild(name);
+        row.appendChild(line);
+        bars.appendChild(row);
+      });
+      box.appendChild(bars);
+      root.appendChild(box);
+    });
+  }
+  document.querySelectorAll("[data-platform]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      document.querySelectorAll("[data-platform]").forEach(function (b) { b.setAttribute("aria-pressed", String(b === button)); });
+      render(button.dataset.platform);
+    });
+  });
+  render("linux");
+</script>
 </body>
 </html>
