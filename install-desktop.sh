@@ -1,26 +1,38 @@
 #!/bin/sh
-# Pi-Bolt Desktop installer (macOS, Apple silicon).
+# Pi-Bolt Desktop installer (macOS on Apple silicon, Linux on x86-64).
 #
 #   curl -fsSL https://pi-bolt.opensec.in/install-desktop.sh | sh
 #
 #
 # Downloads Pi-Bolt Desktop straight from the npm registry with curl (the registry as a CDN, fast in most places: no npm, Node
 # or Bun needed for the app), checks it against the registry's sha512 integrity and the app against its SHA-256 in the
-# package, and installs Pi-Bolt.app into /Applications (or ~/Applications). Run it again to update or uninstall. The optional
-# pi-bolt-desktop command (--cli) is a Bun script, installed with `bun add -g` from the same download.
+# package, and installs it. Run it again to update or uninstall. The optional pi-bolt-desktop command (--cli) is a Bun
+# script, installed with `bun add -g` from the same download. The app runs the Pi-Bolt agent, which it does not include: when
+# the agent is missing, the installer offers to run Pi-Bolt's own installer for it.
 #
-# The app is the private npm package @kushalkhemka/pi-bolt-desktop, so the registry wants a token that can read it: the
-# installer takes PIBOLT_DESKTOP_NPM_TOKEN, NPM_TOKEN, or a token in ~/.bunfig.toml or ~/.npmrc. It sends the token to
-# the registry only, in a header read from a file (never in a URL or on a command line), and never prints it. If the package
-# can be read without a token (published publicly), none is needed.
+# On a Mac it installs Pi-Bolt.app into /Applications (or ~/Applications) from @kushalkhemka/pi-bolt-desktop. On Linux it
+# installs from @kushalkhemka/pi-bolt-desktop-linux-x64, by default for this user only and without root: the AppImage is
+# extracted (no FUSE needed) into ~/.local/share/pi-bolt-desktop/app, with a launcher in ~/.local/bin/pi-bolt-desktop-app,
+# an entry in the applications menu and an icon. --deb or --rpm instead installs the system package with apt-get or dnf
+# (through sudo), which uses the system's WebKitGTK.
+#
+# The app is a private npm package, so the registry wants a token that can read it: the installer takes
+# PIBOLT_DESKTOP_NPM_TOKEN, NPM_TOKEN, or a token in ~/.bunfig.toml or ~/.npmrc. It sends the token to the registry only, in a
+# header read from a file (never in a URL or on a command line), and never prints it. If the package can be read without a
+# token (published publicly), none is needed.
 #
 # Options:
 #   --cli         also install the pi-bolt-desktop command with Bun (asked when interactive; offers to install Bun)
+#   --agent       install the Pi-Bolt agent if it is missing, without asking (the default with --yes)
+#   --no-agent    do not install the Pi-Bolt agent
 #   --no-cli      do not install or update the command
-#   --user        use ~/Applications instead of /Applications
+#   --user        macOS: use ~/Applications instead of /Applications; Linux: the user install (the default)
+#   --deb         Linux: install the .deb system-wide with sudo apt-get (Debian, Ubuntu)
+#   --rpm         Linux: install the .rpm system-wide with sudo dnf (Fedora, RHEL; or yum, zypper)
 #   --force       reinstall the same version, or replace a newer one
 #   --open        open Pi-Bolt when done (asked when interactive)
-#   --uninstall   remove the app and the command; --purge also removes the app's data in ~/Library
+#   --uninstall   remove the app and the command; --purge also removes the app's data (~/Library, or ~/.local/share,
+#                 ~/.config and ~/.cache on Linux)
 #   --version V   install version V (default: latest)
 #   -y, --yes     do not ask: take the default action
 #
@@ -33,8 +45,10 @@
 #                                registry in ~/.bunfig.toml or ~/.npmrc, BUN_CONFIG_REGISTRY, else https://registry.npmjs.org)
 #   PIBOLT_DESKTOP_CONNECTIONS   connections to download over at once (default: 4; 1 for a single connection)
 #   PIBOLT_DESKTOP_TGZ           install from this local package .tgz instead of the registry (offline, testing)
-#   PIBOLT_DESKTOP_DIR           install to and look for the app only in this folder
+#   PIBOLT_DESKTOP_DIR           macOS: install to and look for the app only in this folder; Linux: the folder for the app
+#                                instead of ~/.local/share/pi-bolt-desktop (it goes into its app/ folder)
 #   BUN_INSTALL                  where Bun is (default: ~/.bun); --cli installs the command into its global packages
+#   PIBOLT_DESKTOP_AGENT_INSTALLER  Pi-Bolt's installer to run for the agent (default: https://pi-bolt.opensec.in/install.sh)
 
 PKG="@kushalkhemka/pi-bolt-desktop"
 PKG_SCOPE="@kushalkhemka"
@@ -42,16 +56,37 @@ PKG_PATH="@kushalkhemka%2fpi-bolt-desktop"
 PKG_BASE="pi-bolt-desktop"
 BUNDLE_ID="in.opensec.pibolt.desktop"
 APP_NAME="Pi-Bolt.app"
-AGENT_INSTALLER="https://pi-bolt.opensec.in/install.sh"
+AGENT_INSTALLER="${PIBOLT_DESKTOP_AGENT_INSTALLER:-https://pi-bolt.opensec.in/install.sh}"
 ACCEPT_PACKUMENT="application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8, */*"
 
 ESC=$(printf '\033')
 CR=$(printf '\r')
 ETX=$(printf '\003')
 
+# setup_platform: OS (Darwin or Linux), and on Linux the Linux package and where the user install goes.
+setup_platform() {
+	OS=$(uname -s 2>/dev/null || echo unknown)
+	NATIVE=Mac PLATFORM_LABEL="Apple silicon"
+	[ "$OS" = Linux ] || return 0
+	PKG="@kushalkhemka/pi-bolt-desktop-linux-x64"
+	PKG_PATH="@kushalkhemka%2fpi-bolt-desktop-linux-x64"
+	PKG_BASE="pi-bolt-desktop-linux-x64"
+	NATIVE=desktop PLATFORM_LABEL="Linux x86-64"
+	DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+	APP_HOME="${PIBOLT_DESKTOP_DIR:-$DATA_HOME/pi-bolt-desktop}"
+	APP_HOME="${APP_HOME%/}"
+	APP_DIR="$APP_HOME/app"
+	BIN_DIR="$HOME/.local/bin"
+	LAUNCHER="$BIN_DIR/pi-bolt-desktop-app"
+	DESKTOP_FILE="$DATA_HOME/applications/pi-bolt-desktop.desktop"
+	ICON_THEME="$DATA_HOME/icons/hicolor"
+	ICON_FILE="$ICON_THEME/256x256/apps/pi-bolt-desktop.png"
+}
+
 main() {
 	set -eu
-	CLI=ask OPEN=ask UNINSTALL="" USER_FLAG="" FORCE="" PURGE=""
+	setup_platform
+	CLI=ask AGENT=ask OPEN=ask UNINSTALL="" USER_FLAG="" FORCE="" PURGE="" MODE=user
 	YES="${PIBOLT_DESKTOP_YES:-0}"
 	VERSION="${PIBOLT_DESKTOP_VERSION:-latest}"
 	LOCAL_TGZ="${PIBOLT_DESKTOP_TGZ:-}"
@@ -59,7 +94,11 @@ main() {
 		case "$1" in
 		--cli) CLI=yes ;;
 		--no-cli) CLI=no ;;
+		--agent) AGENT=yes ;;
+		--no-agent) AGENT=no ;;
 		--user) USER_FLAG=1 ;;
+		--deb) MODE=deb ;;
+		--rpm) MODE=rpm ;;
 		--force) FORCE=1 ;;
 		--open) OPEN=yes ;;
 		--no-open) OPEN=no ;;
@@ -75,6 +114,8 @@ main() {
 	done
 	case "$VERSION" in "" | *[!0-9A-Za-z.+-]*) usage_error "not a version: $VERSION" ;; esac
 	[ -z "$PURGE" ] || [ -n "$UNINSTALL" ] || usage_error "--purge goes with --uninstall"
+	[ "$MODE" = user ] || [ "$OS" = Linux ] || usage_error "--$MODE is for Linux"
+	[ "$MODE" = user ] || [ -z "$USER_FLAG" ] || usage_error "--user and --$MODE do not go together"
 	[ -z "$LOCAL_TGZ" ] || [ -f "$LOCAL_TGZ" ] || usage_error "PIBOLT_DESKTOP_TGZ: no such file: $LOCAL_TGZ"
 	setup_style
 
@@ -97,7 +138,7 @@ main() {
 	fi
 	logo_animation
 	if wait "$check_pid"; then check_status=0; else check_status=$?; fi
-	printf '%s  Pi-Bolt Desktop Installer%s\n%s  The Pi-Bolt agent as a native Mac app. Your sessions, plugins and settings, unchanged.%s\n\n' "$bold" "$reset" "$dim" "$reset"
+	printf '%s  Pi-Bolt Desktop Installer%s\n%s  The Pi-Bolt agent as a native %s app. Your sessions, plugins and settings, unchanged.%s\n\n' "$bold" "$reset" "$dim" "$NATIVE" "$reset"
 	cat "$TMP/preflight"
 	[ "$check_status" -eq 0 ] || exit "$check_status"
 
@@ -122,6 +163,7 @@ main() {
 			finish_progress
 			install_cli
 		fi
+		[ -z "$EXISTING" ] || install_agent
 		[ "$OPEN" != yes ] || [ -z "$EXISTING" ] || open_app "$EXISTING"
 		exit 0
 		;;
@@ -143,12 +185,11 @@ main() {
 	printf '%s\n' "$OTHERS" | while IFS= read -r other; do
 		[ -z "$other" ] || printf '%sNote: another copy is at %s.%s\n' "$dim" "$(tilde "$other")" "$reset"
 	done
+	warn_missing_libraries
 	install_cli
-	if ! agent_found; then
-		printf '\nPi-Bolt Desktop runs the Pi-Bolt agent, which was not found. Install it with:\n\n  curl -fsSL %s | sh\n' "$AGENT_INSTALLER"
-	fi
+	install_agent
 	offer_open
-	printf '\nOpen it from Launchpad or Spotlight. Run this script again to update or uninstall it.\n'
+	printf '\n%s Run this script again to update or uninstall it.\n' "$(open_hint)"
 }
 
 # --- Look -------------------------------------------------------------------------------------------------------------
@@ -308,20 +349,25 @@ mb() { awk -v b="$1" 'BEGIN { printf "%.1f", b / 1048576 }'; }
 
 usage() {
 	cat <<EOF
-Pi-Bolt Desktop installer (macOS, Apple silicon)
+Pi-Bolt Desktop installer (macOS on Apple silicon, Linux on x86-64)
 
 Usage: sh install.sh [options]        (or: curl -fsSL <URL> | sh -s -- [options])
 
   --cli         also install the pi-bolt-desktop command (with Bun: bun add -g)
   --no-cli      do not install or update the command
-  --user        use ~/Applications instead of /Applications
+  --agent       install the Pi-Bolt agent if it is missing, without asking
+  --no-agent    do not install the Pi-Bolt agent
+  --user        macOS: use ~/Applications instead of /Applications (Linux: the default user install)
+  --deb         Linux: install the .deb system-wide (sudo apt-get) instead of the user install
+  --rpm         Linux: install the .rpm system-wide (sudo dnf) instead of the user install
   --force       reinstall the same version, or replace a newer one
   --open        open Pi-Bolt when done
-  --uninstall   remove the app and the command (--purge: also its data in ~/Library)
+  --uninstall   remove the app and the command (--purge: also its settings and data)
   --version V   install version V (default: latest)
   -y, --yes     do not ask questions
 
 Downloads $PKG from the npm registry with curl; the app needs no npm, Node or Bun.
+On Linux the default install is for this user, without root: the AppImage, extracted into ~/.local/share/pi-bolt-desktop.
 The package is private: set NPM_TOKEN to a token with read access, or keep one in ~/.npmrc or ~/.bunfig.toml.
 Run it again to update or uninstall.
 EOF
@@ -345,6 +391,7 @@ cleanup() {
 	# Interrupted in the middle of the swap: put the old copy back.
 	if [ -n "$STAGE" ] && [ -d "$STAGE/previous.app" ] && [ ! -e "$DEST" ]; then mv "$STAGE/previous.app" "$DEST" 2>/dev/null || true; fi
 	[ -z "$STAGE" ] || rm -rf "$STAGE"
+	[ -z "${PKG_TMP:-}" ] || rm -rf "$PKG_TMP"
 	rm -rf "$TMP"
 }
 
@@ -352,8 +399,12 @@ cleanup() {
 
 preflight() {
 	status=0
+	if [ "$OS" = Linux ]; then
+		preflight_linux
+		return
+	fi
 	if [ "$(uname -s)" != Darwin ]; then
-		printf 'error: Pi-Bolt Desktop runs on macOS only (this is %s).\n\n' "$(uname -s)"
+		printf 'error: Pi-Bolt Desktop runs on macOS (Apple silicon) and Linux (x86-64) only (this is %s).\n\n' "$(uname -s)"
 		return 1
 	fi
 	# Apple silicon, also from a shell that runs under Rosetta.
@@ -549,7 +600,8 @@ fetch() {
 	fi
 }
 
-# JSON is read with JavaScript for Automation, which every Mac has (no jq needed).
+# JSON is read with JavaScript for Automation, which every Mac has (no jq needed); on Linux with python3, else Bun, else awk
+# (json_linux).
 #   json FILE packument WANT   "ok", then the version WANT names (a dist-tag such as latest, or a version), its dist.tarball,
 #                              dist.integrity and dist.shasum, one per line; or "missing", then the latest version
 #   json FILE field NAME       the top-level string NAME
@@ -567,7 +619,10 @@ function run(argv) {
 	if (!entry || !entry.dist) return "missing\n" + clean(tags.latest);
 	return ["ok", clean(version), clean(entry.dist.tarball), clean(entry.dist.integrity), clean(entry.dist.shasum)].join("\n");
 }'
-json() { osascript -l JavaScript -e "$JSON_JS" "$@" 2>/dev/null; }
+json() {
+	if [ "$OS" = Linux ]; then json_linux "$@"; return; fi
+	osascript -l JavaScript -e "$JSON_JS" "$@" 2>/dev/null
+}
 
 # resolve: which version to install and where it is, worked out in the background while the logo draws. Writes, one per
 # line, to $TMP/resolved: a status (ok, private, denied, offline, missing, http-CODE, bad), the version, the tarball's URL, its
@@ -767,6 +822,17 @@ sha512_base64() {
 	fi
 }
 
+# sha512_matches FILE BASE64: whether FILE's SHA-512 is BASE64. On Linux with sha512sum (compared in hex: no xxd needed).
+sha512_matches() {
+	if [ "$OS" = Linux ] && command -v sha512sum >/dev/null 2>&1 && command -v base64 >/dev/null 2>&1; then
+		[ "$(sha512sum "$1" | cut -d ' ' -f 1)" = "$(printf '%s' "$2" | base64 -d 2>/dev/null | od -An -v -tx1 | tr -d ' \n')" ]
+	else
+		[ "$(sha512_base64 "$1")" = "$2" ]
+	fi
+}
+
+sha1_hex() { if command -v shasum >/dev/null 2>&1; then shasum -a 1 "$1"; else sha1sum "$1"; fi | cut -d ' ' -f 1; }
+
 # verify_integrity FILE: checks FILE against the registry's dist.integrity (sha512), or its dist.shasum (SHA-1) for a
 # package so old that it has no integrity.
 verify_integrity() {
@@ -775,9 +841,9 @@ verify_integrity() {
 		case "$hash" in sha512-*) want=${hash#sha512-} ;; esac
 	done
 	if [ -n "$want" ]; then
-		[ "$(sha512_base64 "$1")" = "$want" ] && return 0
+		sha512_matches "$1" "$want" && return 0
 	elif [ -n "$SHASUM" ]; then
-		[ "$(shasum -a 1 "$1" | cut -d ' ' -f 1)" = "$SHASUM" ] && return 0
+		[ "$(sha1_hex "$1")" = "$SHASUM" ] && return 0
 	else
 		fail "the registry gives no checksum for $PKG@$SHOWN_VERSION. Nothing was installed."
 	fi
@@ -787,7 +853,11 @@ verify_integrity() {
 # check_sum FILE: whether FILE (in the current folder) matches its line in SHA256SUMS. No line is a mismatch.
 check_sum() {
 	line=$(grep " $1\$" SHA256SUMS) && [ -n "$line" ] || return 1
-	printf '%s\n' "$line" | shasum -a 256 -c --status - 2>/dev/null
+	if [ "$OS" = Linux ] && command -v sha256sum >/dev/null 2>&1; then
+		printf '%s\n' "$line" | sha256sum -c --status - 2>/dev/null
+	else
+		printf '%s\n' "$line" | shasum -a 256 -c --status - 2>/dev/null
+	fi
 }
 
 # fetch_package: the package .tgz in $TGZ (downloaded and checked against the registry's integrity, or PIBOLT_DESKTOP_TGZ),
@@ -833,6 +903,10 @@ fetch_package() {
 	mkdir "$TMP/pkg" "$TMP/app"
 	tar -xzf "$TGZ" -C "$TMP/pkg" 2>/dev/null || fail "could not unpack $(basename "$TGZ"): it is not an npm package."
 	PKGDIR="$TMP/pkg/package"
+	if [ "$OS" = Linux ]; then
+		check_linux_package
+		return
+	fi
 	[ -f "$PKGDIR/package.json" ] && [ -f "$PKGDIR/app/$APP_NAME.tar.gz" ] && [ -f "$PKGDIR/app/SHA256SUMS" ] ||
 		fail "$(basename "$TGZ") is not a complete Pi-Bolt Desktop package."
 	[ "$(json "$PKGDIR/package.json" field name)" = "$PKG" ] && [ "$(json "$PKGDIR/package.json" field version)" = "$SHOWN_VERSION" ] ||
@@ -862,6 +936,10 @@ search_dirs() {
 # EXISTING: the installed Pi-Bolt.app (the first found), INSTALLED_VERSION its version, OTHERS any further copies.
 find_installed() {
 	EXISTING="" INSTALLED_VERSION="" OTHERS=""
+	if [ "$OS" = Linux ]; then
+		find_installed_linux
+		return
+	fi
 	old_ifs=$IFS
 	IFS='
 '
@@ -897,6 +975,10 @@ is_running() {
 
 refuse_if_running() {
 	[ -n "$EXISTING" ] || return 0
+	if [ "$OS" = Linux ]; then
+		refuse_if_running_linux
+		return
+	fi
 	if is_running "$EXISTING"; then
 		finish_progress
 		printf '%serror:%s Pi-Bolt %s is running from %s. Quit it (Cmd-Q), then run this again.\n' "$red" "$reset" "$INSTALLED_VERSION" "$(tilde "$EXISTING")" >&2
@@ -916,6 +998,10 @@ destination_dir() {
 # ready there (quarantine flag off, code signature verified, or signed ad hoc only if it does not verify), then swapped in: the
 # old copy moves aside first and comes back if the new one cannot take its place.
 install_app() {
+	if [ "$OS" = Linux ]; then
+		if [ "$MODE" = user ]; then install_user_linux; else install_system_linux; fi
+		return
+	fi
 	dir=$(destination_dir)
 	DEST="$dir/$APP_NAME"
 	draw_progress "$step" 10000 "${dim}installing into $(tilde "$dir")$reset"
@@ -958,6 +1044,10 @@ install_app() {
 }
 
 open_app() {
+	if [ "$OS" = Linux ]; then
+		open_app_linux "$1"
+		return
+	fi
 	if open "$1" >/dev/null 2>&1; then
 		printf '\nOpened %s.\n' "$(tilde "$1")"
 	else
@@ -969,8 +1059,604 @@ agent_found() {
 	[ -n "${PI_BOLT_BIN:-}" ] && [ -f "$PI_BOLT_BIN" ] && return 0
 	command -v pi-bolt >/dev/null 2>&1 && return 0
 	for p in "$HOME/.pi-bolt/pi" "$HOME/.pi-bolt/pi-bolt" "$HOME/.local/bin/pi-bolt"; do [ -f "$p" ] && return 0; done
-	for p in "$HOME"/.pi-bolt/pi-bolt-darwin-*/pi; do [ -f "$p" ] && return 0; done
+	if [ "$OS" = Linux ]; then
+		for p in "$HOME"/.pi-bolt/pi-bolt-linux-*/pi; do [ -f "$p" ] && return 0; done
+	else
+		for p in "$HOME"/.pi-bolt/pi-bolt-darwin-*/pi; do [ -f "$p" ] && return 0; done
+	fi
 	return 1
+}
+
+# --- Linux ------------------------------------------------------------------------------------------------------------
+
+# The app's executable is pi-bolt-desktop: also its window class (StartupWMClass) and its icon's name, as in the .deb and .rpm,
+# which install the system package pi-bolt.
+LINUX_BIN="pi-bolt-desktop"
+SYSTEM_BIN="/usr/bin/pi-bolt-desktop"
+SYSTEM_PKG="pi-bolt"
+# Written into the files the user install adds (and checked before replacing or removing one); the version of the extracted
+# app is in VERSION_FILE inside it.
+MARKER="Pi-Bolt Desktop, installed by install-desktop.sh (run it with --uninstall to remove)"
+VERSION_FILE=".pi-bolt-desktop-version"
+
+preflight_linux() {
+	case "$(uname -m)" in
+	x86_64 | amd64) ;;
+	*)
+		printf 'error: Pi-Bolt Desktop for Linux needs an x86-64 (amd64) CPU; this one is %s.\n' "$(uname -m)"
+		status=1
+		;;
+	esac
+	if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+		printf 'error: curl or wget is required.\n'
+		status=1
+	fi
+	for tool in tar gzip; do
+		command -v "$tool" >/dev/null 2>&1 || { printf 'error: %s is required.\n' "$tool"; status=1; }
+	done
+	if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+		printf 'error: sha256sum (coreutils) is required.\n'
+		status=1
+	fi
+	if ! { command -v sha512sum >/dev/null 2>&1 && command -v base64 >/dev/null 2>&1 && command -v od >/dev/null 2>&1; } &&
+		! command -v openssl >/dev/null 2>&1; then
+		printf 'error: sha512sum and base64 (coreutils), or openssl, are required.\n'
+		status=1
+	fi
+	case "$MODE" in
+	deb)
+		if ! command -v apt-get >/dev/null 2>&1; then
+			printf 'error: --deb needs apt-get (Debian, Ubuntu and their relatives). Use --rpm on Fedora or openSUSE, or neither for the user install.\n'
+			status=1
+		fi
+		;;
+	rpm)
+		if ! command -v dnf >/dev/null 2>&1 && ! command -v yum >/dev/null 2>&1 && ! command -v zypper >/dev/null 2>&1; then
+			printf 'error: --rpm needs dnf, yum or zypper (Fedora, RHEL, openSUSE). Use --deb on Debian or Ubuntu, or neither for the user install.\n'
+			status=1
+		fi
+		;;
+	esac
+	if [ "$MODE" != user ] && [ "$(id -u)" != 0 ] && ! command -v sudo >/dev/null 2>&1; then
+		printf 'error: --%s installs system-wide, which needs root: run this as root, or install sudo. Without --%s it installs for this user (no root needed).\n' "$MODE" "$MODE"
+		status=1
+	fi
+	[ "$status" -eq 0 ] || printf '\n'
+	return "$status"
+}
+
+# json_linux: json (see there) with python3, else Bun, else awk.
+# shellcheck disable=SC2016 # Python, JavaScript and awk, not shell
+JSON_PY='import json, sys
+def clean(v): return v.replace("\r", "").replace("\n", "") if isinstance(v, str) else ""
+doc = json.load(open(sys.argv[1], encoding="utf-8"))
+if not isinstance(doc, dict): sys.exit(1)
+if sys.argv[2] == "field":
+	print(clean(doc.get(sys.argv[3])))
+	sys.exit(0)
+tags = doc.get("dist-tags") if isinstance(doc.get("dist-tags"), dict) else {}
+versions = doc.get("versions") if isinstance(doc.get("versions"), dict) else {}
+version = tags[sys.argv[3]] if sys.argv[3] in tags else sys.argv[3]
+entry = versions.get(version) if isinstance(version, str) else None
+if not isinstance(entry, dict) or not isinstance(entry.get("dist"), dict):
+	print("missing\n" + clean(tags.get("latest")))
+else:
+	dist = entry["dist"]
+	print("\n".join(["ok", clean(version), clean(dist.get("tarball")), clean(dist.get("integrity")), clean(dist.get("shasum"))]))'
+# shellcheck disable=SC2016
+JSON_BUN='const [file, mode, want] = process.argv.slice(2);
+const doc = JSON.parse(require("fs").readFileSync(file, "utf8"));
+const clean = (v) => (typeof v === "string" ? v.replace(/[\r\n]/g, "") : "");
+const own = (o, k) => o !== null && typeof o === "object" && Object.prototype.hasOwnProperty.call(o, k);
+if (doc === null || typeof doc !== "object" || Array.isArray(doc)) process.exit(1);
+if (mode === "field") {
+	console.log(clean(doc[want]));
+} else {
+	const tags = doc["dist-tags"] || {}, versions = doc.versions || {};
+	const version = own(tags, want) ? tags[want] : want;
+	const entry = own(versions, version) ? versions[version] : null;
+	if (!entry || !entry.dist) console.log("missing\n" + clean(tags.latest));
+	else console.log(["ok", clean(version), clean(entry.dist.tarball), clean(entry.dist.integrity), clean(entry.dist.shasum)].join("\n"));
+}'
+# A small JSON parser in POSIX awk, for systems with neither python3 nor Bun: it reads the whole document (rejecting what is
+# not JSON), keeps its strings by their path, and answers the same questions as above.
+# shellcheck disable=SC2016
+JSON_AWK='
+function bad_json() { bad = 1 }
+function skip() { while (pos <= n && index(" \t\r\n", substr(text, pos, 1)) > 0) pos++ }
+function str(   c, out) {
+	pos++
+	out = ""
+	while (pos <= n) {
+		c = substr(text, pos, 1)
+		if (c == "\"") { pos++; return out }
+		if (c == "\\") {
+			pos++
+			c = substr(text, pos, 1)
+			if (c == "n") c = "\n"
+			else if (c == "t") c = "\t"
+			else if (c == "r") c = "\r"
+			else if (c == "b" || c == "f") c = ""
+			else if (c == "u") { c = "?"; pos += 4 }
+		}
+		out = out c
+		pos++
+	}
+	bad_json()
+	return ""
+}
+function value(path,   c, k, i, start) {
+	if (bad) return
+	if (++depth > 64) { bad_json(); return }
+	skip()
+	c = substr(text, pos, 1)
+	if (c == "{") {
+		pos++
+		skip()
+		if (substr(text, pos, 1) == "}") pos++
+		else while (!bad) {
+			skip()
+			if (substr(text, pos, 1) != "\"") { bad_json(); return }
+			k = str()
+			skip()
+			if (substr(text, pos, 1) != ":") { bad_json(); return }
+			pos++
+			value(path SUBSEP k)
+			skip()
+			c = substr(text, pos, 1)
+			pos++
+			if (c == "}") break
+			if (c != ",") { bad_json(); return }
+		}
+	} else if (c == "[") {
+		pos++
+		skip()
+		if (substr(text, pos, 1) == "]") pos++
+		else for (i = 0; !bad; i++) {
+			value(path SUBSEP i)
+			skip()
+			c = substr(text, pos, 1)
+			pos++
+			if (c == "]") break
+			if (c != ",") { bad_json(); return }
+		}
+	} else if (c == "\"") {
+		strings[path] = str()
+	} else {
+		start = pos
+		while (pos <= n && index(",:]}[{\" \t\r\n", substr(text, pos, 1)) == 0) pos++
+		if (substr(text, start, pos - start) !~ /^(true|false|null|-?[0-9][0-9.eE+-]*)$/) { bad_json(); return }
+	}
+	depth--
+}
+function clean(v) { gsub(/[\r\n]/, "", v); return v }
+{ text = text $0 "\n" }
+END {
+	n = length(text)
+	pos = 1
+	skip()
+	if (substr(text, pos, 1) != "{") exit 1
+	value("")
+	skip()
+	if (bad || pos <= n) exit 1
+	if (mode == "field") { print clean(strings[SUBSEP want]); exit 0 }
+	t = SUBSEP "dist-tags" SUBSEP want
+	version = (t in strings) ? strings[t] : want
+	d = SUBSEP "versions" SUBSEP version SUBSEP "dist" SUBSEP
+	if (!((d "tarball") in strings) && !((d "integrity") in strings) && !((d "shasum") in strings)) {
+		print "missing"
+		print clean(strings[SUBSEP "dist-tags" SUBSEP "latest"])
+		exit 0
+	}
+	print "ok"
+	print clean(version)
+	print clean(strings[d "tarball"])
+	print clean(strings[d "integrity"])
+	print clean(strings[d "shasum"])
+}'
+json_linux() {
+	if [ "${PIBOLT_DESKTOP_JSON:-}" != awk ] && [ "${PIBOLT_DESKTOP_JSON:-}" != bun ] && command -v python3 >/dev/null 2>&1; then
+		python3 -c "$JSON_PY" "$@" 2>/dev/null
+	elif [ "${PIBOLT_DESKTOP_JSON:-}" != awk ] && find_bun; then
+		printf '%s\n' "$JSON_BUN" >"$TMP/json.js"
+		"$BUN" "$TMP/json.js" "$@" 2>/dev/null
+	else
+		LC_ALL=C awk -v mode="$2" -v want="$3" "$JSON_AWK" "$1" 2>/dev/null
+	fi
+}
+
+has_display() { [ "$OS" != Linux ] || [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; }
+
+on_path() { case ":$PATH:" in *":$1:"*) return 0 ;; esac; return 1; }
+
+open_hint() {
+	if [ "$OS" != Linux ]; then
+		printf 'Open it from Launchpad or Spotlight.'
+	elif [ "$MODE" != user ]; then
+		printf 'Open it from your applications menu, or run %s.' "$LINUX_BIN"
+	elif on_path "$BIN_DIR"; then
+		printf 'Open it from your applications menu, or run %s.' "$(basename "$LAUNCHER")"
+	else
+		printf 'Open it from your applications menu, or run %s.' "$(tilde "$LAUNCHER")"
+	fi
+}
+
+# install_target: where the app goes, for the summary before installing.
+install_target() {
+	if [ "$OS" != Linux ]; then
+		tilde "$(destination_dir)/$APP_NAME"
+	elif [ "$MODE" = user ]; then
+		printf '%s %s(for this user, no root needed)%s' "$(tilde "$APP_DIR")" "$dim" "$reset"
+	else
+		printf '%s %s(the system package %s, with %s)%s' "$SYSTEM_BIN" "$dim" "$SYSTEM_PKG" "$(system_tool_name)" "$reset"
+	fi
+}
+
+# The user install's files are ours when they hold the marker (the launcher, the menu entry) or the version file (the app).
+ours() { [ -f "$1" ] && grep -qF "$MARKER" "$1" 2>/dev/null; }
+app_ours() { [ -f "$1/$VERSION_FILE" ] || { [ -e "$1/AppRun" ] && [ -f "$1/usr/bin/$LINUX_BIN" ]; }; }
+
+# system_version: the version of the system package pi-bolt (from dpkg or rpm), empty when it is not installed.
+system_version() {
+	v=""
+	if command -v dpkg-query >/dev/null 2>&1; then
+		# shellcheck disable=SC2016 # dpkg-query's format, not shell
+		v=$(dpkg-query -W -f='${Status}|${Version}' "$SYSTEM_PKG" 2>/dev/null || true)
+		case "$v" in *" installed|"*) v=${v#*|} ;; *) v="" ;; esac
+	fi
+	if [ -z "$v" ] && command -v rpm >/dev/null 2>&1; then
+		v=$(rpm -q --qf '%{VERSION}' "$SYSTEM_PKG" 2>/dev/null) || v=""
+	fi
+	printf '%s' "$v"
+}
+
+# The command that removes the system package, for messages.
+system_remove_command() {
+	if command -v dpkg-query >/dev/null 2>&1 && dpkg-query -W "$SYSTEM_PKG" >/dev/null 2>&1; then printf 'sudo apt remove %s' "$SYSTEM_PKG"
+	elif command -v dnf >/dev/null 2>&1; then printf 'sudo dnf remove %s' "$SYSTEM_PKG"
+	elif command -v yum >/dev/null 2>&1; then printf 'sudo yum remove %s' "$SYSTEM_PKG"
+	elif command -v zypper >/dev/null 2>&1; then printf 'sudo zypper remove %s' "$SYSTEM_PKG"
+	else printf 'sudo apt remove %s' "$SYSTEM_PKG"; fi
+}
+
+system_tool_name() {
+	if [ "$MODE" = deb ]; then printf 'sudo apt-get'
+	elif command -v dnf >/dev/null 2>&1; then printf 'sudo dnf'
+	elif command -v yum >/dev/null 2>&1; then printf 'sudo yum'
+	else printf 'sudo zypper'; fi
+}
+
+# EXISTING: the install this run updates (the user install, or with --deb/--rpm the system package's executable), with
+# INSTALLED_VERSION; OTHERS: the other kind, if it is there too.
+find_installed_linux() {
+	SYSTEM_VERSION=$(system_version)
+	user_app=""
+	if [ -e "$APP_DIR" ]; then
+		app_ours "$APP_DIR" || fail "$(tilde "$APP_DIR") is not a Pi-Bolt Desktop install; not touching it."
+		user_app=$APP_DIR
+	fi
+	if [ "$MODE" = user ]; then
+		if [ -n "$user_app" ]; then
+			EXISTING=$user_app
+			INSTALLED_VERSION=$(head -n 1 "$APP_DIR/$VERSION_FILE" 2>/dev/null || true)
+		fi
+		[ -z "$SYSTEM_VERSION" ] || OTHERS="$SYSTEM_BIN (the system package $SYSTEM_PKG $SYSTEM_VERSION)"
+	else
+		if [ -n "$SYSTEM_VERSION" ]; then EXISTING=$SYSTEM_BIN INSTALLED_VERSION=$SYSTEM_VERSION; fi
+		[ -z "$user_app" ] || OTHERS="$user_app (the user install; --uninstall removes it)"
+	fi
+}
+
+# is_running_linux PATH: whether a process runs the executable PATH, or one under PATH when it ends in /. It reads where the
+# processes' /proc/PID/exe links point (exact, whatever their command lines say), else asks pgrep.
+is_running_linux() {
+	if [ -d /proc/self ]; then
+		# shellcheck disable=SC2012 # ls -l shows where each link points
+		ls -l /proc/[0-9]*/exe 2>/dev/null | P="$1" awk '
+			{ i = index($0, " -> "); if (i == 0) next; exe = substr($0, i + 4); sub(/ \(deleted\)$/, "", exe) }
+			(ENVIRON["P"] ~ /\/$/ && index(exe, ENVIRON["P"]) == 1) || exe == ENVIRON["P"] { found = 1; exit }
+			END { exit !found }'
+	else
+		pgrep -f -- "$1" >/dev/null 2>&1
+	fi
+}
+
+refuse_if_running_linux() {
+	if [ "$EXISTING" = "$SYSTEM_BIN" ]; then running=$SYSTEM_BIN; else running="$EXISTING/"; fi
+	if is_running_linux "$running"; then
+		finish_progress
+		printf '%serror:%s Pi-Bolt %s is running from %s. Quit it, then run this again.\n' "$red" "$reset" "$INSTALLED_VERSION" "$(tilde "$EXISTING")" >&2
+		exit 3
+	fi
+}
+
+# check_linux_package: the download is the Linux package of this version, and the file this run installs (and the icon)
+# matches its SHA-256 in SHA256SUMS.
+check_linux_package() {
+	case "$MODE" in
+	user) ARTIFACT=Pi-Bolt.AppImage ;;
+	*) ARTIFACT="pi-bolt-desktop.$MODE" ;;
+	esac
+	[ -f "$PKGDIR/package.json" ] && [ -f "$PKGDIR/app/$ARTIFACT" ] && [ -f "$PKGDIR/app/SHA256SUMS" ] ||
+		fail "$(basename "$TGZ") is not a complete Pi-Bolt Desktop package for Linux."
+	[ "$(json "$PKGDIR/package.json" field name)" = "$PKG" ] && [ "$(json "$PKGDIR/package.json" field version)" = "$SHOWN_VERSION" ] ||
+		fail "$(basename "$TGZ") is not $PKG $SHOWN_VERSION."
+	draw_progress "$step" 10000 "${dim}verifying checksum$reset"
+	(cd "$PKGDIR/app" && check_sum "$ARTIFACT") ||
+		fail "$ARTIFACT does not match its SHA-256 in SHA256SUMS: the package is damaged or was altered. Nothing was installed."
+	if [ "$MODE" = user ]; then
+		{ [ -f "$PKGDIR/app/pi-bolt-desktop.png" ] && (cd "$PKGDIR/app" && check_sum pi-bolt-desktop.png); } ||
+			fail "pi-bolt-desktop.png does not match its SHA-256 in SHA256SUMS: the package is damaged or was altered. Nothing was installed."
+	fi
+	APP_VERSION=$SHOWN_VERSION
+	SIGNATURE="checksums verified"
+}
+
+# sh_quote S: S in single quotes, for a shell script.
+sh_quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+# desktop_quote S: S as one quoted argument of a desktop entry's Exec key: the spec's quoting (\ before " ` $ and \), then
+# its string escape (\ as \\), and % as %%.
+desktop_quote() { printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\\\\\/g' -e 's/[$`"]/\\\\&/g' -e 's/%/%%/g')"; }
+
+# put FILE: moves FILE.part, which the caller wrote, into place as FILE.
+put() { mv -f "$1.part" "$1"; }
+
+# refresh_menus: tells the desktop about the new or removed menu entry and icon, with the tools for it where they are installed.
+refresh_menus() {
+	if command -v update-desktop-database >/dev/null 2>&1 && [ -d "$DATA_HOME/applications" ]; then
+		update-desktop-database -q "$DATA_HOME/applications" >/dev/null 2>&1 || true
+	fi
+	if command -v gtk-update-icon-cache >/dev/null 2>&1 && [ -d "$ICON_THEME" ]; then
+		touch "$ICON_THEME" 2>/dev/null || true
+		gtk-update-icon-cache -q -t -f "$ICON_THEME" >/dev/null 2>&1 || true
+	fi
+}
+
+# install_user_linux: extracts the AppImage (--appimage-extract: no FUSE needed) next to the destination, then swaps it in
+# as on a Mac: the old copy moves aside first and comes back if the new one cannot take its place. Then the launcher, the
+# menu entry and the icon.
+install_user_linux() {
+	DEST=$APP_DIR
+	for f in "$LAUNCHER" "$DESKTOP_FILE"; do
+		[ ! -e "$f" ] || ours "$f" || fail "$(tilde "$f") is not Pi-Bolt Desktop's; not replacing it."
+	done
+	draw_progress "$step" 10000 "${dim}extracting the AppImage into $(tilde "$APP_HOME")$reset"
+	mkdir -p "$APP_HOME" 2>/dev/null || fail "cannot create $(tilde "$APP_HOME")."
+	if ! STAGE=$(mktemp -d "$APP_HOME/.app.install-XXXXXX" 2>/dev/null); then
+		STAGE=""
+		fail "cannot write to $(tilde "$APP_HOME")."
+	fi
+	appimage="$PKGDIR/app/Pi-Bolt.AppImage"
+	chmod 755 "$appimage" 2>/dev/null || true
+	if ! (cd "$STAGE" && "$appimage" --appimage-extract >"$TMP/extract.log" 2>&1); then
+		# The temporary folder may be mounted noexec: run it from the destination's folder instead.
+		rm -rf "$STAGE/squashfs-root"
+		if ! cp "$appimage" "$STAGE/Pi-Bolt.AppImage" || ! chmod 755 "$STAGE/Pi-Bolt.AppImage" ||
+			! (cd "$STAGE" && ./Pi-Bolt.AppImage --appimage-extract >"$TMP/extract.log" 2>&1); then
+			fail "could not extract the AppImage. Nothing was installed." "$(tail -n 2 "$TMP/extract.log" 2>/dev/null || true)"
+		fi
+		rm -f "$STAGE/Pi-Bolt.AppImage"
+	fi
+	fresh="$STAGE/squashfs-root"
+	[ -e "$fresh/AppRun" ] && [ -f "$fresh/usr/bin/$LINUX_BIN" ] ||
+		fail "the AppImage does not hold Pi-Bolt (no usr/bin/$LINUX_BIN). Nothing was installed."
+	printf '%s\n' "$SHOWN_VERSION" >"$fresh/$VERSION_FILE"
+	chmod 755 "$fresh"
+	if [ -e "$DEST" ]; then
+		app_ours "$DEST" || fail "$(tilde "$DEST") is not a Pi-Bolt Desktop install; not replacing it."
+		if is_running_linux "$DEST/"; then
+			finish_progress
+			printf '%serror:%s Pi-Bolt is running from %s. Quit it, then run this again.\n' "$red" "$reset" "$(tilde "$DEST")" >&2
+			exit 3
+		fi
+		mv "$DEST" "$STAGE/previous.app" || fail "could not move the old $(tilde "$DEST") aside."
+		if ! mv "$fresh" "$DEST"; then
+			mv "$STAGE/previous.app" "$DEST" || true
+			fail "could not put the new app at $(tilde "$DEST"); the old one is back."
+		fi
+	else
+		mv "$fresh" "$DEST" || fail "could not put the app at $(tilde "$DEST")."
+	fi
+	rm -rf "$STAGE"
+	STAGE=""
+
+	draw_progress "$step" 10000 "${dim}adding it to the applications menu$reset"
+	mkdir -p "$BIN_DIR" "$(dirname "$DESKTOP_FILE")" "$(dirname "$ICON_FILE")" || fail "cannot create the folders in ~/.local."
+	{
+		printf '#!/bin/sh\n# %s\n' "$MARKER"
+		printf 'exec %s "$@"\n' "$(sh_quote "$DEST/AppRun")"
+	} >"$LAUNCHER.part" || fail "could not write $(tilde "$LAUNCHER")."
+	{ chmod 755 "$LAUNCHER.part" && put "$LAUNCHER"; } || fail "could not write $(tilde "$LAUNCHER")."
+	{
+		printf '# %s\n' "$MARKER"
+		printf '[Desktop Entry]\nType=Application\nName=Pi-Bolt\nGenericName=Coding Agent\n'
+		printf 'Comment=Desktop app for the Pi-Bolt coding agent\n'
+		printf 'Exec=%s\n' "$(desktop_quote "$LAUNCHER")"
+		printf 'Icon=%s\nTerminal=false\nCategories=Development;IDE;\nKeywords=pi;agent;coding;ai;\n' "$LINUX_BIN"
+		printf 'StartupWMClass=%s\nStartupNotify=true\n' "$LINUX_BIN"
+	} >"$DESKTOP_FILE.part" || fail "could not write $(tilde "$DESKTOP_FILE")."
+	{ chmod 644 "$DESKTOP_FILE.part" && put "$DESKTOP_FILE"; } || fail "could not write $(tilde "$DESKTOP_FILE")."
+	{ cp "$PKGDIR/app/pi-bolt-desktop.png" "$ICON_FILE.part" && chmod 644 "$ICON_FILE.part" && put "$ICON_FILE"; } ||
+		fail "could not write $(tilde "$ICON_FILE")."
+	refresh_menus
+}
+
+# run_root COMMAND...: runs COMMAND as root: directly when this is root, else with sudo (which asks for the password on the
+# terminal). Its output goes to the terminal; its input is not the script's.
+run_root() {
+	if [ "$(id -u)" = 0 ]; then "$@" </dev/null; else sudo "$@" </dev/null; fi
+}
+
+# install_system_linux: installs the .deb or .rpm with the system's package manager, which brings in WebKitGTK and the other
+# libraries it needs. The package is copied into a folder of its own that apt's unprivileged downloader can read.
+install_system_linux() {
+	if ! PKG_TMP=$(mktemp -d "${TMPDIR:-/tmp}/pi-bolt-desktop-$MODE.XXXXXX"); then fail "cannot create a temporary folder."; fi
+	file="$PKG_TMP/pi-bolt-desktop_${SHOWN_VERSION}.$MODE"
+	{ cp "$PKGDIR/app/$ARTIFACT" "$file" && chmod 755 "$PKG_TMP" && chmod 644 "$file"; } || fail "could not copy the package."
+	finish_progress
+	cmp=1
+	[ -z "$INSTALLED_VERSION" ] || cmp=$(version_cmp "$SHOWN_VERSION" "$INSTALLED_VERSION")
+	if [ "$MODE" = deb ]; then
+		tool=apt-get
+		set -- apt-get install -y
+		[ "$cmp" != 0 ] || set -- "$@" --reinstall
+		[ "$cmp" != -1 ] || set -- "$@" --allow-downgrades
+		set -- "$@" "$file"
+	else
+		if command -v dnf >/dev/null 2>&1; then tool=dnf; elif command -v yum >/dev/null 2>&1; then tool=yum; else tool=zypper; fi
+		case "$cmp" in 0) verb=reinstall ;; -1) verb=downgrade ;; *) verb=install ;; esac
+		if [ "$tool" = zypper ]; then
+			set -- zypper --non-interactive install --allow-unsigned-rpm
+			[ "$verb" != reinstall ] || set -- "$@" --force
+			[ "$verb" != downgrade ] || set -- "$@" --oldpackage
+			set -- "$@" "$file"
+		else
+			set -- "$tool" "$verb" -y "$file"
+		fi
+	fi
+	if [ "$(id -u)" = 0 ]; then
+		printf '\nInstalling the system package %s %s:\n\n  %s%s%s\n\n' "$SYSTEM_PKG" "$SHOWN_VERSION" "$dim" "$*" "$reset"
+	else
+		printf '\nThe system package installs into /usr for every user, which needs root. This runs:\n\n  %ssudo %s%s\n\n' "$dim" "$*" "$reset"
+		printf '%ssudo may ask for your password. (Without --%s, the installer installs for this user only, with no root.)%s\n\n' "$dim" "$MODE" "$reset"
+	fi
+	[ "$tool" != apt-get ] || set -- env DEBIAN_FRONTEND=noninteractive "$@"
+	if ! run_root "$@"; then
+		[ "$tool" = apt-get ] || fail "$tool could not install $(basename "$file")."
+		# apt may not know yet where the libraries the package needs are (old or empty package lists): once more after an update.
+		printf '\n%sapt-get could not install it; updating the package lists and trying again.%s\n\n' "$dim" "$reset"
+		run_root apt-get update || fail "apt-get update failed."
+		run_root "$@" || fail "apt-get could not install $(basename "$file")."
+	fi
+	DEST=$SYSTEM_BIN
+	[ -x "$DEST" ] || fail "the package installed, but there is no $DEST."
+	APP_VERSION=$(system_version)
+	[ -n "$APP_VERSION" ] || APP_VERSION=$SHOWN_VERSION
+	SIGNATURE="installed with $tool"
+	printf '\n'
+}
+
+# missing_libraries: the system libraries the user install needs that this system does not have. An AppImage carries
+# WebKitGTK and GTK but, by design, not what every desktop has (X11 and xcb, Wayland, fontconfig, freetype, harfbuzz, GBM...),
+# so this is empty on a desktop and lists them on a minimal system (a server, a container).
+missing_libraries() {
+	[ "$OS" = Linux ] && [ "$MODE" = user ] && command -v ldd >/dev/null 2>&1 || return 0
+	ldd "$APP_DIR/usr/bin/$LINUX_BIN" 2>/dev/null | awk '$2 == "=>" && $3 == "not" { print $1 }' | sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+
+warn_missing_libraries() {
+	libs=$(missing_libraries)
+	[ -n "$libs" ] || return 0
+	printf '\n%sNote:%s Pi-Bolt needs libraries this system does not have: %s\n' "$bold" "$reset" "$libs"
+	printf '%sDesktop systems have them. Install them with your package manager, or install with --deb (or --rpm), which brings in\nwhat the app needs.%s\n' "$dim" "$reset"
+}
+
+open_app_linux() {
+	if [ "$1" = "$SYSTEM_BIN" ]; then cmd=$SYSTEM_BIN; else cmd="$1/AppRun"; fi
+	if ! has_display; then
+		printf '\n%sNo display here (neither DISPLAY nor WAYLAND_DISPLAY is set): open Pi-Bolt from your desktop.%s\n' "$dim" "$reset"
+		return 0
+	fi
+	(cd / && nohup "$cmd" >/dev/null 2>&1 </dev/null &)
+	printf '\nOpened Pi-Bolt.\n'
+}
+
+# Where Pi-Bolt keeps its settings and web data on Linux: the XDG folders named after the app's identifier.
+linux_data_paths() {
+	printf '%s\n' "$DATA_HOME/$BUNDLE_ID" "${XDG_CONFIG_HOME:-$HOME/.config}/$BUNDLE_ID" "${XDG_CACHE_HOME:-$HOME/.cache}/$BUNDLE_ID"
+}
+
+uninstall_linux() {
+	if [ -e "$APP_DIR" ]; then
+		app_ours "$APP_DIR" || fail "$(tilde "$APP_DIR") is not a Pi-Bolt Desktop install; not removing it."
+		if is_running_linux "$APP_DIR/"; then
+			printf '%serror:%s Pi-Bolt is running from %s. Quit it, then run this again.\n' "$red" "$reset" "$(tilde "$APP_DIR")" >&2
+			exit 3
+		fi
+		rm -rf "$APP_DIR" || fail "could not remove $(tilde "$APP_DIR")."
+		printf '  %s%s%s removed %s\n' "$green" "$CHECK" "$reset" "$(tilde "$APP_DIR")"
+		REMOVED=1
+	fi
+	for f in "$LAUNCHER" "$DESKTOP_FILE"; do
+		ours "$f" || continue
+		rm -f "$f" && printf '  %s%s%s removed %s\n' "$green" "$CHECK" "$reset" "$(tilde "$f")"
+		REMOVED=1
+	done
+	if [ "$REMOVED" = 1 ] && [ -f "$ICON_FILE" ]; then
+		rm -f "$ICON_FILE" && printf '  %s%s%s removed %s\n' "$green" "$CHECK" "$reset" "$(tilde "$ICON_FILE")"
+	fi
+	[ "$REMOVED" = 0 ] || refresh_menus
+	remove_cli
+	[ -n "${PIBOLT_DESKTOP_DIR:-}" ] || rmdir "$APP_HOME" 2>/dev/null || true
+	kept=""
+	while IFS= read -r p; do
+		[ -e "$p" ] || continue
+		if [ -n "$PURGE" ]; then
+			rm -rf "$p" && printf '  %s%s%s removed %s\n' "$green" "$CHECK" "$reset" "$(tilde "$p")"
+			REMOVED=1
+		else
+			kept="$kept $(tilde "$p")"
+		fi
+	done <<EOF
+$(linux_data_paths)
+EOF
+	[ -z "$kept" ] || printf '  %sKept your settings and data in%s (run with --uninstall --purge to remove them).%s\n' "$dim" "$kept" "$reset"
+	SYSTEM_VERSION=$(system_version)
+	[ "$REMOVED" = 0 ] || printf '\nPi-Bolt Desktop was uninstalled.\n'
+	if [ -n "$SYSTEM_VERSION" ]; then
+		also=""
+		[ "$REMOVED" = 0 ] || { printf '\n'; also="also "; }
+		printf 'Pi-Bolt Desktop %s is %sinstalled system-wide, as the package %s. Remove it with:\n\n  %s\n' "$SYSTEM_VERSION" "$also" "$SYSTEM_PKG" "$(system_remove_command)"
+	elif [ "$REMOVED" = 0 ]; then
+		printf 'Pi-Bolt Desktop is not installed (not in %s, and no system package %s). Nothing to remove.\n' "$(tilde "$APP_DIR")" "$SYSTEM_PKG"
+	fi
+}
+
+# cli_package FILE: the package without the app, for Bun to install the command from (the app is big, and installed already).
+cli_package() {
+	[ -f "$PKGDIR/bin/pi-bolt-desktop.js" ] || return 1
+	rm -rf "$TMP/cli"
+	mkdir -p "$TMP/cli/package/bin" &&
+		cp "$PKGDIR/package.json" "$TMP/cli/package/" &&
+		cp "$PKGDIR/bin/pi-bolt-desktop.js" "$TMP/cli/package/bin/" &&
+		{ [ ! -f "$PKGDIR/README.md" ] || cp "$PKGDIR/README.md" "$TMP/cli/package/"; } &&
+		tar -czf "$1" -C "$TMP/cli" package
+}
+
+# --- The agent --------------------------------------------------------------------------------------------------------
+
+# The app runs the Pi-Bolt agent and does not include it: Pi-Bolt has its own installer and updates (to ~/.pi-bolt, with
+# pi-bolt linked into ~/.local/bin), shared with the pi-bolt command. install_agent runs that installer when the agent is
+# missing, with --agent or --yes or a yes at the prompt. It is not asked again (PIBOLT_YES) and does not start Pi-Bolt. If it
+# does not finish, the app stays installed and the command to install the agent is printed.
+install_agent() {
+	agent_found && return 0
+	if [ "$AGENT" = no ]; then
+		agent_hint
+		return 0
+	elif [ "$AGENT" = yes ] || [ "$YES" = 1 ]; then
+		:
+	elif ! has_tty || ! ask "Pi-Bolt Desktop runs the Pi-Bolt agent, which is not installed. Install it now?" y; then
+		agent_hint
+		return 0
+	fi
+	printf '\nInstalling the Pi-Bolt agent %s(%s)%s\n\n' "$dim" "$AGENT_INSTALLER" "$reset"
+	if ! fetch "$TMP/agent-install.sh" "$AGENT_INSTALLER" 0 2>>"$TMP/fetch.log"; then
+		printf '%sCould not download %s.%s\n' "$red" "$AGENT_INSTALLER" "$reset"
+		agent_hint
+		return 0
+	fi
+	if PIBOLT_YES=1 PIBOLT_NO_START=1 sh "$TMP/agent-install.sh" </dev/null && agent_found; then
+		printf '\n%s%s%s Pi-Bolt Desktop will run this Pi-Bolt.\n' "$green" "$CHECK" "$reset"
+	else
+		printf '\n%sThe Pi-Bolt installer did not finish. Pi-Bolt Desktop is installed, but it needs the agent.%s\n' "$red" "$reset"
+		agent_hint
+	fi
+}
+
+agent_hint() {
+	printf '\nPi-Bolt Desktop runs the Pi-Bolt agent, which is not installed. Install it with:\n\n  curl -fsSL %s | sh\n' "$AGENT_INSTALLER"
 }
 
 # --- The command ------------------------------------------------------------------------------------------------------
@@ -1028,7 +1714,9 @@ install_cli() {
 	find_bun || install_bun || return 0
 	mkdir -p "$CLI_HOME" || fail "cannot create $(tilde "$CLI_HOME")."
 	kept="$CLI_HOME/$PKG_BASE-$SHOWN_VERSION.tgz"
-	if ! cp "$TGZ" "$kept.part" || ! mv "$kept.part" "$kept"; then fail "could not copy the package into $(tilde "$CLI_HOME")."; fi
+	if [ "$OS" = Linux ]; then
+		if ! cli_package "$kept.part" || ! mv "$kept.part" "$kept"; then fail "could not write the command's package into $(tilde "$CLI_HOME")."; fi
+	elif ! cp "$TGZ" "$kept.part" || ! mv "$kept.part" "$kept"; then fail "could not copy the package into $(tilde "$CLI_HOME")."; fi
 	if ! BUN_INSTALL="$BUN_HOME" "$BUN" add -g "$kept" >"$TMP/cli.log" 2>&1; then
 		fail "bun add -g $(tilde "$kept") failed." "$(grep -m 2 -i 'error' "$TMP/cli.log" || tail -n 2 "$TMP/cli.log")"
 	fi
@@ -1059,6 +1747,10 @@ remove_cli() {
 
 uninstall() {
 	REMOVED=0
+	if [ "$OS" = Linux ]; then
+		uninstall_linux
+		return
+	fi
 	apps=""
 	[ -z "$EXISTING" ] || apps="$EXISTING
 $OTHERS"
@@ -1143,8 +1835,8 @@ choose_action() {
 	fi
 	if [ -n "$LOCAL_TGZ" ]; then source="$(tilde "$LOCAL_TGZ")"; elif [ "$AUTH" = 1 ]; then source="$REGISTRY (private, token from $TOKEN_FROM)"; else source="$REGISTRY"; fi
 	printf '%sInstallation:%s\n\n' "$bold" "$reset"
-	printf '  %sPi-Bolt Desktop %s%s, for Apple silicon\n' "$amber" "$SHOWN_VERSION" "$reset"
-	printf '  %sinstalls to%s  %s\n' "$dim" "$reset" "$(tilde "$(destination_dir)/$APP_NAME")"
+	printf '  %sPi-Bolt Desktop %s%s, for %s\n' "$amber" "$SHOWN_VERSION" "$reset" "$PLATFORM_LABEL"
+	printf '  %sinstalls to%s  %s\n' "$dim" "$reset" "$(install_target)"
 	printf '  %sfrom%s         %s\n\n' "$dim" "$reset" "$source"
 
 	if has_tty; then
@@ -1197,7 +1889,7 @@ choose_action() {
 
 offer_open() {
 	if [ "$OPEN" = ask ]; then
-		if [ -t 1 ] && has_tty && ask "Open Pi-Bolt now?" y; then OPEN=yes; else OPEN=no; fi
+		if [ -t 1 ] && has_tty && has_display && ask "Open Pi-Bolt now?" y; then OPEN=yes; else OPEN=no; fi
 	fi
 	[ "$OPEN" != yes ] || open_app "$DEST"
 }
