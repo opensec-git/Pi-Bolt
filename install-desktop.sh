@@ -6,15 +6,13 @@
 #
 # Downloads Pi-Bolt Desktop straight from the npm registry with curl (the registry as a CDN, fast in most places: no npm, Node
 # or Bun needed for the app), checks it against the registry's sha512 integrity and the app against its SHA-256 in the
-# package, and installs it. Run it again to update or uninstall. The optional pi-bolt-desktop command (--cli) is a Bun
-# script, installed with `bun add -g` from the same download. The app runs the Pi-Bolt agent, which it does not include: when
-# the agent is missing, the installer offers to run Pi-Bolt's own installer for it.
+# package, and installs it. Run it again to update or uninstall. The app includes the Pi-Bolt agent, so nothing else is
+# needed. The optional pi-bolt-desktop command (--cli) runs on the Bun runtime inside that bundled agent: no Bun install.
 #
 # On a Mac it installs Pi-Bolt.app into /Applications (or ~/Applications) from @kushalkhemka/pi-bolt-desktop. On Linux it
 # installs from @kushalkhemka/pi-bolt-desktop-linux-x64, by default for this user only and without root: the AppImage is
 # extracted (no FUSE needed) into ~/.local/share/pi-bolt-desktop/app, with a launcher in ~/.local/bin/pi-bolt-desktop-app,
-# an entry in the applications menu and an icon. --deb or --rpm instead installs the system package with apt-get or dnf
-# (through sudo), which uses the system's WebKitGTK.
+# an entry in the applications menu and an icon. The Pi-Bolt agent comes from Pi-Bolt's own installer (offered below).
 #
 # The app is a private npm package, so the registry wants a token that can read it: the installer takes
 # PIBOLT_DESKTOP_NPM_TOKEN, NPM_TOKEN, or a token in ~/.bunfig.toml or ~/.npmrc. It sends the token to the registry only, in a
@@ -22,13 +20,11 @@
 # token (published publicly), none is needed.
 #
 # Options:
-#   --cli         also install the pi-bolt-desktop command with Bun (asked when interactive; offers to install Bun)
-#   --agent       install the Pi-Bolt agent if it is missing, without asking (the default with --yes)
-#   --no-agent    do not install the Pi-Bolt agent
+#   --cli         also install the pi-bolt-desktop command (asked when interactive)
+#   --agent       also install the standalone Pi-Bolt agent (the pi-bolt command) when it is missing; the app has its own
+#   --no-agent    do not install the standalone Pi-Bolt agent
 #   --no-cli      do not install or update the command
 #   --user        macOS: use ~/Applications instead of /Applications; Linux: the user install (the default)
-#   --deb         Linux: install the .deb system-wide with sudo apt-get (Debian, Ubuntu)
-#   --rpm         Linux: install the .rpm system-wide with sudo dnf (Fedora, RHEL; or yum, zypper)
 #   --force       reinstall the same version, or replace a newer one
 #   --open        open Pi-Bolt when done (asked when interactive)
 #   --uninstall   remove the app and the command; --purge also removes the app's data (~/Library, or ~/.local/share,
@@ -47,7 +43,7 @@
 #   PIBOLT_DESKTOP_TGZ           install from this local package .tgz instead of the registry (offline, testing)
 #   PIBOLT_DESKTOP_DIR           macOS: install to and look for the app only in this folder; Linux: the folder for the app
 #                                instead of ~/.local/share/pi-bolt-desktop (it goes into its app/ folder)
-#   BUN_INSTALL                  where Bun is (default: ~/.bun); --cli installs the command into its global packages
+#   BUN_INSTALL                  where an older Bun-based install of the command is removed from (default: ~/.bun)
 #   PIBOLT_DESKTOP_AGENT_INSTALLER  Pi-Bolt's installer to run for the agent (default: https://pi-bolt.opensec.in/install.sh)
 
 PKG="@kushalkhemka/pi-bolt-desktop"
@@ -97,8 +93,7 @@ main() {
 		--agent) AGENT=yes ;;
 		--no-agent) AGENT=no ;;
 		--user) USER_FLAG=1 ;;
-		--deb) MODE=deb ;;
-		--rpm) MODE=rpm ;;
+		--deb | --rpm) usage_error "$1 is no longer offered: the default install (for this user, no root) works on every distribution" ;;
 		--force) FORCE=1 ;;
 		--open) OPEN=yes ;;
 		--no-open) OPEN=no ;;
@@ -114,8 +109,6 @@ main() {
 	done
 	case "$VERSION" in "" | *[!0-9A-Za-z.+-]*) usage_error "not a version: $VERSION" ;; esac
 	[ -z "$PURGE" ] || [ -n "$UNINSTALL" ] || usage_error "--purge goes with --uninstall"
-	[ "$MODE" = user ] || [ "$OS" = Linux ] || usage_error "--$MODE is for Linux"
-	[ "$MODE" = user ] || [ -z "$USER_FLAG" ] || usage_error "--user and --$MODE do not go together"
 	[ -z "$LOCAL_TGZ" ] || [ -f "$LOCAL_TGZ" ] || usage_error "PIBOLT_DESKTOP_TGZ: no such file: $LOCAL_TGZ"
 	setup_style
 
@@ -158,12 +151,12 @@ main() {
 		;;
 	none)
 		# Nothing to install, but the command may still be wanted, and the app opened.
+		[ -z "$EXISTING" ] || install_agent
 		if [ "$CLI" = yes ]; then
 			fetch_package
 			finish_progress
 			install_cli
 		fi
-		[ -z "$EXISTING" ] || install_agent
 		[ "$OPEN" != yes ] || [ -z "$EXISTING" ] || open_app "$EXISTING"
 		exit 0
 		;;
@@ -186,8 +179,8 @@ main() {
 		[ -z "$other" ] || printf '%sNote: another copy is at %s.%s\n' "$dim" "$(tilde "$other")" "$reset"
 	done
 	warn_missing_libraries
-	install_cli
 	install_agent
+	install_cli
 	offer_open
 	printf '\n%s Run this script again to update or uninstall it.\n' "$(open_hint)"
 }
@@ -353,13 +346,11 @@ Pi-Bolt Desktop installer (macOS on Apple silicon, Linux on x86-64)
 
 Usage: sh install.sh [options]        (or: curl -fsSL <URL> | sh -s -- [options])
 
-  --cli         also install the pi-bolt-desktop command (with Bun: bun add -g)
+  --cli         also install the pi-bolt-desktop command (no Bun needed)
   --no-cli      do not install or update the command
-  --agent       install the Pi-Bolt agent if it is missing, without asking
+  --agent       also install the standalone Pi-Bolt agent if it is missing
   --no-agent    do not install the Pi-Bolt agent
   --user        macOS: use ~/Applications instead of /Applications (Linux: the default user install)
-  --deb         Linux: install the .deb system-wide (sudo apt-get) instead of the user install
-  --rpm         Linux: install the .rpm system-wide (sudo dnf) instead of the user install
   --force       reinstall the same version, or replace a newer one
   --open        open Pi-Bolt when done
   --uninstall   remove the app and the command (--purge: also its settings and data)
@@ -999,7 +990,7 @@ destination_dir() {
 # old copy moves aside first and comes back if the new one cannot take its place.
 install_app() {
 	if [ "$OS" = Linux ]; then
-		if [ "$MODE" = user ]; then install_user_linux; else install_system_linux; fi
+		install_user_linux
 		return
 	fi
 	dir=$(destination_dir)
@@ -1101,24 +1092,6 @@ preflight_linux() {
 	if ! { command -v sha512sum >/dev/null 2>&1 && command -v base64 >/dev/null 2>&1 && command -v od >/dev/null 2>&1; } &&
 		! command -v openssl >/dev/null 2>&1; then
 		printf 'error: sha512sum and base64 (coreutils), or openssl, are required.\n'
-		status=1
-	fi
-	case "$MODE" in
-	deb)
-		if ! command -v apt-get >/dev/null 2>&1; then
-			printf 'error: --deb needs apt-get (Debian, Ubuntu and their relatives). Use --rpm on Fedora or openSUSE, or neither for the user install.\n'
-			status=1
-		fi
-		;;
-	rpm)
-		if ! command -v dnf >/dev/null 2>&1 && ! command -v yum >/dev/null 2>&1 && ! command -v zypper >/dev/null 2>&1; then
-			printf 'error: --rpm needs dnf, yum or zypper (Fedora, RHEL, openSUSE). Use --deb on Debian or Ubuntu, or neither for the user install.\n'
-			status=1
-		fi
-		;;
-	esac
-	if [ "$MODE" != user ] && [ "$(id -u)" != 0 ] && ! command -v sudo >/dev/null 2>&1; then
-		printf 'error: --%s installs system-wide, which needs root: run this as root, or install sudo. Without --%s it installs for this user (no root needed).\n' "$MODE" "$MODE"
 		status=1
 	fi
 	[ "$status" -eq 0 ] || printf '\n'
@@ -1272,8 +1245,6 @@ on_path() { case ":$PATH:" in *":$1:"*) return 0 ;; esac; return 1; }
 open_hint() {
 	if [ "$OS" != Linux ]; then
 		printf 'Open it from Launchpad or Spotlight.'
-	elif [ "$MODE" != user ]; then
-		printf 'Open it from your applications menu, or run %s.' "$LINUX_BIN"
 	elif on_path "$BIN_DIR"; then
 		printf 'Open it from your applications menu, or run %s.' "$(basename "$LAUNCHER")"
 	else
@@ -1285,10 +1256,8 @@ open_hint() {
 install_target() {
 	if [ "$OS" != Linux ]; then
 		tilde "$(destination_dir)/$APP_NAME"
-	elif [ "$MODE" = user ]; then
-		printf '%s %s(for this user, no root needed)%s' "$(tilde "$APP_DIR")" "$dim" "$reset"
 	else
-		printf '%s %s(the system package %s, with %s)%s' "$SYSTEM_BIN" "$dim" "$SYSTEM_PKG" "$(system_tool_name)" "$reset"
+		printf '%s %s(for this user, no root needed)%s' "$(tilde "$APP_DIR")" "$dim" "$reset"
 	fi
 }
 
@@ -1317,13 +1286,6 @@ system_remove_command() {
 	elif command -v yum >/dev/null 2>&1; then printf 'sudo yum remove %s' "$SYSTEM_PKG"
 	elif command -v zypper >/dev/null 2>&1; then printf 'sudo zypper remove %s' "$SYSTEM_PKG"
 	else printf 'sudo apt remove %s' "$SYSTEM_PKG"; fi
-}
-
-system_tool_name() {
-	if [ "$MODE" = deb ]; then printf 'sudo apt-get'
-	elif command -v dnf >/dev/null 2>&1; then printf 'sudo dnf'
-	elif command -v yum >/dev/null 2>&1; then printf 'sudo yum'
-	else printf 'sudo zypper'; fi
 }
 
 # EXISTING: the install this run updates (the user install, or with --deb/--rpm the system package's executable), with
@@ -1373,10 +1335,7 @@ refuse_if_running_linux() {
 # check_linux_package: the download is the Linux package of this version, and the file this run installs (and the icon)
 # matches its SHA-256 in SHA256SUMS.
 check_linux_package() {
-	case "$MODE" in
-	user) ARTIFACT=Pi-Bolt.AppImage ;;
-	*) ARTIFACT="pi-bolt-desktop.$MODE" ;;
-	esac
+	ARTIFACT=Pi-Bolt.AppImage
 	[ -f "$PKGDIR/package.json" ] && [ -f "$PKGDIR/app/$ARTIFACT" ] && [ -f "$PKGDIR/app/SHA256SUMS" ] ||
 		fail "$(basename "$TGZ") is not a complete Pi-Bolt Desktop package for Linux."
 	[ "$(json "$PKGDIR/package.json" field name)" = "$PKG" ] && [ "$(json "$PKGDIR/package.json" field version)" = "$SHOWN_VERSION" ] ||
@@ -1482,61 +1441,6 @@ install_user_linux() {
 	refresh_menus
 }
 
-# run_root COMMAND...: runs COMMAND as root: directly when this is root, else with sudo (which asks for the password on the
-# terminal). Its output goes to the terminal; its input is not the script's.
-run_root() {
-	if [ "$(id -u)" = 0 ]; then "$@" </dev/null; else sudo "$@" </dev/null; fi
-}
-
-# install_system_linux: installs the .deb or .rpm with the system's package manager, which brings in WebKitGTK and the other
-# libraries it needs. The package is copied into a folder of its own that apt's unprivileged downloader can read.
-install_system_linux() {
-	if ! PKG_TMP=$(mktemp -d "${TMPDIR:-/tmp}/pi-bolt-desktop-$MODE.XXXXXX"); then fail "cannot create a temporary folder."; fi
-	file="$PKG_TMP/pi-bolt-desktop_${SHOWN_VERSION}.$MODE"
-	{ cp "$PKGDIR/app/$ARTIFACT" "$file" && chmod 755 "$PKG_TMP" && chmod 644 "$file"; } || fail "could not copy the package."
-	finish_progress
-	cmp=1
-	[ -z "$INSTALLED_VERSION" ] || cmp=$(version_cmp "$SHOWN_VERSION" "$INSTALLED_VERSION")
-	if [ "$MODE" = deb ]; then
-		tool=apt-get
-		set -- apt-get install -y
-		[ "$cmp" != 0 ] || set -- "$@" --reinstall
-		[ "$cmp" != -1 ] || set -- "$@" --allow-downgrades
-		set -- "$@" "$file"
-	else
-		if command -v dnf >/dev/null 2>&1; then tool=dnf; elif command -v yum >/dev/null 2>&1; then tool=yum; else tool=zypper; fi
-		case "$cmp" in 0) verb=reinstall ;; -1) verb=downgrade ;; *) verb=install ;; esac
-		if [ "$tool" = zypper ]; then
-			set -- zypper --non-interactive install --allow-unsigned-rpm
-			[ "$verb" != reinstall ] || set -- "$@" --force
-			[ "$verb" != downgrade ] || set -- "$@" --oldpackage
-			set -- "$@" "$file"
-		else
-			set -- "$tool" "$verb" -y "$file"
-		fi
-	fi
-	if [ "$(id -u)" = 0 ]; then
-		printf '\nInstalling the system package %s %s:\n\n  %s%s%s\n\n' "$SYSTEM_PKG" "$SHOWN_VERSION" "$dim" "$*" "$reset"
-	else
-		printf '\nThe system package installs into /usr for every user, which needs root. This runs:\n\n  %ssudo %s%s\n\n' "$dim" "$*" "$reset"
-		printf '%ssudo may ask for your password. (Without --%s, the installer installs for this user only, with no root.)%s\n\n' "$dim" "$MODE" "$reset"
-	fi
-	[ "$tool" != apt-get ] || set -- env DEBIAN_FRONTEND=noninteractive "$@"
-	if ! run_root "$@"; then
-		[ "$tool" = apt-get ] || fail "$tool could not install $(basename "$file")."
-		# apt may not know yet where the libraries the package needs are (old or empty package lists): once more after an update.
-		printf '\n%sapt-get could not install it; updating the package lists and trying again.%s\n\n' "$dim" "$reset"
-		run_root apt-get update || fail "apt-get update failed."
-		run_root "$@" || fail "apt-get could not install $(basename "$file")."
-	fi
-	DEST=$SYSTEM_BIN
-	[ -x "$DEST" ] || fail "the package installed, but there is no $DEST."
-	APP_VERSION=$(system_version)
-	[ -n "$APP_VERSION" ] || APP_VERSION=$SHOWN_VERSION
-	SIGNATURE="installed with $tool"
-	printf '\n'
-}
-
 # missing_libraries: the system libraries the user install needs that this system does not have. An AppImage carries
 # WebKitGTK and GTK but, by design, not what every desktop has (X11 and xcb, Wayland, fontconfig, freetype, harfbuzz, GBM...),
 # so this is empty on a desktop and lists them on a minimal system (a server, a container).
@@ -1549,7 +1453,7 @@ warn_missing_libraries() {
 	libs=$(missing_libraries)
 	[ -n "$libs" ] || return 0
 	printf '\n%sNote:%s Pi-Bolt needs libraries this system does not have: %s\n' "$bold" "$reset" "$libs"
-	printf '%sDesktop systems have them. Install them with your package manager, or install with --deb (or --rpm), which brings in\nwhat the app needs.%s\n' "$dim" "$reset"
+	printf '%sEvery desktop system has them; on a server or in a container, install them with your package manager.%s\n' "$dim" "$reset"
 }
 
 open_app_linux() {
@@ -1613,25 +1517,19 @@ EOF
 	fi
 }
 
-# cli_package FILE: the package without the app, for Bun to install the command from (the app is big, and installed already).
-cli_package() {
-	[ -f "$PKGDIR/bin/pi-bolt-desktop.js" ] || return 1
-	rm -rf "$TMP/cli"
-	mkdir -p "$TMP/cli/package/bin" &&
-		cp "$PKGDIR/package.json" "$TMP/cli/package/" &&
-		cp "$PKGDIR/bin/pi-bolt-desktop.js" "$TMP/cli/package/bin/" &&
-		{ [ ! -f "$PKGDIR/README.md" ] || cp "$PKGDIR/README.md" "$TMP/cli/package/"; } &&
-		tar -czf "$1" -C "$TMP/cli" package
-}
-
 # --- The agent --------------------------------------------------------------------------------------------------------
 
-# The app runs the Pi-Bolt agent and does not include it: Pi-Bolt has its own installer and updates (to ~/.pi-bolt, with
-# pi-bolt linked into ~/.local/bin), shared with the pi-bolt command. install_agent runs that installer when the agent is
-# missing, with --agent or --yes or a yes at the prompt. It is not asked again (PIBOLT_YES) and does not start Pi-Bolt. If it
+# The app includes a Pi-Bolt agent. The standalone agent (the pi-bolt command, with its own updates in ~/.pi-bolt) is
+# optional: install_agent runs Pi-Bolt's installer for it with --agent, or, for an app build without a bundled agent, with
+# --yes or a yes at the prompt. It is not asked again (PIBOLT_YES) and does not start Pi-Bolt. If it
 # does not finish, the app stays installed and the command to install the agent is printed.
 install_agent() {
 	agent_found && return 0
+	# The app carries its own agent: install the standalone one only when asked for (--agent).
+	if [ "$AGENT" != yes ]; then
+		r=$(cli_runtime)
+		[ -z "$r" ] || [ ! -x "$r" ] || return 0
+	fi
 	if [ "$AGENT" = no ]; then
 		agent_hint
 		return 0
@@ -1661,41 +1559,33 @@ agent_hint() {
 
 # --- The command ------------------------------------------------------------------------------------------------------
 
-# The pi-bolt-desktop command is a Bun script, installed with Bun (bun add -g) from the package just downloaded, so Bun needs no
-# access to the registry. Bun's global package.json points at that .tgz, so it is kept here (one version at a time).
-CLI_HOME="${XDG_DATA_HOME:-$HOME/.local/share}/pi-bolt-desktop"
+# The pi-bolt-desktop command is a Bun script. It needs no Bun install: a small launcher in ~/.local/bin runs it on the Bun
+# runtime inside the app's bundled Pi-Bolt agent (BUN_BE_BUN=1), and falls back to a bun on PATH. Its files live in
+# CLI_DIR (a subfolder, so removing the command never touches an app installed next to it).
+CLI_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/pi-bolt-desktop/cli"
+CLI_BIN="$HOME/.local/bin/pi-bolt-desktop"
 BUN_HOME="${BUN_INSTALL:-$HOME/.bun}"
-BUN_INSTALLER="https://bun.sh/install"
 
-# find_bun: BUN, the bun executable (on PATH, or where Bun's installer puts it); fails if there is none.
+# find_bun: BUN, a bun the user already has (only a fallback JSON parser on Linux; never installed by this script).
 find_bun() {
 	BUN=$(command -v bun 2>/dev/null || true)
 	[ -n "$BUN" ] || { [ -x "$BUN_HOME/bin/bun" ] && BUN="$BUN_HOME/bin/bun"; }
 	[ -n "$BUN" ]
 }
 
-# Whether Bun has the command installed globally.
-cli_installed() { [ -f "$BUN_HOME/install/global/node_modules/$PKG/package.json" ]; }
+# Whether the command is installed (this launcher, or an older Bun global install).
+cli_installed() { [ -f "$CLI_DIR/bin/pi-bolt-desktop.js" ] || [ -f "$BUN_HOME/install/global/node_modules/$PKG/package.json" ]; }
 
-# install_bun: Bun's own installer (curl -fsSL https://bun.sh/install | bash), only with --yes or a yes at the prompt.
-install_bun() {
-	if [ "$YES" = 1 ]; then
-		:
-	elif has_tty && ask "The pi-bolt-desktop command runs on Bun, which is not installed. Install Bun now (curl -fsSL $BUN_INSTALLER | bash)?" y; then
-		:
-	else
-		printf '\n%sThe pi-bolt-desktop command runs on Bun, which is not installed (the app does not need it). Install Bun with:%s\n\n  curl -fsSL %s | bash\n\n%sthen run this again with --cli.%s\n' "$dim" "$reset" "$BUN_INSTALLER" "$dim" "$reset"
-		return 1
-	fi
-	command -v bash >/dev/null 2>&1 || fail "Bun's installer needs bash."
-	printf '\nInstalling Bun (%s)\n' "$BUN_INSTALLER"
-	if command -v curl >/dev/null 2>&1; then
-		curl -fsSL "$BUN_INSTALLER" | bash >"$TMP/bun.log" 2>&1 </dev/null || fail "Bun's installer failed." "$(tail -n 2 "$TMP/bun.log")"
-	else
-		wget -qO- "$BUN_INSTALLER" | bash >"$TMP/bun.log" 2>&1 </dev/null || fail "Bun's installer failed." "$(tail -n 2 "$TMP/bun.log")"
-	fi
-	find_bun || fail "Bun's installer ran, but there is no bun in $(tilde "$BUN_HOME/bin")."
-	printf '  %s%s%s installed Bun %s %s(%s)%s\n' "$green" "$CHECK" "$reset" "$("$BUN" --version 2>/dev/null)" "$dim" "$(tilde "$BUN")" "$reset"
+# cli_runtime: the Pi-Bolt agent whose Bun runtime runs the command: on a Mac the one inside the app just installed; on
+# Linux the agent installed by Pi-Bolt's installer (the Linux app does not carry one).
+cli_runtime() {
+	case "$OS" in
+	Darwin) printf '%s' "$DEST/Contents/Resources/resources/agent/pi" ;;
+	*) for r in "$HOME/.pi-bolt/pi-bolt-linux-x64/pi" "$HOME/.pi-bolt/pi-bolt-linux-x64-baseline/pi" "$(command -v pi-bolt 2>/dev/null || true)"; do
+		[ -n "$r" ] && [ -x "$r" ] && { printf '%s' "$r"; return 0; }
+	done ;;
+	esac
+	return 0 # none yet: callers test the result (and set -e must not stop the script here)
 }
 
 install_cli() {
@@ -1705,42 +1595,65 @@ install_cli() {
 	if [ "$CLI" = ask ]; then
 		if [ "$installed_before" = 1 ]; then
 			CLI=yes
-		elif has_tty && ask "Also install the pi-bolt-desktop command (install, update, open, doctor; runs on Bun)?" n; then
+		elif has_tty && ask "Also install the pi-bolt-desktop command (install, update, open, doctor)?" n; then
 			CLI=yes
 		else
 			return 0
 		fi
 	fi
-	find_bun || install_bun || return 0
-	mkdir -p "$CLI_HOME" || fail "cannot create $(tilde "$CLI_HOME")."
-	kept="$CLI_HOME/$PKG_BASE-$SHOWN_VERSION.tgz"
-	if [ "$OS" = Linux ]; then
-		if ! cli_package "$kept.part" || ! mv "$kept.part" "$kept"; then fail "could not write the command's package into $(tilde "$CLI_HOME")."; fi
-	elif ! cp "$TGZ" "$kept.part" || ! mv "$kept.part" "$kept"; then fail "could not copy the package into $(tilde "$CLI_HOME")."; fi
-	if ! BUN_INSTALL="$BUN_HOME" "$BUN" add -g "$kept" >"$TMP/cli.log" 2>&1; then
-		fail "bun add -g $(tilde "$kept") failed." "$(grep -m 2 -i 'error' "$TMP/cli.log" || tail -n 2 "$TMP/cli.log")"
+	[ -f "$PKGDIR/bin/pi-bolt-desktop.js" ] || fail "the package has no pi-bolt-desktop command."
+	# The package's layout without the app archive: the command then installs and updates the app from the registry.
+	mkdir -p "$CLI_DIR/bin" "$(dirname "$CLI_BIN")" || fail "cannot create $(tilde "$CLI_DIR")."
+	if ! { cp "$PKGDIR/bin/pi-bolt-desktop.js" "$CLI_DIR/bin/pi-bolt-desktop.js.part" && mv "$CLI_DIR/bin/pi-bolt-desktop.js.part" "$CLI_DIR/bin/pi-bolt-desktop.js" &&
+		cp "$PKGDIR/package.json" "$CLI_DIR/package.json"; }; then
+		fail "could not write the command into $(tilde "$CLI_DIR")."
 	fi
-	for old in "$CLI_HOME/$PKG_BASE"-*.tgz; do
-		[ "$old" = "$kept" ] || rm -f "$old"
-	done
+	runtime=$(cli_runtime)
+	printf '%s\n' "$runtime" >"$CLI_DIR/runtime"
+	cat >"$CLI_BIN.part" <<'PIBOLT_CLI'
+#!/bin/sh
+# pi-bolt-desktop: runs on the Bun runtime inside the Pi-Bolt agent (bundled in the Mac app; installed by Pi-Bolt's
+# installer on Linux), so no Bun install is needed.
+d="${XDG_DATA_HOME:-$HOME/.local/share}/pi-bolt-desktop/cli"
+js="$d/bin/pi-bolt-desktop.js"
+[ -f "$js" ] || { echo "pi-bolt-desktop: $js is missing; reinstall with: curl -fsSL https://pi-bolt.opensec.in/install-desktop.sh | sh -s -- --cli" >&2; exit 1; }
+for r in "${PIBOLT_DESKTOP_RUNTIME:-}" "$(cat "$d/runtime" 2>/dev/null)" /Applications/Pi-Bolt.app/Contents/Resources/resources/agent/pi "$HOME/Applications/Pi-Bolt.app/Contents/Resources/resources/agent/pi" "$HOME/.pi-bolt/pi-bolt-linux-x64/pi" "$HOME/.pi-bolt/pi-bolt-linux-x64-baseline/pi" "$(command -v pi-bolt 2>/dev/null)"; do
+	[ -n "$r" ] && [ -x "$r" ] && BUN_BE_BUN=1 exec "$r" "$js" "$@"
+done
+command -v bun >/dev/null 2>&1 && exec bun "$js" "$@"
+echo "pi-bolt-desktop: no Pi-Bolt runtime found (the Mac app carries one; on Linux it is the Pi-Bolt agent). Install with:" >&2
+echo "  curl -fsSL https://pi-bolt.opensec.in/install-desktop.sh | sh" >&2
+exit 1
+PIBOLT_CLI
+	if ! { chmod 755 "$CLI_BIN.part" && mv "$CLI_BIN.part" "$CLI_BIN"; }; then fail "could not write $(tilde "$CLI_BIN")."; fi
+	# An older install through Bun (bun add -g) would shadow the launcher on PATH: remove it.
+	if [ -f "$BUN_HOME/install/global/node_modules/$PKG/package.json" ] && [ -x "$BUN_HOME/bin/bun" ]; then
+		BUN_INSTALL="$BUN_HOME" "$BUN_HOME/bin/bun" remove -g "$PKG" >/dev/null 2>&1 || true
+	fi
+	rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/pi-bolt-desktop/$PKG_BASE"-*.tgz 2>/dev/null || true
 	if [ "$installed_before" = 1 ]; then word=Updated; else word=Installed; fi
-	bin="$BUN_HOME/bin/pi-bolt-desktop"
-	printf '%s the pi-bolt-desktop command %s(%s, Bun %s)%s.\n' "$word" "$dim" "$(tilde "$bin")" "$("$BUN" --version 2>/dev/null)" "$reset"
-	if [ "$(command -v pi-bolt-desktop 2>/dev/null || true)" != "$bin" ]; then
-		printf '%s%s is not on your PATH (Bun'"'"'s installer adds it to your shell'"'"'s config: restart your shell).%s\n' "$dim" "$(tilde "$BUN_HOME/bin")" "$reset"
-	fi
+	if [ -n "$runtime" ] && [ -x "$runtime" ]; then how="runs on the Pi-Bolt agent's runtime"; else how="runs once the Pi-Bolt agent is installed"; fi
+	printf '%s the pi-bolt-desktop command %s(%s, %s)%s.\n' "$word" "$dim" "$(tilde "$CLI_BIN")" "$how" "$reset"
+	case ":$PATH:" in
+	*":$(dirname "$CLI_BIN"):"*) ;;
+	*) printf '%sAdd %s to your PATH to run it by name.%s\n' "$dim" "$(tilde "$(dirname "$CLI_BIN")")" "$reset" ;;
+	esac
 }
 
 remove_cli() {
-	if cli_installed && find_bun; then
-		BUN_INSTALL="$BUN_HOME" "$BUN" remove -g "$PKG" >"$TMP/cli.log" 2>&1 || fail "bun remove -g $PKG failed." "$(tail -n 2 "$TMP/cli.log")"
-		printf '  %s%s%s removed the pi-bolt-desktop command\n' "$green" "$CHECK" "$reset"
+	if [ -f "$CLI_BIN" ] && grep -q 'pi-bolt-desktop: runs on the Bun runtime' "$CLI_BIN" 2>/dev/null; then
+		rm -f "$CLI_BIN"
 		REMOVED=1
 	fi
-	if [ -d "$CLI_HOME" ]; then
-		rm -rf "$CLI_HOME"
+	if [ -d "$CLI_DIR" ]; then
+		rm -rf "$CLI_DIR"
 		REMOVED=1
 	fi
+	if [ -f "$BUN_HOME/install/global/node_modules/$PKG/package.json" ] && [ -x "$BUN_HOME/bin/bun" ]; then
+		BUN_INSTALL="$BUN_HOME" "$BUN_HOME/bin/bun" remove -g "$PKG" >/dev/null 2>&1 || true
+		REMOVED=1
+	fi
+	[ "$REMOVED" != 1 ] || printf '  %s%s%s removed the pi-bolt-desktop command\n' "$green" "$CHECK" "$reset"
 }
 
 # --- Uninstall --------------------------------------------------------------------------------------------------------
