@@ -267,7 +267,7 @@ tilde() { case "$1" in "$HOME"/*) printf '~/%s' "${1#"$HOME"/}" ;; *) printf '%s
 resolve_version() {
 	if [ "$VERSION" != latest ]; then printf '%s' "${VERSION#bolt-v}"; return; fi
 	command -v curl >/dev/null 2>&1 || return 0
-	curl -fsSIL -o /dev/null -w '%{url_effective}' "$REPO/releases/latest" | sed -n 's#.*/tag/bolt-v##p'
+	net_curl -fsSIL -o /dev/null -w '%{url_effective}' "$REPO/releases/latest" | sed -n 's#.*/tag/bolt-v##p'
 }
 
 mb() { awk -v b="$1" 'BEGIN { printf "%.1f", b / 1048576 }'; }
@@ -343,15 +343,20 @@ check_sum() {
 	fi
 }
 
+# curl that gives up on a connection after a few seconds: one of the addresses a name has can stop answering (seen with
+# GitHub's release servers), and curl then waits for the system's timeout, 75 s on macOS, before trying the next. With a
+# timeout, it tries the next address after half of it.
+net_curl() { curl --connect-timeout 8 "$@"; }
+
 fetch() { # fetch FILE URL
-	if command -v curl >/dev/null 2>&1; then curl -fsSL -o "$1" "$2"; else wget -q -O "$1" "$2"; fi
+	if command -v curl >/dev/null 2>&1; then net_curl -fsSL --retry 2 -o "$1" "$2"; else wget -q -O "$1" "$2"; fi
 }
 
 # probe URL: prints "FINAL SIZE RANGES": where the download ends up after redirects ("-" if not known), its size in bytes (0 if
 # not known), and 1 if that server sends parts of it (Range requests).
 probe() {
 	if command -v curl >/dev/null 2>&1; then
-		curl -fsSIL -w 'url %{url_effective}\n' "$1" 2>/dev/null | tr -d '\r' | awk '
+		net_curl -fsSIL -w 'url %{url_effective}\n' "$1" 2>/dev/null | tr -d '\r' | awk '
 			/^HTTP\// { n = 0; r = 0 }
 			tolower($1) == "content-length:" { n = $2 }
 			tolower($1) == "accept-ranges:" { r = (tolower($2) == "bytes") }
@@ -366,7 +371,7 @@ probe() {
 # and reads the size from the reply. Fails if the registry does not have it.
 npm_probe() {
 	command -v curl >/dev/null 2>&1 || return 1
-	curl -fsSL -r 0-0 -D - -o /dev/null -w 'url %{url_effective}\n' "$1" 2>/dev/null | tr -d '\r' | awk '
+	net_curl -fsSL -r 0-0 -D - -o /dev/null -w 'url %{url_effective}\n' "$1" 2>/dev/null | tr -d '\r' | awk '
 		tolower($1) == "content-range:" { split($3, a, "/"); n = a[2] }
 		$1 == "url" { u = $2 }
 		END { if (u == "" || n + 0 == 0) exit 1; print u, n + 0, 1 }'
@@ -416,7 +421,7 @@ start_download() {
 			from=$((n * chunk))
 			to=$((from + chunk - 1))
 			[ "$to" -lt "$3" ] || to=$(($3 - 1))
-			curl -fsS --retry 2 -r "$from-$to" -o "$TMP/part.$n" "$2" 2>>"$TMP/fetch.log" &
+			net_curl -fsS --retry 2 -r "$from-$to" -o "$TMP/part.$n" "$2" 2>>"$TMP/fetch.log" &
 			PIDS="$PIDS $!"
 			n=$((n + 1))
 		done
@@ -460,9 +465,13 @@ rate_and_eta() {
 
 # The checksums are signed by Pi-Bolt's release key: a signature that does not verify means the files are not Pi-Bolt's.
 # Checked when the key is known and openssl is there; a release from before signing began has no signature, which is said.
+# The signature is fetched in the background while the release downloads (fetch_signature), and waited for here.
+signature_wanted() { [ -n "$RELEASE_KEY" ] && command -v openssl >/dev/null 2>&1; }
+fetch_signature() { fetch "$TMP/SHA256SUMS.sig.part" "$BASE/SHA256SUMS.sig" 2>/dev/null && mv "$TMP/SHA256SUMS.sig.part" "$TMP/SHA256SUMS.sig"; }
 verify_signature() {
-	[ -n "$RELEASE_KEY" ] && command -v openssl >/dev/null 2>&1 || return 0
-	if ! fetch "$TMP/SHA256SUMS.sig" "$BASE/SHA256SUMS.sig" 2>/dev/null; then
+	signature_wanted || return 0
+	[ -z "$SIG_PID" ] || wait "$SIG_PID" 2>/dev/null
+	if [ ! -f "$TMP/SHA256SUMS.sig" ]; then
 		UNSIGNED=1
 		return 0
 	fi
@@ -529,7 +538,8 @@ install_release() {
 	SIGNED="" UNSIGNED="" NOVERIFY=""
 	TMP="$(mktemp -d)"
 	PIDS=""
-	trap 'kill $PIDS 2>/dev/null; rm -rf "$TMP"; finish_progress; exit 130' INT TERM
+	SIG_PID=""
+	trap 'kill $PIDS $SIG_PID 2>/dev/null; rm -rf "$TMP"; finish_progress; exit 130' INT TERM
 	[ -t 1 ] && printf '%s[?25l' "$ESC"
 	if [ ! -t 1 ]; then
 		# Not a terminal (a log, CI): plain lines instead of an animated bar.
@@ -539,6 +549,10 @@ install_release() {
 	step=0
 	plan_download &
 	plan_pid=$!
+	if signature_wanted; then
+		fetch_signature &
+		SIG_PID=$!
+	fi
 	while [ -t 1 ] && [ ! -f "$TMP/plan" ] && kill -0 "$plan_pid" 2>/dev/null; do
 		draw_progress "$step" -1 "${dim}connecting$reset"
 		step=$((step + 1))
@@ -553,7 +567,7 @@ install_release() {
 		if download "$final" "$final" "$total" "$ranges" "$TMP/npm.tgz" &&
 			tar -C "$TMP" -xzf "$TMP/npm.tgz" "package/$NAME.$ext" 2>/dev/null &&
 			mv "$TMP/package/$NAME.$ext" "$TMP/$NAME.$ext" &&
-			(cd "$TMP" && check_sum "$NAME.$ext"); then
+			{ draw_progress "$step" 10000 "${dim}verifying checksum$reset"; (cd "$TMP" && check_sum "$NAME.$ext"); }; then
 			FROM=npm
 		else
 			[ "${PIBOLT_SOURCE:-auto}" != npm ] || fail "download failed: $final"
@@ -570,10 +584,13 @@ install_release() {
 		download "$BASE/$NAME.$ext" "$final" "$total" "$ranges" "$TMP/$NAME.$ext" || fail "download failed: $BASE/$NAME.$ext"
 		FROM=GitHub
 		[ -z "${PIBOLT_DOWNLOAD_BASE:-}" ] || FROM="$PIBOLT_DOWNLOAD_BASE"
+		draw_progress "$step" 10000 "${dim}verifying checksum$reset"
+		(cd "$TMP" && check_sum "$NAME.$ext") ||
+			fail "checksum mismatch: the download is corrupt or incomplete"
 	fi
-	draw_progress "$step" 10000 "${dim}verifying checksum$reset"
-	(cd "$TMP" && check_sum "$NAME.$ext") ||
-		fail "checksum mismatch: the download is corrupt or incomplete"
+	if [ -n "$SIG_PID" ] && kill -0 "$SIG_PID" 2>/dev/null; then
+		draw_progress "$step" 10000 "${dim}fetching the signature$reset"
+	fi
 	verify_signature
 	if [ "$ext" = tar.xz ]; then
 		if command -v xz >/dev/null 2>&1; then
