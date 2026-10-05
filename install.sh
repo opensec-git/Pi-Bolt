@@ -784,7 +784,12 @@ offer_start() {
 	n | N | no | NO) return 0 ;;
 	esac
 	printf '\n'
-	exec "$INSTALL/$NAME/pi" </dev/tty
+	# On the terminal's own device (/dev/ttys003), not /dev/tty: on macOS a file opened as /dev/tty cannot be watched with
+	# kqueue, and Pi-Bolt (Bun) could not read its keys from it.
+	terminal=/dev/tty
+	name=$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')
+	case "$name" in "" | "?" | "??") ;; *) [ -c "/dev/$name" ] && terminal="/dev/$name" ;; esac
+	exec "$INSTALL/$NAME/pi" <"$terminal"
 }
 
 main "$@"
