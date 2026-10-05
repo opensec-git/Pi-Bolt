@@ -463,35 +463,76 @@ rate_and_eta() {
 	}'
 }
 
-# The checksums are signed by Pi-Bolt's release key: a signature that does not verify means the files are not Pi-Bolt's.
-# Checked when the key is known and openssl is there; a release from before signing began has no signature, which is said.
-# The signature is fetched in the background while the release downloads (fetch_signature), and waited for here.
-signature_wanted() { [ -n "$RELEASE_KEY" ] && command -v openssl >/dev/null 2>&1; }
+# The checksums are signed by Pi-Bolt's release key, from 0.6.0 on. For those releases the signature is required: one that
+# cannot be downloaded, or that does not verify, stops the install, whatever the download base. It is checked with OpenSSL 3
+# (LibreSSL, macOS's own openssl, cannot check Ed25519), or else with the Pi-Bolt already installed here; with neither, the
+# checksums alone are checked, and that is said. The signature is fetched in the background while the release downloads.
 fetch_signature() { fetch "$TMP/SHA256SUMS.sig.part" "$BASE/SHA256SUMS.sig" 2>/dev/null && mv "$TMP/SHA256SUMS.sig.part" "$TMP/SHA256SUMS.sig"; }
+
+# Whether this release is from after signing began; one whose version is not known counts as one.
+signed_release() {
+	case "$SHOWN_VERSION" in
+	0.[0-5].*) return 1 ;;
+	*) return 0 ;;
+	esac
+}
+
+# An OpenSSL 3 or later: the one on PATH, or Homebrew's.
+openssl3() {
+	for candidate in openssl /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+		command -v "$candidate" >/dev/null 2>&1 || continue
+		case "$("$candidate" version 2>/dev/null)" in
+		"OpenSSL "[3-9]* | "OpenSSL "[1-9][0-9]*)
+			printf '%s' "$candidate"
+			return 0
+			;;
+		esac
+	done
+	return 1
+}
+
+# A Pi-Bolt executable installed here before, which checks the signature with its own crypto (BUN_BE_BUN=1 runs a script).
+installed_pibolt() {
+	for candidate in "$INSTALL/$NAME/pi-bin" "$INSTALL/$NAME/pi" "$INSTALL"/pi-bolt-"$PLATFORM"-*/pi-bin "$INSTALL"/pi-bolt-"$PLATFORM"-*/pi; do
+		if [ -f "$candidate" ] && [ -x "$candidate" ]; then
+			printf '%s' "$candidate"
+			return 0
+		fi
+	done
+	return 1
+}
+VERIFY_SCRIPT='const c = require("node:crypto"), f = require("node:fs");
+let ok;
+try { ok = c.verify(null, f.readFileSync(process.argv[2]), f.readFileSync(process.argv[3], "utf8"), f.readFileSync(process.argv[4])); } catch { process.exit(4); }
+process.exit(ok ? 0 : 3);'
+
 verify_signature() {
-	signature_wanted || return 0
-	[ -z "$SIG_PID" ] || wait "$SIG_PID" 2>/dev/null
+	[ -n "$RELEASE_KEY" ] || return 0
+	# (Whether it worked is whether the file is there: under set -e a failed wait would end the script without a word.)
+	if [ -n "$SIG_PID" ]; then wait "$SIG_PID" 2>/dev/null || true; fi
 	if [ ! -f "$TMP/SHA256SUMS.sig" ]; then
+		signed_release && fail "could not download the release's signature from $BASE/SHA256SUMS.sig. Pi-Bolt $SHOWN_VERSION is signed, so nothing was installed: try again."
 		UNSIGNED=1
 		return 0
 	fi
 	printf '%s\n' "$RELEASE_KEY" >"$TMP/release.pub"
-	# Only OpenSSL 3 and later verify Ed25519 with -rawin: LibreSSL (macOS's /usr/bin/openssl) cannot read the key, OpenSSL 1.1
-	# has no -rawin. With another, the checksums alone are checked, as without openssl, and that is said.
-	case "$(openssl version 2>/dev/null)" in
-	"OpenSSL "[3-9]* | "OpenSSL "[1-9][0-9]*) ;;
-	*)
-		NOVERIFY=1
-		return 0
-		;;
-	esac
-	if ! openssl pkey -pubin -in "$TMP/release.pub" -noout >/dev/null 2>&1; then
-		NOVERIFY=1
+	if ssl=$(openssl3) && "$ssl" pkey -pubin -in "$TMP/release.pub" -noout >/dev/null 2>&1; then
+		"$ssl" pkeyutl -verify -pubin -inkey "$TMP/release.pub" -rawin -in "$TMP/SHA256SUMS" -sigfile "$TMP/SHA256SUMS.sig" >/dev/null 2>&1 ||
+			fail "the release's signature does not verify: the download is not Pi-Bolt's. Nothing was installed."
+		SIGNED=1
 		return 0
 	fi
-	openssl pkeyutl -verify -pubin -inkey "$TMP/release.pub" -rawin -in "$TMP/SHA256SUMS" -sigfile "$TMP/SHA256SUMS.sig" >/dev/null 2>&1 ||
-		fail "the release's signature does not verify: the download is not Pi-Bolt's. Nothing was installed."
-	SIGNED=1
+	if exe=$(installed_pibolt); then
+		printf '%s\n' "$VERIFY_SCRIPT" >"$TMP/verify.js"
+		status=0
+		BUN_BE_BUN=1 "$exe" "$TMP/verify.js" "$TMP/SHA256SUMS" "$TMP/release.pub" "$TMP/SHA256SUMS.sig" >/dev/null 2>&1 || status=$?
+		[ "$status" != 3 ] || fail "the release's signature does not verify: the download is not Pi-Bolt's. Nothing was installed."
+		if [ "$status" = 0 ]; then
+			SIGNED=1
+			return 0
+		fi
+	fi
+	NOVERIFY=1
 }
 
 # download URL FINAL SIZE RANGES FILE: fetches URL into FILE with the progress bar, in parts if the server allows; false if it
@@ -549,7 +590,7 @@ install_release() {
 	step=0
 	plan_download &
 	plan_pid=$!
-	if signature_wanted; then
+	if [ -n "$RELEASE_KEY" ]; then
 		fetch_signature &
 		SIG_PID=$!
 	fi
@@ -620,7 +661,7 @@ install_release() {
 	finish_progress
 	printf '  %s%s%s install complete %s(%s, %s MB from %s%s)%s\n' "$green" "$CHECK" "$reset" "$dim" "$PLATFORM-$VARIANT" "$(mb "${total:-0}")" "$FROM" "${SIGNED:+, signature verified}" "$reset"
 	[ -z "$UNSIGNED" ] || printf '  %snote: this release is not signed (it is from before Pi-Bolt signed releases); its checksum was verified%s\n' "$dim" "$reset"
-	[ -z "$NOVERIFY" ] || printf '  %snote: this openssl cannot check the release'"'"'s signature (install OpenSSL 3 to have it checked); its checksum was verified%s\n' "$dim" "$reset"
+	[ -z "$NOVERIFY" ] || printf '  %snote: there is no OpenSSL 3 here to check the release'"'"'s signature (install it to have it checked); its checksum was verified%s\n' "$dim" "$reset"
 }
 
 uninstall() {
@@ -708,7 +749,8 @@ shell_config_file() {
 }
 
 path_hint() {
-	if [ "$BIN_DIR" = "$HOME/.local/bin" ]; then expr="\$HOME/.local/bin"; else expr="$BIN_DIR"; fi
+	# (A folder of the user's own choosing goes into a line their shell runs: quoted, so that it stays a folder.)
+	if [ "$BIN_DIR" = "$HOME/.local/bin" ]; then expr="\$HOME/.local/bin"; else expr=$(printf '%s' "$BIN_DIR" | sed 's/[\\"$`]/\\&/g'); fi
 	if [ "$(basename "${SHELL:-sh}")" = fish ]; then line="fish_add_path \"$expr\""; else line="export PATH=\"$expr:\$PATH\""; fi
 	config=$(shell_config_file)
 	printf '\n%s is not on your PATH yet.\n' "$(tilde "$BIN_DIR")"
