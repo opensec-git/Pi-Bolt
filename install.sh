@@ -717,8 +717,10 @@ path_hint() {
 
 # OpenSec's optional extensions: Bun builds that load fast in Pi-Bolt (see their READMEs on npm). Pi-Bolt installs them
 # itself, with npm where it is installed and otherwise with the package manager built into Pi-Bolt: nothing else is needed.
-EXTENSIONS="opensec-pi-subagents:run specialized agents in separate sessions:@tintinweb/pi-subagents
-opensec-pi-todo:a todo list for the model, shown above the editor:@juicesharp/rpiv-todo"
+# The last field matches other extensions of the same kind (an extended regular expression on `pi-bolt list`): one of those
+# registers the same tools, so Pi would refuse to load both. A local checkout counts too, by its folder's name.
+EXTENSIONS="opensec-pi-subagents:run specialized agents in separate sessions:subagents|swarm
+opensec-pi-todo:a todo list for the model, shown above the editor:rpiv-todo|pi-todo"
 
 offer_extensions() {
 	choice="${PIBOLT_EXTENSIONS:-}"
@@ -735,10 +737,12 @@ offer_extensions() {
 	old_ifs=$IFS
 	IFS=$newline
 	for entry in $EXTENSIONS; do
-		package=${entry%%:*} upstream=${entry##*:}
+		package=${entry%%:*} kind=${entry##*:}
 		if printf '%s\n' "$sources" | grep -Eq "npm:$package(@.*)?\$"; then continue; fi
-		if printf '%s\n' "$sources" | grep -Fq "npm:$upstream"; then
-			printf '  %s%s is not offered: %s is installed and registers the same tools%s\n' "$dim" "$package" "$upstream" "$reset"
+		# (`pi-bolt list` prints each source, then its path indented below it: only the sources.)
+		other=$(printf '%s\n' "$sources" | grep -E '^  [^ ]' | grep -Ei "$kind" | head -n 1 | sed 's/^ *//')
+		if [ -n "$other" ]; then
+			printf '  %s%s is not offered: %s is installed and registers the same tools%s\n' "$dim" "$package" "$other" "$reset"
 			continue
 		fi
 		wanted="$wanted $package"
