@@ -21,17 +21,26 @@ So the code is already position-independent. What is not is the heap, the region
 
 ## The design
 
-**The region is a section of the executable.** The runtime has an uninitialized, read-only section, `.pbreg` (1,344 MB of
-address space, nothing in the file). `StaticRegion::base()` is the address of its first byte rounded up to 64 KB: a linker symbol, so a
-RIP-relative `lea`, relocated with the image by ASLR. Offsets from it stay compile-time constants, so `StringImpl::empty()` and
-the engine's symbols cost what they cost on Linux. Pages are made writable only as the engine places things in them
-(`StaticRegion::makeWritable()`), so a process is charged only for those.
+**The region starts with a section of the executable.** The runtime has an uninitialized, read-only section, `.pbreg`: the
+32 MB of `Arena::Bss` that has things at fixed offsets (the empty string, the engine's symbols, the VM, the global object, the
+modules' decoders), nothing in the file. `StaticRegion::base()` is its first byte rounded up to 64 KB: a linker symbol, so a
+RIP-relative `lea`, relocated with the image by ASLR. Offsets in Bss stay compile-time constants, so `StringImpl::empty()` and the
+engine's symbols cost what they cost on Linux. Pages are made writable only as the engine places things in them
+(`StaticRegion::makeWritable()`), so a process is charged only for those. (Why only 32 MB: see "What was measured".)
 
-**A compiled Pi executable replaces `.pbreg` with its arenas.** `bun build --compile` (`Bun__StaticHeap__rewritePE()`, before Bun's own
-PE writer adds the module graph) splits the section into sections at the same addresses: the heap's arenas as initialized data
-(`.pbheap`), the code's tables read-only (`.pbimage`), the code as `RX` (`.pbcode`), Bss and the rest still uninitialized. The code
-gets one `RUNTIME_FUNCTION` in the exception directory (`.pbpdata`), so stack walks go through compiled frames. Every pointer in the heap becomes a **base relocation** (`IMAGE_REL_BASED_DIR64`): pointers into the region and
-into the executable move by the same delta, since both are the image. The Windows loader applies them.
+**The other arenas follow the image** (`bmalloc::StaticRegionLayout`, in the read-only section `.pblay`). While the runtime builds
+a heap, they are reserved right after its image, at the next 64 KB. In the compiled executable, `bun build --compile`
+(`Bun__StaticHeap__rewritePE()`, before Bun's own PE writer adds the module graph) adds them at the same place relative to the
+image, as sections as big as they are: the heap's arenas as initialized data (`.pbheap`), the code's tables read-only
+(`.pbimage`), the code as `RX` (`.pbcode`), and writes their layout into `.pblay`. `scripts\build-pi.ps1` builds twice: the first
+build says how big each arena is (`BUN_STATIC_REGION_SIZES_OUT`), and the second makes them that big (`BUN_STATIC_REGION_SIZES`), so
+that there is no room between them, which would be uninitialized. (The heap cannot be packed after it is built: tables hashed by
+address, and the static atom table, have positions relative to the region in them.) `StaticHeap::allocateBlock()`'s blocks, which
+only a running program makes, are a reservation of their own, anywhere, decommitted when they are freed.
+
+The code gets one `RUNTIME_FUNCTION` in the exception directory (`.pbpdata`), so stack walks go through compiled frames. Every
+pointer in the heap becomes a **base relocation** (`IMAGE_REL_BASED_DIR64`): pointers into the region and into the executable move
+by the same delta, since both are the image. The Windows loader applies them.
 
 **Nothing executable is at a fixed address**: the code is a section of the image, wherever ASLR puts it, and needs no relocation.
 
@@ -80,19 +89,21 @@ Reading every page of the section; 3 fresh copies each. (Clock-tick CPU times ar
   nothing written). A read-only one is not. Hence `.pbreg` is read-only (`/SECTION:.pbreg,R`) and pages are made writable as
   needed: `VirtualProtect` takes 1.8 µs a page, and commit is charged per page. A page of an image cannot be decommitted
   afterwards (`VirtualFree` fails, error 87); freed GC blocks there are zeroed instead.
-- **The loader refuses images of about 2 GB** ("not a valid application"); 1.7 GB loads. The region is 1,344 MB on Windows,
-  each arena as big as it needs to be instead of 4 GB each: 128 MB for data, malloc and cells, 64 MB for each mutable arena, 192 MB
-  for the code image, 256 MB for what is only used while building, and 384 MB for Bss, which holds a realm's 256 MB of room for
-  the data of its compiled code (addresses only: it is committed as it is used).
+- **The loader refuses images of about 2 GB** ("not a valid application"); 1.7 GB loads. (A first version had the whole region in
+  the image, 1,344 MB: 128 MB for data, malloc and cells, 64 MB for each mutable arena, 192 MB for the code image, 256 MB for
+  what is only used while building, and 384 MB for Bss, with a realm's 256 MB of room for its compiled code's data. Now the image
+  has the 32 MB of Bss and the arenas as big as they are.)
 - **An uninitialized section is charged to the system's commit in full, read-only or not, and for as long as the image is
   cached.** The measurement above looked at the process's private bytes, which do not show it. The system's commit charge
   (`GetPerformanceInfo`) does: a fresh copy of the runtime, of a compiled program or of a bytecode build each added 1,348–1,351 MB
-  on its first run (the 1,344 MB of `.pbreg`), and that stayed after the process exited; `node.exe` added nothing. Windows keeps
+  on its first run (the 1,344 MB `.pbreg` of the first version), and that stayed after the process exited; `node.exe` added nothing. Windows keeps
   an image section, and its charge, until the file changes or is deleted, and did not let go of them under pressure: 67 test
   executables filled this machine's 41 GB commit limit ("the paging file is too small"), and opening them for writing (which
   drops the cached section; nothing written) gave back 30.6 GB. Confirmed independently with a 1 GB read-only uninitialized
   section. `bench/image_commit.py` measures it per executable; `bench/winproc.py` reports the system's commit charge with every
-  run. So the region cannot be an uninitialized section of the image: see "The layout" below (to be done).
+  run. So the region is only as big in the image as it has to be (see "The design"). Read-only pages with base relocations cost
+  nothing of the kind: a 128 MB read-only section with 48,526 or 2 million relocations added no system commit (within a few MB),
+  while the same section writable cost 131.5 MB of private bytes in each process (given back when it exits).
 - **A write-fault handler** that makes a read-only heap page writable on first write costs about 5 µs a page (4,000 pages in
   21 ms): an option for the arenas that are rarely written, if their commit charge turns out to matter.
 - **The address space right after the image** was free in this test (a 4 GB reservation there succeeded), but nothing needs it

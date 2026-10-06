@@ -127,6 +127,20 @@ function Build-Pi($runtime, $outfile, $log) {
 Push-Location $Agent
 try {
 	$log = if ($env:PIBOLT_BUILD_LOG) { $env:PIBOLT_BUILD_LOG } else { Join-Path $Work 'build-pi.log' }
+	# Twice: the first build says how big each part of the prebuilt heap is, and the second makes them that big, side by side, so
+	# that the executable has no room between them (which would be charged to the system's commit while it is cached; docs/WINDOWS.md).
+	$sizes = Join-Path $Work 'static-region-sizes.txt'
+	Remove-Item $sizes -ErrorAction SilentlyContinue
+	$saved.BUN_STATIC_REGION_SIZES_OUT = [Environment]::GetEnvironmentVariable('BUN_STATIC_REGION_SIZES_OUT')
+	$saved.BUN_STATIC_REGION_SIZES = [Environment]::GetEnvironmentVariable('BUN_STATIC_REGION_SIZES')
+	[Environment]::SetEnvironmentVariable('BUN_STATIC_REGION_SIZES', $null)
+	[Environment]::SetEnvironmentVariable('BUN_STATIC_REGION_SIZES_OUT', $sizes)
+	Log 'first build: how big the prebuilt heap is'
+	Build-Pi $Bun (Join-Path $Work 'pi-first-build.exe') "$log.first"
+	[Environment]::SetEnvironmentVariable('BUN_STATIC_REGION_SIZES_OUT', $null)
+	if (-not (Test-Path $sizes)) { Die 'the first build did not say how big its prebuilt heap is' }
+	[Environment]::SetEnvironmentVariable('BUN_STATIC_REGION_SIZES', (Get-Content $sizes -Raw).Trim())
+	Log "second build, with the heap's parts that big ($((Get-Content $sizes -Raw).Trim()))"
 	Build-Pi $Bun (Join-Path $Out 'pi.exe') $log
 	if ($VerifyDeterminism) {
 		$verify = Join-Path $Work "verify-$(Get-Date -Format yyyyMMddHHmmss)"
@@ -154,4 +168,24 @@ $check = (& (Join-Path $Out 'pi.exe') --version 2>&1 | Out-String)
 $ErrorActionPreference = 'Stop'
 [Environment]::SetEnvironmentVariable('BUN_STATIC_HEAP_VERBOSE', $null)
 if ($check -notmatch 'image registered: true') { Die "the executable does not use its compiled code:`n$check" }
+# The image's size, and what of it is uninitialized: that is charged to the system's commit while Windows has the executable cached
+# (docs/WINDOWS.md). .pbreg is the 32 MB of the region that has to be there; a .pbgap is room between the arenas, which should be small.
+$bytes = [IO.File]::ReadAllBytes((Join-Path $Out 'pi.exe'))
+$pe = [BitConverter]::ToInt32($bytes, 0x3c)
+$count = [BitConverter]::ToUInt16($bytes, $pe + 6)
+$table = $pe + 24 + [BitConverter]::ToUInt16($bytes, $pe + 20)
+$sizeOfImage = [BitConverter]::ToUInt32($bytes, $pe + 24 + 56)
+$uninitialized = @{}
+$heapSections = 0
+for ($i = 0; $i -lt $count; $i++) {
+	$at = $table + 40 * $i
+	$name = [Text.Encoding]::ASCII.GetString($bytes, $at, 8).TrimEnd([char]0)
+	$virtualSize = [BitConverter]::ToUInt32($bytes, $at + 8)
+	$characteristics = [BitConverter]::ToUInt32($bytes, $at + 36)
+	if ($characteristics -band 0x80) { $uninitialized[$name] = $uninitialized[$name] + $virtualSize }
+	if ($name -in '.pbheap', '.pbimage', '.pbcode') { $heapSections += $virtualSize }
+}
+$gaps = [double]$uninitialized['.pbgap']
+Log ("image {0:N1} MB, of it the static heap and code {1:N1} MB; uninitialized: {2}" -f ($sizeOfImage / 1MB), ($heapSections / 1MB), (($uninitialized.GetEnumerator() | Sort-Object Name | ForEach-Object { '{0} {1:N1} MB' -f $_.Name, ($_.Value / 1MB) }) -join ', '))
+if ($gaps -gt 8MB) { Die ("{0:N1} MB of room between the static heap's arenas (.pbgap), which is charged to the system's commit: the arenas were not where the build expected them (see its log)" -f ($gaps / 1MB)) }
 Log "done: $Out\pi.exe ($([math]::Round((Get-Item (Join-Path $Out 'pi.exe')).Length / 1MB)) MB, Pi $(($check.Trim() -split "`n")[-1]))"

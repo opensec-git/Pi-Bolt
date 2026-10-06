@@ -21,7 +21,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
 ---
  scripts/build/deps/webkit.ts                  |  18 +
  scripts/build/download.ts                     |  28 +-
- scripts/build/flags.ts                        |   8 +
+ scripts/build/flags.ts                        |  10 +
  src/ast/import_record.rs                      |   4 +
  src/bun_alloc/lib.rs                          |  14 +-
  src/bun_core/env_var.rs                       |   1 +
@@ -48,16 +48,16 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/jsc/bindings/InternalModuleRegistry.cpp   |  15 +-
  src/jsc/bindings/ZigException.cpp             |  14 +-
  src/jsc/bindings/ZigGlobalObject.cpp          |  45 +
- src/jsc/bindings/ZigSourceProvider.cpp        | 896 +++++++++++++++++-
- src/jsc/bindings/c-bindings.cpp               | 113 +++
+ src/jsc/bindings/ZigSourceProvider.cpp        | 999 +++++++++++++++++-
+ src/jsc/bindings/c-bindings.cpp               | 113 ++
  src/jsc/web_worker.rs                         |   4 +
  src/runtime/api/bun/subprocess.rs             |   2 +-
  src/runtime/cli/run_command.rs                |   5 +
  src/spawn/process.rs                          |  23 +-
- src/spawn_sys/posix_spawn.rs                  | 173 +++-
+ src/spawn_sys/posix_spawn.rs                  | 173 ++-
  src/spawn_sys/spawn_process.rs                |  14 +-
  src/standalone_graph/StandaloneModuleGraph.rs | 254 ++++-
- 38 files changed, 2152 insertions(+), 146 deletions(-)
+ 38 files changed, 2257 insertions(+), 146 deletions(-)
 
 diff --git a/scripts/build/deps/webkit.ts b/scripts/build/deps/webkit.ts
 index bba31a2c..17a71224 100644
@@ -141,20 +141,22 @@ index 42d81846..daeca6fd 100644
   * Extract a .zip archive with mtime normalization.
   *
 diff --git a/scripts/build/flags.ts b/scripts/build/flags.ts
-index 3d40f647..e7bd4377 100644
+index 3d40f647..bd0ae0e1 100644
 --- a/scripts/build/flags.ts
 +++ b/scripts/build/flags.ts
-@@ -1011,6 +1011,14 @@ export const linkerFlags: Flag[] = [
+@@ -1011,6 +1011,16 @@ export const linkerFlags: Flag[] = [
      when: c => c.windows,
      desc: "18MB stack reserve (JSC uses deep recursion), no error limit",
    },
 +  {
-+    // bmalloc::StaticRegion is the section .pbreg on Windows (1,344 MB, uninitialized). An object file cannot make an uninitialized
-+    // section read-only, and a writable one is charged to the commit limit in full when the image is mapped: read-only, nothing
-+    // of it is committed until the engine makes a page writable.
-+    flag: "/SECTION:.pbreg,R",
++    // bmalloc::StaticRegion starts with the section .pbreg on Windows (32 MB, uninitialized): an object file cannot make an
++    // uninitialized section read-only, and read-only, a process is charged only for the pages the engine makes writable. (The
++    // system's commit is charged for all of it while the image is cached: hence the rest of the region is not in the image.)
++    // .pblay is where the region's arenas are (bmalloc::StaticRegionLayout): read-only, since that decides where the engine
++    // reads and writes.
++    flag: ["/SECTION:.pbreg,R", "/SECTION:.pblay,R"],
 +    when: c => c.windows,
-+    desc: "The static region's section is read-only until used (no commit charge)",
++    desc: "The static region's section is read-only until used; its layout is read-only",
 +  },
    {
      flag: "/DEBUG:FULL",
@@ -1892,7 +1894,7 @@ index 9de807ad..bb219910 100644
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH
 diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
-index fbfaa2ff..f03dd2dd 100644
+index fbfaa2ff..eb8b2a85 100644
 --- a/src/jsc/bindings/ZigSourceProvider.cpp
 +++ b/src/jsc/bindings/ZigSourceProvider.cpp
 @@ -2,6 +2,17 @@
@@ -1969,7 +1971,7 @@ index fbfaa2ff..f03dd2dd 100644
  }
  
  extern "C" uint32_t Bun__EncoderStringTable__slotForLatin1(JSC::EncoderStringTable* table, const Latin1Character* chars, size_t length)
-@@ -290,17 +332,841 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
+@@ -290,17 +332,944 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
      return generateCachedByteCodeFromSourceCode(sourceProviderURL, inputSourceCode, false, depth, optimize, outputByteCode, outputByteCodeSize, cachedBytecodePtr, externalStrings);
  }
  
@@ -2001,6 +2003,9 @@ index fbfaa2ff..f03dd2dd 100644
 +    // Not taken for granted by the code, but chosen when it was built (BUN_AOT_JIT=0): the program runs with the JIT off, as code
 +    // compiled ahead of time is meant to. Less memory and no runtime code generation; every function runs the image's code.
 +    static constexpr uint64_t withoutJIT = 2;
++    // Windows: the image is a section of the executable, and only its first page is here (Bun__StaticHeap__takeBuilt()), to say
++    // that the section is this image. sizeOfImage is the section's.
++    static constexpr uint64_t imageIsInExecutable = 4;
 +    uint64_t offsetOfImage;
 +    uint64_t sizeOfImage;
 +    uint64_t cpuFeatures; // What the code was compiled to use (cpuFeaturesOfCode()). A CPU without one of them runs without the image.
@@ -2162,8 +2167,28 @@ index fbfaa2ff..f03dd2dd 100644
 +        memcpy(*data + *size - sizeof(trailer), &trailer, sizeof(trailer));
 +    }
 +#if OS(WINDOWS)
-+    // The executable's writer puts the arenas and the code in the image as sections (Bun__StaticHeap__rewritePE()).
++    // The executable's writer puts the arenas and the code in the image as sections (Bun__StaticHeap__rewritePE()), from all of it;
++    // what goes in the module graph is only what says that those sections are this heap's (a heap's copy of its arenas would be
++    // in the executable twice): the header with a sample of the string table, and the image's first page with the trailer.
 +    s_heapForExecutable = Vector<uint8_t>(std::span<const uint8_t> { *data, *size });
++    if (auto compact = JSC::StaticHeap::compactForExecutable(s_heapForExecutable.span()); !compact.isEmpty()) {
++        size_t compactImageAt = WTF::roundUpToMultipleOf<pageSizeOfStaticHeap>(compact.size());
++        size_t firstPage = std::min<size_t>(s_builtAOTImage.size(), pageSizeOfStaticHeap);
++        size_t compactSize = s_builtAOTImage.isEmpty() ? compact.size() : compactImageAt + firstPage + sizeof(AOTImageTrailer);
++        auto* compactData = static_cast<uint8_t*>(mi_zalloc(compactSize));
++        memcpy(compactData, compact.span().data(), compact.size());
++        if (!s_builtAOTImage.isEmpty()) {
++            memcpy(compactData + compactImageAt, s_builtAOTImage.span().data(), firstPage);
++            AOTImageTrailer trailer;
++            memcpy(&trailer, *data + *size - sizeof(trailer), sizeof(trailer));
++            trailer.offsetOfImage = compactImageAt;
++            trailer.optionsOfCode |= AOTImageTrailer::imageIsInExecutable;
++            memcpy(compactData + compactSize - sizeof(trailer), &trailer, sizeof(trailer));
++        }
++        mi_free(*data);
++        *data = compactData;
++        *size = compactSize;
++    }
 +#endif
 +    s_builtStaticHeap = { };
 +    s_builtAOTImage = { };
@@ -2204,7 +2229,8 @@ index fbfaa2ff..f03dd2dd 100644
 +        return true; // A static heap without code.
 +    AOTImageTrailer trailer;
 +    memcpy(&trailer, image + size - sizeof(trailer), sizeof(trailer));
-+    if (trailer.offsetOfImage % pageSizeOfStaticHeap || trailer.offsetOfImage > size || trailer.sizeOfImage > size - trailer.offsetOfImage)
++    bool isInExecutable = trailer.optionsOfCode & AOTImageTrailer::imageIsInExecutable;
++    if (trailer.offsetOfImage % pageSizeOfStaticHeap || trailer.offsetOfImage > size - sizeof(trailer) || (!isInExecutable && trailer.sizeOfImage > size - trailer.offsetOfImage))
 +        return false;
 +    // (Before anything compares stamps: JSCInitialize() sets them again, as Options::initialize() resets every option.)
 +    s_optionsOfMappedCode = trailer.optionsOfCode;
@@ -2217,6 +2243,22 @@ index fbfaa2ff..f03dd2dd 100644
 +        return false;
 +    }
 +    std::span<const uint8_t> inFile { image + trailer.offsetOfImage, static_cast<size_t>(trailer.sizeOfImage) };
++    // What says that the code where it is expected is this image: its first bytes, here.
++    std::span<const uint8_t> sample = inFile;
++    if (isInExecutable) {
++        // The image is the executable's section; here, only its first page.
++#if OS(WINDOWS)
++        using Region = bmalloc::StaticRegion;
++        if (Region::layout().magic != bmalloc::StaticRegionLayout::expectedMagic || trailer.sizeOfImage > Region::reservationOf(Region::Arena::Image)) {
++            s_whyNotMapped = "the executable does not have the code image it says it has";
++            return false;
++        }
++        sample = { image + trailer.offsetOfImage, size - sizeof(trailer) - trailer.offsetOfImage };
++        inFile = { reinterpret_cast<const uint8_t*>(Region::startOf(Region::Arena::Image)), static_cast<size_t>(trailer.sizeOfImage) };
++#else
++        return false;
++#endif
++    }
 +    auto range = JSC::aotImageCodeRange(inFile);
 +    if (!range || range->first % pageSizeOfStaticHeap) {
 +        if (verbose)
@@ -2230,7 +2272,9 @@ index fbfaa2ff..f03dd2dd 100644
 +    // header, which has no pointers, says whether it is this one. (An executable without it has zeros there.)
 +    UNUSED_PARAM(fd);
 +    UNUSED_PARAM(offsetInFile);
-+    if (memcmp(reinterpret_cast<const void*>(Region::startOf(Region::Arena::Image)), inFile.data(), std::min<size_t>(range->first, 256))) {
++    // (An executable whose writer did not put the image in it has the runtime's own layout of the region: nothing is there.)
++    if (Region::layout().magic != bmalloc::StaticRegionLayout::expectedMagic || sample.size() < std::min<size_t>(range->first, 256)
++        || memcmp(reinterpret_cast<const void*>(Region::startOf(Region::Arena::Image)), sample.data(), std::min<size_t>(range->first, 256))) {
 +#else
 +    uint64_t at = offsetInFile + trailer.offsetOfImage;
 +    if (!Region::map(Region::Arena::Image, fd, static_cast<off_t>(at), range->first, 0, false)
@@ -2398,10 +2442,12 @@ index fbfaa2ff..f03dd2dd 100644
 +    for (auto& part : parts) {
 +        if (!part.size)
 +            continue;
-+        if (part.offsetInImage > blob.size() || part.size > blob.size() - part.offsetInImage || part.size > Region::reservation)
++        if (part.offsetInImage > blob.size() || part.size > blob.size() - part.offsetInImage || part.offsetInRegion > Region::layout().extent || part.size > Region::layout().extent - part.offsetInRegion)
 +            return fail("the static heap is malformed");
-+        // Every arena may be written to (as on Linux, where they are private mappings of the file).
-+        inRegion.append({ static_cast<uint32_t>(part.offsetInRegion), blob.subspan(part.offsetInImage, part.size), scnInitializedData | scnRead | scnWrite, true });
++        // The arenas that running the program writes to are writable; the others are read-only, which no process is charged for,
++        // and what is written to there all the same is made writable a page at a time (bmalloc::StaticRegion's exception
++        // handler), as on Linux, where they are private mappings of the file.
++        inRegion.append({ static_cast<uint32_t>(part.offsetInRegion), blob.subspan(part.offsetInImage, part.size), part.isMutable ? scnInitializedData | scnRead | scnWrite : scnInitializedData | scnRead, true });
 +    }
 +    if (hasAOTImageTrailer(blob.data(), blob.size())) {
 +        AOTImageTrailer trailer;
@@ -2421,6 +2467,29 @@ index fbfaa2ff..f03dd2dd 100644
 +            inRegion.append({ startOfImage + static_cast<uint32_t>(endOfCode), codeImage.subspan(endOfCode), scnInitializedData | scnRead, true });
 +    }
 +    std::ranges::sort(inRegion, { }, &Part::offsetInRegion);
++    // Where the region ends in the executable: after the last part (the arenas' room to grow while building is not in it, nor
++    // Arena::Scratch, which only a build has).
++    uint64_t endOfParts = 0;
++    for (auto& part : inRegion)
++        endOfParts = std::max<uint64_t>(endOfParts, part.offsetInRegion + WTF::roundUpToMultipleOf<4096>(part.bytes.size()));
++    // How big the arenas were for this build (BUN_STATIC_REGION_SIZES_OUT): a build after this one with
++    // BUN_STATIC_REGION_SIZES set to it makes the same heap with the arenas side by side, and so an executable without room
++    // between them, which would be uninitialized and charged to the system's commit (scripts\build-pi.ps1 builds twice).
++    if (const char* sizesOut = getenv("BUN_STATIC_REGION_SIZES_OUT")) {
++        // (Each with a little to spare; Scratch, which is in no file, with more.)
++        auto sizeOf = [](Region::Arena arena, size_t spare) { return WTF::roundUpToMultipleOf<0x10000>(Region::used(arena) + spare); };
++        size_t imageSize = 0;
++        if (hasAOTImageTrailer(blob.data(), blob.size())) {
++            AOTImageTrailer trailer;
++            memcpy(&trailer, blob.data() + blob.size() - sizeof(trailer), sizeof(trailer));
++            imageSize = WTF::roundUpToMultipleOf<0x10000>(trailer.sizeOfImage + 0x10000);
++        }
++        if (FILE* file = fopen(sizesOut, "w")) {
++            fprintf(file, "%zu,%zu,%zu,%zu,%zu,%zu,%zu\n", sizeOf(Region::Arena::Data, 0x40000), sizeOf(Region::Arena::Malloc, 0x40000), sizeOf(Region::Arena::Cells, 0x40000),
++                sizeOf(Region::Arena::MutableCells, 0x40000), sizeOf(Region::Arena::MutableMalloc, 0x40000), imageSize, sizeOf(Region::Arena::Scratch, 16 << 20));
++            fclose(file);
++        }
++    }
 +
 +    // ---- Their pointers into the image, at the preferred base, and a relocation for each. A pointer anywhere else in the
 +    // process that a static heap holds would not be good in another process: other modules move at every boot.
@@ -2446,6 +2515,9 @@ index fbfaa2ff..f03dd2dd 100644
 +    size_t nextTaggedWord = 0;
 +    size_t taggedWordsMoved = 0;
 +    size_t looksTaggedButIsNotListed = 0;
++    size_t pointersToWhatIsNotKept = 0;
++    size_t looksLikeBlocks = 0;
++    uintptr_t endOfExecutable = std::max<uintptr_t>(imageEnd, Region::base() + endOfParts);
 +    for (auto& part : inRegion) {
 +        Vector<uint8_t> bytes(part.bytes);
 +        if (part.hasPointers) {
@@ -2455,7 +2527,7 @@ index fbfaa2ff..f03dd2dd 100644
 +                uint64_t word;
 +                memcpy(&word, bytes.span().data() + at, 8);
 +                uint64_t target = word & addressBits & ~7ull;
-+                bool targetIsInRegion = target >= Region::base() && target < Region::base() + Region::reservation;
++                bool targetIsInRegion = target - Region::base() < endOfParts;
 +                if (nextTaggedWord < taggedWords.size() && taggedWords[nextTaggedWord] == part.offsetInRegion + at) {
 +                    ++nextTaggedWord;
 +                    if (!targetIsInRegion)
@@ -2465,7 +2537,19 @@ index fbfaa2ff..f03dd2dd 100644
 +                    ++taggedWordsMoved;
 +                    continue;
 +                }
-+                if (word >= imageStart && word < imageEnd) {
++                // (Arena::Scratch is not in the executable: what is there is not kept, and nothing may point to it. It is after the
++                // image, where a word that is not a pointer is as unlikely to be as a pointer into the image. The blocks are anywhere,
++                // maybe where two 32-bit numbers side by side often are: what looks like a pointer there is counted, not moved.)
++                if (word - Region::startOf(Region::Arena::Scratch) < Region::reservationOf(Region::Arena::Scratch)) {
++                    if (pointersToWhatIsNotKept++ < 10)
++                        fprintf(stderr, "warning: the static heap points to what is not kept (%llx, at offset %zu of a part at %x)\n", static_cast<unsigned long long>(word), at, part.offsetInRegion);
++                    continue;
++                }
++                if (word - Region::startOfBlocks() < Region::sizeOfBlocks()) {
++                    ++looksLikeBlocks;
++                    continue;
++                }
++                if (word >= imageStart && word < endOfExecutable) {
 +                    writeAt<uint64_t>(bytes, at, word - imageStart + preferredBase);
 +                    relocations.append(regionRVA + part.offsetInRegion + static_cast<uint32_t>(at));
 +                    continue;
@@ -2482,36 +2566,44 @@ index fbfaa2ff..f03dd2dd 100644
 +    }
 +    if (pointersIntoOtherModules)
 +        return fail("the static heap points into a system library, which moves at every boot");
++    if (pointersToWhatIsNotKept)
++        return fail("the static heap points to memory that is not in the executable (the build's scratch memory)");
 +    if (taggedWordsMoved != taggedWords.size())
 +        return fail("the static heap's entry words are not all in its parts");
 +    if (getenv("BUN_STATIC_HEAP_VERBOSE")) {
 +        fprintf(stderr, "[static heap] %zu pointers into the executable, relocated (%zu of them entry words)\n", relocations.size(), taggedWordsMoved);
 +        if (looksTaggedButIsNotListed)
 +            fprintf(stderr, "[static heap] %zu words look like entry words but are not listed as any; not moved\n", looksTaggedButIsNotListed);
++        if (looksLikeBlocks)
++            fprintf(stderr, "[static heap] %zu words look like addresses of the blocks a running program makes; not moved\n", looksLikeBlocks);
 +    }
 +
-+    // ---- The sections that replace .pbreg: the parts, and uninitialized read-only sections between them.
++    // ---- The arenas: sections after the executable's own, where the build had them (the layout says where; .pblay below), with
++    // uninitialized read-only sections where there is nothing (what is left over of an arena, a hole in Arena::Data). .pbreg, the
++    // start of the region and what of Arena::Bss is in the image, stays as it is.
++    uint32_t endOfImage = 0;
++    for (auto& s : sections)
++        endOfImage = std::max(endOfImage, s.virtualAddress + alignUp(std::max(s.virtualSize, s.sizeOfRawData), sectionAlignment));
 +    Vector<RegionSection> newSections;
-+    uint32_t regionStart = regionSection.virtualAddress;
-+    uint32_t regionEnd = regionStart + alignUp(regionSection.virtualSize, sectionAlignment);
-+    uint32_t at = regionStart;
++    uint32_t at = endOfImage;
 +    auto gapTo = [&](uint32_t end) {
 +        if (end > at)
-+            newSections.append({ ".pbreg", at, end, scnUninitializedData | scnRead, { } });
++            newSections.append({ ".pbgap", at, end, scnUninitializedData | scnRead, { } });
 +        at = end;
 +    };
 +    for (size_t i = 0; i < inRegion.size(); ++i) {
 +        auto& part = inRegion[i];
-+        uint32_t start = regionRVA + part.offsetInRegion;
-+        uint32_t end = start + alignUp(static_cast<uint32_t>(part.bytes.size()), sectionAlignment);
-+        if (start < at || end > regionEnd)
-+            return fail("the static heap does not fit the region");
-+        gapTo(start);
-+        const char* name = part.characteristics & scnExecute ? ".pbcode" : (part.characteristics & scnWrite ? ".pbheap" : ".pbimage");
-+        newSections.append({ name, start, end, part.characteristics, rebased[i].span() });
-+        at = end;
++        uint64_t start = regionRVA + static_cast<uint64_t>(part.offsetInRegion);
++        uint64_t end = start + alignUp(static_cast<uint32_t>(part.bytes.size()), sectionAlignment);
++        if (start < at || end > (1ull << 31))
++            return fail("the static heap's arenas are not after the executable (another runtime than the one that built it?)");
++        gapTo(static_cast<uint32_t>(start));
++        bool isOfCodeImage = part.offsetInRegion >= Region::startOf(Region::Arena::Image) - Region::base();
++        const char* name = part.characteristics & scnExecute ? ".pbcode" : (isOfCodeImage ? ".pbimage" : ".pbheap");
++        newSections.append({ name, static_cast<uint32_t>(start), static_cast<uint32_t>(end), part.characteristics, rebased[i].span() });
++        at = static_cast<uint32_t>(end);
 +    }
-+    gapTo(regionEnd);
++    uint32_t endOfRegion = at;
 +
 +    // ---- The base relocations: the executable's own, then these, in a section of their own at the end.
 +    std::span<const uint8_t> oldRelocations;
@@ -2532,10 +2624,7 @@ index fbfaa2ff..f03dd2dd 100644
 +    }
 +    Vector<uint8_t> allRelocations(oldRelocations);
 +    allRelocations.append(relocationBlocks(relocations).span());
-+    uint32_t endOfImage = 0;
-+    for (auto& s : sections)
-+        endOfImage = std::max(endOfImage, s.virtualAddress + alignUp(std::max(s.virtualSize, s.sizeOfRawData), sectionAlignment));
-+    RegionSection relocationSection { ".pbreloc", endOfImage, endOfImage + alignUp(static_cast<uint32_t>(allRelocations.size()), sectionAlignment), scnInitializedData | scnRead | scnDiscardable, allRelocations.span() };
++    RegionSection relocationSection { ".pbreloc", endOfRegion, endOfRegion + alignUp(static_cast<uint32_t>(allRelocations.size()), sectionAlignment), scnInitializedData | scnRead | scnDiscardable, allRelocations.span() };
 +
 +    // ---- Unwind information for the compiled code, so that stack walks (exceptions, crash reports, debuggers) go through its
 +    // frames. For an address in an image Windows only looks at the image's own exception directory: the executable's entries,
@@ -2578,22 +2667,18 @@ index fbfaa2ff..f03dd2dd 100644
 +        uint32_t oldPointer; // For finding what of the old file was in it (the debug directory's data).
 +    };
 +    Vector<NewSection> table;
-+    for (size_t i = 0; i < sections.size(); ++i) {
-+        if (i != indexOfRegion) {
-+            auto& s = sections[i];
-+            if (s.sizeOfRawData && s.pointerToRawData + s.sizeOfRawData > pe.size())
-+                return fail("the executable is truncated");
-+            table.append({ s, s.sizeOfRawData ? pe.subspan(s.pointerToRawData, s.sizeOfRawData) : std::span<const uint8_t> { }, s.pointerToRawData });
-+            continue;
-+        }
-+        for (auto& n : newSections) {
-+            PESection s { };
-+            memcpy(s.name, n.name, std::min<size_t>(strlen(n.name), 8));
-+            s.virtualAddress = n.start;
-+            s.virtualSize = n.end - n.start;
-+            s.characteristics = n.characteristics;
-+            table.append({ s, n.bytes, 0 });
-+        }
++    for (auto& s : sections) {
++        if (s.sizeOfRawData && s.pointerToRawData + s.sizeOfRawData > pe.size())
++            return fail("the executable is truncated");
++        table.append({ s, s.sizeOfRawData ? pe.subspan(s.pointerToRawData, s.sizeOfRawData) : std::span<const uint8_t> { }, s.pointerToRawData });
++    }
++    for (auto& n : newSections) {
++        PESection s { };
++        memcpy(s.name, n.name, std::min<size_t>(strlen(n.name), 8));
++        s.virtualAddress = n.start;
++        s.virtualSize = n.end - n.start;
++        s.characteristics = n.characteristics;
++        table.append({ s, n.bytes, 0 });
 +    }
 +    // (Windows refuses an image of about 2 GB as "not a valid application"; 1.7 GB loads. The .bun section comes after this.)
 +    if (static_cast<uint64_t>(exceptionSection ? exceptionSection->end : relocationSection.end) + blob.size() > 1600ull << 20)
@@ -2684,6 +2769,26 @@ index fbfaa2ff..f03dd2dd 100644
 +            writeAt<uint32_t>(result, newOffset + entry + 24, moved);
 +        }
 +    }
++    // ---- Where the arenas are, for the executable (bmalloc::StaticRegionLayout, the section .pblay): as in this build, up to
++    // the end of the last part. (Nothing of Arena::Scratch; the blocks are reserved when it runs.)
++    {
++        uint32_t layoutRVA = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&Region::layout()) - imageStart);
++        std::optional<size_t> layoutOffset;
++        for (auto& s : table) {
++            if (!memcmp(s.header.name, ".pblay\0\0", 8) && layoutRVA >= s.header.virtualAddress && layoutRVA - s.header.virtualAddress + sizeof(bmalloc::StaticRegionLayout) <= s.header.sizeOfRawData)
++                layoutOffset = s.header.pointerToRawData + (layoutRVA - s.header.virtualAddress);
++        }
++        if (!layoutOffset)
++            return fail("the executable has no .pblay section for the static region's layout (it is not the Pi-Bolt runtime)");
++        bmalloc::StaticRegionLayout layout = Region::layout();
++        layout.magic = bmalloc::StaticRegionLayout::expectedMagic;
++        layout.offset[static_cast<unsigned>(Region::Arena::Scratch)] = endOfRegion - regionRVA;
++        layout.size[static_cast<unsigned>(Region::Arena::Scratch)] = 0;
++        layout.extent = endOfRegion - regionRVA;
++        layout.blocksStart = 0;
++        layout.blocksSize = 0;
++        writeAt<bmalloc::StaticRegionLayout>(result, *layoutOffset, layout);
++    }
 +    s_heapForExecutable = { };
 +    *outSize = result.size();
 +    *out = static_cast<uint8_t*>(mi_malloc(result.size()));
@@ -2759,7 +2864,7 @@ index fbfaa2ff..f03dd2dd 100644
 +        return false;
 +    }
 +#endif
-+    if (asked && (bmalloc::StaticRegion::bssMapped() < bmalloc::StaticRegion::reservationOf(bmalloc::StaticRegion::Arena::Bss) || (hasAOTImageTrailer(image, size) && !structureHeapCanBeWhereTheCodeExpects()))) {
++    if (asked && (bmalloc::StaticRegion::bssMapped() < bmalloc::StaticRegion::reservationOf(bmalloc::StaticRegion::Arena::Bss) || !bmalloc::StaticRegion::sizeOfBlocks() || (hasAOTImageTrailer(image, size) && !structureHeapCanBeWhereTheCodeExpects()))) {
 +        noteNotUsed("the address space for it is not available");
 +        return false;
 +    }
@@ -2811,7 +2916,7 @@ index fbfaa2ff..f03dd2dd 100644
      return new JSC::BytecodeLinkEncoder(vm, externalStrings, WTF::move(hints));
  }
  
-@@ -331,6 +1197,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
+@@ -331,6 +1300,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
      return true;
  }
  
@@ -2834,7 +2939,7 @@ index fbfaa2ff..f03dd2dd 100644
  // `entryOffsets` has room for one number per successful add* call; `regionEnds` for
  // JSC::BytecodeLinkEncoder::numberOfRegions.
  static_assert(JSC::BytecodeLinkEncoder::numberOfRegions == 6, "bun_resolver::LINKED_BYTECODE_REGION_COUNT");
-@@ -340,6 +1222,18 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
+@@ -340,6 +1325,18 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
      auto result = encoder->finish();
      if (!result.payload || result.entryOffsets.size() != entryOffsetCount)
          return false;

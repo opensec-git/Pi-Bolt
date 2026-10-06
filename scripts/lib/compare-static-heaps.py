@@ -27,7 +27,7 @@ def sections(path):
     return out
 
 
-MAGIC = b"BTHEAP06"  # StaticHeap::Header::expectedMagic
+MAGIC = b"BTHEAP07"  # StaticHeap::Header::expectedMagic
 OFFSET_OF_REGION_BASE = 336  # offsetof(StaticHeap::Header, regionBase), static_assert-ed in StaticHeap.cpp
 
 
@@ -45,6 +45,44 @@ def region_base(path):
     return None
 
 
+def compare_with_different_code(a, b, bases):
+    """The ahead-of-time compiler does not always lay out the same code twice (which of a program's functions get which data
+    slots can follow the order of a table keyed by addresses that differ from run to run), and then the code, the image's tables
+    and the entry words in the cells differ by where things moved to. What can still be told: the data arenas (Data and Malloc,
+    the first two parts of the heap) must be the same; and anywhere, a word that differs by exactly as much as the two builds'
+    addresses did is a pointer the writer missed."""
+    mask = (1 << 48) - 1
+    delta = (bases[1] - bases[0]) & mask
+    heap_a = [s for s in a if s[0] == ".pbheap"]
+    heap_b = [s for s in b if s[0] == ".pbheap"]
+    if [(s[1], len(s[3])) for s in heap_a] != [(s[1], len(s[3])) for s in heap_b]:
+        print("the layouts of the heaps differ")
+        return 2
+    failures = 0
+    for index, ((name, va, _, x), (_, _, _, y)) in enumerate(zip(heap_a[:2], heap_b[:2])):
+        if x != y:
+            first = next(i for i in range(len(x)) if x[i] != y[i])
+            print(f"{name} at {va:#x} (part {index}, a data arena) differs, first at +{first:#x}")
+            failures += 1
+    missed = 0
+    other = 0
+    for (name, va, _, x), (_, _, _, y) in zip([s for s in a if s[0] in (".pbheap", ".pbimage")], [s for s in b if s[0] in (".pbheap", ".pbimage")]):
+        for at in range(0, min(len(x), len(y)) - 7, 8):
+            wa = int.from_bytes(x[at:at + 8], "little")
+            wb = int.from_bytes(y[at:at + 8], "little")
+            if wa == wb:
+                continue
+            if ((wb & mask) - (wa & mask)) & mask == delta and (wa >> 48) == (wb >> 48):
+                if missed < 20:
+                    print(f"{name} at {va:#x} +{at:#x}: {wa:#018x} vs {wb:#018x}: a pointer that was not relocated")
+                missed += 1
+            else:
+                other += 1
+    print(f"the builds' code differs (the compiler laid it out differently): {other} other words differ with it, not judged")
+    print(f"{missed} words differ by exactly the builds' addresses; the data arenas are {'not ' if failures else ''}the same")
+    return 1 if missed or failures else 0
+
+
 def main():
     # The comparison tests something only if the two builds were at different addresses.
     bases = region_base(sys.argv[1]), region_base(sys.argv[2])
@@ -56,6 +94,10 @@ def main():
         print("both builds had the region at the same address: the comparison would test nothing (build again)")
         return 2
     a, b = sections(sys.argv[1]), sections(sys.argv[2])
+    code_a = b"".join(s[3] for s in a if s[0] == ".pbcode")
+    code_b = b"".join(s[3] for s in b if s[0] == ".pbcode")
+    if code_a != code_b:
+        return compare_with_different_code(a, b, bases)
     wanted = (".pbheap", ".pbimage", ".pbcode")
     pa = [s for s in a if s[0] in wanted]
     pb = [s for s in b if s[0] in wanted]
