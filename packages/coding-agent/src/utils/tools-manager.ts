@@ -12,7 +12,7 @@ import {
 	statSync,
 } from "fs";
 import { arch, platform } from "os";
-import { delimiter, join } from "path";
+import { delimiter, isAbsolute, join } from "path";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import { APP_NAME, getBinDir } from "../config.ts";
@@ -79,28 +79,29 @@ const TOOLS: Record<string, ToolConfig> = {
 	},
 };
 
-// Whether cmd is an executable file in PATH, which is what spawning it finds. Elsewhere than on Windows it is looked up rather
-// than run as `cmd --version`: Pi asks for rg and fd before its first frame, and spawning one held the start for milliseconds.
-function commandExists(cmd: string): boolean {
-	if (platform() !== "win32") {
-		for (const dir of (process.env.PATH ?? "").split(delimiter)) {
-			if (!dir) continue;
-			const file = join(dir, cmd);
-			try {
-				if (!statSync(file).isFile()) continue;
-				accessSync(file, constants.X_OK);
-				return true;
-			} catch {}
+// cmd as an executable file in PATH, which is what spawning it finds, or null. Looked up rather than run as `cmd --version`: Pi
+// asks for rg and fd before its first frame, and spawning one held the start for milliseconds (on Windows, tens of them).
+// Elsewhere than on Windows the name is returned, and spawning it finds that file. On Windows spawning a bare name looks in the
+// working directory before PATH, so a project's own rg.exe would run in the place of the one installed: there the file is
+// returned by its path, from the absolute directories of PATH only, with the extensions spawn tries (.com after the others).
+function findCommand(cmd: string): string | null {
+	const windows = platform() === "win32";
+	const passes = windows ? [[".exe", ".cmd", ".bat"], [".com"]] : [[""]];
+	const dirs = (process.env.PATH ?? "").split(delimiter).filter((dir) => dir && (!windows || isAbsolute(dir)));
+	for (const extensions of passes) {
+		for (const dir of dirs) {
+			for (const extension of extensions) {
+				const file = join(dir, cmd + extension);
+				if (!statSync(file, { throwIfNoEntry: false })?.isFile()) continue;
+				if (windows) return file;
+				try {
+					accessSync(file, constants.X_OK);
+					return cmd;
+				} catch {}
+			}
 		}
-		return false;
 	}
-	try {
-		const result = spawnSync(cmd, ["--version"], { stdio: "pipe" });
-		// Check for ENOENT error (command not found)
-		return result.error === undefined || result.error === null;
-	} catch {
-		return false;
-	}
+	return null;
 }
 
 // Get the path to a tool (system-wide or in our tools dir)
@@ -114,11 +115,12 @@ export function getToolPath(tool: "fd" | "rg"): string | null {
 		return localPath;
 	}
 
-	// Check system PATH - if found, just return the command name (it's in PATH)
+	// Check system PATH
 	const systemBinaryNames = config.systemBinaryNames ?? [config.binaryName];
 	for (const systemBinaryName of systemBinaryNames) {
-		if (commandExists(systemBinaryName)) {
-			return systemBinaryName;
+		const found = findCommand(systemBinaryName);
+		if (found) {
+			return found;
 		}
 	}
 
