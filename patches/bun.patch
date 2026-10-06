@@ -28,6 +28,9 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  scripts/build/download.ts                     |   28 +-
  scripts/build/flags.ts                        |   25 +-
  scripts/build/rust.ts                         |    3 +
+ scripts/orderfile/functrace-windows.c         |   24 +-
+ scripts/orderfile/generate.ts                 |   55 +-
+ scripts/orderfile/hints.ts                    |   63 +-
  src/ast/import_record.rs                      |    4 +
  src/bun_alloc/lib.rs                          |   14 +-
  src/bun_core/env_var.rs                       |    1 +
@@ -69,7 +72,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/spawn_sys/posix_spawn.rs                  |  173 ++-
  src/spawn_sys/spawn_process.rs                |   14 +-
  src/standalone_graph/StandaloneModuleGraph.rs |  254 +++-
- 50 files changed, 2483 insertions(+), 169 deletions(-)
+ 53 files changed, 2590 insertions(+), 204 deletions(-)
  create mode 100644 patches/libuv/win-thread-stack-reservation.patch
  create mode 100644 patches/mimalloc/page-commit-on-demand-default.patch
 
@@ -452,6 +455,270 @@ index ad58bbad..7137df78 100644
    // Parallel frontend: rustc's default is single-threaded for parse / macro
    // expansion / typeck / borrowck, so the critical-path crate (`bun_runtime`)
    // sits on one core while the rest idle. With this, independent compiler
+diff --git a/scripts/orderfile/functrace-windows.c b/scripts/orderfile/functrace-windows.c
+index 1d34712b..c1caff89 100644
+--- a/scripts/orderfile/functrace-windows.c
++++ b/scripts/orderfile/functrace-windows.c
+@@ -25,7 +25,7 @@
+ //
+ //   clang-cl /O2 -fuse-ld=lld functrace-windows.c    (or: cl /O2 functrace-windows.c)
+ //   set BUN_FUNCTRACE_STARTS=starts.bin
+-//   set BUN_FUNCTRACE_OUT=trace.bin
++//   set BUN_FUNCTRACE_OUT=trace.bin             (a %p in it is the traced process's id)
+ //   functrace-windows build\release\bun-profile.exe -e "console.log(1)"
+ //
+ // Exits with the debuggee's exit code; 2 if the trace itself could not be set up.
+@@ -303,6 +303,26 @@ static int on_exception(const DEBUG_EVENT *event)
+     return 1;
+ }
+ 
++/** The record's path: BUN_FUNCTRACE_OUT with each %p replaced by the traced process's id, as functrace.c does. */
++static wchar_t *record_path(const wchar_t *pattern, DWORD pid)
++{
++    wchar_t id[16];
++    swprintf(id, 16, L"%lu", pid);
++    size_t bound = wcslen(pattern) * 8 + 1, used = 0;
++    wchar_t *path = malloc(bound * sizeof *path);
++    if (!path) die("out of memory");
++    for (const wchar_t *at = pattern; *at; at++) {
++        if (at[0] == L'%' && at[1] == L'p') {
++            for (const wchar_t *digit = id; *digit; digit++) path[used++] = *digit;
++            at++;
++        } else {
++            path[used++] = *at;
++        }
++    }
++    path[used] = L'\0';
++    return path;
++}
++
+ static void write_record(const wchar_t *path)
+ {
+     FILE *f = _wfopen(path, L"wb");
+@@ -536,6 +556,6 @@ int wmain(int argc, wchar_t **argv)
+     CloseHandle(process);
+ 
+     if (console) close_console(console, output_thread);
+-    write_record(out_path);
++    write_record(record_path(out_path, info.dwProcessId));
+     return (int)exit_code;
+ }
+diff --git a/scripts/orderfile/generate.ts b/scripts/orderfile/generate.ts
+index 7383322f..56e90ad5 100644
+--- a/scripts/orderfile/generate.ts
++++ b/scripts/orderfile/generate.ts
+@@ -512,6 +512,19 @@ function buildUnixTracer(scratch: string): Tracer {
+  * Visual Studio developer shell; $CC names one explicitly.
+  */
+ function buildWindowsTracer(scratch: string): Tracer {
++  const tracer = buildWindowsTracerExecutable(scratch);
++  return {
++    linker: "lld-link /order",
++    launch: (workload, exe) => {
++      const env: Record<string, string> = {};
++      if (workload.tty) env.BUN_FUNCTRACE_TTY = "1";
++      return { cmd: [tracer, exe, ...workload.args], env };
++    },
++  };
++}
++
++/** Builds functrace-windows.c in `scratch`; returns the tracer's path. */
++export function buildWindowsTracerExecutable(scratch: string): string {
+   const tracer = join(scratch, "functrace.exe");
+   const failures: string[] = [];
+   for (const cc of process.env.CC ? [process.env.CC] : ["clang-cl", "cl"]) {
+@@ -533,14 +546,7 @@ function buildWindowsTracer(scratch: string): Tracer {
+   if (!existsSync(tracer)) {
+     throw new Error(`failed to build the tracer — needs clang-cl, or cl in a developer shell:\n${failures.join("\n")}`);
+   }
+-  return {
+-    linker: "lld-link /order",
+-    launch: (workload, exe) => {
+-      const env: Record<string, string> = {};
+-      if (workload.tty) env.BUN_FUNCTRACE_TTY = "1";
+-      return { cmd: [tracer, exe, ...workload.args], env };
+-    },
+-  };
++  return tracer;
+ }
+ 
+ const CLONE_SUFFIXES = /(\.llvm\.\d+|\.cold(\.\d+)?|\.isra\.\d+|\.part\.\d+|\.constprop\.\d+|\.\d+)+$/;
+@@ -548,10 +554,14 @@ const CLONE_SUFFIXES = /(\.llvm\.\d+|\.cold(\.\d+)?|\.isra\.\d+|\.part\.\d+|\.co
+ /** A name without the suffixes the optimizer gives a function's clones (`.llvm.123`, `.cold`, `.isra.0`, …), which differ from build to build. */
+ const withoutCloneSuffix = (name: string) => name.replace(CLONE_SUFFIXES, "");
+ 
+-/** Mach-O puts an underscore before every C-level name: `malloc` is `_malloc` there, `_ZN3JSC…` is `__ZN3JSC…`. */
+-export type ObjectFormat = "elf" | "macho";
++/**
++ * Mach-O puts an underscore before every C-level name: `malloc` is `_malloc` there, `_ZN3JSC…` is `__ZN3JSC…`. COFF names
++ * are MSVC's decorations (`?foo@JSC@@…`), which have no spelling in the other two.
++ */
++export type ObjectFormat = "elf" | "macho" | "coff";
+ 
+-export const hostObjectFormat: ObjectFormat = process.platform === "darwin" ? "macho" : "elf";
++export const hostObjectFormat: ObjectFormat =
++  process.platform === "darwin" ? "macho" : process.platform === "win32" ? "coff" : "elf";
+ 
+ export interface HintList {
+   names: string[];
+@@ -564,13 +574,14 @@ export interface HintList {
+  * spelled for the link it is given to.
+  */
+ export function readHintList(path: string, fallback: ObjectFormat = hostObjectFormat): HintList {
+-  const format = /^#\s*format:\s*(elf|macho)\s*$/m.exec(readFileSync(path, "utf8"))?.[1] as ObjectFormat | undefined;
++  const format = /^#\s*format:\s*(elf|macho|coff)\s*$/m.exec(readFileSync(path, "utf8"))?.[1] as ObjectFormat | undefined;
+   return { names: readNameList(path), format: format ?? fallback };
+ }
+ 
+ /** The list's names as `format` spells them. A Mach-O name with no underscore has no ELF spelling and stays as it is. */
+ export function hintNames(list: HintList, format: ObjectFormat): string[] {
+   if (list.format === format) return list.names;
++  if (list.format === "coff" || format === "coff") return [];
+   return list.names.map(name => (format === "macho" ? `_${name}` : name.replace(/^_/, "")));
+ }
+ 
+@@ -727,13 +738,31 @@ function codeRanges(fd: number, path: string): CodeRange[] {
+           });
+         }
+       }
++    } else if (header.readUInt16LE(0) === 0x5a4d /* MZ */) {
++      // PE: .text, the code the linker laid out. (An executable compiled with this one may add code sections of its own after
++      // the image; what the starts are addresses in is .text.)
++      const pe = header.readUInt32LE(0x3c);
++      const fileHeader = readAt(fd, pe, 24 + 112);
++      if (fileHeader.readUInt32LE(0) !== 0x4550 /* PE\0\0 */) throw new RangeError("not a PE");
++      const sections = fileHeader.readUInt16LE(6);
++      const optionalSize = fileHeader.readUInt16LE(20);
++      const imageBase = fileHeader.readBigUInt64LE(24 + 24);
++      const table = readAt(fd, pe + 24 + optionalSize, sections * 40);
++      for (let at = 0; at < sections * 40; at += 40) {
++        if (table.toString("latin1", at, at + 8).replace(/\0+$/, "") !== ".text") continue;
++        ranges.push({
++          address: imageBase + BigInt(table.readUInt32LE(at + 12)),
++          offset: table.readUInt32LE(at + 20),
++          size: Math.min(table.readUInt32LE(at + 8), table.readUInt32LE(at + 16)),
++        });
++      }
+     } else if (header.readUInt32BE(0) === 0xcafebabe) {
+       throw new Error(`${path} is a universal Mach-O; the tracer follows one architecture (lipo -thin)`);
+     }
+   } catch (error) {
+     if (!(error instanceof RangeError)) throw error; // a header that points past the end of the file
+   }
+-  if (!ranges.length) throw new Error(`cannot find the code of ${path}: not a 64-bit ELF or Mach-O executable?`);
++  if (!ranges.length) throw new Error(`cannot find the code of ${path}: not a 64-bit ELF, Mach-O or PE executable?`);
+   return ranges;
+ }
+ 
+diff --git a/scripts/orderfile/hints.ts b/scripts/orderfile/hints.ts
+index f741ee68..76ced5de 100644
+--- a/scripts/orderfile/hints.ts
++++ b/scripts/orderfile/hints.ts
+@@ -24,8 +24,9 @@
+  * binary (/bin/sh, /usr/bin/env) runs, so an application that restarts itself
+  * through a shell is not followed past it.
+  *
+- * Linux and macOS. The Windows tracer is a debugger of one process
+- * (functrace-windows.c) and does not follow it into children.
++ * On Windows the launcher is a batch file that starts the application under
++ * functrace-windows.c, a debugger of that one process: a process the
++ * application starts is not traced, itself or not.
+  */
+ import { spawn, spawnSync } from "node:child_process";
+ import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+@@ -35,6 +36,7 @@ import { quote } from "../build/shell.ts";
+ import {
+   appendNames,
+   buildTracerLibrary,
++  buildWindowsTracerExecutable,
+   flagValue,
+   hostObjectFormat,
+   KILL_GRACE_MS,
+@@ -105,7 +107,7 @@ export function busiestFirst(traces: number[][]): number[][] {
+ }
+ 
+ export async function traceHints(options: HintOptions): Promise<{ count: number; processes: number }> {
+-  if (process.platform === "win32") throw new Error("hints.ts traces on linux and macOS only");
++  const windows = process.platform === "win32";
+   const profile = resolve(options.profile);
+   const exe = resolve(options.exe);
+   for (const path of [profile, exe]) if (!existsSync(path)) throw new Error(`${path} not found`);
+@@ -117,7 +119,6 @@ export async function traceHints(options: HintOptions): Promise<{ count: number;
+   }
+ 
+   return withScratch("bun-orderfile-hints-", async (scratch, interrupted) => {
+-    const tracer = buildTracerLibrary(scratch);
+     const symbols = readTextSymbols(profile);
+     const starts = join(scratch, "starts.bin");
+     writeStarts(
+@@ -130,21 +131,43 @@ export async function traceHints(options: HintOptions): Promise<{ count: number;
+     // The variables are set here rather than on the command: the command's own
+     // processes (a shell, a test runner, another bun) are not the application,
+     // and the starts would plant breakpoints in the middle of their code.
+-    const launcher = join(scratch, "launch");
+-    writeFileSync(
+-      launcher,
+-      [
+-        "#!/bin/sh",
+-        `export ${tracer.preloadVar}=${sh(tracer.library)}`,
+-        `export BUN_FUNCTRACE_STARTS=${sh(starts)}`,
+-        `export BUN_FUNCTRACE_OUT=${sh(join(traces, "%p.bin"))}`,
+-        "export BUN_FUNCTRACE_CHILDREN=1",
+-        `export BUN_FUNCTRACE_EXE=${sh(exe)}`,
+-        `exec ${sh(exe)} "$@"`,
+-        "",
+-      ].join("\n"),
+-    );
+-    chmodSync(launcher, 0o755);
++    let launcher: string;
++    if (windows) {
++      const tracer = buildWindowsTracerExecutable(scratch);
++      // cmd.exe reads the batch file: a path it would take apart (a quote, a %) cannot be in it.
++      for (const path of [tracer, starts, traces, exe]) {
++        if (/["%]/.test(path)) throw new Error(`${path}: a path with " or % in it cannot be put in the launcher`);
++      }
++      launcher = join(scratch, "launch.cmd");
++      writeFileSync(
++        launcher,
++        [
++          "@echo off",
++          `set "BUN_FUNCTRACE_STARTS=${starts}"`,
++          `set "BUN_FUNCTRACE_OUT=${join(traces, "%%p.bin")}"`, // %% is a % to cmd.exe; %p is the tracer's
++          `"${tracer}" "${exe}" %*`,
++          "exit /b %ERRORLEVEL%",
++          "",
++        ].join("\r\n"),
++      );
++    } else {
++      const tracer = buildTracerLibrary(scratch);
++      launcher = join(scratch, "launch");
++      writeFileSync(
++        launcher,
++        [
++          "#!/bin/sh",
++          `export ${tracer.preloadVar}=${sh(tracer.library)}`,
++          `export BUN_FUNCTRACE_STARTS=${sh(starts)}`,
++          `export BUN_FUNCTRACE_OUT=${sh(join(traces, "%p.bin"))}`,
++          "export BUN_FUNCTRACE_CHILDREN=1",
++          `export BUN_FUNCTRACE_EXE=${sh(exe)}`,
++          `exec ${sh(exe)} "$@"`,
++          "",
++        ].join("\n"),
++      );
++      chmodSync(launcher, 0o755);
++    }
+ 
+     const [program, ...args] = options.command.map(arg => arg.replaceAll("{}", launcher));
+     // Not spawnSync: a signal held for the scratch directory's sake has to be able to stop the session.
+@@ -226,7 +249,7 @@ if (import.meta.main) {
+   }
+   try {
+     const { count, processes } = await traceHints({
+-      profile: join(buildDir, "bun-profile"),
++      profile: join(buildDir, process.platform === "win32" ? "bun-profile.exe" : "bun-profile"),
+       exe,
+       command,
+       outPath: out,
 diff --git a/src/ast/import_record.rs b/src/ast/import_record.rs
 index 6e582f84..c41f7e5a 100644
 --- a/src/ast/import_record.rs
