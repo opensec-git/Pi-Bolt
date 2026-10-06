@@ -20,7 +20,8 @@
 #   PIBOLT_NPM_REGISTRY  the npm registry or mirror to use (default: https://registry.npmjs.org)
 #   PIBOLT_EXTENSIONS  yes or no: whether to install OpenSec's optional extensions (opensec-pi-subagents, opensec-pi-todo)
 #                    without asking. Without it the installer asks when it can; a run that cannot ask, or PIBOLT_YES=1,
-#                    installs none.
+#                    installs none. They are installed at the versions the release pins (its extensions.txt, covered by the
+#                    signed checksums), and only if the registry's tarball has the pinned integrity.
 
 # The public key that releases are signed with (keys/release.pub in the repository; scripts/sign-release.sh), from 0.6.0. A
 # release from before has no signature, which is said.
@@ -592,6 +593,11 @@ install_release() {
 		draw_progress "$step" 10000 "${dim}fetching the signature$reset"
 	fi
 	verify_signature
+	# The optional extensions this release pins (extensions.txt, covered by the checksums and their signature).
+	PINS=""
+	if fetch "$TMP/extensions.txt" "$BASE/extensions.txt" 2>/dev/null && (cd "$TMP" && check_sum extensions.txt); then
+		PINS=$(grep -E '^[a-z0-9][a-z0-9._-]* [0-9]+\.[0-9]+\.[0-9]+ sha512-[A-Za-z0-9+/]+=*$' "$TMP/extensions.txt" || true)
+	fi
 	if [ "$ext" = tar.xz ]; then
 		if command -v xz >/dev/null 2>&1; then
 			(xz -T0 -dc "$TMP/$NAME.$ext" 2>/dev/null || xz -dc "$TMP/$NAME.$ext") | tar -C "$TMP" -xf - &
@@ -739,6 +745,21 @@ path_hint() {
 EXTENSIONS="opensec-pi-subagents:run specialized agents in separate sessions:subagents|swarm
 opensec-pi-todo:a todo list for the model, shown above the editor:rpiv-todo|pi-todo"
 
+# pin_of PACKAGE: the release's line for it in extensions.txt ("NAME VERSION sha512-..."); false if there is none.
+pin_of() { printf '%s\n' "${PINS:-}" | grep -m 1 "^$1 "; }
+
+# pinned_tarball_matches PACKAGE VERSION INTEGRITY: whether the registry's tarball of that version has that integrity (SHA-512),
+# which the package manager then installs.
+pinned_tarball_matches() {
+	command -v base64 >/dev/null 2>&1 && command -v od >/dev/null 2>&1 || return 1
+	TMP_PIN=$(mktemp) || return 1
+	fetch "$TMP_PIN" "$NPM_REGISTRY/$1/-/$1-$2.tgz" 2>/dev/null || { rm -f "$TMP_PIN"; return 1; }
+	want=$(printf '%s' "${3#sha512-}" | base64 -d 2>/dev/null | od -An -v -tx1 | tr -d ' \n')
+	if command -v sha512sum >/dev/null 2>&1; then got=$(sha512sum <"$TMP_PIN" | cut -d ' ' -f 1); else got=$(shasum -a 512 <"$TMP_PIN" | cut -d ' ' -f 1); fi
+	rm -f "$TMP_PIN"
+	[ -n "$want" ] && [ "$want" = "$got" ]
+}
+
 offer_extensions() {
 	choice="${PIBOLT_EXTENSIONS:-}"
 	case "$choice" in
@@ -755,6 +776,8 @@ offer_extensions() {
 	IFS=$newline
 	for entry in $EXTENSIONS; do
 		package=${entry%%:*} kind=${entry##*:}
+		# Only what the release pins (a release from before extensions.txt pins none).
+		pin_of "$package" >/dev/null || continue
 		if printf '%s\n' "$sources" | grep -Eq "npm:$package(@.*)?\$"; then continue; fi
 		# (`pi-bolt list` prints each source, then its path indented below it: only the sources.)
 		other=$(printf '%s\n' "$sources" | grep -E '^  [^ ]' | grep -Ei "$kind" | head -n 1 | sed 's/^ *//')
@@ -784,8 +807,15 @@ offer_extensions() {
 		esac
 	fi
 	for package in $wanted; do
-		if out=$(NPM_CONFIG_REGISTRY="$NPM_REGISTRY" "$INSTALL/$NAME/pi" install "npm:$package" 2>&1); then
-			printf '  %s%s%s %s installed\n' "$green" "$CHECK" "$reset" "$package"
+		pin=$(pin_of "$package")
+		version=${pin#* } integrity=${pin##* }
+		version=${version%% *}
+		if ! pinned_tarball_matches "$package" "$version" "$integrity"; then
+			printf '  %sdid not install %s@%s (Pi-Bolt itself is installed): the registry'"'"'s package is not the one this release pins%s\n' "$red" "$package" "$version" "$reset"
+			continue
+		fi
+		if out=$(NPM_CONFIG_REGISTRY="$NPM_REGISTRY" "$INSTALL/$NAME/pi" install "npm:$package@$version" 2>&1); then
+			printf '  %s%s%s %s@%s installed\n' "$green" "$CHECK" "$reset" "$package" "$version"
 		else
 			printf '  %scould not install %s (Pi-Bolt itself is installed): %s%s\n' "$red" "$package" "$(printf '%s' "$out" | tail -1)" "$reset"
 			printf '  %sInstall it later with: pi-bolt install npm:%s%s\n' "$dim" "$package" "$reset"
