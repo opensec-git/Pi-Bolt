@@ -59,14 +59,14 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  .../bytecode/UnlinkedGlobalCodeBlock.h        |    5 +-
  .../dfg/DFGAbstractInterpreterInlines.h       |    6 +-
  Source/JavaScriptCore/ffi/FFICallHost.cpp     |    4 +-
- Source/JavaScriptCore/heap/StaticHeap.cpp     |  205 +-
- Source/JavaScriptCore/heap/StaticHeap.h       |   32 +-
+ Source/JavaScriptCore/heap/StaticHeap.cpp     |  238 +-
+ Source/JavaScriptCore/heap/StaticHeap.h       |   35 +-
  .../heap/StructureAlignedMemoryAllocator.cpp  |    5 +-
  .../JavaScriptCore/interpreter/CallFrame.cpp  |    7 +
  .../interpreter/StackVisitor.cpp              |    8 +-
  .../parser/VariableEnvironment.cpp            |    2 +-
  .../parser/VariableEnvironment.h              |   16 +-
- Source/JavaScriptCore/runtime/CachedTypes.cpp |  195 +-
+ Source/JavaScriptCore/runtime/CachedTypes.cpp |  226 +-
  Source/JavaScriptCore/runtime/CachedTypes.h   |   21 +-
  Source/JavaScriptCore/runtime/CodeCache.cpp   |    2 +
  .../runtime/CyclicModuleRecord.cpp            |    3 +-
@@ -83,7 +83,7 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  .../runtime/SamplingProfiler.cpp              |    8 +
  Source/JavaScriptCore/runtime/StackFrame.cpp  |   11 +-
  .../runtime/StringPrototype.cpp               |   14 +
- Source/JavaScriptCore/runtime/VM.cpp          |   41 +-
+ Source/JavaScriptCore/runtime/VM.cpp          |   50 +-
  Source/JavaScriptCore/yarr/YarrJIT.cpp        |  124 +-
  Source/JavaScriptCore/yarr/YarrJIT.h          |   23 +-
  Source/JavaScriptCore/yarr/YarrPattern.cpp    |  114 +
@@ -94,12 +94,12 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  Source/WTF/wtf/HashFunctions.h                |   21 +-
  Source/WTF/wtf/Hasher.h                       |    4 +-
  Source/WTF/wtf/SysVCall.h                     |   49 +
- Source/bmalloc/bmalloc/StaticRegion.cpp       |  361 +-
+ Source/bmalloc/bmalloc/StaticRegion.cpp       |  380 +-
  Source/bmalloc/bmalloc/StaticRegion.h         |   92 +-
  Source/cmake/WebKitCompilerFlags.cmake        |    4 +-
  Source/cmake/WebKitMacros.cmake               |   28 +-
  build-icu.ps1                                 |   34 +-
- 81 files changed, 7482 insertions(+), 327 deletions(-)
+ 81 files changed, 7572 insertions(+), 332 deletions(-)
  create mode 100644 Source/JavaScriptCore/aot/AOTStubsX86_64.cpp
  create mode 100644 Source/JavaScriptCore/runtime/ReportableSitesOfFunction.h
  create mode 100644 Source/WTF/wtf/SysVCall.h
@@ -7866,7 +7866,7 @@ index f8e046f978..6f0a26fb9a 100644
  
      RELEASE_AND_RETURN(scope, JSValue::encode(jsValueFromSlot(globalObject, context, signature.returnType(), slots[argumentCount])));
 diff --git a/Source/JavaScriptCore/heap/StaticHeap.cpp b/Source/JavaScriptCore/heap/StaticHeap.cpp
-index 96edcf1624..fde7c772cd 100644
+index 96edcf1624..233af7bf4b 100644
 --- a/Source/JavaScriptCore/heap/StaticHeap.cpp
 +++ b/Source/JavaScriptCore/heap/StaticHeap.cpp
 @@ -23,7 +23,11 @@
@@ -7939,17 +7939,18 @@ index 96edcf1624..fde7c772cd 100644
          for (unsigned i = 0, count = s_numberOfOwnersEverUsed.load(std::memory_order_acquire); i < count; ++i) {
              auto& owner = s_ownersOfBlocks[i];
              if (address - owner.start.load(std::memory_order_relaxed) < owner.size.load(std::memory_order_acquire))
-@@ -211,6 +235,9 @@ void StaticHeap::willAllocateUnlinkedFunctionSlow()
+@@ -211,6 +235,10 @@ void StaticHeap::willAllocateUnlinkedFunctionSlow()
  
  // Where the cells are and how big, for as long as the region is being built. Nothing needs to be told once it is.
  static Vector<std::pair<void*, size_t>> s_cellsBeingBuilt[2]; // Those of Arena::Cells, and of Arena::MutableCells.
 +#if OS(WINDOWS)
 +static Vector<uint32_t> s_taggedWordsOfBuiltImage; // See taggedWordsOfBuiltImage().
++static Vector<std::pair<void*, size_t>> s_cellsOfBuiltImage; // The cells, sorted, for describeBuiltAddress().
 +#endif
  
  template<typename Functor> static void forEachCell(Region::Arena arena, const Functor& functor)
  {
-@@ -244,7 +271,7 @@ static Vector<std::pair<void*, size_t>>& freeBlocks() WTF_REQUIRES_LOCK(s_blocks
+@@ -244,7 +272,7 @@ static Vector<std::pair<void*, size_t>>& freeBlocks() WTF_REQUIRES_LOCK(s_blocks
      return blocks;
  }
  
@@ -7958,7 +7959,7 @@ index 96edcf1624..fde7c772cd 100644
  {
      RELEASE_ASSERT(!(size % WTF::pageSize()));
      Locker locker { s_blocksLock };
-@@ -258,11 +285,11 @@ void* StaticHeap::allocateBlock(VM& vm, size_t size)
+@@ -258,11 +286,11 @@ void* StaticHeap::allocateBlock(VM& vm, size_t size)
          }
      }
      if (!result) {
@@ -7973,7 +7974,7 @@ index 96edcf1624..fde7c772cd 100644
      for (unsigned i = 0; i < maxBlocks; ++i) {
          auto& owner = s_ownersOfBlocks[i];
          if (owner.size.load(std::memory_order_relaxed))
-@@ -283,9 +310,16 @@ void StaticHeap::freeBlock(void* block, size_t size)
+@@ -283,9 +311,16 @@ void StaticHeap::freeBlock(void* block, size_t size)
          if (owner.start.load(std::memory_order_relaxed) == std::bit_cast<uintptr_t>(block) && owner.size.load(std::memory_order_relaxed))
              owner.size.store(0, std::memory_order_release);
      }
@@ -7990,7 +7991,7 @@ index 96edcf1624..fde7c772cd 100644
      Locker locker { s_blocksLock };
      freeBlocks().append({ block, size });
  }
-@@ -351,7 +385,7 @@ public:
+@@ -351,7 +386,7 @@ public:
  
      void check(const void* pointer, const char* what)
      {
@@ -7999,7 +8000,40 @@ index 96edcf1624..fde7c772cd 100644
          if (!pointer || (StaticHeap::contains(pointer) && isKept))
              return;
          numberOfEscapes++;
-@@ -1277,8 +1311,10 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+@@ -1219,9 +1254,16 @@ static void deduplicateSymbolTables()
+     for (uintptr_t table : tables) {
+         std::span bytes { std::bit_cast<const Latin1Character*>(table), sizeof(SymbolTable) };
+         moved.add(table, kept.ensure(String { bytes }, [&] {
+-            void* cell = Region::allocate(Region::Arena::Cells, sizeof(SymbolTable), 16, StaticHeap::sizeOfCellHeader);
++#if OS(WINDOWS)
++            // In the mutable cells: looking a name up in one takes its lock (with the JIT on, ConcurrentJSLocker), and on
++            // Windows a write to the immutable arenas is a fault (bmalloc::StaticRegion's exception handler).
++            constexpr bool isMutable = true;
++#else
++            constexpr bool isMutable = false;
++#endif
++            void* cell = Region::allocate(isMutable ? Region::Arena::MutableCells : Region::Arena::Cells, sizeof(SymbolTable), 16, StaticHeap::sizeOfCellHeader);
+             memcpy(cell, bytes.data(), bytes.size());
+-            s_cellsBeingBuilt[0].append({ cell, sizeof(SymbolTable) });
++            s_cellsBeingBuilt[isMutable].append({ cell, sizeof(SymbolTable) });
+             return std::bit_cast<uintptr_t>(cell);
+         }).iterator->value);
+     }
+@@ -1246,6 +1288,13 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+     s_identifiersOfProgram = { };
+     s_constantsOfProgram = { };
+     auto forgetCells = makeScopeExit([] {
++#if OS(WINDOWS)
++        // (Kept for the executable's writer to say what a word it cannot relocate is in: describeBuiltAddress().)
++        s_cellsOfBuiltImage = { };
++        for (auto& cells : s_cellsBeingBuilt)
++            s_cellsOfBuiltImage.appendVector(cells);
++        std::ranges::sort(s_cellsOfBuiltImage, { }, &std::pair<void*, size_t>::first);
++#endif
+         for (auto& cells : s_cellsBeingBuilt)
+             cells = { };
+         s_allocatesFunctionsInScratch = false;
+@@ -1277,8 +1326,10 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
      s_vm = &vm;
  
      Header header { };
@@ -8010,7 +8044,7 @@ index 96edcf1624..fde7c772cd 100644
  
      auto copy = [&](std::span<const uint8_t> bytes) {
          auto* result = static_cast<uint8_t*>(Region::allocate(Region::Arena::Data, bytes.size(), pageSizeOfImage));
-@@ -1330,6 +1366,7 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+@@ -1330,6 +1381,7 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
                  auto* modules = static_cast<StaticHeapModule*>(Region::allocate(Region::Arena::Data, sortedOffsets.size() * sizeof(StaticHeapModule), 16));
                  header.modules = std::bit_cast<uint64_t>(modules);
                  header.numberOfModules = sortedOffsets.size();
@@ -8018,7 +8052,7 @@ index 96edcf1624..fde7c772cd 100644
                  auto imageView = AOT::ImageView::tryCreate(imageOfCode, reinterpret_cast<const void*>(Region::startOf(Region::Arena::Image)));
                  std::span<AOT::FunctionInfo> infosOfFunctions;
                  if (imageView) {
-@@ -1540,7 +1577,7 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+@@ -1540,7 +1592,7 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
              unsigned mask = capacity - 1;
              for (auto& atom : atoms->table()) {
                  atom->becomeStatic();
@@ -8027,7 +8061,7 @@ index 96edcf1624..fde7c772cd 100644
                  RELEASE_ASSERT(contains(atom.get()) && distance && !(distance & ((1u << StaticAtoms::shift) - 1)) && !(distance >> StaticAtoms::shift >> 32));
                  unsigned probes = 0;
                  unsigned place = atom->hash() & mask;
-@@ -1575,6 +1612,37 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+@@ -1575,6 +1627,37 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
          }
      }
  
@@ -8065,7 +8099,7 @@ index 96edcf1624..fde7c772cd 100644
      // Cells are as they would be in the VM that is going to have them, after a collection that found them.
      auto structures = structuresOf(vm);
      uint32_t blockOfStructures = vm.structureStructure->id().bits() & ~static_cast<uint32_t>(MarkedBlock::blockSize - 1);
-@@ -1691,13 +1759,49 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
+@@ -1691,13 +1774,49 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
      AtomStringTable* atoms = Thread::currentSingleton().atomStringTable();
      if (!atoms->table().isEmpty())
          return false;
@@ -8116,7 +8150,7 @@ index 96edcf1624..fde7c772cd 100644
      for (unsigned i = 0; i < Region::numberOfArenasInFile; ++i) {
          // (Some of it mapped and the rest not is nothing that anybody gets to see.)
          if (static_cast<Region::Arena>(i) == Region::Arena::Data && header.sizeOfHoleInData) {
-@@ -1710,14 +1814,83 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
+@@ -1710,14 +1829,97 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
          if (!Region::map(static_cast<Region::Arena>(i), fileDescriptor, offsetInFile + header.arenaOffset[i], header.arenaSize[i]))
              return false;
      }
@@ -8199,12 +8233,26 @@ index 96edcf1624..fde7c772cd 100644
 +{
 +    return s_taggedWordsOfBuiltImage.span();
 +}
++
++CString StaticHeap::describeBuiltAddress(uintptr_t address)
++{
++    auto it = std::ranges::upper_bound(s_cellsOfBuiltImage, reinterpret_cast<void*>(address), { }, &std::pair<void*, size_t>::first);
++    if (it == s_cellsOfBuiltImage.begin())
++        return "not in a cell"_s;
++    --it;
++    uintptr_t start = reinterpret_cast<uintptr_t>(it->first);
++    if (address >= start + it->second)
++        return "not in a cell"_s;
++    auto* cell = static_cast<JSCell*>(it->first);
++    const ClassInfo* info = cell->structureID() ? cell->classInfo() : nullptr;
++    return makeString(info ? info->className : "a cell without a structure"_s, " +"_s, address - start, " (of "_s, it->second, " bytes)"_s).utf8();
++}
 +#endif
 +
  void StaticHeap::prepareThread()
  {
      if (!s_header || !s_vm || t_threadIsPrepared)
-@@ -1725,7 +1898,7 @@ void StaticHeap::prepareThread()
+@@ -1725,7 +1927,7 @@ void StaticHeap::prepareThread()
      AtomStringTable* atoms = Thread::currentSingleton().atomStringTable();
      if (!atoms->table().isEmpty())
          return;
@@ -8214,7 +8262,7 @@ index 96edcf1624..fde7c772cd 100644
  }
  
 diff --git a/Source/JavaScriptCore/heap/StaticHeap.h b/Source/JavaScriptCore/heap/StaticHeap.h
-index b4c5c6697e..283ff226ce 100644
+index b4c5c6697e..7c103c7edf 100644
 --- a/Source/JavaScriptCore/heap/StaticHeap.h
 +++ b/Source/JavaScriptCore/heap/StaticHeap.h
 @@ -7,6 +7,7 @@
@@ -8241,7 +8289,7 @@ index b4c5c6697e..283ff226ce 100644
  class TDZEnvironmentLink;
  class UnlinkedCodeBlock;
  class UnlinkedFunctionCodeBlock;
-@@ -98,6 +99,28 @@ public:
+@@ -98,6 +99,31 @@ public:
          bool hasPositionsOfCallSites; // See PositionsToKeep.
      };
      JS_EXPORT_PRIVATE static std::optional<Copies> copiesIn(std::span<const uint8_t> image);
@@ -8266,11 +8314,14 @@ index b4c5c6697e..283ff226ce 100644
 +    // AOT::FunctionInfo's executable), as offsets from Region::base(), in order. The writer moves the address in each of them; a
 +    // plain pointer it finds by itself. Kept by this process only: nothing of it is in the image.
 +    JS_EXPORT_PRIVATE static std::span<const uint32_t> taggedWordsOfBuiltImage();
++    // What cell of the last image that build() made an address is in, and where in it: its class and the offset ("Structure
++    // +24 (of 112 bytes)"), for a word the writer cannot relocate.
++    JS_EXPORT_PRIVATE static CString describeBuiltAddress(uintptr_t);
 +#endif
      // Call on a thread that will own a VM other than the first, before it creates any atom string. Does for that thread what map()
      // does for its own.
      JS_EXPORT_PRIVATE static void prepareThread();
-@@ -109,7 +132,7 @@ public:
+@@ -109,7 +135,7 @@ public:
      static bool isFirst(VM& vm) { return s_vm == &vm; }
      static ALWAYS_INLINE bool isOnlyForFirstVM(const void* pointer)
      {
@@ -8279,7 +8330,7 @@ index b4c5c6697e..283ff226ce 100644
      }
      // Once more than one VM uses the heap, the PreciseAllocation for a static cell is that of the VM that placed it, or else that
      // of the calling thread's VM.
-@@ -247,8 +270,9 @@ public:
+@@ -247,8 +273,9 @@ public:
      // All cells placed outside the GC's own memory belong to a single VM. Returns whether that is this VM. Without a static heap,
      // the first VM to ask claims the role.
      JS_EXPORT_PRIVATE static bool canPlaceCellsOf(VM&);
@@ -8421,7 +8472,7 @@ index 1dda303c94..4d245ef488 100644
      using Variables = Variant<Compact, Inflated>;
  
 diff --git a/Source/JavaScriptCore/runtime/CachedTypes.cpp b/Source/JavaScriptCore/runtime/CachedTypes.cpp
-index 696ac7a731..6a19d2ab9c 100644
+index 696ac7a731..c985ba4110 100644
 --- a/Source/JavaScriptCore/runtime/CachedTypes.cpp
 +++ b/Source/JavaScriptCore/runtime/CachedTypes.cpp
 @@ -26,6 +26,7 @@
@@ -8459,7 +8510,64 @@ index 696ac7a731..6a19d2ab9c 100644
      unsigned m_hash;
  };
  
-@@ -5941,6 +5942,8 @@ struct BytecodeLinkEncoder::Impl {
+@@ -3078,7 +3079,17 @@ public:
+         if (decoder.isForStaticHeap()) [[unlikely]]
+             StaticHeap::willAllocateUnlinkedFunction();
+ #endif
+-        SymbolTable* symbolTable = SymbolTable::create(decoder.vm());
++        SymbolTable* symbolTable;
++        {
++#if OS(WINDOWS) && USE(BUN_JSC_ADDITIONS)
++            // In a static heap, in the mutable cells (unless it goes to Arena::Scratch, to be deduplicated into them: StaticHeap.cpp):
++            // looking a name up in one takes its lock, and on Windows a write to the immutable arenas is a fault.
++            std::optional<bmalloc::StaticRegion::MutableScope> mutableScope;
++            if (decoder.isForStaticHeap())
++                mutableScope.emplace();
++#endif
++            symbolTable = SymbolTable::create(decoder.vm());
++        }
+ #if USE(BUN_JSC_ADDITIONS)
+         // Whether it only ever has one scope is not to be found out by writing to it.
+         if (decoder.isForStaticHeap()) [[unlikely]]
+@@ -4716,12 +4727,27 @@ ALWAYS_INLINE void CachedCodeBlock<CodeBlockType>::decode(Decoder& decoder, Unli
+ #endif
+ }
+ 
++// A program's or a module's top-level code block: in a static heap, in the mutable cells on Windows, where a write to the
++// immutable arenas is a fault (bmalloc::StaticRegion's exception handler). Its code runs in the interpreter, whose prologue counts
++// the block's executions in it (UnlinkedCodeBlock::m_llintExecuteCounter), as tiering up does. Only the cell: what it points to
++// stays where it would be.
++template<typename CodeBlockType>
++static void* allocateTopLevelCodeBlockCell(Decoder& decoder)
++{
++#if OS(WINDOWS)
++    std::optional<bmalloc::StaticRegion::MutableScope> mutableScope;
++    if (decoder.isForStaticHeap())
++        mutableScope.emplace();
++#endif
++    return allocateCell<CodeBlockType>(decoder.vm());
++}
++
+ UnlinkedProgramCodeBlock* CachedProgramCodeBlock::decode(Decoder& decoder) const
+ {
+     Tail tail = readTail();
+     ActiveTailScope activeTail(decoder, this, tail);
+     prefetchStringTableSlots(decoder, tail);
+-    UnlinkedProgramCodeBlock* codeBlock = new (NotNull, allocateCell<UnlinkedProgramCodeBlock>(decoder.vm())) UnlinkedProgramCodeBlock(decoder, *this);
++    UnlinkedProgramCodeBlock* codeBlock = new (NotNull, allocateTopLevelCodeBlockCell<UnlinkedProgramCodeBlock>(decoder)) UnlinkedProgramCodeBlock(decoder, *this);
+     codeBlock->finishCreation(decoder.vm());
+     Base::decode(decoder, *codeBlock, tail);
+     decodeOwnMembers(decoder, *codeBlock);
+@@ -4733,7 +4759,7 @@ UnlinkedModuleProgramCodeBlock* CachedModuleCodeBlock::decode(Decoder& decoder)
+     Tail tail = readTail();
+     ActiveTailScope activeTail(decoder, this, tail);
+     prefetchStringTableSlots(decoder, tail);
+-    UnlinkedModuleProgramCodeBlock* codeBlock = new (NotNull, allocateCell<UnlinkedModuleProgramCodeBlock>(decoder.vm())) UnlinkedModuleProgramCodeBlock(decoder, *this);
++    UnlinkedModuleProgramCodeBlock* codeBlock = new (NotNull, allocateTopLevelCodeBlockCell<UnlinkedModuleProgramCodeBlock>(decoder)) UnlinkedModuleProgramCodeBlock(decoder, *this);
+     codeBlock->finishCreation(decoder.vm());
+     Base::decode(decoder, *codeBlock, tail);
+     decodeOwnMembers(decoder, *codeBlock);
+@@ -5941,6 +5967,8 @@ struct BytecodeLinkEncoder::Impl {
          executable.takeParentDeclaredNames();
          if (!forCall && !forConstruct) {
              omittedFunctions[0]++;
@@ -8468,7 +8576,7 @@ index 696ac7a731..6a19d2ab9c 100644
              return;
          }
          SourceCode source = executable.linkedSourceCode(around);
-@@ -6116,7 +6119,71 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6116,7 +6144,71 @@ struct BytecodeLinkEncoder::Impl {
      Vector<AOT::Variable> variablesWrittenNativelyOfLink;
  
      // What the bundler says of the variables at the top of a module, by where each is in the environment of the module.
@@ -8540,7 +8648,7 @@ index 696ac7a731..6a19d2ab9c 100644
      {
          using Graph = PrelinkedModuleGraph;
          Vector<AOT::ModuleHints::Binding> result;
-@@ -6391,6 +6458,9 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6391,6 +6483,9 @@ struct BytecodeLinkEncoder::Impl {
          AOT::MultiValueReturnTable multiValueReturnTable;
          AOT::setMultiValueReturnTable(&multiValueReturnTable);
          auto forgetThingsReturnedByFunctions = makeScopeExit([] { AOT::setMultiValueReturnTable(nullptr); });
@@ -8550,7 +8658,7 @@ index 696ac7a731..6a19d2ab9c 100644
          {
              MonotonicTime before = MonotonicTime::now();
              for (auto& hintsOfModule : hints) {
-@@ -6413,6 +6483,7 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6413,6 +6508,7 @@ struct BytecodeLinkEncoder::Impl {
                      unreadable++;
              });
              AOT::TypeTable::finalizeAtomizedFields();
@@ -8558,7 +8666,7 @@ index 696ac7a731..6a19d2ab9c 100644
              RELEASE_ASSERT(!unreadable.load());
              classesOfProgram.forEachNonEscapingMethod([&](uint32_t number) {
                  const AOT::KnownFunction& function = *functionsOfProgram.function(number);
-@@ -6673,10 +6744,18 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6673,10 +6769,18 @@ struct BytecodeLinkEncoder::Impl {
          std::atomic<size_t> next { 0 };
          Lock declinedLock;
          UncheckedKeyHashSet<UnlinkedCodeBlock*> declined;
@@ -8577,7 +8685,7 @@ index 696ac7a731..6a19d2ab9c 100644
                  auto it = all.find(codeBlock);
                  return it == all.end() ? std::nullopt : std::optional { it->value };
              }
-@@ -6704,7 +6783,11 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6704,7 +6808,11 @@ struct BytecodeLinkEncoder::Impl {
                      continue;
                  }
                  AOT::CompiledCode code;
@@ -8590,7 +8698,7 @@ index 696ac7a731..6a19d2ab9c 100644
                      // (A function's key says where its source starts, if it is a function that somebody wrote.)
                      {
                          auto kindOfFunction = static_cast<OrderFunctionKind>(jobs[index].key.kind >> 1);
-@@ -6733,6 +6816,7 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6733,6 +6841,7 @@ struct BytecodeLinkEncoder::Impl {
                  else {
                      Locker locker { declinedLock };
                      declined.add(jobs[index].codeBlock);
@@ -8598,7 +8706,7 @@ index 696ac7a731..6a19d2ab9c 100644
                  }
              }
          };
-@@ -6844,6 +6928,7 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6844,6 +6953,7 @@ struct BytecodeLinkEncoder::Impl {
  
          // A call that passes no function object has nowhere to go but the function's code. If there turns out to be none, it is all
          // done again with that known.
@@ -8606,7 +8714,7 @@ index 696ac7a731..6a19d2ab9c 100644
          for (bool again = true; again;) {
              Vector<Ref<Thread>> threads;
              for (unsigned i = 1; i < numberOfThreads; ++i)
-@@ -6869,6 +6954,53 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6869,6 +6979,53 @@ struct BytecodeLinkEncoder::Impl {
                      again = true;
                  }
              });
@@ -8660,7 +8768,7 @@ index 696ac7a731..6a19d2ab9c 100644
              dataLogLn("AOT: ", functionsNeverReached.load(), " closed functions that nothing reaches are left out (", bytecodeNeverReached.load(), " bytes of bytecode)");
              if (again) {
                  functionsNeverReached = 0;
-@@ -6878,7 +7010,13 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6878,7 +7035,13 @@ struct BytecodeLinkEncoder::Impl {
                  next = 0;
              }
          }
@@ -8674,7 +8782,7 @@ index 696ac7a731..6a19d2ab9c 100644
          AOT::setNumbersOfIdentifiersOfProgram(nullptr);
          AOT::setNumbersOfConstantsOfProgram(nullptr);
          for (auto& job : jobs) {
-@@ -6890,6 +7028,55 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6890,6 +7053,55 @@ struct BytecodeLinkEncoder::Impl {
          // A regular expression that the program makes out of a string finds its code by what it says. So it is worth having code
          // for whatever string may be made one of, and it costs nothing but room to be wrong: a string in which something is
          // escaped that only a regular expression has any call to escape.
@@ -9370,7 +9478,7 @@ index f48a8a6a3b..86c7e65d54 100644
      RETURN_IF_EXCEPTION(scope, { });
      JSValue a0 = callFrame->argument(0);
 diff --git a/Source/JavaScriptCore/runtime/VM.cpp b/Source/JavaScriptCore/runtime/VM.cpp
-index e55096c301..fe8c78ab2a 100644
+index e55096c301..dab6862830 100644
 --- a/Source/JavaScriptCore/runtime/VM.cpp
 +++ b/Source/JavaScriptCore/runtime/VM.cpp
 @@ -193,6 +193,10 @@
@@ -9401,7 +9509,7 @@ index e55096c301..fe8c78ab2a 100644
  {
      const int pageSize = 4096;
      for (volatile char* p = reinterpret_cast<char*>(&stackLimit); p > stackLimit; p -= pageSize) {
-@@ -1416,6 +1427,34 @@ static void preCommitStackMemory(void* stackLimit)
+@@ -1416,6 +1427,43 @@ static void preCommitStackMemory(void* stackLimit)
          *p = ch;
      }
  }
@@ -9432,6 +9540,15 @@ index e55096c301..fe8c78ab2a 100644
 +    RELEASE_ASSERT(VirtualProtect(guard, pageSize, PAGE_READWRITE | PAGE_GUARD, &oldProtection));
 +    RELEASE_ASSERT(VirtualProtect(reinterpret_cast<void*>(limit), committed - limit, PAGE_READWRITE, &oldProtection));
 +    tib->StackLimit = reinterpret_cast<void*>(limit);
++    // As the system leaves a stack it has grown: the guard page below, committed read-write memory above it up to what was
++    // committed before, the TEB's limit at its start. If a Windows sees it otherwise, touching is still the way.
++    MEMORY_BASIC_INFORMATION below;
++    MEMORY_BASIC_INFORMATION range;
++    bool asTheSystemLeavesIt = VirtualQuery(guard, &below, sizeof(below)) && below.State == MEM_COMMIT && below.Protect == (PAGE_READWRITE | PAGE_GUARD)
++        && VirtualQuery(reinterpret_cast<void*>(limit), &range, sizeof(range)) && range.State == MEM_COMMIT && range.Protect == PAGE_READWRITE
++        && reinterpret_cast<uintptr_t>(range.BaseAddress) + range.RegionSize >= committed && tib->StackLimit == reinterpret_cast<void*>(limit);
++    if (!asTheSystemLeavesIt)
++        touchStackMemory(stackLimit);
 +}
  #endif
  
@@ -10090,10 +10207,10 @@ index 0000000000..1c31756902
 +
 +using WTF::callSysV;
 diff --git a/Source/bmalloc/bmalloc/StaticRegion.cpp b/Source/bmalloc/bmalloc/StaticRegion.cpp
-index 77260b2296..cd7f672d1d 100644
+index 77260b2296..ab6ec08785 100644
 --- a/Source/bmalloc/bmalloc/StaticRegion.cpp
 +++ b/Source/bmalloc/bmalloc/StaticRegion.cpp
-@@ -7,33 +7,298 @@
+@@ -7,33 +7,317 @@
  
  #include "BAssert.h"
  #include "BPlatform.h"
@@ -10233,14 +10350,23 @@ index 77260b2296..cd7f672d1d 100644
 +
 +// In an executable with a static heap, the arenas that running the program is not expected to write to (Data, Malloc, Cells:
 +// they are side by side, before MutableCells) are read-only sections: no process is charged for them, and they are the
-+// executable's pages, shared. What is written to all the same is made writable, a page at a time, when it is (the page is then
-+// the process's, as it would be on Linux, where they are private mappings of the file): about 5 µs a page.
-+// BUN_STATIC_HEAP_WRITES=1 says where each such write was (the code's address as an offset in the executable, and where in which
-+// arena), for finding out what could go in a mutable arena instead.
++// executable's pages, shared. Nothing that runs writes to them (what does is in the mutable arenas: StaticHeap.cpp), so a write
++// there is a fault like any other: one line here says where it was, and Bun's crash handler reports it.
++// BUN_STATIC_HEAP_WRITES=1 makes such a page writable instead (the page is then the process's, as it would be on Linux, where
++// they are private mappings of the file; about 5 µs a page), and says where the first write to it was: the code's address as an
++// offset in the executable, and where in which arena. BUN_STATIC_HEAP_WRITES=all says where every write is: the page is writable
++// for the one instruction (the trap flag), then read-only again. Both are for finding out what belongs in a mutable arena.
 +static std::atomic<size_t> s_pagesMadeWritable { 0 };
++static thread_local uintptr_t t_pageToMakeReadOnly { 0 };
 +static LONG CALLBACK makeImmutablePageWritable(EXCEPTION_POINTERS* pointers)
 +{
 +    auto* record = pointers->ExceptionRecord;
++    if (record->ExceptionCode == EXCEPTION_SINGLE_STEP && t_pageToMakeReadOnly) {
++        // (BUN_STATIC_HEAP_WRITES=all: the write is done.)
++        DWORD old;
++        VirtualProtect(reinterpret_cast<void*>(std::exchange(t_pageToMakeReadOnly, 0)), 4096, PAGE_READONLY, &old);
++        return EXCEPTION_CONTINUE_EXECUTION;
++    }
 +    if (record->ExceptionCode != EXCEPTION_ACCESS_VIOLATION || record->NumberParameters < 2 || record->ExceptionInformation[0] != 1)
 +        return EXCEPTION_CONTINUE_SEARCH;
 +    uintptr_t address = static_cast<uintptr_t>(record->ExceptionInformation[1]);
@@ -10252,16 +10378,26 @@ index 77260b2296..cd7f672d1d 100644
 +    MEMORY_BASIC_INFORMATION info;
 +    if (!VirtualQuery(reinterpret_cast<void*>(address), &info, sizeof(info)) || info.Protect != PAGE_READONLY)
 +        return EXCEPTION_CONTINUE_SEARCH;
++    static const char* mode = getenv("BUN_STATIC_HEAP_WRITES");
++    static const bool everyWrite = mode && !strcmp(mode, "all");
++    uintptr_t image = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
++    static constexpr const char* names[] = { "Data", "Malloc", "Cells" };
++    unsigned arena = address >= StaticRegion::startOf(StaticRegion::Arena::Cells) ? 2 : address >= StaticRegion::startOf(StaticRegion::Arena::Malloc) ? 1 : 0;
++    size_t inArena = static_cast<size_t>(address - StaticRegion::startOf(static_cast<StaticRegion::Arena>(arena)));
++    size_t from = static_cast<size_t>(reinterpret_cast<uintptr_t>(record->ExceptionAddress) - image);
++    if (!mode) {
++        fprintf(stderr, "bun: a write to the read-only prebuilt heap (%s+%zx from +%zx)\n", names[arena], inArena, from);
++        return EXCEPTION_CONTINUE_SEARCH;
++    }
++    uintptr_t page = address & ~static_cast<uintptr_t>(4095);
 +    DWORD old;
-+    if (!VirtualProtect(reinterpret_cast<void*>(address & ~static_cast<uintptr_t>(4095)), 4096, PAGE_READWRITE, &old))
++    if (!VirtualProtect(reinterpret_cast<void*>(page), 4096, PAGE_READWRITE, &old))
 +        return EXCEPTION_CONTINUE_SEARCH;
 +    size_t count = ++s_pagesMadeWritable;
-+    static const bool trace = !!getenv("BUN_STATIC_HEAP_WRITES");
-+    if (trace) {
-+        uintptr_t image = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
-+        static constexpr const char* names[] = { "Data", "Malloc", "Cells" };
-+        unsigned arena = address >= StaticRegion::startOf(StaticRegion::Arena::Cells) ? 2 : address >= StaticRegion::startOf(StaticRegion::Arena::Malloc) ? 1 : 0;
-+        fprintf(stderr, "[static heap] write #%zu to %s+%zx from +%zx\n", count, names[arena], static_cast<size_t>(address - StaticRegion::startOf(static_cast<StaticRegion::Arena>(arena))), static_cast<size_t>(reinterpret_cast<uintptr_t>(record->ExceptionAddress) - image));
++    fprintf(stderr, "[static heap] write #%zu to %s+%zx from +%zx\n", count, names[arena], inArena, from);
++    if (everyWrite) {
++        t_pageToMakeReadOnly = page;
++        pointers->ContextRecord->EFlags |= 0x100; // TF: back here after the one instruction
 +    }
 +    return EXCEPTION_CONTINUE_EXECUTION;
 +}
@@ -10394,7 +10530,7 @@ index 77260b2296..cd7f672d1d 100644
          munmap(result, size);
          return false;
      }
-@@ -47,6 +312,7 @@ bool StaticRegion::beginBuilding()
+@@ -47,6 +331,7 @@ bool StaticRegion::beginBuilding()
      memset(s_used, 0, sizeof(s_used));
      s_isBuilding = true;
      return true;
@@ -10402,7 +10538,7 @@ index 77260b2296..cd7f672d1d 100644
  }
  
  void StaticRegion::endBuilding()
-@@ -55,8 +321,16 @@ void StaticRegion::endBuilding()
+@@ -55,8 +340,16 @@ void StaticRegion::endBuilding()
      s_isBuilding = false;
      ::free(std::exchange(s_sizes, nullptr));
      s_capacityOfSizes = 0;
@@ -10420,7 +10556,7 @@ index 77260b2296..cd7f672d1d 100644
  }
  
  void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t misalignment)
-@@ -64,8 +338,12 @@ void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t
+@@ -64,8 +357,12 @@ void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t
      RELEASE_BASSERT(s_isBuilding && alignment && !(alignment & (alignment - 1)) && misalignment < alignment);
      size_t& used = s_used[static_cast<size_t>(arena)];
      size_t offset = ((used + alignment - 1 - misalignment) & ~(alignment - 1)) + misalignment;
@@ -10434,7 +10570,7 @@ index 77260b2296..cd7f672d1d 100644
      return reinterpret_cast<void*>(startOf(arena) + offset);
  }
  
-@@ -107,22 +385,72 @@ bool StaticRegion::isAllocatingMutable()
+@@ -107,22 +404,72 @@ bool StaticRegion::isAllocatingMutable()
      return t_isAllocatingMutable;
  }
  
@@ -10510,7 +10646,7 @@ index 77260b2296..cd7f672d1d 100644
      void* wanted = reinterpret_cast<void*>(startOf(arena) + offsetInArena);
      if (arena == Arena::Image) {
          void* result = mmap(wanted, size, isCode ? PROT_READ | PROT_EXEC : PROT_READ, MAP_PRIVATE, fileDescriptor, offsetInFile);
-@@ -147,6 +475,7 @@ bool StaticRegion::map(Arena arena, int fileDescriptor, off_t offsetInFile, size
+@@ -147,6 +494,7 @@ bool StaticRegion::map(Arena arena, int fileDescriptor, off_t offsetInFile, size
          return false;
      }
      return true;
@@ -10518,7 +10654,7 @@ index 77260b2296..cd7f672d1d 100644
  }
  
  // In Arena::MutableMalloc, what is asked for is preceded by how much was asked for: it may be given back, or be found too small,
-@@ -160,7 +489,7 @@ static constexpr size_t unit = 8;
+@@ -160,7 +508,7 @@ static constexpr size_t unit = 8;
  
  static bool isInImmutableMalloc(const void* pointer)
  {
@@ -10527,7 +10663,7 @@ index 77260b2296..cd7f672d1d 100644
  }
  
  static uint32_t& sizeOfImmutable(const void* pointer)
-@@ -288,6 +617,9 @@ static void* mallocImmutable(size_t size, size_t alignment)
+@@ -288,6 +636,9 @@ static void* mallocImmutable(size_t size, size_t alignment)
              }
              pushFreeImmutable(block + units * unit, found - units);
              sizeOfImmutable(block) = static_cast<uint32_t>(size);
@@ -10537,7 +10673,7 @@ index 77260b2296..cd7f672d1d 100644
              return block;
          }
      }
-@@ -317,6 +649,9 @@ void* StaticRegion::tryMallocSlow(size_t size, size_t alignment)
+@@ -317,6 +668,9 @@ void* StaticRegion::tryMallocSlow(size_t size, size_t alignment)
                  memcpy(rest - sizeOfHeader, &sizeOfRest, sizeof(sizeOfRest));
                  pushFree(mutableOnes, found - index, rest);
              }
@@ -10547,7 +10683,7 @@ index 77260b2296..cd7f672d1d 100644
              return block;
          }
      }
-@@ -347,16 +682,22 @@ void* StaticRegion::reallocate(void* pointer, size_t newSize)
+@@ -347,16 +701,22 @@ void* StaticRegion::reallocate(void* pointer, size_t newSize)
              size_t newUnits = unitsFor(newSize);
              // (Where it is has to do for what it is going to be, too.)
              bool isWhereItMayBe = newSize % 16 || !(reinterpret_cast<uintptr_t>(pointer) & 15);

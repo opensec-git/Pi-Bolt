@@ -39,13 +39,16 @@ address, and the static atom table, have positions relative to the region in the
 only a running program makes, are a reservation of their own, anywhere, decommitted when they are freed.
 
 **What a running program does not write to is read-only.** The arenas it is not expected to write to (Data, Malloc, Cells) are
-read-only sections: their pages are the executable's, shared, and no process is charged for them. A page that is written to all
-the same is made writable when it is, by an exception handler that runs before any other (`StaticRegion.cpp`; about 5 µs a page;
-`BUN_STATIC_HEAP_WRITES=1` says where each write was). In a Pi session there are none. Only MutableCells and MutableMalloc
-(1.7 MB for Pi) are writable sections. This saves memory; it does not protect the arenas: the engine does write to them now and
-then (a static cell's lock byte when the JIT is on, an execution counter), so a write is let through, as on Linux, where the
-arenas are private writable mappings. (Across `tests\aot`, 9 pages, from those two.) Refusing writes would need what is written
-to moved to the mutable arenas first.
+read-only sections: their pages are the executable's, shared, and no process is charged for them. Only MutableCells and
+MutableMalloc (1.7 MB for Pi) are writable sections. **A write to the others is a fault**: an exception handler that runs
+before any other (`StaticRegion.cpp`) says in one line where it was, and Bun's crash handler reports it. What the engine did write
+there has been moved to the mutable cells: the tables of a scope's variables (`SymbolTable`, whose lock a lookup takes when the
+JIT is on) and a program's or module's top-level code block (whose execution counter the interpreter's prologue bumps). Logging
+every write (`BUN_STATIC_HEAP_WRITES=all`: the page is writable for one instruction, the trap flag, then read-only again),
+tests\aot in all three modes (JIT on, JIT off, compact) wrote nothing; before the move, the JIT-on tests wrote 5,500 times
+(mostly symbol tables' locks). For finding out what else belongs there, `BUN_STATIC_HEAP_WRITES=1` lets writes through again, a
+page at a time (about 5 µs a page), as on Linux, where the arenas are private writable mappings, and says where the first
+write to each page was.
 
 **The heap is in the executable once.** The module graph that Bun's PE writer adds (`.bun`) keeps only the heap's header, a copy
 of the first 4 KB of its string table and the code image's first page (`StaticHeap::compactForExecutable()`): what says that the
@@ -83,10 +86,18 @@ The writer refuses a heap that points into any other module (a system DLL moves 
 there; a class element's initializer position carried 12 bytes of the builder's memory into the heap that way (an address,
 different in every build). It is a type whose bytes are always written now.
 
-*The compiler's own order.* Pi's compiled code is not laid out the same way twice, even by the same runtime: which function's
-data goes in which slot follows the order of a table keyed by addresses (the same on Linux and macOS). Then the code and the
-entry words differ between two builds, and `-VerifyDeterminism` judges what it can: the data arenas must be identical, and no word
-may differ by exactly as much as the two builds' addresses did (a pointer that was not relocated).
+*The compiler's own order.* Pi's compiled code is not laid out the same way twice, even by the same runtime: the number of
+inline-cache slots a function gets differs between builds (the same on Linux and macOS). Then the code and the entry words
+differ between two builds, and `-VerifyDeterminism` judges what it can: the data arenas must be identical, and no word may differ
+by exactly as much as the two builds' addresses did (a pointer that was not relocated). **Open, engine-wide, to be fixed before a
+release is called reproducible or verifiable.** Read, not yet confirmed by a run: the likeliest cause is the type inference that
+runs over all functions in parallel before compiling (`CachedTypes.cpp`, the inference rounds): a unit reads summaries that other
+threads are still writing, a rule that is not monotone (`AOTTypeInference.cpp`: an array with no store seen yet is untyped)
+widens a type on a stale read, and the join keeps it; the worklist after each round follows hash order
+(`copyToVector(next)`), and `ClassesOfProgram` is read while other threads write it (`MethodsOfProgram` has a `seal()` for
+that; it has none). The plan: build twice with `BUN_JSC_numberOfAOTCompilerThreads=1` (identical output points at the
+threads); make each round read a snapshot and merge its results in unit order; make the rule monotone; sort the worklist; seal
+`ClassesOfProgram`; then require identical output from 1, 2 and the default number of threads.
 
 ## What was measured
 
@@ -160,13 +171,25 @@ Stock Bun 1.4.2 for Windows is linked with `/DYNAMICBASE`, `/HIGHENTROPYVA` and 
 
   What CFG costs in memory: the loader keeps a bitmap of valid targets, about 1.4 MB resident for Pi. With the JIT on, JSC's
   1 GB executable reservation is all valid targets, which costs 16 MB of bitmap pages; Pi runs with the JIT off.
-- **CET shadow stacks: not tested yet, and not linked in.** JavaScriptCore discards frames when it unwinds to a JavaScript
-  `catch` handler or to its entry frame, without a matching return, which a shadow stack would take for an attack. Whether it
-  does has to be found out on a machine that runs programs with shadow stacks; this one does not: Windows runs no process here
-  with them (Edge, which is linked `/CETCOMPAT`, has `ProcessUserShadowStackPolicy` 0, and so does a process created with
-  `PROCESS_CREATION_MITIGATION_POLICY2_CET_USER_SHADOW_STACKS_ALWAYS_ON`; `.work/exp/cet/cet_run.py`), and turning it on is a
-  change to the system's security settings. Linking `/CETCOMPAT` untested could make Pi-Bolt crash at its first caught exception
-  on a machine that enforces them; so it waits for that test, and the owner's decision.
+- **CET shadow stacks: not linked in, for a reason the code shows** (read, not run: this machine runs no process with shadow
+  stacks, not even Edge, nor one created with `PROCESS_CREATION_MITIGATION_POLICY2_CET_USER_SHADOW_STACKS_ALWAYS_ON`;
+  `.work/exp/cet/cet_run.py`). JavaScriptCore reaches every exception handler by a jump that discards frames without popping
+  the shadow stack (LLInt's throw trampolines, `llint\LowLevelInterpreter64.asm`; the JIT's `jumpToExceptionHandler`; the
+  compiled code's `callAndCheckException`, `unwind()` and catch entry, `aot\AOTStubsX86_64.cpp`). The next `ret` then finds a
+  stale return address on the shadow stack: the catching LLInt function's return when a frame was discarded, every compiled
+  function's after it catches (the operation stub's call is always abandoned), and every uncaught exception's return to the
+  entry frame (`llint_handle_uncaught_exception`). All of that is in `pi.exe`, so with `/CETCOMPAT` even compatibility mode
+  would end Pi at its first caught exception. To earn it, JSC must record the shadow stack pointer at VM entry
+  (`VMEntryRecord`, read with `rdsspq`), have the unwinder compute the handler's (one entry per physical frame between), and
+  pop to it with `incsspq` before each jump to a handler (skipped when shadow stacks are off); then the test matrix below, on
+  a machine with CET (Intel 11th generation or AMD Zen 3, Windows 11, the mitigation on for `pi.exe`:
+  `Set-ProcessMitigation -Name pi.exe -Enable UserShadowStack`, and again with `UserShadowStackStrictMode`; the owner's
+  setting to make): a positive control (a `/CETCOMPAT` program that overwrites its return address must end with 0xC0000409),
+  the policy read back from the running process, and exceptions thrown and caught in one frame and across many, from host
+  functions, through callbacks from C++ (`toJSON`, getters, Proxy traps), uncaught at the top level and in promise jobs,
+  rethrown, through `finally`, a caught stack overflow, generators and async functions, tail calls, arity fixup, workers,
+  tests\aot and Pi's own tests; a violation is exit 0xC0000409 with fast-fail code 57. `SetProcessDynamicEnforcedCetCompatibleRanges`
+  does not help: it only adds enforcement for dynamic code, and cannot exempt code in the image.
 - **Unwind information** for the code image: one `RUNTIME_FUNCTION` for all of it (`.pbpdata`), so that stack walks and crash
   reports go through compiled frames.
 
@@ -179,12 +202,16 @@ its debugger, which sees it at its exit) and a sampling profile of the threads (
   limit (`maxPerThreadStackUsage`, 5 MB), because LLInt, JIT and compiled frames can be bigger than the guard page that grows
   the stack. It did so by touching every page, each a guard-page fault: about 1,260 of them, some 20 ms of a fresh thread, and
   the 5 MB stayed resident for the life of the thread. Every Bun on Windows does it, stock Bun included (`bun -e 0`: 1,303 of
-  its 1,770 private pages). `preCommitStackMemory` (VM.cpp) now commits those pages instead (0.1 to 0.35 ms), and does what the
-  system does when it moves the guard page: puts one below them and lowers the thread's stack limit in its TEB, which
-  exception dispatch and `_chkstk` read. The guarantee is the same (the pages are committed, as touched ones were, and charge the
-  same commit), but none is resident until used. `.work/exp/stack/precommit_test.cpp` checks it: the 5 MB committed and not
+  its 1,770 private pages). `preCommitStackMemory` (VM.cpp) now commits those pages instead (0.1 to 0.35 ms), and leaves the
+  stack as the system leaves it when it grows: the guard page below them, and the thread's stack limit in its TEB lowered to them
+  (exception dispatch and `_chkstk` read it). It is the one place that writes the TEB; it checks afterwards that the stack is as
+  the system would have left it (`VirtualQuery`, the limit), and touches the pages as upstream does if it is not. The guarantee is the same (the pages are committed, as touched ones were, and charge
+  the same commit), but none is resident until used. `.work/exp/stack/precommit_test.cpp` checks it: the 5 MB committed and not
   resident, a frame that writes far below the stack pointer, SEH and C++ exceptions raised and caught down there, and recursion
-  past it still growing the stack and ending in a catchable stack overflow. `bun -e 0`'s private memory went from 7.1 to 2.3 MB.
+  past it still growing the stack and ending in a catchable stack overflow. (Committing them through the executable's header
+  instead, `/STACK:0x1200000,0x600000`, was tried and measured: the header's commit is every thread's default, not only the main
+  thread's, and Bun's, libuv's and the system's thread pools create theirs with a reservation size only, so each committed 6 MB
+  instead of 2: Pi's peak private bytes went from 194 to 233 MB headless and from 246 to 302 MB in the TUI.)
 - **A page fault on the executable's image** costs about 1.5 µs once the file is in memory, 44 µs on the first run after it
   is not (`.work/exp/stack/imagefault.cpp`). `pi --version` touches about 1,900 pages of the runtime's code, so laying out what
   Pi runs together (a linker order file, as on macOS: `scripts\train-runtime-hints.ps1`, `scripts\build-runtime.ps1`) is worth a

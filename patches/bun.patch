@@ -51,7 +51,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/jsc/bindings/InternalModuleRegistry.cpp   |   15 +-
  src/jsc/bindings/ZigException.cpp             |   14 +-
  src/jsc/bindings/ZigGlobalObject.cpp          |   45 +
- src/jsc/bindings/ZigSourceProvider.cpp        | 1084 ++++++++++++++++-
+ src/jsc/bindings/ZigSourceProvider.cpp        | 1085 ++++++++++++++++-
  src/jsc/bindings/c-bindings.cpp               |  113 ++
  .../webcore/SerializedScriptValue.cpp         |    9 +
  src/jsc/web_worker.rs                         |    4 +
@@ -63,7 +63,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/spawn_sys/posix_spawn.rs                  |  173 ++-
  src/spawn_sys/spawn_process.rs                |   14 +-
  src/standalone_graph/StandaloneModuleGraph.rs |  254 +++-
- 44 files changed, 2409 insertions(+), 166 deletions(-)
+ 44 files changed, 2410 insertions(+), 166 deletions(-)
 
 diff --git a/scripts/build/binary-expectations.ts b/scripts/build/binary-expectations.ts
 index f18a60b0..0ba5981b 100644
@@ -2113,7 +2113,7 @@ index 9de807ad..bb219910 100644
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH
 diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
-index fbfaa2ff..69b8e0b8 100644
+index fbfaa2ff..c0442c55 100644
 --- a/src/jsc/bindings/ZigSourceProvider.cpp
 +++ b/src/jsc/bindings/ZigSourceProvider.cpp
 @@ -2,6 +2,17 @@
@@ -2191,7 +2191,7 @@ index fbfaa2ff..69b8e0b8 100644
  }
  
  extern "C" uint32_t Bun__EncoderStringTable__slotForLatin1(JSC::EncoderStringTable* table, const Latin1Character* chars, size_t length)
-@@ -290,17 +333,1028 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
+@@ -290,17 +333,1029 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
      return generateCachedByteCodeFromSourceCode(sourceProviderURL, inputSourceCode, false, depth, optimize, outputByteCode, outputByteCodeSize, cachedBytecodePtr, externalStrings);
  }
  
@@ -2805,8 +2805,9 @@ index fbfaa2ff..69b8e0b8 100644
 +                    static_cast<unsigned long long>(word), at, inRegion[i].offsetInRegion, inRegion[i].characteristics & scnExecute ? ", code" : "");
 +                for (size_t b = at >= 16 ? at - 16 : 0; b < std::min(bytes.size(), at + 24); ++b)
 +                    fprintf(stderr, "%s%02x", b == at ? " [" : " ", bytes[b]);
-+                fprintf(stderr, " (the structure heap starts at %p; this is at %p)\n", reinterpret_cast<void*>(g_jscConfig.startOfStructureHeap),
-+                    reinterpret_cast<void*>(Region::base() + inRegion[i].offsetInRegion + at));
++                uintptr_t where = Region::base() + inRegion[i].offsetInRegion + at;
++                fprintf(stderr, " (at %p, in %s; the structure heap starts at %p)\n", reinterpret_cast<void*>(where),
++                    JSC::StaticHeap::describeBuiltAddress(where).data(), reinterpret_cast<void*>(g_jscConfig.startOfStructureHeap));
 +            }
 +        }
 +    }
@@ -3220,7 +3221,7 @@ index fbfaa2ff..69b8e0b8 100644
      return new JSC::BytecodeLinkEncoder(vm, externalStrings, WTF::move(hints));
  }
  
-@@ -331,6 +1385,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
+@@ -331,6 +1386,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
      return true;
  }
  
@@ -3243,7 +3244,7 @@ index fbfaa2ff..69b8e0b8 100644
  // `entryOffsets` has room for one number per successful add* call; `regionEnds` for
  // JSC::BytecodeLinkEncoder::numberOfRegions.
  static_assert(JSC::BytecodeLinkEncoder::numberOfRegions == 6, "bun_resolver::LINKED_BYTECODE_REGION_COUNT");
-@@ -340,6 +1410,18 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
+@@ -340,6 +1411,18 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
      auto result = encoder->finish();
      if (!result.payload || result.entryOffsets.size() != entryOffsetCount)
          return false;
