@@ -18,48 +18,65 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
   expressions.
 - Intl on Darwin: the plain language tags of ICU's lists of locales made without ICU.
 ---
- Source/JavaScriptCore/aot/AOTCompiler.cpp     |  161 +-
+ Source/JavaScriptCore/CMakeLists.txt          |    7 +
+ Source/JavaScriptCore/aot/AOTCompiler.cpp     |  169 +-
  Source/JavaScriptCore/aot/AOTCompiler.h       |    3 +-
  Source/JavaScriptCore/aot/AOTConvention.h     |   89 +-
+ Source/JavaScriptCore/aot/AOTEmitter.cpp      |    5 +-
  .../JavaScriptCore/aot/AOTEscapeAnalysis.cpp  |   19 +-
+ Source/JavaScriptCore/aot/AOTFunction.h       |   10 +-
  Source/JavaScriptCore/aot/AOTGraph.cpp        |  226 +-
  Source/JavaScriptCore/aot/AOTGraph.h          |   34 +-
- Source/JavaScriptCore/aot/AOTImage.cpp        |  105 +-
+ Source/JavaScriptCore/aot/AOTImage.cpp        |  122 +-
  Source/JavaScriptCore/aot/AOTImage.h          |   15 +
  Source/JavaScriptCore/aot/AOTInlining.cpp     |  291 +-
  .../aot/AOTLoopOptimization.cpp               |   79 +-
  Source/JavaScriptCore/aot/AOTLowerAccess.cpp  |  135 +-
  Source/JavaScriptCore/aot/AOTLowerArith.cpp   |   64 +-
- .../JavaScriptCore/aot/AOTLowerBuiltins.cpp   |    7 +
+ .../JavaScriptCore/aot/AOTLowerBuiltins.cpp   |   13 +-
  Source/JavaScriptCore/aot/AOTLowerCalls.cpp   |    9 +-
  Source/JavaScriptCore/aot/AOTLowerCore.cpp    |  173 +-
  Source/JavaScriptCore/aot/AOTLowerGuards.cpp  |   75 +-
  Source/JavaScriptCore/aot/AOTLowerMisc.cpp    |    2 +-
  Source/JavaScriptCore/aot/AOTLowering.h       |    1 +
+ .../JavaScriptCore/aot/AOTOperationsObjects.h |    2 +
  Source/JavaScriptCore/aot/AOTProgram.cpp      |   73 +
  Source/JavaScriptCore/aot/AOTProgram.h        |   85 +
- Source/JavaScriptCore/aot/AOTRuntime.cpp      |  101 +-
- Source/JavaScriptCore/aot/AOTRuntime.h        |    5 +
- Source/JavaScriptCore/aot/AOTStubs.cpp        |  121 +-
+ Source/JavaScriptCore/aot/AOTRuntime.cpp      |  200 +-
+ Source/JavaScriptCore/aot/AOTRuntime.h        |   15 +-
+ Source/JavaScriptCore/aot/AOTStubs.cpp        |  144 +-
  Source/JavaScriptCore/aot/AOTStubs.h          |   51 +
- Source/JavaScriptCore/aot/AOTStubsX86_64.cpp  | 3494 +++++++++++++++++
+ Source/JavaScriptCore/aot/AOTStubsX86_64.cpp  | 3512 +++++++++++++++++
  Source/JavaScriptCore/aot/AOTThunks.cpp       |  326 +-
  Source/JavaScriptCore/aot/AOTThunks.h         |   15 +-
  .../JavaScriptCore/aot/AOTTypeInference.cpp   |   77 +-
  .../b3/B3AbstractHeapRepository.h             |    2 +
  .../JavaScriptCore/bytecode/CallLinkInfo.cpp  |    5 +-
+ .../JavaScriptCore/bytecode/SpeculatedType.h  |    1 +
  .../bytecode/UnlinkedFunctionExecutable.cpp   |    8 +-
- Source/JavaScriptCore/heap/StaticHeap.cpp     |    2 +-
+ .../bytecode/UnlinkedGlobalCodeBlock.h        |    5 +-
+ Source/JavaScriptCore/heap/StaticHeap.cpp     |  174 +-
+ Source/JavaScriptCore/heap/StaticHeap.h       |   28 +-
+ .../heap/StructureAlignedMemoryAllocator.cpp  |    5 +-
  .../JavaScriptCore/interpreter/CallFrame.cpp  |    7 +
- .../interpreter/StackVisitor.cpp              |    6 +
- Source/JavaScriptCore/runtime/CachedTypes.cpp |  189 +-
+ .../interpreter/StackVisitor.cpp              |    8 +-
+ .../parser/VariableEnvironment.cpp            |    2 +-
+ .../parser/VariableEnvironment.h              |   16 +-
+ Source/JavaScriptCore/runtime/CachedTypes.cpp |  195 +-
+ Source/JavaScriptCore/runtime/CachedTypes.h   |   18 +-
  Source/JavaScriptCore/runtime/CodeCache.cpp   |    2 +
  .../runtime/CyclicModuleRecord.cpp            |    3 +-
+ .../runtime/FunctionRareData.cpp              |    5 +
+ .../JavaScriptCore/runtime/FunctionRareData.h |    2 +-
  Source/JavaScriptCore/runtime/IntlObject.cpp  |   58 +-
+ .../runtime/MegamorphicCache.cpp              |    1 +
  Source/JavaScriptCore/runtime/OptionsList.h   |   13 +
+ Source/JavaScriptCore/runtime/PrototypeKey.h  |    3 +-
  Source/JavaScriptCore/runtime/RegExp.cpp      |   76 +-
  Source/JavaScriptCore/runtime/RegExp.h        |    9 +
  Source/JavaScriptCore/runtime/RegExpInlines.h |   48 +
+ .../runtime/ReportableSitesOfFunction.h       |   29 +
+ .../runtime/SamplingProfiler.cpp              |    8 +
  Source/JavaScriptCore/runtime/StackFrame.cpp  |   11 +-
  .../runtime/StringPrototype.cpp               |   14 +
  Source/JavaScriptCore/yarr/YarrJIT.cpp        |  124 +-
@@ -67,17 +84,47 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  Source/JavaScriptCore/yarr/YarrPattern.cpp    |  114 +
  Source/JavaScriptCore/yarr/YarrPattern.h      |    3 +
  Source/WTF/wtf/BumpPointerAllocator.h         |    8 +-
- Source/bmalloc/bmalloc/StaticRegion.cpp       |   28 +-
- Source/bmalloc/bmalloc/StaticRegion.h         |    1 +
+ Source/WTF/wtf/HashFunctions.h                |   21 +-
+ Source/WTF/wtf/Hasher.h                       |    4 +-
+ Source/bmalloc/bmalloc/StaticRegion.cpp       |  180 +-
+ Source/bmalloc/bmalloc/StaticRegion.h         |   69 +-
  Source/cmake/WebKitCompilerFlags.cmake        |    4 +-
- 52 files changed, 6356 insertions(+), 229 deletions(-)
+ Source/cmake/WebKitMacros.cmake               |   28 +-
+ build-icu.ps1                                 |   20 +-
+ 73 files changed, 7073 insertions(+), 313 deletions(-)
  create mode 100644 Source/JavaScriptCore/aot/AOTStubsX86_64.cpp
+ create mode 100644 Source/JavaScriptCore/runtime/ReportableSitesOfFunction.h
 
+diff --git a/Source/JavaScriptCore/CMakeLists.txt b/Source/JavaScriptCore/CMakeLists.txt
+index 79c1f1a3c..e00c2fdf0 100644
+--- a/Source/JavaScriptCore/CMakeLists.txt
++++ b/Source/JavaScriptCore/CMakeLists.txt
+@@ -425,6 +425,12 @@ set(LLIntSettingsExtractor_SOURCES
+     ${JAVASCRIPTCORE_DIR}/llint/LLIntSettingsExtractor.cpp
+     ${JavaScriptCore_DERIVED_SOURCES_DIR}/LLIntDesiredSettings.h ${JavaScriptCore_DERIVED_SOURCES_DIR}/Bytecodes.h ${JavaScriptCore_DERIVED_SOURCES_DIR}/BytecodeStructs.h
+ )
++if (WIN32)
++    # It includes WasmOps.h (through the forwarding headers of WEBKIT_SYMLINK_FILES, which on Windows include the generated
++    # file itself). Generated as one of this target's sources, it does not wait for this target's executable, as it would as
++    # one of LLIntOffsetsExtractor's: that would be a cycle.
++    list(APPEND LLIntSettingsExtractor_SOURCES ${JavaScriptCore_DERIVED_SOURCES_DIR}/WasmOps.h)
++endif ()
+ 
+ set(LLIntSettingsExtractor_PRIVATE_INCLUDE_DIRECTORIES
+     $<TARGET_PROPERTY:JavaScriptCore,INCLUDE_DIRECTORIES>
+@@ -1210,6 +1216,7 @@ set(JavaScriptCore_PRIVATE_FRAMEWORK_HEADERS
+     runtime/CachedBytecode.h
+     runtime/CachedSpecialPropertyAdaptiveStructureWatchpoint.h
+     runtime/CachedTypes.h
++    runtime/ReportableSitesOfFunction.h
+     runtime/CagedBarrierPtr.h
+     runtime/CallData.h
+     runtime/CellSize.h
 diff --git a/Source/JavaScriptCore/aot/AOTCompiler.cpp b/Source/JavaScriptCore/aot/AOTCompiler.cpp
-index 944a17bfb4..c813752040 100644
+index 944a17bfb..63b7192fc 100644
 --- a/Source/JavaScriptCore/aot/AOTCompiler.cpp
 +++ b/Source/JavaScriptCore/aot/AOTCompiler.cpp
-@@ -32,8 +32,68 @@
+@@ -32,8 +32,76 @@
  #include <wtf/StringPrintStream.h>
  #include <wtf/text/StringHash.h>
  
@@ -85,6 +132,8 @@ index 944a17bfb4..c813752040 100644
 +#include <dlfcn.h>
 +#include <mach/mach.h>
 +#include <mach/mach_vm.h>
++#elif OS(WINDOWS)
++#include <windows.h>
 +#endif
 +
  namespace JSC { namespace AOT {
@@ -137,6 +186,12 @@ index 944a17bfb4..c813752040 100644
 +    // A reservation that nothing can be read from (the system keeps hundreds of gigabytes of them) holds nothing to point at: what
 +    // is used of it is a region of its own.
 +    return address >= start && address - start < size && info.protection != VM_PROT_NONE;
++#elif OS(WINDOWS)
++    // Committed memory that can be read; as on Darwin, a reservation holds nothing to point at.
++    MEMORY_BASIC_INFORMATION info;
++    if (!VirtualQuery(reinterpret_cast<const void*>(static_cast<uintptr_t>(address)), &info, sizeof(info)))
++        return false;
++    return info.State == MEM_COMMIT && !(info.Protect & (PAGE_NOACCESS | PAGE_GUARD));
 +#else
 +    UNUSED_PARAM(address);
 +    return true;
@@ -146,7 +201,7 @@ index 944a17bfb4..c813752040 100644
  static ScopeChain unknownScopeChain()
  {
      ScopeChain chain;
-@@ -131,7 +191,7 @@ bool hasNoFrame(const Graph& graph, B3::Air::Code& code)
+@@ -131,7 +199,7 @@ bool hasNoFrame(const Graph& graph, B3::Air::Code& code)
          for (B3::Air::BasicBlock* block : code) {
              for (B3::Air::Inst& inst : *block) {
                  if (inst.kind.opcode == B3::Air::Patch)
@@ -155,7 +210,7 @@ index 944a17bfb4..c813752040 100644
                  else
                      found |= inst.kind.opcode == B3::Air::ColdCCall;
              }
-@@ -141,12 +201,48 @@ bool hasNoFrame(const Graph& graph, B3::Air::Code& code)
+@@ -141,12 +209,48 @@ bool hasNoFrame(const Graph& graph, B3::Air::Code& code)
      return !*graph.callsAreLeft;
  }
  
@@ -205,7 +260,7 @@ index 944a17bfb4..c813752040 100644
      jit.emitFunctionEpilogue();
  }
  
-@@ -154,13 +250,32 @@ void emitRestoreBeforeLeaving(CCallHelpers& jit, const Graph& graph, B3::Air::Co
+@@ -154,13 +258,32 @@ void emitRestoreBeforeLeaving(CCallHelpers& jit, const Graph& graph, B3::Air::Co
  {
      RELEASE_ASSERT(!hasNoFrame(graph, code));
      AllowMacroScratchRegisterUsage allowScratch(jit);
@@ -239,7 +294,7 @@ index 944a17bfb4..c813752040 100644
      for (BasicBlock* block : graph.m_rpo) {
          if (!block->isInLoop)
              continue;
-@@ -168,6 +283,7 @@ static bool loopsWillDoWhole(Graph& graph)
+@@ -168,6 +291,7 @@ static bool loopsWillDoWhole(Graph& graph)
          for (Node* node : block->nodes) {
              if (node->kind != NodeKind::Bytecode || !node->instruction)
                  continue;
@@ -247,7 +302,7 @@ index 944a17bfb4..c813752040 100644
              switch (node->opcode) {
              case op_get_by_val:
                  if (!node->use(node->as<OpGetByVal>().m_base)->type || !isSubtype(node->use(node->as<OpGetByVal>().m_base)->type, TArray) || !isSubtype(node->use(node->as<OpGetByVal>().m_property)->type, TNumber))
-@@ -195,12 +311,17 @@ static bool loopsWillDoWhole(Graph& graph)
+@@ -195,12 +319,17 @@ static bool loopsWillDoWhole(Graph& graph)
              case op_get_from_scope:
                  if (node->as<OpGetFromScope>().m_getPutInfo.resolveType() != ResolvedClosureVar)
                      return false;
@@ -265,7 +320,7 @@ index 944a17bfb4..c813752040 100644
      return hasLoop;
  }
  
-@@ -224,6 +345,17 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
+@@ -224,6 +353,17 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
          graph.fail("compiled for the debugger or a profiler"_s);
          return declined();
      }
@@ -283,7 +338,7 @@ index 944a17bfb4..c813752040 100644
      if (!parseBytecode(graph))
          return declined();
      if (program)
-@@ -268,7 +400,7 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
+@@ -268,7 +408,7 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
              continue;
          uint64_t bits = value->asInt64();
          // (But for where structures are, which is the same in every process: structureIDBaseOfImages.)
@@ -292,7 +347,7 @@ index 944a17bfb4..c813752040 100644
              graph.fail("an address in the code"_s);
              return declined();
          }
-@@ -287,7 +419,7 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
+@@ -287,7 +427,7 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
              stubCalls.call(jit, Stub::Prologue, code.frameSize(), CallSite { });
          else if (code.frameSize())
              jit.subPtr(GPRInfo::callFrameRegister, CCallHelpers::TrustedImm32(code.frameSize()), CCallHelpers::stackPointerRegister);
@@ -301,7 +356,7 @@ index 944a17bfb4..c813752040 100644
      }));
      proc.code().setEpilogueGenerator(createSharedTask<B3::Air::PrologueGeneratorFunction>([&graph](CCallHelpers& jit, B3::Air::Code& code) {
          emitEpilogueBeforeLeaving(jit, graph, code);
-@@ -319,12 +451,13 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
+@@ -319,12 +459,13 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
      // The code is linked in ordinary memory. It is only copied into the image and never runs from here, so compiling needs no JIT memory.
      jit.breakpoint();
      jit.padBeforePatch();
@@ -316,7 +371,7 @@ index 944a17bfb4..c813752040 100644
      info.codeSize = linkBuffer.size();
      void* start = linkBuffer.entrypoint<JSEntryPtrTag>().untaggedPtr();
      // (It turned out to be what comes first anyway.)
-@@ -335,6 +468,8 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
+@@ -335,6 +476,8 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
              call.offset -= sizeof(uint32_t);
          for (auto& reference : info.indexReferences)
              reference.offset -= sizeof(uint32_t);
@@ -325,7 +380,7 @@ index 944a17bfb4..c813752040 100644
      }
      auto offsetOf = [&](CCallHelpers::Label label) {
          return static_cast<unsigned>(static_cast<uint8_t*>(linkBuffer.locationOf<JSEntryPtrTag>(label).untaggedPtr()) - static_cast<uint8_t*>(start));
-@@ -383,6 +518,13 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
+@@ -383,6 +526,13 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
      info.startsCold = graph.startsCold;
      RELEASE_ASSERT(!info.startsCold || info.numSlots <= std::min<uint32_t>(SharedData::maxSlots, FunctionInfo::maxEncodedSlots));
      info.calleeSaveRegisters = proc.calleeSaveRegisterAtOffsetList();
@@ -339,7 +394,7 @@ index 944a17bfb4..c813752040 100644
      for (unsigned i = 0; i < graph.catchEntrypoints.size(); ++i)
          info.catchEntrypoints.append({ graph.catchEntrypoints[i]->bytecodeBegin, offsetOf(proc.code().entrypointLabel(i + 1)) });
  
-@@ -421,6 +563,7 @@ bool recordUsesOfKnownFunctionsForImage(VM& vm, UnlinkedCodeBlock* unlinkedCodeB
+@@ -421,6 +571,7 @@ bool recordUsesOfKnownFunctionsForImage(VM& vm, UnlinkedCodeBlock* unlinkedCodeB
      graph.noteFieldsComparedWithStrings();
      recordReturnedLiterals(graph);
      graph.noteClassesDefined();
@@ -347,7 +402,7 @@ index 944a17bfb4..c813752040 100644
      if (variableSummaries)
          graph.recordUntrackableVariableAccesses(*variableSummaries);
      return true;
-@@ -444,13 +587,17 @@ Type inferReturnTypeForImage(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const
+@@ -444,13 +595,17 @@ Type inferReturnTypeForImage(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const
      return result;
  }
  
@@ -367,7 +422,7 @@ index 944a17bfb4..c813752040 100644
  }
  
 diff --git a/Source/JavaScriptCore/aot/AOTCompiler.h b/Source/JavaScriptCore/aot/AOTCompiler.h
-index 43919e8406..bce45c02f8 100644
+index 43919e840..bce45c02f 100644
 --- a/Source/JavaScriptCore/aot/AOTCompiler.h
 +++ b/Source/JavaScriptCore/aot/AOTCompiler.h
 @@ -29,7 +29,8 @@ struct CompiledCode;
@@ -381,7 +436,7 @@ index 43919e8406..bce45c02f8 100644
  bool mayBecomePartOfAnother(UnlinkedCodeBlock*, const FunctionSummary*);
  void noteEverySiteOf(Graph&);
 diff --git a/Source/JavaScriptCore/aot/AOTConvention.h b/Source/JavaScriptCore/aot/AOTConvention.h
-index 2e95072fc9..2442b0290a 100644
+index 2e95072fc..2442b0290 100644
 --- a/Source/JavaScriptCore/aot/AOTConvention.h
 +++ b/Source/JavaScriptCore/aot/AOTConvention.h
 @@ -7,7 +7,9 @@
@@ -496,8 +551,24 @@ index 2e95072fc9..2442b0290a 100644
  enum class Signature : uint8_t {
      // Each parameter in its register. Whoever calls fills in undefined for what it has not got, and keeps what is left over to itself.
      Registers,
+diff --git a/Source/JavaScriptCore/aot/AOTEmitter.cpp b/Source/JavaScriptCore/aot/AOTEmitter.cpp
+index c74620a2f..e00770008 100644
+--- a/Source/JavaScriptCore/aot/AOTEmitter.cpp
++++ b/Source/JavaScriptCore/aot/AOTEmitter.cpp
+@@ -58,8 +58,9 @@ LValue Emitter::changing32(ptrdiff_t offset)
+ 
+ LValue Emitter::structureWithID(LValue structureID)
+ {
+-    // (In an image: structureIDBaseOfImages. Code that is made when the program runs goes by what it finds.)
+-    if (usesStubs)
++    // (In an image: structureIDBaseOfImages. Code that is made when the program runs goes by what it finds, as an image's does
++    // where the structure heap is not at a fixed address.)
++    if (usesStubs && structureIDBaseIsFixed)
+         return m_out.bitOr(m_out.zeroExtPtr(structureID), m_out.constIntPtr(structureIDBaseOfImages));
+     return m_out.bitOr(m_out.zeroExtPtr(structureID), entry(Entry::StructureIDBase));
+ }
 diff --git a/Source/JavaScriptCore/aot/AOTEscapeAnalysis.cpp b/Source/JavaScriptCore/aot/AOTEscapeAnalysis.cpp
-index fb3b1264be..84d0859c16 100644
+index fb3b1264b..84d0859c1 100644
 --- a/Source/JavaScriptCore/aot/AOTEscapeAnalysis.cpp
 +++ b/Source/JavaScriptCore/aot/AOTEscapeAnalysis.cpp
 @@ -624,9 +624,22 @@ public:
@@ -534,8 +605,30 @@ index fb3b1264be..84d0859c16 100644
                  return;
              if (!users)
                  users.emplace(graph);
+diff --git a/Source/JavaScriptCore/aot/AOTFunction.h b/Source/JavaScriptCore/aot/AOTFunction.h
+index dcf297ac5..195195aaa 100644
+--- a/Source/JavaScriptCore/aot/AOTFunction.h
++++ b/Source/JavaScriptCore/aot/AOTFunction.h
+@@ -159,8 +159,16 @@ struct ImageAddressInfo {
+ };
+ JS_EXPORT_PRIVATE ImageAddressInfo classifyAddress(const void* address); // Any thread.
+ // The return address into `frame`, found by walking outward from a more recent frame (that of a running C++ function, or the
+-// EntryFrame of code that `frame` is waiting on). Returns null if `frame` is not reachable from there.
++// EntryFrame of code that `frame` is waiting on). Returns null if `frame` is not reachable from there. On Windows `startingFrom`
++// is an EntryFrame: from the running function, returnAddressForFrameFromHere().
+ JS_EXPORT_PRIVATE void* returnAddressForFrame(const void* frame, const void* startingFrom);
++#if OS(WINDOWS)
++// The same, walking outward from the function that calls it. (Windows' C++ code keeps no chain of frame records to walk.)
++JS_EXPORT_PRIVATE NEVER_INLINE void* returnAddressForFrameFromHere(const void* frame);
++#define AOT_RETURN_ADDRESS_FOR_FRAME_FROM_HERE(frame) JSC::AOT::returnAddressForFrameFromHere(frame)
++#else
++#define AOT_RETURN_ADDRESS_FOR_FRAME_FROM_HERE(frame) JSC::AOT::returnAddressForFrame(frame, __builtin_frame_address(0))
++#endif
+ // The call site (CallSiteIndex::bits()) for a return address at this offset in the function's code.
+ JS_EXPORT_PRIVATE uint32_t callSiteAt(const ImageFunction&, uint32_t offsetOfReturnAddress);
+ JS_EXPORT_PRIVATE const RegisterAtOffsetList& adapterSavedRegisters();
 diff --git a/Source/JavaScriptCore/aot/AOTGraph.cpp b/Source/JavaScriptCore/aot/AOTGraph.cpp
-index d95a8ad60f..557abf728d 100644
+index d95a8ad60..557abf728 100644
 --- a/Source/JavaScriptCore/aot/AOTGraph.cpp
 +++ b/Source/JavaScriptCore/aot/AOTGraph.cpp
 @@ -652,6 +652,11 @@ const KnownFunction* Graph::knownCallee(const Node* node, bool* isExact) const
@@ -835,7 +928,7 @@ index d95a8ad60f..557abf728d 100644
      UncheckedKeyHashMap<UnlinkedFunctionCodeBlock*, bool> m_canBeInlined;
      UncheckedKeyHashMap<unsigned, Node*, WTF::IntHash<unsigned>, WTF::UnsignedWithZeroKeyHashTraits<unsigned>> m_resultsOfInlinedCalls; // By the offset of the call.
 diff --git a/Source/JavaScriptCore/aot/AOTGraph.h b/Source/JavaScriptCore/aot/AOTGraph.h
-index 10cfe2379d..43a9411057 100644
+index 10cfe2379..43a941105 100644
 --- a/Source/JavaScriptCore/aot/AOTGraph.h
 +++ b/Source/JavaScriptCore/aot/AOTGraph.h
 @@ -90,6 +90,13 @@ enum class GuardKind : uint8_t {
@@ -922,10 +1015,19 @@ index 10cfe2379d..43a9411057 100644
  void promoteEnvironments(Graph&); // Sets Node::isPromoted.
  void scalarReplaceReadOnlyObjects(Graph&); // Runs before type inference.
 diff --git a/Source/JavaScriptCore/aot/AOTImage.cpp b/Source/JavaScriptCore/aot/AOTImage.cpp
-index bea4646b3a..09758eef35 100644
+index bea4646b3..5308bf904 100644
 --- a/Source/JavaScriptCore/aot/AOTImage.cpp
 +++ b/Source/JavaScriptCore/aot/AOTImage.cpp
-@@ -411,12 +411,28 @@ void noteThatLinkTimeConstantIsUsed(unsigned which)
+@@ -34,6 +34,8 @@
+ #if OS(DARWIN) || OS(LINUX)
+ #include <pthread.h>
+ #include <sys/mman.h>
++#elif OS(WINDOWS)
++#include <windows.h>
+ #endif
+ 
+ namespace JSC { namespace AOT {
+@@ -411,12 +413,28 @@ void noteThatLinkTimeConstantIsUsed(unsigned which)
  void ImageBuilder::add(ImageKey key, uint64_t rank, CompiledCode&& code)
  {
      // Where they pointed depends on where the code was when it was compiled, which is nothing to do with the code.
@@ -955,7 +1057,7 @@ index bea4646b3a..09758eef35 100644
  bool ImageBuilder::addRegExp(VM& vm, const String& pattern, OptionSet<Yarr::Flags> flags)
  {
      Locker locker { m_lock };
-@@ -429,14 +445,25 @@ bool ImageBuilder::addRegExp(VM& vm, const String& pattern, OptionSet<Yarr::Flag
+@@ -429,14 +447,25 @@ bool ImageBuilder::addRegExp(VM& vm, const String& pattern, OptionSet<Yarr::Flag
          // As RegExp::compile() goes about it.
          Yarr::ErrorCode error = Yarr::ErrorCode::NoError;
          Yarr::YarrPattern yarrPattern(pattern, flags, error);
@@ -983,7 +1085,7 @@ index bea4646b3a..09758eef35 100644
          result.code[charSize == Yarr::CharSize::Char16] = WTF::move(*code);
      }
      m_regExps.append(WTF::move(result));
-@@ -786,11 +813,16 @@ Vector<uint8_t> ImageBuilder::finish()
+@@ -786,11 +815,16 @@ Vector<uint8_t> ImageBuilder::finish()
              auto& code = m_functions[index].code;
              ++functions;
              bytes += code.bytes.size();
@@ -1000,7 +1102,7 @@ index bea4646b3a..09758eef35 100644
              code.info.sitesOfSpreads.clear();
              code.info.inlineFrames.clear();
              code.info.catchEntrypoints.clear();
-@@ -889,7 +921,7 @@ Vector<uint8_t> ImageBuilder::finish()
+@@ -889,7 +923,7 @@ Vector<uint8_t> ImageBuilder::finish()
          Vector<std::pair<uint32_t, uint32_t>> all;
          for (auto& call : function.code.info.stubCalls) {
              if (call.callSite != StubCall::noCallSite && !call.isTailCall)
@@ -1009,7 +1111,7 @@ index bea4646b3a..09758eef35 100644
          }
          if (all.isEmpty()) {
              callSitesOfFunction.append(0);
-@@ -914,7 +946,7 @@ Vector<uint8_t> ImageBuilder::finish()
+@@ -914,7 +948,7 @@ Vector<uint8_t> ImageBuilder::finish()
          uint32_t previousOffset = 0;
          int64_t previousSite = 0;
          for (auto& [offset, site] : all) {
@@ -1018,7 +1120,7 @@ index bea4646b3a..09758eef35 100644
              int64_t step = static_cast<int64_t>(site) - previousSite;
              appendVarint(callSites, static_cast<uint64_t>(step << 1) ^ static_cast<uint64_t>(step >> 63));
              previousOffset = offset;
-@@ -966,7 +998,7 @@ Vector<uint8_t> ImageBuilder::finish()
+@@ -966,7 +1000,7 @@ Vector<uint8_t> ImageBuilder::finish()
              record.text = safeCast<uint32_t>(textOfRegExps.size());
              record.length = regExp.pattern.length();
              record.is8Bit = regExp.pattern.is8Bit();
@@ -1027,7 +1129,7 @@ index bea4646b3a..09758eef35 100644
              record.codeFor8Bit = safeCast<uint32_t>(at[0]);
              record.codeFor16Bit = safeCast<uint32_t>(at[1]);
              imageRegExps.append(record);
-@@ -1269,6 +1301,10 @@ Vector<uint8_t> ImageBuilder::finish()
+@@ -1269,6 +1303,10 @@ Vector<uint8_t> ImageBuilder::finish()
              for (auto& reference : regExpCode.tables) {
                  size_t instructionAt = codeAt + reference.offset;
                  size_t tableAt = tablesOfRegExps.get(reference.table.data());
@@ -1038,7 +1140,7 @@ index bea4646b3a..09758eef35 100644
                  int64_t pages = static_cast<int64_t>(tableAt >> 12) - static_cast<int64_t>(instructionAt >> 12);
                  RELEASE_ASSERT(pages >= -(1 << 20) && pages < (1 << 20));
                  uint32_t adrp = 0x90000000u | (static_cast<uint32_t>(pages) & 3u) << 29 | (static_cast<uint32_t>(pages >> 2) & 0x7ffffu) << 5 | reference.reg;
-@@ -1284,10 +1320,47 @@ Vector<uint8_t> ImageBuilder::finish()
+@@ -1284,10 +1322,47 @@ Vector<uint8_t> ImageBuilder::finish()
      Vector<uint32_t> functionInBucket;
      functionInBucket.fill(0, capacity);
      size_t recordAt = 0;
@@ -1086,7 +1188,7 @@ index bea4646b3a..09758eef35 100644
  
          ImageFunction record { };
          RELEASE_ASSERT(startsOfFunctions[index] == codeAt);
-@@ -1359,9 +1432,16 @@ Vector<uint8_t> ImageBuilder::finish()
+@@ -1359,9 +1434,16 @@ Vector<uint8_t> ImageBuilder::finish()
          memcpy(code + codeAt, function.code.bytes.span().data(), function.code.bytes.size());
          for (auto& reference : info.indexReferences)
              IndexReferences::fill(code + codeAt, reference, safeCast<uint32_t>(index));
@@ -1103,7 +1205,7 @@ index bea4646b3a..09758eef35 100644
  
      // With every function in its place: the calls from one to another.
      for (size_t index = 0; index < m_functions.size(); ++index) {
-@@ -1630,7 +1710,7 @@ std::optional<uint32_t> tryCallSiteAt(const ImageFunction& function, uint32_t of
+@@ -1630,7 +1712,7 @@ std::optional<uint32_t> tryCallSiteAt(const ImageFunction& function, uint32_t of
      uint64_t first = readVarint(at);
      skipInlineFrames(at, first);
      for (uint64_t count = first >> 2; count--;) {
@@ -1112,7 +1214,29 @@ index bea4646b3a..09758eef35 100644
          uint64_t step = readVarint(at);
          site += static_cast<int64_t>(step >> 1) ^ -static_cast<int64_t>(step & 1);
          if (offset >= offsetOfReturnAddress) {
-@@ -1764,11 +1844,11 @@ auto Image::codeForRegExp(const String& pattern, OptionSet<Yarr::Flags> flags) -
+@@ -1708,6 +1790,21 @@ static void* copyToExecutableMemory(std::span<const uint8_t> code)
+ #endif
+     MacroAssembler::cacheFlush(result, code.size());
+     return result;
++#elif OS(WINDOWS)
++    // Written while it is not executable, then executable and no longer writable.
++    size_t size = WTF::roundUpToMultipleOf(WTF::pageSize(), code.size() + imagePageSize);
++    void* mapping = VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
++    if (!mapping)
++        return nullptr;
++    void* result = reinterpret_cast<void*>(WTF::roundUpToMultipleOf<imagePageSize>(reinterpret_cast<uintptr_t>(mapping)));
++    memcpy(result, code.data(), code.size());
++    DWORD old;
++    if (!VirtualProtect(mapping, size, PAGE_EXECUTE_READ, &old)) {
++        VirtualFree(mapping, 0, MEM_RELEASE);
++        return nullptr;
++    }
++    FlushInstructionCache(GetCurrentProcess(), result, code.size());
++    return result;
+ #else
+     UNUSED_PARAM(code);
+     return nullptr;
+@@ -1764,11 +1861,11 @@ auto Image::codeForRegExp(const String& pattern, OptionSet<Yarr::Flags> flags) -
          std::span regExps { image->at<ImageRegExp>(header.regExpsOffset), header.numberOfRegExps };
          auto* text = image->at<uint8_t>(header.textOfRegExpsOffset);
          for (auto it = std::ranges::lower_bound(regExps, hash, { }, &ImageRegExp::hash); it != regExps.end() && it->hash == hash; ++it) {
@@ -1126,7 +1250,7 @@ index bea4646b3a..09758eef35 100644
              }
          }
      }
-@@ -1944,6 +2024,10 @@ ImageCode findInImage(ScriptExecutable* executable, CodeSpecializationKind kind,
+@@ -1944,6 +2041,10 @@ ImageCode findInImage(ScriptExecutable* executable, CodeSpecializationKind kind,
      });
      if (!Image::hasAny())
          return { };
@@ -1137,7 +1261,7 @@ index bea4646b3a..09758eef35 100644
  
      Image* image = nullptr;
      const ImageFunction* function = nullptr;
-@@ -2092,7 +2176,8 @@ public:
+@@ -2092,7 +2193,8 @@ public:
      void add(AOT::ImageKey key, UnlinkedCodeBlock* codeBlock)
      {
          // An inner function of a function with both call and construct code blocks is reached twice.
@@ -1148,7 +1272,7 @@ index bea4646b3a..09758eef35 100644
          AOT::CompiledCode code;
          if (AOT::compileForImage(m_vm, codeBlock, code))
 diff --git a/Source/JavaScriptCore/aot/AOTImage.h b/Source/JavaScriptCore/aot/AOTImage.h
-index cce882109e..4e942585eb 100644
+index cce882109..4e942585e 100644
 --- a/Source/JavaScriptCore/aot/AOTImage.h
 +++ b/Source/JavaScriptCore/aot/AOTImage.h
 @@ -116,6 +116,10 @@ struct ImageRegExp {
@@ -1195,7 +1319,7 @@ index cce882109e..4e942585eb 100644
      JS_EXPORT_PRIVATE static std::optional<CodeForRegExp> codeForRegExp(const String& pattern, OptionSet<Yarr::Flags>); // From any image.
  
 diff --git a/Source/JavaScriptCore/aot/AOTInlining.cpp b/Source/JavaScriptCore/aot/AOTInlining.cpp
-index 5293958d8f..89d174ec32 100644
+index 5293958d8..89d174ec3 100644
 --- a/Source/JavaScriptCore/aot/AOTInlining.cpp
 +++ b/Source/JavaScriptCore/aot/AOTInlining.cpp
 @@ -35,6 +35,7 @@ public:
@@ -1571,7 +1695,7 @@ index 5293958d8f..89d174ec32 100644
  {
      // (A site has to have room to say which call it is in.)
 diff --git a/Source/JavaScriptCore/aot/AOTLoopOptimization.cpp b/Source/JavaScriptCore/aot/AOTLoopOptimization.cpp
-index 04a47f035c..6868252002 100644
+index 04a47f035..686825200 100644
 --- a/Source/JavaScriptCore/aot/AOTLoopOptimization.cpp
 +++ b/Source/JavaScriptCore/aot/AOTLoopOptimization.cpp
 @@ -123,83 +123,7 @@ private:
@@ -1668,7 +1792,7 @@ index 04a47f035c..6868252002 100644
                  guard->uses.clear();
                  instruction->guard = hoisted;
 diff --git a/Source/JavaScriptCore/aot/AOTLowerAccess.cpp b/Source/JavaScriptCore/aot/AOTLowerAccess.cpp
-index 6fd1998c0f..20044f3e46 100644
+index 6fd1998c0..20044f3e4 100644
 --- a/Source/JavaScriptCore/aot/AOTLowerAccess.cpp
 +++ b/Source/JavaScriptCore/aot/AOTLowerAccess.cpp
 @@ -372,7 +372,7 @@ void Lowering::lowerGetById(Node* node)
@@ -1866,7 +1990,7 @@ index 6fd1998c0f..20044f3e46 100644
  
      m_out.appendTo(continuation);
 diff --git a/Source/JavaScriptCore/aot/AOTLowerArith.cpp b/Source/JavaScriptCore/aot/AOTLowerArith.cpp
-index 1f0ebd9817..d8e7c62777 100644
+index 1f0ebd981..d8e7c6277 100644
 --- a/Source/JavaScriptCore/aot/AOTLowerArith.cpp
 +++ b/Source/JavaScriptCore/aot/AOTLowerArith.cpp
 @@ -139,6 +139,29 @@ void Lowering::lowerBinaryArith(Node* node, VirtualRegister lhs, VirtualRegister
@@ -1966,9 +2090,24 @@ index 1f0ebd9817..d8e7c62777 100644
  
  void Lowering::lowerUnaryArith(Node* node, VirtualRegister operandRegister)
 diff --git a/Source/JavaScriptCore/aot/AOTLowerBuiltins.cpp b/Source/JavaScriptCore/aot/AOTLowerBuiltins.cpp
-index 8a4d3a1c0d..ed0c23c528 100644
+index 8a4d3a1c0..6e1211ca0 100644
 --- a/Source/JavaScriptCore/aot/AOTLowerBuiltins.cpp
 +++ b/Source/JavaScriptCore/aot/AOTLowerBuiltins.cpp
+@@ -545,11 +545,11 @@ bool Lowering::lowerCallOfBuiltin(Node* node, Node* calleeNode, unsigned argc, u
+             return false;
+         begin();
+         LValue code = m_out.bitAnd(asInt32(1), m_out.constInt32(0xffff));
+-        LBasicBlock small = m_out.newBlock();
++        LBasicBlock isSingleCharacter = m_out.newBlock();
+         LBasicBlock big = newColdBlock();
+         LBasicBlock made = m_out.newBlock();
+-        m_out.branch(m_out.belowOrEqual(code, m_out.constInt32(maxSingleCharacterString)), usually(small), rarely(big));
+-        m_out.appendTo(small);
++        m_out.branch(m_out.belowOrEqual(code, m_out.constInt32(maxSingleCharacterString)), usually(isSingleCharacter), rarely(big));
++        m_out.appendTo(isSingleCharacter);
+         ValueFromBlock ofSmall = m_out.anchor(singleCharacterString(code));
+         m_out.jump(made);
+         m_out.appendTo(big);
 @@ -574,6 +574,13 @@ bool Lowering::lowerCallOfBuiltin(Node* node, Node* calleeNode, unsigned argc, u
              Vector<ValueFromBlock, 2> lengthsOtherwise;
              Vector<ValueFromBlock, 3> answers;
@@ -1984,7 +2123,7 @@ index 8a4d3a1c0d..ed0c23c528 100644
              answers.append(m_out.anchor(m_out.booleanFalse));
              m_out.branch(m_out.aboveOrEqual(length, needed), unsure(isLongEnough), unsure(settled));
 diff --git a/Source/JavaScriptCore/aot/AOTLowerCalls.cpp b/Source/JavaScriptCore/aot/AOTLowerCalls.cpp
-index 26a637003c..4c9b5bd479 100644
+index 26a637003..4c9b5bd47 100644
 --- a/Source/JavaScriptCore/aot/AOTLowerCalls.cpp
 +++ b/Source/JavaScriptCore/aot/AOTLowerCalls.cpp
 @@ -51,8 +51,9 @@ void Lowering::finishCall(PatchpointValue* patchpoint, CallMode mode, Rep result
@@ -2016,7 +2155,7 @@ index 26a637003c..4c9b5bd479 100644
              if (!isSubtype(typeOfCallee, TCell)) {
                  LBasicBlock isCellCase = m_out.newBlock();
 diff --git a/Source/JavaScriptCore/aot/AOTLowerCore.cpp b/Source/JavaScriptCore/aot/AOTLowerCore.cpp
-index 9c341c2ac9..2dffb741d1 100644
+index 9c341c2ac..2dffb741d 100644
 --- a/Source/JavaScriptCore/aot/AOTLowerCore.cpp
 +++ b/Source/JavaScriptCore/aot/AOTLowerCore.cpp
 @@ -499,6 +499,70 @@ static bool mayLookAtStack(Stub stub)
@@ -2309,7 +2448,7 @@ index 9c341c2ac9..2dffb741d1 100644
  
      auto setCurrentNode = [&](Node* node) {
 diff --git a/Source/JavaScriptCore/aot/AOTLowerGuards.cpp b/Source/JavaScriptCore/aot/AOTLowerGuards.cpp
-index 6e8573ca98..eadecef405 100644
+index 6e8573ca9..eadecef40 100644
 --- a/Source/JavaScriptCore/aot/AOTLowerGuards.cpp
 +++ b/Source/JavaScriptCore/aot/AOTLowerGuards.cpp
 @@ -9,6 +9,8 @@
@@ -2429,7 +2568,7 @@ index 6e8573ca98..eadecef405 100644
          return loadLazily(bytecode.m_offset);
      StaticVariable variable = resolveStatically(bytecode.m_var, bytecode.m_localScopeDepth, type);
 diff --git a/Source/JavaScriptCore/aot/AOTLowerMisc.cpp b/Source/JavaScriptCore/aot/AOTLowerMisc.cpp
-index 84cbb0c8a0..c6c97aa762 100644
+index 84cbb0c8a..c6c97aa76 100644
 --- a/Source/JavaScriptCore/aot/AOTLowerMisc.cpp
 +++ b/Source/JavaScriptCore/aot/AOTLowerMisc.cpp
 @@ -601,7 +601,7 @@ void Lowering::emitTypeTests(std::nullptr_t, Type typeOfValue, LValue jsValue, u
@@ -2442,7 +2581,7 @@ index 84cbb0c8a0..c6c97aa762 100644
                      if (mayBe(others, kind.type))
                          passIf(isType(kind.jsType));
 diff --git a/Source/JavaScriptCore/aot/AOTLowering.h b/Source/JavaScriptCore/aot/AOTLowering.h
-index 237691d56c..17ad851551 100644
+index 237691d56..17ad85155 100644
 --- a/Source/JavaScriptCore/aot/AOTLowering.h
 +++ b/Source/JavaScriptCore/aot/AOTLowering.h
 @@ -141,6 +141,7 @@ private:
@@ -2453,8 +2592,21 @@ index 237691d56c..17ad851551 100644
      LValue toBoolean(Node*);
  
      TypedPointer addressFor(VirtualRegister); // The address of a register that lives in the frame (Graph::livesInFrame()).
+diff --git a/Source/JavaScriptCore/aot/AOTOperationsObjects.h b/Source/JavaScriptCore/aot/AOTOperationsObjects.h
+index 635ef7cef..d8e78126f 100644
+--- a/Source/JavaScriptCore/aot/AOTOperationsObjects.h
++++ b/Source/JavaScriptCore/aot/AOTOperationsObjects.h
+@@ -20,6 +20,8 @@ class VM;
+ 
+ namespace AOT {
+ 
++struct Data;
++struct Instance;
+ struct Slot;
+ 
+ // The operations behind every instruction that is not arithmetic, a plain property access or a variable access. What they have
 diff --git a/Source/JavaScriptCore/aot/AOTProgram.cpp b/Source/JavaScriptCore/aot/AOTProgram.cpp
-index 7d50baee24..f39918a262 100644
+index 7d50baee2..f39918a26 100644
 --- a/Source/JavaScriptCore/aot/AOTProgram.cpp
 +++ b/Source/JavaScriptCore/aot/AOTProgram.cpp
 @@ -83,6 +83,18 @@ const NumbersOfIdentifiers* numbersOfIdentifiersOfProgram()
@@ -2552,7 +2704,7 @@ index 7d50baee24..f39918a262 100644
  {
      Locker locker { m_lock };
 diff --git a/Source/JavaScriptCore/aot/AOTProgram.h b/Source/JavaScriptCore/aot/AOTProgram.h
-index 6585df2494..38835bcc29 100644
+index 6585df249..38835bcc2 100644
 --- a/Source/JavaScriptCore/aot/AOTProgram.h
 +++ b/Source/JavaScriptCore/aot/AOTProgram.h
 @@ -10,6 +10,8 @@
@@ -2669,10 +2821,22 @@ index 6585df2494..38835bcc29 100644
  // program's identifiers have been numbered, all functions share one table. The shared table is built by StaticHeap, so such code
  // can only run with a static heap.
 diff --git a/Source/JavaScriptCore/aot/AOTRuntime.cpp b/Source/JavaScriptCore/aot/AOTRuntime.cpp
-index 6b48e7b145..47154d9080 100644
+index 6b48e7b14..68942b95e 100644
 --- a/Source/JavaScriptCore/aot/AOTRuntime.cpp
 +++ b/Source/JavaScriptCore/aot/AOTRuntime.cpp
-@@ -159,7 +159,7 @@ RuntimeTable::RuntimeTable(VM& vm)
+@@ -10,7 +10,11 @@
+ #include "AOTBuiltins.h"
+ #include "AOTGraph.h"
+ #include <bmalloc/StaticRegion.h>
++#if OS(WINDOWS)
++#include <windows.h>
++#else
+ #include <sys/mman.h>
++#endif
+ 
+ #include "ArrayConstructor.h"
+ #include "ArrayPrototype.h"
+@@ -159,7 +163,7 @@ RuntimeTable::RuntimeTable(VM& vm)
      installOperationFrontEnds(vm, m_entries);
  
      // (With a JIT it has boundFunctionCallGenerator()'s thunk.)
@@ -2681,7 +2845,7 @@ index 6b48e7b145..47154d9080 100644
          vm.getBoundFunction(true, SourceTaintedOrigin::Untainted)->setCodeToBeCalledWith(CodePtr<JSEntryPtrTag>::fromTaggedPtr(tagCodePtr<JSEntryPtrTag>(addressOfStub(Stub::CallBoundFunction))));
  }
  
-@@ -182,6 +182,7 @@ struct Instance::Collections {
+@@ -182,6 +186,7 @@ struct Instance::Collections {
      struct FunctionWithoutData {
          ScriptExecutable* executable;
          UnlinkedCodeBlock* unlinkedCodeBlock;
@@ -2689,9 +2853,18 @@ index 6b48e7b145..47154d9080 100644
      };
      Vector<FunctionWithoutData> functionsWithoutData;
      // The slots that have, or have had, a transition. The collector goes over them again and again while it marks, and they are few.
-@@ -253,9 +254,19 @@ Instance& Instance::ensure(JSGlobalObject* globalObject)
+@@ -251,11 +256,34 @@ Instance& Instance::ensure(JSGlobalObject* globalObject)
+         environmentsSize = roundUpToMultipleOf(WTF::pageSize(), Image::environmentsSize());
+         numberOfFunctions = Image::numberOfFunctionsOfImageWithEnvironments();
          size = sizeFor(numberOfFunctions);
++#if OS(WINDOWS)
++        // (Writable up to the room for datas, which is made so as it is used: the region is committed page by page, and 256 MB
++        // of it at once would count against the commit limit, as reserving it does not elsewhere.)
++        instance = reinterpret_cast<Instance*>(static_cast<char*>(StaticHeap::allocateBlock(vm, environmentsSize + size, environmentsSize + startOfDatasFor(numberOfFunctions))) + environmentsSize);
++        instance->committedThrough = startOfDatasFor(numberOfFunctions);
++#else
          instance = reinterpret_cast<Instance*>(static_cast<char*>(StaticHeap::allocateBlock(vm, environmentsSize + size)) + environmentsSize);
++#endif
      } else {
 -        numberOfFunctions = maxFunctions;
 +        // Another realm (ShadowRealm, a node:vm context) or a program without a static heap. A function is known by its index in
@@ -2702,16 +2875,31 @@ index 6b48e7b145..47154d9080 100644
 +        numberOfFunctions = image ? image->header().numberOfFunctions : maxFunctions;
          size = sizeFor(numberOfFunctions);
 -        instance = static_cast<Instance*>(OSAllocator::reserveAndCommit(size, OSAllocator::FastMallocPages));
++        size_t committed = startOfDatasFor(numberOfFunctions);
++#if OS(WINDOWS)
++        void* reserved = VirtualAlloc(nullptr, size, MEM_RESERVE, PAGE_NOACCESS);
++        RELEASE_ASSERT_WITH_MESSAGE(reserved, "Out of address space for a realm's ahead-of-time code");
++        RELEASE_ASSERT(VirtualAlloc(reserved, committed, MEM_COMMIT, PAGE_READWRITE));
++#else
 +        void* reserved = mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
 +        RELEASE_ASSERT_WITH_MESSAGE(reserved != MAP_FAILED, "Out of address space for a realm's ahead-of-time code");
-+        size_t committed = startOfDatasFor(numberOfFunctions);
 +        RELEASE_ASSERT(!mprotect(reserved, committed, PROT_READ | PROT_WRITE));
++#endif
 +        instance = static_cast<Instance*>(reserved);
 +        instance->committedThrough = committed;
      }
      instance->runtimeTable = AOT::runtimeTable(vm).entries();
      instance->globalObject = globalObject;
-@@ -383,6 +394,15 @@ void* Instance::allocateForData(size_t size)
+@@ -285,7 +313,7 @@ Instance& Instance::ensure(JSGlobalObject* globalObject)
+     instance->missesForEightSlots = Options::aotCacheMissesPerEightSlotsBeforeOwnData();
+     instance->missesToSpare = Options::aotExtraCacheMissesBeforeOwnData();
+     instance->structureIDBase = JSC::structureIDBase();
+-    RELEASE_ASSERT_WITH_MESSAGE(!Image::withCode() || instance->structureIDBase == structureIDBaseOfImages, "Structures are not where the program's code takes them to be: the addresses were taken.");
++    RELEASE_ASSERT_WITH_MESSAGE(!structureIDBaseIsFixed || !Image::withCode() || instance->structureIDBase == structureIDBaseOfImages, "Structures are not where the program's code takes them to be: the addresses were taken.");
+     {
+         auto idOf = [](Structure* structure) { return structure->id().bits(); };
+         if (Options::useImmutableIntrinsics()) {
+@@ -383,6 +411,23 @@ void* Instance::allocateForData(size_t size)
      size_t where = collections->endOfDatasUsed;
      RELEASE_ASSERT(units <= collections->endOfDatas - where);
      collections->endOfDatasUsed += units;
@@ -2720,14 +2908,22 @@ index 6b48e7b145..47154d9080 100644
 +        size_t end = collections->endOfDatasUsed << shiftOfStateWithData;
 +        if (end > committedThrough) {
 +            size_t newEnd = std::min(roundUpToMultipleOf(MB, end), collections->sizeFromInstance);
++#if OS(WINDOWS)
++            // (The program's realm is in the static region, which is part of the image: its pages are made writable.)
++            if (bmalloc::StaticRegion::contains(this))
++                RELEASE_ASSERT(bmalloc::StaticRegion::makeWritable(reinterpret_cast<char*>(this) + committedThrough, newEnd - committedThrough));
++            else
++                RELEASE_ASSERT(VirtualAlloc(reinterpret_cast<char*>(this) + committedThrough, newEnd - committedThrough, MEM_COMMIT, PAGE_READWRITE));
++#else
 +            RELEASE_ASSERT(!mprotect(reinterpret_cast<char*>(this) + committedThrough, newEnd - committedThrough, PROT_READ | PROT_WRITE));
++#endif
 +            committedThrough = newEnd;
 +        }
 +    }
      return at(where);
  }
  
-@@ -410,6 +430,18 @@ void Instance::destroy(Instance* instance)
+@@ -410,6 +455,18 @@ void Instance::destroy(Instance* instance)
      instance->vm->m_aotInstances.removeFirst(instance);
      if (instance->vm->m_aotInstanceOfProgram == instance)
          instance->vm->m_aotInstanceOfProgram = nullptr;
@@ -2746,16 +2942,103 @@ index 6b48e7b145..47154d9080 100644
      while (!instance->collections->all.isEmpty())
          Data::destroy(instance->collections->all.last());
      size_t environmentsSize = instance->collections->environmentsSize;
-@@ -422,7 +454,7 @@ void Instance::destroy(Instance* instance)
+@@ -421,8 +478,13 @@ void Instance::destroy(Instance* instance)
+     fastFree(instance->selectorsOnObjectPrototype);
      if (environmentsSize)
          StaticHeap::freeBlock(reinterpret_cast<char*>(instance) - environmentsSize, environmentsSize + size);
-     else
+-    else
 -        OSAllocator::decommitAndRelease(instance, size);
++    else {
++#if OS(WINDOWS)
++        VirtualFree(instance, 0, MEM_RELEASE);
++#else
 +        munmap(instance, size);
++#endif
++    }
  }
  
  void* Instance::placeForEnvironment(ImageEnvironment environment) const
-@@ -515,10 +547,17 @@ const RegisterAtOffsetList& adapterSavedRegisters()
+@@ -432,6 +494,62 @@ void* Instance::placeForEnvironment(ImageEnvironment environment) const
+     return const_cast<char*>(reinterpret_cast<const char*>(this)) - environment.distance;
+ }
+ 
++#if OS(WINDOWS)
++// Windows' C++ functions keep no chain of frame records: where rbp points in a frame, if it is a frame pointer at all, is the
++// function's to say, in its unwind information. So the frames are walked with the system's unwinder, from a context, each caller's
++// state in turn. Code without unwind information (the LLInt, the JITs' code, their thunks) makes frame records as on any other
++// system, and the code image's one entry in the exception directory says that it does too (Bun__StaticHeap__rewritePE()).
++// Code in the engine's convention keeps its CallFrame in rbp: `frame` is reached when a frame is unwound to rbp == frame, at a
++// return address into such code. (A C++ function that does not use rbp leaves it as its caller had it, so C++ code is passed over.)
++static void* returnAddressForFrameFrom(const void* frame, CONTEXT& context)
++{
++    auto isInCPlusPlus = [](DWORD64 pc) {
++        DWORD64 imageBase;
++        return RtlLookupFunctionEntry(pc, &imageBase, nullptr) && classifyAddress(reinterpret_cast<void*>(pc)).kind == ImageAddressInfo::NotInImage;
++    };
++    uintptr_t target = reinterpret_cast<uintptr_t>(frame);
++    for (unsigned step = 0; step < 100000 && context.Rip && context.Rsp <= target; ++step) {
++        DWORD64 imageBase;
++        if (PRUNTIME_FUNCTION function = RtlLookupFunctionEntry(context.Rip, &imageBase, nullptr)) {
++            void* handlerData;
++            DWORD64 establisherFrame;
++            RtlVirtualUnwind(UNW_FLAG_NHANDLER, imageBase, context.Rip, function, &context, &handlerData, &establisherFrame, nullptr);
++        } else {
++            // A frame record: the caller's rbp, then the return address.
++            auto* record = reinterpret_cast<const uintptr_t*>(context.Rbp);
++            if (context.Rbp < context.Rsp || context.Rbp >= target)
++                return nullptr;
++            context.Rip = record[1];
++            context.Rsp = context.Rbp + 16;
++            context.Rbp = record[0];
++        }
++        if (context.Rbp == target && context.Rip && !isInCPlusPlus(context.Rip))
++            return removeCodePtrTag(reinterpret_cast<void*>(context.Rip));
++    }
++    return nullptr;
++}
++
++NEVER_INLINE void* returnAddressForFrameFromHere(const void* frame)
++{
++    CONTEXT context;
++    RtlCaptureContext(&context);
++    return returnAddressForFrameFrom(frame, context);
++}
++
++void* returnAddressForFrame(const void* frame, const void* entryFrame)
++{
++    // An EntryFrame is the frame record of the way in to the VM (vmEntryToJavaScript and the like), which the C++ function that
++    // called it is returned to from.
++    if (!entryFrame || entryFrame >= frame)
++        return nullptr;
++    CONTEXT context { };
++    auto* record = static_cast<const uintptr_t*>(entryFrame);
++    context.Rbp = record[0];
++    context.Rip = record[1];
++    context.Rsp = reinterpret_cast<uintptr_t>(entryFrame) + 16;
++    return returnAddressForFrameFrom(frame, context);
++}
++#else
+ SUPPRESS_ASAN void* returnAddressForFrame(const void* frame, const void* startingFrom)
+ {
+     struct Record {
+@@ -444,6 +562,7 @@ SUPPRESS_ASAN void* returnAddressForFrame(const void* frame, const void* startin
+     }
+     return nullptr;
+ }
++#endif
+ 
+ namespace {
+ struct FrameRecord {
+@@ -478,7 +597,7 @@ NEVER_INLINE bool topCallFrameIsAOTFrame(const void* frame)
+ {
+     if (!hasCode())
+         return false;
+-    void* returnAddress = returnAddressForFrame(frame, __builtin_frame_address(0));
++    void* returnAddress = AOT_RETURN_ADDRESS_FOR_FRAME_FROM_HERE(frame);
+     return returnAddress && classifyAddress(returnAddress).kind != ImageAddressInfo::NotInImage;
+ }
+ 
+@@ -515,10 +634,17 @@ const RegisterAtOffsetList& adapterSavedRegisters()
          registers.add(instanceGPR, IgnoreVectors);
          registers.add(GPRInfo::numberTagRegister, IgnoreVectors);
          registers.add(GPRInfo::notCellMaskRegister, IgnoreVectors);
@@ -2773,7 +3056,7 @@ index 6b48e7b145..47154d9080 100644
      });
      return list.get();
  }
-@@ -669,7 +708,13 @@ Data* Data::create(Instance& instance, ScriptExecutable* executable, UnlinkedCod
+@@ -669,7 +795,13 @@ Data* Data::create(Instance& instance, ScriptExecutable* executable, UnlinkedCod
              dataLogLn("AOT: nothing was known of function ", code.index(), " when the program was built");
          fillInfo(info, executable, unlinkedCodeBlock, code, data->constants);
      }
@@ -2788,7 +3071,7 @@ index 6b48e7b145..47154d9080 100644
      return data;
  }
  
-@@ -681,7 +726,9 @@ Data* Instance::ensureData(uint32_t index)
+@@ -681,7 +813,9 @@ Data* Instance::ensureData(uint32_t index)
          return data;
      const FunctionInfo& info = infos[index];
      auto* executable = uncheckedDowncast<FunctionExecutable>(info.executable());
@@ -2799,7 +3082,7 @@ index 6b48e7b145..47154d9080 100644
      // (An executable that was made when the program was built has no way of holding on to one.)
      Ref<JITCode> code = executable->hasJITCodeFor(info.kind()) ? Ref { static_cast<JITCode&>(executable->generatedJITCodeFor(info.kind()).get()) } : codeOfFunctionFromImage({ &Image::of(*info.function()), info.function() }, info.kind());
      RELEASE_ASSERT(code->index() == index);
-@@ -848,7 +895,18 @@ UnlinkedCodeBlock* FunctionRef::unlinkedCodeBlockIfExists() const
+@@ -848,7 +982,18 @@ UnlinkedCodeBlock* FunctionRef::unlinkedCodeBlockIfExists() const
  {
      if (Data* data = dataIfExists(); data && data->unlinkedCodeBlock)
          return data->unlinkedCodeBlock;
@@ -2819,7 +3102,22 @@ index 6b48e7b145..47154d9080 100644
  }
  
  // As many zeros as any function has bytes of instructions, in memory that is nobody's until somebody reads it.
-@@ -986,23 +1044,32 @@ auto FunctionRef::reportedPositionFor(BytecodeIndex bytecodeIndex, OfConstructio
+@@ -858,8 +1003,14 @@ static std::span<const uint8_t> zerosForInstructions(size_t size)
+     static const uint8_t* zeros;
+     static std::once_flag once;
+     std::call_once(once, [] {
++#if OS(WINDOWS)
++        // (Committed read-only: Windows counts that against the commit limit, 4 MB, but no page is there until it is read.)
++        void* result = VirtualAlloc(nullptr, most, MEM_RESERVE | MEM_COMMIT, PAGE_READONLY);
++        RELEASE_ASSERT(result);
++#else
+         void* result = mmap(nullptr, most, PROT_READ, MAP_PRIVATE | MAP_ANON, -1, 0);
+         RELEASE_ASSERT(result != MAP_FAILED);
++#endif
+         zeros = static_cast<const uint8_t*>(result);
+     });
+     RELEASE_ASSERT(size <= most);
+@@ -986,23 +1137,32 @@ auto FunctionRef::reportedPositionFor(BytecodeIndex bytecodeIndex, OfConstructio
      return result;
  }
  
@@ -2855,7 +3153,7 @@ index 6b48e7b145..47154d9080 100644
  }
  
  void* FunctionRef::addressOfCatchEntrypoint(unsigned bytecodeOffset) const
-@@ -1149,13 +1216,19 @@ LineColumn FunctionRef::lineColumnFor(BytecodeIndex bytecodeIndex) const
+@@ -1149,13 +1309,19 @@ LineColumn FunctionRef::lineColumnFor(BytecodeIndex bytecodeIndex) const
      if (auto position = reportedPositionFor(bytecodeIndex))
          return position->lineColumn;
      ScriptExecutable* executable = this->executable();
@@ -2878,7 +3176,7 @@ index 6b48e7b145..47154d9080 100644
      lineColumn.column += lineColumn.line ? 1 : executable->startColumn();
      lineColumn.line += executable->firstLine();
      return lineColumn;
-@@ -1231,7 +1304,7 @@ bool install(VM& vm, FunctionExecutable* executable, CodeSpecializationKind kind
+@@ -1231,7 +1397,7 @@ bool install(VM& vm, FunctionExecutable* executable, CodeSpecializationKind kind
              dataLogLn("AOT: nothing was known of function ", index, " when the program was built");
          fillInfo(instance.infos[index], executable, unlinkedCodeBlock, code.get(), unlinkedCodeBlock->constantRegisters().span().data());
          instance.infos[index].flags |= FunctionInfo::startsCold;
@@ -2888,10 +3186,27 @@ index 6b48e7b145..47154d9080 100644
      } else if (!Data::create(instance, executable, unlinkedCodeBlock, code.get()))
          return false;
 diff --git a/Source/JavaScriptCore/aot/AOTRuntime.h b/Source/JavaScriptCore/aot/AOTRuntime.h
-index d96ea043c6..50429bbb63 100644
+index d96ea043c..c17acc2a2 100644
 --- a/Source/JavaScriptCore/aot/AOTRuntime.h
 +++ b/Source/JavaScriptCore/aot/AOTRuntime.h
-@@ -647,6 +647,9 @@ struct Instance {
+@@ -290,7 +290,15 @@ RuntimeTable& runtimeTable(VM&);
+ // PropertyOffset does not need. The GC ignores a Slot with no structureID.
+ // The upper 32 bits of every Structure address. StructureMemoryManager reserves the structure heap directly after the static
+ // region. If that address range is unavailable, the program cannot run.
+-static constexpr uintptr_t structureIDBaseOfImages = bmalloc::StaticRegion::base + bmalloc::StaticRegion::reservation;
++// On Windows nothing is at a fixed address: the structure heap is wherever the system puts it, and code in an image finds its
++// base in the runtime table (Entry::StructureIDBase), as code made at run time does. Zero there means that.
++#if OS(WINDOWS)
++static constexpr bool structureIDBaseIsFixed = false;
++static constexpr uintptr_t structureIDBaseOfImages = 0;
++#else
++static constexpr bool structureIDBaseIsFixed = true;
++static constexpr uintptr_t structureIDBaseOfImages = bmalloc::StaticRegion::base() + bmalloc::StaticRegion::reservation;
++#endif
+ static_assert(!(structureIDBaseOfImages & 0xffffffff));
+ 
+ struct Slot {
+@@ -647,6 +655,9 @@ struct Instance {
      //   - Below leastStateWithData: the function uses SharedData. The low 16 bits count cache misses. isLinkedWithoutData is set
      //     once the function has been linked in this realm (a function that is only called directly need not be).
      //   - Otherwise: the function is linked, and its Data is at this value times 16 bytes from the Instance.
@@ -2901,7 +3216,7 @@ index d96ea043c6..50429bbb63 100644
      uint32_t states[0];
  };
  
-@@ -783,6 +786,7 @@ struct CompiledFunctionInfo {
+@@ -783,6 +794,7 @@ struct CompiledFunctionInfo {
      unsigned codeSize { 0 }; // The entry point is at offset zero.
      Convention convention;
      Vector<IndexReference> indexReferences;
@@ -2909,7 +3224,7 @@ index d96ea043c6..50429bbb63 100644
      Vector<SiteOfSpread> sitesOfSpreads;
      struct InlineFrame {
          uint32_t parent;
-@@ -930,6 +934,7 @@ public:
+@@ -930,6 +942,7 @@ public:
      static constexpr ptrdiff_t offsetOfInstance() { return OBJECT_OFFSETOF(JITCode, m_instance); }
      Instance* instance() const { return m_instance; }
      void setInstance(Instance& instance) { m_instance = &instance; }
@@ -2918,10 +3233,73 @@ index d96ea043c6..50429bbb63 100644
  private:
      void* m_code;
 diff --git a/Source/JavaScriptCore/aot/AOTStubs.cpp b/Source/JavaScriptCore/aot/AOTStubs.cpp
-index 1b472efc1f..8614e49d88 100644
+index 1b472efc1..01ebef166 100644
 --- a/Source/JavaScriptCore/aot/AOTStubs.cpp
 +++ b/Source/JavaScriptCore/aot/AOTStubs.cpp
-@@ -1691,11 +1691,15 @@ static void generatePutById(CCallHelpers& jit)
+@@ -101,6 +101,17 @@ static void loadInstance(CCallHelpers& jit, GPRReg result)
+     jit.move(instanceGPR, result);
+ }
+ 
++// Turns the StructureID in `reg` into its Structure's address. Where the structure heap is the same in every process, that is a
++// constant; on Windows nothing is at a fixed address, and the realm's Instance has where it is.
++static void orStructureIDBase(CCallHelpers& jit, GPRReg reg)
++{
++#if OS(WINDOWS)
++    jit.or64(CCallHelpers::Address(instanceGPR, Instance::offsetOfStructureIDBase()), reg);
++#else
++    jit.or64(CCallHelpers::TrustedImm64(structureIDBaseOfImages), reg);
++#endif
++}
++
+ // Loads into T15 the index of the function that contains `pc`. A stub identifies its caller from its return address. Only reads two
+ // of the image's tables, at entries adjacent to those for neighboring code. Clobbers T14.
+ void loadIndexOfFunctionAt(CCallHelpers& jit, GPRReg pc)
+@@ -496,7 +507,7 @@ static void generateInstanceOf(CCallHelpers& jit)
+     // AssemblyHelpers::emitLoadPrototype(), with the StructureID decoded position-independently.
+     slowPath.append(jit.branchTest8(CCallHelpers::NonZero, Address(T11, JSObject::typeInfoFlagsOffset()), TrustedImm32(OverridesGetPrototype)));
+     jit.load32(Address(T11, JSCell::structureIDOffset()), T12);
+-    jit.or64(CCallHelpers::TrustedImm64(structureIDBaseOfImages), T12);
++    orStructureIDBase(jit, T12);
+     jit.load64(Address(T12, Structure::prototypeOffset()), T12);
+     Jump hasMonoProto = jit.branchTest64(CCallHelpers::NonZero, T12);
+     jit.load64(Address(T11, offsetRelativeToBase(knownPolyProtoOffset)), T12);
+@@ -1240,7 +1251,7 @@ static Address slotOfFrameBeingMade(CallFrameSlot slot, ptrdiff_t offset = 0)
+ static void findInDispatchTable(CCallHelpers& jit, GPRReg slot, GPRReg selector, CCallHelpers::JumpList& notOfKnownShape, CCallHelpers::JumpList& notOwn)
+ {
+     jit.load32(Address(A0, JSCell::structureIDOffset()), T11);
+-    jit.or64(CCallHelpers::TrustedImm64(structureIDBaseOfImages), T11);
++    orStructureIDBase(jit, T11);
+     jit.load16(Address(T11, Structure::offsetOfKnownShape()), T11);
+     notOfKnownShape.append(jit.branchTest32(CCallHelpers::Zero, T11));
+     loadInfo(jit, T9, T12);
+@@ -1423,7 +1434,7 @@ static void generateReadSlot(CCallHelpers& jit, unsigned slot, bool allowsUndefi
+     static_assert(!(structureIDBaseOfImages & ~(0xffffull << 32)));
+     jit.m_assembler.movk<64>(T13, static_cast<uint16_t>(structureIDBaseOfImages >> 32), 32);
+ #else
+-    jit.or64(CCallHelpers::TrustedImm64(structureIDBaseOfImages), T13);
++    orStructureIDBase(jit, T13);
+ #endif
+     jit.load16(Address(T13, Structure::offsetOfFieldIDInSlot() + slot * sizeof(uint16_t)), T11);
+     Jump isNotThere = jit.branch32(CCallHelpers::NotEqual, T11, A1);
+@@ -1536,7 +1547,7 @@ static void generateGetByIdWith(CCallHelpers& jit, Entry operation)
+             jit.extractUnsignedBitfield64(T11, TrustedImm32(32 + Slot::nameIDShift), TrustedImm32(16), T13);
+             Jump hasNoNameID = jit.branchTest32(CCallHelpers::Zero, T13);
+             jit.extractUnsignedBitfield64(T11, TrustedImm32(32), TrustedImm32(Slot::directLocationBits), T14);
+-            jit.or64(CCallHelpers::TrustedImm64(structureIDBaseOfImages), T12);
++            orStructureIDBase(jit, T12);
+             constexpr ptrdiff_t wordsBeforeInlineStorage = JSObject::offsetOfInlineStorage() / sizeof(EncodedJSValue);
+             jit.load16(CCallHelpers::BaseIndex(T12, T14, CCallHelpers::TimesTwo, Structure::offsetOfFieldIDInSlot() - wordsBeforeInlineStorage * sizeof(uint16_t)), T12);
+             Jump isAnotherName = jit.branch32(CCallHelpers::NotEqual, T12, T13);
+@@ -1625,7 +1636,7 @@ static void generateGetByIdWith(CCallHelpers& jit, Entry operation)
+         // No own property with that name. See Instance::lookAtObjectPrototype().
+         notOwn.link(&jit);
+         jit.load32(Address(A0, JSCell::structureIDOffset()), T12);
+-        jit.or64(CCallHelpers::TrustedImm64(structureIDBaseOfImages), T12);
++        orStructureIDBase(jit, T12);
+         jit.loadPtr(Address(T12, Structure::prototypeOffset()), T12);
+         jit.loadPtr(Address(T9, Instance::offsetOfObjectPrototype()), T13);
+         notInTable.append(jit.branchPtr(CCallHelpers::NotEqual, T12, T13));
+@@ -1691,11 +1702,15 @@ static void generatePutById(CCallHelpers& jit)
      jit.store64(A1, CCallHelpers::BaseIndex(T12, T11, CCallHelpers::TimesEight));
      Jump sameStructure = jit.branchTest32(CCallHelpers::Zero, T13);
      jit.store32(T13, Address(A0, JSCell::structureIDOffset()));
@@ -2937,7 +3315,16 @@ index 1b472efc1f..8614e49d88 100644
      loadInstance(jit, T9);
      jit.load8(Address(A0, JSCell::cellStateOffset()), T11);
      jit.loadPtr(Address(T9, Instance::offsetOfVM()), T12);
-@@ -3535,12 +3539,21 @@ static void generateAheadOfObjectKeysObject(CCallHelpers& jit) { generateAheadOf
+@@ -1772,7 +1787,7 @@ static void generatePutById(CCallHelpers& jit)
+         jit.branchTest32(CCallHelpers::Zero, T12).linkTo(isHeld, &jit);
+         loadInstance(jit, T9);
+         jit.load32(Address(A1, JSCell::structureIDOffset()), T10);
+-        jit.or64(CCallHelpers::TrustedImm64(structureIDBaseOfImages), T10);
++        orStructureIDBase(jit, T10);
+         jit.load16(Address(T10, Structure::offsetOfTypedLayoutID()), T10);
+         jit.branch32(CCallHelpers::Equal, T10, T12).linkTo(isHeld, &jit);
+         miss.append(jit.jump());
+@@ -3535,12 +3550,21 @@ static void generateAheadOfObjectKeysObject(CCallHelpers& jit) { generateAheadOf
  FOR_EACH_AOT_HELPER(AOT_GENERATE_HELPER)
  #undef AOT_GENERATE_HELPER
  
@@ -2959,7 +3346,7 @@ index 1b472efc1f..8614e49d88 100644
  #endif // CPU(ARM64)
  
  // The stubs that call an operation take its offset in the runtime table in T9. The stubs that call a function take the argument
-@@ -3612,7 +3625,7 @@ static_assert(numberOfThunks < std::numeric_limits<uint16_t>::max());
+@@ -3612,7 +3636,7 @@ static_assert(numberOfThunks < std::numeric_limits<uint16_t>::max());
  
  static bool thereAreNoWaysInByRegister()
  {
@@ -2968,7 +3355,7 @@ index 1b472efc1f..8614e49d88 100644
  }
  
  static std::optional<unsigned> firstThunkForOperandOf(Stub stub, std::optional<uint32_t> valueOfT9)
-@@ -3737,7 +3750,7 @@ bool returnsResultInAnyRegister(Stub stub, std::optional<uint32_t> valueOfT9)
+@@ -3737,7 +3761,7 @@ bool returnsResultInAnyRegister(Stub stub, std::optional<uint32_t> valueOfT9)
  
  std::optional<unsigned> thunkFor(Stub stub, uint32_t valueOfT9)
  {
@@ -2977,7 +3364,7 @@ index 1b472efc1f..8614e49d88 100644
          return std::nullopt;
      for (unsigned i = 0; i < std::size(operationCallStubs); ++i) {
          if (operationCallStubs[i] == stub)
-@@ -3781,14 +3794,19 @@ const StubBlob& stubBlob()
+@@ -3781,14 +3805,19 @@ const StubBlob& stubBlob()
      std::call_once(once, [] {
          blob.construct();
          CCallHelpers jit;
@@ -2998,7 +3385,7 @@ index 1b472efc1f..8614e49d88 100644
  #else
          Vector<CCallHelpers::Label> returnsIntoAdapters;
          CCallHelpers::Label labels[numberOfStubs];
-@@ -3802,6 +3820,8 @@ const StubBlob& stubBlob()
+@@ -3802,6 +3831,8 @@ const StubBlob& stubBlob()
  #undef AOT_GENERATE_STUB
  
          Vector<CCallHelpers::Label> thunkLabels;
@@ -3007,7 +3394,7 @@ index 1b472efc1f..8614e49d88 100644
          if constexpr (usesStubs) {
              for (Stub stub : operationCallStubs) {
                  for (unsigned entry = 0; entry < numberOfEntries; ++entry) {
-@@ -3913,10 +3933,11 @@ const StubBlob& stubBlob()
+@@ -3913,10 +3944,11 @@ const StubBlob& stubBlob()
  #endif
              RELEASE_ASSERT(thunkLabels.size() == numberOfThunks);
          }
@@ -3020,7 +3407,7 @@ index 1b472efc1f..8614e49d88 100644
          LinkBuffer linkBuffer(jit, CodePtr<LinkBufferPtrTag>::fromUntaggedPtr(storage.mutableSpan().data()), storage.sizeInBytes(), LinkBuffer::Profile::Thunk);
          for (auto& [call, stub] : callsBetweenStubs)
              linkBuffer.link<JITThunkPtrTag>(call, linkBuffer.locationOf<JITThunkPtrTag>(labels[static_cast<unsigned>(stub)]));
-@@ -3929,6 +3950,8 @@ const StubBlob& stubBlob()
+@@ -3929,6 +3961,8 @@ const StubBlob& stubBlob()
              uint32_t encoded = 0x10000000u | (static_cast<uint32_t>(delta) & 3) << 29 | (static_cast<uint32_t>(delta >> 2) & 0x7ffff) << 5 | static_cast<uint32_t>(address.reg);
              performJITMemcpy<jitMemcpyRepatch>(instruction, &encoded, sizeof(encoded));
          }
@@ -3029,7 +3416,7 @@ index 1b472efc1f..8614e49d88 100644
  #endif
          auto* start = static_cast<uint8_t*>(linkBuffer.entrypoint<JITThunkPtrTag>().untaggedPtr());
          for (unsigned i = 0; i < numberOfStubs; ++i)
-@@ -3953,6 +3976,10 @@ const StubBlob& stubBlob()
+@@ -3953,6 +3987,10 @@ const StubBlob& stubBlob()
              };
              for (unsigned i = 0; i < numberOfStubs; ++i)
                  dataLogLn("AOT: stub ", names[i], " ", blob->offsets[i]);
@@ -3040,7 +3427,7 @@ index 1b472efc1f..8614e49d88 100644
              // In the order in which they were generated above.
              unsigned thunk = 0;
              for (Stub stub : operationCallStubs) {
-@@ -4002,7 +4029,7 @@ void StubCalls::call(CCallHelpers& jit, Stub stub, uint32_t valueOfT9, CallSite
+@@ -4002,7 +4040,7 @@ void StubCalls::call(CCallHelpers& jit, Stub stub, uint32_t valueOfT9, CallSite
  {
      auto thunk = thunkFor(stub, valueOfT9);
      if (!thunk)
@@ -3049,7 +3436,7 @@ index 1b472efc1f..8614e49d88 100644
      m_pending.append({ jit.nearCall(), stub, false, site.bits });
      if (thunk)
          m_pending.last().thunk = safeCast<uint16_t>(*thunk + 1);
-@@ -4061,7 +4088,11 @@ void StubCalls::callForResultIn(CCallHelpers& jit, Stub stub, uint32_t valueOfT9
+@@ -4061,7 +4099,11 @@ void StubCalls::callForResultIn(CCallHelpers& jit, Stub stub, uint32_t valueOfT9
          return;
      }
      unsigned which = *indexOfOperationWithAnyRegisterResult(stub, valueOfT9);
@@ -3061,7 +3448,7 @@ index 1b472efc1f..8614e49d88 100644
      RELEASE_ASSERT(numberOfResult < numberOfRegistersForResult);
      RELEASE_ASSERT(operationsWithAnyRegisterResult[which].acceptsOperandInAnyRegister ? operandMayBeIn(stub, operand) : operand == defaultOperandRegister(stub));
      m_pending.append({ jit.nearCall(), stub, false, site.bits });
-@@ -4077,7 +4108,7 @@ void StubCalls::tailCall(CCallHelpers& jit, Stub stub, uint32_t valueOfT9)
+@@ -4077,7 +4119,7 @@ void StubCalls::tailCall(CCallHelpers& jit, Stub stub, uint32_t valueOfT9)
  {
      auto thunk = thunkFor(stub, valueOfT9);
      if (!thunk)
@@ -3070,7 +3457,7 @@ index 1b472efc1f..8614e49d88 100644
      m_pending.append({ jit.nearTailCall(), stub, true, StubCall::noCallSite });
      if (thunk)
          m_pending.last().thunk = safeCast<uint16_t>(*thunk + 1);
-@@ -4099,13 +4130,21 @@ void IndexReferences::load(CCallHelpers& jit, GPRReg base, GPRReg dest, uint32_t
+@@ -4099,13 +4141,21 @@ void IndexReferences::load(CCallHelpers& jit, GPRReg base, GPRReg dest, uint32_t
      bool isHalfWord = scale == sizeof(uint32_t);
      RELEASE_ASSERT(isHalfWord ? !(addend % sizeof(uint32_t)) : !(addend % sizeof(void*)) && !(scale % sizeof(void*)));
      RELEASE_ASSERT(scale <= std::numeric_limits<uint16_t>::max());
@@ -3093,7 +3480,7 @@ index 1b472efc1f..8614e49d88 100644
  #else
      UNUSED_PARAM(base);
      UNUSED_PARAM(dest);
-@@ -4134,6 +4173,57 @@ void IndexReferences::fill(uint8_t* code, const IndexReference& reference, uint3
+@@ -4134,6 +4184,57 @@ void IndexReferences::fill(uint8_t* code, const IndexReference& reference, uint3
      RELEASE_ASSERT(!(instructions[0] & immediate) && !(instructions[1] & immediate));
      instructions[0] |= static_cast<uint32_t>(distance >> 12) << 10;
      instructions[1] |= static_cast<uint32_t>((distance & 0xfff) / (reference.scale == sizeof(uint32_t) ? sizeof(uint32_t) : sizeof(void*))) << 10;
@@ -3151,7 +3538,7 @@ index 1b472efc1f..8614e49d88 100644
  #else
      UNUSED_PARAM(code);
      UNUSED_PARAM(reference);
-@@ -4149,9 +4239,15 @@ Vector<StubCall> StubCalls::link(LinkBuffer& linkBuffer)
+@@ -4149,9 +4250,15 @@ Vector<StubCall> StubCalls::link(LinkBuffer& linkBuffer)
      for (auto& pending : m_pending) {
          // A placeholder within range. ImageBuilder retargets every call when it places the code.
          linkBuffer.link<JITThunkPtrTag>(pending.call, CodeLocationLabel<JITThunkPtrTag>(tagCodePtr<JITThunkPtrTag>(start)));
@@ -3169,7 +3556,7 @@ index 1b472efc1f..8614e49d88 100644
      }
      return result;
  }
-@@ -4184,6 +4280,13 @@ void retargetStubCall(uint8_t* base, size_t instruction, size_t target, bool isT
+@@ -4184,6 +4291,13 @@ void retargetStubCall(uint8_t* base, size_t instruction, size_t target, bool isT
      RELEASE_ASSERT(delta >= -(1 << 25) && delta < (1 << 25));
      uint32_t encoded = (isTailCall ? 0x14000000u : 0x94000000u) | (static_cast<uint32_t>(delta) & 0x03ffffffu);
      memcpy(base + instruction, &encoded, sizeof(encoded));
@@ -3184,7 +3571,7 @@ index 1b472efc1f..8614e49d88 100644
      UNUSED_PARAM(base);
      UNUSED_PARAM(instruction);
 diff --git a/Source/JavaScriptCore/aot/AOTStubs.h b/Source/JavaScriptCore/aot/AOTStubs.h
-index fddb0880c7..0d9c5f1037 100644
+index fddb0880c..0d9c5f103 100644
 --- a/Source/JavaScriptCore/aot/AOTStubs.h
 +++ b/Source/JavaScriptCore/aot/AOTStubs.h
 @@ -75,8 +75,16 @@ StubIntrinsic stubIntrinsicFor(UniquedStringImpl* name, unsigned argumentCountIn
@@ -3278,10 +3665,10 @@ index fddb0880c7..0d9c5f1037 100644
  static constexpr size_t roomToSpareInReachOfStubCall = 24 * MB; // A target considered in range stays in range if it ends up this much further away.
 diff --git a/Source/JavaScriptCore/aot/AOTStubsX86_64.cpp b/Source/JavaScriptCore/aot/AOTStubsX86_64.cpp
 new file mode 100644
-index 0000000000..8ac3f4d035
+index 000000000..bd19936a2
 --- /dev/null
 +++ b/Source/JavaScriptCore/aot/AOTStubsX86_64.cpp
-@@ -0,0 +1,3494 @@
+@@ -0,0 +1,3512 @@
 +/*
 + * Copyright (C) 2026 Oven, Inc. All rights reserved.
 + * SPDX-License-Identifier: BSD-2-Clause
@@ -3372,6 +3759,17 @@ index 0000000000..8ac3f4d035
 +static void loadInstance(CCallHelpers& jit, GPRReg result)
 +{
 +    jit.move(instanceGPR, result);
++}
++
++// Turns the StructureID in `reg` into its Structure's address. Where the structure heap is the same in every process, that is a
++// constant; on Windows nothing is at a fixed address, and the realm's Instance has where it is.
++static void orStructureIDBase(CCallHelpers& jit, GPRReg reg)
++{
++#if OS(WINDOWS)
++    jit.or64(CCallHelpers::Address(instanceGPR, Instance::offsetOfStructureIDBase()), reg);
++#else
++    jit.or64(CCallHelpers::TrustedImm64(structureIDBaseOfImages), reg);
++#endif
 +}
 +
 +static void jumpToEntry(CCallHelpers& jit, GPRReg data, Entry entry)
@@ -4692,7 +5090,7 @@ index 0000000000..8ac3f4d035
 +            jit.move(word, location);
 +            jit.urshift64(TrustedImm32(32), location);
 +            jit.and32(TrustedImm32(Slot::directLocationMask), location);
-+            jit.or64(CCallHelpers::TrustedImm64(structureIDBaseOfImages), t1);
++            orStructureIDBase(jit, t1);
 +            constexpr ptrdiff_t wordsBeforeInlineStorage = JSObject::offsetOfInlineStorage() / sizeof(EncodedJSValue);
 +            jit.load16(CCallHelpers::BaseIndex(t1, location, CCallHelpers::TimesTwo, Structure::offsetOfFieldIDInSlot() - wordsBeforeInlineStorage * sizeof(uint16_t)), t1);
 +            Jump isAnotherName = jit.branch32(CCallHelpers::NotEqual, t1, nameID);
@@ -4964,7 +5362,7 @@ index 0000000000..8ac3f4d035
 +    CCallHelpers::Label loop = jit.label();
 +    slowPath.append(jit.branchTest8(CCallHelpers::NonZero, Address(object, JSObject::typeInfoFlagsOffset()), TrustedImm32(OverridesGetPrototype)));
 +    jit.load32(Address(object, JSCell::structureIDOffset()), prototype);
-+    jit.or64(CCallHelpers::TrustedImm64(structureIDBaseOfImages), prototype);
++    orStructureIDBase(jit, prototype);
 +    jit.load64(Address(prototype, Structure::prototypeOffset()), prototype);
 +    Jump hasMonoProto = jit.branchTest64(CCallHelpers::NonZero, prototype);
 +    jit.load64(Address(object, offsetRelativeToBase(knownPolyProtoOffset)), prototype);
@@ -6311,7 +6709,8 @@ index 0000000000..8ac3f4d035
 +static void generateAheadOfObjectKeysObject(CCallHelpers& jit) { generateAheadOf(jit, Entry::BehindObjectKeysObject, Stub::HelperObjectKeys, 1); }
 +
 +// TODO(x86-aot-port): the stubs that are not ported yet say which they are and stop. A stub leaves this list when it is.
-+static void NO_RETURN_DUE_TO_CRASH reportUnportedStub(unsigned stub)
++// (SYSV_ABI: the stub passes `stub` where the engine's own calls pass a first argument, which on Windows is not where C does.)
++static void NO_RETURN_DUE_TO_CRASH SYSV_ABI reportUnportedStub(unsigned stub)
 +{
 +    static constexpr ASCIILiteral names[] = {
 +#define AOT_STUB_NAME(name) #name ""_s,
@@ -6325,9 +6724,15 @@ index 0000000000..8ac3f4d035
 +static void generateUnported(CCallHelpers& jit, Stub stub)
 +{
 +    jit.move(TrustedImm32(static_cast<unsigned>(stub)), A0);
++#if OS(WINDOWS)
++    // (The code of an image has no addresses in it on Windows, where it is not at a fixed one: the stub stops with its number in
++    // A0, for a debugger or a crash dump to show, rather than calling reportUnportedStub().)
++    UNUSED_PARAM(reportUnportedStub);
++#else
 +    jit.move(CCallHelpers::TrustedImmPtr(tagCFunction<OperationPtrTag>(reportUnportedStub)), scratchGPR);
 +    jit.andPtr(TrustedImm32(-static_cast<int32_t>(stackAlignmentBytes())), CCallHelpers::stackPointerRegister);
 +    jit.call(scratchGPR, OperationPtrTag);
++#endif
 +    jit.breakpoint();
 +}
 +
@@ -6777,7 +7182,7 @@ index 0000000000..8ac3f4d035
 +
 +#endif // CPU(X86_64)
 diff --git a/Source/JavaScriptCore/aot/AOTThunks.cpp b/Source/JavaScriptCore/aot/AOTThunks.cpp
-index bbf2c72bbd..76a49342e7 100644
+index bbf2c72bb..76a49342e 100644
 --- a/Source/JavaScriptCore/aot/AOTThunks.cpp
 +++ b/Source/JavaScriptCore/aot/AOTThunks.cpp
 @@ -541,9 +541,333 @@ void installOperationFrontEnds(VM& vm, void** entries)
@@ -7116,7 +7521,7 @@ index bbf2c72bbd..76a49342e7 100644
  #endif // CPU(ARM64)
  
 diff --git a/Source/JavaScriptCore/aot/AOTThunks.h b/Source/JavaScriptCore/aot/AOTThunks.h
-index f32370ede3..f1e750f0f5 100644
+index f32370ede..f1e750f0f 100644
 --- a/Source/JavaScriptCore/aot/AOTThunks.h
 +++ b/Source/JavaScriptCore/aot/AOTThunks.h
 @@ -23,11 +23,22 @@ namespace AOT {
@@ -7145,7 +7550,7 @@ index f32370ede3..f1e750f0f5 100644
  } } // namespace JSC::AOT
  
 diff --git a/Source/JavaScriptCore/aot/AOTTypeInference.cpp b/Source/JavaScriptCore/aot/AOTTypeInference.cpp
-index 8db0635296..98879bfe5e 100644
+index 8db063529..98879bfe5 100644
 --- a/Source/JavaScriptCore/aot/AOTTypeInference.cpp
 +++ b/Source/JavaScriptCore/aot/AOTTypeInference.cpp
 @@ -32,6 +32,8 @@ public:
@@ -7248,7 +7653,7 @@ index 8db0635296..98879bfe5e 100644
      UncheckedKeyHashMap<Node*, Type> m_elementTypes; // Of the arrays that the function makes: everything it puts in them.
      bool m_elementTypesChanged { false };
 diff --git a/Source/JavaScriptCore/b3/B3AbstractHeapRepository.h b/Source/JavaScriptCore/b3/B3AbstractHeapRepository.h
-index 413895dd46..1eb8b27733 100644
+index 413895dd4..1eb8b2773 100644
 --- a/Source/JavaScriptCore/b3/B3AbstractHeapRepository.h
 +++ b/Source/JavaScriptCore/b3/B3AbstractHeapRepository.h
 @@ -76,6 +76,8 @@ namespace JSC::B3 {
@@ -7261,7 +7666,7 @@ index 413895dd46..1eb8b27733 100644
      macro(FunctionRareData_allocator, FunctionRareData::offsetOfObjectAllocationProfile() + ObjectAllocationProfileWithPrototype::offsetOfAllocator(), Mutability::Mutable) \
      macro(FunctionRareData_structure, FunctionRareData::offsetOfObjectAllocationProfile() + ObjectAllocationProfileWithPrototype::offsetOfStructure(), Mutability::Mutable) \
 diff --git a/Source/JavaScriptCore/bytecode/CallLinkInfo.cpp b/Source/JavaScriptCore/bytecode/CallLinkInfo.cpp
-index f24bdf71f7..81e557684b 100644
+index f24bdf71f..81e557684 100644
 --- a/Source/JavaScriptCore/bytecode/CallLinkInfo.cpp
 +++ b/Source/JavaScriptCore/bytecode/CallLinkInfo.cpp
 @@ -654,7 +654,10 @@ void DirectCallLinkInfo::setCallTarget(CodeBlock* codeBlock, CodeLocationLabel<J
@@ -7276,8 +7681,20 @@ index f24bdf71f7..81e557684b 100644
              target = CodeLocationLabel<JSEntryPtrTag>(tagCodePtr<JSEntryPtrTag>(AOT::nearCallTargetFor(target.untaggedPtr())));
  #endif
          MacroAssembler::repatchNearCall(m_callLocation, target);
+diff --git a/Source/JavaScriptCore/bytecode/SpeculatedType.h b/Source/JavaScriptCore/bytecode/SpeculatedType.h
+index 354a93eba..7cf380bb8 100644
+--- a/Source/JavaScriptCore/bytecode/SpeculatedType.h
++++ b/Source/JavaScriptCore/bytecode/SpeculatedType.h
+@@ -31,6 +31,7 @@
+ #include <JavaScriptCore/CPU.h>
+ #include <JavaScriptCore/JSType.h>
+ #include <wtf/Forward.h>
++#include <wtf/PrintStream.h>
+ 
+ namespace JSC {
+ 
 diff --git a/Source/JavaScriptCore/bytecode/UnlinkedFunctionExecutable.cpp b/Source/JavaScriptCore/bytecode/UnlinkedFunctionExecutable.cpp
-index c7ff1cad28..0711a0f670 100644
+index c7ff1cad2..0711a0f67 100644
 --- a/Source/JavaScriptCore/bytecode/UnlinkedFunctionExecutable.cpp
 +++ b/Source/JavaScriptCore/bytecode/UnlinkedFunctionExecutable.cpp
 @@ -186,7 +186,13 @@ void UnlinkedFunctionExecutable::visitChildrenImpl(JSCell* cell, Visitor& visito
@@ -7295,11 +7712,112 @@ index c7ff1cad28..0711a0f670 100644
          auto markIfProfitable = [&] (WriteBarrier<UnlinkedFunctionCodeBlock>& unlinkedCodeBlock) {
              if (!unlinkedCodeBlock)
                  return;
+diff --git a/Source/JavaScriptCore/bytecode/UnlinkedGlobalCodeBlock.h b/Source/JavaScriptCore/bytecode/UnlinkedGlobalCodeBlock.h
+index 3746be46c..fbd0c5c90 100644
+--- a/Source/JavaScriptCore/bytecode/UnlinkedGlobalCodeBlock.h
++++ b/Source/JavaScriptCore/bytecode/UnlinkedGlobalCodeBlock.h
+@@ -81,8 +81,9 @@ private:
+     unsigned m_lineCount { 0 };
+     unsigned m_endColumn { UINT_MAX };
+ 
+-    PackedRefPtr<StringImpl> m_sourceURLDirective;
+-    PackedRefPtr<StringImpl> m_sourceMappingURLDirective;
++    // (Plain pointers on Windows, as VariableEnvironment's: these code blocks are among what a static heap holds.)
++    VariableEnvironmentRefPtr<StringImpl> m_sourceURLDirective;
++    VariableEnvironmentRefPtr<StringImpl> m_sourceMappingURLDirective;
+ };
+ 
+ }
 diff --git a/Source/JavaScriptCore/heap/StaticHeap.cpp b/Source/JavaScriptCore/heap/StaticHeap.cpp
-index 96edcf1624..4b13ef6b83 100644
+index 96edcf162..311c2a580 100644
 --- a/Source/JavaScriptCore/heap/StaticHeap.cpp
 +++ b/Source/JavaScriptCore/heap/StaticHeap.cpp
-@@ -259,7 +259,7 @@ void* StaticHeap::allocateBlock(VM& vm, size_t size)
+@@ -23,7 +23,11 @@
+ #include "UnlinkedFunctionExecutable.h"
+ #include "UnlinkedModuleProgramCodeBlock.h"
+ #include <wtf/BitVector.h>
++#if OS(WINDOWS)
++#include <windows.h>
++#else
+ #include <sys/mman.h>
++#endif
+ #include <wtf/text/AtomStringTable.h>
+ #include <wtf/text/SymbolRegistry.h>
+ 
+@@ -68,7 +72,7 @@ static uint32_t s_entryOffsetOfModuleBeingBuilt;
+ 
+ // The file: this, then each arena, on a page boundary.
+ struct StaticHeap::Header {
+-    static constexpr uint64_t expectedMagic = 0x3530504145485442ULL; // "BTHEAP05"
++    static constexpr uint64_t expectedMagic = 0x3630504145485442ULL; // "BTHEAP06"
+     static constexpr unsigned maxStructures = 32;
+ 
+     uint64_t magic;
+@@ -111,6 +115,9 @@ struct StaticHeap::Header {
+     uint64_t constantsOfProgram; // EncodedJSValue[]. See AOT::NumbersOfConstants.
+     uint64_t keysOfImage; // AOT::ImageKey[]. See keysOfImage().
+     uint64_t capacityOfKeysOfImage;
++    // Region::base() where it was built. The addresses here are at that base; on Windows the region is wherever the executable
++    // is, and they are moved by as much as the region has (the arenas' own pointers are base relocations of the executable).
++    uint64_t regionBase;
+ 
+     // What the cells say they are: which of the VM's own structures, and where that has to be.
+     uint32_t numberOfStructures;
+@@ -127,10 +134,23 @@ static std::span<WriteBarrier<Structure>> structuresOf(VM& vm)
+ }
+ 
+ // In Arena::Bss, a Decoder for each module.
++static constexpr size_t strideOfDecoders = roundUpToMultipleOf<64>(sizeof(Decoder));
+ static void* addressOfDecoder(size_t moduleIndex)
+ {
+-    constexpr size_t stride = roundUpToMultipleOf<64>(sizeof(Decoder));
+-    return reinterpret_cast<void*>(Region::startOf(Region::Arena::Bss) + Region::offsetOfDecodersInBss + moduleIndex * stride);
++    return reinterpret_cast<void*>(Region::startOf(Region::Arena::Bss) + Region::offsetOfDecodersInBss + moduleIndex * strideOfDecoders);
++}
++
++// What is placed in Arena::Bss for each module (a Decoder, a SourceProvider, the executable of its top-level code), for so many
++// modules. On Windows the arena is read-only until then (bmalloc::StaticRegion::makeWritable()).
++static void makePlacesOfModulesWritable(size_t numberOfModules)
++{
++    uintptr_t bss = Region::startOf(Region::Arena::Bss);
++    RELEASE_ASSERT(Region::offsetOfDecodersInBss + numberOfModules * strideOfDecoders <= Region::offsetOfSourceProvidersInBss);
++    RELEASE_ASSERT(Region::offsetOfSourceProvidersInBss + numberOfModules * StaticHeap::sizeOfPlaceForSourceProvider <= Region::offsetOfTopLevelExecutablesInBss);
++    RELEASE_ASSERT(Region::offsetOfTopLevelExecutablesInBss + numberOfModules * sizeof(void*) <= Region::offsetOfBlocksInBss);
++    RELEASE_ASSERT(Region::makeWritable(reinterpret_cast<void*>(bss + Region::offsetOfDecodersInBss), numberOfModules * strideOfDecoders)
++        && Region::makeWritable(reinterpret_cast<void*>(bss + Region::offsetOfSourceProvidersInBss), numberOfModules * StaticHeap::sizeOfPlaceForSourceProvider)
++        && Region::makeWritable(reinterpret_cast<void*>(bss + Region::offsetOfTopLevelExecutablesInBss), numberOfModules * sizeof(void*)));
+ }
+ 
+ static VM* s_vmOfContainer = nullptr;
+@@ -178,7 +198,7 @@ static std::atomic<unsigned> s_numberOfOwnersEverUsed { 0 }; // The first so man
+ PreciseAllocation* StaticHeap::containerOfSlow(const void* cell)
+ {
+     uintptr_t address = std::bit_cast<uintptr_t>(cell);
+-    if (address - (Region::startOf(Region::Arena::Bss) + Region::offsetOfBlocksInBss) < Region::arenaReservation - Region::offsetOfBlocksInBss) {
++    if (address - (Region::startOf(Region::Arena::Bss) + Region::offsetOfBlocksInBss) < Region::reservationOf(Region::Arena::Bss) - Region::offsetOfBlocksInBss) {
+         for (unsigned i = 0, count = s_numberOfOwnersEverUsed.load(std::memory_order_acquire); i < count; ++i) {
+             auto& owner = s_ownersOfBlocks[i];
+             if (address - owner.start.load(std::memory_order_relaxed) < owner.size.load(std::memory_order_acquire))
+@@ -211,6 +231,9 @@ void StaticHeap::willAllocateUnlinkedFunctionSlow()
+ 
+ // Where the cells are and how big, for as long as the region is being built. Nothing needs to be told once it is.
+ static Vector<std::pair<void*, size_t>> s_cellsBeingBuilt[2]; // Those of Arena::Cells, and of Arena::MutableCells.
++#if OS(WINDOWS)
++static Vector<uint32_t> s_taggedWordsOfBuiltImage; // See taggedWordsOfBuiltImage().
++#endif
+ 
+ template<typename Functor> static void forEachCell(Region::Arena arena, const Functor& functor)
+ {
+@@ -244,7 +267,7 @@ static Vector<std::pair<void*, size_t>>& freeBlocks() WTF_REQUIRES_LOCK(s_blocks
+     return blocks;
+ }
+ 
+-void* StaticHeap::allocateBlock(VM& vm, size_t size)
++void* StaticHeap::allocateBlock(VM& vm, size_t size, size_t sizeToMakeWritable)
+ {
+     RELEASE_ASSERT(!(size % WTF::pageSize()));
+     Locker locker { s_blocksLock };
+@@ -259,10 +282,11 @@ void* StaticHeap::allocateBlock(VM& vm, size_t size)
      }
      if (!result) {
          size_t offset = Region::offsetOfBlocksInBss + s_blocksUsed;
@@ -7308,8 +7826,313 @@ index 96edcf1624..4b13ef6b83 100644
          s_blocksUsed += size;
          result = reinterpret_cast<void*>(Region::startOf(Region::Arena::Bss) + offset);
      }
++    RELEASE_ASSERT_WITH_MESSAGE(Region::makeWritable(result, std::min(size, sizeToMakeWritable)), "The static region could not be made writable (the commit limit?)");
+     for (unsigned i = 0; i < maxBlocks; ++i) {
+         auto& owner = s_ownersOfBlocks[i];
+         if (owner.size.load(std::memory_order_relaxed))
+@@ -283,9 +307,23 @@ void StaticHeap::freeBlock(void* block, size_t size)
+         if (owner.start.load(std::memory_order_relaxed) == std::bit_cast<uintptr_t>(block) && owner.size.load(std::memory_order_relaxed))
+             owner.size.store(0, std::memory_order_release);
+     }
++#if OS(WINDOWS)
++    // Zeroed again: what of it was written to (PAGE_READWRITE; a page of the image that was made writable but never written
++    // to is still PAGE_WRITECOPY, and zero, and writing to it would make it the process's for nothing). A page of the image stays
++    // the process's once it is: it cannot be decommitted.
++    for (uintptr_t at = std::bit_cast<uintptr_t>(block), end = at + size; at < end;) {
++        MEMORY_BASIC_INFORMATION info;
++        RELEASE_ASSERT(VirtualQuery(reinterpret_cast<void*>(at), &info, sizeof(info)));
++        uintptr_t next = std::min<uintptr_t>(end, std::bit_cast<uintptr_t>(info.BaseAddress) + info.RegionSize);
++        if (info.Protect == PAGE_READWRITE)
++            memset(reinterpret_cast<void*>(at), 0, next - at);
++        at = next;
++    }
++#else
+     // Zeroed again, and nobody's memory until it is written to.
+     void* result = mmap(block, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE | MAP_FIXED, -1, 0);
+     RELEASE_ASSERT(result == block);
++#endif
+     Locker locker { s_blocksLock };
+     freeBlocks().append({ block, size });
+ }
+@@ -351,7 +389,7 @@ public:
+ 
+     void check(const void* pointer, const char* what)
+     {
+-        bool isKept = std::bit_cast<uintptr_t>(pointer) - Region::startOf(Region::Arena::Scratch) >= Region::arenaReservation;
++        bool isKept = std::bit_cast<uintptr_t>(pointer) - Region::startOf(Region::Arena::Scratch) >= Region::reservationOf(Region::Arena::Scratch);
+         if (!pointer || (StaticHeap::contains(pointer) && isKept))
+             return;
+         numberOfEscapes++;
+@@ -1277,8 +1315,10 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+     s_vm = &vm;
+ 
+     Header header { };
++    static_assert(OBJECT_OFFSETOF(Header, regionBase) == 336); // scripts/lib/compare-static-heaps.py reads it there, in an executable.
+     header.magic = Header::expectedMagic;
+     header.stamp = AOT::imageStamp();
++    header.regionBase = Region::base();
+ 
+     auto copy = [&](std::span<const uint8_t> bytes) {
+         auto* result = static_cast<uint8_t*>(Region::allocate(Region::Arena::Data, bytes.size(), pageSizeOfImage));
+@@ -1330,6 +1370,7 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+                 auto* modules = static_cast<StaticHeapModule*>(Region::allocate(Region::Arena::Data, sortedOffsets.size() * sizeof(StaticHeapModule), 16));
+                 header.modules = std::bit_cast<uint64_t>(modules);
+                 header.numberOfModules = sortedOffsets.size();
++                makePlacesOfModulesWritable(sortedOffsets.size());
+                 auto imageView = AOT::ImageView::tryCreate(imageOfCode, reinterpret_cast<const void*>(Region::startOf(Region::Arena::Image)));
+                 std::span<AOT::FunctionInfo> infosOfFunctions;
+                 if (imageView) {
+@@ -1540,7 +1581,7 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+             unsigned mask = capacity - 1;
+             for (auto& atom : atoms->table()) {
+                 atom->becomeStatic();
+-                uintptr_t distance = std::bit_cast<uintptr_t>(atom.get()) - Region::base;
++                uintptr_t distance = std::bit_cast<uintptr_t>(atom.get()) - Region::base();
+                 RELEASE_ASSERT(contains(atom.get()) && distance && !(distance & ((1u << StaticAtoms::shift) - 1)) && !(distance >> StaticAtoms::shift >> 32));
+                 unsigned probes = 0;
+                 unsigned place = atom->hash() & mask;
+@@ -1575,6 +1616,37 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+         }
+     }
+ 
++#if OS(WINDOWS)
++    // The words that hold an address in the region with other bits above it, for the executable's writer (taggedWordsOfBuiltImage()).
++    // (Before the structures are translated below: an executable is told by its class.)
++    s_taggedWordsOfBuiltImage.clear();
++    {
++        auto add = [&](const void* word) {
++            uintptr_t at = std::bit_cast<uintptr_t>(word);
++            RELEASE_ASSERT(contains(word) && !(at & 7));
++            s_taggedWordsOfBuiltImage.append(static_cast<uint32_t>(at - Region::base()));
++        };
++        for (auto arena : { Region::Arena::Cells, Region::Arena::MutableCells }) {
++            forEachCell(arena, [&](void* pointer, size_t) {
++                auto* cell = static_cast<JSCell*>(pointer);
++                if (!cell->inherits<ExecutableBase>())
++                    return;
++                for (auto kind : { CodeSpecializationKind::CodeForCall, CodeSpecializationKind::CodeForConstruct }) {
++                    auto* word = static_cast<const uint8_t*>(pointer) + FunctionExecutable::offsetOfAOTEntryFor(kind);
++                    if (*reinterpret_cast<const uint64_t*>(word))
++                        add(word);
++                }
++            });
++        }
++        for (auto& info : std::span { std::bit_cast<AOT::FunctionInfo*>(header.infosOfFunctions), static_cast<size_t>(header.numberOfFunctions) }) {
++            static_assert(!(OBJECT_OFFSETOF(AOT::FunctionInfo, executableAndMoreLow) % 8));
++            if (info.executable())
++                add(&info.executableAndMoreLow);
++        }
++        std::ranges::sort(s_taggedWordsOfBuiltImage);
++    }
++#endif
++
+     // Cells are as they would be in the VM that is going to have them, after a collection that found them.
+     auto structures = structuresOf(vm);
+     uint32_t blockOfStructures = vm.structureStructure->id().bits() & ~static_cast<uint32_t>(MarkedBlock::blockSize - 1);
+@@ -1698,6 +1770,37 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
+     }
+     if (header.holeInData % pageSizeOfImage || header.sizeOfHoleInData % pageSizeOfImage || header.holeInData + header.sizeOfHoleInData > header.arenaSize[static_cast<unsigned>(Region::Arena::Data)])
+         return false;
++#if OS(WINDOWS)
++    UNUSED_PARAM(fileDescriptor);
++    UNUSED_PARAM(offsetInFile);
++    // Nothing is mapped: the arenas are sections of this executable at the region's addresses (its writer put them there, and the
++    // loader moved their pointers along with it). What is checked is that they are this image's: the string table, which has no
++    // pointers, is in both. (In an executable without them, .pbreg reads as zeros there.)
++    {
++        constexpr unsigned data = static_cast<unsigned>(Region::Arena::Data);
++        uint64_t inArena = header.strings - header.regionBase;
++        size_t compared = std::min<size_t>(header.stringsSize, 4096);
++        if (!compared || inArena + compared > header.arenaSize[data] || (header.sizeOfHoleInData && inArena + compared > header.holeInData))
++            return false;
++        auto* inRegion = reinterpret_cast<const uint8_t*>(Region::startOf(Region::Arena::Data) + inArena);
++        if (memcmp(inRegion, image.data() + header.arenaOffset[data] + inArena, compared))
++            return false;
++    }
++    // The addresses in the header are where the region was when it was built: here, they are moved to where it is.
++    static Header headerOfThisProcess;
++    headerOfThisProcess = header;
++    {
++        uint64_t delta = Region::base() - header.regionBase;
++        Header& h = headerOfThisProcess;
++        for (uint64_t* field : { &h.strings, &h.stringSlots, &h.staticAtoms, &h.symbolRegistries[0], &h.symbolRegistries[1], &h.payload, &h.modules, &h.tdz, &h.infosOfFunctions, &h.functionMetadataOffsets, &h.rowsOfFunctions, &h.namesOfSources, &h.identifiersOfProgram, &h.constantsOfProgram, &h.keysOfImage }) {
++            if (*field)
++                *field += delta;
++        }
++        h.regionBase = Region::base();
++    }
++    const Header& mapped = headerOfThisProcess;
++#else
++    const Header& mapped = header;
+     for (unsigned i = 0; i < Region::numberOfArenasInFile; ++i) {
+         // (Some of it mapped and the rest not is nothing that anybody gets to see.)
+         if (static_cast<Region::Arena>(i) == Region::Arena::Data && header.sizeOfHoleInData) {
+@@ -1710,14 +1813,59 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
+         if (!Region::map(static_cast<Region::Arena>(i), fileDescriptor, offsetInFile + header.arenaOffset[i], header.arenaSize[i]))
+             return false;
+     }
+-    for (uint64_t at = header.guardedFrom; at < header.guardedTo; at += 2 * pageSizeOfImage)
++#endif
++    for (uint64_t at = header.guardedFrom; at < header.guardedTo; at += 2 * pageSizeOfImage) {
++#if OS(WINDOWS)
++        DWORD old;
++        RELEASE_ASSERT(VirtualProtect(reinterpret_cast<void*>(Region::startOf(Region::Arena::Cells) + at + pageSizeOfImage), pageSizeOfImage, PAGE_NOACCESS, &old));
++#else
+         RELEASE_ASSERT(!mprotect(reinterpret_cast<void*>(Region::startOf(Region::Arena::Cells) + at + pageSizeOfImage), pageSizeOfImage, PROT_NONE));
+-    s_header = &header;
+-    s_rowsOfFunctions = std::bit_cast<const RowOfFunction*>(header.rowsOfFunctions);
+-    atoms->setStaticAtoms({ std::bit_cast<const uint32_t*>(header.staticAtoms), static_cast<uint32_t>(header.capacityOfStaticAtoms - 1), Region::base });
++#endif
++    }
++    makePlacesOfModulesWritable(mapped.numberOfModules);
++    s_header = &mapped;
++    s_rowsOfFunctions = std::bit_cast<const RowOfFunction*>(mapped.rowsOfFunctions);
++    atoms->setStaticAtoms({ std::bit_cast<const uint32_t*>(mapped.staticAtoms), static_cast<uint32_t>(mapped.capacityOfStaticAtoms - 1), Region::base() });
+     return true;
+ }
+ 
++#if OS(WINDOWS)
++Vector<StaticHeap::PartOfImage> StaticHeap::partsOf(std::span<const uint8_t> image)
++{
++    if (image.size() < sizeof(Header))
++        return { };
++    auto& header = *reinterpret_cast<const Header*>(image.data());
++    if (header.magic != Header::expectedMagic || header.size > image.size())
++        return { };
++    Vector<PartOfImage> parts;
++    for (unsigned i = 0; i < Region::numberOfArenasInFile; ++i) {
++        auto arena = static_cast<Region::Arena>(i);
++        size_t inRegion = Region::startOf(arena) - Region::base();
++        bool isMutable = arena == Region::Arena::MutableCells || arena == Region::Arena::MutableMalloc;
++        if (arena == Region::Arena::Data && header.sizeOfHoleInData) {
++            size_t afterHole = header.holeInData + header.sizeOfHoleInData;
++            parts.append({ static_cast<size_t>(header.arenaOffset[i]), static_cast<size_t>(header.holeInData), inRegion, isMutable });
++            parts.append({ static_cast<size_t>(header.arenaOffset[i] + header.holeInData), static_cast<size_t>(header.arenaSize[i] - afterHole), inRegion + afterHole, isMutable });
++            continue;
++        }
++        parts.append({ static_cast<size_t>(header.arenaOffset[i]), static_cast<size_t>(header.arenaSize[i]), inRegion, isMutable });
++    }
++    return parts;
++}
++
++uintptr_t StaticHeap::regionBaseOf(std::span<const uint8_t> image)
++{
++    if (image.size() < sizeof(Header))
++        return 0;
++    return reinterpret_cast<const Header*>(image.data())->regionBase;
++}
++
++std::span<const uint32_t> StaticHeap::taggedWordsOfBuiltImage()
++{
++    return s_taggedWordsOfBuiltImage.span();
++}
++#endif
++
+ void StaticHeap::prepareThread()
+ {
+     if (!s_header || !s_vm || t_threadIsPrepared)
+@@ -1725,7 +1873,7 @@ void StaticHeap::prepareThread()
+     AtomStringTable* atoms = Thread::currentSingleton().atomStringTable();
+     if (!atoms->table().isEmpty())
+         return;
+-    atoms->setStaticAtoms({ std::bit_cast<const uint32_t*>(s_header->staticAtoms), static_cast<uint32_t>(s_header->capacityOfStaticAtoms - 1), Region::base });
++    atoms->setStaticAtoms({ std::bit_cast<const uint32_t*>(s_header->staticAtoms), static_cast<uint32_t>(s_header->capacityOfStaticAtoms - 1), Region::base() });
+     t_threadIsPrepared = true;
+ }
+ 
+diff --git a/Source/JavaScriptCore/heap/StaticHeap.h b/Source/JavaScriptCore/heap/StaticHeap.h
+index b4c5c6697..90292e025 100644
+--- a/Source/JavaScriptCore/heap/StaticHeap.h
++++ b/Source/JavaScriptCore/heap/StaticHeap.h
+@@ -7,6 +7,7 @@
+ 
+ #include "CodeSpecializationKind.h"
+ #include "LineColumn.h"
++#include "ReportableSitesOfFunction.h"
+ #include <bmalloc/StaticRegion.h>
+ #include <span>
+ #include <wtf/Forward.h>
+@@ -27,6 +28,7 @@ class JSString;
+ class PreciseAllocation;
+ class FunctionExecutable;
+ class Identifier;
++class JSGlobalObject;
+ namespace AOT {
+ struct FunctionInfo;
+ struct ImageFunction;
+@@ -36,7 +38,6 @@ class ScriptExecutable;
+ class SourceCodeKey;
+ class SourceOrigin;
+ class SourceProvider;
+-struct ReportableSitesOfFunction;
+ class TDZEnvironmentLink;
+ class UnlinkedCodeBlock;
+ class UnlinkedFunctionCodeBlock;
+@@ -98,6 +99,24 @@ public:
+         bool hasPositionsOfCallSites; // See PositionsToKeep.
+     };
+     JS_EXPORT_PRIVATE static std::optional<Copies> copiesIn(std::span<const uint8_t> image);
++#if OS(WINDOWS)
++    // For whoever writes the executable: on Windows the arenas are sections of it, at their places in the region (map() maps
++    // nothing; the region is the section .pbreg). Each part of `image`, the result of build(), and where it goes: as an offset
++    // from Region::base(). (The data arena is two parts when it has a hole, which is in no part.) Empty if it is not an image.
++    struct PartOfImage {
++        size_t offsetInImage;
++        size_t size;
++        size_t offsetInRegion;
++        bool isMutable; // Written to as the program runs (Arena::MutableCells, Arena::MutableMalloc).
++    };
++    JS_EXPORT_PRIVATE static Vector<PartOfImage> partsOf(std::span<const uint8_t> image);
++    // Region::base() where `image` was built: what its pointers into the region are relative to.
++    JS_EXPORT_PRIVATE static uintptr_t regionBaseOf(std::span<const uint8_t> image);
++    // The words of the last image that build() made that hold an address in the region with other bits above it (AOT::EntryWord,
++    // AOT::FunctionInfo's executable), as offsets from Region::base(), in order. The writer moves the address in each of them; a
++    // plain pointer it finds by itself. Kept by this process only: nothing of it is in the image.
++    JS_EXPORT_PRIVATE static std::span<const uint32_t> taggedWordsOfBuiltImage();
++#endif
+     // Call on a thread that will own a VM other than the first, before it creates any atom string. Does for that thread what map()
+     // does for its own.
+     JS_EXPORT_PRIVATE static void prepareThread();
+@@ -109,7 +128,7 @@ public:
+     static bool isFirst(VM& vm) { return s_vm == &vm; }
+     static ALWAYS_INLINE bool isOnlyForFirstVM(const void* pointer)
+     {
+-        return std::bit_cast<uintptr_t>(pointer) - bmalloc::StaticRegion::startOf(bmalloc::StaticRegion::Arena::MutableCells) < 2 * bmalloc::StaticRegion::arenaReservation;
++        return std::bit_cast<uintptr_t>(pointer) - bmalloc::StaticRegion::startOf(bmalloc::StaticRegion::Arena::MutableCells) < bmalloc::StaticRegion::reservationOf(bmalloc::StaticRegion::Arena::MutableCells) + bmalloc::StaticRegion::reservationOf(bmalloc::StaticRegion::Arena::MutableMalloc);
+     }
+     // Once more than one VM uses the heap, the PreciseAllocation for a static cell is that of the VM that placed it, or else that
+     // of the calling thread's VM.
+@@ -247,8 +266,9 @@ public:
+     // All cells placed outside the GC's own memory belong to a single VM. Returns whether that is this VM. Without a static heap,
+     // the first VM to ask claims the role.
+     JS_EXPORT_PRIVATE static bool canPlaceCellsOf(VM&);
+-    // Page-aligned, zeroed memory for placing cells. Any thread.
+-    JS_EXPORT_PRIVATE static void* allocateBlock(VM&, size_t);
++    // Page-aligned, zeroed memory for placing cells. Any thread. On Windows only the first `sizeToMakeWritable` bytes can be
++    // written to at first; the rest is made so with bmalloc::StaticRegion::makeWritable() as it is used (not committed until then).
++    JS_EXPORT_PRIVATE static void* allocateBlock(VM&, size_t, size_t sizeToMakeWritable = SIZE_MAX);
+     JS_EXPORT_PRIVATE static void freeBlock(void*, size_t);
+ 
+ private:
+diff --git a/Source/JavaScriptCore/heap/StructureAlignedMemoryAllocator.cpp b/Source/JavaScriptCore/heap/StructureAlignedMemoryAllocator.cpp
+index dab620a1d..f67885454 100644
+--- a/Source/JavaScriptCore/heap/StructureAlignedMemoryAllocator.cpp
++++ b/Source/JavaScriptCore/heap/StructureAlignedMemoryAllocator.cpp
+@@ -117,9 +117,10 @@ public:
+             // addresses in the range. The top 32 bits being constant is an invariant that we rely on in
+             // order to encode StructureIDs.
+             g_jscConfig.startOfStructureHeap = reinterpret_cast<uintptr_t>(OSAllocator::tryReserveUncommittedAligned(mappedHeapSize, mappedHeapSize, OSAllocator::StructureAllocatorPages
+-#if USE(BUN_JSC_ADDITIONS)
++#if USE(BUN_JSC_ADDITIONS) && !OS(WINDOWS)
+                 // Right after bmalloc::StaticRegion, if that is to be had: code from the static compiler takes it to be there (AOT::structureIDBaseOfImages).
+-                , reinterpret_cast<void*>(bmalloc::StaticRegion::base + bmalloc::StaticRegion::reservation)
++                // (On Windows it is wherever the system puts it: that code finds it in its runtime table.)
++                , reinterpret_cast<void*>(bmalloc::StaticRegion::base() + bmalloc::StaticRegion::reservation)
+ #endif
+                 ));
+             if (g_jscConfig.startOfStructureHeap)
 diff --git a/Source/JavaScriptCore/interpreter/CallFrame.cpp b/Source/JavaScriptCore/interpreter/CallFrame.cpp
-index a04b3f56f8..150655018e 100644
+index a04b3f56f..150655018 100644
 --- a/Source/JavaScriptCore/interpreter/CallFrame.cpp
 +++ b/Source/JavaScriptCore/interpreter/CallFrame.cpp
 @@ -26,6 +26,8 @@
@@ -7334,9 +8157,18 @@ index a04b3f56f8..150655018e 100644
      return true;
  #else
 diff --git a/Source/JavaScriptCore/interpreter/StackVisitor.cpp b/Source/JavaScriptCore/interpreter/StackVisitor.cpp
-index 202516f58d..cfec69f846 100644
+index 202516f58..470a920f5 100644
 --- a/Source/JavaScriptCore/interpreter/StackVisitor.cpp
 +++ b/Source/JavaScriptCore/interpreter/StackVisitor.cpp
+@@ -106,7 +106,7 @@ StackVisitor::StackVisitor(CallFrame* startFrame, VM& vm, bool skipFirstFrame)
+ #if ENABLE(FTL_JIT)
+             // What kind of frame it is has to be known before anything is read from it.
+             if (AOT::hasCode()) {
+-                void* returnPC = AOT::returnAddressForFrame(topFrame, __builtin_frame_address(0));
++                void* returnPC = AOT_RETURN_ADDRESS_FOR_FRAME_FROM_HERE(topFrame);
+                 if (returnPC && AOT::classifyAddress(returnPC).kind != AOT::ImageAddressInfo::NotInImage) {
+                     CallFrame* adapter = nullptr;
+                     topFrame = skipFramesOfStubs(topFrame, m_frame.m_entryFrame, returnPC, adapter);
 @@ -471,6 +471,12 @@ void StackVisitor::readInlinedFrame(CallFrame* callFrame, CodeOrigin* codeOrigin
  CodeBlock* StackVisitor::Frame::makeCodeBlock() const
  {
@@ -7350,8 +8182,69 @@ index 202516f58d..cfec69f846 100644
      m_codeBlock = m_aotFunction.ensureData()->ensureCodeBlock();
  #endif
      return m_codeBlock;
+diff --git a/Source/JavaScriptCore/parser/VariableEnvironment.cpp b/Source/JavaScriptCore/parser/VariableEnvironment.cpp
+index 902b8f938..c08b9484e 100644
+--- a/Source/JavaScriptCore/parser/VariableEnvironment.cpp
++++ b/Source/JavaScriptCore/parser/VariableEnvironment.cpp
+@@ -226,7 +226,7 @@ void CompactTDZEnvironment::sortCompact(Compact& compact)
+ CompactTDZEnvironment::CompactTDZEnvironment(const TDZEnvironment& env)
+ {
+     m_hash = 0; // Note: XOR is commutative so order doesn't matter here.
+-    Compact variables = WTF::map(env, [this](auto& key) -> PackedRefPtr<UniquedStringImpl> {
++    Compact variables = WTF::map(env, [this](auto& key) -> VariableEnvironmentRefPtr<UniquedStringImpl> {
+         m_hash ^= key->hash();
+         return key.get();
+     });
+diff --git a/Source/JavaScriptCore/parser/VariableEnvironment.h b/Source/JavaScriptCore/parser/VariableEnvironment.h
+index 1dda303c9..4d245ef48 100644
+--- a/Source/JavaScriptCore/parser/VariableEnvironment.h
++++ b/Source/JavaScriptCore/parser/VariableEnvironment.h
+@@ -35,6 +35,16 @@
+ 
+ namespace JSC {
+ 
++// How a variable environment holds the names of its variables. Packed (six bytes) where that is possible. On Windows, where the
++// pointers of a static heap are base relocations of the executable, which are eight bytes, they are plain pointers: environments
++// are among what a static heap holds (StaticHeap.h).
++#if OS(WINDOWS)
++template<typename T> using VariableEnvironmentPtrTraits = RawPtrTraits<T>;
++#else
++template<typename T> using VariableEnvironmentPtrTraits = PackedPtrTraits<T>;
++#endif
++template<typename T> using VariableEnvironmentRefPtr = RefPtr<T, VariableEnvironmentPtrTraits<T>>;
++
+ struct VariableEnvironmentEntry {
+ public:
+     ALWAYS_INLINE bool isCaptured() const { return m_bits & IsCaptured; }
+@@ -142,7 +152,7 @@ struct PrivateNameEntryHashTraits : HashTraits<PrivateNameEntry> {
+     static constexpr bool needsDestruction = false;
+ };
+ 
+-typedef UncheckedKeyHashMap<PackedRefPtr<UniquedStringImpl>, PrivateNameEntry, IdentifierRepHash, HashTraits<RefPtr<UniquedStringImpl>>, PrivateNameEntryHashTraits> PrivateNameEnvironment;
++typedef UncheckedKeyHashMap<VariableEnvironmentRefPtr<UniquedStringImpl>, PrivateNameEntry, IdentifierRepHash, HashTraits<RefPtr<UniquedStringImpl>>, PrivateNameEntryHashTraits> PrivateNameEnvironment;
+ 
+ class VariableEnvironment {
+     WTF_MAKE_TZONE_ALLOCATED(VariableEnvironment);
+@@ -151,7 +161,7 @@ public:
+     static constexpr unsigned inlineMapCapacity = 9;
+ 
+ private:
+-    typedef InlineMap<PackedRefPtr<UniquedStringImpl>, VariableEnvironmentEntry, inlineMapCapacity, IdentifierRepHash, HashTraits<RefPtr<UniquedStringImpl>>, VariableEnvironmentEntryHashTraits> Map;
++    typedef InlineMap<VariableEnvironmentRefPtr<UniquedStringImpl>, VariableEnvironmentEntry, inlineMapCapacity, IdentifierRepHash, HashTraits<RefPtr<UniquedStringImpl>>, VariableEnvironmentEntryHashTraits> Map;
+ 
+ public:
+ 
+@@ -350,7 +360,7 @@ class CompactTDZEnvironment {
+ 
+     friend class CachedCompactTDZEnvironment;
+ 
+-    using Compact = Vector<PackedRefPtr<UniquedStringImpl>>;
++    using Compact = Vector<VariableEnvironmentRefPtr<UniquedStringImpl>>;
+     using Inflated = TDZEnvironment;
+     using Variables = Variant<Compact, Inflated>;
+ 
 diff --git a/Source/JavaScriptCore/runtime/CachedTypes.cpp b/Source/JavaScriptCore/runtime/CachedTypes.cpp
-index 696ac7a731..040ae37ac6 100644
+index 696ac7a73..6a19d2ab9 100644
 --- a/Source/JavaScriptCore/runtime/CachedTypes.cpp
 +++ b/Source/JavaScriptCore/runtime/CachedTypes.cpp
 @@ -26,6 +26,7 @@
@@ -7362,6 +8255,33 @@ index 696ac7a731..040ae37ac6 100644
  #include <wtf/NumberOfCores.h>
  #include <wtf/Threading.h>
  #include <wtf/Deque.h>
+@@ -2851,7 +2852,7 @@ private:
+     uint32_t m_bits;
+ };
+ 
+-typedef CachedHashMap<CachedRefPtr<CachedUniquedStringImpl, UniquedStringImpl, WTF::PackedPtrTraits<UniquedStringImpl>>, CachedEntryBits<PrivateNameEntry>, IdentifierRepHash, HashTraits<RefPtr<UniquedStringImpl>>, PrivateNameEntryHashTraits> CachedPrivateNameEnvironment;
++typedef CachedHashMap<CachedRefPtr<CachedUniquedStringImpl, UniquedStringImpl, VariableEnvironmentPtrTraits<UniquedStringImpl>>, CachedEntryBits<PrivateNameEntry>, IdentifierRepHash, HashTraits<RefPtr<UniquedStringImpl>>, PrivateNameEntryHashTraits> CachedPrivateNameEnvironment;
+ 
+ class CachedVariableEnvironmentRareData : public CachedObject<VariableEnvironment::RareData> {
+ public:
+@@ -2898,7 +2899,7 @@ private:
+     bool m_isEverythingCaptured;
+     bool m_hasAwaitUsingDeclaration;
+     uint8_t m_unused[2] { };
+-    CachedInlineMap<CachedRefPtr<CachedUniquedStringImpl, UniquedStringImpl, WTF::PackedPtrTraits<UniquedStringImpl>>, CachedEntryBits<VariableEnvironmentEntry>, VariableEnvironment::inlineMapCapacity, IdentifierRepHash, HashTraits<RefPtr<UniquedStringImpl>>, VariableEnvironmentEntryHashTraits> m_map;
++    CachedInlineMap<CachedRefPtr<CachedUniquedStringImpl, UniquedStringImpl, VariableEnvironmentPtrTraits<UniquedStringImpl>>, CachedEntryBits<VariableEnvironmentEntry>, VariableEnvironment::inlineMapCapacity, IdentifierRepHash, HashTraits<RefPtr<UniquedStringImpl>>, VariableEnvironmentEntryHashTraits> m_map;
+     CachedPtr<CachedVariableEnvironmentRareData> m_rareData;
+ };
+ 
+@@ -2938,7 +2939,7 @@ public:
+     }
+ 
+ private:
+-    CachedVector<CachedRefPtr<CachedUniquedStringImpl, UniquedStringImpl, WTF::PackedPtrTraits<UniquedStringImpl>>> m_variables;
++    CachedVector<CachedRefPtr<CachedUniquedStringImpl, UniquedStringImpl, VariableEnvironmentPtrTraits<UniquedStringImpl>>> m_variables;
+     unsigned m_hash;
+ };
+ 
 @@ -5941,6 +5942,8 @@ struct BytecodeLinkEncoder::Impl {
          executable.takeParentDeclaredNames();
          if (!forCall && !forConstruct) {
@@ -7633,8 +8553,48 @@ index 696ac7a731..040ae37ac6 100644
          Vector<uint8_t> image = builder.finish();
          reportableSites = builder.takeReportableSites();
          return image;
+diff --git a/Source/JavaScriptCore/runtime/CachedTypes.h b/Source/JavaScriptCore/runtime/CachedTypes.h
+index e572aae01..b2a34a6cb 100644
+--- a/Source/JavaScriptCore/runtime/CachedTypes.h
++++ b/Source/JavaScriptCore/runtime/CachedTypes.h
+@@ -26,10 +26,12 @@
+ #pragma once
+ 
+ #include "CollectionScope.h"
++#include "HandlerInfo.h"
+ #include <wtf/Lock.h>
+ 
+ #include "JSCast.h"
+ #include "ParserModes.h"
++#include "ReportableSitesOfFunction.h"
+ #include "VariableEnvironment.h"
+ #include <wtf/FileSystem.h>
+ #include <wtf/HashMap.h>
+@@ -460,22 +462,6 @@ struct CachedCodeDigest {
+ JS_EXPORT_PRIVATE std::optional<CachedCodeDigest> digestOfAllCachedCode(VM&, const SourceCode&, bool isModule, Ref<CachedBytecode>);
+ JS_EXPORT_PRIVATE std::optional<CachedCodeDigest> digestOfAllCachedBuiltinCode(VM&, const SourceCode&, unsigned embedderStamp, Ref<CachedBytecode>);
+ 
+-// Where a frame of a function that was compiled ahead of time can say it is.
+-struct ReportableSitesOfFunction {
+-    struct Construction {
+-        uint32_t offset;
+-        // Where the expression starts (the `new`), from where the frame says it is: that many lines up, and then at this column,
+-        // counting from one; or, on the same line, this many columns to the left.
+-        uint32_t linesUp;
+-        uint32_t columnOrColumnsLeft;
+-    };
+-    Vector<uint32_t> offsets; // In the bytecode. In order.
+-    Vector<Construction> constructions; // Those of them that construct something, if it is known where the `new` is.
+-    // What the code says for each of the function's identifiers, if that is not simply which of them it is (AOT::NumbersOfIdentifiers).
+-    Vector<uint32_t> numbersOfIdentifiers;
+-    Vector<uint32_t> numbersOfConstants; // Likewise (AOT::NumbersOfConstants). None: the function has its own.
+-};
+-
+ // `bun build --compile --bytecode` with a payload order file: every module of the link is encoded into ONE payload, laid
+ // out by how the recorded run used it. Regions, in file order, each written to completion before the next starts:
+ //   0 heads (cache entry, key, top-level code, its functions' records) of modules the run evaluated, or did not know
 diff --git a/Source/JavaScriptCore/runtime/CodeCache.cpp b/Source/JavaScriptCore/runtime/CodeCache.cpp
-index 506caee0e1..e69478516b 100644
+index 506caee0e..e69478516 100644
 --- a/Source/JavaScriptCore/runtime/CodeCache.cpp
 +++ b/Source/JavaScriptCore/runtime/CodeCache.cpp
 @@ -97,6 +97,8 @@ static void generateUnlinkedCodeBlocksOfFunction(VM& vm, UnlinkedFunctionExecuta
@@ -7647,7 +8607,7 @@ index 506caee0e1..e69478516b 100644
          generateUnlinkedCodeBlockForFunctions(vm, unlinkedFunctionCodeBlock, source, codeGenerationMode, error, depth - 1, optimize);
      // When all the code there is going to be is generated now: also what `new` runs, of a function that looks as if it is
 diff --git a/Source/JavaScriptCore/runtime/CyclicModuleRecord.cpp b/Source/JavaScriptCore/runtime/CyclicModuleRecord.cpp
-index fb79b0270d..16a64d2446 100644
+index fb79b0270..16a64d244 100644
 --- a/Source/JavaScriptCore/runtime/CyclicModuleRecord.cpp
 +++ b/Source/JavaScriptCore/runtime/CyclicModuleRecord.cpp
 @@ -476,7 +476,8 @@ void CyclicModuleRecord::initializeEnvironment(JSGlobalObject* globalObject, Ref
@@ -7660,8 +8620,37 @@ index fb79b0270d..16a64d2446 100644
      bool initializeVarsByOffset = symbolTable->hasCachedEntriesPending() || isTableOfStaticHeap;
      if (initializeVarsByOffset) {
          for (unsigned i = 0; i < unlinkedCodeBlock->numberOfVarScopeOffsets(); ++i)
+diff --git a/Source/JavaScriptCore/runtime/FunctionRareData.cpp b/Source/JavaScriptCore/runtime/FunctionRareData.cpp
+index 686f766a3..d12e2a2b5 100644
+--- a/Source/JavaScriptCore/runtime/FunctionRareData.cpp
++++ b/Source/JavaScriptCore/runtime/FunctionRareData.cpp
+@@ -33,6 +33,11 @@
+ 
+ namespace JSC {
+ 
++void FunctionRareData::replaceExecutable(VM& vm, ExecutableBase* executable)
++{
++    m_executable.set(vm, this, executable);
++}
++
+ const ClassInfo FunctionRareData::s_info = { "FunctionRareData"_s, nullptr, nullptr, nullptr, CREATE_METHOD_TABLE(FunctionRareData) };
+ 
+ FunctionRareData* FunctionRareData::create(VM& vm, ExecutableBase* executable)
+diff --git a/Source/JavaScriptCore/runtime/FunctionRareData.h b/Source/JavaScriptCore/runtime/FunctionRareData.h
+index 996414448..24df457f3 100644
+--- a/Source/JavaScriptCore/runtime/FunctionRareData.h
++++ b/Source/JavaScriptCore/runtime/FunctionRareData.h
+@@ -115,7 +115,7 @@ public:
+     void setBoundFunctionStructure(VM& vm, Structure* structure) { m_boundFunctionStructureID.set(vm, this, structure); }
+ 
+     ExecutableBase* executable() const LIFETIME_BOUND { return m_executable.get(); }
+-    void replaceExecutable(VM& vm, ExecutableBase* executable) { m_executable.set(vm, this, executable); } // See JSFunction::replaceExecutable().
++    void replaceExecutable(VM&, ExecutableBase*); // See JSFunction::replaceExecutable(). (Not inline: ExecutableBase is incomplete here.)
+ 
+     bool hasReifiedLength() const { return m_hasReifiedLength; }
+     void setHasReifiedLength() { m_hasReifiedLength = true; }
 diff --git a/Source/JavaScriptCore/runtime/IntlObject.cpp b/Source/JavaScriptCore/runtime/IntlObject.cpp
-index 40a58704e5..07c71d9963 100644
+index 40a58704e..07c71d996 100644
 --- a/Source/JavaScriptCore/runtime/IntlObject.cpp
 +++ b/Source/JavaScriptCore/runtime/IntlObject.cpp
 @@ -63,6 +63,9 @@
@@ -7757,8 +8746,20 @@ index 40a58704e5..07c71d9963 100644
              if (locale.isEmpty())
                  continue;
              availableLocales->add(locale);
+diff --git a/Source/JavaScriptCore/runtime/MegamorphicCache.cpp b/Source/JavaScriptCore/runtime/MegamorphicCache.cpp
+index 351824d68..d4230abfe 100644
+--- a/Source/JavaScriptCore/runtime/MegamorphicCache.cpp
++++ b/Source/JavaScriptCore/runtime/MegamorphicCache.cpp
+@@ -26,6 +26,7 @@
+ #include "config.h"
+ #include "MegamorphicCache.h"
+ 
++#include "JSObject.h"
+ #include "ProgramExecutable.h"
+ 
+ #include <wtf/TZoneMallocInlines.h>
 diff --git a/Source/JavaScriptCore/runtime/OptionsList.h b/Source/JavaScriptCore/runtime/OptionsList.h
-index 7ac0274b6e..812cfdaf6f 100644
+index 7ac0274b6..812cfdaf6 100644
 --- a/Source/JavaScriptCore/runtime/OptionsList.h
 +++ b/Source/JavaScriptCore/runtime/OptionsList.h
 @@ -146,13 +146,20 @@ bool hasCapacityToUseLargeGigacage();
@@ -7795,8 +8796,22 @@ index 7ac0274b6e..812cfdaf6f 100644
      v(Unsigned, aotLoopSplittingPolicy, 3, Normal, "Which loops useAOTLoopSplitting applies to. 1: all. 2: loops that contain something the fast copy improves (arithmetic, indexed element accesses, a call it can elide). 3: loops that make no calls. 4: loops that satisfy both 2 and 3. 5: loops that make no calls, or that contain a call the fast copy elides or an indexed element access."_s) \
      \
      v(Unsigned, repatchCountForCoolDown, 8, Normal, nullptr) \
+diff --git a/Source/JavaScriptCore/runtime/PrototypeKey.h b/Source/JavaScriptCore/runtime/PrototypeKey.h
+index 2fe8317ee..37fd7f51b 100644
+--- a/Source/JavaScriptCore/runtime/PrototypeKey.h
++++ b/Source/JavaScriptCore/runtime/PrototypeKey.h
+@@ -64,7 +64,8 @@ public:
+ 
+     unsigned hash() const
+     {
+-        return WTF::IntHash<uintptr_t>::hash(std::bit_cast<uintptr_t>(m_prototype) ^ std::bit_cast<uintptr_t>(m_executable) ^ std::bit_cast<uintptr_t>(m_classInfo)) + m_inlineCapacity;
++        // (Each by WTF::addressForHashing(), which does not commute with ^.)
++        return WTF::IntHash<uintptr_t>::hash(WTF::addressForHashing(std::bit_cast<uintptr_t>(m_prototype)) ^ WTF::addressForHashing(std::bit_cast<uintptr_t>(m_executable)) ^ WTF::addressForHashing(std::bit_cast<uintptr_t>(m_classInfo))) + m_inlineCapacity;
+     }
+     
+ private:
 diff --git a/Source/JavaScriptCore/runtime/RegExp.cpp b/Source/JavaScriptCore/runtime/RegExp.cpp
-index 352a5f60a7..46f3f7c3ab 100644
+index 352a5f60a..46f3f7c3a 100644
 --- a/Source/JavaScriptCore/runtime/RegExp.cpp
 +++ b/Source/JavaScriptCore/runtime/RegExp.cpp
 @@ -31,6 +31,10 @@
@@ -7942,7 +8957,7 @@ index 352a5f60a7..46f3f7c3ab 100644
      if (!pattern.containsUnsignedLengthPattern() && Options::useRegExpJIT()
  #if !ENABLE(YARR_JIT_BACKREFERENCES)
 diff --git a/Source/JavaScriptCore/runtime/RegExp.h b/Source/JavaScriptCore/runtime/RegExp.h
-index 91f6c257d8..5c3e48806a 100644
+index 91f6c257d..5c3e48806 100644
 --- a/Source/JavaScriptCore/runtime/RegExp.h
 +++ b/Source/JavaScriptCore/runtime/RegExp.h
 @@ -213,6 +213,8 @@ WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
@@ -7969,7 +8984,7 @@ index 91f6c257d8..5c3e48806a 100644
  #if ENABLE(YARR_JIT)
      std::unique_ptr<Yarr::YarrCodeBlock> m_regExpJITCode;
 diff --git a/Source/JavaScriptCore/runtime/RegExpInlines.h b/Source/JavaScriptCore/runtime/RegExpInlines.h
-index 60568923b7..7552cabba0 100644
+index 60568923b..7552cabba 100644
 --- a/Source/JavaScriptCore/runtime/RegExpInlines.h
 +++ b/Source/JavaScriptCore/runtime/RegExpInlines.h
 @@ -28,6 +28,7 @@
@@ -8048,8 +9063,73 @@ index 60568923b7..7552cabba0 100644
      if constexpr (matchFrom == Yarr::MatchFrom::VMThread) {
          if (m_specificPattern == Yarr::SpecificPattern::AnchoredWordList) {
              if (startOffset || !isAnchoredWord(s))
+diff --git a/Source/JavaScriptCore/runtime/ReportableSitesOfFunction.h b/Source/JavaScriptCore/runtime/ReportableSitesOfFunction.h
+new file mode 100644
+index 000000000..891d4dda8
+--- /dev/null
++++ b/Source/JavaScriptCore/runtime/ReportableSitesOfFunction.h
+@@ -0,0 +1,29 @@
++/*
++ * Copyright (C) 2026 Oven, Inc. All rights reserved.
++ * SPDX-License-Identifier: BSD-2-Clause
++ */
++
++#pragma once
++
++#include <wtf/Vector.h>
++
++namespace JSC {
++
++// Where a frame of a function that was compiled ahead of time can say it is.
++// (A header of its own: StaticHeap.h takes a std::span of them, which the Microsoft C++ library cannot do of an incomplete type.)
++struct ReportableSitesOfFunction {
++    struct Construction {
++        uint32_t offset;
++        // Where the expression starts (the `new`), from where the frame says it is: that many lines up, and then at this column,
++        // counting from one; or, on the same line, this many columns to the left.
++        uint32_t linesUp;
++        uint32_t columnOrColumnsLeft;
++    };
++    Vector<uint32_t> offsets; // In the bytecode. In order.
++    Vector<Construction> constructions; // Those of them that construct something, if it is known where the `new` is.
++    // What the code says for each of the function's identifiers, if that is not simply which of them it is (AOT::NumbersOfIdentifiers).
++    Vector<uint32_t> numbersOfIdentifiers;
++    Vector<uint32_t> numbersOfConstants; // Likewise (AOT::NumbersOfConstants). None: the function has its own.
++};
++
++} // namespace JSC
+diff --git a/Source/JavaScriptCore/runtime/SamplingProfiler.cpp b/Source/JavaScriptCore/runtime/SamplingProfiler.cpp
+index f419e8ca0..6b84c353e 100644
+--- a/Source/JavaScriptCore/runtime/SamplingProfiler.cpp
++++ b/Source/JavaScriptCore/runtime/SamplingProfiler.cpp
+@@ -200,8 +200,13 @@ protected:
+         }
+         EntryFrame* entryFrameOfCallee = m_entryFrame;
+         m_callFrame = m_callFrame->unsafeCallerFrame(m_entryFrame);
++        // (Not on Windows: there the walk goes through the system's unwinder, which the suspended thread may be in the middle of.)
++#if !OS(WINDOWS)
+         if (m_entryFrame != entryFrameOfCallee && m_callFrame && AOT::hasCode())
+             pc = AOT::returnAddressForFrame(m_callFrame, entryFrameOfCallee);
++#else
++        UNUSED_VARIABLE(entryFrameOfCallee);
++#endif
+         m_pc = pc;
+ #else
+         m_callFrame = m_callFrame->unsafeCallerFrame(m_entryFrame);
+@@ -486,8 +491,11 @@ void SamplingProfiler::takeSample(Seconds& stackTraceProcessingTime)
+ 
+             void* pcOfFrame = machinePC;
+ #if ENABLE(FTL_JIT)
++            // (Not on Windows: see advanceToParentFrame(). And a C++ function's rbp there is no frame record to start from.)
++#if !OS(WINDOWS)
+             if (callFrame && callFrame != machineFrame && AOT::hasCode())
+                 pcOfFrame = AOT::returnAddressForFrame(callFrame, machineFrame);
++#endif
+ #endif
+ 
+             size_t walkSize;
 diff --git a/Source/JavaScriptCore/runtime/StackFrame.cpp b/Source/JavaScriptCore/runtime/StackFrame.cpp
-index 57f3f696af..0c21044bc9 100644
+index 57f3f696a..0c21044bc 100644
 --- a/Source/JavaScriptCore/runtime/StackFrame.cpp
 +++ b/Source/JavaScriptCore/runtime/StackFrame.cpp
 @@ -90,7 +90,16 @@ CodeBlock* StackFrame::makeCodeBlock() const
@@ -8071,7 +9151,7 @@ index 57f3f696af..0c21044bc9 100644
      if (AOT::FunctionRef function = AOT::FunctionRef::of(vm, jsFrame.aotExecutable.get(), jsFrame.aotKind))
          return function.ensureCodeBlock();
 diff --git a/Source/JavaScriptCore/runtime/StringPrototype.cpp b/Source/JavaScriptCore/runtime/StringPrototype.cpp
-index f48a8a6a3b..86c7e65d54 100644
+index f48a8a6a3..86c7e65d5 100644
 --- a/Source/JavaScriptCore/runtime/StringPrototype.cpp
 +++ b/Source/JavaScriptCore/runtime/StringPrototype.cpp
 @@ -763,6 +763,13 @@ JSC_DEFINE_HOST_FUNCTION(stringProtoFuncCharAt, (JSGlobalObject* globalObject, C
@@ -8103,7 +9183,7 @@ index f48a8a6a3b..86c7e65d54 100644
      RETURN_IF_EXCEPTION(scope, { });
      JSValue a0 = callFrame->argument(0);
 diff --git a/Source/JavaScriptCore/yarr/YarrJIT.cpp b/Source/JavaScriptCore/yarr/YarrJIT.cpp
-index 87c90d8818..70d5da8036 100644
+index 87c90d881..70d5da803 100644
 --- a/Source/JavaScriptCore/yarr/YarrJIT.cpp
 +++ b/Source/JavaScriptCore/yarr/YarrJIT.cpp
 @@ -691,7 +691,9 @@ static void emitVerifySubjectRead(CCallHelpers& jit, AddressType address, unsign
@@ -8367,7 +9447,7 @@ index 87c90d8818..70d5da8036 100644
  #else
      UNUSED_PARAM(pattern);
 diff --git a/Source/JavaScriptCore/yarr/YarrJIT.h b/Source/JavaScriptCore/yarr/YarrJIT.h
-index f8dc0ace2d..f33a2bf61c 100644
+index f8dc0ace2..f33a2bf61 100644
 --- a/Source/JavaScriptCore/yarr/YarrJIT.h
 +++ b/Source/JavaScriptCore/yarr/YarrJIT.h
 @@ -475,6 +475,20 @@ struct YarrCodeForImage {
@@ -8392,7 +9472,7 @@ index f8dc0ace2d..f33a2bf61c 100644
  #if ENABLE(YARR_JIT_REGEXP_TEST_INLINE)
  
 diff --git a/Source/JavaScriptCore/yarr/YarrPattern.cpp b/Source/JavaScriptCore/yarr/YarrPattern.cpp
-index b44f0032e0..b5f3f3429b 100644
+index b44f0032e..b5f3f3429 100644
 --- a/Source/JavaScriptCore/yarr/YarrPattern.cpp
 +++ b/Source/JavaScriptCore/yarr/YarrPattern.cpp
 @@ -4578,6 +4578,120 @@ std::optional<WTF::BitSet<256>> computeFirstCharacterBitmap(StringView patternSt
@@ -8517,7 +9597,7 @@ index b44f0032e0..b5f3f3429b 100644
  
  WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
 diff --git a/Source/JavaScriptCore/yarr/YarrPattern.h b/Source/JavaScriptCore/yarr/YarrPattern.h
-index 52edaf0a33..49c6775bdf 100644
+index 52edaf0a3..49c6775bd 100644
 --- a/Source/JavaScriptCore/yarr/YarrPattern.h
 +++ b/Source/JavaScriptCore/yarr/YarrPattern.h
 @@ -819,6 +819,9 @@ private:
@@ -8531,7 +9611,7 @@ index 52edaf0a33..49c6775bdf 100644
  
  using JSC::Yarr::MatchDirection;
 diff --git a/Source/WTF/wtf/BumpPointerAllocator.h b/Source/WTF/wtf/BumpPointerAllocator.h
-index e3cba80913..701b5ec332 100644
+index e3cba8091..701b5ec33 100644
 --- a/Source/WTF/wtf/BumpPointerAllocator.h
 +++ b/Source/WTF/wtf/BumpPointerAllocator.h
 @@ -177,8 +177,12 @@ private:
@@ -8549,11 +9629,243 @@ index e3cba80913..701b5ec332 100644
                  if (!pool) [[unlikely]]
                      return nullptr;
                  previousPool->m_next = pool;
+diff --git a/Source/WTF/wtf/HashFunctions.h b/Source/WTF/wtf/HashFunctions.h
+index 8c633ff78..2574afbb0 100644
+--- a/Source/WTF/wtf/HashFunctions.h
++++ b/Source/WTF/wtf/HashFunctions.h
+@@ -26,8 +26,25 @@
+ #include <wtf/Int128.h>
+ #include <wtf/RefPtr.h>
+ #include <wtf/StdLibExtras.h>
++#if OS(WINDOWS)
++#include <bmalloc/StaticRegion.h>
++#endif
+ 
+ namespace WTF {
++    // What a pointer is hashed by. On Windows a static heap (bmalloc::StaticRegion) is built at one address and used at another (it
++    // moves with the executable): a table in it that is keyed by pointers into the executable (into the region, or its code and
++    // data), built where it was built, must find them where they are. So a pointer is hashed by its distance from the region, which
++    // is at the same place in the executable wherever the executable is loaded. Subtracting a constant keeps distinct pointers
++    // distinct, so it needs no test of where the pointer is.
++    ALWAYS_INLINE uintptr_t addressForHashing(uintptr_t pointer)
++    {
++#if OS(WINDOWS)
++        return pointer - reinterpret_cast<uintptr_t>(bmallocStaticRegion);
++#else
++        return pointer;
++#endif
++    }
++
+     // integer hash function
+ 
+     // rapidhash "mum" mixer.
+@@ -96,7 +113,7 @@ namespace WTF {
+     struct PtrHashBase<T, false /* isSmartPtr */> {
+         typedef T PtrType; 
+ 
+-        static unsigned hash(PtrType key) { return IntHash<uintptr_t>::hash(reinterpret_cast<uintptr_t>(key)); }
++        static unsigned hash(PtrType key) { return IntHash<uintptr_t>::hash(addressForHashing(reinterpret_cast<uintptr_t>(key))); }
+         static bool equal(PtrType a, PtrType b) { return a == b; }
+         static constexpr bool safeToCompareToEmptyOrDeleted = true;
+     };
+@@ -106,7 +123,7 @@ namespace WTF {
+         typedef typename GetPtrHelper<T>::PtrType PtrType;
+         typedef typename GetPtrHelper<T>::UnderlyingType UnderlyingType;
+ 
+-        static unsigned hash(std::add_const_t<UnderlyingType>* key) { return IntHash<uintptr_t>::hash(reinterpret_cast<uintptr_t>(key)); }
++        static unsigned hash(std::add_const_t<UnderlyingType>* key) { return IntHash<uintptr_t>::hash(addressForHashing(reinterpret_cast<uintptr_t>(key))); }
+         static bool equal(std::add_const_t<UnderlyingType>* a, std::add_const_t<UnderlyingType>* b) { return a == b; }
+         static constexpr bool safeToCompareToEmptyOrDeleted = true;
+ 
+diff --git a/Source/WTF/wtf/Hasher.h b/Source/WTF/wtf/Hasher.h
+index a4fccc37f..4fc090967 100644
+--- a/Source/WTF/wtf/Hasher.h
++++ b/Source/WTF/wtf/Hasher.h
+@@ -129,7 +129,7 @@ inline void add(Hasher& hasher, float number)
+ 
+ template<typename T> inline void add(Hasher& hasher, T* ptr)
+ {
+-    add(hasher, std::bit_cast<uintptr_t>(ptr));
++    add(hasher, addressForHashing(std::bit_cast<uintptr_t>(ptr))); // (See addressForHashing().)
+ }
+ 
+ inline void add(Hasher& hasher, const String& string)
+@@ -146,7 +146,7 @@ inline void add(Hasher& hasher, const String& string)
+ inline void add(Hasher& hasher, const AtomString& string)
+ {
+     // Chose to hash the pointer here. Assuming this is better than hashing the characters or hashing the already-computed hash of the characters.
+-    add(hasher, std::bit_cast<uintptr_t>(string.impl()));
++    add(hasher, addressForHashing(std::bit_cast<uintptr_t>(string.impl())));
+ }
+ 
+ inline void add(Hasher& hasher, ASCIILiteral literal)
 diff --git a/Source/bmalloc/bmalloc/StaticRegion.cpp b/Source/bmalloc/bmalloc/StaticRegion.cpp
-index 77260b2296..b6f24d2bce 100644
+index 77260b229..e9d9006ec 100644
 --- a/Source/bmalloc/bmalloc/StaticRegion.cpp
 +++ b/Source/bmalloc/bmalloc/StaticRegion.cpp
-@@ -107,6 +107,8 @@ bool StaticRegion::isAllocatingMutable()
+@@ -11,12 +11,28 @@
+ #include <cstring>
+ #include <cstdio>
+ #include <utility>
++#if BOS(WINDOWS)
++#include <windows.h>
++#else
+ #include <sys/mman.h>
++#endif
+ 
+ #if BUSE(MIMALLOC)
+ #include "mimalloc.h"
+ #endif
+ 
++#if BOS(WINDOWS)
++// The region: an uninitialized section ("b"), which the link makes read-only (/SECTION:.pbreg,R) so that none of it is committed
++// until makeWritable() says so. 64 KB more than the reservation, for base()'s rounding.
++static_assert(bmalloc::StaticRegion::reservation == 0x54000000);
++__asm__(".section .pbreg,\"b\"\n"
++        ".globl bmallocStaticRegion\n"
++        ".p2align 12\n"
++        "bmallocStaticRegion:\n"
++        ".zero 0x54010000\n"
++        ".text\n");
++#endif
++
+ namespace bmalloc {
+ 
+ bool StaticRegion::s_isBuilding = false;
+@@ -26,14 +42,90 @@ static thread_local bool t_isAllocatingMutable = false;
+ static uint32_t* s_sizes; // See sizeOfImmutable().
+ static size_t s_capacityOfSizes;
+ 
++#if BOS(WINDOWS)
++bool StaticRegion::makeWritable(const void* start, size_t size)
++{
++    constexpr uintptr_t page = 4096;
++    uintptr_t from = reinterpret_cast<uintptr_t>(start) & ~(page - 1);
++    uintptr_t to = (reinterpret_cast<uintptr_t>(start) + size + page - 1) & ~(page - 1);
++    RELEASE_BASSERT(from - base() <= reservation && to - base() <= reservation);
++    // Only what is still read-only: the rest may hold something already, and VirtualProtect() would not lose it, but it would
++    // say again what was said.
++    for (uintptr_t at = from; at < to;) {
++        MEMORY_BASIC_INFORMATION info;
++        if (!VirtualQuery(reinterpret_cast<void*>(at), &info, sizeof(info)))
++            return false;
++        uintptr_t end = reinterpret_cast<uintptr_t>(info.BaseAddress) + info.RegionSize;
++        if (end > to)
++            end = to;
++        if (info.Protect == PAGE_READONLY) {
++            DWORD old;
++            if (!VirtualProtect(reinterpret_cast<void*>(at), end - at, PAGE_READWRITE, &old))
++                return false;
++        }
++        at = end;
++    }
++    return true;
++}
++
++// While the region is built: how much of each arena is writable. It is made so a megabyte at a time, as it is allocated.
++static size_t s_writable[StaticRegion::numberOfArenas];
++
++// BUN_STATIC_REGION_TRACE=FILE while building: every allocation in the region (arena, offset, size) and who made it (return
++// addresses, as offsets in the executable), for finding out what something in a built heap is.
++static FILE* traceOfAllocations()
++{
++    static FILE* file = [] {
++        const char* path = getenv("BUN_STATIC_REGION_TRACE");
++        return path ? fopen(path, "w") : nullptr;
++    }();
++    return file;
++}
++
++static void traceAllocation(StaticRegion::Arena arena, uintptr_t address, size_t size)
++{
++    FILE* file = traceOfAllocations();
++    if (!file)
++        return;
++    void* frames[16];
++    unsigned count = RtlCaptureStackBackTrace(2, 16, frames, nullptr);
++    uintptr_t image = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
++    fprintf(file, "%u %zx %zx", static_cast<unsigned>(arena), static_cast<size_t>(address - StaticRegion::startOf(arena)), size);
++    for (unsigned i = 0; i < count; ++i)
++        fprintf(file, " %zx", static_cast<size_t>(reinterpret_cast<uintptr_t>(frames[i]) - image));
++    fputc('\n', file);
++}
++
++static void ensureWritable(StaticRegion::Arena arena, size_t end)
++{
++    size_t& writable = s_writable[static_cast<size_t>(arena)];
++    if (end <= writable)
++        return;
++    constexpr size_t chunk = 1 << 20;
++    size_t newWritable = (end + chunk - 1) & ~(chunk - 1);
++    if (newWritable > StaticRegion::reservationOf(arena))
++        newWritable = StaticRegion::reservationOf(arena);
++    RELEASE_BASSERT(StaticRegion::makeWritable(reinterpret_cast<void*>(StaticRegion::startOf(arena) + writable), newWritable - writable));
++    writable = newWritable;
++}
++#endif
++
+ bool StaticRegion::beginBuilding()
+ {
++#if BOS(WINDOWS)
++    // The region is this executable's own: nobody else has the addresses. What a build before this one left is zero again
++    // (endBuilding()), as fresh memory would be.
++    RELEASE_BASSERT(!s_isBuilding);
++    memset(s_used, 0, sizeof(s_used));
++    s_isBuilding = true;
++    return true;
++#else
+     RELEASE_BASSERT(!s_isBuilding);
+     constexpr size_t size = numberOfArenasInFile * arenaReservation;
+-    void* result = mmap(reinterpret_cast<void*>(base), size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
++    void* result = mmap(reinterpret_cast<void*>(base()), size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+     if (result == MAP_FAILED)
+         return false;
+-    if (result != reinterpret_cast<void*>(base)) {
++    if (result != reinterpret_cast<void*>(base())) {
+         munmap(result, size);
+         return false;
+     }
+@@ -47,6 +139,7 @@ bool StaticRegion::beginBuilding()
+     memset(s_used, 0, sizeof(s_used));
+     s_isBuilding = true;
+     return true;
++#endif
+ }
+ 
+ void StaticRegion::endBuilding()
+@@ -55,8 +148,16 @@ void StaticRegion::endBuilding()
+     s_isBuilding = false;
+     ::free(std::exchange(s_sizes, nullptr));
+     s_capacityOfSizes = 0;
+-    munmap(reinterpret_cast<void*>(base), numberOfArenasInFile * arenaReservation);
++#if BOS(WINDOWS)
++    // Pages of an image cannot be given back (decommitted), only cleared, for a build after this one.
++    for (unsigned i = 0; i < numberOfArenas; ++i) {
++        if (static_cast<Arena>(i) != Arena::Bss && static_cast<Arena>(i) != Arena::Image)
++            memset(reinterpret_cast<void*>(startOf(static_cast<Arena>(i))), 0, s_used[i]);
++    }
++#else
++    munmap(reinterpret_cast<void*>(base()), numberOfArenasInFile * arenaReservation);
+     munmap(reinterpret_cast<void*>(startOf(Arena::Scratch)), arenaReservation);
++#endif
+ }
+ 
+ void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t misalignment)
+@@ -64,8 +165,12 @@ void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t
+     RELEASE_BASSERT(s_isBuilding && alignment && !(alignment & (alignment - 1)) && misalignment < alignment);
+     size_t& used = s_used[static_cast<size_t>(arena)];
+     size_t offset = ((used + alignment - 1 - misalignment) & ~(alignment - 1)) + misalignment;
+-    RELEASE_BASSERT(offset >= used && size <= arenaReservation && offset <= arenaReservation - size);
++    RELEASE_BASSERT(offset >= used && size <= reservationOf(arena) && offset <= reservationOf(arena) - size);
+     used = offset + size;
++#if BOS(WINDOWS)
++    ensureWritable(arena, used);
++    traceAllocation(arena, startOf(arena) + offset, size);
++#endif
+     return reinterpret_cast<void*>(startOf(arena) + offset);
+ }
+ 
+@@ -107,22 +212,64 @@ bool StaticRegion::isAllocatingMutable()
      return t_isAllocatingMutable;
  }
  
@@ -8562,9 +9874,18 @@ index 77260b2296..b6f24d2bce 100644
  void StaticRegion::mapBss()
  {
      static bool isMapped = false;
-@@ -114,8 +116,30 @@ void StaticRegion::mapBss()
+     if (isMapped)
          return;
      isMapped = true;
++#if BOS(WINDOWS)
++    // It is there already, read-only: what is placed in it at once is made writable now, the rest when it is used. And the whole
++    // arena is this executable's, whatever the address space is like.
++    if (!makeWritable(reinterpret_cast<void*>(startOf(Arena::Bss)), sizeOfBssMadeWritableAtStart)) {
++        fprintf(stderr, "bun: could not make the static region writable (commit limit?)\n");
++        RELEASE_BASSERT_NOT_REACHED();
++    }
++    s_bssMapped = reservationOf(Arena::Bss);
++#else
      void* wanted = reinterpret_cast<void*>(startOf(Arena::Bss));
 -    void* result = mmap(wanted, arenaReservation, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
 -    RELEASE_BASSERT(result == wanted);
@@ -8587,6 +9908,7 @@ index 77260b2296..b6f24d2bce 100644
 +    // The empty string and the engine's symbols live at fixed addresses here: nothing works without it.
 +    fprintf(stderr, "bun: could not map the static region at %p (address space limit, or the address is taken)\n", wanted);
 +    RELEASE_BASSERT_NOT_REACHED();
++#endif
 +}
 +
 +size_t StaticRegion::bssMapped()
@@ -8595,20 +9917,200 @@ index 77260b2296..b6f24d2bce 100644
  }
  
  bool StaticRegion::map(Arena arena, int fileDescriptor, off_t offsetInFile, size_t size, size_t offsetInArena, bool isCode)
+ {
+-    RELEASE_BASSERT(offsetInArena <= arenaReservation && size <= arenaReservation - offsetInArena);
++    RELEASE_BASSERT(offsetInArena <= reservationOf(arena) && size <= reservationOf(arena) - offsetInArena);
+     if (!size)
+         return true;
++#if BOS(WINDOWS)
++    // Nothing is mapped from the file: the arenas of an executable with a static heap are sections of its image already.
++    (void)arena;
++    (void)fileDescriptor;
++    (void)offsetInFile;
++    (void)isCode;
++    return false;
++#else
+     void* wanted = reinterpret_cast<void*>(startOf(arena) + offsetInArena);
+     if (arena == Arena::Image) {
+         void* result = mmap(wanted, size, isCode ? PROT_READ | PROT_EXEC : PROT_READ, MAP_PRIVATE, fileDescriptor, offsetInFile);
+@@ -147,6 +294,7 @@ bool StaticRegion::map(Arena arena, int fileDescriptor, off_t offsetInFile, size
+         return false;
+     }
+     return true;
++#endif
+ }
+ 
+ // In Arena::MutableMalloc, what is asked for is preceded by how much was asked for: it may be given back, or be found too small,
+@@ -160,7 +308,7 @@ static constexpr size_t unit = 8;
+ 
+ static bool isInImmutableMalloc(const void* pointer)
+ {
+-    return reinterpret_cast<uintptr_t>(pointer) - StaticRegion::startOf(StaticRegion::Arena::Malloc) < StaticRegion::arenaReservation;
++    return reinterpret_cast<uintptr_t>(pointer) - StaticRegion::startOf(StaticRegion::Arena::Malloc) < StaticRegion::reservationOf(StaticRegion::Arena::Malloc);
+ }
+ 
+ static uint32_t& sizeOfImmutable(const void* pointer)
+@@ -288,6 +436,9 @@ static void* mallocImmutable(size_t size, size_t alignment)
+             }
+             pushFreeImmutable(block + units * unit, found - units);
+             sizeOfImmutable(block) = static_cast<uint32_t>(size);
++#if BOS(WINDOWS)
++            traceAllocation(StaticRegion::Arena::Malloc, reinterpret_cast<uintptr_t>(block), size);
++#endif
+             return block;
+         }
+     }
+@@ -317,6 +468,9 @@ void* StaticRegion::tryMallocSlow(size_t size, size_t alignment)
+                 memcpy(rest - sizeOfHeader, &sizeOfRest, sizeof(sizeOfRest));
+                 pushFree(mutableOnes, found - index, rest);
+             }
++#if BOS(WINDOWS)
++            traceAllocation(Arena::MutableMalloc, reinterpret_cast<uintptr_t>(block), size);
++#endif
+             return block;
+         }
+     }
+@@ -347,16 +501,22 @@ void* StaticRegion::reallocate(void* pointer, size_t newSize)
+             size_t newUnits = unitsFor(newSize);
+             // (Where it is has to do for what it is going to be, too.)
+             bool isWhereItMayBe = newSize % 16 || !(reinterpret_cast<uintptr_t>(pointer) & 15);
+-            if (reinterpret_cast<uintptr_t>(pointer) + units * unit == startOf(Arena::Malloc) + used && newUnits >= units && isWhereItMayBe && newSize <= UINT32_MAX && (newUnits - units) * unit <= arenaReservation - used) {
++            if (reinterpret_cast<uintptr_t>(pointer) + units * unit == startOf(Arena::Malloc) + used && newUnits >= units && isWhereItMayBe && newSize <= UINT32_MAX && (newUnits - units) * unit <= reservationOf(Arena::Malloc) - used) {
+                 used += (newUnits - units) * unit;
++#if BOS(WINDOWS)
++                ensureWritable(Arena::Malloc, used);
++#endif
+                 sizeOfImmutable(pointer) = static_cast<uint32_t>(newSize);
+                 return pointer;
+             }
+         } else {
+             uintptr_t end = reinterpret_cast<uintptr_t>(pointer) + mallocSize(pointer);
+             size_t& used = s_used[static_cast<size_t>(Arena::MutableMalloc)];
+-            if (end == startOf(Arena::MutableMalloc) + used && newSize >= mallocSize(pointer) && newSize - mallocSize(pointer) <= arenaReservation - used) {
++            if (end == startOf(Arena::MutableMalloc) + used && newSize >= mallocSize(pointer) && newSize - mallocSize(pointer) <= reservationOf(Arena::MutableMalloc) - used) {
+                 used += newSize - mallocSize(pointer);
++#if BOS(WINDOWS)
++                ensureWritable(Arena::MutableMalloc, used);
++#endif
+                 memcpy(static_cast<char*>(pointer) - sizeOfHeader, &newSize, sizeof(newSize));
+                 return pointer;
+             }
 diff --git a/Source/bmalloc/bmalloc/StaticRegion.h b/Source/bmalloc/bmalloc/StaticRegion.h
-index c87b01ecf0..6d666d4c1d 100644
+index c87b01ecf..83e658388 100644
 --- a/Source/bmalloc/bmalloc/StaticRegion.h
 +++ b/Source/bmalloc/bmalloc/StaticRegion.h
-@@ -80,6 +80,7 @@ public:
+@@ -7,12 +7,47 @@
+ 
+ #include "BExport.h"
+ #include "BInline.h"
++#include "BPlatform.h"
+ #include <cstddef>
+ #include <cstdint>
+ #include <sys/types.h>
+ 
++#if BOS(WINDOWS)
++// On Windows the region is not at a fixed address: it is a section of the executable, .pbreg, which the loader places with the
++// rest of the image, wherever ASLR puts it. In the runtime it is uninitialized and read-only, so that it costs neither the file
++// nor the process anything until a page of it is made writable. In an executable with a static heap, the arenas that come from
++// the file are sections of their own in its place, and their pointers are base relocations (the loader adjusts them, once per
++// boot, in pages that every process shares). This symbol, defined in StaticRegion.cpp, is its first byte.
++extern "C" char bmallocStaticRegion[];
++#endif
++
+ namespace bmalloc {
+ 
++#if BOS(WINDOWS)
++// The size of each arena of StaticRegion on Windows, in the order of StaticRegion::Arena. The loader refuses an image of 2 GB
++// (1.7 GB loads), and the region is part of the executable's. Arena::Bss holds a realm's room for the data of its compiled code
++// (256 MB of addresses, AOT::Instance), which is committed as it is used.
++struct WindowsArenas {
++    static constexpr size_t size[8] = {
++        128ULL << 20, // Data
++        128ULL << 20, // Malloc
++        128ULL << 20, // Cells
++        64ULL << 20, // MutableCells
++        64ULL << 20, // MutableMalloc
++        384ULL << 20, // Bss
++        192ULL << 20, // Image
++        256ULL << 20, // Scratch
++    };
++    static constexpr size_t offsetOf(unsigned index)
++    {
++        size_t offset = 0;
++        for (unsigned i = 0; i < index; ++i)
++            offset += size[i];
++        return offset;
++    }
++};
++#endif
++
+ // Memory that is at the same address in every process. What a program is going to need that does not depend on how it is run is
+ // made once, when the program is built, by the code that would otherwise make it each time the program starts; the memory it was
+ // made in is written to the program's file, and mapped from there when the program runs. Pointers from one part of it to another
+@@ -39,12 +74,24 @@ public:
+     static constexpr unsigned numberOfArenas = 8;
+     static constexpr unsigned numberOfArenasInFile = 5;
+ 
+-    static constexpr uintptr_t base = 0x200000000000ULL; // Beyond where mimalloc asks for memory, and far from where the kernel puts things.
++#if BOS(WINDOWS)
++    // Where the image is: the section's start, rounded up to 64 KB (a section in an object file cannot ask for more than 8 KB of
++    // alignment; the image is placed at a multiple of 64 KB, so this is the same place relative to it in every process).
++    static BINLINE uintptr_t base() { return (reinterpret_cast<uintptr_t>(bmallocStaticRegion) + 0xffff) & ~static_cast<uintptr_t>(0xffff); }
++    // The arenas are smaller than elsewhere, each as big as it needs to be (WindowsArenas, above).
++    static constexpr size_t reservationOf(Arena arena) { return WindowsArenas::size[static_cast<unsigned>(arena)]; }
++    static constexpr size_t reservation = WindowsArenas::offsetOf(numberOfArenas);
++    static BINLINE uintptr_t startOf(Arena arena) { return base() + WindowsArenas::offsetOf(static_cast<unsigned>(arena)); }
++#else
++    static constexpr uintptr_t baseAddress = 0x200000000000ULL; // Beyond where mimalloc asks for memory, and far from where the kernel puts things.
++    static constexpr uintptr_t base() { return baseAddress; }
+     static constexpr size_t arenaReservation = 4ULL << 30;
++    static constexpr size_t reservationOf(Arena) { return arenaReservation; }
+     static constexpr size_t reservation = arenaReservation * numberOfArenas;
++    static constexpr uintptr_t startOf(Arena arena) { return base() + static_cast<size_t>(arena) * arenaReservation; }
++#endif
+ 
+-    static BINLINE bool contains(const void* pointer) { return reinterpret_cast<uintptr_t>(pointer) - base < reservation; }
+-    static constexpr uintptr_t startOf(Arena arena) { return base + static_cast<size_t>(arena) * arenaReservation; }
++    static BINLINE bool contains(const void* pointer) { return reinterpret_cast<uintptr_t>(pointer) - base() < reservation; }
+ 
+     // ---- When the program is built. One thread does it.
+ 
+@@ -80,6 +127,7 @@ public:
      // ---- When it runs.
  
      BEXPORT static void mapBss(); // Before anything else here. Crashes if the addresses are taken.
-+    BEXPORT static size_t bssMapped(); // How much of Arena::Bss mapBss() got: arenaReservation unless the address space is limited.
++    BEXPORT static size_t bssMapped(); // How much of Arena::Bss mapBss() got: all of it (reservationOf()) unless the address space is limited.
      // What is where in Arena::Bss.
      static constexpr size_t offsetOfEmptyStringInBss = 0; // WTF::StringImpl::empty()
      static constexpr size_t offsetOfSymbolsInBss = 64; // JSC::Symbols
+@@ -88,10 +136,25 @@ public:
+     static constexpr size_t offsetOfVTablesInBss = 256 * 1024;
+     static constexpr size_t offsetOfVMInBss = 1 << 20;
+     static constexpr size_t offsetOfGlobalObjectInBss = 2 << 20;
++#if BOS(WINDOWS)
++    // (The same, closer together: the arena is 128 MB. Room for 16,384 modules.)
++    static constexpr size_t offsetOfDecodersInBss = 8 << 20; // One for each module, as of the next few.
++    static constexpr size_t offsetOfSourceProvidersInBss = 12 << 20;
++    static constexpr size_t offsetOfTopLevelExecutablesInBss = 16 << 20;
++    static constexpr size_t offsetOfBlocksInBss = 32 << 20; // JSC::StaticHeap::allocateBlock()
++    // What mapBss() makes writable at once: the strings, symbols, tables, the VM and the global object (2 MB for it). The rest is
++    // made writable as it is used.
++    static constexpr size_t sizeOfBssMadeWritableAtStart = offsetOfGlobalObjectInBss + (2 << 20);
++    // Makes this part of the region writable, if it is not yet: the pages of .pbreg are read-only until something is put there.
++    // Any thread. False if Windows would not (the commit limit).
++    BEXPORT static bool makeWritable(const void*, size_t);
++#else
+     static constexpr size_t offsetOfDecodersInBss = 16 << 20; // One for each module, as of the next few.
+     static constexpr size_t offsetOfSourceProvidersInBss = 64 << 20;
+     static constexpr size_t offsetOfTopLevelExecutablesInBss = 128 << 20;
+     static constexpr size_t offsetOfBlocksInBss = 256 << 20; // JSC::StaticHeap::allocateBlock()
++    static bool makeWritable(const void*, size_t) { return true; }
++#endif
+ 
+     // False if the addresses are taken. `offsetInArena` and the rest are multiples of the size of a page.
+     BEXPORT static bool map(Arena, int fileDescriptor, off_t offsetInFile, size_t, size_t offsetInArena = 0, bool isCode = false);
 diff --git a/Source/cmake/WebKitCompilerFlags.cmake b/Source/cmake/WebKitCompilerFlags.cmake
-index 04629219b7..1bae3cb0f4 100644
+index 04629219b..1bae3cb0f 100644
 --- a/Source/cmake/WebKitCompilerFlags.cmake
 +++ b/Source/cmake/WebKitCompilerFlags.cmake
 @@ -172,7 +172,9 @@ if (DEVELOPER_MODE AND DEVELOPER_MODE_FATAL_WARNINGS)
@@ -8622,6 +10124,89 @@ index 04629219b7..1bae3cb0f4 100644
      # This lets us get good backtraces, in particular when using JSC_useGdbJITInfo=1.
      WEBKIT_PREPEND_GLOBAL_COMPILER_FLAGS(-fno-omit-frame-pointer)
  endif ()
+diff --git a/Source/cmake/WebKitMacros.cmake b/Source/cmake/WebKitMacros.cmake
+index dfb74c367..1d1bbc51a 100644
+--- a/Source/cmake/WebKitMacros.cmake
++++ b/Source/cmake/WebKitMacros.cmake
+@@ -973,11 +973,29 @@ function(WEBKIT_SYMLINK_FILES target_name)
+             file(MAKE_DIRECTORY ${opt_DESTINATION}/${file_dir})
+             set(dst_file ${opt_DESTINATION}/${file})
+         endif ()
+-        add_custom_command(OUTPUT ${dst_file}
+-            COMMAND ${CMAKE_COMMAND} -E create_symlink ${src_file} ${dst_file}
+-            MAIN_DEPENDENCY ${src_file}
+-            VERBATIM
+-        )
++        if (WIN32)
++            # A symbolic link needs a privilege on Windows (or Developer Mode), and clang does not take a hard link or a copy for
++            # the same file as far as #pragma once goes. A forwarding header does: it includes the source by its own path, so
++            # every way of reaching the header reaches that one file. Written now (it says the same whatever the source
++            # becomes); whatever else is there first is removed, not written through: it may be a link to the source.
++            set(_forward "#pragma once\n#include \"${src_file}\"\n")
++            set(_existing "")
++            if (EXISTS "${dst_file}")
++                file(READ "${dst_file}" _existing)
++            endif ()
++            if (NOT _existing STREQUAL _forward)
++                file(REMOVE "${dst_file}")
++                get_filename_component(_dst_dir "${dst_file}" DIRECTORY)
++                file(MAKE_DIRECTORY "${_dst_dir}")
++                file(WRITE "${dst_file}" "${_forward}")
++            endif ()
++        else ()
++            add_custom_command(OUTPUT ${dst_file}
++                COMMAND ${CMAKE_COMMAND} -E create_symlink ${src_file} ${dst_file}
++                MAIN_DEPENDENCY ${src_file}
++                VERBATIM
++            )
++        endif ()
+         list(APPEND dst_files ${dst_file})
+     endforeach ()
+     add_custom_target(${target_name} ALL DEPENDS ${dst_files})
+diff --git a/build-icu.ps1 b/build-icu.ps1
+index de1657546..8ace86cc2 100644
+--- a/build-icu.ps1
++++ b/build-icu.ps1
+@@ -78,7 +78,7 @@ $ICU_SOURCE_STAMP = Join-Path $OutputDir "source-version.txt"
+ if (Test-Path $ICU_SOURCE_DIR) {
+     $have = if (Test-Path $ICU_SOURCE_STAMP) { (Get-Content $ICU_SOURCE_STAMP -Raw).Trim() } else { "" }
+     if ($have -ne $ICU_VERSION) {
+-        Write-Host ":: $ICU_SOURCE_DIR is ICU '$have', not $ICU_VERSION: removing it"
++        Write-Host ":: $ICU_SOURCE_DIR is ICU '$have', not ${ICU_VERSION}: removing it"
+         Remove-Item -Recurse -Force $ICU_SOURCE_DIR
+     }
+ }
+@@ -186,13 +186,29 @@ if (Test-Path $makedataMak) {
+     }
+ }
+ 
++# --- Patch pkgdata not to export the data's entry point from a static library ---
++# pkgdata always marks icudt<N>_dat __declspec(dllexport) (writeObjectCode(..., true)), which a DLL of the data needs and a static
++# library must not have: every executable it is linked into would export it. genccode has --skip-dll-export for this; pkgdata
++# passes the flag itself, so it is told to pass it only outside static mode.
++$pkgdataCpp = Join-Path $ICU_SOURCE_DIR "tools\pkgdata\pkgdata.cpp"
++if (Test-Path $pkgdataCpp) {
++    $pkgdataContent = Get-Content $pkgdataCpp -Raw
++    if ($pkgdataContent -match 'sizeof\(gencFilePath\),\s*true\);') {
++        Write-Host ":: Patching pkgdata.cpp not to export the data of a static library..."
++        $pkgdataContent = $pkgdataContent -replace '(sizeof\(gencFilePath\),\s*)true\);', '$1!IN_STATIC_MODE(mode));'
++        Set-Content $pkgdataCpp $pkgdataContent -NoNewline
++        Write-Host "  Patched: pkgdata.cpp"
++    }
++}
++
+ # --- Find MSBuild ---
+ $vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+ if (-not (Test-Path $vswhere)) {
+     throw "vswhere not found. Please install Visual Studio."
+ }
+ 
+-$vsPath = & $vswhere -latest -property installationPath
++# (-products *: Build Tools as well as the editions of Visual Studio.)
++$vsPath = & $vswhere -products * -latest -requires Microsoft.Component.MSBuild -property installationPath
+ $msbuildPath = Join-Path $vsPath "MSBuild\Current\Bin\MSBuild.exe"
+ 
+ if (-not (Test-Path $msbuildPath)) {
 -- 
-2.54.0 (Apple Git-157)
+2.56.0.windows.1
 
