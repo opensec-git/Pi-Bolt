@@ -328,6 +328,8 @@ def main():
         ("pi -p: one prompt, 4 tool calls", "ms", vals(lambda x: b(x, "headless", "wall_ms"))),
         (f"Time per prompt, {session}", "ms", vals(lambda x: lg(x, "ms_per_prompt"))),
     ]
+    if any(bench[(x, "interactive-default-theme")] for x in builds):
+        speed.append(("Launch to interactive (TUI), default theme", "ms", vals(lambda x: b(x, "interactive-default-theme", "tti_ms"))))
     cpu = [
         ("Interactive session: 5 prompts", "ms", vals(lambda x: b(x, "interactive", "cpu_ms"))),
         ("pi -p: one prompt", "ms", vals(lambda x: b(x, "headless", "cpu_ms"))),

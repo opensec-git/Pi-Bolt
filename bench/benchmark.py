@@ -5,6 +5,8 @@ Scenarios (each run is a fresh process):
   startup      `pi --version`
   headless     `pi -p "<prompt>"`: one prompt, 5 model turns (4 `read` calls + an answer)
   interactive  the real TUI on a pseudo-terminal: time to interactive, 5 prompts (25 model turns), /quit
+  interactive-default-theme
+               the TUI with no theme setting, as a fresh install starts (the others use "dark"): one prompt
 
 Runs are interleaved round-robin across builds, so background load hits all of them alike; pin them to the same cores with
 --cpus. CPU time and peak memory come from wait4() and cover all threads.
@@ -107,11 +109,25 @@ def interactive(build, env, cwd, cpus, prompts=5):
     return r
 
 
-SCENARIOS = {"startup": startup, "headless": headless, "interactive": interactive}
+def interactive_default_theme(build, env, cwd, cpus):
+    """The TUI started as a fresh install starts it: no theme setting, so the system theme, which waits for the terminal's
+    colors before drawing the header (the other scenarios use "dark", which does not). One prompt: what differs is the start."""
+    settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    saved = settings.read_text()
+    settings.write_text(json.dumps({k: v for k, v in json.loads(saved).items() if k != "theme"}))
+    try:
+        return interactive(build, env, cwd, cpus, prompts=1)
+    finally:
+        settings.write_text(saved)
+
+
+SCENARIOS = {"startup": startup, "headless": headless, "interactive": interactive,
+             "interactive-default-theme": interactive_default_theme}
 COLUMNS = {
     "startup": ["wall_ms", "cpu_ms", "peak_mb"],
     "headless": ["wall_ms", "cpu_ms", "peak_mb"],
     "interactive": ["tti_ms", "turns_ms", "wall_ms", "cpu_ms", "peak_mb"],
+    "interactive-default-theme": ["tti_ms", "cpu_ms"],
 }
 if MACOS:
     # (peak_mb, ru_maxrss, counts clean file pages and freed pages the kernel may take back; the footprint does not.)
@@ -165,7 +181,7 @@ def main():
     ap.add_argument("--build", action="append", required=True, help="name=command that starts Pi (repeatable)")
     ap.add_argument("--runs", type=int, default=10)
     ap.add_argument("--warmup", type=int, default=2)
-    ap.add_argument("--scenarios", default="startup,headless,interactive")
+    ap.add_argument("--scenarios", default="startup,headless,interactive,interactive-default-theme")
     ap.add_argument("--cpus", help="pin every run to these cores (taskset list, e.g. 8-15)")
     ap.add_argument("--baseline", help="build to compare the others with (default: the last --build)")
     ap.add_argument("--out", help="append raw results to this JSONL file")
