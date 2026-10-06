@@ -38,6 +38,16 @@ that there is no room between them, which would be uninitialized. (The heap cann
 address, and the static atom table, have positions relative to the region in them.) `StaticHeap::allocateBlock()`'s blocks, which
 only a running program makes, are a reservation of their own, anywhere, decommitted when they are freed.
 
+**What a running program does not write to is read-only.** The arenas it is not expected to write to (Data, Malloc, Cells) are
+read-only sections: their pages are the executable's, shared, and no process is charged for them. A page that is written to all
+the same is made writable when it is, by an exception handler that runs before any other (`StaticRegion.cpp`; about 5 µs a page;
+`BUN_STATIC_HEAP_WRITES=1` says where each write was). In a Pi session there are none. Only MutableCells and MutableMalloc
+(1.7 MB for Pi) are writable sections.
+
+**The heap is in the executable once.** The module graph that Bun's PE writer adds (`.bun`) keeps only the heap's header, a copy
+of the first 4 KB of its string table and the code image's first page (`StaticHeap::compactForExecutable()`): what says that the
+sections are this heap's. (It had the whole heap, 104 MB of Pi's executable a second time.)
+
 The code gets one `RUNTIME_FUNCTION` in the exception directory (`.pbpdata`), so stack walks go through compiled frames. Every
 pointer in the heap becomes a **base relocation** (`IMAGE_REL_BASED_DIR64`): pointers into the region and into the executable move
 by the same delta, since both are the image. The Windows loader applies them.
@@ -64,7 +74,16 @@ building the same program with two copies of the runtime (two files, so two ASLR
 - *Compiled stubs that embed an address* (those not yet ported to x86-64 called a reporting function by its address): on Windows
   they trap instead, with the stub's number in the first argument register.
 
-The writer refuses a heap that points into any other module (a system DLL moves at every boot).
+The writer refuses a heap that points into any other module (a system DLL moves at every boot), or into what only a build has.
+
+*Bytes that were never written.* A disengaged `std::optional` is copied without its value's bytes, which keep whatever was
+there; a class element's initializer position carried 12 bytes of the builder's memory into the heap that way (an address,
+different in every build). It is a type whose bytes are always written now.
+
+*The compiler's own order.* Pi's compiled code is not laid out the same way twice, even by the same runtime: which function's
+data goes in which slot follows the order of a table keyed by addresses (the same on Linux and macOS). Then the code and the
+entry words differ between two builds, and `-VerifyDeterminism` judges what it can: the data arenas must be identical, and no word
+may differ by exactly as much as the two builds' addresses did (a pointer that was not relocated).
 
 ## What was measured
 

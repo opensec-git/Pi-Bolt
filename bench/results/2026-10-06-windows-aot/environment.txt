@@ -1,0 +1,1 @@
+CPU: 13th Gen Intel(R) Core(TM) i5-1335U; RAM 16 GB; Microsoft Windows 11 Home Single Language 26200; Defender real-time protection on; power: AC; node v24.21.0; bun 1.4.2 (stock); Pi-Bolt runtime 1.4.3-canary.1 build 24 (no LTO), pibolt-aot = scripts\build-pi.ps1 (JIT off, CPU native, two-pass layout)

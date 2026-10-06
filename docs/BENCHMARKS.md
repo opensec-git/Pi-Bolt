@@ -152,6 +152,35 @@ each program Pi starts takes 1.4 ms more to start and be waited for (`spawnSync`
 the scenarios above starts a program. The programs' CPU time is not counted in Pi's on macOS (`wait4` counts a process's
 children; the programs are the helper's).
 
+## Windows x64 (work in progress)
+
+The same scenarios on Windows 11 (26200) on an Intel Core i5-1335U laptop (16 GB, on AC, Defender real-time protection on),
+against Pi 1.0.3 as released on Bun 1.4.2 and its npm package on Node 24.21. Pi-Bolt is the `windows-x64` branch: the runtime without
+LTO yet, Pi compiled ahead of time with the JIT off for this CPU (`scripts\build-pi.ps1`). Processes run in Job objects of their own
+and the TUI in a ConPTY (`bench/winproc.py`); CPU is the main process's, by cycles. "Peak memory" is the peak working set,
+"peak private" the peak private bytes (commit charge). Medians of 11 runs (2 warm-up), interleaved. Raw data:
+[`bench/results/2026-10-06-windows-aot`](../bench/results/2026-10-06-windows-aot), and before the compiled code
+[`bench/results/2026-10-06-windows-baseline`](../bench/results/2026-10-06-windows-baseline).
+
+| Scenario | Metric | Pi-Bolt | Pi-Bolt, bytecode | Pi (fork) on Bun 1.4.2 | Pi 1.0.3 on Bun 1.4.2 | Node 24 |
+|---|---|---:|---:|---:|---:|---:|
+| `pi --version` | wall | **44 ms** | 60 ms | 53 ms | 104 ms | 240 ms |
+| | CPU | **29 ms** | 46 ms | 38 ms | 147 ms | 294 ms |
+| `pi -p "<prompt>"`: 5 model turns, 4 tool calls | wall | **163 ms** | 220 ms | 205 ms | 258 ms | 491 ms |
+| | CPU | **138 ms** | 314 ms | 289 ms | 425 ms | 701 ms |
+| | peak memory | **83 MB** | 100 MB | 104 MB | 117 MB | 118 MB |
+| Interactive TUI: launch, 5 prompts, `/quit` | time to interactive | **122 ms** | 159 ms | 153 ms | 191 ms | 359 ms |
+| | CPU | **368 ms** | 752 ms | 723 ms | 887 ms | 1,302 ms |
+| | peak memory | **113 MB** | 138 MB | 147 MB | 163 MB | 195 MB |
+| | peak private | **241 MB** | 326 MB | 324 MB | 342 MB | 269 MB |
+
+**What an executable costs Windows when it is not running.** Windows charges an image's uninitialized sections to the system's
+commit for as long as it keeps the image cached, after the process has exited (process memory does not show it;
+[WINDOWS.md](WINDOWS.md#what-was-measured)). `bench/image_commit.py`, medians of 5: Pi on Bun 1 MB; Pi-Bolt 33 MB (the 32 MB of the
+region that has to be in the image); before that was fixed, 1,029 MB.
+
+Still to measure on Windows: an LTO build, long sessions, streaming in a terminal, and large files.
+
 ## With a real model
 
 The tables above use a local scripted model, which answers instantly and the same way every time, so they measure Pi and its

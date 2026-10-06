@@ -1,0 +1,69 @@
+﻿py : startup: round 1/13
+At line:1 char:951
++ ... nment.txt"; py bench\benchmark.py --runs 11 --warmup 2 --out "$r\benc ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (startup: round 1/13:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+startup: round 2/13
+startup: round 3/13
+startup: round 4/13
+startup: round 5/13
+startup: round 6/13
+startup: round 7/13
+startup: round 8/13
+startup: round 9/13
+startup: round 10/13
+startup: round 11/13
+startup: round 12/13
+startup: round 13/13
+headless: round 1/13
+headless: round 2/13
+headless: round 3/13
+headless: round 4/13
+headless: round 5/13
+headless: round 6/13
+headless: round 7/13
+headless: round 8/13
+headless: round 9/13
+headless: round 10/13
+headless: round 11/13
+headless: round 12/13
+headless: round 13/13
+interactive: round 1/13
+interactive: round 2/13
+interactive: round 3/13
+interactive: round 4/13
+interactive: round 5/13
+interactive: round 6/13
+interactive: round 7/13
+interactive: round 8/13
+interactive: round 9/13
+interactive: round 10/13
+interactive: round 11/13
+interactive: round 12/13
+interactive: round 13/13
+
+startup
+  build                          wall_ms          cpu_ms         peak_mb peak_private_mb      job_cpu_ms
+  pibolt-aot                   44 (-82%)       29 (-90%)       34 (-60%)        65 (-4%)       31 (-89%)
+  pibolt-bc                    60 (-75%)       46 (-84%)       39 (-54%)       98 (+43%)       62 (-79%)
+  bun-fork                     53 (-78%)       38 (-87%)       39 (-55%)      100 (+47%)       47 (-84%)
+  bun-upstream                104 (-57%)      147 (-50%)       75 (-13%)     144 (+111%)      156 (-47%)
+  node24                             240             294              86              68             297
+
+headless
+  build                          wall_ms          cpu_ms         peak_mb peak_private_mb      job_cpu_ms
+  pibolt-aot                  163 (-67%)      138 (-80%)       83 (-29%)      195 (+56%)      156 (-78%)
+  pibolt-bc                   220 (-55%)      314 (-55%)      100 (-15%)     289 (+131%)      375 (-48%)
+  bun-fork                    205 (-58%)      289 (-59%)      104 (-12%)     267 (+114%)      250 (-65%)
+  bun-upstream                258 (-47%)      425 (-39%)       117 (-1%)     274 (+120%)      438 (-39%)
+  node24                             491             701             118             125             719
+
+interactive
+  build                           tti_ms        turns_ms         wall_ms          cpu_ms         peak_mb peak_private_mb      job_cpu_ms
+  pibolt-aot                  122 (-66%)      370 (-40%)      812 (-42%)      368 (-72%)      113 (-42%)      241 (-11%)      359 (-71%)
+  pibolt-bc                   159 (-56%)      431 (-30%)      952 (-32%)      752 (-42%)      138 (-29%)      326 (+21%)      719 (-41%)
+  bun-fork                    153 (-57%)      409 (-33%)      917 (-35%)      723 (-44%)      147 (-24%)      324 (+20%)      656 (-46%)
+  bun-upstream                191 (-47%)      426 (-31%)      965 (-31%)      887 (-32%)      163 (-16%)      342 (+27%)      875 (-28%)
+  node24                             359             615            1407            1302             195             269            1219
