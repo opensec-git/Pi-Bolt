@@ -11,7 +11,8 @@ Reads the JSONL files the tools append to (--out) from one results folder:
   long_answer-*.txt, large_write-*.txt   bench/long_answer.py, bench/large_write.py (their tables, one file per run)
 and writes, for each chart, a light and a dark SVG (for GitHub's <picture> theme switch) to --images, and the tables (Markdown) to
 stdout. Figures are medians over runs. Results taken on Windows (benchmark.jsonl with private bytes) get the Windows memory rows:
-peak working set, private working set, private bytes (commit) and the rise of the system's commit charge.
+peak working set, private working set, private bytes (commit) and the rise of the system's commit charge. Where benchmark.jsonl
+has the process floor (benchmark.py --floor), the Time and CPU tables add its rows and each build's figures over it.
 --label name=text names a build's column (e.g. --label "bun=Pi 1.0.3 on stock Bun 1.4.2").
 
 Example: bench/report.py results/2026-10-02 --images docs/images --builds pi-bolt,bun,node
@@ -36,6 +37,7 @@ THEME = {
     "dark": {"text": "#f0f6fc", "muted": "#9198a1", "rule": "#3d444d", "card": "#151b23", "edge": "#3d444d", "pill": "#1b2f4a"},
 }
 FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif"
+FLOOR = "floor"  # benchmark.py --floor's runs: the process floor
 
 
 def load(path):
@@ -52,7 +54,7 @@ def fmt(value, unit):
         return "–"
     if unit == "ms" and value >= 1000:
         return f"{value:,.0f} ms"
-    if unit == "ms" and value < 10:
+    if unit == "ms" and -10 < value < 10:  # (below zero: a figure over the process floor)
         return f"{value:.1f} ms"
     if unit == "s":
         return f"{value:.1f} s"
@@ -403,12 +405,38 @@ def main():
             chart("Plugins", "A Pi extension compiled into the executable vs loaded at run time. Lower is better.", panels, order, theme,
                   a.images / f"bench-plugins-{theme}.svg")
 
+    # The process floor (benchmark.py --floor: the build "floor", bench/floor/floor.c), where measured: rows for it, the same in
+    # every column, and for each build what it takes over it. Tables only; the charts are left as they are.
+    floor_speed, floor_cpu = [], []
+    for scenario, key, name in [("interactive", "tti_ms", "launch to interactive"), ("startup", "wall_ms", "--version"),
+                                ("headless", "wall_ms", "-p")]:
+        if b(FLOOR, scenario, key) is not None:
+            floor_speed.append((f"Process floor (minimal program): {name}", "ms", vals(lambda x, s=scenario, k=key: b(FLOOR, s, k))))
+    for scenario, name in [("interactive", "interactive session"), ("headless", "-p"), ("startup", "--version")]:
+        if b(FLOOR, scenario, "cpu_ms") is not None:
+            floor_cpu.append((f"Process floor (minimal program): {name}", "ms", vals(lambda x, s=scenario: b(FLOOR, s, "cpu_ms"))))
+    def over_floor(panels, scenarios, key=None):
+        out = []
+        for (name, unit, values, *_), scenario in zip(panels, scenarios):
+            k = key or ("tti_ms" if scenario == "interactive" else "wall_ms")
+            floor = b(FLOOR, scenario, k)
+            if floor is not None:
+                out.append((f"{name}, over floor", unit, {x: None if v is None else v - floor for x, v in values.items()}))
+        return out
+    if floor_speed:
+        floor_speed += over_floor(speed[:3], ["interactive", "startup", "headless"])
+    if floor_cpu:
+        floor_cpu += over_floor(cpu[:3], ["interactive", "headless", "startup"], "cpu_ms")
+
     # Tables.
     def row(name, unit, values, *_):
         return [name] + [fmt(values.get(x), unit) for x in builds]
     header = ["", *[LABELS.get(x, x) for x in builds]]
-    print("### Time\n\n" + table(header, [row(*p) for p in speed]))
-    print("\n### CPU\n\n" + table(header, [row(*p) for p in cpu]))
+    print("### Time\n\n" + table(header, [row(*p) for p in speed + floor_speed]))
+    print("\n### CPU\n\n" + table(header, [row(*p) for p in cpu + floor_cpu]))
+    if floor_speed or floor_cpu:
+        print("\nProcess floor: a minimal native program (bench/floor/floor.c: prints a line; in the ConPTY, the marker the TUI is "
+              "waited for) started the same way, in the same rounds. Over floor: a build's median less the floor's.")
     print("\n### Memory and streaming\n\n" + table(header, [row(*p) for p in memory]))
     if plugins:
         print("\n### Plugins\n\n" + table(["", "launch", "hot loop"], [[names[k], fmt(med(r["launch_ms"] for r in plugins[k]), "ms"),

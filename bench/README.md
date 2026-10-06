@@ -26,6 +26,7 @@ throwaway Pi home, so runs are isolated from your Pi configuration and from each
 | `fake_model.py`, `fake_model_tools.py`, `fake_model_stress.py` | The scripted OpenAI-compatible model servers the tools start. |
 | `harness.py` | Shared pieces: build parsing, model server, Pi home, pseudo-terminal, CPU and memory readings. |
 | `fixtures/` | Four Pi source files (MIT, from Pi) that the scripted model asks Pi to read. |
+| `floor/floor.c` | The process floor (`benchmark.py --floor`): a minimal native program that takes Pi's arguments and answers each scenario as Pi does. |
 
 `results/` holds the published runs: the raw JSONL of each tool, with a note on what was compared.
 
@@ -50,3 +51,23 @@ Full suite: `powershell -ExecutionPolicy Bypass -File bench\run-suite.ps1 -Out b
 parameters; see the top of the script). `plugin_bench.py --compiled` needs a build with the plugin compiled in, which
 `scripts\build-pi.ps1` cannot make yet: on Windows the suite measures the plugin loaded at run time, unless `-PiBoltPlugins`
 names such a build.
+
+### The process floor
+
+Starting a process costs far more on Windows than on Linux: process creation, the loader and Defender's check of a new process
+take 10-25 ms and some 2,000 page faults even for a program that only prints a line (under a millisecond on Linux), so the
+ratios between builds look closer than what the builds themselves cost. `benchmark.py --floor PATH` adds such a program to
+every round, as the build `floor`, and prints each build's time over it; `report.py` then adds rows for the floor and for
+each build's figures over it ("over floor": its median less the floor's) to the Time and CPU tables. Without `--floor` the
+output is what it was.
+
+`floor/floor.c` takes the arguments Pi gets: `--version` prints a line, `-p` prints the line that ends the scripted model's
+answer, and anything else is the TUI's stand-in in the ConPTY: it shows `fake-model` (time to interactive), answers each line
+typed as the scripted model ends its nth answer, and exits on `/quit`. `run-suite.ps1` builds it with clang-cl, linked as the
+real executable is (`/O2 /MT`, `/DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /guard:cf`), into `%TEMP%\pibolt-bench-floor`; `-Floor`
+takes one built already, `-NoFloor` leaves it out. By hand (from a shell with C:\pb\env.ps1 dot-sourced):
+
+```powershell
+clang-cl /nologo /O2 /MT /guard:cf bench\floor\floor.c /Fo$env:TEMP\ /Fe$env:TEMP\floor.exe /link /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /guard:cf
+python bench\benchmark.py --floor $env:TEMP\floor.exe --build pi-bolt=out\pi-bolt-aot-lto\pi.exe --build bun=out\pi-stable-upstream\pi.exe
+```

@@ -9,6 +9,10 @@ Scenarios (each run is a fresh process):
 Runs are interleaved round-robin across builds, so background load hits all of them alike; pin them to the same cores with
 --cpus. CPU time and peak memory come from wait4() and cover all threads.
 
+--floor PATH adds the process floor to the rounds, as the build "floor": a minimal native program (bench/floor/floor.c) that
+takes Pi's arguments and answers each scenario the way Pi does, so that what process creation, the loader and (on Windows)
+Defender's check of a new process cost can be told from what a build costs. The tables then add each build's figure over it.
+
 Example:
   bench/benchmark.py --runs 15 --cpus 8-15 \\
       --build pi-bolt=./out/pi/pi \\
@@ -26,8 +30,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import (
-    DONE, MACOS, MODEL_ARGS, PROMPT, WINDOWS, Tty, done, fake_model, maxrss_mb, median, parse_builds, peak_footprint_mb, pi_env,
-    pi_home, pinned, workdir,
+    DONE, MACOS, MODEL_ARGS, PROMPT, WINDOWS, Build, Tty, done, fake_model, maxrss_mb, median, parse_builds, peak_footprint_mb,
+    pi_env, pi_home, pinned, warm_page_cache, workdir,
 )
 
 if WINDOWS:
@@ -121,6 +125,11 @@ if WINDOWS:
         columns += ["peak_private_mb", "peak_private_ws_mb", "job_cpu_ms"]
 
 
+FLOOR = "floor"  # (the build name of --floor's runs)
+# What is shown over the floor: the time to the answer, or to the TUI being ready.
+OVER_FLOOR = {"startup": "wall_ms", "headless": "wall_ms", "interactive": "tti_ms"}
+
+
 def summarize(rows, baseline=None):
     for scenario, columns in COLUMNS.items():
         rs = [r for r in rows if r["scenario"] == scenario and r["ok"]]
@@ -141,6 +150,11 @@ def summarize(rows, baseline=None):
                     cell += f" ({(v / base[c] - 1) * 100:+.0f}%)"
                 cells.append(cell.rjust(width[c]))
             print("  " + n.ljust(22) + "".join(cells))
+        floor = stats.get(FLOOR, {}).get(OVER_FLOOR[scenario])
+        if floor is not None:
+            c = OVER_FLOOR[scenario]
+            over = [f"{n} {stats[n][c] - floor:.0f}" for n in names if n != FLOOR and stats[n][c] is not None]
+            print(f"  {c} over the floor ({floor:.0f}): " + ", ".join(over))
     failed = [r for r in rows if not r["ok"]]
     if failed:
         print(f"\n{len(failed)} failed runs: " + ", ".join(sorted({f'{r["scenario"]}/{r["build"]}' for r in failed})))
@@ -155,8 +169,20 @@ def main():
     ap.add_argument("--cpus", help="pin every run to these cores (taskset list, e.g. 8-15)")
     ap.add_argument("--baseline", help="build to compare the others with (default: the last --build)")
     ap.add_argument("--out", help="append raw results to this JSONL file")
+    ap.add_argument("--floor", metavar="PATH", help="also run this minimal program (bench/floor/floor.c, built) in every round, "
+                    "as the build 'floor': the process floor")
     a = ap.parse_args()
     builds = parse_builds(a.build)
+    baseline = a.baseline or builds[-1].name
+    if a.floor:
+        if any(b.name == FLOOR for b in builds):
+            raise SystemExit(f"--floor: a build is already called {FLOOR!r}")
+        path = os.path.abspath(a.floor)
+        if not os.path.isfile(path):
+            raise SystemExit(f"--floor: {a.floor} is not a file")
+        # (Not through parse_builds: a path is one argument here, spaces and all.) First in every round.
+        builds.insert(0, Build(FLOOR, [path]))
+        warm_page_cache(builds[:1])
     rows = []
     with fake_model() as port, pi_home(port) as home, workdir() as cwd:
         env = pi_env(home)
@@ -173,7 +199,7 @@ def main():
                         with open(a.out, "a") as f:
                             f.write(json.dumps(r) + "\n")
                 print(f"{scenario}: round {i + 1}/{a.warmup + a.runs}", file=sys.stderr, flush=True)
-    summarize(rows, a.baseline or builds[-1].name)
+    summarize(rows, baseline)
 
 
 if __name__ == "__main__":

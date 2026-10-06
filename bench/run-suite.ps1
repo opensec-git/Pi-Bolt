@@ -9,7 +9,9 @@
 #   node     C:\pb\tools\node22\node.exe    Node 22, running Pi's npm bundle (-NodeCli)
 #   node24   node (on PATH)                 Node 24, the same bundle
 # What runs, in this order (every tool starts its own fake model on 127.0.0.1; no model provider is called):
-#   benchmark.py      startup, headless, interactive: -Runs runs after -Warmup warm-up rounds, interleaved
+#   benchmark.py      startup, headless, interactive: -Runs runs after -Warmup warm-up rounds, interleaved; with the process
+#                     floor in every round (--floor): bench\floor\floor.c, built with clang-cl into %TEMP%\pibolt-bench-floor
+#                     (-Floor: an executable built already; -NoFloor: none)
 #   long_session.py   -LongSessions sessions of -LongPrompts prompts per build
 #   conpty_check.py   tmux_check.py's streaming check in a ConPTY (there is no tmux on Windows): -Rounds rounds
 #   pauses.py         frame times and stalls (-PauseSteps), then garbage collection pauses (--gc, -GcSteps)
@@ -42,7 +44,9 @@ param(
 	[string]$LargeWriteSizes = '50,200',
 	[int]$PluginRuns = 5,
 	[int]$PluginCommands = 5,
-	[string]$Images = ''
+	[string]$Images = '',
+	[string]$Floor = '',
+	[switch]$NoFloor
 )
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -71,6 +75,24 @@ $Node22 = Resolve-File $Node22 'Node 22 (-Node22)'
 $Node24 = Resolve-File $Node24 'Node 24 (-Node24)'
 $NodeCli = Resolve-File $NodeCli "Pi's npm bundle (-NodeCli)"
 if ($PiBoltPlugins) { $PiBoltPlugins = Resolve-File $PiBoltPlugins 'the plugin build (-PiBoltPlugins)' }
+# The process floor: a minimal native program, linked as the real executable is (static CRT, ASLR with high entropy, DEP, Control
+# Flow Guard), built here from bench\floor\floor.c into a scratch folder (no binary in the repository).
+$floorBuilt = ''
+if ($NoFloor) { $Floor = '' }
+elseif ($Floor) { $Floor = Resolve-File $Floor 'the process floor (-Floor)' }
+else {
+	if (-not (Get-Command clang-cl -ErrorAction SilentlyContinue) -and (Test-Path 'C:\pb\env.ps1')) { . 'C:\pb\env.ps1' }
+	if (-not (Get-Command clang-cl -ErrorAction SilentlyContinue)) { Die 'clang-cl not found, to build the process floor (pass -Floor with one built already, or -NoFloor)' }
+	$floorDir = Join-Path $env:TEMP 'pibolt-bench-floor'
+	New-Item -ItemType Directory -Force $floorDir | Out-Null
+	$Floor = Join-Path $floorDir 'floor.exe'
+	$ErrorActionPreference = 'Continue'
+	& clang-cl /nologo /O2 /MT /guard:cf "/Fo$floorDir\" (Join-Path $PSScriptRoot 'floor\floor.c') "/Fe$Floor" /link /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /guard:cf | Out-Host
+	$ErrorActionPreference = 'Stop'
+	if ($LASTEXITCODE -ne 0) { Die "the process floor did not build (clang-cl exit $LASTEXITCODE)" }
+	$clangVersion = if (((& clang-cl --version) | Select-Object -First 1) -match 'version (\S+)') { $Matches[1] } else { '?' }
+	$floorBuilt = " built with clang-cl $clangVersion /O2 /MT /guard:cf, linked /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /guard:cf"
+}
 if (-not [System.IO.Path]::IsPathRooted($Out)) { $Out = Join-Path (Get-Location).Path $Out }
 New-Item -ItemType Directory -Force $Out | Out-Null
 $Out = (Resolve-Path $Out).Path
@@ -133,12 +155,14 @@ Save-Lines (Join-Path $Out 'environment.txt') @(
 	"python: $pythonVersion",
 	"model: bench/fake_model*.py on 127.0.0.1 (no provider is called)"
 )
+if ($Floor) { [System.IO.File]::AppendAllLines((Join-Path $Out 'environment.txt'), [string[]]@("floor: bench/floor/floor.c$floorBuilt, $Floor")) }
 Get-Content (Join-Path $Out 'environment.txt')
 
 $builds = @('--build', "pi-bolt=$PiBolt", '--build', "bun=$Bun", '--build', "node=$Node22 $NodeCli", '--build', "node24=$Node24 $NodeCli")
 
-Log 'benchmark.py: startup, headless, interactive'
-Run-Python bench\benchmark.py --runs $Runs --warmup $Warmup --out "$Out\benchmark.jsonl" @builds --baseline bun |
+$floorArgs = if ($Floor) { @('--floor', $Floor) } else { @() }
+Log "benchmark.py: startup, headless, interactive$(if ($Floor) { ', and the process floor' })"
+Run-Python bench\benchmark.py --runs $Runs --warmup $Warmup --out "$Out\benchmark.jsonl" @builds @floorArgs --baseline bun |
 	Tee-Object -Variable lines | Out-Host
 Save-Lines "$Out\benchmark.txt" $lines
 
