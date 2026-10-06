@@ -173,6 +173,14 @@ if ($Floor) { [System.IO.File]::AppendAllLines((Join-Path $Out 'environment.txt'
 foreach ($extra in @(@('pi-bolt-plugins', $PiBoltPlugins), @('pi-bolt-plugins-jit', $PiBoltPluginsJit), @('pi-bolt-jit', $PiBoltJit))) {
 	if ($extra[1]) { [System.IO.File]::AppendAllLines((Join-Path $Out 'environment.txt'), [string[]]@("$($extra[0]): $(& $extra[1] --version | Select-Object -First 1), $($extra[1])")) }
 }
+# The runtime each Pi-Bolt build was made with (its pi-bolt.txt, from scripts\build-pi.ps1): builds on different runtimes show here.
+foreach ($extra in @(@('pi-bolt', $PiBolt), @('pi-bolt-plugins', $PiBoltPlugins), @('pi-bolt-plugins-jit', $PiBoltPluginsJit), @('pi-bolt-jit', $PiBoltJit))) {
+	if (-not $extra[1]) { continue }
+	$stamp = Join-Path (Split-Path $extra[1]) 'pi-bolt.txt'
+	$runtime = if (Test-Path -LiteralPath $stamp) { Get-Content -LiteralPath $stamp | Where-Object { $_ -like 'runtime: *' } | Select-Object -First 1 } else { $null }
+	if (-not $runtime) { $runtime = 'runtime: not recorded (built before scripts\build-pi.ps1 recorded it)' }
+	[System.IO.File]::AppendAllLines((Join-Path $Out 'environment.txt'), [string[]]@("$($extra[0]) $runtime"))
+}
 Get-Content (Join-Path $Out 'environment.txt')
 
 $builds = @('--build', "pi-bolt=$PiBolt", '--build', "bun=$Bun", '--build', "node=$Node22 $NodeCli", '--build', "node24=$Node24 $NodeCli")

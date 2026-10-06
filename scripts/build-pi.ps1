@@ -160,6 +160,33 @@ if ($Stable) {
 
 $Bun = if ($env:PIBOLT_BUN) { $env:PIBOLT_BUN } else { Join-Path $Work 'runtime\bun.exe' }
 if (-not (Test-Path $Bun)) { Die "no Pi-Bolt runtime at ${Bun}: build it (scripts\build-runtime.ps1), or set PIBOLT_BUN" }
+# Which runtime this is, for pi-bolt.txt (and from it the benchmarks' environment.txt), so that two builds made with different
+# runtimes say so: its version, hash, whether it has Control Flow Guard (the PE header's GUARD_CF), and the build of it in
+# .work\bun\build it is a copy of, with that build's LTO setting. A build of the runtime newer than this one is warned about.
+function Get-RuntimeStamp($exe) {
+	$stream = [IO.File]::OpenRead($exe)
+	try { $header = New-Object byte[] 4096; [void]$stream.Read($header, 0, $header.Length) } finally { $stream.Dispose() }
+	$pe = [BitConverter]::ToInt32($header, 0x3C)
+	$cfg = if (([BitConverter]::ToUInt16($header, $pe + 24 + 70) -band 0x4000) -ne 0) { 'CFG' } else { 'no CFG' }
+	$file = Get-Item -LiteralPath $exe
+	$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $exe).Hash.ToLower()
+	$from = 'not a build in .work\bun\build'
+	foreach ($dir in @(Get-ChildItem (Join-Path $Work 'bun\build') -Directory -ErrorAction SilentlyContinue)) {
+		$built = Get-Item -LiteralPath (Join-Path $dir.FullName 'bun.exe') -ErrorAction SilentlyContinue
+		if (-not $built) { continue }
+		if ($built.Length -eq $file.Length -and (Get-FileHash -Algorithm SHA256 -LiteralPath $built.FullName).Hash.ToLower() -eq $hash) {
+			$lto = try { if ((Get-Content (Join-Path $dir.FullName 'configure.json') -Raw | ConvertFrom-Json).overrides.lto) { 'LTO' } else { 'no LTO' } } catch { 'LTO unknown' }
+			$from = "build/$($dir.Name), $lto"
+		} elseif ($built.LastWriteTime -gt $file.LastWriteTime) {
+			Write-Host "warning: $($built.FullName) is newer than the runtime used, $exe (set PIBOLT_BUN, or install it with scripts\build-runtime.ps1)" -ForegroundColor Yellow
+		}
+	}
+	$ErrorActionPreference = 'Continue'
+	$revision = (& $exe --revision 2>$null | Select-Object -First 1)
+	"runtime: Bun $revision, $cfg, $from, $($file.Length) bytes, sha256 $($hash.Substring(0, 16))"
+}
+$RuntimeStamp = Get-RuntimeStamp $Bun
+Log "$RuntimeStamp ($Bun)"
 $OrderArgs = @(); $Regexps = ''
 if (Test-Path (Join-Path $Profile 'bytecode.order')) {
 	$OrderArgs = @("--bytecode-order=$(Join-Path $Profile 'bytecode.order')")
@@ -229,7 +256,8 @@ if ($VerifyDeterminism) {
 	Log 'the prebuilt heap is the same from both builds'
 }
 Stage-Assets $Out
-"Pi-Bolt $PiboltVersion (Pi $Version), win32-$CpuVariant, JIT $Jit, built $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd'))" | Set-Content -Encoding ascii (Join-Path $Out 'pi-bolt.txt')
+@("Pi-Bolt $PiboltVersion (Pi $Version), win32-$CpuVariant, JIT $Jit, built $((Get-Date).ToUniversalTime().ToString('yyyy-MM-dd'))", $RuntimeStamp) |
+	Set-Content -Encoding ascii (Join-Path $Out 'pi-bolt.txt')
 
 $env:BUN_STATIC_HEAP_VERBOSE = '1'
 $ErrorActionPreference = 'Continue' # (stderr is where it says it)
