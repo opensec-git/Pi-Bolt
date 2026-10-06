@@ -6,8 +6,9 @@ counted with it, as wait4() counts a child's waited-for children on Linux. What 
 - CPU: the job's user + kernel time (every process that ran in it), and the cycles of the main process
   (QueryProcessCycleTime) converted to milliseconds at the time-stamp counter's rate. Thread times on Windows advance in clock
   ticks (15.6 ms by default), so short runs are measured by cycles.
-- Memory: the main process's peak working set and peak private bytes (commit charge), from GetProcessMemoryInfo, and the
-  job's peak private bytes of any one process. And the system's commit charge (GetPerformanceInfo), which also counts what a
+- Memory: the main process's peak working set and peak private bytes (commit charge), from GetProcessMemoryInfo, its peak
+  private working set (sampled every 50 ms: Windows keeps no peak of it), and the job's peak private bytes of any one process.
+  Now (memory_mb): working set, private bytes and private working set. And the system's commit charge (GetPerformanceInfo), which also counts what a
   process's private bytes do not: an executable's image section is charged for its writable and uninitialized pages, once, when
   it is first mapped, and stays charged while Windows keeps the image cached, after the process has exited. Its rise while the
   process ran (sampled) and what is left of it after the process exited; both are system-wide, so they are only meaningful on an
@@ -89,6 +90,32 @@ class PROCESS_MEMORY_COUNTERS_EX(ctypes.Structure):
                 ("QuotaPagedPoolUsage", ctypes.c_size_t), ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
                 ("QuotaNonPagedPoolUsage", ctypes.c_size_t), ("PagefileUsage", ctypes.c_size_t),
                 ("PeakPagefileUsage", ctypes.c_size_t), ("PrivateUsage", ctypes.c_size_t)]
+
+
+class PROCESS_MEMORY_COUNTERS_EX2(ctypes.Structure):
+    """With the private working set (Windows 10 2004 and later): what Task Manager shows as a process's memory."""
+    _fields_ = PROCESS_MEMORY_COUNTERS_EX._fields_ + [("PrivateWorkingSetSize", ctypes.c_size_t),
+                                                      ("SharedCommitUsage", ctypes.c_size_t)]
+
+
+def _counters(process):
+    """GetProcessMemoryInfo of a process handle, with the private working set where Windows has it (else that field is 0)."""
+    pmc = PROCESS_MEMORY_COUNTERS_EX2()
+    pmc.cb = ctypes.sizeof(pmc)
+    if not psapi.GetProcessMemoryInfo(process, ctypes.byref(pmc), pmc.cb):
+        pmc = PROCESS_MEMORY_COUNTERS_EX2()
+        pmc.cb = ctypes.sizeof(PROCESS_MEMORY_COUNTERS_EX)
+        psapi.GetProcessMemoryInfo(process, ctypes.byref(pmc), pmc.cb)
+    return pmc
+
+
+def _memory(pmc) -> dict:
+    """rss: the working set; own: the private bytes (commit charge); private_ws: the private working set (resident and not
+    shared: the closest to Linux's private dirty pages)."""
+    out = {"rss": round(pmc.WorkingSetSize / 2**20, 1), "own": round(pmc.PrivateUsage / 2**20, 1)}
+    if pmc.cb >= ctypes.sizeof(PROCESS_MEMORY_COUNTERS_EX2):
+        out["private_ws"] = round(pmc.PrivateWorkingSetSize / 2**20, 1)
+    return out
 
 
 class COORD(ctypes.Structure):
@@ -183,6 +210,8 @@ class Measured:
     """A process started suspended in a Job object of its own. Use .result() after it has exited."""
 
     def __init__(self, argv, env=None, cwd=None, pseudo_console=None, stdin=None, stdout=None, stderr=None):
+        """With a pseudo_console, stdin and stdout are the console's; stderr, if given (an inheritable handle), goes there instead
+        (for diagnostics the TUI must not draw over, such as the engine's GC log)."""
         self.job = _check(k32.CreateJobObjectW(None, None))
         limits = JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
         limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
@@ -203,6 +232,9 @@ class Measured:
             si.lpAttributeList = ctypes.cast(self._attrs, ctypes.c_void_p)
             # (No standard handles of ours: the pseudo-console's.)
             si.StartupInfo.dwFlags = STARTF_USESTDHANDLES
+            if stderr is not None:
+                si.StartupInfo.hStdError = stderr
+                inherit = True
         else:
             si.StartupInfo.dwFlags = STARTF_USESTDHANDLES
             si.StartupInfo.hStdInput, si.StartupInfo.hStdOutput, si.StartupInfo.hStdError = stdin, stdout, stderr
@@ -221,13 +253,18 @@ class Measured:
         k32.ResumeThread(pi.hThread)
         k32.CloseHandle(pi.hThread)
         self._result = None
-        # The system's commit charge, every 50 ms while the process runs (one call each: nothing to speak of).
+        # The system's commit charge and the process's private working set, every 50 ms while it runs (two calls each: nothing to
+        # speak of). Windows keeps the peak of the working set and of the private bytes, not of the private working set.
+        self.private_ws_peak = None  # (None: it ended before the first sample)
         self._sampling = threading.Thread(target=self._sample_commit, daemon=True)
         self._sampling.start()
 
     def _sample_commit(self):
         while self.process and k32.WaitForSingleObject(self.process, 50) == WAIT_TIMEOUT:
             self.commit_peak = max(self.commit_peak, system_commit_mb())
+            private_ws = _counters(self.process).PrivateWorkingSetSize
+            if k32.WaitForSingleObject(self.process, 0) == WAIT_TIMEOUT:  # (once it has exited, it reads 0)
+                self.private_ws_peak = max(self.private_ws_peak or 0, private_ws)
 
     def poll(self):
         if k32.WaitForSingleObject(self.process, 0) == WAIT_TIMEOUT:
@@ -250,11 +287,8 @@ class Measured:
         return cycles.value / tsc_hz() * 1e3
 
     def memory_mb(self) -> dict:
-        """Working set and private bytes of the main process, now."""
-        pmc = PROCESS_MEMORY_COUNTERS_EX()
-        pmc.cb = ctypes.sizeof(pmc)
-        psapi.GetProcessMemoryInfo(self.process, ctypes.byref(pmc), pmc.cb)
-        return {"rss": round(pmc.WorkingSetSize / 2**20, 1), "own": round(pmc.PrivateUsage / 2**20, 1)}
+        """Working set, private bytes and private working set of the main process, now."""
+        return _memory(_counters(self.process))
 
     def result(self) -> dict:
         """After exit: wall time, CPU and peak memory, in the benchmark tools' fields."""
@@ -281,6 +315,8 @@ class Measured:
             "processes": acct.TotalProcesses,
             "peak_mb": round(pmc.PeakWorkingSetSize / 2**20, 1),  # peak working set (like ru_maxrss)
             "peak_private_mb": round(pmc.PeakPagefileUsage / 2**20, 1),  # peak commit charge of the main process
+            # (Sampled every 50 ms, so a peak shorter than that can be missed.)
+            "peak_private_ws_mb": None if self.private_ws_peak is None else round(self.private_ws_peak / 2**20, 1),
             "job_peak_private_mb": round(ext.PeakProcessMemoryUsed / 2**20, 1),
             "page_faults": pmc.PageFaultCount,
             # System-wide (see the top of this file): the rise while it ran, and what is still charged after it exited.
@@ -326,7 +362,8 @@ def run(argv, env=None, cwd=None, timeout=300) -> tuple[bytes, dict]:
 class ConPty:
     """A pseudo-console running one process: bytes in, the screen's VT stream out."""
 
-    def __init__(self, argv, env, cwd, cols=120, rows=40):
+    def __init__(self, argv, env, cwd, cols=120, rows=40, stderr=None):
+        """stderr: a file to send the process's standard error to instead of the console."""
         in_read, in_write, out_read, out_write = w.HANDLE(), w.HANDLE(), w.HANDLE(), w.HANDLE()
         _check(k32.CreatePipe(ctypes.byref(in_read), ctypes.byref(in_write), None, 0))
         _check(k32.CreatePipe(ctypes.byref(out_read), ctypes.byref(out_write), None, 0))
@@ -334,7 +371,17 @@ class ConPty:
         hr = k32.CreatePseudoConsole(COORD(cols, rows), in_read, out_write, 0, ctypes.byref(self.hpc))
         if hr != 0:
             raise OSError(f"CreatePseudoConsole failed: {hr:#x}")
-        self.proc = Measured(argv, env, cwd, pseudo_console=self.hpc.value)
+        self.err_file = err = None
+        if stderr is not None:
+            import msvcrt
+            self.err_file = open(stderr, "ab")
+            err = msvcrt.get_osfhandle(self.err_file.fileno())
+            k32.SetHandleInformation(err, 1, 1)  # HANDLE_FLAG_INHERIT
+        try:
+            self.proc = Measured(argv, env, cwd, pseudo_console=self.hpc.value, stderr=err)
+        finally:
+            if err is not None:
+                k32.SetHandleInformation(err, 1, 0)  # (inherited by this process only)
         # The console has its own copies now.
         k32.CloseHandle(in_read)
         k32.CloseHandle(out_write)
@@ -391,6 +438,9 @@ class ConPty:
                 k32.CloseHandle(h)
         self.inp = self.out = None
         self.proc.close()
+        if self.err_file:
+            self.err_file.close()
+            self.err_file = None
 
 
 def open_process(pid: int):
@@ -427,10 +477,7 @@ def memory_mb(pid: int) -> dict:
     if not h:
         return {}
     try:
-        pmc = PROCESS_MEMORY_COUNTERS_EX()
-        pmc.cb = ctypes.sizeof(pmc)
-        psapi.GetProcessMemoryInfo(h, ctypes.byref(pmc), pmc.cb)
-        return {"rss": round(pmc.WorkingSetSize / 2**20, 1), "own": round(pmc.PrivateUsage / 2**20, 1)}
+        return _memory(_counters(h))
     finally:
         k32.CloseHandle(h)
 

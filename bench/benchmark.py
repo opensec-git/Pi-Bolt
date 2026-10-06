@@ -34,11 +34,17 @@ if WINDOWS:
     import winproc
 
 
+def windows_memory(res):
+    """The memory figures of a run on Windows (winproc.Measured.result()): peak working set, peak private bytes (commit charge),
+    the peak private working set (sampled every 50 ms) and the rise of the system's commit charge while it ran."""
+    return {k: res[k] for k in ("peak_mb", "peak_private_mb", "peak_private_ws_mb", "system_commit_peak_mb")}
+
+
 def run_plain(build, args, env, cwd, cpus):
     if WINDOWS:
         out, res = winproc.run([*build.argv, *args], env, cwd)
         return out, {"ok": res["exit"] == 0, "wall_ms": res["wall_ms"], "cpu_ms": res["cpu_ms"], "job_cpu_ms": res["job_cpu_ms"],
-                     "peak_mb": res["peak_mb"], "peak_private_mb": res["peak_private_mb"]}
+                     **windows_memory(res)}
     t0 = time.perf_counter()
     p = subprocess.Popen(pinned([*build.argv, *args], cpus), env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -91,8 +97,7 @@ def interactive(build, env, cwd, cpus, prompts=5):
     r["cpu_ms"] = (ru.ru_utime + ru.ru_stime) * 1e3
     r["peak_mb"] = maxrss_mb(ru)
     if WINDOWS:
-        r["peak_private_mb"] = ru.result["peak_private_mb"]
-        r["job_cpu_ms"] = ru.result["job_cpu_ms"]
+        r.update(windows_memory(ru.result), job_cpu_ms=ru.result["job_cpu_ms"])
     if getattr(tty, "peak_footprint_mb", None) is not None:
         r["peak_fp_mb"] = tty.peak_footprint_mb
     return r
@@ -109,10 +114,11 @@ if MACOS:
     for columns in COLUMNS.values():
         columns.append("peak_fp_mb")
 if WINDOWS:
-    # peak_mb is the peak working set; peak_private_mb the peak commit charge (private bytes). cpu_ms is the main process's,
-    # by cycles; job_cpu_ms adds what it started, in clock ticks.
+    # peak_mb is the peak working set; peak_private_mb the peak commit charge (private bytes); peak_private_ws_mb the peak
+    # private working set. cpu_ms is the main process's, by cycles; job_cpu_ms adds what it started, in clock ticks. (The rise of
+    # the system's commit charge, system_commit_peak_mb, is in the JSONL: system-wide, so too noisy for this table.)
     for columns in COLUMNS.values():
-        columns += ["peak_private_mb", "job_cpu_ms"]
+        columns += ["peak_private_mb", "peak_private_ws_mb", "job_cpu_ms"]
 
 
 def summarize(rows, baseline=None):
@@ -124,7 +130,8 @@ def summarize(rows, baseline=None):
         stats = {n: {c: median([r.get(c) for r in rs if r["build"] == n]) for c in columns} for n in names}
         base = stats.get(baseline) if baseline else None
         print(f"\n{scenario}")
-        print("  " + "build".ljust(22) + "".join(c.rjust(16) for c in columns))
+        width = {c: max(16, len(c) + 2) for c in columns}
+        print("  " + "build".ljust(22) + "".join(c.rjust(width[c]) for c in columns))
         for n in names:
             cells = []
             for c in columns:
@@ -132,7 +139,7 @@ def summarize(rows, baseline=None):
                 cell = "-" if v is None else f"{v:.0f}"
                 if base and base[c] and v is not None and n != baseline:
                     cell += f" ({(v / base[c] - 1) * 100:+.0f}%)"
-                cells.append(cell.rjust(16))
+                cells.append(cell.rjust(width[c]))
             print("  " + n.ljust(22) + "".join(cells))
     failed = [r for r in rows if not r["ok"]]
     if failed:

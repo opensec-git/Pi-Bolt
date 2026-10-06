@@ -226,8 +226,8 @@ def peak_footprint_mb(pid: int, block: bool = True) -> float | None:
 class WinTty:
     """Tty's counterpart on Windows: Pi in a ConPTY, in a Job object. quit() returns (status, winproc.Usage)."""
 
-    def __init__(self, argv, env, cwd, cols=120, rows=40):
-        self.console = winproc.ConPty(argv, env, cwd, cols, rows)
+    def __init__(self, argv, env, cwd, cols=120, rows=40, stderr=None):
+        self.console = winproc.ConPty(argv, env, cwd, cols, rows, stderr=stderr)
         self.pid = self.console.proc.pid
         self.buf = b""
 
@@ -273,15 +273,18 @@ class WinTty:
 
 
 class Tty:
-    """A minimal terminal on a pseudo-terminal: answers the capability queries the TUI sends the way xterm does."""
+    """A minimal terminal on a pseudo-terminal: answers the capability queries the TUI sends the way xterm does. stderr: a file
+    the program's standard error goes to instead of the terminal (diagnostics the TUI must not draw over)."""
 
     def __new__(cls, *args, **kwargs):
         return WinTty(*args, **kwargs) if WINDOWS else super().__new__(cls)
 
-    def __init__(self, argv, env, cwd, cols=120, rows=40):
+    def __init__(self, argv, env, cwd, cols=120, rows=40, stderr=None):
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(cwd)
+            if stderr is not None:
+                os.dup2(os.open(stderr, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644), 2)
             os.execvpe(argv[0], argv, env)
         fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
         self.buf = b""

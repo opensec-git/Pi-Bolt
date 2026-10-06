@@ -3,6 +3,10 @@
 time per prompt, CPU per prompt, memory, and how large the conversation sent to the model has grown, to expose slowdowns and
 growth that short runs hide.
 
+On Windows (ConPTY, winproc.py) memory is the working set and, as "own", the private bytes (commit charge), plus the private
+working set; the last row also has the session's peaks (working set, private working set, private bytes) and the rise of the
+system's commit charge.
+
 Example (300 tool calls, a context well past a million tokens):
   bench/long_session.py --prompts 75 --every 25 --build pi-bolt=./out/pi/pi --build bun=./out/pi-stable/pi
 """
@@ -16,7 +20,9 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from harness import MODEL_ARGS, PROMPT, Tty, cpu_ms, done, fake_model, memory_mb, parse_builds, pi_env, pi_home, pinned, workdir
+from harness import (
+    MODEL_ARGS, PROMPT, WINDOWS, Tty, cpu_ms, done, fake_model, memory_mb, parse_builds, pi_env, pi_home, pinned, workdir,
+)
 
 
 def session(build, prompts, every, cpus):
@@ -43,8 +49,17 @@ def session(build, prompts, every, cpus):
                 rows.append({"prompt": i, "ms_per_prompt": round((now - t_block) * 1000 / every, 1),
                              "cpu_ms_per_prompt": round((c - c_block) / every, 1), "rss_mb": m.get("rss"), "own_mb": m.get("own"),
                              "request_mb": round(last / 1e6, 2), "tokens_m": round(last / 4e6, 2)})
+                if WINDOWS:
+                    # (own_mb is the private bytes, the commit charge; the private working set is what of it is resident.)
+                    rows[-1]["private_ws_mb"] = m.get("private_ws")
                 t_block, c_block = now, c
-        status, _ = tty.quit()
+        status, ru = tty.quit()
+        if WINDOWS and rows and "error" not in rows[-1]:
+            # The peaks over the whole session, from the Job object and the sampling (winproc.py).
+            res = ru.result
+            rows[-1].update(peak_mb=res["peak_mb"], peak_private_mb=res["peak_private_mb"],
+                            peak_private_ws_mb=res["peak_private_ws_mb"], system_commit_peak_mb=res["system_commit_peak_mb"],
+                            job_cpu_ms=round(res["job_cpu_ms"], 1))
     os.unlink(sizes)
     return rows, status
 
@@ -65,7 +80,11 @@ def main():
                 print(f"   {row.get('prompt', '')}: {row['error']}")
                 continue
             print(f"   {row['prompt']:4d}: {row['ms_per_prompt']:7.1f} ms/prompt   cpu {row['cpu_ms_per_prompt']:7.1f} ms/prompt   "
-                  f"memory {row['rss_mb']} MB (own {row['own_mb']} MB)   request {row['request_mb']:5.1f} MB (~{row['tokens_m']:.1f}M tokens)")
+                  f"memory {row['rss_mb']} MB (own {row['own_mb']} MB)   request {row['request_mb']:5.1f} MB (~{row['tokens_m']:.1f}M tokens)"
+                  + (f"   private working set {row['private_ws_mb']} MB" if "private_ws_mb" in row else ""))
+            if "peak_mb" in row:
+                print(f"         peaks: working set {row['peak_mb']} MB, private working set {row['peak_private_ws_mb']} MB, "
+                      f"private bytes {row['peak_private_mb']} MB, system commit +{row['system_commit_peak_mb']} MB")
         if a.out:
             with open(a.out, "a") as f:
                 for row in rows:

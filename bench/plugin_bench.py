@@ -12,6 +12,9 @@ the plugin reaches it:
 Example:
   bench/plugin_bench.py --compiled pi-bolt=out/pi-bolt-plugins/pi --runtime pi-bolt=out/pi-bolt/pi \\
       --runtime bun=out/pi-stable/pi --none pi-bolt=out/pi-bolt/pi
+
+On Windows it runs as it is (Pi in a ConPTY). --runtime and --none need only the usual builds; --compiled needs a build with the
+plugin compiled in, which scripts\\build-pi.ps1 cannot make yet (scripts/build-pi.sh --plugins can, on Linux and macOS).
 """
 
 import argparse
