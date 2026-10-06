@@ -19,45 +19,45 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
   was linked to be; SharedArrayBuffer with the JIT off; a terminal reopened by its own device, which
   kqueue can watch; the programs an executable starts are started by Pi-Bolt's launcher helper.
 ---
- scripts/build/deps/webkit.ts                  |  18 +
- scripts/build/download.ts                     |  28 +-
- scripts/build/flags.ts                        |  10 +
- src/ast/import_record.rs                      |   4 +
- src/bun_alloc/lib.rs                          |  14 +-
- src/bun_core/env_var.rs                       |   1 +
- src/bundler/LinkerContext.rs                  |  38 +
- src/bundler/bundle_v2.rs                      |  22 +
- .../linker_context/convertStmtsForChunk.rs    |  68 ++
- .../generateChunksInParallel.rs               |  21 +
- .../linker_context/scanImportsAndExports.rs   |  21 +
- src/bundler/prelinked_module_graph.rs         |  14 +-
- src/crash_handler/lib.rs                      |  41 +-
- src/http/HTTPContext.rs                       |  39 +-
- src/http/HTTPThread.rs                        |  11 +
- src/http/HeaderValueIterator.rs               |  20 +
- src/http/InternalState.rs                     |   4 +
- src/http/lib.rs                               |  39 +-
- src/jsc/CachedBytecode.rs                     |  31 +
- src/jsc/GarbageCollectionController.rs        |  26 +-
- src/jsc/JSType.rs                             | 144 +--
- src/jsc/VirtualMachine.rs                     |  18 +-
- src/jsc/bindings/BunClientData.cpp            |   8 +-
- src/jsc/bindings/BunClientData.h              |   2 +-
- src/jsc/bindings/ErrorStackTrace.cpp          |  73 +-
- src/jsc/bindings/FormatStackTraceForJS.cpp    |  27 +-
- src/jsc/bindings/InternalModuleRegistry.cpp   |  15 +-
- src/jsc/bindings/ZigException.cpp             |  14 +-
- src/jsc/bindings/ZigGlobalObject.cpp          |  45 +
- src/jsc/bindings/ZigSourceProvider.cpp        | 999 +++++++++++++++++-
- src/jsc/bindings/c-bindings.cpp               | 113 ++
- src/jsc/web_worker.rs                         |   4 +
- src/runtime/api/bun/subprocess.rs             |   2 +-
- src/runtime/cli/run_command.rs                |   5 +
- src/spawn/process.rs                          |  23 +-
- src/spawn_sys/posix_spawn.rs                  | 173 ++-
- src/spawn_sys/spawn_process.rs                |  14 +-
- src/standalone_graph/StandaloneModuleGraph.rs | 254 ++++-
- 38 files changed, 2257 insertions(+), 146 deletions(-)
+ scripts/build/deps/webkit.ts                  |   18 +
+ scripts/build/download.ts                     |   28 +-
+ scripts/build/flags.ts                        |   10 +
+ src/ast/import_record.rs                      |    4 +
+ src/bun_alloc/lib.rs                          |   14 +-
+ src/bun_core/env_var.rs                       |    1 +
+ src/bundler/LinkerContext.rs                  |   38 +
+ src/bundler/bundle_v2.rs                      |   22 +
+ .../linker_context/convertStmtsForChunk.rs    |   68 ++
+ .../generateChunksInParallel.rs               |   21 +
+ .../linker_context/scanImportsAndExports.rs   |   21 +
+ src/bundler/prelinked_module_graph.rs         |   14 +-
+ src/crash_handler/lib.rs                      |   41 +-
+ src/http/HTTPContext.rs                       |   39 +-
+ src/http/HTTPThread.rs                        |   11 +
+ src/http/HeaderValueIterator.rs               |   20 +
+ src/http/InternalState.rs                     |    4 +
+ src/http/lib.rs                               |   39 +-
+ src/jsc/CachedBytecode.rs                     |   31 +
+ src/jsc/GarbageCollectionController.rs        |   26 +-
+ src/jsc/JSType.rs                             |  144 +--
+ src/jsc/VirtualMachine.rs                     |   18 +-
+ src/jsc/bindings/BunClientData.cpp            |    8 +-
+ src/jsc/bindings/BunClientData.h              |    2 +-
+ src/jsc/bindings/ErrorStackTrace.cpp          |   73 +-
+ src/jsc/bindings/FormatStackTraceForJS.cpp    |   27 +-
+ src/jsc/bindings/InternalModuleRegistry.cpp   |   15 +-
+ src/jsc/bindings/ZigException.cpp             |   14 +-
+ src/jsc/bindings/ZigGlobalObject.cpp          |   45 +
+ src/jsc/bindings/ZigSourceProvider.cpp        | 1010 ++++++++++++++++-
+ src/jsc/bindings/c-bindings.cpp               |  113 ++
+ src/jsc/web_worker.rs                         |    4 +
+ src/runtime/api/bun/subprocess.rs             |    2 +-
+ src/runtime/cli/run_command.rs                |    5 +
+ src/spawn/process.rs                          |   23 +-
+ src/spawn_sys/posix_spawn.rs                  |  173 ++-
+ src/spawn_sys/spawn_process.rs                |   14 +-
+ src/standalone_graph/StandaloneModuleGraph.rs |  254 ++++-
+ 38 files changed, 2268 insertions(+), 146 deletions(-)
 
 diff --git a/scripts/build/deps/webkit.ts b/scripts/build/deps/webkit.ts
 index bba31a2c..17a71224 100644
@@ -1894,7 +1894,7 @@ index 9de807ad..bb219910 100644
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH
 diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
-index fbfaa2ff..eb8b2a85 100644
+index fbfaa2ff..c45e0a66 100644
 --- a/src/jsc/bindings/ZigSourceProvider.cpp
 +++ b/src/jsc/bindings/ZigSourceProvider.cpp
 @@ -2,6 +2,17 @@
@@ -1971,7 +1971,7 @@ index fbfaa2ff..eb8b2a85 100644
  }
  
  extern "C" uint32_t Bun__EncoderStringTable__slotForLatin1(JSC::EncoderStringTable* table, const Latin1Character* chars, size_t length)
-@@ -290,17 +332,944 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
+@@ -290,17 +332,955 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
      return generateCachedByteCodeFromSourceCode(sourceProviderURL, inputSourceCode, false, depth, optimize, outputByteCode, outputByteCodeSize, cachedBytecodePtr, externalStrings);
  }
  
@@ -2516,7 +2516,6 @@ index fbfaa2ff..eb8b2a85 100644
 +    size_t taggedWordsMoved = 0;
 +    size_t looksTaggedButIsNotListed = 0;
 +    size_t pointersToWhatIsNotKept = 0;
-+    size_t looksLikeBlocks = 0;
 +    uintptr_t endOfExecutable = std::max<uintptr_t>(imageEnd, Region::base() + endOfParts);
 +    for (auto& part : inRegion) {
 +        Vector<uint8_t> bytes(part.bytes);
@@ -2537,16 +2536,12 @@ index fbfaa2ff..eb8b2a85 100644
 +                    ++taggedWordsMoved;
 +                    continue;
 +                }
-+                // (Arena::Scratch is not in the executable: what is there is not kept, and nothing may point to it. It is after the
-+                // image, where a word that is not a pointer is as unlikely to be as a pointer into the image. The blocks are anywhere,
-+                // maybe where two 32-bit numbers side by side often are: what looks like a pointer there is counted, not moved.)
-+                if (word - Region::startOf(Region::Arena::Scratch) < Region::reservationOf(Region::Arena::Scratch)) {
++                // (Arena::Scratch and the blocks are not in the executable: what is there is not kept, or made by a running program,
++                // and nothing may point to it. Both are high in the address space, where a word that is not a pointer is as unlikely
++                // to be as a pointer into the image.)
++                if (word - Region::startOf(Region::Arena::Scratch) < Region::reservationOf(Region::Arena::Scratch) || word - Region::startOfBlocks() < Region::sizeOfBlocks()) {
 +                    if (pointersToWhatIsNotKept++ < 10)
 +                        fprintf(stderr, "warning: the static heap points to what is not kept (%llx, at offset %zu of a part at %x)\n", static_cast<unsigned long long>(word), at, part.offsetInRegion);
-+                    continue;
-+                }
-+                if (word - Region::startOfBlocks() < Region::sizeOfBlocks()) {
-+                    ++looksLikeBlocks;
 +                    continue;
 +                }
 +                if (word >= imageStart && word < endOfExecutable) {
@@ -2567,15 +2562,31 @@ index fbfaa2ff..eb8b2a85 100644
 +    if (pointersIntoOtherModules)
 +        return fail("the static heap points into a system library, which moves at every boot");
 +    if (pointersToWhatIsNotKept)
-+        return fail("the static heap points to memory that is not in the executable (the build's scratch memory)");
++        return fail("the static heap points to memory that is not in the executable (the build's scratch memory, or a running program's blocks)");
++    // What is left that looks like an address in this process's image, now that its pointers are at the preferred base: a pointer
++    // that is not on an 8-byte boundary (a packed one), or bytes that were never written and kept an address from the process
++    // that built the heap. Either would be wrong in another process, and either is told by building twice only by chance. Every
++    // 4-byte boundary is looked at.
++    size_t notRelocated = 0;
++    for (size_t i = 0; i < inRegion.size(); ++i) {
++        if (!inRegion[i].hasPointers)
++            continue;
++        auto bytes = rebased[i].span();
++        for (size_t at = 0; at + 8 <= bytes.size(); at += 4) {
++            uint64_t word;
++            memcpy(&word, bytes.data() + at, 8);
++            if (word >= imageStart && word < endOfExecutable && notRelocated++ < 10)
++                fprintf(stderr, "warning: the static heap has an address of the process that built it that is not relocated (%llx, at offset %zu of a part at %x)\n", static_cast<unsigned long long>(word), at, inRegion[i].offsetInRegion);
++        }
++    }
++    if (notRelocated)
++        return fail("the static heap has addresses that cannot be relocated (a pointer not on an 8-byte boundary, or bytes never written)");
 +    if (taggedWordsMoved != taggedWords.size())
 +        return fail("the static heap's entry words are not all in its parts");
 +    if (getenv("BUN_STATIC_HEAP_VERBOSE")) {
 +        fprintf(stderr, "[static heap] %zu pointers into the executable, relocated (%zu of them entry words)\n", relocations.size(), taggedWordsMoved);
 +        if (looksTaggedButIsNotListed)
 +            fprintf(stderr, "[static heap] %zu words look like entry words but are not listed as any; not moved\n", looksTaggedButIsNotListed);
-+        if (looksLikeBlocks)
-+            fprintf(stderr, "[static heap] %zu words look like addresses of the blocks a running program makes; not moved\n", looksLikeBlocks);
 +    }
 +
 +    // ---- The arenas: sections after the executable's own, where the build had them (the layout says where; .pblay below), with
@@ -2916,7 +2927,7 @@ index fbfaa2ff..eb8b2a85 100644
      return new JSC::BytecodeLinkEncoder(vm, externalStrings, WTF::move(hints));
  }
  
-@@ -331,6 +1300,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
+@@ -331,6 +1311,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
      return true;
  }
  
@@ -2939,7 +2950,7 @@ index fbfaa2ff..eb8b2a85 100644
  // `entryOffsets` has room for one number per successful add* call; `regionEnds` for
  // JSC::BytecodeLinkEncoder::numberOfRegions.
  static_assert(JSC::BytecodeLinkEncoder::numberOfRegions == 6, "bun_resolver::LINKED_BYTECODE_REGION_COUNT");
-@@ -340,6 +1325,18 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
+@@ -340,6 +1336,18 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
      auto result = encoder->finish();
      if (!result.payload || result.entryOffsets.size() != entryOffsetCount)
          return false;

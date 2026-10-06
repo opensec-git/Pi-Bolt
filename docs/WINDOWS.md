@@ -42,7 +42,10 @@ only a running program makes, are a reservation of their own, anywhere, decommit
 read-only sections: their pages are the executable's, shared, and no process is charged for them. A page that is written to all
 the same is made writable when it is, by an exception handler that runs before any other (`StaticRegion.cpp`; about 5 µs a page;
 `BUN_STATIC_HEAP_WRITES=1` says where each write was). In a Pi session there are none. Only MutableCells and MutableMalloc
-(1.7 MB for Pi) are writable sections.
+(1.7 MB for Pi) are writable sections. This saves memory; it does not protect the arenas: the engine does write to them now and
+then (a static cell's lock byte when the JIT is on, an execution counter), so a write is let through, as on Linux, where the
+arenas are private writable mappings. (Across `tests\aot`, 9 pages, from those two.) Refusing writes would need what is written
+to moved to the mutable arenas first.
 
 **The heap is in the executable once.** The module graph that Bun's PE writer adds (`.bun`) keeps only the heap's header, a copy
 of the first 4 KB of its string table and the code image's first page (`StaticHeap::compactForExecutable()`): what says that the

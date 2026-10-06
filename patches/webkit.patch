@@ -87,12 +87,12 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  Source/WTF/wtf/BumpPointerAllocator.h         |    8 +-
  Source/WTF/wtf/HashFunctions.h                |   21 +-
  Source/WTF/wtf/Hasher.h                       |    4 +-
- Source/bmalloc/bmalloc/StaticRegion.cpp       |  359 +-
+ Source/bmalloc/bmalloc/StaticRegion.cpp       |  361 +-
  Source/bmalloc/bmalloc/StaticRegion.h         |   92 +-
  Source/cmake/WebKitCompilerFlags.cmake        |    4 +-
  Source/cmake/WebKitMacros.cmake               |   28 +-
  build-icu.ps1                                 |   34 +-
- 74 files changed, 7344 insertions(+), 318 deletions(-)
+ 74 files changed, 7346 insertions(+), 318 deletions(-)
  create mode 100644 Source/JavaScriptCore/aot/AOTStubsX86_64.cpp
  create mode 100644 Source/JavaScriptCore/runtime/ReportableSitesOfFunction.h
 
@@ -9780,10 +9780,10 @@ index a4fccc37f9..4fc0909675 100644
  
  inline void add(Hasher& hasher, ASCIILiteral literal)
 diff --git a/Source/bmalloc/bmalloc/StaticRegion.cpp b/Source/bmalloc/bmalloc/StaticRegion.cpp
-index 77260b2296..c78c78347f 100644
+index 77260b2296..cd7f672d1d 100644
 --- a/Source/bmalloc/bmalloc/StaticRegion.cpp
 +++ b/Source/bmalloc/bmalloc/StaticRegion.cpp
-@@ -7,33 +7,296 @@
+@@ -7,33 +7,298 @@
  
  #include "BAssert.h"
  #include "BPlatform.h"
@@ -10006,8 +10006,10 @@ index 77260b2296..c78c78347f 100644
 +        // else that handles exceptions (Bun's crash handler is the last), so that a write there is not taken for a crash.
 +        AddVectoredExceptionHandler(1, makeImmutablePageWritable);
 +    }
-+    // StaticHeap::allocateBlock()'s blocks: addresses only, committed as they are used.
-+    if (void* blocks = VirtualAlloc(nullptr, defaultSizeOfBlocks, MEM_RESERVE, PAGE_READWRITE)) {
++    // StaticHeap::allocateBlock()'s blocks: addresses only, committed as they are used. At the top of the address space, where an
++    // address looks like no small number (the writer of an executable refuses a heap that points to them, and a pair of 32-bit
++    // numbers would otherwise look like an address of theirs).
++    if (void* blocks = VirtualAlloc(nullptr, defaultSizeOfBlocks, MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE)) {
 +        s_layout.blocksStart = reinterpret_cast<uintptr_t>(blocks);
 +        s_layout.blocksSize = defaultSizeOfBlocks;
 +    }
@@ -10082,7 +10084,7 @@ index 77260b2296..c78c78347f 100644
          munmap(result, size);
          return false;
      }
-@@ -47,6 +310,7 @@ bool StaticRegion::beginBuilding()
+@@ -47,6 +312,7 @@ bool StaticRegion::beginBuilding()
      memset(s_used, 0, sizeof(s_used));
      s_isBuilding = true;
      return true;
@@ -10090,7 +10092,7 @@ index 77260b2296..c78c78347f 100644
  }
  
  void StaticRegion::endBuilding()
-@@ -55,8 +319,16 @@ void StaticRegion::endBuilding()
+@@ -55,8 +321,16 @@ void StaticRegion::endBuilding()
      s_isBuilding = false;
      ::free(std::exchange(s_sizes, nullptr));
      s_capacityOfSizes = 0;
@@ -10108,7 +10110,7 @@ index 77260b2296..c78c78347f 100644
  }
  
  void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t misalignment)
-@@ -64,8 +336,12 @@ void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t
+@@ -64,8 +338,12 @@ void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t
      RELEASE_BASSERT(s_isBuilding && alignment && !(alignment & (alignment - 1)) && misalignment < alignment);
      size_t& used = s_used[static_cast<size_t>(arena)];
      size_t offset = ((used + alignment - 1 - misalignment) & ~(alignment - 1)) + misalignment;
@@ -10122,7 +10124,7 @@ index 77260b2296..c78c78347f 100644
      return reinterpret_cast<void*>(startOf(arena) + offset);
  }
  
-@@ -107,22 +383,72 @@ bool StaticRegion::isAllocatingMutable()
+@@ -107,22 +385,72 @@ bool StaticRegion::isAllocatingMutable()
      return t_isAllocatingMutable;
  }
  
@@ -10198,7 +10200,7 @@ index 77260b2296..c78c78347f 100644
      void* wanted = reinterpret_cast<void*>(startOf(arena) + offsetInArena);
      if (arena == Arena::Image) {
          void* result = mmap(wanted, size, isCode ? PROT_READ | PROT_EXEC : PROT_READ, MAP_PRIVATE, fileDescriptor, offsetInFile);
-@@ -147,6 +473,7 @@ bool StaticRegion::map(Arena arena, int fileDescriptor, off_t offsetInFile, size
+@@ -147,6 +475,7 @@ bool StaticRegion::map(Arena arena, int fileDescriptor, off_t offsetInFile, size
          return false;
      }
      return true;
@@ -10206,7 +10208,7 @@ index 77260b2296..c78c78347f 100644
  }
  
  // In Arena::MutableMalloc, what is asked for is preceded by how much was asked for: it may be given back, or be found too small,
-@@ -160,7 +487,7 @@ static constexpr size_t unit = 8;
+@@ -160,7 +489,7 @@ static constexpr size_t unit = 8;
  
  static bool isInImmutableMalloc(const void* pointer)
  {
@@ -10215,7 +10217,7 @@ index 77260b2296..c78c78347f 100644
  }
  
  static uint32_t& sizeOfImmutable(const void* pointer)
-@@ -288,6 +615,9 @@ static void* mallocImmutable(size_t size, size_t alignment)
+@@ -288,6 +617,9 @@ static void* mallocImmutable(size_t size, size_t alignment)
              }
              pushFreeImmutable(block + units * unit, found - units);
              sizeOfImmutable(block) = static_cast<uint32_t>(size);
@@ -10225,7 +10227,7 @@ index 77260b2296..c78c78347f 100644
              return block;
          }
      }
-@@ -317,6 +647,9 @@ void* StaticRegion::tryMallocSlow(size_t size, size_t alignment)
+@@ -317,6 +649,9 @@ void* StaticRegion::tryMallocSlow(size_t size, size_t alignment)
                  memcpy(rest - sizeOfHeader, &sizeOfRest, sizeof(sizeOfRest));
                  pushFree(mutableOnes, found - index, rest);
              }
@@ -10235,7 +10237,7 @@ index 77260b2296..c78c78347f 100644
              return block;
          }
      }
-@@ -347,16 +680,22 @@ void* StaticRegion::reallocate(void* pointer, size_t newSize)
+@@ -347,16 +682,22 @@ void* StaticRegion::reallocate(void* pointer, size_t newSize)
              size_t newUnits = unitsFor(newSize);
              // (Where it is has to do for what it is going to be, too.)
              bool isWhereItMayBe = newSize % 16 || !(reinterpret_cast<uintptr_t>(pointer) & 15);
