@@ -16,8 +16,12 @@
 #   conpty_check.py   tmux_check.py's streaming check in a ConPTY (there is no tmux on Windows): -Rounds rounds
 #   pauses.py         frame times and stalls (-PauseSteps), then garbage collection pauses (--gc, -GcSteps)
 #   long_answer.py, large_write.py   -LongAnswerRuns runs each (0 skips them)
-#   plugin_bench.py   a plugin loaded at run time; compiled in too if -PiBoltPlugins names a build with it (scripts\build-pi.ps1
-#                     cannot make one yet: only scripts/build-pi.sh --plugins can)
+#   plugin_bench.py   the example plugin loaded at run time, and compiled in, as run-suite.sh has them: each of these builds that
+#                     is there (or that its parameter names) is measured:
+#                       -PiBoltPlugins     out\pi-bolt-plugins\pi.exe       --compiled pi-bolt
+#                       -PiBoltPluginsJit  out\pi-bolt-plugins-jit\pi.exe   --compiled pi-bolt-jit
+#                       -PiBoltJit         out\pi-bolt-aot-lto-jit\pi.exe   --runtime pi-bolt-jit
+#                     (scripts\build-pi.ps1 -Plugins examples\plugins\plugins.ts [-Jit on] -Out ...; -Jit on for the last)
 #   report.py         summary.md, and the charts in -Images (default: <Out>\images; docs\images is left alone)
 # Keep the machine otherwise idle, on AC power, for the whole run: Windows cannot pin a process to cores the way taskset does.
 [CmdletBinding()]
@@ -29,6 +33,8 @@ param(
 	[string]$Node24 = 'node',
 	[string]$NodeCli = 'C:\pb\Pi-Bolt\.work\node-pi\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js',
 	[string]$PiBoltPlugins = '',
+	[string]$PiBoltPluginsJit = '',
+	[string]$PiBoltJit = '',
 	[string]$PiBoltLabel = 'Pi-Bolt (LTO+CFG AOT)',
 	[int]$Runs = 11,
 	[int]$Warmup = 2,
@@ -74,7 +80,15 @@ $Bun = Resolve-File $Bun 'the stock-Bun build (-Bun)'
 $Node22 = Resolve-File $Node22 'Node 22 (-Node22)'
 $Node24 = Resolve-File $Node24 'Node 24 (-Node24)'
 $NodeCli = Resolve-File $NodeCli "Pi's npm bundle (-NodeCli)"
-if ($PiBoltPlugins) { $PiBoltPlugins = Resolve-File $PiBoltPlugins 'the plugin build (-PiBoltPlugins)' }
+# The plugin_bench.py builds: one named is required; by default, each is measured if it is there.
+function Resolve-Optional($path, $default, $what) {
+	if ($path) { return Resolve-File $path $what }
+	if (Test-Path -LiteralPath (Join-Path $Root $default) -PathType Leaf) { return Resolve-File (Join-Path $Root $default) $what }
+	return ''
+}
+$PiBoltPlugins = Resolve-Optional $PiBoltPlugins 'out\pi-bolt-plugins\pi.exe' 'the plugin build (-PiBoltPlugins)'
+$PiBoltPluginsJit = Resolve-Optional $PiBoltPluginsJit 'out\pi-bolt-plugins-jit\pi.exe' 'the JIT-on plugin build (-PiBoltPluginsJit)'
+$PiBoltJit = Resolve-Optional $PiBoltJit 'out\pi-bolt-aot-lto-jit\pi.exe' 'the JIT-on build (-PiBoltJit)'
 # The process floor: a minimal native program, linked as the real executable is (static CRT, ASLR with high entropy, DEP, Control
 # Flow Guard), built here from bench\floor\floor.c into a scratch folder (no binary in the repository).
 $floorBuilt = ''
@@ -156,6 +170,9 @@ Save-Lines (Join-Path $Out 'environment.txt') @(
 	"model: bench/fake_model*.py on 127.0.0.1 (no provider is called)"
 )
 if ($Floor) { [System.IO.File]::AppendAllLines((Join-Path $Out 'environment.txt'), [string[]]@("floor: bench/floor/floor.c$floorBuilt, $Floor")) }
+foreach ($extra in @(@('pi-bolt-plugins', $PiBoltPlugins), @('pi-bolt-plugins-jit', $PiBoltPluginsJit), @('pi-bolt-jit', $PiBoltJit))) {
+	if ($extra[1]) { [System.IO.File]::AppendAllLines((Join-Path $Out 'environment.txt'), [string[]]@("$($extra[0]): $(& $extra[1] --version | Select-Object -First 1), $($extra[1])")) }
+}
 Get-Content (Join-Path $Out 'environment.txt')
 
 $builds = @('--build', "pi-bolt=$PiBolt", '--build', "bun=$Bun", '--build', "node=$Node22 $NodeCli", '--build', "node24=$Node24 $NodeCli")
@@ -192,10 +209,16 @@ for ($i = 1; $i -le $LongAnswerRuns; $i++) {
 }
 
 Log 'plugin_bench.py'
+# (The order of run-suite.sh's, which is the order of the table and chart.)
 $plugins = @()
 if ($PiBoltPlugins) { $plugins += @('--compiled', "pi-bolt=$PiBoltPlugins") }
-else { Write-Host 'note: no -PiBoltPlugins build: plugins are measured loaded at run time only' -ForegroundColor Yellow }
-$plugins += @('--runtime', "pi-bolt=$PiBolt", '--runtime', "bun=$Bun", '--none', "pi-bolt=$PiBolt", '--none', "bun=$Bun")
+else { Write-Host 'note: no plugin build (out\pi-bolt-plugins\pi.exe, or -PiBoltPlugins): not measured compiled in' -ForegroundColor Yellow }
+if ($PiBoltPluginsJit) { $plugins += @('--compiled', "pi-bolt-jit=$PiBoltPluginsJit") }
+else { Write-Host 'note: no JIT-on plugin build (out\pi-bolt-plugins-jit\pi.exe, or -PiBoltPluginsJit): not measured compiled in with the JIT on' -ForegroundColor Yellow }
+$plugins += @('--runtime', "pi-bolt=$PiBolt")
+if ($PiBoltJit) { $plugins += @('--runtime', "pi-bolt-jit=$PiBoltJit") }
+else { Write-Host 'note: no JIT-on build (out\pi-bolt-aot-lto-jit\pi.exe, or -PiBoltJit): not measured loaded at run time with the JIT on' -ForegroundColor Yellow }
+$plugins += @('--runtime', "bun=$Bun", '--none', "pi-bolt=$PiBolt", '--none', "bun=$Bun")
 Run-Python bench\plugin_bench.py --runs $PluginRuns --commands $PluginCommands --out "$Out\plugins.jsonl" @plugins | Out-Host
 
 Log "report.py -> $Out\summary.md"

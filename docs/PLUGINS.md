@@ -89,6 +89,9 @@ dependencies (`npm install` there first). [`examples/plugins/plugins.ts`](../exa
 scripts/build-pi.sh --plugins my-plugins/plugins.ts --out out/pi-bolt-plugins
 ```
 
+On Windows: `scripts\build-pi.ps1 -Plugins my-plugins\plugins.ts -Out out\pi-bolt-plugins`, with `-PluginWorker` and `-Jit on`
+for the options below.
+
 The script copies the manifest's folder into the Pi tree and generates an entry point. The entry starts Pi exactly as Pi's own
 Bun entry does, passing your plugins to `main()` as `extensionFactories`. The script then compiles everything ahead of time, checks
 that the executable uses its compiled code, and removes the staging folder. Options:

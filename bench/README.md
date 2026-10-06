@@ -48,9 +48,9 @@ power. Memory is reported several ways, because Windows counts it several ways:
 | `system_commit_peak_mb` | The rise of the system's commit charge while the process ran; also counts an executable's image pages that are charged once, when first mapped. System-wide: only meaningful on a quiet machine | — |
 
 Full suite: `powershell -ExecutionPolicy Bypass -File bench\run-suite.ps1 -Out bench\results\<date>-windows` (the builds are
-parameters; see the top of the script). `plugin_bench.py --compiled` needs a build with the plugin compiled in, which
-`scripts\build-pi.ps1` cannot make yet: on Windows the suite measures the plugin loaded at run time, unless `-PiBoltPlugins`
-names such a build.
+parameters; see the top of the script). `plugin_bench.py --compiled` needs a build with the plugin compiled in:
+`scripts\build-pi.ps1 -Plugins examples\plugins\plugins.ts -Out out\pi-bolt-plugins` (and `-Jit on -Out out\pi-bolt-plugins-jit`).
+The suite measures those, and `out\pi-bolt-aot-lto-jit` loaded at run time, when they are there, as run-suite.sh does.
 
 ### The process floor
 
