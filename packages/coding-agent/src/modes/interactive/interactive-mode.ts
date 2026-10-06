@@ -50,6 +50,7 @@ import {
 	TuiMainScreen,
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
+	ttiTrace,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -1001,12 +1002,76 @@ export class InteractiveMode {
 		this.isInitialized = true;
 		this.ensurePngTranscoder();
 
-		this.themeController.applyFromSettings();
-		// The header and startup notices bake theme colors into their text, so build them once the terminal
-		// reported its colors. This ends at the terminal's DA1 reply, or after 100 ms if it answers nothing.
-		await this.themeController.waitForTerminalColors();
+		await this.applyThemeAndShowStartupHeader();
 
-		// Add header with keybindings from config (unless silenced)
+		// Ensure fd and rg are available after mounting the TUI (downloads if missing, adds to PATH via getBinDir)
+		// so slow downloads do not make startup appear frozen.
+		// Both are needed: fd for autocomplete, rg for grep tool and bash commands.
+		const [fdPath] = await Promise.all([
+			ensureTool("fd", (status) => this.showManagedToolStatus(status)),
+			ensureTool("rg", (status) => this.showManagedToolStatus(status)),
+		]);
+		this.fdPath = fdPath;
+
+		// Enable the remaining input handlers only after managed-tool setup completes.
+		this.setupKeyHandlers();
+		this.setupEditorSubmitHandler();
+		this.ui.requestRender();
+
+		// Initialize extensions first so resources are shown before messages
+		await this.rebindCurrentSession();
+
+		// Render initial messages AFTER showing loaded resources
+		this.renderInitialMessages();
+
+		// Set up theme file watcher
+		onThemeChange(() => {
+			this.ui.invalidate();
+			this.updateEditorBorderColor();
+			this.ui.requestRender();
+		});
+
+		// Set up git branch watcher (uses provider instead of footer)
+		this.footerDataProvider.onBranchChange(() => {
+			this.ui.requestRender();
+		});
+
+		// Initialize available provider count for footer display
+		await this.updateAvailableProviderCount();
+
+		// Flush the completed startup state before loading the remaining syntax grammars.
+		this.ui.renderNow();
+		ttiTrace("startup.done");
+		loadAllHighlightLanguagesOnDemand(() => {
+			if (!this.isInitialized) return;
+			this.ui.invalidate();
+			this.ui.requestRender();
+		});
+	}
+
+	/**
+	 * Apply the theme setting, query the terminal's colors, and add the startup header. The header goes up at once
+	 * when the theme draws it the same with or without the terminal's colors (any theme but the system theme and
+	 * theme pairs), so the first frame carries it; otherwise it waits for the colors, as a header drawn before
+	 * them would change color when they arrive. Either way this resolves once the terminal answered (its DA1
+	 * reply) or 100 ms passed, so what startup does next (extensions, startup notices) sees the same terminal
+	 * colors as before. Colors that arrive later still re-render everything.
+	 */
+	private async applyThemeAndShowStartupHeader(): Promise<void> {
+		this.themeController.applyFromSettings();
+		const terminalColors = this.themeController.waitForTerminalColors();
+		const waitForColors = this.themeController.dependsOnTerminalColors();
+		if (waitForColors) {
+			await terminalColors;
+		}
+		this.addStartupHeader();
+		ttiTrace("header.added", waitForColors ? "after-colors" : "before-colors");
+		this.ui.requestRender();
+		await terminalColors;
+	}
+
+	/** Add the built-in header with keybindings from config, or an empty one when startup is quiet. */
+	private addStartupHeader(): void {
 		if (this.shouldShowStartupHeader()) {
 			const showDetails = this.shouldShowStartupDetails();
 			// Built on demand so the header follows theme changes. The logo's first line carries the version,
@@ -1081,50 +1146,6 @@ export class InteractiveMode {
 			this.builtInHeader = new Text("", 0, 0);
 			this.headerContainer.addChild(this.builtInHeader);
 		}
-		this.ui.requestRender();
-
-		// Ensure fd and rg are available after mounting the TUI (downloads if missing, adds to PATH via getBinDir)
-		// so slow downloads do not make startup appear frozen.
-		// Both are needed: fd for autocomplete, rg for grep tool and bash commands.
-		const [fdPath] = await Promise.all([
-			ensureTool("fd", (status) => this.showManagedToolStatus(status)),
-			ensureTool("rg", (status) => this.showManagedToolStatus(status)),
-		]);
-		this.fdPath = fdPath;
-
-		// Enable the remaining input handlers only after managed-tool setup completes.
-		this.setupKeyHandlers();
-		this.setupEditorSubmitHandler();
-		this.ui.requestRender();
-
-		// Initialize extensions first so resources are shown before messages
-		await this.rebindCurrentSession();
-
-		// Render initial messages AFTER showing loaded resources
-		this.renderInitialMessages();
-
-		// Set up theme file watcher
-		onThemeChange(() => {
-			this.ui.invalidate();
-			this.updateEditorBorderColor();
-			this.ui.requestRender();
-		});
-
-		// Set up git branch watcher (uses provider instead of footer)
-		this.footerDataProvider.onBranchChange(() => {
-			this.ui.requestRender();
-		});
-
-		// Initialize available provider count for footer display
-		await this.updateAvailableProviderCount();
-
-		// Flush the completed startup state before loading the remaining syntax grammars.
-		this.ui.renderNow();
-		loadAllHighlightLanguagesOnDemand(() => {
-			if (!this.isInitialized) return;
-			this.ui.invalidate();
-			this.ui.requestRender();
-		});
 	}
 
 	/**

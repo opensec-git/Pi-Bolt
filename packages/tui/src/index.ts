@@ -153,6 +153,8 @@ export {
 	setCellDimensions,
 	type TerminalCapabilities,
 } from "./terminal-image.ts";
+// Startup timing trace (PI_TTI_TRACE)
+export { isTtiTraceEnabled, ttiTrace } from "./tti-trace.ts";
 export {
 	type Component,
 	Container,

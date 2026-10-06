@@ -14,6 +14,7 @@ import {
 	type TerminalColors,
 } from "./terminal-colors.ts";
 import { getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.ts";
+import { isTtiTraceEnabled, ttiTrace } from "./tti-trace.ts";
 import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.ts";
 
 /**
@@ -156,7 +157,12 @@ type PendingTerminalColorQuery = {
 	 */
 	deliver: ((colors: TerminalColors) => void) | undefined;
 	timer: NodeJS.Timeout | undefined;
+	/** The timeout expired: what completes the query now goes to `onLateReply`. */
+	timedOut: boolean;
 };
+
+/** Frames traced after `start()` when PI_TTI_TRACE is set: enough to cover startup. */
+const TTI_TRACED_FRAMES = 8;
 
 const TERMINAL_PALETTE_SIZE = 16;
 /** OSC 10 and 11 plus OSC 4 for every palette color. */
@@ -506,6 +512,9 @@ export abstract class TuiBase extends Container implements TUI {
 	private renderTimer: NodeJS.Timeout | undefined;
 	private lastRenderAt = 0;
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
+	/** Frames still to trace (PI_TTI_TRACE); 0 when tracing is off. */
+	private framesToTrace = 0;
+	private framesTraced = 0;
 	private showHardwareCursor = false;
 	private clearOnShrink = false;
 	protected fullRedrawCount = 0;
@@ -540,6 +549,15 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	protected abstract doRender(): void;
+
+	/** Render a frame; with PI_TTI_TRACE set, record when the first frames were handed to the terminal. */
+	private renderFrame(): void {
+		this.doRender();
+		if (this.framesToTrace > 0 && !this.stopped) {
+			this.framesToTrace--;
+			ttiTrace("frame.written", String(++this.framesTraced));
+		}
+	}
 
 	protected resetRenderState(): void {}
 
@@ -918,6 +936,10 @@ export abstract class TuiBase extends Container implements TUI {
 
 	start(): void {
 		this.stopped = false;
+		if (isTtiTraceEnabled()) {
+			ttiTrace("tui.start", this.mode);
+			this.framesToTrace = TTI_TRACED_FRAMES;
+		}
 		this.beforeTerminalStart();
 		this.terminal.start(
 			(data) => this.handleTerminalInput(data),
@@ -987,7 +1009,7 @@ export abstract class TuiBase extends Container implements TUI {
 		this.renderRequested = false;
 		this.cancelRenderTimer();
 		this.lastRenderAt = performance.now();
-		this.doRender();
+		this.renderFrame();
 	}
 
 	requestRender(force = false): void {
@@ -1014,7 +1036,7 @@ export abstract class TuiBase extends Container implements TUI {
 			this.cancelRenderTimer();
 			this.renderRequested = false;
 			this.lastRenderAt = performance.now();
-			this.doRender();
+			this.renderFrame();
 		});
 	}
 
@@ -1037,7 +1059,7 @@ export abstract class TuiBase extends Container implements TUI {
 			}
 			this.renderRequested = false;
 			this.lastRenderAt = performance.now();
-			this.doRender();
+			this.renderFrame();
 			if (this.renderRequested) {
 				this.scheduleRender();
 			}
@@ -1165,6 +1187,7 @@ export abstract class TuiBase extends Container implements TUI {
 		const deliver = query.deliver;
 		query.deliver = undefined;
 		clearTimeout(query.timer);
+		ttiTrace(query.timedOut ? "colors.late-reply" : "colors.reply", `replies=${query.replied.size}`);
 		deliver?.(this.terminalColorQueryResult(query));
 	}
 
@@ -1483,14 +1506,18 @@ export abstract class TuiBase extends Container implements TUI {
 				replied: new Set(),
 				deliver: resolve,
 				timer: undefined,
+				timedOut: false,
 			};
 			// Resolve with the replies so far, and keep collecting late replies for `onLateReply`.
 			query.timer = setTimeout(() => {
+				query.timedOut = true;
 				query.deliver = onLateReply;
+				ttiTrace("colors.timeout", `${timeoutMs}ms replies=${query.replied.size}`);
 				resolve(this.terminalColorQueryResult(query));
 			}, timeoutMs);
 			this.pendingTerminalColorQueries.push(query);
 			this.terminal.write(TERMINAL_COLOR_QUERY);
+			ttiTrace("colors.query-sent");
 		});
 	}
 }
