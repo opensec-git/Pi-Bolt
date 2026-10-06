@@ -38,7 +38,7 @@ describe("piBoltInstallerProcess", () => {
 	it("runs the installer for this platform, with an exit status that says whether it installed", () => {
 		const { command, args } = piBoltInstallerProcess();
 		if (process.platform === "win32") {
-			expect(command).toBe("powershell.exe");
+			expect(command.toLowerCase()).toMatch(/\\system32\\windowspowershell\\v1\.0\\powershell\.exe$/);
 			expect(args.at(-1)).toBe("irm https://pi-bolt.opensec.in/install.ps1 | iex; exit $LASTEXITCODE");
 		} else {
 			expect(command).toBe("sh");

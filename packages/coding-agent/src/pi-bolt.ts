@@ -26,8 +26,15 @@ export const PIBOLT_INSTALL_COMMAND =
 /** The installer as a command to spawn (with piBoltUpdateEnvironment()): it exits non-zero if it did not install. */
 export function piBoltInstallerProcess(): { command: string; args: string[] } {
 	if (process.platform === "win32") {
+		// By its full path: a bare name may be looked up in the current folder first, where anything could be called that.
 		return {
-			command: "powershell.exe",
+			command: join(
+				process.env.SystemRoot ?? "C:\\Windows",
+				"System32",
+				"WindowsPowerShell",
+				"v1.0",
+				"powershell.exe",
+			),
 			args: ["-NoProfile", "-Command", `irm ${PIBOLT_INSTALL_URL} | iex; exit $LASTEXITCODE`],
 		};
 	}
