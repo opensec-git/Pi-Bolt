@@ -1,7 +1,7 @@
 {
 	"name": "pi-bolt",
 	"version": "0.7.0",
-	"description": "Pi, the coding agent, compiled ahead of time to native code: one executable for Linux x86-64 and macOS on Apple silicon, starts 2-3x sooner than Pi on Bun and uses about a third of its CPU over a session",
+	"description": "Pi, the coding agent, compiled ahead of time to native code: one executable for Linux x86-64, macOS on Apple silicon and Windows x64, starts 2-3x sooner than Pi on Bun and uses about a third of its CPU over a session",
 	"keywords": [
 		"pi",
 		"coding-agent",
@@ -20,22 +20,26 @@
 	"license": "MIT",
 	"author": "OpenSec",
 	"bin": {
-		"pi-bolt": "bin/pi-bolt"
+		"pi-bolt": "bin/pi-bolt.exe"
 	},
 	"files": [
 		"bin/pi-bolt",
+		"bin/pi-bolt.exe",
+		"install.cjs",
 		"install.sh",
 		"README.md"
 	],
 	"os": [
 		"linux",
-		"darwin"
+		"darwin",
+		"win32"
 	],
 	"cpu": [
 		"x64",
 		"arm64"
 	],
 	"scripts": {
-		"prepack": "cp ../install.sh install.sh"
+		"prepack": "node -e \"require('fs').copyFileSync('../install.sh', 'install.sh')\"",
+		"postinstall": "node install.cjs"
 	}
 }

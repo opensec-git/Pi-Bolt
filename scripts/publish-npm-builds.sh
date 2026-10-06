@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Publishes each build of a release to npm as pi-bolt-PLATFORM-VARIANT@VERSION (pi-bolt-linux-x64, pi-bolt-darwin-arm64, ...):
-# a package that holds the release's .tar.xz, byte for byte. The installer downloads it from the npm registry, a CDN that is
-# fast where GitHub's release downloads are slow, and checks it against the release's SHA256SUMS on GitHub, as it does a
-# download from GitHub.
+# a package that holds the release's .tar.xz (Windows: .zip), byte for byte. The installers download it from the npm registry,
+# a CDN that is fast where GitHub's release downloads are slow, and check it against the release's SHA256SUMS on GitHub, as
+# they do a download from GitHub. On Windows the pi-bolt package's install script (npm/install.cjs) downloads it the same
+# way, by its URL in the registry: it is not a dependency of pi-bolt, so a package manager never installs it unchecked.
 #
 # Usage: scripts/publish-npm-builds.sh DIST [--pack OUT] [-- NPM PUBLISH OPTIONS]
 #   DIST     dist/<version>, as package-release.sh makes it (the .tar.xz files and SHA256SUMS)
@@ -62,7 +63,7 @@ for file in "${builds[@]}"; do
 {
 	"name": "$name",
 	"version": "$VERSION",
-	"description": "The Pi-Bolt $VERSION executable ($platform) for its installer. Install Pi-Bolt with the pi-bolt package or install.sh.",
+	"description": "The Pi-Bolt $VERSION executable ($platform) for its installer. Install Pi-Bolt with the pi-bolt package or $(if [ "$os" = win32 ]; then echo install.ps1; else echo install.sh; fi).",
 	"homepage": "https://github.com/opensec-git/Pi-Bolt",
 	"repository": {
 		"type": "git",
@@ -83,7 +84,7 @@ bytes, for Pi-Bolt's installer to download from the npm registry. Nothing to ins
 
 $(if [ "$os" = win32 ]; then printf '```powershell\npowershell -c "irm https://pi-bolt.opensec.in/install.ps1 | iex"\n```'; else printf '```bash\ncurl -fsSL https://pi-bolt.opensec.in/install.sh | sh\n```'; fi)
 
-$(if [ "$os" = win32 ]; then printf 'The installer'; else printf 'or `npm install -g pi-bolt`. The installer'; fi) checks the file against the release's \`SHA256SUMS\` on GitHub, and their signature.
+or \`npm install -g pi-bolt\`. Both check the file against the release's \`SHA256SUMS\` on GitHub, and their signature.
 EOF
 	if [ -n "$PACK" ]; then
 		mkdir -p "$PACK"

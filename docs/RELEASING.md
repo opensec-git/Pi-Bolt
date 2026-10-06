@@ -50,6 +50,16 @@ The installer downloads the executable from npm (`pi-bolt-<platform>-<variant>@X
 CDN that is fast where GitHub's release downloads are slow, and from GitHub if npm does not have it or the download fails.
 The checksums always come from the GitHub release. Publish the npm builds before announcing a release.
 
+The `pi-bolt` package works natively on Windows, as Bun's and Claude Code's packages do: its `bin` is `bin/pi-bolt.exe` on every
+platform, a placeholder without a `#!` line (so npm's `pi-bolt.cmd` and `pi-bolt.ps1` start it directly), which its install
+script, `npm/install.cjs`, replaces. On Windows that script downloads the build of the package's version from
+`pi-bolt-win32-<variant>` on npm (or the GitHub release if that fails) and checks it as `install.ps1` does: the Ed25519 signature
+of the release's `SHA256SUMS` by `keys/release.pub`, the version on its first line, the build's SHA-256. If a check fails it
+installs nothing; otherwise it puts `pi-bolt.exe` and its files in the package's `bin` folder. On Linux and macOS it puts the `sh`
+launcher there, and where install scripts are blocked the placeholder runs that launcher itself, as before. On Windows the
+install script must run (with pnpm or Bun, allow it, or run `node "$(npm root -g)\pi-bolt\install.cjs"`). So a Windows release
+needs `pi-bolt-win32-x64` (and its variants) published before `pi-bolt`, and `NPM_TOKEN` needs publish rights on them.
+
 ## The macOS builds
 
 The release workflow builds on the Linux runner. The macOS archives (`pi-bolt-darwin-arm64`, `pi-bolt-darwin-arm64-jit` and

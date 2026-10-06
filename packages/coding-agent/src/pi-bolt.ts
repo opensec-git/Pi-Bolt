@@ -57,12 +57,15 @@ export function piBoltVersionOfTag(tag: unknown): string | undefined {
 }
 
 /**
- * How this Pi-Bolt was installed: with the npm package (whose launcher keeps the executable under $PIBOLT_HOME/npm/<version>),
- * or with the installer (anything else).
+ * How this Pi-Bolt was installed: with the npm package (whose launcher keeps the executable under $PIBOLT_HOME/npm/<version>;
+ * on Windows, whose install script puts it in the package's own bin folder, where npm's shims start it directly), or with the
+ * installer (anything else).
  */
 export function piBoltInstallMethod(): "npm" | "installer" {
 	if (process.env.PIBOLT_NPM === "1") return "npm";
-	return /[\\/]npm[\\/]\d+\.\d+\.\d+[\\/]pi-bolt-(linux|darwin|win32)-/.test(process.execPath) ? "npm" : "installer";
+	const execPath = process.execPath;
+	if (/[\\/]npm[\\/]\d+\.\d+\.\d+[\\/]pi-bolt-(linux|darwin|win32)-/.test(execPath)) return "npm";
+	return /[\\/]node_modules[\\/]pi-bolt[\\/]bin[\\/]pi-bolt\.exe$/i.test(execPath) ? "npm" : "installer";
 }
 
 /** The environment that makes the installer replace this installation with the latest release, keeping its variant and place. */

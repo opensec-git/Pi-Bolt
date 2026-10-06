@@ -12,8 +12,8 @@
 # pi-bolt
 
 [Pi](https://github.com/earendil-works/pi), the coding agent, compiled ahead of time to native code. Pi-Bolt is one executable,
-for Linux on x86-64 and macOS on Apple silicon, that starts two to three times sooner than Pi on Bun and uses about a third of its
-CPU over a session, with no JIT. (Measured on one Linux server and one Mac; the times on your machine will differ, the ratios less so.)
+for Linux on x86-64, macOS on Apple silicon and Windows on x64, that starts two to three times sooner than Pi on Bun and uses
+about a third of its CPU over a session, with no JIT. (Measured on one Linux server and one Mac; the times on your machine will differ, the ratios less so.)
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/opensec-git/Pi-Bolt/HEAD/docs/images/bench-hero-dark.svg">
@@ -34,10 +34,24 @@ pnpm add -g pi-bolt
 yarn global add pi-bolt
 ```
 
+On Windows the package's install script puts the executable in place, so the package manager has to run it. npm does (npm
+11 warns that it is not in `allowScripts`; `npm install -g --allow-scripts=pi-bolt pi-bolt` allows it by name), while pnpm
+and Bun run install scripts only for the packages you allow to. If it did not run (`pi-bolt` then fails to start: "not
+compatible with the version of Windows" or "not a valid application"), run it yourself, from the package's folder
+(`npm root -g` says where npm's global packages are):
+
+```powershell
+node "$(npm root -g)\pi-bolt\install.cjs"
+```
+
 Without a package manager:
 
 ```bash
 curl -fsSL https://pi-bolt.opensec.in/install.sh | sh
+```
+
+```powershell
+powershell -c "irm https://pi-bolt.opensec.in/install.ps1 | iex"
 ```
 
 ## Usage
@@ -60,7 +74,10 @@ pi-bolt --help
 
 ## How the package works
 
-This package does not contain the executable. Its `pi-bolt` command is a small shell script:
+This package does not contain the executable, and has no dependencies. Its `pi-bolt` command is `bin/pi-bolt.exe`, a
+placeholder that the package's install script (`install.cjs`, plain Node.js) replaces.
+
+**On Linux and macOS** the install script puts a small shell script there:
 
 1. **On the first run**, it downloads the Pi-Bolt build that matches the package version, from the npm registry or, failing
    that, from the [GitHub release](https://github.com/opensec-git/Pi-Bolt/releases). It checks the download against the
@@ -68,8 +85,15 @@ This package does not contain the executable. Its `pi-bolt` command is a small s
 2. **On every run**, it replaces itself with that native executable (`exec`). No Node.js or Bun process stays in between, and
    startup is the same as running the executable directly.
 
-The package has no dependencies and no install scripts, so it works with package managers that block lifecycle scripts, such
-as Bun.
+Where the package manager does not run install scripts (Bun, pnpm, `--ignore-scripts`), the placeholder starts the same
+shell script, so nothing changes there.
+
+**On Windows** the install script installs the native executable while the package is installed: the Windows build that
+matches the package version, from the npm registry or, failing that, from the GitHub release. Before anything is unpacked it
+checks the release's checksums against their Ed25519 signature (by the key in the repository's `keys/release.pub`), that they
+are the checksums of this version, and the download against them; if any of that fails, nothing is installed. It then puts
+`pi-bolt.exe` and the files it needs in the package's `bin` folder, where npm's `pi-bolt` command starts it directly, with no
+Node.js process in between.
 
 ## Extensions
 
@@ -91,16 +115,18 @@ OpenSec maintains two for Pi-Bolt, prebuilt for Bun so that they load without be
 
 | Variable | Default | Effect |
 |---|---|---|
-| `PIBOLT_HOME` | `~/.pi-bolt` | Where downloaded executables are kept |
-| `PIBOLT_VARIANT` | the standard build for your CPU | `x64-baseline` for an x86-64 CPU without AVX2 (picked automatically). Advanced: `x64-jit` or `arm64-jit` also JIT-compile plugins loaded at run time |
+| `PIBOLT_HOME` | `~/.pi-bolt` | Where downloaded executables are kept (Linux and macOS; on Windows they are in the package) |
+| `PIBOLT_VARIANT` | the standard build for your CPU | `x64-baseline` for an x86-64 CPU without AVX2 (picked automatically). Advanced: `x64-jit` or `arm64-jit` also JIT-compile plugins loaded at run time. On Windows it is read when the package is installed |
 
 ## Update and uninstall
 
 ```bash
-npm update -g pi-bolt       # the next run downloads the new version
+npm update -g pi-bolt       # Linux and macOS: the next run downloads the new version; Windows: while it updates
 npm uninstall -g pi-bolt
-rm -rf ~/.pi-bolt/npm       # downloaded executables
+rm -rf ~/.pi-bolt/npm       # Linux and macOS: downloaded executables
 ```
+
+On Windows the executable is in the package's folder, and is removed with it.
 
 ## Requirements
 
@@ -108,6 +134,8 @@ rm -rf ~/.pi-bolt/npm       # downloaded executables
   Alpine and other musl-based systems are not supported.
 - Or macOS 13 or later on Apple silicon (M1 or later).
 - `curl` or `wget`, `tar` and `sha256sum` (or, on macOS, `shasum`) for the first run.
+- Or Windows 10 version 1809 or later, or Windows 11, on x64 (Windows on ARM runs it under its x64 emulation), and Node.js
+  18 or later for the install script.
 
 ## Links
 

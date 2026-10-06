@@ -23,6 +23,9 @@ describe("piBoltInstallMethod", () => {
 		expect(piBoltInstallMethod()).toBe("npm");
 		setExecPath("C:\\Users\\me\\.pi-bolt\\npm\\0.7.0\\pi-bolt-win32-x64\\pi-bolt.exe");
 		expect(piBoltInstallMethod()).toBe("npm");
+		// Windows: the package's install script puts the executable in its own bin folder (npm/install.cjs).
+		setExecPath("C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\pi-bolt\\bin\\pi-bolt.exe");
+		expect(piBoltInstallMethod()).toBe("npm");
 	});
 
 	it("tells an executable the installer put in place", () => {
