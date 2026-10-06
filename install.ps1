@@ -457,6 +457,25 @@ function Test-PiBoltExtension([string]$registry, $extension) {
 	}
 }
 
+# Whether what the package manager installed of an extension has the pinned integrity, by its lockfile (npm's, bun's or pnpm's,
+# in the folder Pi installs npm packages to; `pi-bolt list` says where): 'same', 'different', or 'unknown' (no lockfile).
+function Test-PiBoltInstalledExtension([string]$exe, $extension) {
+	$lines = @(& $exe list 2>$null)
+	for ($i = 0; $i -lt $lines.Count - 1; $i++) {
+		if ($lines[$i] -match "^\s+npm:$([regex]::Escape($extension.Package))(@\S*)?\s*$") {
+			$root = Split-Path (Split-Path $lines[$i + 1].Trim()) # <root>\node_modules\<package>
+			foreach ($lock in 'package-lock.json', 'bun.lock', 'pnpm-lock.yaml') {
+				$path = Join-Path $root $lock
+				if (Test-Path -LiteralPath $path) {
+					if ([IO.File]::ReadAllText($path).Contains($extension.Integrity)) { return 'same' } else { return 'different' }
+				}
+			}
+			return 'unknown'
+		}
+	}
+	'unknown'
+}
+
 # OpenSec's optional extensions (see install.sh, which offers the same), at the versions the release pins.
 function Install-PiBoltExtensions($state) {
 	$choice = $env:PIBOLT_EXTENSIONS
@@ -500,7 +519,18 @@ function Install-PiBoltExtensions($state) {
 			continue
 		}
 		$out = & $exe install "npm:$spec" 2>&1
-		if ($LASTEXITCODE -eq 0) { Write-Host "  ${green}ok$reset $spec installed" }
+		$installed = $LASTEXITCODE -eq 0
+		if ($installed) {
+			# What the package manager installed is a download of its own: its lockfile says what it got.
+			$check = Test-PiBoltInstalledExtension $exe $e
+			if ($check -eq 'different') {
+				& $exe remove "npm:$spec" *> $null
+				Write-Host "  ${red}removed $spec again: what the package manager installed is not the one this release pins$reset"
+				continue
+			}
+			if ($check -eq 'unknown') { Write-Host "  ${dim}note: the package manager's lockfile does not say what it installed of $spec; the registry's package was checked before$reset" }
+		}
+		if ($installed) { Write-Host "  ${green}ok$reset $spec installed" }
 		else {
 			Write-Host "  ${red}could not install $($e.Package) (Pi-Bolt itself is installed): $(($out | Select-Object -Last 1))$reset"
 			Write-Host "  ${dim}Install it later with: pi-bolt install npm:$($e.Package)$reset"

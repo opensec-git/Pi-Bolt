@@ -20,8 +20,15 @@ import winproc  # noqa: E402
 
 
 def drop_cached_image(path: Path):
-    with open(path, "r+b"):
-        pass
+    # (A file that was just written may be open for a while yet: the antivirus is reading it.)
+    for attempt in range(20):
+        try:
+            with open(path, "r+b"):
+                return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.5)
 
 
 def main():
