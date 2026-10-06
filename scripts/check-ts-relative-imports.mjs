@@ -12,7 +12,8 @@ import {
 } from "typescript/unstable/ast/is";
 import { API } from "typescript/unstable/sync";
 
-const ignoredDirectories = new Set([".git", "coverage", "dist", "node_modules"]);
+// (.work: the engine's sources and other build inputs, not the repository's.)
+const ignoredDirectories = new Set([".git", ".work", "coverage", "dist", "node_modules"]);
 const files = [];
 
 function collectTypescriptFiles(directory) {

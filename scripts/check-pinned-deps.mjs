@@ -3,7 +3,8 @@ import { join } from "node:path";
 
 const dependencySections = ["dependencies", "devDependencies", "optionalDependencies"];
 const exactVersionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-const ignoredDirectories = new Set([".git", "dist", "node_modules"]);
+// (.work: the engine's sources and other build inputs, not the repository's: Bun's tests have deliberately broken package.json files.)
+const ignoredDirectories = new Set([".git", ".work", "dist", "node_modules"]);
 const internalPackageNames = new Set(["@earendil-works/chord"]);
 const packageJsonFiles = [];
 
