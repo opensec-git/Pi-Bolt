@@ -27,7 +27,7 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  Source/JavaScriptCore/aot/AOTFunction.h       |   10 +-
  Source/JavaScriptCore/aot/AOTGraph.cpp        |  226 +-
  Source/JavaScriptCore/aot/AOTGraph.h          |   34 +-
- Source/JavaScriptCore/aot/AOTImage.cpp        |  122 +-
+ Source/JavaScriptCore/aot/AOTImage.cpp        |  143 +-
  Source/JavaScriptCore/aot/AOTImage.h          |   15 +
  Source/JavaScriptCore/aot/AOTInlining.cpp     |  291 +-
  .../aot/AOTLoopOptimization.cpp               |   79 +-
@@ -50,12 +50,15 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  Source/JavaScriptCore/aot/AOTThunks.cpp       |  326 +-
  Source/JavaScriptCore/aot/AOTThunks.h         |   15 +-
  .../JavaScriptCore/aot/AOTTypeInference.cpp   |   77 +-
+ .../JavaScriptCore/assembler/ProbeContext.cpp |    4 +-
  .../b3/B3AbstractHeapRepository.h             |    2 +
  .../JavaScriptCore/bytecode/CallLinkInfo.cpp  |    5 +-
  .../JavaScriptCore/bytecode/SpeculatedType.h  |    1 +
  .../bytecode/UnlinkedFunctionExecutable.cpp   |    8 +-
  .../bytecode/UnlinkedFunctionExecutable.h     |   25 +-
  .../bytecode/UnlinkedGlobalCodeBlock.h        |    5 +-
+ .../dfg/DFGAbstractInterpreterInlines.h       |    6 +-
+ Source/JavaScriptCore/ffi/FFICallHost.cpp     |    4 +-
  Source/JavaScriptCore/heap/StaticHeap.cpp     |  205 +-
  Source/JavaScriptCore/heap/StaticHeap.h       |   32 +-
  .../heap/StructureAlignedMemoryAllocator.cpp  |    5 +-
@@ -64,7 +67,7 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  .../parser/VariableEnvironment.cpp            |    2 +-
  .../parser/VariableEnvironment.h              |   16 +-
  Source/JavaScriptCore/runtime/CachedTypes.cpp |  195 +-
- Source/JavaScriptCore/runtime/CachedTypes.h   |   18 +-
+ Source/JavaScriptCore/runtime/CachedTypes.h   |   21 +-
  Source/JavaScriptCore/runtime/CodeCache.cpp   |    2 +
  .../runtime/CyclicModuleRecord.cpp            |    3 +-
  .../runtime/FunctionRareData.cpp              |    5 +
@@ -80,21 +83,26 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  .../runtime/SamplingProfiler.cpp              |    8 +
  Source/JavaScriptCore/runtime/StackFrame.cpp  |   11 +-
  .../runtime/StringPrototype.cpp               |   14 +
+ Source/JavaScriptCore/runtime/VM.cpp          |   41 +-
  Source/JavaScriptCore/yarr/YarrJIT.cpp        |  124 +-
- Source/JavaScriptCore/yarr/YarrJIT.h          |   14 +
+ Source/JavaScriptCore/yarr/YarrJIT.h          |   23 +-
  Source/JavaScriptCore/yarr/YarrPattern.cpp    |  114 +
  Source/JavaScriptCore/yarr/YarrPattern.h      |    3 +
  Source/WTF/wtf/BumpPointerAllocator.h         |    8 +-
+ Source/WTF/wtf/CMakeLists.txt                 |    1 +
+ Source/WTF/wtf/FunctionPtr.h                  |    7 +
  Source/WTF/wtf/HashFunctions.h                |   21 +-
  Source/WTF/wtf/Hasher.h                       |    4 +-
+ Source/WTF/wtf/SysVCall.h                     |   49 +
  Source/bmalloc/bmalloc/StaticRegion.cpp       |  361 +-
  Source/bmalloc/bmalloc/StaticRegion.h         |   92 +-
  Source/cmake/WebKitCompilerFlags.cmake        |    4 +-
  Source/cmake/WebKitMacros.cmake               |   28 +-
  build-icu.ps1                                 |   34 +-
- 74 files changed, 7346 insertions(+), 318 deletions(-)
+ 81 files changed, 7482 insertions(+), 327 deletions(-)
  create mode 100644 Source/JavaScriptCore/aot/AOTStubsX86_64.cpp
  create mode 100644 Source/JavaScriptCore/runtime/ReportableSitesOfFunction.h
+ create mode 100644 Source/WTF/wtf/SysVCall.h
 
 diff --git a/Source/JavaScriptCore/CMakeLists.txt b/Source/JavaScriptCore/CMakeLists.txt
 index 79c1f1a3cb..e00c2fdf0b 100644
@@ -1016,7 +1024,7 @@ index 10cfe2379d..43a9411057 100644
  void promoteEnvironments(Graph&); // Sets Node::isPromoted.
  void scalarReplaceReadOnlyObjects(Graph&); // Runs before type inference.
 diff --git a/Source/JavaScriptCore/aot/AOTImage.cpp b/Source/JavaScriptCore/aot/AOTImage.cpp
-index bea4646b3a..5308bf904c 100644
+index bea4646b3a..8afea6df29 100644
 --- a/Source/JavaScriptCore/aot/AOTImage.cpp
 +++ b/Source/JavaScriptCore/aot/AOTImage.cpp
 @@ -34,6 +34,8 @@
@@ -1272,6 +1280,34 @@ index bea4646b3a..5308bf904c 100644
              return;
          AOT::CompiledCode code;
          if (AOT::compileForImage(m_vm, codeBlock, code))
+@@ -2179,6 +2281,27 @@ std::optional<std::pair<size_t, size_t>> aotImageCodeRange(std::span<const uint8
+     return std::pair { static_cast<size_t>(header.codeOffset), static_cast<size_t>(header.size - header.codeOffset) };
+ }
+ 
++Vector<uint32_t> aotImageIndirectCallTargets(std::span<const uint8_t> image)
++{
++    Vector<uint32_t> targets;
++    auto range = aotImageCodeRange(image);
++    if (!range)
++        return targets;
++    auto& header = *reinterpret_cast<const AOT::ImageHeader*>(image.data());
++    if (header.regExpsOffset > header.size || header.numberOfRegExps > (header.size - header.regExpsOffset) / sizeof(AOT::ImageRegExp))
++        return targets;
++    std::span regExps { reinterpret_cast<const AOT::ImageRegExp*>(image.data() + header.regExpsOffset), header.numberOfRegExps };
++    for (auto& regExp : regExps) {
++        for (uint32_t offset : { regExp.codeFor8Bit, regExp.codeFor16Bit }) {
++            if (offset < range->second)
++                targets.append(offset);
++        }
++    }
++    std::ranges::sort(targets);
++    targets.shrink(std::ranges::unique(targets).begin() - targets.begin());
++    return targets;
++}
++
+ } // namespace JSC
+ 
+ #endif // ENABLE(FTL_JIT)
 diff --git a/Source/JavaScriptCore/aot/AOTImage.h b/Source/JavaScriptCore/aot/AOTImage.h
 index cce882109e..4e942585eb 100644
 --- a/Source/JavaScriptCore/aot/AOTImage.h
@@ -7653,6 +7689,28 @@ index 8db0635296..98879bfe5e 100644
      Type m_returnType { TNone };
      UncheckedKeyHashMap<Node*, Type> m_elementTypes; // Of the arrays that the function makes: everything it puts in them.
      bool m_elementTypesChanged { false };
+diff --git a/Source/JavaScriptCore/assembler/ProbeContext.cpp b/Source/JavaScriptCore/assembler/ProbeContext.cpp
+index b52b4897a1..e67bce685f 100644
+--- a/Source/JavaScriptCore/assembler/ProbeContext.cpp
++++ b/Source/JavaScriptCore/assembler/ProbeContext.cpp
+@@ -28,6 +28,7 @@
+ 
+ #if ENABLE(ASSEMBLER)
+ 
++#include <wtf/SysVCall.h>
+ #include <wtf/TZoneMallocInlines.h>
+ 
+ namespace JSC {
+@@ -46,7 +47,8 @@ extern "C" void SYSV_ABI executeJSCJITProbe(State* state)
+ 
+     state->initializeStackFunction = nullptr;
+     state->initializeStackArg = nullptr;
+-    state->probeFunction(context);
++    // (Probe::Function is SYSV_ABI: called so that Control Flow Guard checks it correctly, wtf/SysVCall.h.)
++    callSysV(state->probeFunction, context);
+ 
+ #if CPU(ARM64)
+     // The ARM64 probe trampoline does not support changing both lr and pc.
 diff --git a/Source/JavaScriptCore/b3/B3AbstractHeapRepository.h b/Source/JavaScriptCore/b3/B3AbstractHeapRepository.h
 index 413895dd46..1eb8b27733 100644
 --- a/Source/JavaScriptCore/b3/B3AbstractHeapRepository.h
@@ -7768,6 +7826,45 @@ index 3746be46cc..fbd0c5c900 100644
  };
  
  }
+diff --git a/Source/JavaScriptCore/dfg/DFGAbstractInterpreterInlines.h b/Source/JavaScriptCore/dfg/DFGAbstractInterpreterInlines.h
+index a326fc023a..2de7792972 100644
+--- a/Source/JavaScriptCore/dfg/DFGAbstractInterpreterInlines.h
++++ b/Source/JavaScriptCore/dfg/DFGAbstractInterpreterInlines.h
+@@ -6400,7 +6400,11 @@ void AbstractInterpreter<AbstractStateType>::executeDoubleUnaryOpEffects(Node* n
+     if (std::optional<double> number = child.toNumberFromPrimitive()) {
+         if (node->child1().useKind() != DoubleRepUse)
+             didFoldClobberWorld();
+-        setConstant(node, jsDoubleNumber(equivalentFunction(*number)));
++        // (A function pointer here is an Arith::UnaryFunction, JIT_OPERATION_ATTRIBUTES: wtf/SysVCall.h.)
++        if constexpr (std::is_pointer_v<std::remove_cvref_t<decltype(equivalentFunction)>>)
++            setConstant(node, jsDoubleNumber(callSysV(equivalentFunction, *number)));
++        else
++            setConstant(node, jsDoubleNumber(equivalentFunction(*number)));
+         return;
+     }
+     SpeculatedType type;
+diff --git a/Source/JavaScriptCore/ffi/FFICallHost.cpp b/Source/JavaScriptCore/ffi/FFICallHost.cpp
+index f8e046f978..6f0a26fb9a 100644
+--- a/Source/JavaScriptCore/ffi/FFICallHost.cpp
++++ b/Source/JavaScriptCore/ffi/FFICallHost.cpp
+@@ -78,7 +78,7 @@ static ALWAYS_INLINE EncodedJSValue ffiCall(JSGlobalObject* globalObject, CallFr
+             auto hookScope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
+             void* hookToken = hooks->before ? hooks->before(globalObject, callFrame) : nullptr;
+             if (!hookScope.exception()) [[likely]]
+-                thunk.taggedPtr<InvokeThunkFunction>()(function->target(), slots);
++                callSysV(thunk.taggedPtr<InvokeThunkFunction>(), function->target(), slots); // (wtf/SysVCall.h)
+             pending = hookScope.exception(); // from a throwing before-hook or an in-call callback
+             if (pending) [[unlikely]]
+                 hookScope.clearException();
+@@ -98,7 +98,7 @@ static ALWAYS_INLINE EncodedJSValue ffiCall(JSGlobalObject* globalObject, CallFr
+             return { };
+         }
+     } else
+-        thunk.taggedPtr<InvokeThunkFunction>()(function->target(), slots);
++        callSysV(thunk.taggedPtr<InvokeThunkFunction>(), function->target(), slots); // (wtf/SysVCall.h)
+     RETURN_IF_EXCEPTION(scope, { });
+ 
+     RELEASE_AND_RETURN(scope, JSValue::encode(jsValueFromSlot(globalObject, context, signature.returnType(), slots[argumentCount])));
 diff --git a/Source/JavaScriptCore/heap/StaticHeap.cpp b/Source/JavaScriptCore/heap/StaticHeap.cpp
 index 96edcf1624..fde7c772cd 100644
 --- a/Source/JavaScriptCore/heap/StaticHeap.cpp
@@ -8634,7 +8731,7 @@ index 696ac7a731..6a19d2ab9c 100644
          reportableSites = builder.takeReportableSites();
          return image;
 diff --git a/Source/JavaScriptCore/runtime/CachedTypes.h b/Source/JavaScriptCore/runtime/CachedTypes.h
-index e572aae01e..b2a34a6cb5 100644
+index e572aae01e..05f113dae5 100644
 --- a/Source/JavaScriptCore/runtime/CachedTypes.h
 +++ b/Source/JavaScriptCore/runtime/CachedTypes.h
 @@ -26,10 +26,12 @@
@@ -8673,6 +8770,16 @@ index e572aae01e..b2a34a6cb5 100644
  // `bun build --compile --bytecode` with a payload order file: every module of the link is encoded into ONE payload, laid
  // out by how the recorded run used it. Regions, in file order, each written to completion before the next starts:
  //   0 heads (cache entry, key, top-level code, its functions' records) of modules the run evaluated, or did not know
+@@ -545,6 +531,9 @@ JS_EXPORT_PRIVATE bool registerAOTImage(std::span<const uint8_t> image, const vo
+ JS_EXPORT_PRIVATE bool isPCOfAOTImage(const void*);
+ // Where the code starts in the image and how much there is, both in whole pages. Nothing if it is not an image.
+ JS_EXPORT_PRIVATE std::optional<std::pair<size_t, size_t>> aotImageCodeRange(std::span<const uint8_t> image);
++// Where in the image's code (offsets from its start, sorted) are the entry points that C++ calls through a pointer: on Windows,
++// what Control Flow Guard must allow to be called so (the compiled regular expressions: YarrCodeBlock::execute()).
++JS_EXPORT_PRIVATE Vector<uint32_t> aotImageIndirectCallTargets(std::span<const uint8_t> image);
+ // How much of `image` is the image: a whole number of pages. Something else may follow.
+ JS_EXPORT_PRIVATE std::optional<size_t> aotImageSize(std::span<const uint8_t> image);
+ #endif
 diff --git a/Source/JavaScriptCore/runtime/CodeCache.cpp b/Source/JavaScriptCore/runtime/CodeCache.cpp
 index 506caee0e1..e69478516b 100644
 --- a/Source/JavaScriptCore/runtime/CodeCache.cpp
@@ -9262,6 +9369,73 @@ index f48a8a6a3b..86c7e65d54 100644
      auto view = thisString->view(globalObject);
      RETURN_IF_EXCEPTION(scope, { });
      JSValue a0 = callFrame->argument(0);
+diff --git a/Source/JavaScriptCore/runtime/VM.cpp b/Source/JavaScriptCore/runtime/VM.cpp
+index e55096c301..fe8c78ab2a 100644
+--- a/Source/JavaScriptCore/runtime/VM.cpp
++++ b/Source/JavaScriptCore/runtime/VM.cpp
+@@ -193,6 +193,10 @@
+ #include "WasmDebugServerUtilities.h"
+ #endif
+ 
++#if OS(WINDOWS)
++#include <windows.h>
++#endif
++
+ #include <span>
+ 
+ namespace JSC {
+@@ -1407,8 +1411,15 @@ size_t VM::updateSoftReservedZoneSize(size_t softReservedZoneSize)
+ // when needed, see http://support.microsoft.com/kb/100775.
+ // By touching every page up to the stack limit with a dummy operation,
+ // we force the system to move the guard page, and commit memory.
++//
++// Pi-Bolt: commit those pages instead of touching them, and do what the system does when it moves the guard page: put it
++// below them, and lower the thread's stack limit in its TEB (which exception dispatch and _chkstk read) to them. Committed
++// pages are there when touched, as the touched ones were, and charge the same commit; but they take no physical memory and
++// no page fault until something uses them (touched, the 5MB of maxPerThreadStackUsage took about 1,260 faults and stayed
++// resident for the life of the thread). Touching remains the way when committing cannot be done (too close to the end of
++// the stack, where the system's overflow handling is better left to the system, or out of commit).
+ 
+-static void preCommitStackMemory(void* stackLimit)
++static void touchStackMemory(void* stackLimit)
+ {
+     const int pageSize = 4096;
+     for (volatile char* p = reinterpret_cast<char*>(&stackLimit); p > stackLimit; p -= pageSize) {
+@@ -1416,6 +1427,34 @@ static void preCommitStackMemory(void* stackLimit)
+         *p = ch;
+     }
+ }
++
++static void preCommitStackMemory(void* stackLimit)
++{
++    constexpr uintptr_t pageSize = 4096;
++    auto* tib = reinterpret_cast<NT_TIB*>(NtCurrentTeb());
++    uintptr_t committed = reinterpret_cast<uintptr_t>(tib->StackLimit);
++    uintptr_t limit = reinterpret_cast<uintptr_t>(stackLimit) & ~(pageSize - 1);
++    if (limit >= committed)
++        return;
++    ULONG_PTR lowest = 0;
++    ULONG_PTR highest = 0;
++    GetCurrentThreadStackLimits(&lowest, &highest);
++    // Room for the guard page below, and the page the system keeps uncommitted beneath that.
++    if (limit < lowest + 4 * pageSize) {
++        touchStackMemory(stackLimit);
++        return;
++    }
++    // The new guard page is committed with the rest, so that nothing can fail once the old one is gone.
++    auto* guard = reinterpret_cast<void*>(limit - pageSize);
++    DWORD oldProtection;
++    if (!VirtualAlloc(guard, committed - limit + pageSize, MEM_COMMIT, PAGE_READWRITE)) {
++        touchStackMemory(stackLimit);
++        return;
++    }
++    RELEASE_ASSERT(VirtualProtect(guard, pageSize, PAGE_READWRITE | PAGE_GUARD, &oldProtection));
++    RELEASE_ASSERT(VirtualProtect(reinterpret_cast<void*>(limit), committed - limit, PAGE_READWRITE, &oldProtection));
++    tib->StackLimit = reinterpret_cast<void*>(limit);
++}
+ #endif
+ 
+ void VM::updateStackLimits()
 diff --git a/Source/JavaScriptCore/yarr/YarrJIT.cpp b/Source/JavaScriptCore/yarr/YarrJIT.cpp
 index 87c90d8818..70d5da8036 100644
 --- a/Source/JavaScriptCore/yarr/YarrJIT.cpp
@@ -9527,10 +9701,54 @@ index 87c90d8818..70d5da8036 100644
  #else
      UNUSED_PARAM(pattern);
 diff --git a/Source/JavaScriptCore/yarr/YarrJIT.h b/Source/JavaScriptCore/yarr/YarrJIT.h
-index f8dc0ace2d..f33a2bf61c 100644
+index f8dc0ace2d..33de4476e7 100644
 --- a/Source/JavaScriptCore/yarr/YarrJIT.h
 +++ b/Source/JavaScriptCore/yarr/YarrJIT.h
-@@ -475,6 +475,20 @@ struct YarrCodeForImage {
+@@ -38,6 +38,7 @@
+ #include <wtf/Atomics.h>
+ #include <wtf/BitSet.h>
+ #include <wtf/StackCheck.h>
++#include <wtf/SysVCall.h>
+ #include <wtf/TZoneMalloc.h>
+ #include <wtf/UniqueRef.h>
+ 
+@@ -350,7 +351,7 @@ public:
+         if (Options::useJITCage())
+             return MatchResult(vmEntryToYarrJIT(input.data(), start, input.size(), output, matchingContext, retagCodePtr<Yarr8BitPtrTag, YarrEntryPtrTag>(m_ref8.code().taggedPtr())));
+ #endif
+-        return MatchResult(untagCFunctionPtr<YarrJITCode8, Yarr8BitPtrTag>(m_ref8.code().taggedPtr())(input.data(), start, input.size(), output, matchingContext));
++        return MatchResult(callSysV(untagCFunctionPtr<YarrJITCode8, Yarr8BitPtrTag>(m_ref8.code().taggedPtr()), input.data(), start, input.size(), output, matchingContext));
+     }
+ 
+     MatchResult execute(std::span<const char16_t> input, unsigned start, int* output, MatchingContextHolder* matchingContext)
+@@ -360,7 +361,7 @@ public:
+         if (Options::useJITCage())
+             return MatchResult(vmEntryToYarrJIT(input.data(), start, input.size(), output, matchingContext, retagCodePtr<Yarr16BitPtrTag, YarrEntryPtrTag>(m_ref16.code().taggedPtr())));
+ #endif
+-        return MatchResult(untagCFunctionPtr<YarrJITCode16, Yarr16BitPtrTag>(m_ref16.code().taggedPtr())(input.data(), start, input.size(), output, matchingContext));
++        return MatchResult(callSysV(untagCFunctionPtr<YarrJITCode16, Yarr16BitPtrTag>(m_ref16.code().taggedPtr()), input.data(), start, input.size(), output, matchingContext));
+     }
+ 
+     MatchResult execute(std::span<const Latin1Character> input, unsigned start, MatchingContextHolder* matchingContext)
+@@ -375,7 +376,7 @@ public:
+         if (Options::useJITCage())
+             return MatchResult(vmEntryToYarrJIT(input.data(), start, input.size(), nullptr, matchingContext, retagCodePtr<YarrMatchOnly8BitPtrTag, YarrEntryPtrTag>(m_matchOnly8.code().taggedPtr())));
+ #endif
+-        return MatchResult(untagCFunctionPtr<YarrJITCodeMatchOnly8, YarrMatchOnly8BitPtrTag>(m_matchOnly8.code().taggedPtr())(input.data(), start, input.size(), nullptr, matchingContext));
++        return MatchResult(callSysV(untagCFunctionPtr<YarrJITCodeMatchOnly8, YarrMatchOnly8BitPtrTag>(m_matchOnly8.code().taggedPtr()), input.data(), start, input.size(), nullptr, matchingContext));
+     }
+ 
+     MatchResult execute(std::span<const char16_t> input, unsigned start, MatchingContextHolder* matchingContext)
+@@ -390,7 +391,7 @@ public:
+         if (Options::useJITCage())
+             return MatchResult(vmEntryToYarrJIT(input.data(), start, input.size(), nullptr, matchingContext, retagCodePtr<YarrMatchOnly16BitPtrTag, YarrEntryPtrTag>(m_matchOnly16.code().taggedPtr())));
+ #endif
+-        return MatchResult(untagCFunctionPtr<YarrJITCodeMatchOnly16, YarrMatchOnly16BitPtrTag>(m_matchOnly16.code().taggedPtr())(input.data(), start, input.size(), nullptr, matchingContext));
++        return MatchResult(callSysV(untagCFunctionPtr<YarrJITCodeMatchOnly16, YarrMatchOnly16BitPtrTag>(m_matchOnly16.code().taggedPtr()), input.data(), start, input.size(), nullptr, matchingContext));
+     }
+ 
+ #if ENABLE(REGEXP_TRACING)
+@@ -475,6 +476,20 @@ struct YarrCodeForImage {
  };
  // Null: it takes something that such code cannot have.
  JS_EXPORT_PRIVATE std::optional<YarrCodeForImage> jitCompileForImage(YarrPattern&, StringView patternString, CharSize, VM*, ExecutionMode);
@@ -9709,6 +9927,43 @@ index e3cba80913..701b5ec332 100644
                  if (!pool) [[unlikely]]
                      return nullptr;
                  previousPool->m_next = pool;
+diff --git a/Source/WTF/wtf/CMakeLists.txt b/Source/WTF/wtf/CMakeLists.txt
+index 83a0833da0..ee470e7833 100644
+--- a/Source/WTF/wtf/CMakeLists.txt
++++ b/Source/WTF/wtf/CMakeLists.txt
+@@ -359,6 +359,7 @@ set(WTF_PUBLIC_HEADERS
+     SwiftBridging.h
+     SwiftCXXThunk.h
+     SynchronizedFixedQueue.h
++    SysVCall.h
+     SystemFree.h
+     SystemMalloc.h
+     SystemTracing.h
+diff --git a/Source/WTF/wtf/FunctionPtr.h b/Source/WTF/wtf/FunctionPtr.h
+index 198bc88761..12b9c8f44e 100644
+--- a/Source/WTF/wtf/FunctionPtr.h
++++ b/Source/WTF/wtf/FunctionPtr.h
+@@ -31,6 +31,7 @@
+ #include <wtf/FunctionTraits.h>
+ #include <wtf/Hasher.h>
+ #include <wtf/PtrTag.h>
++#include <wtf/SysVCall.h>
+ 
+ WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+ 
+@@ -111,6 +112,12 @@ public:
+     Out operator()(In... in) const
+     {
+         ASSERT(m_ptr);
++#if OS(WINDOWS) && CPU(X86_64)
++        // (Pi-Bolt: a SYSV_ABI function, called so that Control Flow Guard checks it correctly: wtf/SysVCall.h.)
++        if constexpr (attr != FunctionAttributes::None)
++            return callSysV(get(), std::forward<In>(in)...);
++        else
++#endif
+         return (*get())(std::forward<In>(in)...);
+     }
+ 
 diff --git a/Source/WTF/wtf/HashFunctions.h b/Source/WTF/wtf/HashFunctions.h
 index 8c633ff782..2574afbb0c 100644
 --- a/Source/WTF/wtf/HashFunctions.h
@@ -9779,6 +10034,61 @@ index a4fccc37f9..4fc0909675 100644
  }
  
  inline void add(Hasher& hasher, ASCIILiteral literal)
+diff --git a/Source/WTF/wtf/SysVCall.h b/Source/WTF/wtf/SysVCall.h
+new file mode 100644
+index 0000000000..1c31756902
+--- /dev/null
++++ b/Source/WTF/wtf/SysVCall.h
+@@ -0,0 +1,49 @@
++/*
++ * Pi-Bolt: an indirect call to a SYSV_ABI function that Control Flow Guard checks correctly on Windows x64.
++ *
++ * With /guard:cf, LLVM turns an indirect call on x64 into a call to the loader's dispatch function (__guard_dispatch_icall_fptr),
++ * with the target in RAX: the target is an extra argument of the call, which the Win64 calling convention assigns to RAX
++ * (CCIfCFGuardTarget in X86CallingConv.td). The SysV convention has no such rule, so for a call to a SYSV_ABI function (on
++ * Windows x64: JavaScriptCore's host functions, JIT operations, custom getters and setters, and compiled regular expressions) the
++ * target lands in the next free argument register instead, and the dispatcher jumps to whatever RAX held (LLVM 23.1). Calling
++ * such a pointer through callSysV() does what the dispatcher would: the target is checked by the loader's check function
++ * (__guard_check_icall_fptr: the target in RCX, as an ordinary Win64 call has it), which ends the process if the target is not
++ * one that may be called so; then it is called, without a second, broken check (guard(nocf) covers this function's calls only,
++ * and stays with them when it is inlined).
++ *
++ * Elsewhere callSysV() is a plain call.
++ */
++
++#pragma once
++
++#include <utility>
++#include <wtf/Platform.h>
++
++#if OS(WINDOWS) && CPU(X86_64)
++extern "C" void* __guard_check_icall_fptr;
++#endif
++
++namespace WTF {
++
++#if OS(WINDOWS) && CPU(X86_64)
++
++template<typename Out, typename... In, typename... Args>
++__declspec(guard(nocf)) ALWAYS_INLINE Out callSysV(Out(SYSV_ABI* function)(In...), Args&&... args)
++{
++    reinterpret_cast<void (*)(const void*)>(__guard_check_icall_fptr)(reinterpret_cast<const void*>(function));
++    return function(std::forward<Args>(args)...);
++}
++
++#else
++
++template<typename Function, typename... Args>
++ALWAYS_INLINE decltype(auto) callSysV(Function* function, Args&&... args)
++{
++    return function(std::forward<Args>(args)...);
++}
++
++#endif
++
++} // namespace WTF
++
++using WTF::callSysV;
 diff --git a/Source/bmalloc/bmalloc/StaticRegion.cpp b/Source/bmalloc/bmalloc/StaticRegion.cpp
 index 77260b2296..cd7f672d1d 100644
 --- a/Source/bmalloc/bmalloc/StaticRegion.cpp

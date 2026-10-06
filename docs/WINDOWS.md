@@ -136,16 +136,65 @@ Reading every page of the section; 3 fresh copies each. (Clock-tick CPU times ar
 Stock Bun 1.4.2 for Windows is linked with `/DYNAMICBASE`, `/HIGHENTROPYVA` and `/NXCOMPAT`, but **without Control Flow Guard**
 (no `GUARD_CF`, an empty function table) and **without `/CETCOMPAT`**. Pi-Bolt must add both:
 
-- **CFG**: every C and C++ object with `/guard:cf` (and Rust with `-C control-flow-guard`), the link with `/guard:cf`. JIT
-  memory is allocated executable at run time, so its targets are valid by default. The code image is part of the image: any of its
-  entry points that instrumented C++ calls through a pointer must be in the image's guard function table, which the PE writer
-  can extend. To be verified by running with CFG on.
-- **CET shadow stacks**: this CPU supports them, so they can be tested here. JavaScriptCore discards frames when it unwinds to a
-  JavaScript `catch` handler or to its entry frame, without a matching return; whether that is compatible with a shadow stack has
-  to be established by running Bun's and Pi's tests on a `/CETCOMPAT` build. If it is not, the finding and its numbers come back
-  to the owner before anything is decided.
-- **Unwind information** for the code image (`RUNTIME_FUNCTION` entries, in `.pdata` or registered with `RtlAddFunctionTable`),
-  so that stack walks and crash reports go through compiled frames.
+- **CFG: linked in, and verified** (`GUARD_CF` is required of the executable by the build's binary checks): every C and C++
+  object with `/guard:cf`, Rust with `-C control-flow-guard`, the link with `/guard:cf`; tests\aot passes all 58 checks with it,
+  and Pi runs. Three things had to be done for it:
+  - **LLVM checks an indirect call to a SysV-convention function with the target in the wrong register.** On x64 a checked
+    call goes through the loader's dispatch function with the target in RAX, which LLVM assigns only for the Win64 convention
+    (`CCIfCFGuardTarget` is in `CC_X86_Win64_C`, not `CC_X86_64_C`). JavaScriptCore on Windows x64 declares its host functions,
+    JIT operations, custom getters and setters and compiled regular expressions `sysv_abi`; for a call to one, the target goes
+    in the next argument register and the dispatcher jumps to whatever RAX held (LLVM 23.1: Pi failed at its first custom
+    getter, calling a StructureID). Such calls go through `WTF::callSysV()` (`wtf/SysVCall.h`): it checks the target with the
+    loader's check function (target in RCX, as an ordinary call has it, so the check is the one the dispatcher would make),
+    then calls it unchecked (`guard(nocf)`). `FunctionPtr`'s call operator does that for every pointer declared a JIT
+    operation or host call; the few raw pointers (Yarr's code, the DFG's math functions, FFI thunks, JIT probes, the
+    structured-clone writer) call it directly, and Rust's calls of the structured-clone writer go through C++
+    (`Bun__StructuredClone__writeBytes`), rustc's LLVM having the same bug. `scripts\lib\check-cfg-sysv-calls.py` reads every
+    bitcode object of an LTO build (Rust's from its archives) and fails if any such call is checked the broken way;
+    `scripts\build-runtime.ps1` runs it after an LTO build (3,264 objects, about two and a half minutes; none found).
+  - **The compiled code's entry points that C++ calls through a pointer** (the regular expressions) are added to the image's
+    table of valid targets: the PE writer writes the executable's table with them, sorted, in a section `.pbgfids`, and points
+    the load configuration to it (Pi: 5,960 added to 31,577). Nothing is registered at run time.
+  - **The jsc shell is not linked in an LTO build** (`deps/webkit.ts`): WTF's weak declarations of what Bun defines become
+    duplicate definitions across ThinLTO modules in COFF; Bun needs only the libraries.
+
+  What CFG costs in memory: the loader keeps a bitmap of valid targets, about 1.4 MB resident for Pi. With the JIT on, JSC's
+  1 GB executable reservation is all valid targets, which costs 16 MB of bitmap pages; Pi runs with the JIT off.
+- **CET shadow stacks: not tested yet, and not linked in.** JavaScriptCore discards frames when it unwinds to a JavaScript
+  `catch` handler or to its entry frame, without a matching return, which a shadow stack would take for an attack. Whether it
+  does has to be found out on a machine that runs programs with shadow stacks; this one does not: Windows runs no process here
+  with them (Edge, which is linked `/CETCOMPAT`, has `ProcessUserShadowStackPolicy` 0, and so does a process created with
+  `PROCESS_CREATION_MITIGATION_POLICY2_CET_USER_SHADOW_STACKS_ALWAYS_ON`; `.work/exp/cet/cet_run.py`), and turning it on is a
+  change to the system's security settings. Linking `/CETCOMPAT` untested could make Pi-Bolt crash at its first caught exception
+  on a machine that enforces them; so it waits for that test, and the owner's decision.
+- **Unwind information** for the code image: one `RUNTIME_FUNCTION` for all of it (`.pbpdata`), so that stack walks and crash
+  reports go through compiled frames.
+
+## Where Windows startup time and memory went
+
+Measured with `bench/ws_at_exit.py` (what a run has resident when it ends, by section and reservation; it runs the program as
+its debugger, which sees it at its exit) and a sampling profile of the threads (`.work/exp/stack`, not shipped).
+
+- **JavaScriptCore touched 5 MB of stack at its start, a page at a time.** On Windows it pre-commits the stack down to its soft
+  limit (`maxPerThreadStackUsage`, 5 MB), because LLInt, JIT and compiled frames can be bigger than the guard page that grows
+  the stack. It did so by touching every page, each a guard-page fault: about 1,260 of them, some 20 ms of a fresh thread, and
+  the 5 MB stayed resident for the life of the thread. Every Bun on Windows does it, stock Bun included (`bun -e 0`: 1,303 of
+  its 1,770 private pages). `preCommitStackMemory` (VM.cpp) now commits those pages instead (0.1 to 0.35 ms), and does what the
+  system does when it moves the guard page: puts one below them and lowers the thread's stack limit in its TEB, which
+  exception dispatch and `_chkstk` read. The guarantee is the same (the pages are committed, as touched ones were, and charge the
+  same commit), but none is resident until used. `.work/exp/stack/precommit_test.cpp` checks it: the 5 MB committed and not
+  resident, a frame that writes far below the stack pointer, SEH and C++ exceptions raised and caught down there, and recursion
+  past it still growing the stack and ending in a catchable stack overflow. `bun -e 0`'s private memory went from 7.1 to 2.3 MB.
+- **A page fault on the executable's image** costs about 1.5 µs once the file is in memory, 44 µs on the first run after it
+  is not (`.work/exp/stack/imagefault.cpp`). `pi --version` touches about 1,900 pages of the runtime's code, so laying out what
+  Pi runs together (a linker order file, as on macOS: `scripts\train-runtime-hints.ps1`, `scripts\build-runtime.ps1`) is worth a
+  few milliseconds warm and more cold. The Windows tracer and `hints.ts` support for it are in place.
+- **Looking up a program in PATH** costs 5 to 7 ms for one that is not there (four extensions in each of this machine's 38
+  directories; a probe for a missing file is 45 to 65 µs with Defender's filter). Pi looks for `rg`, `fd` and `fdfind` before
+  its first frame. On Windows it did so by running each as `cmd --version`: three misses when none is installed, and a process
+  start for each one that is. It now looks them up, as on Linux and macOS, from PATH's absolute directories, with the
+  extensions spawn tries (`.com` last), and returns the file's path. That is also safer: spawning a bare name on Windows looks in
+  the working directory first, so a project's own `rg.exe` would have run at Pi's start, and as the search tools.
 
 ## What would carry over to macOS
 

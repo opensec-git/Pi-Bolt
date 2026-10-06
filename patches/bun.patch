@@ -19,9 +19,11 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
   was linked to be; SharedArrayBuffer with the JIT off; a terminal reopened by its own device, which
   kqueue can watch; the programs an executable starts are started by Pi-Bolt's launcher helper.
 ---
- scripts/build/deps/webkit.ts                  |   18 +
+ scripts/build/binary-expectations.ts          |   32 +-
+ scripts/build/deps/webkit.ts                  |   25 +-
  scripts/build/download.ts                     |   28 +-
- scripts/build/flags.ts                        |   10 +
+ scripts/build/flags.ts                        |   17 +
+ scripts/build/rust.ts                         |    3 +
  src/ast/import_record.rs                      |    4 +
  src/bun_alloc/lib.rs                          |   14 +-
  src/bun_core/env_var.rs                       |    1 +
@@ -31,6 +33,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  .../generateChunksInParallel.rs               |   21 +
  .../linker_context/scanImportsAndExports.rs   |   21 +
  src/bundler/prelinked_module_graph.rs         |   14 +-
+ src/codegen/generate-classes.ts               |   25 +-
  src/crash_handler/lib.rs                      |   41 +-
  src/http/HTTPContext.rs                       |   39 +-
  src/http/HTTPThread.rs                        |   11 +
@@ -48,22 +51,155 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/jsc/bindings/InternalModuleRegistry.cpp   |   15 +-
  src/jsc/bindings/ZigException.cpp             |   14 +-
  src/jsc/bindings/ZigGlobalObject.cpp          |   45 +
- src/jsc/bindings/ZigSourceProvider.cpp        | 1010 ++++++++++++++++-
+ src/jsc/bindings/ZigSourceProvider.cpp        | 1084 ++++++++++++++++-
  src/jsc/bindings/c-bindings.cpp               |  113 ++
+ .../webcore/SerializedScriptValue.cpp         |    9 +
  src/jsc/web_worker.rs                         |    4 +
  src/runtime/api/bun/subprocess.rs             |    2 +-
  src/runtime/cli/run_command.rs                |    5 +
+ src/runtime/node/net/BlockList.rs             |    2 +-
+ src/runtime/webcore/Blob.rs                   |    2 +-
  src/spawn/process.rs                          |   23 +-
  src/spawn_sys/posix_spawn.rs                  |  173 ++-
  src/spawn_sys/spawn_process.rs                |   14 +-
- src/standalone_graph/StandaloneModuleGraph.rs |  254 ++++-
- 38 files changed, 2268 insertions(+), 146 deletions(-)
+ src/standalone_graph/StandaloneModuleGraph.rs |  254 +++-
+ 44 files changed, 2409 insertions(+), 166 deletions(-)
 
+diff --git a/scripts/build/binary-expectations.ts b/scripts/build/binary-expectations.ts
+index f18a60b0..0ba5981b 100644
+--- a/scripts/build/binary-expectations.ts
++++ b/scripts/build/binary-expectations.ts
+@@ -7,9 +7,9 @@
+  * BEFORE EXTENDING A LIST HERE: these are not build settings, they are the
+  * shipped binary's contract with the machines it runs on and the addons that
+  * load into it. The check failing is the point at which a change that would
+- * otherwise ship unnoticed — a new shared-library dependency, a higher
++ * otherwise ship unnoticed â€” a new shared-library dependency, a higher
+  * minimum glibc, a symbol leaking into the export table, a static initializer,
+- * a lost mitigation — gets decided on purpose. The usual right answer is to
++ * a lost mitigation â€” gets decided on purpose. The usual right answer is to
+  * change the code (link statically, fix the declaration, make the global
+  * lazy), not the expectation. Extend a list only in the same change that
+  * deliberately takes on the new requirement, and say so in the commit.
+@@ -29,7 +29,7 @@ export interface BinaryExpectations {
+    * one of `patterns` (`*` wildcards) by its raw name, or one of
+    * `demangledPatterns` by its demangled name (a version script's
+    * `extern "C++"` block). Nothing may leak past the export lists in src/
+-   * (linker.lds / symbols.txt / symbols.def) — on Windows a stray
++   * (linker.lds / symbols.txt / symbols.def) â€” on Windows a stray
+    * `__declspec(dllexport)` does exactly that.
+    */
+   exports: {
+@@ -81,7 +81,7 @@ export interface BinaryExpectations {
+   /**
+    * Version nodes without a number that the binary may require, exact names.
+    * Bionic tags its symbols by the API level that introduced them (LIBC,
+-   * LIBC_N, LIBC_O, LIBC_P, …), so on Android this list is the API floor the
++   * LIBC_N, LIBC_O, LIBC_P, â€¦), so on Android this list is the API floor the
+    * way maxSymbolVersions is glibc's; on glibc any un-numbered node
+    * (GLIBC_ABI_DT_RELR = a 2.36+ loader, GLIBC_PRIVATE) is a violation.
+    * Judged only where maxSymbolVersions is.
+@@ -106,7 +106,7 @@ export interface BinaryExpectations {
+    *
+    * Not a list to grow: an initializer from bun/JSC/WTF code is a bug
+    * (startup cost on every invocation, init-order hazards). Make the global
+-   * lazy instead — function-local static, LazyNeverDestroyed, constinit.
++   * lazy instead â€” function-local static, LazyNeverDestroyed, constinit.
+    */
+   staticInitializers?: string[];
+   elf?: {
+@@ -128,22 +128,22 @@ export interface BinaryExpectations {
+   macho?: {
+     /** MH_* flags that must be present. */
+     flags: string[];
+-    /** Segment name → maxprot, for the segments that must not gain W or X. */
++    /** Segment name â†’ maxprot, for the segments that must not gain W or X. */
+     segmentMaxProt: Record<string, string>;
+   };
+   /**
+    * The profile executable keeps a symbol table and debug sections (ELF; on
+    * Mach-O debug info lives in the dSYM, on PE in the PDB). `compressed`:
+    * the DWARF sections carry SHF_COMPRESSED (at link, or post-link with
+-   * rust-lld — flags.ts --compress-debug-sections).
++   * rust-lld â€” flags.ts --compress-debug-sections).
+    */
+   debugInfo?: { symtab: boolean; debugSections: boolean; compressed: boolean };
+ }
+ 
+ /**
+  * `global:` patterns of an ld version script (the part before `local:`):
+- * plain ones match mangled names, those inside `extern "C++" { … }` match
+- * demangled names — returned as `patterns` / `demangledPatterns`.
++ * plain ones match mangled names, those inside `extern "C++" { â€¦ }` match
++ * demangled names â€” returned as `patterns` / `demangledPatterns`.
+  */
+ export function versionScriptGlobals(path: string): { patterns: string[]; demangledPatterns: string[] } {
+   const text = readFileSync(path, "utf8")
+@@ -193,7 +193,7 @@ export function binaryFormat(cfg: Config): BinaryFormat {
+ }
+ 
+ /**
+- * Static initializers the runtime libraries contribute on each target — the
++ * Static initializers the runtime libraries contribute on each target â€” the
+  * allowlist for that target and nothing wider, so an entry that starts
+  * showing up somewhere new is noticed too. bun, JSC and WTF add none (WTF's
+  * NeverDestroyed / LazyNeverDestroyed exist so they don't have to); a
+@@ -286,7 +286,7 @@ function forbiddenImports(cfg: Config): string[] {
+     forbidden.push("_Unwind_Resume");
+   }
+   if (cfg.linux && cfg.abi !== "musl") {
+-    // …nor the function-local-static guards (musl/FreeBSD/macOS take them
++    // â€¦nor the function-local-static guards (musl/FreeBSD/macOS take them
+     // from the shared libstdc++/libc++ legitimately).
+     forbidden.push("__cxa_guard_*");
+   }
+@@ -305,8 +305,8 @@ function forbiddenImports(cfg: Config): string[] {
+  * bun-windows-x64 bun.exe: 22 MSVC-mangled members of namespace bmalloc
+  * (`bmalloc::api::*`, `bmalloc::Mutex::lockSlowCase`, `bmalloc::Environment`'s
+  * constructor, `bmalloc::systemHeapCache`, the StaticPerProcess storage of
+- * Environment and SystemHeap) — every one contains `@bmalloc@@`, hence the
+- * pattern, which is as narrow as a pattern over mangled names gets — and the
++ * Environment and SystemHeap) â€” every one contains `@bmalloc@@`, hence the
++ * pattern, which is as narrow as a pattern over mangled names gets â€” and the
+  * C symbol `g_config` (bmalloc/libpas' GigacageConfig slot array).
+  */
+ const PREBUILT_BMALLOC_DLLEXPORTS = {
+@@ -362,10 +362,10 @@ export function binaryExpectations(cfg: Config): BinaryExpectations {
+   const sanitizerLibs = cfg.asan ? ["*clang_rt.asan*", "libgcc_s.so.1"] : [];
+   // Android: -llog (WTF's logging goes to logcat) is linked --as-needed, so
+   // liblog.so is NEEDED exactly when a live __android_log_* reference
+-  // survives — a system library either way, allowed rather than pinned.
++  // survives â€” a system library either way, allowed rather than pinned.
+   // --webkit=local on Linux links the host's ICU (bun.ts systemLibs); the
+   // prebuilt bundles its own statically. A developer-only flavour, never
+-  // shipped, so the sonames (libicuuc.so.78 …) are allowed rather than pinned.
++  // shipped, so the sonames (libicuuc.so.78 â€¦) are allowed rather than pinned.
+   const localWebKitLibs =
+     cfg.webkit === "local" && cfg.linux && cfg.abi !== "android"
+       ? ["libicudata.so.*", "libicui18n.so.*", "libicuuc.so.*"]
+@@ -523,7 +523,7 @@ export function binaryExpectations(cfg: Config): BinaryExpectations {
+         forbiddenImports: forbiddenImports(cfg),
+         // No initializer audit: PE has no symbol table to name .CRT$XCU entries by.
+         pe: {
+-          dllCharacteristics: ["DYNAMIC_BASE", "HIGH_ENTROPY_VA", "NX_COMPAT", "TERMINAL_SERVER_AWARE"],
++          dllCharacteristics: ["DYNAMIC_BASE", "HIGH_ENTROPY_VA", "NX_COMPAT", "GUARD_CF", "TERMINAL_SERVER_AWARE"],
+           subsystem: "IMAGE_SUBSYSTEM_WINDOWS_CUI",
+         },
+       };
 diff --git a/scripts/build/deps/webkit.ts b/scripts/build/deps/webkit.ts
-index bba31a2c..17a71224 100644
+index bba31a2c..b71b89d8 100644
 --- a/scripts/build/deps/webkit.ts
 +++ b/scripts/build/deps/webkit.ts
-@@ -275,6 +275,12 @@ export const webkit: Dependency = {
+@@ -252,6 +252,8 @@ export const webkit: Dependency = {
+     // -fno-pic probe object fails R_X86_64_32S relocation, killing FindThreads.
+     if (cfg.unix && cfg.abi !== "android") optFlags.push("-fno-pic", "-fno-pie", "-no-pie");
+     if (cfg.lto) optFlags.push("-flto=thin");
++    // Control Flow Guard, as bun's own C++ (flags.ts).
++    if (cfg.windows) optFlags.push("/guard:cf");
+     if (cfg.pgoGenerate) optFlags.push(`-fprofile-generate=${cfg.pgoGenerate}`);
+     if (cfg.pgoUse) {
+       optFlags.push(
+@@ -275,6 +277,12 @@ export const webkit: Dependency = {
      if (cfg.freebsd && cfg.crossTarget !== undefined) {
        optFlags.push(`--target=${cfg.crossTarget}`, `--sysroot=${cfg.sysroot!}`);
      }
@@ -76,7 +212,7 @@ index bba31a2c..17a71224 100644
      const optFlagStr = optFlags.join(" ");
      let cxxOptFlagStr = optFlagStr;
      if (cfg.abi === "android") {
-@@ -308,6 +314,18 @@ export const webkit: Dependency = {
+@@ -308,6 +316,18 @@ export const webkit: Dependency = {
              CMAKE_FIND_ROOT_PATH_MODE_INCLUDE: "BOTH",
            }
          : {}),
@@ -95,6 +231,18 @@ index bba31a2c..17a71224 100644
        ...(cfg.freebsd && cfg.crossTarget !== undefined
          ? {
              CMAKE_SYSTEM_NAME: "FreeBSD",
+@@ -347,7 +367,10 @@ export const webkit: Dependency = {
+ 
+     const spec: NestedCmakeBuild = {
+       kind: "nested-cmake",
+-      targets: ["jsc"],
++      // Windows with LTO: the libraries alone. The jsc shell does not link there — WTF's weak declarations of what bun
++      // defines (WTFTimer__*, Bun__thisThreadHasVM) become duplicate definitions across ThinLTO modules in COFF, and
++      // nothing defines them in the shell — and bun needs only the libraries.
++      targets: cfg.windows && cfg.lto ? ["JavaScriptCore"] : ["jsc"],
+       args,
+       // Release local WebKit keeps debug info so JSC crashes symbolicate.
+       // LTO stays plain Release (debug info + LTO bloats significantly).
 diff --git a/scripts/build/download.ts b/scripts/build/download.ts
 index 42d81846..daeca6fd 100644
 --- a/scripts/build/download.ts
@@ -141,10 +289,24 @@ index 42d81846..daeca6fd 100644
   * Extract a .zip archive with mtime normalization.
   *
 diff --git a/scripts/build/flags.ts b/scripts/build/flags.ts
-index 3d40f647..bd0ae0e1 100644
+index 3d40f647..debb326c 100644
 --- a/scripts/build/flags.ts
 +++ b/scripts/build/flags.ts
-@@ -1011,6 +1011,16 @@ export const linkerFlags: Flag[] = [
+@@ -499,6 +499,13 @@ export const globalFlags: Flag[] = [
+     when: c => c.windows,
+     desc: "Optimize TLS access (assume vars defined in executable)",
+   },
++  {
++    // Control Flow Guard: every indirect call checks its target against the image's table of functions that may be called so
++    // (the link's /guard:cf makes the table and marks the image). WebKit gets it in deps/webkit.ts, Rust in rust.ts.
++    flag: "/guard:cf",
++    when: c => c.windows,
++    desc: "Control Flow Guard: checked indirect calls",
++  },
+ 
+   // ─── Linux-specific codegen ───
+   {
+@@ -1011,6 +1018,16 @@ export const linkerFlags: Flag[] = [
      when: c => c.windows,
      desc: "18MB stack reserve (JSC uses deep recursion), no error limit",
    },
@@ -154,13 +316,27 @@ index 3d40f647..bd0ae0e1 100644
 +    // system's commit is charged for all of it while the image is cached: hence the rest of the region is not in the image.)
 +    // .pblay is where the region's arenas are (bmalloc::StaticRegionLayout): read-only, since that decides where the engine
 +    // reads and writes.
-+    flag: ["/SECTION:.pbreg,R", "/SECTION:.pblay,R"],
++    flag: ["/SECTION:.pbreg,R", "/SECTION:.pblay,R", "/guard:cf"],
 +    when: c => c.windows,
-+    desc: "The static region's section is read-only until used; its layout is read-only",
++    desc: "The static region's section is read-only until used; its layout is read-only; Control Flow Guard's table (/guard:cf)",
 +  },
    {
      flag: "/DEBUG:FULL",
      when: c => c.windows && c.debug,
+diff --git a/scripts/build/rust.ts b/scripts/build/rust.ts
+index ad58bbad..7137df78 100644
+--- a/scripts/build/rust.ts
++++ b/scripts/build/rust.ts
+@@ -325,6 +325,9 @@ export function cargoBuildInvocation(cfg: Config): CargoInvocation {
+   // Keep frame pointers — matches the C++ side's `-fno-omit-frame-pointer`
+   // (flags.ts:293-301). Needed so profilers and crash backtraces can walk Rust frames.
+   rustflags.push("-Cforce-frame-pointers=yes");
++  // Control Flow Guard, as the C and C++ side (flags.ts: /guard:cf): indirect calls are checked against the image's table of
++  // the functions that may be called so, and the table lists the Rust side's too.
++  if (cfg.windows) rustflags.push("-Ccontrol-flow-guard=checks");
+   // Parallel frontend: rustc's default is single-threaded for parse / macro
+   // expansion / typeck / borrowck, so the critical-path crate (`bun_runtime`)
+   // sits on one core while the rest idle. With this, independent compiler
 diff --git a/src/ast/import_record.rs b/src/ast/import_record.rs
 index 6e582f84..c41f7e5a 100644
 --- a/src/ast/import_record.rs
@@ -586,6 +762,49 @@ index 497b0694..9517a930 100644
          ] {
              put(v);
          }
+diff --git a/src/codegen/generate-classes.ts b/src/codegen/generate-classes.ts
+index 52b02fc5..402310cf 100644
+--- a/src/codegen/generate-classes.ts
++++ b/src/codegen/generate-classes.ts
+@@ -2079,6 +2079,28 @@ pub type WriteBytesFn = unsafe extern "sysv64" fn(*mut c_void, *const u8, u32);
+ #[cfg(not(all(windows, target_arch = "x86_64")))]
+ pub type WriteBytesFn = unsafe extern "C" fn(*mut c_void, *const u8, u32);
+ 
++/// Calls a \`WriteBytesFn\`. On Windows x64 through C++ (\`Bun__StructuredClone__writeBytes\`,
++/// SerializedScriptValue.cpp): LLVM's Control Flow Guard check of an indirect call to a sysv64
++/// function passes the target in the wrong register, so such a call is made where it can be
++/// checked correctly (WTF's \`callSysV\`).
++#[allow(dead_code, unreachable_pub, unused)]
++#[inline]
++pub unsafe fn call_write_bytes(f: WriteBytesFn, ctx: *mut c_void, ptr: *const u8, len: u32) {
++    #[cfg(all(windows, target_arch = "x86_64"))]
++    {
++        unsafe extern "C" {
++            fn Bun__StructuredClone__writeBytes(f: WriteBytesFn, ctx: *mut c_void, ptr: *const u8, len: u32);
++        }
++        // SAFETY: as the caller's: f is the C++ writer's callback, valid for ctx.
++        unsafe { Bun__StructuredClone__writeBytes(f, ctx, ptr, len) }
++    }
++    #[cfg(not(all(windows, target_arch = "x86_64")))]
++    // SAFETY: as the caller's.
++    unsafe {
++        f(ctx, ptr, len)
++    }
++}
++
+ /// \`JSC::PropertyName\` — opaque pointer-sized handle (UniquedStringImpl*).
+ #[allow(dead_code, unreachable_pub, unused)]
+ #[repr(transparent)]
+@@ -2402,7 +2424,8 @@ class StructuredCloneableSerialize {
+     static std::optional<StructuredCloneableSerialize> fromJS(JSC::JSValue);
+     void write(CloneSerializer* serializer, JSC::JSGlobalObject* globalObject)
+     {
+-      zigFunction(impl, globalObject, serializer, cppWriteBytes);
++      // (A SYSV_ABI function pointer, called so that Control Flow Guard checks it correctly: wtf/SysVCall.h.)
++      callSysV(zigFunction, impl, globalObject, serializer, cppWriteBytes);
+     }
+ };
+ 
 diff --git a/src/crash_handler/lib.rs b/src/crash_handler/lib.rs
 index 91e2ee80..c2db8ce8 100644
 --- a/src/crash_handler/lib.rs
@@ -1894,7 +2113,7 @@ index 9de807ad..bb219910 100644
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH
 diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
-index fbfaa2ff..c45e0a66 100644
+index fbfaa2ff..69b8e0b8 100644
 --- a/src/jsc/bindings/ZigSourceProvider.cpp
 +++ b/src/jsc/bindings/ZigSourceProvider.cpp
 @@ -2,6 +2,17 @@
@@ -1915,12 +2134,13 @@ index fbfaa2ff..c45e0a66 100644
  #include "ZigSourceProvider.h"
  #include "MimallocWTFMalloc.h"
  #include "BunAnalyzeTranspiledModule.h"
-@@ -16,8 +27,17 @@
+@@ -16,8 +27,18 @@
  #include <JavaScriptCore/SourceCodeKey.h>
  #include <mimalloc.h>
  #include <JavaScriptCore/CodeCache.h>
 +#include <JavaScriptCore/StaticHeap.h>
 +#include <JavaScriptCore/CachedTypes.h>
++#include <JavaScriptCore/JSCConfig.h>
 +#include <JavaScriptCore/MacroAssembler.h>
 +#include <JavaScriptCore/Options.h>
 +#include <wtf/text/AtomStringTable.h>
@@ -1933,7 +2153,7 @@ index fbfaa2ff..c45e0a66 100644
  namespace Zig {
  
  using SourceOrigin = JSC::SourceOrigin;
-@@ -105,6 +125,28 @@ Ref<SourceProvider> SourceProvider::create(
+@@ -105,6 +126,28 @@ Ref<SourceProvider> SourceProvider::create(
              if (resolvedSource.bytecode_cache_persistent)
                  bytecode->setPayloadIsPersistent();
              bytecode->setEntryOffset(resolvedSource.bytecode_cache_entry_offset);
@@ -1962,7 +2182,7 @@ index fbfaa2ff..c45e0a66 100644
              auto provider = adoptRef(*new SourceProvider(
                  globalObject->bunVM(),
                  resolvedSource,
-@@ -224,7 +266,7 @@ extern "C" void JSC__Heap__setInitialAllocationBudget(JSC::VM* vm, size_t bytes)
+@@ -224,7 +267,7 @@ extern "C" void JSC__Heap__setInitialAllocationBudget(JSC::VM* vm, size_t bytes)
  extern "C" void Bun__DecoderStringTable__install(JSC::VM* vm, const uint8_t* bytes, size_t len)
  {
      ASSERT(vm->clientData);
@@ -1971,7 +2191,7 @@ index fbfaa2ff..c45e0a66 100644
  }
  
  extern "C" uint32_t Bun__EncoderStringTable__slotForLatin1(JSC::EncoderStringTable* table, const Latin1Character* chars, size_t length)
-@@ -290,17 +332,955 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
+@@ -290,17 +333,1028 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
      return generateCachedByteCodeFromSourceCode(sourceProviderURL, inputSourceCode, false, depth, optimize, outputByteCode, outputByteCodeSize, cachedBytecodePtr, externalStrings);
  }
  
@@ -2439,6 +2659,7 @@ index fbfaa2ff..c45e0a66 100644
 +        bool hasPointers;
 +    };
 +    Vector<Part> inRegion;
++    Vector<uint32_t> codeCallTargets; // RVAs of the compiled code's entry points that C++ calls through a pointer
 +    for (auto& part : parts) {
 +        if (!part.size)
 +            continue;
@@ -2460,9 +2681,13 @@ index fbfaa2ff..c45e0a66 100644
 +            return fail("the code image is not one for this engine");
 +        uint32_t startOfImage = static_cast<uint32_t>(Region::startOf(Region::Arena::Image) - Region::base());
 +        size_t endOfCode = WTF::roundUpToMultipleOf<4096>(range->first + range->second);
-+        // The code's tables, before it; the code itself (executable, never writable); what follows it.
-+        inRegion.append({ startOfImage, codeImage.first(range->first), scnInitializedData | scnRead, true });
++        // The code's tables, before it; the code itself (executable, never writable); what follows it. None has a pointer: the
++        // image has no absolute addresses (AOTImage.h), so none of its bytes is relocated, or taken for an address the
++        // relocation missed (which a number in its tables can look like).
++        inRegion.append({ startOfImage, codeImage.first(range->first), scnInitializedData | scnRead, false });
 +        inRegion.append({ startOfImage + static_cast<uint32_t>(range->first), codeImage.subspan(range->first, range->second), scnCode | scnExecute | scnRead, false });
++        for (uint32_t offset : JSC::aotImageIndirectCallTargets(codeImage))
++            codeCallTargets.append(regionRVA + startOfImage + static_cast<uint32_t>(range->first) + offset);
 +        if (endOfCode < codeImage.size())
 +            inRegion.append({ startOfImage + static_cast<uint32_t>(endOfCode), codeImage.subspan(endOfCode), scnInitializedData | scnRead, true });
 +    }
@@ -2575,8 +2800,14 @@ index fbfaa2ff..c45e0a66 100644
 +        for (size_t at = 0; at + 8 <= bytes.size(); at += 4) {
 +            uint64_t word;
 +            memcpy(&word, bytes.data() + at, 8);
-+            if (word >= imageStart && word < endOfExecutable && notRelocated++ < 10)
-+                fprintf(stderr, "warning: the static heap has an address of the process that built it that is not relocated (%llx, at offset %zu of a part at %x)\n", static_cast<unsigned long long>(word), at, inRegion[i].offsetInRegion);
++            if (word >= imageStart && word < endOfExecutable && notRelocated++ < 10) {
++                fprintf(stderr, "warning: the static heap has an address of the process that built it that is not relocated (%llx, at offset %zu of a part at %x%s); the bytes around it:",
++                    static_cast<unsigned long long>(word), at, inRegion[i].offsetInRegion, inRegion[i].characteristics & scnExecute ? ", code" : "");
++                for (size_t b = at >= 16 ? at - 16 : 0; b < std::min(bytes.size(), at + 24); ++b)
++                    fprintf(stderr, "%s%02x", b == at ? " [" : " ", bytes[b]);
++                fprintf(stderr, " (the structure heap starts at %p; this is at %p)\n", reinterpret_cast<void*>(g_jscConfig.startOfStructureHeap),
++                    reinterpret_cast<void*>(Region::base() + inRegion[i].offsetInRegion + at));
++            }
 +        }
 +    }
 +    if (notRelocated)
@@ -2671,6 +2902,53 @@ index fbfaa2ff..c45e0a66 100644
 +        exceptionTableSize = static_cast<uint32_t>(oldEntries.size() + sizeof(codeEntry));
 +        exceptionSection = RegionSection { ".pbpdata", sectionRVA, sectionRVA + alignUp(static_cast<uint32_t>(exceptionData.size()), sectionAlignment), scnInitializedData | scnRead, exceptionData.span() };
 +    }
++    // ---- Control Flow Guard: an indirect call is allowed only to a target that the image's table lists (the loader makes its
++    // bitmap of valid targets from it). The compiled code's entry points that C++ calls through a pointer (the regular
++    // expressions, which WTF::callSysV() checks) are added: the executable's table, with them, sorted, in a section of its own,
++    // to which the load configuration then points. (Its pointer to the table already has a base relocation.)
++    Vector<uint8_t> guardTable;
++    std::optional<RegionSection> guardSection;
++    std::optional<size_t> loadConfigOffset;
++    uint32_t guardTableCount = 0;
++    if (uint32_t loadConfigRVA = readAt<uint32_t>(pe, directories + 10 * 8); loadConfigRVA && !codeCallTargets.isEmpty()) {
++        loadConfigOffset = fileOffsetOf(loadConfigRVA);
++        if (!loadConfigOffset || *loadConfigOffset + 0x94 > pe.size() || readAt<uint32_t>(pe, *loadConfigOffset) < 0x94)
++            return fail("the executable's load configuration is malformed");
++        uint64_t tableVA = readAt<uint64_t>(pe, *loadConfigOffset + 0x80); // GuardCFFunctionTable
++        uint64_t count = readAt<uint64_t>(pe, *loadConfigOffset + 0x88); // GuardCFFunctionCount
++        uint32_t guardFlags = readAt<uint32_t>(pe, *loadConfigOffset + 0x90);
++        constexpr uint32_t instrumented = 0x100, tablePresent = 0x400; // IMAGE_GUARD_CF_INSTRUMENTED, IMAGE_GUARD_CF_FUNCTION_TABLE_PRESENT
++        if (guardFlags & instrumented) {
++            if (!(guardFlags & tablePresent) || tableVA < preferredBase)
++                return fail("the executable has Control Flow Guard but no table of the targets it allows");
++            size_t stride = 4 + ((guardFlags >> 28) & 0xf); // an RVA, then that many bytes of flags
++            auto tableOffset = fileOffsetOf(static_cast<uint32_t>(tableVA - preferredBase));
++            if (!tableOffset || count > (pe.size() - *tableOffset) / stride)
++                return fail("the executable's table of Control Flow Guard targets is malformed");
++            auto old = pe.subspan(*tableOffset, count * stride);
++            size_t next = 0;
++            uint32_t last = 0;
++            auto append = [&](uint32_t rva, std::span<const uint8_t> flags) {
++                if (guardTableCount && rva <= last)
++                    return; // (sorted, once each)
++                guardTable.append(std::span { reinterpret_cast<const uint8_t*>(&rva), 4 });
++                guardTable.append(flags);
++                last = rva;
++                ++guardTableCount;
++            };
++            const uint8_t noFlags[16] = { };
++            for (size_t i = 0; i < count; ++i) {
++                uint32_t rva = readAt<uint32_t>(old, i * stride);
++                for (; next < codeCallTargets.size() && codeCallTargets[next] < rva; ++next)
++                    append(codeCallTargets[next], std::span { noFlags }.first(stride - 4));
++                append(rva, old.subspan(i * stride + 4, stride - 4));
++            }
++            for (; next < codeCallTargets.size(); ++next)
++                append(codeCallTargets[next], std::span { noFlags }.first(stride - 4));
++            uint32_t sectionRVA = exceptionSection ? exceptionSection->end : relocationSection.end;
++            guardSection = RegionSection { ".pbgfids", sectionRVA, sectionRVA + alignUp(static_cast<uint32_t>(guardTable.size()), sectionAlignment), scnInitializedData | scnRead, guardTable.span() };
++        }
++    }
 +    // ---- The new file: the headers (with room for the new section table), then every section's bytes in the order of their addresses.
 +    struct NewSection {
 +        PESection header;
@@ -2692,10 +2970,10 @@ index fbfaa2ff..c45e0a66 100644
 +        table.append({ s, n.bytes, 0 });
 +    }
 +    // (Windows refuses an image of about 2 GB as "not a valid application"; 1.7 GB loads. The .bun section comes after this.)
-+    if (static_cast<uint64_t>(exceptionSection ? exceptionSection->end : relocationSection.end) + blob.size() > 1600ull << 20)
++    if (static_cast<uint64_t>(guardSection ? guardSection->end : exceptionSection ? exceptionSection->end : relocationSection.end) + blob.size() > 1600ull << 20)
 +        return fail("the executable would be too large for Windows to load (over 1.6 GB of image)");
 +    uint32_t newEndOfImage = relocationSection.end;
-+    for (auto* added : { &relocationSection, exceptionSection ? &*exceptionSection : nullptr }) {
++    for (auto* added : { &relocationSection, exceptionSection ? &*exceptionSection : nullptr, guardSection ? &*guardSection : nullptr }) {
 +        if (!added)
 +            continue;
 +        PESection s { };
@@ -2779,6 +3057,21 @@ index fbfaa2ff..c45e0a66 100644
 +            }
 +            writeAt<uint32_t>(result, newOffset + entry + 24, moved);
 +        }
++    }
++    // ---- The load configuration's table of Control Flow Guard targets: the one with the compiled code's (.pbgfids, above).
++    if (guardSection) {
++        uint32_t loadConfigRVA = readAt<uint32_t>(pe, directories + 10 * 8);
++        std::optional<size_t> newOffset;
++        for (auto& s : table) {
++            if (loadConfigRVA >= s.header.virtualAddress && loadConfigRVA - s.header.virtualAddress + 0x94 <= s.header.sizeOfRawData)
++                newOffset = s.header.pointerToRawData + (loadConfigRVA - s.header.virtualAddress);
++        }
++        if (!newOffset)
++            return fail("the executable's load configuration is malformed");
++        writeAt<uint64_t>(result, *newOffset + 0x80, preferredBase + guardSection->start);
++        writeAt<uint64_t>(result, *newOffset + 0x88, guardTableCount);
++        if (getenv("BUN_STATIC_HEAP_VERBOSE"))
++            fprintf(stderr, "[static heap] %zu entry points of the compiled code added to Control Flow Guard's %u targets\n", codeCallTargets.size(), guardTableCount);
 +    }
 +    // ---- Where the arenas are, for the executable (bmalloc::StaticRegionLayout, the section .pblay): as in this build, up to
 +    // the end of the last part. (Nothing of Arena::Scratch; the blocks are reserved when it runs.)
@@ -2927,7 +3220,7 @@ index fbfaa2ff..c45e0a66 100644
      return new JSC::BytecodeLinkEncoder(vm, externalStrings, WTF::move(hints));
  }
  
-@@ -331,6 +1311,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
+@@ -331,6 +1385,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
      return true;
  }
  
@@ -2950,7 +3243,7 @@ index fbfaa2ff..c45e0a66 100644
  // `entryOffsets` has room for one number per successful add* call; `regionEnds` for
  // JSC::BytecodeLinkEncoder::numberOfRegions.
  static_assert(JSC::BytecodeLinkEncoder::numberOfRegions == 6, "bun_resolver::LINKED_BYTECODE_REGION_COUNT");
-@@ -340,6 +1336,18 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
+@@ -340,6 +1410,18 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
      auto result = encoder->finish();
      if (!result.payload || result.entryOffsets.size() != entryOffsetCount)
          return false;
@@ -3117,6 +3410,26 @@ index a3fd0268..27a3940a 100644
  #else // __linux__ / __FreeBSD__ — both ELF, same .bun section approach
  
  extern "C" BlobHeader __attribute__((section(".bun"), aligned(BLOB_HEADER_ALIGNMENT), used)) BUN_COMPILED = { 0 };
+diff --git a/src/jsc/bindings/webcore/SerializedScriptValue.cpp b/src/jsc/bindings/webcore/SerializedScriptValue.cpp
+index 16951a2b..615ebea9 100644
+--- a/src/jsc/bindings/webcore/SerializedScriptValue.cpp
++++ b/src/jsc/bindings/webcore/SerializedScriptValue.cpp
+@@ -2002,6 +2002,15 @@ SYSV_ABI void SerializedScriptValue::writeBytesForBun(CloneSerializer* ctx, cons
+     ctx->write(data, size);
+ }
+ 
++#if OS(WINDOWS) && CPU(X86_64)
++// Pi-Bolt: the Rust side's call of its writer callback (a SYSV_ABI function), made here, where Control Flow Guard can check it
++// correctly (wtf/SysVCall.h); rustc's LLVM would pass the target in the wrong register (generated_classes::call_write_bytes).
++extern "C" void Bun__StructuredClone__writeBytes(void(SYSV_ABI* writeBytes)(CloneSerializer*, const uint8_t*, uint32_t), CloneSerializer* ctx, const uint8_t* data, uint32_t size)
++{
++    callSysV(writeBytes, ctx, data, size);
++}
++#endif
++
+ SerializationReturnCode CloneSerializer::serialize(JSValue in)
+ {
+     VM& vm = m_lexicalGlobalObject->vm();
 diff --git a/src/jsc/web_worker.rs b/src/jsc/web_worker.rs
 index 486a196f..299d3f13 100644
 --- a/src/jsc/web_worker.rs
@@ -3168,6 +3481,32 @@ index aea7e78e..5cede4c3 100644
          // argv belongs to the compiled program, so a `-e` or `-p` in it is not ours.
          bun_jsc::initialize(bun_jsc::InitializeOptions::default());
          bun_analytics::features::standalone_executable.fetch_add(1, Ordering::Relaxed);
+diff --git a/src/runtime/node/net/BlockList.rs b/src/runtime/node/net/BlockList.rs
+index af498017..e844c277 100644
+--- a/src/runtime/node/net/BlockList.rs
++++ b/src/runtime/node/net/BlockList.rs
+@@ -19,7 +19,7 @@ impl bun_io::Write for StructuredCloneWriter {
+         // SAFETY: `ctx` and `impl_` were supplied together by the C++
+         // SerializedScriptValue writer; the callback only reads `len` bytes
+         // from `ptr`, both of which we derive from a single `&[u8]`.
+-        unsafe { (self.impl_)(self.ctx, bytes.as_ptr(), bytes.len() as u32) };
++        unsafe { crate::generated_classes::call_write_bytes(self.impl_, self.ctx, bytes.as_ptr(), bytes.len() as u32) };
+         Ok(())
+     }
+ }
+diff --git a/src/runtime/webcore/Blob.rs b/src/runtime/webcore/Blob.rs
+index 70ad2da7..b11f6279 100644
+--- a/src/runtime/webcore/Blob.rs
++++ b/src/runtime/webcore/Blob.rs
+@@ -3740,7 +3740,7 @@ impl StructuredCloneWriter {
+     fn write(&self, bytes: &[u8]) -> usize {
+         // SAFETY: ctx and impl_ are supplied by C++ SerializedScriptValue and valid
+         // for the duration of on_structured_clone_serialize.
+-        unsafe { (self.impl_)(self.ctx, bytes.as_ptr(), bytes.len() as u32) };
++        unsafe { crate::generated_classes::call_write_bytes(self.impl_, self.ctx, bytes.as_ptr(), bytes.len() as u32) };
+         bytes.len()
+     }
+ }
 diff --git a/src/spawn/process.rs b/src/spawn/process.rs
 index 4ae154d4..193fe0b2 100644
 --- a/src/spawn/process.rs

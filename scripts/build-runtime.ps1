@@ -27,11 +27,40 @@ Log "building the runtime in $BunSrc\$BuildDir (WebKit from $WebKit)"
 $env:BUN_WEBKIT_PATH = $WebKit
 # (MSBuild's worker processes, from ICU's build, would otherwise outlive it.)
 $env:MSBUILDDISABLENODEREUSE = '1'
-Push-Location $BunSrc
-try {
-	& bun @buildArgs
-	if ($LASTEXITCODE -ne 0) { Die 'the build failed' }
-} finally { Pop-Location }
+function Build-Runtime {
+	Push-Location $BunSrc
+	try {
+		& bun @buildArgs
+		if ($LASTEXITCODE -ne 0) { Die 'the build failed' }
+	} finally { Pop-Location }
+}
+Build-Runtime
+# Control Flow Guard checks an indirect call to a SysV-convention function with its target in the wrong register (LLVM on x64):
+# each must go through WTF::callSysV(). An LTO build's objects are bitcode, where such a call can be found (docs\WINDOWS.md).
+if ($Lto -eq 'on') {
+	Log 'checking for indirect SysV calls that Control Flow Guard would check wrongly'
+	& py -3 (Join-Path $Root 'scripts\lib\check-cfg-sysv-calls.py') (Join-Path $BunSrc $BuildDir)
+	if ($LASTEXITCODE -ne 0) { Die 'an indirect call to a SysV function does not go through callSysV() (see above)' }
+}
+# The functions that start Pi, and those it runs most, laid out together at the front of the code (a linker order file), so that
+# Pi touches fewer of its pages: what Pi runs, traced in sessions of it (profiles\runtime-win32-x64.hints, from
+# scripts\train-runtime-hints.ps1), then what Bun's own workloads run. The order is made with the build just done, and the runtime
+# linked again with it when it changed. (As build-runtime.sh does on macOS.)
+$Hints = Join-Path $Root 'profiles\runtime-win32-x64.hints'
+if (Test-Path $Hints) {
+	$Order = Join-Path $BunSrc "$BuildDir\linker.order"
+	$before = if (Test-Path $Order) { (Get-FileHash $Order).Hash } else { '' }
+	Log "a linker order file from $Hints"
+	Push-Location $BunSrc
+	try {
+		& bun scripts/orderfile/generate.ts "--build-dir=$BuildDir" "--hints=$Hints" | Where-Object { $_ -match '^ *hints:|^wrote ' }
+		if ($LASTEXITCODE -ne 0) { Die 'making the order file failed' }
+	} finally { Pop-Location }
+	if ((Get-FileHash $Order).Hash -ne $before) {
+		Log 'linking the runtime again with its order file'
+		Build-Runtime
+	}
+}
 
 $Runtime = Join-Path $Work 'runtime'
 New-Item -ItemType Directory -Force $Runtime | Out-Null
