@@ -1,0 +1,9 @@
+﻿build           file   wall s    cpu s  result
+pibolt-bc       50 KB      1.1      0.5  ok
+pibolt-bc      200 KB      0.7      0.9  ok
+bun-fork        50 KB      0.4      0.4  ok
+bun-fork       200 KB      0.7      0.8  ok
+bun-upstream    50 KB      2.2      3.2  ok
+bun-upstream   200 KB     41.4    103.0  ok
+node24          50 KB      2.1      2.3  ok
+node24         200 KB     26.8     26.7  ok

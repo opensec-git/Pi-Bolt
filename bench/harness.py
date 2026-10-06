@@ -11,12 +11,9 @@ isolated from the user's Pi configuration and from each other.
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import os
-import pty
 import re
-import select
 import shlex
 import shutil
 import socket
@@ -24,10 +21,19 @@ import struct
 import subprocess
 import sys
 import tempfile
-import termios
 import time
 from dataclasses import dataclass
 from pathlib import Path
+
+WINDOWS = sys.platform == "win32"
+if WINDOWS:
+    # Job objects, cycle counts and ConPTY instead of wait4(), /proc and pty (winproc.py).
+    import winproc
+else:
+    import fcntl
+    import pty
+    import select
+    import termios
 
 HERE = Path(__file__).resolve().parent
 FIXTURES = HERE / "fixtures"
@@ -55,9 +61,11 @@ def parse_builds(specs: list[str]) -> list[Build]:
         if "=" not in spec:
             raise SystemExit(f"--build wants name=command, got {spec!r}")
         name, command = spec.split("=", 1)
-        argv = [os.path.expanduser(a) for a in shlex.split(command)]
+        argv = [os.path.expanduser(a) for a in shlex.split(command, posix=not WINDOWS)]
+        if WINDOWS:
+            argv = [a[1:-1] if len(a) > 1 and a[0] == a[-1] == '"' else a for a in argv]
         # Runs change directory: a relative path to the executable is taken from where the tool was started.
-        argv = [os.path.abspath(a) if "/" in a and os.path.exists(a) else a for a in argv]
+        argv = [os.path.abspath(a) if ("/" in a or os.sep in a) and os.path.exists(a) else a for a in argv]
         if not shutil.which(argv[0]) and not os.access(argv[0], os.X_OK):
             raise SystemExit(f"build {name}: {argv[0]} is not executable")
         builds.append(Build(name, argv))
@@ -73,7 +81,7 @@ def warm_page_cache(builds: list[Build]) -> None:
         # (A macOS build's pi is a launcher: the executable is pi-bin beside it.)
         paths = [*build.argv, *(os.path.join(os.path.dirname(p), "pi-bin") for p in build.argv if "/" in p)]
         for path in paths:
-            if "/" in path and os.path.isfile(path):
+            if ("/" in path or os.sep in path) and os.path.isfile(path):
                 with open(path, "rb") as f:
                     while f.read(1 << 22):
                         pass
@@ -150,10 +158,10 @@ MACOS = sys.platform == "darwin"
 
 
 def pinned(argv: list[str], cpus: str | None) -> list[str]:
-    if cpus and MACOS:
+    if cpus and (MACOS or WINDOWS):
         # macOS cannot pin a process to cores: runs share the machine (interleaving still spreads its load evenly).
         if not getattr(pinned, "warned", False):
-            print("note: --cpus is ignored on macOS", file=sys.stderr)
+            print(f"note: --cpus is ignored on {'Windows' if WINDOWS else 'macOS'}", file=sys.stderr)
             pinned.warned = True
         return list(argv)
     return ["taskset", "-c", cpus, *argv] if cpus else list(argv)
@@ -166,6 +174,8 @@ def maxrss_mb(ru) -> float:
 
 def alive(pid: int) -> bool:
     """Whether a process (not necessarily a child) still exists."""
+    if WINDOWS:
+        return winproc.alive(pid)  # (os.kill(pid, 0) would terminate it there)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -213,8 +223,60 @@ def peak_footprint_mb(pid: int, block: bool = True) -> float | None:
     return round(ri[28] / (1 << 20), 1) if ri else 0.0
 
 
+class WinTty:
+    """Tty's counterpart on Windows: Pi in a ConPTY, in a Job object. quit() returns (status, winproc.Usage)."""
+
+    def __init__(self, argv, env, cwd, cols=120, rows=40):
+        self.console = winproc.ConPty(argv, env, cwd, cols, rows)
+        self.pid = self.console.proc.pid
+        self.buf = b""
+
+    def pump(self, timeout):
+        data = self.console.read(timeout)
+        if not data:
+            return False
+        self.buf += data
+        # (ConPTY answers most queries itself; these it passes on to the terminal, which is us.)
+        if b"\x1b[c" in data:
+            self.console.write(b"\x1b[?62;22c")
+        if b"\x1b]11;?" in data:
+            self.console.write(b"\x1b]11;rgb:0000/0000/0000\x1b\\")
+        if b"\x1b[6n" in data:
+            self.console.write(b"\x1b[1;1R")
+        return True
+
+    def send(self, data: bytes):
+        self.console.write(data)
+
+    def resize(self, cols, rows):
+        self.console.resize(cols, rows)
+
+    wait_for = lambda self, *a: Tty.wait_for(self, *a)  # noqa: E731
+    settle = lambda self, *a: Tty.settle(self, *a)  # noqa: E731
+    screen_text = lambda self, *a: Tty.screen_text(self, *a)  # noqa: E731
+
+    def quit(self, timeout=10):
+        self.send(b"/quit\r")
+        end = time.perf_counter() + timeout
+        status = None
+        while time.perf_counter() < end:
+            self.pump(0.02)
+            status = self.console.proc.poll()
+            if status is not None:
+                break
+        if status is None:
+            self.console.proc.kill()
+            self.console.proc.wait()
+        result = self.console.proc.result()
+        self.console.close()
+        return status, winproc.Usage(result)
+
+
 class Tty:
     """A minimal terminal on a pseudo-terminal: answers the capability queries the TUI sends the way xterm does."""
+
+    def __new__(cls, *args, **kwargs):
+        return WinTty(*args, **kwargs) if WINDOWS else super().__new__(cls)
 
     def __init__(self, argv, env, cwd, cols=120, rows=40):
         self.pid, self.fd = pty.fork()
@@ -282,7 +344,10 @@ class Tty:
 
 
 def cpu_ms(pid: int) -> float:
-    """CPU time of every thread of a live process: from schedstat (nanoseconds), on macOS from proc_pid_rusage."""
+    """CPU time of every thread of a live process: from schedstat (nanoseconds), on macOS from proc_pid_rusage, on Windows
+    from its cycles."""
+    if WINDOWS:
+        return winproc.cpu_ms(pid)
     if MACOS:
         ri = _rusage_macos(pid)
         return (ri[0] + ri[1]) * _ticks_ns / 1e6 if ri else 0.0
@@ -295,7 +360,10 @@ def cpu_ms(pid: int) -> float:
 
 def memory_mb(pid: int) -> dict:
     """Resident memory, and the process's own (private dirty) memory: what it costs beyond shared, droppable file pages. On
-    macOS "own" is the physical footprint (what Activity Monitor shows: dirty and compressed memory, without clean file pages)."""
+    macOS "own" is the physical footprint (what Activity Monitor shows: dirty and compressed memory, without clean file pages).
+    On Windows: the working set, and "own" is the private bytes (commit charge)."""
+    if WINDOWS:
+        return winproc.memory_mb(pid)
     if MACOS:
         ri = _rusage_macos(pid)
         return {"rss": round(ri[6] / (1 << 20), 1), "own": round(ri[7] / (1 << 20), 1)} if ri else {}

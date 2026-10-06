@@ -26,12 +26,19 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import (
-    DONE, MACOS, MODEL_ARGS, PROMPT, Tty, done, fake_model, maxrss_mb, median, parse_builds, peak_footprint_mb, pi_env, pi_home,
-    pinned, workdir,
+    DONE, MACOS, MODEL_ARGS, PROMPT, WINDOWS, Tty, done, fake_model, maxrss_mb, median, parse_builds, peak_footprint_mb, pi_env,
+    pi_home, pinned, workdir,
 )
+
+if WINDOWS:
+    import winproc
 
 
 def run_plain(build, args, env, cwd, cpus):
+    if WINDOWS:
+        out, res = winproc.run([*build.argv, *args], env, cwd)
+        return out, {"ok": res["exit"] == 0, "wall_ms": res["wall_ms"], "cpu_ms": res["cpu_ms"], "job_cpu_ms": res["job_cpu_ms"],
+                     "peak_mb": res["peak_mb"], "peak_private_mb": res["peak_private_mb"]}
     t0 = time.perf_counter()
     p = subprocess.Popen(pinned([*build.argv, *args], cpus), env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -83,6 +90,9 @@ def interactive(build, env, cwd, cpus, prompts=5):
     r["wall_ms"] = (time.perf_counter() - t0) * 1e3
     r["cpu_ms"] = (ru.ru_utime + ru.ru_stime) * 1e3
     r["peak_mb"] = maxrss_mb(ru)
+    if WINDOWS:
+        r["peak_private_mb"] = ru.result["peak_private_mb"]
+        r["job_cpu_ms"] = ru.result["job_cpu_ms"]
     if getattr(tty, "peak_footprint_mb", None) is not None:
         r["peak_fp_mb"] = tty.peak_footprint_mb
     return r
@@ -98,6 +108,11 @@ if MACOS:
     # (peak_mb, ru_maxrss, counts clean file pages and freed pages the kernel may take back; the footprint does not.)
     for columns in COLUMNS.values():
         columns.append("peak_fp_mb")
+if WINDOWS:
+    # peak_mb is the peak working set; peak_private_mb the peak commit charge (private bytes). cpu_ms is the main process's,
+    # by cycles; job_cpu_ms adds what it started, in clock ticks.
+    for columns in COLUMNS.values():
+        columns += ["peak_private_mb", "job_cpu_ms"]
 
 
 def summarize(rows, baseline=None):

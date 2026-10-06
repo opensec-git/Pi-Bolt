@@ -1,0 +1,13 @@
+﻿build        characters   wall s    cpu s  of a core  own MB
+pibolt-bc          5000      4.5     1.16        26%     233
+pibolt-bc         20000     17.4     3.24        19%     261
+pibolt-bc         60000     52.0     6.94        13%     268
+bun-fork           5000      4.4     0.93        21%     203
+bun-fork          20000     17.5     3.68        21%     238
+bun-fork          60000     52.1     8.64        17%     237
+bun-upstream       5000      4.4     1.98        45%     266
+bun-upstream      20000     17.3     8.92        51%     304
+bun-upstream      60000     51.6    41.77        81%     290
+node24             5000      4.5     1.77        39%     132
+node24            20000     17.4     7.31        42%     242
+node24            60000     51.6    32.58        63%     253
