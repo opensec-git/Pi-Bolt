@@ -74,10 +74,10 @@ The charts above are drawn from these measurements,
 
 | | 0.5.2 | 0.6.0 | 0.6.1 |
 |---|---:|---:|---:|
-| `pi --version` | 54 ms | 17–18 ms | 14–17 ms |
-| `pi -p`, one prompt | 138 ms | 88–102 ms | 79–85 ms |
-| Time to interactive | 85 ms | 47–49 ms | 45–47 ms |
-| Interactive TUI, CPU | 378 ms | 306–311 ms | 303–307 ms |
+| `pi --version` | 54 ms | 17â€“18 ms | 14â€“17 ms |
+| `pi -p`, one prompt | 138 ms | 88â€“102 ms | 79â€“85 ms |
+| Time to interactive | 85 ms | 47â€“49 ms | 45â€“47 ms |
+| Interactive TUI, CPU | 378 ms | 306â€“311 ms | 303â€“307 ms |
 
 Ranges are the sessions they were measured in. Side by side, 0.6.1 measures the same as 0.6.0 on Linux (within 3%). Its
 changes are the macOS process spawning, the `pi-bolt` command name and the installer's extensions.
@@ -132,8 +132,8 @@ Medians of 21 runs (3 warm-up runs), 3 long sessions and 5 tmux rounds per runti
 
 **Compare CPU times only within one table.** This MacBook Air has no fan. After hours of building it ran hot and at a lower
 clock, so the same work took more CPU time than in a cool session: the 20,000-character answer took Pi-Bolt 0.98 s in the
-0.6.0 measurements and 1.9 s here. Run side by side in this session, 0.6.0 and 0.6.1 took the same (1.66–1.76 s), and the
-build behind the 0.6.0 table took 2.0–2.1 s to 0.6.1's 1.8 s. Every table here interleaves its runtimes, so each table is fair
+0.6.0 measurements and 1.9 s here. Run side by side in this session, 0.6.0 and 0.6.1 took the same (1.66â€“1.76 s), and the
+build behind the 0.6.0 table took 2.0â€“2.1 s to 0.6.1's 1.8 s. Every table here interleaves its runtimes, so each table is fair
 within itself.
 
 **CPU time understates the difference on Apple silicon.** macOS runs a light, bursty process on the efficiency cores or at a low
@@ -152,7 +152,44 @@ each program Pi starts takes 1.4 ms more to start and be waited for (`spawnSync`
 the scenarios above starts a program. The programs' CPU time is not counted in Pi's on macOS (`wait4` counts a process's
 children; the programs are the helper's).
 
-## Windows x64 (work in progress)
+## Windows x64
+
+The full suite (`bench\run-suite.ps1`) on Windows 11 25H2 (26200) on an Intel Core i5-1335U laptop (16 GB, on AC, best
+performance, Defender real-time protection on): Pi-Bolt 0.7.0 from `7ec4e71f7` (the runtime with ThinLTO and Control Flow Guard,
+Pi compiled ahead of time for this CPU, JIT off), Pi 1.0.3 as released on stock Bun 1.4.2, and Pi 1.0.3's npm package on Node
+22.23.3 and Node 24.21.0. Medians of 11 runs (2 warm-up), 4 long sessions of 75 prompts, 5 streaming rounds; streaming runs in a
+ConPTY rather than tmux (`bench\conpty_check.py`: ConPTY passes frames on at about 16 ms, which is the floor of the frame
+times). Raw data and charts: [`bench/results/2026-10-06-windows-suite`](../bench/results/2026-10-06-windows-suite). (A read-only
+review that ran alongside used the CPU for up to about two minutes at some point of the run.)
+
+| | Pi-Bolt | Pi on Bun 1.4.2 | Node 22 | Node 24 |
+|---|---:|---:|---:|---:|
+| Launch to interactive (TUI) | **100 ms** | 165 ms | 344 ms | 311 ms |
+| `pi --version` | **39 ms** | 92 ms | 237 ms | 213 ms |
+| `pi -p`: one prompt, 4 tool calls | **121 ms** | 195 ms | 422 ms | 377 ms |
+| Time per prompt, 4.2M-token session | **533 ms** | 557 ms | 959 ms | 908 ms |
+| CPU, interactive session (5 prompts) | **317 ms** | 791 ms | 1,209 ms | 1,134 ms |
+| CPU, `pi -p` | **100 ms** | 319 ms | 572 ms | 546 ms |
+| CPU, `pi --version` | **23 ms** | 132 ms | 275 ms | 266 ms |
+| CPU per prompt, 4.2M-token session | **253 ms** | 332 ms | 828 ms | 749 ms |
+| Peak working set, interactive session | **110 MB** | 164 MB | 166 MB | 194 MB |
+| Peak private working set, interactive session | **60 MB** | 127 MB | 133 MB | 154 MB |
+| Peak private bytes (commit), interactive session | 247 MB | 344 MB | **176 MB** | 269 MB |
+| Private working set, end of 4.2M-token session | **157 MB** | 249 MB | 387 MB | 405 MB |
+| Private bytes, end of 4.2M-token session | **370 MB** | 469 MB | 433 MB | 452 MB |
+| CPU, streaming replies (ConPTY) | **810 ms** | 931 ms | 1,436 ms | 1,198 ms |
+| Frame time p99, streaming replies | **17 ms** | 17 ms | 20 ms | 21 ms |
+| Frame time p99 / longest stall, 50 KB file written | **18 / 164 ms** | 50 / 1,408 ms | 36 / 2,606 ms | 98 / 3,519 ms |
+| Frame time p99 / longest stall, 200 KB file written | **18 / 133 ms** | 220 / 57,658 ms | 117 / 61,424 ms | 771 / 55,265 ms |
+| GC pause p99, 20,000-char answer / longest GC pause | 3.5 / 8.3 ms | 4.1 / 8.7 ms | **1.2 / 3.4 ms** | 2.2 / 8.8 ms |
+
+Pi-Bolt is the fastest and has the smallest private working set (what Task Manager shows) everywhere. Commit (private bytes) is
+where it is not ahead: Node 22 commits less in the TUI. Most of Pi-Bolt's is address space committed and never touched (thread
+stacks' default commit, mimalloc's pages committed in full, freed memory that keeps its commit on Windows): what to lower next.
+A plugin loaded at run time runs its hot loop in 788 ms against Bun's 32 ms (Pi-Bolt runs with the JIT off, as on Linux);
+compiled into the executable it would not, but `scripts\build-pi.ps1` cannot build that yet.
+
+### Earlier Windows results
 
 The same scenarios on Windows 11 (26200) on an Intel Core i5-1335U laptop (16 GB, on AC, Defender real-time protection on),
 against Pi 1.0.3 as released on Bun 1.4.2 and its npm package on Node 24.21. Pi-Bolt is the `windows-x64` branch: the runtime without
@@ -179,7 +216,6 @@ commit for as long as it keeps the image cached, after the process has exited (p
 [WINDOWS.md](WINDOWS.md#what-was-measured)). `bench/image_commit.py`, medians of 5: Pi on Bun 1 MB; Pi-Bolt 33 MB (the 32 MB of the
 region that has to be in the image); before that was fixed, 1,029 MB.
 
-Still to measure on Windows: an LTO build, long sessions, streaming in a terminal, and large files.
 
 ## With a real model
 
@@ -204,11 +240,11 @@ many .ts files there are." 10 rounds per runtime.
 | Wall time, median | 7.96 s | 7.96 s | 8.17 s | 7.48 s |
 | Wall time, fastest / slowest | 6.0 / 12.0 s | 6.3 / 9.4 s | 6.5 / 10.7 s | 6.0 / 10.2 s |
 | **Pi's CPU, median** | **0.20 s** | 0.49 s | 0.77 s | 0.76 s |
-| Pi's CPU, range | 0.17–0.23 s | 0.45–0.52 s | 0.69–0.89 s | 0.73–0.79 s |
+| Pi's CPU, range | 0.17â€“0.23 s | 0.45â€“0.52 s | 0.69â€“0.89 s | 0.73â€“0.79 s |
 | Peak memory, median | **124 MB** | 131 MB | 126 MB | 135 MB |
 
 - **Wall time:** no runtime is faster or slower. In a permutation test, differences in median as large as these came out by
-  chance 65–97% of the time: they are the model's variation.
+  chance 65â€“97% of the time: they are the model's variation.
 - **CPU:** the difference does not overlap. Pi-Bolt's slowest run used less than Bun's fastest.
 
 **A long answer, `pi -p`:** about 2,500 words of Markdown with three TypeScript code blocks, answered in the chat. One run per runtime.
@@ -220,7 +256,7 @@ many .ts files there are." 10 rounds per runtime.
 | **Pi's CPU** | **0.47 s** | 0.91 s | 1.06 s | 1.06 s |
 | Peak memory | **124 MB** | 129 MB | 125 MB | 137 MB |
 
-**The interactive TUI in tmux:** a 160×48 pane, "read README.md and summarize it in two sentences". One run per runtime.
+**The interactive TUI in tmux:** a 160Ã—48 pane, "read README.md and summarize it in two sentences". One run per runtime.
 
 | | Pi-Bolt | Bun 1.4.2 | Node 22 | Node 24 |
 |---|---:|---:|---:|---:|
@@ -260,7 +296,7 @@ On the M5, against Pi 1.0.0 as released on Bun 1.4.2 and on Node 26. Two rounds 
 Every prompt ended normally on every runtime. Bun's first session did not exit in time for its peak to be read.
 
 The user waits the same on every runtime: the model sets the pace. Pi-Bolt does that waiting with:
-- 40–50% of the CPU of Pi on Bun and a quarter to a half of Node's;
+- 40â€“50% of the CPU of Pi on Bun and a quarter to a half of Node's;
 - a third of Bun's memory, and less than a quarter of Node's.
 
 ## Setup and method
@@ -295,7 +331,7 @@ figures vary between sessions. Figures from sessions taken under heavy load were
 
 ## In a real terminal (tmux)
 
-Pi in a 160×48 tmux pane ([`bench/tmux_check.py`](../bench/tmux_check.py)): keys sent with `send-keys`, the screen read back
+Pi in a 160Ã—48 tmux pane ([`bench/tmux_check.py`](../bench/tmux_check.py)): keys sent with `send-keys`, the screen read back
 with `capture-pane`, and the model streaming at human pace, one event every 10 ms.
 
 | | Pi-Bolt | Bun 1.4.2 | Node 22 | Node 24 |
@@ -306,7 +342,7 @@ with `capture-pane`, and the model streaming at human pace, one event every 10 m
 | **CPU while 4 replies stream** (6.5 s) | **320 ms** | 524 ms | 605 ms | 530 ms |
 | written to the terminal for a reply | **138 KB** | 324 KB | 323 KB | 324 KB |
 | idle CPU at the prompt | 0.5 ms/s | 2.6 ms/s | **0.3 ms/s** | **0.3 ms/s** |
-| own memory, start → end | **17 → 27 MB** | 62 → 89 MB | 60 → 132 MB | 68 → 209 MB |
+| own memory, start â†’ end | **17 â†’ 27 MB** | 62 â†’ 89 MB | 60 â†’ 132 MB | 68 â†’ 209 MB |
 | resize while streaming, Escape to abort, prompt after abort, `/quit`, errors on screen | all ok, none | all ok, none | all ok, none | all ok, none |
 
 Medians of 5 rounds of 4 prompts each, Pi-Bolt 0.6.1. Keystroke latency is the terminal's own round trip and is the same
@@ -388,7 +424,7 @@ character loop, timed inside Pi with `performance.now()`. See [PLUGINS.md](PLUGI
 | Loaded at run time, Pi-Bolt JIT on | 79 ms | 42 ms |
 | Loaded at run time, Bun 1.4.2 | 195 ms | **38 ms** |
 
-Medians of 5 sessions, each running `/words` 5 times, Pi-Bolt 0.6.1. The hot-loop figure is the median of runs 2–5.
+Medians of 5 sessions, each running `/words` 5 times, Pi-Bolt 0.6.1. The hot-loop figure is the median of runs 2â€“5.
 
 ## Questions
 
@@ -400,7 +436,7 @@ Because that plugin's code is not compiled at all on that build: it runs in Java
   code when the executable was built.
 - A plugin loaded at **run time** (from `~/.pi/agent/extensions`, a project's `.pi/extensions` or a Pi package) is not part of
   that build. `jiti` turns its TypeScript into JavaScript when Pi starts. With no JIT, JavaScriptCore can then only interpret
-  it, and an interpreter runs a tight loop 20–30× slower than compiled code.
+  it, and an interpreter runs a tight loop 20â€“30Ã— slower than compiled code.
 - Stock Bun's JIT compiles the loop after a few thousand iterations, which is how it gets to 38 ms.
 
 This is not a regression. The figure is the same in every Pi-Bolt release: it is the cost of loading code at run time into a
@@ -434,7 +470,7 @@ v0.1.0 was as fast or faster on every metric.
 
 What does vary is streaming CPU in tmux. It is the most load-sensitive measurement on this shared machine, and v0.1.0 measured
 531 ms in one session and 578 ms in another. That variation is noise. What the follow-up review did find is a real gap: stock
-Bun's warmed-up JIT used 5–15% less CPU than v0.1.0 while replies streamed. v0.2.0 closes it, as the next answer explains.
+Bun's warmed-up JIT used 5â€“15% less CPU than v0.1.0 while replies streamed. v0.2.0 closes it, as the next answer explains.
 
 ### How was the streaming gap closed?
 
@@ -460,7 +496,7 @@ Three engine fixes followed (in the [WebKit patch](../patches/webkit.patch)):
 | Bun 1.4.2, warmed-up JIT | 516 ms |
 
 This was an earlier session than the main results, of Pi-Bolt 0.2.0 ([raw data](../bench/results/2026-10-02-streaming-fix));
-0.5.2 is at 366 ms. pi-tui's `visibleWidth` loop on its own: 25 ms → 6.3 ms (Bun: 2.4 ms).
+0.5.2 is at 366 ms. pi-tui's `visibleWidth` loop on its own: 25 ms â†’ 6.3 ms (Bun: 2.4 ms).
 
 ## Reproduce
 

@@ -1,0 +1,66 @@
+﻿python : startup: round 1/13
+At line:1 char:1004
++ ... nment.txt"; python bench\benchmark.py --runs 11 --warmup 2 --out "$r\ ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (startup: round 1/13:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+startup: round 2/13
+startup: round 3/13
+startup: round 4/13
+startup: round 5/13
+startup: round 6/13
+startup: round 7/13
+startup: round 8/13
+startup: round 9/13
+startup: round 10/13
+startup: round 11/13
+startup: round 12/13
+startup: round 13/13
+headless: round 1/13
+headless: round 2/13
+headless: round 3/13
+headless: round 4/13
+headless: round 5/13
+headless: round 6/13
+headless: round 7/13
+headless: round 8/13
+headless: round 9/13
+headless: round 10/13
+headless: round 11/13
+headless: round 12/13
+headless: round 13/13
+interactive: round 1/13
+interactive: round 2/13
+interactive: round 3/13
+interactive: round 4/13
+interactive: round 5/13
+interactive: round 6/13
+interactive: round 7/13
+interactive: round 8/13
+interactive: round 9/13
+interactive: round 10/13
+interactive: round 11/13
+interactive: round 12/13
+interactive: round 13/13
+
+startup
+  build                          wall_ms          cpu_ms         peak_mb peak_private_mb      job_cpu_ms
+  pibolt-lto                    42 (-6%)       23 (-12%)       31 (-11%)        70 (+7%)        31 (+0%)
+  pibolt-aot                          44              27              34              65              31
+  bun-upstream               102 (+131%)     141 (+428%)      75 (+117%)     140 (+115%)     141 (+350%)
+  node24                     233 (+427%)     286 (+971%)      86 (+150%)        68 (+3%)     312 (+900%)
+
+headless
+  build                          wall_ms          cpu_ms         peak_mb peak_private_mb      job_cpu_ms
+  pibolt-lto                  124 (-10%)        99 (-9%)        80 (-4%)       199 (+1%)       109 (+0%)
+  pibolt-aot                         138             108              84             197             109
+  bun-upstream                211 (+53%)     345 (+219%)      119 (+43%)      280 (+42%)     344 (+214%)
+  node24                     407 (+196%)     578 (+435%)      118 (+41%)      124 (-37%)     531 (+386%)
+
+interactive
+  build                           tti_ms        turns_ms         wall_ms          cpu_ms         peak_mb peak_private_mb      job_cpu_ms
+  pibolt-lto                   123 (+5%)       359 (-7%)       818 (-2%)       332 (-5%)       111 (-1%)       244 (+1%)       328 (+0%)
+  pibolt-aot                         117             388             835             350             112             242             328
+  bun-upstream                180 (+53%)       412 (+6%)      972 (+16%)     871 (+149%)      162 (+45%)      344 (+42%)     797 (+143%)
+  node24                     335 (+186%)      623 (+60%)     1407 (+69%)    1225 (+251%)      189 (+68%)      271 (+12%)    1219 (+271%)

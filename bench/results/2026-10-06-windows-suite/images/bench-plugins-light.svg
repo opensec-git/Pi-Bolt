@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="318" viewBox="0 0 880 318" role="img" aria-label="Plugins: A Pi extension compiled into the executable vs loaded at run time. Lower is better.">
+<style>text{font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif}</style>
+<text x="24" y="32" font-size="21" font-weight="650" fill="#1f2328">Plugins</text>
+<text x="24" y="56" font-size="13.5" fill="#59636e">A Pi extension compiled into the executable vs loaded at run time. Lower is better.</text>
+<text x="24" y="96" font-size="15" font-weight="600" fill="#1f2328">Hot loop in the plugin (/words)</text>
+<text x="294" y="126.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt (LTO+CFG AOT), run time</text>
+<path d="M304,114 h464.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-464.0 z" fill="#2a78d6"/>
+<text x="780.0" y="126.5" font-size="13.5" font-weight="650" fill="#1f2328">788 ms</text>
+<text x="294" y="156.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi 1.0.3 on stock Bun 1.4.2, run time</text>
+<path d="M304,144 h15.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-15.0 z" fill="#848d97"/>
+<text x="331.0" y="156.5" font-size="13.5" font-weight="400" fill="#1f2328">32 ms</text>
+<line x1="304" y1="108" x2="304" y2="166" stroke="#d1d9e0"/>
+<text x="24" y="216" font-size="15" font-weight="600" fill="#1f2328">Launch to interactive</text>
+<text x="294" y="246.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt (LTO+CFG AOT), run time</text>
+<path d="M304,234 h281.3 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-281.3 z" fill="#2a78d6"/>
+<text x="597.3" y="246.5" font-size="13.5" font-weight="650" fill="#1f2328">147 ms</text>
+<text x="294" y="276.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi 1.0.3 on stock Bun 1.4.2, run time</text>
+<path d="M304,264 h464.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-464.0 z" fill="#848d97"/>
+<text x="780.0" y="276.5" font-size="13.5" font-weight="400" fill="#1f2328">242 ms</text>
+<line x1="304" y1="228" x2="304" y2="286" stroke="#d1d9e0"/>
+</svg>
