@@ -760,6 +760,23 @@ pinned_tarball_matches() {
 	[ -n "$want" ] && [ "$want" = "$got" ]
 }
 
+# installed_matches PACKAGE INTEGRITY: "same" if the lockfile of the folder Pi installed PACKAGE to (npm's, bun's or pnpm's; `pi
+# list` says where) has INTEGRITY, "different" if it has not, "unknown" if there is none.
+installed_matches() {
+	path=$("$INSTALL/$NAME/pi" list 2>/dev/null | awk -v want="npm:$1" '
+		found { sub(/^ +/, ""); print; exit }
+		{ line = $0; sub(/^ +/, "", line); if (line == want || index(line, want "@") == 1) found = 1 }')
+	[ -n "$path" ] || { echo unknown; return; }
+	root=$(dirname "$(dirname "$path")")
+	for lock in package-lock.json bun.lock pnpm-lock.yaml; do
+		if [ -f "$root/$lock" ]; then
+			if grep -qF -- "$2" "$root/$lock"; then echo same; else echo different; fi
+			return
+		fi
+	done
+	echo unknown
+}
+
 offer_extensions() {
 	choice="${PIBOLT_EXTENSIONS:-}"
 	case "$choice" in
@@ -815,6 +832,15 @@ offer_extensions() {
 			continue
 		fi
 		if out=$(NPM_CONFIG_REGISTRY="$NPM_REGISTRY" "$INSTALL/$NAME/pi" install "npm:$package@$version" 2>&1); then
+			# What the package manager installed is a download of its own: its lockfile says what it got.
+			case $(installed_matches "$package" "$integrity") in
+			different)
+				"$INSTALL/$NAME/pi" remove "npm:$package@$version" >/dev/null 2>&1 || true
+				printf '  %sremoved %s@%s again: what the package manager installed is not the one this release pins%s\n' "$red" "$package" "$version" "$reset"
+				continue
+				;;
+			unknown) printf '  %snote: the package manager'"'"'s lockfile does not say what it installed of %s@%s; the registry'"'"'s package was checked before%s\n' "$dim" "$package" "$version" "$reset" ;;
+			esac
 			printf '  %s%s%s %s@%s installed\n' "$green" "$CHECK" "$reset" "$package" "$version"
 		else
 			printf '  %scould not install %s (Pi-Bolt itself is installed): %s%s\n' "$red" "$package" "$(printf '%s' "$out" | tail -1)" "$reset"
