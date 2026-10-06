@@ -62,6 +62,7 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  Source/JavaScriptCore/heap/StaticHeap.cpp     |  238 +-
  Source/JavaScriptCore/heap/StaticHeap.h       |   35 +-
  .../heap/StructureAlignedMemoryAllocator.cpp  |    5 +-
+ .../remote/socket/RemoteInspectorSocket.cpp   |    4 +-
  .../JavaScriptCore/interpreter/CallFrame.cpp  |    7 +
  .../interpreter/StackVisitor.cpp              |    8 +-
  .../parser/VariableEnvironment.cpp            |    2 +-
@@ -98,8 +99,8 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  Source/bmalloc/bmalloc/StaticRegion.h         |   92 +-
  Source/cmake/WebKitCompilerFlags.cmake        |    4 +-
  Source/cmake/WebKitMacros.cmake               |   28 +-
- build-icu.ps1                                 |   34 +-
- 81 files changed, 7572 insertions(+), 332 deletions(-)
+ build-icu.ps1                                 |   49 +-
+ 82 files changed, 7586 insertions(+), 337 deletions(-)
  create mode 100644 Source/JavaScriptCore/aot/AOTStubsX86_64.cpp
  create mode 100644 Source/JavaScriptCore/runtime/ReportableSitesOfFunction.h
  create mode 100644 Source/WTF/wtf/SysVCall.h
@@ -8359,6 +8360,21 @@ index dab620a1df..f678854542 100644
  #endif
                  ));
              if (g_jscConfig.startOfStructureHeap)
+diff --git a/Source/JavaScriptCore/inspector/remote/socket/RemoteInspectorSocket.cpp b/Source/JavaScriptCore/inspector/remote/socket/RemoteInspectorSocket.cpp
+index 6af090ce50..b911c57744 100644
+--- a/Source/JavaScriptCore/inspector/remote/socket/RemoteInspectorSocket.cpp
++++ b/Source/JavaScriptCore/inspector/remote/socket/RemoteInspectorSocket.cpp
+@@ -51,7 +51,9 @@ RemoteInspector& RemoteInspector::singleton()
+ 
+ RemoteInspector::RemoteInspector()
+ {
+-    Socket::init();
++    // (Pi-Bolt: no Socket::init() here. Every global object makes this singleton, and on Windows Socket::init() is
++    // WSAStartup: wsock32, ws2_32, rpcrt4 and msvcrt loaded at every start of every program. What uses a socket initializes
++    // them itself first: RemoteInspectorSocketEndpoint and RemoteInspectorServer, in their constructors.)
+     start();
+ }
+ 
 diff --git a/Source/JavaScriptCore/interpreter/CallFrame.cpp b/Source/JavaScriptCore/interpreter/CallFrame.cpp
 index a04b3f56f8..150655018e 100644
 --- a/Source/JavaScriptCore/interpreter/CallFrame.cpp
@@ -10906,7 +10922,7 @@ index dfb74c367d..1d1bbc51a5 100644
      endforeach ()
      add_custom_target(${target_name} ALL DEPENDS ${dst_files})
 diff --git a/build-icu.ps1 b/build-icu.ps1
-index de16575461..4c738acb14 100644
+index de16575461..dd18e3f63b 100644
 --- a/build-icu.ps1
 +++ b/build-icu.ps1
 @@ -78,7 +78,7 @@ $ICU_SOURCE_STAMP = Join-Path $OutputDir "source-version.txt"
@@ -10918,7 +10934,30 @@ index de16575461..4c738acb14 100644
          Remove-Item -Recurse -Force $ICU_SOURCE_DIR
      }
  }
-@@ -186,13 +186,29 @@ if (Test-Path $makedataMak) {
+@@ -133,7 +133,8 @@ function Patch-IcuVcxProj {
+         Write-Host "  Backed up: $(Split-Path -Leaf $FilePath)"
+     }
+ 
+-    $content = Get-Content $FilePath -Raw
++    # From the original each time, so that a change here is applied to it and not on top of what an earlier run did.
++    $content = Get-Content $BackupPath -Raw
+ 
+     # DynamicLibrary -> StaticLibrary
+     $content = $content -replace '<ConfigurationType>DynamicLibrary</ConfigurationType>', '<ConfigurationType>StaticLibrary</ConfigurationType>'
+@@ -149,8 +150,11 @@ function Patch-IcuVcxProj {
+         $content = $content -replace '(<PreprocessorDefinitions>)', '$1U_STATIC_IMPLEMENTATION;'
+     }
+ 
++    # Control Flow Guard, as everything else in the executable (Bun's flags.ts, deps/webkit.ts): ICU's indirect calls are
++    # checked, and its functions are in the image's table of valid targets. /Gw: its data in sections of their own, which the
++    # link can drop.
+     if ($ArchFlag) {
+-        $content = $content -replace '(<ClCompile>)', "`$1`n      <AdditionalOptions>$ArchFlag %(AdditionalOptions)</AdditionalOptions>"
++        $content = $content -replace '(<ClCompile>)', "`$1`n      <AdditionalOptions>$ArchFlag /guard:cf /Gw %(AdditionalOptions)</AdditionalOptions>"
+     }
+ 
+     # Disable /GL - lld-link cannot read LTCG object files
+@@ -186,13 +190,29 @@ if (Test-Path $makedataMak) {
      }
  }
  
@@ -10949,7 +10988,7 @@ index de16575461..4c738acb14 100644
  $msbuildPath = Join-Path $vsPath "MSBuild\Current\Bin\MSBuild.exe"
  
  if (-not (Test-Path $msbuildPath)) {
-@@ -217,6 +233,20 @@ Write-Host ":: STAGE 1: Building ICU makedata (generates ICU data)..."
+@@ -217,6 +237,20 @@ Write-Host ":: STAGE 1: Building ICU makedata (generates ICU data)..."
  $env:ICU_PACKAGE_MODE = "-m static"
  Write-Host ":: ICU_PACKAGE_MODE set to: $env:ICU_PACKAGE_MODE"
  
@@ -10970,6 +11009,20 @@ index de16575461..4c738acb14 100644
  $buildArgs = @(
      $slnPath,
      "/t:makedata",
+@@ -366,8 +400,11 @@ if (-not (Test-Path $icuDataLibSrc)) {
+ }
+ 
+ if (Test-Path $icuDataLibSrc) {
+-    Copy-Item $icuDataLibSrc "$ICU_LIB_DIR/sicudt.lib" -Force
+-    Write-Host "  Copied: $(Split-Path -Leaf $icuDataLibSrc) -> sicudt.lib"
++    # (Run again over its own output, the search above can find the copy it made the first time.)
++    if ((Resolve-Path $icuDataLibSrc).Path -ne [System.IO.Path]::GetFullPath("$ICU_LIB_DIR/sicudt.lib")) {
++        Copy-Item $icuDataLibSrc "$ICU_LIB_DIR/sicudt.lib" -Force
++        Write-Host "  Copied: $(Split-Path -Leaf $icuDataLibSrc) -> sicudt.lib"
++    }
+ } else {
+     Write-Host ":: WARNING: ICU data library not found. Listing generated files..."
+     Get-ChildItem -Path $OutputDir -Recurse -Filter "*.lib" | ForEach-Object {
 -- 
 2.56.0.windows.1
 
