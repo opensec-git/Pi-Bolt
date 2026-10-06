@@ -133,9 +133,12 @@ async function sha256(file) {
 
 // --- Archives -----------------------------------------------------------------------------------------------------------
 
-/** Whether `name` (a path in an archive, with / between its parts) stays inside the folder it is unpacked into. */
+/**
+ * Whether `name` (a path in an archive, with / between its parts) stays inside the folder it is unpacked into. A \ is refused
+ * too (Windows takes it for a separator: the .zip reader turns them into / first, but this does not count on it).
+ */
 function isSafeEntryName(name) {
-	if (!name || name.startsWith("/") || name.includes(":") || name.includes("\0")) return false;
+	if (!name || name.startsWith("/") || name.includes(":") || name.includes("\0") || name.includes("\\")) return false;
 	const parts = name.replace(/\/$/, "").split("/");
 	return parts.every((part) => part !== "" && part !== "." && part !== "..");
 }
@@ -511,6 +514,14 @@ function isSourceTree(pkgDir) {
 	return path.basename(pkgDir) === "npm" && ["VERSION", "install.ps1", "install.sh"].every((file) => fs.existsSync(path.join(pkgDir, "..", file)));
 }
 
+/**
+ * The proxy to download through, if one is set: in the environment, or in npm's configuration, which npm gives its install
+ * scripts as npm_config_https_proxy and npm_config_proxy. (Node's fetch uses none of them by itself.)
+ */
+function proxyOf(env) {
+	return env.HTTPS_PROXY || env.https_proxy || env.npm_config_https_proxy || env.npm_config_proxy || env.HTTP_PROXY || env.http_proxy || "";
+}
+
 async function main() {
 	const pkgDir = __dirname;
 	if (isSourceTree(pkgDir)) {
@@ -519,6 +530,16 @@ async function main() {
 	}
 	if (process.platform !== "win32") {
 		installPosix({ pkgDir });
+		return;
+	}
+	// Behind a proxy: again, with Node's fetch told to use it (NODE_USE_ENV_PROXY, Node 22.21 and 24.5 or later; an older
+	// Node ignores it, and a download that fails then says which proxy was not used).
+	const proxy = proxyOf(process.env);
+	if (proxy && process.env.NODE_USE_ENV_PROXY !== "1") {
+		const env = { ...process.env, NODE_USE_ENV_PROXY: "1", HTTPS_PROXY: process.env.HTTPS_PROXY || process.env.https_proxy || proxy };
+		env.HTTP_PROXY = process.env.HTTP_PROXY || process.env.http_proxy || env.HTTPS_PROXY;
+		const result = spawnSync(process.execPath, [__filename], { stdio: "inherit", env });
+		process.exitCode = result.status ?? 1;
 		return;
 	}
 	const { version } = JSON.parse(fs.readFileSync(path.join(pkgDir, "package.json"), "utf8"));
@@ -536,6 +557,7 @@ module.exports = {
 	installWindows,
 	isSafeEntryName,
 	isSourceTree,
+	proxyOf,
 	windowsProblems,
 };
 
@@ -543,6 +565,10 @@ if (require.main === module) {
 	main().catch((error) => {
 		const message = error instanceof InstallError ? error.message : error && error.stack ? error.stack : String(error);
 		console.error(`pi-bolt: error: ${message}`);
+		const proxy = proxyOf(process.env);
+		if (proxy && /download failed/.test(message)) {
+			console.error(`pi-bolt: downloads went through the proxy ${proxy.replace(/\/\/[^@/]*@/, "//")}; a Node.js older than 22.21 or 24.5 cannot use one (NODE_USE_ENV_PROXY)`);
+		}
 		if (process.platform === "win32") {
 			console.error('pi-bolt: Pi-Bolt was not installed. Try again, or install it with: powershell -c "irm https://pi-bolt.opensec.in/install.ps1 | iex"');
 		}

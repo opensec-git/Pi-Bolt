@@ -501,3 +501,17 @@ test("the placeholder, run without the install script: on Linux it starts the la
 	assert.equal(linux.stdout, "the build: --version\n", linux.stderr);
 	assert.equal(linux.status, 0);
 });
+
+test("an archive entry's name: inside its folder, with / between its parts and no \\, :, .. or empty part", () => {
+	for (const name of ["pi-bolt-win32-x64/pi-bolt.exe", "pi-bolt-win32-x64/", "a/b/c.txt"]) assert.equal(install.isSafeEntryName(name), true, name);
+	for (const name of ["", "/x", "C:/x", "a/../x", "a//x", "./x", "a\\x", "pi-bolt-win32-x64/..\\..\\x", "a\0x"]) {
+		assert.equal(install.isSafeEntryName(name), false, JSON.stringify(name));
+	}
+});
+
+test("the proxy to download through: the environment's, then npm's configuration", () => {
+	assert.equal(install.proxyOf({}), "");
+	assert.equal(install.proxyOf({ npm_config_proxy: "http://p:1" }), "http://p:1");
+	assert.equal(install.proxyOf({ npm_config_proxy: "http://p:1", npm_config_https_proxy: "http://s:2" }), "http://s:2");
+	assert.equal(install.proxyOf({ npm_config_https_proxy: "http://s:2", HTTPS_PROXY: "http://e:3" }), "http://e:3");
+});
