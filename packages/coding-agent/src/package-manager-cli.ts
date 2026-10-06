@@ -35,7 +35,13 @@ import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import { DefaultResourceLoader, isBuiltinExtension } from "./core/resource-loader.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
-import { PIBOLT, PIBOLT_INSTALL_COMMAND, piBoltInstallMethod, piBoltUpdateEnvironment } from "./pi-bolt.ts";
+import {
+	PIBOLT,
+	PIBOLT_INSTALL_COMMAND,
+	piBoltInstallerProcess,
+	piBoltInstallMethod,
+	piBoltUpdateEnvironment,
+} from "./pi-bolt.ts";
 import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/child-process.ts";
 import { canonicalizePath, getCwdRelativePath } from "./utils/paths.ts";
 import { getPiUserAgent } from "./utils/pi-user-agent.ts";
@@ -706,7 +712,8 @@ async function runPiBoltSelfUpdate(version: string): Promise<boolean> {
 	}
 	console.log(chalk.dim(`Updating Pi-Bolt to ${version} with ${PIBOLT_INSTALL_COMMAND}...`));
 	const status = await new Promise<number | null>((resolve, reject) => {
-		const child = spawnProcess("sh", ["-c", PIBOLT_INSTALL_COMMAND], {
+		const installer = piBoltInstallerProcess();
+		const child = spawnProcess(installer.command, installer.args, {
 			stdio: "inherit",
 			env: piBoltUpdateEnvironment(),
 		});

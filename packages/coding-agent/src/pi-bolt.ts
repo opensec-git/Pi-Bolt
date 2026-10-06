@@ -17,8 +17,22 @@ export interface PiBoltBuild {
 
 export const PIBOLT: PiBoltBuild | undefined = parse(typeof PIBOLT_BUILD === "string" ? PIBOLT_BUILD : undefined);
 
-export const PIBOLT_INSTALL_COMMAND = "curl -fsSL https://pi-bolt.opensec.in/install.sh | sh";
-export const PIBOLT_INSTALL_URL = "https://pi-bolt.opensec.in/install.sh";
+export const PIBOLT_INSTALL_URL =
+	process.platform === "win32" ? "https://pi-bolt.opensec.in/install.ps1" : "https://pi-bolt.opensec.in/install.sh";
+export const PIBOLT_INSTALL_COMMAND =
+	process.platform === "win32"
+		? `powershell -c "irm ${PIBOLT_INSTALL_URL} | iex"`
+		: `curl -fsSL ${PIBOLT_INSTALL_URL} | sh`;
+/** The installer as a command to spawn (with piBoltUpdateEnvironment()): it exits non-zero if it did not install. */
+export function piBoltInstallerProcess(): { command: string; args: string[] } {
+	if (process.platform === "win32") {
+		return {
+			command: "powershell.exe",
+			args: ["-NoProfile", "-Command", `irm ${PIBOLT_INSTALL_URL} | iex; exit $LASTEXITCODE`],
+		};
+	}
+	return { command: "sh", args: ["-c", PIBOLT_INSTALL_COMMAND] };
+}
 export const PIBOLT_RELEASES_URL = "https://github.com/opensec-git/Pi-Bolt/releases";
 export const PIBOLT_LATEST_RELEASE_API = "https://api.github.com/repos/opensec-git/Pi-Bolt/releases/latest";
 
@@ -41,12 +55,12 @@ export function piBoltVersionOfTag(tag: unknown): string | undefined {
  */
 export function piBoltInstallMethod(): "npm" | "installer" {
 	if (process.env.PIBOLT_NPM === "1") return "npm";
-	return /\/npm\/\d+\.\d+\.\d+\/pi-bolt-(linux|darwin)-/.test(process.execPath) ? "npm" : "installer";
+	return /[\\/]npm[\\/]\d+\.\d+\.\d+[\\/]pi-bolt-(linux|darwin|win32)-/.test(process.execPath) ? "npm" : "installer";
 }
 
 /** The environment that makes the installer replace this installation with the latest release, keeping its variant and place. */
 export function piBoltUpdateEnvironment(): NodeJS.ProcessEnv {
-	// ~/.pi-bolt/pi-bolt-linux-x64/pi (or pi-bolt-darwin-arm64/pi) -> ~/.pi-bolt
+	// ~/.pi-bolt/pi-bolt-linux-x64/pi (or pi-bolt-darwin-arm64/pi, pi-bolt-win32-x64\pi-bolt.exe) -> ~/.pi-bolt
 	const installDir = join(process.execPath, "..", "..");
 	return {
 		...process.env,

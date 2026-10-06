@@ -60,8 +60,21 @@ The release workflow builds on the Linux runner. The macOS archives (`pi-bolt-da
 2. `scripts/prepare-pi.sh`, then `scripts/package-release.sh`: the two builds, the runtime and their `SHA256SUMS` in `dist/X.Y.Z`.
 3. The checks, as on Linux: `tests/aot/run.sh`, `tests/pi/run.sh`, `tests/runtime/run.sh`, and the end-to-end checks against
    `scripts/build-pi.sh --stable --out out/pi-stable`.
-4. Put the archives of both platforms in one folder, run `sha256sum -- *.tar.gz *.tar.xz >SHA256SUMS` (or `shasum -a 256`) over
-   all of them, then `scripts/sign-release.sh`: one `SHA256SUMS` and one signature for the release.
+4. Put the archives of every platform and `extensions.txt` in one folder, and make one `SHA256SUMS` over all of them, whose first
+   line says the version (`install.ps1` refuses checksums of another version: an older release, signed all the same, served as
+   a newer one):
+   `{ echo "# pi-bolt X.Y.Z"; sha256sum -- *.tar.gz *.tar.xz *.zip extensions.txt; } >SHA256SUMS` (or `shasum -a 256`). Then
+   `scripts/sign-release.sh`: one signature for the release. `extensions.txt` pins the optional extensions the installers offer
+   (each version and its npm integrity); update it when one of them has a new release.
+
+## The Windows build
+
+`pi-bolt-win32-x64.zip` and `pi-bolt-runtime-win32-x64.zip` are built on Windows x64 ([WINDOWS.md](WINDOWS.md)):
+`scripts\fetch-sources.ps1`, `scripts\build-runtime.ps1`, then `scripts\package-release.ps1`, which builds Pi twice to check
+that the prebuilt heap does not depend on where the runtime was loaded (`-VerifyDeterminism`). The archives join the others
+in step 4 above. `install.ps1` verifies the signature itself (it carries an Ed25519 verifier, since Windows has none), and refuses
+a Windows release without one. If the executable is to carry an Authenticode signature, it is signed before the archive is made,
+with the owner's certificate. Publish `install.ps1` next to `install.sh`.
 
 The executables are signed ad hoc, as `bun build --compile` signs them, which is what an install through `install.sh` or npm needs:
 neither quarantines what it downloads. A build downloaded with a browser is quarantined, and Gatekeeper only accepts a Developer
@@ -91,6 +104,7 @@ openssl pkey -in pi-bolt-signing-key.pem -pubout -out keys/release.pub
 gh secret set PIBOLT_SIGNING_KEY --repo opensec-git/Pi-Bolt < pi-bolt-signing-key.pem
 ```
 
-Then copy the contents of `keys/release.pub` into `RELEASE_KEY` in `install.sh`, commit both, and keep
+Then copy the contents of `keys/release.pub` into `RELEASE_KEY` in `install.sh`, and its base64 line into `$PiBoltReleaseKey` in
+`install.ps1`, commit them, and keep
 `pi-bolt-signing-key.pem` somewhere safe and private (a password manager). Rotating the key is the same procedure; releases
 signed with the old key stay verifiable with an installer that carries the old key.
