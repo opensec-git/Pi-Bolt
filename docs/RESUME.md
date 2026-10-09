@@ -107,10 +107,14 @@ queries before DA1; no timeouts. The behaviour is kept.
    longest stall 20 -> 87 ms, a 20,000-character answer's CPU 0.5 -> 0.73 s). Scoping it would need a generation of what the
    theme's functions give, not the component's identity. Measured and not kept on Windows: the 12 MB first heap budget and the 5 s GC timer
    that macOS has (-10 MB peak in the TUI, but twice the collections and +40% CPU while a long answer streams).
-5. **Plugin rows** (done for the example plugin, in the suite): compiled in, its hot loop is 37 ms; loaded at run time with
-   the JIT off, 748 ms (the JIT build: 32 ms). The two OpenSec extensions were not measured: they are not on this machine
+5. **Plugin rows** (done for the example plugin, in the suite): compiled in, its hot loop is 36 ms; loaded at run time with
+   the JIT off, 750 ms (the JIT build: 32 ms). The two OpenSec extensions were not measured: they are not on this machine
    (downloading them needs the owner's go-ahead). Making run-time plugins fast is an owner decision (below).
-6. **Clean suite** (done): `bench\results\2026-10-09-windows-suite`, and again on the build that ships.
+6. **Clean suite** (done): `bench\results\2026-10-09-windows`, on the build that ships (`cdad1a5f8`), in
+   `docs\BENCHMARKS.md`. The 50 KB write's longest stall (87 ms; 19 ms before the review's fixes) is the step's last tool
+   call, `bash`, starting this machine's only `bash.exe`: WSL's launcher with no distribution, ~0.1 s. Node's `statSync`
+   fails on that app execution alias (EACCES), so before `isProgramFile` the lookup found no bash and the call failed at
+   once. Pi on Bun and Node runs it too (`where` lists it). A/B on one runtime: only `shell.ts` reverted, 19/20 ms.
 7. **Docs** (done): `docs\WINDOWS.md` on the memory changes and the runtime order file.
 
 Smaller items: a glance at JSC's nursery size; in Pi, caching in `Container.render`; the startup fs probes that are left
@@ -128,11 +132,11 @@ Smaller items: a glance at JSC's nursery size; in Pi, caching in `Container.rend
   with it (any value) the page is made writable and the program goes on, which tests\aot relies on (`=all`) to list writes.
   Options: (a) leave it; (b) compile it out of release runtimes, and test with a diagnostic runtime; (c) honor it only in an
   executable that is not a packaged release (package-release.ps1 sets a flag in the heap's header that the handler reads).
-- **Run-time plugins with the JIT off** (748 ms against 32-37 ms): (a) recommend the x64-jit variant to who loads plugins
+- **Run-time plugins with the JIT off** (750 ms against 32-36 ms): (a) recommend the x64-jit variant to who loads plugins
   with hot loops (exists; JIT on means generated code at run time); (b) compile installed plugins ahead of time on the
   user's machine, into a cached image the executable maps (code made on that machine, not signed: what `aotImagePath` was
   closed for; it would need its own check, a hash the executable keeps, for instance); (c) a JIT for plugin code only (the
-  JIT is on, then, for whatever runs that code). Compiled in with `build-pi -Plugins` is already 37 ms.
+  JIT is on, then, for whatever runs that code). Compiled in with `build-pi -Plugins` is already 36 ms.
 - **From the review of 2026-10-09** (design, not fixed): code compiled ahead of time reaches some targets without CFG's
   check (the runtime table's entries in writable memory, entry words loaded from cells, the catch PC); a cold operation's stub
   returns by `pop; pop; jmp`, which would unbalance CET's shadow stack (and mispredicts returns). Both need a memory-corruption

@@ -1,0 +1,5 @@
+build                         tti_ms     key_ms_median          paste_ms    prompt_wall_ms     prompt_cpu_ms     prompt_frames      frame_ms_p99 idle_cpu_ms_per_s   private bytes start/end MB   private working set end MB   checks
+pi-bolt                         94.2              16.2             302.6            6936.4             859.4             423.5              17.0               0.0   [67.9, 87.7]   31.8   ['ok']
+bun                            178.8              16.2             302.2            6937.6            1010.8             416.5              17.4               6.4   [186.3, 269.3]   97.3   ['ok']
+node                           344.2              16.2             307.3            6961.6            1497.7             399.5              21.6               1.1   [98.6, 139.8]   101.1   ['ok']
+node24                         313.3              16.2             303.6            6978.6            1258.2             398.5              21.6              23.3   [106.1, 99.8]   60.2   ['ok']

@@ -1,0 +1,19 @@
+date: 2026-10-09T15:45Z
+cpu: 13th Gen Intel(R) Core(TM) i5-1335U, 10 cores, 12 threads, not pinned; RAM 15.7 GB
+system: Microsoft Windows 11 Home Single Language 25H2, build 26200.9457
+defender: real-time protection on, antivirus on, tamper protection on, mode Normal, engine 1.1.26080.3
+power: AC, scheme 381b4222-f694-41f0-9685-ff5bb260df2e (Balanced), power mode best performance
+pi-bolt: 1.0.3 (Pi-Bolt 0.7.0, win32-x64, JIT off), Pi-Bolt 0.7.0 from cdad1a5f8, runtime Bun 1.4.3 (Pi-Bolt's), C:\pb\Pi-Bolt\out\pi-bolt\pi.exe
+bun: Pi 1.0.3 on stock Bun 1.4.2, C:\pb\Pi-Bolt\out\pi-stable-upstream\pi.exe
+node: v22.23.3, Pi 1.0.3's npm bundle, C:\pb\tools\node22\node.exe
+node24: v24.21.0, Pi 1.0.3's npm bundle, C:\pb\tools\node\node.exe
+python: Python 3.13.16
+model: bench/fake_model*.py on 127.0.0.1 (no provider is called)
+floor: bench/floor/floor.c built with clang-cl 23.1.1 /O2 /MT /guard:cf, linked /DYNAMICBASE /HIGHENTROPYVA /NXCOMPAT /guard:cf, %TEMP%\pibolt-bench-floor\floor.exe
+pi-bolt-plugins: 1.0.3 (Pi-Bolt 0.7.0, win32-x64, JIT off), C:\pb\Pi-Bolt\out\pi-bolt-plugins\pi.exe
+pi-bolt-plugins-jit: 1.0.3 (Pi-Bolt 0.7.0, win32-x64-jit, JIT on), C:\pb\Pi-Bolt\out\pi-bolt-plugins-jit\pi.exe
+pi-bolt-jit: 1.0.3 (Pi-Bolt 0.7.0, win32-x64-jit, JIT on), C:\pb\Pi-Bolt\out\pi-bolt-aot-lto-jit\pi.exe
+pi-bolt runtime: Bun 1.4.3-canary.1+e87d177bf, CFG, build/pibolt-release-lto, LTO, 106032128 bytes, sha256 cb39be1eef86f062
+pi-bolt-plugins runtime: Bun 1.4.3-canary.1+e87d177bf, CFG, build/pibolt-release-lto, LTO, 106032128 bytes, sha256 cb39be1eef86f062
+pi-bolt-plugins-jit runtime: Bun 1.4.3-canary.1+e87d177bf, CFG, build/pibolt-release-lto, LTO, 106032128 bytes, sha256 cb39be1eef86f062
+pi-bolt-jit runtime: Bun 1.4.3-canary.1+e87d177bf, CFG, build/pibolt-release-lto, LTO, 106032128 bytes, sha256 cb39be1eef86f062

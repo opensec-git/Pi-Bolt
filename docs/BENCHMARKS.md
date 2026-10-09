@@ -155,39 +155,49 @@ children; the programs are the helper's).
 ## Windows x64
 
 The full suite (`bench\run-suite.ps1`) on Windows 11 25H2 (26200) on an Intel Core i5-1335U laptop (16 GB, on AC, best
-performance, Defender real-time protection on): Pi-Bolt 0.7.0 from `7ec4e71f7` (the runtime with ThinLTO and Control Flow Guard,
-Pi compiled ahead of time for this CPU, JIT off), Pi 1.0.3 as released on stock Bun 1.4.2, and Pi 1.0.3's npm package on Node
-22.23.3 and Node 24.21.0. Medians of 11 runs (2 warm-up), 4 long sessions of 75 prompts, 5 streaming rounds; streaming runs in a
-ConPTY rather than tmux (`bench\conpty_check.py`: ConPTY passes frames on at about 16 ms, which is the floor of the frame
-times). Raw data and charts: [`bench/results/2026-10-06-windows-suite`](../bench/results/2026-10-06-windows-suite). (A read-only
-review that ran alongside used the CPU for up to about two minutes at some point of the run.)
+performance, Defender real-time protection on): Pi-Bolt 0.7.0 from `cdad1a5f8` (the runtime `e87d177bf` with ThinLTO and Control
+Flow Guard, Pi compiled ahead of time for this CPU, JIT off; the executable that ships), Pi 1.0.3 as released on stock Bun 1.4.2,
+and Pi 1.0.3's npm package on Node 22.23.3 and Node 24.21.0. Medians of 11 runs (2 warm-up), 4 long sessions of 75 prompts, 5
+streaming rounds; streaming runs in a ConPTY rather than tmux (`bench\conpty_check.py`: ConPTY passes frames on at about 16 ms,
+which is the floor of the frame times). Raw data and charts:
+[`bench/results/2026-10-09-windows`](../bench/results/2026-10-09-windows).
 
 | | Pi-Bolt | Pi on Bun 1.4.2 | Node 22 | Node 24 |
 |---|---:|---:|---:|---:|
-| Launch to interactive (TUI) | **100 ms** | 165 ms | 344 ms | 311 ms |
-| `pi --version` | **39 ms** | 92 ms | 237 ms | 213 ms |
-| `pi -p`: one prompt, 4 tool calls | **121 ms** | 195 ms | 422 ms | 377 ms |
-| Time per prompt, 4.2M-token session | **533 ms** | 557 ms | 959 ms | 908 ms |
-| CPU, interactive session (5 prompts) | **317 ms** | 791 ms | 1,209 ms | 1,134 ms |
-| CPU, `pi -p` | **100 ms** | 319 ms | 572 ms | 546 ms |
-| CPU, `pi --version` | **23 ms** | 132 ms | 275 ms | 266 ms |
-| CPU per prompt, 4.2M-token session | **253 ms** | 332 ms | 828 ms | 749 ms |
-| Peak working set, interactive session | **110 MB** | 164 MB | 166 MB | 194 MB |
-| Peak private working set, interactive session | **60 MB** | 127 MB | 133 MB | 154 MB |
-| Peak private bytes (commit), interactive session | 247 MB | 344 MB | **176 MB** | 269 MB |
-| Private working set, end of 4.2M-token session | **157 MB** | 249 MB | 387 MB | 405 MB |
-| Private bytes, end of 4.2M-token session | **370 MB** | 469 MB | 433 MB | 452 MB |
-| CPU, streaming replies (ConPTY) | **810 ms** | 931 ms | 1,436 ms | 1,198 ms |
-| Frame time p99, streaming replies | **17 ms** | 17 ms | 20 ms | 21 ms |
-| Frame time p99 / longest stall, 50 KB file written | **18 / 164 ms** | 50 / 1,408 ms | 36 / 2,606 ms | 98 / 3,519 ms |
-| Frame time p99 / longest stall, 200 KB file written | **18 / 133 ms** | 220 / 57,658 ms | 117 / 61,424 ms | 771 / 55,265 ms |
-| GC pause p99, 20,000-char answer / longest GC pause | 3.5 / 8.3 ms | 4.1 / 8.7 ms | **1.2 / 3.4 ms** | 2.2 / 8.8 ms |
+| Launch to interactive (TUI) | **92 ms** | 179 ms | 345 ms | 312 ms |
+| `pi --version` | **33 ms** | 95 ms | 241 ms | 218 ms |
+| `pi -p`: one prompt, 4 tool calls | **113 ms** | 202 ms | 435 ms | 383 ms |
+| Time per prompt, 4.2M-token session | **410 ms** | 522 ms | 817 ms | 802 ms |
+| CPU, interactive session (5 prompts) | **295 ms** | 812 ms | 1,225 ms | 1,139 ms |
+| CPU, `pi -p` | **92 ms** | 335 ms | 582 ms | 554 ms |
+| CPU, `pi --version` | **17 ms** | 135 ms | 280 ms | 271 ms |
+| CPU per prompt, 4.2M-token session | **186 ms** | 316 ms | 691 ms | 647 ms |
+| Peak working set, interactive session | **95 MB** | 164 MB | 166 MB | 196 MB |
+| Peak private working set, interactive session | **57 MB** | 126 MB | 133 MB | 155 MB |
+| Peak private bytes (commit), interactive session | **114 MB** | 340 MB | 176 MB | 270 MB |
+| Private working set, TUI streaming in a ConPTY | **32 MB** | 97 MB | 101 MB | 60 MB |
+| Private working set, end of 4.2M-token session | **140 MB** | 255 MB | 393 MB | 399 MB |
+| Private bytes, end of 4.2M-token session | **211 MB** | 474 MB | 438 MB | 446 MB |
+| CPU, streaming replies (ConPTY) | **859 ms** | 1,011 ms | 1,498 ms | 1,258 ms |
+| Frame time p99, streaming replies | **17 ms** | 17 ms | 22 ms | 22 ms |
+| Frame time p99 / longest stall, 50 KB file written | **18 / 87 ms** | 52 / 2,036 ms | 47 / 688 ms | 51 / 106 ms |
+| Frame time p99 / longest stall, 200 KB file written | **18 / 61 ms** | 118 / 46,688 ms | 80 / 51,893 ms | 64 / 40,928 ms |
+| GC pause p99, 20,000-char answer / longest GC pause | 2.2 / **2.5 ms** | 5.4 / 8.5 ms | **1.4** / 3.8 ms | 1.6 / 8.6 ms |
 
-Pi-Bolt is the fastest and has the smallest private working set (what Task Manager shows) everywhere. Commit (private bytes) is
-where it is not ahead: Node 22 commits less in the TUI. Most of Pi-Bolt's is address space committed and never touched (thread
-stacks' default commit, mimalloc's pages committed in full, freed memory that keeps its commit on Windows): what to lower next.
-A plugin loaded at run time runs its hot loop in 788 ms against Bun's 32 ms (Pi-Bolt runs with the JIT off, as on Linux);
-compiled into the executable it would not, but `scripts\build-pi.ps1` cannot build that yet.
+Pi-Bolt is the fastest and uses the least memory in every row, commit included. The exception is the p99 GC pause, where
+Node is shorter by under a millisecond; Pi-Bolt's longest pause is the shortest. Against the suite of 2026-10-06
+([`bench/results/2026-10-06-windows-suite`](../bench/results/2026-10-06-windows-suite), `7ec4e71f7`), on the same machine:
+- Launch to interactive: 100 to 92 ms. CPU per prompt in the long session: 253 to 186 ms.
+- Peak private bytes: 247 to 114 MB. Private bytes at the end of the long session: 370 to 211 MB.
+- The longest GC pause: 8.3 to 2.5 ms.
+
+These come from memory committed on demand, the prebuilt heap laid out in first-use order, and the runtime's code laid out in
+the order it runs ([WINDOWS.md](WINDOWS.md)). Each 50 KB and 200 KB step ends with a `bash` tool call. The only `bash.exe` on
+this machine is the WSL launcher with no distribution installed, which takes about 0.1 s to start and fail. That is Pi-Bolt's
+longest stall of the 50 KB step, and every build pays it.
+
+Plugins: the example plugin's hot loop takes 36 ms compiled into the executable (`build-pi.ps1 -Plugins`). Loaded at run time,
+it takes 750 ms with the JIT off and 32 ms in the build with the JIT on, the same as on Bun.
 
 ### Earlier Windows results
 
