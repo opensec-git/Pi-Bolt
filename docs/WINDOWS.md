@@ -171,9 +171,32 @@ Stock Bun 1.4.2 for Windows is linked with `/DYNAMICBASE`, `/HIGHENTROPYVA` and 
 
   What CFG costs in memory: the loader keeps a bitmap of valid targets, about 1.4 MB resident for Pi. With the JIT on, JSC's
   1 GB executable reservation is all valid targets, which costs 16 MB of bitmap pages; Pi runs with the JIT off.
+- **DLLs from System32.** The executable is linked with `/DEPENDENTLOADFLAG:0x800` (its imports from System32 only), and the
+  DLLs it delay-loads (USERENV for the home folder, dbghelp for a crash report, CRYPT32, IPHLPAPI, ...) go through a delay-load
+  hook (`__pfnDliNotifyHook2`, `c-bindings.cpp`) that loads them with `LOAD_LIBRARY_SEARCH_SYSTEM32`: a DLL of the same name
+  next to the executable (one unzipped in Downloads) is not loaded in their place. `windowscodecs.dll` the same way. What a
+  program loads by name itself (`bun:ffi`, an addon's own libraries) is looked for as upstream has it.
+- **The prebuilt heap stays read-only.** A write to its immutable arenas ends the process (fail closed). The variable that turned
+  that into a write that goes through, `BUN_STATIC_HEAP_WRITES`, exists only in a runtime built for diagnostics (a debug build,
+  or `-DPIBOLT_STATIC_HEAP_WRITES`): tests\aot's `=all` run needs one. Read once at startup.
+- **A build without the JIT stays without it.** When its compiled code is not used (`BUN_AOT=0`, a CPU without the
+  instructions it was compiled for, no room for the region), the program interprets its bytecode, slower, rather than turn the
+  JIT on and with it a writable and executable 1 GB pool; `BUN_JSC_useJIT=1` does not put it back. In a program compiled ahead of
+  time, the debugging options that reach into memory or load code (`useDollarVM`, `functionOverrides`,
+  `jitMemoryReservationAddress`, `dumpJITMemoryPath`, `diskCachePath`) are off whatever `BUN_JSC_*` says, and `aotImagePath`
+  is ignored in every release runtime.
+- **The realms' blocks** (each realm's AOT::Instance and its compiled code's data: 256 MB of addresses each, committed as used) are
+  a 4 GB reservation, room for fifteen realms at once (each worker is one; it was 352 MB, and Pi's image worker ended the
+  process). In a program with a prebuilt heap the reservation is at a random 64 KB-aligned address between 16 and 127 TB (about
+  31 bits); a process that builds a heap keeps it at the top of the address space, where the writer of an executable can tell a
+  pointer into it from data.
+- **Not done (open):** compiled code and its stubs call C++ operations through a runtime table, and enter functions through
+  addresses loaded from cells, without CFG's check. Closing that is a change to the code generator (a check at each such call,
+  and every entry point in the image's table of valid targets) or making the table and the fields that lead to it read-only.
 - **CET shadow stacks: not linked in, for a reason the code shows** (read, not run: this machine runs no process with shadow
   stacks, not even Edge, nor one created with `PROCESS_CREATION_MITIGATION_POLICY2_CET_USER_SHADOW_STACKS_ALWAYS_ON`;
-  `.work/exp/cet/cet_run.py`). JavaScriptCore reaches every exception handler by a jump that discards frames without popping
+  `.work/exp/cet/cet_run.py`; `IsUserCetAvailableInEnvironment` says no here, and Intel SDE's CET emulation is Linux-only, so a
+  fix cannot be tested on this machine: planned after the release, on one where Windows enables shadow stacks). JavaScriptCore reaches every exception handler by a jump that discards frames without popping
   the shadow stack (LLInt's throw trampolines, `llint\LowLevelInterpreter64.asm`; the JIT's `jumpToExceptionHandler`; the
   compiled code's `callAndCheckException`, `unwind()` and catch entry, `aot\AOTStubsX86_64.cpp`). The next `ret` then finds a
   stale return address on the shadow stack: the catching LLInt function's return when a frame was discarded, every compiled

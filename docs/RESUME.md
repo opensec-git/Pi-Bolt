@@ -9,12 +9,13 @@ trees exactly. Nothing is pushed.
 `.work\runtime\bun.exe` is a copy of `.work\bun\build\pibolt-release-lto\bun.exe` as linked with the order file, with the heap
 ordering of 2026-10-09 (below):
 
-    runtime: Bun 1.4.3-canary.1+e87d177bf, CFG, build/pibolt-release-lto, LTO, sha256 cb39be1eef86f062
+    runtime: Bun 1.4.3-canary.1+88fb7b83d, CFG, build/pibolt-release-lto, LTO, sha256 ef3922801c3e1231
 
-(Built from the engine commits as they are: `e87d177b` in `.work\bun`, and in `.work\webkit` the commit `patches\webkit.patch`
+(Built from the engine commits as they are: `88fb7b83` in `.work\bun`, and in `.work\webkit` the commit `patches\webkit.patch`
 makes.)
 `scripts\build-pi.ps1` uses it by default and writes that line into each build's `pi-bolt.txt`. Older runtimes are kept beside
-it in `.work\runtime`: `bun.exe.final-9e51d11a` (before the review's fixes), `bun.exe.heap-tiers-db54ae7d`,
+it in `.work\runtime`: `bun.exe.ship-cb39be1e` (the 0.7.0 candidate of 2026-10-09, before the hardening round),
+`bun.exe.final-9e51d11a` (before the review's fixes), `bun.exe.heap-tiers-db54ae7d`,
 `bun.exe.heap-hot-6e5c9d5d` (the heap ordering without the executables' tiers),
 `bun.exe.lto-order-4610987b` (the one before any of it), `bun.exe.lto-noorder-*`, `bun.exe.nolto-*`,
 `bun.exe.heap-tag-v1-broken`; the folders `heap-tag-v2`, `heap-hot`, `heap-functions`, `heap-tiers` hold each step's runtime.
@@ -23,6 +24,34 @@ The current Pi build is `out\pi-bolt` (this runtime, the retrained profile), wit
 
 The LTO build directory is `build/pibolt-release-lto` (made by hand); `scripts\build-runtime.ps1` builds into
 `build/pibolt-release`, so pass `-BuildDir build/pibolt-release-lto` to `train-runtime-hints.ps1` and `tests\cfg\run.ps1` meanwhile.
+
+## Release hardening (2026-10-10)
+
+Seven read-only reviews (security of Pi's changes and the installers, security of the runtime, crashes in the engine and in Pi,
+Windows 10, performance) and what came of them:
+- **Fixed, a crash:** a worker (Pi resizes an image it is given in one) ended the process at once (0xC0000409): the realms'
+  blocks were a 352 MB reservation, room for one. Now 4 GB of addresses (`StaticRegion.h`). `tests\pi\image.py` checks it.
+- **Runtime:** DLLs that are delay-loaded come from System32 (`__pfnDliNotifyHook2`, `/DEPENDENTLOADFLAG:0x800`, WIC);
+  `BUN_STATIC_HEAP_WRITES` only in a diagnostics runtime; a build without the JIT stays without it on every fallback; the
+  debugging options that reach memory or load code are off in a compiled program; the blocks at a random address in a program
+  (the builder keeps them at the top). See docs\WINDOWS.md, "The other mitigations".
+- **Pi:** npm and git for the package manager are no longer looked up in the working directory (cross-spawn's `which` did, before
+  any trust decision); the TUI's native helper is not resolved from the working directory's node_modules in a compiled
+  executable; `pi-bolt update` turns TLS 1.2 on before its first download, installs the version it decided on, where this
+  installation is, without a mirror or source from the environment, and checks the version that is there afterwards; quoted
+  PATH entries; the Store's pwsh.exe alias.
+- **Installers:** a signature is required, a mirror included (`PIBOLT_ALLOW_UNSIGNED=1` for a build of one's own); a file is moved
+  next to its target before the old one is renamed aside, which is put back if the last rename fails; a folder outside the
+  profile is made the user's, SYSTEM's and the Administrators' only; an extension whose lockfile does not show the pin is
+  removed; Windows 10 on ARM is refused early; the AVX2 answer of Windows 10 is not taken for a no; pax records are capped.
+- **Performance:** one model refresh at start, not two; `sanitizeSurrogates()` returns a well-formed string as it is
+  (`isWellFormed()`), which every request ran a regular expression over the whole conversation for; the streaming reply's
+  components are made when the frame is drawn, not at each delta.
+- **Tests on Windows:** `tests\pi\run.ps1` and `tests\runtime\run.ps1` (the shell runners' counterparts, with Windows' own:
+  programs started as Pi starts them, workers, Pi's image worker), and `scripts\windows-selftest.ps1`, self-contained, for a
+  machine without the repository (Windows 10).
+- **Not done:** CFG's check on compiled code's indirect calls (docs\WINDOWS.md); CET (cannot be tested here: Windows reports
+  user shadow stacks unavailable on this machine, and SDE's CET emulation is Linux-only), planned after the release.
 
 ## Committed in this stretch
 
@@ -128,15 +157,19 @@ Smaller items: a glance at JSC's nursery size; in Pi, caching in `Container.rend
   `docs\WINDOWS.md`.
 - **Code-signing certificate** for the Windows executables. The owner signs.
 - **Windows CI**: a runner that builds and tests windows-x64.
-- **`BUN_STATIC_HEAP_WRITES`** in release builds: without it a write to the read-only heap ends the process (fail closed);
-  with it (any value) the page is made writable and the program goes on, which tests\aot relies on (`=all`) to list writes.
-  Options: (a) leave it; (b) compile it out of release runtimes, and test with a diagnostic runtime; (c) honor it only in an
-  executable that is not a packaged release (package-release.ps1 sets a flag in the heap's header that the handler reads).
+- **`BUN_STATIC_HEAP_WRITES`**: decided (b), done: compiled out of release runtimes; tests\aot's `=all` needs a runtime built
+  with `-DPIBOLT_STATIC_HEAP_WRITES` (or a debug one).
+- **`pi-bolt update` trusts the site's install.ps1** (HTTPS only; what it downloads is then checked against the signed
+  checksums). To make the script itself checked: put install.ps1 in each release and its SHA256SUMS, and have the update verify
+  the signature and the script's checksum before it runs it. A change to the release steps (docs\RELEASING.md).
 - **Run-time plugins with the JIT off** (750 ms against 32-36 ms): (a) recommend the x64-jit variant to who loads plugins
   with hot loops (exists; JIT on means generated code at run time); (b) compile installed plugins ahead of time on the
   user's machine, into a cached image the executable maps (code made on that machine, not signed: what `aotImagePath` was
   closed for; it would need its own check, a hash the executable keeps, for instance); (c) a JIT for plugin code only (the
-  JIT is on, then, for whatever runs that code). Compiled in with `build-pi -Plugins` is already 36 ms.
+  JIT is on, then, for whatever runs that code); (d) one executable with the JIT compilers in it, off at start, turned on only
+  when plugins loaded at run time are configured (extension folders, `packages` in settings, `--extension`), so that who has
+  none runs as today (to measure first: Pi's own rows with that executable and the JIT off; whether Pi's compiled functions
+  tier up once it is on). Compiled in with `build-pi -Plugins` is already 36 ms.
 - **From the review of 2026-10-09** (design, not fixed): code compiled ahead of time reaches some targets without CFG's
   check (the runtime table's entries in writable memory, entry words loaded from cells, the catch PC); a cold operation's stub
   returns by `pop; pop; jmp`, which would unbalance CET's shadow stack (and mispredicts returns). Both need a memory-corruption
