@@ -1,19 +1,21 @@
 # Windows x64 port: where it stands
 
-Paused on 2026-10-06. Everything below that is committed is green on windows-x64 (tests\aot 58/58, tests\cfg, the SysV check of
+Paused on 2026-10-06; resumed 2026-10-09 (work list item 1). Everything below that is committed is green on windows-x64 (tests\aot 58/58, tests\cfg, the SysV check of
 CFG dispatch: 0 in 3,264 objects); `patches\webkit.patch` and `patches\bun.patch` apply to the pins and give the engine commits'
 trees exactly. Nothing is pushed.
 
 ## The runtime in use
 
-`.work\runtime\bun.exe` is a copy of `.work\bun\build\pibolt-release-lto\bun.exe` as linked with the order file:
+`.work\runtime\bun.exe` is a copy of `.work\bun\build\pibolt-release-lto\bun.exe` as linked with the order file, with the heap
+ordering of 2026-10-09 (below):
 
-    runtime: Bun 1.4.3-canary.1+f7f19349b, CFG, build/pibolt-release-lto, LTO, 106022400 bytes, sha256 4610987bf0abbb88
+    runtime: Bun 1.4.3-canary.1+aaab7e31c, CFG, build/pibolt-release-lto, LTO, 106028032 bytes, sha256 6e5c9d5d5bd90288
 
-`scripts\build-pi.ps1` uses it by default and writes that line into each build's `pi-bolt.txt`. Note that the build directory's
-own `bun.exe` is not that one now: it is a heap experiment that was stopped (below), so `build-pi.ps1` warns that a newer build
-exists; the next runtime build replaces it. Older runtimes are kept beside it in `.work\runtime` (`bun.exe.lto-noorder-*`,
-`bun.exe.nolto-*`, `bun.exe.heap-tag-v1-broken`). The current Pi build is `out\pi-bolt-aot-lto-order`.
+(The revision is the engine commit's before it was amended with that work; the next runtime build says the amended one.)
+`scripts\build-pi.ps1` uses it by default and writes that line into each build's `pi-bolt.txt`. Older runtimes are kept beside
+it in `.work\runtime` (`bun.exe.lto-order-4610987b`, the one before; `bun.exe.lto-noorder-*`, `bun.exe.nolto-*`,
+`bun.exe.heap-tag-v1-broken`; `heap-tag-v2\` is the tag bits alone). The current Pi build is `out\pi-bolt-heap-hot`;
+`out\pi-bolt-ab-base` is the same `dist` on the runtime before, for A/B runs.
 
 The LTO build directory is `build/pibolt-release-lto` (made by hand); `scripts\build-runtime.ps1` builds into
 `build/pibolt-release`, so pass `-BuildDir build/pibolt-release-lto` to `train-runtime-hints.ps1` and `tests\cfg\run.ps1` meanwhile.
@@ -29,22 +31,31 @@ The LTO build directory is `build/pibolt-release-lto` (made by hand); `scripts\b
 | d3d68b846 | each Pi build records its runtime; the suite copies it into environment.txt | |
 | 293329426 | runtime code laid out in the order Pi runs it (`profiles\runtime-win32-x64.hints`) | peak WS -4 to -7 MB; CPU 98 -> 93 ms headless, 309 -> 297 ms TUI |
 | f4cf32990 | benchmark scenario `interactive-default-theme` | |
+| (2026-10-09) | prebuilt heap laid out by first use: see work list item 1 | `.pbheap` pages 2,092 -> 1,567 at `--version`, 3,853 -> 3,325 headless; peak WS -2.0 / -1.8 / -1.6 MB (startup / headless / TUI); CPU at `--version` 19.7 -> 18.9 ms; headless and TUI CPU unchanged (within noise) |
 
 Default-theme check: the colour reply costs 1.6 ms in conhost and about 9 ms in Windows Terminal, which answers all 18 colour
 queries before DA1; no timeouts. The behaviour is kept.
 
 ## Work list
 
-1. **Heap first-touch ordering (next).** `--version` touches 2,096 `.pbheap` pages: the static atom table 256/256, atom
-   StringImpls 399/451, FunctionExecutables 578/1,415. First step, stashed in `.work\webkit` (`git stash list`; a copy is in
-   `.work\wip\webkit-heap-atoms-v2.diff`):
-   - hash tag bits in the static atom table's entries, so a probe skips other strings without reading them; the distance width is
-     recorded in the heap header (`distanceBitsOfStaticAtoms`, magic `BTHEAP08`; `scripts\lib\compare-static-heaps.py` too);
-   - atoms and their JSStrings made in the string records' order, which is the training's first-use order.
-   v1 (a fixed 24-bit distance) failed tests\aot: unsized test builds put atoms farther away. v2 records the width; it is not
-   built yet. Then: build, tests\aot (also with `BUN_STATIC_HEAP_WRITES=all`), `-VerifyDeterminism`, and an A/B of two Pi builds
-   from the same `dist` (old and new runtime) with `.pbheap` pages from `bench\ws_at_exit.py` beside CPU and WS. After that, the
-   larger design: per-tier cursors in the arenas from a recorded touch map (`heap.order`), and a small hot atom table.
+1. **Heap first-touch ordering: first round done (2026-10-09), in the engine commits.** tests\aot 58/58 (also with
+   `BUN_STATIC_HEAP_WRITES=all`), CFG SysV check 0, `-VerifyDeterminism`: the heap is the same from both builds.
+   - The static atom table's entries carry 8 bits of the hash above the distance, whose width is in the header
+     (`distanceBitsOfStaticAtoms`, `BTHEAP08`): a probe passes over other strings without reading them. Atom StringImpl pages
+     399 -> 257 at `--version`. The table is no more than 3/4 full (it was half): 256 -> 128 pages.
+   - Bug fixed: the heap's copy of the string table was written in ordinal order and the executable's in the order file's, so
+     `StaticHeap::tryCreateStringTable` never matched them (it compares 4 KB of each) and every Pi build decoded strings through a
+     second `DecoderStringTable` instead of the heap's slots. The link encoder now gets the order file's strings
+     (`Bun__BytecodeLinkEncoder__create`), so both copies are the same (checked: three identical copies in `pi.exe`), and the atoms
+     and JSStrings are made in first-use order. JSString pages 65 -> 30.
+   - Executables in two passes per module (`makeExecutables`): first the functions whose code is in the payload's Hot or Unknown
+     region (the recorded run ran them) and the functions of code that ran (made when it runs, called or not), then the rest.
+     FunctionExecutable pages 574 -> 376 at `--version`, 878 -> 626 headless.
+   Left (measured, `.work\exp\handoff\heapmap.py`, `heapmap_headless.py`): atom StringImpls still 252/451 and string records
+   254/656 at `--version` although both are in first-use order now (find out what touches them: the order file's `S` lines are
+   what the payload's decoding read, not what the program looks up); UnlinkedFunctionExecutables 179/690 (made by decoding, in
+   payload order: a hot-first decode would do for them what the two passes do for executables); "other malloc" 122/2,005
+   (568 headless).
 2. **Startup trace and filesystem calls.** About 65 ms of Pi's initialization precedes `tui.start`. Partial work is stashed in the
    fork (`git stash list`; a copy in `.work\wip\fork-startup-trace-and-heap-magic.diff`): `PI_TTI_TRACE` stages from process
    start through settings, sessions, models, extensions and tools, and `GetProcessIoCounters` in `bench\winproc.py`. To finish:

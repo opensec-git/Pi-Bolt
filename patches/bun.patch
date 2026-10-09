@@ -35,8 +35,8 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/bun_alloc/lib.rs                          |   14 +-
  src/bun_core/env_var.rs                       |    1 +
  src/bundler/LinkerContext.rs                  |   38 +
- src/bundler/bundle_v2.rs                      |   22 +
- .../linker_context/convertStmtsForChunk.rs    |   68 ++
+ src/bundler/bundle_v2.rs                      |   25 +
+ .../linker_context/convertStmtsForChunk.rs    |   68 +
  .../generateChunksInParallel.rs               |   21 +
  .../linker_context/scanImportsAndExports.rs   |   21 +
  src/bundler/prelinked_module_graph.rs         |   14 +-
@@ -48,7 +48,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/http/InternalState.rs                     |    4 +
  src/http/lib.rs                               |   39 +-
  src/io/PipeWriter.rs                          |    6 +
- src/jsc/CachedBytecode.rs                     |   31 +
+ src/jsc/CachedBytecode.rs                     |   36 +
  src/jsc/GarbageCollectionController.rs        |   26 +-
  src/jsc/JSType.rs                             |  144 +--
  src/jsc/VirtualMachine.rs                     |   18 +-
@@ -59,7 +59,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/jsc/bindings/InternalModuleRegistry.cpp   |   15 +-
  src/jsc/bindings/ZigException.cpp             |   14 +-
  src/jsc/bindings/ZigGlobalObject.cpp          |   45 +
- src/jsc/bindings/ZigSourceProvider.cpp        | 1085 ++++++++++++++++-
+ src/jsc/bindings/ZigSourceProvider.cpp        | 1091 ++++++++++++++++-
  src/jsc/bindings/c-bindings.cpp               |  113 ++
  .../webcore/SerializedScriptValue.cpp         |    9 +
  src/jsc/web_worker.rs                         |    4 +
@@ -72,7 +72,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/spawn_sys/posix_spawn.rs                  |  173 ++-
  src/spawn_sys/spawn_process.rs                |   14 +-
  src/standalone_graph/StandaloneModuleGraph.rs |  254 +++-
- 53 files changed, 2590 insertions(+), 204 deletions(-)
+ 53 files changed, 2603 insertions(+), 205 deletions(-)
  create mode 100644 patches/libuv/win-thread-stack-reservation.patch
  create mode 100644 patches/mimalloc/page-commit-on-demand-default.patch
 
@@ -871,10 +871,18 @@ index 354e7135..96f5b56a 100644
          self.stmts.push(stmt);
          Ok(())
 diff --git a/src/bundler/bundle_v2.rs b/src/bundler/bundle_v2.rs
-index 871b0495..df7b61c1 100644
+index 871b0495..666db93f 100644
 --- a/src/bundler/bundle_v2.rs
 +++ b/src/bundler/bundle_v2.rs
-@@ -1544,6 +1544,12 @@ pub mod bv2_impl {
+@@ -1516,6 +1516,7 @@ pub mod bv2_impl {
+                 known_functions: &[u64],
+                 evaluated_modules: &[u64],
+                 not_evaluated_modules: &[u64],
++                hot_strings: &[u64],
+             ) -> core::ptr::NonNull<BytecodeLinkEncoder>;
+             safe fn __bun_jsc_bytecode_link_encoder_destroy(
+                 encoder: core::ptr::NonNull<BytecodeLinkEncoder>,
+@@ -1544,6 +1545,12 @@ pub mod bv2_impl {
                  depth: u32,
                  names: &crate::bytecode_order::CodeNamesRef<'_>,
              ) -> bool;
@@ -887,7 +895,16 @@ index 871b0495..df7b61c1 100644
              safe fn __bun_jsc_bytecode_link_encoder_finish(
                  encoder: core::ptr::NonNull<BytecodeLinkEncoder>,
                  module_count: usize,
-@@ -1730,6 +1736,13 @@ pub mod bv2_impl {
+@@ -1666,6 +1673,8 @@ pub mod bv2_impl {
+                         &order.known_functions,
+                         &order.evaluated_modules,
+                         &order.not_evaluated_modules,
++                        // (As `EncoderStringTableHandle::take` is given them: the static heap's copy of the table is the same.)
++                        &order.hot_strings,
+                     ),
+                     module_count: 0,
+                 }
+@@ -1730,6 +1739,13 @@ pub mod bv2_impl {
                  self.module_count += ok as usize;
                  ok
              }
@@ -901,7 +918,7 @@ index 871b0495..df7b61c1 100644
              pub(crate) fn finish(&mut self) -> Option<crate::bytecode_order::LinkedPayload> {
                  __bun_jsc_bytecode_link_encoder_finish(self.encoder, self.module_count)
              }
-@@ -3370,6 +3383,15 @@ pub mod bv2_impl {
+@@ -3370,6 +3386,15 @@ pub mod bv2_impl {
                  }
              }
              this.linker.options.compile_mode = this.transpiler.options.compile_mode;
@@ -1522,10 +1539,19 @@ index 859c676a..4ae7382e 100644
              // Truncate the buffer's content to `page` bytes AND release the
              // excess capacity.
 diff --git a/src/jsc/CachedBytecode.rs b/src/jsc/CachedBytecode.rs
-index 2364c15d..60175edb 100644
+index 2364c15d..ee1948a2 100644
 --- a/src/jsc/CachedBytecode.rs
 +++ b/src/jsc/CachedBytecode.rs
-@@ -105,6 +105,15 @@ unsafe extern "C" {
+@@ -75,6 +75,8 @@ unsafe extern "C" {
+         evaluated_module_count: usize,
+         not_evaluated_modules: *const u64,
+         not_evaluated_module_count: usize,
++        hot_strings: *const u64,
++        hot_string_count: usize,
+     ) -> *mut BytecodeLinkEncoder;
+     fn Bun__BytecodeLinkEncoder__destroy(this: *mut BytecodeLinkEncoder);
+     fn Bun__BytecodeLinkEncoder__addModule(
+@@ -105,6 +107,15 @@ unsafe extern "C" {
          depth: u32,
          names: &CodeNamesRef<'_>,
      ) -> bool;
@@ -1541,7 +1567,24 @@ index 2364c15d..60175edb 100644
      fn Bun__BytecodeLinkEncoder__finish(
          this: *mut BytecodeLinkEncoder,
          output_byte_code: *mut Option<NonNull<u8>>,
-@@ -418,6 +427,28 @@ pub(crate) fn __bun_jsc_bytecode_link_encoder_add_internal_module_from_source(
+@@ -318,6 +329,7 @@ pub(crate) fn __bun_jsc_bytecode_link_encoder_new(
+     known_functions: &[u64],
+     evaluated_modules: &[u64],
+     not_evaluated_modules: &[u64],
++    hot_strings: &[u64],
+ ) -> NonNull<BytecodeLinkEncoder> {
+     crate::initialize(crate::InitializeOptions::default());
+     // SAFETY: the slices are valid for the call (C++ copies them); `external_strings` is a live table. `new` never returns null.
+@@ -332,6 +344,8 @@ pub(crate) fn __bun_jsc_bytecode_link_encoder_new(
+             evaluated_modules.len(),
+             not_evaluated_modules.as_ptr(),
+             not_evaluated_modules.len(),
++            hot_strings.as_ptr(),
++            hot_strings.len(),
+         ))
+     }
+ }
+@@ -418,6 +432,28 @@ pub(crate) fn __bun_jsc_bytecode_link_encoder_add_internal_module_from_source(
      }
  }
  
@@ -2513,7 +2556,7 @@ index 9de807ad..bb219910 100644
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH
 diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
-index fbfaa2ff..c0442c55 100644
+index fbfaa2ff..c08202df 100644
 --- a/src/jsc/bindings/ZigSourceProvider.cpp
 +++ b/src/jsc/bindings/ZigSourceProvider.cpp
 @@ -2,6 +2,17 @@
@@ -2591,13 +2634,16 @@ index fbfaa2ff..c0442c55 100644
  }
  
  extern "C" uint32_t Bun__EncoderStringTable__slotForLatin1(JSC::EncoderStringTable* table, const Latin1Character* chars, size_t length)
-@@ -290,17 +333,1029 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
+@@ -290,17 +333,1033 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
      return generateCachedByteCodeFromSourceCode(sourceProviderURL, inputSourceCode, false, depth, optimize, outputByteCode, outputByteCodeSize, cachedBytecodePtr, externalStrings);
  }
  
 +// BUN_STATIC_HEAP=1 while building: JSC::StaticHeap is also built for the link's payload, and the executable maps it instead of
 +// decoding. The link's string table, and the image while Bun__StaticHeap__takeBuilt has not taken it.
 +static JSC::EncoderStringTable* s_stringsOfLinkEncoder;
++// The order file's strings, hottest first: the heap's copy of the table is written in the order the executable's is
++// (StaticHeap::tryCreateStringTable() takes the heap's only if they are the same), and its atoms are made in that order.
++static Vector<uint64_t> s_hotStringsOfLinkEncoder;
 +static Vector<uint8_t> s_builtStaticHeap;
 +
 +extern "C" bool Bun__AOTImage__isMapped();
@@ -3602,11 +3648,13 @@ index fbfaa2ff..c0442c55 100644
 +
  // `bun build --compile --bytecode` with a payload order file (--bytecode-order): one payload for the whole link.
  // Created, fed and finished on the bundler's bytecode thread (it uses that thread's bytecode VM).
- extern "C" JSC::BytecodeLinkEncoder* Bun__BytecodeLinkEncoder__create(JSC::EncoderStringTable* externalStrings, const uint64_t* hotFunctions, size_t hotFunctionCount, const uint64_t* knownFunctions, size_t knownFunctionCount, const uint64_t* evaluatedModules, size_t evaluatedModuleCount, const uint64_t* notEvaluatedModules, size_t notEvaluatedModuleCount)
+-extern "C" JSC::BytecodeLinkEncoder* Bun__BytecodeLinkEncoder__create(JSC::EncoderStringTable* externalStrings, const uint64_t* hotFunctions, size_t hotFunctionCount, const uint64_t* knownFunctions, size_t knownFunctionCount, const uint64_t* evaluatedModules, size_t evaluatedModuleCount, const uint64_t* notEvaluatedModules, size_t notEvaluatedModuleCount)
++extern "C" JSC::BytecodeLinkEncoder* Bun__BytecodeLinkEncoder__create(JSC::EncoderStringTable* externalStrings, const uint64_t* hotFunctions, size_t hotFunctionCount, const uint64_t* knownFunctions, size_t knownFunctionCount, const uint64_t* evaluatedModules, size_t evaluatedModuleCount, const uint64_t* notEvaluatedModules, size_t notEvaluatedModuleCount, const uint64_t* hotStrings, size_t hotStringCount)
  {
      JSC::VM& vm = vmForBytecodeCache();
      JSC::JSLockHolder locker(vm);
 +    s_stringsOfLinkEncoder = externalStrings;
++    s_hotStringsOfLinkEncoder = Vector<uint64_t>(std::span { hotStrings, hotStringCount });
 +    // (What a link that did not get as far as embedding left behind is not this link's.)
 +    s_builtStaticHeap = { };
 +    s_builtAOTImage = { };
@@ -3621,7 +3669,7 @@ index fbfaa2ff..c0442c55 100644
      return new JSC::BytecodeLinkEncoder(vm, externalStrings, WTF::move(hints));
  }
  
-@@ -331,6 +1386,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
+@@ -331,6 +1390,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
      return true;
  }
  
@@ -3644,7 +3692,7 @@ index fbfaa2ff..c0442c55 100644
  // `entryOffsets` has room for one number per successful add* call; `regionEnds` for
  // JSC::BytecodeLinkEncoder::numberOfRegions.
  static_assert(JSC::BytecodeLinkEncoder::numberOfRegions == 6, "bun_resolver::LINKED_BYTECODE_REGION_COUNT");
-@@ -340,6 +1411,18 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
+@@ -340,6 +1415,18 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
      auto result = encoder->finish();
      if (!result.payload || result.entryOffsets.size() != entryOffsetCount)
          return false;
@@ -3655,8 +3703,8 @@ index fbfaa2ff..c0442c55 100644
 +        return false;
 +    }
 +    if (s_stringsOfLinkEncoder && shouldBuildStaticHeap()) {
-+        auto strings = s_stringsOfLinkEncoder->serialize();
-+        s_builtStaticHeap = JSC::StaticHeap::build(encoder->vm(), strings.span(), result.payload->span(), result.entryOffsetsOfModules.span(), result.aotImage.span(), 0, nullptr, result.reportableSites.span(), result.variablesExportedByModules.span());
++        auto strings = s_stringsOfLinkEncoder->serialize(s_hotStringsOfLinkEncoder.span());
++        s_builtStaticHeap = JSC::StaticHeap::build(encoder->vm(), strings.span(), result.payload->span(), result.entryOffsetsOfModules.span(), result.aotImage.span(), 0, nullptr, result.reportableSites.span(), result.variablesExportedByModules.span(), result.regionEnds);
 +        s_builtAOTImage = s_builtStaticHeap.isEmpty() ? Vector<uint8_t> { } : WTF::move(result.aotImage);
 +        dataLogLnIf(JSC::Options::verboseDiskCache() || getenv("BUN_STATIC_HEAP_VERBOSE"), "[Bytecode Build] static heap: ", s_builtStaticHeap.size(), " bytes for ", result.entryOffsetsOfModules.size(), " modules; AOT image: ", s_builtAOTImage.size(), " bytes");
 +    }

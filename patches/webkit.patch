@@ -59,16 +59,16 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  .../bytecode/UnlinkedGlobalCodeBlock.h        |    5 +-
  .../dfg/DFGAbstractInterpreterInlines.h       |    6 +-
  Source/JavaScriptCore/ffi/FFICallHost.cpp     |    4 +-
- Source/JavaScriptCore/heap/StaticHeap.cpp     |  238 +-
- Source/JavaScriptCore/heap/StaticHeap.h       |   35 +-
+ Source/JavaScriptCore/heap/StaticHeap.cpp     |  347 +-
+ Source/JavaScriptCore/heap/StaticHeap.h       |   39 +-
  .../heap/StructureAlignedMemoryAllocator.cpp  |    5 +-
  .../remote/socket/RemoteInspectorSocket.cpp   |    4 +-
  .../JavaScriptCore/interpreter/CallFrame.cpp  |    7 +
  .../interpreter/StackVisitor.cpp              |    8 +-
  .../parser/VariableEnvironment.cpp            |    2 +-
  .../parser/VariableEnvironment.h              |   16 +-
- Source/JavaScriptCore/runtime/CachedTypes.cpp |  226 +-
- Source/JavaScriptCore/runtime/CachedTypes.h   |   21 +-
+ Source/JavaScriptCore/runtime/CachedTypes.cpp |  243 +-
+ Source/JavaScriptCore/runtime/CachedTypes.h   |   23 +-
  Source/JavaScriptCore/runtime/CodeCache.cpp   |    2 +
  .../runtime/CyclicModuleRecord.cpp            |    3 +-
  .../runtime/FunctionRareData.cpp              |    5 +
@@ -95,12 +95,13 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  Source/WTF/wtf/HashFunctions.h                |   21 +-
  Source/WTF/wtf/Hasher.h                       |    4 +-
  Source/WTF/wtf/SysVCall.h                     |   49 +
+ Source/WTF/wtf/text/AtomStringTable.h         |   24 +-
  Source/bmalloc/bmalloc/StaticRegion.cpp       |  380 +-
  Source/bmalloc/bmalloc/StaticRegion.h         |   92 +-
  Source/cmake/WebKitCompilerFlags.cmake        |    4 +-
  Source/cmake/WebKitMacros.cmake               |   28 +-
  build-icu.ps1                                 |   49 +-
- 82 files changed, 7586 insertions(+), 337 deletions(-)
+ 83 files changed, 7719 insertions(+), 360 deletions(-)
  create mode 100644 Source/JavaScriptCore/aot/AOTStubsX86_64.cpp
  create mode 100644 Source/JavaScriptCore/runtime/ReportableSitesOfFunction.h
  create mode 100644 Source/WTF/wtf/SysVCall.h
@@ -7867,10 +7868,18 @@ index f8e046f978..6f0a26fb9a 100644
  
      RELEASE_AND_RETURN(scope, JSValue::encode(jsValueFromSlot(globalObject, context, signature.returnType(), slots[argumentCount])));
 diff --git a/Source/JavaScriptCore/heap/StaticHeap.cpp b/Source/JavaScriptCore/heap/StaticHeap.cpp
-index 96edcf1624..233af7bf4b 100644
+index 96edcf1624..b589dc4ea8 100644
 --- a/Source/JavaScriptCore/heap/StaticHeap.cpp
 +++ b/Source/JavaScriptCore/heap/StaticHeap.cpp
-@@ -23,7 +23,11 @@
+@@ -14,6 +14,7 @@
+ #include "BuiltinNames.h"
+ #include "JSBigInt.h"
+ #include "BytecodeStructs.h"
++#include "CachedBytecode.h"
+ #include "CachedTypes.h"
+ #include "FunctionExecutable.h"
+ #include "JSCInlines.h"
+@@ -23,7 +24,11 @@
  #include "UnlinkedFunctionExecutable.h"
  #include "UnlinkedModuleProgramCodeBlock.h"
  #include <wtf/BitVector.h>
@@ -7882,16 +7891,16 @@ index 96edcf1624..233af7bf4b 100644
  #include <wtf/text/AtomStringTable.h>
  #include <wtf/text/SymbolRegistry.h>
  
-@@ -68,7 +72,7 @@ static uint32_t s_entryOffsetOfModuleBeingBuilt;
+@@ -68,7 +73,7 @@ static uint32_t s_entryOffsetOfModuleBeingBuilt;
  
  // The file: this, then each arena, on a page boundary.
  struct StaticHeap::Header {
 -    static constexpr uint64_t expectedMagic = 0x3530504145485442ULL; // "BTHEAP05"
-+    static constexpr uint64_t expectedMagic = 0x3730504145485442ULL; // "BTHEAP07"
++    static constexpr uint64_t expectedMagic = 0x3830504145485442ULL; // "BTHEAP08"
      static constexpr unsigned maxStructures = 32;
  
      uint64_t magic;
-@@ -111,6 +115,13 @@ struct StaticHeap::Header {
+@@ -111,6 +116,13 @@ struct StaticHeap::Header {
      uint64_t constantsOfProgram; // EncodedJSValue[]. See AOT::NumbersOfConstants.
      uint64_t keysOfImage; // AOT::ImageKey[]. See keysOfImage().
      uint64_t capacityOfKeysOfImage;
@@ -7905,7 +7914,16 @@ index 96edcf1624..233af7bf4b 100644
  
      // What the cells say they are: which of the VM's own structures, and where that has to be.
      uint32_t numberOfStructures;
-@@ -127,10 +138,23 @@ static std::span<WriteBarrier<Structure>> structuresOf(VM& vm)
+@@ -118,6 +130,8 @@ struct StaticHeap::Header {
+         uint32_t indexInVM;
+         uint32_t id;
+     } structures[maxStructures];
++
++    uint32_t distanceBitsOfStaticAtoms; // See AtomStringTable::StaticAtoms.
+ };
+ 
+ // The VM's own structures, which it makes first, are members of it that follow one another.
+@@ -127,10 +141,23 @@ static std::span<WriteBarrier<Structure>> structuresOf(VM& vm)
  }
  
  // In Arena::Bss, a Decoder for each module.
@@ -7931,7 +7949,7 @@ index 96edcf1624..233af7bf4b 100644
  }
  
  static VM* s_vmOfContainer = nullptr;
-@@ -178,7 +202,7 @@ static std::atomic<unsigned> s_numberOfOwnersEverUsed { 0 }; // The first so man
+@@ -178,7 +205,7 @@ static std::atomic<unsigned> s_numberOfOwnersEverUsed { 0 }; // The first so man
  PreciseAllocation* StaticHeap::containerOfSlow(const void* cell)
  {
      uintptr_t address = std::bit_cast<uintptr_t>(cell);
@@ -7940,7 +7958,7 @@ index 96edcf1624..233af7bf4b 100644
          for (unsigned i = 0, count = s_numberOfOwnersEverUsed.load(std::memory_order_acquire); i < count; ++i) {
              auto& owner = s_ownersOfBlocks[i];
              if (address - owner.start.load(std::memory_order_relaxed) < owner.size.load(std::memory_order_acquire))
-@@ -211,6 +235,10 @@ void StaticHeap::willAllocateUnlinkedFunctionSlow()
+@@ -211,6 +238,10 @@ void StaticHeap::willAllocateUnlinkedFunctionSlow()
  
  // Where the cells are and how big, for as long as the region is being built. Nothing needs to be told once it is.
  static Vector<std::pair<void*, size_t>> s_cellsBeingBuilt[2]; // Those of Arena::Cells, and of Arena::MutableCells.
@@ -7951,7 +7969,7 @@ index 96edcf1624..233af7bf4b 100644
  
  template<typename Functor> static void forEachCell(Region::Arena arena, const Functor& functor)
  {
-@@ -244,7 +272,7 @@ static Vector<std::pair<void*, size_t>>& freeBlocks() WTF_REQUIRES_LOCK(s_blocks
+@@ -244,7 +275,7 @@ static Vector<std::pair<void*, size_t>>& freeBlocks() WTF_REQUIRES_LOCK(s_blocks
      return blocks;
  }
  
@@ -7960,7 +7978,7 @@ index 96edcf1624..233af7bf4b 100644
  {
      RELEASE_ASSERT(!(size % WTF::pageSize()));
      Locker locker { s_blocksLock };
-@@ -258,11 +286,11 @@ void* StaticHeap::allocateBlock(VM& vm, size_t size)
+@@ -258,11 +289,11 @@ void* StaticHeap::allocateBlock(VM& vm, size_t size)
          }
      }
      if (!result) {
@@ -7975,7 +7993,7 @@ index 96edcf1624..233af7bf4b 100644
      for (unsigned i = 0; i < maxBlocks; ++i) {
          auto& owner = s_ownersOfBlocks[i];
          if (owner.size.load(std::memory_order_relaxed))
-@@ -283,9 +311,16 @@ void StaticHeap::freeBlock(void* block, size_t size)
+@@ -283,9 +314,16 @@ void StaticHeap::freeBlock(void* block, size_t size)
          if (owner.start.load(std::memory_order_relaxed) == std::bit_cast<uintptr_t>(block) && owner.size.load(std::memory_order_relaxed))
              owner.size.store(0, std::memory_order_release);
      }
@@ -7992,7 +8010,7 @@ index 96edcf1624..233af7bf4b 100644
      Locker locker { s_blocksLock };
      freeBlocks().append({ block, size });
  }
-@@ -351,7 +386,7 @@ public:
+@@ -351,7 +389,7 @@ public:
  
      void check(const void* pointer, const char* what)
      {
@@ -8001,7 +8019,78 @@ index 96edcf1624..233af7bf4b 100644
          if (!pointer || (StaticHeap::contains(pointer) && isKept))
              return;
          numberOfEscapes++;
-@@ -1219,9 +1254,16 @@ static void deduplicateSymbolTables()
+@@ -707,11 +745,43 @@ static void fillInfo(AOT::FunctionInfo& info, const AOT::ImageView::Function& fu
+     fillMetadata(function.index, codeBlock, executable, s_entryOffsetOfModuleBeingBuilt);
+ }
+ 
+-// The functions of `codeBlock`, whose source is `source`, and theirs.
+-static void makeExecutables(VM& vm, UnlinkedCodeBlock* codeBlock, const SourceCode& source, bool isInsideOrdinaryFunction, uint32_t moduleID, const AOT::ImageView& image, std::span<AOT::FunctionInfo> byIndex, uint64_t& made, UnlinkedFunctionExecutable* only = nullptr)
++// A module's executables are made in two passes (see build()): first those that a recorded run of the program used, so that what a
++// program starts with is on as few pages as can be, then the rest. Used: a function the run ran, or one that what it ran made (the
++// functions of code are made when it runs, whether or not they are called).
++enum class PassOfExecutables : uint8_t { Used, Rest };
++static PassOfExecutables s_passOfExecutables = PassOfExecutables::Rest;
++static UncheckedKeyHashSet<const UnlinkedFunctionExecutable*> s_functionsThatRan; // Of the module being built.
++static UncheckedKeyHashSet<const UnlinkedFunctionExecutable*> s_madeInFirstPass; // Their functions that were not used are left.
++
++// The functions of `codeBlock`, whose source is `source`, and theirs. `codeRuns`: the recorded run ran it.
++static void makeExecutables(VM& vm, UnlinkedCodeBlock* codeBlock, const SourceCode& source, bool isInsideOrdinaryFunction, uint32_t moduleID, const AOT::ImageView& image, std::span<AOT::FunctionInfo> byIndex, uint64_t& made, bool codeRuns, UnlinkedFunctionExecutable* only = nullptr)
+ {
++    bool isFirstPass = s_passOfExecutables == PassOfExecutables::Used;
++    auto makeExecutablesInside = [&](UnlinkedFunctionExecutable* unlinked, FunctionExecutable* executable, bool ran) {
++        if (isFirstPass) {
++            Region::AllocationScope notInRegion(false);
++            s_madeInFirstPass.add(unlinked);
++        }
++        for (auto kind : { CodeSpecializationKind::CodeForCall, CodeSpecializationKind::CodeForConstruct }) {
++            if (auto* nested = unlinked->codeBlockIfExists(kind))
++                makeExecutables(vm, nested, executable->source(), executable->isInsideOrdinaryFunction(), moduleID, image, byIndex, made, ran);
++        }
++    };
+     auto make = [&](UnlinkedFunctionExecutable* unlinked) {
+-        if (unlinked->staticExecutable())
++        if (auto* executable = unlinked->staticExecutable()) {
++            if (!isFirstPass) {
++                bool wasMadeInFirstPass;
++                {
++                    Region::AllocationScope notInRegion(false);
++                    wasMadeInFirstPass = s_madeInFirstPass.remove(unlinked);
++                }
++                if (wasMadeInFirstPass)
++                    makeExecutablesInside(unlinked, executable, false);
++            }
++            return;
++        }
++        bool ran = s_functionsThatRan.contains(unlinked);
++        if (isFirstPass && !ran && !codeRuns)
+             return;
+         // The source of a constructor that nobody wrote is one of the engine's own, so its executable is made when the program runs.
+         bool isDefaultConstructor = unlinked->isBuiltinDefaultClassConstructor();
+@@ -753,10 +823,7 @@ static void makeExecutables(VM& vm, UnlinkedCodeBlock* codeBlock, const SourceCo
+             if (!isComplete)
+                 return;
+             unlinked->setStaticExecutable(executable);
+-            for (auto kind : { CodeSpecializationKind::CodeForCall, CodeSpecializationKind::CodeForConstruct }) {
+-                if (auto* nested = unlinked->codeBlockIfExists(kind))
+-                    makeExecutables(vm, nested, executable->source(), executable->isInsideOrdinaryFunction(), moduleID, image, byIndex, made);
+-            }
++            makeExecutablesInside(unlinked, executable, ran);
+             return;
+         }
+         s_nextCellIsOfAFunction = true;
+@@ -779,10 +846,7 @@ static void makeExecutables(VM& vm, UnlinkedCodeBlock* codeBlock, const SourceCo
+         }
+         unlinked->setStaticExecutable(executable);
+         made++;
+-        for (auto kind : { CodeSpecializationKind::CodeForCall, CodeSpecializationKind::CodeForConstruct }) {
+-            if (auto* nested = unlinked->codeBlockIfExists(kind))
+-                makeExecutables(vm, nested, executable->source(), executable->isInsideOrdinaryFunction(), moduleID, image, byIndex, made);
+-        }
++        makeExecutablesInside(unlinked, executable, ran);
+     };
+     if (only) {
+         make(only);
+@@ -1219,9 +1283,16 @@ static void deduplicateSymbolTables()
      for (uintptr_t table : tables) {
          std::span bytes { std::bit_cast<const Latin1Character*>(table), sizeof(SymbolTable) };
          moved.add(table, kept.ensure(String { bytes }, [&] {
@@ -8020,7 +8109,14 @@ index 96edcf1624..233af7bf4b 100644
              return std::bit_cast<uintptr_t>(cell);
          }).iterator->value);
      }
-@@ -1246,6 +1288,13 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+@@ -1240,12 +1311,19 @@ static void deduplicateSymbolTables()
+     }
+ }
+ 
+-Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std::span<const uint8_t> payload, std::span<const uint32_t> entryOffsetsOfModules, std::span<const uint8_t> imageOfCode, size_t keptPayloadStart, const PositionsToKeep* positionsToKeep, std::span<const ReportableSitesOfFunction> reportableSites, std::span<const std::optional<Vector<uint32_t>>> variablesExportedByModules)
++Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std::span<const uint8_t> payload, std::span<const uint32_t> entryOffsetsOfModules, std::span<const uint8_t> imageOfCode, size_t keptPayloadStart, const PositionsToKeep* positionsToKeep, std::span<const ReportableSitesOfFunction> reportableSites, std::span<const std::optional<Vector<uint32_t>>> variablesExportedByModules, std::span<const uint32_t> regionEndsOfPayload)
+ {
+     s_reportableSites = reportableSites;
      s_identifiersOfProgram = { };
      s_constantsOfProgram = { };
      auto forgetCells = makeScopeExit([] {
@@ -8034,7 +8130,7 @@ index 96edcf1624..233af7bf4b 100644
          for (auto& cells : s_cellsBeingBuilt)
              cells = { };
          s_allocatesFunctionsInScratch = false;
-@@ -1277,8 +1326,10 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+@@ -1277,8 +1355,10 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
      s_vm = &vm;
  
      Header header { };
@@ -8045,7 +8141,32 @@ index 96edcf1624..233af7bf4b 100644
  
      auto copy = [&](std::span<const uint8_t> bytes) {
          auto* result = static_cast<uint8_t*>(Region::allocate(Region::Arena::Data, bytes.size(), pageSizeOfImage));
-@@ -1330,6 +1381,7 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+@@ -1307,12 +1387,23 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+             s_symbolRegistriesBeingBuilt[isPrivate] = new (NotNull, Region::allocate(Region::Arena::Data, sizeof(SymbolRegistry), 16)) SymbolRegistry(isPrivate ? SymbolRegistry::Type::PrivateSymbol : SymbolRegistry::Type::PublicSymbol);
+             header.symbolRegistries[isPrivate] = std::bit_cast<uint64_t>(s_symbolRegistriesBeingBuilt[isPrivate]);
+         }
++        // The strings are made in the order of their records, which is the order the training used them in first
++        // (EncoderStringTable::serialize, then ordinal order): so the ones a program starts with are side by side, on fewer pages,
++        // and so are their cells.
++        Vector<uint32_t> ordinalsInRecordOrder;
++        ordinalsInRecordOrder.reserveInitialCapacity(count);
++        for (uint32_t ordinal = 0; ordinal < count; ++ordinal)
++            ordinalsInRecordOrder.append(ordinal);
++        {
++            auto offsets = spanReinterpretCast<const uint32_t>(stringsCopy.subspan(sizeof(uint32_t), static_cast<size_t>(count) * sizeof(uint32_t)));
++            std::ranges::sort(ordinalsInRecordOrder, { }, [&](uint32_t ordinal) { return offsets[ordinal]; });
++        }
+         AtomStringTable* usualAtoms = Thread::currentSingleton().setCurrentAtomStringTable(atoms.get());
+         {
+             Region::AllocationScope allocationScope;
+             s_isBuilding = true;
+             vm.heap.m_placeOfNextCell = placeOfEveryCellWhileBuilding;
+-            for (uint32_t ordinal = 0; ordinal < count; ++ordinal) {
++            for (uint32_t ordinal : ordinalsInRecordOrder) {
+                 table.atomFor(vm, ordinal);
+                 // So that nothing that is decoded when the program runs has to make one, which would be writing to the slot. If
+                 // nothing is going to be, the ones that are wanted are the ones that what is decoded here and now asks for.
+@@ -1330,6 +1421,7 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
                  auto* modules = static_cast<StaticHeapModule*>(Region::allocate(Region::Arena::Data, sortedOffsets.size() * sizeof(StaticHeapModule), 16));
                  header.modules = std::bit_cast<uint64_t>(modules);
                  header.numberOfModules = sortedOffsets.size();
@@ -8053,16 +8174,84 @@ index 96edcf1624..233af7bf4b 100644
                  auto imageView = AOT::ImageView::tryCreate(imageOfCode, reinterpret_cast<const void*>(Region::startOf(Region::Arena::Image)));
                  std::span<AOT::FunctionInfo> infosOfFunctions;
                  if (imageView) {
-@@ -1540,7 +1592,7 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+@@ -1396,7 +1488,7 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+                             if (builtinFunction) {
+                                 static_cast<SourceProvider*>(addressOfSourceProvider(i))->ref();
+                                 SourceCode source { RefPtr { static_cast<SourceProvider*>(addressOfSourceProvider(i)) }, 0, static_cast<int>(lengthOfBuiltin), 1, 1 };
+-                                makeExecutables(vm, nullptr, source, false, sortedOffsets[i] + 1, *imageView, infosOfFunctions, numberOfExecutables, builtinFunction);
++                                makeExecutables(vm, nullptr, source, false, sortedOffsets[i] + 1, *imageView, infosOfFunctions, numberOfExecutables, true, builtinFunction);
+                             }
+                         }
+                         UnlinkedCodeBlock* codeBlock = isBuiltinFunction ? nullptr : decodeAllForStaticHeap(decoder, key, functions);
+@@ -1411,7 +1503,27 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+                             // not kept: once more than it is, or it would be destroyed if the module turns out to have no functions.
+                             static_cast<SourceProvider*>(addressOfSourceProvider(i))->ref();
+                             SourceCode source { RefPtr { static_cast<SourceProvider*>(addressOfSourceProvider(i)) }, 0, static_cast<int>(key.length()), 1, 1 };
+-                            makeExecutables(vm, codeBlock, source, false, sortedOffsets[i] + 1, *imageView, infosOfFunctions, numberOfExecutables);
++                            if (regionEndsOfPayload.size() == BytecodeLinkRegions::Count) {
++                                // What the recorded run ran is in the payload's first regions: the modules it evaluated, then the
++                                // functions it ran (or that the build it ran was not).
++                                {
++                                    Region::AllocationScope notInRegion(false);
++                                    for (auto& [function, offsets] : functions) {
++                                        if (auto at = payloadOffsetOfFunctionCode(decoder, offsets); at && *at < regionEndsOfPayload[BytecodeLinkRegions::Unknown])
++                                            s_functionsThatRan.add(function);
++                                    }
++                                }
++                                bool moduleRan = sortedOffsets[i] < regionEndsOfPayload[BytecodeLinkRegions::EarlyHeads];
++                                s_passOfExecutables = PassOfExecutables::Used;
++                                makeExecutables(vm, codeBlock, source, false, sortedOffsets[i] + 1, *imageView, infosOfFunctions, numberOfExecutables, moduleRan);
++                                s_passOfExecutables = PassOfExecutables::Rest;
++                            }
++                            makeExecutables(vm, codeBlock, source, false, sortedOffsets[i] + 1, *imageView, infosOfFunctions, numberOfExecutables, true);
++                            {
++                                Region::AllocationScope notInRegion(false);
++                                RELEASE_ASSERT(s_madeInFirstPass.isEmpty());
++                                s_functionsThatRan.clear();
++                            }
+                             // The code of the module itself, but for its executable, which is made when the program runs.
+                             if (auto function = imageView->find(AOT::imageKeyForTopLevelCode(sortedOffsets[i] + 1)))
+                                 fillInfo(infosOfFunctions[function->index], *function, codeBlock, nullptr, CodeSpecializationKind::CodeForCall);
+@@ -1532,24 +1644,33 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+         Thread::currentSingleton().setCurrentAtomStringTable(usualAtoms);
+         {
+             using StaticAtoms = AtomStringTable::StaticAtoms;
+-            // (No more than half full. What it is made from was given room in advance, and a lot of it.)
+-            size_t capacity = WTF::roundUpToPowerOfTwo(std::max<size_t>(2 * atoms->table().size(), 8));
++            // No more than three quarters full: a place that holds another string is passed over by its entry's tag, without reading
++            // that string, so a longer probe costs little, and a table half the size is half the pages that lookups touch.
++            size_t capacity = WTF::roundUpToPowerOfTwo(std::max<size_t>((4 * atoms->table().size() + 2) / 3, 8));
+             RELEASE_ASSERT(hasOneBitSet(capacity) && capacity > atoms->table().size());
+             std::span<uint32_t> entries { static_cast<uint32_t*>(Region::allocate(Region::Arena::Data, capacity * sizeof(uint32_t), pageSizeOfImage)), capacity };
+             zeroSpan(entries);
              unsigned mask = capacity - 1;
++            uintptr_t farthest = 0;
              for (auto& atom : atoms->table()) {
-                 atom->becomeStatic();
+-                atom->becomeStatic();
 -                uintptr_t distance = std::bit_cast<uintptr_t>(atom.get()) - Region::base;
 +                uintptr_t distance = std::bit_cast<uintptr_t>(atom.get()) - Region::base();
                  RELEASE_ASSERT(contains(atom.get()) && distance && !(distance & ((1u << StaticAtoms::shift) - 1)) && !(distance >> StaticAtoms::shift >> 32));
++                farthest = std::max(farthest, distance);
++            }
++            StaticAtoms table;
++            table.distanceBits = StaticAtoms::distanceBitsFor(farthest);
++            for (auto& atom : atoms->table()) {
++                atom->becomeStatic();
++                uintptr_t distance = std::bit_cast<uintptr_t>(atom.get()) - Region::base();
                  unsigned probes = 0;
                  unsigned place = atom->hash() & mask;
-@@ -1575,6 +1627,37 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
+                 while (entries[place])
+                     place = StaticAtoms::next(place, probes, mask);
+-                entries[place] = static_cast<uint32_t>(distance >> StaticAtoms::shift);
++                entries[place] = table.entryFor(distance, atom->hash());
+             }
+             header.staticAtoms = std::bit_cast<uint64_t>(entries.data());
+             header.capacityOfStaticAtoms = capacity;
++            header.distanceBitsOfStaticAtoms = table.distanceBits;
+         }
+         for (auto* registry : s_symbolRegistriesBeingBuilt)
+             registry->becomeStatic();
+@@ -1575,6 +1696,37 @@ Vector<uint8_t> StaticHeap::build(VM& vm, std::span<const uint8_t> strings, std:
          }
      }
  
@@ -8100,7 +8289,7 @@ index 96edcf1624..233af7bf4b 100644
      // Cells are as they would be in the VM that is going to have them, after a collection that found them.
      auto structures = structuresOf(vm);
      uint32_t blockOfStructures = vm.structureStructure->id().bits() & ~static_cast<uint32_t>(MarkedBlock::blockSize - 1);
-@@ -1691,13 +1774,49 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
+@@ -1691,13 +1843,49 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
      AtomStringTable* atoms = Thread::currentSingleton().atomStringTable();
      if (!atoms->table().isEmpty())
          return false;
@@ -8151,7 +8340,7 @@ index 96edcf1624..233af7bf4b 100644
      for (unsigned i = 0; i < Region::numberOfArenasInFile; ++i) {
          // (Some of it mapped and the rest not is nothing that anybody gets to see.)
          if (static_cast<Region::Arena>(i) == Region::Arena::Data && header.sizeOfHoleInData) {
-@@ -1710,14 +1829,97 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
+@@ -1710,14 +1898,98 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
          if (!Region::map(static_cast<Region::Arena>(i), fileDescriptor, offsetInFile + header.arenaOffset[i], header.arenaSize[i]))
              return false;
      }
@@ -8171,7 +8360,8 @@ index 96edcf1624..233af7bf4b 100644
 +    makePlacesOfModulesWritable(mapped.numberOfModules);
 +    s_header = &mapped;
 +    s_rowsOfFunctions = std::bit_cast<const RowOfFunction*>(mapped.rowsOfFunctions);
-+    atoms->setStaticAtoms({ std::bit_cast<const uint32_t*>(mapped.staticAtoms), static_cast<uint32_t>(mapped.capacityOfStaticAtoms - 1), Region::base() });
++    RELEASE_ASSERT(mapped.distanceBitsOfStaticAtoms >= 24 && mapped.distanceBitsOfStaticAtoms <= 32);
++    atoms->setStaticAtoms({ std::bit_cast<const uint32_t*>(mapped.staticAtoms), static_cast<uint32_t>(mapped.capacityOfStaticAtoms - 1), Region::base(), mapped.distanceBitsOfStaticAtoms });
      return true;
  }
  
@@ -8253,17 +8443,18 @@ index 96edcf1624..233af7bf4b 100644
  void StaticHeap::prepareThread()
  {
      if (!s_header || !s_vm || t_threadIsPrepared)
-@@ -1725,7 +1927,7 @@ void StaticHeap::prepareThread()
+@@ -1725,7 +1997,8 @@ void StaticHeap::prepareThread()
      AtomStringTable* atoms = Thread::currentSingleton().atomStringTable();
      if (!atoms->table().isEmpty())
          return;
 -    atoms->setStaticAtoms({ std::bit_cast<const uint32_t*>(s_header->staticAtoms), static_cast<uint32_t>(s_header->capacityOfStaticAtoms - 1), Region::base });
-+    atoms->setStaticAtoms({ std::bit_cast<const uint32_t*>(s_header->staticAtoms), static_cast<uint32_t>(s_header->capacityOfStaticAtoms - 1), Region::base() });
++    RELEASE_ASSERT(s_header->distanceBitsOfStaticAtoms >= 24 && s_header->distanceBitsOfStaticAtoms <= 32);
++    atoms->setStaticAtoms({ std::bit_cast<const uint32_t*>(s_header->staticAtoms), static_cast<uint32_t>(s_header->capacityOfStaticAtoms - 1), Region::base(), s_header->distanceBitsOfStaticAtoms });
      t_threadIsPrepared = true;
  }
  
 diff --git a/Source/JavaScriptCore/heap/StaticHeap.h b/Source/JavaScriptCore/heap/StaticHeap.h
-index b4c5c6697e..7c103c7edf 100644
+index b4c5c6697e..f4d2c092d7 100644
 --- a/Source/JavaScriptCore/heap/StaticHeap.h
 +++ b/Source/JavaScriptCore/heap/StaticHeap.h
 @@ -7,6 +7,7 @@
@@ -8290,7 +8481,18 @@ index b4c5c6697e..7c103c7edf 100644
  class TDZEnvironmentLink;
  class UnlinkedCodeBlock;
  class UnlinkedFunctionCodeBlock;
-@@ -98,6 +99,31 @@ public:
+@@ -73,7 +74,9 @@ public:
+     };
+     // If keptPayloadStart is nonzero, the payload before it is omitted. It must be the start of
+     // BytecodeLinkRegions::ExpressionInfo. The program can then no longer be interpreted or decoded again.
+-    JS_EXPORT_PRIVATE static Vector<uint8_t> build(VM&, std::span<const uint8_t> strings, std::span<const uint8_t> payload, std::span<const uint32_t> entryOffsetsOfModules, std::span<const uint8_t> imageOfCode = { }, size_t keptPayloadStart = 0, const PositionsToKeep* = nullptr, std::span<const ReportableSitesOfFunction> reportableSites = { }, std::span<const std::optional<Vector<uint32_t>>> variablesExportedByModules = { });
++    // `regionEndsOfPayload` (BytecodeLinkRegions, from BytecodeLinkEncoder::finish(); or none) says which functions a recorded run
++    // of the program used: their executables are made first, so that what a program starts with is on fewer pages.
++    JS_EXPORT_PRIVATE static Vector<uint8_t> build(VM&, std::span<const uint8_t> strings, std::span<const uint8_t> payload, std::span<const uint32_t> entryOffsetsOfModules, std::span<const uint8_t> imageOfCode = { }, size_t keptPayloadStart = 0, const PositionsToKeep* = nullptr, std::span<const ReportableSitesOfFunction> reportableSites = { }, std::span<const std::optional<Vector<uint32_t>>> variablesExportedByModules = { }, std::span<const uint32_t> regionEndsOfPayload = { });
+     static bool isBuilding() { return s_isBuilding; }
+     static JSString* emptyStringWhileBuilding(VM&); // Distinct from the VM's own empty string.
+     static WTF::SymbolRegistry& symbolRegistryWhileBuilding(bool isPrivate); // Distinct from the VM's own registries.
+@@ -98,6 +101,31 @@ public:
          bool hasPositionsOfCallSites; // See PositionsToKeep.
      };
      JS_EXPORT_PRIVATE static std::optional<Copies> copiesIn(std::span<const uint8_t> image);
@@ -8322,7 +8524,7 @@ index b4c5c6697e..7c103c7edf 100644
      // Call on a thread that will own a VM other than the first, before it creates any atom string. Does for that thread what map()
      // does for its own.
      JS_EXPORT_PRIVATE static void prepareThread();
-@@ -109,7 +135,7 @@ public:
+@@ -109,7 +137,7 @@ public:
      static bool isFirst(VM& vm) { return s_vm == &vm; }
      static ALWAYS_INLINE bool isOnlyForFirstVM(const void* pointer)
      {
@@ -8331,7 +8533,7 @@ index b4c5c6697e..7c103c7edf 100644
      }
      // Once more than one VM uses the heap, the PreciseAllocation for a static cell is that of the VM that placed it, or else that
      // of the calling thread's VM.
-@@ -247,8 +273,9 @@ public:
+@@ -247,8 +275,9 @@ public:
      // All cells placed outside the GC's own memory belong to a single VM. Returns whether that is this VM. Without a static heap,
      // the first VM to ask claims the role.
      JS_EXPORT_PRIVATE static bool canPlaceCellsOf(VM&);
@@ -8488,7 +8690,7 @@ index 1dda303c94..4d245ef488 100644
      using Variables = Variant<Compact, Inflated>;
  
 diff --git a/Source/JavaScriptCore/runtime/CachedTypes.cpp b/Source/JavaScriptCore/runtime/CachedTypes.cpp
-index 696ac7a731..c985ba4110 100644
+index 696ac7a731..6d0876dd00 100644
 --- a/Source/JavaScriptCore/runtime/CachedTypes.cpp
 +++ b/Source/JavaScriptCore/runtime/CachedTypes.cpp
 @@ -26,6 +26,7 @@
@@ -8499,7 +8701,16 @@ index 696ac7a731..c985ba4110 100644
  #include <wtf/NumberOfCores.h>
  #include <wtf/Threading.h>
  #include <wtf/Deque.h>
-@@ -2851,7 +2852,7 @@ private:
+@@ -1700,6 +1701,8 @@ public:
+     ptrdiff_t payloadOffsetInEncoder(Encoder& encoder) const { return encoder.offsetOf(&this->m_offset) + this->m_offset; }
+     // Encoder side: point at something already written instead of allocating.
+     void pointAtPayloadOffset(Encoder& encoder, ptrdiff_t offset) { this->m_offset = safeCast<Offset>(offset - encoder.offsetOf(&this->m_offset)); }
++    // Decoder side: where what it points at is, as a payload offset.
++    ptrdiff_t payloadOffsetInDecoder(const Decoder& decoder) const { return decoder.offsetOf(buffer()); }
+ 
+     // A 1-3 character Latin-1 string that decodes to an atom fits in the 4-byte slot that would otherwise hold the offset
+     // of its record: low two bits 01 (record offsets are multiples of 4 and the empty sentinel ends in 11), then the
+@@ -2851,7 +2854,7 @@ private:
      uint32_t m_bits;
  };
  
@@ -8508,7 +8719,7 @@ index 696ac7a731..c985ba4110 100644
  
  class CachedVariableEnvironmentRareData : public CachedObject<VariableEnvironment::RareData> {
  public:
-@@ -2898,7 +2899,7 @@ private:
+@@ -2898,7 +2901,7 @@ private:
      bool m_isEverythingCaptured;
      bool m_hasAwaitUsingDeclaration;
      uint8_t m_unused[2] { };
@@ -8517,7 +8728,7 @@ index 696ac7a731..c985ba4110 100644
      CachedPtr<CachedVariableEnvironmentRareData> m_rareData;
  };
  
-@@ -2938,7 +2939,7 @@ public:
+@@ -2938,7 +2941,7 @@ public:
      }
  
  private:
@@ -8526,7 +8737,7 @@ index 696ac7a731..c985ba4110 100644
      unsigned m_hash;
  };
  
-@@ -3078,7 +3079,17 @@ public:
+@@ -3078,7 +3081,17 @@ public:
          if (decoder.isForStaticHeap()) [[unlikely]]
              StaticHeap::willAllocateUnlinkedFunction();
  #endif
@@ -8545,7 +8756,7 @@ index 696ac7a731..c985ba4110 100644
  #if USE(BUN_JSC_ADDITIONS)
          // Whether it only ever has one scope is not to be found out by writing to it.
          if (decoder.isForStaticHeap()) [[unlikely]]
-@@ -4716,12 +4727,27 @@ ALWAYS_INLINE void CachedCodeBlock<CodeBlockType>::decode(Decoder& decoder, Unli
+@@ -4716,12 +4729,27 @@ ALWAYS_INLINE void CachedCodeBlock<CodeBlockType>::decode(Decoder& decoder, Unli
  #endif
  }
  
@@ -8574,7 +8785,7 @@ index 696ac7a731..c985ba4110 100644
      codeBlock->finishCreation(decoder.vm());
      Base::decode(decoder, *codeBlock, tail);
      decodeOwnMembers(decoder, *codeBlock);
-@@ -4733,7 +4759,7 @@ UnlinkedModuleProgramCodeBlock* CachedModuleCodeBlock::decode(Decoder& decoder)
+@@ -4733,7 +4761,7 @@ UnlinkedModuleProgramCodeBlock* CachedModuleCodeBlock::decode(Decoder& decoder)
      Tail tail = readTail();
      ActiveTailScope activeTail(decoder, this, tail);
      prefetchStringTableSlots(decoder, tail);
@@ -8583,7 +8794,7 @@ index 696ac7a731..c985ba4110 100644
      codeBlock->finishCreation(decoder.vm());
      Base::decode(decoder, *codeBlock, tail);
      decodeOwnMembers(decoder, *codeBlock);
-@@ -5941,6 +5967,8 @@ struct BytecodeLinkEncoder::Impl {
+@@ -5941,6 +5969,8 @@ struct BytecodeLinkEncoder::Impl {
          executable.takeParentDeclaredNames();
          if (!forCall && !forConstruct) {
              omittedFunctions[0]++;
@@ -8592,7 +8803,7 @@ index 696ac7a731..c985ba4110 100644
              return;
          }
          SourceCode source = executable.linkedSourceCode(around);
-@@ -6116,7 +6144,71 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6116,7 +6146,71 @@ struct BytecodeLinkEncoder::Impl {
      Vector<AOT::Variable> variablesWrittenNativelyOfLink;
  
      // What the bundler says of the variables at the top of a module, by where each is in the environment of the module.
@@ -8664,7 +8875,7 @@ index 696ac7a731..c985ba4110 100644
      {
          using Graph = PrelinkedModuleGraph;
          Vector<AOT::ModuleHints::Binding> result;
-@@ -6391,6 +6483,9 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6391,6 +6485,9 @@ struct BytecodeLinkEncoder::Impl {
          AOT::MultiValueReturnTable multiValueReturnTable;
          AOT::setMultiValueReturnTable(&multiValueReturnTable);
          auto forgetThingsReturnedByFunctions = makeScopeExit([] { AOT::setMultiValueReturnTable(nullptr); });
@@ -8674,7 +8885,7 @@ index 696ac7a731..c985ba4110 100644
          {
              MonotonicTime before = MonotonicTime::now();
              for (auto& hintsOfModule : hints) {
-@@ -6413,6 +6508,7 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6413,6 +6510,7 @@ struct BytecodeLinkEncoder::Impl {
                      unreadable++;
              });
              AOT::TypeTable::finalizeAtomizedFields();
@@ -8682,7 +8893,7 @@ index 696ac7a731..c985ba4110 100644
              RELEASE_ASSERT(!unreadable.load());
              classesOfProgram.forEachNonEscapingMethod([&](uint32_t number) {
                  const AOT::KnownFunction& function = *functionsOfProgram.function(number);
-@@ -6673,10 +6769,18 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6673,10 +6771,18 @@ struct BytecodeLinkEncoder::Impl {
          std::atomic<size_t> next { 0 };
          Lock declinedLock;
          UncheckedKeyHashSet<UnlinkedCodeBlock*> declined;
@@ -8701,7 +8912,7 @@ index 696ac7a731..c985ba4110 100644
                  auto it = all.find(codeBlock);
                  return it == all.end() ? std::nullopt : std::optional { it->value };
              }
-@@ -6704,7 +6808,11 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6704,7 +6810,11 @@ struct BytecodeLinkEncoder::Impl {
                      continue;
                  }
                  AOT::CompiledCode code;
@@ -8714,7 +8925,7 @@ index 696ac7a731..c985ba4110 100644
                      // (A function's key says where its source starts, if it is a function that somebody wrote.)
                      {
                          auto kindOfFunction = static_cast<OrderFunctionKind>(jobs[index].key.kind >> 1);
-@@ -6733,6 +6841,7 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6733,6 +6843,7 @@ struct BytecodeLinkEncoder::Impl {
                  else {
                      Locker locker { declinedLock };
                      declined.add(jobs[index].codeBlock);
@@ -8722,7 +8933,7 @@ index 696ac7a731..c985ba4110 100644
                  }
              }
          };
-@@ -6844,6 +6953,7 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6844,6 +6955,7 @@ struct BytecodeLinkEncoder::Impl {
  
          // A call that passes no function object has nowhere to go but the function's code. If there turns out to be none, it is all
          // done again with that known.
@@ -8730,7 +8941,7 @@ index 696ac7a731..c985ba4110 100644
          for (bool again = true; again;) {
              Vector<Ref<Thread>> threads;
              for (unsigned i = 1; i < numberOfThreads; ++i)
-@@ -6869,6 +6979,53 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6869,6 +6981,53 @@ struct BytecodeLinkEncoder::Impl {
                      again = true;
                  }
              });
@@ -8784,7 +8995,7 @@ index 696ac7a731..c985ba4110 100644
              dataLogLn("AOT: ", functionsNeverReached.load(), " closed functions that nothing reaches are left out (", bytecodeNeverReached.load(), " bytes of bytecode)");
              if (again) {
                  functionsNeverReached = 0;
-@@ -6878,7 +7035,13 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6878,7 +7037,13 @@ struct BytecodeLinkEncoder::Impl {
                  next = 0;
              }
          }
@@ -8798,7 +9009,7 @@ index 696ac7a731..c985ba4110 100644
          AOT::setNumbersOfIdentifiersOfProgram(nullptr);
          AOT::setNumbersOfConstantsOfProgram(nullptr);
          for (auto& job : jobs) {
-@@ -6890,6 +7053,55 @@ struct BytecodeLinkEncoder::Impl {
+@@ -6890,6 +7055,55 @@ struct BytecodeLinkEncoder::Impl {
          // A regular expression that the program makes out of a string finds its code by what it says. So it is worth having code
          // for whatever string may be made one of, and it costs nothing but room to be wrong: a string in which something is
          // escaped that only a regular expression has any call to escape.
@@ -8854,8 +9065,30 @@ index 696ac7a731..c985ba4110 100644
          Vector<uint8_t> image = builder.finish();
          reportableSites = builder.takeReportableSites();
          return image;
+@@ -7198,6 +7412,21 @@ UnlinkedCodeBlock* decodeAllForStaticHeap(Decoder& decoder, SourceCodeKey& key,
+     return entry.second;
+ }
+ 
++std::optional<uint32_t> payloadOffsetOfFunctionCode(const Decoder& decoder, std::pair<int32_t, int32_t> offsetsOfCachedCodeBlocks)
++{
++    // (As UnlinkedFunctionExecutable::decodeCachedCodeBlocks() reads them: a slot that points at the code, or minus where the code is.)
++    for (int32_t offset : { offsetsOfCachedCodeBlocks.first, offsetsOfCachedCodeBlocks.second }) {
++        if (offset < 0)
++            return static_cast<uint32_t>(-static_cast<int64_t>(offset));
++        if (offset > 0) {
++            auto& slot = *static_cast<const CachedWriteBarrier<CachedFunctionCodeBlock, UnlinkedFunctionCodeBlock>*>(decoder.ptrForOffsetFromBase(offset));
++            if (!slot.isEmpty())
++                return static_cast<uint32_t>(slot.ptr().payloadOffsetInDecoder(decoder));
++        }
++    }
++    return std::nullopt;
++}
++
+ bool entryIsOfBuiltinFunction(Decoder& decoder)
+ {
+     return std::bit_cast<const BuiltinFunctionCacheEntry*>(decoder.ptrForOffsetFromBase(decoder.entryOffset()))->matchesAssumedType();
 diff --git a/Source/JavaScriptCore/runtime/CachedTypes.h b/Source/JavaScriptCore/runtime/CachedTypes.h
-index e572aae01e..05f113dae5 100644
+index e572aae01e..e25ef778b7 100644
 --- a/Source/JavaScriptCore/runtime/CachedTypes.h
 +++ b/Source/JavaScriptCore/runtime/CachedTypes.h
 @@ -26,10 +26,12 @@
@@ -8871,7 +9104,16 @@ index e572aae01e..05f113dae5 100644
  #include "VariableEnvironment.h"
  #include <wtf/FileSystem.h>
  #include <wtf/HashMap.h>
-@@ -460,22 +462,6 @@ struct CachedCodeDigest {
+@@ -392,6 +394,8 @@ private:
+ // is not to be had. And the key it is for.
+ // functions: each with UnlinkedFunctionExecutable::offsetsOfCachedCodeBlocks(), as it was.
+ UnlinkedCodeBlock* decodeAllForStaticHeap(Decoder&, SourceCodeKey&, Vector<std::pair<UnlinkedFunctionExecutable*, std::pair<int32_t, int32_t>>>& functions);
++// Where in the payload the code of one of those functions is (its code for calling, else for constructing). Nothing if neither.
++std::optional<uint32_t> payloadOffsetOfFunctionCode(const Decoder&, std::pair<int32_t, int32_t> offsetsOfCachedCodeBlocks);
+ // An UnlinkedFunctionCodeBlock that says everything about a function's code that the real one did, but for what the instructions
+ // were: for whoever wants to ask one about code that is not going to be interpreted. The scalars are what the first of these gave.
+ struct UnlinkedHandlerInfo;
+@@ -460,22 +464,6 @@ struct CachedCodeDigest {
  JS_EXPORT_PRIVATE std::optional<CachedCodeDigest> digestOfAllCachedCode(VM&, const SourceCode&, bool isModule, Ref<CachedBytecode>);
  JS_EXPORT_PRIVATE std::optional<CachedCodeDigest> digestOfAllCachedBuiltinCode(VM&, const SourceCode&, unsigned embedderStamp, Ref<CachedBytecode>);
  
@@ -8894,7 +9136,7 @@ index e572aae01e..05f113dae5 100644
  // `bun build --compile --bytecode` with a payload order file: every module of the link is encoded into ONE payload, laid
  // out by how the recorded run used it. Regions, in file order, each written to completion before the next starts:
  //   0 heads (cache entry, key, top-level code, its functions' records) of modules the run evaluated, or did not know
-@@ -545,6 +531,9 @@ JS_EXPORT_PRIVATE bool registerAOTImage(std::span<const uint8_t> image, const vo
+@@ -545,6 +533,9 @@ JS_EXPORT_PRIVATE bool registerAOTImage(std::span<const uint8_t> image, const vo
  JS_EXPORT_PRIVATE bool isPCOfAOTImage(const void*);
  // Where the code starts in the image and how much there is, both in whole pages. Nothing if it is not an image.
  JS_EXPORT_PRIVATE std::optional<std::pair<size_t, size_t>> aotImageCodeRange(std::span<const uint8_t> image);
@@ -10222,6 +10464,55 @@ index 0000000000..1c31756902
 +} // namespace WTF
 +
 +using WTF::callSysV;
+diff --git a/Source/WTF/wtf/text/AtomStringTable.h b/Source/WTF/wtf/text/AtomStringTable.h
+index 9f18146bf2..8f6bbed8d6 100644
+--- a/Source/WTF/wtf/text/AtomStringTable.h
++++ b/Source/WTF/wtf/text/AtomStringTable.h
+@@ -48,23 +48,41 @@ public:
+     // that are static (StringImpl::becomeStatic()) and say that they are atoms. It is only looked in, when table() does not have
+     // what is wanted. To be set before the thread has an atom that may be equal to one of them.
+     // They are all within reach of one address, and nothing is ever added: so it is a table of how far each is from that, in units
+-    // of 8 bytes, nothing standing for nothing, that is looked in the way any table is.
++    // of 8 bytes, nothing standing for nothing, that is looked in the way any table is. Above how far it is (distanceBits, at
++    // least 24: as many as the farthest needs), an entry has what bits are left of 8 of the atom's hash: a place that holds another
++    // string is passed over without reading that string, which would be a page of the image touched for nothing.
+     struct StaticAtoms {
+         static constexpr unsigned shift = 3;
++        static constexpr unsigned distanceBitsFor(uintptr_t farthest)
++        {
++            unsigned bits = 24;
++            while (bits < 32 && (farthest >> shift >> bits))
++                ++bits;
++            return bits;
++        }
+         const uint32_t* entries { nullptr };
+         uint32_t mask { 0 }; // One less than how many places there are, which is a power of two.
+         uintptr_t base { 0 };
++        unsigned distanceBits { 32 };
+ 
++        uint32_t distanceMask() const { return distanceBits >= 32 ? ~0u : (1u << distanceBits) - 1; }
++        uint32_t tagBitsOf(unsigned hash) const { return distanceBits >= 32 ? 0 : (((hash >> 16) & 0xff) << distanceBits) & ~distanceMask(); }
++        uint32_t entryFor(uintptr_t distance, unsigned hash) const { return static_cast<uint32_t>(distance >> shift) | tagBitsOf(hash); }
+         explicit operator bool() const { return !!entries; }
+         static unsigned next(unsigned place, unsigned& probes, unsigned mask) { return (place + ++probes) & mask; }
+         template<typename HashTranslator, typename T> StringImpl* find(const T& value) const
+         {
+             unsigned probes = 0;
+-            for (unsigned place = HashTranslator::hash(value) & mask;; place = next(place, probes, mask)) {
++            unsigned hash = HashTranslator::hash(value);
++            uint32_t distances = distanceMask();
++            uint32_t tag = tagBitsOf(hash);
++            for (unsigned place = hash & mask;; place = next(place, probes, mask)) {
+                 uint32_t entry = entries[place];
+                 if (!entry)
+                     return nullptr;
+-                auto* string = reinterpret_cast<StringImpl*>(base + (static_cast<uintptr_t>(entry) << shift));
++                if ((entry & ~distances) != tag)
++                    continue;
++                auto* string = reinterpret_cast<StringImpl*>(base + (static_cast<uintptr_t>(entry & distances) << shift));
+                 if (HashTranslator::equal(StringEntry { string }, value))
+                     return string;
+             }
 diff --git a/Source/bmalloc/bmalloc/StaticRegion.cpp b/Source/bmalloc/bmalloc/StaticRegion.cpp
 index 77260b2296..ab6ec08785 100644
 --- a/Source/bmalloc/bmalloc/StaticRegion.cpp

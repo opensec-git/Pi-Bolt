@@ -27,7 +27,7 @@ def sections(path):
     return out
 
 
-MAGIC = b"BTHEAP07"  # StaticHeap::Header::expectedMagic
+MAGIC = b"BTHEAP08"  # StaticHeap::Header::expectedMagic
 OFFSET_OF_REGION_BASE = 336  # offsetof(StaticHeap::Header, regionBase), static_assert-ed in StaticHeap.cpp
 
 
