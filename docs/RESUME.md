@@ -9,9 +9,9 @@ trees exactly. Nothing is pushed.
 `.work\runtime\bun.exe` is a copy of `.work\bun\build\pibolt-release-lto\bun.exe` as linked with the order file, with the heap
 ordering of 2026-10-09 (below):
 
-    runtime: Bun 1.4.3-canary.1+88fb7b83d, CFG, build/pibolt-release-lto, LTO, sha256 ef3922801c3e1231
+    runtime: Bun 1.4.3-canary.1+16ed51941, CFG, build/pibolt-release-lto, LTO, sha256 1a6fc68a33637966
 
-(Built from the engine commits as they are: `88fb7b83` in `.work\bun`, and in `.work\webkit` the commit `patches\webkit.patch`
+(Built from the engine commits as they are: `16ed5194` in `.work\bun`, and in `.work\webkit` the commit `patches\webkit.patch`
 makes.)
 `scripts\build-pi.ps1` uses it by default and writes that line into each build's `pi-bolt.txt`. Older runtimes are kept beside
 it in `.work\runtime`: `bun.exe.ship-cb39be1e` (the 0.7.0 candidate of 2026-10-09, before the hardening round),
@@ -154,7 +154,18 @@ Smaller items: a glance at JSC's nursery size; in Pi, caching in `Container.rend
 - **CET** (`/CETCOMPAT`): off, because JSC jumps to exception handlers without popping the shadow stack; the plan (rdssp/incssp)
   is in `docs\WINDOWS.md`. Needs a decision before work starts.
 - **Reproducibility**: AOT output is not yet bit-for-bit deterministic (likely parallel type inference); documented in
-  `docs\WINDOWS.md`.
+  `docs\WINDOWS.md`. With runtime 16ed5194, `-VerifyDeterminism` failed in 2 of 3 runs on one word of the data arena
+  (`.pbheap` part 0, +0x190885c, not a pointer: "0 words differ by exactly the builds' addresses"): something there depends on
+  where the building process was loaded. The release build is the one whose two builds agreed; what that word is (the build
+  log's `describeBuiltAddress`, with `BUN_STATIC_HEAP_VERBOSE=1`) is to find out.
+- **A write to the read-only prebuilt heap** ends the process on Windows (fail closed), where Linux and macOS take a private copy
+  of the page: the release posture chosen. A write path that no traced run took would crash a user. Options: (A) as is; (B)
+  write-through as elsewhere, losing the Windows-only protection; (C) as is, after a diagnostics runtime
+  (`-DPIBOLT_STATIC_HEAP_WRITES`) with `BUN_STATIC_HEAP_WRITES=all` over the whole suite, npm test, tests\pi, the OpenSec
+  extensions, the inspector, error paths and workers, and every writer moved to a mutable arena. Recommended: (C).
+- **Stack commit at a thread's start** (`VM.cpp` `preCommitStackMemory`): when Windows cannot commit it, touching the pages fails
+  the same way, and the thread ends with a stack overflow (as upstream). Better: keep the soft limit at what is committed, so
+  that JavaScript gets a RangeError.
 - **Code-signing certificate** for the Windows executables. The owner signs.
 - **Windows CI**: a runner that builds and tests windows-x64.
 - **`BUN_STATIC_HEAP_WRITES`**: decided (b), done: compiled out of release runtimes; tests\aot's `=all` needs a runtime built

@@ -96,12 +96,12 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  Source/WTF/wtf/Hasher.h                       |    4 +-
  Source/WTF/wtf/SysVCall.h                     |   49 +
  Source/WTF/wtf/text/AtomStringTable.h         |   24 +-
- Source/bmalloc/bmalloc/StaticRegion.cpp       |  417 +-
+ Source/bmalloc/bmalloc/StaticRegion.cpp       |  422 +-
  Source/bmalloc/bmalloc/StaticRegion.h         |   94 +-
  Source/cmake/WebKitCompilerFlags.cmake        |    4 +-
  Source/cmake/WebKitMacros.cmake               |   28 +-
  build-icu.ps1                                 |   49 +-
- 83 files changed, 7852 insertions(+), 361 deletions(-)
+ 83 files changed, 7857 insertions(+), 361 deletions(-)
  create mode 100644 Source/JavaScriptCore/aot/AOTStubsX86_64.cpp
  create mode 100644 Source/JavaScriptCore/runtime/ReportableSitesOfFunction.h
  create mode 100644 Source/WTF/wtf/SysVCall.h
@@ -10668,10 +10668,10 @@ index 9f18146bf2..8f6bbed8d6 100644
                      return string;
              }
 diff --git a/Source/bmalloc/bmalloc/StaticRegion.cpp b/Source/bmalloc/bmalloc/StaticRegion.cpp
-index 77260b2296..39ee2fca24 100644
+index 77260b2296..d2c72ce766 100644
 --- a/Source/bmalloc/bmalloc/StaticRegion.cpp
 +++ b/Source/bmalloc/bmalloc/StaticRegion.cpp
-@@ -7,33 +7,354 @@
+@@ -7,33 +7,359 @@
  
  #include "BAssert.h"
  #include "BPlatform.h"
@@ -10956,6 +10956,11 @@ index 77260b2296..39ee2fca24 100644
 +    if (void* blocks = reserveBlocks(defaultSizeOfBlocks, s_layout.magic == StaticRegionLayout::expectedMagic)) {
 +        s_layout.blocksStart = reinterpret_cast<uintptr_t>(blocks);
 +        s_layout.blocksSize = defaultSizeOfBlocks;
++    } else {
++        // None (an address space limit): no blocks, rather than whatever the executable's layout says (the program then runs
++        // without its prebuilt heap: Bun__StaticHeap__map()).
++        s_layout.blocksStart = 0;
++        s_layout.blocksSize = 0;
 +    }
 +    RELEASE_BASSERT(VirtualProtect(&s_layout, sizeof(s_layout), PAGE_READONLY, &old));
 +}
@@ -11028,7 +11033,7 @@ index 77260b2296..39ee2fca24 100644
          munmap(result, size);
          return false;
      }
-@@ -47,6 +368,7 @@ bool StaticRegion::beginBuilding()
+@@ -47,6 +373,7 @@ bool StaticRegion::beginBuilding()
      memset(s_used, 0, sizeof(s_used));
      s_isBuilding = true;
      return true;
@@ -11036,7 +11041,7 @@ index 77260b2296..39ee2fca24 100644
  }
  
  void StaticRegion::endBuilding()
-@@ -55,8 +377,16 @@ void StaticRegion::endBuilding()
+@@ -55,8 +382,16 @@ void StaticRegion::endBuilding()
      s_isBuilding = false;
      ::free(std::exchange(s_sizes, nullptr));
      s_capacityOfSizes = 0;
@@ -11054,7 +11059,7 @@ index 77260b2296..39ee2fca24 100644
  }
  
  void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t misalignment)
-@@ -64,8 +394,12 @@ void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t
+@@ -64,8 +399,12 @@ void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t
      RELEASE_BASSERT(s_isBuilding && alignment && !(alignment & (alignment - 1)) && misalignment < alignment);
      size_t& used = s_used[static_cast<size_t>(arena)];
      size_t offset = ((used + alignment - 1 - misalignment) & ~(alignment - 1)) + misalignment;
@@ -11068,7 +11073,7 @@ index 77260b2296..39ee2fca24 100644
      return reinterpret_cast<void*>(startOf(arena) + offset);
  }
  
-@@ -107,22 +441,72 @@ bool StaticRegion::isAllocatingMutable()
+@@ -107,22 +446,72 @@ bool StaticRegion::isAllocatingMutable()
      return t_isAllocatingMutable;
  }
  
@@ -11144,7 +11149,7 @@ index 77260b2296..39ee2fca24 100644
      void* wanted = reinterpret_cast<void*>(startOf(arena) + offsetInArena);
      if (arena == Arena::Image) {
          void* result = mmap(wanted, size, isCode ? PROT_READ | PROT_EXEC : PROT_READ, MAP_PRIVATE, fileDescriptor, offsetInFile);
-@@ -147,6 +531,7 @@ bool StaticRegion::map(Arena arena, int fileDescriptor, off_t offsetInFile, size
+@@ -147,6 +536,7 @@ bool StaticRegion::map(Arena arena, int fileDescriptor, off_t offsetInFile, size
          return false;
      }
      return true;
@@ -11152,7 +11157,7 @@ index 77260b2296..39ee2fca24 100644
  }
  
  // In Arena::MutableMalloc, what is asked for is preceded by how much was asked for: it may be given back, or be found too small,
-@@ -160,7 +545,7 @@ static constexpr size_t unit = 8;
+@@ -160,7 +550,7 @@ static constexpr size_t unit = 8;
  
  static bool isInImmutableMalloc(const void* pointer)
  {
@@ -11161,7 +11166,7 @@ index 77260b2296..39ee2fca24 100644
  }
  
  static uint32_t& sizeOfImmutable(const void* pointer)
-@@ -288,6 +673,9 @@ static void* mallocImmutable(size_t size, size_t alignment)
+@@ -288,6 +678,9 @@ static void* mallocImmutable(size_t size, size_t alignment)
              }
              pushFreeImmutable(block + units * unit, found - units);
              sizeOfImmutable(block) = static_cast<uint32_t>(size);
@@ -11171,7 +11176,7 @@ index 77260b2296..39ee2fca24 100644
              return block;
          }
      }
-@@ -317,6 +705,9 @@ void* StaticRegion::tryMallocSlow(size_t size, size_t alignment)
+@@ -317,6 +710,9 @@ void* StaticRegion::tryMallocSlow(size_t size, size_t alignment)
                  memcpy(rest - sizeOfHeader, &sizeOfRest, sizeof(sizeOfRest));
                  pushFree(mutableOnes, found - index, rest);
              }
@@ -11181,7 +11186,7 @@ index 77260b2296..39ee2fca24 100644
              return block;
          }
      }
-@@ -347,16 +738,22 @@ void* StaticRegion::reallocate(void* pointer, size_t newSize)
+@@ -347,16 +743,22 @@ void* StaticRegion::reallocate(void* pointer, size_t newSize)
              size_t newUnits = unitsFor(newSize);
              // (Where it is has to do for what it is going to be, too.)
              bool isWhereItMayBe = newSize % 16 || !(reinterpret_cast<uintptr_t>(pointer) & 15);
@@ -11207,7 +11212,7 @@ index 77260b2296..39ee2fca24 100644
                  return pointer;
              }
 diff --git a/Source/bmalloc/bmalloc/StaticRegion.h b/Source/bmalloc/bmalloc/StaticRegion.h
-index c87b01ecf0..7291f1ce54 100644
+index c87b01ecf0..dfbba2aacb 100644
 --- a/Source/bmalloc/bmalloc/StaticRegion.h
 +++ b/Source/bmalloc/bmalloc/StaticRegion.h
 @@ -7,12 +7,45 @@
@@ -11321,8 +11326,8 @@ index c87b01ecf0..7291f1ce54 100644
 +    // anywhere (startOfBlocks()).
 +    static constexpr size_t sizeOfBssInImage = 32 << 20;
 +    static constexpr size_t offsetOfBlocksInBss = sizeOfBssInImage; // (Not where they are: for code that is the same everywhere.)
-+    // Each program realm's block is its 256 MB of room for its compiled code's data and more, and every worker has one: room for
-+    // fifteen at once, as elsewhere. Addresses only (startOfBlocks()).
++    // Each program realm's block is its 256 MB of room for its compiled code's data and a little more, and every worker has one:
++    // room for fifteen at once, as elsewhere. Addresses only (startOfBlocks()).
 +    static constexpr size_t defaultSizeOfBlocks = 4ULL << 30;
 +    // What mapBss() makes writable at once: the strings, symbols, tables, the VM and the global object (2 MB for it). The rest is
 +    // made writable as it is used.

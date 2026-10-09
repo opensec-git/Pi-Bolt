@@ -56,7 +56,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/io/PipeWriter.rs                          |    6 +
  src/jsc/CachedBytecode.rs                     |   36 +
  src/jsc/GarbageCollectionController.rs        |   27 +-
- src/jsc/JSType.rs                             |  144 ++-
+ src/jsc/JSType.rs                             |  144 +-
  src/jsc/VirtualMachine.rs                     |   19 +-
  src/jsc/bindings/BunClientData.cpp            |    8 +-
  src/jsc/bindings/BunClientData.h              |    2 +-
@@ -64,9 +64,9 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/jsc/bindings/FormatStackTraceForJS.cpp    |   27 +-
  src/jsc/bindings/InternalModuleRegistry.cpp   |   15 +-
  src/jsc/bindings/ZigException.cpp             |   14 +-
- src/jsc/bindings/ZigGlobalObject.cpp          |   67 +
- src/jsc/bindings/ZigSourceProvider.cpp        | 1149 ++++++++++++++++-
- src/jsc/bindings/c-bindings.cpp               |  128 ++
+ src/jsc/bindings/ZigGlobalObject.cpp          |   68 +
+ src/jsc/bindings/ZigSourceProvider.cpp        | 1154 ++++++++++++++++-
+ src/jsc/bindings/c-bindings.cpp               |  135 ++
  .../webcore/SerializedScriptValue.cpp         |    9 +
  src/jsc/web_worker.rs                         |    4 +
  src/runtime/api/bun/subprocess.rs             |    2 +-
@@ -79,7 +79,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/spawn_sys/posix_spawn.rs                  |  173 ++-
  src/spawn_sys/spawn_process.rs                |   14 +-
  src/standalone_graph/StandaloneModuleGraph.rs |  254 +++-
- 60 files changed, 2816 insertions(+), 213 deletions(-)
+ 60 files changed, 2829 insertions(+), 213 deletions(-)
  create mode 100644 patches/libuv/win-thread-stack-reservation.patch
  create mode 100644 patches/mimalloc/page-commit-on-demand-default.patch
 
@@ -2727,7 +2727,7 @@ index cfd1059c..e6aa41f7 100644
          uint8_t frame_i = 0;
          size_t stack_frame_i = 0;
 diff --git a/src/jsc/bindings/ZigGlobalObject.cpp b/src/jsc/bindings/ZigGlobalObject.cpp
-index 9de807ad..e7fb2b71 100644
+index 9de807ad..248e5264 100644
 --- a/src/jsc/bindings/ZigGlobalObject.cpp
 +++ b/src/jsc/bindings/ZigGlobalObject.cpp
 @@ -1,4 +1,5 @@
@@ -2736,7 +2736,7 @@ index 9de807ad..e7fb2b71 100644
  
  #include "ZigGlobalObject.h"
  #include "BunModuleRegistry.h"
-@@ -268,6 +269,20 @@ static consteval unsigned getWebKitBytecodeCacheVersion()
+@@ -268,6 +269,19 @@ static consteval unsigned getWebKitBytecodeCacheVersion()
  {
      return WTF::SuperFastHash::computeHash(WEBKIT_BYTECODE_CACHE_HASH_KEY);
  }
@@ -2752,12 +2752,11 @@ index 9de807ad..e7fb2b71 100644
 +extern "C" void Bun__setOptionsForAheadOfTimeCode();
 +extern "C" bool Bun__AOTImage__isMapped();
 +extern "C" bool Bun__AOTImage__executableRunsWithoutJIT();
-+extern "C" bool Bun__AOTImage__executableRunsWithoutJIT();
 +extern "C" void Bun__AOTImage__register();
  #undef WEBKIT_BYTECODE_CACHE_HASH_KEY
  
  // Declare fuzzilli function registration from FuzzilliREPRL.cpp
-@@ -288,6 +303,15 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -288,6 +302,15 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
      static std::once_flag jsc_init_flag;
      // NOLINTBEGIN
      std::call_once(jsc_init_flag, [evalMode, oneShotStartup, shortLivedGlobals, envp, envc, onCrash]() {
@@ -2773,7 +2772,7 @@ index 9de807ad..e7fb2b71 100644
          Bun__ensureICUDefaultLocale();
          JSC::Config::enableRestrictedOptions();
          // JSC options come from BUN_JSC_* (applied in the callback below), not JSC_*.
-@@ -363,6 +387,19 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -363,6 +386,19 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
                  JSC::Options::thresholdForFTLOptimizeAfterWarmUp() = 1000000;
              }
  
@@ -2793,7 +2792,7 @@ index 9de807ad..e7fb2b71 100644
              if (envc > 0) [[likely]] {
                  auto envc_copy = envc;
                  while (envc_copy--) {
-@@ -378,8 +415,38 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -378,8 +414,40 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
                      }
                  }
              }
@@ -2818,6 +2817,8 @@ index 9de807ad..e7fb2b71 100644
 +            }
 +            // A build without the JIT stays without it, its code used or not (BUN_AOT=0, a CPU the code was not compiled for): it
 +            // interprets the bytecode then, rather than make machine code in writable executable memory (ZigSourceProvider.cpp).
++            // (Without Bun__setOptionsForAheadOfTimeCode(), which is for code compiled ahead of time: JSC's own choices for a VM
++            // that interprets everything apply, mini mode's collector among them.)
 +            if (Bun__AOTImage__executableRunsWithoutJIT())
 +                JSC::Options::useJIT() = false;
              JSC::Options::assertOptionsAreCoherent();
@@ -2833,7 +2834,7 @@ index 9de807ad..e7fb2b71 100644
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH
 diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
-index fbfaa2ff..c1517c5a 100644
+index fbfaa2ff..55a0fdb6 100644
 --- a/src/jsc/bindings/ZigSourceProvider.cpp
 +++ b/src/jsc/bindings/ZigSourceProvider.cpp
 @@ -2,6 +2,17 @@
@@ -2911,7 +2912,7 @@ index fbfaa2ff..c1517c5a 100644
  }
  
  extern "C" uint32_t Bun__EncoderStringTable__slotForLatin1(JSC::EncoderStringTable* table, const Latin1Character* chars, size_t length)
-@@ -290,17 +333,1058 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
+@@ -290,17 +333,1063 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
      return generateCachedByteCodeFromSourceCode(sourceProviderURL, inputSourceCode, false, depth, optimize, outputByteCode, outputByteCodeSize, cachedBytecodePtr, externalStrings);
  }
  
@@ -3516,12 +3517,13 @@ index fbfaa2ff..c1517c5a 100644
 +        return fail("the static heap points to memory that is not in the executable (the build's scratch memory, or a running program's blocks)");
 +    // What is left that looks like an address in this process's image, now that its pointers are at the preferred base: a pointer
 +    // that is not on an 8-byte boundary (a packed one), or bytes that were never written and kept an address from the process
-+    // that built the heap. Either would be wrong in another process, and either is told by building twice only by chance. Every
-+    // 4-byte boundary is looked at. Not, between two 8-byte words, one whose low 32 bits are zero: that is the high half of one
-+    // word and the low half of the next, such as a NaN's upper bytes after a zero (0x7ff8...), which an executable loaded just
-+    // below a multiple of 4 GB has in its range (Windows places an image at the same address all through a boot, so such a
-+    // build would fail every time until the next one); a packed pointer to something at a multiple of 4 GB is not one to expect.
++    // that built the heap. Either would be wrong in another process, and either is told by building twice only by chance. One on an
++    // 8-byte boundary fails the build. Between two such words (a 4-byte boundary) it is only said: there it is the halves of two
++    // words, data as often as not (a number's upper half next to another's lower half), and whether it falls in the range of the
++    // executable depends on where Windows loaded the process, which is the same all through a boot, so failing would stop every
++    // build until the next one. (A packed pointer is caught by building twice, -VerifyDeterminism.)
 +    size_t notRelocated = 0;
++    size_t notRelocatedBetweenWords = 0;
 +    for (size_t i = 0; i < inRegion.size(); ++i) {
 +        if (!inRegion[i].hasPointers)
 +            continue;
@@ -3529,8 +3531,12 @@ index fbfaa2ff..c1517c5a 100644
 +        for (size_t at = 0; at + 8 <= bytes.size(); at += 4) {
 +            uint64_t word;
 +            memcpy(&word, bytes.data() + at, 8);
-+            if (at % 8 && !(word & 0xffffffffu))
++            if (at % 8) {
++                if (word >= imageStart && word < endOfExecutable && notRelocatedBetweenWords++ < 3 && getenv("BUN_STATIC_HEAP_VERBOSE"))
++                    fprintf(stderr, "[static heap] between two words, something that looks like an address of this process: %llx, at offset %zu of a part at %x\n",
++                        static_cast<unsigned long long>(word), at, inRegion[i].offsetInRegion);
 +                continue;
++            }
 +            if (word >= imageStart && word < endOfExecutable && notRelocated++ < 10) {
 +                fprintf(stderr, "warning: the static heap has an address of the process that built it that is not relocated (%llx, at offset %zu of a part at %x%s); the bytes around it:",
 +                    static_cast<unsigned long long>(word), at, inRegion[i].offsetInRegion, inRegion[i].characteristics & scnExecute ? ", code" : "");
@@ -3543,7 +3549,7 @@ index fbfaa2ff..c1517c5a 100644
 +        }
 +    }
 +    if (notRelocated)
-+        return fail("the static heap has addresses that cannot be relocated (a pointer not on an 8-byte boundary, or bytes never written)");
++        return fail("the static heap has addresses that cannot be relocated (bytes never written, which kept an address of the process that built it)");
 +    if (taggedWordsMoved != taggedWords.size())
 +        return fail("the static heap's entry words are not all in its parts");
 +    if (getenv("BUN_STATIC_HEAP_VERBOSE")) {
@@ -3971,7 +3977,7 @@ index fbfaa2ff..c1517c5a 100644
      return new JSC::BytecodeLinkEncoder(vm, externalStrings, WTF::move(hints));
  }
  
-@@ -331,6 +1415,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
+@@ -331,6 +1420,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
      return true;
  }
  
@@ -3994,7 +4000,7 @@ index fbfaa2ff..c1517c5a 100644
  // `entryOffsets` has room for one number per successful add* call; `regionEnds` for
  // JSC::BytecodeLinkEncoder::numberOfRegions.
  static_assert(JSC::BytecodeLinkEncoder::numberOfRegions == 6, "bun_resolver::LINKED_BYTECODE_REGION_COUNT");
-@@ -340,6 +1440,51 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
+@@ -340,6 +1445,51 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
      auto result = encoder->finish();
      if (!result.payload || result.entryOffsets.size() != entryOffsetCount)
          return false;
@@ -4047,7 +4053,7 @@ index fbfaa2ff..c1517c5a 100644
      memcpySpan(std::span { regionEnds, JSC::BytecodeLinkEncoder::numberOfRegions }, std::span<const uint32_t> { result.regionEnds });
      *namedHotFunctions = result.namedHotFunctions;
 diff --git a/src/jsc/bindings/c-bindings.cpp b/src/jsc/bindings/c-bindings.cpp
-index a3fd0268..840557f9 100644
+index a3fd0268..6877bbba 100644
 --- a/src/jsc/bindings/c-bindings.cpp
 +++ b/src/jsc/bindings/c-bindings.cpp
 @@ -21,6 +21,7 @@
@@ -4058,7 +4064,7 @@ index a3fd0268..840557f9 100644
  #endif
  #else
  #include <uv.h>
-@@ -32,6 +33,21 @@
+@@ -32,6 +33,28 @@
  #endif // !OS(WINDOWS)
  #include <lshpack.h>
  
@@ -4067,12 +4073,19 @@ index a3fd0268..840557f9 100644
 +// The DLLs the executable delay-loads (/delayload: in scripts/build/flags.ts) are Windows's own: from System32, not from the
 +// executable's folder, which a DLL asked for by name is looked for in first and where a planted copy (next to a download
 +// unzipped in Downloads) would run inside the process. Only these: what a program loads by name itself (bun:ffi, an addon's
-+// own libraries) is looked for as before. (Null if System32 has no such DLL: the loader's own search then, as without this.)
++// own libraries) is looked for as before. If System32 has no such DLL, that is the failure to load it (the exception the
++// delay-load helper raises then), not a search elsewhere.
 +static FARPROC WINAPI loadDelayLoadedDLLFromSystem32(unsigned notification, PDelayLoadInfo info)
 +{
 +    if (notification != dliNotePreLoadLibrary)
 +        return nullptr;
-+    return reinterpret_cast<FARPROC>(LoadLibraryExA(info->szDll, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32));
++    if (HMODULE module = LoadLibraryExA(info->szDll, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32))
++        return reinterpret_cast<FARPROC>(module);
++    DWORD error = GetLastError();
++    ULONG_PTR argument = reinterpret_cast<ULONG_PTR>(info);
++    info->dwLastError = error;
++    RaiseException(VcppException(ERROR_SEVERITY_ERROR, ERROR_MOD_NOT_FOUND), 0, 1, &argument);
++    return nullptr;
 +}
 +extern "C" const PfnDliHook __pfnDliNotifyHook2 = loadDelayLoadedDLLFromSystem32;
 +#endif
@@ -4080,7 +4093,7 @@ index a3fd0268..840557f9 100644
  // Error condition is encoded as max int32_t.
  // The only error in this function is ESRCH (no process found)
  extern "C" int32_t get_process_priority(int32_t pid)
-@@ -857,9 +873,31 @@ extern "C" int32_t open_as_nonblocking_tty(int32_t fd, int32_t mode)
+@@ -857,9 +880,31 @@ extern "C" int32_t open_as_nonblocking_tty(int32_t fd, int32_t mode)
      }
  
      char pathbuf[PATH_MAX + 1];
@@ -4112,7 +4125,7 @@ index a3fd0268..840557f9 100644
  
      return open(pathbuf, mode | O_NONBLOCK | O_NOCTTY | O_CLOEXEC);
  }
-@@ -1182,6 +1220,10 @@ struct BlobHeader {
+@@ -1182,6 +1227,10 @@ struct BlobHeader {
  
  #if OS(DARWIN)
  
@@ -4123,7 +4136,7 @@ index a3fd0268..840557f9 100644
  extern "C" BlobHeader __attribute__((section("__BUN,__bun"))) BUN_COMPILED = { 0, 0 };
  
  extern "C" uint64_t* Bun__getStandaloneModuleGraphMachoLength()
-@@ -1189,6 +1231,92 @@ extern "C" uint64_t* Bun__getStandaloneModuleGraphMachoLength()
+@@ -1189,6 +1238,92 @@ extern "C" uint64_t* Bun__getStandaloneModuleGraphMachoLength()
      return &BUN_COMPILED.size;
  }
  
