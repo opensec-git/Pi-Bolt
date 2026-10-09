@@ -76,11 +76,24 @@ queries before DA1; no timeouts. The behaviour is kept.
    Build time: any WebKit change rebuilds Bun's precompiled header and its ~140 C++ objects (ccache cannot help those): find
    which input makes `pch/root-pch.h.hxx.pch` out of date (`ninja -d explain`). The ThinLTO cache (`/lldltocache`) has not
    shortened a link yet; measure on a quiet machine with `/time`.
-2. **Startup trace and filesystem calls.** About 65 ms of Pi's initialization precedes `tui.start`. Partial work is stashed in the
-   fork (`git stash list`; a copy in `.work\wip\fork-startup-trace-and-heap-magic.diff`): `PI_TTI_TRACE` stages from process
-   start through settings, sessions, models, extensions and tools, and `GetProcessIoCounters` in `bench\winproc.py`. To finish:
-   measure the stages and the operation counts per scenario, then cut probes that cannot succeed.
-3. **Startup mallocs**: what allocates about 3.9 MB at `--version`.
+2. **Startup trace and filesystem calls.** The trace and the bench's I/O counts are committed (5dca41b84). Measured, with one home
+   reused as a user's is (`.work\exp\handoff\tti_stages.py`): ready at ~76 ms; 25 ms to `main()` (the runtime, and evaluating
+   Pi's modules), ~10 ms for the model runtime, ~12 ms for resources and the models' refresh, 4.5 ms for the managed tools,
+   4 ms for settings. A fresh home per run (`tti_probe.py`) adds 13-18 ms that is the on-access scan of files just written,
+   not Pi. File calls (`.work\exp\handoff\fstrace.py`, a debugger on ntdll's file calls): `--version` 4; headless 200 (117
+   failed probes); TUI 277 (128 failed, 45 directory listings). The failed ones repeat: `.agents\skills` and `.git` up every
+   ancestor three times a start, `CLAUDE.md` and `CLAUDE.MD` both (one is enough on a case-insensitive volume, but for a
+   per-directory case-sensitive folder), the gcloud ADC file six times. At ~50-65 µs a probe that is ~3 ms of a TUI start; to
+   cut, in Pi: do the trust check's ancestor walk once per start (main.ts calls it twice), and memoize the walks within one
+   load of resources.
+3. **Startup mallocs**: the private pages at `--version` (1,385) are mostly mimalloc's arena (1,006), and of its commits
+   (`.work\exp\handoff\commitwho.py`, a breakpoint on `_mi_os_commit_ex`, `pdbaddr.py` finds it) about half are JSC's
+   MarkedBlocks: the objects evaluating Pi's modules makes (JSFunctions for top-level functions, Structures and their
+   transitions, objects, environments), then Structure blocks and property tables. Less of it means making fewer of them at
+   start (lazy closures, or a snapshot of evaluated modules): engine work, not a quick one.
+   The static atom table (128 pages at `--version`): ~1,300 of ~4,000 lookups end at an empty entry (strings the program
+   makes that are not static atoms), so a small table in front would not spare the big one; making those strings static atoms
+   too (from a trace) would, and would save making them.
 4. **Streaming CPU profile**: the reply-rendering path (810 ms against 931 ms on stock Bun).
 5. **Plugin rows**: the two OpenSec extensions JIT off against the x64 JIT build; plugin builds in the suite.
 6. **Clean suite** on AC power with nothing else running: floor rows, the default-theme row, the plugin rows; update
