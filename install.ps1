@@ -1,6 +1,6 @@
 # Pi-Bolt installer for Windows (x64).
 #
-#   powershell -c "irm https://pi-bolt.opensec.in/install.ps1 | iex"
+#   powershell -c "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://pi-bolt.opensec.in/install.ps1 | iex"
 #
 # Downloads a release, verifies its SHA-256 checksum and the Ed25519 signature of the checksums, installs it to
 # %USERPROFILE%\.pi-bolt and puts `pi-bolt` on your PATH (it asks first). Run it again to reinstall, update or uninstall. The
@@ -21,6 +21,10 @@
 #   PIBOLT_EXTENSIONS  yes or no: whether to install OpenSec's optional extensions (opensec-pi-subagents, opensec-pi-todo)
 #                    without asking. Without it the installer asks when it can; a run that cannot ask, or PIBOLT_YES=1,
 #                    installs none.
+#   PIBOLT_DOWNLOAD_BASE  a mirror of a release to download everything from (its SHA256SUMS.sig too)
+#   PIBOLT_ALLOW_UNSIGNED=1  install a release whose checksums have no signature (a build of your own); never needed otherwise
+#
+# A folder given in PIBOLT_INSTALL outside your profile is made yours, SYSTEM's and the Administrators' only.
 
 # The public key that releases are signed with (keys/release.pub in the repository; scripts/sign-release.sh).
 $PiBoltReleaseKey = 'MCowBQYDK2VwAyEAoLboJqtKaoISPqffk03vHZr+1sRBG3uIRIWeKOew+aY='
@@ -155,6 +159,8 @@ function Test-PiBoltPrerequisites {
 	# ConPTY, and the console's virtual terminal sequences, which Pi's interface needs: Windows 10 1809 (build 17763).
 	$build = [Environment]::OSVersion.Version.Build
 	if ($build -lt 17763) { $problems += "Pi-Bolt needs Windows 10 version 1809 or later (this is build $build)." }
+	# Windows on ARM runs x64 code from Windows 11 on; Windows 10 on ARM emulates 32-bit x86 only.
+	if ($arch -eq 'ARM64' -and $build -lt 22000) { $problems += "On ARM, Pi-Bolt needs Windows 11, whose x64 emulation runs it (this is Windows 10, build $build)." }
 	foreach ($p in $problems) { [Console]::Error.WriteLine("${red}error:$reset $p") }
 	if ($problems) { throw [System.OperationCanceledException]::new('Pi-Bolt installer') }
 	if ($arch -eq 'ARM64') { Write-Host "  ${dim}note: this is Windows on ARM; Pi-Bolt is x64 code and runs under its emulation$reset" }
@@ -166,7 +172,9 @@ function Test-PiBoltAvx2 {
 		if (-not ('PiBoltInstaller.Cpu' -as [type])) {
 			Add-Type -Namespace PiBoltInstaller -Name Cpu -MemberDefinition '[DllImport("kernel32.dll")] public static extern bool IsProcessorFeaturePresent(uint feature);'
 		}
-		return [PiBoltInstaller.Cpu]::IsProcessorFeaturePresent(40) # PF_AVX2_INSTRUCTIONS_AVAILABLE
+		if ([PiBoltInstaller.Cpu]::IsProcessorFeaturePresent(40)) { return $true } # PF_AVX2_INSTRUCTIONS_AVAILABLE
+		# Windows 10 may not fill that feature in (it is newer than Windows 10's first builds): no is not known there.
+		return [Environment]::OSVersion.Version.Build -lt 22000
 	} catch {
 		return $true # Not known: the default build, which works on any x86-64 CPU all the same.
 	}
@@ -301,28 +309,56 @@ function Get-PiBoltInstalledVersion([string]$dir) {
 # renamed is deleted now if it can be, or by the next installation.
 function Install-PiBoltFiles([string]$from, [string]$to) {
 	if (Test-Path -LiteralPath $to) {
-		Get-ChildItem -LiteralPath $to -Recurse -File -Filter '*.pibolt-old' | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
+		Get-ChildItem -LiteralPath $to -Recurse -File | Where-Object { $_.Name -like '*.pibolt-old' -or $_.Name -like '*.pibolt-new' } |
+			ForEach-Object { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
 	}
 	New-Item -ItemType Directory -Force -Path $to | Out-Null
 	$stamp = [DateTime]::UtcNow.Ticks
 	# pi-bolt.exe last: until it is in place, the one that runs is the old one. (If a move fails part of the way, the files moved
-	# before it are the new ones; the installer says so and stops, and running it again puts the rest in place.)
+	# before it are the new ones; the installer says so and stops, and running it again puts the rest in place.) Each new file is
+	# first moved next to its target (from %TEMP%, perhaps another drive: a copy, which can fail on a full disk), and only then is
+	# the old one renamed aside and the new one renamed into place, in the same folder; if that last step fails, the old one is
+	# put back. A file is never missing because a copy failed.
 	$files = @(Get-ChildItem -LiteralPath $from -Recurse -File | Sort-Object { $_.Name -ieq 'pi-bolt.exe' })
 	foreach ($file in $files) {
 		$relative = $file.FullName.Substring($from.Length).TrimStart('\')
 		$target = Join-Path $to $relative
+		$staged = "$target.$stamp.pibolt-new"
+		$aside = "$target.$stamp.pibolt-old"
 		try {
 			New-Item -ItemType Directory -Force -Path (Split-Path $target) -ErrorAction Stop | Out-Null
-			if (Test-Path -LiteralPath $target) {
-				$aside = "$target.$stamp.pibolt-old"
-				Move-Item -LiteralPath $target -Destination $aside -Force -ErrorAction Stop
-				Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue
+			Move-Item -LiteralPath $file.FullName -Destination $staged -ErrorAction Stop
+			if (Test-Path -LiteralPath $target) { Move-Item -LiteralPath $target -Destination $aside -Force -ErrorAction Stop }
+			try {
+				Move-Item -LiteralPath $staged -Destination $target -ErrorAction Stop
+			} catch {
+				if ((Test-Path -LiteralPath $aside) -and -not (Test-Path -LiteralPath $target)) { Move-Item -LiteralPath $aside -Destination $target -ErrorAction SilentlyContinue }
+				throw
 			}
-			Move-Item -LiteralPath $file.FullName -Destination $target -ErrorAction Stop
+			Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue
 		} catch {
+			Remove-Item -LiteralPath $staged -Force -ErrorAction SilentlyContinue
 			Stop-PiBolt "could not put $target in place ($($_.Exception.Message)). Close Pi-Bolt and anything that has its files open, then run the installer again."
 		}
 	}
+}
+
+# A folder Pi-Bolt is installed in outside the user's profile (PIBOLT_INSTALL=C:\tools\pi-bolt) inherits its parent's
+# permissions, and a folder made in C:\ lets every user change what is in it: anyone on the machine could then replace
+# pi-bolt.exe, which is on this user's PATH. Such a folder is made the user's, SYSTEM's and the Administrators' only.
+function Protect-PiBoltFolder([string]$dir) {
+	$inProfile = foreach ($root in $env:USERPROFILE, $env:LOCALAPPDATA) {
+		if ($root -and $dir.StartsWith($root.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) { $true }
+	}
+	if ($inProfile) { return }
+	$acl = New-Object System.Security.AccessControl.DirectorySecurity
+	$acl.SetAccessRuleProtection($true, $false)
+	$owners = @([Security.Principal.WindowsIdentity]::GetCurrent().User, [Security.Principal.SecurityIdentifier]::new('S-1-5-18'), [Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+	foreach ($sid in $owners) {
+		$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new($sid, 'FullControl', 'ContainerInherit, ObjectInherit', 'None', 'Allow'))
+	}
+	try { Set-Acl -LiteralPath $dir -AclObject $acl -ErrorAction Stop }
+	catch { Write-Host "  ${dim}note: could not limit who can change $dir ($($_.Exception.Message))$reset" }
 }
 
 function Install-PiBoltRelease($state) {
@@ -348,7 +384,8 @@ function Install-PiBoltRelease($state) {
 				Stop-PiBolt "the release's signature does not verify: the download is not Pi-Bolt's. Nothing was installed."
 			}
 			$signed = $true
-		} elseif (-not $env:PIBOLT_DOWNLOAD_BASE) {
+		} elseif ($env:PIBOLT_ALLOW_UNSIGNED -ne '1') {
+			# (A mirror, PIBOLT_DOWNLOAD_BASE, copies the signature too: it is not a reason to do without it.)
 			Stop-PiBolt "the release has no signature (SHA256SUMS.sig), and every Windows release is signed. Nothing was installed."
 		}
 		# The signature covers the files, and the first line says which release they are: without it, an older release (signed all the
@@ -404,6 +441,11 @@ function Install-PiBoltRelease($state) {
 		Show-PiBoltProgress 'checking the executable'
 		$null = & $exe --version 2>&1
 		if ($LASTEXITCODE -ne 0) { Stop-PiBolt 'the downloaded executable does not run on this system' }
+		# (The folder that holds the variant's too, if the installer is making it: whoever may change that may rename the other.)
+		$madeInstall = -not (Test-Path -LiteralPath $state.Install)
+		New-Item -ItemType Directory -Force -Path $state.Dir | Out-Null
+		if ($madeInstall) { Protect-PiBoltFolder $state.Install }
+		Protect-PiBoltFolder $state.Dir
 		Install-PiBoltFiles (Join-Path $unpacked $name) $state.Dir
 		Clear-PiBoltProgress
 		$size = (Get-Item -LiteralPath $file).Length
@@ -616,12 +658,14 @@ function Install-PiBoltExtensions($state) {
 		if ($installed) {
 			# What the package manager installed is a download of its own: its lockfile says what it got.
 			$check = Test-PiBoltInstalledExtension $exe $e
-			if ($check -eq 'different') {
+			if ($check -ne 'same') {
+				# (Not known is not the pin either: what was installed is a download the installer has not seen.)
 				& $exe remove "npm:$spec" *> $null
-				Write-Host "  ${red}removed $spec again: what the package manager installed is not the one this release pins$reset"
+				$why = if ($check -eq 'different') { 'is not the one this release pins' } else { 'cannot be checked against the pin (no lockfile says what it is)' }
+				Write-Host "  ${red}removed $spec again: what the package manager installed $why$reset"
+				Write-Host "  ${dim}Install it yourself if you want it: pi-bolt install npm:$spec$reset"
 				continue
 			}
-			if ($check -eq 'unknown') { Write-Host "  ${dim}note: the package manager's lockfile does not say what it installed of $spec; the registry's package was checked before$reset" }
 		}
 		if ($installed) { Write-Host "  ${green}ok$reset $spec installed" }
 		else {

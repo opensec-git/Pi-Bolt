@@ -328,12 +328,24 @@ test("Windows: a release without a signature is refused from GitHub", async (t) 
 	assertPlaceholder(pkgDir);
 });
 
-test("Windows: from a mirror (PIBOLT_DOWNLOAD_BASE) without a signature, only the checksum is verified, and that is said", async (t) => {
+test("Windows: a mirror (PIBOLT_DOWNLOAD_BASE) without a signature is refused", async (t) => {
+	const release = makeRelease();
+	const { fetch } = fakeFetch(githubRoutes(release, "http://mirror.test/pi-bolt"));
+	const pkgDir = makePackage(t);
+	await assert.rejects(
+		run(pkgDir, { fetch, key: install.RELEASE_KEY, env: { PIBOLT_DOWNLOAD_BASE: "http://mirror.test/pi-bolt/" } }).promise,
+		/has no signature/,
+	);
+	assertPlaceholder(pkgDir);
+});
+
+test("Windows: an unsigned release only with PIBOLT_ALLOW_UNSIGNED=1, and only the checksum is verified, which is said", async (t) => {
 	const mirror = "http://mirror.test/pi-bolt/";
 	const release = makeRelease();
 	const { fetch, asked } = fakeFetch(githubRoutes(release, "http://mirror.test/pi-bolt"));
 	const pkgDir = makePackage(t);
-	const { promise, log } = run(pkgDir, { fetch, key: install.RELEASE_KEY, env: { PIBOLT_DOWNLOAD_BASE: mirror } });
+	const env = { PIBOLT_DOWNLOAD_BASE: mirror, PIBOLT_ALLOW_UNSIGNED: "1" };
+	const { promise, log } = run(pkgDir, { fetch, key: install.RELEASE_KEY, env });
 	assert.deepEqual(await promise, { variant: "x64", from: "http://mirror.test/pi-bolt", signed: false });
 	assert.ok(asked.every((url) => url.startsWith("http://mirror.test/pi-bolt/")));
 	assert.match(log.join("\n"), /note: http:\/\/mirror\.test\/pi-bolt has no signature for this release \(SHA256SUMS\.sig\): only its checksum was verified/);
@@ -411,6 +423,8 @@ test("Windows: an older Windows is refused before anything is downloaded", async
 	assert.match(install.windowsProblems({ PROCESSOR_ARCHITECTURE: "x86" }, WINDOWS_10_1809).join(), /runs on x86-64 \(this is x86\)/);
 	assert.deepEqual(install.windowsProblems({ PROCESSOR_ARCHITECTURE: "x86", PROCESSOR_ARCHITEW6432: "AMD64" }, WINDOWS_10_1809), []);
 	assert.deepEqual(install.windowsProblems({ PROCESSOR_ARCHITECTURE: "ARM64" }, "10.0.26100"), []);
+	// Windows 10 on ARM has no x64 emulation.
+	assert.match(install.windowsProblems({ PROCESSOR_ARCHITECTURE: "ARM64" }, "10.0.19045").join(), /On ARM, Pi-Bolt needs Windows 11/);
 });
 
 test("Windows: installing again replaces the files that are there", async (t) => {

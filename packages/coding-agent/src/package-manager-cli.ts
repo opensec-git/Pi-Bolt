@@ -38,6 +38,7 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/tru
 import {
 	PIBOLT,
 	PIBOLT_INSTALL_COMMAND,
+	piBoltExecutableIn,
 	piBoltInstallerProcess,
 	piBoltInstallMethod,
 	piBoltUpdateEnvironment,
@@ -715,7 +716,7 @@ async function runPiBoltSelfUpdate(version: string): Promise<boolean> {
 		const installer = piBoltInstallerProcess();
 		const child = spawnProcess(installer.command, installer.args, {
 			stdio: "inherit",
-			env: piBoltUpdateEnvironment(),
+			env: piBoltUpdateEnvironment(version),
 		});
 		child.on("error", reject);
 		child.on("close", (code) => resolve(code));
@@ -725,6 +726,14 @@ async function runPiBoltSelfUpdate(version: string): Promise<boolean> {
 	});
 	if (status !== 0) {
 		console.error(chalk.red(`The installer did not finish. You can run it yourself: ${PIBOLT_INSTALL_COMMAND}`));
+		return false;
+	}
+	// What is there now says which version it is: an update that left the old one in place is not reported as done.
+	const installed = piBoltExecutableIn(piBoltUpdateEnvironment(version).PIBOLT_INSTALL ?? "");
+	const check = spawnProcessSync(installed, ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	if (check.status !== 0 || !check.stdout.includes(`Pi-Bolt ${version}`)) {
+		console.error(chalk.red(`The installer finished, but ${installed} is not Pi-Bolt ${version}.`));
+		console.error(chalk.red(`You can run the installer yourself: ${PIBOLT_INSTALL_COMMAND}`));
 		return false;
 	}
 	console.log(chalk.green(`Updated Pi-Bolt from ${PIBOLT?.version} to ${version}`));

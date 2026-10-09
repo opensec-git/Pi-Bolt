@@ -14,7 +14,8 @@
 //   PIBOLT_VARIANT        x64 (the default), x64-baseline (picked when the CPU has no AVX2 and the release has it) or x64-jit
 //   PIBOLT_SOURCE         auto (npm, then GitHub; the default), npm or github
 //   PIBOLT_NPM_REGISTRY   the npm registry or mirror to download the build from (default: https://registry.npmjs.org)
-//   PIBOLT_DOWNLOAD_BASE  a mirror of the release to download everything from instead
+//   PIBOLT_DOWNLOAD_BASE  a mirror of the release to download everything from instead (its SHA256SUMS.sig too)
+//   PIBOLT_ALLOW_UNSIGNED=1  install a release whose checksums have no signature (a build of one's own)
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -48,7 +49,7 @@ function checksumOf(sums, name) {
 /**
  * Checks the release's SHA256SUMS before anything else in the release is looked at: its signature by the release key, and
  * that its first line says it is `version` (otherwise an older release, signed all the same, could be served as this one).
- * A release without a signature is refused, except from a mirror (PIBOLT_DOWNLOAD_BASE), as install.ps1 does; the caller
+ * A release without a signature is refused, unless PIBOLT_ALLOW_UNSIGNED=1 (a build of one's own), as install.ps1 does; the caller
  * then says that only the checksum was verified. Returns whether the signature was verified, and the checksums as text.
  */
 function checkSums({ sums, signature, version, key = RELEASE_KEY, unsignedAllowed = false }) {
@@ -221,6 +222,8 @@ async function extractFromTgz(tgz, wanted, out) {
 					nextName = undefined;
 				}
 				if (type === "x" || type === "L") {
+					// (A name: a few hundred bytes. Read before anything is verified, so a record is not let fill memory.)
+					if (size > 65536) fail("the npm package's archive has a name record too long to be one: it is damaged. Nothing was installed.");
 					record = [];
 					recordType = type;
 				} else if ((type === "0" || type === "\0") && name === wanted && !found) {
@@ -343,6 +346,10 @@ function windowsProblems(env, release = os.release()) {
 	// ConPTY, and the console's virtual terminal sequences, which Pi's interface needs: Windows 10 1809 (build 17763).
 	const build = Number(release.split(".")[2]) || 0;
 	if (build < 17763) problems.push(`Pi-Bolt needs Windows 10 version 1809 or later (this is build ${build}).`);
+	// Windows on ARM runs x64 code from Windows 11 on; Windows 10 on ARM emulates 32-bit x86 only.
+	if (/^(ARM64|arm64)$/.test(arch) && build >= 17763 && build < 22000) {
+		problems.push(`On ARM, Pi-Bolt needs Windows 11, whose x64 emulation runs it (this is Windows 10, build ${build}).`);
+	}
 	return problems;
 }
 
@@ -356,7 +363,9 @@ function hasAvx2() {
 		timeout: 60000,
 		windowsHide: true,
 	});
-	return result.status !== 0 || result.stdout.trim() !== "False";
+	// (Windows 10 may not fill that feature in: no is only known from Windows 11 on.)
+	const build = Number(os.release().split(".")[2]) || 0;
+	return result.status !== 0 || result.stdout.trim() !== "False" || build < 22000;
 }
 
 function runsVersion(exe) {
@@ -404,14 +413,24 @@ function moveFiles(from, to, stamp, last) {
 			moveFiles(source, target, stamp);
 			continue;
 		}
+		const aside = `${target}.${stamp}.pibolt-old`;
+		if (existing) fs.renameSync(target, aside);
+		try {
+			fs.renameSync(source, target);
+		} catch (error) {
+			// (The old one back, rather than none: the command keeps working.)
+			if (existing && !fs.existsSync(target)) {
+				try {
+					fs.renameSync(aside, target);
+				} catch {}
+			}
+			throw error;
+		}
 		if (existing) {
-			const aside = `${target}.${stamp}.pibolt-old`;
-			fs.renameSync(target, aside);
 			try {
 				fs.rmSync(aside, { recursive: true, force: true });
 			} catch {}
 		}
-		fs.renameSync(source, target);
 	}
 }
 
@@ -446,7 +465,8 @@ async function installWindows({
 		const sums = await fetchBytes(fetchImpl, `${base}/SHA256SUMS`);
 		if (!sums) fail(`download failed: ${base}/SHA256SUMS`);
 		const signature = await fetchBytes(fetchImpl, `${base}/SHA256SUMS.sig`);
-		const { signed, text } = checkSums({ sums, signature, version, key, unsignedAllowed: Boolean(mirror) });
+		// (A mirror copies the signature too; only a build of one's own, PIBOLT_ALLOW_UNSIGNED=1, has none.)
+		const { signed, text } = checkSums({ sums, signature, version, key, unsignedAllowed: env.PIBOLT_ALLOW_UNSIGNED === "1" });
 		if (!variant) {
 			variant = "x64";
 			if (checksumOf(text, "pi-bolt-win32-x64-baseline.zip") && !avx2()) variant = "x64-baseline";
@@ -570,7 +590,7 @@ if (require.main === module) {
 			console.error(`pi-bolt: downloads went through the proxy ${proxy.replace(/\/\/[^@/]*@/, "//")}; a Node.js older than 22.21 or 24.5 cannot use one (NODE_USE_ENV_PROXY)`);
 		}
 		if (process.platform === "win32") {
-			console.error('pi-bolt: Pi-Bolt was not installed. Try again, or install it with: powershell -c "irm https://pi-bolt.opensec.in/install.ps1 | iex"');
+			console.error('pi-bolt: Pi-Bolt was not installed. Try again, or install it with: powershell -c "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://pi-bolt.opensec.in/install.ps1 | iex"');
 		}
 		process.exitCode = 1;
 	});

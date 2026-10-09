@@ -5,7 +5,7 @@
  * variant (x64, x64-baseline, x64-jit, arm64), and whether the JIT is on). In every other build it is undefined and nothing here changes what Pi does.
  */
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 declare const PIBOLT_BUILD: string | undefined;
 
@@ -19,9 +19,13 @@ export const PIBOLT: PiBoltBuild | undefined = parse(typeof PIBOLT_BUILD === "st
 
 export const PIBOLT_INSTALL_URL =
 	process.platform === "win32" ? "https://pi-bolt.opensec.in/install.ps1" : "https://pi-bolt.opensec.in/install.sh";
+// TLS 1.2 before the first download: Windows PowerShell 5.1 on an older Windows 10 offers only TLS 1.0 by default, which the
+// site refuses, and the installer turns it on only once it is running.
+const WINDOWS_TLS12 =
+	"[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072";
 export const PIBOLT_INSTALL_COMMAND =
 	process.platform === "win32"
-		? `powershell -c "irm ${PIBOLT_INSTALL_URL} | iex"`
+		? `powershell -c "${WINDOWS_TLS12}; irm ${PIBOLT_INSTALL_URL} | iex"`
 		: `curl -fsSL ${PIBOLT_INSTALL_URL} | sh`;
 /** The installer as a command to spawn (with piBoltUpdateEnvironment()): it exits non-zero if it did not install. */
 export function piBoltInstallerProcess(): { command: string; args: string[] } {
@@ -40,7 +44,7 @@ export function piBoltInstallerProcess(): { command: string; args: string[] } {
 			args: [
 				"-NoProfile",
 				"-Command",
-				`try { $installer = irm ${PIBOLT_INSTALL_URL} -ErrorAction Stop } catch { Write-Error $_; exit 1 }; iex $installer; exit $LASTEXITCODE`,
+				`${WINDOWS_TLS12}; try { $installer = irm ${PIBOLT_INSTALL_URL} -ErrorAction Stop } catch { Write-Error $_; exit 1 }; iex $installer; exit $LASTEXITCODE`,
 			],
 		};
 	}
@@ -74,16 +78,39 @@ export function piBoltInstallMethod(): "npm" | "installer" {
 	return /[\\/]node_modules[\\/]pi-bolt[\\/]bin[\\/]pi-bolt\.exe$/i.test(execPath) ? "npm" : "installer";
 }
 
-/** The environment that makes the installer replace this installation with the latest release, keeping its variant and place. */
-export function piBoltUpdateEnvironment(): NodeJS.ProcessEnv {
-	// ~/.pi-bolt/pi-bolt-linux-x64/pi (or pi-bolt-darwin-arm64/pi, pi-bolt-win32-x64\pi-bolt.exe) -> ~/.pi-bolt
-	const installDir = join(process.execPath, "..", "..");
-	return {
+/**
+ * Where this installation is: the folder that holds its variant's folder (~/.pi-bolt/pi-bolt-linux-x64/pi, or
+ * pi-bolt-darwin-arm64/pi, pi-bolt-win32-x64\pi-bolt.exe -> ~/.pi-bolt), wherever that is; undefined for an executable that is
+ * not in one.
+ */
+export function piBoltInstallDir(): string | undefined {
+	const variantDir = dirname(process.execPath);
+	return /^pi-bolt-(linux|darwin|win32)-/i.test(basename(variantDir)) ? dirname(variantDir) : undefined;
+}
+
+/**
+ * The environment that makes the installer replace this installation with release `version`, keeping its variant and place.
+ * The version is the one the update was decided on (not "latest" again), and what in the user's environment would change
+ * where the release comes from (a mirror, which may be unsigned; the npm launcher's mode; the source) is left out.
+ */
+export function piBoltUpdateEnvironment(version: string): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = {
 		...process.env,
 		PIBOLT_YES: "1",
 		PIBOLT_NO_START: "1",
 		PIBOLT_VARIANT: PIBOLT?.variant ?? "x64",
-		PIBOLT_INSTALL:
-			process.env.PIBOLT_INSTALL ?? (installDir.startsWith(homedir()) ? installDir : join(homedir(), ".pi-bolt")),
+		PIBOLT_VERSION: `bolt-v${version}`,
+		PIBOLT_INSTALL: piBoltInstallDir() ?? process.env.PIBOLT_INSTALL ?? join(homedir(), ".pi-bolt"),
 	};
+	for (const name of ["PIBOLT_DOWNLOAD_BASE", "PIBOLT_LAUNCHER", "PIBOLT_SOURCE", "PIBOLT_ALLOW_UNSIGNED"]) {
+		delete env[name];
+	}
+	return env;
+}
+
+/** The executable the installer puts in `installDir` for this variant. */
+export function piBoltExecutableIn(installDir: string): string {
+	const platform = process.platform === "win32" ? "win32" : process.platform;
+	const folder = `pi-bolt-${platform}-${PIBOLT?.variant ?? "x64"}`;
+	return join(installDir, folder, process.platform === "win32" ? "pi-bolt.exe" : "pi");
 }
