@@ -59,7 +59,7 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  .../bytecode/UnlinkedGlobalCodeBlock.h        |    5 +-
  .../dfg/DFGAbstractInterpreterInlines.h       |    6 +-
  Source/JavaScriptCore/ffi/FFICallHost.cpp     |    4 +-
- Source/JavaScriptCore/heap/StaticHeap.cpp     |  421 +-
+ Source/JavaScriptCore/heap/StaticHeap.cpp     |  423 +-
  Source/JavaScriptCore/heap/StaticHeap.h       |   56 +-
  .../heap/StructureAlignedMemoryAllocator.cpp  |    5 +-
  .../remote/socket/RemoteInspectorSocket.cpp   |    4 +-
@@ -96,12 +96,12 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  Source/WTF/wtf/Hasher.h                       |    4 +-
  Source/WTF/wtf/SysVCall.h                     |   49 +
  Source/WTF/wtf/text/AtomStringTable.h         |   24 +-
- Source/bmalloc/bmalloc/StaticRegion.cpp       |  380 +-
- Source/bmalloc/bmalloc/StaticRegion.h         |   92 +-
+ Source/bmalloc/bmalloc/StaticRegion.cpp       |  417 +-
+ Source/bmalloc/bmalloc/StaticRegion.h         |   94 +-
  Source/cmake/WebKitCompilerFlags.cmake        |    4 +-
  Source/cmake/WebKitMacros.cmake               |   28 +-
  build-icu.ps1                                 |   49 +-
- 83 files changed, 7811 insertions(+), 361 deletions(-)
+ 83 files changed, 7852 insertions(+), 361 deletions(-)
  create mode 100644 Source/JavaScriptCore/aot/AOTStubsX86_64.cpp
  create mode 100644 Source/JavaScriptCore/runtime/ReportableSitesOfFunction.h
  create mode 100644 Source/WTF/wtf/SysVCall.h
@@ -7868,7 +7868,7 @@ index f8e046f978..6f0a26fb9a 100644
  
      RELEASE_AND_RETURN(scope, JSValue::encode(jsValueFromSlot(globalObject, context, signature.returnType(), slots[argumentCount])));
 diff --git a/Source/JavaScriptCore/heap/StaticHeap.cpp b/Source/JavaScriptCore/heap/StaticHeap.cpp
-index 96edcf1624..6f7cbe8fdb 100644
+index 96edcf1624..8f1415aa47 100644
 --- a/Source/JavaScriptCore/heap/StaticHeap.cpp
 +++ b/Source/JavaScriptCore/heap/StaticHeap.cpp
 @@ -14,6 +14,7 @@
@@ -8401,7 +8401,7 @@ index 96edcf1624..6f7cbe8fdb 100644
      // Cells are as they would be in the VM that is going to have them, after a collection that found them.
      auto structures = structuresOf(vm);
      uint32_t blockOfStructures = vm.structureStructure->id().bits() & ~static_cast<uint32_t>(MarkedBlock::blockSize - 1);
-@@ -1691,13 +1915,49 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
+@@ -1691,13 +1915,51 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
      AtomStringTable* atoms = Thread::currentSingleton().atomStringTable();
      if (!atoms->table().isEmpty())
          return false;
@@ -8427,7 +8427,9 @@ index 96edcf1624..6f7cbe8fdb 100644
 +            return false;
 +        uint64_t inArena = header.strings - header.regionBase - (Region::startOf(Region::Arena::Data) - Region::base());
 +        size_t compared = std::min<size_t>(header.stringsSize, 4096);
-+        if (!compared || inArena + compared > header.arenaSize[data] || (header.sizeOfHoleInData && inArena + compared > header.holeInData))
++        // (Without a sum that could wrap: a header that is not this engine's says no, rather than send the compare elsewhere.)
++        if (!compared || inArena > header.arenaSize[data] || compared > header.arenaSize[data] - inArena
++            || (header.sizeOfHoleInData && (inArena > header.holeInData || compared > header.holeInData - inArena)))
 +            return false;
 +        auto* inRegion = reinterpret_cast<const uint8_t*>(Region::startOf(Region::Arena::Data) + inArena);
 +        uint64_t inImage = header.sampleOfStrings ? header.sampleOfStrings : header.arenaOffset[data] + inArena;
@@ -8452,7 +8454,7 @@ index 96edcf1624..6f7cbe8fdb 100644
      for (unsigned i = 0; i < Region::numberOfArenasInFile; ++i) {
          // (Some of it mapped and the rest not is nothing that anybody gets to see.)
          if (static_cast<Region::Arena>(i) == Region::Arena::Data && header.sizeOfHoleInData) {
-@@ -1710,14 +1970,98 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
+@@ -1710,14 +1972,98 @@ bool StaticHeap::map(std::span<const uint8_t> image, int fileDescriptor, off_t o
          if (!Region::map(static_cast<Region::Arena>(i), fileDescriptor, offsetInFile + header.arenaOffset[i], header.arenaSize[i]))
              return false;
      }
@@ -8555,7 +8557,7 @@ index 96edcf1624..6f7cbe8fdb 100644
  void StaticHeap::prepareThread()
  {
      if (!s_header || !s_vm || t_threadIsPrepared)
-@@ -1725,7 +2069,8 @@ void StaticHeap::prepareThread()
+@@ -1725,7 +2071,8 @@ void StaticHeap::prepareThread()
      AtomStringTable* atoms = Thread::currentSingleton().atomStringTable();
      if (!atoms->table().isEmpty())
          return;
@@ -10666,10 +10668,10 @@ index 9f18146bf2..8f6bbed8d6 100644
                      return string;
              }
 diff --git a/Source/bmalloc/bmalloc/StaticRegion.cpp b/Source/bmalloc/bmalloc/StaticRegion.cpp
-index 77260b2296..ab6ec08785 100644
+index 77260b2296..39ee2fca24 100644
 --- a/Source/bmalloc/bmalloc/StaticRegion.cpp
 +++ b/Source/bmalloc/bmalloc/StaticRegion.cpp
-@@ -7,33 +7,317 @@
+@@ -7,33 +7,354 @@
  
  #include "BAssert.h"
  #include "BPlatform.h"
@@ -10814,9 +10816,20 @@ index 77260b2296..ab6ec08785 100644
 +// BUN_STATIC_HEAP_WRITES=1 makes such a page writable instead (the page is then the process's, as it would be on Linux, where
 +// they are private mappings of the file; about 5 µs a page), and says where the first write to it was: the code's address as an
 +// offset in the executable, and where in which arena. BUN_STATIC_HEAP_WRITES=all says where every write is: the page is writable
-+// for the one instruction (the trap flag), then read-only again. Both are for finding out what belongs in a mutable arena.
++// for the one instruction (the trap flag), then read-only again. Both are for finding out what belongs in a mutable arena, and
++// only a runtime built for it has them (debug builds, or PIBOLT_STATIC_HEAP_WRITES defined): in a release runtime the environment
++// cannot turn the fault into a write that goes through. Read once, at startup (initializeLayout()), not in the handler.
 +static std::atomic<size_t> s_pagesMadeWritable { 0 };
 +static thread_local uintptr_t t_pageToMakeReadOnly { 0 };
++static const char* s_writesMode { nullptr };
++static const char* writesModeFromEnvironment()
++{
++#if !defined(NDEBUG) || defined(PIBOLT_STATIC_HEAP_WRITES)
++    return getenv("BUN_STATIC_HEAP_WRITES");
++#else
++    return nullptr;
++#endif
++}
 +static LONG CALLBACK makeImmutablePageWritable(EXCEPTION_POINTERS* pointers)
 +{
 +    auto* record = pointers->ExceptionRecord;
@@ -10837,8 +10850,8 @@ index 77260b2296..ab6ec08785 100644
 +    MEMORY_BASIC_INFORMATION info;
 +    if (!VirtualQuery(reinterpret_cast<void*>(address), &info, sizeof(info)) || info.Protect != PAGE_READONLY)
 +        return EXCEPTION_CONTINUE_SEARCH;
-+    static const char* mode = getenv("BUN_STATIC_HEAP_WRITES");
-+    static const bool everyWrite = mode && !strcmp(mode, "all");
++    const char* mode = s_writesMode;
++    const bool everyWrite = mode && !strcmp(mode, "all");
 +    uintptr_t image = reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr));
 +    static constexpr const char* names[] = { "Data", "Malloc", "Cells" };
 +    unsigned arena = address >= StaticRegion::startOf(StaticRegion::Arena::Cells) ? 2 : address >= StaticRegion::startOf(StaticRegion::Arena::Malloc) ? 1 : 0;
@@ -10859,6 +10872,31 @@ index 77260b2296..ab6ec08785 100644
 +        pointers->ContextRecord->EFlags |= 0x100; // TF: back here after the one instruction
 +    }
 +    return EXCEPTION_CONTINUE_EXECUTION;
++}
++
++// The blocks hold each realm's AOT::Instance (its runtime table, VM and global object): in a program with a static heap, at a
++// random place, which Windows's top-down placement is not (a few bits of it), between 16 TB and the top of the 128 TB of user
++// addresses. ProcessPrng is Windows's generator (bcryptprimitives.dll, which the executable imports, so it is loaded); top-down if
++// it is not there. A process that builds a heap keeps them at the top: the writer of an executable refuses a heap that points to
++// them, and there a pair of 32-bit numbers looks like such a pointer only if its first is one of the few largest.
++static void* reserveBlocks(size_t size, bool atRandom)
++{
++    if (!atRandom)
++        return VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE);
++    using ProcessPrngFunction = BOOL(WINAPI*)(PBYTE, SIZE_T);
++    HMODULE primitives = GetModuleHandleW(L"bcryptprimitives.dll");
++    auto prng = primitives ? reinterpret_cast<ProcessPrngFunction>(GetProcAddress(primitives, "ProcessPrng")) : nullptr;
++    constexpr uintptr_t lowest = static_cast<uintptr_t>(16) << 40;
++    constexpr uintptr_t highest = static_cast<uintptr_t>(0x7f00) << 32;
++    for (unsigned attempt = 0; prng && attempt < 16; ++attempt) {
++        uint64_t random = 0;
++        if (!prng(reinterpret_cast<PBYTE>(&random), sizeof(random)))
++            break;
++        uintptr_t hint = (lowest + static_cast<uintptr_t>(random % (highest - size - lowest))) & ~static_cast<uintptr_t>(0xffff);
++        if (void* blocks = VirtualAlloc(reinterpret_cast<void*>(hint), size, MEM_RESERVE, PAGE_READWRITE))
++            return blocks;
++    }
++    return VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE);
 +}
 +
 +size_t StaticRegion::pagesMadeWritable()
@@ -10909,12 +10947,13 @@ index 77260b2296..ab6ec08785 100644
 +    else {
 +        // An executable with a static heap: its immutable arenas are read-only (Bun__StaticHeap__rewritePE()). Before anything
 +        // else that handles exceptions (Bun's crash handler is the last), so that a write there is not taken for a crash.
++        s_writesMode = writesModeFromEnvironment();
 +        AddVectoredExceptionHandler(1, makeImmutablePageWritable);
 +    }
-+    // StaticHeap::allocateBlock()'s blocks: addresses only, committed as they are used. At the top of the address space, where an
++    // StaticHeap::allocateBlock()'s blocks: addresses only, committed as they are used. High in the address space, where an
 +    // address looks like no small number (the writer of an executable refuses a heap that points to them, and a pair of 32-bit
 +    // numbers would otherwise look like an address of theirs).
-+    if (void* blocks = VirtualAlloc(nullptr, defaultSizeOfBlocks, MEM_RESERVE | MEM_TOP_DOWN, PAGE_READWRITE)) {
++    if (void* blocks = reserveBlocks(defaultSizeOfBlocks, s_layout.magic == StaticRegionLayout::expectedMagic)) {
 +        s_layout.blocksStart = reinterpret_cast<uintptr_t>(blocks);
 +        s_layout.blocksSize = defaultSizeOfBlocks;
 +    }
@@ -10989,7 +11028,7 @@ index 77260b2296..ab6ec08785 100644
          munmap(result, size);
          return false;
      }
-@@ -47,6 +331,7 @@ bool StaticRegion::beginBuilding()
+@@ -47,6 +368,7 @@ bool StaticRegion::beginBuilding()
      memset(s_used, 0, sizeof(s_used));
      s_isBuilding = true;
      return true;
@@ -10997,7 +11036,7 @@ index 77260b2296..ab6ec08785 100644
  }
  
  void StaticRegion::endBuilding()
-@@ -55,8 +340,16 @@ void StaticRegion::endBuilding()
+@@ -55,8 +377,16 @@ void StaticRegion::endBuilding()
      s_isBuilding = false;
      ::free(std::exchange(s_sizes, nullptr));
      s_capacityOfSizes = 0;
@@ -11015,7 +11054,7 @@ index 77260b2296..ab6ec08785 100644
  }
  
  void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t misalignment)
-@@ -64,8 +357,12 @@ void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t
+@@ -64,8 +394,12 @@ void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t
      RELEASE_BASSERT(s_isBuilding && alignment && !(alignment & (alignment - 1)) && misalignment < alignment);
      size_t& used = s_used[static_cast<size_t>(arena)];
      size_t offset = ((used + alignment - 1 - misalignment) & ~(alignment - 1)) + misalignment;
@@ -11029,7 +11068,7 @@ index 77260b2296..ab6ec08785 100644
      return reinterpret_cast<void*>(startOf(arena) + offset);
  }
  
-@@ -107,22 +404,72 @@ bool StaticRegion::isAllocatingMutable()
+@@ -107,22 +441,72 @@ bool StaticRegion::isAllocatingMutable()
      return t_isAllocatingMutable;
  }
  
@@ -11105,7 +11144,7 @@ index 77260b2296..ab6ec08785 100644
      void* wanted = reinterpret_cast<void*>(startOf(arena) + offsetInArena);
      if (arena == Arena::Image) {
          void* result = mmap(wanted, size, isCode ? PROT_READ | PROT_EXEC : PROT_READ, MAP_PRIVATE, fileDescriptor, offsetInFile);
-@@ -147,6 +494,7 @@ bool StaticRegion::map(Arena arena, int fileDescriptor, off_t offsetInFile, size
+@@ -147,6 +531,7 @@ bool StaticRegion::map(Arena arena, int fileDescriptor, off_t offsetInFile, size
          return false;
      }
      return true;
@@ -11113,7 +11152,7 @@ index 77260b2296..ab6ec08785 100644
  }
  
  // In Arena::MutableMalloc, what is asked for is preceded by how much was asked for: it may be given back, or be found too small,
-@@ -160,7 +508,7 @@ static constexpr size_t unit = 8;
+@@ -160,7 +545,7 @@ static constexpr size_t unit = 8;
  
  static bool isInImmutableMalloc(const void* pointer)
  {
@@ -11122,7 +11161,7 @@ index 77260b2296..ab6ec08785 100644
  }
  
  static uint32_t& sizeOfImmutable(const void* pointer)
-@@ -288,6 +636,9 @@ static void* mallocImmutable(size_t size, size_t alignment)
+@@ -288,6 +673,9 @@ static void* mallocImmutable(size_t size, size_t alignment)
              }
              pushFreeImmutable(block + units * unit, found - units);
              sizeOfImmutable(block) = static_cast<uint32_t>(size);
@@ -11132,7 +11171,7 @@ index 77260b2296..ab6ec08785 100644
              return block;
          }
      }
-@@ -317,6 +668,9 @@ void* StaticRegion::tryMallocSlow(size_t size, size_t alignment)
+@@ -317,6 +705,9 @@ void* StaticRegion::tryMallocSlow(size_t size, size_t alignment)
                  memcpy(rest - sizeOfHeader, &sizeOfRest, sizeof(sizeOfRest));
                  pushFree(mutableOnes, found - index, rest);
              }
@@ -11142,7 +11181,7 @@ index 77260b2296..ab6ec08785 100644
              return block;
          }
      }
-@@ -347,16 +701,22 @@ void* StaticRegion::reallocate(void* pointer, size_t newSize)
+@@ -347,16 +738,22 @@ void* StaticRegion::reallocate(void* pointer, size_t newSize)
              size_t newUnits = unitsFor(newSize);
              // (Where it is has to do for what it is going to be, too.)
              bool isWhereItMayBe = newSize % 16 || !(reinterpret_cast<uintptr_t>(pointer) & 15);
@@ -11168,7 +11207,7 @@ index 77260b2296..ab6ec08785 100644
                  return pointer;
              }
 diff --git a/Source/bmalloc/bmalloc/StaticRegion.h b/Source/bmalloc/bmalloc/StaticRegion.h
-index c87b01ecf0..c6cb175ec2 100644
+index c87b01ecf0..7291f1ce54 100644
 --- a/Source/bmalloc/bmalloc/StaticRegion.h
 +++ b/Source/bmalloc/bmalloc/StaticRegion.h
 @@ -7,12 +7,45 @@
@@ -11269,7 +11308,7 @@ index c87b01ecf0..c6cb175ec2 100644
      // What is where in Arena::Bss.
      static constexpr size_t offsetOfEmptyStringInBss = 0; // WTF::StringImpl::empty()
      static constexpr size_t offsetOfSymbolsInBss = 64; // JSC::Symbols
-@@ -88,10 +149,29 @@ public:
+@@ -88,10 +149,31 @@ public:
      static constexpr size_t offsetOfVTablesInBss = 256 * 1024;
      static constexpr size_t offsetOfVMInBss = 1 << 20;
      static constexpr size_t offsetOfGlobalObjectInBss = 2 << 20;
@@ -11282,7 +11321,9 @@ index c87b01ecf0..c6cb175ec2 100644
 +    // anywhere (startOfBlocks()).
 +    static constexpr size_t sizeOfBssInImage = 32 << 20;
 +    static constexpr size_t offsetOfBlocksInBss = sizeOfBssInImage; // (Not where they are: for code that is the same everywhere.)
-+    static constexpr size_t defaultSizeOfBlocks = 352ULL << 20; // A realm's 256 MB of room for its compiled code's data, and more.
++    // Each program realm's block is its 256 MB of room for its compiled code's data and more, and every worker has one: room for
++    // fifteen at once, as elsewhere. Addresses only (startOfBlocks()).
++    static constexpr size_t defaultSizeOfBlocks = 4ULL << 30;
 +    // What mapBss() makes writable at once: the strings, symbols, tables, the VM and the global object (2 MB for it). The rest is
 +    // made writable as it is used.
 +    static constexpr size_t sizeOfBssMadeWritableAtStart = offsetOfGlobalObjectInBss + (2 << 20);
@@ -11299,7 +11340,7 @@ index c87b01ecf0..c6cb175ec2 100644
  
      // False if the addresses are taken. `offsetInArena` and the rest are multiples of the size of a page.
      BEXPORT static bool map(Arena, int fileDescriptor, off_t offsetInFile, size_t, size_t offsetInArena = 0, bool isCode = false);
-@@ -116,6 +196,10 @@ public:
+@@ -116,6 +198,10 @@ public:
  private:
      BEXPORT static void didFreeSlow(void*);
      BEXPORT static void* tryMallocSlow(size_t, size_t alignment);

@@ -21,6 +21,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
 ---
  .../libuv/win-thread-stack-reservation.patch  |   19 +
  .../page-commit-on-demand-default.patch       |   22 +
+ scripts/build/CLAUDE.md                       |    2 +-
  scripts/build/binary-expectations.ts          |   32 +-
  scripts/build/bun.ts                          |   18 +-
  scripts/build/deps/libuv.ts                   |    7 +-
@@ -28,7 +29,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  scripts/build/deps/webkit.ts                  |   56 +-
  scripts/build/download.ts                     |   28 +-
  scripts/build/fetch-cli.ts                    |   39 +-
- scripts/build/flags.ts                        |   32 +-
+ scripts/build/flags.ts                        |   39 +-
  scripts/build/ninja.ts                        |    1 +
  scripts/build/rust.ts                         |    3 +
  scripts/build/source.ts                       |   10 +
@@ -55,7 +56,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/io/PipeWriter.rs                          |    6 +
  src/jsc/CachedBytecode.rs                     |   36 +
  src/jsc/GarbageCollectionController.rs        |   27 +-
- src/jsc/JSType.rs                             |  144 +--
+ src/jsc/JSType.rs                             |  144 ++-
  src/jsc/VirtualMachine.rs                     |   19 +-
  src/jsc/bindings/BunClientData.cpp            |    8 +-
  src/jsc/bindings/BunClientData.h              |    2 +-
@@ -63,13 +64,14 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/jsc/bindings/FormatStackTraceForJS.cpp    |   27 +-
  src/jsc/bindings/InternalModuleRegistry.cpp   |   15 +-
  src/jsc/bindings/ZigException.cpp             |   14 +-
- src/jsc/bindings/ZigGlobalObject.cpp          |   51 +
- src/jsc/bindings/ZigSourceProvider.cpp        | 1125 ++++++++++++++++-
- src/jsc/bindings/c-bindings.cpp               |  113 ++
+ src/jsc/bindings/ZigGlobalObject.cpp          |   67 +
+ src/jsc/bindings/ZigSourceProvider.cpp        | 1149 ++++++++++++++++-
+ src/jsc/bindings/c-bindings.cpp               |  128 ++
  .../webcore/SerializedScriptValue.cpp         |    9 +
  src/jsc/web_worker.rs                         |    4 +
  src/runtime/api/bun/subprocess.rs             |    2 +-
  src/runtime/cli/run_command.rs                |    5 +
+ src/runtime/image/backend_wic.rs              |    8 +-
  src/runtime/node/net/BlockList.rs             |    2 +-
  src/runtime/timer/mod.rs                      |    5 +
  src/runtime/webcore/Blob.rs                   |    2 +-
@@ -77,7 +79,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/spawn_sys/posix_spawn.rs                  |  173 ++-
  src/spawn_sys/spawn_process.rs                |   14 +-
  src/standalone_graph/StandaloneModuleGraph.rs |  254 +++-
- 58 files changed, 2747 insertions(+), 210 deletions(-)
+ 60 files changed, 2816 insertions(+), 213 deletions(-)
  create mode 100644 patches/libuv/win-thread-stack-reservation.patch
  create mode 100644 patches/mimalloc/page-commit-on-demand-default.patch
 
@@ -134,6 +136,19 @@ index 00000000..9ee92856
 +   { MI_DEFAULT_PAGE_MAX_RECLAIM,
 +          MI_OPTION_UNINIT, MI_OPTION(page_max_reclaim) },         // don't reclaim (small) pages of the same originating theap if we already own N pages in that size class
 +   { MI_DEFAULT_PAGE_CROSS_THREAD_MAX_RECLAIM,
+diff --git a/scripts/build/CLAUDE.md b/scripts/build/CLAUDE.md
+index 4d067e90..41c47fee 100644
+--- a/scripts/build/CLAUDE.md
++++ b/scripts/build/CLAUDE.md
+@@ -292,7 +292,7 @@ Why not auto-register in emit functions? Some rules are shared (`dep_configure`
+ 
+ **Dep order in `allDeps` matters.** `fetchDeps: ["X"]` means X must come first (its `.ref` stamp node must exist). Link order matters too: static linking resolves left→right, providers after users.
+ 
+-**PCH, cc, and no-PCH cxx need implicit dep on `depHeaderSignal`**, not order-only. Local WebKit's sub-build rewrites forwarding headers as an undeclared side effect (only `lib*.a` are declared outputs). Depfiles record those headers, but ninja stats them before the sub-build runs — order-only lags one build. The lib itself is the invalidation signal. Codegen headers stay order-only: they're declared outputs with restat, so depfile tracking is exact.
++**PCH, cc, and no-PCH cxx need implicit dep on `depHeaderSignal`**, not order-only. Local WebKit's sub-build rewrites forwarding headers as an undeclared side effect (only `lib*.a` are declared outputs). Depfiles record those headers, but ninja stats them before the sub-build runs — order-only lags one build. For other nested-cmake deps the lib itself is the invalidation signal. For local WebKit it is `deps/WebKit/headers.stamp` (`emitWebKitHeaderStamp`, `fetch-cli.ts header-stamp`): a hash of the path, size and mtime of every header in its build dir, rewritten (restat) only when the sub-build wrote one. The lib changes with every `.cpp` edit, which would rebuild the PCH and every compile; the headers in WebKit's source tree are never written mid-run, so their depfile entries are exact. Codegen headers stay order-only: they're declared outputs with restat, so depfile tracking is exact.
+ 
+ **`isExecutable` must check `isFile()`.** `X_OK` on a directory means traversable — a `cmake/` dir in PATH would shadow the real cmake binary.
+ 
 diff --git a/scripts/build/binary-expectations.ts b/scripts/build/binary-expectations.ts
 index f18a60b0..0ba5981b 100644
 --- a/scripts/build/binary-expectations.ts
@@ -570,7 +585,7 @@ index eebc97cc..e8abff80 100644
  // github-archive dep fetch: download tarball, extract, patch, stamp
  // ───────────────────────────────────────────────────────────────────────────
 diff --git a/scripts/build/flags.ts b/scripts/build/flags.ts
-index 3d40f647..10fead7c 100644
+index 3d40f647..3e1f5d86 100644
 --- a/scripts/build/flags.ts
 +++ b/scripts/build/flags.ts
 @@ -499,6 +499,13 @@ export const globalFlags: Flag[] = [
@@ -601,7 +616,7 @@ index 3d40f647..10fead7c 100644
  
    // ─── PGO (link-side) ───
    {
-@@ -1007,9 +1021,23 @@ export const linkerFlags: Flag[] = [
+@@ -1007,9 +1021,30 @@ export const linkerFlags: Flag[] = [
      desc: "Windows cross-compile: MSVC CRT + Windows SDK library search root (xwin splat)",
    },
    {
@@ -621,9 +636,16 @@ index 3d40f647..10fead7c 100644
 +    // .pblay is where the region's arenas are (bmalloc::StaticRegionLayout): read-only, since that decides where the engine
 +    // reads and writes.
 +    flag: ["/SECTION:.pbreg,R", "/SECTION:.pblay,R", "/guard:cf"],
++    when: c => c.windows,
++    desc: "The static region's section is read-only until used; its layout is read-only; Control Flow Guard's table (/guard:cf)",
++  },
++  {
++    // The DLLs the executable imports are system DLLs: from System32 only (LOAD_LIBRARY_SEARCH_SYSTEM32), not from the folder
++    // the executable was unzipped to. The delay-loaded ones go there too (c-bindings.cpp, __pfnDliNotifyHook2).
++    flag: "/DEPENDENTLOADFLAG:0x800",
      when: c => c.windows,
 -    desc: "18MB stack reserve (JSC uses deep recursion), no error limit",
-+    desc: "The static region's section is read-only until used; its layout is read-only; Control Flow Guard's table (/guard:cf)",
++    desc: "Imported DLLs from System32 only",
    },
    {
      flag: "/DEBUG:FULL",
@@ -2705,7 +2727,7 @@ index cfd1059c..e6aa41f7 100644
          uint8_t frame_i = 0;
          size_t stack_frame_i = 0;
 diff --git a/src/jsc/bindings/ZigGlobalObject.cpp b/src/jsc/bindings/ZigGlobalObject.cpp
-index 9de807ad..4a87c857 100644
+index 9de807ad..e7fb2b71 100644
 --- a/src/jsc/bindings/ZigGlobalObject.cpp
 +++ b/src/jsc/bindings/ZigGlobalObject.cpp
 @@ -1,4 +1,5 @@
@@ -2714,7 +2736,7 @@ index 9de807ad..4a87c857 100644
  
  #include "ZigGlobalObject.h"
  #include "BunModuleRegistry.h"
-@@ -268,6 +269,18 @@ static consteval unsigned getWebKitBytecodeCacheVersion()
+@@ -268,6 +269,20 @@ static consteval unsigned getWebKitBytecodeCacheVersion()
  {
      return WTF::SuperFastHash::computeHash(WEBKIT_BYTECODE_CACHE_HASH_KEY);
  }
@@ -2729,11 +2751,13 @@ index 9de807ad..4a87c857 100644
 +extern "C" bool Bun__shouldCompileAheadOfTime();
 +extern "C" void Bun__setOptionsForAheadOfTimeCode();
 +extern "C" bool Bun__AOTImage__isMapped();
++extern "C" bool Bun__AOTImage__executableRunsWithoutJIT();
++extern "C" bool Bun__AOTImage__executableRunsWithoutJIT();
 +extern "C" void Bun__AOTImage__register();
  #undef WEBKIT_BYTECODE_CACHE_HASH_KEY
  
  // Declare fuzzilli function registration from FuzzilliREPRL.cpp
-@@ -288,6 +301,15 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -288,6 +303,15 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
      static std::once_flag jsc_init_flag;
      // NOLINTBEGIN
      std::call_once(jsc_init_flag, [evalMode, oneShotStartup, shortLivedGlobals, envp, envc, onCrash]() {
@@ -2749,7 +2773,7 @@ index 9de807ad..4a87c857 100644
          Bun__ensureICUDefaultLocale();
          JSC::Config::enableRestrictedOptions();
          // JSC options come from BUN_JSC_* (applied in the callback below), not JSC_*.
-@@ -363,6 +385,19 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -363,6 +387,19 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
                  JSC::Options::thresholdForFTLOptimizeAfterWarmUp() = 1000000;
              }
  
@@ -2769,7 +2793,7 @@ index 9de807ad..4a87c857 100644
              if (envc > 0) [[likely]] {
                  auto envc_copy = envc;
                  while (envc_copy--) {
-@@ -378,8 +413,24 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -378,8 +415,38 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
                      }
                  }
              }
@@ -2782,6 +2806,20 @@ index 9de807ad..4a87c857 100644
 +            // it). It is for working on the compiler, in a debug build.
 +            JSC::Options::aotImagePath() = nullptr;
 +#endif
++            // A program compiled ahead of time is a release, not a test bed: the debugging options that reach into memory or load
++            // code from a file stay off whatever BUN_JSC_* says ($vm reads and writes any address; function overrides replace
++            // the program's own code; the JIT's memory at a chosen address, or dumped to a file).
++            if (Bun__AOTImage__isMapped() || Bun__AOTImage__executableRunsWithoutJIT()) {
++                JSC::Options::useDollarVM() = false;
++                JSC::Options::functionOverrides() = nullptr;
++                JSC::Options::jitMemoryReservationAddress() = 0;
++                JSC::Options::dumpJITMemoryPath() = nullptr;
++                JSC::Options::diskCachePath() = nullptr;
++            }
++            // A build without the JIT stays without it, its code used or not (BUN_AOT=0, a CPU the code was not compiled for): it
++            // interprets the bytecode then, rather than make machine code in writable executable memory (ZigSourceProvider.cpp).
++            if (Bun__AOTImage__executableRunsWithoutJIT())
++                JSC::Options::useJIT() = false;
              JSC::Options::assertOptionsAreCoherent();
          }); // end JSC::initialize lambda
 +        Bun__AOTImage__register();
@@ -2795,7 +2833,7 @@ index 9de807ad..4a87c857 100644
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH
 diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
-index fbfaa2ff..9f3f6080 100644
+index fbfaa2ff..c1517c5a 100644
 --- a/src/jsc/bindings/ZigSourceProvider.cpp
 +++ b/src/jsc/bindings/ZigSourceProvider.cpp
 @@ -2,6 +2,17 @@
@@ -2873,7 +2911,7 @@ index fbfaa2ff..9f3f6080 100644
  }
  
  extern "C" uint32_t Bun__EncoderStringTable__slotForLatin1(JSC::EncoderStringTable* table, const Latin1Character* chars, size_t length)
-@@ -290,17 +333,1034 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
+@@ -290,17 +333,1058 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
      return generateCachedByteCodeFromSourceCode(sourceProviderURL, inputSourceCode, false, depth, optimize, outputByteCode, outputByteCodeSize, cachedBytecodePtr, externalStrings);
  }
  
@@ -3405,7 +3443,9 @@ index fbfaa2ff..9f3f6080 100644
 +    // process that a static heap holds would not be good in another process: other modules move at every boot.
 +    HMODULE modules[1024];
 +    DWORD bytesOfModules = 0;
-+    EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &bytesOfModules);
++    // (Without the list, a pointer into a system library would go unnoticed, and be wrong at the next boot.)
++    if (!EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &bytesOfModules))
++        return fail("the process's modules could not be listed");
 +    Vector<std::pair<uintptr_t, uintptr_t>> otherModules;
 +    // (What it says is how much room all of them need, which may be more than there is: the first 1,024 are what it wrote.)
 +    for (unsigned i = 0; i < std::min<size_t>(bytesOfModules, sizeof(modules)) / sizeof(HMODULE); ++i) {
@@ -3477,7 +3517,10 @@ index fbfaa2ff..9f3f6080 100644
 +    // What is left that looks like an address in this process's image, now that its pointers are at the preferred base: a pointer
 +    // that is not on an 8-byte boundary (a packed one), or bytes that were never written and kept an address from the process
 +    // that built the heap. Either would be wrong in another process, and either is told by building twice only by chance. Every
-+    // 4-byte boundary is looked at.
++    // 4-byte boundary is looked at. Not, between two 8-byte words, one whose low 32 bits are zero: that is the high half of one
++    // word and the low half of the next, such as a NaN's upper bytes after a zero (0x7ff8...), which an executable loaded just
++    // below a multiple of 4 GB has in its range (Windows places an image at the same address all through a boot, so such a
++    // build would fail every time until the next one); a packed pointer to something at a multiple of 4 GB is not one to expect.
 +    size_t notRelocated = 0;
 +    for (size_t i = 0; i < inRegion.size(); ++i) {
 +        if (!inRegion[i].hasPointers)
@@ -3486,6 +3529,8 @@ index fbfaa2ff..9f3f6080 100644
 +        for (size_t at = 0; at + 8 <= bytes.size(); at += 4) {
 +            uint64_t word;
 +            memcpy(&word, bytes.data() + at, 8);
++            if (at % 8 && !(word & 0xffffffffu))
++                continue;
 +            if (word >= imageStart && word < endOfExecutable && notRelocated++ < 10) {
 +                fprintf(stderr, "warning: the static heap has an address of the process that built it that is not relocated (%llx, at offset %zu of a part at %x%s); the bytes around it:",
 +                    static_cast<unsigned long long>(word), at, inRegion[i].offsetInRegion, inRegion[i].characteristics & scnExecute ? ", code" : "");
@@ -3540,8 +3585,11 @@ index fbfaa2ff..9f3f6080 100644
 +    uint32_t relocationsSize = readAt<uint32_t>(pe, directories + 5 * 8 + 4);
 +    auto fileOffsetOf = [&](uint32_t rva) -> std::optional<size_t> {
 +        for (auto& s : sections) {
-+            if (rva >= s.virtualAddress && rva < s.virtualAddress + std::max(s.virtualSize, s.sizeOfRawData) && rva - s.virtualAddress < s.sizeOfRawData)
++            if (rva >= s.virtualAddress && rva < s.virtualAddress + std::max(s.virtualSize, s.sizeOfRawData) && rva - s.virtualAddress < s.sizeOfRawData) {
++                if (static_cast<size_t>(s.pointerToRawData) + s.sizeOfRawData > pe.size())
++                    return std::nullopt;
 +                return s.pointerToRawData + (rva - s.virtualAddress);
++            }
 +        }
 +        return std::nullopt;
 +    };
@@ -3842,9 +3890,23 @@ index fbfaa2ff..9f3f6080 100644
 +    fprintf(stderr, "bun: the executable's ahead-of-time compiled code is not used (%s); running from bytecode\n", why);
 +}
 +
++// The executable was built to run without the JIT (AOTImageTrailer::withoutJIT): so it runs whether its code is used or not
++// (BUN_AOT=0, a CPU the code was not compiled for, no room for the region). Its fallback interprets the bytecode rather than make
++// machine code in writable executable memory, which a build without the JIT is meant never to have (JSCInitialize()).
++static bool s_executableRunsWithoutJIT;
++extern "C" bool Bun__AOTImage__executableRunsWithoutJIT()
++{
++    return s_executableRunsWithoutJIT;
++}
++
 +extern "C" bool Bun__StaticHeap__map(const uint8_t* image, size_t size, int fd, uint64_t offsetInFile)
 +{
 +    Bun__setBytecodeCacheVersion();
++    if (hasAOTImageTrailer(image, size)) {
++        AOTImageTrailer trailer;
++        memcpy(&trailer, image + size - sizeof(trailer), sizeof(trailer));
++        s_executableRunsWithoutJIT = trailer.optionsOfCode & AOTImageTrailer::withoutJIT;
++    }
 +    bool asked = !(getenv("BUN_AOT") && getenv("BUN_AOT")[0] == '0');
 +#if OS(DARWIN)
 +    // The heap points into this executable where it was linked to be (c-bindings.cpp starts it again there). (Also with BUN_AOT=0:
@@ -3909,7 +3971,7 @@ index fbfaa2ff..9f3f6080 100644
      return new JSC::BytecodeLinkEncoder(vm, externalStrings, WTF::move(hints));
  }
  
-@@ -331,6 +1391,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
+@@ -331,6 +1415,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
      return true;
  }
  
@@ -3932,7 +3994,7 @@ index fbfaa2ff..9f3f6080 100644
  // `entryOffsets` has room for one number per successful add* call; `regionEnds` for
  // JSC::BytecodeLinkEncoder::numberOfRegions.
  static_assert(JSC::BytecodeLinkEncoder::numberOfRegions == 6, "bun_resolver::LINKED_BYTECODE_REGION_COUNT");
-@@ -340,6 +1416,51 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
+@@ -340,6 +1440,51 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
      auto result = encoder->finish();
      if (!result.payload || result.entryOffsets.size() != entryOffsetCount)
          return false;
@@ -3985,7 +4047,7 @@ index fbfaa2ff..9f3f6080 100644
      memcpySpan(std::span { regionEnds, JSC::BytecodeLinkEncoder::numberOfRegions }, std::span<const uint32_t> { result.regionEnds });
      *namedHotFunctions = result.namedHotFunctions;
 diff --git a/src/jsc/bindings/c-bindings.cpp b/src/jsc/bindings/c-bindings.cpp
-index a3fd0268..27a3940a 100644
+index a3fd0268..840557f9 100644
 --- a/src/jsc/bindings/c-bindings.cpp
 +++ b/src/jsc/bindings/c-bindings.cpp
 @@ -21,6 +21,7 @@
@@ -3996,7 +4058,29 @@ index a3fd0268..27a3940a 100644
  #endif
  #else
  #include <uv.h>
-@@ -857,9 +858,31 @@ extern "C" int32_t open_as_nonblocking_tty(int32_t fd, int32_t mode)
+@@ -32,6 +33,21 @@
+ #endif // !OS(WINDOWS)
+ #include <lshpack.h>
+ 
++#if OS(WINDOWS)
++#include <delayimp.h>
++// The DLLs the executable delay-loads (/delayload: in scripts/build/flags.ts) are Windows's own: from System32, not from the
++// executable's folder, which a DLL asked for by name is looked for in first and where a planted copy (next to a download
++// unzipped in Downloads) would run inside the process. Only these: what a program loads by name itself (bun:ffi, an addon's
++// own libraries) is looked for as before. (Null if System32 has no such DLL: the loader's own search then, as without this.)
++static FARPROC WINAPI loadDelayLoadedDLLFromSystem32(unsigned notification, PDelayLoadInfo info)
++{
++    if (notification != dliNotePreLoadLibrary)
++        return nullptr;
++    return reinterpret_cast<FARPROC>(LoadLibraryExA(info->szDll, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32));
++}
++extern "C" const PfnDliHook __pfnDliNotifyHook2 = loadDelayLoadedDLLFromSystem32;
++#endif
++
+ // Error condition is encoded as max int32_t.
+ // The only error in this function is ESRCH (no process found)
+ extern "C" int32_t get_process_priority(int32_t pid)
+@@ -857,9 +873,31 @@ extern "C" int32_t open_as_nonblocking_tty(int32_t fd, int32_t mode)
      }
  
      char pathbuf[PATH_MAX + 1];
@@ -4028,7 +4112,7 @@ index a3fd0268..27a3940a 100644
  
      return open(pathbuf, mode | O_NONBLOCK | O_NOCTTY | O_CLOEXEC);
  }
-@@ -1182,6 +1205,10 @@ struct BlobHeader {
+@@ -1182,6 +1220,10 @@ struct BlobHeader {
  
  #if OS(DARWIN)
  
@@ -4039,7 +4123,7 @@ index a3fd0268..27a3940a 100644
  extern "C" BlobHeader __attribute__((section("__BUN,__bun"))) BUN_COMPILED = { 0, 0 };
  
  extern "C" uint64_t* Bun__getStandaloneModuleGraphMachoLength()
-@@ -1189,6 +1216,92 @@ extern "C" uint64_t* Bun__getStandaloneModuleGraphMachoLength()
+@@ -1189,6 +1231,92 @@ extern "C" uint64_t* Bun__getStandaloneModuleGraphMachoLength()
      return &BUN_COMPILED.size;
  }
  
@@ -4203,6 +4287,25 @@ index aea7e78e..5cede4c3 100644
          // argv belongs to the compiled program, so a `-e` or `-p` in it is not ours.
          bun_jsc::initialize(bun_jsc::InitializeOptions::default());
          bun_analytics::features::standalone_executable.fetch_add(1, Ordering::Relaxed);
+diff --git a/src/runtime/image/backend_wic.rs b/src/runtime/image/backend_wic.rs
+index 6ad5736f..ff5f23d0 100644
+--- a/src/runtime/image/backend_wic.rs
++++ b/src/runtime/image/backend_wic.rs
+@@ -897,8 +897,12 @@ fn factory() -> Result<ComPtr<IWICImagingFactory>, BackendError> {
+ fn load_factory() {
+     // Resolve the one flat C export first; if windowscodecs.dll isn't present
+     // we never attempt CoCreateInstance and the whole backend stays disabled.
+-    // SAFETY: literal C string; LoadLibraryA is safe to call from any thread.
+-    let dll = unsafe { windows::LoadLibraryA(c"windowscodecs.dll".as_ptr()) };
++    // From System32 only: windowscodecs.dll is no KnownDLL, and loaded by bare name it would be looked for in the executable's
++    // folder first, where a planted copy would run inside the process.
++    const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
++    let name: Vec<u16> = "windowscodecs.dll\0".encode_utf16().collect();
++    // SAFETY: `name` is NUL-terminated UTF-16; LoadLibraryExW is safe to call from any thread.
++    let dll = unsafe { windows::kernel32::LoadLibraryExW(name.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
+     if dll.is_null() {
+         return;
+     }
 diff --git a/src/runtime/node/net/BlockList.rs b/src/runtime/node/net/BlockList.rs
 index af498017..e844c277 100644
 --- a/src/runtime/node/net/BlockList.rs
