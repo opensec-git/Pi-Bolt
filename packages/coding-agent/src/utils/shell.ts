@@ -1,8 +1,8 @@
-import { existsSync, lstatSync, statSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import { spawn, spawnSync } from "child_process";
 import { getBinDir } from "../config.ts";
-import { windowsPathDirectories } from "./windows-path.ts";
+import { isProgramFile, windowsPathDirectories } from "./windows-path.ts";
 
 export interface ShellConfig {
 	shell: string;
@@ -25,22 +25,6 @@ function getBashShellConfig(shell: string): ShellConfig {
 // Windows: what a PATH lookup found, by PATH and name. The shell tools look their shell up on every call, and starting
 // `where` for it took a process start each time.
 const foundOnWindowsPath = new Map<string, string>();
-
-// A file there to run. An app execution alias (a Store app's pwsh.exe in WindowsApps) is a reparse point that stat may refuse
-// to follow; Windows starts it all the same, and `where` listed it: it counts when the link itself is there and is not a folder.
-// (stat may also say that it is not there, rather than fail.)
-function isProgramFile(file: string): boolean {
-	try {
-		const stats = statSync(file, { throwIfNoEntry: false });
-		if (stats) return stats.isFile();
-	} catch {}
-	try {
-		const link = lstatSync(file, { throwIfNoEntry: false });
-		return link !== undefined && !link.isDirectory();
-	} catch {
-		return false;
-	}
-}
 
 function findExecutableOnPath(executable: string): string | null {
 	if (process.platform === "win32") {

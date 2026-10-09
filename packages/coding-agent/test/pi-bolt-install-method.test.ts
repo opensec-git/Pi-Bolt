@@ -60,7 +60,10 @@ describe("piBoltUpdateEnvironment", () => {
 		process.env.PIBOLT_DOWNLOAD_BASE = "https://mirror.example";
 		process.env.PIBOLT_SOURCE = "github";
 		process.env.PIBOLT_VERSION = "bolt-v0.1.0";
+		process.env.PIBOLT_INSTALLER_NO_MAIN = "1";
 		const env = piBoltUpdateEnvironment("0.8.0");
+		delete process.env.PIBOLT_INSTALLER_NO_MAIN;
+		expect(env.PIBOLT_INSTALLER_NO_MAIN).toBeUndefined();
 		expect(env.PIBOLT_INSTALL).toBe(root);
 		expect(env.PIBOLT_VERSION).toBe("bolt-v0.8.0");
 		expect(env.PIBOLT_DOWNLOAD_BASE).toBeUndefined();

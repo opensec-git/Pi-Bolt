@@ -223,7 +223,8 @@ async function extractFromTgz(tgz, wanted, out) {
 				}
 				if (type === "x" || type === "L") {
 					// (A name: a few hundred bytes. Read before anything is verified, so a record is not let fill memory.)
-					if (size > 65536) fail("the npm package's archive has a name record too long to be one: it is damaged. Nothing was installed.");
+					// (As any other defect of the package: not this way, then; the release on GitHub is the other.)
+					if (size > 65536) throw new Error("a name record too long to be one");
 					record = [];
 					recordType = type;
 				} else if ((type === "0" || type === "\0") && name === wanted && !found) {

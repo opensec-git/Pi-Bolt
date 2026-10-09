@@ -102,7 +102,14 @@ export function piBoltUpdateEnvironment(version: string): NodeJS.ProcessEnv {
 		PIBOLT_VERSION: `bolt-v${version}`,
 		PIBOLT_INSTALL: piBoltInstallDir() ?? process.env.PIBOLT_INSTALL ?? join(homedir(), ".pi-bolt"),
 	};
-	for (const name of ["PIBOLT_DOWNLOAD_BASE", "PIBOLT_LAUNCHER", "PIBOLT_SOURCE", "PIBOLT_ALLOW_UNSIGNED"]) {
+	// (And what would make the installer only define its functions, install nothing, and exit 0.)
+	for (const name of [
+		"PIBOLT_DOWNLOAD_BASE",
+		"PIBOLT_LAUNCHER",
+		"PIBOLT_SOURCE",
+		"PIBOLT_ALLOW_UNSIGNED",
+		"PIBOLT_INSTALLER_NO_MAIN",
+	]) {
 		delete env[name];
 	}
 	return env;

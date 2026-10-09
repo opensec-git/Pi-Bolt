@@ -14,7 +14,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import type { Readable } from "node:stream";
 import crossSpawn from "cross-spawn";
-import { windowsPathDirectories } from "./windows-path.ts";
+import { isProgramFile, windowsPathDirectories } from "./windows-path.ts";
 
 const EXIT_STDIO_GRACE_MS = 100;
 
@@ -49,7 +49,8 @@ export function spawnProcessSync(
 function resolveWindowsCommand(command: string, env: NodeJS.ProcessEnv | undefined): string {
 	if (/[\\/]/.test(command)) return command;
 	const source = env ?? process.env;
-	const pathKey = Object.keys(source).find((key) => key.toLowerCase() === "path");
+	// (An environment merged from two may have both PATH and Path: PATH, as cross-spawn takes it.)
+	const pathKey = "PATH" in source ? "PATH" : Object.keys(source).find((key) => key.toLowerCase() === "path");
 	const dirs = windowsPathDirectories(pathKey ? (source[pathKey] ?? "") : "").filter((dir) => isAbsolute(dir));
 	const pathExtensions = (source.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
 	// (As `which` has it: a name with a dot is also tried as it is.)
@@ -57,14 +58,11 @@ function resolveWindowsCommand(command: string, env: NodeJS.ProcessEnv | undefin
 	for (const dir of dirs) {
 		for (const extension of extensions) {
 			const file = join(dir, command + extension);
-			try {
-				if (statSync(file).isFile()) return file;
-			} catch {
-				// Not here; keep looking.
-			}
+			if (isProgramFile(file)) return file;
 		}
 	}
-	return join(dirs[0] ?? process.env.SystemRoot ?? "C:\\Windows", `${command}.exe`);
+	// (In a folder that cannot exist: not one of Windows's own programs of that name, were PATH empty.)
+	return join(process.env.SystemRoot ?? "C:\\Windows", "pi-bolt-no-such-command", `${command}.exe`);
 }
 
 /** The first executable file named `command` in the PATH directories, or undefined. Does not run it. */
