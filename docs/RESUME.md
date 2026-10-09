@@ -9,14 +9,15 @@ trees exactly. Nothing is pushed.
 `.work\runtime\bun.exe` is a copy of `.work\bun\build\pibolt-release-lto\bun.exe` as linked with the order file, with the heap
 ordering of 2026-10-09 (below):
 
-    runtime: Bun 1.4.3-canary.1+aaab7e31c, CFG, build/pibolt-release-lto, LTO, 106028032 bytes, sha256 6e5c9d5d5bd90288
+    runtime: Bun 1.4.3-canary.1+4dc206147, CFG, build/pibolt-release-lto, LTO, 106032128 bytes, sha256 db54ae7d73b26a86
 
-(The revision is the engine commit's before it was amended with that work; the next runtime build says the amended one.)
+(The revision is the engine commit's before it was last amended; the next runtime build says the amended one.)
 `scripts\build-pi.ps1` uses it by default and writes that line into each build's `pi-bolt.txt`. Older runtimes are kept beside
-it in `.work\runtime` (`bun.exe.lto-order-4610987b`, the one before; `bun.exe.lto-noorder-*`, `bun.exe.nolto-*`,
-`bun.exe.heap-tag-v1-broken`; `heap-tag-v2\` is the tag bits alone). The current Pi build is `out\pi-bolt-heap-strings`
-(this runtime, the retrained profile); `out\pi-bolt-heap-hot` is the same before the profile was, and `out\pi-bolt-ab-base` the
-same `dist` on the runtime before, for A/B runs.
+it in `.work\runtime`: `bun.exe.heap-hot-6e5c9d5d` (the heap ordering without the executables' tiers),
+`bun.exe.lto-order-4610987b` (the one before any of it), `bun.exe.lto-noorder-*`, `bun.exe.nolto-*`,
+`bun.exe.heap-tag-v1-broken`; the folders `heap-tag-v2`, `heap-hot`, `heap-functions`, `heap-tiers` hold each step's runtime.
+The current Pi build is `out\pi-bolt-heap-tiers` (this runtime, the retrained profile). For A/B runs, from the same `dist`:
+`out\pi-bolt-ab-base` (the runtime before), `out\pi-bolt-heap-hot`, `out\pi-bolt-heap-strings`.
 
 The LTO build directory is `build/pibolt-release-lto` (made by hand); `scripts\build-runtime.ps1` builds into
 `build/pibolt-release`, so pass `-BuildDir build/pibolt-release-lto` to `train-runtime-hints.ps1` and `tests\cfg\run.ps1` meanwhile.
@@ -32,7 +33,8 @@ The LTO build directory is `build/pibolt-release-lto` (made by hand); `scripts\b
 | d3d68b846 | each Pi build records its runtime; the suite copies it into environment.txt | |
 | 293329426 | runtime code laid out in the order Pi runs it (`profiles\runtime-win32-x64.hints`) | peak WS -4 to -7 MB; CPU 98 -> 93 ms headless, 309 -> 297 ms TUI |
 | f4cf32990 | benchmark scenario `interactive-default-theme` | |
-| (2026-10-09) | strings laid out in the order Pi touches them (`train-heap-strings.ps1`, profile retrained) | against the commit before: CPU 18.9 -> 18.0 / 99.9 -> 97.7 / 315.2 -> 310.0 ms, peak WS -1.8 / -2.0 / -1.9 MB (startup / headless / TUI); TTI unchanged |
+| (2026-10-09) | executables of the functions Pi touches made side by side, in two tiers (`train-heap.ps1`, profile retrained) | against the commit before: `.pbheap` at `--version` 1,122 -> 968; peak WS -0.6 / -1.4 MB (startup / headless), TUI of one prompt -1.1 MB; CPU and TTI unchanged (40-round TUI A/B: 93.0 vs 94.2 ms, quartiles overlapping) |
+| 3540d99e6 | strings laid out in the order Pi touches them (`train-heap-strings.ps1`, profile retrained) | against the commit before: CPU 18.9 -> 18.0 / 99.9 -> 97.7 / 315.2 -> 310.0 ms, peak WS -1.8 / -2.0 / -1.9 MB (startup / headless / TUI); TTI unchanged |
 | b6c343b07 | prebuilt heap laid out by first use: see work list item 1 | `.pbheap` pages 2,092 -> 1,567 at `--version`, 3,853 -> 3,325 headless; peak WS -2.0 / -1.8 / -1.6 MB (startup / headless / TUI); CPU at `--version` 19.7 -> 18.9 ms; headless and TUI CPU unchanged (within noise) |
 
 Default-theme check: the colour reply costs 1.6 ms in conhost and about 9 ms in Windows Terminal, which answers all 18 colour
@@ -53,17 +55,27 @@ queries before DA1; no timeouts. The behaviour is kept.
    - Executables in two passes per module (`makeExecutables`): first the functions whose code is in the payload's Hot or Unknown
      region (the recorded run ran them) and the functions of code that ran (made when it runs, called or not), then the rest.
      FunctionExecutable pages 574 -> 376 at `--version`, 878 -> 626 headless.
-   - Strings in the order Pi touches them (`scripts\train-heap-strings.ps1`, `scripts\lib\train_heap_strings.py`): a debugger
+   - Executables of the functions Pi touches made side by side (`scripts\train-heap.ps1` writes the profile's
+     `heap-functions.txt`; `build-pi` passes it as `BUN_STATIC_HEAP_FUNCTIONS_FIRST`): each function is named by its module's
+     number in the link and where it starts in that module's text (`StaticHeap::FunctionCell`), which both the decoder (for the
+     unlinked executable) and `makeExecutables` (for the linked one) know before the cell is allocated. Two tiers, each a block
+     at the start of the cells: what `--version` touches (6,632 functions), then what the TUI and headless runs touch besides
+     (4,439). `build-pi -FunctionCellsOut` (`BUN_STATIC_HEAP_FUNCTION_CELLS_OUT`) writes where each executable is, which the
+     trainer maps the trace through. `.pbheap` at `--version` 1,122 -> 968.
+   - Strings in the order Pi touches them (`scripts\train-heap.ps1`, `scripts\lib\train_heap.py`): a debugger
      guards the pages of the strings' records, StringImpls and JSStrings, records every access of `--version`, a headless
      prompt and a TUI session, and puts those strings first in the profile's `S` lines (the order file's own follow). What a
      prebuilt heap touches is what is looked up by name (the engine's identifiers, single characters, the global object's
      properties: 4,338 StringImpls at `--version`), not what the training's decoding read. StringImpl pages 252 -> 35, records
      254 -> 37, JSStrings 30 -> 19 at `--version`; `.pbheap` 1,567 -> 1,122 at `--version`, 3,325 -> 2,817 headless. The
      profile is the Pi version's, so a new Pi version needs `scripts/train-profile.sh` and then this, on Windows.
-   Left (measured, `.work\exp\handoff\heapmap.py`, `heapmap_headless.py`; the tracer is `.work\exp\handoff\touchtrace.py`):
-   FunctionExecutables 376/1,410 at `--version` and UnlinkedFunctionExecutables 179/690 (made by decoding, in payload order).
-   The same trace of their pages says which are touched; ordering them needs the executables named across builds (module,
-   start offset), as `orderFunctionKey` does, in a list the build reads. "Other malloc" 122/2,005 (568 headless).
+   Left (measured, `.work\exp\handoff\heapmap.py`, `heapmap_headless.py`, `cellmap.py`; the tracer is
+   `.work\exp\handoff\touchtrace.py`): the static atom table 128/128 (a small table of the hot atoms in front of it); "other
+   malloc" 122/2,005 at `--version`, 568 headless (code blocks' arrays, symbol tables: the same trace and a name for each would
+   do for them what was done for executables); `identifiersOfProgram` 69/75; MutableMalloc 178/348 headless.
+   Build time: any WebKit change rebuilds Bun's precompiled header and its ~140 C++ objects (ccache cannot help those): find
+   which input makes `pch/root-pch.h.hxx.pch` out of date (`ninja -d explain`). The ThinLTO cache (`/lldltocache`) has not
+   shortened a link yet; measure on a quiet machine with `/time`.
 2. **Startup trace and filesystem calls.** About 65 ms of Pi's initialization precedes `tui.start`. Partial work is stashed in the
    fork (`git stash list`; a copy in `.work\wip\fork-startup-trace-and-heap-magic.diff`): `PI_TTI_TRACE` stages from process
    start through settings, sessions, models, extensions and tools, and `GetProcessIoCounters` in `bench\winproc.py`. To finish:

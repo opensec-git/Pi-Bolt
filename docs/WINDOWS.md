@@ -219,12 +219,13 @@ its debugger, which sees it at its exit) and a sampling profile of the threads (
 - **The prebuilt heap's pages** were a quarter of `pi --version`'s: 2,092 of 7,655 page faults (`.work/exp/handoff/heapmap.py`
   classifies them). What was laid out in the order the training's decoding used it was not in the order a prebuilt heap is used:
   there is nothing left to decode, and what Pi touches as it starts is mostly what the engine and Pi look up by name. A string's
-  three parts (its record, its atom's StringImpl, its JSString) are now laid out in the order Pi's runs first touch them
-  (`scripts\train-heap-strings.ps1` traces the runs: every access to those pages, by a debugger that guards them, and rewrites
-  the profile's string order); the executables of each module that the training ran or made come before the rest; and the
-  static atom table's entries carry hash bits, so a lookup reads no other string, in a table half the size. 2,092 -> 1,114 heap
-  pages and 7,655 -> 6,689 faults at `--version`; 3,853 -> 2,807 heap pages headless. Atom StringImpls touched at `--version`:
-  4,338 of 76,955, which now fit on about 30 pages instead of 250.
+  three parts (its record, its atom's StringImpl, its JSString) are now laid out in the order Pi's runs first touch them, and
+  the executables (unlinked and linked) of the functions they touch are made side by side, those of Pi's start first:
+  `scripts\train-heap.ps1` traces the runs (every access to those pages, by a debugger that guards them) and writes the
+  profile's string order and `heap-functions.txt`. The executables of each module that the training ran or made come before the
+  rest without it, and the static atom table's entries carry hash bits, so a lookup reads no other string, in a table half the
+  size. Atom StringImpls touched at `--version`: 4,338 of 76,955, which now fit on about 30 pages instead of 250; executables:
+  about 6,700 of each kind at `--version`, 11,000 in all three runs, of 38,000.
 - **Looking up a program in PATH** costs 5 to 7 ms for one that is not there (four extensions in each of this machine's 38
   directories; a probe for a missing file is 45 to 65 µs with Defender's filter). Pi looks for `rg`, `fd` and `fdfind` before
   its first frame. On Windows it did so by running each as `cmd --version`: three misses when none is installed, and a process

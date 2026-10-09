@@ -1,23 +1,28 @@
-"""Puts the strings a Pi-Bolt build touches when it runs first in a training profile's order file (its S lines), in the order it
-first touches them. The order file's strings are what decoding Pi's bytecode read first; a prebuilt heap has nothing left to
-decode, and what it touches as it starts is mostly what the engine looks up by name (its own identifiers, single characters,
-the global object's properties) and what Pi's code then uses. Each string has three parts in the heap: its record in the
-string table, its atom's StringImpl and its JSString. The build lays all three out in S order, so these are on few pages.
+"""Records what of a Pi-Bolt build's prebuilt heap its runs touch, for the build to lay it out side by side, in a training profile:
+- strings: put first in the profile's order file (its S lines), in the order the runs first touch them. The order file's strings
+  are what decoding Pi's bytecode read first; a prebuilt heap has nothing left to decode, and what it touches as it starts is
+  mostly what the engine looks up by name (its own identifiers, single characters, the global object's properties) and what Pi's
+  code then uses. Each string has three parts in the heap: its record in the string table, its atom's StringImpl and its
+  JSString. The build lays all three out in S order.
+- functions: the ones whose executables (unlinked or linked) the runs touch, in the profile's heap-functions.txt, by the names
+  the build gives them (StaticHeap::FunctionCell: the module's number, and where the function starts in its text), with a tier
+  in the top byte: 0 for what `--version` touches (Pi's start, which every run has), 1 for the rest. The build makes each
+  tier's cells side by side, tier 0's first.
 Windows only: the runs are traced as a debugger does it.
 
-  python scripts/lib/train_heap_strings.py EXE ORDER_FILE
+  python scripts/lib/train_heap.py EXE FUNCTION_CELLS PROFILE_DIR
 
-EXE: a Pi-Bolt build of the profile's Pi version (scripts\build-pi.ps1). ORDER_FILE: the profile's bytecode.order, rewritten
-in place. The runs: `--version`, a headless prompt, a TUI session of one prompt, each against the bench's fake model.
+EXE: a Pi-Bolt build of the profile's Pi version, made with `scripts\build-pi.ps1 -FunctionCellsOut FUNCTION_CELLS`. The
+profile's bytecode.order is rewritten in place, and its heap-functions.txt written. The runs: `--version`, a headless prompt, a
+TUI session of one prompt, each against the bench's fake model.
 
 How a run is traced: at the loader's breakpoint (relocations done, nothing of the program run yet) the pages of the strings' three
-parts get PAGE_GUARD. An access faults; its address is recorded; the thread single-steps it with the page unguarded; the page is
-guarded again. So every access is seen, not just the first to each page, at the cost of two debug events each (a TUI session
+parts and of the executables get PAGE_GUARD. An access faults; its address is recorded; the thread single-steps it with the page
+unguarded; the page is guarded again. So every access is seen, not just the first to each page, at the cost of two debug events each (a TUI session
 takes minutes). An access by another thread while a page is unguarded for one is missed.
 """
 import bisect
 import ctypes
-import json
 import mmap
 import msvcrt
 import os
@@ -232,12 +237,43 @@ def run_plain(argv, env, cwd, output):
                 k32.SetHandleInformation(handle, 1, 0)
 
 
+class Functions:
+    """The executables' cells of the build, as it wrote them (build-pi.ps1 -FunctionCellsOut): `<offset> <name> <size>` in hex."""
+
+    def __init__(self, path):
+        cells = sorted(tuple(int(x, 16) for x in line.split()) for line in Path(path).read_text().splitlines() if line.strip())
+        if not cells:
+            sys.exit(f"{path} lists no cells: was the build made with -FunctionCellsOut?")
+        self.starts = [offset for offset, _, _ in cells]
+        self.cells = cells
+        self.count = len({name for _, name, _ in cells})
+        self.range = (cells[0][0], max(offset + size for offset, _, size in cells))
+
+    def function_at(self, offset):
+        k = bisect.bisect_right(self.starts, offset + 7) - 1
+        if k < 0 or offset >= self.cells[k][0] + self.cells[k][2]:
+            return None
+        return self.cells[k][1]
+
+
+def merged(ranges):
+    out = []
+    for begin, end in sorted(ranges):
+        if out and begin <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], end))
+        else:
+            out.append((begin, end))
+    return out
+
+
 def main():
-    if len(sys.argv) != 3:
+    if len(sys.argv) != 4:
         raise SystemExit(__doc__)
-    exe, order_file = os.path.abspath(sys.argv[1]), sys.argv[2]
+    exe, profile = os.path.abspath(sys.argv[1]), Path(sys.argv[3])
     strings = Strings(exe)
-    print(f"{len(strings.texts)} strings; guarding " + ", ".join(f"{a:#x}-{b:#x}" for a, b in strings.ranges), flush=True)
+    functions = Functions(sys.argv[2])
+    ranges = merged([*strings.ranges, functions.range])
+    print(f"{len(strings.texts)} strings, {functions.count} functions; guarding " + ", ".join(f"{a:#x}-{b:#x}" for a, b in ranges), flush=True)
     # (Measured starts its process suspended and resumes it: as a debuggee, with this.)
     winproc.CREATE_SUSPENDED |= DEBUG_ONLY_THIS_PROCESS
     touched = []
@@ -248,7 +284,7 @@ def main():
             t0 = time.perf_counter()
             output.seek(0)
             output.truncate()
-            touched.append(trace(lambda: run_plain([exe, *args], env, cwd, output), strings.region_rva, strings.ranges))
+            touched.append(trace(lambda: run_plain([exe, *args], env, cwd, output), strings.region_rva, ranges))
             output.seek(0)
             if expect.encode() not in output.read():
                 sys.exit(f"{name}: the run did not complete")
@@ -280,27 +316,40 @@ def main():
 
         driver = threading.Thread(target=drive, daemon=True)
         driver.start()
-        touched.append(trace(start, strings.region_rva, strings.ranges))
+        touched.append(trace(start, strings.region_rva, ranges))
         driver.join(30)
         if not box.get("ok"):
             sys.exit("TUI: the session did not complete")
         box["tty"].console.close()
         print(f"TUI: {len(touched[-1])} granules ({time.perf_counter() - t0:.0f} s)", flush=True)
-    # --version's strings first (every run starts with them), then the TUI's, then the headless run's.
-    first, seen = [], set()
-    for run in (touched[0], touched[2], touched[1]):
+    # --version's first (every run starts with what it touches), then the TUI's, then the headless run's.
+    first_strings, seen_strings = [], set()
+    first_functions, seen_functions = [], set()
+    for tier, run in ((0, touched[0]), (1, touched[2]), (1, touched[1])):
         for granule in run:
             ordinal = strings.ordinal_at(granule)
-            if ordinal is not None and ordinal not in seen:
-                seen.add(ordinal)
-                first.append(order_string_hash(strings.texts[ordinal]))
-    lines = Path(order_file).read_text().splitlines()
-    hashes = set(first)
+            if ordinal is not None:
+                if ordinal not in seen_strings:
+                    seen_strings.add(ordinal)
+                    first_strings.append(order_string_hash(strings.texts[ordinal]))
+                continue
+            function = functions.function_at(granule)
+            if function is not None and function not in seen_functions:
+                seen_functions.add(function)
+                # (The tier, in the top byte: 0 for what Pi's start touches, which every run does, 1 for the rest.)
+                first_functions.append(function | tier << 56)
+    order_file = profile / "bytecode.order"
+    lines = order_file.read_text().splitlines()
+    hashes = set(first_strings)
     others = [line for line in lines[1:] if not line.startswith("S ")]
     rest = [line for line in lines[1:] if line.startswith("S ") and int(line.split()[1], 16) not in hashes]
-    text = "\n".join([lines[0], *others, *(f"S {h:016x}" for h in first), *rest]) + "\n"
-    Path(order_file).write_text(text, newline="\n")
-    print(f"{order_file}: {len(first)} strings the runs touched first, then {len(rest)} of the order file's")
+    order_file.write_text("\n".join([lines[0], *others, *(f"S {h:016x}" for h in first_strings), *rest]) + "\n", newline="\n")
+    print(f"{order_file}: {len(first_strings)} strings the runs touched first, then {len(rest)} of the order file's")
+    functions_file = profile / "heap-functions.txt"
+    functions_file.write_text(
+        "# The functions whose executables Pi's runs touch, by StaticHeap::FunctionCell's names: scripts\\train-heap.ps1.\n"
+        + "".join(f"{f:016x}\n" for f in first_functions), newline="\n")
+    print(f"{functions_file}: {len(first_functions)} functions of {functions.count}")
 
 
 if __name__ == "__main__":

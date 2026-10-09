@@ -17,6 +17,8 @@
 #                     build a second time with a copy of the runtime (another file, so ASLR loads it at another address) and
 #                     check that the prebuilt heaps are the same byte for byte: a pointer the executable's writer did not relocate,
 #                     or a table hashed by address, would differ (scripts\lib\compare-static-heaps.py)
+#   -FunctionCellsOut FILE
+#                     write where each function's executables are in the prebuilt heap, by name (for scripts\train-heap.ps1)
 # Environment: PIBOLT_BUN (the Pi-Bolt runtime; default .work\runtime\bun.exe); PIBOLT_BUILD_LOG (a file for what the compiler
 #              prints)
 param(
@@ -29,7 +31,8 @@ param(
 	[string[]]$PluginWorker = @(),
 	[switch]$KeepBytecode,
 	[switch]$Stable,
-	[switch]$VerifyDeterminism
+	[switch]$VerifyDeterminism,
+	[string]$FunctionCellsOut = ''
 )
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandArgumentPassing = 'Legacy' # (PowerShell 7 as Windows PowerShell: see Build-Pi)
@@ -206,6 +209,9 @@ if ($Jit -eq 'off') { $vars.BUN_AOT_JIT = '0' }
 if ($Cpu -eq 'baseline') { $vars.BUN_AOT_CPU = 'baseline' }
 if (-not $KeepBytecode) { $vars.BUN_JSC_omitBytecodeFromStaticHeap = '1' }
 if ($Regexps) { $vars.BUN_JSC_aotRegExpsPath = $Regexps }
+# The functions whose executables Pi's runs touch (scripts\train-heap.ps1): made side by side in the prebuilt heap.
+if (Test-Path (Join-Path $Profile 'heap-functions.txt')) { $vars.BUN_STATIC_HEAP_FUNCTIONS_FIRST = Join-Path $Profile 'heap-functions.txt' }
+if ($FunctionCellsOut) { $vars.BUN_STATIC_HEAP_FUNCTION_CELLS_OUT = [System.IO.Path]::GetFullPath($FunctionCellsOut) }
 foreach ($k in $vars.Keys) { $saved[$k] = [Environment]::GetEnvironmentVariable($k); [Environment]::SetEnvironmentVariable($k, $vars[$k]) }
 function Build-Pi($runtime, $outfile, $log) {
 	# A JSON string. (Windows PowerShell passes a native command's argument's double quotes as they are, which the program's runtime

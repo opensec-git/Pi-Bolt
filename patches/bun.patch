@@ -26,7 +26,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  scripts/build/deps/mimalloc.ts                |    9 +
  scripts/build/deps/webkit.ts                  |   25 +-
  scripts/build/download.ts                     |   28 +-
- scripts/build/flags.ts                        |   25 +-
+ scripts/build/flags.ts                        |   32 +-
  scripts/build/rust.ts                         |    3 +
  scripts/orderfile/functrace-windows.c         |   24 +-
  scripts/orderfile/generate.ts                 |   55 +-
@@ -59,7 +59,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/jsc/bindings/InternalModuleRegistry.cpp   |   15 +-
  src/jsc/bindings/ZigException.cpp             |   14 +-
  src/jsc/bindings/ZigGlobalObject.cpp          |   45 +
- src/jsc/bindings/ZigSourceProvider.cpp        | 1091 ++++++++++++++++-
+ src/jsc/bindings/ZigSourceProvider.cpp        | 1124 ++++++++++++++++-
  src/jsc/bindings/c-bindings.cpp               |  113 ++
  .../webcore/SerializedScriptValue.cpp         |    9 +
  src/jsc/web_worker.rs                         |    4 +
@@ -72,7 +72,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/spawn_sys/posix_spawn.rs                  |  173 ++-
  src/spawn_sys/spawn_process.rs                |   14 +-
  src/standalone_graph/StandaloneModuleGraph.rs |  254 +++-
- 53 files changed, 2603 insertions(+), 205 deletions(-)
+ 53 files changed, 2643 insertions(+), 205 deletions(-)
  create mode 100644 patches/libuv/win-thread-stack-reservation.patch
  create mode 100644 patches/mimalloc/page-commit-on-demand-default.patch
 
@@ -398,7 +398,7 @@ index 42d81846..daeca6fd 100644
   * Extract a .zip archive with mtime normalization.
   *
 diff --git a/scripts/build/flags.ts b/scripts/build/flags.ts
-index 3d40f647..62e835fe 100644
+index 3d40f647..10fead7c 100644
 --- a/scripts/build/flags.ts
 +++ b/scripts/build/flags.ts
 @@ -499,6 +499,13 @@ export const globalFlags: Flag[] = [
@@ -415,7 +415,21 @@ index 3d40f647..62e835fe 100644
  
    // ─── Linux-specific codegen ───
    {
-@@ -1007,9 +1014,23 @@ export const linkerFlags: Flag[] = [
+@@ -961,6 +968,13 @@ export const linkerFlags: Flag[] = [
+     when: c => c.windows && linkRunsLto(c),
+     desc: "LTO level: IR pipeline and code generation (lld-link)",
+   },
++  {
++    // A relink after a small change takes the code of every module whose input, imports and options are unchanged from
++    // here (the key covers all three), instead of compiling all of them again. What it links is the same either way.
++    flag: c => [`/lldltocache:${c.buildDir}/lto-cache`, "/lldltocachepolicy:cache_size_bytes=8g"],
++    when: c => c.windows && linkRunsLto(c),
++    desc: "ThinLTO cache for the link's code generation (lld-link)",
++  },
+ 
+   // ─── PGO (link-side) ───
+   {
+@@ -1007,9 +1021,23 @@ export const linkerFlags: Flag[] = [
      desc: "Windows cross-compile: MSVC CRT + Windows SDK library search root (xwin splat)",
    },
    {
@@ -2556,7 +2570,7 @@ index 9de807ad..bb219910 100644
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH
 diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
-index fbfaa2ff..c08202df 100644
+index fbfaa2ff..3b903b40 100644
 --- a/src/jsc/bindings/ZigSourceProvider.cpp
 +++ b/src/jsc/bindings/ZigSourceProvider.cpp
 @@ -2,6 +2,17 @@
@@ -3692,7 +3706,7 @@ index fbfaa2ff..c08202df 100644
  // `entryOffsets` has room for one number per successful add* call; `regionEnds` for
  // JSC::BytecodeLinkEncoder::numberOfRegions.
  static_assert(JSC::BytecodeLinkEncoder::numberOfRegions == 6, "bun_resolver::LINKED_BYTECODE_REGION_COUNT");
-@@ -340,6 +1415,18 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
+@@ -340,6 +1415,51 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
      auto result = encoder->finish();
      if (!result.payload || result.entryOffsets.size() != entryOffsetCount)
          return false;
@@ -3704,7 +3718,40 @@ index fbfaa2ff..c08202df 100644
 +    }
 +    if (s_stringsOfLinkEncoder && shouldBuildStaticHeap()) {
 +        auto strings = s_stringsOfLinkEncoder->serialize(s_hotStringsOfLinkEncoder.span());
-+        s_builtStaticHeap = JSC::StaticHeap::build(encoder->vm(), strings.span(), result.payload->span(), result.entryOffsetsOfModules.span(), result.aotImage.span(), 0, nullptr, result.reportableSites.span(), result.variablesExportedByModules.span(), result.regionEnds);
++        // BUN_STATIC_HEAP_FUNCTIONS_FIRST: a file of the functions a recorded run touched the executables of, one name
++        // (StaticHeap::FunctionCell::function) in hex a line. BUN_STATIC_HEAP_FUNCTION_CELLS_OUT: where to write each
++        // executable's cell, "<offset in the region> <name> <size>" in hex, for making such a list from a trace.
++        Vector<uint64_t> functionsUsedFirst;
++        if (const char* path = getenv("BUN_STATIC_HEAP_FUNCTIONS_FIRST"); path && *path) {
++            if (FILE* file = fopen(path, "r")) {
++                char line[64];
++                while (fgets(line, sizeof(line), file)) {
++                    if (line[0] == '#')
++                        continue;
++                    char* end = nullptr;
++                    unsigned long long name = strtoull(line, &end, 16);
++                    if (end != line && name)
++                        functionsUsedFirst.append(name);
++                }
++                fclose(file);
++            } else {
++                fprintf(stderr, "error: BUN_STATIC_HEAP_FUNCTIONS_FIRST: cannot read %s\n", path);
++                return false;
++            }
++        }
++        const char* cellsOut = getenv("BUN_STATIC_HEAP_FUNCTION_CELLS_OUT");
++        Vector<JSC::StaticHeap::FunctionCell> cellsOfFunctions;
++        s_builtStaticHeap = JSC::StaticHeap::build(encoder->vm(), strings.span(), result.payload->span(), result.entryOffsetsOfModules.span(), result.aotImage.span(), 0, nullptr, result.reportableSites.span(), result.variablesExportedByModules.span(), result.regionEnds, functionsUsedFirst.span(), cellsOut && *cellsOut ? &cellsOfFunctions : nullptr);
++        if (cellsOut && *cellsOut) {
++            FILE* file = fopen(cellsOut, "w");
++            if (!file) {
++                fprintf(stderr, "error: BUN_STATIC_HEAP_FUNCTION_CELLS_OUT: cannot write %s\n", cellsOut);
++                return false;
++            }
++            for (auto& cell : cellsOfFunctions)
++                fprintf(file, "%llx %llx %llx\n", static_cast<unsigned long long>(cell.offsetInRegion), static_cast<unsigned long long>(cell.function), static_cast<unsigned long long>(cell.size));
++            fclose(file);
++        }
 +        s_builtAOTImage = s_builtStaticHeap.isEmpty() ? Vector<uint8_t> { } : WTF::move(result.aotImage);
 +        dataLogLnIf(JSC::Options::verboseDiskCache() || getenv("BUN_STATIC_HEAP_VERBOSE"), "[Bytecode Build] static heap: ", s_builtStaticHeap.size(), " bytes for ", result.entryOffsetsOfModules.size(), " modules; AOT image: ", s_builtAOTImage.size(), " bytes");
 +    }
