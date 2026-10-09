@@ -831,7 +831,9 @@ offer_extensions() {
 			printf '  %sdid not install %s@%s (Pi-Bolt itself is installed): the registry'"'"'s package is not the one this release pins%s\n' "$red" "$package" "$version" "$reset"
 			continue
 		fi
-		if out=$(NPM_CONFIG_REGISTRY="$NPM_REGISTRY" "$INSTALL/$NAME/pi" install "npm:$package@$version" 2>&1); then
+		# (From the registry that was checked, and without the package's install scripts: nothing of it runs before its lockfile
+		# entry is compared with the pin, below, and an extension of Pi needs none.)
+		if out=$(NPM_CONFIG_REGISTRY="$NPM_REGISTRY" NPM_CONFIG_IGNORE_SCRIPTS=true "$INSTALL/$NAME/pi" install "npm:$package@$version" 2>&1); then
 			# What the package manager installed is a download of its own: its lockfile says what it got.
 			case $(installed_matches "$package" "$integrity") in
 			different)

@@ -212,6 +212,76 @@ function Get-PiBoltFile($client, [string]$url, [string]$file, [string]$what) {
 	}
 }
 
+# Copies one file, by its path in the archive, out of a .tgz (gzip, then tar: what npm publishes) to $out; $false if it is not
+# there or the archive is not one. Read here rather than by tar.exe: the tarball is not verified (the .zip in it is, by the signed
+# checksums, once it is out), so nothing but this reads it: a header at a time, the one file's bytes, nothing else of it kept.
+function Get-PiBoltTarEntry([string]$tgz, [string]$entry, [string]$out) {
+	$in = $null; $gz = $null
+	try {
+		$in = [System.IO.File]::OpenRead($tgz)
+		$gz = [System.IO.Compression.GZipStream]::new($in, [System.IO.Compression.CompressionMode]::Decompress)
+		$header = [byte[]]::new(512)
+		$ascii = [System.Text.Encoding]::ASCII
+		$longName = $null
+		$read = {
+			param([byte[]]$buffer, [long]$count)
+			$got = 0
+			while ($got -lt $count) { $n = $gz.Read($buffer, $got, [int]($count - $got)); if ($n -le 0) { return $false }; $got += $n }
+			$true
+		}
+		$skip = {
+			param([long]$count)
+			$chunk = [byte[]]::new(65536)
+			while ($count -gt 0) { $n = $gz.Read($chunk, 0, [int][Math]::Min($count, 65536)); if ($n -le 0) { return $false }; $count -= $n }
+			$true
+		}
+		while (& $read $header 512) {
+			if ($header[0] -eq 0) { return $false } # the end: two blocks of zeros
+			$octal = $ascii.GetString($header, 124, 12).Trim([char]0, ' ')
+			if ($octal -notmatch '^[0-7]{1,11}$') { return $false }
+			$size = [Convert]::ToInt64($octal, 8)
+			$padded = [long]([Math]::Ceiling($size / 512) * 512)
+			$type = [char]$header[156]
+			$name = $ascii.GetString($header, 0, 100).Split([char]0)[0]
+			if ($ascii.GetString($header, 257, 5) -eq 'ustar') {
+				$prefix = $ascii.GetString($header, 345, 155).Split([char]0)[0]
+				if ($prefix) { $name = "$prefix/$name" }
+			}
+			if ($longName) { $name = $longName; $longName = $null }
+			if ($type -eq 'L' -and $size -le 4096) {
+				# (GNU's long name: the next entry's name, in this one's data.)
+				$data = [byte[]]::new($padded)
+				if (-not (& $read $data $padded)) { return $false }
+				$longName = $ascii.GetString($data, 0, [int]$size).Split([char]0)[0]
+				continue
+			}
+			if (($type -eq '0' -or $type -eq [char]0) -and $name -eq $entry) {
+				# (Before it is verified, a size it says is only believed so far: a release's archive is a few hundred MB.)
+				if ($size -gt 1GB) { return $false }
+				$file = [System.IO.File]::Create($out)
+				try {
+					$chunk = [byte[]]::new(1MB)
+					$left = $size
+					while ($left -gt 0) {
+						$n = $gz.Read($chunk, 0, [int][Math]::Min($left, $chunk.Length))
+						if ($n -le 0) { return $false }
+						$file.Write($chunk, 0, $n)
+						$left -= $n
+					}
+				} finally { $file.Dispose() }
+				return $true
+			}
+			if (-not (& $skip $padded)) { return $false }
+		}
+		$false
+	} catch {
+		$false
+	} finally {
+		if ($gz) { $gz.Dispose() }
+		if ($in) { $in.Dispose() }
+	}
+}
+
 # The line of SHA256SUMS for $name, and whether $file matches it. (A file that SHA256SUMS has no line for does not match.)
 function Test-PiBoltChecksum([string]$sums, [string]$name, [string]$file) {
 	$pattern = "^([0-9a-fA-F]{64}) [ *]?$([regex]::Escape($name))$"
@@ -235,16 +305,23 @@ function Install-PiBoltFiles([string]$from, [string]$to) {
 	}
 	New-Item -ItemType Directory -Force -Path $to | Out-Null
 	$stamp = [DateTime]::UtcNow.Ticks
-	foreach ($file in Get-ChildItem -LiteralPath $from -Recurse -File) {
+	# pi-bolt.exe last: until it is in place, the one that runs is the old one. (If a move fails part of the way, the files moved
+	# before it are the new ones; the installer says so and stops, and running it again puts the rest in place.)
+	$files = @(Get-ChildItem -LiteralPath $from -Recurse -File | Sort-Object { $_.Name -ieq 'pi-bolt.exe' })
+	foreach ($file in $files) {
 		$relative = $file.FullName.Substring($from.Length).TrimStart('\')
 		$target = Join-Path $to $relative
-		New-Item -ItemType Directory -Force -Path (Split-Path $target) | Out-Null
-		if (Test-Path -LiteralPath $target) {
-			$aside = "$target.$stamp.pibolt-old"
-			Move-Item -LiteralPath $target -Destination $aside -Force
-			Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue
+		try {
+			New-Item -ItemType Directory -Force -Path (Split-Path $target) -ErrorAction Stop | Out-Null
+			if (Test-Path -LiteralPath $target) {
+				$aside = "$target.$stamp.pibolt-old"
+				Move-Item -LiteralPath $target -Destination $aside -Force -ErrorAction Stop
+				Remove-Item -LiteralPath $aside -Force -ErrorAction SilentlyContinue
+			}
+			Move-Item -LiteralPath $file.FullName -Destination $target -ErrorAction Stop
+		} catch {
+			Stop-PiBolt "could not put $target in place ($($_.Exception.Message)). Close Pi-Bolt and anything that has its files open, then run the installer again."
 		}
-		Move-Item -LiteralPath $file.FullName -Destination $target
 	}
 }
 
@@ -294,15 +371,12 @@ function Install-PiBoltRelease($state) {
 		}
 		$file = Join-Path $tmp $archive
 		$from = ''
-		$tar = Join-Path $env:SystemRoot 'System32\tar.exe' # (Windows' own, not whatever a PATH has)
-		if ($state.Source -ne 'github' -and -not $env:PIBOLT_DOWNLOAD_BASE -and (Test-Path -LiteralPath $tar)) {
+		if ($state.Source -ne 'github' -and -not $env:PIBOLT_DOWNLOAD_BASE) {
 			# The npm package pi-bolt-win32-x64 (of the same version) is a .tgz with the release's .zip in it.
 			$registry = if ($env:PIBOLT_NPM_REGISTRY) { $env:PIBOLT_NPM_REGISTRY.TrimEnd('/') } else { 'https://registry.npmjs.org' }
 			$tgz = Join-Path $tmp 'npm.tgz'
 			if ((Get-PiBoltFile $client "$registry/$name/-/$name-$($state.Version).tgz" $tgz 'downloading')) {
-				& $tar -xzf $tgz -C $tmp "package/$archive" 2>$null
-				if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath (Join-Path $tmp "package\$archive"))) {
-					Move-Item -LiteralPath (Join-Path $tmp "package\$archive") -Destination $file -Force
+				if (Get-PiBoltTarEntry $tgz "package/$archive" $file) {
 					Show-PiBoltProgress 'verifying the checksum'
 					if (Test-PiBoltChecksum $sums $archive $file) { $from = 'npm' }
 				}
@@ -313,7 +387,7 @@ function Install-PiBoltRelease($state) {
 				Write-Host "  ${dim}the download from npm failed; downloading from GitHub instead$reset"
 			}
 		} elseif ($state.Source -eq 'npm') {
-			Stop-PiBolt 'PIBOLT_SOURCE=npm needs tar.exe (Windows 10 1803 or later) and the release from GitHub (no PIBOLT_DOWNLOAD_BASE)'
+			Stop-PiBolt 'PIBOLT_SOURCE=npm needs the release from GitHub (no PIBOLT_DOWNLOAD_BASE)'
 		}
 		if (-not $from) {
 			if (-not (Get-PiBoltFile $client "$($state.Base)/$archive" $file 'downloading')) { Stop-PiBolt "download failed: $($state.Base)/$archive" }
@@ -365,6 +439,15 @@ function Test-PiBoltOnPath([string]$dir, [string]$path) {
 }
 
 function Add-PiBoltToPath([string]$dir) {
+	# Another variant of this installation on PATH (pi-bolt-win32-x64 when this is -x64-jit, say) would be found first, and the
+	# build just installed would not be the one that runs: it comes off.
+	$root = Split-Path $dir
+	foreach ($other in Get-ChildItem -LiteralPath $root -Directory -Filter 'pi-bolt-win32-*' -ErrorAction SilentlyContinue) {
+		if ($other.FullName.TrimEnd('\') -ine $dir.TrimEnd('\') -and (Test-PiBoltOnPath $other.FullName (Get-PiBoltUserPath))) {
+			Remove-PiBoltFromPath $other.FullName
+			Write-Host "  ${dim}took $($other.FullName) off your PATH: $dir is the one installed now$reset"
+		}
+	}
 	$userPath = Get-PiBoltUserPath
 	if (-not (Test-PiBoltOnPath $dir $userPath)) {
 		if ($env:PIBOLT_NO_PATH -eq '1') {
@@ -518,8 +601,18 @@ function Install-PiBoltExtensions($state) {
 			Write-Host "  ${red}did not install $spec (Pi-Bolt itself is installed): the registry's package is not the one this release pins$reset"
 			continue
 		}
-		$out = & $exe install "npm:$spec" 2>&1
-		$installed = $LASTEXITCODE -eq 0
+		# From the registry that was checked, and without running the package's install scripts: nothing of it runs until its
+		# lockfile entry has been compared with the pin (below), and an extension of Pi needs none.
+		$saved = @{ NPM_CONFIG_REGISTRY = $env:NPM_CONFIG_REGISTRY; NPM_CONFIG_IGNORE_SCRIPTS = $env:NPM_CONFIG_IGNORE_SCRIPTS }
+		$env:NPM_CONFIG_REGISTRY = $registry
+		$env:NPM_CONFIG_IGNORE_SCRIPTS = 'true'
+		try {
+			$out = & $exe install "npm:$spec" 2>&1
+			$installed = $LASTEXITCODE -eq 0
+		} finally {
+			$env:NPM_CONFIG_REGISTRY = $saved.NPM_CONFIG_REGISTRY
+			$env:NPM_CONFIG_IGNORE_SCRIPTS = $saved.NPM_CONFIG_IGNORE_SCRIPTS
+		}
 		if ($installed) {
 			# What the package manager installed is a download of its own: its lockfile says what it got.
 			$check = Test-PiBoltInstalledExtension $exe $e
@@ -574,6 +667,9 @@ function Install-PiBolt {
 		if (-not (Test-PiBoltAvx2)) { $variant = 'x64-baseline-if-there' }
 	}
 	$install = if ($env:PIBOLT_INSTALL) { $env:PIBOLT_INSTALL } else { Join-Path $env:USERPROFILE '.pi-bolt' }
+	# A full path, which is what goes on PATH: a relative one there would be looked up from whatever folder a terminal is in.
+	if (-not [System.IO.Path]::IsPathRooted($install)) { Stop-PiBolt "PIBOLT_INSTALL must be a full path (it is $install)" }
+	$install = [System.IO.Path]::GetFullPath($install)
 	$state = @{ Version = $shown; Shown = $(if ($shown) { $shown } else { '(latest)' }); Source = $source; Base = $base; Platform = 'win32'; Install = $install }
 	if ($variant -eq 'x64-baseline-if-there') {
 		$variant = 'x64'
@@ -620,6 +716,11 @@ if ($env:PIBOLT_INSTALLER_NO_MAIN -ne '1') {
 		Install-PiBolt
 		$global:LASTEXITCODE = 0
 	} catch [System.OperationCanceledException] {
+		$global:LASTEXITCODE = 1
+	} catch {
+		# Anything else is a failure too: said, with an exit status that says so (for `pi-bolt update`), not a success.
+		Clear-PiBoltProgress
+		[Console]::Error.WriteLine("${red}error:$reset the installer stopped: $($_.Exception.Message)")
 		$global:LASTEXITCODE = 1
 	}
 }

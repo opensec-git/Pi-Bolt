@@ -1,4 +1,4 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, lstatSync, statSync } from "node:fs";
 import { delimiter, isAbsolute, join } from "node:path";
 import { spawn, spawnSync } from "child_process";
 import { getBinDir } from "../config.ts";
@@ -25,6 +25,21 @@ function getBashShellConfig(shell: string): ShellConfig {
 // `where` for it took a process start each time.
 const foundOnWindowsPath = new Map<string, string>();
 
+// A file there to run. An app execution alias (a Store app's pwsh.exe in WindowsApps) is a reparse point that stat may refuse
+// to follow; Windows starts it all the same, and `where` listed it: it counts when the link itself is there and is not a folder.
+function isProgramFile(file: string): boolean {
+	try {
+		return statSync(file, { throwIfNoEntry: false })?.isFile() ?? false;
+	} catch {
+		try {
+			const link = lstatSync(file, { throwIfNoEntry: false });
+			return link !== undefined && !link.isDirectory();
+		} catch {
+			return false;
+		}
+	}
+}
+
 function findExecutableOnPath(executable: string): string | null {
 	if (process.platform === "win32") {
 		// Windows: the file in PATH's absolute directories, in order. (`where`, which this was, also looks in the working
@@ -36,7 +51,7 @@ function findExecutableOnPath(executable: string): string | null {
 		for (const dir of path.split(delimiter)) {
 			if (!dir || !isAbsolute(dir)) continue;
 			const file = join(dir, executable);
-			if (statSync(file, { throwIfNoEntry: false })?.isFile()) {
+			if (isProgramFile(file)) {
 				foundOnWindowsPath.set(key, file);
 				return file;
 			}

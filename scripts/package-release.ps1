@@ -34,7 +34,11 @@ if (-not $NoBuild) {
 $exe = Join-Path $Out 'pi.exe'
 if (-not (Test-Path $exe)) { Die "$exe not found: build it, or run without -NoBuild" }
 [Environment]::SetEnvironmentVariable('BUN_STATIC_HEAP_VERBOSE', '1')
+# (What it says on stderr is what is looked for; Windows PowerShell makes each such line an error, which 'Stop' would end the
+# script at.)
+$ErrorActionPreference = 'Continue'
 $check = (& $exe --version 2>&1 | Out-String)
+$ErrorActionPreference = 'Stop'
 [Environment]::SetEnvironmentVariable('BUN_STATIC_HEAP_VERBOSE', $null)
 if ($check -notmatch 'image registered: true') { Die "$exe does not use its compiled code" }
 

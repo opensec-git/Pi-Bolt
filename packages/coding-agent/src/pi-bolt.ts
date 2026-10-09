@@ -35,7 +35,13 @@ export function piBoltInstallerProcess(): { command: string; args: string[] } {
 				"v1.0",
 				"powershell.exe",
 			),
-			args: ["-NoProfile", "-Command", `irm ${PIBOLT_INSTALL_URL} | iex; exit $LASTEXITCODE`],
+			// (If the download fails, nothing was installed: that is an exit code too. `irm ... | iex; exit $LASTEXITCODE` exited 0,
+			// as no program had run to set it.)
+			args: [
+				"-NoProfile",
+				"-Command",
+				`try { $installer = irm ${PIBOLT_INSTALL_URL} -ErrorAction Stop } catch { Write-Error $_; exit 1 }; iex $installer; exit $LASTEXITCODE`,
+			],
 		};
 	}
 	return { command: "sh", args: ["-c", PIBOLT_INSTALL_COMMAND] };

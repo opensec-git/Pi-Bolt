@@ -83,16 +83,22 @@ const TOOLS: Record<string, ToolConfig> = {
 // asks for rg and fd before its first frame, and spawning one held the start for milliseconds (on Windows, tens of them).
 // Elsewhere than on Windows the name is returned, and spawning it finds that file. On Windows spawning a bare name looks in the
 // working directory before PATH, so a project's own rg.exe would run in the place of the one installed: there the file is
-// returned by its path, from the absolute directories of PATH only, with the extensions spawn tries (.com after the others).
+// returned by its path, from the absolute directories of PATH only, as a program (.exe, then .com). Not a batch file (.cmd,
+// .bat): Windows runs one through cmd.exe, which parses its arguments again, and the search tools pass it patterns and globs
+// that the model chose. A file that cannot be looked at (an app execution alias, a denied one) is passed over.
 function findCommand(cmd: string): string | null {
 	const windows = platform() === "win32";
-	const passes = windows ? [[".exe", ".cmd", ".bat"], [".com"]] : [[""]];
+	const passes = windows ? [[".exe"], [".com"]] : [[""]];
 	const dirs = (process.env.PATH ?? "").split(delimiter).filter((dir) => dir && (!windows || isAbsolute(dir)));
 	for (const extensions of passes) {
 		for (const dir of dirs) {
 			for (const extension of extensions) {
 				const file = join(dir, cmd + extension);
-				if (!statSync(file, { throwIfNoEntry: false })?.isFile()) continue;
+				let isFile = false;
+				try {
+					isFile = statSync(file, { throwIfNoEntry: false })?.isFile() ?? false;
+				} catch {}
+				if (!isFile) continue;
 				if (windows) return file;
 				try {
 					accessSync(file, constants.X_OK);

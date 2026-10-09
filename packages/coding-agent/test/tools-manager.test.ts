@@ -140,6 +140,21 @@ describe("getToolPath", () => {
 			expect(getToolPath("rg")).toBe(join(bin, "rg.exe"));
 		},
 	);
+
+	it.runIf(process.platform === "win32")(
+		"does not take a batch file for a tool (cmd.exe would parse the model's patterns again)",
+		() => {
+			const shims = temporaryDir();
+			const bin = temporaryDir();
+			writeFileSync(join(shims, "rg.cmd"), "");
+			writeFileSync(join(shims, "rg.bat"), "");
+			process.env.PATH = shims;
+			expect(getToolPath("rg")).toBeNull();
+			writeFileSync(join(bin, "rg.exe"), "");
+			process.env.PATH = `${shims};${bin}`;
+			expect(getToolPath("rg")).toBe(join(bin, "rg.exe"));
+		},
+	);
 });
 
 describe("ensureTool", () => {

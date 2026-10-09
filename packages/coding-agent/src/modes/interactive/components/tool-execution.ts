@@ -17,7 +17,7 @@ export type { ToolRenderers };
 
 import { formatToolCallWithArgs, getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
 import { ensurePngTranscoder } from "../../../utils/image-convert.ts";
-import { theme } from "../theme/theme.ts";
+import { liveTheme, theme } from "../theme/theme.ts";
 import { keyHint } from "./keybinding-hints.ts";
 
 const FALLBACK_PREVIEW_LINES = 10;
@@ -276,7 +276,8 @@ export class ToolExecutionComponent extends Container {
 				hasContent = true;
 			} else {
 				try {
-					const component = callRenderer(this.args, theme, this.getRenderContext(this.callRendererComponent));
+					// (liveTheme: a renderer may keep it in what it returns, which is handed back to it, and a theme may change.)
+					const component = callRenderer(this.args, liveTheme, this.getRenderContext(this.callRendererComponent));
 					this.callRendererComponent = component;
 					renderContainer.addChild(this.createResultRegion(component));
 					hasContent = true;
@@ -300,7 +301,7 @@ export class ToolExecutionComponent extends Container {
 						const component = resultRenderer(
 							{ content: this.result.content as any, details: this.result.details },
 							{ expanded: this.expanded, isPartial: this.isPartial },
-							theme,
+							liveTheme,
 							this.getRenderContext(this.resultRendererComponent),
 						);
 						this.resultRendererComponent = component;
