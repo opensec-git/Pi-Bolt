@@ -725,8 +725,19 @@ export async function main(args: string[], options?: MainOptions) {
 
 	const trustStore = new ProjectTrustStore(agentDir);
 	const sessionCwd = sessionManager.getCwd();
+	// The session's directory is checked once at startup, here or for the initial runtime, whichever asks first: the check walks
+	// every ancestor directory, and both ask about the same one a moment apart. Later runtimes (a reload, another session) check
+	// again.
+	let sessionCwdHasTrustRequiringResources: boolean | undefined;
+	const hasTrustRequiringResourcesAtStartup = (dir: string): boolean => {
+		if (dir !== sessionCwd) return hasTrustRequiringProjectResources(dir);
+		if (sessionCwdHasTrustRequiringResources === undefined) {
+			sessionCwdHasTrustRequiringResources = hasTrustRequiringProjectResources(dir);
+		}
+		return sessionCwdHasTrustRequiringResources;
+	};
 	const autoTrustOnReloadCwd =
-		parsed.projectTrustOverride === undefined && !hasTrustRequiringProjectResources(sessionCwd)
+		parsed.projectTrustOverride === undefined && !hasTrustRequiringResourcesAtStartup(sessionCwd)
 			? sessionCwd
 			: undefined;
 	const trustPromptMode: AppMode = parsed.help || parsed.listModels !== undefined ? "print" : appMode;
@@ -746,7 +757,9 @@ export async function main(args: string[], options?: MainOptions) {
 		const isInitialRuntime = sessionStartEvent === undefined;
 		const projectTrustDiagnostics: AgentSessionRuntimeDiagnostic[] = [];
 		const cachedProjectTrust = projectTrustByCwd.get(cwd);
-		const hasTrustRequiringResources = hasTrustRequiringProjectResources(cwd);
+		const hasTrustRequiringResources = isInitialRuntime
+			? hasTrustRequiringResourcesAtStartup(cwd)
+			: hasTrustRequiringProjectResources(cwd);
 		const shouldResolveProjectTrust =
 			parsed.projectTrustOverride === undefined && cachedProjectTrust === undefined && hasTrustRequiringResources;
 		const projectTrusted = shouldResolveProjectTrust

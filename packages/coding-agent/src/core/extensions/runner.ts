@@ -1296,6 +1296,15 @@ export class ExtensionRunner {
 	 * handlers then see the full transcript and their output is used as returned.
 	 */
 	async emitContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
+		// The copy is for handlers, which may edit the messages in place. With none, they go on as they are, as they do when there
+		// are no extensions at all (sdk.ts transformContext): a deep copy of the whole conversation before every request costs
+		// milliseconds that grow with it.
+		const hasHandlers = this.extensions.some(
+			(ext) =>
+				(ext.handlers.get("context")?.length ?? 0) > 0 ||
+				(ext.handlers.get("context_with_system")?.length ?? 0) > 0,
+		);
+		if (!hasHandlers) return messages;
 		const ctx = this.createContext();
 		let currentMessages = structuredClone(messages);
 
