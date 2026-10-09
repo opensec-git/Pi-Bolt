@@ -145,9 +145,6 @@ export async function createAgentSessionServices(
 			authPath: join(agentDir, "auth.json"),
 			modelsPath: join(agentDir, "models.json"),
 			signal: options.modelRuntimeSignal,
-			// Refreshed once, below, after the extensions' providers are registered: refreshing here too read models.json and
-			// checked every provider's credentials twice at each start.
-			refreshOnCreate: false,
 		}));
 	ttiTrace("models.loaded");
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
