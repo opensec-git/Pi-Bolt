@@ -213,9 +213,21 @@ its debugger, which sees it at its exit) and a sampling profile of the threads (
   thread's, and Bun's, libuv's and the system's thread pools create theirs with a reservation size only, so each committed 6 MB
   instead of 2: Pi's peak private bytes went from 194 to 233 MB headless and from 246 to 302 MB in the TUI.)
 - **A page fault on the executable's image** costs about 1.5 µs once the file is in memory, 44 µs on the first run after it
-  is not (`.work/exp/stack/imagefault.cpp`). `pi --version` touches about 1,900 pages of the runtime's code, so laying out what
-  Pi runs together (a linker order file, as on macOS: `scripts\train-runtime-hints.ps1`, `scripts\build-runtime.ps1`) is worth a
-  few milliseconds warm and more cold. The Windows tracer and `hints.ts` support for it are in place.
+  is not (`.work/exp/stack/imagefault.cpp`). `pi --version` touched about 1,900 pages of the runtime's code, so the runtime's
+  code is now laid out in the order Pi enters it, as on macOS: `scripts\train-runtime-hints.ps1` traces which runtime functions
+  Pi enters, in first-entry order, from a headless and an interactive session against the local fake model (a debugger of the
+  one process, `functrace-windows.c`), into `profiles\runtime-win32-x64.hints`, which `scripts\build-runtime.ps1` turns into the
+  linker's order file. Peak working set 29.6 -> 25.8 MB at `--version`, 79.9 -> 74.1 MB headless, 110.5 -> 103.4 MB in the TUI;
+  CPU 98 -> 93 ms headless, 309 -> 297 ms in the TUI. The list is of names: it holds from one runtime build to the next, and is
+  made again when what Pi runs has changed much.
+- **Memory committed and never used.** Commit charge is what Windows promises a process, whether or not it touches it, and
+  what "private bytes" shows; Pi's peak was 203 MB headless and 246 MB in the TUI. Now: mimalloc commits its pages' memory on
+  demand (`MI_DEFAULT_PAGE_COMMIT_ON_DEMAND=2`) instead of a whole segment up front; the main thread's stack commit in the
+  executable's header is 256 KB, and JavaScriptCore commits what it needs itself (above); libuv's threads reserve their stacks
+  instead of committing them (`STACK_SIZE_PARAM_IS_A_RESERVATION`); the inspector no longer starts Winsock at every launch;
+  timers round their waits up to a whole millisecond (a shorter wait is a busy one on Windows); a pipe writer keeps 256 KB when
+  it shrinks. Peak private bytes 203 -> 80 MB headless and 246 -> 117 MB in the TUI, with CPU and time to interactive the same.
+  ICU is built with `/guard:cf`, as the rest is.
 - **The prebuilt heap's pages** were a quarter of `pi --version`'s: 2,092 of 7,655 page faults (`.work/exp/handoff/heapmap.py`
   classifies them). What was laid out in the order the training's decoding used it was not in the order a prebuilt heap is used:
   there is nothing left to decode, and what Pi touches as it starts is mostly what the engine and Pi look up by name. A string's
@@ -232,6 +244,15 @@ its debugger, which sees it at its exit) and a sampling profile of the threads (
   start for each one that is. It now looks them up, as on Linux and macOS, from PATH's absolute directories, with the
   extensions spawn tries (`.com` last), and returns the file's path. That is also safer: spawning a bare name on Windows looks in
   the working directory first, so a project's own `rg.exe` would have run at Pi's start, and as the search tools.
+- **Other file probes at start.** A TUI start makes about 280 file calls, 128 of them probes for files that are not there
+  (`.work/exp/handoff/fstrace.py`, a debugger on ntdll's file calls). Most are Pi looking up the directory tree for project
+  resources (`.agents\skills`, `.git`, `AGENTS.md`, `CLAUDE.md`), a few times a start, which it must do again on a reload; one
+  repeat was not needed (the trust check asked twice about the same directory at startup) and is gone. What is left is about
+  3 ms a start at this machine's depth.
+- **A copy of the conversation before every request.** The extensions' context transform deep-copied the whole conversation
+  before each request to the model, for handlers that may edit it, also when no extension had one. It no longer does then.
+- **A fresh home is slower to read.** A file just written is scanned by the on-access scanner when it is first opened (1 to
+  15 ms here), so a benchmark that makes a new home for every run measures that, not Pi: the bench reuses one home per session.
 
 ## What would carry over to macOS
 
