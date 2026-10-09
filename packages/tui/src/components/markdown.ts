@@ -1,6 +1,6 @@
 import { Marked, type Token, Tokenizer, type TokenizerExtension, type Tokens } from "marked";
 import { renderLatex } from "../latex.ts";
-import { renderedMarkdownGeneration } from "../rendered-markdown.ts";
+import { invalidateRenderedMarkdown, renderedMarkdownGeneration } from "../rendered-markdown.ts";
 import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.ts";
 import type { Component } from "../tui.ts";
 import { applyBackgroundToLine, flattenLines, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
@@ -328,9 +328,6 @@ function replaceTabs(text: string): string {
 /** What a top-level block was rendered to, and everything that went into it besides the token. */
 interface RenderedBlock {
 	generation: number;
-	/** Which component rendered it, and how often that component had been invalidated then. */
-	owner: number;
-	ownerGeneration: number;
 	width: number;
 	paddingX: number;
 	nextTokenType: string | undefined;
@@ -349,8 +346,6 @@ interface RenderedBlock {
 }
 
 const renderedBlocks = new WeakMap<Token, RenderedBlock>();
-
-let nextMarkdownId = 0;
 
 let markdownCaching = true;
 
@@ -440,9 +435,6 @@ export class Markdown implements Component {
 	// about ten times the size of its source, and every message of a long transcript keeps a Markdown component. The
 	// tokens survive a burst of re-renders, such as a theme preview, and are collected afterwards.
 	private cachedTokens?: WeakRef<{ source: string; tokens: Token[] }>;
-	// What this component's own invalidate() makes of the blocks it rendered (see invalidate()).
-	private readonly id = nextMarkdownId++;
-	private ownGeneration = 0;
 
 	constructor(
 		text: string,
@@ -471,11 +463,8 @@ export class Markdown implements Component {
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
-		// What the theme's functions give may have changed: nothing this component rendered with them is good any more. Only
-		// this one's: a component that is invalidated on its own (a tool's, an extension's) would otherwise throw away what every
-		// message rendered, the streaming one's included, at each update. The whole screen's invalidation (the TUI's: a theme,
-		// the terminal's colors) forgets them all (invalidateRenderedMarkdown()).
-		this.ownGeneration++;
+		// What the theme's functions give may have changed: nothing rendered with them is good any more.
+		invalidateRenderedMarkdown();
 	}
 
 	/**
@@ -489,8 +478,6 @@ export class Markdown implements Component {
 		if (
 			known &&
 			known.generation === renderedMarkdownGeneration() &&
-			known.owner === this.id &&
-			known.ownerGeneration === this.ownGeneration &&
 			known.width === width &&
 			known.paddingX === this.paddingX &&
 			known.nextTokenType === nextTokenType &&
@@ -544,8 +531,6 @@ export class Markdown implements Component {
 		}
 		renderedBlocks.set(token, {
 			generation: renderedMarkdownGeneration(),
-			owner: this.id,
-			ownerGeneration: this.ownGeneration,
 			width,
 			paddingX: this.paddingX,
 			nextTokenType,

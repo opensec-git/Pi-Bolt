@@ -101,8 +101,11 @@ queries before DA1; no timeouts. The behaviour is kept.
    context events, 473c37d2d) and request serialization (`JSON.stringify` of each request: inherent). Natively
    (`stream_prof.py`), the main thread's streaming time is mostly in system calls, and Pi writes once a frame
    (`writecount.py`: 419 frames, 419 writes); the rest is the socket reads of the model's events. Pi's compiled JS is ~3% of
-   the samples. Nothing big is left there. A Markdown component's own invalidate() now forgets only its own blocks (neutral
-   in the bench, right for a spinner). Measured and not kept on Windows: the 12 MB first heap budget and the 5 s GC timer
+   the samples. Nothing big is left there. Tried and reverted: a Markdown component's own invalidate() forgetting only its own
+   blocks. The assistant message makes a new Markdown for each chunk, and the rendered blocks are shared between components
+   through the token cache, so keying them by component made each chunk render the whole message again (the 50 KB write's
+   longest stall 20 -> 87 ms, a 20,000-character answer's CPU 0.5 -> 0.73 s). Scoping it would need a generation of what the
+   theme's functions give, not the component's identity. Measured and not kept on Windows: the 12 MB first heap budget and the 5 s GC timer
    that macOS has (-10 MB peak in the TUI, but twice the collections and +40% CPU while a long answer streams).
 5. **Plugin rows** (done for the example plugin, in the suite): compiled in, its hot loop is 37 ms; loaded at run time with
    the JIT off, 748 ms (the JIT build: 32 ms). The two OpenSec extensions were not measured: they are not on this machine
