@@ -17,6 +17,7 @@ import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import { APP_NAME, getBinDir } from "../config.ts";
 import { fetchWithRetry } from "./management-http.ts";
+import { windowsPathDirectories } from "./windows-path.ts";
 
 const TOOLS_DIR = getBinDir();
 const NETWORK_TIMEOUT_MS = 10_000;
@@ -89,7 +90,9 @@ const TOOLS: Record<string, ToolConfig> = {
 function findCommand(cmd: string): string | null {
 	const windows = platform() === "win32";
 	const passes = windows ? [[".exe"], [".com"]] : [[""]];
-	const dirs = (process.env.PATH ?? "").split(delimiter).filter((dir) => dir && (!windows || isAbsolute(dir)));
+	const dirs = windows
+		? windowsPathDirectories(process.env.PATH ?? "").filter((dir) => isAbsolute(dir))
+		: (process.env.PATH ?? "").split(delimiter).filter(Boolean);
 	for (const extensions of passes) {
 		for (const dir of dirs) {
 			for (const extension of extensions) {
