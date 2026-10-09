@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
+import { ttiTrace } from "@earendil-works/pi-tui";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
 import type { SessionStartEvent, ToolDefinition } from "./extensions/index.ts";
@@ -135,6 +136,7 @@ function applyExtensionFlagValues(
 export async function createAgentSessionServices(
 	options: CreateAgentSessionServicesOptions,
 ): Promise<AgentSessionServices> {
+	ttiTrace("services.start");
 	const cwd = resolvePath(options.cwd);
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getAgentDir();
 	const modelRuntime =
@@ -144,6 +146,7 @@ export async function createAgentSessionServices(
 			modelsPath: join(agentDir, "models.json"),
 			signal: options.modelRuntimeSignal,
 		}));
+	ttiTrace("models.loaded");
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const resourceLoader = new DefaultResourceLoader({
 		...(options.resourceLoaderOptions ?? {}),
@@ -152,6 +155,7 @@ export async function createAgentSessionServices(
 		settingsManager,
 	});
 	await resourceLoader.reload(options.resourceLoaderReloadOptions);
+	ttiTrace("resources.loaded");
 
 	const diagnostics: AgentSessionRuntimeDiagnostic[] = [];
 	const extensionsResult = resourceLoader.getExtensions();
@@ -192,6 +196,7 @@ export async function createAgentSessionServices(
 	}
 	extensionsResult.runtime.pendingVirtualModelRegistrations = [];
 	await modelRuntime.refresh({ allowNetwork: false });
+	ttiTrace("models.refreshed");
 	diagnostics.push(...applyExtensionFlagValues(resourceLoader, options.extensionFlagValues));
 
 	return {

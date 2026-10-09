@@ -140,6 +140,7 @@ k32.QueryInformationJobObject.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_
 k32.SetInformationJobObject.argtypes = [w.HANDLE, ctypes.c_int, ctypes.c_void_p, w.DWORD]
 k32.AssignProcessToJobObject.argtypes = [w.HANDLE, w.HANDLE]
 k32.QueryProcessCycleTime.argtypes = [w.HANDLE, ctypes.POINTER(ctypes.c_ulonglong)]
+k32.GetProcessIoCounters.argtypes = [w.HANDLE, ctypes.POINTER(IO_COUNTERS)]
 k32.QueryThreadCycleTime.argtypes = [w.HANDLE, ctypes.POINTER(ctypes.c_ulonglong)]
 k32.GetCurrentThread.restype = w.HANDLE
 k32.WaitForSingleObject.argtypes = [w.HANDLE, w.DWORD]
@@ -304,6 +305,8 @@ class Measured:
         psapi.GetProcessMemoryInfo(self.process, ctypes.byref(pmc), pmc.cb)
         cycles = ctypes.c_ulonglong()
         k32.QueryProcessCycleTime(self.process, ctypes.byref(cycles))
+        io = IO_COUNTERS()
+        k32.GetProcessIoCounters(self.process, ctypes.byref(io))
         code = self.poll()
         commit_after = system_commit_mb()
         self._result = {
@@ -319,6 +322,14 @@ class Measured:
             "peak_private_ws_mb": None if self.private_ws_peak is None else round(self.private_ws_peak / 2**20, 1),
             "job_peak_private_mb": round(ext.PeakProcessMemoryUsed / 2**20, 1),
             "page_faults": pmc.PageFaultCount,
+            # The main process's I/O calls (GetProcessIoCounters), files, pipes, sockets and the console alike: reads, writes, and
+            # every other one, with the bytes those others moved. The others are mostly the file system's: under Bun a stat or
+            # a missing file's open is 1, a readFileSync 2 (and 2 reads), a readdirSync 4, a realpathSync several per path
+            # component (26 for a path 7 deep).
+            "io_read_ops": io.ReadOperationCount,
+            "io_write_ops": io.WriteOperationCount,
+            "io_other_ops": io.OtherOperationCount,
+            "io_other_bytes": io.OtherTransferCount,
             # System-wide (see the top of this file): the rise while it ran, and what is still charged after it exited.
             "system_commit_peak_mb": round(self.commit_peak - self.commit_before, 1),
             "system_commit_left_mb": round(commit_after - self.commit_before, 1),

@@ -1012,6 +1012,7 @@ export class InteractiveMode {
 			ensureTool("rg", (status) => this.showManagedToolStatus(status)),
 		]);
 		this.fdPath = fdPath;
+		ttiTrace("tools.checked");
 
 		// Enable the remaining input handlers only after managed-tool setup completes.
 		this.setupKeyHandlers();
@@ -1020,6 +1021,7 @@ export class InteractiveMode {
 
 		// Initialize extensions first so resources are shown before messages
 		await this.rebindCurrentSession();
+		ttiTrace("session.bound");
 
 		// Render initial messages AFTER showing loaded resources
 		this.renderInitialMessages();

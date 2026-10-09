@@ -20,16 +20,23 @@ class Line implements Component {
 
 const wait = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-/** The events of a trace file, without their times. */
-function events(file: string): string[] {
+/** The lines of a trace file: time, delta from the line before, event. */
+function lines(file: string): { ms: number; delta: number; event: string }[] {
 	return readFileSync(file, "utf-8")
 		.trim()
 		.split("\n")
 		.map((line) => {
-			const match = /^pi-tti \d+\.\d (.+)$/.exec(line);
+			const match = /^pi-tti (\d+\.\d) \+(\d+\.\d) (.+)$/.exec(line);
 			assert.ok(match, `unexpected trace line: ${line}`);
-			return match[1];
+			return { ms: Number(match[1]), delta: Number(match[2]), event: match[3] };
 		});
+}
+
+/** The events of a trace file after the runtime's start, without their times. */
+function events(file: string): string[] {
+	return lines(file)
+		.slice(1)
+		.map((line) => line.event);
 }
 
 describe("PI_TTI_TRACE", () => {
@@ -84,6 +91,28 @@ describe("PI_TTI_TRACE", () => {
 		} finally {
 			tui.stop();
 		}
+	});
+
+	it("starts with the runtime's start on the wall clock, and gives each event's time since the one before", () => {
+		directory = mkdtempSync(join(tmpdir(), "pi-tti-"));
+		const file = join(directory, "trace.log");
+		process.env.PI_TTI_TRACE = file;
+		resetTtiTrace();
+
+		ttiTrace("first");
+		ttiTrace("second", "detail");
+
+		const [start, first, second] = lines(file);
+		assert.strictEqual(start.ms, 0);
+		assert.strictEqual(start.delta, 0);
+		const origin = /^runtime\.start (\d+\.\d{3})$/.exec(start.event);
+		assert.ok(origin, start.event);
+		assert.ok(Math.abs(Number(origin[1]) - performance.timeOrigin) < 0.01);
+		assert.strictEqual(first.event, "first");
+		assert.strictEqual(first.delta, first.ms);
+		assert.strictEqual(second.event, "second detail");
+		// (Each figure is rounded to 0.1 ms.)
+		assert.ok(Math.abs(second.delta - (second.ms - first.ms)) < 0.2);
 	});
 
 	it("records a timeout and the late reply", async () => {

@@ -46,11 +46,17 @@ def windows_memory(res):
     return {k: res[k] for k in ("peak_mb", "peak_private_mb", "peak_private_ws_mb", "system_commit_peak_mb")}
 
 
+def windows_io(res):
+    """The I/O calls of a run on Windows (GetProcessIoCounters of the main process): io_other_ops is mostly file-system calls
+    (opens, stats, directory listings; see winproc.Measured.result())."""
+    return {k: res[k] for k in ("io_read_ops", "io_write_ops", "io_other_ops", "io_other_bytes")}
+
+
 def run_plain(build, args, env, cwd, cpus):
     if WINDOWS:
         out, res = winproc.run([*build.argv, *args], env, cwd)
         return out, {"ok": res["exit"] == 0, "wall_ms": res["wall_ms"], "cpu_ms": res["cpu_ms"], "job_cpu_ms": res["job_cpu_ms"],
-                     **windows_memory(res)}
+                     **windows_memory(res), **windows_io(res)}
     t0 = time.perf_counter()
     p = subprocess.Popen(pinned([*build.argv, *args], cpus), env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -103,7 +109,7 @@ def interactive(build, env, cwd, cpus, prompts=5):
     r["cpu_ms"] = (ru.ru_utime + ru.ru_stime) * 1e3
     r["peak_mb"] = maxrss_mb(ru)
     if WINDOWS:
-        r.update(windows_memory(ru.result), job_cpu_ms=ru.result["job_cpu_ms"])
+        r.update(**windows_memory(ru.result), **windows_io(ru.result), job_cpu_ms=ru.result["job_cpu_ms"])
     if getattr(tty, "peak_footprint_mb", None) is not None:
         r["peak_fp_mb"] = tty.peak_footprint_mb
     return r
@@ -136,14 +142,15 @@ if MACOS:
 if WINDOWS:
     # peak_mb is the peak working set; peak_private_mb the peak commit charge (private bytes); peak_private_ws_mb the peak
     # private working set. cpu_ms is the main process's, by cycles; job_cpu_ms adds what it started, in clock ticks. (The rise of
-    # the system's commit charge, system_commit_peak_mb, is in the JSONL: system-wide, so too noisy for this table.)
+    # the system's commit charge, system_commit_peak_mb, is in the JSONL: system-wide, so too noisy for this table.) io_other_ops:
+    # the main process's I/O calls other than reads and writes, mostly the file system's (the other I/O counts are in the JSONL).
     for columns in COLUMNS.values():
-        columns += ["peak_private_mb", "peak_private_ws_mb", "job_cpu_ms"]
+        columns += ["peak_private_mb", "peak_private_ws_mb", "job_cpu_ms", "io_other_ops"]
 
 
 FLOOR = "floor"  # (the build name of --floor's runs)
 # What is shown over the floor: the time to the answer, or to the TUI being ready.
-OVER_FLOOR = {"startup": "wall_ms", "headless": "wall_ms", "interactive": "tti_ms"}
+OVER_FLOOR = {"startup": "wall_ms", "headless": "wall_ms", "interactive": "tti_ms", "interactive-default-theme": "tti_ms"}
 
 
 def summarize(rows, baseline=None):
