@@ -44,7 +44,8 @@ Windows 10, performance) and what came of them:
   next to its target before the old one is renamed aside, which is put back if the last rename fails; a folder outside the
   profile is made the user's, SYSTEM's and the Administrators' only; an extension whose lockfile does not show the pin is
   removed; Windows 10 on ARM is refused early; the AVX2 answer of Windows 10 is not taken for a no; pax records are capped.
-- **Performance:** one model refresh at start, not two; `sanitizeSurrogates()` returns a well-formed string as it is
+- **Performance:** (one model refresh at start instead of two was tried and reverted: the one left took 23 ms, the two 12);
+  `sanitizeSurrogates()` returns a well-formed string as it is
   (`isWellFormed()`), which every request ran a regular expression over the whole conversation for; the streaming reply's
   components are made when the frame is drawn, not at each delta.
 - **Tests on Windows:** `tests\pi\run.ps1` and `tests\runtime\run.ps1` (the shell runners' counterparts, with Windows' own:

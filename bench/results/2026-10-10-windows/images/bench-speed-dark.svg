@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="978" viewBox="0 0 880 978" role="img" aria-label="Time: Wall-clock time, lower is better. Ratios compare Pi-Bolt with Bun. Pi 1.0.3, medians.">
+<style>text{font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif}</style>
+<text x="24" y="32" font-size="21" font-weight="650" fill="#f0f6fc">Time</text>
+<text x="24" y="56" font-size="13.5" fill="#9198a1">Wall-clock time, lower is better. Ratios compare Pi-Bolt with Bun. Pi 1.0.3, medians.</text>
+<text x="24" y="96" font-size="15" font-weight="600" fill="#f0f6fc">Launch to interactive (TUI)</text>
+<text x="223" y="126.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (LTO+CFG AOT)</text>
+<path d="M233,114 h138.6 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-138.6 z" fill="#3987e5"/>
+<text x="383.6" y="126.5" font-size="13.5" font-weight="650" fill="#f0f6fc">91 ms</text>
+<rect x="427.3" y="111.5" width="84.0" height="22" rx="11.0" fill="#1b2f4a"/><text x="434.3" y="126.5" font-size="12" font-weight="600" fill="#f0f6fc">1.9× faster</text>
+<text x="223" y="156.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi 1.0.3 on stock Bun 1.4.2</text>
+<path d="M233,144 h273.6 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-273.6 z" fill="#6e7681"/>
+<text x="518.6" y="156.5" font-size="13.5" font-weight="400" fill="#f0f6fc">178 ms</text>
+<text x="223" y="186.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 22</text>
+<path d="M233,174 h535.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-535.0 z" fill="#6e7681"/>
+<text x="780.0" y="186.5" font-size="13.5" font-weight="400" fill="#f0f6fc">346 ms</text>
+<text x="223" y="216.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 24</text>
+<path d="M233,204 h482.6 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-482.6 z" fill="#6e7681"/>
+<text x="727.6" y="216.5" font-size="13.5" font-weight="400" fill="#f0f6fc">312 ms</text>
+<line x1="233" y1="108" x2="233" y2="226" stroke="#3d444d"/>
+<text x="24" y="276" font-size="15" font-weight="600" fill="#f0f6fc">pi --version</text>
+<text x="223" y="306.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (LTO+CFG AOT)</text>
+<path d="M233,294 h68.9 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-68.9 z" fill="#3987e5"/>
+<text x="313.9" y="306.5" font-size="13.5" font-weight="650" fill="#f0f6fc">35 ms</text>
+<rect x="357.7" y="291.5" width="84.0" height="22" rx="11.0" fill="#1b2f4a"/><text x="364.7" y="306.5" font-size="12" font-weight="600" fill="#f0f6fc">2.8× faster</text>
+<text x="223" y="336.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi 1.0.3 on stock Bun 1.4.2</text>
+<path d="M233,324 h201.6 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-201.6 z" fill="#6e7681"/>
+<text x="446.6" y="336.5" font-size="13.5" font-weight="400" fill="#f0f6fc">100 ms</text>
+<text x="223" y="366.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 22</text>
+<path d="M233,354 h535.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-535.0 z" fill="#6e7681"/>
+<text x="780.0" y="366.5" font-size="13.5" font-weight="400" fill="#f0f6fc">262 ms</text>
+<text x="223" y="396.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 24</text>
+<path d="M233,384 h476.5 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-476.5 z" fill="#6e7681"/>
+<text x="721.5" y="396.5" font-size="13.5" font-weight="400" fill="#f0f6fc">233 ms</text>
+<line x1="233" y1="288" x2="233" y2="406" stroke="#3d444d"/>
+<text x="24" y="456" font-size="15" font-weight="600" fill="#f0f6fc">pi -p: one prompt, 4 tool calls</text>
+<text x="223" y="486.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (LTO+CFG AOT)</text>
+<path d="M233,474 h138.8 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-138.8 z" fill="#3987e5"/>
+<text x="383.8" y="486.5" font-size="13.5" font-weight="650" fill="#f0f6fc">124 ms</text>
+<rect x="434.8" y="471.5" width="84.0" height="22" rx="11.0" fill="#1b2f4a"/><text x="441.8" y="486.5" font-size="12" font-weight="600" fill="#f0f6fc">1.8× faster</text>
+<text x="223" y="516.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi 1.0.3 on stock Bun 1.4.2</text>
+<path d="M233,504 h251.7 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-251.7 z" fill="#6e7681"/>
+<text x="496.7" y="516.5" font-size="13.5" font-weight="400" fill="#f0f6fc">222 ms</text>
+<text x="223" y="546.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 22</text>
+<path d="M233,534 h535.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-535.0 z" fill="#6e7681"/>
+<text x="780.0" y="546.5" font-size="13.5" font-weight="400" fill="#f0f6fc">468 ms</text>
+<text x="223" y="576.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 24</text>
+<path d="M233,564 h474.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-474.0 z" fill="#6e7681"/>
+<text x="719.0" y="576.5" font-size="13.5" font-weight="400" fill="#f0f6fc">415 ms</text>
+<line x1="233" y1="468" x2="233" y2="586" stroke="#3d444d"/>
+<text x="24" y="636" font-size="15" font-weight="600" fill="#f0f6fc">Time per prompt, 4.2M-token session</text>
+<text x="223" y="666.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (LTO+CFG AOT)</text>
+<path d="M233,654 h267.3 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-267.3 z" fill="#3987e5"/>
+<text x="512.3" y="666.5" font-size="13.5" font-weight="650" fill="#f0f6fc">413 ms</text>
+<rect x="563.2" y="651.5" width="84.0" height="22" rx="11.0" fill="#1b2f4a"/><text x="570.2" y="666.5" font-size="12" font-weight="600" fill="#f0f6fc">1.2× faster</text>
+<text x="223" y="696.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi 1.0.3 on stock Bun 1.4.2</text>
+<path d="M233,684 h333.2 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-333.2 z" fill="#6e7681"/>
+<text x="578.2" y="696.5" font-size="13.5" font-weight="400" fill="#f0f6fc">514 ms</text>
+<text x="223" y="726.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 22</text>
+<path d="M233,714 h535.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-535.0 z" fill="#6e7681"/>
+<text x="780.0" y="726.5" font-size="13.5" font-weight="400" fill="#f0f6fc">821 ms</text>
+<text x="223" y="756.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 24</text>
+<path d="M233,744 h524.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-524.0 z" fill="#6e7681"/>
+<text x="769.0" y="756.5" font-size="13.5" font-weight="400" fill="#f0f6fc">804 ms</text>
+<line x1="233" y1="648" x2="233" y2="766" stroke="#3d444d"/>
+<text x="24" y="816" font-size="15" font-weight="600" fill="#f0f6fc">Launch to interactive (TUI), default theme</text>
+<text x="223" y="846.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (LTO+CFG AOT)</text>
+<path d="M233,834 h135.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-135.1 z" fill="#3987e5"/>
+<text x="380.1" y="846.5" font-size="13.5" font-weight="650" fill="#f0f6fc">89 ms</text>
+<rect x="423.8" y="831.5" width="84.0" height="22" rx="11.0" fill="#1b2f4a"/><text x="430.8" y="846.5" font-size="12" font-weight="600" fill="#f0f6fc">2.0× faster</text>
+<text x="223" y="876.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi 1.0.3 on stock Bun 1.4.2</text>
+<path d="M233,864 h269.4 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-269.4 z" fill="#6e7681"/>
+<text x="514.4" y="876.5" font-size="13.5" font-weight="400" fill="#f0f6fc">175 ms</text>
+<text x="223" y="906.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 22</text>
+<path d="M233,894 h535.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-535.0 z" fill="#6e7681"/>
+<text x="780.0" y="906.5" font-size="13.5" font-weight="400" fill="#f0f6fc">344 ms</text>
+<text x="223" y="936.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 24</text>
+<path d="M233,924 h481.6 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-481.6 z" fill="#6e7681"/>
+<text x="726.6" y="936.5" font-size="13.5" font-weight="400" fill="#f0f6fc">310 ms</text>
+<line x1="233" y1="828" x2="233" y2="946" stroke="#3d444d"/>
+</svg>

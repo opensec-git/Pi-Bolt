@@ -1,0 +1,35 @@
+{"build": "pi-bolt", "plugin": "compiled", "run": 0, "launch_ms": 138.3, "loop_ms": [37.7, 37.1, 37.1, 36.6, 37.3]}
+{"build": "pi-bolt-jit", "plugin": "compiled", "run": 0, "launch_ms": 167.9, "loop_ms": [37.6, 36.9, 38.8, 36.0, 36.4]}
+{"build": "pi-bolt", "plugin": "runtime", "run": 0, "launch_ms": 152.5, "loop_ms": [764.0, 761.6, 759.3, 760.4, 762.0]}
+{"build": "pi-bolt-jit", "plugin": "runtime", "run": 0, "launch_ms": 212.3, "loop_ms": [37.6, 32.1, 36.1, 32.0, 32.2]}
+{"build": "bun", "plugin": "runtime", "run": 0, "launch_ms": 256.5, "loop_ms": [34.2, 32.0, 31.8, 31.9, 38.6]}
+{"build": "pi-bolt", "plugin": "none", "run": 0, "launch_ms": 117.7, "loop_ms": []}
+{"build": "bun", "plugin": "none", "run": 0, "launch_ms": 200.1, "loop_ms": []}
+{"build": "pi-bolt", "plugin": "compiled", "run": 1, "launch_ms": 118.4, "loop_ms": [37.1, 35.9, 38.3, 36.8, 37.1]}
+{"build": "pi-bolt-jit", "plugin": "compiled", "run": 1, "launch_ms": 116.2, "loop_ms": [38.0, 36.2, 38.3, 36.2, 36.9]}
+{"build": "pi-bolt", "plugin": "runtime", "run": 1, "launch_ms": 151.8, "loop_ms": [762.2, 759.3, 758.2, 758.2, 756.5]}
+{"build": "pi-bolt-jit", "plugin": "runtime", "run": 1, "launch_ms": 158.0, "loop_ms": [36.7, 31.7, 34.4, 32.1, 32.2]}
+{"build": "bun", "plugin": "runtime", "run": 1, "launch_ms": 246.6, "loop_ms": [34.3, 31.9, 31.7, 32.3, 31.9]}
+{"build": "pi-bolt", "plugin": "none", "run": 1, "launch_ms": 122.7, "loop_ms": []}
+{"build": "bun", "plugin": "none", "run": 1, "launch_ms": 201.0, "loop_ms": []}
+{"build": "pi-bolt", "plugin": "compiled", "run": 2, "launch_ms": 110.5, "loop_ms": [38.4, 38.0, 39.4, 36.5, 37.4]}
+{"build": "pi-bolt-jit", "plugin": "compiled", "run": 2, "launch_ms": 127.9, "loop_ms": [38.8, 36.8, 38.7, 36.8, 35.9]}
+{"build": "pi-bolt", "plugin": "runtime", "run": 2, "launch_ms": 141.0, "loop_ms": [766.8, 760.2, 758.9, 766.9, 759.8]}
+{"build": "pi-bolt-jit", "plugin": "runtime", "run": 2, "launch_ms": 158.2, "loop_ms": [36.7, 31.5, 34.7, 31.9, 31.7]}
+{"build": "bun", "plugin": "runtime", "run": 2, "launch_ms": 251.2, "loop_ms": [34.4, 32.5, 31.8, 31.9, 31.6]}
+{"build": "pi-bolt", "plugin": "none", "run": 2, "launch_ms": 119.0, "loop_ms": []}
+{"build": "bun", "plugin": "none", "run": 2, "launch_ms": 201.7, "loop_ms": []}
+{"build": "pi-bolt", "plugin": "compiled", "run": 3, "launch_ms": 116.3, "loop_ms": [37.7, 36.9, 38.6, 36.6, 36.8]}
+{"build": "pi-bolt-jit", "plugin": "compiled", "run": 3, "launch_ms": 130.2, "loop_ms": [37.4, 35.9, 38.6, 36.9, 36.4]}
+{"build": "pi-bolt", "plugin": "runtime", "run": 3, "launch_ms": 145.9, "loop_ms": [760.4, 754.7, 755.8, 757.1, 755.0]}
+{"build": "pi-bolt-jit", "plugin": "runtime", "run": 3, "launch_ms": 143.8, "loop_ms": [36.6, 31.8, 34.6, 32.0, 32.0]}
+{"build": "bun", "plugin": "runtime", "run": 3, "launch_ms": 259.3, "loop_ms": [33.9, 32.4, 31.4, 31.8, 31.7]}
+{"build": "pi-bolt", "plugin": "none", "run": 3, "launch_ms": 113.5, "loop_ms": []}
+{"build": "bun", "plugin": "none", "run": 3, "launch_ms": 181.2, "loop_ms": []}
+{"build": "pi-bolt", "plugin": "compiled", "run": 4, "launch_ms": 107.5, "loop_ms": [37.5, 36.3, 37.8, 36.4, 36.3]}
+{"build": "pi-bolt-jit", "plugin": "compiled", "run": 4, "launch_ms": 136.2, "loop_ms": [38.0, 37.5, 37.9, 36.9, 36.7]}
+{"build": "pi-bolt", "plugin": "runtime", "run": 4, "launch_ms": 141.8, "loop_ms": [758.3, 756.3, 757.0, 756.6, 753.7]}
+{"build": "pi-bolt-jit", "plugin": "runtime", "run": 4, "launch_ms": 160.0, "loop_ms": [36.8, 31.9, 34.6, 32.0, 32.0]}
+{"build": "bun", "plugin": "runtime", "run": 4, "launch_ms": 244.6, "loop_ms": [33.9, 31.9, 31.8, 32.0, 32.3]}
+{"build": "pi-bolt", "plugin": "none", "run": 4, "launch_ms": 116.5, "loop_ms": []}
+{"build": "bun", "plugin": "none", "run": 4, "launch_ms": 199.1, "loop_ms": []}

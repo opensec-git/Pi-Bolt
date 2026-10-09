@@ -155,49 +155,55 @@ children; the programs are the helper's).
 ## Windows x64
 
 The full suite (`bench\run-suite.ps1`) on Windows 11 25H2 (26200) on an Intel Core i5-1335U laptop (16 GB, on AC, best
-performance, Defender real-time protection on): Pi-Bolt 0.7.0 from `cdad1a5f8` (the runtime `e87d177bf` with ThinLTO and Control
-Flow Guard, Pi compiled ahead of time for this CPU, JIT off; the executable that ships), Pi 1.0.3 as released on stock Bun 1.4.2,
-and Pi 1.0.3's npm package on Node 22.23.3 and Node 24.21.0. Medians of 11 runs (2 warm-up), 4 long sessions of 75 prompts, 5
-streaming rounds; streaming runs in a ConPTY rather than tmux (`bench\conpty_check.py`: ConPTY passes frames on at about 16 ms,
-which is the floor of the frame times). Raw data and charts:
-[`bench/results/2026-10-09-windows`](../bench/results/2026-10-09-windows).
+performance, Defender real-time protection on): Pi-Bolt 0.7.0 from `2acfe5ca0` (the runtime `16ed51941` with ThinLTO and Control
+Flow Guard, Pi compiled ahead of time for this CPU, JIT off; the executable that ships, after the hardening round of 2026-10-10),
+Pi 1.0.3 as released on stock Bun 1.4.2, and Pi 1.0.3's npm package on Node 22.23.3 and Node 24.21.0. Medians of 11 runs (2
+warm-up), 4 long sessions of 75 prompts, 5 streaming rounds; streaming runs in a ConPTY rather than tmux
+(`bench\conpty_check.py`: ConPTY passes frames on at about 16 ms, which is the floor of the frame times). Raw data and charts:
+[`bench/results/2026-10-10-windows`](../bench/results/2026-10-10-windows).
 
 | | Pi-Bolt | Pi on Bun 1.4.2 | Node 22 | Node 24 |
 |---|---:|---:|---:|---:|
-| Launch to interactive (TUI) | **92 ms** | 179 ms | 345 ms | 312 ms |
-| `pi --version` | **33 ms** | 95 ms | 241 ms | 218 ms |
-| `pi -p`: one prompt, 4 tool calls | **113 ms** | 202 ms | 435 ms | 383 ms |
-| Time per prompt, 4.2M-token session | **410 ms** | 522 ms | 817 ms | 802 ms |
-| CPU, interactive session (5 prompts) | **295 ms** | 812 ms | 1,225 ms | 1,139 ms |
-| CPU, `pi -p` | **92 ms** | 335 ms | 582 ms | 554 ms |
-| CPU, `pi --version` | **17 ms** | 135 ms | 280 ms | 271 ms |
-| CPU per prompt, 4.2M-token session | **186 ms** | 316 ms | 691 ms | 647 ms |
-| Peak working set, interactive session | **95 MB** | 164 MB | 166 MB | 196 MB |
-| Peak private working set, interactive session | **57 MB** | 126 MB | 133 MB | 155 MB |
-| Peak private bytes (commit), interactive session | **114 MB** | 340 MB | 176 MB | 270 MB |
-| Private working set, TUI streaming in a ConPTY | **32 MB** | 97 MB | 101 MB | 60 MB |
-| Private working set, end of 4.2M-token session | **140 MB** | 255 MB | 393 MB | 399 MB |
-| Private bytes, end of 4.2M-token session | **211 MB** | 474 MB | 438 MB | 446 MB |
-| CPU, streaming replies (ConPTY) | **859 ms** | 1,011 ms | 1,498 ms | 1,258 ms |
-| Frame time p99, streaming replies | **17 ms** | 17 ms | 22 ms | 22 ms |
-| Frame time p99 / longest stall, 50 KB file written | **18 / 87 ms** | 52 / 2,036 ms | 47 / 688 ms | 51 / 106 ms |
-| Frame time p99 / longest stall, 200 KB file written | **18 / 61 ms** | 118 / 46,688 ms | 80 / 51,893 ms | 64 / 40,928 ms |
-| GC pause p99, 20,000-char answer / longest GC pause | 2.2 / **2.5 ms** | 5.4 / 8.5 ms | **1.4** / 3.8 ms | 1.6 / 8.6 ms |
+| Launch to interactive (TUI) | **91 ms** | 178 ms | 346 ms | 312 ms |
+| `pi --version` | **35 ms** | 100 ms | 262 ms | 233 ms |
+| `pi -p`: one prompt, 4 tool calls | **124 ms** | 222 ms | 468 ms | 415 ms |
+| Time per prompt, 4.2M-token session | **413 ms** | 514 ms | 821 ms | 804 ms |
+| CPU, interactive session (5 prompts) | **296 ms** | 816 ms | 1,231 ms | 1,189 ms |
+| CPU, `pi -p` | **101 ms** | 355 ms | 627 ms | 595 ms |
+| CPU, `pi --version` | **18 ms** | 141 ms | 303 ms | 290 ms |
+| CPU per prompt, 4.2M-token session | **188 ms** | 313 ms | 694 ms | 648 ms |
+| Peak working set, interactive session | **96 MB** | 164 MB | 167 MB | 195 MB |
+| Peak private working set, interactive session | **57 MB** | 126 MB | 134 MB | 153 MB |
+| Peak private bytes (commit), interactive session | **114 MB** | 344 MB | 178 MB | 270 MB |
+| Private working set, TUI streaming in a ConPTY | **33 MB** | 98 MB | 99 MB | 178 MB |
+| Private working set, end of 4.2M-token session | **148 MB** | 230 MB | 376 MB | 423 MB |
+| Private bytes, end of 4.2M-token session | **217 MB** | 437 MB | 421 MB | 471 MB |
+| CPU, streaming replies (ConPTY) | **959 ms** | 1,116 ms | 1,613 ms | 1,420 ms |
+| Frame time p99, streaming replies | **17 ms** | 17 ms | 20 ms | 20 ms |
+| Frame time p99 / longest stall, 50 KB file written | **18 / 116 ms** | 47 / 1,946 ms | 35 / 1,303 ms | 61 / 915 ms |
+| Frame time p99 / longest stall, 200 KB file written | **18 / 62 ms** | 124 / 26,515 ms | 46 / 54,249 ms | 75 / 43,644 ms |
+| GC pause p99, 20,000-char answer / longest GC pause | 2.2 / **2.9 ms** | 4.2 / 29 ms | **1.1** / 3.8 ms | 1.6 / 9.2 ms |
 
 Pi-Bolt is the fastest and uses the least memory in every row, commit included. The exception is the p99 GC pause, where
-Node is shorter by under a millisecond; Pi-Bolt's longest pause is the shortest. Against the suite of 2026-10-06
-([`bench/results/2026-10-06-windows-suite`](../bench/results/2026-10-06-windows-suite), `7ec4e71f7`), on the same machine:
-- Launch to interactive: 100 to 92 ms. CPU per prompt in the long session: 253 to 186 ms.
-- Peak private bytes: 247 to 114 MB. Private bytes at the end of the long session: 370 to 211 MB.
-- The longest GC pause: 8.3 to 2.5 ms.
+Node is shorter by about a millisecond; Pi-Bolt's longest pause is the shortest. This run was slower for every build than the
+day before at `pi -p` and in streaming (Bun 222 against 202 ms, Node 22 468 against 435; the process floor 19 against 17): the
+machine. An interleaved A/B of `pi -p` on this build and the one before, 11 rounds, gave 115 against 119 ms, and 94 against 95
+ms of CPU. Against the suite of 2026-10-06 ([`bench/results/2026-10-06-windows-suite`](../bench/results/2026-10-06-windows-suite),
+`7ec4e71f7`), on the same machine:
+- Launch to interactive: 100 to 91 ms. CPU per prompt in the long session: 253 to 188 ms.
+- Peak private bytes: 247 to 114 MB. Private bytes at the end of the long session: 370 to 217 MB.
+- The longest GC pause: 8.3 to 2.9 ms.
+
+The 2026-10-09 suite of the build before the hardening round is in
+[`bench/results/2026-10-09-windows`](../bench/results/2026-10-09-windows).
 
 These come from memory committed on demand, the prebuilt heap laid out in first-use order, and the runtime's code laid out in
 the order it runs ([WINDOWS.md](WINDOWS.md)). Each 50 KB and 200 KB step ends with a `bash` tool call. The only `bash.exe` on
 this machine is the WSL launcher with no distribution installed, which takes about 0.1 s to start and fail. That is Pi-Bolt's
 longest stall of the 50 KB step, and every build pays it.
 
-Plugins: the example plugin's hot loop takes 36 ms compiled into the executable (`build-pi.ps1 -Plugins`). Loaded at run time,
-it takes 750 ms with the JIT off and 32 ms in the build with the JIT on, the same as on Bun.
+Plugins: the example plugin's hot loop takes 37 ms compiled into the executable (`build-pi.ps1 -Plugins`). Loaded at run time,
+it takes 758 ms with the JIT off and 32 ms in the build with the JIT on, the same as on Bun.
 
 ### Earlier Windows results
 
