@@ -54,17 +54,17 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/http/lib.rs                               |   39 +-
  src/io/PipeWriter.rs                          |    6 +
  src/jsc/CachedBytecode.rs                     |   36 +
- src/jsc/GarbageCollectionController.rs        |   26 +-
+ src/jsc/GarbageCollectionController.rs        |   27 +-
  src/jsc/JSType.rs                             |  144 +--
- src/jsc/VirtualMachine.rs                     |   18 +-
+ src/jsc/VirtualMachine.rs                     |   19 +-
  src/jsc/bindings/BunClientData.cpp            |    8 +-
  src/jsc/bindings/BunClientData.h              |    2 +-
  src/jsc/bindings/ErrorStackTrace.cpp          |   73 +-
  src/jsc/bindings/FormatStackTraceForJS.cpp    |   27 +-
  src/jsc/bindings/InternalModuleRegistry.cpp   |   15 +-
  src/jsc/bindings/ZigException.cpp             |   14 +-
- src/jsc/bindings/ZigGlobalObject.cpp          |   45 +
- src/jsc/bindings/ZigSourceProvider.cpp        | 1124 ++++++++++++++++-
+ src/jsc/bindings/ZigGlobalObject.cpp          |   51 +
+ src/jsc/bindings/ZigSourceProvider.cpp        | 1125 ++++++++++++++++-
  src/jsc/bindings/c-bindings.cpp               |  113 ++
  .../webcore/SerializedScriptValue.cpp         |    9 +
  src/jsc/web_worker.rs                         |    4 +
@@ -77,7 +77,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/spawn_sys/posix_spawn.rs                  |  173 ++-
  src/spawn_sys/spawn_process.rs                |   14 +-
  src/standalone_graph/StandaloneModuleGraph.rs |  254 +++-
- 58 files changed, 2738 insertions(+), 210 deletions(-)
+ 58 files changed, 2747 insertions(+), 210 deletions(-)
  create mode 100644 patches/libuv/win-thread-stack-reservation.patch
  create mode 100644 patches/mimalloc/page-commit-on-demand-default.patch
 
@@ -1845,7 +1845,7 @@ index 2364c15d..ee1948a2 100644
  /// payload's regions ends (`JSC::BytecodeLinkEncoder`), how many of the order files' hot functions are functions
  /// of this link, and for each module how many functions with code its names did not cover.
 diff --git a/src/jsc/GarbageCollectionController.rs b/src/jsc/GarbageCollectionController.rs
-index 96ff316e..5ca64ff9 100644
+index 96ff316e..b2a8c15a 100644
 --- a/src/jsc/GarbageCollectionController.rs
 +++ b/src/jsc/GarbageCollectionController.rs
 @@ -79,7 +79,7 @@ impl GarbageCollectionController {
@@ -1866,7 +1866,7 @@ index 96ff316e..5ca64ff9 100644
                  this.gc_repeating_timer_fast.set(false);
              }
          } else {
-@@ -253,3 +253,25 @@ impl Drop for GarbageCollectionController {
+@@ -253,3 +253,26 @@ impl Drop for GarbageCollectionController {
          self.deinit();
      }
  }
@@ -1874,7 +1874,8 @@ index 96ff316e..5ca64ff9 100644
 +/// The fast interval of the repeating timer, unless `BUN_GC_TIMER_INTERVAL` says. macOS, an executable compiled ahead of time:
 +/// 5 s rather than 1 s. Such a program (an interactive one) left waiting still collected every second for half a minute, the
 +/// only thing that woke it (Pi at its prompt: 1.4 ms of CPU a second); at 5 s it gives the same memory back as soon, in a fifth
-+/// of the wake-ups.
++/// of the wake-ups. (Windows: its idle collection finishes at this timer's ticks, and Pi's idle CPU at the prompt was the same
++/// with 5 s, about 1 ms a second, in conpty_check.py.)
 +fn default_fast_interval_ms() -> u64 {
 +    #[cfg(target_os = "macos")]
 +    {
@@ -2335,10 +2336,10 @@ index 3c21ec7b..6503c62d 100644
      pub const Event: JSType = JSType(0b11101111);
      pub const DOMWrapper: JSType = JSType(0b11101110);
 diff --git a/src/jsc/VirtualMachine.rs b/src/jsc/VirtualMachine.rs
-index 3848fa53..816ff36b 100644
+index 3848fa53..8c4730aa 100644
 --- a/src/jsc/VirtualMachine.rs
 +++ b/src/jsc/VirtualMachine.rs
-@@ -1455,9 +1455,25 @@ impl VirtualMachine {
+@@ -1455,9 +1455,26 @@ impl VirtualMachine {
          }
          const MIN_BUDGET: usize = 8 * 1024 * 1024;
          const MAX_BUDGET: usize = 128 * 1024 * 1024;
@@ -2351,7 +2352,8 @@ index 3848fa53..816ff36b 100644
 +        // it a third as much (Pi: 7 of 21 MB); a budget of all those bytes only lets the heap grow larger before its first
 +        // collection. Measured on Pi (budgets of 12, 16, 20 and 24 MB): at 12, a sixth less memory at the peak of a session
 +        // and a few percent less CPU over it, for two small collections while it starts (2-3 ms of CPU, the same time to
-+        // the first frame).
++        // the first frame). Not on Windows: measured there (2026-10-09, Pi, interactive and pauses.py), it saved 10 MB at the
++        // peak of a TUI session but made twice the collections while a long answer streamed, with 40% more CPU and longer pauses.
 +        #[cfg(target_os = "macos")]
 +        {
 +            unsafe extern "C" {
@@ -2703,7 +2705,7 @@ index cfd1059c..e6aa41f7 100644
          uint8_t frame_i = 0;
          size_t stack_frame_i = 0;
 diff --git a/src/jsc/bindings/ZigGlobalObject.cpp b/src/jsc/bindings/ZigGlobalObject.cpp
-index 9de807ad..bb219910 100644
+index 9de807ad..4a87c857 100644
 --- a/src/jsc/bindings/ZigGlobalObject.cpp
 +++ b/src/jsc/bindings/ZigGlobalObject.cpp
 @@ -1,4 +1,5 @@
@@ -2767,13 +2769,19 @@ index 9de807ad..bb219910 100644
              if (envc > 0) [[likely]] {
                  auto envc_copy = envc;
                  while (envc_copy--) {
-@@ -378,8 +413,18 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -378,8 +413,24 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
                      }
                  }
              }
 +            // Again after BUN_JSC_*: code compiled ahead of time is only right for bytecode made the way it was compiled from.
 +            if (Bun__AOTImage__isMapped())
 +                Bun__setOptionsForAheadOfTimeCode();
++#ifndef BUN_DEBUG
++            // Machine code comes from the executable or from nowhere: BUN_JSC_aotImagePath would map it from a file nothing has
++            // checked, into a process whose executable is signed, with or without an image of its own (BUN_AOT=0 runs without
++            // it). It is for working on the compiler, in a debug build.
++            JSC::Options::aotImagePath() = nullptr;
++#endif
              JSC::Options::assertOptionsAreCoherent();
          }); // end JSC::initialize lambda
 +        Bun__AOTImage__register();
@@ -2787,7 +2795,7 @@ index 9de807ad..bb219910 100644
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH
 diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
-index fbfaa2ff..3b903b40 100644
+index fbfaa2ff..9f3f6080 100644
 --- a/src/jsc/bindings/ZigSourceProvider.cpp
 +++ b/src/jsc/bindings/ZigSourceProvider.cpp
 @@ -2,6 +2,17 @@
@@ -2865,7 +2873,7 @@ index fbfaa2ff..3b903b40 100644
  }
  
  extern "C" uint32_t Bun__EncoderStringTable__slotForLatin1(JSC::EncoderStringTable* table, const Latin1Character* chars, size_t length)
-@@ -290,17 +333,1033 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
+@@ -290,17 +333,1034 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
      return generateCachedByteCodeFromSourceCode(sourceProviderURL, inputSourceCode, false, depth, optimize, outputByteCode, outputByteCodeSize, cachedBytecodePtr, externalStrings);
  }
  
@@ -3399,7 +3407,8 @@ index fbfaa2ff..3b903b40 100644
 +    DWORD bytesOfModules = 0;
 +    EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &bytesOfModules);
 +    Vector<std::pair<uintptr_t, uintptr_t>> otherModules;
-+    for (unsigned i = 0; i < bytesOfModules / sizeof(HMODULE); ++i) {
++    // (What it says is how much room all of them need, which may be more than there is: the first 1,024 are what it wrote.)
++    for (unsigned i = 0; i < std::min<size_t>(bytesOfModules, sizeof(modules)) / sizeof(HMODULE); ++i) {
 +        MODULEINFO info;
 +        if (modules[i] != reinterpret_cast<HMODULE>(const_cast<uint8_t*>(image)) && GetModuleInformation(GetCurrentProcess(), modules[i], &info, sizeof(info)))
 +            otherModules.append({ reinterpret_cast<uintptr_t>(info.lpBaseOfDll), reinterpret_cast<uintptr_t>(info.lpBaseOfDll) + info.SizeOfImage });
@@ -3900,7 +3909,7 @@ index fbfaa2ff..3b903b40 100644
      return new JSC::BytecodeLinkEncoder(vm, externalStrings, WTF::move(hints));
  }
  
-@@ -331,6 +1390,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
+@@ -331,6 +1391,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
      return true;
  }
  
@@ -3923,7 +3932,7 @@ index fbfaa2ff..3b903b40 100644
  // `entryOffsets` has room for one number per successful add* call; `regionEnds` for
  // JSC::BytecodeLinkEncoder::numberOfRegions.
  static_assert(JSC::BytecodeLinkEncoder::numberOfRegions == 6, "bun_resolver::LINKED_BYTECODE_REGION_COUNT");
-@@ -340,6 +1415,51 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
+@@ -340,6 +1416,51 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
      auto result = encoder->finish();
      if (!result.payload || result.entryOffsets.size() != entryOffsetCount)
          return false;

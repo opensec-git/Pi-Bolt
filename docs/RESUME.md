@@ -9,15 +9,17 @@ trees exactly. Nothing is pushed.
 `.work\runtime\bun.exe` is a copy of `.work\bun\build\pibolt-release-lto\bun.exe` as linked with the order file, with the heap
 ordering of 2026-10-09 (below):
 
-    runtime: Bun 1.4.3-canary.1+4dc206147, CFG, build/pibolt-release-lto, LTO, 106032128 bytes, sha256 db54ae7d73b26a86
+    runtime: Bun 1.4.3-canary.1+e87d177bf, CFG, build/pibolt-release-lto, LTO, sha256 cb39be1eef86f062
 
-(The revision is the engine commit's before it was last amended; the next runtime build says the amended one.)
+(Built from the engine commits as they are: `e87d177b` in `.work\bun`, and in `.work\webkit` the commit `patches\webkit.patch`
+makes.)
 `scripts\build-pi.ps1` uses it by default and writes that line into each build's `pi-bolt.txt`. Older runtimes are kept beside
-it in `.work\runtime`: `bun.exe.heap-hot-6e5c9d5d` (the heap ordering without the executables' tiers),
+it in `.work\runtime`: `bun.exe.final-9e51d11a` (before the review's fixes), `bun.exe.heap-tiers-db54ae7d`,
+`bun.exe.heap-hot-6e5c9d5d` (the heap ordering without the executables' tiers),
 `bun.exe.lto-order-4610987b` (the one before any of it), `bun.exe.lto-noorder-*`, `bun.exe.nolto-*`,
 `bun.exe.heap-tag-v1-broken`; the folders `heap-tag-v2`, `heap-hot`, `heap-functions`, `heap-tiers` hold each step's runtime.
-The current Pi build is `out\pi-bolt-heap-tiers` (this runtime, the retrained profile). For A/B runs, from the same `dist`:
-`out\pi-bolt-ab-base` (the runtime before), `out\pi-bolt-heap-hot`, `out\pi-bolt-heap-strings`.
+The current Pi build is `out\pi-bolt` (this runtime, the retrained profile), with `out\pi-bolt-aot-lto-jit` (JIT on),
+`out\pi-bolt-plugins` and `out\pi-bolt-plugins-jit` (the example plugin compiled in) for the suite.
 
 The LTO build directory is `build/pibolt-release-lto` (made by hand); `scripts\build-runtime.ps1` builds into
 `build/pibolt-release`, so pass `-BuildDir build/pibolt-release-lto` to `train-runtime-hints.ps1` and `tests\cfg\run.ps1` meanwhile.
@@ -94,13 +96,22 @@ queries before DA1; no timeouts. The behaviour is kept.
    The static atom table (128 pages at `--version`): ~1,300 of ~4,000 lookups end at an empty entry (strings the program
    makes that are not static atoms), so a small table in front would not spare the big one; making those strings static atoms
    too (from a trace) would, and would save making them.
-4. **Streaming CPU profile**: the reply-rendering path (810 ms against 931 ms on stock Bun).
-5. **Plugin rows**: the two OpenSec extensions JIT off against the x64 JIT build; plugin builds in the suite.
-6. **Clean suite** on AC power with nothing else running: floor rows, the default-theme row, the plugin rows; update
-   `docs\BENCHMARKS.md` and drop its contention note.
-7. **Docs**: `docs\WINDOWS.md` on the memory changes (commit on demand, stack commit) and the runtime order file.
+4. **Streaming CPU** (done, measured): a Node CPU profile of a TUI session (`.work\exp\handoff\node_prof.py`,
+   `node_callers.py`) showed a deep copy of the whole conversation before every request (gone when no extension handles the
+   context events, 473c37d2d) and request serialization (`JSON.stringify` of each request: inherent). Natively
+   (`stream_prof.py`), the main thread's streaming time is mostly in system calls, and Pi writes once a frame
+   (`writecount.py`: 419 frames, 419 writes); the rest is the socket reads of the model's events. Pi's compiled JS is ~3% of
+   the samples. Nothing big is left there. A Markdown component's own invalidate() now forgets only its own blocks (neutral
+   in the bench, right for a spinner). Measured and not kept on Windows: the 12 MB first heap budget and the 5 s GC timer
+   that macOS has (-10 MB peak in the TUI, but twice the collections and +40% CPU while a long answer streams).
+5. **Plugin rows** (done for the example plugin, in the suite): compiled in, its hot loop is 37 ms; loaded at run time with
+   the JIT off, 748 ms (the JIT build: 32 ms). The two OpenSec extensions were not measured: they are not on this machine
+   (downloading them needs the owner's go-ahead). Making run-time plugins fast is an owner decision (below).
+6. **Clean suite** (done): `bench\results\2026-10-09-windows-suite`, and again on the build that ships.
+7. **Docs** (done): `docs\WINDOWS.md` on the memory changes and the runtime order file.
 
-Smaller items: a glance at JSC's nursery size; in Pi, caching in `Container.render`, request serialization, and startup fs probes.
+Smaller items: a glance at JSC's nursery size; in Pi, caching in `Container.render`; the startup fs probes that are left
+(each walk is one Pi needs again on a reload).
 
 ## Open items for the owner
 
@@ -110,3 +121,16 @@ Smaller items: a glance at JSC's nursery size; in Pi, caching in `Container.rend
   `docs\WINDOWS.md`.
 - **Code-signing certificate** for the Windows executables. The owner signs.
 - **Windows CI**: a runner that builds and tests windows-x64.
+- **`BUN_STATIC_HEAP_WRITES`** in release builds: without it a write to the read-only heap ends the process (fail closed);
+  with it (any value) the page is made writable and the program goes on, which tests\aot relies on (`=all`) to list writes.
+  Options: (a) leave it; (b) compile it out of release runtimes, and test with a diagnostic runtime; (c) honor it only in an
+  executable that is not a packaged release (package-release.ps1 sets a flag in the heap's header that the handler reads).
+- **Run-time plugins with the JIT off** (748 ms against 32-37 ms): (a) recommend the x64-jit variant to who loads plugins
+  with hot loops (exists; JIT on means generated code at run time); (b) compile installed plugins ahead of time on the
+  user's machine, into a cached image the executable maps (code made on that machine, not signed: what `aotImagePath` was
+  closed for; it would need its own check, a hash the executable keeps, for instance); (c) a JIT for plugin code only (the
+  JIT is on, then, for whatever runs that code). Compiled in with `build-pi -Plugins` is already 37 ms.
+- **From the review of 2026-10-09** (design, not fixed): code compiled ahead of time reaches some targets without CFG's
+  check (the runtime table's entries in writable memory, entry words loaded from cells, the catch PC); a cold operation's stub
+  returns by `pop; pop; jmp`, which would unbalance CET's shadow stack (and mispredicts returns). Both need a memory-corruption
+  bug first; both are engine work.
