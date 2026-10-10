@@ -106,7 +106,7 @@ A draft is not visible to users. Fill the Linux and macOS rows of "The runtimes"
 
 ### 6. Merge, tag, release
 
-1. Decide the two open questions below; mark PR #4 ready; merge it into `pi-bolt` (a merge commit, not a squash: the history
+1. Mark PR #4 ready; merge it into `pi-bolt` (a merge commit, not a squash: the history
    carries the engine commits' provenance).
 2. When `ci` passes on `pi-bolt`, push the tag (`git tag -a bolt-v0.8.0 -m "Pi-Bolt 0.8.0"` on the merge commit, `git push
    origin bolt-v0.8.0`), or run `release` for it. First time: run `release` from the Actions tab with `dry_run` checked; its
@@ -128,14 +128,6 @@ A draft is not visible to users. Fill the Linux and macOS rows of "The runtimes"
 
 If something is wrong after publishing: 0.7.3 stays installable (`PIBOLT_VERSION=bolt-v0.7.3`), and can be marked the latest
 release again on GitHub.
-
-## Open questions for the owner
-
-- **`pi-bolt update`'s folder.** 0.8.0 installs into the installation that is running; `PIBOLT_INSTALL` decides only for an
-  executable outside one. 0.7.3 did the opposite. Keep (a stray or hostile environment variable cannot put the update elsewhere
-  and leave the running copy stale), or go back to 0.7.3's order (`packages/coding-agent/src/pi-bolt.ts`,
-  `piBoltUpdateEnvironment`, and its two tests).
-- **The version:** 0.8.0 for a new platform (not 0.7.4).
 
 ## Known limits shipping with 0.8.0
 
