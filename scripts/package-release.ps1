@@ -1,11 +1,13 @@
 # Builds and packages the Windows part of a release: Pi's executable, the runtime, and their SHA256SUMS, in dist\<version>\.
 # Windows' scripts/package-release.sh.
 #
-# Usage: scripts\package-release.ps1 [-Pi DIR] [-NoBuild] [-WithoutOpenSec]
+# Usage: scripts\package-release.ps1 [-Pi DIR] [-NoBuild] [-WithOpenSec]
 #   -Pi DIR     the built Pi tree (default: this repository)
 #   -NoBuild    package the builds already in out\pi-bolt and out\pi-bolt-jit instead of building them
-#   -WithoutOpenSec  build without OpenSec's extensions compiled in (plugins\opensec; by default they are, and can be turned off
-#               with `-builtin:<name>` in the extensions setting)
+#   -WithOpenSec  compile in OpenSec's extensions (plugins\opensec; `-builtin:<name>` in the extensions setting turns one off).
+#               Releases are built without: the installers offer them, and compiled in they cost every `-p` +66 ms
+#               (bench/results/2026-10-10-opensec-compiled). With it, retrain the profile with them first
+#               (scripts\train-heap.ps1 -Plugins plugins\opensec\plugins.ts).
 # Archives (the names stay the same from release to release, so that releases/latest/download/<name> always works):
 #   pi-bolt-win32-x64.zip           JIT off, code for AVX2-class CPUs (falls back to bytecode on others)
 #   pi-bolt-win32-x64-jit.zip       JIT on, for extensions that do heavy JavaScript work at run time (docs/PLUGINS.md)
@@ -17,7 +19,7 @@
 param(
 	[string]$Pi = '',
 	[switch]$NoBuild,
-	[switch]$WithoutOpenSec
+	[switch]$WithOpenSec
 )
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -33,10 +35,10 @@ $Pi = (Resolve-Path $Pi).Path
 $Out = Join-Path $Root 'out\pi-bolt'
 $OutJit = Join-Path $Root 'out\pi-bolt-jit'
 if (-not $NoBuild) {
-	# OpenSec's extensions compiled in (plugins\opensec: the versions extensions.txt pins, by their lockfile's integrity), unless
-	# -WithoutOpenSec. The profile is trained with them (scripts\train-heap.ps1 -Plugins plugins\opensec\plugins.ts).
+	# With -WithOpenSec, OpenSec's extensions compiled in (plugins\opensec: the versions extensions.txt pins, by their lockfile's
+	# integrity).
 	$withPlugins = @{}
-	if (-not $WithoutOpenSec) {
+	if ($WithOpenSec) {
 		$opensec = Join-Path $Root 'plugins\opensec'
 		Push-Location $opensec
 		try {
@@ -54,6 +56,10 @@ if (-not $NoBuild) {
 }
 foreach ($dir in $Out, $OutJit) {
 	if (-not (Test-Path (Join-Path $dir 'pi.exe'))) { Die "$dir\pi.exe not found: build it, or run without -NoBuild" }
+	# A build with plugins compiled in (its pi-bolt.txt says which) is packaged only when that was asked for.
+	$compiledIn = Select-String -LiteralPath (Join-Path $dir 'pi-bolt.txt') -Pattern '^plugins: ' -ErrorAction SilentlyContinue
+	if ($compiledIn -and -not $WithOpenSec) { Die "$dir has $($compiledIn.Line): rebuild it without, or pass -WithOpenSec" }
+	if ($WithOpenSec -and -not $compiledIn) { Die "$dir has no plugins compiled in: rebuild it, or run without -WithOpenSec" }
 }
 $exe = Join-Path $Out 'pi.exe'
 [Environment]::SetEnvironmentVariable('BUN_STATIC_HEAP_VERBOSE', '1')

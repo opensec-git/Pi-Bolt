@@ -61,10 +61,13 @@ work. The exception is an extension that does heavy JavaScript work itself: pi-l
 off against 154 ms with it on. **For such an extension, use the JIT build** (`pi-bolt-win32-x64-jit`, `PIBOLT_VARIANT=x64-jit`
 for the installer), or compile it in.
 
-**OpenSec's extensions are compiled into the release executables** (opensec-pi-subagents, opensec-pi-todo; `plugins/opensec`):
-they are there without installing anything. To turn one off, add `-builtin:opensec-pi-todo` (or `-builtin:opensec-pi-subagents`)
-to the `extensions` list in `~/.pi/agent/settings.json`, or use `pi-bolt config`. Installed from npm, a newer version replaces the
-compiled one.
+**OpenSec's extensions** (opensec-pi-subagents, opensec-pi-todo) are offered by the installers and installed from npm at the
+versions the release pins. They are not compiled into the release executables. Compiled in, they cost every `pi-bolt -p`
++66 ms (114 -> 180 ms), mostly opensec-pi-subagents loading itself, and their actions get only a little faster
+([results](../bench/results/2026-10-10-opensec-compiled/summary.md)). To build them in anyway (Windows), retrain the profile
+with them (`scripts\train-heap.ps1 -Plugins plugins\opensec\plugins.ts`), then run
+`scripts\package-release.ps1 -WithOpenSec`. There, `-builtin:opensec-pi-todo` (or `-builtin:opensec-pi-subagents`) in the
+`extensions` list of `~/.pi/agent/settings.json` turns one off, and an npm copy of one replaces the compiled one.
 
 ## Compile plugins into the executable
 

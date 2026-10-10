@@ -19,10 +19,10 @@ it in `.work\runtime`: `bun.exe.ship-cb39be1e` (the 0.7.0 candidate of 2026-10-0
 `bun.exe.heap-hot-6e5c9d5d` (the heap ordering without the executables' tiers),
 `bun.exe.lto-order-4610987b` (the one before any of it), `bun.exe.lto-noorder-*`, `bun.exe.nolto-*`,
 `bun.exe.heap-tag-v1-broken`; the folders `heap-tag-v2`, `heap-hot`, `heap-functions`, `heap-tiers` hold each step's runtime.
-The current Pi build is `out\pi-bolt` (this runtime, with OpenSec's two extensions compiled in: `-Plugins
-plugins\opensec\plugins.ts`, as `package-release.ps1` builds by default; the profile in `profiles\pi-1.0.3` is trained with them).
-`out\pi-bolt.old-20261010125512` is the same build without them. For the suite there are also `out\pi-bolt-aot-lto-jit` (JIT
-on), and `out\pi-bolt-plugins` and `out\pi-bolt-plugins-jit` (the example plugin compiled in).
+The release builds are `out\pi-bolt` (JIT off) and `out\pi-bolt-jit` (JIT on), both on this runtime, without plugins, and
+with the profile of eaea0b5d8. That is what `package-release.ps1` builds; the installers offer OpenSec's two extensions. A
+build with them compiled in (`-WithOpenSec`) is in `.work\opensec-test4`. For the suite there are also
+`out\pi-bolt-aot-lto-jit` (JIT on), and `out\pi-bolt-plugins` and `out\pi-bolt-plugins-jit` (the example plugin compiled in).
 
 The LTO build directory is `build/pibolt-release-lto` (made by hand); `scripts\build-runtime.ps1` builds into
 `build/pibolt-release`, so pass `-BuildDir build/pibolt-release-lto` to `train-runtime-hints.ps1` and `tests\cfg\run.ps1` meanwhile.
@@ -144,7 +144,7 @@ queries before DA1; no timeouts. The behaviour is kept.
    `bench\results\2026-10-10-plugins-real`. Their actions cost the same with the JIT off, except pi-lens's (838 ms, against
    154 ms with the JIT): docs\PLUGINS.md sends such plugins to the JIT build. OpenSec's two, compiled in, are measured in
    `bench\results\2026-10-10-opensec-compiled`. Every `-p` takes +66 ms (114 -> 180 ms), and that cost is opensec-pi-subagents
-   loading itself; `--version` and the time to the TUI are unchanged.
+   loading itself; `--version` and the time to the TUI are unchanged. So they are not compiled in.
 6. **Clean suite** (done): `bench\results\2026-10-09-windows`, on the build that ships (`cdad1a5f8`), in
    `docs\BENCHMARKS.md`. The 50 KB write's longest stall (87 ms; 19 ms before the review's fixes) is the step's last tool
    call, `bash`, starting this machine's only `bash.exe`: WSL's launcher with no distribution, ~0.1 s. Node's `statSync`
@@ -157,11 +157,11 @@ Smaller items: a glance at JSC's nursery size; in Pi, caching in `Container.rend
 
 ## Open items for the owner
 
-- **OpenSec compiled in by default?** This is done, as asked: both can be turned off with `-builtin:<name>`, and an npm copy
-  replaces the compiled one. The cost falls on users who don't use them: +66 ms and +47 ms of CPU on every `-p`, and +18 MB
-  peak in the TUI, all from opensec-pi-subagents' own start-up (`bench\results\2026-10-10-opensec-compiled`). The reviewer
-  recommends keeping them optional in the default build and building it with `package-release.ps1 -WithoutOpenSec`. The real
-  fix would be lazy activation: register the tools and commands from a manifest, and load the module on first use.
+- **OpenSec's extensions: decided (2026-10-10).** They stay optional and offered by the installers, and only these two are
+  offered (`extensions.txt`). Compiled in, every `-p` cost +66 ms, +47 ms of CPU and +18 MB at peak in the TUI, from
+  opensec-pi-subagents' own start-up (`bench\results\2026-10-10-opensec-compiled`). `-WithOpenSec` stays for a build of
+  one's own. Lazy activation would make compiling in free: register the tools and commands from a manifest, and load the
+  module on first use.
 
 - **CET** (`/CETCOMPAT`): off, because JSC jumps to exception handlers without popping the shadow stack; the plan (rdssp/incssp)
   is in `docs\WINDOWS.md`. Needs a decision before work starts.
@@ -169,7 +169,15 @@ Smaller items: a glance at JSC's nursery size; in Pi, caching in `Container.rend
   `docs\WINDOWS.md`. With runtime 16ed5194, `-VerifyDeterminism` failed in 2 of 3 runs on one word of the data arena
   (`.pbheap` part 0, +0x190885c, not a pointer: "0 words differ by exactly the builds' addresses"): something there depends on
   where the building process was loaded. The release build is the one whose two builds agreed; what that word is (the build
-  log's `describeBuiltAddress`, with `BUN_STATIC_HEAP_VERBOSE=1`) is to find out.
+  log's `describeBuiltAddress`, with `BUN_STATIC_HEAP_VERBOSE=1`) is to find out. Until it is, a failed check is retried, and
+  only a build whose two copies agreed is released.
+  On 2026-10-10 (runtime 1ad2e13f5, the build without plugins) it failed again, and the two outputs were compared
+  (`out\pi-bolt.old-*` from 13:22 against `.work\verify-20261010132207`). The cause is not padding: 60 one-byte runs in one stretch
+  of part 0 (+0x19087ec to +0x1908c0c, part 1 identical). The stretch holds 16-byte records `[u32 key][u32 x][u32 7][u32 value]`.
+  Records with key 1 are identical. Every other record (keys 0x0ded71, 0x422e19, 0x4229a5, 0x0de975) has a value larger by
+  exactly 0x14 in one build. This looks like an index into something whose order depends on the run (the AOT compiler's slot
+  order, keyed by addresses). It is consistent within a build but not reproducible across builds. What the object is
+  (`describeBuiltAddress(+0x19087ec)`), and making that order stable, is the next step.
 - **A write to the read-only prebuilt heap** ends the process on Windows (fail closed), where Linux and macOS take a private copy
   of the page: the release posture chosen. A write path that no traced run took would crash a user. Options: (A) as is; (B)
   write-through as elsewhere, losing the Windows-only protection; (C) as is, after a diagnostics runtime
