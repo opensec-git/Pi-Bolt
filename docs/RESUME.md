@@ -1,28 +1,34 @@
 # Windows x64 port: where it stands
 
-Paused on 2026-10-06; resumed 2026-10-09 (work list item 1). Everything below that is committed is green on windows-x64 (tests\aot 58/58, tests\cfg, the SysV check of
-CFG dispatch: 0 in 3,264 objects); `patches\webkit.patch` and `patches\bun.patch` apply to the pins and give the engine commits'
-trees exactly. Nothing is pushed.
+Paused on 2026-10-06; resumed 2026-10-09 (work list item 1). On 2026-10-10 pi-bolt 0.7.3 (Pi 1.1.0) was merged in (aea3e5066),
+and the candidate is Pi-Bolt 0.8.0 (1d373d18b and the docs after it): green on windows-x64 (tests\pi, the self-test,
+tests\runtime, tests\aot, tests\cfg, Intel SDE on Sandy Bridge and Haswell, on both variants), the suite in
+`bench\results\2026-10-10-windows-0.8.0`. `patches\webkit.patch` and `patches\bun.patch` apply to the pins and give the engine
+commits' trees exactly. Nothing is pushed. What publishing takes is in docs/RELEASING.md; the Linux and macOS runtimes of
+0.8.0 are still to be built (the engine changed).
 
 ## The runtime in use
 
-`.work\runtime\bun.exe` is a copy of `.work\bun\build\pibolt-release-lto\bun.exe` as linked with the order file, with the heap
-ordering of 2026-10-09 (below):
+`.work\runtime\bun.exe` is a copy of `.work\bun\build\pibolt-release-lto\bun.exe` as linked with the order file:
 
-    runtime: Bun 1.4.3-canary.1+1ad2e13f5, CFG, build/pibolt-release-lto, LTO, sha256 59f3cc77d4e9f852
+    runtime: Bun 1.4.3-canary.1+8bcf03bc0, CFG, build/pibolt-release-lto, LTO, sha256 27bbd0ad3aa9483c
 
-(Built from the engine commits as they are: `1ad2e13f` in `.work\bun`, and in `.work\webkit` the commit `patches\webkit.patch`
-makes.)
+(Built from the engine commits as they are: `8bcf03bc` in `.work\bun`, and `aaa99caa1e` in `.work\webkit`, the commits the
+patches make.) `scripts\build-runtime.ps1 -BuildDir build/pibolt-release-lto` builds it again (run it with its output
+redirected outside PowerShell: `cmd /c "powershell -File ... > log 2>&1"`, since Windows PowerShell 5.1 stops at the first
+line a native program writes to stderr when the output is redirected inside it).
 `scripts\build-pi.ps1` uses it by default and writes that line into each build's `pi-bolt.txt`. Older runtimes are kept beside
-it in `.work\runtime`: `bun.exe.ship-cb39be1e` (the 0.7.0 candidate of 2026-10-09, before the hardening round),
+it in `.work\runtime`: `bun.exe.pre-0.7.3-59f3cc77` (0.7.0's, before the merge), `bun.exe.merge-*` (the merge's steps),
+`bun.exe.ship-cb39be1e` (the 0.7.0 candidate of 2026-10-09, before the hardening round),
 `bun.exe.final-9e51d11a` (before the review's fixes), `bun.exe.heap-tiers-db54ae7d`,
 `bun.exe.heap-hot-6e5c9d5d` (the heap ordering without the executables' tiers),
 `bun.exe.lto-order-4610987b` (the one before any of it), `bun.exe.lto-noorder-*`, `bun.exe.nolto-*`,
 `bun.exe.heap-tag-v1-broken`; the folders `heap-tag-v2`, `heap-hot`, `heap-functions`, `heap-tiers` hold each step's runtime.
 The release builds are `out\pi-bolt` (JIT off) and `out\pi-bolt-jit` (JIT on), both on this runtime, without plugins, and
-with the profile of eaea0b5d8. That is what `package-release.ps1` builds; the installers offer OpenSec's two extensions. A
-build with them compiled in (`-WithOpenSec`) is in `.work\opensec-test4`. For the suite there are also
-`out\pi-bolt-aot-lto-jit` (JIT on), and `out\pi-bolt-plugins` and `out\pi-bolt-plugins-jit` (the example plugin compiled in).
+with the Pi 1.1.0 profile (`profiles\pi-1.1.0`, retrained on Windows). That is what `package-release.ps1` builds; the
+installers offer OpenSec's two extensions. For the suite there are also `out\pi-bolt-plugins` and `out\pi-bolt-plugins-jit`
+(the example plugin compiled in), and Pi 1.1.0 as released on stock Bun in `out\pi-stable-upstream-1.1.0`, built from the
+worktree `.work\pi-upstream-1.1.0` (abe508e1b, upstream's "Release v1.1.0"), whose bundle the suite runs on Node.
 
 The LTO build directory is `build/pibolt-release-lto` (made by hand); `scripts\build-runtime.ps1` builds into
 `build/pibolt-release`, so pass `-BuildDir build/pibolt-release-lto` to `train-runtime-hints.ps1` and `tests\cfg\run.ps1` meanwhile.
