@@ -57,19 +57,22 @@ async function run() {
 	const timedOut = spawnSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "ping.exe"), ["-n", "30", "127.0.0.1"], { timeout: 300 });
 	check("timeout", timedOut.signal === "SIGTERM" || timedOut.error?.code === "ETIMEDOUT", `${timedOut.status} ${timedOut.signal} ${timedOut.error?.code}`);
 
-	// As Pi's bash tool on Windows: a tree of processes, ended with taskkill /T.
+	// As Pi's bash tool on Windows: a tree of processes, ended with taskkill /T. The grandchild (the ping cmd.exe starts) is
+	// found with tasklist, by the ping.exe processes that were not there before: WMI (Get-CimInstance) was slow on GitHub's
+	// Windows runner and at times did not list it at all.
+	const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32");
+	const pings = () =>
+		[...execFileSync(join(system32, "tasklist.exe"), ["/FO", "CSV", "/NH", "/FI", "IMAGENAME eq PING.EXE"], { encoding: "utf8" }).matchAll(
+			/"PING\.EXE","(\d+)"/gi,
+		)].map((match) => Number(match[1]));
+	const before = new Set(pings());
 	const tree = spawn(cmd, ["/d", "/c", "ping -n 30 127.0.0.1 >nul"], { stdio: "ignore", detached: true, windowsHide: true });
-	// cmd.exe starts ping when it gets to it: on a busy machine that can take longer than a fixed wait, so look until it is there.
 	let grandchildren = [];
-	for (let tries = 0; grandchildren.length === 0 && tries < 50; tries++) {
-		await new Promise((resolve) => setTimeout(resolve, 200));
-		grandchildren = execFileSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), [
-			"-NoProfile",
-			"-Command",
-			`(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${tree.pid}').ProcessId`,
-		], { encoding: "utf8" }).trim().split(/\s+/).filter(Boolean).map(Number);
+	for (let tries = 0; grandchildren.length === 0 && tries < 100; tries++) {
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		grandchildren = pings().filter((pid) => !before.has(pid));
 	}
-	spawnSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"), ["/pid", String(tree.pid), "/T", "/F"]);
+	spawnSync(join(system32, "taskkill.exe"), ["/pid", String(tree.pid), "/T", "/F"]);
 	await exited(tree);
 	let anyAlive = true;
 	for (let tries = 0; anyAlive && tries < 100; tries++) {
@@ -79,16 +82,15 @@ async function run() {
 	check("a process tree, ended as one", grandchildren.length > 0 && !anyAlive, `${grandchildren.join(",")} alive=${anyAlive}`);
 }
 
-export default function () {
-	run().then(
-		() => {
-			if (failures.length) console.log(`child-processes-windows failed: ${failures.join("; ")}`);
-			else console.log(`child-processes-windows: ${passed.length} checks`);
-			process.exit(0);
-		},
-		(error) => {
-			console.log(`child-processes-windows failed: ${error.stack}`);
-			process.exit(0);
-		},
-	);
+// Pi waits for an extension's factory: the checks are done before Pi goes on with its own work (it would otherwise answer the
+// prompt and exit first when the checks take long).
+export default async function () {
+	try {
+		await run();
+		if (failures.length) console.log(`child-processes-windows failed: ${failures.join("; ")}`);
+		else console.log(`child-processes-windows: ${passed.length} checks`);
+	} catch (error) {
+		console.log(`child-processes-windows failed: ${error.stack}`);
+	}
+	process.exit(0);
 }
