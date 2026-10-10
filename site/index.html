@@ -6,9 +6,9 @@
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#050505">
 <title>Pi-Bolt: the Pi coding agent, compiled to machine code</title>
-<meta name="description" content="Pi-Bolt is the Pi coding agent compiled ahead of time into one native executable for Linux x86-64 and macOS on Apple silicon. It starts two to three times sooner than Pi on Bun and uses about a third of its CPU.">
+<meta name="description" content="Pi-Bolt is the Pi coding agent compiled ahead of time into one native executable for Linux x86-64 and macOS on Apple silicon. It starts three times sooner than Pi on Bun and uses about a third of its CPU.">
 <meta property="og:title" content="Pi-Bolt: the Pi coding agent, compiled to machine code">
-<meta property="og:description" content="One native executable for Linux and macOS. Starts two to three times sooner than Pi on Bun and uses about a third of its CPU.">
+<meta property="og:description" content="One native executable for Linux and macOS. Starts three times sooner than Pi on Bun and uses about a third of its CPU.">
 <meta property="og:url" content="https://pi-bolt.opensec.in/">
 <link rel="icon" href="logo.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -126,7 +126,7 @@
   .bar.bolt .b { background: var(--lime); }
   .bar .v { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-soft); font-size: 0.9rem; }
   .bar.bolt .v { color: var(--text); font-weight: 600; }
-  .ratio { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 3px; background: rgba(186, 252, 107, 0.12); color: var(--lime); font: 500 0.78rem var(--mono); }
+  .ratio { display: inline-block; margin-left: 10px; color: var(--text-soft); font: 500 0.78rem var(--mono); }
   .platforms { display: flex; gap: 8px; margin: 0 0 40px; }
   .platforms button { border: 1px solid var(--rule-2); background: transparent; color: var(--text-soft); border-radius: 3px; padding: 7px 14px; font: 500 0.92rem var(--sans); cursor: pointer; }
   .platforms button:hover { color: var(--text); }
@@ -187,8 +187,8 @@
       <div>
         <h1>The Pi coding agent, compiled to <span class="pix">machine&nbsp;code.</span></h1>
         <p class="lede">Pi-Bolt is Pi as one native executable for Linux and macOS. Every function is compiled before you run it, so
-          nothing is parsed or JIT-compiled at launch: it starts two to three times sooner than Pi on Bun and uses about a third of
-          its CPU.</p>
+          nothing is parsed or JIT-compiled at launch: it starts three times sooner than Pi on Bun and uses about a third of its
+          CPU.</p>
         <div class="install">
           <code id="cmd">curl -fsSL https://pi-bolt.opensec.in/install.sh | sh</code>
           <button class="copy" type="button" data-copy="cmd" aria-label="Copy the install command">Copy</button>
@@ -201,10 +201,10 @@
           <h2 id="race-title">Launch to prompt</h2>
           <button class="replay" type="button" id="replay">Run again</button>
         </div>
-        <div class="lane bolt" data-ms="45"><span class="who">Pi-Bolt</span><span class="track"><span class="fill"></span></span><span class="ms"><span class="ready">45 ms</span></span></div>
-        <div class="lane" data-ms="128"><span class="who">Pi on Bun 1.4.2</span><span class="track"><span class="fill"></span></span><span class="ms"><span class="ready">128 ms</span></span></div>
-        <div class="lane" data-ms="303"><span class="who">Pi on Node 22</span><span class="track"><span class="fill"></span></span><span class="ms"><span class="ready">303 ms</span></span></div>
-        <p class="race-foot">Pi-Bolt against Pi 1.0.0 on Bun and Node, from launch to an interactive prompt, measured on an AMD EPYC 7B13 server and replayed ten times
+        <div class="lane bolt" data-ms="47"><span class="who">Pi-Bolt</span><span class="track"><span class="fill"></span></span><span class="ms"><span class="ready">47 ms</span></span></div>
+        <div class="lane" data-ms="143"><span class="who">Pi on Bun 1.4.2</span><span class="track"><span class="fill"></span></span><span class="ms"><span class="ready">143 ms</span></span></div>
+        <div class="lane" data-ms="334"><span class="who">Pi on Node 24</span><span class="track"><span class="fill"></span></span><span class="ms"><span class="ready">334 ms</span></span></div>
+        <p class="race-foot">Pi-Bolt 0.7.3 against Pi 1.1.0 on Bun and Node, from launch to an interactive prompt, measured on an AMD EPYC 7B13 server and replayed ten times
           slower. On your machine the times differ; the order does not.</p>
       </div>
     </div>
@@ -241,8 +241,8 @@
   <section id="benchmarks" aria-labelledby="bench-title">
     <div class="wrap">
       <h2 class="sec" id="bench-title">Benchmarks</h2>
-      <p class="sec-lede">Pi run three ways: compiled by Pi-Bolt (0.7.0 measures the same as the 0.6.1 shown), and Pi 1.0.0 as
-        released on stock Bun and from its npm package on Node. Medians of fresh processes, interleaved across the runtimes. Lower
+      <p class="sec-lede">Pi run three ways: compiled by Pi-Bolt 0.7.3, and Pi 1.1.0 as released on stock Bun and from its npm
+        package on Node. Medians of fresh processes, interleaved across the runtimes. Lower
         is better.</p>
       <div class="platforms" role="group" aria-label="Platform">
         <button type="button" data-platform="linux" aria-pressed="true">Linux x86-64</button>
@@ -345,28 +345,28 @@
   document.getElementById("replay").addEventListener("click", race);
   race();
 
-  // Benchmarks, from docs/BENCHMARKS.md (Pi-Bolt 0.6.1, which 0.7.0 equals; stock Pi 1.0.0). [Pi-Bolt, Bun, Node]
+  // Benchmarks, from docs/BENCHMARKS.md (Pi-Bolt 0.7.3; Pi 1.1.0 as released). [Pi-Bolt, Bun, Node]
   var data = {
     linux: {
-      runtimes: ["Pi-Bolt", "Bun 1.4.2", "Node 22"],
+      runtimes: ["Pi-Bolt", "Bun 1.4.2", "Node 24"],
       metrics: [
-        ["Ready to type", "ms", [45, 128, 303], "faster"],
-        ["One prompt (pi -p), CPU", "ms", [81, 329, 572], "less"],
-        ["Interactive session, CPU", "ms", [303, 844, 1242], "less"],
-        ["Streaming a 60,000-character answer, CPU", "s", [3.8, 43.1, 43.7], "less"],
-        ["Writing a 200 KB file through a tool call", "s", [0.8, 27.8, 44.3], "faster"],
-        ["A tool turn with a real model, CPU", "s", [0.20, 0.49, 0.77], "less"]
+        ["Ready to type", "ms", [47, 143, 334], "faster"],
+        ["One prompt (pi -p), CPU", "ms", [85, 333, 645], "less"],
+        ["Interactive session, CPU", "ms", [309, 913, 1312], "less"],
+        ["Streaming a 60,000-character answer, CPU", "s", [4.3, 44.4, 42.3], "less"],
+        ["Writing a 200 KB file through a tool call", "s", [0.8, 30.0, 39.4], "faster"],
+        ["Memory after a 4.2M-token session", "MB", [139, 296, 537], "less"]
       ]
     },
     mac: {
       runtimes: ["Pi-Bolt", "Bun 1.4.2", "Node 26"],
       metrics: [
-        ["Ready to type", "ms", [31, 63, 193], "faster"],
-        ["One prompt (pi -p), CPU", "ms", [32, 138, 290], "less"],
-        ["Interactive session, CPU", "ms", [126, 363, 544], "less"],
-        ["Streaming a 60,000-character answer, CPU", "s", [6.9, 25.3, 24.0], "less"],
-        ["Writing a 200 KB file through a tool call", "s", [0.3, 12.0, 14.2], "faster"],
-        ["Memory after a 4.2M-token session", "MB", [64, 95, 1890], "less"]
+        ["Ready to type", "ms", [46, 101, 347], "faster"],
+        ["One prompt (pi -p), CPU", "ms", [58, 236, 525], "less"],
+        ["Interactive session, CPU", "ms", [175, 555, 915], "less"],
+        ["Streaming a 60,000-character answer, CPU", "s", [7.0, 38.4, 37.8], "less"],
+        ["Writing a 200 KB file through a tool call", "s", [0.5, 22.1, 26.6], "faster"],
+        ["Memory after a 4.2M-token session", "MB", [39, 91, 2441], "less"]
       ]
     }
   };

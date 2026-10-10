@@ -53,7 +53,7 @@ for package in "$(dirname "$AGENT")"/*/; do
 	built="$(find "$package/dist" -maxdepth 1 -name '*.js' -print -quit)"
 	[ -n "$built" ] || continue
 	stale="$(find "$package/src" -name '*.ts' ! -name '*.d.ts' -newer "$built" -print -quit)"
-	[ -z "$stale" ] || die "Pi's sources changed since it was built ($stale): build it again (npm run build in $(dirname "$(dirname "$AGENT")"), or scripts/prepare-pi.sh)"
+	[ -z "$stale" ] || die "Pi's sources changed since it was built ($stale): build it again (scripts/prepare-pi.sh, or npm run build:offline in $(dirname "$(dirname "$AGENT")"))"
 done
 PIBOLT_VERSION="$(cat "$PIBOLT_ROOT/VERSION")"
 CPU_VARIANT=$PIBOLT_ARCH; [ "$CPU" = baseline ] && CPU_VARIANT=$PIBOLT_ARCH-baseline; [ "$JIT" = on ] && CPU_VARIANT=$PIBOLT_ARCH-jit

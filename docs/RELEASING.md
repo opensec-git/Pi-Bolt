@@ -144,10 +144,12 @@ records the profile, opens a pull request and merges it when `ci` passes, after 
 By hand:
 
 1. Merge the tag into `pi-bolt` (`git fetch https://github.com/earendil-works/pi.git tag vX.Y.Z && git merge vX.Y.Z`). Where
-   Pi-Bolt changed the same code, keep both: Pi-Bolt's changes are listed in the README under [The fork](../README.md#the-fork).
-2. `scripts/bump-version.sh --pi X.Y.Z` (the last number goes up by one, as for any release), then `scripts/train-profile.sh` **on Linux**, and commit
-   `profiles/pi-X.Y.Z`. A profile recorded on Linux serves every platform. On Windows, `scripts\train-heap.ps1` then adds the
-   prebuilt heap's order to it (`heap-functions.txt`, and the strings' order in `bytecode.order`): commit that too.
+   Pi-Bolt changed the same code, keep both: Pi-Bolt's changes are its commits on top of the previous Pi tag
+   (`git log vX.Y.Z..pi-bolt -- packages/`).
+2. `scripts/bump-version.sh --pi X.Y.Z` (the last number goes up by one, as for any release), `scripts/prepare-pi.sh --refresh-models`
+   (the model catalog of the new Pi, `packages/ai/src/providers/data`), then `scripts/train-profile.sh` **on Linux**, and commit
+   `profiles/pi-X.Y.Z` and the catalog. A profile recorded on Linux serves every platform. On Windows, `scripts\train-heap.ps1`
+   then adds the prebuilt heap's order to it (`heap-functions.txt`, and the strings' order in `bytecode.order`): commit that too.
 3. Push; `ci` builds and tests it, and it is released as above.
 
 ## The macOS builds
