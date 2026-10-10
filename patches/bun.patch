@@ -71,7 +71,7 @@ Subject: [PATCH] Pi-Bolt: ahead-of-time compiled executables
  src/spawn/process.rs                          |   23 +-
  src/spawn_sys/posix_spawn.rs                  |  173 ++-
  src/spawn_sys/spawn_process.rs                |   14 +-
- src/standalone_graph/StandaloneModuleGraph.rs |  262 +++-
+ src/standalone_graph/StandaloneModuleGraph.rs |  264 +++-
  test/js/bun/util/sleepSync.test.ts            |   47 +
  test/js/node/fs/fs.test.ts                    |   24 +
  test/js/node/stream/node-stream.test.js       |   22 +
@@ -79,7 +79,7 @@ Subject: [PATCH] Pi-Bolt: ahead-of-time compiled executables
  .../fetch.tls.renegotiation-peer-fixture.mjs  |   86 ++
  test/js/web/fetch/fetch.tls.test.ts           |   70 +-
  test/js/web/timers/timer-gc-roots.test.ts     |    3 +
- 75 files changed, 3236 insertions(+), 232 deletions(-)
+ 75 files changed, 3238 insertions(+), 232 deletions(-)
  create mode 100644 patches/libuv/win-thread-stack-reservation.patch
  create mode 100644 patches/mimalloc/page-commit-on-demand-default.patch
  create mode 100644 test/js/web/fetch/fetch.tls.renegotiation-client-fixture.ts
@@ -4957,7 +4957,7 @@ index 0de81dcb9f6..e59e0d6e696 100644
  
              #[cfg(any(target_os = "linux", target_os = "android"))]
 diff --git a/src/standalone_graph/StandaloneModuleGraph.rs b/src/standalone_graph/StandaloneModuleGraph.rs
-index a1cfe230615..3838151aa6e 100644
+index a1cfe230615..000f83a31a8 100644
 --- a/src/standalone_graph/StandaloneModuleGraph.rs
 +++ b/src/standalone_graph/StandaloneModuleGraph.rs
 @@ -63,6 +63,8 @@ pub struct StandaloneModuleGraph {
@@ -5238,16 +5238,18 @@ index a1cfe230615..3838151aa6e 100644
      if !target.is_host_platform()
          && output_files
              .iter()
-@@ -2367,7 +2552,7 @@ pub(crate) fn inject<'a>(
+@@ -2367,7 +2552,9 @@ pub(crate) fn inject<'a>(
              ));
          }
          CompileTargetOs::Windows => {
 -            let input_bytes = match bun_sys::File::borrow(&cloned_executable_fd).read_to_end() {
++            // (Rewritten in place only on Windows, below.)
++            #[cfg_attr(not(windows), allow(unused_mut))]
 +            let mut input_bytes = match bun_sys::File::borrow(&cloned_executable_fd).read_to_end() {
                  Ok(b) => b,
                  Err(err) => {
                      bun_core::pretty_errorln!("Error reading standalone module graph: {}", err);
-@@ -2375,6 +2560,33 @@ pub(crate) fn inject<'a>(
+@@ -2375,6 +2562,33 @@ pub(crate) fn inject<'a>(
                      return None;
                  }
              };
@@ -5281,7 +5283,7 @@ index a1cfe230615..3838151aa6e 100644
              let mut pe_file = match bun_pe::PEFile::init(&input_bytes) {
                  Ok(f) => f,
                  Err(e) => {
-@@ -3103,6 +3315,14 @@ impl StandaloneModuleGraph {
+@@ -3103,6 +3317,14 @@ impl StandaloneModuleGraph {
          {
              return;
          }
@@ -5296,7 +5298,7 @@ index a1cfe230615..3838151aa6e 100644
          let startup = &self.files.values()[..self.startup_module_count as usize];
          let span = if startup.iter().any(|f| !f.bytecode.is_empty()) {
              // A linked payload follows the string table; its hot front is what any module reads at startup.
-@@ -3348,6 +3568,44 @@ fn append_bytecode_aligned(
+@@ -3348,6 +3570,44 @@ fn append_bytecode_aligned(
      }
  }
  

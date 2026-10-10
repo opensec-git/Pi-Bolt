@@ -164,7 +164,9 @@ if ($Stable) {
 	Log "Pi $Version with stock Bun $(& $Bun --version) (bytecode, no AOT) -> $Out"
 	Push-Location $Agent
 	try {
-		& $Bun @CommonArgs @Entries --outfile (Join-Path $Out 'pi.exe') | Out-Null
+		# Named Pi-Bolt as the builds it is compared with are (PRODUCT_NAME, in messages and the window title), on stock Bun.
+		$stableBuild = "$PiboltVersion x64-stable jit-on" -replace ' ', ('\' + 'u0020')
+		& $Bun @CommonArgs --define "PIBOLT_BUILD=\`"$stableBuild\`"" @Entries --outfile (Join-Path $Out 'pi.exe') | Out-Null
 		if ($LASTEXITCODE -ne 0) { Die 'bun build failed' }
 	} finally { Pop-Location; Remove-PluginStage }
 	Stage-Assets $Out

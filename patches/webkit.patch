@@ -9259,7 +9259,7 @@ index 902b8f938f..c08b9484e4 100644
          return key.get();
      });
 diff --git a/Source/JavaScriptCore/parser/VariableEnvironment.h b/Source/JavaScriptCore/parser/VariableEnvironment.h
-index 1dda303c94..4d245ef488 100644
+index 1dda303c94..29709a14fc 100644
 --- a/Source/JavaScriptCore/parser/VariableEnvironment.h
 +++ b/Source/JavaScriptCore/parser/VariableEnvironment.h
 @@ -35,6 +35,16 @@
@@ -9272,7 +9272,7 @@ index 1dda303c94..4d245ef488 100644
 +#if OS(WINDOWS)
 +template<typename T> using VariableEnvironmentPtrTraits = RawPtrTraits<T>;
 +#else
-+template<typename T> using VariableEnvironmentPtrTraits = PackedPtrTraits<T>;
++template<typename T> using VariableEnvironmentPtrTraits = WTF::PackedPtrTraits<T>;
 +#endif
 +template<typename T> using VariableEnvironmentRefPtr = RefPtr<T, VariableEnvironmentPtrTraits<T>>;
 +

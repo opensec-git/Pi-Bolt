@@ -26,8 +26,12 @@ is left, in order, and what not to do. Delete it from the branch once 0.8.0 is o
   the executable resolves no module or package in the working directory (`tests/runtime` workdir, also in `run.ps1`). It also
   builds with `--compile-autoload-package-json` (in `build-pi.ps1` too) and runs `tests/pi`'s extensions from a folder of their
   own (also in `run.ps1`), with a test of an extension's own packages.
-- **The engine patches changed again** (three-way merge of the engine trees, replayed and checked): Bun tree
-  `522ef6e2a120616ab9e0b6317be1487ab8eb18f0`, WebKit tree `40dbb846da619a806fcfe4a844e4239f65c93f93`. **The Windows runtime packaged
+- **The engine patches changed again** (three-way merge of the engine trees, replayed and checked), and two non-Windows
+  compile errors of the Windows port are fixed (`VariableEnvironment.h`: `WTF::PackedPtrTraits`; `StandaloneModuleGraph.rs`:
+  a `mut` used only on Windows). Bun tree `2c4f4980f78e0986a324aa46f648ce05542d9369`, WebKit tree
+  `f527504e0d1d9f14c73b7aab4682fe44972507fa`. The macOS and Linux runtimes are built from these and pass every test.
+- The stable (comparison) build is named Pi-Bolt too (`PIBOLT_BUILD` `X.Y.Z <arch>-stable jit-on`), so `e2e_screen.py`
+  compares like with like now that messages name Pi-Bolt. **The Windows runtime packaged
   before this (`bun.exe` sha256 `27bbd0ad...`) is out of date: build it again on the Windows PC from this branch, run
   `tests\runtime\run.ps1` (workdir must pass), `tests\aot`, `tests\pi\run.ps1`, and upload that one in step 4.**
 

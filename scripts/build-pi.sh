@@ -92,8 +92,9 @@ if [ -n "$STABLE" ]; then
 	BUN="${PIBOLT_STABLE_BUN:-bun}"
 	need "$BUN"
 	log "Pi $VERSION with stock Bun $("$BUN" --version) (bytecode, no AOT) -> $OUT"
+	# Named Pi-Bolt as the builds it is compared with are (PRODUCT_NAME, in messages and the window title), on stock Bun.
 	(cd "$AGENT" && "$BUN" build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --target="bun-$PIBOLT_PLATFORM" --bytecode --format=esm \
-		"${ENTRIES[@]}" --outfile "$OUT/pi" >/dev/null)
+		--define "PIBOLT_BUILD=\"$PIBOLT_VERSION $PIBOLT_ARCH-stable jit-on\"" "${ENTRIES[@]}" --outfile "$OUT/pi" >/dev/null)
 	stage_assets "$OUT"
 	log "done: $OUT/pi"
 	exit 0
