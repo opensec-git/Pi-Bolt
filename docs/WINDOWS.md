@@ -24,7 +24,7 @@ So the code is already position-independent. What is not is the heap, the region
 **The region starts with a section of the executable.** The runtime has an uninitialized, read-only section, `.pbreg`: the
 32 MB of `Arena::Bss` that has things at fixed offsets (the empty string, the engine's symbols, the VM, the global object, the
 modules' decoders), nothing in the file. `StaticRegion::base()` is its first byte rounded up to 64 KB: a linker symbol, so a
-RIP-relative `lea`, relocated with the image by ASLR. Offsets in Bss stay compile-time constants, so `StringImpl::empty()` and the
+RIP-relative `lea`, relocated with the image wherever Windows loads it. Offsets in Bss stay compile-time constants, so `StringImpl::empty()` and the
 engine's symbols cost what they cost on Linux. Pages are made writable only as the engine places things in them
 (`StaticRegion::makeWritable()`), so a process is charged only for those. (Why only 32 MB: see "What was measured".)
 
@@ -58,14 +58,14 @@ The code gets one `RUNTIME_FUNCTION` in the exception directory (`.pbpdata`), so
 pointer in the heap becomes a **base relocation** (`IMAGE_REL_BASED_DIR64`): pointers into the region and into the executable move
 by the same delta, since both are the image. The Windows loader applies them.
 
-**Nothing executable is at a fixed address**: the code is a section of the image, wherever ASLR puts it, and needs no relocation.
+**Nothing executable is at a fixed address**: the code is a section of the image, wherever Windows loads it, and needs no relocation.
 
 **The structure heap is wherever Windows puts it.** On Windows the code ORs the base from the realm's `Instance`
 (`or64(Address(instanceGPR, Instance::offsetOfStructureIDBase()), reg)`) instead of a 10-byte immediate: one load that is in L1.
 To be measured.
 
 **Pointers that are not plain words.** A base relocation moves an aligned 64-bit word. What the heap holds otherwise was found by
-building the same program with two copies of the runtime (two files, so two ASLR bases) and comparing the heaps
+building the same program with two copies of the runtime (two files, so two load addresses) and comparing the heaps
 (`scripts/lib/compare-static-heaps.py`; `scripts\build-pi.ps1 -VerifyDeterminism` does it for Pi):
 
 - *Packed pointers* (`PackedRefPtr`, 6 bytes, unaligned): on Windows the few kinds of them that a prebuilt heap holds
@@ -279,8 +279,8 @@ its debugger, which sees it at its exit) and a sampling profile of the threads (
 
 ## What would carry over to macOS
 
-The same idea, applied to Mach-O, would remove the ASLR exception there: the region as a section of the executable (a
+The same idea applies to Mach-O: the region as a section of the executable (a
 zero-fill section), the heap's pointers as rebase opcodes of the chained fixups, applied by dyld. The difference is that dyld
 applies rebases in the process (private dirty pages, the 44 MB that the macOS session measured), unless the pages are in the
 shared region, which an application's are not. So the Windows result does not carry over by itself: on macOS the fix-up cost is
-per process, and has to be measured against keeping ASLR off for the executable.
+per process, and has to be measured against the macOS design as it is.

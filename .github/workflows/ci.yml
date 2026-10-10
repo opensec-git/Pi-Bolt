@@ -127,7 +127,12 @@ jobs:
       - name: Engine tests
         run: tests/aot/run.sh
       - name: Runtime tests
-        run: tests/runtime/run.sh
+        # A test of what the engine in this commit does is skipped while the released runtime is an older engine; the
+        # release workflow runs it on the runtime built from this engine (docs/RELEASING.md).
+        run: |
+          released=$(curl -fsSL https://github.com/opensec-git/Pi-Bolt/releases/latest/download/RUNTIME_STAMP || true)
+          [ "$(scripts/runtime-stamp.sh)" = "$released" ] || export PIBOLT_RUNTIME_OLDER=1
+          tests/runtime/run.sh
       - name: The same as stock Pi
         run: |
           scripts/build-pi.sh --stable --out out/pi-stable

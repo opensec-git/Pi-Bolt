@@ -1,36 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: OpenSec <contactus@opensec.in>
-Date: Sat, 10 Oct 2026 14:53:32 +0530
+Date: Sat, 10 Oct 2026 17:52:02 +0530
 Subject: [PATCH] Pi-Bolt: ahead-of-time compiled executables
 
-Bun's changes for Pi-Bolt's executables, on Linux x86-64, macOS ARM64 and Windows x64:
-
-- Executables with a prebuilt heap and a code image, made by `bun build --compile` and mapped from the
-  executable when it starts (bundler, StandaloneModuleGraph, ZigSourceProvider).
-- Builtin modules imported in the order Node evaluates them; the names of a builtin module required in
-  a wrapper read once, ahead of the wrapper's dependencies.
-- Stack traces and crash reports of ahead-of-time code: no CodeBlocks made to read a frame, crash
-  reports not uploaded unasked. The default Error.prepareStackTrace takes any object.
-- Memory: garbage collection markers for the prebuilt heap, the allocator's idle sweep every 250 ms,
-  static strings not reference counted from Rust; on macOS a starting heap budget that fits the
-  prebuilt heap, and a collection every 5 seconds while the program waits.
-- fetch: an idle connection waits in the keep-alive pool for 4 seconds, or as long as the server says.
-- macOS: the prebuilt heap and code image mapped from the __BUN section, with the executable where it
-  was linked to be; SharedArrayBuffer with the JIT off; a terminal reopened by its own device, which
-  kqueue can watch; the programs an executable starts are started by Pi-Bolt's launcher helper.
-
-- Windows x64: the prebuilt heap and code image in the executable's PE sections, mapped read-only where
-  nothing writes; DLLs that are delay-loaded only from System32 (a delay-load hook, the dependent load
-  flag, WIC); a build without the JIT stays without it, and the debugging options that reach memory or
-  load code are off in a compiled program; crash reports of compiled code; a collection every second
-  while waiting (5 s measured +40% CPU while a reply streams), and mimalloc's purge delay left at its
-  default; an idle keep-alive connection aged on GetTickCount64; the writer of the prebuilt heap takes a word that
-  looks like an address of the blocks or the build's scratch memory for a number unless it is aligned and its page committed,
-  and says so.
-
-Includes the engine changes of Pi-Bolt 0.7.1 to 0.7.3 on pi-bolt (5f6ad773e, c9bde4b67): writev for
-queued writes, mimalloc from upstream, less idle work, an idle keep-alive's age on a clock nobody sets,
-fetch through a TLS 1.2 renegotiation.
 ---
  Cargo.lock                                    |    1 +
  .../bun-usockets/src/eventing/epoll_kqueue.c  |    7 +-
@@ -85,9 +57,10 @@ fetch through a TLS 1.2 renegotiation.
  src/jsc/bindings/ZigException.cpp             |   14 +-
  src/jsc/bindings/ZigGlobalObject.cpp          |   77 ++
  src/jsc/bindings/ZigSourceProvider.cpp        | 1184 ++++++++++++++++-
- src/jsc/bindings/c-bindings.cpp               |  135 ++
+ src/jsc/bindings/c-bindings.cpp               |  136 ++
  .../webcore/SerializedScriptValue.cpp         |    9 +
  src/jsc/web_worker.rs                         |    4 +
+ src/resolver/resolver.rs                      |    7 +-
  src/runtime/api/BunObject.rs                  |    6 +
  src/runtime/api/bun/subprocess.rs             |    2 +-
  src/runtime/cli/run_command.rs                |    5 +
@@ -106,14 +79,14 @@ fetch through a TLS 1.2 renegotiation.
  .../fetch.tls.renegotiation-peer-fixture.mjs  |   86 ++
  test/js/web/fetch/fetch.tls.test.ts           |   70 +-
  test/js/web/timers/timer-gc-roots.test.ts     |    3 +
- 74 files changed, 3229 insertions(+), 231 deletions(-)
+ 75 files changed, 3236 insertions(+), 232 deletions(-)
  create mode 100644 patches/libuv/win-thread-stack-reservation.patch
  create mode 100644 patches/mimalloc/page-commit-on-demand-default.patch
  create mode 100644 test/js/web/fetch/fetch.tls.renegotiation-client-fixture.ts
  create mode 100644 test/js/web/fetch/fetch.tls.renegotiation-peer-fixture.mjs
 
 diff --git a/Cargo.lock b/Cargo.lock
-index cd424128..4ad04f29 100644
+index cd424128a7f..4ad04f29949 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -624,6 +624,7 @@ dependencies = [
@@ -125,7 +98,7 @@ index cd424128..4ad04f29 100644
   "strum",
   "thiserror",
 diff --git a/packages/bun-usockets/src/eventing/epoll_kqueue.c b/packages/bun-usockets/src/eventing/epoll_kqueue.c
-index 28a2040a..6806c094 100644
+index 28a2040abb2..6806c0940e3 100644
 --- a/packages/bun-usockets/src/eventing/epoll_kqueue.c
 +++ b/packages/bun-usockets/src/eventing/epoll_kqueue.c
 @@ -512,9 +512,10 @@ void us_loop_run_bun_tick(struct us_loop_t *loop, const struct timespec* timeout
@@ -144,7 +117,7 @@ index 28a2040a..6806c094 100644
          static _Thread_local uint64_t last_idle_sweep_ns = 0;
 diff --git a/patches/libuv/win-thread-stack-reservation.patch b/patches/libuv/win-thread-stack-reservation.patch
 new file mode 100644
-index 00000000..293a355f
+index 00000000000..293a355f5ce
 --- /dev/null
 +++ b/patches/libuv/win-thread-stack-reservation.patch
 @@ -0,0 +1,19 @@
@@ -169,7 +142,7 @@ index 00000000..293a355f
 +     err = errno;
 diff --git a/patches/mimalloc/page-commit-on-demand-default.patch b/patches/mimalloc/page-commit-on-demand-default.patch
 new file mode 100644
-index 00000000..9ee92856
+index 00000000000..9ee928568f8
 --- /dev/null
 +++ b/patches/mimalloc/page-commit-on-demand-default.patch
 @@ -0,0 +1,22 @@
@@ -196,7 +169,7 @@ index 00000000..9ee92856
 +          MI_OPTION_UNINIT, MI_OPTION(page_max_reclaim) },         // don't reclaim (small) pages of the same originating theap if we already own N pages in that size class
 +   { MI_DEFAULT_PAGE_CROSS_THREAD_MAX_RECLAIM,
 diff --git a/scripts/build/CLAUDE.md b/scripts/build/CLAUDE.md
-index 4d067e90..41c47fee 100644
+index 4d067e90447..41c47fee81c 100644
 --- a/scripts/build/CLAUDE.md
 +++ b/scripts/build/CLAUDE.md
 @@ -292,7 +292,7 @@ Why not auto-register in emit functions? Some rules are shared (`dep_configure`
@@ -209,7 +182,7 @@ index 4d067e90..41c47fee 100644
  **`isExecutable` must check `isFile()`.** `X_OK` on a directory means traversable — a `cmake/` dir in PATH would shadow the real cmake binary.
  
 diff --git a/scripts/build/binary-expectations.ts b/scripts/build/binary-expectations.ts
-index f18a60b0..0ba5981b 100644
+index f18a60b06b5..0ba5981b7f5 100644
 --- a/scripts/build/binary-expectations.ts
 +++ b/scripts/build/binary-expectations.ts
 @@ -7,9 +7,9 @@
@@ -330,7 +303,7 @@ index f18a60b0..0ba5981b 100644
          },
        };
 diff --git a/scripts/build/bun.ts b/scripts/build/bun.ts
-index b6214880..c37eea84 100644
+index b6214880674..c37eea84aee 100644
 --- a/scripts/build/bun.ts
 +++ b/scripts/build/bun.ts
 @@ -21,6 +21,7 @@ import { bunExeName, shouldStrip, type Config } from "./config.ts";
@@ -380,7 +353,7 @@ index b6214880..c37eea84 100644
    // Codegen stays order-only: those outputs only change if inputs change,
    // and inputs don't change mid-build. cppAll (not all): what the C++ side
 diff --git a/scripts/build/deps/libuv.ts b/scripts/build/deps/libuv.ts
-index edcd6bf3..2dc2c347 100644
+index edcd6bf3b4c..2dc2c347f2b 100644
 --- a/scripts/build/deps/libuv.ts
 +++ b/scripts/build/deps/libuv.ts
 @@ -60,7 +60,12 @@ export const libuv: Dependency = {
@@ -398,7 +371,7 @@ index edcd6bf3..2dc2c347 100644
    build: () => ({
      kind: "direct",
 diff --git a/scripts/build/deps/mimalloc.ts b/scripts/build/deps/mimalloc.ts
-index 2984efa9..fac6b037 100644
+index 2984efa98b8..fac6b037153 100644
 --- a/scripts/build/deps/mimalloc.ts
 +++ b/scripts/build/deps/mimalloc.ts
 @@ -12,7 +12,7 @@
@@ -434,7 +407,7 @@ index 2984efa9..fac6b037 100644
      if (override) defines.MI_MALLOC_OVERRIDE = true;
  
 diff --git a/scripts/build/deps/webkit.ts b/scripts/build/deps/webkit.ts
-index bba31a2c..4171ecfe 100644
+index bba31a2cc89..4171ecfe198 100644
 --- a/scripts/build/deps/webkit.ts
 +++ b/scripts/build/deps/webkit.ts
 @@ -42,8 +42,10 @@ export const WEBKIT_VERSION = "35e8970dfd926abf6661c9d356f5d60d8f611c9b";
@@ -537,7 +510,7 @@ index bba31a2c..4171ecfe 100644
        // Release local WebKit keeps debug info so JSC crashes symbolicate.
        // LTO stays plain Release (debug info + LTO bloats significantly).
 diff --git a/scripts/build/download.ts b/scripts/build/download.ts
-index 42d81846..daeca6fd 100644
+index 42d81846779..daeca6fdc51 100644
 --- a/scripts/build/download.ts
 +++ b/scripts/build/download.ts
 @@ -275,13 +275,39 @@ export async function extractTarGz(tarball: string, dest: string, stripComponent
@@ -582,7 +555,7 @@ index 42d81846..daeca6fd 100644
   * Extract a .zip archive with mtime normalization.
   *
 diff --git a/scripts/build/fetch-cli.ts b/scripts/build/fetch-cli.ts
-index eebc97cc..e8abff80 100644
+index eebc97cc79e..e8abff80933 100644
 --- a/scripts/build/fetch-cli.ts
 +++ b/scripts/build/fetch-cli.ts
 @@ -22,7 +22,7 @@
@@ -653,7 +626,7 @@ index eebc97cc..e8abff80 100644
  // github-archive dep fetch: download tarball, extract, patch, stamp
  // ───────────────────────────────────────────────────────────────────────────
 diff --git a/scripts/build/flags.ts b/scripts/build/flags.ts
-index 3d40f647..3e1f5d86 100644
+index 3d40f647a47..3e1f5d8672b 100644
 --- a/scripts/build/flags.ts
 +++ b/scripts/build/flags.ts
 @@ -499,6 +499,13 @@ export const globalFlags: Flag[] = [
@@ -718,7 +691,7 @@ index 3d40f647..3e1f5d86 100644
    {
      flag: "/DEBUG:FULL",
 diff --git a/scripts/build/ninja.ts b/scripts/build/ninja.ts
-index e6a4479f..b7c38f8a 100644
+index e6a4479f14d..b7c38f8aa39 100644
 --- a/scripts/build/ninja.ts
 +++ b/scripts/build/ninja.ts
 @@ -69,6 +69,7 @@ const ruleVars = {
@@ -730,7 +703,7 @@ index e6a4479f..b7c38f8a 100644
    dep_prebuild: ["name", "cwd", "cmd"],
    dep_subst: ["pairs"],
 diff --git a/scripts/build/rust.ts b/scripts/build/rust.ts
-index ad58bbad..7137df78 100644
+index ad58bbad630..7137df783c1 100644
 --- a/scripts/build/rust.ts
 +++ b/scripts/build/rust.ts
 @@ -325,6 +325,9 @@ export function cargoBuildInvocation(cfg: Config): CargoInvocation {
@@ -744,7 +717,7 @@ index ad58bbad..7137df78 100644
    // expansion / typeck / borrowck, so the critical-path crate (`bun_runtime`)
    // sits on one core while the rest idle. With this, independent compiler
 diff --git a/scripts/build/source.ts b/scripts/build/source.ts
-index ee3163e9..63623584 100644
+index ee3163e9f42..636235848cc 100644
 --- a/scripts/build/source.ts
 +++ b/scripts/build/source.ts
 @@ -738,6 +738,16 @@ export function registerDepRules(n: Ninja, cfg: Config): void {
@@ -765,7 +738,7 @@ index ee3163e9..63623584 100644
    // build spawns its own -j parallelism; running all 15 at once would
    // oversubscribe cores badly (15 × nproc jobs). Four-at-a-time keeps CPU
 diff --git a/scripts/build/timings.ts b/scripts/build/timings.ts
-index 7b13bbc4..8eacea86 100644
+index 7b13bbc46d7..8eacea8603a 100644
 --- a/scripts/build/timings.ts
 +++ b/scripts/build/timings.ts
 @@ -808,6 +808,7 @@ const ruleLane: Record<RuleName, Lane> = {
@@ -777,7 +750,7 @@ index 7b13bbc4..8eacea86 100644
    dep_prebuild: "dependencies",
    dep_subst: "dependencies",
 diff --git a/scripts/orderfile/functrace-windows.c b/scripts/orderfile/functrace-windows.c
-index 1d34712b..c1caff89 100644
+index 1d34712b461..c1caff89da6 100644
 --- a/scripts/orderfile/functrace-windows.c
 +++ b/scripts/orderfile/functrace-windows.c
 @@ -25,7 +25,7 @@
@@ -825,7 +798,7 @@ index 1d34712b..c1caff89 100644
      return (int)exit_code;
  }
 diff --git a/scripts/orderfile/generate.ts b/scripts/orderfile/generate.ts
-index 7383322f..56e90ad5 100644
+index 7383322f94b..56e90ad5b65 100644
 --- a/scripts/orderfile/generate.ts
 +++ b/scripts/orderfile/generate.ts
 @@ -512,6 +512,19 @@ function buildUnixTracer(scratch: string): Tracer {
@@ -932,7 +905,7 @@ index 7383322f..56e90ad5 100644
  }
  
 diff --git a/scripts/orderfile/hints.ts b/scripts/orderfile/hints.ts
-index f741ee68..76ced5de 100644
+index f741ee68855..76ced5def63 100644
 --- a/scripts/orderfile/hints.ts
 +++ b/scripts/orderfile/hints.ts
 @@ -24,8 +24,9 @@
@@ -1041,7 +1014,7 @@ index f741ee68..76ced5de 100644
        command,
        outPath: out,
 diff --git a/src/ast/import_record.rs b/src/ast/import_record.rs
-index 6e582f84..c41f7e5a 100644
+index 6e582f84e53..c41f7e5a16a 100644
 --- a/src/ast/import_record.rs
 +++ b/src/ast/import_record.rs
 @@ -113,6 +113,10 @@ bitflags::bitflags! {
@@ -1056,7 +1029,7 @@ index 6e582f84..c41f7e5a 100644
  }
  
 diff --git a/src/bun_alloc/lib.rs b/src/bun_alloc/lib.rs
-index 7888ef35..3d4f4e61 100644
+index 7888ef351d0..3d4f4e618fa 100644
 --- a/src/bun_alloc/lib.rs
 +++ b/src/bun_alloc/lib.rs
 @@ -759,6 +759,11 @@ impl WTFStringImplStruct {
@@ -1090,7 +1063,7 @@ index 7888ef35..3d4f4e61 100644
              .ref_count_atomic()
              .fetch_sub(Self::S_REF_COUNT_INCREMENT, Ordering::Relaxed);
 diff --git a/src/bun_core/env_var.rs b/src/bun_core/env_var.rs
-index b5b37d98..4ecdc6e7 100644
+index b5b37d98870..4ecdc6e765d 100644
 --- a/src/bun_core/env_var.rs
 +++ b/src/bun_core/env_var.rs
 @@ -62,6 +62,7 @@ new!(pub BUN_CONFIG_DNS_TIME_TO_LIVE_SECONDS: unsigned, "BUN_CONFIG_DNS_TIME_TO_
@@ -1102,7 +1075,7 @@ index b5b37d98..4ecdc6e7 100644
  // A peer that accepts the TCP connection but never answers the upgrade fails
  // with error + close(1006). 0 disables; uSockets' 4 s sweep rounds small values up.
 diff --git a/src/bundler/LinkerContext.rs b/src/bundler/LinkerContext.rs
-index 354e7135..96f5b56a 100644
+index 354e7135f57..96f5b56a3b4 100644
 --- a/src/bundler/LinkerContext.rs
 +++ b/src/bundler/LinkerContext.rs
 @@ -1450,6 +1450,8 @@ pub struct LinkerOptions {
@@ -1192,7 +1165,7 @@ index 354e7135..96f5b56a 100644
          self.stmts.push(stmt);
          Ok(())
 diff --git a/src/bundler/bundle_v2.rs b/src/bundler/bundle_v2.rs
-index 871b0495..666db93f 100644
+index 871b0495225..666db93fd2d 100644
 --- a/src/bundler/bundle_v2.rs
 +++ b/src/bundler/bundle_v2.rs
 @@ -1516,6 +1516,7 @@ pub mod bv2_impl {
@@ -1256,7 +1229,7 @@ index 871b0495..666db93f 100644
              // SAFETY: same `'a`-owned `Transpiler` field as `banner` above.
              this.linker.options.metafile_json_path =
 diff --git a/src/bundler/linker_context/convertStmtsForChunk.rs b/src/bundler/linker_context/convertStmtsForChunk.rs
-index 258b0dfb..be4fcff3 100644
+index 258b0dfbcfd..be4fcff3d21 100644
 --- a/src/bundler/linker_context/convertStmtsForChunk.rs
 +++ b/src/bundler/linker_context/convertStmtsForChunk.rs
 @@ -97,6 +97,74 @@ pub(crate) fn convert_stmts_for_chunk(
@@ -1335,7 +1308,7 @@ index 258b0dfb..be4fcff3 100644
                          stmts,
                          stmt.loc,
 diff --git a/src/bundler/linker_context/generateChunksInParallel.rs b/src/bundler/linker_context/generateChunksInParallel.rs
-index 88212ec8..ef33e540 100644
+index 88212ec8a68..ef33e540d2c 100644
 --- a/src/bundler/linker_context/generateChunksInParallel.rs
 +++ b/src/bundler/linker_context/generateChunksInParallel.rs
 @@ -1429,6 +1429,7 @@ pub(crate) fn generate_chunks_in_parallel<const IS_DEV_SERVER: bool>(
@@ -1388,7 +1361,7 @@ index 88212ec8..ef33e540 100644
      internal_names: Vec<Option<crate::bytecode_order::CodeNames>>,
      /// `BUN_BYTECODE_ORDER_NAMES_OUT`, and what is written there.
 diff --git a/src/bundler/linker_context/scanImportsAndExports.rs b/src/bundler/linker_context/scanImportsAndExports.rs
-index 4611b2fe..101b1afe 100644
+index 4611b2fe6f8..101b1afe9d3 100644
 --- a/src/bundler/linker_context/scanImportsAndExports.rs
 +++ b/src/bundler/linker_context/scanImportsAndExports.rs
 @@ -1090,6 +1090,25 @@ pub(crate) fn scan_imports_and_exports(
@@ -1430,7 +1403,7 @@ index 4611b2fe..101b1afe 100644
                              // We should use "__require" instead of "require" if we're not
                              // generating a CommonJS output file, since it won't exist otherwise.
 diff --git a/src/bundler/prelinked_module_graph.rs b/src/bundler/prelinked_module_graph.rs
-index 497b0694..9517a930 100644
+index 497b0694312..9517a930ed1 100644
 --- a/src/bundler/prelinked_module_graph.rs
 +++ b/src/bundler/prelinked_module_graph.rs
 @@ -12,7 +12,7 @@ use bun_js_printer::analyze_transpiled_module::{
@@ -1483,7 +1456,7 @@ index 497b0694..9517a930 100644
              put(v);
          }
 diff --git a/src/codegen/generate-classes.ts b/src/codegen/generate-classes.ts
-index 52b02fc5..402310cf 100644
+index 52b02fc54f8..402310cfa1d 100644
 --- a/src/codegen/generate-classes.ts
 +++ b/src/codegen/generate-classes.ts
 @@ -2079,6 +2079,28 @@ pub type WriteBytesFn = unsafe extern "sysv64" fn(*mut c_void, *const u8, u32);
@@ -1526,7 +1499,7 @@ index 52b02fc5..402310cf 100644
  };
  
 diff --git a/src/crash_handler/lib.rs b/src/crash_handler/lib.rs
-index 91e2ee80..f4246de1 100644
+index 91e2ee8025f..f4246de129b 100644
 --- a/src/crash_handler/lib.rs
 +++ b/src/crash_handler/lib.rs
 @@ -1118,11 +1118,11 @@ mod draft {
@@ -1610,7 +1583,7 @@ index 91e2ee80..f4246de1 100644
          if cfg!(debug_assertions) {
              return false;
 diff --git a/src/http/Cargo.toml b/src/http/Cargo.toml
-index da1bf199..dd9b7319 100644
+index da1bf1993a4..dd9b7319d5b 100644
 --- a/src/http/Cargo.toml
 +++ b/src/http/Cargo.toml
 @@ -38,4 +38,5 @@ bun_url.workspace = true
@@ -1620,7 +1593,7 @@ index da1bf199..dd9b7319 100644
 +libc.workspace = true
  bun_zstd.workspace = true
 diff --git a/src/http/HTTPContext.rs b/src/http/HTTPContext.rs
-index 4f00a0c2..62757284 100644
+index 4f00a0c2069..62757284f94 100644
 --- a/src/http/HTTPContext.rs
 +++ b/src/http/HTTPContext.rs
 @@ -242,8 +242,42 @@ pub struct PooledSocket<const SSL: bool> {
@@ -1716,7 +1689,7 @@ index 4f00a0c2..62757284 100644
                      Self::terminate_socket(http_socket);
                      continue;
 diff --git a/src/http/HTTPThread.rs b/src/http/HTTPThread.rs
-index b4f2c2f2..4c9a4d3c 100644
+index b4f2c2f208d..4c9a4d3ce45 100644
 --- a/src/http/HTTPThread.rs
 +++ b/src/http/HTTPThread.rs
 @@ -1239,6 +1239,17 @@ mod _event_loop_draft {
@@ -1738,7 +1711,7 @@ index b4f2c2f2..4c9a4d3c 100644
          // `internal_loop_data.set_parent_raw(2 /* mini */, mini_ptr)` on this
          // thread's uSockets loop. Without it, the macOS DNS cache-miss path
 diff --git a/src/http/HeaderValueIterator.rs b/src/http/HeaderValueIterator.rs
-index f6219fdd..10fd3d85 100644
+index f6219fddc26..10fd3d854ed 100644
 --- a/src/http/HeaderValueIterator.rs
 +++ b/src/http/HeaderValueIterator.rs
 @@ -58,6 +58,26 @@ pub fn fold_transfer_encoding(value: &[u8], coding: &mut Encoding) -> crate::Res
@@ -1769,7 +1742,7 @@ index f6219fdd..10fd3d85 100644
  pub fn connection_header_keep_alive(value: &[u8]) -> Option<bool> {
      let mut keep_alive = None;
 diff --git a/src/http/InternalState.rs b/src/http/InternalState.rs
-index 041c611e..300b5055 100644
+index 041c611e109..300b50559c0 100644
 --- a/src/http/InternalState.rs
 +++ b/src/http/InternalState.rs
 @@ -45,6 +45,9 @@ pub struct InternalState<'a> {
@@ -1791,7 +1764,7 @@ index 041c611e..300b5055 100644
              request_body: bun_ptr::RawSlice::EMPTY,
              original_request_body: HTTPRequestBody::Bytes(b""),
 diff --git a/src/http/ProxyTunnel.rs b/src/http/ProxyTunnel.rs
-index abdb981d..2f4e6f99 100644
+index abdb981d454..2f4e6f99011 100644
 --- a/src/http/ProxyTunnel.rs
 +++ b/src/http/ProxyTunnel.rs
 @@ -625,7 +625,7 @@ impl ProxyTunnel {
@@ -1804,7 +1777,7 @@ index abdb981d..2f4e6f99 100644
              wrapper.set_inline_reject();
          }
 diff --git a/src/http/lib.rs b/src/http/lib.rs
-index 265ba9db..f1df19c4 100644
+index 265ba9db804..f1df19c4016 100644
 --- a/src/http/lib.rs
 +++ b/src/http/lib.rs
 @@ -123,7 +123,7 @@ pub enum Protocol {
@@ -1960,7 +1933,7 @@ index 265ba9db..f1df19c4 100644
                      pretend_304 = self.flags.force_last_modified
                          && response.status_code > 199
 diff --git a/src/io/PipeWriter.rs b/src/io/PipeWriter.rs
-index 859c676a..4ae7382e 100644
+index 859c676aa2f..4ae7382e831 100644
 --- a/src/io/PipeWriter.rs
 +++ b/src/io/PipeWriter.rs
 @@ -1785,7 +1785,13 @@ impl StreamBuffer {
@@ -1978,7 +1951,7 @@ index 859c676a..4ae7382e 100644
              // Truncate the buffer's content to `page` bytes AND release the
              // excess capacity.
 diff --git a/src/js/internal/fs/streams.ts b/src/js/internal/fs/streams.ts
-index 8547718d..cf631a4e 100644
+index 8547718d143..cf631a4ed14 100644
 --- a/src/js/internal/fs/streams.ts
 +++ b/src/js/internal/fs/streams.ts
 @@ -436,7 +436,8 @@ function WriteStream(this: FSStream, path: string | null | undefined, options?:
@@ -1992,7 +1965,7 @@ index 8547718d..cf631a4e 100644
    }
  
 diff --git a/src/js/internal/streams/writable.ts b/src/js/internal/streams/writable.ts
-index d192409e..60b8244c 100644
+index d192409e5c1..60b8244c4b4 100644
 --- a/src/js/internal/streams/writable.ts
 +++ b/src/js/internal/streams/writable.ts
 @@ -735,7 +735,10 @@ function clearBuffer(stream, state) {
@@ -2008,7 +1981,7 @@ index d192409e..60b8244c 100644
        state.bufferedIndex = 0;
      } else {
 diff --git a/src/jsc/CachedBytecode.rs b/src/jsc/CachedBytecode.rs
-index 2364c15d..ee1948a2 100644
+index 2364c15de80..ee1948a28d8 100644
 --- a/src/jsc/CachedBytecode.rs
 +++ b/src/jsc/CachedBytecode.rs
 @@ -75,6 +75,8 @@ unsafe extern "C" {
@@ -2083,7 +2056,7 @@ index 2364c15d..ee1948a2 100644
  /// payload's regions ends (`JSC::BytecodeLinkEncoder`), how many of the order files' hot functions are functions
  /// of this link, and for each module how many functions with code its names did not cover.
 diff --git a/src/jsc/GarbageCollectionController.rs b/src/jsc/GarbageCollectionController.rs
-index 96ff316e..78c02e85 100644
+index 96ff316eafb..78c02e859a6 100644
 --- a/src/jsc/GarbageCollectionController.rs
 +++ b/src/jsc/GarbageCollectionController.rs
 @@ -79,7 +79,7 @@ impl GarbageCollectionController {
@@ -2133,7 +2106,7 @@ index 96ff316e..78c02e85 100644
 +    (30_000 / fast_interval_ms.max(1000)).clamp(1, 30) as u8
 +}
 diff --git a/src/jsc/JSType.rs b/src/jsc/JSType.rs
-index 3c21ec7b..6503c62d 100644
+index 3c21ec7b288..6503c62dced 100644
 --- a/src/jsc/JSType.rs
 +++ b/src/jsc/JSType.rs
 @@ -176,49 +176,51 @@ impl JSType {
@@ -2575,7 +2548,7 @@ index 3c21ec7b..6503c62d 100644
      pub const Event: JSType = JSType(0b11101111);
      pub const DOMWrapper: JSType = JSType(0b11101110);
 diff --git a/src/jsc/VirtualMachine.rs b/src/jsc/VirtualMachine.rs
-index 3848fa53..8c4730aa 100644
+index 3848fa534cd..8c4730aae58 100644
 --- a/src/jsc/VirtualMachine.rs
 +++ b/src/jsc/VirtualMachine.rs
 @@ -1455,9 +1455,26 @@ impl VirtualMachine {
@@ -2607,7 +2580,7 @@ index 3848fa53..8c4730aa 100644
              JSC__Heap__setInitialAllocationBudget(self.jsc_vm(), budget);
          }
 diff --git a/src/jsc/bindings/BunClientData.cpp b/src/jsc/bindings/BunClientData.cpp
-index 6434aa34..97ac963d 100644
+index 6434aa343d1..97ac963d3af 100644
 --- a/src/jsc/bindings/BunClientData.cpp
 +++ b/src/jsc/bindings/BunClientData.cpp
 @@ -1,6 +1,7 @@
@@ -2636,7 +2609,7 @@ index 6434aa34..97ac963d 100644
  }
  
 diff --git a/src/jsc/bindings/BunClientData.h b/src/jsc/bindings/BunClientData.h
-index 34af44c7..004ab02b 100644
+index 34af44c71ae..004ab02bf96 100644
 --- a/src/jsc/bindings/BunClientData.h
 +++ b/src/jsc/bindings/BunClientData.h
 @@ -301,7 +301,7 @@ public:
@@ -2649,7 +2622,7 @@ index 34af44c7..004ab02b 100644
      // The executable's pre-resolved module graph for this VM, created on first use over decoderStringTable() from the
      // standalone module graph; null when there is none (or it does not validate).
 diff --git a/src/jsc/bindings/ErrorStackTrace.cpp b/src/jsc/bindings/ErrorStackTrace.cpp
-index 0b0e9e59..9aea36cf 100644
+index 0b0e9e5920b..9aea36cf614 100644
 --- a/src/jsc/bindings/ErrorStackTrace.cpp
 +++ b/src/jsc/bindings/ErrorStackTrace.cpp
 @@ -31,16 +31,6 @@ using namespace WebCore;
@@ -2802,7 +2775,7 @@ index 0b0e9e59..9aea36cf 100644
      } else if (callee) {
          functionName = Zig::functionName(vm, callee);
 diff --git a/src/jsc/bindings/FormatStackTraceForJS.cpp b/src/jsc/bindings/FormatStackTraceForJS.cpp
-index cebb7c8f..a49505f3 100644
+index cebb7c8f74c..a49505f3d0d 100644
 --- a/src/jsc/bindings/FormatStackTraceForJS.cpp
 +++ b/src/jsc/bindings/FormatStackTraceForJS.cpp
 @@ -335,7 +335,15 @@ WTF::String formatStackTrace(
@@ -2857,7 +2830,7 @@ index cebb7c8f..a49505f3 100644
      }
      if (!callSites) {
 diff --git a/src/jsc/bindings/InternalModuleRegistry.cpp b/src/jsc/bindings/InternalModuleRegistry.cpp
-index baf1b157..d2182382 100644
+index baf1b157677..d2182382b0f 100644
 --- a/src/jsc/bindings/InternalModuleRegistry.cpp
 +++ b/src/jsc/bindings/InternalModuleRegistry.cpp
 @@ -7,6 +7,7 @@
@@ -2898,7 +2871,7 @@ index baf1b157..d2182382 100644
      RETURN_IF_EXCEPTION(throwScope, {});
      if (globalObject->hasDebugger() && globalObject->debugger()->isInteractivelyDebugging()) [[unlikely]] {
 diff --git a/src/jsc/bindings/ZigException.cpp b/src/jsc/bindings/ZigException.cpp
-index cfd1059c..e6aa41f7 100644
+index cfd1059c2e7..e6aa41f79d7 100644
 --- a/src/jsc/bindings/ZigException.cpp
 +++ b/src/jsc/bindings/ZigException.cpp
 @@ -30,6 +30,7 @@
@@ -2944,7 +2917,7 @@ index cfd1059c..e6aa41f7 100644
          uint8_t frame_i = 0;
          size_t stack_frame_i = 0;
 diff --git a/src/jsc/bindings/ZigGlobalObject.cpp b/src/jsc/bindings/ZigGlobalObject.cpp
-index 9de807ad..7999522c 100644
+index 9de807adfae..7999522c991 100644
 --- a/src/jsc/bindings/ZigGlobalObject.cpp
 +++ b/src/jsc/bindings/ZigGlobalObject.cpp
 @@ -1,4 +1,5 @@
@@ -3060,7 +3033,7 @@ index 9de807ad..7999522c 100644
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH
 diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
-index fbfaa2ff..329f425d 100644
+index fbfaa2ffb62..7144143e21b 100644
 --- a/src/jsc/bindings/ZigSourceProvider.cpp
 +++ b/src/jsc/bindings/ZigSourceProvider.cpp
 @@ -2,6 +2,17 @@
@@ -3316,8 +3289,8 @@ index fbfaa2ff..329f425d 100644
 +        return false;
 +#if OS(DARWIN)
 +    if (_dyld_get_image_vmaddr_slide(0)) {
-+        // (c-bindings.cpp starts a build with BUN_STATIC_HEAP=1 again without ASLR; that did not work.)
-+        fprintf(stderr, "error: the static heap can only be built with the executable at the address it was linked for (ASLR off); building without it\n");
++        // (c-bindings.cpp starts a build with BUN_STATIC_HEAP=1 again at its linked address; that did not work.)
++        fprintf(stderr, "error: the static heap can only be built with the executable at the address it was linked for; building without it\n");
 +        s_builtStaticHeap = { };
 +        s_builtAOTImage = { };
 +        return false;
@@ -3473,7 +3446,7 @@ index fbfaa2ff..329f425d 100644
 +// bmalloc::StaticRegion (uninitialized and read-only in the runtime), becomes the arenas of the heap and the code image, as sections
 +// at the addresses they were built at, relative to the image. Their pointers into the image (the region itself, and the
 +// executable's code and data) are written as if the image were at its preferred base, with a base relocation each: the loader
-+// moves them with the image, wherever ASLR puts it, once for every process that runs it. The code is position-independent and is
++// moves them with the image, wherever Windows loads it, once for every process that runs it. The code is position-independent and is
 +// not relocated. The rest of the region stays uninitialized (Bss is made writable as it is used), and the rest of the executable
 +// is as it was.
 +namespace {
@@ -4309,7 +4282,7 @@ index fbfaa2ff..329f425d 100644
      memcpySpan(std::span { regionEnds, JSC::BytecodeLinkEncoder::numberOfRegions }, std::span<const uint32_t> { result.regionEnds });
      *namedHotFunctions = result.namedHotFunctions;
 diff --git a/src/jsc/bindings/c-bindings.cpp b/src/jsc/bindings/c-bindings.cpp
-index a3fd0268..6877bbba 100644
+index a3fd0268c05..61f912d07bc 100644
 --- a/src/jsc/bindings/c-bindings.cpp
 +++ b/src/jsc/bindings/c-bindings.cpp
 @@ -21,6 +21,7 @@
@@ -4392,18 +4365,18 @@ index a3fd0268..6877bbba 100644
  extern "C" BlobHeader __attribute__((section("__BUN,__bun"))) BUN_COMPILED = { 0, 0 };
  
  extern "C" uint64_t* Bun__getStandaloneModuleGraphMachoLength()
-@@ -1189,6 +1238,92 @@ extern "C" uint64_t* Bun__getStandaloneModuleGraphMachoLength()
+@@ -1189,6 +1238,93 @@ extern "C" uint64_t* Bun__getStandaloneModuleGraphMachoLength()
      return &BUN_COMPILED.size;
  }
  
 +// A static heap (StandaloneModuleGraph's Flags::HAS_STATIC_HEAP) holds pointers into this executable: to native functions, to
 +// what describes the engine's classes, to the text of static strings. On Linux the executable is not position independent, so
-+// they are good in every process; macOS loads it somewhere else each time (ASLR, and an ARM64 executable must be position
++// they are good in every process; macOS loads it somewhere else each time (an ARM64 executable must be position
 +// independent). So an executable with a static heap, and the build that makes one (BUN_STATIC_HEAP=1), run with the main
-+// executable where it was linked to be: they start again at once, before anything else, with ASLR turned off for it. The
++// executable where it was linked to be: they start again at once, before anything else, at their linked address. The
 +// system's libraries move as before; the static heap must not point into them (JSC::StaticHeap checks while building). With
 +// BUN_AOT=0 the static heap is not used, and the executable runs as it was started.
-+static constexpr const char* reexecutedWithoutASLR = "BUN_INTERNAL_STATIC_HEAP_NO_ASLR";
++static constexpr const char* reexecutedAtLinkedAddress = "BUN_INTERNAL_STATIC_HEAP_AT_LINKED_ADDRESS";
 +
 +static bool hasStaticHeap()
 +{
@@ -4418,9 +4391,10 @@ index a3fd0268..6877bbba 100644
 +    return flags & hasStaticHeapFlag;
 +}
 +
-+// macOS passes ASLR being off on to every process this one starts. Pi-Bolt's launcher (scripts/lib/darwin-launcher.c) forks a
-+// helper with ASLR before it starts this executable without it, and says so in BUN_INTERNAL_SPAWN_HELPER: <pid>:<socket>:<path
-+// of pi-spawn>. posix_spawn.rs then starts pi-spawn in the place of a program, which has the helper start it.
++// macOS passes how this executable was started on to every process it starts. Pi-Bolt's launcher
++// (scripts/lib/darwin-launcher.c) forks a helper, started the usual way, before it starts this executable, and says so in
++// BUN_INTERNAL_SPAWN_HELPER: <pid>:<socket>:<path of pi-spawn>. posix_spawn.rs then starts pi-spawn in the place of a program,
++// which has the helper start it.
 +static constexpr const char* spawnHelperVariable = "BUN_INTERNAL_SPAWN_HELPER";
 +extern "C" int Bun__spawnHelperFd = -1;
 +extern "C" const char* Bun__spawnProxyPath = nullptr;
@@ -4445,11 +4419,11 @@ index a3fd0268..6877bbba 100644
 +    unsetenv(spawnHelperVariable);
 +}
 +
-+__attribute__((constructor(101))) static void Bun__reexecWithoutASLRForStaticHeap(int, char** argv, char**)
++__attribute__((constructor(101))) static void Bun__reexecAtLinkedAddressForStaticHeap(int, char** argv, char**)
 +{
-+    if (getenv(reexecutedWithoutASLR)) {
++    if (getenv(reexecutedAtLinkedAddress)) {
 +        // Whether or not it worked: once. (Bun__StaticHeap__map() checks where the executable is.)
-+        unsetenv(reexecutedWithoutASLR);
++        unsetenv(reexecutedAtLinkedAddress);
 +        takeSpawnHelper();
 +        return;
 +    }
@@ -4472,13 +4446,13 @@ index a3fd0268..6877bbba 100644
 +    posix_spawnattr_t attributes;
 +    if (posix_spawnattr_init(&attributes))
 +        return;
-+    constexpr short disableASLR = 0x100; // _POSIX_SPAWN_DISABLE_ASLR
-+    posix_spawnattr_setflags(&attributes, disableASLR | POSIX_SPAWN_SETEXEC);
-+    setenv(reexecutedWithoutASLR, "1", 1);
++    constexpr short linkedAddress = 0x100; // (a private posix_spawn flag: no slide for the main executable)
++    posix_spawnattr_setflags(&attributes, linkedAddress | POSIX_SPAWN_SETEXEC);
++    setenv(reexecutedAtLinkedAddress, "1", 1);
 +    extern char** environ;
 +    posix_spawn(nullptr, path, nullptr, &attributes, argv, environ);
 +    // Not started again: go on as it is (the static heap is then not used).
-+    unsetenv(reexecutedWithoutASLR);
++    unsetenv(reexecutedAtLinkedAddress);
 +    posix_spawnattr_destroy(&attributes);
 +}
 +
@@ -4486,7 +4460,7 @@ index a3fd0268..6877bbba 100644
  
  extern "C" BlobHeader __attribute__((section(".bun"), aligned(BLOB_HEADER_ALIGNMENT), used)) BUN_COMPILED = { 0 };
 diff --git a/src/jsc/bindings/webcore/SerializedScriptValue.cpp b/src/jsc/bindings/webcore/SerializedScriptValue.cpp
-index 16951a2b..615ebea9 100644
+index 16951a2be47..615ebea99e2 100644
 --- a/src/jsc/bindings/webcore/SerializedScriptValue.cpp
 +++ b/src/jsc/bindings/webcore/SerializedScriptValue.cpp
 @@ -2002,6 +2002,15 @@ SYSV_ABI void SerializedScriptValue::writeBytesForBun(CloneSerializer* ctx, cons
@@ -4506,7 +4480,7 @@ index 16951a2b..615ebea9 100644
  {
      VM& vm = m_lexicalGlobalObject->vm();
 diff --git a/src/jsc/web_worker.rs b/src/jsc/web_worker.rs
-index 486a196f..299d3f13 100644
+index 486a196fc8f..299d3f13781 100644
 --- a/src/jsc/web_worker.rs
 +++ b/src/jsc/web_worker.rs
 @@ -154,6 +154,7 @@ pub enum Status {
@@ -4527,8 +4501,26 @@ index 486a196f..299d3f13 100644
                  let start = start;
                  start.worker.thread_main(start.init);
                  // The thread's ref (and the parent ticket) drop here.
+diff --git a/src/resolver/resolver.rs b/src/resolver/resolver.rs
+index 3615a6efe7f..a140bb42b32 100644
+--- a/src/resolver/resolver.rs
++++ b/src/resolver/resolver.rs
+@@ -1329,7 +1329,12 @@ impl<'a> Resolver<'a> {
+                             ..Default::default()
+                         });
+                     }
+-                    if specifier_is_embedded_path {
++                    // An embedded module resolves nothing in the working directory: the program must not run a
++                    // package or file that the directory it is started in supplies. Absolute paths still resolve,
++                    // and so do the directories a caller names itself (`require.resolve(id, { paths })`).
++                    if specifier_is_embedded_path
++                        || (!bun_paths::is_absolute(import_path) && self.custom_dir_paths.is_none())
++                    {
+                         self.extension_order = original_order;
+                         return ResultUnion::NotFound;
+                     }
 diff --git a/src/runtime/api/BunObject.rs b/src/runtime/api/BunObject.rs
-index b216ec4e..31ce8060 100644
+index b216ec4eb03..31ce8060de8 100644
 --- a/src/runtime/api/BunObject.rs
 +++ b/src/runtime/api/BunObject.rs
 @@ -1025,9 +1025,15 @@ fn sleep_sync(global_object: &JSGlobalObject, callframe: &CallFrame) -> JsResult
@@ -4548,7 +4540,7 @@ index b216ec4e..31ce8060 100644
  }
  
 diff --git a/src/runtime/api/bun/subprocess.rs b/src/runtime/api/bun/subprocess.rs
-index 4ae01e96..296759b7 100644
+index 4ae01e9699d..296759b7ee9 100644
 --- a/src/runtime/api/bun/subprocess.rs
 +++ b/src/runtime/api/bun/subprocess.rs
 @@ -848,7 +848,7 @@ impl Subprocess<'_> {
@@ -4561,7 +4553,7 @@ index 4ae01e96..296759b7 100644
  
      #[bun_jsc::host_fn(getter)]
 diff --git a/src/runtime/cli/run_command.rs b/src/runtime/cli/run_command.rs
-index aea7e78e..5cede4c3 100644
+index aea7e78ed53..5cede4c334b 100644
 --- a/src/runtime/cli/run_command.rs
 +++ b/src/runtime/cli/run_command.rs
 @@ -1116,6 +1116,11 @@ Full documentation is available at <magenta>https://bun.com/docs/cli/run<r>
@@ -4577,7 +4569,7 @@ index aea7e78e..5cede4c3 100644
          bun_jsc::initialize(bun_jsc::InitializeOptions::default());
          bun_analytics::features::standalone_executable.fetch_add(1, Ordering::Relaxed);
 diff --git a/src/runtime/image/backend_wic.rs b/src/runtime/image/backend_wic.rs
-index 6ad5736f..ff5f23d0 100644
+index 6ad5736f121..ff5f23d0121 100644
 --- a/src/runtime/image/backend_wic.rs
 +++ b/src/runtime/image/backend_wic.rs
 @@ -897,8 +897,12 @@ fn factory() -> Result<ComPtr<IWICImagingFactory>, BackendError> {
@@ -4596,7 +4588,7 @@ index 6ad5736f..ff5f23d0 100644
          return;
      }
 diff --git a/src/runtime/node/net/BlockList.rs b/src/runtime/node/net/BlockList.rs
-index af498017..e844c277 100644
+index af498017cd4..e844c277026 100644
 --- a/src/runtime/node/net/BlockList.rs
 +++ b/src/runtime/node/net/BlockList.rs
 @@ -19,7 +19,7 @@ impl bun_io::Write for StructuredCloneWriter {
@@ -4609,7 +4601,7 @@ index af498017..e844c277 100644
      }
  }
 diff --git a/src/runtime/timer/mod.rs b/src/runtime/timer/mod.rs
-index f701bbd1..6d7a3f70 100644
+index f701bbd1c8c..6d7a3f706e5 100644
 --- a/src/runtime/timer/mod.rs
 +++ b/src/runtime/timer/mod.rs
 @@ -749,7 +749,12 @@ impl All {
@@ -4626,7 +4618,7 @@ index f701bbd1..6d7a3f70 100644
          // SAFETY: `uv_timer_init` ran above; the handle is live.
          let due_in = unsafe { uv::uv_timer_get_due_in(&self.uv_timer) };
 diff --git a/src/runtime/webcore/Blob.rs b/src/runtime/webcore/Blob.rs
-index 70ad2da7..b11f6279 100644
+index 70ad2da7e4d..b11f6279c37 100644
 --- a/src/runtime/webcore/Blob.rs
 +++ b/src/runtime/webcore/Blob.rs
 @@ -3740,7 +3740,7 @@ impl StructuredCloneWriter {
@@ -4639,7 +4631,7 @@ index 70ad2da7..b11f6279 100644
      }
  }
 diff --git a/src/spawn/process.rs b/src/spawn/process.rs
-index 4ae154d4..193fe0b2 100644
+index 4ae154d480f..193fe0b28a7 100644
 --- a/src/spawn/process.rs
 +++ b/src/spawn/process.rs
 @@ -119,6 +119,10 @@ fn call_exit_handler(
@@ -4708,19 +4700,19 @@ index 4ae154d4..193fe0b2 100644
  
              for fd in out_fds {
 diff --git a/src/spawn_sys/posix_spawn.rs b/src/spawn_sys/posix_spawn.rs
-index 6555894c..41e25d24 100644
+index 6555894ca83..908802f7a45 100644
 --- a/src/spawn_sys/posix_spawn.rs
 +++ b/src/spawn_sys/posix_spawn.rs
 @@ -610,6 +610,167 @@ pub mod posix_spawn {
          Ok((posix_actions, posix_attr))
      }
  
-+    /// pi-bin, Pi-Bolt's executable on macOS, runs without ASLR, and macOS passes that on to every process it starts. When
-+    /// Pi-Bolt's launcher has made a helper with ASLR (see `Bun__spawnHelperFd` in c-bindings.cpp), the program is started by
-+    /// it: this starts pi-spawn (Pi-Bolt's scripts/lib/darwin-spawn-proxy.c) in the program's place, with everything the
-+    /// program would get, and two more files: the helper's socket, and a pipe on which pi-spawn says how it went. pi-spawn
-+    /// then waits for the program and exits as it did, so its pid is the one to wait for; the program's pid is the one to
-+    /// signal. `None`: start the program directly.
++    /// pi-bin, Pi-Bolt's executable on macOS, runs at its linked address, and macOS passes how it was started on to every
++    /// process it starts. When Pi-Bolt's launcher has made a helper (see `Bun__spawnHelperFd` in c-bindings.cpp), the program
++    /// is started by it: this starts pi-spawn (Pi-Bolt's scripts/lib/darwin-spawn-proxy.c) in the program's place, with
++    /// everything the program would get, and two more files: the helper's socket, and a pipe on which pi-spawn says how it
++    /// went. pi-spawn then waits for the program and exits as it did, so its pid is the one to wait for; the program's pid is
++    /// the one to signal. `None`: start the program directly.
 +    #[cfg(target_os = "macos")]
 +    fn spawn_through_proxy(
 +        path: &CStr,
@@ -4925,7 +4917,7 @@ index 6555894c..41e25d24 100644
  
              sys::Result::Err(sys::Error {
 diff --git a/src/spawn_sys/spawn_process.rs b/src/spawn_sys/spawn_process.rs
-index 0de81dcb..e59e0d6e 100644
+index 0de81dcb9f6..e59e0d6e696 100644
 --- a/src/spawn_sys/spawn_process.rs
 +++ b/src/spawn_sys/spawn_process.rs
 @@ -458,6 +458,8 @@ impl PosixStdio {
@@ -4965,7 +4957,7 @@ index 0de81dcb..e59e0d6e 100644
  
              #[cfg(any(target_os = "linux", target_os = "android"))]
 diff --git a/src/standalone_graph/StandaloneModuleGraph.rs b/src/standalone_graph/StandaloneModuleGraph.rs
-index a1cfe230..3838151a 100644
+index a1cfe230615..3838151aa6e 100644
 --- a/src/standalone_graph/StandaloneModuleGraph.rs
 +++ b/src/standalone_graph/StandaloneModuleGraph.rs
 @@ -63,6 +63,8 @@ pub struct StandaloneModuleGraph {
@@ -5350,7 +5342,7 @@ index a1cfe230..3838151a 100644
  /// populates it from bytes, sets it globally, and returns the pointer.
  fn from_bytes_alloc(
 diff --git a/test/js/bun/util/sleepSync.test.ts b/test/js/bun/util/sleepSync.test.ts
-index 45361c2b..99a9f820 100644
+index 45361c2b5b3..99a9f820e94 100644
 --- a/test/js/bun/util/sleepSync.test.ts
 +++ b/test/js/bun/util/sleepSync.test.ts
 @@ -1,5 +1,6 @@
@@ -5411,7 +5403,7 @@ index 45361c2b..99a9f820 100644
 +  },
 +);
 diff --git a/test/js/node/fs/fs.test.ts b/test/js/node/fs/fs.test.ts
-index ac3c8fc4..f6823530 100644
+index ac3c8fc43d9..f68235303e4 100644
 --- a/test/js/node/fs/fs.test.ts
 +++ b/test/js/node/fs/fs.test.ts
 @@ -4175,6 +4175,30 @@ describe("fs.WriteStream", () => {
@@ -5446,7 +5438,7 @@ index ac3c8fc4..f6823530 100644
  
  describe("fs.ReadStream", () => {
 diff --git a/test/js/node/stream/node-stream.test.js b/test/js/node/stream/node-stream.test.js
-index 782ed903..f56f7012 100644
+index 782ed9039c6..f56f70122d0 100644
 --- a/test/js/node/stream/node-stream.test.js
 +++ b/test/js/node/stream/node-stream.test.js
 @@ -213,6 +213,28 @@ describe("Writable", () => {
@@ -5480,7 +5472,7 @@ index 782ed903..f56f7012 100644
  describe("Duplex", () => {
 diff --git a/test/js/web/fetch/fetch.tls.renegotiation-client-fixture.ts b/test/js/web/fetch/fetch.tls.renegotiation-client-fixture.ts
 new file mode 100644
-index 00000000..57dbcf99
+index 00000000000..57dbcf99e72
 --- /dev/null
 +++ b/test/js/web/fetch/fetch.tls.renegotiation-client-fixture.ts
 @@ -0,0 +1,38 @@
@@ -5524,7 +5516,7 @@ index 00000000..57dbcf99
 +process.exit(0);
 diff --git a/test/js/web/fetch/fetch.tls.renegotiation-peer-fixture.mjs b/test/js/web/fetch/fetch.tls.renegotiation-peer-fixture.mjs
 new file mode 100644
-index 00000000..5ccb2da7
+index 00000000000..5ccb2da7de6
 --- /dev/null
 +++ b/test/js/web/fetch/fetch.tls.renegotiation-peer-fixture.mjs
 @@ -0,0 +1,86 @@
@@ -5615,7 +5607,7 @@ index 00000000..5ccb2da7
 +const controlPort = await listen(control);
 +console.log(relayPort, controlPort);
 diff --git a/test/js/web/fetch/fetch.tls.test.ts b/test/js/web/fetch/fetch.tls.test.ts
-index 3cf57b86..695c1c80 100644
+index 3cf57b86d0c..695c1c8097a 100644
 --- a/test/js/web/fetch/fetch.tls.test.ts
 +++ b/test/js/web/fetch/fetch.tls.test.ts
 @@ -1,5 +1,5 @@
@@ -5701,7 +5693,7 @@ index 3cf57b86..695c1c80 100644
  
    // Covers a family of HTTP-thread crashes (sentry BUN-2WC6 and siblings) where
 diff --git a/test/js/web/timers/timer-gc-roots.test.ts b/test/js/web/timers/timer-gc-roots.test.ts
-index 73509515..49386f1c 100644
+index 73509515e25..49386f1c637 100644
 --- a/test/js/web/timers/timer-gc-roots.test.ts
 +++ b/test/js/web/timers/timer-gc-roots.test.ts
 @@ -131,6 +131,9 @@ describe.concurrent("AbortSignal.timeout is released when its wrapper is collect
@@ -5715,5 +5707,5 @@ index 73509515..49386f1c 100644
        const before = process.memoryUsage().rss;
        await round();
 -- 
-2.56.0.windows.1
+2.54.0 (Apple Git-157)
 

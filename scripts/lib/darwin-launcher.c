@@ -86,7 +86,7 @@ int main(int argc, char** argv)
     }
 
     // What pi-bin's own start at its linked address looks for (c-bindings.cpp in Bun): it is started that way already.
-    setenv("BUN_INTERNAL_STATIC_HEAP_NO_ASLR", "1", 1);
+    setenv("BUN_INTERNAL_STATIC_HEAP_AT_LINKED_ADDRESS", "1", 1);
     posix_spawnattr_t attributes;
     if (!posix_spawnattr_init(&attributes)) {
         const short linkedAddress = 0x100; // (a private posix_spawn flag: no slide for the main executable)
@@ -94,7 +94,7 @@ int main(int argc, char** argv)
         posix_spawn(NULL, target, NULL, &attributes, argv, environ);
     }
     // Not started that way: as it is (it then starts again itself, if it can).
-    unsetenv("BUN_INTERNAL_STATIC_HEAP_NO_ASLR");
+    unsetenv("BUN_INTERNAL_STATIC_HEAP_AT_LINKED_ADDRESS");
     execv(target, argv);
     fprintf(stderr, "pi: cannot start %s: %s\n", target, strerror(errno));
     return 127;

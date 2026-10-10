@@ -4,7 +4,10 @@
 #   keepalive   a connection waits in fetch's keep-alive pool for 4 seconds, or for as long as the server's Keep-Alive header
 #               says less 2 seconds, and one that has waited longer is not used again: a connection that went dead while it
 #               waited (no FIN, no RST) is not what the next request is written to
-# Usage: tests/runtime/run.sh        Environment: PIBOLT_BUN (the runtime; default $PIBOLT_WORK/runtime/bun)
+#   workdir     a compiled executable's embedded code resolves nothing in the directory it is started in, where a repository
+#               could supply a package or a native module for it to run; absolute paths and built-in modules still resolve
+# Usage: tests/runtime/run.sh        Environment: PIBOLT_BUN (the runtime; default $PIBOLT_WORK/runtime/bun);
+#   PIBOLT_RUNTIME_OLDER=1 skips workdir (CI, while the released runtime is an older engine)
 source "$(dirname "$0")/../../scripts/lib/common.sh"
 set +e
 BUN="$(runtime_bun)"
@@ -15,6 +18,23 @@ check() { # check NAME EXPECTED ACTUAL
 }
 
 if [ "$("$BUN" stack.mjs 2>&1)" = "$(cat stack.expected)" ]; then echo "PASS stack"; else echo "FAIL stack"; "$BUN" stack.mjs 2>&1 | diff stack.expected - | head -5; status=1; fi
+
+if [ -n "${PIBOLT_RUNTIME_OLDER:-}" ]; then
+	echo "SKIP workdir: the runtime is an older engine than this commit's"
+else
+workdir=$(mktemp -d)
+# Built as Pi is (scripts/build-pi.sh): package.json files are read, so a planted package with a "main" would resolve too.
+"$BUN" build --compile --compile-autoload-package-json workdir/app.mjs --outfile "$workdir/app" >/dev/null
+mkdir -p "$workdir/repo/node_modules/planted" "$workdir/repo/node_modules/planted-pkg/lib"
+echo 'module.exports = "PLANTED";' > "$workdir/repo/node_modules/planted/index.js"
+echo '{"name": "planted-pkg", "main": "lib/main.mjs"}' > "$workdir/repo/node_modules/planted-pkg/package.json"
+echo 'export default "PLANTED";' > "$workdir/repo/node_modules/planted-pkg/lib/main.mjs"
+echo 'export default "absolute";' > "$workdir/repo/planted-file.mjs"
+check "workdir: embedded code resolves nothing in the working directory" \
+	"embedded=ok bare=not-found package=not-found relative=not-found require=not-found resolve=not-found paths=found builtin=function node-builtin=function absolute=absolute" \
+	"$(cd "$workdir/repo" && "$workdir/app" 2>&1)"
+rm -rf "$workdir"
+fi
 
 port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
 servers=()

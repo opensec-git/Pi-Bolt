@@ -14,6 +14,11 @@ $Pi = (Resolve-Path -LiteralPath $Pi -ErrorAction SilentlyContinue).Path
 if (-not $Pi) { Write-Host 'no Pi executable (scripts\build-pi.ps1)'; exit 1 }
 $home_ = Join-Path ([IO.Path]::GetTempPath()) "pibolt-tests-pi-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
 New-Item -ItemType Directory -Force -Path $home_ | Out-Null
+# The extensions run from a folder of their own, as a user's do (~\.pi\agent\extensions): from this repository, a package with
+# "type": "module" and node_modules, jiti would import them as they are rather than transform them.
+$extensions = Join-Path $home_ 'extensions'
+New-Item -ItemType Directory -Force -Path $extensions | Out-Null
+Copy-Item -Path (Join-Path $here '*.js') -Destination $extensions
 $script:status = 0
 
 # Runs Pi with only what it needs in its environment (as run.sh's `env -i`), plus `$vars`.
@@ -42,7 +47,7 @@ function Invoke-Pi([string[]]$arguments, [hashtable]$vars = @{}, [string]$exe = 
 function Test-Extension([string]$name, [int]$runs, [hashtable]$vars = @{}) {
 	$failed = 0; $last = ''
 	for ($i = 0; $i -lt $runs; $i++) {
-		$r = Invoke-Pi @('-ne', '-e', ".\$name.js", '--offline', '--no-session', '-p', 'hi') $vars
+		$r = Invoke-Pi @('-ne', '-e', (Join-Path $extensions "$name.js"), '--offline', '--no-session', '-p', 'hi') $vars
 		if ($r.Code -ne 0 -or $r.Text -notmatch "(?m)^${name}: " -or $r.Text -match 'Failed to load extension') { $failed++; $last = $r }
 	}
 	$with = if ($vars.Count) { ', ' + (($vars.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ' ') } else { '' }
@@ -61,6 +66,29 @@ Test-Extension 'capture-stack' 3
 if (Get-ChildItem (Join-Path $home_ 'agent\cache\jiti') -Filter '*capture-stack*' -ErrorAction SilentlyContinue) { Write-Host 'PASS the transformed extension is kept in the agent directory' }
 else { Write-Host "FAIL the transformed extension is not in $home_\agent\cache\jiti"; $script:status = 1 }
 Test-Extension 'builtin-modules' 2
+
+# An extension package's own dependencies resolve as on Node, through their package.json ("exports" here, as sharp finds its
+# native module), with import and with require.
+$pkg = Join-Path $extensions 'package-deps'
+New-Item -ItemType Directory -Force -Path (Join-Path $pkg 'node_modules\dep\lib') | Out-Null
+[IO.File]::WriteAllText((Join-Path $pkg 'node_modules\dep\package.json'), '{"name": "dep", "exports": {".": {"require": "./lib/main.cjs"}}}')
+[IO.File]::WriteAllText((Join-Path $pkg 'node_modules\dep\lib\main.cjs'), 'module.exports = { answer: 42 };')
+[IO.File]::WriteAllText((Join-Path $pkg 'package-deps.ts'), @'
+import { createRequire } from "node:module";
+import { answer } from "dep";
+const require = createRequire(import.meta.url);
+export default function () {
+	console.log(`package-deps: import=${answer} require=${require("dep").answer}`);
+	process.exit(0);
+}
+'@)
+$r = Invoke-Pi @('-ne', '-e', (Join-Path $pkg 'package-deps.ts'), '--offline', '--no-session', '-p', 'hi')
+if ($r.Text -match '(?m)^package-deps: import=42 require=42') { Write-Host "PASS an extension's own packages resolve through their package.json" }
+else {
+	Write-Host "FAIL an extension's own packages resolve through their package.json"
+	($r.Text -split "`n" | Where-Object { $_ -match '(?i)error|cannot' } | Select-Object -First 3) | ForEach-Object { Write-Host "   $_" }
+	$script:status = 1
+}
 Test-Extension 'child-processes-windows' 3
 Test-Extension 'workers' 3
 
@@ -72,7 +100,7 @@ Copy-Item -LiteralPath $Pi -Destination (Join-Path $planted 'pi.exe')
 foreach ($dll in 'USERENV.dll', 'dbghelp.dll', 'IPHLPAPI.dll', 'CRYPT32.dll', 'WSOCK32.dll', 'windowscodecs.dll') {
 	[IO.File]::WriteAllText((Join-Path $planted $dll), 'not a DLL')
 }
-$r = Invoke-Pi @('-ne', '-e', '.\builtin-modules.js', '--offline', '--no-session', '-p', 'hi') @{} (Join-Path $planted 'pi.exe')
+$r = Invoke-Pi @('-ne', '-e', (Join-Path $extensions 'builtin-modules.js'), '--offline', '--no-session', '-p', 'hi') @{} (Join-Path $planted 'pi.exe')
 if ($r.Code -eq 0 -and $r.Text -match '(?m)^builtin-modules: ') { Write-Host 'PASS DLLs next to the executable are not loaded in the place of the system''s' }
 else { Write-Host "FAIL with DLLs planted next to it, Pi did not run (exit $('{0:x}' -f $r.Code))"; $script:status = 1 }
 

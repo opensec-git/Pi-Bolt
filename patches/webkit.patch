@@ -1,32 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: OpenSec <contactus@opensec.in>
-Date: Sat, 10 Oct 2026 14:17:39 +0530
-Subject: [PATCH] Pi-Bolt: JavaScriptCore's ahead-of-time compiler
+Date: Sat, 10 Oct 2026 17:52:03 +0530
+Subject: [PATCH] Pi-Bolt: ahead-of-time compiled executables
 
-JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64, macOS ARM64 and Windows x64:
-
-- An x86-64 back end for ahead-of-time code, and the runtime work it needs.
-- Optimizations: inlining of helpers held in module constants and of methods by name, variables
-  narrowed in loops, stores cached by computed key, integral doubles boxed as int32, integer
-  remainders; a size limit for what is compiled.
-- Correctness: a write barrier after every Structure transition; frames of ahead-of-time code make no
-  CodeBlock during a collection; string type checks; endsWith() of long strings; closure environments
-  that stay when a name is only found as the code runs; image builds that are the same every time and
-  free of a race between their threads; a build that stops, and says why, when a function is declined.
-- ARM64 and Darwin: 64-bit constants told apart from addresses, callee numbers loaded with movz and
-  movk, unicode regular expressions in image code, a map of the image's functions, stubs and regular
-  expressions.
-- Intl on Darwin: the plain language tags of ICU's lists of locales made without ICU.
-
-- Windows x64: the static region in the executable's image (its arenas reserved after the image while
-  a heap is built; the immutable ones read-only sections, where a write is a fault that says where it
-  was), realm blocks reserved at a random address, the image's pointers relocated with the executable,
-  indirect calls to SysV-convention functions through callSysV() (Control Flow Guard checks them),
-  addresses told apart from numbers by what is committed.
-
-Includes the engine changes of Pi-Bolt 0.7.1 to 0.7.3 on pi-bolt (5f6ad773e, c9bde4b67): image builds
-that fit in 16 GB (MAP_NORESERVE), no false addresses on macOS, threads that give back their free
-memory when idle, Linux's randomness from getrandom(2), an FTL fix for wrong NaNs.
 ---
  .../array-length-increment-large.js           |   15 +
  .../array-set-length-grow-within-vector.js    |   73 +
@@ -309,7 +285,7 @@ index 79c1f1a3cb..e00c2fdf0b 100644
      runtime/CallData.h
      runtime/CellSize.h
 diff --git a/Source/JavaScriptCore/aot/AOTCompiler.cpp b/Source/JavaScriptCore/aot/AOTCompiler.cpp
-index 944a17bfb4..3e0db228be 100644
+index 944a17bfb4..e2b28a7eb2 100644
 --- a/Source/JavaScriptCore/aot/AOTCompiler.cpp
 +++ b/Source/JavaScriptCore/aot/AOTCompiler.cpp
 @@ -32,8 +32,87 @@
@@ -377,10 +353,10 @@ index 944a17bfb4..3e0db228be 100644
 +    // is used of it is a region of its own.
 +    if (!(address >= start && address - start < size && info.protection != VM_PROT_NONE))
 +        return false;
-+    // The image is built without ASLR, so this process's own memory (malloc's zones, the heap of the VM that builds) lies just
-+    // above the executable, at 4 to 8 GB, where numbers made of others land (4294967295 + 2147483648): there only what is mapped
-+    // from a file (the executable, a library) or is the static region is taken for an address. (On Linux that memory is far
-+    // from such numbers, and every mapping counts.)
++    // The image is built with the executable at its linked address, so this process's own memory (malloc's zones, the heap of
++    // the VM that builds) lies just above the executable, at 4 to 8 GB, where numbers made of others land (4294967295 +
++    // 2147483648): there only what is mapped from a file (the executable, a library) or is the static region is taken for an
++    // address. (On Linux that memory is far from such numbers, and every mapping counts.)
 +    if (bmalloc::StaticRegion::contains(reinterpret_cast<const void*>(address)))
 +        return true;
 +    char path[PATH_MAX];
@@ -12176,7 +12152,7 @@ index 77260b2296..bbe9ce4ee0 100644
                  return pointer;
              }
 diff --git a/Source/bmalloc/bmalloc/StaticRegion.h b/Source/bmalloc/bmalloc/StaticRegion.h
-index c87b01ecf0..dfbba2aacb 100644
+index c87b01ecf0..60f226a4c9 100644
 --- a/Source/bmalloc/bmalloc/StaticRegion.h
 +++ b/Source/bmalloc/bmalloc/StaticRegion.h
 @@ -7,12 +7,45 @@
@@ -12189,7 +12165,7 @@ index c87b01ecf0..dfbba2aacb 100644
  #include <sys/types.h>
  
 +#if BOS(WINDOWS)
-+// On Windows the region is not at a fixed address: it moves with the executable, wherever ASLR puts it. Its start is the section
++// On Windows the region is not at a fixed address: it moves with the executable, wherever Windows loads it. Its start is the section
 +// .pbreg (this symbol, defined in StaticRegion.cpp), which holds Arena::Bss, as much of it as has a place at a fixed offset (the
 +// empty string, the engine's symbols, the VM, the global object, a module's decoder): uninitialized and read-only, so that it
 +// costs the file nothing, and a process only the pages that are made writable. (An uninitialized section is charged to the
@@ -12521,5 +12497,5 @@ index de16575461..dd18e3f63b 100644
      Write-Host ":: WARNING: ICU data library not found. Listing generated files..."
      Get-ChildItem -Path $OutputDir -Recurse -Filter "*.lib" | ForEach-Object {
 -- 
-2.56.0.windows.1
+2.54.0 (Apple Git-157)
 

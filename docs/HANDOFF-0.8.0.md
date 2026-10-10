@@ -19,6 +19,18 @@ is left, in order, and what not to do. Delete it from the branch once 0.8.0 is o
   must be built again from this branch.** Nobody has built or run them yet. That is the one step that can break Linux or
   macOS; everything else is checked by CI or only reaches users at `publish`.
 
+## Status from the Mac (2026-10-10)
+
+- **0.7.4 is merged into this branch.** 0.7.4 (released from `pi-bolt`) fixed loading code from the working directory: the
+  tui's native helper lookup (the same fix this branch had, its version kept) and, in the engine, the resolver: code built into
+  the executable resolves no module or package in the working directory (`tests/runtime` workdir, also in `run.ps1`). It also
+  builds with `--compile-autoload-package-json` (in `build-pi.ps1` too) and runs `tests/pi`'s extensions from a folder of their
+  own (also in `run.ps1`), with a test of an extension's own packages.
+- **The engine patches changed again** (three-way merge of the engine trees, replayed and checked): Bun tree
+  `522ef6e2a120616ab9e0b6317be1487ab8eb18f0`, WebKit tree `40dbb846da619a806fcfe4a844e4239f65c93f93`. **The Windows runtime packaged
+  before this (`bun.exe` sha256 `27bbd0ad...`) is out of date: build it again on the Windows PC from this branch, run
+  `tests\runtime\run.ps1` (workdir must pass), `tests\aot`, `tests\pi\run.ps1`, and upload that one in step 4.**
+
 ## Rules
 
 - No AI attribution in commits, PRs or releases. Commits: `-c user.name=OpenSec -c

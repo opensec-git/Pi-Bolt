@@ -14,7 +14,7 @@
 #   -KeepBytecode     keep the bytecode in the prebuilt heap
 #   -Stable           build with a stock Bun instead ($env:PIBOLT_STABLE_BUN, default `bun`): the comparison build, no AOT
 #   -VerifyDeterminism
-#                     build a second time with a copy of the runtime (another file, so ASLR loads it at another address) and
+#                     build a second time with a copy of the runtime (another file, so Windows loads it at another address) and
 #                     check that the prebuilt heaps are the same byte for byte: a pointer the executable's writer did not relocate,
 #                     or a table hashed by address, would differ (scripts\lib\compare-static-heaps.py)
 #   -FunctionCellsOut FILE
@@ -230,7 +230,9 @@ function Build-Pi($runtime, $outfile, $log) {
 	$build = "$PiboltVersion $CpuVariant jit-$Jit" -replace ' ', ('\' + 'u0020')
 	# (What the compiler prints on stderr is its progress: Windows PowerShell would make each line of it an error, and stop.)
 	$ErrorActionPreference = 'Continue'
-	& $runtime @CommonArgs @OrderArgs --define "PIBOLT_BUILD=\`"$build\`"" '--compile-exec-argv=--smol' @Entries --outfile $outfile *> $log
+	# Extensions resolve their own packages as on Node, through their package.json files; Pi's own code resolves nothing in the
+	# working directory (scripts/build-pi.sh, tests/runtime: workdir).
+	& $runtime @CommonArgs '--compile-autoload-package-json' @OrderArgs --define "PIBOLT_BUILD=\`"$build\`"" '--compile-exec-argv=--smol' @Entries --outfile $outfile *> $log
 	$status = $LASTEXITCODE
 	$ErrorActionPreference = 'Stop'
 	# (The writer's notes and warnings about the prebuilt heap are shown wherever they are in the log: a release build's log keeps

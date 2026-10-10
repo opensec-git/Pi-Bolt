@@ -3,6 +3,8 @@
 #   keepalive   a connection waits in fetch's keep-alive pool for 4 seconds, or for as long as the server's Keep-Alive header
 #               says less 2 seconds, and one that has waited longer is not used again: a connection that went dead while it
 #               waited (no FIN, no RST) is not what the next request is written to
+#   workdir     a compiled executable's embedded code resolves nothing in the directory it is started in, where a repository
+#               could supply a package or a native module for it to run; absolute paths and built-in modules still resolve
 # Usage: tests\runtime\run.ps1        Environment: PIBOLT_BUN (the runtime; default .work\runtime\bun.exe). Needs Python 3 (`py`).
 $ErrorActionPreference = 'Continue'
 $here = $PSScriptRoot
@@ -19,6 +21,21 @@ try {
 	$expected = ((Get-Content -Raw (Join-Path $here 'stack.expected')) -replace "`r", '').TrimEnd("`n")
 	$actual = ((& $bun stack.mjs 2>&1 | Out-String) -replace "`r", '').TrimEnd("`n")
 	Test-Same 'stack' $expected $actual
+
+	$workdir = Join-Path ([IO.Path]::GetTempPath()) "pibolt-workdir-$([Guid]::NewGuid().ToString('N').Substring(0, 8))"
+	$repo = Join-Path $workdir 'repo'
+	New-Item -ItemType Directory -Force -Path (Join-Path $repo 'node_modules\planted'), (Join-Path $repo 'node_modules\planted-pkg\lib') | Out-Null
+	# Built as Pi is (scripts\build-pi.ps1): package.json files are read, so a planted package with a "main" would resolve too.
+	& $bun build --compile --compile-autoload-package-json workdir\app.mjs --outfile (Join-Path $workdir 'app.exe') *> $null
+	[IO.File]::WriteAllText((Join-Path $repo 'node_modules\planted\index.js'), 'module.exports = "PLANTED";')
+	[IO.File]::WriteAllText((Join-Path $repo 'node_modules\planted-pkg\package.json'), '{"name": "planted-pkg", "main": "lib/main.mjs"}')
+	[IO.File]::WriteAllText((Join-Path $repo 'node_modules\planted-pkg\lib\main.mjs'), 'export default "PLANTED";')
+	[IO.File]::WriteAllText((Join-Path $repo 'planted-file.mjs'), 'export default "absolute";')
+	Push-Location $repo
+	$actual = ((& (Join-Path $workdir 'app.exe') 2>&1 | Out-String) -replace "`r", '').Trim()
+	Pop-Location
+	Test-Same 'workdir: embedded code resolves nothing in the working directory' 'embedded=ok bare=not-found package=not-found relative=not-found require=not-found resolve=not-found paths=found builtin=function node-builtin=function absolute=absolute' $actual
+	Remove-Item -LiteralPath $workdir -Recurse -Force -ErrorAction SilentlyContinue
 
 	function Get-FreePort { $l = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $l.Start(); $p = $l.LocalEndpoint.Port; $l.Stop(); $p }
 	function Start-Server([int]$port, [string[]]$more = @()) {

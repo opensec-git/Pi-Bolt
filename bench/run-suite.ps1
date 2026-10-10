@@ -89,7 +89,7 @@ function Resolve-Optional($path, $default, $what) {
 $PiBoltPlugins = Resolve-Optional $PiBoltPlugins 'out\pi-bolt-plugins\pi.exe' 'the plugin build (-PiBoltPlugins)'
 $PiBoltPluginsJit = Resolve-Optional $PiBoltPluginsJit 'out\pi-bolt-plugins-jit\pi.exe' 'the JIT-on plugin build (-PiBoltPluginsJit)'
 $PiBoltJit = Resolve-Optional $PiBoltJit 'out\pi-bolt-aot-lto-jit\pi.exe' 'the JIT-on build (-PiBoltJit)'
-# The process floor: a minimal native program, linked as the real executable is (static CRT, ASLR with high entropy, DEP, Control
+# The process floor: a minimal native program, linked as the real executable is (static CRT, a relocatable image, DEP, Control
 # Flow Guard), built here from bench\floor\floor.c into a scratch folder (no binary in the repository).
 $floorBuilt = ''
 if ($NoFloor) { $Floor = '' }
