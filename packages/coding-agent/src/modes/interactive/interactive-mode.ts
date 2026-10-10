@@ -65,6 +65,7 @@ import {
 	getAuthPath,
 	getDebugLogPath,
 	getDocsPath,
+	PRODUCT_NAME,
 	VERSION,
 } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
@@ -860,10 +861,13 @@ export class InteractiveMode {
 		if (this.settingsManager.getCollapseChangelog()) {
 			const versionMatch = this.changelogMarkdown.match(/##\s+\[?(\d+\.\d+\.\d+)\]?/);
 			const latestVersion = versionMatch ? versionMatch[1] : this.version;
-			const condensedText = `Updated to v${latestVersion}. Use ${theme.bold("/changelog")} to view full changelog.`;
+			// (A Pi-Bolt build shows Pi's changelog: the version is Pi's, not Pi-Bolt's.)
+			const condensedText = `Updated to ${PIBOLT ? "Pi " : "v"}${latestVersion}. Use ${theme.bold("/changelog")} to view full changelog.`;
 			this.chatContainer.addChild(new Text(condensedText, 1, 0));
 		} else {
-			this.chatContainer.addChild(new ThemedText(() => theme.bold(theme.fg("accent", "What's New")), 1, 0));
+			this.chatContainer.addChild(
+				new ThemedText(() => theme.bold(theme.fg("accent", PIBOLT ? "What's New in Pi" : "What's New")), 1, 0),
+			);
 			this.chatContainer.addChild(new Spacer(1));
 			this.chatContainer.addChild(
 				new Markdown(this.changelogMarkdown.trim(), 1, 0, this.getMarkdownThemeWithSettings()),
@@ -1128,7 +1132,10 @@ export class InteractiveMode {
 					`Press ${keyText("app.tools.expand")} to show full startup help${showDetails ? " and loaded resources" : ""}.`,
 				);
 			const onboarding = () =>
-				theme.fg("dim", `Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`);
+				theme.fg(
+					"dim",
+					`${PRODUCT_NAME} can explain its own features and look up its docs. Ask it how to use or extend ${PRODUCT_NAME}.`,
+				);
 			const header = new BuiltInHeader(
 				() => `${withLogo(compactInstructions())}\n${compactOnboarding()}\n\n${onboarding()}`,
 				() => `${withLogo(expandedInstructions())}\n\n${onboarding()}`,
@@ -1245,7 +1252,7 @@ export class InteractiveMode {
 		if (crash) {
 			const when = new Date(crash.timestamp).toLocaleString();
 			this.showWarning(
-				`${APP_NAME} crashed on ${when} (${crash.message}). Run /bug to report it; the crash details are attached automatically.`,
+				`${PRODUCT_NAME} crashed on ${when} (${crash.message}). Run /bug to report it; the crash details are attached automatically.`,
 			);
 		}
 
@@ -1343,7 +1350,7 @@ export class InteractiveMode {
 		}
 
 		if (extendedKeysFormat === "xterm") {
-			return "tmux extended-keys-format is xterm. Pi works best with csi-u. Add `set -g extended-keys-format csi-u` to ~/.tmux.conf and restart tmux.";
+			return `tmux extended-keys-format is xterm. ${PRODUCT_NAME} works best with csi-u. Add \`set -g extended-keys-format csi-u\` to ~/.tmux.conf and restart tmux.`;
 		}
 
 		return undefined;
@@ -4368,7 +4375,7 @@ export class InteractiveMode {
 		try {
 			this.ui.stop();
 		} catch {}
-		console.error(`${APP_NAME} exiting due to uncaughtException:`);
+		console.error(`${PRODUCT_NAME} exiting due to uncaughtException:`);
 		console.error(error);
 		const extensionHint = this.getCrashExtensionHint(error);
 		if (extensionHint) console.error(`\n${extensionHint}`);
@@ -6188,7 +6195,7 @@ export class InteractiveMode {
 			`${providerOption.name} setup`,
 		);
 		dialog.showInfo(
-			`${providerOption.method?.name ?? "Authentication"} is configured outside ${APP_NAME}.`,
+			`${providerOption.method?.name ?? "Authentication"} is configured outside ${PRODUCT_NAME}.`,
 			[],
 			true,
 		);
@@ -6789,7 +6796,9 @@ export class InteractiveMode {
 
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new DynamicBorder());
-		this.chatContainer.addChild(new ThemedText(() => theme.bold(theme.fg("accent", "What's New")), 1, 0));
+		this.chatContainer.addChild(
+			new ThemedText(() => theme.bold(theme.fg("accent", PIBOLT ? "What's New in Pi" : "What's New")), 1, 0),
+		);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Markdown(changelogMarkdown, 1, 1, this.getMarkdownThemeWithSettings()));
 		this.chatContainer.addChild(new DynamicBorder());

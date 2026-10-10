@@ -4,7 +4,7 @@
 
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import chalk from "chalk";
-import { COMMAND_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR } from "../config.ts";
+import { COMMAND_NAME, CONFIG_DIR_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR, PRODUCT_NAME } from "../config.ts";
 import type { ExtensionFlag } from "../core/extensions/types.ts";
 import type { TuiMode } from "../core/settings-manager.ts";
 
@@ -281,7 +281,7 @@ ${chalk.bold("Commands:")}
   ${COMMAND_NAME} install <source> [-l]     Install extension source and add to settings
   ${COMMAND_NAME} remove <source> [-l]      Remove extension source from settings
   ${COMMAND_NAME} uninstall <source> [-l]   Alias for remove
-  ${COMMAND_NAME} update [source|self|pi]   Update pi, extensions, or model catalogs
+  ${COMMAND_NAME} update [source|self|pi]   Update ${PRODUCT_NAME}, extensions, or model catalogs
   ${COMMAND_NAME} list                      List installed extensions from settings
   ${COMMAND_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
   ${COMMAND_NAME} auth <command>            Print credentials or check provider readiness
