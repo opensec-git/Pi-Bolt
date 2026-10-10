@@ -6,5 +6,5 @@ cd "$(dirname "$0")/.."
 sum() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi; }
 {
 	python3 -c 'import json; s = json.load(open("sources.json")); print(json.dumps({"webkit": s["webkit"], "bun": s["bun"]}, sort_keys=True))'
-	cat patches/webkit.patch patches/bun.patch scripts/build-runtime.sh scripts/toolchain/*.sh
+	cat patches/webkit.patch patches/bun.patch scripts/build-runtime.sh scripts/build-runtime.ps1 scripts/toolchain/*.sh
 } | sum | cut -c1-16

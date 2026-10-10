@@ -34,11 +34,13 @@ for file in "$DIST"/pi-bolt-*.tar.xz "$DIST"/pi-bolt-win32-*.zip; do
 done
 [ ${#builds[@]} -gt 0 ] || die "no pi-bolt-*.tar.xz or pi-bolt-win32-*.zip in $DIST"
 # A platform's builds come together: all of them, or none (a missing one is a mistake, as it always was on Linux).
-for set in "linux-x64 linux-x64-baseline linux-x64-jit" "darwin-arm64 darwin-arm64-jit"; do
+for set in "linux-x64 linux-x64-baseline linux-x64-jit" "darwin-arm64 darwin-arm64-jit" "win32-x64 win32-x64-jit"; do
+	ext=tar.xz
+	case "$set" in win32-*) ext=zip ;; esac
 	present=0
-	for platform in $set; do [ -f "$DIST/pi-bolt-$platform.tar.xz" ] && present=$((present + 1)); done
+	for platform in $set; do [ -f "$DIST/pi-bolt-$platform.$ext" ] && present=$((present + 1)); done
 	if [ "$present" -gt 0 ]; then
-		for platform in $set; do [ -f "$DIST/pi-bolt-$platform.tar.xz" ] || die "no pi-bolt-$platform.tar.xz in $DIST"; done
+		for platform in $set; do [ -f "$DIST/pi-bolt-$platform.$ext" ] || die "no pi-bolt-$platform.$ext in $DIST"; done
 	fi
 done
 for file in "${builds[@]}"; do

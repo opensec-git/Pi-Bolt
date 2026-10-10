@@ -1,15 +1,16 @@
 name: publish
 
 # Publishes a release the release workflow drafted: signs SHA256SUMS when the draft has no SHA256SUMS.sig yet, checks
-# SHA256SUMS.sig against keys/release.pub and every archive against SHA256SUMS, publishes the GitHub release as the latest, puts
-# install.sh and the site on gh-pages (https://pi-bolt.opensec.in), and publishes the npm packages.
+# SHA256SUMS.sig against keys/release.pub and that SHA256SUMS lists exactly the draft's files, each as it is
+# (scripts/check-release-files.sh), publishes the GitHub release as the latest, puts install.sh, install.ps1 and the site on
+# gh-pages (https://pi-bolt.opensec.in), and publishes the npm packages.
 #
 # Signing: the release key is the secret PIBOLT_SIGNING_KEY of the "release" environment, which only runs this workflow from
 # pi-bolt; it is used in the job below and nowhere else. A draft signed by hand (scripts/sign-release.sh) is published as signed.
 #
 # npm: with trusted publishing (npm's OpenID Connect link to this workflow and its "npm" environment; no token stored here). Set it up once for each of
-# pi-bolt, pi-bolt-linux-x64, pi-bolt-linux-x64-baseline, pi-bolt-linux-x64-jit, pi-bolt-darwin-arm64 and
-# pi-bolt-darwin-arm64-jit (docs/RELEASING.md), then set the repository variable NPM_TRUSTED_PUBLISHING to true. Until then the
+# pi-bolt, pi-bolt-linux-x64, pi-bolt-linux-x64-baseline, pi-bolt-linux-x64-jit, pi-bolt-darwin-arm64, pi-bolt-darwin-arm64-jit,
+# pi-bolt-win32-x64 and pi-bolt-win32-x64-jit (docs/RELEASING.md), then set the repository variable NPM_TRUSTED_PUBLISHING to true. Until then the
 # npm job is skipped and the packages are published from the maintainer's machine.
 #
 # Run it from pi-bolt with the tag (the workflow is pi-bolt's, the files published are the tag's):
@@ -60,9 +61,8 @@ jobs:
         run: |
           if [ -f SHA256SUMS.sig ]; then echo "the draft is signed"; exit 0; fi
           [ -n "$SIGNING_KEY" ] || { echo "::error::$TAG has no SHA256SUMS.sig and the release environment has no PIBOLT_SIGNING_KEY"; exit 1; }
-          # (What is signed is checked first: the 12 archives of the draft, as SHA256SUMS lists them.)
-          sha256sum -c SHA256SUMS
-          test "$(wc -l < SHA256SUMS)" -eq 12
+          # (What is signed is checked first: the draft's files, exactly as SHA256SUMS lists them, and its version line.)
+          ../scripts/check-release-files.sh . "${TAG#bolt-v}"
           key="$RUNNER_TEMP/release-key.pem"
           trap 'rm -f "$key"' EXIT
           (umask 077 && printenv SIGNING_KEY > "$key")
@@ -77,8 +77,7 @@ jobs:
         run: |
           openssl version
           openssl pkeyutl -verify -pubin -inkey ../keys/release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
-          sha256sum -c SHA256SUMS
-          test "$(wc -l < SHA256SUMS)" -eq 12
+          ../scripts/check-release-files.sh . "${TAG#bolt-v}"
 
   release:
     name: GitHub release and site
@@ -96,18 +95,21 @@ jobs:
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: install.sh and the site
+      - name: install.sh, install.ps1 and the site
         run: |
           git config user.name "OpenSec"
           git config user.email "323596076+opensec-intelligence@users.noreply.github.com"
           scripts/publish-installer.sh origin
-      - name: The installer serves it
+      - name: The installers are served
         run: |
-          for _ in $(seq 30); do
-            curl -fsSL "https://pi-bolt.opensec.in/install.sh?$(date +%s)" | cmp -s - install.sh && exit 0
-            sleep 10
+          for installer in install.sh install.ps1; do
+            served=""
+            for _ in $(seq 30); do
+              curl -fsSL "https://pi-bolt.opensec.in/$installer?$(date +%s)" | cmp -s - "$installer" && { served=1; break; }
+              sleep 10
+            done
+            [ -n "$served" ] || echo "::warning::pi-bolt.opensec.in does not serve this $installer yet"
           done
-          echo "::warning::pi-bolt.opensec.in does not serve this install.sh yet"
 
   npm:
     name: npm
@@ -136,7 +138,7 @@ jobs:
       - name: Download the release
         run: |
           mkdir -p "dist/$VERSION"
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "dist/$VERSION" --pattern '*.tar.xz' --pattern SHA256SUMS
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "dist/$VERSION" --pattern '*.tar.xz' --pattern 'pi-bolt-win32-*.zip' --pattern SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}
       - name: The builds (pi-bolt-PLATFORM-VARIANT)
