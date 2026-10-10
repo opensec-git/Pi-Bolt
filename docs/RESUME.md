@@ -9,9 +9,9 @@ trees exactly. Nothing is pushed.
 `.work\runtime\bun.exe` is a copy of `.work\bun\build\pibolt-release-lto\bun.exe` as linked with the order file, with the heap
 ordering of 2026-10-09 (below):
 
-    runtime: Bun 1.4.3-canary.1+16ed51941, CFG, build/pibolt-release-lto, LTO, sha256 1a6fc68a33637966
+    runtime: Bun 1.4.3-canary.1+1ad2e13f5, CFG, build/pibolt-release-lto, LTO, sha256 59f3cc77d4e9f852
 
-(Built from the engine commits as they are: `16ed5194` in `.work\bun`, and in `.work\webkit` the commit `patches\webkit.patch`
+(Built from the engine commits as they are: `1ad2e13f` in `.work\bun`, and in `.work\webkit` the commit `patches\webkit.patch`
 makes.)
 `scripts\build-pi.ps1` uses it by default and writes that line into each build's `pi-bolt.txt`. Older runtimes are kept beside
 it in `.work\runtime`: `bun.exe.ship-cb39be1e` (the 0.7.0 candidate of 2026-10-09, before the hardening round),

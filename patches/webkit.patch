@@ -10668,7 +10668,7 @@ index 9f18146bf2..8f6bbed8d6 100644
                      return string;
              }
 diff --git a/Source/bmalloc/bmalloc/StaticRegion.cpp b/Source/bmalloc/bmalloc/StaticRegion.cpp
-index 77260b2296..d2c72ce766 100644
+index 77260b2296..5fbbd4cbc0 100644
 --- a/Source/bmalloc/bmalloc/StaticRegion.cpp
 +++ b/Source/bmalloc/bmalloc/StaticRegion.cpp
 @@ -7,33 +7,359 @@
@@ -10858,7 +10858,7 @@ index 77260b2296..d2c72ce766 100644
 +    size_t inArena = static_cast<size_t>(address - StaticRegion::startOf(static_cast<StaticRegion::Arena>(arena)));
 +    size_t from = static_cast<size_t>(reinterpret_cast<uintptr_t>(record->ExceptionAddress) - image);
 +    if (!mode) {
-+        fprintf(stderr, "bun: a write to the read-only prebuilt heap (%s+%zx from +%zx)\n", names[arena], inArena, from);
++        fprintf(stderr, "pi-bolt: a write to the read-only prebuilt heap (%s+%zx from +%zx)\n", names[arena], inArena, from);
 +        return EXCEPTION_CONTINUE_SEARCH;
 +    }
 +    uintptr_t page = address & ~static_cast<uintptr_t>(4095);

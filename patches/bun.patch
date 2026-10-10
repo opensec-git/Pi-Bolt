@@ -47,7 +47,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  .../linker_context/scanImportsAndExports.rs   |   21 +
  src/bundler/prelinked_module_graph.rs         |   14 +-
  src/codegen/generate-classes.ts               |   25 +-
- src/crash_handler/lib.rs                      |   41 +-
+ src/crash_handler/lib.rs                      |   43 +-
  src/http/HTTPContext.rs                       |   39 +-
  src/http/HTTPThread.rs                        |   11 +
  src/http/HeaderValueIterator.rs               |   20 +
@@ -65,7 +65,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/jsc/bindings/InternalModuleRegistry.cpp   |   15 +-
  src/jsc/bindings/ZigException.cpp             |   14 +-
  src/jsc/bindings/ZigGlobalObject.cpp          |   68 +
- src/jsc/bindings/ZigSourceProvider.cpp        | 1154 ++++++++++++++++-
+ src/jsc/bindings/ZigSourceProvider.cpp        | 1163 ++++++++++++++++-
  src/jsc/bindings/c-bindings.cpp               |  135 ++
  .../webcore/SerializedScriptValue.cpp         |    9 +
  src/jsc/web_worker.rs                         |    4 +
@@ -79,7 +79,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/spawn_sys/posix_spawn.rs                  |  173 ++-
  src/spawn_sys/spawn_process.rs                |   14 +-
  src/standalone_graph/StandaloneModuleGraph.rs |  254 +++-
- 60 files changed, 2829 insertions(+), 213 deletions(-)
+ 60 files changed, 2840 insertions(+), 213 deletions(-)
  create mode 100644 patches/libuv/win-thread-stack-reservation.patch
  create mode 100644 patches/mimalloc/page-commit-on-demand-default.patch
 
@@ -1458,7 +1458,7 @@ index 52b02fc5..402310cf 100644
  };
  
 diff --git a/src/crash_handler/lib.rs b/src/crash_handler/lib.rs
-index 91e2ee80..c2db8ce8 100644
+index 91e2ee80..f4246de1 100644
 --- a/src/crash_handler/lib.rs
 +++ b/src/crash_handler/lib.rs
 @@ -1118,11 +1118,11 @@ mod draft {
@@ -1475,7 +1475,7 @@ index 91e2ee80..c2db8ce8 100644
                              ).is_err() { abort(); }
                              }
                          }
-@@ -1463,10 +1463,31 @@ mod draft {
+@@ -1463,10 +1463,33 @@ mod draft {
              if let Some(url) = env_var::BUN_CRASH_REPORT_URL::get() {
                  return strings::without_trailing_slash(url);
              }
@@ -1496,18 +1496,20 @@ index 91e2ee80..c2db8ce8 100644
 +        Please report it at https://github.com/opensec-git/Pi-Bolt/issues/new\n\
 +        with the link below and what you were doing:\n\n";
 +
++    // A Pi-Bolt executable: one that carries code compiled ahead of time, whether it uses it or not (on a CPU it was not
++    // compiled for, or with BUN_AOT=0, it runs its bytecode, and is Pi-Bolt all the same).
 +    fn is_ahead_of_time_executable() -> bool {
 +        unsafe extern "C" {
-+            fn Bun__AOTImage__isMapped() -> bool;
++            fn Bun__AOTImage__executableHasImage() -> bool;
 +        }
 +        // SAFETY: a plain query of a flag set at startup.
-+        unsafe { Bun__AOTImage__isMapped() }
++        unsafe { Bun__AOTImage__executableHasImage() }
 +    }
 +
      const ARCH_DISPLAY_STRING: &str = if cfg!(target_arch = "aarch64") {
          if cfg!(target_os = "macos") {
              "Silicon"
-@@ -1814,11 +1835,13 @@ mod draft {
+@@ -1814,11 +1837,13 @@ mod draft {
                  } else {
                      let _ = writer.write_all(b": ");
                  }
@@ -1524,7 +1526,7 @@ index 91e2ee80..c2db8ce8 100644
                  if enable_ansi_colors_stderr() {
                      let _ = writer.write_all(&Output::pretty_fmt::<true>("<cyan>"));
                  }
-@@ -2720,6 +2743,14 @@ mod draft {
+@@ -2720,6 +2745,14 @@ mod draft {
              return enable_crash_reporting;
          }
  
@@ -2834,7 +2836,7 @@ index 9de807ad..248e5264 100644
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH
 diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
-index fbfaa2ff..55a0fdb6 100644
+index fbfaa2ff..dbeca5a1 100644
 --- a/src/jsc/bindings/ZigSourceProvider.cpp
 +++ b/src/jsc/bindings/ZigSourceProvider.cpp
 @@ -2,6 +2,17 @@
@@ -2912,7 +2914,7 @@ index fbfaa2ff..55a0fdb6 100644
  }
  
  extern "C" uint32_t Bun__EncoderStringTable__slotForLatin1(JSC::EncoderStringTable* table, const Latin1Character* chars, size_t length)
-@@ -290,17 +333,1063 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
+@@ -290,17 +333,1072 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
      return generateCachedByteCodeFromSourceCode(sourceProviderURL, inputSourceCode, false, depth, optimize, outputByteCode, outputByteCodeSize, cachedBytecodePtr, externalStrings);
  }
  
@@ -3853,7 +3855,7 @@ index fbfaa2ff..55a0fdb6 100644
 +    if (!registered) {
 +        // The static heap, which is mapped and was built with this code, cannot run without it (short-form executables point into
 +        // it), and the engine is initialized by now: stop here, rather than at the first call.
-+        fprintf(stderr, "bun: the executable's ahead-of-time code image was rejected by the engine; run with BUN_AOT=0 to use the bytecode instead\n");
++        fprintf(stderr, "pi-bolt: the executable's ahead-of-time code image was rejected by the engine; run with BUN_AOT=0 to use the bytecode instead\n");
 +        exit(70); // EX_SOFTWARE
 +    }
 +}
@@ -3893,7 +3895,7 @@ index fbfaa2ff..55a0fdb6 100644
 +static void noteNotUsed(const char* why)
 +{
 +    // One line, once: the program still runs, from its bytecode, with the JIT; only slower to start.
-+    fprintf(stderr, "bun: the executable's ahead-of-time compiled code is not used (%s); running from bytecode\n", why);
++    fprintf(stderr, "pi-bolt: the executable's ahead-of-time compiled code is not used (%s); running from bytecode\n", why);
 +}
 +
 +// The executable was built to run without the JIT (AOTImageTrailer::withoutJIT): so it runs whether its code is used or not
@@ -3905,6 +3907,14 @@ index fbfaa2ff..55a0fdb6 100644
 +    return s_executableRunsWithoutJIT;
 +}
 +
++// The executable carries code compiled ahead of time (a Pi-Bolt executable), used or not: what the crash handler and the notices
++// below call it by.
++static bool s_executableHasImage;
++extern "C" bool Bun__AOTImage__executableHasImage()
++{
++    return s_executableHasImage;
++}
++
 +extern "C" bool Bun__StaticHeap__map(const uint8_t* image, size_t size, int fd, uint64_t offsetInFile)
 +{
 +    Bun__setBytecodeCacheVersion();
@@ -3912,6 +3922,7 @@ index fbfaa2ff..55a0fdb6 100644
 +        AOTImageTrailer trailer;
 +        memcpy(&trailer, image + size - sizeof(trailer), sizeof(trailer));
 +        s_executableRunsWithoutJIT = trailer.optionsOfCode & AOTImageTrailer::withoutJIT;
++        s_executableHasImage = true;
 +    }
 +    bool asked = !(getenv("BUN_AOT") && getenv("BUN_AOT")[0] == '0');
 +#if OS(DARWIN)
@@ -3977,7 +3988,7 @@ index fbfaa2ff..55a0fdb6 100644
      return new JSC::BytecodeLinkEncoder(vm, externalStrings, WTF::move(hints));
  }
  
-@@ -331,6 +1420,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
+@@ -331,6 +1429,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
      return true;
  }
  
@@ -4000,7 +4011,7 @@ index fbfaa2ff..55a0fdb6 100644
  // `entryOffsets` has room for one number per successful add* call; `regionEnds` for
  // JSC::BytecodeLinkEncoder::numberOfRegions.
  static_assert(JSC::BytecodeLinkEncoder::numberOfRegions == 6, "bun_resolver::LINKED_BYTECODE_REGION_COUNT");
-@@ -340,6 +1445,51 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
+@@ -340,6 +1454,51 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
      auto result = encoder->finish();
      if (!result.payload || result.entryOffsets.size() != entryOffsetCount)
          return false;
@@ -4689,7 +4700,7 @@ index 0de81dcb..e59e0d6e 100644
  
              #[cfg(any(target_os = "linux", target_os = "android"))]
 diff --git a/src/standalone_graph/StandaloneModuleGraph.rs b/src/standalone_graph/StandaloneModuleGraph.rs
-index a1cfe230..6afeaa23 100644
+index a1cfe230..a7ea3803 100644
 --- a/src/standalone_graph/StandaloneModuleGraph.rs
 +++ b/src/standalone_graph/StandaloneModuleGraph.rs
 @@ -63,6 +63,8 @@ pub struct StandaloneModuleGraph {
@@ -4856,7 +4867,7 @@ index a1cfe230..6afeaa23 100644
 +            let Some((file, offset)) = macho::open_file_of(self.static_heap.as_ptr() as usize) else {
 +                // (Bun__StaticHeap__map() says why for every other reason.)
 +                if !std::env::var_os("BUN_AOT").is_some_and(|value| value.as_encoded_bytes().starts_with(b"0")) {
-+                    eprintln!("bun: the executable's ahead-of-time compiled code is not used (the executable's file could not be opened); running from bytecode");
++                    eprintln!("pi-bolt: the executable's ahead-of-time compiled code is not used (the executable's file could not be opened); running from bytecode");
 +                }
 +                return false;
 +            };
