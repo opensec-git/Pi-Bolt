@@ -59,12 +59,16 @@ async function run() {
 
 	// As Pi's bash tool on Windows: a tree of processes, ended with taskkill /T.
 	const tree = spawn(cmd, ["/d", "/c", "ping -n 30 127.0.0.1 >nul"], { stdio: "ignore", detached: true, windowsHide: true });
-	await new Promise((resolve) => setTimeout(resolve, 300));
-	const grandchildren = execFileSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), [
-		"-NoProfile",
-		"-Command",
-		`(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${tree.pid}').ProcessId`,
-	], { encoding: "utf8" }).trim().split(/\s+/).filter(Boolean).map(Number);
+	// cmd.exe starts ping when it gets to it: on a busy machine that can take longer than a fixed wait, so look until it is there.
+	let grandchildren = [];
+	for (let tries = 0; grandchildren.length === 0 && tries < 50; tries++) {
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		grandchildren = execFileSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), [
+			"-NoProfile",
+			"-Command",
+			`(Get-CimInstance Win32_Process -Filter 'ParentProcessId=${tree.pid}').ProcessId`,
+		], { encoding: "utf8" }).trim().split(/\s+/).filter(Boolean).map(Number);
+	}
 	spawnSync(join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe"), ["/pid", String(tree.pid), "/T", "/F"]);
 	await exited(tree);
 	let anyAlive = true;
