@@ -89,6 +89,7 @@ describe("Coding Agent Tools", () => {
 			// No truncation message since file fits within limits
 			expect(getTextOutput(result)).not.toContain("Use offset=");
 			expect(result.details).toBeUndefined();
+			expect(result.structuredContent).toBe(content);
 		});
 
 		it("should handle non-existent files", async () => {
@@ -217,6 +218,13 @@ describe("Coding Agent Tools", () => {
 			expect(imageBlock?.mimeType).toBe("image/png");
 			expect(typeof imageBlock?.data).toBe("string");
 			expect((imageBlock?.data ?? "").length).toBeGreaterThan(0);
+			// Programmatic callers get the same image as a block. https://github.com/earendil-works/pi/issues/10251
+			expect(result.structuredContent).toEqual({
+				type: "image",
+				data: imageBlock?.data,
+				mimeType: "image/png",
+				note: getTextOutput(result),
+			});
 		});
 
 		it("should read BMP files from disk as PNG image attachments", async () => {
@@ -862,6 +870,61 @@ describe("Coding Agent Tools", () => {
 			const fullOutput = readFileSync(fullOutputPath!, "utf-8");
 			expect(fullOutput).toContain("1\n2\n3");
 			expect(fullOutput).toContain("2998\n2999\n3000");
+		});
+
+		// Output that arrives faster than an asynchronous file stream drains queued in memory without bound: a command
+		// printing for hours made the process hold tens of GB. The full output file is written as the output arrives.
+		const manySmallChunks: BashOperations = {
+			exec: async (_command, _cwd, { onData }) => {
+				for (let i = 0; i < 200_000; i++) {
+					onData(Buffer.from(`line ${i}\n`));
+				}
+				return { exitCode: 0 };
+			},
+		};
+		const manySmallChunksText = Array.from({ length: 200_000 }, (_, i) => `line ${i}\n`).join("");
+
+		it("should write the full output file as many small chunks arrive", async () => {
+			const bash = createBashTool(testDir, { operations: manySmallChunks });
+			const result = await bash.execute("test-call-small-chunks", { command: "many" });
+			const fullOutputPath = result.details?.fullOutputPath;
+
+			expect(fullOutputPath).toBeDefined();
+			expect(readFileSync(fullOutputPath!, "utf-8")).toBe(manySmallChunksText);
+			expect(getTextOutput(result)).toContain("line 199999");
+			rmSync(fullOutputPath!, { force: true });
+		});
+
+		it("should keep the output and exit code when the full output file cannot be created", async () => {
+			const tmp = process.env.TMPDIR;
+			process.env.TMPDIR = join(testDir, "missing", "tmp");
+			try {
+				const bash = createBashTool(testDir, { operations: manySmallChunks });
+				const result = await bash.execute("test-call-no-tmpdir", { command: "many" });
+				const output = getTextOutput(result);
+				expect(output).toContain("line 199999");
+				expect(output).toContain("The full output could not be saved");
+				expect(output).not.toContain("Full output: ");
+				expect(result.details?.fullOutputPath).toBeUndefined();
+				const structured = result.structuredContent as { truncated: boolean; output: string; exit_code: number };
+				expect(structured.truncated).toBe(true);
+				expect(structured.output).toContain("line 199999");
+				expect(structured.exit_code).toBe(0);
+			} finally {
+				if (tmp === undefined) delete process.env.TMPDIR;
+				else process.env.TMPDIR = tmp;
+			}
+		});
+
+		it("executeBash should write the full output file and keep the tail as many small chunks arrive", async () => {
+			const result = await executeBashWithOperations("many", process.cwd(), manySmallChunks);
+
+			expect(result.truncated).toBe(true);
+			expect(result.fullOutputPath).toBeDefined();
+			expect(readFileSync(result.fullOutputPath!, "utf-8")).toBe(manySmallChunksText);
+			expect(result.output).toContain("line 199998\nline 199999");
+			expect(manySmallChunksText.includes(result.output)).toBe(true);
+			rmSync(result.fullOutputPath!, { force: true });
 		});
 	});
 

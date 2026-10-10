@@ -42,9 +42,11 @@ export interface CodemodeTool {
 
 /**
  * One item of the script's output, in the order the script produced it: `text()` and `console.*`
- * produce text items, `image()` image items. `data` is base64.
+ * produce text items, with `console: true` for `console.*`, and `image()` image items. `data` is base64.
  */
-export type CodemodeOutputItem = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
+export type CodemodeOutputItem =
+	| { type: "text"; text: string; console?: true }
+	| { type: "image"; data: string; mimeType: string };
 
 export type CodemodeCallStatus = "ok" | "error" | "cancelled";
 

@@ -135,9 +135,9 @@ log "Pi $VERSION, ahead of time: JIT $JIT, CPU $CPU, $([ -n "$KEEP_BYTECODE" ] &
 		--define "PIBOLT_BUILD=\"$PIBOLT_VERSION $CPU_VARIANT jit-$JIT\"" \
 		--compile-exec-argv=--smol "${ENTRIES[@]}" --outfile "$OUT/pi" 2>&1 | tee "${PIBOLT_BUILD_LOG:-/dev/null}" | grep -v "^AOT: " | tail -3
 )
-# macOS: pi is a launcher that starts the executable, pi-bin, without ASLR for it at once (scripts/lib/darwin-launcher.c): it
+# macOS: pi is a launcher that starts the executable, pi-bin, at its linked address at once (scripts/lib/darwin-launcher.c): it
 # would otherwise start again itself, after a first load by dyld. The launcher also forks the helper that starts the programs
-# Pi starts with ASLR, through pi-spawn (scripts/lib/darwin-spawn.h).
+# Pi starts, through pi-spawn (scripts/lib/darwin-spawn.h).
 if [ "$PIBOLT_OS" = darwin ]; then
 	mv "$OUT/pi" "$OUT/pi-bin"
 	CLANG=(xcrun clang -O2 -Wall -arch arm64 -mmacosx-version-min=13.0 -I"$PIBOLT_ROOT/scripts/lib")
@@ -150,4 +150,9 @@ printf 'Pi-Bolt %s (Pi %s), %s-%s, JIT %s, built %s\n' "$PIBOLT_VERSION" "$VERSI
 check=$(BUN_STATIC_HEAP_VERBOSE=1 "$OUT/pi" --version 2>&1)
 grep -q "image registered: true" <<<"$check" || die "the executable does not use its compiled code:"$'\n'"$check"
 executable="$OUT/pi"; [ -f "$OUT/pi-bin" ] && executable="$OUT/pi-bin"
+# macOS: the parts of pi-bin a start reads, for the launcher to ask for at once when pi-bin is not in memory (a start after a
+# restart or an update: 65 ms rather than 180). Only advice: without it Pi starts as before.
+if [ "$PIBOLT_OS" = darwin ]; then
+	python3 "$PIBOLT_ROOT/scripts/lib/darwin_hot_pages.py" "$OUT" || { rm -f "$OUT/pi-bin.hot"; log "no pi-bin.hot (see above)"; }
+fi
 log "done: $OUT/pi ($(du -h "$executable" | cut -f1), Pi $(tail -1 <<<"$check"))"

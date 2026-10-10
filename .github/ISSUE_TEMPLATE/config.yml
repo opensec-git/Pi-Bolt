@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: A problem in Pi itself (also with plain Pi on Node or Bun)
+    url: https://github.com/earendil-works/pi/issues
+    about: Pi-Bolt runs Pi as it is released; a bug that plain Pi has too belongs upstream.
+  - name: A security vulnerability
+    url: https://github.com/opensec-git/Pi-Bolt/security/advisories/new
+    about: Report it privately (SECURITY.md).

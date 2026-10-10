@@ -1,0 +1,10 @@
+{'build': 'v072', 'cpu_ms_per_s': 1.012, 'own_mb': [31.9, 24.5], 'threads': {}}
+{'build': 'new', 'cpu_ms_per_s': 1.104, 'own_mb': [29.3, 25.0], 'threads': {}}
+{'build': 'v072', 'cpu_ms_per_s': 1.035, 'own_mb': [31.6, 24.4], 'threads': {}}
+{'build': 'new', 'cpu_ms_per_s': 0.992, 'own_mb': [29.0, 24.0], 'threads': {}}
+{'build': 'v072', 'cpu_ms_per_s': 1.136, 'own_mb': [32.0, 24.7], 'threads': {}}
+{'build': 'new', 'cpu_ms_per_s': 1.113, 'own_mb': [29.3, 25.0], 'threads': {}}
+
+build                 idle CPU ms/s (median)   own MB at end (median)
+v072                       1.035         24.5
+new                        1.104         25.0

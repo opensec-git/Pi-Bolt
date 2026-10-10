@@ -1,0 +1,54 @@
+name: tag
+
+# With the repository variable AUTO_RELEASE set to true: when ci passes on a push to pi-bolt whose VERSION has no
+# bolt-vX.Y.Z tag yet (a version bump, as scripts/bump-version.sh makes for a new Pi), tags that commit and runs the release
+# workflow, which hands its draft to publish (docs/RELEASING.md). Only pi-bolt's latest commit is tagged: a later push gets a
+# run of its own. Nothing is checked out here; the commit is read through the API.
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [pi-bolt]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tag
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    name: Tag a new version
+    if: >-
+      vars.AUTO_RELEASE == 'true' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # (To create the tag.)
+      actions: write # (To run the release workflow.)
+    steps:
+      - name: Tag and release
+        run: |
+          printf '%s' "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "unexpected commit: $SHA"; exit 1; }
+          head=$(gh api "repos/$GITHUB_REPOSITORY/commits/pi-bolt" --jq .sha)
+          [ "$head" = "$SHA" ] || { echo "pi-bolt has moved on to $head: that push is tagged by its own run"; exit 0; }
+          version=$(gh api "repos/$GITHUB_REPOSITORY/contents/VERSION?ref=$SHA" --jq .content | base64 -d | tr -d '[:space:]')
+          printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo "unexpected VERSION: $version"; exit 1; }
+          tag="bolt-v$version"
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" >/dev/null 2>&1; then echo "$tag exists"; exit 0; fi
+          gh api "repos/$GITHUB_REPOSITORY/contents/docs/releases/$version.md?ref=$SHA" >/dev/null 2>&1 ||
+            { echo "::warning::VERSION is $version but docs/releases/$version.md is missing: not tagged"; exit 0; }
+          object=$(gh api "repos/$GITHUB_REPOSITORY/git/tags" -f tag="$tag" -f message="Pi-Bolt $version" -f object="$SHA" -f type=commit \
+            -f "tagger[name]=OpenSec" -f "tagger[email]=323596076+opensec-intelligence@users.noreply.github.com" --jq .sha)
+          gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$tag" -f sha="$object" >/dev/null
+          echo "tagged $SHA as $tag"
+          # (A tag created with this workflow's token starts no workflow by itself.)
+          gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --ref pi-bolt -f tag="$tag"
+          echo "### $tag: tagged and released (the release workflow builds it, then publish signs and publishes it)" >> "$GITHUB_STEP_SUMMARY"
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}

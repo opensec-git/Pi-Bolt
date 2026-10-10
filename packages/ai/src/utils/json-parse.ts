@@ -2,11 +2,6 @@ import { parse as partialParse } from "partial-json";
 
 const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
 
-function isControlCharacter(char: string): boolean {
-	const codePoint = char.codePointAt(0);
-	return codePoint !== undefined && codePoint >= 0x00 && codePoint <= 0x1f;
-}
-
 function escapeControlCharacter(char: string): string {
 	switch (char) {
 		case "\b":
@@ -28,58 +23,50 @@ function escapeControlCharacter(char: string): string {
  * Repairs malformed JSON string literals by:
  * - escaping raw control characters inside strings
  * - doubling backslashes before invalid escape characters
+ *
+ * Returns `json` itself when nothing needs repair. Unchanged runs are copied with slice() rather than one character at a
+ * time: streamed tool-call arguments, often a whole file, come through here each time they are parsed.
  */
 export function repairJson(json: string): string {
 	let repaired = "";
+	// Start of the run of characters that has not been copied to `repaired` yet.
+	let runStart = 0;
 	let inString = false;
 
 	for (let index = 0; index < json.length; index++) {
-		const char = json[index];
+		const code = json.charCodeAt(index);
 
 		if (!inString) {
-			repaired += char;
-			if (char === '"') {
+			if (code === 0x22) {
 				inString = true;
 			}
 			continue;
 		}
 
-		if (char === '"') {
-			repaired += char;
+		if (code === 0x22) {
 			inString = false;
 			continue;
 		}
 
-		if (char === "\\") {
+		if (code === 0x5c) {
 			const nextChar = json[index + 1];
-			if (nextChar === undefined) {
-				repaired += "\\\\";
-				continue;
-			}
-
-			if (nextChar === "u") {
-				const unicodeDigits = json.slice(index + 2, index + 6);
-				if (/^[0-9a-fA-F]{4}$/.test(unicodeDigits)) {
-					repaired += `\\u${unicodeDigits}`;
-					index += 5;
-					continue;
-				}
-			}
-
-			if (VALID_JSON_ESCAPES.has(nextChar)) {
-				repaired += `\\${nextChar}`;
+			// "\u" stays as it is, with or without four hex digits after it.
+			if (nextChar !== undefined && VALID_JSON_ESCAPES.has(nextChar)) {
 				index += 1;
 				continue;
 			}
-
-			repaired += "\\\\";
+			repaired += `${json.slice(runStart, index)}\\\\`;
+			runStart = index + 1;
 			continue;
 		}
 
-		repaired += isControlCharacter(char) ? escapeControlCharacter(char) : char;
+		if (code <= 0x1f) {
+			repaired += json.slice(runStart, index) + escapeControlCharacter(json[index]);
+			runStart = index + 1;
+		}
 	}
 
-	return repaired;
+	return runStart === 0 ? json : repaired + json.slice(runStart);
 }
 
 export function parseJsonWithRepair<T>(json: string): T {

@@ -228,6 +228,23 @@ interface EditorSnapshot {
 	pasteCounter: number;
 }
 
+/**
+ * A snapshot that later edits do not change. The lines array and the paste registry are changed in place, so they are
+ * copied; the strings in them are immutable and are shared. (A deep clone would copy every paste, megabytes for a pasted
+ * log, for each word typed and each character deleted, and keep every copy until the prompt is submitted.)
+ */
+function cloneEditorSnapshot(snapshot: EditorSnapshot): EditorSnapshot {
+	return {
+		state: {
+			lines: [...snapshot.state.lines],
+			cursorLine: snapshot.state.cursorLine,
+			cursorCol: snapshot.state.cursorCol,
+		},
+		pastes: new Map(snapshot.pastes),
+		pasteCounter: snapshot.pasteCounter,
+	};
+}
+
 interface LayoutLine {
 	text: string;
 	hasCursor: boolean;
@@ -364,7 +381,7 @@ export class Editor implements Component, Focusable {
 	private snappedFromCursorCol: number | null = null;
 
 	// Undo support
-	private undoStack = new UndoStack<EditorSnapshot>();
+	private undoStack = new UndoStack<EditorSnapshot>(cloneEditorSnapshot);
 
 	public onSubmit?: (text: string) => void;
 	public onChange?: (text: string) => void;

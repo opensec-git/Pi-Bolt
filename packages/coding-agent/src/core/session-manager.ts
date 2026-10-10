@@ -478,36 +478,32 @@ export function buildContextEntries(
 	leafId?: string | null,
 	byId?: Map<string, SessionEntry>,
 ): SessionEntry[] {
-	const path = buildSessionPath(entries, leafId, byId);
-	let compaction: CompactionEntry | null = null;
+	return contextEntriesOfPath(buildSessionPath(entries, leafId, byId));
+}
 
-	for (const entry of path) {
-		if (entry.type === "compaction") {
-			compaction = entry;
-		}
-	}
-
-	if (!compaction) {
-		return path;
-	}
-
-	const compactionIdx = path.findIndex((entry) => entry.id === compaction.id);
+/**
+ * The context entries of a root-to-leaf path; the path itself when it has no compaction. Scans back
+ * from the leaf, so the cost is the kept window, not the history before the latest compaction.
+ */
+function contextEntriesOfPath(path: SessionEntry[]): SessionEntry[] {
+	let compactionIdx = path.length - 1;
+	while (compactionIdx >= 0 && path[compactionIdx].type !== "compaction") compactionIdx--;
 	if (compactionIdx < 0) {
 		return path;
 	}
+	const compaction = path[compactionIdx] as CompactionEntry;
 
+	// Entries from firstKeptEntryId up to the compaction; none when it is not on the path.
+	let firstKeptIdx = compactionIdx - 1;
+	while (firstKeptIdx >= 0 && path[firstKeptIdx].id !== compaction.firstKeptEntryId) firstKeptIdx--;
 	const contextEntries: SessionEntry[] = [compaction];
-	let foundFirstKept = false;
-	for (let i = 0; i < compactionIdx; i++) {
+	for (let i = firstKeptIdx < 0 ? compactionIdx : firstKeptIdx; i < compactionIdx; i++) {
 		const entry = path[i];
-		if (entry.id === compaction.firstKeptEntryId) {
-			foundFirstKept = true;
-		}
-		if (foundFirstKept && !(entry.type === "message" && entry.message.role === "system")) {
+		if (!(entry.type === "message" && entry.message.role === "system")) {
 			contextEntries.push(entry);
 		}
 	}
-	contextEntries.push(...path.slice(compactionIdx + 1));
+	for (let i = compactionIdx + 1; i < path.length; i++) contextEntries.push(path[i]);
 	return contextEntries;
 }
 
@@ -545,9 +541,13 @@ export function buildSessionProjection(
 	leafId?: string | null,
 	byId?: Map<string, SessionEntry>,
 ): SessionProjection {
-	const path = buildSessionPath(entries, leafId, byId);
+	return projectSessionPath(buildSessionPath(entries, leafId, byId));
+}
+
+/** The projection of a root-to-leaf path. Does not keep or return `path`. */
+function projectSessionPath(path: SessionEntry[]): SessionProjection {
 	const { thinkingLevel, model } = getSessionContextSettings(path);
-	const contextEntries = buildContextEntries(entries, leafId, byId);
+	const contextEntries = contextEntriesOfPath(path);
 	const edits = new Map<string, ContextEditEntry>();
 	for (const entry of contextEntries) {
 		if (entry.type === "context_edit") edits.set(entry.targetId, entry);
@@ -996,6 +996,11 @@ export class SessionManager {
 	private labelsById: Map<string, string> = new Map();
 	private labelTimestampsById: Map<string, string> = new Map();
 	private leafId: string | null = null;
+	/**
+	 * The root-to-leaf path of `leafId`, kept between calls: an append extends it by one entry, so
+	 * the per-request projection does not walk the whole history. Never handed out; callers get copies.
+	 */
+	private leafPath: { leafId: string; path: SessionEntry[] } | undefined;
 
 	private constructor(
 		cwd: string,
@@ -1069,6 +1074,7 @@ export class SessionManager {
 			parentSession: options?.parentSession,
 		};
 		this.fileEntries = [header];
+		this.leafPath = undefined;
 		this.byId.clear();
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
@@ -1101,6 +1107,7 @@ export class SessionManager {
 	}
 
 	private _buildIndex(): void {
+		this.leafPath = undefined;
 		this.byId.clear();
 		this.labelsById.clear();
 		this.labelTimestampsById.clear();
@@ -1467,8 +1474,12 @@ export class SessionManager {
 	 * Use buildSessionContext() to get the resolved messages for the LLM.
 	 */
 	getBranch(fromId?: string): SessionEntry[] {
+		if (fromId === undefined || fromId === this.leafId) return this._leafPath().slice();
+		return this._walkBranch(fromId);
+	}
+
+	private _walkBranch(startId: string | null): SessionEntry[] {
 		const path: SessionEntry[] = [];
-		const startId = fromId ?? this.leafId;
 		let current = startId ? this.byId.get(startId) : undefined;
 		while (current) {
 			path.push(current);
@@ -1478,12 +1489,33 @@ export class SessionManager {
 		return path;
 	}
 
+	/** The cached path to the current leaf. Must not be modified or returned to callers. */
+	private _leafPath(): SessionEntry[] {
+		const leafId = this.leafId;
+		if (leafId === null) return [];
+		const cached = this.leafPath;
+		if (cached?.leafId === leafId) return cached.path;
+		const leaf = this.byId.get(leafId);
+		let path: SessionEntry[];
+		if (cached && leaf && leaf.parentId === cached.leafId) {
+			// Appended under the cached leaf: extend the cached path in place.
+			path = cached.path;
+			path.push(leaf);
+		} else {
+			path = this._walkBranch(leafId);
+		}
+		this.leafPath = { leafId, path };
+		return path;
+	}
+
 	/**
 	 * Build the active, compaction-aware entry list for context/rendering.
 	 * Uses tree traversal from current leaf.
 	 */
 	buildContextEntries(): SessionEntry[] {
-		return buildContextEntries(this.getEntries(), this.leafId, this.byId);
+		const path = this._leafPath();
+		const entries = contextEntriesOfPath(path);
+		return entries === path ? path.slice() : entries;
 	}
 
 	/**
@@ -1491,7 +1523,7 @@ export class SessionManager {
 	 * Uses tree traversal from current leaf.
 	 */
 	buildSessionProjection(): SessionProjection {
-		return buildSessionProjection(this.getEntries(), this.leafId, this.byId);
+		return projectSessionPath(this._leafPath());
 	}
 
 	buildSessionContext(): SessionContext {

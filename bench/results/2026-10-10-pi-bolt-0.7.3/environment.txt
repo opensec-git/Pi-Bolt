@@ -1,0 +1,7 @@
+date: 2026-10-10T05:41Z
+cpu: AMD EPYC 7B13, pinned to 29,30,34,35
+kernel: 7.0.0-1013-gcp
+pi-bolt: 0.7.3, Pi 1.1.0 (Pi-Bolt 0.7.3, linux-x64, JIT off)
+bun: 1.4.2
+node: v24.21.0
+upstream: bun and node run Pi 1.1.0 as released (upstream v1.1.0: scripts/prepare-pi.sh --tag v1.1.0, build-pi.sh --stable)

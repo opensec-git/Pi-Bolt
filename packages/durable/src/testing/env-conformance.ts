@@ -341,6 +341,32 @@ export function createEnvConformance(options: EnvConformanceOptions): readonly E
 			});
 		}),
 
+		watchCase("watch keeps recursive coverage where a non-recursive target overlaps", async (env) => {
+			getOrThrow(await env.writeFile("skills/a/one.md", "one", context));
+			const targets: WatchTarget[] = [{ path: "skills" }, { path: "skills", recursive: true }];
+			await watching(env, targets, async ({ expectChange }) => {
+				await expectChange("skills/a/two.md", async () => {
+					getOrThrow(await env.writeFile("skills/a/two.md", "two", context));
+				});
+			});
+		}),
+
+		watchCase("watch follows a directory replaced at the same path", async (env) => {
+			getOrThrow(await env.writeFile("skills/a/x.md", "x", context));
+			await watching(env, [{ path: "skills", recursive: true }], async ({ expectChange }) => {
+				await expectChange("skills/a", async () => {
+					getOrThrow(await env.renameFile("skills/a", "skills-old", context));
+					getOrThrow(await env.createDir("skills/a", undefined, context));
+				});
+				await expectChange("skills/a/y.md", async () => {
+					getOrThrow(await env.writeFile("skills/a/y.md", "y", context));
+				});
+				await expectChange("skills/a/y.md", async () => {
+					getOrThrow(await env.writeFile("skills/a/y.md", "yy", context));
+				});
+			});
+		}),
+
 		watchCase("watch stops reporting once closed", async (env) => {
 			const changes: WatchChange[] = [];
 			const watcher = getOrThrow(await env.watch([{ path: "file.txt" }], (change) => changes.push(change), context));
@@ -465,6 +491,18 @@ export function createEnvConformance(options: EnvConformanceOptions): readonly E
 				const inner = getOrThrow(await env.openBinaryReader("dirlink/inner.txt", { noFollow: true }, context));
 				assert.strictEqual(decoder.decode(getOrThrow(await inner.read(0, 10, context))), "inner");
 				await inner.close(context);
+			}),
+
+			watchCase("watch reports changes to the file a watched symbolic link points to", async (env) => {
+				getOrThrow(await env.writeFile("data/real.md", "one", context));
+				getOrThrow(await env.createDir("config", undefined, context));
+				const linked = await env.exec([...shell, "ln -s ../data/real.md config/AGENTS.md"], undefined, context);
+				assert.strictEqual(getOrThrow(linked).exitCode, 0);
+				await watching(env, [{ path: "config/AGENTS.md" }], async ({ expectChange }) => {
+					await expectChange("config/AGENTS.md", async () => {
+						getOrThrow(await env.writeFile("data/real.md", "two!", context));
+					});
+				});
 			}),
 		);
 	}

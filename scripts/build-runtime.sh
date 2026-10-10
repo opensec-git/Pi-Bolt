@@ -38,12 +38,15 @@ EXTRA=()
 build() { (cd "$BUN_SRC" && BUN_WEBKIT_PATH="$WEBKIT" bun scripts/build.ts --profile=release-local --lto="$LTO" --build-dir="$BUILD_DIR" "${EXTRA[@]}" "${JOBS[@]}"); }
 log "building the runtime in $BUN_SRC/$BUILD_DIR (WebKit from $WEBKIT)"
 build
-# macOS: the functions that start Pi, and those it runs most, laid out together at the front of the code (a linker order file),
-# so that Pi touches fewer of its pages: what Pi runs, traced in sessions of it (profiles/runtime-darwin-arm64.hints, from
-# scripts/train-runtime-hints.sh), then what Bun's own workloads run. The order is made with the build just done, and the
-# runtime linked again with it when it changed.
+# The functions that start Pi, and those it runs most, laid out together at the front of the code (a linker order file: ld64's
+# -order_file, lld's --symbol-ordering-file), so that Pi touches fewer of its pages: what Pi runs, traced in sessions of it
+# (profiles/runtime-<platform>.hints, from scripts/train-runtime-hints.sh), then what Bun's own workloads run. The order is made
+# with the build just done, and the runtime linked again with it when it changed. The hints are function names, so another
+# platform's serve when this one has none. Linux x86-64 uses the macOS hints: pi --version 12.45 ms of CPU without an order
+# file, 12.25 with hints traced on Linux (3 processes), 11.87 with the macOS ones (0.7.3, interleaved runs).
 HINTS="$PIBOLT_ROOT/profiles/runtime-$PIBOLT_PLATFORM.hints"
-if [ "$PIBOLT_OS" = darwin ] && [ -f "$HINTS" ]; then
+[ -f "$HINTS" ] || HINTS="$PIBOLT_ROOT/profiles/runtime-darwin-arm64.hints"
+if [ -f "$HINTS" ]; then
 	ORDER="$BUN_SRC/$BUILD_DIR/linker.order"
 	log "a linker order file from $HINTS"
 	cp -p "$ORDER" "$ORDER.before"

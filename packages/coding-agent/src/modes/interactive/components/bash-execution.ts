@@ -17,10 +17,21 @@ import { truncateToVisualLines } from "./visual-truncate.ts";
 
 // Preview line limit when not expanded (matches tool execution behavior)
 const PREVIEW_LINES = 20;
+/**
+ * Output characters kept for display. Every character is at least one UTF-8 byte, so this tail holds more than the
+ * DEFAULT_MAX_BYTES that the context truncation below keeps, and truncating it gives the same result as truncating
+ * the whole output.
+ */
+const RETAINED_OUTPUT_CHARS = DEFAULT_MAX_BYTES * 2;
 
 export class BashExecutionComponent extends Container {
 	private command: string;
-	private outputLines: string[] = [];
+	/** The end of the output, at most 2 * RETAINED_OUTPUT_CHARS characters. */
+	private output = "";
+	/** Whether the start of the output was dropped from `output`. */
+	private outputDropped = false;
+	/** Output arrived since the content was last rebuilt; it is rebuilt on the next render. */
+	private displayDirty = false;
 	private status: "running" | "complete" | "cancelled" | "error" = "running";
 	private exitCode: number | undefined = undefined;
 	private loader: Loader;
@@ -28,14 +39,16 @@ export class BashExecutionComponent extends Container {
 	private fullOutputPath?: string;
 	private expanded = false;
 	private contentContainer: Container;
+	/** `dim` marks `!!` commands, whose output is excluded from the model context. */
+	private readonly colorKey: "dim" | "bashMode";
+	private outputPad: number;
 
-	constructor(command: string, ui: TUI, excludeFromContext = false) {
+	constructor(command: string, ui: TUI, excludeFromContext = false, outputPad = 1) {
 		super();
 		this.command = command;
-
-		// Use dim border for excluded-from-context commands (!! prefix)
-		const colorKey = excludeFromContext ? "dim" : "bashMode";
-		const borderColor = (str: string) => theme.fg(colorKey, str);
+		this.colorKey = excludeFromContext ? "dim" : "bashMode";
+		this.outputPad = outputPad;
+		const borderColor = (str: string) => theme.fg(this.colorKey, str);
 
 		// Add spacer
 		this.addChild(new Spacer(1));
@@ -47,21 +60,17 @@ export class BashExecutionComponent extends Container {
 		this.contentContainer = new Container();
 		this.addChild(this.contentContainer);
 
-		// Command header
-		const header = new Text(theme.fg(colorKey, theme.bold(`$ ${command}`)), 1, 0);
-		this.contentContainer.addChild(header);
-
-		// Loader
 		this.loader = new Loader(
 			ui,
-			(spinner) => theme.fg(colorKey, spinner),
+			(spinner) => theme.fg(this.colorKey, spinner),
 			(text) => theme.fg("muted", text),
 			`Running... (${keyText("tui.select.cancel")} to cancel)`, // Plain text for loader
 		);
-		this.contentContainer.addChild(this.loader);
 
 		// Bottom border
 		this.addChild(new DynamicBorder(borderColor));
+
+		this.updateDisplay();
 	}
 
 	/**
@@ -69,6 +78,11 @@ export class BashExecutionComponent extends Container {
 	 */
 	setExpanded(expanded: boolean): void {
 		this.expanded = expanded;
+		this.updateDisplay();
+	}
+
+	setOutputPad(outputPad: number): void {
+		this.outputPad = outputPad;
 		this.updateDisplay();
 	}
 
@@ -82,17 +96,21 @@ export class BashExecutionComponent extends Container {
 		// Note: binary data is already sanitized in tui-renderer.ts executeBashCommand
 		const clean = stripAnsi(chunk).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
-		// Append to output lines
-		const newLines = clean.split("\n");
-		if (this.outputLines.length > 0 && newLines.length > 0) {
-			// Append first chunk to last line (incomplete line continuation)
-			this.outputLines[this.outputLines.length - 1] += newLines[0];
-			this.outputLines.push(...newLines.slice(1));
-		} else {
-			this.outputLines.push(...newLines);
+		// Keep only the tail that can be shown: rebuilding the display from all output on every chunk makes a command
+		// printing N bytes cost O(N^2), and holding all of it keeps the whole output in memory.
+		this.output += clean;
+		if (this.output.length > RETAINED_OUTPUT_CHARS * 2) {
+			this.output = this.output.slice(-RETAINED_OUTPUT_CHARS);
+			this.outputDropped = true;
 		}
 
-		this.updateDisplay();
+		// Many chunks can arrive between two frames; rebuild once per frame.
+		this.displayDirty = true;
+	}
+
+	override render(width: number): string[] {
+		if (this.displayDirty) this.updateDisplay();
+		return super.render(width);
 	}
 
 	setComplete(
@@ -117,9 +135,9 @@ export class BashExecutionComponent extends Container {
 	}
 
 	private updateDisplay(): void {
+		this.displayDirty = false;
 		// Apply truncation for LLM context limits (same limits as bash tool)
-		const fullOutput = this.outputLines.join("\n");
-		const contextTruncation = truncateTail(fullOutput, {
+		const contextTruncation = truncateTail(this.output, {
 			maxLines: DEFAULT_MAX_LINES,
 			maxBytes: DEFAULT_MAX_BYTES,
 		});
@@ -135,7 +153,7 @@ export class BashExecutionComponent extends Container {
 		this.contentContainer.clear();
 
 		// Command header
-		const header = new Text(theme.fg("bashMode", theme.bold(`$ ${this.command}`)), 1, 0);
+		const header = new Text(theme.fg(this.colorKey, theme.bold(`$ ${this.command}`)), this.outputPad, 0);
 		this.contentContainer.addChild(header);
 
 		// Output
@@ -143,7 +161,7 @@ export class BashExecutionComponent extends Container {
 			if (this.expanded) {
 				// Show all lines
 				const displayText = availableLines.map((line) => theme.fg("muted", line)).join("\n");
-				this.contentContainer.addChild(new Text(`\n${displayText}`, 1, 0));
+				this.contentContainer.addChild(new Text(`\n${displayText}`, this.outputPad, 0));
 			} else {
 				// Use shared visual truncation utility with width-aware caching
 				const styledOutput = previewLogicalLines.map((line) => theme.fg("muted", line)).join("\n");
@@ -153,7 +171,7 @@ export class BashExecutionComponent extends Container {
 				this.contentContainer.addChild({
 					render: (width: number) => {
 						if (cachedLines === undefined || cachedWidth !== width) {
-							const result = truncateToVisualLines(styledInput, PREVIEW_LINES, width, 1);
+							const result = truncateToVisualLines(styledInput, PREVIEW_LINES, width, this.outputPad);
 							cachedLines = result.visualLines;
 							cachedWidth = width;
 						}
@@ -193,22 +211,22 @@ export class BashExecutionComponent extends Container {
 			}
 
 			// Add truncation warning (context truncation, not preview truncation)
-			const wasTruncated = this.truncationResult?.truncated || contextTruncation.truncated;
+			const wasTruncated = this.truncationResult?.truncated || contextTruncation.truncated || this.outputDropped;
 			if (wasTruncated && this.fullOutputPath) {
 				statusParts.push(theme.fg("warning", `Output truncated. Full output: ${this.fullOutputPath}`));
 			}
 
 			if (statusParts.length > 0) {
-				this.contentContainer.addChild(new Text(`\n${statusParts.join("\n")}`, 1, 0));
+				this.contentContainer.addChild(new Text(`\n${statusParts.join("\n")}`, this.outputPad, 0));
 			}
 		}
 	}
 
 	/**
-	 * Get the raw output for creating BashExecutionMessage.
+	 * Get the output for creating BashExecutionMessage: its last 2 * RETAINED_OUTPUT_CHARS characters at most.
 	 */
 	getOutput(): string {
-		return this.outputLines.join("\n");
+		return this.output;
 	}
 
 	/**

@@ -1,0 +1,10 @@
+{"build": "v072", "mb": 32, "ok": true, "wall_ms": 1389, "cpu_ms": 1932, "peak_mb": 104.2, "note": ""}
+{"build": "new", "mb": 32, "ok": true, "wall_ms": 679, "cpu_ms": 288, "peak_mb": 52.3, "note": ""}
+{"build": "v072", "mb": 32, "ok": true, "wall_ms": 1443, "cpu_ms": 1995, "peak_mb": 103.8, "note": ""}
+{"build": "new", "mb": 32, "ok": true, "wall_ms": 272, "cpu_ms": 257, "peak_mb": 56.5, "note": ""}
+{"build": "v072", "mb": 32, "ok": true, "wall_ms": 1461, "cpu_ms": 2014, "peak_mb": 104.2, "note": ""}
+{"build": "new", "mb": 32, "ok": true, "wall_ms": 272, "cpu_ms": 262, "peak_mb": 59.1, "note": ""}
+{"build": "v072", "mb": 256, "ok": true, "wall_ms": 541, "cpu_ms": 233, "peak_mb": 72.9, "note": ""}
+{"build": "new", "mb": 256, "ok": true, "wall_ms": 568, "cpu_ms": 220, "peak_mb": 71.5, "note": ""}
+{"build": "v072", "mb": 256, "ok": true, "wall_ms": 567, "cpu_ms": 253, "peak_mb": 83.4, "note": ""}
+{"build": "new", "mb": 256, "ok": true, "wall_ms": 561, "cpu_ms": 213, "peak_mb": 75.3, "note": ""}

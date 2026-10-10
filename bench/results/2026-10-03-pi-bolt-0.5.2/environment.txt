@@ -1,6 +1,0 @@
-date: 2026-10-03T17:37Z
-cpu: AMD EPYC 7B13, pinned to 40-47
-kernel: 7.0.0-1013-gcp
-pi-bolt: 0.5.2, Pi 1.0.0 (Pi-Bolt 0.5.2, linux-x64, JIT off)
-bun: 1.4.2
-node: v22.23.3

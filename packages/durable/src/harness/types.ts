@@ -171,6 +171,8 @@ export interface ToolExecutionApi<TDetails extends JsonValue = JsonValue> extend
 	readonly registry: RegistrySnapshot;
 	/** The calling conversation's agent, as the tool task's phase resolved it. */
 	agent(context: Context): Promise<Agent>;
+	/** `HarnessOptions.models`: the catalog, credentials, and request transforms generation uses. */
+	readonly models: Models;
 	/** Built by `HarnessOptions.env` for this call; `undefined` without an environment. */
 	readonly env: ExecutionEnv | undefined;
 	/**
@@ -419,6 +421,11 @@ export type HarnessSettings = {
 	readonly toolExecution?: ToolExecutionMode;
 	readonly steeringMode?: QueueMode;
 	readonly followUpMode?: QueueMode;
+	/**
+	 * How long an idle conversation keeps its last context read in memory, so its next run reads only newer entries.
+	 * Busy conversations always keep it; `0` drops it once the conversation is idle.
+	 */
+	readonly contextRetentionMs?: number;
 };
 
 /** Resolved settings: every field over its built-in default, object fields merged. */
@@ -432,6 +439,7 @@ export type Settings = {
 	readonly toolExecution: ToolExecutionMode;
 	readonly steeringMode: QueueMode;
 	readonly followUpMode: QueueMode;
+	readonly contextRetentionMs: number;
 };
 
 /** What `HarnessOptions.env` builds an environment for. */
@@ -529,8 +537,12 @@ export interface Conversation {
 
 	/** Session commit whose `tx.createTask()` defaults to this conversation. */
 	commit<T>(change: (tx: Tx) => T | Promise<T>, context: Context): Promise<T>;
-	context(context: Context): Promise<ContextView>;
-	/** Newest-first fork-aware history of this conversation. */
+	/**
+	 * Committed raw active transcript and model context. With `at`, the context as of that visible entry: the same view
+	 * `fork(at)` would start with, without creating a conversation.
+	 */
+	context(context: Context, options?: { readonly at?: EntryId }): Promise<ContextView>;
+	/** Fork-aware history of this conversation, newest first unless `query.order` is `ascending`. */
 	entries(
 		query: Omit<EntryQuery, "conversationId">,
 		limit: number,
@@ -605,6 +617,8 @@ export interface Harness extends Session {
 export interface HookApi extends DocumentReader {
 	readonly taskId: TaskId;
 	readonly conversationId: ConversationId;
+	/** `HarnessOptions.models`. */
+	readonly models: Models;
 	memo<T extends JsonValue>(name: string, context: Context): Promise<T | undefined>;
 	memo<T extends JsonValue>(name: string, candidate: T, context: Context): Promise<T>;
 }

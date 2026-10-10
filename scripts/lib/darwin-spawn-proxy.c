@@ -1,11 +1,12 @@
-// pi-spawn: what pi-bin starts on macOS in the place of a program, so that the program runs with ASLR (darwin-spawn.h).
+// pi-spawn: what pi-bin starts on macOS in the place of a program, so that the program gets the system's own process setup
+// (darwin-spawn.h).
 //
 //     pi-spawn <helper's socket> <status pipe> <path> <argv[0]> [arguments...]
 //
 // pi-bin started it as it would have started the program: its files, directory, environment, signals, process group or
 // session are the program's. It hands them to the helper, which starts the program; pi-bin is told the program's pid on the
 // status pipe, and signals that pid. pi-spawn ignores signals, waits, and exits as the program did. When the helper cannot
-// start the program, pi-spawn starts it in its own place, without ASLR, as pi-bin would have.
+// start the program, pi-spawn starts it in its own place, as pi-bin would have.
 // Built by scripts/build-pi.sh: clang -O2 -mmacosx-version-min=13.0 darwin-spawn-proxy.c -o pi-spawn
 #include "darwin-spawn.h"
 
@@ -16,9 +17,11 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/event.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 extern char** environ;
@@ -65,7 +68,7 @@ static void tell(int status, int kind, int value)
     writeFully(status, &message, sizeof(message));
 }
 
-// The program in pi-spawn's place, as pi-bin would have started it (without ASLR, then).
+// The program in pi-spawn's place, as pi-bin would have started it.
 static void execute(int helper, int status, const char* path, char** argv)
 {
     for (size_t i = 0; i < ASYNCHRONOUS_COUNT; i++)
@@ -96,6 +99,31 @@ static int writeStrings(int stream, char** strings)
     return 0;
 }
 
+// Waits until the stream has the worker's first answer, or the helper has exited, or 30 seconds have passed. Only a wait:
+// after it the stream is read as before, so a worker that has the request is always heard (it would otherwise start the
+// program a second time).
+static void waitForAnswer(int helper, int stream)
+{
+    int queue = kqueue();
+    if (queue < 0)
+        return;
+    struct kevent changes[2];
+    int count = 0;
+    EV_SET(&changes[count++], stream, EVFILT_READ, EV_ADD, 0, 0, NULL);
+    // (The helper's pid, as the peer of its socket: the helper takes the socket over at its start. Not when the peer is
+    // still the launcher, which is pi-bin, pi-spawn's parent.)
+    pid_t helperPid = 0;
+    socklen_t size = sizeof(helperPid);
+    if (!getsockopt(helper, SOL_LOCAL, LOCAL_PEERPID, &helperPid, &size) && helperPid > 0 && helperPid != getppid())
+        EV_SET(&changes[count++], helperPid, EVFILT_PROC, EV_ADD, NOTE_EXIT, 0, NULL);
+    if (!kevent(queue, changes, count, NULL, 0, NULL)) {
+        struct timespec timeout = { 30, 0 };
+        struct kevent event;
+        while (kevent(queue, NULL, 0, &event, 1, &timeout) < 0 && errno == EINTR) { }
+    }
+    close(queue);
+}
+
 // Asks the helper to start the program. 0: it did (or posix_spawn failed, which pi-bin has been told); -1: it cannot, and
 // nothing was started.
 static int request(int helper, int status, const char* path, char** argv, uint32_t ignored, uint32_t blocked, int* stream)
@@ -119,6 +147,11 @@ static int request(int helper, int status, const char* path, char** argv, uint32
     int pair[2];
     if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair))
         return -1;
+    // Room for the whole request (its arguments and environment fit in ARG_MAX, 1 MB, or pi-spawn would not have started):
+    // writing it never waits for the worker, which may never come (below).
+    int room = 2 << 20;
+    setsockopt(pair[0], SOL_SOCKET, SO_SNDBUF, &room, sizeof(room));
+    setsockopt(pair[1], SOL_SOCKET, SO_RCVBUF, &room, sizeof(room));
     int directory = open(".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
     if (directory < 0) {
         close(pair[0]);
@@ -145,12 +178,18 @@ static int request(int helper, int status, const char* path, char** argv, uint32
     // A datagram that does not fit in the helper's socket is refused at once (ENOBUFS): it is taking requests, so again.
     for (int attempt = 0; (sent = sendmsg(helper, &header, 0)) < 0 && (errno == ENOBUFS || errno == EINTR) && attempt < 2000; attempt++)
         usleep(500);
-    close(pair[1]);
     close(directory);
     if (sent < 0) {
         close(pair[0]);
+        close(pair[1]);
         return -1;
     }
+    // The worker's end of the stream stays open here too until the worker has answered. A socket that is only in flight
+    // (in a message not yet received) can be taken for garbage by the kernel's collector of descriptors in flight when
+    // another Unix socket closes meanwhile: the worker then reads a stream that has ended, and the program was started here,
+    // itself, with pi-bin's process setup (0.7.2: 73 of 3,000 programs started 20 at a time). Holding it, the stream cannot end before the worker
+    // answers, so that is waited for with an eye on the helper. (The protocol is unchanged: a helper of an earlier release,
+    // still serving a Pi started before an update, works with this pi-spawn, and the other way round.)
     *stream = pair[0];
 
     struct pibolt_spawn_params params = { .ignored_signals = ignored, .blocked_signals = blocked };
@@ -162,8 +201,13 @@ static int request(int helper, int status, const char* path, char** argv, uint32
     params.umask = mask;
     for (int resource = 0; resource < PIBOLT_SPAWN_RLIMITS; resource++) {
         struct rlimit limit;
-        if (getrlimit(resource, &limit))
+        if (getrlimit(resource, &limit)) {
+            // (Closed: the program would otherwise inherit it, and the helper's worker would wait on it.)
+            close(*stream);
+            close(pair[1]);
+            *stream = -1;
             return -1;
+        }
         params.rlimits[resource][0] = limit.rlim_cur;
         params.rlimits[resource][1] = limit.rlim_max;
     }
@@ -171,8 +215,14 @@ static int request(int helper, int status, const char* path, char** argv, uint32
     params.argv_len = (uint32_t)stringsSize(argv, &params.argc);
     params.envp_len = (uint32_t)stringsSize(environ, &params.envc);
     struct pibolt_spawn_reply reply;
-    if (writeFully(*stream, &params, sizeof(params)) || writeFully(*stream, path, params.path_len) || writeStrings(*stream, argv)
-        || writeStrings(*stream, environ) || readFully(*stream, &reply, sizeof(reply)) || reply.kind == PIBOLT_SPAWN_UNAVAILABLE) {
+    int failed = writeFully(*stream, &params, sizeof(params)) || writeFully(*stream, path, params.path_len) || writeStrings(*stream, argv)
+        || writeStrings(*stream, environ);
+    if (!failed)
+        waitForAnswer(helper, *stream);
+    // The worker has its own copy by now, or never will (the helper is gone, or nothing for 30 seconds): from here the
+    // stream ends when the worker does, and a request that never reached one ends it at once.
+    close(pair[1]);
+    if (failed || readFully(*stream, &reply, sizeof(reply)) || reply.kind == PIBOLT_SPAWN_UNAVAILABLE) {
         close(*stream);
         return -1;
     }

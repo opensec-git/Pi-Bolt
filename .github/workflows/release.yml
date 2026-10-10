@@ -1,125 +1,230 @@
 name: release
 
-# Builds, tests, packages, signs and publishes a release when a bolt-vX.Y.Z tag is pushed. The runtime (patched WebKit and Bun)
-# is rebuilt only when patches/ or sources.json changed since the previous release; otherwise the previous release's runtime is
-# used. Building the runtime needs about 32 GB of RAM and 40 GB of disk, so this runs on a self-hosted runner: see
-# docs/RELEASING.md for setting one up.
+# A bolt-vX.Y.Z tag (pushed, or created by the tag workflow, which runs this one) builds the release on GitHub's runners: the
+# Linux x86-64 archives (x64, baseline, jit) and the macOS ones (arm64, jit), each tested, then a draft GitHub release with every
+# archive, SHA256SUMS and RUNTIME_STAMP. Nothing is signed or published here: with the repository variable AUTO_RELEASE set to
+# true, the draft is handed to the publish workflow, which signs and publishes it; otherwise publish is run by hand
+# (docs/RELEASING.md).
+#
+# The runtime: when the engine (patches/, sources.json, the runtime build scripts) is the latest release's, its runtime archives
+# are used again. When it changed, build the runtimes by hand (scripts/build-runtime.sh, on Linux and on a Mac) and upload
+# pi-bolt-runtime-linux-x64.tar.gz and pi-bolt-runtime-darwin-arm64.tar.gz to a draft release of the tag before this runs.
 on:
   push:
     tags: ["bolt-v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "The bolt-vX.Y.Z tag to release (must exist)"
+        description: "The bolt-vX.Y.Z tag to build (it must exist)"
         required: true
+      dry_run:
+        description: "Build and test only: no draft release (works for a tag already released)"
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
-  id-token: write # npm provenance
+  contents: read
 
 concurrency:
   group: release
   cancel-in-progress: false
 
+env:
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
 jobs:
-  release:
-    runs-on: [self-hosted, linux, x64, pi-bolt]
-    timeout-minutes: 600
-    env:
-      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  prepare:
+    name: Versions and runtime
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # (A draft release, and the runtimes uploaded to it, are only visible to a token that may write.)
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      stamp: ${{ steps.check.outputs.stamp }}
+      runtime_from: ${{ steps.check.outputs.runtime_from }}
     steps:
-      - uses: actions/checkout@v4
+      - name: The tag
+        run: |
+          printf '%s' "$TAG" | grep -Eq '^bolt-v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "not a release tag: $TAG"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
-
-      - name: versions agree
-        run: |
-          test "bolt-v$(cat VERSION)" = "$TAG" || { echo "VERSION is $(cat VERSION), the tag is $TAG"; exit 1; }
-          test "$(python3 -c 'import json; print(json.load(open("npm/package.json"))["version"])')" = "$(cat VERSION)"
-          grep -q "^VERSION=$(cat VERSION)\$" npm/bin/pi-bolt
-
-      # The runtime is identified by what it is built from. The previous release's is reused if nothing changed.
-      - name: runtime
-        run: |
-          stamp=$(cat sources.json patches/webkit.patch patches/bun.patch scripts/build-runtime.sh scripts/toolchain/*.sh | sha256sum | cut -c1-16)
-          echo "runtime stamp: $stamp"
-          previous=$(gh release list --exclude-drafts --exclude-pre-releases --limit 1 --json tagName --jq '.[0].tagName' || true)
-          if [ -n "$previous" ] && gh release download "$previous" --pattern RUNTIME_STAMP --output .work/previous-stamp 2>/dev/null \
-             && [ "$(cat .work/previous-stamp)" = "$stamp" ]; then
-            echo "same as $previous: downloading its runtime"
-            scripts/fetch-runtime.sh --version "$previous"
-          else
-            echo "building the runtime"
-            [ -d .toolchain/sysroot-glibc ] || scripts/toolchain/make-sysroot.sh
-            scripts/fetch-sources.sh
-            scripts/build-runtime.sh
-          fi
-          echo "$stamp" > .work/RUNTIME_STAMP
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Pi
-        run: scripts/prepare-pi.sh
-
-      - name: training profile
-        run: |
-          pi=$(python3 -c 'import json; print(json.load(open("packages/coding-agent/package.json"))["version"])')
-          [ -f "profiles/pi-$pi/bytecode.order" ] || { echo "no training profile for Pi $pi: run scripts/train-profile.sh and commit profiles/pi-$pi"; exit 1; }
-
-      - name: build and package
-        run: scripts/package-release.sh
-
-      - name: tests
-        run: |
-          tests/aot/run.sh
-          scripts/build-pi.sh --stable --out out/pi-stable
-          python3 bench/e2e_tools.py --reference bun=out/pi-stable/pi --build x64=out/pi-bolt/pi --build baseline=out/pi-bolt-baseline/pi --build jit=out/pi-bolt-jit/pi
-          python3 bench/ui_check.py --project . --build x64=out/pi-bolt/pi --build jit=out/pi-bolt-jit/pi
-
-      - name: sign
-        run: |
-          printf '%s' "$PIBOLT_SIGNING_KEY" > .work/signing-key.pem
-          scripts/sign-release.sh --key .work/signing-key.pem "dist/$(cat VERSION)"
-          rm -f .work/signing-key.pem
-          cp .work/RUNTIME_STAMP "dist/$(cat VERSION)/RUNTIME_STAMP"
-        env:
-          PIBOLT_SIGNING_KEY: ${{ secrets.PIBOLT_SIGNING_KEY }}
-
-      - name: GitHub release
+          ref: refs/tags/${{ env.TAG }}
+      - id: check
         run: |
           version=$(cat VERSION)
-          pi=$(python3 -c 'import json; print(json.load(open("packages/coding-agent/package.json"))["version"])')
-          notes=.work/notes.md
-          if [ -f "docs/releases/$version.md" ]; then cp "docs/releases/$version.md" $notes; else
-            printf 'Pi-Bolt %s runs Pi %s.\n\nInstall:\n\n```bash\ncurl -fsSL https://pi-bolt.opensec.in/install.sh | sh\n```\n' "$version" "$pi" > $notes
+          test "bolt-v$version" = "$TAG" || { echo "VERSION is $version, the tag is $TAG"; exit 1; }
+          test "$(python3 -c 'import json; print(json.load(open("npm/package.json"))["version"])')" = "$version"
+          grep -q "^VERSION=$version\$" npm/bin/pi-bolt
+          pi=$(python3 -c 'import json; print(json.load(open("sources.json"))["pi"]["tag"][1:])')
+          test -f "profiles/pi-$pi/bytecode.order" || { echo "no training profile for Pi $pi (scripts/train-profile.sh)"; exit 1; }
+          test -f "docs/releases/$version.md" || { echo "no release notes: docs/releases/$version.md"; exit 1; }
+          stamp=$(scripts/runtime-stamp.sh)
+          previous=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName 2>/dev/null || true)
+          released=""
+          [ -z "$previous" ] || released=$(gh release download "$previous" --repo "$GITHUB_REPOSITORY" --pattern RUNTIME_STAMP --output - 2>/dev/null || true)
+          if [ -n "$previous" ] && [ "$released" = "$stamp" ]; then
+            runtime_from=$previous
+            echo "the engine is $previous's: its runtime is used again"
+          elif gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null | grep -q '^pi-bolt-runtime-linux-x64.tar.gz$' &&
+               gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep -q '^pi-bolt-runtime-darwin-arm64.tar.gz$'; then
+            runtime_from=$TAG
+            echo "the engine changed: using the runtimes uploaded to the draft of $TAG"
+          else
+            echo "::error title=Runtime needed::The engine changed since $previous (runtime stamp $released, now $stamp). Build the runtimes (scripts/build-runtime.sh on Linux and on a Mac), upload pi-bolt-runtime-linux-x64.tar.gz and pi-bolt-runtime-darwin-arm64.tar.gz to a draft release of $TAG, and run this workflow again."
+            exit 1
           fi
-          gh release create "$TAG" --title "Pi-Bolt $version (Pi $pi)" --notes-file $notes --latest dist/$version/*
+          { echo "version=$version"; echo "stamp=$stamp"; echo "runtime_from=$runtime_from"; } >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: installer and site
+  build:
+    name: Build and test on ${{ matrix.name }}
+    needs: prepare
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: Linux x86-64
+            runner: ubuntu-24.04
+            platform: linux-x64
+          - name: macOS Apple silicon
+            runner: macos-15
+            platform: darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    permissions:
+      contents: write # (To download the runtimes from this tag's draft release.)
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RUNTIME_FROM: ${{ needs.prepare.outputs.runtime_from }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+      - name: Tools (Linux)
+        if: runner.os == 'Linux'
         run: |
-          git config user.name "OpenSec"
-          git config user.email "323596076+opensec-intelligence@users.noreply.github.com"
-          scripts/publish-installer.sh origin
-
-      - name: npm builds
-        # pi-bolt-linux-{x64,x64-baseline,x64-jit}: the release's .tar.xz files, which the installer downloads from npm.
+          sudo apt-get update -qq && sudo apt-get install -y -qq tmux xz-utils
+          # The x64 build's code uses what the building CPU has (AVX2, LZCNT, BMI1: what JSC's x86 back end can use).
+          for flag in avx2 bmi1 abm; do grep -qw "$flag" /proc/cpuinfo || { echo "this runner's CPU has no $flag"; exit 1; }; done
+      - name: Tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bash tmux xz
+      - name: Runtime
         run: |
-          scripts/publish-npm-builds.sh "dist/$(cat VERSION)" -- --provenance
+          if [ "$RUNTIME_FROM" = "$TAG" ]; then
+            # Uploaded to this tag's draft by the maintainer.
+            mkdir -p .work/rt .work/runtime
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "pi-bolt-runtime-${{ matrix.platform }}.tar.gz" --dir .work/rt
+            tar -C .work/rt -xzf ".work/rt/pi-bolt-runtime-${{ matrix.platform }}.tar.gz"
+            install -m 755 ".work/rt/pi-bolt-runtime-${{ matrix.platform }}/bun" .work/runtime/bun
+          else
+            scripts/fetch-runtime.sh --version "$RUNTIME_FROM"
+          fi
+          .work/runtime/bun --version
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: npm
+          GH_TOKEN: ${{ github.token }}
+      - name: Pi
+        run: scripts/prepare-pi.sh
+      - name: Build and package
+        run: scripts/package-release.sh
+      - name: Tests on every build, as unpacked from its archive
         run: |
-          cd npm && npm publish --access public --provenance
+          mkdir -p .work/unpacked
+          for archive in "dist/$VERSION/pi-bolt-${{ matrix.platform }}"*.tar.xz; do
+            tar -C .work/unpacked -xf "$archive"
+            dir=.work/unpacked/$(basename "$archive" .tar.xz)
+            "$dir/pi" --version | tee /dev/stderr | grep -q "Pi-Bolt $VERSION"
+            tests/pi/run.sh "$PWD/$dir/pi"
+          done
+          tests/aot/run.sh
+          tests/runtime/run.sh
+          scripts/build-pi.sh --stable --out out/pi-stable
+          python3 bench/e2e_tools.py --reference bun=out/pi-stable/pi --build pi-bolt=.work/unpacked/pi-bolt-${{ matrix.platform }}/pi
+          python3 bench/e2e_screen.py --reference bun=out/pi-stable/pi --build pi-bolt=.work/unpacked/pi-bolt-${{ matrix.platform }}/pi
+          python3 bench/e2e_fullscreen.py --build pi-bolt=.work/unpacked/pi-bolt-${{ matrix.platform }}/pi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            dist/${{ env.VERSION }}/*.tar.gz
+            dist/${{ env.VERSION }}/*.tar.xz
+          if-no-files-found: error
+          retention-days: 14
+
+  draft:
+    name: Draft release
+    needs: [prepare, build]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      actions: write # (To run the publish workflow.)
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      STAMP: ${{ needs.prepare.outputs.stamp }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: release
+          merge-multiple: true
+      - name: SHA256SUMS and RUNTIME_STAMP
+        working-directory: release
+        run: |
+          test "$(find . -maxdepth 1 -name "*.tar.?z" | wc -l)" -eq 12 || { ls -la; echo "expected 12 archives"; exit 1; }
+          sha256sum -- *.tar.gz *.tar.xz > SHA256SUMS
+          echo "$STAMP" > RUNTIME_STAMP
+          cat SHA256SUMS
+      - name: Draft
+        run: |
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != true ]; then
+              echo "::error::$TAG is already published; a published release is not changed (run with dry_run to test)"
+              exit 1
+            fi
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft --notes-file "docs/releases/$VERSION.md"
+            # (A signature of the SHA256SUMS replaced here no longer holds.)
+            gh release delete-asset "$TAG" SHA256SUMS.sig --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber release/*
+          else
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Pi-Bolt $VERSION" --notes-file "docs/releases/$VERSION.md" release/*
+          fi
+          sum=$(sha256sum release/SHA256SUMS | cut -c1-64)
+          if [ "$AUTO_RELEASE" = true ]; then
+            gh workflow run publish.yml --repo "$GITHUB_REPOSITORY" --ref pi-bolt -f tag="$TAG"
+            {
+              echo "### $TAG is a draft, handed to publish"
+              echo
+              echo "SHA256SUMS: \`$sum\`"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "### $TAG is a draft, ready to sign"
+            echo
+            echo "SHA256SUMS: \`$sum\`"
+            echo
+            echo '```bash'
+            echo "gh release download $TAG -R $GITHUB_REPOSITORY -p SHA256SUMS -D dist/$VERSION --clobber"
+            echo "scripts/sign-release.sh --key <your key> dist/$VERSION"
+            echo "gh release upload $TAG -R $GITHUB_REPOSITORY dist/$VERSION/SHA256SUMS.sig"
+            echo '```'
+            echo
+            echo "Then run the **publish** workflow: \`gh workflow run publish.yml -R $GITHUB_REPOSITORY -f tag=$TAG\` (it signs the draft"
+            echo "itself when the release environment has the key)."
+          } >> "$GITHUB_STEP_SUMMARY"
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          AUTO_RELEASE: ${{ vars.AUTO_RELEASE }}

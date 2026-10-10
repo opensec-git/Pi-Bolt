@@ -489,6 +489,13 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	showImages: boolean;
 	/** Whether the current result is an error. */
 	isError: boolean;
+	/**
+	 * Milliseconds the tool's execution took, from the final result; `undefined` while it runs, when it did not run, or
+	 * for results stored before durations were recorded.
+	 */
+	durationMs: number | undefined;
+	/** Horizontal padding configured by the outputPad setting. Renderers with `renderShell: "self"` apply it themselves. */
+	outputPad: number;
 }
 
 /**
@@ -546,6 +553,8 @@ export interface ToolLoadout {
 	readonly registered: readonly AgentTool[];
 	getExposure(name: string): ToolExposure;
 	getNamespace(name: string): ToolNamespace | undefined;
+	/** A tool's `promptGuidelines`. Hidden declarations leave them out of the system prompt. */
+	getPromptGuidelines(name: string): readonly string[];
 }
 
 /** Changes {@link ToolDefinition.prepareLoadout} makes to what the model sees. */
@@ -995,6 +1004,8 @@ export interface AgentBeforeSettleEvent extends BoundaryState {
 /** Fired after an agent run has fully settled and no automatic retry, compaction, or queued continuation will run. */
 export interface AgentSettledEvent {
 	type: "agent_settled";
+	/** Whether the run ended because it was aborted, for example with Escape. */
+	aborted: boolean;
 }
 
 export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom";
@@ -1079,6 +1090,8 @@ export interface ToolExecutionEndEvent {
 	toolName: string;
 	result: any;
 	isError: boolean;
+	/** Milliseconds `execute()` took, measured with a monotonic clock; absent when the tool did not run. */
+	durationMs?: number;
 	/** Set when another tool (for example a codemode script) made this call. */
 	parentToolCallId?: string;
 }

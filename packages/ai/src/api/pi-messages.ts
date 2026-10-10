@@ -27,7 +27,7 @@ import type {
 import { appendAssistantMessageDiagnostic, createAssistantMessageDiagnostic } from "../utils/diagnostics.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord, providerHeadersToRecord } from "../utils/headers.ts";
-import { parseStreamingJson } from "../utils/json-parse.ts";
+import { parseStreamingJson, parseStreamingJsonWhileStreaming } from "../utils/json-parse.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 
 export interface PiMessagesOptions extends StreamOptions {
@@ -193,6 +193,11 @@ function createEventConverter(model: Model<"pi-messages">) {
 	return (event: PiMessagesEvent): AssistantMessageEvent => {
 		switch (event.type) {
 			case "done":
+				// A tool call without its toolcall_end keeps all the arguments that arrived (they are parsed only as they
+				// grow while streaming).
+				for (const [contentIndex, json] of toolJson) {
+					(partial.content[contentIndex] as ToolCall).arguments = parseStreamingJson<ToolCall["arguments"]>(json);
+				}
 				Object.assign(partial, {
 					stopReason: event.reason,
 					usage: event.usage,
@@ -204,6 +209,10 @@ function createEventConverter(model: Model<"pi-messages">) {
 				appendRewriteDiagnostic(partial, event.rewrite);
 				return { type: "done", reason: event.reason, message: partial };
 			case "error":
+				// Tool calls cut off mid-stream keep all the arguments that arrived, as before.
+				for (const [contentIndex, json] of toolJson) {
+					(partial.content[contentIndex] as ToolCall).arguments = parseStreamingJson<ToolCall["arguments"]>(json);
+				}
 				Object.assign(partial, {
 					stopReason: event.reason,
 					usage: event.usage,
@@ -254,8 +263,9 @@ function createEventConverter(model: Model<"pi-messages">) {
 			case "toolcall_delta": {
 				const json = `${toolJson.get(event.contentIndex) ?? ""}${event.delta}`;
 				toolJson.set(event.contentIndex, json);
-				(partial.content[event.contentIndex] as ToolCall).arguments =
-					parseStreamingJson<ToolCall["arguments"]>(json);
+				// toolcall_end carries the final arguments; parsing all that arrived on every delta was quadratic.
+				const block = partial.content[event.contentIndex] as ToolCall;
+				block.arguments = parseStreamingJsonWhileStreaming<ToolCall["arguments"]>(block, json, block.arguments);
 				break;
 			}
 			case "toolcall_end":

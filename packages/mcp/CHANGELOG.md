@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.1.0] - 2026-10-07
+
+### Added
+
+- Added a `signal` option to `authorizeMcp()`, `registerClient()`, the token request functions, and the discovery functions, which aborts their requests. An aborted refresh no longer falls back to a new authorization ([#10565](https://github.com/earendil-works/pi/issues/10565))
+
+### Fixed
+
+- Fixed `StreamableHttpTransport.close()` calling `AuthProvider.token()`, which could refresh tokens over the network before the session DELETE and delay closing; the DELETE now reuses the token of the last request ([#10565](https://github.com/earendil-works/pi/issues/10565))
+
+## [1.0.4] - 2026-10-05
+
+### Fixed
+
+- Fixed dynamic client registration failing on OpenID Connect authorization servers with `invalid_redirect_uri` for loopback redirect URIs. `registerClient()` now sends `application_type` (MCP SEP-837), derived from `redirect_uris` when `OAuthClientMetadata.application_type` is not set: `native` for loopback hosts and custom schemes, otherwise `web` ([#10493](https://github.com/earendil-works/pi/issues/10493))
+
 ## [1.0.3] - 2026-10-05
 
 ## [1.0.2] - 2026-10-04

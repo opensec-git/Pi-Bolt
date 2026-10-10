@@ -204,7 +204,7 @@
         <div class="lane bolt" data-ms="45"><span class="who">Pi-Bolt</span><span class="track"><span class="fill"></span></span><span class="ms"><span class="ready">45 ms</span></span></div>
         <div class="lane" data-ms="128"><span class="who">Pi on Bun 1.4.2</span><span class="track"><span class="fill"></span></span><span class="ms"><span class="ready">128 ms</span></span></div>
         <div class="lane" data-ms="303"><span class="who">Pi on Node 22</span><span class="track"><span class="fill"></span></span><span class="ms"><span class="ready">303 ms</span></span></div>
-        <p class="race-foot">Pi 1.0.0, from launch to an interactive prompt, measured on an AMD EPYC 7B13 server and replayed ten times
+        <p class="race-foot">Pi-Bolt against Pi 1.0.0 on Bun and Node, from launch to an interactive prompt, measured on an AMD EPYC 7B13 server and replayed ten times
           slower. On your machine the times differ; the order does not.</p>
       </div>
     </div>
@@ -241,8 +241,9 @@
   <section id="benchmarks" aria-labelledby="bench-title">
     <div class="wrap">
       <h2 class="sec" id="bench-title">Benchmarks</h2>
-      <p class="sec-lede">The same Pi 1.0.0 run three ways: compiled by Pi-Bolt, as released on stock Bun, and from its npm package
-        on Node. Medians of fresh processes, interleaved across the runtimes. Lower is better.</p>
+      <p class="sec-lede">Pi run three ways: compiled by Pi-Bolt (0.7.0 measures the same as the 0.6.1 shown), and Pi 1.0.0 as
+        released on stock Bun and from its npm package on Node. Medians of fresh processes, interleaved across the runtimes. Lower
+        is better.</p>
       <div class="platforms" role="group" aria-label="Platform">
         <button type="button" data-platform="linux" aria-pressed="true">Linux x86-64</button>
         <button type="button" data-platform="mac" aria-pressed="false">macOS on Apple silicon</button>
@@ -344,7 +345,7 @@
   document.getElementById("replay").addEventListener("click", race);
   race();
 
-  // Benchmarks, from docs/BENCHMARKS.md (Pi-Bolt 0.6.1, Pi 1.0.0). [Pi-Bolt, Bun, Node]
+  // Benchmarks, from docs/BENCHMARKS.md (Pi-Bolt 0.6.1, which 0.7.0 equals; stock Pi 1.0.0). [Pi-Bolt, Bun, Node]
   var data = {
     linux: {
       runtimes: ["Pi-Bolt", "Bun 1.4.2", "Node 22"],

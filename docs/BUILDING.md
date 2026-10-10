@@ -50,8 +50,8 @@ scripts/build-runtime.sh            # release build with LTO -> .work/runtime/bu
 
 `fetch-sources.sh` reads [`sources.json`](../sources.json):
 
-- the upstream repositories and commits: WebKit from the `claude/sound-types-aot` branch of
-  [oven-sh/WebKit#743](https://github.com/oven-sh/WebKit/pull/743), and Bun from `main`;
+- the upstream repositories and commits: WebKit from [oven-sh/WebKit#743](https://github.com/oven-sh/WebKit/pull/743), and Bun
+  from `main`;
 - Pi-Bolt's changes to each, one patch apiece: [`patches/webkit.patch`](../patches/webkit.patch) and
   [`patches/bun.patch`](../patches/bun.patch), applied with `git am`.
 
@@ -119,7 +119,7 @@ A build without a profile works, with somewhat slower startup. `build-pi.sh` war
 
 ## Training profiles
 
-A profile ([`profiles/pi-1.0.3`](../profiles/pi-1.0.3)) has two files, recorded by running a plain bytecode build of Pi through
+A profile ([`profiles/pi-1.1.0`](../profiles/pi-1.1.0)) has two files, recorded by running a plain bytecode build of Pi through
 two scripted interactive sessions (`scripts/lib/train_session.py`). The first is a plain start and a few plain turns, and gives
 the order. The second is there for the regular expressions: an answer that uses every kind of Markdown and a code block in
 every language Pi highlights (`scripts/lib/training.md`), tool calls whose results the TUI renders, and the editor's

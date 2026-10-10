@@ -281,6 +281,13 @@ Context derivation:
    fork cut or at an interrupted tail. Drop tool results with no preceding call.
 9. Exclude model-less entries and assistant messages with `aborted`, `error`, or
    `deferred` stop reasons from future provider requests.
+10. Move a system message that only user messages precede to the front. A
+    run's input is committed before generation renders the system prompt, so a
+    transcript, or the range after a compaction or reset, otherwise starts with
+    the input. Providers treat only a leading system message as the initial
+    prompt and tool set; without one, a later tool change rewrites the
+    request's tool list and invalidates the whole prompt cache. Stored entries
+    and `contributions` keep the committed order.
 
 Views carry raw active entries. UI reduction and model-context reduction are
 separate consumers. Older stored history is available through the owning
@@ -352,6 +359,7 @@ type HarnessOptions<Tool extends ToolRegistration = ToolRegistration> = {
   ) => ExecutionEnv | undefined | Promise<ExecutionEnv | undefined>;
   /** Runs in every commit that creates or forks a conversation, after the built-in creation hook (below). */
   readonly conversationCreated?: (tx: Tx, conversation: ConversationRecord) => void | Promise<void>;
+  /** Wall clock for sleeps, retries, message timestamps, and task lifecycle times. Default `Date.now`. */
   readonly now?: () => number;
   readonly onReport?: (error: unknown) => void;
 };
@@ -404,6 +412,8 @@ type HarnessSettings = {
   readonly toolExecution?: ToolExecutionMode;
   readonly steeringMode?: QueueMode;
   readonly followUpMode?: QueueMode;
+  /** How long an idle conversation keeps its last context read in memory; busy ones always keep it. */
+  readonly contextRetentionMs?: number;
 };
 
 /** Resolved: every field over its built-in default, object fields merged. */
@@ -415,6 +425,7 @@ type Settings = {
   readonly toolExecution: ToolExecutionMode; // "parallel"
   readonly steeringMode: QueueMode; // "one-at-a-time"
   readonly followUpMode: QueueMode; // "one-at-a-time"
+  readonly contextRetentionMs: number; // 600000
 };
 
 /** Stored choices of one conversation; names, not objects. Unset fields follow the host. */
@@ -539,7 +550,8 @@ interface Conversation {
     change: (tx: Tx) => T | Promise<T>,
     context: Context,
   ): Promise<T>;
-  context(context: Context): Promise<ContextView>;
+  /** With `at`, the context as of that visible entry, as `fork(at)` would start with. */
+  context(context: Context, options?: { readonly at?: EntryId }): Promise<ContextView>;
   entries(
     query: Omit<EntryQuery, "conversationId">,
     limit: number,
@@ -1630,6 +1642,10 @@ type TaskRecord<I, S, R> = {
   readonly owner?: TaskId;
   readonly background: boolean;
   readonly abortRequested: boolean;
+  /** Wall clock at the first change to `running`; kept through waits and recovery. */
+  readonly startedAt?: number;
+  /** Wall clock at the change to `terminal`. */
+  readonly endedAt?: number;
 } & (
   | {
       readonly state: Extract<TaskState<S, R>, { status: "pending" | "running" | "waiting" }>;
@@ -1697,7 +1713,7 @@ interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver, Docum
   entry(id: EntryId, context: Context): Promise<EntryRecord | undefined>;
   entry<D extends JsonValue>(token: Entry<D>, id: EntryId, context: Context): Promise<TypedEntry<D> | undefined>;
   /** Committed raw active transcript and model context, optionally cut off at `at`. */
-  context(conversationId: ConversationId, context: Context, at?: EntryId): Promise<ContextView>;
+  context(conversationId: ConversationId, context: Context, options?: { readonly at?: EntryId }): Promise<ContextView>;
   /** The Harness clock. */
   now(): number;
   /** Forward a non-fatal failure to `HarnessOptions.onReport`. */
@@ -1793,8 +1809,15 @@ committed documents, for example to supply `PromptInput.read` (section 7.4).
 `getTask()` and `entry()` read committed records with one lookup each; `waitForTask()` waits for a terminal receipt,
 for example a child task created by a tool.
 `context()` captures its bounds on the Session line and derives the view from
-immutable entries off the line, like `Conversation.context()`. Like every runtime
-operation, these reject after the invocation ends.
+immutable entries off the line, like `Conversation.context()`. The scheduler keeps
+each conversation's last range and view in memory: a later read by any of its tasks
+with the same head marker scans and derives only the entries after that range's tail.
+A conversation keeps them while busy and for `contextRetentionMs` once idle.
+Expiry is checked on task changes and by one unreferenced timer, which never keeps
+the process alive; where timers cannot be unreferenced, as in Cloudflare Workers,
+only task changes check it. Kept entries are frozen and each read returns its own
+view arrays. Like every runtime operation, these
+reject after the invocation ends.
 
 Reservation durably changes `pending`, or `waiting` once it may resume, to
 `running`. One invocation runs phase
@@ -1886,6 +1909,17 @@ items 1 and 3 and its waiters follow in the final commit.
 
 The execution checkpoint and memos disappear from the terminal representation.
 Terminal records remain queryable for waits, waiters, inspection, and reopen.
+
+The Session stamps lifecycle times on task records with the clock it was opened
+with (`HarnessOptions.now` for a Harness, `Date.now` by default): `startedAt` at
+the first change to `running`, `endedAt` at the change to `terminal`. Once set,
+each carries over from the replaced record, so `startedAt` survives waits, a
+`completing` hold, and reopen, and the span between them includes those. A task
+that never ran, such as one orphaned before its first reservation, has only
+`endedAt`; records written by earlier versions have neither, and a task live
+across the upgrade gets `startedAt` at its next run. `inspect()` shows
+them on each live task's record. They are lifecycle times, not execution time:
+a tool's execution time is its result's `durationMs` (section 7.3).
 There are no free-standing task dependencies: ordering comes from a task waiting
 on other tasks (section 5.5). An abort mark lets pending work reach its abort handler,
 or its `orphaned` settlement when its definition is unavailable.
@@ -2561,6 +2595,8 @@ type HookResult<T> = T | undefined | Promise<T | undefined>;
 interface HookApi extends DocumentReader {
   readonly taskId: TaskId;
   readonly conversationId: ConversationId;
+  /** `HarnessOptions.models`. */
+  readonly models: Models;
   memo<T extends JsonValue>(name: string, context: Context): Promise<T | undefined>;
   memo<T extends JsonValue>(name: string, candidate: T, context: Context): Promise<T>;
 }
@@ -2693,6 +2729,8 @@ interface ToolExecutionApi<TDetails extends JsonValue = JsonValue> extends Docum
   readonly registry: RegistrySnapshot;
   /** The calling conversation's agent, as the tool task's phase resolved it. */
   agent(context: Context): Promise<Agent>;
+  /** `HarnessOptions.models`: the catalog, credentials, and request transforms generation uses. */
+  readonly models: Models;
   /** Built by `HarnessOptions.env` for this call. */
   readonly env: ExecutionEnv | undefined;
   output(chunk: string | Uint8Array): void;
@@ -3591,9 +3629,12 @@ because the terminal record keeps it; the call is read from the assistant entry.
   diagnostics, and ends `failed` with `{ entryId }`.
 - The result commit bounds the content, appends the diagnostics block (section
   7.3), appends one `pi.tool-result` entry with `model: [{ role: "toolResult",
-  toolCallId, toolName, content, details, isError, timestamp }]` and
+  toolCallId, toolName, content, details, isError, durationMs, timestamp }]` and
   `data: { diagnostics }`, marks the slot `done`, and
   completes with `{ entryId, control }`. An `isError` result still completes.
+  `durationMs` is how long `execute()` took in this attempt, measured with a
+  monotonic clock, including when it threw; results of calls that did not
+  execute, and `interrupted` or `aborted` results, have none.
 - A throw from `execute()`, or from `HarnessOptions.env` building its
   environment, becomes a `tool_error` result and the task ends
   `failed` with `{ entryId }`; once the invocation is signalled it propagates
@@ -4288,15 +4329,20 @@ type Page<T, C> = {
 
 type Cursor = Readonly<Record<string, JsonValue>>;
 
+/** ID order: `ascending` is oldest first, `descending` newest first. */
+type ScanOrder = "ascending" | "descending";
+
 type ConversationQuery = {
   readonly ownerConversationId?: ConversationId;
   readonly ownerTaskId?: TaskId;
+  readonly order?: ScanOrder; // default ascending
 };
 
 type EntryQuery = {
   readonly conversationId: ConversationId;
   readonly minEntryId?: EntryId; // inclusive
   readonly maxEntryId?: EntryId; // inclusive
+  readonly order?: ScanOrder; // default descending
 };
 
 type TaskQuery = {
@@ -4305,11 +4351,13 @@ type TaskQuery = {
   readonly status?: "pending" | "running" | "waiting" | "completing" | "terminal";
   readonly abortRequested?: boolean;
   readonly background?: boolean;
+  readonly order?: ScanOrder; // default ascending
 };
 
 type SubmissionQuery = {
   readonly conversationId?: ConversationId;
   readonly status?: SubmissionRecord["status"];
+  readonly order?: ScanOrder; // default ascending
 };
 
 type DocumentPoint = Seq | "current";
@@ -4409,15 +4457,22 @@ not create, change, or retire a selected source. Later source changes,
 reclamation, retirement, or backend reopen cannot affect the child.
 
 Cursors are backend-owned JSON objects. Callers only round-trip them to the same
-scan on the same storage; cross-storage or cross-query use is unsupported. The
+scan on the same storage; cross-storage or cross-query use is unsupported.
+Conversation, entry, task, and submission scans run in their query's `order`,
+by ID. A cursor carries the order of the scan that returned it: a scan given a
+cursor continues in that order whether its query repeats `order` or omits it,
+and rejects a query that asks for the other order. Storage implementations
+must honor `order`; one that ignored it would return pages in the wrong
+direction without an error. The
 Session owns the mutation line, so storage implementations do not add a second
 caller-facing commit mutex. Each backend still makes one admitted batch atomic.
 
 `findLatestHeadMarker()` returns the newest visible entry carrying `head` at or
 below its optional inclusive cutoff. The returned entry is the marker; its
 `head` value is the actual lower bound for context. `scanEntries()` pages the
-inclusive ID range in newest-first order while applying every conversation
-ancestry cap. With no bounds it pages complete visible history. To read context
+inclusive ID range, newest first by default, while applying every conversation
+ancestry cap; oldest first, it reads the root's segment first and then each
+fork's. With no bounds it pages complete visible history. To read context
 through entry `E`, find the marker at or before `E`, then scan from
 `marker?.head` through `E`. For current context the upper bound is omitted.
 Conversation owner filters are indexed and conjunctive. They support ownership

@@ -1,6 +1,0 @@
-0.5.1 start: own 33.5 MB
-0.5.1 after 0 s idle: own 159 MB
-0.5.1 after 15 s idle: own 112 MB
-0.5.2 start: own 33.5 MB
-0.5.2 after 0 s idle: own 72 MB
-0.5.2 after 15 s idle: own 34 MB

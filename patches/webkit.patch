@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: OpenSec <contactus@opensec.in>
-Date: Mon, 5 Oct 2026 19:25:56 +0530
+Date: Sat, 10 Oct 2026 13:32:04 +0530
 Subject: [PATCH] Pi-Bolt: JavaScriptCore's ahead-of-time compiler
 
 JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
@@ -18,8 +18,11 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
   expressions.
 - Intl on Darwin: the plain language tags of ICU's lists of locales made without ICU.
 ---
+ .../array-length-increment-large.js           |   15 +
+ .../array-set-length-grow-within-vector.js    |   73 +
+ ...ay-float-load-clobbers-fp-temp-register.js |   38 +
  Source/JavaScriptCore/CMakeLists.txt          |    7 +
- Source/JavaScriptCore/aot/AOTCompiler.cpp     |  169 +-
+ Source/JavaScriptCore/aot/AOTCompiler.cpp     |  180 +-
  Source/JavaScriptCore/aot/AOTCompiler.h       |    3 +-
  Source/JavaScriptCore/aot/AOTConvention.h     |   89 +-
  Source/JavaScriptCore/aot/AOTEmitter.cpp      |    5 +-
@@ -59,6 +62,7 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  .../bytecode/UnlinkedGlobalCodeBlock.h        |    5 +-
  .../dfg/DFGAbstractInterpreterInlines.h       |    6 +-
  Source/JavaScriptCore/ffi/FFICallHost.cpp     |    4 +-
+ Source/JavaScriptCore/ftl/FTLLowerDFGToB3.cpp |   38 +
  Source/JavaScriptCore/heap/StaticHeap.cpp     |  423 +-
  Source/JavaScriptCore/heap/StaticHeap.h       |   56 +-
  .../heap/StructureAlignedMemoryAllocator.cpp  |    5 +-
@@ -74,6 +78,7 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  .../runtime/FunctionRareData.cpp              |    5 +
  .../JavaScriptCore/runtime/FunctionRareData.h |    2 +-
  Source/JavaScriptCore/runtime/IntlObject.cpp  |   58 +-
+ Source/JavaScriptCore/runtime/JSArray.cpp     |    1 +
  .../runtime/MegamorphicCache.cpp              |    1 +
  Source/JavaScriptCore/runtime/OptionsList.h   |   13 +
  Source/JavaScriptCore/runtime/PrototypeKey.h  |    3 +-
@@ -85,27 +90,189 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
  Source/JavaScriptCore/runtime/StackFrame.cpp  |   11 +-
  .../runtime/StringPrototype.cpp               |   14 +
  Source/JavaScriptCore/runtime/VM.cpp          |   50 +-
+ .../runtime/WaiterListManager.cpp             |   23 +-
+ Source/JavaScriptCore/shell/CMakeLists.txt    |    6 +-
+ .../shell/ExternalMimallocShims.cpp           |   39 +
  Source/JavaScriptCore/yarr/YarrJIT.cpp        |  124 +-
  Source/JavaScriptCore/yarr/YarrJIT.h          |   23 +-
  Source/JavaScriptCore/yarr/YarrPattern.cpp    |  114 +
  Source/JavaScriptCore/yarr/YarrPattern.h      |    3 +
+ Source/WTF/wtf/AutomaticThread.cpp            |   57 +-
+ Source/WTF/wtf/AutomaticThread.h              |    1 +
  Source/WTF/wtf/BumpPointerAllocator.h         |    8 +-
  Source/WTF/wtf/CMakeLists.txt                 |    1 +
+ Source/WTF/wtf/FastMalloc.cpp                 |    5 +
+ Source/WTF/wtf/FastMalloc.h                   |    2 +
  Source/WTF/wtf/FunctionPtr.h                  |    7 +
  Source/WTF/wtf/HashFunctions.h                |   21 +-
  Source/WTF/wtf/Hasher.h                       |    4 +-
+ Source/WTF/wtf/RandomDevice.cpp               |   39 +-
+ Source/WTF/wtf/RandomDevice.h                 |    4 +-
  Source/WTF/wtf/SysVCall.h                     |   49 +
  Source/WTF/wtf/text/AtomStringTable.h         |   24 +-
- Source/bmalloc/bmalloc/StaticRegion.cpp       |  422 +-
+ Source/bmalloc/CMakeLists.txt                 |    4 +
+ Source/bmalloc/bmalloc/BPlatform.h            |    7 +
+ Source/bmalloc/bmalloc/CryptoRandom.cpp       |   60 +-
+ Source/bmalloc/bmalloc/StaticRegion.cpp       |  426 +-
  Source/bmalloc/bmalloc/StaticRegion.h         |   94 +-
+ Source/bmalloc/bmalloc/bmalloc.cpp            |   17 +
+ Source/bmalloc/bmalloc/bmalloc.h              |    5 +
  Source/cmake/WebKitCompilerFlags.cmake        |    4 +-
  Source/cmake/WebKitMacros.cmake               |   28 +-
  build-icu.ps1                                 |   49 +-
- 83 files changed, 7857 insertions(+), 361 deletions(-)
+ 102 files changed, 8278 insertions(+), 389 deletions(-)
+ create mode 100644 JSTests/microbenchmarks/array-length-increment-large.js
+ create mode 100644 JSTests/stress/array-set-length-grow-within-vector.js
+ create mode 100644 JSTests/stress/ftl-get-by-val-ic-typed-array-float-load-clobbers-fp-temp-register.js
  create mode 100644 Source/JavaScriptCore/aot/AOTStubsX86_64.cpp
  create mode 100644 Source/JavaScriptCore/runtime/ReportableSitesOfFunction.h
+ create mode 100644 Source/JavaScriptCore/shell/ExternalMimallocShims.cpp
  create mode 100644 Source/WTF/wtf/SysVCall.h
 
+diff --git a/JSTests/microbenchmarks/array-length-increment-large.js b/JSTests/microbenchmarks/array-length-increment-large.js
+new file mode 100644
+index 0000000000..ebed95e18a
+--- /dev/null
++++ b/JSTests/microbenchmarks/array-length-increment-large.js
+@@ -0,0 +1,15 @@
++function test(count) {
++    const array = [];
++    for (let i = 0; i < count; i++) {
++        ++array.length;
++        array[i] = i;
++    }
++    return array;
++}
++noInline(test);
++
++for (let i = 0; i < 3; i++) {
++    const array = test(150000);
++    if (array.length !== 150000 || array[149999] !== 149999)
++        throw new Error("bad result");
++}
+diff --git a/JSTests/stress/array-set-length-grow-within-vector.js b/JSTests/stress/array-set-length-grow-within-vector.js
+new file mode 100644
+index 0000000000..5abccbdb84
+--- /dev/null
++++ b/JSTests/stress/array-set-length-grow-within-vector.js
+@@ -0,0 +1,73 @@
++function shouldBe(actual, expected) {
++    if (actual !== expected)
++        throw new Error(`expected ${expected} but got ${actual}`);
++}
++
++function incrementLength(count, makeValue) {
++    const array = [];
++    for (let i = 0; i < count; i++) {
++        ++array.length;
++        array[i] = makeValue(i);
++    }
++    return array;
++}
++
++for (const makeValue of [i => i, i => i + 0.5, i => "v" + i]) {
++    const array = incrementLength(150000, makeValue);
++    shouldBe(array.length, 150000);
++    for (const i of [0, 1, 99999, 100000, 100001, 149999])
++        shouldBe(array[i], makeValue(i));
++    shouldBe(array[150000], undefined);
++}
++
++{
++    const array = incrementLength(150000, i => i);
++    array.length = 120000;
++    shouldBe(array.length, 120000);
++    shouldBe(array[119999], 119999);
++    shouldBe(array[120000], undefined);
++    shouldBe(120000 in array, false);
++
++    array.length = 140000;
++    shouldBe(array.length, 140000);
++    shouldBe(array[119999], 119999);
++    for (const i of [120000, 130000, 139999]) {
++        shouldBe(array[i], undefined);
++        shouldBe(i in array, false);
++    }
++    array[139999] = "last";
++    shouldBe(array[139999], "last");
++    shouldBe(array.indexOf("last"), 139999);
++}
++
++{
++    const array = [1, 2, 3];
++    array.length = 110000;
++    shouldBe(array.length, 110000);
++    shouldBe(array[2], 3);
++    shouldBe(3 in array, false);
++    shouldBe(109999 in array, false);
++    ++array.length;
++    shouldBe(array.length, 110001);
++    array[110000] = 4;
++    shouldBe(array[110000], 4);
++    shouldBe(Object.keys(array).length, 4);
++    array.length = 2;
++    shouldBe(array.length, 2);
++    shouldBe(array[2], undefined);
++    shouldBe(Object.keys(array).length, 2);
++}
++
++{
++    const array = incrementLength(100000, i => i);
++    array.length = 3000000;
++    shouldBe(array.length, 3000000);
++    shouldBe(array[99999], 99999);
++    shouldBe(2999999 in array, false);
++    array[2999999] = 1;
++    shouldBe(array[2999999], 1);
++    array.length = 100001;
++    shouldBe(array.length, 100001);
++    shouldBe(array[99999], 99999);
++    shouldBe(array[100000], undefined);
++}
+diff --git a/JSTests/stress/ftl-get-by-val-ic-typed-array-float-load-clobbers-fp-temp-register.js b/JSTests/stress/ftl-get-by-val-ic-typed-array-float-load-clobbers-fp-temp-register.js
+new file mode 100644
+index 0000000000..269bde9aa5
+--- /dev/null
++++ b/JSTests/stress/ftl-get-by-val-ic-typed-array-float-load-clobbers-fp-temp-register.js
+@@ -0,0 +1,38 @@
++//@ runDefault("--useConcurrentJIT=0")
++// The IndexedTypedArrayFloat{16,32,64}Load inline cache stubs call AssemblyHelpers::purifyNaN(),
++// which materializes PNaN in MacroAssembler::fpTempRegister (xmm15 on x86-64, q31 on ARM64).
++// FTL lets Air allocate that register, so a double that is live across a generic GetByVal
++// patchpoint could be silently replaced with NaN once the IC attached a typed-array load case.
++
++function f(arr, idx, d) {
++    // Enough doubles live across the access that Air has to use every FP register, including fpTempRegister.
++    const a0 = d + 0.5, a1 = d + 1.5, a2 = d + 2.5, a3 = d + 3.5, a4 = d + 4.5, a5 = d + 5.5, a6 = d + 6.5, a7 = d + 7.5;
++    const b0 = d * 0.5, b1 = d * 1.5, b2 = d * 2.5, b3 = d * 3.5, b4 = d * 4.5, b5 = d * 5.5, b6 = d * 6.5, b7 = d * 7.5;
++    const x = arr[idx];
++    return x + a0 * b0 + a1 * b1 + a2 * b2 + a3 * b3 + a4 * b4 + a5 * b5 + a6 * b6 + a7 * b7 + (a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7) - (b0 + b1 + b2 + b3 + b4 + b5 + b6 + b7);
++}
++noInline(f);
++
++function expected(idx, d) {
++    const a0 = d + 0.5, a1 = d + 1.5, a2 = d + 2.5, a3 = d + 3.5, a4 = d + 4.5, a5 = d + 5.5, a6 = d + 6.5, a7 = d + 7.5;
++    const b0 = d * 0.5, b1 = d * 1.5, b2 = d * 2.5, b3 = d * 3.5, b4 = d * 4.5, b5 = d * 5.5, b6 = d * 6.5, b7 = d * 7.5;
++    return (idx + 0.25) + a0 * b0 + a1 * b1 + a2 * b2 + a3 * b3 + a4 * b4 + a5 * b5 + a6 * b6 + a7 * b7 + (a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7) - (b0 + b1 + b2 + b3 + b4 + b5 + b6 + b7);
++}
++noInline(expected);
++noFTL(expected);
++
++for (const TypedArray of [Float64Array, Float32Array, Float16Array]) {
++    const ta = new TypedArray(8);
++    for (let i = 0; i < 8; i++)
++        ta[i] = i + 0.25;
++    const other = { 0: 0.25, 1: 1.25, 2: 2.25, 3: 3.25, 4: 4.25, 5: 5.25, 6: 6.25, 7: 7.25 };
++    for (let i = 0; i < 200000; i++) {
++        const arr = (i & 1023) === 0 ? other : ta; // keep the GetByVal generic so it goes through an IC
++        const idx = i & 7;
++        const d = (i % 97) * 0.25;
++        const r = f(arr, idx, d);
++        const e = expected(idx, d);
++        if (r !== e)
++            throw new Error(TypedArray.name + ": i=" + i + " got " + r + " expected " + e);
++    }
++}
 diff --git a/Source/JavaScriptCore/CMakeLists.txt b/Source/JavaScriptCore/CMakeLists.txt
 index 79c1f1a3cb..e00c2fdf0b 100644
 --- a/Source/JavaScriptCore/CMakeLists.txt
@@ -132,15 +299,17 @@ index 79c1f1a3cb..e00c2fdf0b 100644
      runtime/CallData.h
      runtime/CellSize.h
 diff --git a/Source/JavaScriptCore/aot/AOTCompiler.cpp b/Source/JavaScriptCore/aot/AOTCompiler.cpp
-index 944a17bfb4..63b7192fcb 100644
+index 944a17bfb4..3e0db228be 100644
 --- a/Source/JavaScriptCore/aot/AOTCompiler.cpp
 +++ b/Source/JavaScriptCore/aot/AOTCompiler.cpp
-@@ -32,8 +32,76 @@
+@@ -32,8 +32,87 @@
  #include <wtf/StringPrintStream.h>
  #include <wtf/text/StringHash.h>
  
 +#if OS(DARWIN)
++#include <bmalloc/StaticRegion.h>
 +#include <dlfcn.h>
++#include <libproc.h>
 +#include <mach/mach.h>
 +#include <mach/mach_vm.h>
 +#elif OS(WINDOWS)
@@ -196,7 +365,16 @@ index 944a17bfb4..63b7192fcb 100644
 +        mach_port_deallocate(mach_task_self(), object);
 +    // A reservation that nothing can be read from (the system keeps hundreds of gigabytes of them) holds nothing to point at: what
 +    // is used of it is a region of its own.
-+    return address >= start && address - start < size && info.protection != VM_PROT_NONE;
++    if (!(address >= start && address - start < size && info.protection != VM_PROT_NONE))
++        return false;
++    // The image is built without ASLR, so this process's own memory (malloc's zones, the heap of the VM that builds) lies just
++    // above the executable, at 4 to 8 GB, where numbers made of others land (4294967295 + 2147483648): there only what is mapped
++    // from a file (the executable, a library) or is the static region is taken for an address. (On Linux that memory is far
++    // from such numbers, and every mapping counts.)
++    if (bmalloc::StaticRegion::contains(reinterpret_cast<const void*>(address)))
++        return true;
++    char path[PATH_MAX];
++    return proc_regionfilename(getpid(), address, path, sizeof(path)) > 0;
 +#elif OS(WINDOWS)
 +    // Committed memory that can be read; as on Darwin, a reservation holds nothing to point at.
 +    MEMORY_BASIC_INFORMATION info;
@@ -212,7 +390,7 @@ index 944a17bfb4..63b7192fcb 100644
  static ScopeChain unknownScopeChain()
  {
      ScopeChain chain;
-@@ -131,7 +199,7 @@ bool hasNoFrame(const Graph& graph, B3::Air::Code& code)
+@@ -131,7 +210,7 @@ bool hasNoFrame(const Graph& graph, B3::Air::Code& code)
          for (B3::Air::BasicBlock* block : code) {
              for (B3::Air::Inst& inst : *block) {
                  if (inst.kind.opcode == B3::Air::Patch)
@@ -221,7 +399,7 @@ index 944a17bfb4..63b7192fcb 100644
                  else
                      found |= inst.kind.opcode == B3::Air::ColdCCall;
              }
-@@ -141,12 +209,48 @@ bool hasNoFrame(const Graph& graph, B3::Air::Code& code)
+@@ -141,12 +220,48 @@ bool hasNoFrame(const Graph& graph, B3::Air::Code& code)
      return !*graph.callsAreLeft;
  }
  
@@ -271,7 +449,7 @@ index 944a17bfb4..63b7192fcb 100644
      jit.emitFunctionEpilogue();
  }
  
-@@ -154,13 +258,32 @@ void emitRestoreBeforeLeaving(CCallHelpers& jit, const Graph& graph, B3::Air::Co
+@@ -154,13 +269,32 @@ void emitRestoreBeforeLeaving(CCallHelpers& jit, const Graph& graph, B3::Air::Co
  {
      RELEASE_ASSERT(!hasNoFrame(graph, code));
      AllowMacroScratchRegisterUsage allowScratch(jit);
@@ -305,7 +483,7 @@ index 944a17bfb4..63b7192fcb 100644
      for (BasicBlock* block : graph.m_rpo) {
          if (!block->isInLoop)
              continue;
-@@ -168,6 +291,7 @@ static bool loopsWillDoWhole(Graph& graph)
+@@ -168,6 +302,7 @@ static bool loopsWillDoWhole(Graph& graph)
          for (Node* node : block->nodes) {
              if (node->kind != NodeKind::Bytecode || !node->instruction)
                  continue;
@@ -313,7 +491,7 @@ index 944a17bfb4..63b7192fcb 100644
              switch (node->opcode) {
              case op_get_by_val:
                  if (!node->use(node->as<OpGetByVal>().m_base)->type || !isSubtype(node->use(node->as<OpGetByVal>().m_base)->type, TArray) || !isSubtype(node->use(node->as<OpGetByVal>().m_property)->type, TNumber))
-@@ -195,12 +319,17 @@ static bool loopsWillDoWhole(Graph& graph)
+@@ -195,12 +330,17 @@ static bool loopsWillDoWhole(Graph& graph)
              case op_get_from_scope:
                  if (node->as<OpGetFromScope>().m_getPutInfo.resolveType() != ResolvedClosureVar)
                      return false;
@@ -331,7 +509,7 @@ index 944a17bfb4..63b7192fcb 100644
      return hasLoop;
  }
  
-@@ -224,6 +353,17 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
+@@ -224,6 +364,17 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
          graph.fail("compiled for the debugger or a profiler"_s);
          return declined();
      }
@@ -349,7 +527,7 @@ index 944a17bfb4..63b7192fcb 100644
      if (!parseBytecode(graph))
          return declined();
      if (program)
-@@ -268,7 +408,7 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
+@@ -268,7 +419,7 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
              continue;
          uint64_t bits = value->asInt64();
          // (But for where structures are, which is the same in every process: structureIDBaseOfImages.)
@@ -358,7 +536,7 @@ index 944a17bfb4..63b7192fcb 100644
              graph.fail("an address in the code"_s);
              return declined();
          }
-@@ -287,7 +427,7 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
+@@ -287,7 +438,7 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
              stubCalls.call(jit, Stub::Prologue, code.frameSize(), CallSite { });
          else if (code.frameSize())
              jit.subPtr(GPRInfo::callFrameRegister, CCallHelpers::TrustedImm32(code.frameSize()), CCallHelpers::stackPointerRegister);
@@ -367,7 +545,7 @@ index 944a17bfb4..63b7192fcb 100644
      }));
      proc.code().setEpilogueGenerator(createSharedTask<B3::Air::PrologueGeneratorFunction>([&graph](CCallHelpers& jit, B3::Air::Code& code) {
          emitEpilogueBeforeLeaving(jit, graph, code);
-@@ -319,12 +459,13 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
+@@ -319,12 +470,13 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
      // The code is linked in ordinary memory. It is only copied into the image and never runs from here, so compiling needs no JIT memory.
      jit.breakpoint();
      jit.padBeforePatch();
@@ -382,7 +560,7 @@ index 944a17bfb4..63b7192fcb 100644
      info.codeSize = linkBuffer.size();
      void* start = linkBuffer.entrypoint<JSEntryPtrTag>().untaggedPtr();
      // (It turned out to be what comes first anyway.)
-@@ -335,6 +476,8 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
+@@ -335,6 +487,8 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
              call.offset -= sizeof(uint32_t);
          for (auto& reference : info.indexReferences)
              reference.offset -= sizeof(uint32_t);
@@ -391,7 +569,7 @@ index 944a17bfb4..63b7192fcb 100644
      }
      auto offsetOf = [&](CCallHelpers::Label label) {
          return static_cast<unsigned>(static_cast<uint8_t*>(linkBuffer.locationOf<JSEntryPtrTag>(label).untaggedPtr()) - static_cast<uint8_t*>(start));
-@@ -383,6 +526,13 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
+@@ -383,6 +537,13 @@ static bool compile(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const CalleeHi
      info.startsCold = graph.startsCold;
      RELEASE_ASSERT(!info.startsCold || info.numSlots <= std::min<uint32_t>(SharedData::maxSlots, FunctionInfo::maxEncodedSlots));
      info.calleeSaveRegisters = proc.calleeSaveRegisterAtOffsetList();
@@ -405,7 +583,7 @@ index 944a17bfb4..63b7192fcb 100644
      for (unsigned i = 0; i < graph.catchEntrypoints.size(); ++i)
          info.catchEntrypoints.append({ graph.catchEntrypoints[i]->bytecodeBegin, offsetOf(proc.code().entrypointLabel(i + 1)) });
  
-@@ -421,6 +571,7 @@ bool recordUsesOfKnownFunctionsForImage(VM& vm, UnlinkedCodeBlock* unlinkedCodeB
+@@ -421,6 +582,7 @@ bool recordUsesOfKnownFunctionsForImage(VM& vm, UnlinkedCodeBlock* unlinkedCodeB
      graph.noteFieldsComparedWithStrings();
      recordReturnedLiterals(graph);
      graph.noteClassesDefined();
@@ -413,7 +591,7 @@ index 944a17bfb4..63b7192fcb 100644
      if (variableSummaries)
          graph.recordUntrackableVariableAccesses(*variableSummaries);
      return true;
-@@ -444,13 +595,17 @@ Type inferReturnTypeForImage(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const
+@@ -444,13 +606,17 @@ Type inferReturnTypeForImage(VM& vm, UnlinkedCodeBlock* unlinkedCodeBlock, const
      return result;
  }
  
@@ -7867,6 +8045,314 @@ index f8e046f978..6f0a26fb9a 100644
      RETURN_IF_EXCEPTION(scope, { });
  
      RELEASE_AND_RETURN(scope, JSValue::encode(jsValueFromSlot(globalObject, context, signature.returnType(), slots[argumentCount])));
+diff --git a/Source/JavaScriptCore/ftl/FTLLowerDFGToB3.cpp b/Source/JavaScriptCore/ftl/FTLLowerDFGToB3.cpp
+index b894755248..2b1d40c454 100644
+--- a/Source/JavaScriptCore/ftl/FTLLowerDFGToB3.cpp
++++ b/Source/JavaScriptCore/ftl/FTLLowerDFGToB3.cpp
+@@ -2941,6 +2941,7 @@ private:
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+         patchpoint->numGPScratchRegisters = 1;
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         State* state = &m_ftlState;
+         CodeOrigin semanticNodeOrigin = node->origin.semantic;
+         patchpoint->setGenerator(
+@@ -3048,6 +3049,7 @@ private:
+         patchpoint->numGPScratchRegisters = 1;
+         patchpoint->numFPScratchRegisters = 2;
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         State* state = &m_ftlState;
+         CodeOrigin semanticNodeOrigin = node->origin.semantic;
+         patchpoint->setGenerator(
+@@ -4690,6 +4692,7 @@ private:
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = 4;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -4770,6 +4773,7 @@ private:
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = 4;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -4869,6 +4873,7 @@ private:
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = 3;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -4944,6 +4949,7 @@ private:
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = Options::useHandlerICInFTL() ? 1 : 0;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -5036,6 +5042,7 @@ private:
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = 4;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -5100,6 +5107,7 @@ private:
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = Options::useHandlerICInFTL() ? 1 : 0;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -5244,6 +5252,7 @@ private:
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = Options::useHandlerICInFTL() ? 1 : 0;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -5392,6 +5401,7 @@ private:
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = 4;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -5489,6 +5499,7 @@ private:
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = Options::useHandlerICInFTL() ? 1 : 0;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -5862,6 +5873,7 @@ private:
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = Options::useHandlerICInFTL() ? 3 : 0;
+ 
+         // FIXME: If this is a PutByIdFlush, we might want to late-clobber volatile registers.
+@@ -5965,6 +5977,7 @@ private:
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = 3;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -6127,6 +6140,7 @@ private:
+ #endif
+             patchpoint->appendSomeRegister(base);
+             patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++            patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+             patchpoint->numGPScratchRegisters = 2;
+ 
+             patchpoint->setGenerator([=] (CCallHelpers& jit, const StackmapGenerationParams& params) {
+@@ -6325,6 +6339,7 @@ IGNORE_CLANG_WARNINGS_END
+             if (typedArrayType.has_value() && typedArrayType.value() == TypeDataView) {
+                 patchpoint->appendSomeRegister(base);
+                 patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++                patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+                 patchpoint->numGPScratchRegisters = 3;
+ 
+                 unsigned osrExitArgumentOffset = patchpoint->numChildren() + /* result */ 1;
+@@ -6360,6 +6375,7 @@ IGNORE_CLANG_WARNINGS_END
+ 
+             patchpoint->appendSomeRegister(base);
+             patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++            patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+             patchpoint->numGPScratchRegisters = 2;
+             patchpoint->setGenerator([=] (CCallHelpers& jit, const StackmapGenerationParams& params) {
+                 JIT_COMMENT(jit, "typedArrayLength");
+@@ -6826,6 +6842,7 @@ IGNORE_CLANG_WARNINGS_END
+             patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+             patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+             patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++            patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+             patchpoint->numGPScratchRegisters = Options::useHandlerICInFTL() ? 1 : 0;
+ 
+             RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -7556,6 +7573,7 @@ IGNORE_CLANG_WARNINGS_END
+             patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+             patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+             patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++            patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+             patchpoint->numGPScratchRegisters = Options::useHandlerICInFTL() ? 1 : 0;
+ 
+             RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -8180,6 +8198,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = Options::useHandlerICInFTL() ? 1 : 0;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle =
+@@ -14132,6 +14151,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->append(m_notCellMask, ValueRep::reg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::reg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->clobberLate(RegisterSet::registersToSaveForJSCall(RegisterSet::allScalarRegisters()));
+         patchpoint->resultConstraints = { ValueRep::reg(GPRInfo::returnValueGPR) };
+ 
+@@ -14223,6 +14243,7 @@ IGNORE_CLANG_WARNINGS_END
+         }
+ 
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         if (!isTail) {
+             patchpoint->clobberLate(RegisterSet::registersToSaveForJSCall(RegisterSet::allScalarRegisters()));
+             patchpoint->resultConstraints = { ValueRep::reg(GPRInfo::returnValueGPR) };
+@@ -14638,6 +14659,7 @@ IGNORE_CLANG_WARNINGS_END
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+ 
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->clobber(RegisterSet::registersToSaveForJSCall(RegisterSet::allScalarRegisters())); // No inputs will be in a volatile register.
+         patchpoint->resultConstraints = { ValueRep::reg(GPRInfo::returnValueGPR) };
+ 
+@@ -14899,6 +14921,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->append(m_numberTag, ValueRep::reg(GPRInfo::numberTagRegister));
+ 
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->clobberLate(RegisterSet::registersToSaveForJSCall(RegisterSet::allScalarRegisters()));
+         patchpoint->resultConstraints = { ValueRep::reg(GPRInfo::returnValueGPR) };
+ 
+@@ -15136,6 +15159,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->append(m_notCellMask, ValueRep::reg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::reg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->clobberLate(RegisterSet::registersToSaveForJSCall(RegisterSet::allScalarRegisters()));
+         patchpoint->resultConstraints = { ValueRep::reg(GPRInfo::returnValueGPR) };
+ 
+@@ -15225,6 +15249,7 @@ IGNORE_CLANG_WARNINGS_END
+                 PatchpointValue* patchpoint = m_out.patchpoint(Int64);
+                 patchpoint->append(ConstrainedValue(argument, ValueRep::SomeLateRegister));
+                 patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++                patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+                 patchpoint->setGenerator(
+                     [=](CCallHelpers& jit, const StackmapGenerationParams& params) {
+                         AllowMacroScratchRegisterUsage allowScratch(jit);
+@@ -17897,6 +17922,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         if constexpr (type == AccessType::InById)
+             patchpoint->numGPScratchRegisters = Options::useHandlerICInFTL() ? 2 : 0;
+         else
+@@ -18057,6 +18083,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = 3;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -18132,6 +18159,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = 4;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -18496,6 +18524,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->numGPScratchRegisters = Options::useHandlerICInFTL() ? 1 : 0;
+         patchpoint->resultConstraints = { ValueRep::SomeEarlyRegister };
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle =
+             preparePatchpointForExceptions(patchpoint);
+@@ -19401,6 +19430,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = Options::useHandlerICInFTL() ? 1 : 0;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+@@ -20513,6 +20543,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->append(ConstrainedValue(argument, ValueRep::SomeLateRegister));
+         patchpoint->numGPScratchRegisters = inlineCodeStats8Bit.needsTemp2() ? 6 : 5;
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->setGenerator(
+             [=] (CCallHelpers& jit, const StackmapGenerationParams& params) {
+                 AllowMacroScratchRegisterUsage allowScratch(jit);
+@@ -21345,6 +21376,7 @@ IGNORE_CLANG_WARNINGS_END
+         // https://bugs.webkit.org/show_bug.cgi?id=152848
+ 
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle =
+             preparePatchpointForExceptions(patchpoint);
+@@ -21434,6 +21466,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->append(m_notCellMask, ValueRep::lateReg(GPRInfo::notCellMaskRegister));
+         patchpoint->append(m_numberTag, ValueRep::lateReg(GPRInfo::numberTagRegister));
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = Options::useHandlerICInFTL() ? 2 : 0;
+ 
+         RefPtr<PatchpointExceptionHandle> exceptionHandle =
+@@ -22202,6 +22235,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->numGPScratchRegisters = domJIT->numGPScratchRegisters;
+         patchpoint->numFPScratchRegisters = domJIT->numFPScratchRegisters;
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+ 
+         State* state = &m_ftlState;
+         Node* node = m_node;
+@@ -22403,6 +22437,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->append(m_numberTag, ValueRep::reg(GPRInfo::numberTagRegister));
+         RefPtr<PatchpointExceptionHandle> exceptionHandle = preparePatchpointForExceptions(patchpoint);
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->numGPScratchRegisters = domJIT->numGPScratchRegisters;
+         patchpoint->numFPScratchRegisters = domJIT->numFPScratchRegisters;
+         patchpoint->resultConstraints = { ValueRep::SomeEarlyRegister };
+@@ -23835,6 +23870,7 @@ IGNORE_CLANG_WARNINGS_END
+             preparePatchpointForExceptions(patchpoint);
+         patchpoint->numGPScratchRegisters = BinaryBitOpGenerator::needsScratchGPR ? 1 : 0;
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->resultConstraints = { ValueRep::SomeEarlyRegister };
+         State* state = &m_ftlState;
+         CodeOrigin semanticNodeOrigin = node->origin.semantic;
+@@ -23901,6 +23937,7 @@ IGNORE_CLANG_WARNINGS_END
+         patchpoint->numGPScratchRegisters = 1;
+         patchpoint->numFPScratchRegisters = 1;
+         patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++        patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         patchpoint->resultConstraints = { ValueRep::SomeEarlyRegister };
+         State* state = &m_ftlState;
+         CodeOrigin semanticNodeOrigin = node->origin.semantic;
+@@ -23977,6 +24014,7 @@ IGNORE_CLANG_WARNINGS_END
+         if (isARM64()) {
+             // emitAllocateWithNonNullAllocator uses the scratch registers on ARM.
+             patchpoint->clobber(RegisterSet::macroClobberedGPRs());
++            patchpoint->clobber(RegisterSet::macroClobberedFPRs());
+         }
+         patchpoint->effects.terminal = true;
+         if (actualAllocator.isConstant())
 diff --git a/Source/JavaScriptCore/heap/StaticHeap.cpp b/Source/JavaScriptCore/heap/StaticHeap.cpp
 index 96edcf1624..8f1415aa47 100644
 --- a/Source/JavaScriptCore/heap/StaticHeap.cpp
@@ -9453,6 +9939,18 @@ index 40a58704e5..07c71d9963 100644
              if (locale.isEmpty())
                  continue;
              availableLocales->add(locale);
+diff --git a/Source/JavaScriptCore/runtime/JSArray.cpp b/Source/JavaScriptCore/runtime/JSArray.cpp
+index f3ac1fada1..1a0fb6ea3a 100644
+--- a/Source/JavaScriptCore/runtime/JSArray.cpp
++++ b/Source/JavaScriptCore/runtime/JSArray.cpp
+@@ -1276,6 +1276,7 @@ bool JSArray::setLength(JSGlobalObject* globalObject, unsigned newLength, bool t
+             return true;
+         if (newLength > MAX_STORAGE_VECTOR_LENGTH // This check ensures that we can do fast push.
+             || (newLength >= MIN_SPARSE_ARRAY_INDEX
++                && newLength > butterfly->vectorLength()
+                 && !isDenseEnoughForVector(newLength, countElements()))) {
+             RELEASE_AND_RETURN(scope, setLengthWithArrayStorage(
+                 globalObject, newLength, throwException,
 diff --git a/Source/JavaScriptCore/runtime/MegamorphicCache.cpp b/Source/JavaScriptCore/runtime/MegamorphicCache.cpp
 index 351824d683..d4230abfe7 100644
 --- a/Source/JavaScriptCore/runtime/MegamorphicCache.cpp
@@ -9965,6 +10463,110 @@ index e55096c301..dab6862830 100644
  #endif
  
  void VM::updateStackLimits()
+diff --git a/Source/JavaScriptCore/runtime/WaiterListManager.cpp b/Source/JavaScriptCore/runtime/WaiterListManager.cpp
+index 3e7009b367..dbeb59150b 100644
+--- a/Source/JavaScriptCore/runtime/WaiterListManager.cpp
++++ b/Source/JavaScriptCore/runtime/WaiterListManager.cpp
+@@ -132,8 +132,29 @@ WaiterListManager::WaitSyncResult WaiterListManager::waitSyncImpl(VM& vm, ValueT
+         dataLogLnIf(WaiterListsManagerInternal::verbose, "<WaiterListManager> <Thread:", Thread::currentSingleton(), "> added a new SyncWaiter=", syncWaiter.get(), " to a waiterList for ptr ", RawPointer(ptr));
+         syncWaiter->setParkedList(list.copyRef());
+ 
+-        while (syncWaiter->isOnList() && time.now() < time && !shouldStopWaitingForTermination(vm))
++#if USE(MIMALLOC)
++        // Only the owning thread can return the memory its thread-local heap holds, so do that once in a wait that
++        // takes a while. A wait that is notified soon pays nothing.
++        MonotonicTime releaseFreeMemoryTime = MonotonicTime::now() + 100_ms;
++        bool didReleaseFreeMemory = false;
++#endif
++        while (syncWaiter->isOnList() && time.now() < time && !shouldStopWaitingForTermination(vm)) {
++#if USE(MIMALLOC)
++            if (!didReleaseFreeMemory && releaseFreeMemoryTime < time) {
++                if (MonotonicTime::now() < releaseFreeMemoryTime) {
++                    syncWaiter->condition().waitUntil(list->lock, releaseFreeMemoryTime.approximate<WallTime>());
++                    continue;
++                }
++                didReleaseFreeMemory = true;
++                // A notification in the meantime takes us off the list, and the loop tests for that (and for a
++                // termination request) under the lock again before it waits.
++                DropLockForScope dropLock { listLocker };
++                WTF::releaseFastMallocFreeMemoryForIdleThread();
++                continue;
++            }
++#endif
+             syncWaiter->condition().waitUntil(list->lock, time.approximate<WallTime>());
++        }
+ 
+         syncWaiter->setParkedList(nullptr);
+ 
+diff --git a/Source/JavaScriptCore/shell/CMakeLists.txt b/Source/JavaScriptCore/shell/CMakeLists.txt
+index b1a05d5972..fe6073d65a 100644
+--- a/Source/JavaScriptCore/shell/CMakeLists.txt
++++ b/Source/JavaScriptCore/shell/CMakeLists.txt
+@@ -21,7 +21,10 @@ endif ()
+ if (USE_EXTERNAL_MIMALLOC)
+     # The shipped static archives intentionally leave mi_* unresolved so the
+     # consumer links its own mimalloc. The jsc shell still needs a working
+-    # allocator, so link the vendored mimalloc object library here only.
++    # allocator, so link the vendored mimalloc object library here only, plus
++    # the entry points the archives expect from the consumer's mimalloc that
++    # the vendored one does not have (ExternalMimallocShims.cpp).
++    list(APPEND jsc_SOURCES ExternalMimallocShims.cpp)
+     list(APPEND jsc_LIBRARIES $<TARGET_OBJECTS:mimalloc-obj>)
+ endif ()
+ 
+@@ -94,6 +97,7 @@ if (USE_BUN_JSC_ADDITIONS)
+         # Same as jsc above: the shipped static archives leave mi_* unresolved
+         # under USE_EXTERNAL_MIMALLOC, so any executable that links the
+         # framework must supply the vendored mimalloc objects itself.
++        list(APPEND testFFI_SOURCES ExternalMimallocShims.cpp)
+         list(APPEND testFFI_LIBRARIES $<TARGET_OBJECTS:mimalloc-obj>)
+     endif ()
+ 
+diff --git a/Source/JavaScriptCore/shell/ExternalMimallocShims.cpp b/Source/JavaScriptCore/shell/ExternalMimallocShims.cpp
+new file mode 100644
+index 0000000000..a4b74b4123
+--- /dev/null
++++ b/Source/JavaScriptCore/shell/ExternalMimallocShims.cpp
+@@ -0,0 +1,39 @@
++/*
++ * Copyright (C) 2026 Oven, Inc. All rights reserved.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ *
++ * THIS SOFTWARE IS PROVIDED BY APPLE INC. ``AS IS'' AND ANY
++ * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
++ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
++ * PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL APPLE INC. OR
++ * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
++ * EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
++ * PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
++ * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
++ * OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
++ * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++// Under USE_EXTERNAL_MIMALLOC the static archives call into the consumer's mimalloc
++// (oven-sh/mimalloc), which has entry points the vendored copy does not. An executable in this
++// repository that links the archives against the vendored mimalloc-obj (the jsc shell, testFFI)
++// supplies those entry points here, in terms of the vendored API.
++
++#include <bmalloc/mimalloc.h>
++
++// The consumer's hook for a thread that goes idle: collect the heap, discard the free runs inside
++// still-used pages, hand the arena purge to a scavenger thread. The vendored mimalloc can only do
++// the first part.
++extern "C" void mi_on_thread_idle(void) noexcept
++{
++    mi_theap_collect(mi_theap_get_default(), /* force */ false);
++}
 diff --git a/Source/JavaScriptCore/yarr/YarrJIT.cpp b/Source/JavaScriptCore/yarr/YarrJIT.cpp
 index 87c90d8818..70d5da8036 100644
 --- a/Source/JavaScriptCore/yarr/YarrJIT.cpp
@@ -10437,6 +11039,122 @@ index 52edaf0a33..49c6775bdf 100644
  } } // namespace JSC::Yarr
  
  using JSC::Yarr::MatchDirection;
+diff --git a/Source/WTF/wtf/AutomaticThread.cpp b/Source/WTF/wtf/AutomaticThread.cpp
+index 048180f219..27cc52d63b 100644
+--- a/Source/WTF/wtf/AutomaticThread.cpp
++++ b/Source/WTF/wtf/AutomaticThread.cpp
+@@ -27,6 +27,7 @@
+ #include <wtf/AutomaticThread.h>
+ 
+ #include <wtf/DataLog.h>
++#include <wtf/FastMalloc.h>
+ #include <wtf/PageBlock.h>
+ #include <wtf/TZoneMallocInlines.h>
+ #include <wtf/Threading.h>
+@@ -37,6 +38,11 @@ WTF_MAKE_TZONE_ALLOCATED_IMPL(AutomaticThread);
+ 
+ static constexpr bool verbose = false;
+ 
++#if USE(MIMALLOC)
++// How long a thread waits for more work before it releases its allocator's free memory.
++static constexpr Seconds idleReleaseDelay = 100_ms;
++#endif
++
+ Ref<AutomaticThreadCondition> AutomaticThreadCondition::create()
+ {
+     return adoptRef(*new AutomaticThreadCondition);
+@@ -48,6 +54,16 @@ AutomaticThreadCondition::~AutomaticThreadCondition() = default;
+ 
+ void AutomaticThreadCondition::notifyOne(const AbstractLocker& locker)
+ {
++#if USE(MIMALLOC)
++    // A thread that is releasing its free memory only sees the notification when it is done with that.
++    for (auto& thread : m_threads) {
++        if (thread->isWaiting(locker) && !thread->m_isReleasingFreeMemory) {
++            thread->notify(locker);
++            return;
++        }
++    }
++#endif
++
+     for (auto& thread : m_threads) {
+         if (thread->isWaiting(locker)) {
+             thread->notify(locker);
+@@ -215,6 +231,11 @@ void AutomaticThread::start(const AbstractLocker&)
+                 stopImpl(locker);
+             };
+             
++#if USE(MIMALLOC)
++            // Whether this thread released its allocator's free memory since it last worked.
++            bool didReleaseFreeMemory = false;
++#endif
++
+             for (;;) {
+                 {
+                     Locker locker { *m_lock };
+@@ -228,8 +249,39 @@ void AutomaticThread::start(const AbstractLocker&)
+ 
+                         // Shut the thread down after a timeout.
+                         m_isWaiting = true;
++#if USE(MIMALLOC)
++                        // Only the owning thread can return the memory its thread-local heap holds.
++                        // A compiler thread frees tens of MB of temporaries after a large compile,
++                        // and without this they stay resident until the thread times out and exits.
++                        // Wait a little first, so that a thread which is notified again right away
++                        // (the usual case between tasks) does not pay for the release.
++                        //
++                        // poll() runs once per notify: JITWorklistThread counts a thread as active
++                        // from the notify until its poll() returns Wait. So the thread stays in the
++                        // waiting state through the release, and polls again only if a notify
++                        // arrived meanwhile (notify() clears m_isWaiting, which is checked under the
++                        // lock, so a notify during the release is not lost).
++                        Seconds timeout = m_timeout;
++                        if (!didReleaseFreeMemory && m_timeout > idleReleaseDelay) {
++                            m_waitCondition.waitFor(*m_lock, idleReleaseDelay);
++                            if (!m_isWaiting)
++                                continue;
++                            didReleaseFreeMemory = true;
++                            m_isReleasingFreeMemory = true;
++                            {
++                                DropLockForScope dropLock { locker };
++                                releaseFastMallocFreeMemoryForIdleThread();
++                            }
++                            m_isReleasingFreeMemory = false;
++                            if (!m_isWaiting)
++                                continue;
++                            timeout -= idleReleaseDelay;
++                        }
++#else
++                        Seconds timeout = m_timeout;
++#endif
+                         bool awokenByNotify =
+-                            m_waitCondition.waitFor(*m_lock, m_timeout);
++                            m_waitCondition.waitFor(*m_lock, timeout);
+                         if (verbose && !awokenByNotify && !m_isWaiting)
+                             dataLog(RawPointer(this), ": waitFor timed out, but notified via m_isWaiting flag!\n");
+                         if (m_isWaiting && shouldSleep(locker)) {
+@@ -244,6 +296,9 @@ void AutomaticThread::start(const AbstractLocker&)
+                     }
+                 }
+                 
++#if USE(MIMALLOC)
++                didReleaseFreeMemory = false;
++#endif
+                 WorkResult result = work();
+                 if (result == WorkResult::Stop) {
+                     Locker locker { *m_lock };
+diff --git a/Source/WTF/wtf/AutomaticThread.h b/Source/WTF/wtf/AutomaticThread.h
+index f665a24883..cda144334c 100644
+--- a/Source/WTF/wtf/AutomaticThread.h
++++ b/Source/WTF/wtf/AutomaticThread.h
+@@ -203,6 +203,7 @@ protected:
+     ThreadQOS m_qos { defaultThreadQOS };
+     bool m_isRunning { true };
+     bool m_isWaiting { false };
++    bool m_isReleasingFreeMemory { false };
+     bool m_hasUnderlyingThread { false };
+     Condition m_waitCondition;
+     Condition m_isRunningCondition;
 diff --git a/Source/WTF/wtf/BumpPointerAllocator.h b/Source/WTF/wtf/BumpPointerAllocator.h
 index e3cba80913..701b5ec332 100644
 --- a/Source/WTF/wtf/BumpPointerAllocator.h
@@ -10468,6 +11186,35 @@ index 83a0833da0..ee470e7833 100644
      SystemFree.h
      SystemMalloc.h
      SystemTracing.h
+diff --git a/Source/WTF/wtf/FastMalloc.cpp b/Source/WTF/wtf/FastMalloc.cpp
+index bb0e777124..3c0fe4bef0 100644
+--- a/Source/WTF/wtf/FastMalloc.cpp
++++ b/Source/WTF/wtf/FastMalloc.cpp
+@@ -605,6 +605,11 @@ void releaseFastMallocFreeMemoryForThisThread()
+     bmalloc::api::scavengeThisThread();
+ }
+ 
++void releaseFastMallocFreeMemoryForIdleThread()
++{
++    bmalloc::api::scavengeThisThreadOnIdle();
++}
++
+ void releaseFastMallocFreeMemory()
+ {
+     bmalloc::api::scavenge();
+diff --git a/Source/WTF/wtf/FastMalloc.h b/Source/WTF/wtf/FastMalloc.h
+index 2e673c9f8c..8852635dc8 100644
+--- a/Source/WTF/wtf/FastMalloc.h
++++ b/Source/WTF/wtf/FastMalloc.h
+@@ -177,6 +177,8 @@ WTF_EXPORT_PRIVATE size_t fastMallocGoodSize(size_t);
+ 
+ WTF_EXPORT_PRIVATE void releaseFastMallocFreeMemory();
+ WTF_EXPORT_PRIVATE void releaseFastMallocFreeMemoryForThisThread();
++// For a thread that is idle and about to block for a while. See bmalloc::api::scavengeThisThreadOnIdle.
++WTF_EXPORT_PRIVATE void releaseFastMallocFreeMemoryForIdleThread();
+ 
+ WTF_EXPORT_PRIVATE void fastCommitAlignedMemory(void*, size_t);
+ WTF_EXPORT_PRIVATE void fastDecommitAlignedMemory(void*, size_t);
 diff --git a/Source/WTF/wtf/FunctionPtr.h b/Source/WTF/wtf/FunctionPtr.h
 index 198bc88761..12b9c8f44e 100644
 --- a/Source/WTF/wtf/FunctionPtr.h
@@ -10563,6 +11310,95 @@ index a4fccc37f9..4fc0909675 100644
  }
  
  inline void add(Hasher& hasher, ASCIILiteral literal)
+diff --git a/Source/WTF/wtf/RandomDevice.cpp b/Source/WTF/wtf/RandomDevice.cpp
+index 342682dbcb..55ca3c188d 100644
+--- a/Source/WTF/wtf/RandomDevice.cpp
++++ b/Source/WTF/wtf/RandomDevice.cpp
+@@ -35,6 +35,13 @@
+ #include <unistd.h>
+ #endif
+ 
++#if OS(LINUX)
++#include <sys/syscall.h>
++#ifndef GRND_NONBLOCK
++#define GRND_NONBLOCK 0x0001
++#endif
++#endif
++
+ #if OS(WINDOWS)
+ #include <windows.h>
+ #endif
+@@ -85,10 +92,17 @@ NEVER_INLINE NO_RETURN_DUE_TO_CRASH static void crashUnableToReadFromURandom()
+ 
+ #if !OS(DARWIN) && !OS(FUCHSIA) && !OS(WINDOWS)
+ RandomDevice::RandomDevice()
++{
++#if !OS(LINUX)
++    openURandom();
++#endif
++}
++
++void RandomDevice::openURandom()
+ {
+     int ret = 0;
+     do {
+-        ret = open("/dev/urandom", O_RDONLY, 0);
++        ret = open("/dev/urandom", O_RDONLY | O_CLOEXEC, 0);
+     } while (ret == -1 && errno == EINTR);
+     m_fd = ret;
+     if (m_fd < 0)
+@@ -99,7 +113,8 @@ RandomDevice::RandomDevice()
+ #if !OS(DARWIN) && !OS(FUCHSIA) && !OS(WINDOWS)
+ RandomDevice::~RandomDevice()
+ {
+-    close(m_fd);
++    if (m_fd >= 0)
++        close(m_fd);
+ }
+ #endif
+ 
+@@ -113,6 +128,26 @@ void RandomDevice::cryptographicallyRandomValues(std::span<uint8_t> buffer)
+     zx_cprng_draw(buffer.data(), buffer.size());
+ #elif OS(UNIX)
+     ssize_t amountRead = 0;
++#if OS(LINUX)
++#if defined(SYS_getrandom)
++    // getrandom(2) reads the pool /dev/urandom reads, but needs neither the path nor a free descriptor.
++    // Any failure reads the rest from /dev/urandom: EAGAIN (pool not initialized, where /dev/urandom
++    // does not block), ENOSYS, EPERM (a seccomp filter, which can be installed at any time).
++    while (static_cast<size_t>(amountRead) < buffer.size()) {
++        WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
++        ssize_t currentRead = syscall(SYS_getrandom, buffer.data() + amountRead, buffer.size() - amountRead, GRND_NONBLOCK);
++        WTF_ALLOW_UNSAFE_BUFFER_USAGE_END
++        if (currentRead > 0)
++            amountRead += currentRead;
++        else if (currentRead != -1 || errno != EINTR)
++            break;
++    }
++    if (static_cast<size_t>(amountRead) == buffer.size())
++        return;
++#endif
++    if (m_fd < 0)
++        openURandom();
++#endif
+     while (static_cast<size_t>(amountRead) < buffer.size()) {
+         WTF_ALLOW_UNSAFE_BUFFER_USAGE_BEGIN
+         ssize_t currentRead = read(m_fd, buffer.data() + amountRead, buffer.size() - amountRead);
+diff --git a/Source/WTF/wtf/RandomDevice.h b/Source/WTF/wtf/RandomDevice.h
+index ce4af34736..4d5e2d0f7b 100644
+--- a/Source/WTF/wtf/RandomDevice.h
++++ b/Source/WTF/wtf/RandomDevice.h
+@@ -51,7 +51,9 @@ public:
+ private:
+ #if OS(DARWIN) || OS(FUCHSIA) || OS(WINDOWS)
+ #elif OS(UNIX)
+-    int m_fd { -1 };
++    void openURandom();
++
++    int m_fd { -1 }; // On Linux, /dev/urandom is only opened once getrandom(2) has failed.
+ #else
+ #error "This configuration doesn't have a strong source of randomness."
+ // WARNING: When adding new sources of OS randomness, the randomness must
 diff --git a/Source/WTF/wtf/SysVCall.h b/Source/WTF/wtf/SysVCall.h
 new file mode 100644
 index 0000000000..1c31756902
@@ -10667,11 +11503,122 @@ index 9f18146bf2..8f6bbed8d6 100644
                  if (HashTranslator::equal(StringEntry { string }, value))
                      return string;
              }
+diff --git a/Source/bmalloc/CMakeLists.txt b/Source/bmalloc/CMakeLists.txt
+index 0c3e67772a..b4a4c8dfd1 100644
+--- a/Source/bmalloc/CMakeLists.txt
++++ b/Source/bmalloc/CMakeLists.txt
+@@ -698,6 +698,10 @@ if (USE_MIMALLOC)
+     add_definitions(-DUSE_MIMALLOC=1)
+ endif ()
+ 
++if (USE_EXTERNAL_MIMALLOC)
++    add_definitions(-DUSE_EXTERNAL_MIMALLOC=1)
++endif ()
++
+ if (USE_SYSTEM_MALLOC)
+     add_definitions(-DUSE_SYSTEM_MALLOC=1)
+ endif ()
+diff --git a/Source/bmalloc/bmalloc/BPlatform.h b/Source/bmalloc/bmalloc/BPlatform.h
+index b59de41278..99a96d5e59 100644
+--- a/Source/bmalloc/bmalloc/BPlatform.h
++++ b/Source/bmalloc/bmalloc/BPlatform.h
+@@ -387,6 +387,13 @@
+ #define BUSE_MIMALLOC 0
+ #endif
+ 
++/* The consumer links its own mimalloc (oven-sh/mimalloc), which has APIs the vendored copy does not. */
++#if BUSE(MIMALLOC) && defined(USE_EXTERNAL_MIMALLOC) && USE_EXTERNAL_MIMALLOC
++#define BUSE_EXTERNAL_MIMALLOC 1
++#else
++#define BUSE_EXTERNAL_MIMALLOC 0
++#endif
++
+ #if defined(USE_SYSTEM_MALLOC) && USE_SYSTEM_MALLOC
+ #define BUSE_SYSTEM_MALLOC 1
+ #elif BTSAN_ENABLED
+diff --git a/Source/bmalloc/bmalloc/CryptoRandom.cpp b/Source/bmalloc/bmalloc/CryptoRandom.cpp
+index 4724cad68f..8590e9b999 100644
+--- a/Source/bmalloc/bmalloc/CryptoRandom.cpp
++++ b/Source/bmalloc/bmalloc/CryptoRandom.cpp
+@@ -43,6 +43,13 @@
+ #include <unistd.h>
+ #endif
+ 
++#if BOS(LINUX)
++#include <sys/syscall.h>
++#ifndef GRND_NONBLOCK
++#define GRND_NONBLOCK 0x0001
++#endif
++#endif
++
+ #if BOS(DARWIN)
+ #include <CommonCrypto/CommonCryptoError.h>
+ #include <CommonCrypto/CommonRandom.h>
+@@ -117,27 +124,38 @@ void ARC4RandomNumberGenerator::stir()
+     // TODO Generate random bytes - this appears to be unused when running libpas
+     BCRASH();
+ #else
+-    static std::once_flag onceFlag;
+-    static int fd;
+-    std::call_once(
+-        onceFlag,
+-        [] {
+-            int ret = 0;
+-            do {
+-                ret = open("/dev/urandom", O_RDONLY, 0);
+-            } while (ret == -1 && errno == EINTR);
+-            RELEASE_BASSERT(ret >= 0);
+-            fd = ret;
+-        });
+-    ssize_t amountRead = 0;
+-    while (static_cast<size_t>(amountRead) < length) {
+-        ssize_t currentRead = read(fd, randomness + amountRead, length - amountRead);
+-        // We need to check for both EAGAIN and EINTR since on some systems /dev/urandom
+-        // is blocking and on others it is non-blocking.
+-        if (currentRead == -1)
+-            RELEASE_BASSERT(errno == EAGAIN || errno == EINTR);
+-        else
+-            amountRead += currentRead;
++#if BOS(LINUX) && defined(SYS_getrandom)
++    // getrandom(2) reads the pool /dev/urandom reads, but needs neither the path nor a free descriptor.
++    // It fills a request of up to 256 bytes whole or fails. Any failure reads /dev/urandom instead:
++    // EAGAIN (pool not initialized, where /dev/urandom does not block), ENOSYS, EPERM.
++    static_assert(sizeof(randomness) <= 256);
++    bool needsURandom = syscall(SYS_getrandom, randomness, length, GRND_NONBLOCK) != static_cast<long>(length);
++#else
++    bool needsURandom = true;
++#endif
++    if (needsURandom) {
++        static std::once_flag onceFlag;
++        static int fd;
++        std::call_once(
++            onceFlag,
++            [] {
++                int ret = 0;
++                do {
++                    ret = open("/dev/urandom", O_RDONLY | O_CLOEXEC, 0);
++                } while (ret == -1 && errno == EINTR);
++                RELEASE_BASSERT(ret >= 0);
++                fd = ret;
++            });
++        ssize_t amountRead = 0;
++        while (static_cast<size_t>(amountRead) < length) {
++            ssize_t currentRead = read(fd, randomness + amountRead, length - amountRead);
++            // We need to check for both EAGAIN and EINTR since on some systems /dev/urandom
++            // is blocking and on others it is non-blocking.
++            if (currentRead == -1)
++                RELEASE_BASSERT(errno == EAGAIN || errno == EINTR);
++            else
++                amountRead += currentRead;
++        }
+     }
+ #endif
+ 
 diff --git a/Source/bmalloc/bmalloc/StaticRegion.cpp b/Source/bmalloc/bmalloc/StaticRegion.cpp
-index 77260b2296..5fbbd4cbc0 100644
+index 77260b2296..bbe9ce4ee0 100644
 --- a/Source/bmalloc/bmalloc/StaticRegion.cpp
 +++ b/Source/bmalloc/bmalloc/StaticRegion.cpp
-@@ -7,33 +7,359 @@
+@@ -7,37 +7,365 @@
  
  #include "BAssert.h"
  #include "BPlatform.h"
@@ -11025,7 +11972,9 @@ index 77260b2296..5fbbd4cbc0 100644
      RELEASE_BASSERT(!s_isBuilding);
      constexpr size_t size = numberOfArenasInFile * arenaReservation;
 -    void* result = mmap(reinterpret_cast<void*>(base), size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-+    void* result = mmap(reinterpret_cast<void*>(base()), size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
++    // MAP_NORESERVE: the reservation is far larger than what is used of it, and Linux's default overcommit heuristic refuses a
++    // mapping much larger than the machine's memory when it counts it (building on a machine with 16 GB failed).
++    void* result = mmap(reinterpret_cast<void*>(base()), size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
      if (result == MAP_FAILED)
          return false;
 -    if (result != reinterpret_cast<void*>(base)) {
@@ -11033,7 +11982,12 @@ index 77260b2296..5fbbd4cbc0 100644
          munmap(result, size);
          return false;
      }
-@@ -47,6 +373,7 @@ bool StaticRegion::beginBuilding()
+-    void* scratch = mmap(reinterpret_cast<void*>(startOf(Arena::Scratch)), arenaReservation, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
++    void* scratch = mmap(reinterpret_cast<void*>(startOf(Arena::Scratch)), arenaReservation, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
+     if (scratch != reinterpret_cast<void*>(startOf(Arena::Scratch))) {
+         if (scratch != MAP_FAILED)
+             munmap(scratch, arenaReservation);
+@@ -47,6 +375,7 @@ bool StaticRegion::beginBuilding()
      memset(s_used, 0, sizeof(s_used));
      s_isBuilding = true;
      return true;
@@ -11041,7 +11995,7 @@ index 77260b2296..5fbbd4cbc0 100644
  }
  
  void StaticRegion::endBuilding()
-@@ -55,8 +382,16 @@ void StaticRegion::endBuilding()
+@@ -55,8 +384,16 @@ void StaticRegion::endBuilding()
      s_isBuilding = false;
      ::free(std::exchange(s_sizes, nullptr));
      s_capacityOfSizes = 0;
@@ -11059,7 +12013,7 @@ index 77260b2296..5fbbd4cbc0 100644
  }
  
  void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t misalignment)
-@@ -64,8 +399,12 @@ void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t
+@@ -64,8 +401,12 @@ void* StaticRegion::allocate(Arena arena, size_t size, size_t alignment, size_t
      RELEASE_BASSERT(s_isBuilding && alignment && !(alignment & (alignment - 1)) && misalignment < alignment);
      size_t& used = s_used[static_cast<size_t>(arena)];
      size_t offset = ((used + alignment - 1 - misalignment) & ~(alignment - 1)) + misalignment;
@@ -11073,7 +12027,7 @@ index 77260b2296..5fbbd4cbc0 100644
      return reinterpret_cast<void*>(startOf(arena) + offset);
  }
  
-@@ -107,22 +446,72 @@ bool StaticRegion::isAllocatingMutable()
+@@ -107,22 +448,72 @@ bool StaticRegion::isAllocatingMutable()
      return t_isAllocatingMutable;
  }
  
@@ -11149,7 +12103,7 @@ index 77260b2296..5fbbd4cbc0 100644
      void* wanted = reinterpret_cast<void*>(startOf(arena) + offsetInArena);
      if (arena == Arena::Image) {
          void* result = mmap(wanted, size, isCode ? PROT_READ | PROT_EXEC : PROT_READ, MAP_PRIVATE, fileDescriptor, offsetInFile);
-@@ -147,6 +536,7 @@ bool StaticRegion::map(Arena arena, int fileDescriptor, off_t offsetInFile, size
+@@ -147,6 +538,7 @@ bool StaticRegion::map(Arena arena, int fileDescriptor, off_t offsetInFile, size
          return false;
      }
      return true;
@@ -11157,7 +12111,7 @@ index 77260b2296..5fbbd4cbc0 100644
  }
  
  // In Arena::MutableMalloc, what is asked for is preceded by how much was asked for: it may be given back, or be found too small,
-@@ -160,7 +550,7 @@ static constexpr size_t unit = 8;
+@@ -160,7 +552,7 @@ static constexpr size_t unit = 8;
  
  static bool isInImmutableMalloc(const void* pointer)
  {
@@ -11166,7 +12120,7 @@ index 77260b2296..5fbbd4cbc0 100644
  }
  
  static uint32_t& sizeOfImmutable(const void* pointer)
-@@ -288,6 +678,9 @@ static void* mallocImmutable(size_t size, size_t alignment)
+@@ -288,6 +680,9 @@ static void* mallocImmutable(size_t size, size_t alignment)
              }
              pushFreeImmutable(block + units * unit, found - units);
              sizeOfImmutable(block) = static_cast<uint32_t>(size);
@@ -11176,7 +12130,7 @@ index 77260b2296..5fbbd4cbc0 100644
              return block;
          }
      }
-@@ -317,6 +710,9 @@ void* StaticRegion::tryMallocSlow(size_t size, size_t alignment)
+@@ -317,6 +712,9 @@ void* StaticRegion::tryMallocSlow(size_t size, size_t alignment)
                  memcpy(rest - sizeOfHeader, &sizeOfRest, sizeof(sizeOfRest));
                  pushFree(mutableOnes, found - index, rest);
              }
@@ -11186,7 +12140,7 @@ index 77260b2296..5fbbd4cbc0 100644
              return block;
          }
      }
-@@ -347,16 +743,22 @@ void* StaticRegion::reallocate(void* pointer, size_t newSize)
+@@ -347,16 +745,22 @@ void* StaticRegion::reallocate(void* pointer, size_t newSize)
              size_t newUnits = unitsFor(newSize);
              // (Where it is has to do for what it is going to be, too.)
              bool isWhereItMayBe = newSize % 16 || !(reinterpret_cast<uintptr_t>(pointer) & 15);
@@ -11356,6 +12310,50 @@ index c87b01ecf0..dfbba2aacb 100644
  public:
      BEXPORT static void clearFreeLists(); // When all is built.
      BEXPORT static size_t bytesThatAreFree(); // Before that: what was freed and is in the file all the same.
+diff --git a/Source/bmalloc/bmalloc/bmalloc.cpp b/Source/bmalloc/bmalloc/bmalloc.cpp
+index ff0b7de48c..ef1e6220d9 100644
+--- a/Source/bmalloc/bmalloc/bmalloc.cpp
++++ b/Source/bmalloc/bmalloc/bmalloc.cpp
+@@ -127,6 +127,23 @@ void scavengeThisThread(bool force)
+ #endif
+ }
+ 
++#if BUSE(EXTERNAL_MIMALLOC)
++// oven-sh/mimalloc's idle hook: collects the thread's heap, discards the free runs inside the pages
++// it still uses, and hands the arena purge to mimalloc's scavenger thread. The vendored mimalloc
++// does not have it, so it is declared here and not in mimalloc.h.
++extern "C" void mi_on_thread_idle(void) noexcept;
++#endif
++
++void scavengeThisThreadOnIdle()
++{
++#if BUSE(EXTERNAL_MIMALLOC)
++    mi_on_thread_idle();
++#else
++    // Not forced: that would also purge what every other thread just freed.
++    scavengeThisThread(/* force */ false);
++#endif
++}
++
+ void scavenge()
+ {
+ #if BENABLE(LIBPAS)
+diff --git a/Source/bmalloc/bmalloc/bmalloc.h b/Source/bmalloc/bmalloc/bmalloc.h
+index 953727f888..da8584ebb6 100644
+--- a/Source/bmalloc/bmalloc/bmalloc.h
++++ b/Source/bmalloc/bmalloc/bmalloc.h
+@@ -332,6 +332,11 @@ BEXPORT void freeLargeVirtual(void* object, size_t, HeapKind kind = HeapKind::Pr
+ 
+ BEXPORT void scavengeThisThread(bool force = true);
+ 
++// The calling thread is idle and about to block for a while. Return what its thread-local
++// allocator state holds for it: retired pages, blocks that other threads freed into its pages,
++// and the free runs inside the pages it still uses. Only the owning thread can do this.
++BEXPORT void scavengeThisThreadOnIdle();
++
+ BEXPORT void scavenge();
+ 
+ BEXPORT bool isEnabled(HeapKind kind = HeapKind::Primary);
 diff --git a/Source/cmake/WebKitCompilerFlags.cmake b/Source/cmake/WebKitCompilerFlags.cmake
 index 04629219b7..1bae3cb0f4 100644
 --- a/Source/cmake/WebKitCompilerFlags.cmake

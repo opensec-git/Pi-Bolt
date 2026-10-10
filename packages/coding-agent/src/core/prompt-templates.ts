@@ -71,13 +71,19 @@ export function parseCommandArgs(argsString: string): string[] {
 export function substituteArgs(content: string, args: string[]): string {
 	const allArgs = args.join(" ");
 
-	return content.replace(
-		/\$\{(\d+|ARGUMENTS|@):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)/g,
-		(_match, defaultTarget, defaultValue, sliceStart, sliceLength, simple) => {
+	return replaceArgumentReferences(
+		content,
+		(
+			defaultTarget: string | undefined,
+			defaultValue: string | undefined,
+			sliceStart: string | undefined,
+			sliceLength: string | undefined,
+			simple: string | undefined,
+		) => {
 			if (defaultTarget) {
 				const value =
 					defaultTarget === "@" || defaultTarget === "ARGUMENTS" ? allArgs : args[parseInt(defaultTarget, 10) - 1];
-				return value ? value : defaultValue;
+				return value ? value : (defaultValue ?? "");
 			}
 
 			if (sliceStart) {
@@ -96,10 +102,97 @@ export function substituteArgs(content: string, args: string[]): string {
 				return allArgs;
 			}
 
-			const index = parseInt(simple, 10) - 1;
+			const index = parseInt(simple ?? "", 10) - 1;
 			return args[index] ?? "";
 		},
 	);
+}
+
+const DIGITS = /\d+/y;
+
+/**
+ * Calls `replace` for each reference to the arguments in `content`, left to right, as
+ * `/\$\{(\d+|ARGUMENTS|@):-([^}]*)\}|\$\{@:(\d+)(?::(\d+))?\}|\$(ARGUMENTS|@|\d+)/g` would find them, and puts what it returns in
+ * their place. A scan rather than that expression: on text with many "${1:-" and no "}" after them, the expression looks for
+ * the "}" again from each of them (quadratic); here the next "}" is found once.
+ */
+function replaceArgumentReferences(
+	content: string,
+	replace: (
+		defaultTarget: string | undefined,
+		defaultValue: string | undefined,
+		sliceStart: string | undefined,
+		sliceLength: string | undefined,
+		simple: string | undefined,
+	) => string,
+): string {
+	const digitsAt = (at: number): string | undefined => {
+		DIGITS.lastIndex = at;
+		return DIGITS.exec(content)?.[0];
+	};
+	let closeAt: number | undefined; // the next "}" at or after where it was last looked for; -1: none
+	const closeFrom = (at: number): number => {
+		if (closeAt === undefined || (closeAt !== -1 && closeAt < at)) closeAt = content.indexOf("}", at);
+		return closeAt;
+	};
+	let out = "";
+	let copied = 0;
+	for (let at = content.indexOf("$"); at !== -1; at = content.indexOf("$", at)) {
+		let end = -1;
+		let replacement = "";
+		if (content[at + 1] === "{") {
+			// ${N:-default}, ${ARGUMENTS:-default}, ${@:-default}
+			const targetAt = at + 2;
+			const target =
+				digitsAt(targetAt) ??
+				(content.startsWith("ARGUMENTS", targetAt) ? "ARGUMENTS" : content[targetAt] === "@" ? "@" : undefined);
+			if (target !== undefined && content.startsWith(":-", targetAt + target.length)) {
+				const valueAt = targetAt + target.length + 2;
+				const close = closeFrom(valueAt);
+				if (close !== -1) {
+					end = close + 1;
+					replacement = replace(target, content.slice(valueAt, close), undefined, undefined, undefined);
+				}
+			}
+			// ${@:N} and ${@:N:L}
+			if (end === -1 && content.startsWith("{@:", at + 1)) {
+				const start = digitsAt(at + 4);
+				if (start !== undefined) {
+					const after = at + 4 + start.length;
+					if (content[after] === "}") {
+						end = after + 1;
+						replacement = replace(undefined, undefined, start, undefined, undefined);
+					} else if (content[after] === ":") {
+						const length = digitsAt(after + 1);
+						if (length !== undefined && content[after + 1 + length.length] === "}") {
+							end = after + 2 + length.length;
+							replacement = replace(undefined, undefined, start, length, undefined);
+						}
+					}
+				}
+			}
+		}
+		if (end === -1) {
+			// $ARGUMENTS, $@, $N
+			const simple = content.startsWith("ARGUMENTS", at + 1)
+				? "ARGUMENTS"
+				: content[at + 1] === "@"
+					? "@"
+					: digitsAt(at + 1);
+			if (simple !== undefined) {
+				end = at + 1 + simple.length;
+				replacement = replace(undefined, undefined, undefined, undefined, simple);
+			}
+		}
+		if (end === -1) {
+			at++;
+			continue;
+		}
+		out += content.slice(copied, at) + replacement;
+		copied = end;
+		at = end;
+	}
+	return out + content.slice(copied);
 }
 
 function loadTemplateFromFile(

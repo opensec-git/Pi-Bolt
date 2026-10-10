@@ -1,6 +1,6 @@
 // An extension that starts programs as Pi and its extensions do, and checks what they get and what Pi learns of them. On macOS
-// they are started through pi-spawn (scripts/lib/darwin-spawn.h): they must run with ASLR, which Pi's own executable runs
-// without, and otherwise as if Pi had started them itself. PIBOLT_TEST_PROBE: a program that prints where its code and stack are.
+// they are started through pi-spawn (scripts/lib/darwin-spawn.h): each start must load them at a new address, unlike Pi's
+// own executable, and otherwise as if Pi had started them itself. PIBOLT_TEST_PROBE: a program that prints where its code and stack are.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,14 +24,14 @@ function output(child) {
 async function run() {
 	const probe = process.env.PIBOLT_TEST_PROBE;
 	if (probe) {
-		// Each start of a program with ASLR puts it somewhere else; without, always at the same place.
+		// Each start of a program must put it somewhere else, not always at the same place.
 		const places = new Set();
 		for (let i = 0; i < 4; i++) places.add(execFileSync(probe, { encoding: "utf8" }).trim());
-		check("aslr", places.size === 4, [...places].join(" "));
+		check("new address each start", places.size === 4, [...places].join(" "));
 		const nested = execFileSync("/bin/sh", ["-c", `"${probe}"; "${probe}"`], { encoding: "utf8" }).trim().split("\n");
-		check("aslr in a shell's programs", nested.length === 2 && nested[0] !== nested[1] && !places.has(nested[0]), nested.join(" "));
+		check("new address in a shell's programs", nested.length === 2 && nested[0] !== nested[1] && !places.has(nested[0]), nested.join(" "));
 		const async_ = await output(spawn(probe));
-		check("aslr (spawn)", async_.code === 0 && !places.has(async_.text.trim()), async_.text);
+		check("new address (spawn)", async_.code === 0 && !places.has(async_.text.trim()), async_.text);
 	}
 
 	check("exit code", spawnSync("/bin/sh", ["-c", "exit 7"]).status === 7, "");

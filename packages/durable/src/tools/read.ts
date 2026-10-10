@@ -81,12 +81,15 @@ export function createReadTool(): ToolRegistration<typeof readSchema, ReadToolDe
 			const absolutePath = await resolveReadToolPath(env, path, context);
 			const reader = getOrThrow(await env.openBinaryReader(absolutePath, undefined, context));
 			try {
-				// A concurrent writer can change the file between the scan and the reads; retry once from a fresh scan.
+				// A concurrent writer can change the file between the scan and the reads. Appending (a growing log) leaves
+				// the scanned bytes as they were; a file that shrank or was rewritten in place is read again once.
 				for (let attempt = 0; ; attempt++) {
 					const before = getOrThrow(await reader.info(context));
 					const result = await readText(reader, before, path, offset, limit, context);
 					const after = getOrThrow(await reader.info(context));
-					if (after.size === before.size && after.mtimeMs === before.mtimeMs) return result;
+					if (after.size > before.size || (after.size === before.size && after.mtimeMs === before.mtimeMs)) {
+						return result;
+					}
 					if (attempt === 1) throw new Error(`${path} changed while it was read`);
 				}
 			} finally {

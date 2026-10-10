@@ -743,6 +743,13 @@ function isEnabledByOverrides(filePath: string, patterns: string[], baseDir: str
 	return enabled;
 }
 
+/** A repository or ref that git would read as an option. (Not --end-of-options for that: git 2.24 and later only.) */
+function assertGitSourceIsNotAnOption(source: GitSource): void {
+	if (source.repo.startsWith("-") || source.ref?.startsWith("-")) {
+		throw new Error(`Invalid git source: ${source.repo}${source.ref ? `@${source.ref}` : ""}`);
+	}
+}
+
 /**
  * Apply patterns to paths and return a Set of enabled paths.
  * Pattern types:
@@ -1077,6 +1084,11 @@ export class DefaultPackageManager implements PackageManager {
 		const scope: SourceScope = options?.local ? "project" : "user";
 		this.assertProjectTrustedForScope(scope);
 		await this.withProgress("remove", source, `Removing ${source}...`, async () => {
+			// Pi-Bolt with a package list of its own: Pi's list may still use this package, whose files stay.
+			const keptForPi = this.settingsManager.getPackagesKeptForPi(scope === "project" ? "project" : "global");
+			if (keptForPi.some((existing) => this.packageSourcesMatch(existing, source, scope))) {
+				return;
+			}
 			if (parsed.type === "npm") {
 				await this.uninstallNpm(parsed, scope);
 				return;
@@ -1796,7 +1808,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private parseNpmSpec(spec: string): { name: string; version?: string } {
-		const match = spec.match(/^(@?[^@]+(?:\/[^@]+)?)(?:@(.+))?$/);
+		const match = spec.match(/^(@?[^@]+)(?:@(.+))?$/);
 		if (!match) {
 			return { name: spec };
 		}
@@ -1941,6 +1953,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private async installGit(source: GitSource, scope: SourceScope): Promise<void> {
+		assertGitSourceIsNotAnOption(source);
 		const targetDir = this.getGitInstallPath(source, scope);
 		if (existsSync(targetDir)) {
 			if (source.ref) {
@@ -1975,6 +1988,7 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private async updateGit(source: GitSource, scope: SourceScope): Promise<void> {
+		assertGitSourceIsNotAnOption(source);
 		const targetDir = this.getGitInstallPath(source, scope);
 		if (!existsSync(targetDir)) {
 			await this.installGit(source, scope);

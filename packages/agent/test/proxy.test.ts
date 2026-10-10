@@ -115,4 +115,39 @@ describe("streamProxy", () => {
 		expect(result.stopReason).toBe("error");
 		expect(result.errorMessage).toContain("Connection closed by proxy server");
 	});
+
+	// Streamed arguments are parsed only as they grow; a message that ends without toolcall_end keeps all of them.
+	for (const end of ["error event", "end of stream"] as const) {
+		it(`keeps all streamed tool-call arguments when the stream ends with an ${end}`, async () => {
+			const content = "a".repeat(4000);
+			const json = JSON.stringify({ path: "f.txt", content });
+			const events: ProxyAssistantMessageEvent[] = [
+				{ type: "start" },
+				{ type: "toolcall_start", contentIndex: 0, id: "t1", toolName: "write" },
+			];
+			for (let i = 0; i < json.length; i += 10) {
+				events.push({ type: "toolcall_delta", contentIndex: 0, delta: json.slice(i, i + 10) });
+			}
+			if (end === "error event") {
+				events.push({ type: "error", reason: "error", errorMessage: "upstream overloaded", usage });
+			}
+			const body = events.map((event) => `data: ${JSON.stringify(event)}\n`).join("");
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => new Response(body, { status: 200 })),
+			);
+
+			const stream = streamProxy(model, normalizeContext({ systemPrompt: "", messages: [] }), {
+				authToken: "test-token",
+				proxyUrl: "https://proxy.example.com",
+			});
+			for await (const _event of stream) {
+			}
+			const result = await stream.result();
+
+			expect(result.stopReason).toBe("error");
+			const toolCall = result.content[0];
+			expect(toolCall.type === "toolCall" && toolCall.arguments).toEqual({ path: "f.txt", content });
+		});
+	}
 });

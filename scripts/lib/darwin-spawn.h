@@ -1,6 +1,7 @@
-// How the programs Pi starts on macOS get ASLR back (docs/ARCHITECTURE.md, "The macOS ARM64 port"). pi-bin runs without ASLR,
+// How the programs Pi starts on macOS get the system's own process setup (docs/ARCHITECTURE.md, "The macOS ARM64 port"). pi-bin
+// runs at its linked address,
 // and macOS passes that on to every process it starts, and to theirs. So the launcher (darwin-launcher.c) forks a helper
-// before it starts pi-bin (darwin-spawn-helper.c): a process with ASLR, which is not pi-bin's descendant. pi-bin (Bun's
+// before it starts pi-bin (darwin-spawn-helper.c): a process started the usual way, which is not pi-bin's descendant. pi-bin (Bun's
 // posix_spawn.rs) starts pi-spawn (darwin-spawn-proxy.c) in a program's place; pi-spawn passes what it was given to the
 // helper, which starts the program, and then stands in for the program until it exits.
 //

@@ -111,6 +111,30 @@ describe("tool round", () => {
 		await harness.close(context);
 	});
 
+	// #10395
+	it("gives tools and hooks the Harness's models", async () => {
+		const setup = chatSetup();
+		const seen: unknown[] = [];
+		addTool(
+			setup.registry,
+			tool("echo", async (_args, api) => {
+				seen.push(api.models);
+				return { content: [] };
+			}),
+		);
+		addHooks(setup.registry, ToolTask, {
+			beforeTool: (_call, api) => {
+				seen.push(api.models);
+				return undefined;
+			},
+		});
+		const { harness, status } = await run(setup, [calls(["echo", {}, "c1"]), DONE]);
+		expect(status).toBe("done");
+		expect(seen).toEqual([setup.models, setup.models]);
+		expect(seen.every((models) => models === setup.models)).toBe(true);
+		await harness.close(context);
+	});
+
 	it("answers calls to tools the request did not offer without a task", async () => {
 		const setup = chatSetup();
 		addTool(
@@ -401,6 +425,44 @@ describe("tool results", () => {
 		const [result] = results(entries);
 		expect(result!.isError).toBe(true);
 		expect(resultText(result!)).toBe("partial\n|<harness>\n[error] boom\n</harness>");
+		await harness.close(context);
+	});
+
+	// #10549
+	it("records how long execute() took, excluding hooks, and nothing for calls that did not run", async () => {
+		const setup = chatSetup();
+		const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+		addTool(
+			setup.registry,
+			tool("slow", async () => {
+				await sleep(30);
+				return { content: [] };
+			}),
+		);
+		addTool(
+			setup.registry,
+			tool("thrower", async () => {
+				await sleep(30);
+				throw new Error("boom");
+			}),
+		);
+		addHooks(setup.registry, ToolTask, {
+			beforeTool: async (call) => {
+				await sleep(100);
+				return call.id === "blocked" ? { block: "no" } : undefined;
+			},
+		});
+		const { harness, entries } = await run(setup, [
+			calls(["slow", {}, "slow"], ["thrower", {}, "thrower"], ["slow", {}, "blocked"]),
+			DONE,
+		]);
+		const byId = new Map(results(entries).map((result) => [result.toolCallId, result]));
+		for (const id of ["slow", "thrower"]) {
+			expect(byId.get(id)?.durationMs).toBeGreaterThanOrEqual(25);
+			expect(byId.get(id)?.durationMs).toBeLessThan(100);
+		}
+		expect(byId.get("thrower")?.isError).toBe(true);
+		expect(byId.get("blocked")).not.toHaveProperty("durationMs");
 		await harness.close(context);
 	});
 

@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
+import { PIBOLT } from "../pi-bolt.ts";
 import { getFileRevision, normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
@@ -157,6 +158,7 @@ export interface Settings {
 	trackingId?: string; // analytics tracking identifier, generated when analytics is enabled
 	deviceId?: string; // stable UUID of this installation, created when a login first needs it; global setting only
 	packages?: PackageSource[]; // Array of npm/git package sources (string or object with filtering)
+	piBolt?: { packages?: PackageSource[] }; // Pi-Bolt only: its own package list, in place of `packages` (runtimePackages)
 	extensions?: string[]; // Array of local extension file paths or directories
 	skills?: string[]; // Array of local skill file paths or directories
 	prompts?: string[]; // Array of local prompt template paths or directories
@@ -170,7 +172,7 @@ export interface Settings {
 	treeFilterMode?: "default" | "no-tools" | "user-only" | "labeled-only" | "all"; // Default filter when opening /tree
 	thinkingBudgets?: ThinkingBudgetsSettings; // Custom token budgets for thinking levels
 	editorPaddingX?: number; // Horizontal padding for input editor (default: 0)
-	outputPad?: 0 | 1; // Horizontal padding for chat message output (default: 1)
+	outputPad?: 0 | 1; // Horizontal padding for transcript content (default: 1)
 	autocompleteMaxVisible?: number; // Max visible items in autocomplete dropdown (default: 5)
 	showHardwareCursor?: boolean; // Show terminal cursor while still positioning it for IME
 	markdown?: MarkdownSettings;
@@ -214,8 +216,39 @@ function deepMergeObjects(base: Record<string, unknown>, overrides: Record<strin
 /** Tools enabled at startup when `defaultTools` does not change them. */
 export const DEFAULT_TOOL_NAMES: readonly string[] = ["read", "bash", "edit", "write"];
 
-function isToolModifier(entry: unknown): boolean {
+/** Whether a tool selection entry is a `+name` or `-name` modifier. */
+export function isToolModifier(entry: unknown): boolean {
 	return typeof entry === "string" && (entry.startsWith("+") || entry.startsWith("-"));
+}
+
+/**
+ * Validate a tool list from `--tools` or the SDK `tools` option. It is either an allowlist of plain
+ * names and patterns or a list of only `+name`/`-name` entries with exact names. Returns the
+ * problem, or undefined when the list is valid.
+ */
+export function getToolListError(entries: readonly string[]): string | undefined {
+	const modifiers = entries.filter(isToolModifier);
+	if (modifiers.length === 0) return undefined;
+	if (modifiers.length < entries.length) return "tool names cannot be mixed with +name or -name entries";
+	const pattern = modifiers.find((entry) => entry.includes("*"));
+	if (pattern) return `+name and -name entries take exact tool names, not patterns: ${pattern}`;
+	return undefined;
+}
+
+/**
+ * Apply the `+name` and `-name` entries of `entries` to `base` in order: `+name` adds a tool and
+ * `-name` removes one. Other entries are ignored.
+ */
+export function applyToolModifiers(base: readonly string[], entries: readonly string[]): string[] {
+	const tools = [...base];
+	for (const entry of entries) {
+		if (!isToolModifier(entry)) continue;
+		const name = entry.slice(1);
+		const index = tools.indexOf(name);
+		if (entry.startsWith("+") && index === -1 && name) tools.push(name);
+		else if (entry.startsWith("-") && index !== -1) tools.splice(index, 1);
+	}
+	return tools;
 }
 
 /**
@@ -235,15 +268,7 @@ function mergeDefaultTools(base: string[] | undefined, overrides: string[] | und
  */
 function resolveDefaultTools(entries: string[]): string[] {
 	const plain = entries.filter((entry) => !isToolModifier(entry));
-	const tools = plain.length > 0 || entries.length === 0 ? plain : [...DEFAULT_TOOL_NAMES];
-	for (const entry of entries) {
-		if (!isToolModifier(entry)) continue;
-		const name = entry.slice(1);
-		const index = tools.indexOf(name);
-		if (entry.startsWith("+") && index === -1 && name) tools.push(name);
-		else if (entry.startsWith("-") && index !== -1) tools.splice(index, 1);
-	}
-	return tools;
+	return applyToolModifiers(plain.length > 0 || entries.length === 0 ? plain : DEFAULT_TOOL_NAMES, entries);
 }
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */
@@ -408,6 +433,19 @@ export class InMemorySettingsStorage implements SettingsStorage {
 	}
 }
 
+/**
+ * Pi-Bolt and Pi share one agent directory (auth, models, sessions, settings). Where both are used, they can still load
+ * different packages: a list in `piBolt.packages` is Pi-Bolt's, read and written in place of `packages`, which Pi on Node or
+ * Bun keeps using (it does not read `piBolt`). Without it, both use `packages`.
+ */
+function hasOwnPackageList(settings: Settings): boolean {
+	return PIBOLT !== undefined && Array.isArray(settings.piBolt?.packages);
+}
+
+function runtimePackages(settings: Settings): Settings {
+	return hasOwnPackageList(settings) ? { ...settings, packages: [...(settings.piBolt?.packages ?? [])] } : settings;
+}
+
 export class SettingsManager {
 	private storage: SettingsStorage;
 	private globalSettings: Settings;
@@ -521,7 +559,7 @@ export class SettingsManager {
 			return {};
 		}
 		const settings = JSON.parse(stripBom(content));
-		return SettingsManager.migrateSettings(settings);
+		return runtimePackages(SettingsManager.migrateSettings(settings));
 	}
 
 	private static tryLoadFromStorage(
@@ -751,6 +789,11 @@ export class SettingsManager {
 			const mergedSettings: Settings = { ...currentFileSettings };
 			for (const field of modifiedFields) {
 				const value = snapshotSettings[field];
+				if (field === "packages" && hasOwnPackageList(currentFileSettings)) {
+					// Pi-Bolt's own list changed; the one Pi uses stays as it is.
+					mergedSettings.piBolt = { ...currentFileSettings.piBolt, packages: value as PackageSource[] };
+					continue;
+				}
 				if (modifiedNestedFields.has(field) && typeof value === "object" && value !== null) {
 					const nestedModified = modifiedNestedFields.get(field)!;
 					const baseNested = (currentFileSettings[field] as Record<string, unknown>) ?? {};
@@ -1219,6 +1262,30 @@ export class SettingsManager {
 
 	getPackages(): PackageSource[] {
 		return [...(this.settings.packages ?? [])];
+	}
+
+	/**
+	 * The packages Pi itself loads from this scope's settings when Pi-Bolt keeps a list of its own (`piBolt.packages`), so
+	 * that removing a package from Pi-Bolt's list leaves files Pi still uses; otherwise none.
+	 */
+	getPackagesKeptForPi(scope: SettingsScope): PackageSource[] {
+		if (scope === "project" && !this.projectTrusted) return [];
+		let content: string | undefined;
+		if (this.storage.read) {
+			content = this.storage.read(scope);
+		} else {
+			this.storage.withLock(scope, (current) => {
+				content = current;
+				return undefined;
+			});
+		}
+		if (!content) return [];
+		try {
+			const settings = SettingsManager.migrateSettings(JSON.parse(stripBom(content)) as Record<string, unknown>);
+			return hasOwnPackageList(settings) ? [...(settings.packages ?? [])] : [];
+		} catch {
+			return [];
+		}
 	}
 
 	setPackages(packages: PackageSource[]): void {

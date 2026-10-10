@@ -18,7 +18,8 @@ export type OutputSlice = {
 const NEWLINE = 0x0a;
 const INVALID_OUTPUT = /[\x00-\x08\x0b-\x1f\ufff9-\ufffb]/g;
 const encoder = new TextEncoder();
-const decoder = new TextDecoder();
+/** Slices decode exactly: a U+FEFF at a slice's start is text, not a byte-order mark. */
+const decoder = new TextDecoder("utf-8", { ignoreBOM: true });
 
 /** Remove control characters that break display and transcripts; tabs and newlines stay. */
 export function sanitizeOutput(text: string): string {
@@ -110,7 +111,13 @@ function lineCount(bytes: Uint8Array): number {
  */
 export class OutputBuffer {
 	readonly #limits: OutputLimits;
-	readonly #decoder = new TextDecoder();
+	/**
+	 * Decoder of byte chunks. A string chunk or a skip ends an incomplete character of earlier bytes (it becomes U+FFFD);
+	 * the next byte chunk then starts a new character. As in `StreamDecoder`, only a byte-order mark at the very start of
+	 * the output is dropped, never a U+FEFF later in it.
+	 */
+	readonly #decoder = new TextDecoder("utf-8", { ignoreBOM: true });
+	#started = false;
 	/** Stored chunks: for head the start of the stream, for tail a suffix that still contains the next window. */
 	#chunks: { readonly text: string; readonly bytes: number; readonly newlines: number }[] = [];
 	#storedBytes = 0;
@@ -137,7 +144,10 @@ export class OutputBuffer {
 	push(chunk: string | Uint8Array, skipped?: ShellOutputSkip): boolean {
 		// Bytes of an incomplete character from an earlier byte chunk come first.
 		const pending = typeof chunk === "string" || skipped !== undefined ? this.#decoder.decode() : "";
-		const text = typeof chunk === "string" ? chunk : this.#decoder.decode(chunk, { stream: true });
+		let text = typeof chunk === "string" ? chunk : this.#decoder.decode(chunk, { stream: true });
+		const first = !this.#started && pending === "" && skipped === undefined;
+		if (pending !== "" || text !== "" || skipped !== undefined) this.#started = true;
+		if (first && typeof chunk !== "string" && text.startsWith("\ufeff")) text = text.slice(1);
 		if (skipped === undefined) return this.#accept(pending + text);
 		if (this.#limits.retain !== "tail") throw new Error("Skipped output requires tail retention");
 		this.#accept(pending);

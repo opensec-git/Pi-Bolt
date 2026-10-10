@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Sets Pi-Bolt's version everywhere it is written: VERSION, npm/package.json, npm/bin/pi-bolt, and (with --pi) the Pi version in
-# sources.json. Without --version, a new Pi gets a minor bump and anything else a patch bump.
+# sources.json. Without --version, the last number goes up by one (0.7.0 -> 0.7.1), a new Pi version included.
 # Usage: scripts/bump-version.sh [--version X.Y.Z] [--pi X.Y.Z]
 source "$(dirname "$0")/lib/common.sh"
 
@@ -18,7 +18,7 @@ cd "$PIBOLT_ROOT" || exit 1
 CURRENT="$(cat VERSION)"
 if [ -z "$NEW" ]; then
 	IFS=. read -r major minor patch <<<"$CURRENT"
-	if [ -n "$PI" ]; then NEW="$major.$((minor + 1)).0"; else NEW="$major.$minor.$((patch + 1))"; fi
+	NEW="$major.$minor.$((patch + 1))"
 fi
 [[ "$NEW" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "not a version: $NEW"
 echo "$NEW" >VERSION

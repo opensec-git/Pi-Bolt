@@ -1,0 +1,1286 @@
+/ $
+/ +$
+/ \\|
+/!![\\w#;/?:@&=+$,.~*'()[\\]]+|
+/!<[\\w#;/?:@&=+$,.~*'()[\\]]+>|
+/![\\w#;/?:@&=+$,.~*'()[\\]]+|
+/!\\w+![\\w#;/?:@&=+$,.~*'()[\\]]+|
+/!important|
+/"""(?=[^"])|
+/"""|
+/""|
+/"#|
+/"\\w[\\w :\\/.-]*":(?=[ \u0009]|$)|
+/"|
+/#!?\\[|
+/#!\\/usr\\/bin\\/env runhaskell|
+/#"""|
+/#"|
+/##"""|
+/##"|
+/###"""|
+/###"|
+/#$
+/#([a-fA-F0-9]{6}|[a-fA-F0-9]{3})|
+/#-\\}|
+/#<|
+/#>|
+/#|
+/$|
+/$|;|
+/%r!|
+/%r\\(|
+/%r\\[|
+/%|
+/&[a-zA-Z_]\\w*$|
+/'''|
+/''|
+/'\\w[\\w :\\/.-]*':(?=[ \u0009]|$)|
+/'\\w[\\w\\d_]*(?!')|
+/'|
+/(!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~)\\s*|
+/(!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~|\\b(case|return|throw)\\b)\\s*|
+/(!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~|unless)\\s*|
+/((?=([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*\\s*:)|(?=([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*\\s+([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*\\s*:))|
+/((\\b([0-9](_?[0-9])*))?\\.([0-9](_?[0-9])*)|\\b([0-9](_?[0-9])*)\\.)[jJ]?|
+/((decltype\\(auto\\)|([a-zA-Z_]\\w*::)?[a-zA-Z_]\\w*(<[^<>]+>)?)[\\*&\\s]+)+([a-zA-Z_]\\w*::)?[a-zA-Z]\\w*\\s*\\(|
+/(-?)(\\b0[xX][a-fA-F0-9']+|(\\b[\\d']+(\\.[\\d']*)?|\\.[\\d']+)([eE][-+]?[\\d']+)?)|
+/(-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?)[i]|
+/(-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?)\\b|
+/(-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?)|
+/(-?)\\b([\\d']+(\\.[\\d']*)?|\\.[\\d']+)((ll|LL|l|L)(u|U)?|(u|U)(ll|LL|l|L)?|f|F|b|B)|
+/(-?)\\b([\\d']+(\\.[\\d']*)?|\\.[\\d']+)(u|U|l|L|ul|UL|f|F|b|B)|
+/(-and|-as|-band|-bnot|-bor|-bxor|-casesensitive|-ccontains|-ceq|-cge|-cgt|-cle|-clike|-clt|-cmatch|-cne|-cnotcontains|-cnotlike|-cnotmatch|-contains|-creplace|-csplit|-eq|-exact|-f|-file|-ge|-gt|-icontains|-ieq|-ige|-igt|-ile|-ilike|-ilt|-imatch|-in|-ine|-inotcontains|-inotlike|-inotmatch|-ireplace|-is|-isnot|-isplit|-join|-le|-like|-lt|-match|-ne|-not|-notcontains|-notin|-notlike|-notmatch|-or|-regex|-replace|-shl|-shr|-split|-wildcard|-xor)\\b|
+/(?:(?:m|qr)?)\\/(?:\\\\.|[^\\\\\\/])*?\\/[dualxmsipngr]{0,12}|
+/(?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):|
+/(?:[^?!.,:;*_'"~()&]+|\\([^)]*\\)|&(?![a-zA-Z0-9]+;$)|[?!.,:;*_'"~)]+(?!$))+
+/(?:\\b\\d+(?:_\\d+)*(\\.(?:\\d+(?:_\\d+)*))?|\\B\\.\\d+)(?:e[+-]?\\d+)?|
+/(?:^|\\n) {0,3}(?:\\$\\$|\\\\\\[)
+/(?:m|qr)(!|\\/|\\||\\?|'|"|#)(?:\\\\.|[^\\\\\\/])*?\\1[dualxmsipngr]{0,12}|
+/(?:m|qr)\\((?:\\\\.|[^\\\\\\/])*?\\)[dualxmsipngr]{0,12}|
+/(?:m|qr)\\[(?:\\\\.|[^\\\\\\/])*?\\][dualxmsipngr]{0,12}|
+/(?:m|qr)\\{(?:\\\\.|[^\\\\\\/])*?\\}[dualxmsipngr]{0,12}|
+/(?:s|tr|y)(!|\\/|\\||\\?|'|"|#)(?:\\\\.|[^\\\\\\/])*?\\1(?:\\\\.|[^\\\\\\/])*?\\1[dualxmsipngr]{0,12}|
+/(?:s|tr|y)\\((?:\\\\.|[^\\\\\\/])*?\\)\\((?:\\\\.|[^\\\\\\/])*?\\)[dualxmsipngr]{0,12}|
+/(?:s|tr|y)\\[(?:\\\\.|[^\\\\\\/])*?\\]\\[(?:\\\\.|[^\\\\\\/])*?\\][dualxmsipngr]{0,12}|
+/(?:s|tr|y)\\{(?:\\\\.|[^\\\\\\/])*?\\}\\{(?:\\\\.|[^\\\\\\/])*?\\}[dualxmsipngr]{0,12}|
+/(?=# type:)|
+/(?=#)|$|
+/(?=@)|
+/(?=\\b[A-Z])|
+/(?=\\bfunc\\b)|
+/(?=^( {4}|\\t))|
+/(?=^.+?\\n[=-]{2,}$)|
+/(AV|CA|CF|CG|CI|CL|CM|CN|CT|MK|MP|MTK|MTL|NS|SCN|SK|UI|WK|XC)(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])+|
+/(Add|Clear|Close|Copy|Enter|Exit|Find|Format|Get|Hide|Join|Lock|Move|New|Open|Optimize|Pop|Push|Redo|Remove|Rename|Reset|Resize|Search|Select|Set|Show|Skip|Split|Step|Switch|Undo|Unlock|Watch|Backup|Checkpoint|Compare|Compress|Convert|ConvertFrom|ConvertTo|Dismount|Edit|Expand|Export|Group|Import|Initialize|Limit|Merge|Mount|Out|Publish|Restore|Save|Sync|Unpublish|Update|Approve|Assert|Build|Complete|Confirm|Deny|Deploy|Disable|Enable|Install|Invoke|Register|Request|Restart|Resume|Start|Stop|Submit|Suspend|Uninstall|Unregister|Wait|Debug|Measure|Ping|Repair|Resolve|Test|Trace|Connect|Disconnect|Read|Receive|Send|Write|Block|Grant|Protect|Revoke|Unblock|Unprotect|Use|ForEach|Sort|Tee|Where)+(-)[\\w\\d]+|
+/([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F])*|
+/([=+-])
+/([A-Za-z0-9_-]+|"(\\\\"|[^"])*"|'[^']*')(\\s*\\.\\s*([A-Za-z0-9_-]+|"(\\\\"|[^"])*"|'[^']*'))*(?=\\s*=\\s*[^#\\s])|
+/([\u00c0-\u02b8a-zA-Z_$][\u00c0-\u02b8a-zA-Z_$0-9]*(<[\u00c0-\u02b8a-zA-Z_$][\u00c0-\u02b8a-zA-Z_$0-9]*(\\s*,\\s*[\u00c0-\u02b8a-zA-Z_$][\u00c0-\u02b8a-zA-Z_$0-9]*)*>)?\\s+)+[a-zA-Z_]\\w*\\s*\\(|
+/([^a-zA-Z0-9._])(?=(\\d+(\\.\\d*)?|\\.\\d+)([eE][+-]?\\d+)?[Li]?)|
+/([^a-zA-Z0-9._])(?=0[xX][0-9a-fA-F]+([pP][+-]?\\d+)?[Li]?)|
+/([^a-zA-Z0-9._])(?=0[xX][0-9a-fA-F]+\\.[0-9a-fA-F]*[pP][+-]?\\d+i?)|
+/([_a-zA-Z]\\w*\\.)*([_a-zA-Z]\\w*:)?[_a-zA-Z]\\w*|
+/([a-zA-Z]\\w*(<[a-zA-Z]\\w*(\\s*,\\s*[a-zA-Z]\\w*)*>)?(\\[\\])?\\s+)+[a-zA-Z]\\w*\\s*(<.+>\\s*)?\\(|
+/([a-zA-Z]\\w*::)?[a-zA-Z]\\w*|
+/([a-zA-Z_]\\w*::)?[a-zA-Z]\\w*\\s*\\(|
+/([a-zA-Z_]\\w*::)?[a-zA-Z]\\w*|
+/([a-zA-Z_]\\w*[!?=]?|[-+~]@|<<|>>|=~|===?|<=>|[<>]=?|\\*\\*|[-/+%^&*~`|]|\\[\\]=?)|
+/([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*\\s*:|
+/([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*|
+/(\\$\\W)|((\\$|@@?)(\\w+))(?=[^@$?])(?![A-Za-z])(?![@$?'])|
+/(\\$\\W)|((\\$|@@?)(\\w+))|
+/(\\([^()]*(\\([^()]*(\\([^()]*\\)[^()]*)*\\)[^()]*)*\\)|[a-zA-Z_]\\w*)\\s*=>|
+/(\\(|<)|
+/(\\.([0-9](_*[0-9])*))[fFdD]?\\b|
+/(\\/\\/|!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~|\\b(split|return|print|reverse|grep)\\b)\\s*|
+/(\\[|%)|
+/(\\b(0|[1-9](_?[0-9])*|0[0-7]*[89][0-9]*)((\\.([0-9](_?[0-9])*))|\\.)?|(\\.([0-9](_?[0-9])*)))[eE][+-]?([0-9](_?[0-9])*)\\b|
+/(\\b([0-9](_*[0-9])*)((\\.([0-9](_*[0-9])*))|\\.)?|(\\.([0-9](_*[0-9])*)))[eE][+-]?([0-9](_*[0-9])*)[fFdD]?\\b|
+/(\\b([0-9](_?[0-9])*)|((\\b([0-9](_?[0-9])*))?\\.([0-9](_?[0-9])*)|\\b([0-9](_?[0-9])*)\\.))[eE][+-]?([0-9](_?[0-9])*)[jJ]?\\b|
+/(\\b0[0-7_]+)|(\\b0x[0-9a-fA-F_]+)|(\\b[1-9][0-9_]*(\\.[0-9_]+)?)|[0_]\\b|
+/(\\b0o[0-7_]+)|(\\b0b[01_]+)|(\\b0x[0-9a-fA-F_]+)|(-?\\b[1-9][0-9_]*(\\.[0-9_]+([eE][-+]?[0-9]+)?)?)|
+/(\\bProtocol\\b|\\bType\\b|\\binit\\b|\\bself\\b)|
+/(\\bas\\?\\B|\\bas!\\B|\\bfileprivate\\(set\\)\\B|\\binit\\?\\B|\\binit!\\B|\\binternal\\(set\\)\\B|\\bopen\\(set\\)\\B|\\bprivate\\(set\\)\\B|\\bpublic\\(set\\)\\B|\\btry\\?\\B|\\btry!\\B|\\bunowned\\(safe\\)\\B|\\bunowned\\(unsafe\\)\\B|\\bAny\\b|\\bSelf\\b|\\binit\\b|\\bself\\b)|
+/(\\n|\\r\\n)
+/(\\s*\\(.*?\\))?[;{]|
+/(\\w+)|
+/(`([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*`|([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*|([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F])*)|
+/(`{3,})[^`](.|\\n)*?\\1`*[ ]*|
+/(create table|insert into|primary key|foreign key|not null|alter table|add constraint|grouping sets|on overflow|character set|respect nulls|ignore nulls|nulls first|nulls last|depth first|breadth first)|
+/(double precision|large object|with timezone|without timezone)|
+/(get|set)\\s+(?=[A-Za-z$_][0-9A-Za-z$_]*\\()|
+/(if|else|foreach|return|do|while|until|elseif|begin|for|trap|data|dynamicparam|end|break|throw|param|continue|finally|in|switch|exit|filter|try|process|catch|hidden|static|parameter)\\b|
+/(string|char|byte|int|long|bool|decimal|single|double|DateTime|xml|array|hashtable|void)|
+/(u8?|U|L)?"|
+/(u8?|U|L)?'(\\\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4,8}|[0-7]{3}|\\S)|.)|
+/(~{3,})[^~](.|\\n)*?\\1~*[ ]*|
+/,|\\]|
+/,|\\}|
+/-(?=[ ]|$)|
+/--(?!\\[=*\\[)|
+/-->|
+/--\\[=*\\[|
+/--|
+/->|
+/->|<-|
+/-?\\w+\\s*=>|
+/-\\w\\b|
+/-\\}|
+/.|
+//"""/|
+//""/|
+//"/|
+//#'/|
+//#(?![$_A-z])/|
+//#/|
+//#?[a-z_][a-z1-9_-]+/|
+//#[A-Za-z0-9_-]+/|
+//#\\s*[a-z]+\\b/|
+//#\\{/|
+//#|<\\//|
+//%/|
+//%[qQwWx]?%/|
+//%[qQwWx]?-/|
+//%[qQwWx]?</|
+//%[qQwWx]?\\(/|
+//%[qQwWx]?\\//|
+//%[qQwWx]?\\[/|
+//%[qQwWx]?\\{/|
+//%[qQwWx]?\\|/|
+//%\\{/|
+//%r\\{/|
+//&[a-z]+;|&#[0-9]+;|&#x[a-f0-9]+;/|
+//'''/|
+//''/|
+//'/|
+//'[a-zA-Z_][a-zA-Z0-9_]*/|
+//(-)[\\w\\d]+/|
+//(::|->)+[a-zA-Z_\\x7f-\\xff][a-zA-Z0-9_\\x7f-\\xff]*/|
+//(<\\/|->|\\?)|=>/|
+//(?:u8?|U|L)?R"([^()\\\\ ]{0,16})\\(/|
+//(?=[^\\n])\\s/|
+//(?=\\/[^/\\n]*\\/)/|
+//(@|#)available/|
+//([+-]+)?[\\d]+_[\\d_]+/|
+//([bB]|[bB][rR]|[rR][bB])"/|
+//([bB]|[bB][rR]|[rR][bB])'/|
+//([fF][rR]|[rR][fF]|[fF])"""/|
+//([fF][rR]|[rR][fF]|[fF])"/|
+//([fF][rR]|[rR][fF]|[fF])'''/|
+//([fF][rR]|[rR][fF]|[fF])'/|
+//([uU]|[bB]|[rR]|[bB][rR]|[rR][bB])?"""/|
+//([uU]|[bB]|[rR]|[bB][rR]|[rR][bB])?'''/|
+//([uU]|[rR])"/|
+//([uU]|[rR])'/|
+//(\\d+(\\.\\d*)?|\\.\\d+)([eE][+-]?\\d+)?[Li]?/|
+//(\\w+)/|
+//(m|qr)\\/\\//|
+//(url|data-uri)\\(/|
+//,/|
+//-(webkit|moz|ms|o)-(?=[a-z])/|
+//->/|
+//->\\{/|
+////|
+///|
+//:-/|
+//:/|
+//::/|
+//:=/|
+//;/|
+//<!--/|
+//<![a-z]/|
+//<!\\[CDATA\\[/|
+//<#/|
+//<.*?>/|
+//</|
+//<<-?\\s*(?=\\w+)/|
+//<<<[ \\t]*(\\w+)\\n/|
+//<<[-~]?'?(\\w+)\\n(?:[^\\n]*\\n)*?\\s*\\1\\b/|
+//<<[-~]?'?/|
+//<>|<\\/>/|
+//<[A-Za-z0-9\\\\._:-]+/|
+//<\\/?[A-Za-z_]/|
+//<\\/|#/|
+//<\\?[=]?/|
+//<\\?php/|
+//<\\?xml/|
+//<script(?=\\s|>)/|
+//<style(?=\\s|>)/|
+//=/|
+//=\\s*/|
+//={3,}/|
+//>/|
+//@"/|
+//@'/|
+//@-?\\w[\\w]*(-\\w+)*/|
+//@[a-z0-9]+/|
+//@\\B/|
+//@\\w+/|
+//Index: /|
+//["']/|
+//[$%@][^\\s\\w{]/|
+//[${=;\\n,]/|
+//[($"]/|
+//[,:]\\s*/|
+//[-+*/=%^~]|&&?|\\|\\|?|!=?|<(?:=>?|<|>)?|>[>=]?/|
+//[.']/|
+//[:"[\\]]/|
+//[:"\\[\\]]/|
+//[:($"]/|
+//[=|'\\$]/|
+//[?!]+/|
+//[A-Za-z$_][\\u00C0-\\u02B80-9A-Za-z$_]*/|
+//[A-Za-z0-9._:-]+/|
+//[\\.\\w\\d]+/|
+//[\\w-]+(?=\\()/|
+//[^)]/|
+//[^0-9\\n\\t "'(),.`{}\\[\\]:;][^\\n\\t "'(),.`{}\\[\\]:;]+|[^0-9\\n\\t "'(),.`{}\\[\\]:;=]/|
+//[^\\s"'=<>`]+/|
+//[^\\s,{}[\\]]+/|
+//[^\\s:]/|
+//[^\\w\\s\\*&:<>.]/|
+//[a-z-]+(?=:)/|
+//[a-zA-Z0-9-_]+(\\s*=)/|
+//[a-z]*|
+//[rR]"(-*)\\(/|
+//[rR]"(-*)\\[/|
+//[rR]"(-*)\\{/|
+//[rR]'(-*)\\(/|
+//[rR]'(-*)\\[/|
+//[rR]'(-*)\\{/|
+//[{}]|<\\//|
+//\\$"/|
+//\\$(null|true|false)\\b/|
+//\\$@"/|
+//\\$[(.]/|
+//\\$[@%<?\\^\\+\\*]/|
+//\\$[A-z]/|
+//\\$[\\w\\d"][\\w\\d_]*/|
+//\\$[\\w\\d][\\w\\d_:]*/|
+//\\$\\(/|
+//\\$\\([\\w-]+\\s/|
+//\\$\\(\\(/|
+//\\$\\B/|
+//\\$\\d+/|
+//\\$\\d/|
+//\\$\\w+/|
+//\\$\\{(.*?)\\}/|
+//\\$\\{/|
+//\\$this/|
+//\\$this\\b/|
+//\\$|
+//\\(/|
+//\\(\\)/|
+//\\(\\s*\\)/|
+//\\*(?!\\*)/|
+//\\*\\*|
+//\\*{2}/|
+//\\*|
+//\\.(parameter|forwardhelptargetname|forwardhelpcategory|remotehelprunspace|externalhelp)\\s+\\S+/|
+//\\.(synopsis|description|example|inputs|outputs|notes|link|component|role|functionality)/|
+//\\.\\.\\./|
+//\\//|
+//\\/: (?=\\d+\\s*[,\\]])/|
+//\\/\\*/|
+//\\/\\*\\*(?!\\/)/|
+//\\/{3,} ?/|
+//\\?/|
+//\\?>/|
+//\\B\\?(\\\\M-\\\\C-|\\\\M-\\\\c|\\\\c\\\\M-|\\\\M-|\\\\C-\\\\M-)[\\x20-\\x7e]/|
+//\\B\\?(\\\\\\d{1,3})/|
+//\\B\\?(\\\\u\\{?[A-Fa-f0-9]{1,6}\\}?)/|
+//\\B\\?(\\\\x[A-Fa-f0-9]{1,2})/|
+//\\B\\?\\\\(c|C-)[\\x20-\\x7e]/|
+//\\B\\?\\\\?\\S/|
+//\\B|\\b/|
+//\\S+/|
+//\\S/|
+//\\[+/|
+//\\[.*\\]\\s*[\\w]+[ ]??\\(/|
+//\\[.+?\\]\\(((data|javascript|mailto):|(?:http|ftp)s?:\\/\\/).*?\\)/|
+//\\[.+?\\]\\(.*?\\)/|
+//\\[.+?\\]\\([./?&#].*?\\)/|
+//\\[.+?\\]\\[.*?\\]/|
+//\\[/|
+//\\[|%/|
+//\\\\"/|
+//\\\\\\\\(?=\\{\\{)/|
+//\\\\\\n/|
+//\\\\\\{\\{/|
+//\\b(?=constructor)/|
+//\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b/|
+//\\b(break|continue|return|this)\\b/|
+//\\b(subscript|init[?!]?)\\s*(?=[<(])/|
+//\\b0b([01]_*)+\\b/|
+//\\b0o([0-7]_*)+\\b/|
+//\\b_\\b/|
+//\\bon|off|true|false|yes|no\\b/|
+//\\bself\\b/|
+//\\n/|
+//\\s+/|
+//\\s/|
+//\\w+@/|
+//\\w[\\w\\d]*((-)[\\w\\d]+)*/|
+//\\w[\\w\\d_]*/|
+//\\w[\\w\\d_]*\\s*\\(\\s*\\)\\s*\\{/|
+//\\{-#/|
+//\\{-/|
+//\\{/|
+//\\{\\$/|
+//\\{\\w+\\}/|
+//\\{\\{!--/|
+//\\{\\{!/|
+//\\{\\{#/|
+//\\{\\{(?=else if)/|
+//\\{\\{(?=else\\}\\})/|
+//\\{\\{/|
+//\\{\\{\\//|
+//\\{\\{\\{/|
+//\\{\\{\\{\\{(?!\\/)/|
+//\\{\\{\\{\\{\\//|
+//\\|/|
+//\\}\\}/|
+//^!/|
+//^#![ ]*\\//|
+//^(>>>|\\.\\.\\.) /|
+//^--- +\\d+,\\d+ +----$/|
+//^-/|
+//^-{3}/|
+//^=\\w/|
+//^@@ +-\\d+,\\d+ +\\+\\d+,\\d+ +@@/|
+//^[\\t ]*@/|
+//^[^\\s]+:/|
+//^\\*\\*\\* +\\d+,\\d+ +\\*\\*\\*\\*$/|
+//^\\*{15}$/|
+//^\\*{3} /|
+//^\\+/|
+//^\\+{3}/|
+//^\\.PHONY:/|
+//^\\[[^\\n]+\\]:/|
+//^\\s*=>/|
+//^\\s*['"]use (strict|asm)['"]/|
+//^\\s*['"]use strict['"]/|
+//^\\s{0,3}[/~\\w\\d[\\]()@-]*[>%$#]/|
+//^diff --git/|
+//^index/|
+//_(?!_)/|
+//_{2}/|
+//`/|
+//b?"/|
+//b?'\\\\?(x\\w{2}|u\\w{4}|U\\w{8}|.)'/|
+//function\\s+/|
+//import java\\.[a-z]+\\./|
+//r(#*)"(.|\\n)*?"\\1(?!#)/|
+//using\\s/|
+//|
+//~?\\/[^\\/\\n]+\\//|
+//~S"""/|
+//~S"/|
+//~S'''/|
+//~S'/|
+/:(?![\\s:])|
+/:(?!\\s)|
+/:(active|any-link|blank|checked|current|default|defined|dir|disabled|drop|empty|enabled|first|first-child|first-of-type|fullscreen|future|focus|focus-visible|focus-within|has|host|host-context|hover|indeterminate|in-range|invalid|is|lang|last-child|last-of-type|left|link|local-link|not|nth-child|nth-col|nth-last-child|nth-last-col|nth-last-of-type|nth-of-type|only-child|only-of-type|optional|out-of-range|past|placeholder-shown|read-only|read-write|required|right|root|scope|target|target-within|user-invalid|valid|visited|where)|
+/::(after|backdrop|before|cue|cue-region|first-letter|first-line|grammar-error|marker|part|placeholder|selection|slotted|spelling-error)|
+/::|
+/:|
+/;|
+/<!--|-->|
+/<%[%=-]?|
+/<(?=[A-Z_]([A-Z0-9_.-]*:)?[A-Z0-9_.-]*(\\/>|>|\\s))|
+/</?|
+/</|
+/<>|
+/<\\/(?=[A-Z_]([A-Z0-9_.-]*:)?[A-Z0-9_.-]*>)|
+/<\\/script>|
+/<\\/style>|
+/<\\s*|
+/<|
+/=>|
+/=cut|
+/>|
+/@"|
+/@(?:file|property|field|get|set|receiver|param|setparam|delegate)\\s*:(?:\\s*[a-zA-Z_]\\w*)?|
+/@([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*|
+/@(autoclosure|convention\\((swift|block|c)\\)|discardableResult|dynamicCallable|dynamicMemberLookup|escaping|frozen|GKInspectable|IBAction|IBDesignable|IBInspectable|IBOutlet|IBSegueAction|inlinable|main|nonobjc|NSApplicationMain|NSCopying|NSManaged|objc\\(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*\\)|objc|objcMembers|propertyWrapper|requires_stored_property_inits|testable|UIApplicationMain|unknown|usableFromInline)|
+/@[A-Za-z$_][0-9A-Za-z$_]*|
+/@[A-Za-z]+|
+/@[\u00c0-\u02b8a-zA-Z_$][\u00c0-\u02b8a-zA-Z_$0-9]*|
+/@[a-zA-Z]\\w*|
+/@[a-zA-Z_]\\w*|
+/[ \\t]
+/[ \\t]*(\\w+)\\b|
+/[$%@](\\^\\w\\b|#\\w+(::\\w+)*|\\{\\w+\\}|\\w+(::\\w*)*)(?![A-Za-z])(?![@$%])|
+/[$%\\[]|
+/[$@]\\{|
+/[(]|$|
+/[:={\\[(\\n;]|
+/[:={\\[\\n;]|
+/[:\\{(]|$|
+/[:|]
+/[;{]|
+/[;}]|
+/[=,\\/]|\\)|
+/[A-Z](([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*|
+/[A-Z_]([A-Z0-9_.-]*:)?[A-Z0-9_.-]*|
+/[A-Za-z$_][0-9A-Za-z$_]*(?=\\s*(-)|$)|
+/[A-Za-z$_][0-9A-Za-z$_]*(?=\\s*:)|
+/[A-Za-z$_][0-9A-Za-z$_]*|
+/[A-Za-z0-9_$]+[ \u0009]*:|
+/[A-Za-z]
+/[A-Za-z_]\\w*(::\\w+)*(\\?|!)?|
+/[\\n\\r\\u2028\\u2029]
+/[\\s/]+
+/[\\s\\-_./:]
+/[\\u0e33\\u0eb3]
+/[\\w\\d]|
+/[\\|>]([1-9]?[+-])?[ ]*\\n( +)[^ ][^\\n]*\\n(\\2[^\\n]+\\n?)*|
+/[^ ]
+/[^\\\\]$|
+/[^\\\\](?=\\s*$)|
+/[_a-z][\\w']*|
+/[a-zA-Z0-9.\\-_]
+/[a-zA-Z](\\.?\\w)*|
+/[a-zA-Z][a-zA-Z_0-9]*\\s+<-\\s+|
+/[a-zA-Z]\\w*::|
+/[a-zA-Z]\\w*\\s*(<.+>\\s*)?\\(|
+/[a-zA-Z]\\w*|
+/[a-zA-Z_][a-zA-Z0-9_.]*(!|\\?)?:(?!:)|
+/[a-zA-Z_][a-zA-Z0-9_.]*(!|\\?)?|
+/[a-zA-Z_]\\w*(!|\\?)?:|
+/[a-zA-Z_]\\w*@|
+/[a-zA-Z_]\\w*[!?=]?|[-+~]@|<<|>>|=~|===?|<=>|[<>]=?|\\*\\*|[-/+%^&*~`|]|\\[\\]=?|
+/[a-zA-Z_]\\w*\\([^()]*(\\([^()]*(\\([^()]*\\)[^()]*)*\\)[^()]*)*\\)\\s*\\{|
+/[a-zA-Z_]\\w*\\s*\\(|
+/[a-zA-Z_]\\w*|
+/[a-z]+"""|
+/[a-z]+"|
+/[{,\\n]\\s*(?=(((\\/\\/.*$)|(\\/\\*(\\*[^/]|[^*])*\\*\\/))\\s*)*[A-Za-z$_][0-9A-Za-z$_]*\\s*:)|
+/[{;:<>=]|
+/[{;=]|
+/[{;]|
+/\\$(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])+|
+/\\$+[a-zA-Z_\u007f-\u00ff][a-zA-Z0-9_\u007f-\u00ff]*(?![A-Za-z0-9])(?![$])|
+/\\$/|
+/\\$[A-Za-z$_][0-9A-Za-z$_]*|
+/\\$[A-Za-z0-9_]+|
+/\\$[\\w\\d#@][\\w\\d_]*(?![\\w\\d])(?![$])|
+/\\$[a-zA-Z_]\\w*|
+/\\$\\([a-zA-Z_]\\w*\\)|
+/\\$\\{|
+/\\(|
+/\\)([^()\\\\ ]{0,16})"|
+/\\)|
+/\\*/|
+/\\*[a-zA-Z_]\\w*$|
+/\\*{2}|
+/\\*|
+/\\.(?=(\\bProtocol\\b|\\bType\\b|\\binit\\b|\\bself\\b))|
+/\\.(\\.|(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F]))+|
+/\\.(abs|all|any|assert|assertionFailure|debugPrint|dump|fatalError|getVaList|isKnownUniquelyReferenced|max|min|numericCast|pointwiseMax|pointwiseMin|precondition|preconditionFailure|print|readLine|repeatElement|sequence|stride|swap|swift_unboxFromSwiftValueWithType|transcode|type|unsafeBitCast|unsafeDowncast|withExtendedLifetime|withUnsafeMutablePointer|withUnsafePointer|withVaList|withoutActuallyEscaping|zip)|
+/\\.(associatedtype|async|await|as\\?|as!|as|break|case|catch|class|continue|convenience|default|defer|deinit|didSet|do|dynamic|else|enum|extension|fallthrough|fileprivate\\(set\\)|fileprivate|final|for|func|get|guard|if|import|indirect|infix|init\\?|init!|inout|internal\\(set\\)|internal|in|is|lazy|let|mutating|nonmutating|open\\(set\\)|open|operator|optional|override|postfix|precedencegroup|prefix|private\\(set\\)|private|protocol|public\\(set\\)|public|repeat|required|rethrows|return|set|some|static|struct|subscript|super|switch|throws|throw|try\\?|try!|try|typealias|unowned\\(safe\\)|unowned\\(unsafe\\)|unowned|var|weak|where|while|willSet)|
+/\\.[A-Za-z$_][0-9A-Za-z$_]*|
+/\\.[a-zA-Z-][a-zA-Z0-9_-]*|
+/\\/?>|
+/\\/[A-Za-z0-9\\\\._:-]+>|\\/>|
+/\\/[gimuy]*|
+/\\/|
+/\\?>|
+/\\B\\b|
+/\\B|\\b|
+/\\S
+/\\S|
+/\\W\\.|;|
+/\\[(?:[^\\\\\\]]|\\\\.)*\\]|\\(\\??|\\\\([1-9][0-9]*)|\\\\.
+/\\[.+?\\]\\([A-Za-z][A-Za-z0-9+.-]*:\\/\\/.*?\\)|
+/\\[=*\\[|
+/\\[[ xX]\\]
+/\\[|
+/\\\\#[0\\\\tnr"']|
+/\\\\#\\(|
+/\\\\#u\\{[0-9a-fA-F]{1,8}\\}|
+/\\\\[0\\\\tnr"']|
+/\\\\[A-Za-z]+|[_^=+*/<>()[\\]|\\u00B1\\u2264\\u2265\\u2260\\u2248\\u2208\\u2192\\u21D2\\u221E\\u222B\\u2211\\u221A-]
+/\\\\[\\s\\S]|
+/\\\\[\\t ]*(?:[\\r\\n]|\\r\\n)|
+/\\\\\\(|
+/\\\\u\\{[0-9a-fA-F]{1,8}\\}|
+/\\]+|
+/\\]=*\\]|
+/\\]\\(|
+/\\]\\[|
+/\\]\\]>|
+/\\]|
+/\\b(([0-9]_*)+)(\\.(([0-9]_*)+))?([eE][+-]?(([0-9]_*)+))?\\b|
+/\\b(0b[01']+)|
+/\\b(0b[01]+)|
+/\\b(0|[1-9](_*[0-9])*)[lL]?\\b|
+/\\b(0|[1-9](_?[0-9])*)n\\b|
+/\\b(0|[1-9](_?[0-9])*|0[0-7]*[89][0-9]*)\\b((\\.([0-9](_?[0-9])*))\\b|\\.)?|(\\.([0-9](_?[0-9])*))\\b|
+/\\b(?!decltype)(?!if)(?!for)(?!while)[a-zA-Z]\\w*(?=\\s*\\()|
+/\\b([0-9](_*[0-9])*)((\\.([0-9](_*[0-9])*))[fFdD]?\\b|\\.([fFdD]\\b)?)|
+/\\b([0-9](_*[0-9])*)[fFdD]\\b|
+/\\b([0-9](_?[0-9])*)[jJ]\\b|
+/\\b([1-9](_?[0-9])*|0)(\\.([0-9](_?[0-9])*))?([eE][+-]?([0-9](_?[0-9])*)|r)?i?\\b|
+/\\b([1-9](_?[0-9])*|0+(_?0)*)[lLjJ]?\\b|
+/\\b(\\d[\\d_]*(\\.[0-9_]+)?([eE][+-]?[0-9_]+)?)([ui](8|16|32|64|128|size)|f(32|64))?|
+/\\b(abs|acos|array_agg|asin|atan|avg|cast|ceil|ceiling|coalesce|corr|cos|cosh|count|covar_pop|covar_samp|cume_dist|dense_rank|deref|element|exp|extract|first_value|floor|json_array|json_arrayagg|json_exists|json_object|json_objectagg|json_query|json_table|json_table_primitive|json_value|lag|last_value|lead|listagg|ln|log|log10|lower|max|min|mod|nth_value|ntile|nullif|percent_rank|percentile_cont|percentile_disc|position|position_regex|power|rank|regr_avgx|regr_avgy|regr_count|regr_intercept|regr_r2|regr_slope|regr_sxx|regr_sxy|regr_syy|row_number|sin|sinh|sqrt|stddev_pop|stddev_samp|substring|substring_regex|sum|tan|tanh|translate|translate_regex|treat|trim|trim_array|unnest|upper|value_of|var_pop|var_samp|width_bucket)\\s*\\(|
+/\\b(abs|all|any|assert|assertionFailure|debugPrint|dump|fatalError|getVaList|isKnownUniquelyReferenced|max|min|numericCast|pointwiseMax|pointwiseMin|precondition|preconditionFailure|print|readLine|repeatElement|sequence|stride|swap|swift_unboxFromSwiftValueWithType|transcode|type|unsafeBitCast|unsafeDowncast|withExtendedLifetime|withUnsafeMutablePointer|withUnsafePointer|withVaList|withoutActuallyEscaping|zip)(?=\\()|
+/\\b(a|abbr|address|article|aside|audio|b|blockquote|body|button|canvas|caption|cite|code|dd|del|details|dfn|div|dl|dt|em|fieldset|figcaption|figure|footer|form|h1|h2|h3|h4|h5|h6|header|hgroup|html|i|iframe|img|input|ins|kbd|label|legend|li|main|mark|menu|nav|object|ol|p|q|quote|samp|section|span|strong|summary|sup|table|tbody|td|textarea|tfoot|th|thead|time|tr|ul|var|video)\\b|
+/\\b(class)(?!\\.)(?=\\b|\\s)|
+/\\b(class|enum)(?!\\.)(?=\\b|\\s)|
+/\\b(class|interface)(?!\\.)(?=\\b|\\s)|
+/\\b(class|interface|enum)(?!\\.)(?=\\b|\\s)|
+/\\b(class|interface|trait)(?!\\.)(?=\\b|\\s)|
+/\\b(class|interface|trait|enum)(?!\\.)(?=\\b|\\s)|
+/\\b(class|module)(?!\\.)(?=\\b|\\s)|
+/\\b(class|object|trait|type)(?!\\.)(?=\\b|\\s)|
+/\\b(data|(new)?type)\\b|
+/\\b(def)(?!\\.)(?=\\b|\\s)|
+/\\b(default)(?!\\.)(?=\\b|\\s)|
+/\\b(defimpl|defmodule|defprotocol|defrecord)(?!\\.)(?=\\b|\\s)|
+/\\b(def|defp|defmacro)(?!\\.)(?=\\b|\\s)|
+/\\b(deque|list|queue|priority_queue|pair|stack|vector|map|set|bitset|multiset|multimap|unordered_map|unordered_set|unordered_multiset|unordered_multimap|array)\\s*<|
+/\\b(enum)(?!\\.)(?=\\b|\\s)|
+/\\b(enum|class|struct|union)(?!\\.)(?=\\b|\\s)|
+/\\b(extends)(?!\\.)(?=\\b|\\s)|
+/\\b(extends|implements)(?!\\.)(?=\\b|\\s)|
+/\\b(extends|with)(?!\\.)(?=\\b|\\s)|
+/\\b(final|class|struct)(?!\\.)(?=\\b|\\s)|
+/\\b(fn)(?!\\.)(?=\\b|\\s)|
+/\\b(fn|function)(?!\\.)(?=\\b|\\s)|
+/\\b(fun)(?!\\.)(?=\\b|\\s)|
+/\\b(func)(?!\\.)(?=\\b|\\s)|
+/\\b(function)(?!\\.)(?=\\b|\\s)|
+/\\b(if)(?!\\.)(?=\\b|\\s)|
+/\\b(import)(?!\\.)(?=\\b|\\s)|
+/\\b(infix|infixl|infixr)(?!\\.)(?=\\b|\\s)|
+/\\b(interface)(?!\\.)(?=\\b|\\s)|
+/\\b(in|out)(?!\\.)(?=\\b|\\s)|
+/\\b(module)(?!\\.)(?=\\b|\\s)|
+/\\b(namespace)(?!\\.)(?=\\b|\\s)|
+/\\b(new|return|throw|await|else)(?!\\.)(?=\\b|\\s)|
+/\\b(new|throw|return|else)(?!\\.)(?=\\b|\\s)|
+/\\b(operator)(?!\\.)(?=\\b|\\s)|
+/\\b(precedencegroup)(?!\\.)(?=\\b|\\s)|
+/\\b(public|private|protected|static|internal|protected|abstract|async|extern|override|unsafe|virtual|new|sealed|partial)(?!\\.)(?=\\b|\\s)|
+/\\b(public|protected|internal|private|constructor)(?!\\.)(?=\\b|\\s)|
+/\\b(record)(?!\\.)(?=\\b|\\s)|
+/\\b(run|cmd|entrypoint|volume|add|copy|workdir|label|healthcheck|shell)(?!\\.)(?=\\b|\\s)|
+/\\b(struct|protocol|class|extension|enum)(?!\\.)(?=\\b|\\s)|
+/\\b(sub)(?!\\.)(?=\\b|\\s)|
+/\\b(trait|enum|struct|union)(?!\\.)(?=\\b|\\s)|
+/\\b(true|false|yes|no|null)(?!\\.)(?=\\b|\\s)|
+/\\b(type)(?!\\.)(?=\\b|\\s)|
+/\\b(use)(?!\\.)(?=\\b|\\s)|
+/\\b(while|if|switch|catch|for)(?!\\.)(?=\\b|\\s)|
+/\\b(z-index|word-wrap|word-spacing|word-break|width|widows|white-space|visibility|vertical-align|unicode-bidi|transition-timing-function|transition-property|transition-duration|transition-delay|transition|transform-style|transform-origin|transform|top|text-underline-position|text-transform|text-shadow|text-rendering|text-overflow|text-indent|text-decoration-style|text-decoration-line|text-decoration-color|text-decoration|text-align-last|text-align|table-layout|tab-size|src|right|resize|quotes|position|pointer-events|perspective-origin|perspective|page-break-inside|page-break-before|page-break-after|padding-top|padding-right|padding-left|padding-bottom|padding|overflow-y|overflow-x|overflow-wrap|overflow|outline-width|outline-style|outline-offset|outline-color|outline|orphans|order|opacity|object-position|object-fit|normal|none|nav-up|nav-right|nav-left|nav-index|nav-down|min-width|min-height|max-width|max-height|mask|marks|margin-top|margin-right|margin-left|margin-bottom|margin|list-style-type|list-style-position|list-style-image|list-style|line-height|letter-spacing|left|justify-content|initial|inherit|ime-mode|image-resolution|image-rendering|image-orientation|icon|hyphens|height|font-weight|font-variation-settings|font-variant-ligatures|font-variant|font-style|font-stretch|font-smoothing|font-size-adjust|font-size|font-language-override|font-kerning|font-feature-settings|font-family|font-display|font|float|flex-wrap|flex-shrink|flex-grow|flex-flow|flex-direction|flex-basis|flex|filter|empty-cells|display|direction|cursor|counter-reset|counter-increment|content|columns|column-width|column-span|column-rule-width|column-rule-style|column-rule-color|column-rule|column-gap|column-fill|column-count|color|clip-path|clip|clear|caption-side|break-inside|break-before|break-after|box-sizing|box-shadow|box-decoration-break|bottom|border-width|border-top-width|border-top-style|border-top-right-radius|border-top-left-radius|border-top-color|border-top|border-style|border-spacing|border-right-width|border-right-style|border-right-color|border-right|border-radius|border-left-width|border-left-style|border-left-color|border-left|border-image-width|border-image-source|border-image-slice|border-image-repeat|border-image-outset|border-image|border-color|border-collapse|border-bottom-width|border-bottom-style|border-bottom-right-radius|border-bottom-left-radius|border-bottom-color|border-bottom|border|background-size|background-repeat|background-position|background-origin|background-image|background-color|background-clip|background-attachment|background|backface-visibility|auto|animation-timing-function|animation-play-state|animation-name|animation-iteration-count|animation-fill-mode|animation-duration|animation-direction|animation-delay|animation|align-self|align-items|align-content)\\b|
+/\\b0(_*[0-7])*[lL]?\\b|
+/\\b0(_?[0-7])+r?i?\\b|
+/\\b0[0-7]+n?\\b|
+/\\b0[bB](_?[01])+[lL]?\\b|
+/\\b0[bB][0-1](_?[0-1])*n?\\b|
+/\\b0[bB][0-1](_?[0-1])*r?i?\\b|
+/\\b0[bB][01](_*[01])*[lL]?\\b|
+/\\b0[dD][0-9](_?[0-9])*r?i?\\b|
+/\\b0[oO](_?[0-7])+[lL]?\\b|
+/\\b0[oO][0-7](_?[0-7])*n?\\b|
+/\\b0[oO][0-7](_?[0-7])*r?i?\\b|
+/\\b0[xX](([0-9a-fA-F](_*[0-9a-fA-F])*)\\.?|([0-9a-fA-F](_*[0-9a-fA-F])*)?\\.([0-9a-fA-F](_*[0-9a-fA-F])*))[pP][+-]?([0-9](_*[0-9])*)[fFdD]?\\b|
+/\\b0[xX]([0-9a-fA-F](_*[0-9a-fA-F])*)[lL]?\\b|
+/\\b0[xX](_?[0-9a-fA-F])+[lL]?\\b|
+/\\b0[xX][0-9a-fA-F](_?[0-9a-fA-F])*n?\\b|
+/\\b0[xX][0-9a-fA-F](_?[0-9a-fA-F])*r?i?\\b|
+/\\b0b([01_]+)([ui](8|16|32|64|128|size)|f(32|64))?|
+/\\b0b[01]+(?:_[01]+)*\\b|
+/\\b0o([0-7_]+)([ui](8|16|32|64|128|size)|f(32|64))?|
+/\\b0o[0-7]+(?:_[0-7]+)*\\b|
+/\\b0x(([0-9a-fA-F]_*)+)(\\.(([0-9a-fA-F]_*)+))?([pP][+-]?(([0-9]_*)+))?\\b|
+/\\b0x([A-Fa-f0-9_]+)([ui](8|16|32|64|128|size)|f(32|64))?|
+/\\b0x[\\da-f]+(?:_[\\da-f]+)*\\b|
+/\\b[0-9]{4}(-[0-9][0-9]){0,2}([Tt \\t][0-9][0-9]?(:[0-9][0-9]){2})?(\\.[0-9]*)?([ \\t])*(Z|[-+][0-9][0-9]?(:[0-9][0-9])?)?\\b|
+/\\b[A-Z][A-Za-z0-9_]*|
+/\\b[A-Z][\\w']*|
+/\\b[A-Z][\\w]*(\\((\\.\\.|,|\\w+)\\))?|
+/\\b[a-z\\d_]*_t\\b|
+/\\b\\d+(\\.\\d+)?(%|em|ex|ch|rem|vw|vh|vmin|vmax|cm|mm|in|pt|pc|px|deg|grad|rad|turn|s|ms|Hz|kHz|dpi|dpcm|dppx)?|
+/\\b\\d+(\\.\\d+)?|
+/\\bdo\\b|$|;|
+/\\bforeign\\b|
+/\\bimport\\b|
+/\\n[ \\t]*$
+/\\n[ \\t]*\\n[ \\t]*$
+/\\n|
+/\\r\\n|\\r|\\n
+/\\s
+/\\s$
+/\\s*(\\{|$)|
+/\\s*=>|
+/\\s*[{;=]|
+/\\s*\\{|$|
+/\\s*|
+/\\s+
+/\\s+&\\s+(?=[A-Z](([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*)|
+/\\s+|
+/\\sclass\\s*=\\s*(?:"([^"]*)"|'([^']*)')
+/\\w$
+/\\w[\\w :\\/.-]*:(?=[ \u0009]|$)|
+/\\x1b\\[([\\d;]*)m
+/\\x1b_G([^;]*);
+/\\{|
+/\\|\\d+$
+/\\||
+/\\}|
+/^ 
+/^ *([^\\n ].*)\\n {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)(?:\\n((?:(?! *\\n| {0,3}((?:-[\\t ]*){3,}|(?:_[ \\t]*){3,}|(?:\\*[ \\t]*){3,})(?:\\n+|$)| {0,3}#{1,6}(?:\\s|$)| {0,3}>|(?: {4}| {0,3}\u0009)[^\\n]| {0,3}(?:`{3,}(?=[^`\\n]*(?:\\n|$))|~~~)[^\\n]*(?:\\n|$)| {0,3}(?:[*+-]|1[.)])[ \\t]|</?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)).*(?:\\n|$))*)\\n*|$)
+/^ *-+: *$
+/^ *:-+ *$
+/^ *:-+: *$
+/^ {0,1}#
+/^ {0,1}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)
+/^ {0,1}(?:[*+-]|\\d{1,9}[.)])((?:[ \u0009][^\\n]*)?(?:\\n|$))
+/^ {0,1}(?:```|~~~)
+/^ {0,1}>
+/^ {0,2}#
+/^ {0,2}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)
+/^ {0,2}(?:[*+-]|\\d{1,9}[.)])((?:[ \u0009][^\\n]*)?(?:\\n|$))
+/^ {0,2}(?:```|~~~)
+/^ {0,2}>
+/^ {0,3}#
+/^ {0,3}(#{1,6})(?=\\s|$)(.*)(?:\\n+|$)
+/^ {0,3}((?:- *){3,}|(?:_ *){3,}|(?:\\* *){3,})(?:\\n+|$)
+/^ {0,3}((?:-[\\t ]*){3,}|(?:_[ \\t]*){3,}|(?:\\*[ \\t]*){3,})(?:\\n+|$)
+/^ {0,3}(?:[*+-]|\\d{1,9}[.)])((?:[ \u0009][^\\n]*)?(?:\\n|$))
+/^ {0,3}(?:```|~~~)
+/^ {0,3}(`{3,}(?=[^`\\n]*(?:\\n|$))|~{3,})([^\\n]*)(?:\\n|$)(?:|([\\s\\S]*?)(?:\\n|$))(?: {0,3}\\1[~`]* *(?=\\n|$)|$)
+/^ {0,3}>
+/^ {0,3}\\$\\$[ \\t]*(?:\\n)?([\\s\\S]*)$
+/^ {0,3}\\$\\$[ \\t]*(?:\\n)?([\\s\\S]*?)\\$\\$[ \\t]*(?:\\n|$)
+/^ {0,3}\\[((?!\\s*\\])(?:\\\\[\\s\\S]|[^\\[\\]\\\\])+)\\]: *(?:\\n[ \\t]*)?([^<\\s][^\\s]*|<.*?>)(?:(?: +(?:\\n[ \\t]*)?| *\\n[ \\t]*)((?:"(?:\\\\"?|[^"\\\\])*"|'[^'\\n]*(?:\\n[^'\\n]+)*\\n?'|\\([^()]*\\))))? *(?:\\n+|$)
+/^ {0,3}\\\\\\[[ \\t]*(?:\\n)?([\\s\\S]*)$
+/^ {0,3}\\\\\\[[ \\t]*(?:\\n)?([\\s\\S]*?)\\\\\\][ \\t]*(?:\\n|$)
+/^!?\\[((?!\\s*\\])(?:\\\\[\\s\\S]|[^\\[\\]\\\\])+)\\](?:\\[\\])?
+/^!?\\[((?:\\[(?:\\\\[\\s\\S]|[^\\[\\]\\\\])*\\]|\\\\[\\s\\S]|`+(?!`)[^`]*?`+(?!`)|``+(?=\\])|[^\\[\\]\\\\`])*?)\\]\\(\\s*(<(?:\\\\.|[^\\n<>\\\\])+>|[^ \\t\\n\\x00-\\x1f]+|(?=\\)))(?:(?:[ \\t]+(?:\\n[ \\t]*)?|\\n[ \\t]*)("(?:\\\\"?|[^"\\\\])*"|'(?:\\\\'?|[^'\\\\])*'|\\((?:\\\\\\)?|[^)\\\\])*\\)))?\\s*\\)
+/^!?\\[((?:\\[(?:\\\\[\\s\\S]|[^\\[\\]\\\\])*\\]|\\\\[\\s\\S]|`+(?!`)[^`]*?`+(?!`)|``+(?=\\])|[^\\[\\]\\\\`])*?)\\]\\[((?!\\s*\\])(?:\\\\[\\s\\S]|[^\\[\\]\\\\])+)\\]
+/^"@|
+/^#!/usr/bin/env|
+/^#![ ]*\\/.*\\b(fish|bash|zsh|sh|csh|ksh|tcsh|dash|scsh)\\b.*|
+/^#![ ]*\\/.*\\bgroovy\\b.*|
+/^#![ ]*\\/.*\\bnode\\b.*|
+/^#![ ]*\\/.*\\bruby\\b.*|
+/^#{1,6}|
+/^#|
+/^$
+/^( {0,3}(?:[*+-]|\\d{1,9}[.)]))([ \\t][^\\n]*?)?(?:\\n|$)
+/^( {0,3}> ?(([^\\n]+(?:\\n(?! {0,3}((?:-[\\t ]*){3,}|(?:_[ \\t]*){3,}|(?:\\*[ \\t]*){3,})(?:\\n+|$)| {0,3}#{1,6}(?:\\s|$)| {0,3}>| {0,3}(?:`{3,}(?=[^`\\n]*(?:\\n|$))|~~~)[^\\n]*(?:\\n|$)| {0,3}(?:[*+-]|\\d{1,9}[.)])(?:[ \\t]|\\n|$)|<\\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?: +|\\n|\\/?>)|<(?:script|pre|style|textarea|!--)|[ \\t]+\\n)[^\\n]+)*)|[^\\n]*)(?:\\n|$))+
+/^( {0,3}\\*)((?:[\u0009 ][^\\n]*)?(?:\\n|$))
+/^( {0,3}\\+)((?:[\u0009 ][^\\n]*)?(?:\\n|$))
+/^( {0,3}\\-)((?:[\u0009 ][^\\n]*)?(?:\\n|$))
+/^( {0,3}\\d{1,9}\\.)((?:[\u0009 ][^\\n]*)?(?:\\n|$))
+/^( {2,}|\\\\)\\n(?!\\s*$)
+/^((?: {4}| {0,3}\\t)[^\\n]+(?:\\n(?:[ \\t]*(?:\\n|$))*)?)+
+/^((?:<|>)?=?)\\s{0,1}(v?(0|[1-9]\\d{0,256})\\.(0|[1-9]\\d{0,256})\\.(0|[1-9]\\d{0,256})(?:-((?:\\d{0,256}[a-zA-Z-][a-zA-Z0-9-]{0,250}|0|[1-9]\\d{0,256})(?:\\.(?:\\d{0,256}[a-zA-Z-][a-zA-Z0-9-]{0,250}|0|[1-9]\\d{0,256}))*))?(?:\\+([a-zA-Z0-9-]{1,250}(?:\\.[a-zA-Z0-9-]{1,250})*))?)$|^$
+/^((?:[hH][tT][tT][pP][sS]?|[fF][tT][pP]):\\/\\/|www\\.)(?:[a-zA-Z0-9\\-]+\\.?)+[^\\s<]*|^[A-Za-z0-9._+-]+(@)[a-zA-Z0-9-_]+(?:\\.[a-zA-Z0-9-_]*[a-zA-Z0-9])+(?![-_])
+/^(?! {0,3}(?:[*+-]|\\d{1,9}[.)]) |(?: {4}| {0,3}\\t)| {0,3}(?:`{3,}|~{3,})| {0,3}>| {0,3}#{1,6}(?:\\s|$)| {0,3}<[^\\n>]+>\\n| {0,3}\\|?(?:[:\\- ]*\\|)+[\\:\\- ]*\\n)((?:.|\\n(?!\\s*?\\n| {0,3}(?:[*+-]|\\d{1,9}[.)]) |(?: {4}| {0,3}\\t)| {0,3}(?:`{3,}|~{3,})| {0,3}>| {0,3}#{1,6}(?:\\s|$)| {0,3}<[^\\n>]+>\\n| {0,3}\\|?(?:[:\\- ]*\\|)+[\\:\\- ]*\\n))+?)\\n {0,3}(=+|-+) *(?:\\n+|$)
+/^(?:[ \\t]*(?:\\n|$))+
+/^(?:\\x1b\\[\\?997;(1|2)n)+$
+/^(?:\\x1b\\]133;[ABC](?:\\x07|\\x1b\\\\))+
+/^(?<digits>[0-9]+)(?<letters>[a-z]+)$
+/^(?<letters>[a-z]+)(?<digits>[0-9]+)$
+/^([>?]>|[\\w#]+\\(\\w+\\):\\d+:\\d+>|(\\w+-)?\\d+\\.\\d+\\.\\d+(p\\d+)?[^\\d][^>]+>)(?=[ ])|
+/^([^\\n]+(?:\\n(?! {0,3}((?:-[\\t ]*){3,}|(?:_[ \\t]*){3,}|(?:\\*[ \\t]*){3,})(?:\\n+|$)| {0,3}#{1,6}(?:\\s|$)| {0,3}>| {0,3}(?:`{3,}(?=[^`\\n]*(?:\\n|$))|~~~)[^\\n]*(?:\\n|$)| {0,3}(?:[*+-]|1[.)])[ \\t]+[^ \\t\\n]|</?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?: +|\\n|/?>)|<(?:script|pre|style|textarea|!--)| *([^\\n ].*)\\n {0,3}((?:\\| *)?:?-+:? *(?:\\| *:?-+:? *)*(?:\\| *)?)(?:\\n((?:(?! *\\n| {0,3}((?:-[\\t ]*){3,}|(?:_[ \\t]*){3,}|(?:\\*[ \\t]*){3,})(?:\\n+|$)| {0,3}#{1,6}(?:\\s|$)| {0,3}>|(?: {4}| {0,3}\u0009)[^\\n]| {0,3}(?:`{3,}(?=[^`\\n]*(?:\\n|$))|~~~)[^\\n]*(?:\\n|$)| {0,3}(?:[*+-]|1[.)])[ \\t]|<\\/?(?:address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?: +|\\n|\\/?>)|<(?:script|pre|style|textarea|!--)).*(?:\\n|$))*)\\n*|$)|[ \\t]+\\n)[^\\n]+)*)
+/^(\\s*)
+/^(\\s*)?(class|instance)\\b|
+/^(\\s+)(?:```)
+/^(`+)([^`]|[^`][\\s\\S]*?[^`])\\1(?!`)
+/^(`+|~+|[^`~])(?:(?=[`~])|(?= {2,}\\n)|(?=[a-zA-Z0-9.!#$%&'*+\\/=?_`{\\|}~-]+@)|[\\s\\S]*?(?:(?=[\\\\<!\\[`*~_]|\\b_|[hH][tT][tT][pP][sS]?|[fF][tT][pP]:\\/\\/|www\\.|$)|[^ ](?= {2,}\\n)|[^a-zA-Z0-9.!#$%&'*+\\/=?_`{\\|}~-](?=[a-zA-Z0-9.!#$%&'*+\\/=?_`{\\|}~-]+@)))
+/^(`{3,}|~{3,})
+/^(~~)(?=[^\\s~])((?:\\\\.|[^\\\\])*?(?:\\\\.|[^\\s~\\\\]))\\1(?=[^~]|$)
+/^---\\s*$|
+/^<
+/^<!--(?:-?>|[\\s\\S]*?-->)|^</[a-zA-Z][\\w:-]*\\s*>|^<[a-zA-Z][\\w-]*(?:\\s+[a-zA-Z:_][\\w.:-]*(?:\\s*=\\s*"[^"]*"|\\s*=\\s*'[^']*'|\\s*=\\s*[^\\s"'=<>`]+)?)*?\\s*/?>|^<\\?[\\s\\S]*?\\?>|^<![a-zA-Z]+\\s[\\s\\S]*?>|^<!\\[CDATA\\[[\\s\\S]*?\\]\\]>
+/^<(.*)>$
+/^<([a-zA-Z][a-zA-Z0-9+.-]{1,31}:[^\\s\\x00-\\x1f<>]*|[a-zA-Z0-9.!#$%&'*+/=?_`{|}~-]+(@)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+(?![-_]))>
+/^<skill name="([^"]+)" location="([^"]+)">\\n
+/^=begin|
+/^=end|
+/^>\\s+|
+/^[ \\t]*$
+/^[ \u0009]*(?=[A-Za-z0-9_$]+:)|
+/^[ \u0009]*([*+-]|(\\d+\\.))(?=\\s+)|
+/^[!#$%&'*+\\-.^_`|~0-9A-Za-z]+$
+/^[-\\*]{3,}|
+/^[0-9]+$
+/^[=-]*$|
+/^[A-Z_][A-Z0-9_]*(?:[^A-Za-z0-9_\\s])?$
+/^[^\\n]+
+/^[_a-z][\\w']*|
+/^[a-zA-Z_]\\w*\\s*(?=[:+?]?=)|
+/^[a-z]:\\\\windows\\\\(?:system32|sysnative)\\\\bash\\.exe$
+/^\\$\\s
+/^\\[[ xX]\\] +
+/^\\[[ xX]\\] +\\S
+/^\\\\([!"#$%&'()*+,\\-./:;<=>?@\\[\\]\\\\^_`{|}~])
+/^\\\\(limits|nolimits)(?![A-Za-z])
+/^\\d
+/^\\s*
+/^\\s*\\[|
+/^\\x1b\\[(\\d+)(?::(\\d*))?(?::(\\d+))?(?:;(\\d+))?(?::(\\d+))?u$
+/^\\x1b\\[(\\d+)(?::\\d*)?(?::\\d+)?u$
+/^\\x1b\\[(\\d+)(?:;(\\d+))?(?::(\\d+))?~$
+/^\\x1b\\[1;(\\d+)(?::(\\d+))?([ABCD])$
+/^\\x1b\\[1;(\\d+)(?::(\\d+))?([HF])$
+/^\\x1b\\[27;(\\d+);(\\d+)~$
+/^\\x1b\\[6;(\\d+);(\\d+)t$
+/^\\x1b\\[<(\\d+);(\\d+);(\\d+)([Mm])$
+/^\\x1b\\[<(\\d+);(\\d+);(\\d+)[Mm]$
+/^\\x1b\\[<\\d+;\\d+;\\d+[Mm]$
+/^\\x1b\\[\\?(\\d+)u$
+/^\\x1b\\[\\?[\\d;]*$
+/^\\x1b\\[\\?[\\d;]*c$
+/^\\x1b\\]7501;\\?[^\\x07\\x1b]*(?:\\x07|\\x1b\\\\)$
+/^__DATA__$|
+/^__END__|
+/^command$
+/^content$
+/^edits$
+/^file:\\/\\/
+/^limit$
+/^mcp__(.+?)__(.+)$
+/^newText$
+/^offset$
+/^oldText$
+/^path$
+/^timeout$
+/^v?(0|[1-9]\\d{0,256})\\.(0|[1-9]\\d{0,256})\\.(0|[1-9]\\d{0,256})(?:-((?:\\d{0,256}[a-zA-Z-][a-zA-Z0-9-]{0,250}|0|[1-9]\\d{0,256})(?:\\.(?:\\d{0,256}[a-zA-Z-][a-zA-Z0-9-]{0,250}|0|[1-9]\\d{0,256}))*))?(?:\\+([a-zA-Z0-9-]{1,250}(?:\\.[a-zA-Z0-9-]{1,250})*))?$
+/^|
+/__halt_compiler.+?;|
+/`([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*`|
+/`.+?`|
+/`[\\s\\S]|
+/```|
+/`|
+/b"|
+/b'|
+/css`|
+/decltype\\(auto\\)|
+/def\\s+(?=([a-zA-Z_]\\w*[!?=]?|[-+~]@|<<|>>|=~|===?|<=>|[<>]=?|\\*\\*|[-/+%^&*~`|]|\\[\\]=?)\\s*(\\(|;|$))|
+/extends implements|
+/function|
+/html`|
+/q[qwxr]?\\s*<|
+/q[qwxr]?\\s*\\(|
+/q[qwxr]?\\s*\\[|
+/q[qwxr]?\\s*\\{|
+/q[qwxr]?\\s*\\||
+/qw\\s+q|
+/r"""|
+/r"|
+/r'''|
+/r'|
+/record\\s+[a-zA-Z_]\\w*\\s*\\(|
+/where|
+/~[A-Z](?=[/|([{<"'])|
+/~[a-z](?=[/|([{<"'])|
+/~~~|
+g/!?\\[((?:\\[(?:\\\\[\\s\\S]|[^\\[\\]\\\\])*\\]|\\\\[\\s\\S]|`+(?!`)[^`]*?`+(?!`)|``+(?=\\])|[^\\[\\]\\\\`])*?)\\]\\[((?!\\s*\\])(?:\\\\[\\s\\S]|[^\\[\\]\\\\])+)\\]|!?\\[((?!\\s*\\])(?:\\\\[\\s\\S]|[^\\[\\]\\\\])+)\\](?:\\[\\])?(?!\\()
+g/"
+g/"(?:\\\\.|[^"\\\\])*"|,(\\s*[}\\]])
+g/"(?:\\\\.|[^"\\\\])*"|\\/\\/[^\\n]*
+g/&
+g/'
+g/(?:\\u001B\\][\\s\\S]*?(?:\\u0007|\\u001B\\u005C|\\u009C))|[\\u001B\\u009B][[\\]()#;?]*(?:\\d{1,4}(?:[;:]\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]
+g/(^|[^\\[])\\^
+g/<
+g/>
+g/[ \\t]+
+g/[A-Z]
+g/[\\0-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f-\\x9f]
+g/[\\\\^$.*+?()[\\]{}|-]
+g/[\\r\\n]+
+g/[\\u00A0\\u2000-\\u200A\\u202F\\u205F\\u3000]
+g/[\\u00A0\\u2002-\\u200A\\u202F\\u205F\\u3000]
+g/[\\u2010\\u2011\\u2012\\u2013\\u2014\\u2015\\u2212]
+g/[\\u2018\\u2019\\u201A\\u201B]
+g/[\\u201C\\u201D\\u201E\\u201F]
+g/[\\uD800-\\uDBFF](?![\\uDC00-\\uDFFF])|(?<![\\uD800-\\uDBFF])[\\uDC00-\\uDFFF]
+g/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\uFFF9-\\uFFFB]
+g/[a-z]
+g/\\/
+g/\\[(?:[^\\[\\]`]|(?<a>`+)[^`]+\\k<a>(?!`))*?\\]\\((?:\\\\[\\s\\S]|[^\\\\\\(\\)]|\\((?:\\\\[\\s\\S]|[^\\\\\\(\\)])*\\))*\\)|(?<!`)()(?<b>`+)[^`]+\\k<b>(?!`)|<(?! )[^<>]*?>
+g/\\\\
+g/\\\\([\\[\\]])
+g/\\\\\\|
+g/\\n
+g/\\n {0,3}((?:=+|-+) *)(?=\\n|$)
+g/\\r
+g/\\r\\n
+g/\\r\\n|\\r
+g/\\s
+g/\\s+
+g/\\t
+g/\\x1b\\[0m
+g/\\{2,\\}
+g/\\|
+g/^\\||\\| *$
+g/`+
+g/blockCode
+g/blockquote
+g/bull
+g/fences
+g/heading
+g/html
+g/notPunctSpace
+g/openQuote
+g/punct
+g/punctSpace
+g/table
+g/tag
+gi/ (AM|PM)\\.
+gim/("")|(")
+gim/(")|(')|([^\\s"'=<>`]+)|(\\B|\\b)
+gim/(#([a-fA-F0-9]{6}|[a-fA-F0-9]{3}))|(!important)|(\\b\\d+(\\.\\d+)?(%|em|ex|ch|rem|vw|vh|vmin|vmax|cm|mm|in|pt|pc|px|deg|grad|rad|turn|s|ms|Hz|kHz|dpi|dpcm|dppx)?)|(')|(")|((url|data-uri)\\()|([\\w-]+(?=\\())|([;}])
+gim/(#)|(')|(")|(\\b\\d+(\\.\\d+)?)|(\\b(run|cmd|entrypoint|volume|add|copy|workdir|label|healthcheck|shell)(?!\\.)(?=\\b|\\s))|(</)
+gim/(#)|(//)|(/\\*)|(__halt_compiler.+?;)|(<\\?php)|(<\\?[=]?)|(\\?>)|(\\$this\\b)|(\\$+[a-zA-Z_\u007f-\u00ff][a-zA-Z0-9_\u007f-\u00ff]*(?![A-Za-z0-9])(?![$]))|((::|->)+[a-zA-Z_\\x7f-\\xff][a-zA-Z0-9_\\x7f-\\xff]*)|(\\b(fn|function)(?!\\.)(?=\\b|\\s))|(\\b(enum)(?!\\.)(?=\\b|\\s))|(\\b(class|interface|trait)(?!\\.)(?=\\b|\\s))|(\\b(namespace)(?!\\.)(?=\\b|\\s))|(\\b(use)(?!\\.)(?=\\b|\\s))|(b')|(b")|(")|(')|(<<<[ \\t]*(\\w+)\\n)|(\\b0b[01]+(?:_[01]+)*\\b)|(\\b0o[0-7]+(?:_[0-7]+)*\\b)|(\\b0x[\\da-f]+(?:_[\\da-f]+)*\\b)|((?:\\b\\d+(?:_\\d+)*(\\.(?:\\d+(?:_\\d+)*))?|\\B\\.\\d+)(?:e[+-]?\\d+)?)
+gim/(#?[a-z_][a-z1-9_-]+)|(\\B|\\b)
+gim/(&[a-z]+;|&#[0-9]+;|&#x[a-f0-9]+;)|(")
+gim/(&[a-z]+;|&#[0-9]+;|&#x[a-f0-9]+;)|(')
+gim/('')|(')
+gim/(')
+gim/(')|(")|(\\])|($)
+gim/((create table|insert into|primary key|foreign key|not null|alter table|add constraint|grouping sets|on overflow|character set|respect nulls|ignore nulls|nulls first|nulls last|depth first|breadth first))|((double precision|large object|with timezone|without timezone))|(\\b(abs|acos|array_agg|asin|atan|avg|cast|ceil|ceiling|coalesce|corr|cos|cosh|count|covar_pop|covar_samp|cume_dist|dense_rank|deref|element|exp|extract|first_value|floor|json_array|json_arrayagg|json_exists|json_object|json_objectagg|json_query|json_table|json_table_primitive|json_value|lag|last_value|lead|listagg|ln|log|log10|lower|max|min|mod|nth_value|ntile|nullif|percent_rank|percentile_cont|percentile_disc|position|position_regex|power|rank|regr_avgx|regr_avgy|regr_count|regr_intercept|regr_r2|regr_slope|regr_sxx|regr_sxy|regr_syy|row_number|sin|sinh|sqrt|stddev_pop|stddev_samp|substring|substring_regex|sum|tan|tanh|translate|translate_regex|treat|trim|trim_array|unnest|upper|value_of|var_pop|var_samp|width_bucket)\\s*\\()|(@[a-z0-9]+)|(')|(")|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?))|(/\\*)|(--)|([-+*/=%^~]|&&?|\\|\\|?|!=?|<(?:=>?|<|>)?|>[>=]?)|([{}]|<\\/)
+gim/(/\\*)|(-(webkit|moz|ms|o)-(?=[a-z]))|(\\b\\d+(\\.\\d+)?(%|em|ex|ch|rem|vw|vh|vmin|vmax|cm|mm|in|pt|pc|px|deg|grad|rad|turn|s|ms|Hz|kHz|dpi|dpcm|dppx)?)|(#[A-Za-z0-9_-]+)|(\\.[a-zA-Z-][a-zA-Z0-9_-]*)|(\\[)|(:(active|any-link|blank|checked|current|default|defined|dir|disabled|drop|empty|enabled|first|first-child|first-of-type|fullscreen|future|focus|focus-visible|focus-within|has|host|host-context|hover|indeterminate|in-range|invalid|is|lang|last-child|last-of-type|left|link|local-link|not|nth-child|nth-col|nth-last-child|nth-last-col|nth-last-of-type|nth-of-type|only-child|only-of-type|optional|out-of-range|past|placeholder-shown|read-only|read-write|required|right|root|scope|target|target-within|user-invalid|valid|visited|where))|(::(after|backdrop|before|cue|cue-region|first-letter|first-line|grammar-error|marker|part|placeholder|selection|slotted|spelling-error))|(\\b(z-index|word-wrap|word-spacing|word-break|width|widows|white-space|visibility|vertical-align|unicode-bidi|transition-timing-function|transition-property|transition-duration|transition-delay|transition|transform-style|transform-origin|transform|top|text-underline-position|text-transform|text-shadow|text-rendering|text-overflow|text-indent|text-decoration-style|text-decoration-line|text-decoration-color|text-decoration|text-align-last|text-align|table-layout|tab-size|src|right|resize|quotes|position|pointer-events|perspective-origin|perspective|page-break-inside|page-break-before|page-break-after|padding-top|padding-right|padding-left|padding-bottom|padding|overflow-y|overflow-x|overflow-wrap|overflow|outline-width|outline-style|outline-offset|outline-color|outline|orphans|order|opacity|object-position|object-fit|normal|none|nav-up|nav-right|nav-left|nav-index|nav-down|min-width|min-height|max-width|max-height|mask|marks|margin-top|margin-right|margin-left|margin-bottom|margin|list-style-type|list-style-position|list-style-image|list-style|line-height|letter-spacing|left|justify-content|initial|inherit|ime-mode|image-resolution|image-rendering|image-orientation|icon|hyphens|height|font-weight|font-variation-settings|font-variant-ligatures|font-variant|font-style|font-stretch|font-smoothing|font-size-adjust|font-size|font-language-override|font-kerning|font-feature-settings|font-family|font-display|font|float|flex-wrap|flex-shrink|flex-grow|flex-flow|flex-direction|flex-basis|flex|filter|empty-cells|display|direction|cursor|counter-reset|counter-increment|content|columns|column-width|column-span|column-rule-width|column-rule-style|column-rule-color|column-rule|column-gap|column-fill|column-count|color|clip-path|clip|clear|caption-side|break-inside|break-before|break-after|box-sizing|box-shadow|box-decoration-break|bottom|border-width|border-top-width|border-top-style|border-top-right-radius|border-top-left-radius|border-top-color|border-top|border-style|border-spacing|border-right-width|border-right-style|border-right-color|border-right|border-radius|border-left-width|border-left-style|border-left-color|border-left|border-image-width|border-image-source|border-image-slice|border-image-repeat|border-image-outset|border-image|border-color|border-collapse|border-bottom-width|border-bottom-style|border-bottom-right-radius|border-bottom-left-radius|border-bottom-color|border-bottom|border|background-size|background-repeat|background-position|background-origin|background-image|background-color|background-clip|background-attachment|background|backface-visibility|auto|animation-timing-function|animation-play-state|animation-name|animation-iteration-count|animation-fill-mode|animation-duration|animation-direction|animation-delay|animation|align-self|align-items|align-content)\\b)|(:)|((?=@))|(\\b(a|abbr|address|article|aside|audio|b|blockquote|body|button|canvas|caption|cite|code|dd|del|details|dfn|div|dl|dt|em|fieldset|figcaption|figure|footer|form|h1|h2|h3|h4|h5|h6|header|hgroup|html|i|iframe|img|input|ins|kbd|label|legend|li|main|mark|menu|nav|object|ol|p|q|quote|samp|section|span|strong|summary|sup|table|tbody|td|textarea|tfoot|th|thead|time|tr|ul|var|video)\\b)|([=|'\\$])
+gim/(;)|(#)|(\\[)|(\\bon|off|true|false|yes|no\\b)|(\\$[\\w\\d"][\\w\\d_]*)|(\\$\\{(.*?)\\})|(''')|(""")|(")|(')|(([+-]+)?[\\d]+_[\\d_]+)|(\\b\\d+(\\.\\d+)?)|($)
+gim/(;)|(#)|(\\[+)|(([A-Za-z0-9_-]+|"(\\\\"|[^"])*"|'[^']*')(\\s*\\.\\s*([A-Za-z0-9_-]+|"(\\\\"|[^"])*"|'[^']*'))*(?=\\s*=\\s*[^#\\s]))|(\\S)
+gim/(;)|(#)|(\\bon|off|true|false|yes|no\\b)|(\\$[\\w\\d"][\\w\\d_]*)|(\\$\\{(.*?)\\})|(''')|(""")|(")|(')|(([+-]+)?[\\d]+_[\\d_]+)|(\\b\\d+(\\.\\d+)?)|(\\[)|(\\])
+gim/(<![a-z])|(<!--)|(<!\\[CDATA\\[)|(&[a-z]+;|&#[0-9]+;|&#x[a-f0-9]+;)|(<\\?xml)|(<style(?=\\s|>))|(<script(?=\\s|>))|(<>|<\\/>)|(<(?=[A-Z_]([A-Z0-9_.-]*:)?[A-Z0-9_.-]*(\\/>|>|\\s)))|(<\\/(?=[A-Z_]([A-Z0-9_.-]*:)?[A-Z0-9_.-]*>))
+gim/(<![a-z])|(\\])
+gim/(<\\/script>)
+gim/(<\\/style>)
+gim/(@-?\\w[\\w]*(-\\w+)*)|(\\s)|([{;])|(:)
+gim/(@[A-Za-z]+)|(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|(\\*/)
+gim/([A-Z_]([A-Z0-9_.-]*:)?[A-Z0-9_.-]*)|(>)|(\\B|\\b)
+gim/([A-Z_]([A-Z0-9_.-]*:)?[A-Z0-9_.-]*)|(\\/?>)
+gim/([A-Za-z0-9._:-]+)|(=\\s*)|(>)|(<)
+gim/([A-Za-z0-9._:-]+)|(=\\s*)|(\\/?>)|(<)
+gim/([^)])|(\\))
+gim/([^\\\\]$)
+gim/([a-z-]+(?=:))|(')|(")|(\\b\\d+(\\.\\d+)?(%|em|ex|ch|rem|vw|vh|vmin|vmax|cm|mm|in|pt|pc|px|deg|grad|rad|turn|s|ms|Hz|kHz|dpi|dpcm|dppx)?)|([{;])
+gim/([a-zA-Z_]\\w*)|(;)
+gim/([a-zA-Z_]\\w*)|(;)|([.'])
+gim/(\\()|(\\$+[a-zA-Z_\u007f-\u00ff][a-zA-Z0-9_\u007f-\u00ff]*(?![A-Za-z0-9])(?![$]))|(/\\*)|(b')|(b")|(")|(')|(<<<[ \\t]*(\\w+)\\n)|(\\b0b[01]+(?:_[01]+)*\\b)|(\\b0o[0-7]+(?:_[0-7]+)*\\b)|(\\b0x[\\da-f]+(?:_[\\da-f]+)*\\b)|((?:\\b\\d+(?:_\\d+)*(\\.(?:\\d+(?:_\\d+)*))?|\\B\\.\\d+)(?:e[+-]?\\d+)?)|(\\))
+gim/(\\))
+gim/(\\.(synopsis|description|example|inputs|outputs|notes|link|component|role|functionality))|(\\.(parameter|forwardhelptargetname|forwardhelpcategory|remotehelprunspace|externalhelp)\\s+\\S+)|(#>)
+gim/(\\.(synopsis|description|example|inputs|outputs|notes|link|component|role|functionality))|(\\.(parameter|forwardhelptargetname|forwardhelpcategory|remotehelprunspace|externalhelp)\\s+\\S+)|($)
+gim/(\\?>)
+gim/(\\B|\\b)
+gim/(\\B|\\b)|(>)
+gim/(\\B|\\b)|(\\])|(\\n)
+gim/(\\B|\\b)|(\\n)
+gim/(\\B|\\b)|(\\})|(\\n)
+gim/(\\[)|((if|else|foreach|return|do|while|until|elseif|begin|for|trap|data|dynamicparam|end|break|throw|param|continue|finally|in|switch|exit|filter|try|process|catch|hidden|static|parameter)\\b)|([a-zA-Z]\\w*)|($)
+gim/(\\[)|(\\[.*\\]\\s*[\\w]+[ ]??\\()|(#)|(<#)|(`[\\s\\S])|(\\b\\d+(\\.\\d+)?)|(")|(@")|(')|(@')|((Add|Clear|Close|Copy|Enter|Exit|Find|Format|Get|Hide|Join|Lock|Move|New|Open|Optimize|Pop|Push|Redo|Remove|Rename|Reset|Resize|Search|Select|Set|Show|Skip|Split|Step|Switch|Undo|Unlock|Watch|Backup|Checkpoint|Compare|Compress|Convert|ConvertFrom|ConvertTo|Dismount|Edit|Expand|Export|Group|Import|Initialize|Limit|Merge|Mount|Out|Publish|Restore|Save|Sync|Unpublish|Update|Approve|Assert|Build|Complete|Confirm|Deny|Deploy|Disable|Enable|Install|Invoke|Register|Request|Restart|Resume|Start|Stop|Submit|Suspend|Uninstall|Unregister|Wait|Debug|Measure|Ping|Repair|Resolve|Test|Trace|Connect|Disconnect|Read|Receive|Send|Write|Block|Grant|Protect|Revoke|Unblock|Unprotect|Use|ForEach|Sort|Tee|Where)+(-)[\\w\\d]+)|(\\$\\B)|(\\$this)|(\\$[\\w\\d][\\w\\d_:]*)|(\\$(null|true|false)\\b)|(@\\B)|((string|char|byte|int|long|bool|decimal|single|double|DateTime|xml|array|hashtable|void))|([\\.\\w\\d]+)|(\\])
+gim/(\\[.*\\]\\s*[\\w]+[ ]??\\()|(#)|(<#)|(`[\\s\\S])|(\\b\\d+(\\.\\d+)?)|(")|(@")|(')|(@')|((Add|Clear|Close|Copy|Enter|Exit|Find|Format|Get|Hide|Join|Lock|Move|New|Open|Optimize|Pop|Push|Redo|Remove|Rename|Reset|Resize|Search|Select|Set|Show|Skip|Split|Step|Switch|Undo|Unlock|Watch|Backup|Checkpoint|Compare|Compress|Convert|ConvertFrom|ConvertTo|Dismount|Edit|Expand|Export|Group|Import|Initialize|Limit|Merge|Mount|Out|Publish|Restore|Save|Sync|Unpublish|Update|Approve|Assert|Build|Complete|Confirm|Deny|Deploy|Disable|Enable|Install|Invoke|Register|Request|Restart|Resume|Start|Stop|Submit|Suspend|Uninstall|Unregister|Wait|Debug|Measure|Ping|Repair|Resolve|Test|Trace|Connect|Disconnect|Read|Receive|Send|Write|Block|Grant|Protect|Revoke|Unblock|Unprotect|Use|ForEach|Sort|Tee|Where)+(-)[\\w\\d]+)|(\\$\\B)|(\\$this)|(\\$[\\w\\d][\\w\\d_:]*)|(\\$(null|true|false)\\b)|(@\\B)|(\\b(class|enum)(?!\\.)(?=\\b|\\s))|(function\\s+)|(using\\s)|((-and|-as|-band|-bnot|-bor|-bxor|-casesensitive|-ccontains|-ceq|-cge|-cgt|-cle|-clike|-clt|-cmatch|-cne|-cnotcontains|-cnotlike|-cnotmatch|-contains|-creplace|-csplit|-eq|-exact|-f|-file|-ge|-gt|-icontains|-ieq|-ige|-igt|-ile|-ilike|-ilt|-imatch|-in|-ine|-inotcontains|-inotlike|-inotmatch|-ireplace|-is|-isnot|-isplit|-join|-le|-like|-lt|-match|-ne|-not|-notcontains|-notin|-notlike|-notmatch|-or|-regex|-replace|-shl|-shr|-split|-wildcard|-xor)\\b)|((-)[\\w\\d]+)|(\\[)
+gim/(\\\\[\\s\\S])|(""")
+gim/(\\\\[\\s\\S])|(")
+gim/(\\\\[\\s\\S])|(")|(\\n)
+gim/(\\\\[\\s\\S])|(')
+gim/(\\\\[\\s\\S])|(\\$\\w+)|(\\{\\$)|(")
+gim/(\\\\[\\s\\S])|(\\$\\w+)|(\\{\\$)|([ \\t]*(\\w+)\\b)
+gim/(\\\\[\\s\\S])|(\\{\\{)|(%\\{)|(")
+gim/(\\\\[\\s\\S])|(\\{\\{)|(%\\{)|(')
+gim/(\\\\[\\s\\S])|(\\{\\{)|(%\\{)|(\\B|\\b)
+gim/(\\\\\\{\\{)|(\\\\\\\\(?=\\{\\{))|(\\{\\{!--)|(\\{\\{!)|(\\{\\{\\{\\{(?!\\/))|(\\{\\{\\{\\{\\/)|(\\{\\{#)|(\\{\\{(?=else\\}\\}))|(\\{\\{(?=else if))|(\\{\\{\\/)|(\\{\\{\\{)|(\\{\\{)
+gim/(\\]+)
+gim/(\\]\\]>)
+gim/(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|($)
+gim/(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|(-->)
+gim/(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|(\\*/)
+gim/(\\b(extends|implements)(?!\\.)(?=\\b|\\s))|([a-zA-Z_]\\w*)|(\\{)|([($"])
+gim/(\\b(extends|implements)(?!\\.)(?=\\b|\\s))|([a-zA-Z_]\\w*)|(\\{)|([:($"])
+gim/(\\b(use)(?!\\.)(?=\\b|\\s))|([a-zA-Z_]\\w*)|(=>)|(\\()|([;{])|([$%\\[])
+gim/(\\s)|(")|(')|(\\()|(\\[)|(>)
+gim/(\\s)|(\\()|(")|(')|(>)
+gim/(\\w[\\w :\\/.-]*:(?=[ \u0009]|$))|("\\w[\\w :\\/.-]*":(?=[ \u0009]|$))|('\\w[\\w :\\/.-]*':(?=[ \u0009]|$))|(^---\\s*$)|([\\|>]([1-9]?[+-])?[ ]*\\n( +)[^ ][^\\n]*\\n(\\7[^\\n]+\\n?)*)|(<%[%=-]?)|(!\\w+![\\w#;/?:@&=+$,.~*'()[\\]]+)|(!<[\\w#;/?:@&=+$,.~*'()[\\]]+>)|(![\\w#;/?:@&=+$,.~*'()[\\]]+)|(!![\\w#;/?:@&=+$,.~*'()[\\]]+)|(&[a-zA-Z_]\\w*$)|(\\*[a-zA-Z_]\\w*$)|(-(?=[ ]|$))|(#)|(\\b(true|false|yes|no|null)(?!\\.)(?=\\b|\\s))|(\\b[0-9]{4}(-[0-9][0-9]){0,2}([Tt \\t][0-9][0-9]?(:[0-9][0-9]){2})?(\\.[0-9]*)?([ \\t])*(Z|[-+][0-9][0-9]?(:[0-9][0-9])?)?\\b)|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?)\\b)|(\\{)|(\\[)|(')|(")|([^\\s,{}[\\]]+)|(,|\\])
+gim/(\\w[\\w :\\/.-]*:(?=[ \u0009]|$))|("\\w[\\w :\\/.-]*":(?=[ \u0009]|$))|('\\w[\\w :\\/.-]*':(?=[ \u0009]|$))|(^---\\s*$)|([\\|>]([1-9]?[+-])?[ ]*\\n( +)[^ ][^\\n]*\\n(\\7[^\\n]+\\n?)*)|(<%[%=-]?)|(!\\w+![\\w#;/?:@&=+$,.~*'()[\\]]+)|(!<[\\w#;/?:@&=+$,.~*'()[\\]]+>)|(![\\w#;/?:@&=+$,.~*'()[\\]]+)|(!![\\w#;/?:@&=+$,.~*'()[\\]]+)|(&[a-zA-Z_]\\w*$)|(\\*[a-zA-Z_]\\w*$)|(-(?=[ ]|$))|(#)|(\\b(true|false|yes|no|null)(?!\\.)(?=\\b|\\s))|(\\b[0-9]{4}(-[0-9][0-9]){0,2}([Tt \\t][0-9][0-9]?(:[0-9][0-9]){2})?(\\.[0-9]*)?([ \\t])*(Z|[-+][0-9][0-9]?(:[0-9][0-9])?)?\\b)|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?)\\b)|(\\{)|(\\[)|(')|(")|([^\\s,{}[\\]]+)|(,|\\})
+gim/(\\w[\\w :\\/.-]*:(?=[ \u0009]|$))|("\\w[\\w :\\/.-]*":(?=[ \u0009]|$))|('\\w[\\w :\\/.-]*':(?=[ \u0009]|$))|(^---\\s*$)|([\\|>]([1-9]?[+-])?[ ]*\\n( +)[^ ][^\\n]*\\n(\\7[^\\n]+\\n?)*)|(<%[%=-]?)|(!\\w+![\\w#;/?:@&=+$,.~*'()[\\]]+)|(!<[\\w#;/?:@&=+$,.~*'()[\\]]+>)|(![\\w#;/?:@&=+$,.~*'()[\\]]+)|(!![\\w#;/?:@&=+$,.~*'()[\\]]+)|(&[a-zA-Z_]\\w*$)|(\\*[a-zA-Z_]\\w*$)|(-(?=[ ]|$))|(#)|(\\b(true|false|yes|no|null)(?!\\.)(?=\\b|\\s))|(\\b[0-9]{4}(-[0-9][0-9]){0,2}([Tt \\t][0-9][0-9]?(:[0-9][0-9]){2})?(\\.[0-9]*)?([ \\t])*(Z|[-+][0-9][0-9]?(:[0-9][0-9])?)?\\b)|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?)\\b)|(\\{)|(\\[)|(')|(")|(\\S+)
+gim/(\\})
+gim/(`[\\s\\S])|(\\$\\B)|(\\$this)|(\\$[\\w\\d][\\w\\d_:]*)|(\\$[A-z])|(")
+gim/(`[\\s\\S])|(\\$\\B)|(\\$this)|(\\$[\\w\\d][\\w\\d_:]*)|(\\$[A-z])|(^"@)
+gim/(function)|(\\w[\\w\\d]*((-)[\\w\\d]+)*)|(\\()|(\\s*\\{|$)
+gim/-?[A-z\\.\\-]+\\b
+gim/[\\w\\.]+
+gim/[a-z-]+
+gim/\\b[\\w\\.]+
+gim/\\w+
+gm/(""")
+gm/(""")|(''')|(~S""")|(~S")|(~S''')|(~S')|(')|(")|([a-zA-Z_]\\w*[!?=]?|[-+~]@|<<|>>|=~|===?|<=>|[<>]=?|\\*\\*|[-/+%^&*~`|]|\\[\\]=?)|(\\B|\\b)
+gm/(""")|(''')|(~S""")|(~S")|(~S''')|(~S')|(')|(")|(~[A-Z](?=[/|([{<"']))|(~[a-z](?=[/|([{<"']))|(#)|(\\b(defimpl|defmodule|defprotocol|defrecord)(?!\\.)(?=\\b|\\s))|(\\b(def|defp|defmacro)(?!\\.)(?=\\b|\\s))|(::)|(:(?![\\s:]))|([a-zA-Z_][a-zA-Z0-9_.]*(!|\\?)?:(?!:))|((\\b0o[0-7_]+)|(\\b0b[01_]+)|(\\b0x[0-9a-fA-F_]+)|(-?\\b[1-9][0-9_]*(\\.[0-9_]+([eE][-+]?[0-9]+)?)?))|((\\$\\W)|((\\$|@@?)(\\w+)))|(->)|((!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~)\\s*)
+gm/(""")|(''')|(~S""")|(~S")|(~S''')|(~S')|(')|(")|(~[A-Z](?=[/|([{<"']))|(~[a-z](?=[/|([{<"']))|(#)|(\\b(defimpl|defmodule|defprotocol|defrecord)(?!\\.)(?=\\b|\\s))|(\\b(def|defp|defmacro)(?!\\.)(?=\\b|\\s))|(::)|(:(?![\\s:]))|([a-zA-Z_][a-zA-Z0-9_.]*(!|\\?)?:(?!:))|((\\b0o[0-7_]+)|(\\b0b[01_]+)|(\\b0x[0-9a-fA-F_]+)|(-?\\b[1-9][0-9_]*(\\.[0-9_]+([eE][-+]?[0-9]+)?)?))|((\\$\\W)|((\\$|@@?)(\\w+)))|(->)|((!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~)\\s*)|(\\})
+gm/("")|(")
+gm/(")
+gm/(")|(')|(\\/)|(\\|)|(\\()|(\\[)|(\\{)|(<)|(\\B|\\b)
+gm/(")|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?))|(\\{)|(\\[)|(//)|(/\\*)|(,|\\])
+gm/(")|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?))|(\\{)|(\\[)|(//)|(/\\*)|(,|\\})
+gm/(")|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?))|(\\{)|(\\[)|(//)|(/\\*)|(\\S)
+gm/(")|(:)|(//)|(/\\*)|(\\})|(\\S)
+gm/(")|(\\])
+gm/(#')|(#)|([rR]"(-*)\\()|([rR]"(-*)\\{)|([rR]"(-*)\\[)|([rR]'(-*)\\()|([rR]'(-*)\\{)|([rR]'(-*)\\[)|(")|(')|(([^a-zA-Z0-9._])(?=0[xX][0-9a-fA-F]+\\.[0-9a-fA-F]*[pP][+-]?\\d+i?))|(([^a-zA-Z0-9._])(?=0[xX][0-9a-fA-F]+([pP][+-]?\\d+)?[Li]?))|(([^a-zA-Z0-9._])(?=(\\d+(\\.\\d*)?|\\.\\d+)([eE][+-]?\\d+)?[Li]?))|(%)|([a-zA-Z][a-zA-Z_0-9]*\\s+<-\\s+)|(`)|(->)
+gm/(#)|((?:s|tr|y)(!|\\/|\\||\\?|'|"|#)(?:\\\\.|[^\\\\\\/])*?\\3(?:\\\\.|[^\\\\\\/])*?\\3[dualxmsipngr]{0,12})|((?:s|tr|y)\\((?:\\\\.|[^\\\\\\/])*?\\)\\((?:\\\\.|[^\\\\\\/])*?\\)[dualxmsipngr]{0,12})|((?:s|tr|y)\\[(?:\\\\.|[^\\\\\\/])*?\\]\\[(?:\\\\.|[^\\\\\\/])*?\\][dualxmsipngr]{0,12})|((?:s|tr|y)\\{(?:\\\\.|[^\\\\\\/])*?\\}\\{(?:\\\\.|[^\\\\\\/])*?\\}[dualxmsipngr]{0,12})|((m|qr)\\/\\/)|((?:(?:m|qr)?)\\/(?:\\\\.|[^\\\\\\/])*?\\/[dualxmsipngr]{0,12})|((?:m|qr)(!|\\/|\\||\\?|'|"|#)(?:\\\\.|[^\\\\\\/])*?\\11[dualxmsipngr]{0,12})|((?:m|qr)\\((?:\\\\.|[^\\\\\\/])*?\\)[dualxmsipngr]{0,12})|((?:m|qr)\\[(?:\\\\.|[^\\\\\\/])*?\\][dualxmsipngr]{0,12})|((?:m|qr)\\{(?:\\\\.|[^\\\\\\/])*?\\}[dualxmsipngr]{0,12})|(\\B|\\b)
+gm/(#)|(\\$\\([a-zA-Z_]\\w*\\))|(\\$[@%<?\\^\\+\\*])|(")|(\\$\\([\\w-]+\\s)|(^[a-zA-Z_]\\w*\\s*(?=[:+?]?=))|(^\\.PHONY:)|(^[^\\s]+:)
+gm/(#)|(\\/: (?=\\d+\\s*[,\\]]))|(/)|(%r\\[)|(\\B|\\b)
+gm/(#-\\})
+gm/(#\\s*[a-z]+\\b)|(\\b[a-z\\d_]*_t\\b)|(//)|(/\\*)|(\\b(0b[01']+))|((-?)\\b([\\d']+(\\.[\\d']*)?|\\.[\\d']+)((ll|LL|l|L)(u|U)?|(u|U)(ll|LL|l|L)?|f|F|b|B))|((-?)(\\b0[xX][a-fA-F0-9']+|(\\b[\\d']+(\\.[\\d']*)?|\\.[\\d']+)([eE][-+]?[\\d']+)?))|((u8?|U|L)?")|((u8?|U|L)?'(\\\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4,8}|[0-7]{3}|\\S)|.))|((?:u8?|U|L)?R"([^()\\\\ ]{0,16})\\()|(\\()|(;)
+gm/(#\\s*[a-z]+\\b)|(\\b[a-z\\d_]*_t\\b)|(//)|(/\\*)|(\\b(0b[01']+))|((-?)\\b([\\d']+(\\.[\\d']*)?|\\.[\\d']+)((ll|LL|l|L)(u|U)?|(u|U)(ll|LL|l|L)?|f|F|b|B))|((-?)(\\b0[xX][a-fA-F0-9']+|(\\b[\\d']+(\\.[\\d']*)?|\\.[\\d']+)([eE][-+]?[\\d']+)?))|((u8?|U|L)?")|((u8?|U|L)?'(\\\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4,8}|[0-7]{3}|\\S)|.))|((?:u8?|U|L)?R"([^()\\\\ ]{0,16})\\()|(\\()|(\\))
+gm/($)
+gm/(%)
+gm/(''')
+gm/(')
+gm/(')|(")|(`)|(%[qQwWx]?\\()|(%[qQwWx]?\\[)|(%[qQwWx]?\\{)|(%[qQwWx]?<)|(%[qQwWx]?\\/)|(%[qQwWx]?%)|(%[qQwWx]?-)|(%[qQwWx]?\\|)|(\\B\\?(\\\\\\d{1,3}))|(\\B\\?(\\\\x[A-Fa-f0-9]{1,2}))|(\\B\\?(\\\\u\\{?[A-Fa-f0-9]{1,6}\\}?))|(\\B\\?(\\\\M-\\\\C-|\\\\M-\\\\c|\\\\c\\\\M-|\\\\M-|\\\\C-\\\\M-)[\\x20-\\x7e])|(\\B\\?\\\\(c|C-)[\\x20-\\x7e])|(\\B\\?\\\\?\\S)|(<<[-~]?'?(\\w+)\\n(?:[^\\n]*\\n)*?\\s*\\24\\b)|(([a-zA-Z_]\\w*[!?=]?|[-+~]@|<<|>>|=~|===?|<=>|[<>]=?|\\*\\*|[-/+%^&*~`|]|\\[\\]=?))|(\\B|\\b)
+gm/(')|(")|(`)|(%[qQwWx]?\\()|(%[qQwWx]?\\[)|(%[qQwWx]?\\{)|(%[qQwWx]?<)|(%[qQwWx]?\\/)|(%[qQwWx]?%)|(%[qQwWx]?-)|(%[qQwWx]?\\|)|(\\B\\?(\\\\\\d{1,3}))|(\\B\\?(\\\\x[A-Fa-f0-9]{1,2}))|(\\B\\?(\\\\u\\{?[A-Fa-f0-9]{1,6}\\}?))|(\\B\\?(\\\\M-\\\\C-|\\\\M-\\\\c|\\\\c\\\\M-|\\\\M-|\\\\C-\\\\M-)[\\x20-\\x7e])|(\\B\\?\\\\(c|C-)[\\x20-\\x7e])|(\\B\\?\\\\?\\S)|(<<[-~]?'?(\\w+)\\n(?:[^\\n]*\\n)*?\\s*\\24\\b)|(\\b(class|module)(?!\\.)(?=\\b|\\s))|(def\\s+(?=([a-zA-Z_]\\w*[!?=]?|[-+~]@|<<|>>|=~|===?|<=>|[<>]=?|\\*\\*|[-/+%^&*~`|]|\\[\\]=?)\\s*(\\(|;|$)))|([a-zA-Z]\\w*::)|([a-zA-Z_]\\w*(!|\\?)?:)|(:(?!\\s))|(\\b([1-9](_?[0-9])*|0)(\\.([0-9](_?[0-9])*))?([eE][+-]?([0-9](_?[0-9])*)|r)?i?\\b)|(\\b0[dD][0-9](_?[0-9])*r?i?\\b)|(\\b0[bB][0-1](_?[0-1])*r?i?\\b)|(\\b0[oO][0-7](_?[0-7])*r?i?\\b)|(\\b0[xX][0-9a-fA-F](_?[0-9a-fA-F])*r?i?\\b)|(\\b0(_?[0-7])+r?i?\\b)|((\\$\\W)|((\\$|@@?)(\\w+))(?=[^@$?])(?![A-Za-z])(?![@$?']))|(\\|)|((!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~|unless)\\s*)|(#<)|(#)|(^=begin)|(^__END__)|(\\))
+gm/(')|(")|(`)|(%[qQwWx]?\\()|(%[qQwWx]?\\[)|(%[qQwWx]?\\{)|(%[qQwWx]?<)|(%[qQwWx]?\\/)|(%[qQwWx]?%)|(%[qQwWx]?-)|(%[qQwWx]?\\|)|(\\B\\?(\\\\\\d{1,3}))|(\\B\\?(\\\\x[A-Fa-f0-9]{1,2}))|(\\B\\?(\\\\u\\{?[A-Fa-f0-9]{1,6}\\}?))|(\\B\\?(\\\\M-\\\\C-|\\\\M-\\\\c|\\\\c\\\\M-|\\\\M-|\\\\C-\\\\M-)[\\x20-\\x7e])|(\\B\\?\\\\(c|C-)[\\x20-\\x7e])|(\\B\\?\\\\?\\S)|(<<[-~]?'?(\\w+)\\n(?:[^\\n]*\\n)*?\\s*\\24\\b)|(\\b(class|module)(?!\\.)(?=\\b|\\s))|(def\\s+(?=([a-zA-Z_]\\w*[!?=]?|[-+~]@|<<|>>|=~|===?|<=>|[<>]=?|\\*\\*|[-/+%^&*~`|]|\\[\\]=?)\\s*(\\(|;|$)))|([a-zA-Z]\\w*::)|([a-zA-Z_]\\w*(!|\\?)?:)|(:(?!\\s))|(\\b([1-9](_?[0-9])*|0)(\\.([0-9](_?[0-9])*))?([eE][+-]?([0-9](_?[0-9])*)|r)?i?\\b)|(\\b0[dD][0-9](_?[0-9])*r?i?\\b)|(\\b0[bB][0-1](_?[0-1])*r?i?\\b)|(\\b0[oO][0-7](_?[0-7])*r?i?\\b)|(\\b0[xX][0-9a-fA-F](_?[0-9a-fA-F])*r?i?\\b)|(\\b0(_?[0-7])+r?i?\\b)|((\\$\\W)|((\\$|@@?)(\\w+))(?=[^@$?])(?![A-Za-z])(?![@$?']))|(\\|)|((!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~|unless)\\s*)|(#<)|(#)|(^=begin)|(^__END__)|(\\})
+gm/(')|(")|(html`)|(css`)|(`)|((\\b(0|[1-9](_?[0-9])*|0[0-7]*[89][0-9]*)((\\.([0-9](_?[0-9])*))|\\.)?|(\\.([0-9](_?[0-9])*)))[eE][+-]?([0-9](_?[0-9])*)\\b)|(\\b(0|[1-9](_?[0-9])*|0[0-7]*[89][0-9]*)\\b((\\.([0-9](_?[0-9])*))\\b|\\.)?|(\\.([0-9](_?[0-9])*))\\b)|(\\b(0|[1-9](_?[0-9])*)n\\b)|(\\b0[xX][0-9a-fA-F](_?[0-9a-fA-F])*n?\\b)|(\\b0[bB][0-1](_?[0-1])*n?\\b)|(\\b0[oO][0-7](_?[0-7])*n?\\b)|(\\b0[0-7]+n?\\b)|((?=\\/[^/\\n]*\\/))|(\\{)|(\\})
+gm/(')|(.)
+gm/(')|(\\n)
+gm/(((?=([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*\\s*:)|(?=([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*\\s+([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*\\s*:)))|(//)|(/\\*)|(\\.(?=(\\bProtocol\\b|\\bType\\b|\\binit\\b|\\bself\\b)))|(\\.(associatedtype|async|await|as\\?|as!|as|break|case|catch|class|continue|convenience|default|defer|deinit|didSet|do|dynamic|else|enum|extension|fallthrough|fileprivate\\(set\\)|fileprivate|final|for|func|get|guard|if|import|indirect|infix|init\\?|init!|inout|internal\\(set\\)|internal|in|is|lazy|let|mutating|nonmutating|open\\(set\\)|open|operator|optional|override|postfix|precedencegroup|prefix|private\\(set\\)|private|protocol|public\\(set\\)|public|repeat|required|rethrows|return|set|some|static|struct|subscript|super|switch|throws|throw|try\\?|try!|try|typealias|unowned\\(safe\\)|unowned\\(unsafe\\)|unowned|var|weak|where|while|willSet))|((\\bas\\?\\B|\\bas!\\B|\\bfileprivate\\(set\\)\\B|\\binit\\?\\B|\\binit!\\B|\\binternal\\(set\\)\\B|\\bopen\\(set\\)\\B|\\bprivate\\(set\\)\\B|\\bpublic\\(set\\)\\B|\\btry\\?\\B|\\btry!\\B|\\bunowned\\(safe\\)\\B|\\bunowned\\(unsafe\\)\\B|\\bAny\\b|\\bSelf\\b|\\binit\\b|\\bself\\b))|(->)|(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F])*)|(\\.(\\.|(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F]))+)|(\\b(([0-9]_*)+)(\\.(([0-9]_*)+))?([eE][+-]?(([0-9]_*)+))?\\b)|(\\b0x(([0-9a-fA-F]_*)+)(\\.(([0-9a-fA-F]_*)+))?([pP][+-]?(([0-9]_*)+))?\\b)|(\\b0o([0-7]_*)+\\b)|(\\b0b([01]_*)+\\b)|(""")|(#""")|(##""")|(###""")|(")|(#")|(##")|(###")|((@|#)available)|(@(autoclosure|convention\\((swift|block|c)\\)|discardableResult|dynamicCallable|dynamicMemberLookup|escaping|frozen|GKInspectable|IBAction|IBDesignable|IBInspectable|IBOutlet|IBSegueAction|inlinable|main|nonobjc|NSApplicationMain|NSCopying|NSManaged|objc\\(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*\\)|objc|objcMembers|propertyWrapper|requires_stored_property_inits|testable|UIApplicationMain|unknown|usableFromInline))|(@([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*)|((?=\\b[A-Z]))|(\\()|(\\))|(["'])
+gm/((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?))|(""")|(')|(")|(\\})
+gm/((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?))|(r''')|(r""")|(r')|(r")|(''')|(""")|(')|(")|(\\})
+gm/((AV|CA|CF|CG|CI|CL|CM|CN|CT|MK|MP|MTK|MTL|NS|SCN|SK|UI|WK|XC)(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])+)|([A-Z](([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*)|([?!]+)|(\\.\\.\\.)|(\\s+&\\s+(?=[A-Z](([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*))|(<)|(\\B|\\b)
+gm/(([_a-zA-Z]\\w*\\.)*([_a-zA-Z]\\w*:)?[_a-zA-Z]\\w*)|(\\()|(--(?!\\[=*\\[))|(--\\[=*\\[)|(\\))
+gm/(([a-zA-Z]\\w*::)?[a-zA-Z]\\w*)|(\\B|\\b)
+gm/(([a-zA-Z_]\\w*::)?[a-zA-Z]\\w*)|(\\B|\\b)
+gm/(([a-zA-Z_]\\w*[!?=]?|[-+~]@|<<|>>|=~|===?|<=>|[<>]=?|\\*\\*|[-/+%^&*~`|]|\\[\\]=?))|(\\()|(#)|(^=begin)|(^__END__)|($|;)
+gm/(([uU]|[bB]|[rR]|[bB][rR]|[rR][bB])?''')|(([uU]|[bB]|[rR]|[bB][rR]|[rR][bB])?""")|(([fF][rR]|[rR][fF]|[fF])''')|(([fF][rR]|[rR][fF]|[fF])""")|(([uU]|[rR])')|(([uU]|[rR])")|(([bB]|[bB][rR]|[rR][bB])')|(([bB]|[bB][rR]|[rR][bB])")|(([fF][rR]|[rR][fF]|[fF])')|(([fF][rR]|[rR][fF]|[fF])")|(')|(")|((\\b([0-9](_?[0-9])*)|((\\b([0-9](_?[0-9])*))?\\.([0-9](_?[0-9])*)|\\b([0-9](_?[0-9])*)\\.))[eE][+-]?([0-9](_?[0-9])*)[jJ]?\\b)|(((\\b([0-9](_?[0-9])*))?\\.([0-9](_?[0-9])*)|\\b([0-9](_?[0-9])*)\\.)[jJ]?)|(\\b([1-9](_?[0-9])*|0+(_?0)*)[lLjJ]?\\b)|(\\b0[bB](_?[01])+[lL]?\\b)|(\\b0[oO](_?[0-7])+[lL]?\\b)|(\\b0[xX](_?[0-9a-fA-F])+[lL]?\\b)|(\\b([0-9](_?[0-9])*)[jJ]\\b)|(^(>>>|\\.\\.\\.) )|(\\})|(#)
+gm/((\\b([0-9](_?[0-9])*)|((\\b([0-9](_?[0-9])*))?\\.([0-9](_?[0-9])*)|\\b([0-9](_?[0-9])*)\\.))[eE][+-]?([0-9](_?[0-9])*)[jJ]?\\b)|(((\\b([0-9](_?[0-9])*))?\\.([0-9](_?[0-9])*)|\\b([0-9](_?[0-9])*)\\.)[jJ]?)|(\\b([1-9](_?[0-9])*|0+(_?0)*)[lLjJ]?\\b)|(\\b0[bB](_?[01])+[lL]?\\b)|(\\b0[oO](_?[0-7])+[lL]?\\b)|(\\b0[xX](_?[0-9a-fA-F])+[lL]?\\b)|(\\b([0-9](_?[0-9])*)[jJ]\\b)|(\\(\\s*\\))|(\\()|(([uU]|[bB]|[rR]|[bB][rR]|[rR][bB])?''')|(([uU]|[bB]|[rR]|[bB][rR]|[rR][bB])?""")|(([fF][rR]|[rR][fF]|[fF])''')|(([fF][rR]|[rR][fF]|[fF])""")|(([uU]|[rR])')|(([uU]|[rR])")|(([bB]|[bB][rR]|[rR][bB])')|(([bB]|[bB][rR]|[rR][bB])")|(([fF][rR]|[rR][fF]|[fF])')|(([fF][rR]|[rR][fF]|[fF])")|(')|(")|((?=#)|$)
+gm/((\\bProtocol\\b|\\bType\\b|\\binit\\b|\\bself\\b))
+gm/((\\d+(\\.\\d*)?|\\.\\d+)([eE][+-]?\\d+)?[Li]?)|(\\B|\\b)
+gm/((\\w+))
+gm/((\\w+))|(\\B|\\b)
+gm/((`([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*`|([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*|([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F])*))|(\\s+)|(\\B|\\b)
+gm/(--(?!\\[=*\\[))|(--\\[=*\\[)|(\\))
+gm/(--(?!\\[=*\\[))|(--\\[=*\\[)|(\\b(function)(?!\\.)(?=\\b|\\s))|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?))|(')|(")|(\\[=*\\[)
+gm/(->)|(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F])*)|(\\.(\\.|(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F]))+)|(\\b(([0-9]_*)+)(\\.(([0-9]_*)+))?([eE][+-]?(([0-9]_*)+))?\\b)|(\\b0x(([0-9a-fA-F]_*)+)(\\.(([0-9a-fA-F]_*)+))?([pP][+-]?(([0-9]_*)+))?\\b)|(\\b0o([0-7]_*)+\\b)|(\\b0b([01]_*)+\\b)|(""")|(#""")|(##""")|(###""")|(")|(#")|(##")|(###")|(\\))
+gm/(.)|(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|($)
+gm/(/)|(%r\\{)|(%r\\()|(%r!)|(%r\\[)|(#<)|(#)|(^=begin)|(^__END__)|(\\B|\\b)
+gm/(//)|(/\\*)|(""")|(")|([a-z]+")|([a-z]+""")|('\\w[\\w\\d_]*(?!'))|(\\b[A-Z][A-Za-z0-9_]*)|(\\b(def)(?!\\.)(?=\\b|\\s))|(\\b(class|object|trait|type)(?!\\.)(?=\\b|\\s))|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?))|(@[A-Za-z]+)
+gm/(//)|(/\\*)|(")|(')|(`)|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?)[i])|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?))|(:=)|(\\b(func)(?!\\.)(?=\\b|\\s))|(</)
+gm/(//)|(/\\*)|($)
+gm/(//)|(/\\*)|((?=\\bfunc\\b))|(\\b(subscript|init[?!]?)\\s*(?=[<(]))|(\\b(struct|protocol|class|extension|enum)(?!\\.)(?=\\b|\\s))|(\\b(operator)(?!\\.)(?=\\b|\\s))|(\\b(precedencegroup)(?!\\.)(?=\\b|\\s))|(\\b(import)(?!\\.)(?=\\b|\\s))|(\\.(?=(\\bProtocol\\b|\\bType\\b|\\binit\\b|\\bself\\b)))|(\\.(associatedtype|async|await|as\\?|as!|as|break|case|catch|class|continue|convenience|default|defer|deinit|didSet|do|dynamic|else|enum|extension|fallthrough|fileprivate\\(set\\)|fileprivate|final|for|func|get|guard|if|import|indirect|infix|init\\?|init!|inout|internal\\(set\\)|internal|in|is|lazy|let|mutating|nonmutating|open\\(set\\)|open|operator|optional|override|postfix|precedencegroup|prefix|private\\(set\\)|private|protocol|public\\(set\\)|public|repeat|required|rethrows|return|set|some|static|struct|subscript|super|switch|throws|throw|try\\?|try!|try|typealias|unowned\\(safe\\)|unowned\\(unsafe\\)|unowned|var|weak|where|while|willSet))|((\\bas\\?\\B|\\bas!\\B|\\bfileprivate\\(set\\)\\B|\\binit\\?\\B|\\binit!\\B|\\binternal\\(set\\)\\B|\\bopen\\(set\\)\\B|\\bprivate\\(set\\)\\B|\\bpublic\\(set\\)\\B|\\btry\\?\\B|\\btry!\\B|\\bunowned\\(safe\\)\\B|\\bunowned\\(unsafe\\)\\B|\\bAny\\b|\\bSelf\\b|\\binit\\b|\\bself\\b))|(\\.(abs|all|any|assert|assertionFailure|debugPrint|dump|fatalError|getVaList|isKnownUniquelyReferenced|max|min|numericCast|pointwiseMax|pointwiseMin|precondition|preconditionFailure|print|readLine|repeatElement|sequence|stride|swap|swift_unboxFromSwiftValueWithType|transcode|type|unsafeBitCast|unsafeDowncast|withExtendedLifetime|withUnsafeMutablePointer|withUnsafePointer|withVaList|withoutActuallyEscaping|zip))|(\\b(abs|all|any|assert|assertionFailure|debugPrint|dump|fatalError|getVaList|isKnownUniquelyReferenced|max|min|numericCast|pointwiseMax|pointwiseMin|precondition|preconditionFailure|print|readLine|repeatElement|sequence|stride|swap|swift_unboxFromSwiftValueWithType|transcode|type|unsafeBitCast|unsafeDowncast|withExtendedLifetime|withUnsafeMutablePointer|withUnsafePointer|withVaList|withoutActuallyEscaping|zip)(?=\\())|(->)|(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F])*)|(\\.(\\.|(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F]))+)|(\\b(([0-9]_*)+)(\\.(([0-9]_*)+))?([eE][+-]?(([0-9]_*)+))?\\b)|(\\b0x(([0-9a-fA-F]_*)+)(\\.(([0-9a-fA-F]_*)+))?([pP][+-]?(([0-9]_*)+))?\\b)|(\\b0o([0-7]_*)+\\b)|(\\b0b([01]_*)+\\b)|(""")|(#""")|(##""")|(###""")|(")|(#")|(##")|(###")|(`([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*`)|(\\$\\d+)|(\\$(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])+)|((@|#)available)|(@(autoclosure|convention\\((swift|block|c)\\)|discardableResult|dynamicCallable|dynamicMemberLookup|escaping|frozen|GKInspectable|IBAction|IBDesignable|IBInspectable|IBOutlet|IBSegueAction|inlinable|main|nonobjc|NSApplicationMain|NSCopying|NSManaged|objc\\(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*\\)|objc|objcMembers|propertyWrapper|requires_stored_property_inits|testable|UIApplicationMain|unknown|usableFromInline))|(@([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*)|((?=\\b[A-Z]))|(\\()
+gm/(//)|(/\\*)|((u8?|U|L)?")|((u8?|U|L)?'(\\\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4,8}|[0-7]{3}|\\S)|.))|((?:u8?|U|L)?R"([^()\\\\ ]{0,16})\\()|(\\b(0b[01']+))|((-?)\\b([\\d']+(\\.[\\d']*)?|\\.[\\d']+)((ll|LL|l|L)(u|U)?|(u|U)(ll|LL|l|L)?|f|F|b|B))|((-?)(\\b0[xX][a-fA-F0-9']+|(\\b[\\d']+(\\.[\\d']*)?|\\.[\\d']+)([eE][-+]?[\\d']+)?))|(\\b[a-z\\d_]*_t\\b)|(\\()|(\\))
+gm/(//)|(/\\*)|(\\b(extends|with)(?!\\.)(?=\\b|\\s))|(\\[)|(\\()|([^0-9\\n\\t "'(),.`{}\\[\\]:;][^\\n\\t "'(),.`{}\\[\\]:;]+|[^0-9\\n\\t "'(),.`{}\\[\\]:;=])|([:={\\[\\n;])
+gm/(//)|(/\\*)|(b?")|(r(#*)"(.|\\n)*?"\\5(?!#))|(b?'\\\\?(x\\w{2}|u\\w{4}|U\\w{8}|.)')|('[a-zA-Z_][a-zA-Z0-9_]*)|(\\b0b([01_]+)([ui](8|16|32|64|128|size)|f(32|64))?)|(\\b0o([0-7_]+)([ui](8|16|32|64|128|size)|f(32|64))?)|(\\b0x([A-Fa-f0-9_]+)([ui](8|16|32|64|128|size)|f(32|64))?)|(\\b(\\d[\\d_]*(\\.[0-9_]+)?([eE][+-]?[0-9_]+)?)([ui](8|16|32|64|128|size)|f(32|64))?)|(\\b(fn)(?!\\.)(?=\\b|\\s))|(#!?\\[)|(\\b(type)(?!\\.)(?=\\b|\\s))|(\\b(trait|enum|struct|union)(?!\\.)(?=\\b|\\s))|([a-zA-Z]\\w*::)|(->)|(</)
+gm/(///)|(//)|(/\\*)|(#)|(\\$@")|(\\$")|(@")|(')|(")|(\\b(0b[01']+))|((-?)\\b([\\d']+(\\.[\\d']*)?|\\.[\\d']+)(u|U|l|L|ul|UL|f|F|b|B))|((-?)(\\b0[xX][a-fA-F0-9']+|(\\b[\\d']+(\\.[\\d']*)?|\\.[\\d']+)([eE][-+]?[\\d']+)?))|(\\b(class|interface)(?!\\.)(?=\\b|\\s))|(\\b(namespace)(?!\\.)(?=\\b|\\s))|(\\b(record)(?!\\.)(?=\\b|\\s))|(^\\s*\\[)|(\\b(new|return|throw|await|else)(?!\\.)(?=\\b|\\s))|(([a-zA-Z]\\w*(<[a-zA-Z]\\w*(\\s*,\\s*[a-zA-Z]\\w*)*>)?(\\[\\])?\\s+)+[a-zA-Z]\\w*\\s*(<.+>\\s*)?\\()|(@[a-zA-Z]\\w*)|(::)
+gm/(///)|(<!--|-->)|(</?)|(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|($)
+gm/(/\\$)
+gm/(/\\*)|(\\))
+gm/(/\\*\\*)|(//)|(/\\*)|(\\b(break|continue|return|this)\\b)|([a-zA-Z_]\\w*@)|(@(?:file|property|field|get|set|receiver|param|setparam|delegate)\\s*:(?:\\s*[a-zA-Z_]\\w*)?)|(@[a-zA-Z_]\\w*)|(\\b(fun)(?!\\.)(?=\\b|\\s))|(\\b(class|interface|trait)(?!\\.)(?=\\b|\\s))|(""")|(')|(")|(^#!/usr/bin/env)|((\\b([0-9](_*[0-9])*)((\\.([0-9](_*[0-9])*))|\\.)?|(\\.([0-9](_*[0-9])*)))[eE][+-]?([0-9](_*[0-9])*)[fFdD]?\\b)|(\\b([0-9](_*[0-9])*)((\\.([0-9](_*[0-9])*))[fFdD]?\\b|\\.([fFdD]\\b)?))|((\\.([0-9](_*[0-9])*))[fFdD]?\\b)|(\\b([0-9](_*[0-9])*)[fFdD]\\b)|(\\b0[xX](([0-9a-fA-F](_*[0-9a-fA-F])*)\\.?|([0-9a-fA-F](_*[0-9a-fA-F])*)?\\.([0-9a-fA-F](_*[0-9a-fA-F])*))[pP][+-]?([0-9](_*[0-9])*)[fFdD]?\\b)|(\\b(0|[1-9](_*[0-9])*)[lL]?\\b)|(\\b0[xX]([0-9a-fA-F](_*[0-9a-fA-F])*)[lL]?\\b)|(\\b0(_*[0-7])*[lL]?\\b)|(\\b0[bB][01](_*[01])*[lL]?\\b)
+gm/(/\\*\\*)|(import java\\.[a-z]+\\.)|(//)|(/\\*)|(')|(")|(\\b(class|interface|enum)(?!\\.)(?=\\b|\\s))|(\\b(new|throw|return|else)(?!\\.)(?=\\b|\\s))|(record\\s+[a-zA-Z_]\\w*\\s*\\()|(([\u00c0-\u02b8a-zA-Z_$][\u00c0-\u02b8a-zA-Z_$0-9]*(<[\u00c0-\u02b8a-zA-Z_$][\u00c0-\u02b8a-zA-Z_$0-9]*(\\s*,\\s*[\u00c0-\u02b8a-zA-Z_$][\u00c0-\u02b8a-zA-Z_$0-9]*)*>)?\\s+)+[a-zA-Z_]\\w*\\s*\\()|((\\b([0-9](_*[0-9])*)((\\.([0-9](_*[0-9])*))|\\.)?|(\\.([0-9](_*[0-9])*)))[eE][+-]?([0-9](_*[0-9])*)[fFdD]?\\b)|(\\b([0-9](_*[0-9])*)((\\.([0-9](_*[0-9])*))[fFdD]?\\b|\\.([fFdD]\\b)?))|((\\.([0-9](_*[0-9])*))[fFdD]?\\b)|(\\b([0-9](_*[0-9])*)[fFdD]\\b)|(\\b0[xX](([0-9a-fA-F](_*[0-9a-fA-F])*)\\.?|([0-9a-fA-F](_*[0-9a-fA-F])*)?\\.([0-9a-fA-F](_*[0-9a-fA-F])*))[pP][+-]?([0-9](_*[0-9])*)[fFdD]?\\b)|(\\b(0|[1-9](_*[0-9])*)[lL]?\\b)|(\\b0[xX]([0-9a-fA-F](_*[0-9a-fA-F])*)[lL]?\\b)|(\\b0(_*[0-7])*[lL]?\\b)|(\\b0[bB][01](_*[01])*[lL]?\\b)|(@[\u00c0-\u02b8a-zA-Z_$][\u00c0-\u02b8a-zA-Z_$0-9]*)|(<\\/|#)
+gm/(:)
+gm/(:)|(//)|(/\\*)|(@(?:file|property|field|get|set|receiver|param|setparam|delegate)\\s*:(?:\\s*[a-zA-Z_]\\w*)?)|(@[a-zA-Z_]\\w*)|(""")|(')|(")|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?))|(\\))
+gm/(<)|(\\()|(\\s+)|(\\B|\\b)|(\\[|%)
+gm/(<<[-~]?'?)|((\\w+))|(\\B|\\b)
+gm/(<[A-Za-z0-9\\\\._:-]+)|(\\/[A-Za-z0-9\\\\._:-]+>|\\/>)
+gm/(<\\/?[A-Za-z_])|(\\[.+?\\]\\[.*?\\])|(\\[.+?\\]\\(((data|javascript|mailto):|(?:http|ftp)s?:\\/\\/).*?\\))|(\\[.+?\\]\\([A-Za-z][A-Za-z0-9+.-]*:\\/\\/.*?\\))|(\\[.+?\\]\\([./?&#].*?\\))|(\\[.+?\\]\\(.*?\\))|(_{2})|(\\*{2})|(\\*(?!\\*))|(_(?!_))|($)
+gm/(<\\/?[A-Za-z_])|(\\[.+?\\]\\[.*?\\])|(\\[.+?\\]\\(((data|javascript|mailto):|(?:http|ftp)s?:\\/\\/).*?\\))|(\\[.+?\\]\\([A-Za-z][A-Za-z0-9+.-]*:\\/\\/.*?\\))|(\\[.+?\\]\\([./?&#].*?\\))|(\\[.+?\\]\\(.*?\\))|(_{2})|(\\*{2})|(\\*(?!\\*))|(_(?!_))|(\\n)
+gm/(=)|(\\()|(\\b(new|throw|return|else)(?!\\.)(?=\\b|\\s))|(((decltype\\(auto\\)|([a-zA-Z_]\\w*::)?[a-zA-Z_]\\w*(<[^<>]+>)?)[\\*&\\s]+)+([a-zA-Z_]\\w*::)?[a-zA-Z]\\w*\\s*\\()|(#\\s*[a-z]+\\b)|(\\b[a-z\\d_]*_t\\b)|(//)|(/\\*)|(\\b(0b[01']+))|((-?)\\b([\\d']+(\\.[\\d']*)?|\\.[\\d']+)((ll|LL|l|L)(u|U)?|(u|U)(ll|LL|l|L)?|f|F|b|B))|((-?)(\\b0[xX][a-fA-F0-9']+|(\\b[\\d']+(\\.[\\d']*)?|\\.[\\d']+)([eE][-+]?[\\d']+)?))|((u8?|U|L)?")|((u8?|U|L)?'(\\\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4,8}|[0-7]{3}|\\S)|.))|((?:u8?|U|L)?R"([^()\\\\ ]{0,16})\\()|(#\\s*[a-z]+\\b)|(\\b(deque|list|queue|priority_queue|pair|stack|vector|map|set|bitset|multiset|multimap|unordered_map|unordered_set|unordered_multiset|unordered_multimap|array)\\s*<)|([a-zA-Z]\\w*::)|(\\b(enum|class|struct|union)(?!\\.)(?=\\b|\\s))|(</)
+gm/(=)|(\\()|(\\b(new|throw|return|else)(?!\\.)(?=\\b|\\s))|(((decltype\\(auto\\)|([a-zA-Z_]\\w*::)?[a-zA-Z_]\\w*(<[^<>]+>)?)[\\*&\\s]+)+([a-zA-Z_]\\w*::)?[a-zA-Z]\\w*\\s*\\()|(\\b(?!decltype)(?!if)(?!for)(?!while)[a-zA-Z]\\w*(?=\\s*\\())|(\\b(?!decltype)(?!if)(?!for)(?!while)[a-zA-Z]\\w*(?=\\s*\\())|(#\\s*[a-z]+\\b)|(\\b[a-z\\d_]*_t\\b)|(//)|(/\\*)|(\\b(0b[01']+))|((-?)\\b([\\d']+(\\.[\\d']*)?|\\.[\\d']+)((ll|LL|l|L)(u|U)?|(u|U)(ll|LL|l|L)?|f|F|b|B))|((-?)(\\b0[xX][a-fA-F0-9']+|(\\b[\\d']+(\\.[\\d']*)?|\\.[\\d']+)([eE][-+]?[\\d']+)?))|((u8?|U|L)?")|((u8?|U|L)?'(\\\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4,8}|[0-7]{3}|\\S)|.))|((?:u8?|U|L)?R"([^()\\\\ ]{0,16})\\()|(#\\s*[a-z]+\\b)|(\\b(deque|list|queue|priority_queue|pair|stack|vector|map|set|bitset|multiset|multimap|unordered_map|unordered_set|unordered_multiset|unordered_multimap|array)\\s*<)|([a-zA-Z]\\w*::)|(\\b(enum|class|struct|union)(?!\\.)(?=\\b|\\s))|(</)
+gm/(>)
+gm/(?:(?:[a-zA-Z]|\\.[._a-zA-Z])[._a-zA-Z0-9]*)|\\.(?!\\d)
+gm/(@[A-Za-z]+)|(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|($)
+gm/(@[A-Za-z]+)|(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|(\\*/)
+gm/(@[A-Za-z]+)|(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|(^=end)
+gm/(@[\u00c0-\u02b8a-zA-Z_$][\u00c0-\u02b8a-zA-Z_$0-9]*)|(')|(")|((\\b([0-9](_*[0-9])*)((\\.([0-9](_*[0-9])*))|\\.)?|(\\.([0-9](_*[0-9])*)))[eE][+-]?([0-9](_*[0-9])*)[fFdD]?\\b)|(\\b([0-9](_*[0-9])*)((\\.([0-9](_*[0-9])*))[fFdD]?\\b|\\.([fFdD]\\b)?))|((\\.([0-9](_*[0-9])*))[fFdD]?\\b)|(\\b([0-9](_*[0-9])*)[fFdD]\\b)|(\\b0[xX](([0-9a-fA-F](_*[0-9a-fA-F])*)\\.?|([0-9a-fA-F](_*[0-9a-fA-F])*)?\\.([0-9a-fA-F](_*[0-9a-fA-F])*))[pP][+-]?([0-9](_*[0-9])*)[fFdD]?\\b)|(\\b(0|[1-9](_*[0-9])*)[lL]?\\b)|(\\b0[xX]([0-9a-fA-F](_*[0-9a-fA-F])*)[lL]?\\b)|(\\b0(_*[0-7])*[lL]?\\b)|(\\b0[bB][01](_*[01])*[lL]?\\b)|(/\\*)|(\\))
+gm/(@\\w+)|(\\B|\\b)
+gm/([A-Za-z$_][0-9A-Za-z$_]*(?=\\s*:))|(\\B|\\b)
+gm/([A-Za-z$_][0-9A-Za-z$_]*)|(\\(\\))|(\\()|(\\{)
+gm/([A-Za-z$_][\\u00C0-\\u02B80-9A-Za-z$_]*)|(\\.(?=(\\bProtocol\\b|\\bType\\b|\\binit\\b|\\bself\\b)))|(\\.(associatedtype|async|await|as\\?|as!|as|break|case|catch|class|continue|convenience|default|defer|deinit|didSet|do|dynamic|else|enum|extension|fallthrough|fileprivate\\(set\\)|fileprivate|final|for|func|get|guard|if|import|indirect|infix|init\\?|init!|inout|internal\\(set\\)|internal|in|is|lazy|let|mutating|nonmutating|open\\(set\\)|open|operator|optional|override|postfix|precedencegroup|prefix|private\\(set\\)|private|protocol|public\\(set\\)|public|repeat|required|rethrows|return|set|some|static|struct|subscript|super|switch|throws|throw|try\\?|try!|try|typealias|unowned\\(safe\\)|unowned\\(unsafe\\)|unowned|var|weak|where|while|willSet))|((\\bas\\?\\B|\\bas!\\B|\\bfileprivate\\(set\\)\\B|\\binit\\?\\B|\\binit!\\B|\\binternal\\(set\\)\\B|\\bopen\\(set\\)\\B|\\bprivate\\(set\\)\\B|\\bpublic\\(set\\)\\B|\\btry\\?\\B|\\btry!\\B|\\bunowned\\(safe\\)\\B|\\bunowned\\(unsafe\\)\\B|\\bAny\\b|\\bSelf\\b|\\binit\\b|\\bself\\b))|(\\{)
+gm/([A-Za-z_]\\w*(::\\w+)*(\\?|!)?)|(<\\s*)|(#)|(^=begin)|(^__END__)|($|;)|(=)
+gm/([^0-9\\n\\t "'(),.`{}\\[\\]:;][^\\n\\t "'(),.`{}\\[\\]:;]+|[^0-9\\n\\t "'(),.`{}\\[\\]:;=])|([:={\\[(\\n;])
+gm/([^\\\\](?=\\s*$))
+gm/([a-zA-Z](\\.?\\w)*)|(//)|(/\\*)|([{;=])|([^\\s:])
+gm/([a-zA-Z]\\w*)|((\\s*\\(.*?\\))?[;{])
+gm/([a-zA-Z]\\w*)|(<)|(\\B|\\b)
+gm/([a-zA-Z]\\w*)|(\\()|(\\s*(\\{|$))
+gm/([a-zA-Z_][a-zA-Z0-9_.]*(!|\\?)?)|(\\B\\b)
+gm/([a-zA-Z_][a-zA-Z0-9_.]*(!|\\?)?)|(\\bdo\\b|$|;)
+gm/([a-zA-Z_]\\w*)|((\\(|<))
+gm/([a-zA-Z_]\\w*)|(\\()|(//)|(/\\*)|([=,\\/]|\\))
+gm/([a-zA-Z_]\\w*)|(\\()|(\\))
+gm/([a-zA-Z_]\\w*)|(\\(\\s*\\))|(\\()|(->)|(:)|([${=;\\n,])
+gm/([a-zA-Z_]\\w*)|(\\(\\s*\\))|(\\()|(\\s*=>)
+gm/([a-zA-Z_]\\w*)|(\\B|\\b)
+gm/([a-zA-Z_]\\w*)|(\\{)|([\\w\\d])
+gm/([a-zA-Z_]\\w*\\s*\\()|(<)|(\\()|(/\\*)|([(]|$)
+gm/([a-zA-Z_]\\w*\\s*\\()|(\\()|(//)|(/\\*)|([{;=])
+gm/(\\$@")|(\\$")|(@")|(')|(")|(\\b(0b[01']+))|((-?)\\b([\\d']+(\\.[\\d']*)?|\\.[\\d']+)(u|U|l|L|ul|UL|f|F|b|B))|((-?)(\\b0[xX][a-fA-F0-9']+|(\\b[\\d']+(\\.[\\d']*)?|\\.[\\d']+)([eE][-+]?[\\d']+)?))|(/\\*)|(\\))
+gm/(\\$@")|(\\$")|(@")|(')|(")|(\\b(0b[01']+))|((-?)\\b([\\d']+(\\.[\\d']*)?|\\.[\\d']+)(u|U|l|L|ul|UL|f|F|b|B))|((-?)(\\b0[xX][a-fA-F0-9']+|(\\b[\\d']+(\\.[\\d']*)?|\\.[\\d']+)([eE][-+]?[\\d']+)?))|(/\\*)|(\\})|(\\n)
+gm/(\\$[\\w\\d#@][\\w\\d_]*(?![\\w\\d])(?![$]))|(\\$\\{)|(\\B|\\b)
+gm/(\\$[a-zA-Z_]\\w*)|(\\$\\{)|("""(?=[^"]))
+gm/(\\$\\([a-zA-Z_]\\w*\\))|(\\$[@%<?\\^\\+\\*])|($)
+gm/(\\$\\([a-zA-Z_]\\w*\\))|(\\$[@%<?\\^\\+\\*])|(\\))
+gm/(\\$\\d)|([$%@](\\^\\w\\b|#\\w+(::\\w+)*|\\{\\w+\\}|\\w+(::\\w*)*)(?![A-Za-z])(?![@$%]))|([$%@][^\\s\\w{])|(#)|(^=\\w)|(->\\{)|(q[qwxr]?\\s*\\()|(q[qwxr]?\\s*\\[)|(q[qwxr]?\\s*\\{)|(q[qwxr]?\\s*\\|)|(q[qwxr]?\\s*<)|(qw\\s+q)|(')|(")|(`)|(\\{\\w+\\})|(-?\\w+\\s*=>)|((\\b0[0-7_]+)|(\\b0x[0-9a-fA-F_]+)|(\\b[1-9][0-9_]*(\\.[0-9_]+)?)|[0_]\\b)|((\\/\\/|!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~|\\b(split|return|print|reverse|grep)\\b)\\s*)|(\\b(sub)(?!\\.)(?=\\b|\\s))|(-\\w\\b)|(^__DATA__$)
+gm/(\\$\\d)|([$%@](\\^\\w\\b|#\\w+(::\\w+)*|\\{\\w+\\}|\\w+(::\\w*)*)(?![A-Za-z])(?![@$%]))|([$%@][^\\s\\w{])|(#)|(^=\\w)|(->\\{)|(q[qwxr]?\\s*\\()|(q[qwxr]?\\s*\\[)|(q[qwxr]?\\s*\\{)|(q[qwxr]?\\s*\\|)|(q[qwxr]?\\s*<)|(qw\\s+q)|(')|(")|(`)|(\\{\\w+\\})|(-?\\w+\\s*=>)|((\\b0[0-7_]+)|(\\b0x[0-9a-fA-F_]+)|(\\b[1-9][0-9_]*(\\.[0-9_]+)?)|[0_]\\b)|((\\/\\/|!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~|\\b(split|return|print|reverse|grep)\\b)\\s*)|(\\b(sub)(?!\\.)(?=\\b|\\s))|(-\\w\\b)|(^__DATA__$)|(\\})
+gm/(\\$\\{)|(")
+gm/(\\$\\{)|('')
+gm/(\\$\\{)|(:-)|(\\})
+gm/(\\()|(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*\\s*:)|(//)|(/\\*)|(\\.(?=(\\bProtocol\\b|\\bType\\b|\\binit\\b|\\bself\\b)))|(\\.(associatedtype|async|await|as\\?|as!|as|break|case|catch|class|continue|convenience|default|defer|deinit|didSet|do|dynamic|else|enum|extension|fallthrough|fileprivate\\(set\\)|fileprivate|final|for|func|get|guard|if|import|indirect|infix|init\\?|init!|inout|internal\\(set\\)|internal|in|is|lazy|let|mutating|nonmutating|open\\(set\\)|open|operator|optional|override|postfix|precedencegroup|prefix|private\\(set\\)|private|protocol|public\\(set\\)|public|repeat|required|rethrows|return|set|some|static|struct|subscript|super|switch|throws|throw|try\\?|try!|try|typealias|unowned\\(safe\\)|unowned\\(unsafe\\)|unowned|var|weak|where|while|willSet))|((\\bas\\?\\B|\\bas!\\B|\\bfileprivate\\(set\\)\\B|\\binit\\?\\B|\\binit!\\B|\\binternal\\(set\\)\\B|\\bopen\\(set\\)\\B|\\bprivate\\(set\\)\\B|\\bpublic\\(set\\)\\B|\\btry\\?\\B|\\btry!\\B|\\bunowned\\(safe\\)\\B|\\bunowned\\(unsafe\\)\\B|\\bAny\\b|\\bSelf\\b|\\binit\\b|\\bself\\b))|(\\.(abs|all|any|assert|assertionFailure|debugPrint|dump|fatalError|getVaList|isKnownUniquelyReferenced|max|min|numericCast|pointwiseMax|pointwiseMin|precondition|preconditionFailure|print|readLine|repeatElement|sequence|stride|swap|swift_unboxFromSwiftValueWithType|transcode|type|unsafeBitCast|unsafeDowncast|withExtendedLifetime|withUnsafeMutablePointer|withUnsafePointer|withVaList|withoutActuallyEscaping|zip))|(\\b(abs|all|any|assert|assertionFailure|debugPrint|dump|fatalError|getVaList|isKnownUniquelyReferenced|max|min|numericCast|pointwiseMax|pointwiseMin|precondition|preconditionFailure|print|readLine|repeatElement|sequence|stride|swap|swift_unboxFromSwiftValueWithType|transcode|type|unsafeBitCast|unsafeDowncast|withExtendedLifetime|withUnsafeMutablePointer|withUnsafePointer|withVaList|withoutActuallyEscaping|zip)(?=\\())|(->)|(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F])*)|(\\.(\\.|(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F]))+)|(\\b(([0-9]_*)+)(\\.(([0-9]_*)+))?([eE][+-]?(([0-9]_*)+))?\\b)|(\\b0x(([0-9a-fA-F]_*)+)(\\.(([0-9a-fA-F]_*)+))?([pP][+-]?(([0-9]_*)+))?\\b)|(\\b0o([0-7]_*)+\\b)|(\\b0b([01]_*)+\\b)|(""")|(#""")|(##""")|(###""")|(")|(#")|(##")|(###")|(`([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*`)|(\\$\\d+)|(\\$(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])+)|((@|#)available)|(@(autoclosure|convention\\((swift|block|c)\\)|discardableResult|dynamicCallable|dynamicMemberLookup|escaping|frozen|GKInspectable|IBAction|IBDesignable|IBInspectable|IBOutlet|IBSegueAction|inlinable|main|nonobjc|NSApplicationMain|NSCopying|NSManaged|objc\\(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*\\)|objc|objcMembers|propertyWrapper|requires_stored_property_inits|testable|UIApplicationMain|unknown|usableFromInline))|(@([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*)|((?=\\b[A-Z]))|(\\))
+gm/(\\()|(--)|(\\{-)|($)|(\\W\\.|;)
+gm/(\\()|(--)|(\\{-)|(where)|(\\W\\.|;)
+gm/(\\()|([A-Za-z$_][0-9A-Za-z$_]*)|(\\B|\\b)
+gm/(\\()|(\\))
+gm/(\\()|(\\B|\\b)
+gm/(\\()|(^(>>>|\\.\\.\\.) )|((\\b([0-9](_?[0-9])*)|((\\b([0-9](_?[0-9])*))?\\.([0-9](_?[0-9])*)|\\b([0-9](_?[0-9])*)\\.))[eE][+-]?([0-9](_?[0-9])*)[jJ]?\\b)|(((\\b([0-9](_?[0-9])*))?\\.([0-9](_?[0-9])*)|\\b([0-9](_?[0-9])*)\\.)[jJ]?)|(\\b([1-9](_?[0-9])*|0+(_?0)*)[lLjJ]?\\b)|(\\b0[bB](_?[01])+[lL]?\\b)|(\\b0[oO](_?[0-7])+[lL]?\\b)|(\\b0[xX](_?[0-9a-fA-F])+[lL]?\\b)|(\\b([0-9](_?[0-9])*)[jJ]\\b)|(([uU]|[bB]|[rR]|[bB][rR]|[rR][bB])?''')|(([uU]|[bB]|[rR]|[bB][rR]|[rR][bB])?""")|(([fF][rR]|[rR][fF]|[fF])''')|(([fF][rR]|[rR][fF]|[fF])""")|(([uU]|[rR])')|(([uU]|[rR])")|(([bB]|[bB][rR]|[rR][bB])')|(([bB]|[bB][rR]|[rR][bB])")|(([fF][rR]|[rR][fF]|[fF])')|(([fF][rR]|[rR][fF]|[fF])")|(')|(")|(#)|(\\))
+gm/(\\)([^()\\\\ ]{0,16})")
+gm/(\\))
+gm/(\\))|(["'])
+gm/(\\*(?!\\*))|(_(?!_))|(<\\/?[A-Za-z_])|(\\[.+?\\]\\[.*?\\])|(\\[.+?\\]\\(((data|javascript|mailto):|(?:http|ftp)s?:\\/\\/).*?\\))|(\\[.+?\\]\\([A-Za-z][A-Za-z0-9+.-]*:\\/\\/.*?\\))|(\\[.+?\\]\\([./?&#].*?\\))|(\\[.+?\\]\\(.*?\\))|(\\*{2})
+gm/(\\.(?=(\\bProtocol\\b|\\bType\\b|\\binit\\b|\\bself\\b)))|(\\.(associatedtype|async|await|as\\?|as!|as|break|case|catch|class|continue|convenience|default|defer|deinit|didSet|do|dynamic|else|enum|extension|fallthrough|fileprivate\\(set\\)|fileprivate|final|for|func|get|guard|if|import|indirect|infix|init\\?|init!|inout|internal\\(set\\)|internal|in|is|lazy|let|mutating|nonmutating|open\\(set\\)|open|operator|optional|override|postfix|precedencegroup|prefix|private\\(set\\)|private|protocol|public\\(set\\)|public|repeat|required|rethrows|return|set|some|static|struct|subscript|super|switch|throws|throw|try\\?|try!|try|typealias|unowned\\(safe\\)|unowned\\(unsafe\\)|unowned|var|weak|where|while|willSet))|((\\bas\\?\\B|\\bas!\\B|\\bfileprivate\\(set\\)\\B|\\binit\\?\\B|\\binit!\\B|\\binternal\\(set\\)\\B|\\bopen\\(set\\)\\B|\\bprivate\\(set\\)\\B|\\bpublic\\(set\\)\\B|\\btry\\?\\B|\\btry!\\B|\\bunowned\\(safe\\)\\B|\\bunowned\\(unsafe\\)\\B|\\bAny\\b|\\bSelf\\b|\\binit\\b|\\bself\\b))|(\\.(abs|all|any|assert|assertionFailure|debugPrint|dump|fatalError|getVaList|isKnownUniquelyReferenced|max|min|numericCast|pointwiseMax|pointwiseMin|precondition|preconditionFailure|print|readLine|repeatElement|sequence|stride|swap|swift_unboxFromSwiftValueWithType|transcode|type|unsafeBitCast|unsafeDowncast|withExtendedLifetime|withUnsafeMutablePointer|withUnsafePointer|withVaList|withoutActuallyEscaping|zip))|(\\b(abs|all|any|assert|assertionFailure|debugPrint|dump|fatalError|getVaList|isKnownUniquelyReferenced|max|min|numericCast|pointwiseMax|pointwiseMin|precondition|preconditionFailure|print|readLine|repeatElement|sequence|stride|swap|swift_unboxFromSwiftValueWithType|transcode|type|unsafeBitCast|unsafeDowncast|withExtendedLifetime|withUnsafeMutablePointer|withUnsafePointer|withVaList|withoutActuallyEscaping|zip)(?=\\())|(->)|(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F])*)|(\\.(\\.|(([/=\\-+!*%<>&|^~?]|[\\u00A1-\\u00A7]|[\\u00A9\\u00AB]|[\\u00AC\\u00AE]|[\\u00B0\\u00B1]|[\\u00B6\\u00BB\\u00BF\\u00D7\\u00F7]|[\\u2016-\\u2017]|[\\u2020-\\u2027]|[\\u2030-\\u203E]|[\\u2041-\\u2053]|[\\u2055-\\u205E]|[\\u2190-\\u23FF]|[\\u2500-\\u2775]|[\\u2794-\\u2BFF]|[\\u2E00-\\u2E7F]|[\\u3001-\\u3003]|[\\u3008-\\u3020]|[\\u3030])|[\\u0300-\\u036F]|[\\u1DC0-\\u1DFF]|[\\u20D0-\\u20FF]|[\\uFE00-\\uFE0F]|[\\uFE20-\\uFE2F]))+)|(\\b(([0-9]_*)+)(\\.(([0-9]_*)+))?([eE][+-]?(([0-9]_*)+))?\\b)|(\\b0x(([0-9a-fA-F]_*)+)(\\.(([0-9a-fA-F]_*)+))?([pP][+-]?(([0-9]_*)+))?\\b)|(\\b0o([0-7]_*)+\\b)|(\\b0b([01]_*)+\\b)|(""")|(#""")|(##""")|(###""")|(")|(#")|(##")|(###")|(`([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*`)|(\\$\\d+)|(\\$(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])+)|(\\()|(\\))
+gm/(\\/)|(\\B|\\b)
+gm/(\\/\\*\\*(?!\\/))|(/\\*)|(//)|(')|(")|(html`)|(css`)|(`)|((\\b(0|[1-9](_?[0-9])*|0[0-7]*[89][0-9]*)((\\.([0-9](_?[0-9])*))|\\.)?|(\\.([0-9](_?[0-9])*)))[eE][+-]?([0-9](_?[0-9])*)\\b)|(\\b(0|[1-9](_?[0-9])*|0[0-7]*[89][0-9]*)\\b((\\.([0-9](_?[0-9])*))\\b|\\.)?|(\\.([0-9](_?[0-9])*))\\b)|(\\b(0|[1-9](_?[0-9])*)n\\b)|(\\b0[xX][0-9a-fA-F](_?[0-9a-fA-F])*n?\\b)|(\\b0[bB][0-1](_?[0-1])*n?\\b)|(\\b0[oO][0-7](_?[0-7])*n?\\b)|(\\b0[0-7]+n?\\b)|((?=\\/[^/\\n]*\\/))|(\\{)|(\\()|(@[A-Za-z$_][0-9A-Za-z$_]*)|(\\))
+gm/(\\/\\*\\*(?!\\/))|(/\\*)|(//)|(')|(")|(html`)|(css`)|(`)|((\\b(0|[1-9](_?[0-9])*|0[0-7]*[89][0-9]*)((\\.([0-9](_?[0-9])*))|\\.)?|(\\.([0-9](_?[0-9])*)))[eE][+-]?([0-9](_?[0-9])*)\\b)|(\\b(0|[1-9](_?[0-9])*|0[0-7]*[89][0-9]*)\\b((\\.([0-9](_?[0-9])*))\\b|\\.)?|(\\.([0-9](_?[0-9])*))\\b)|(\\b(0|[1-9](_?[0-9])*)n\\b)|(\\b0[xX][0-9a-fA-F](_?[0-9a-fA-F])*n?\\b)|(\\b0[bB][0-1](_?[0-1])*n?\\b)|(\\b0[oO][0-7](_?[0-7])*n?\\b)|(\\b0[0-7]+n?\\b)|((?=\\/[^/\\n]*\\/))|(\\{)|(\\()|(\\))
+gm/(\\/\\*\\*(?!\\/))|(/\\*)|(//)|((?=\\/[^/\\n]*\\/))|((\\([^()]*(\\([^()]*(\\([^()]*\\)[^()]*)*\\)[^()]*)*\\)|[a-zA-Z_]\\w*)\\s*=>)|(,)|(\\s)|(<>)|(<[A-Za-z0-9\\\\._:-]+)|(\\B|\\b)
+gm/(\\B|\\b)
+gm/(\\B|\\b)|(\\B|\\b)
+gm/(\\B|\\b)|(\\])|(\\S)
+gm/(\\S+)|(\\B|\\b)
+gm/(\\[)|(\\]\\()|(\\]\\[)|(\\B|\\b)
+gm/(\\[=*\\[)|(\\]=*\\])
+gm/(\\[=*\\[)|(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|(\\]=*\\])
+gm/(\\\\#[0\\\\tnr"'])|(\\\\#u\\{[0-9a-fA-F]{1,8}\\})|(\\\\#\\()|("#)
+gm/(\\\\[0\\\\tnr"'])|(\\\\u\\{[0-9a-fA-F]{1,8}\\})|(\\\\[\\t ]*(?:[\\r\\n]|\\r\\n))|(\\\\\\()|(""")
+gm/(\\\\[0\\\\tnr"'])|(\\\\u\\{[0-9a-fA-F]{1,8}\\})|(\\\\\\()|(")
+gm/(\\\\[\\s\\S])|(")
+gm/(\\\\[\\s\\S])|(")|(\\))
+gm/(\\\\[\\s\\S])|(")|(\\n)
+gm/(\\\\[\\s\\S])|(#\\{)|(""")
+gm/(\\\\[\\s\\S])|(#\\{)|(")
+gm/(\\\\[\\s\\S])|(#\\{)|(')
+gm/(\\\\[\\s\\S])|(#\\{)|((\\w+))
+gm/(\\\\[\\s\\S])|(#\\{)|(/[a-z]*)|(\\n)
+gm/(\\\\[\\s\\S])|(#\\{)|(\\))
+gm/(\\\\[\\s\\S])|(#\\{)|(\\/)
+gm/(\\\\[\\s\\S])|(#\\{)|(\\B|\\b)
+gm/(\\\\[\\s\\S])|(#\\{)|(\\])
+gm/(\\\\[\\s\\S])|(#\\{)|(`)
+gm/(\\\\[\\s\\S])|(')
+gm/(\\\\[\\s\\S])|(')|(\\n)
+gm/(\\\\[\\s\\S])|([$@]\\{)|(\\$\\d)|([$%@](\\^\\w\\b|#\\w+(::\\w+)*|\\{\\w+\\}|\\w+(::\\w*)*)(?![A-Za-z])(?![@$%]))|([$%@][^\\s\\w{])|(")
+gm/(\\\\[\\s\\S])|([$@]\\{)|(\\$\\d)|([$%@](\\^\\w\\b|#\\w+(::\\w+)*|\\{\\w+\\}|\\w+(::\\w*)*)(?![A-Za-z])(?![@$%]))|([$%@][^\\s\\w{])|(\\))
+gm/(\\\\[\\s\\S])|([$@]\\{)|(\\$\\d)|([$%@](\\^\\w\\b|#\\w+(::\\w+)*|\\{\\w+\\}|\\w+(::\\w*)*)(?![A-Za-z])(?![@$%]))|([$%@][^\\s\\w{])|(\\B|\\b)
+gm/(\\\\[\\s\\S])|([$@]\\{)|(\\$\\d)|([$%@](\\^\\w\\b|#\\w+(::\\w+)*|\\{\\w+\\}|\\w+(::\\w*)*)(?![A-Za-z])(?![@$%]))|([$%@][^\\s\\w{])|(\\})
+gm/(\\\\[\\s\\S])|(\\$[A-Za-z0-9_]+)|(\\$\\{)|(")|(\\n)
+gm/(\\\\[\\s\\S])|(\\$[A-Za-z0-9_]+)|(\\$\\{)|(''')
+gm/(\\\\[\\s\\S])|(\\$[A-Za-z0-9_]+)|(\\$\\{)|(')|(\\n)
+gm/(\\\\[\\s\\S])|(\\$[\\w\\d#@][\\w\\d_]*(?![\\w\\d])(?![$]))|(\\$\\{)|(\\$\\()|(")
+gm/(\\\\[\\s\\S])|(\\$[a-zA-Z_]\\w*)|(\\$\\{)|(")|(\\n)
+gm/(\\\\[\\s\\S])|(\\$\\([a-zA-Z_]\\w*\\))|(\\$[@%<?\\^\\+\\*])|(")
+gm/(\\\\[\\s\\S])|(\\$\\{)|(`)
+gm/(\\\\[\\s\\S])|(\\B|\\b)
+gm/(\\\\[\\s\\S])|(\\[)|(\\/[gimuy]*)|(\\n)
+gm/(\\\\[\\s\\S])|(\\])
+gm/(\\\\[\\s\\S])|(\\{\\{)|(\\{)|(")
+gm/(\\\\[\\s\\S])|(^(>>>|\\.\\.\\.) )|(""")
+gm/(\\\\[\\s\\S])|(^(>>>|\\.\\.\\.) )|(''')
+gm/(\\\\\\n)|((u8?|U|L)?")|((u8?|U|L)?'(\\\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4,8}|[0-7]{3}|\\S)|.))|((?:u8?|U|L)?R"([^()\\\\ ]{0,16})\\()|(<.*?>)|(//)|(/\\*)|($)
+gm/(\\\\\\n)|(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|($)
+gm/(\\])
+gm/(\\b(?!decltype)(?!if)(?!for)(?!while)[a-zA-Z]\\w*(?=\\s*\\())|(#\\s*[a-z]+\\b)|(\\b[a-z\\d_]*_t\\b)|(//)|(/\\*)|(\\b(0b[01']+))|((-?)\\b([\\d']+(\\.[\\d']*)?|\\.[\\d']+)((ll|LL|l|L)(u|U)?|(u|U)(ll|LL|l|L)?|f|F|b|B))|((-?)(\\b0[xX][a-fA-F0-9']+|(\\b[\\d']+(\\.[\\d']*)?|\\.[\\d']+)([eE][-+]?[\\d']+)?))|((u8?|U|L)?")|((u8?|U|L)?'(\\\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4,8}|[0-7]{3}|\\S)|.))|((?:u8?|U|L)?R"([^()\\\\ ]{0,16})\\()|(\\()|(;)
+gm/(\\b(?!decltype)(?!if)(?!for)(?!while)[a-zA-Z]\\w*(?=\\s*\\())|(#\\s*[a-z]+\\b)|(\\b[a-z\\d_]*_t\\b)|(//)|(/\\*)|(\\b(0b[01']+))|((-?)\\b([\\d']+(\\.[\\d']*)?|\\.[\\d']+)((ll|LL|l|L)(u|U)?|(u|U)(ll|LL|l|L)?|f|F|b|B))|((-?)(\\b0[xX][a-fA-F0-9']+|(\\b[\\d']+(\\.[\\d']*)?|\\.[\\d']+)([eE][-+]?[\\d']+)?))|((u8?|U|L)?")|((u8?|U|L)?'(\\\\(x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4,8}|[0-7]{3}|\\S)|.))|((?:u8?|U|L)?R"([^()\\\\ ]{0,16})\\()|(\\()|(\\))
+gm/(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|($)
+gm/(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|(=cut)
+gm/(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|(\\*/)
+gm/(\\b(deque|list|queue|priority_queue|pair|stack|vector|map|set|bitset|multiset|multimap|unordered_map|unordered_set|unordered_multiset|unordered_multimap|array)\\s*<)|(\\b[a-z\\d_]*_t\\b)|(>)
+gm/(\\b(extends)(?!\\.)(?=\\b|\\s))|([a-zA-Z_]\\w*)|([{;=])|([:"[\\]])
+gm/(\\b(extends|implements)(?!\\.)(?=\\b|\\s))|([a-zA-Z_]\\w*)|([{;=])|([:"\\[\\]])
+gm/(\\b(extends|implements)(?!\\.)(?=\\b|\\s))|([a-zA-Z_]\\w*)|(\\{)
+gm/(\\b(extends|implements)(?!\\.)(?=\\b|\\s))|([a-zA-Z_]\\w*)|(\\{)|(:)
+gm/(\\b(final|class|struct)(?!\\.)(?=\\b|\\s))|([a-zA-Z]\\w*)|([{;:<>=])
+gm/(\\b(func)(?!\\.)(?=\\b|\\s))|(<)|(\\()|(\\s+)|(\\B|\\b)|((\\[|%))
+gm/(\\b(function)(?!\\.)(?=\\b|\\s))|([A-Za-z$_][0-9A-Za-z$_]*)|(\\()|([{;])|(%)
+gm/(\\b(in|out)(?!\\.)(?=\\b|\\s))|([a-zA-Z](\\.?\\w)*)|(>)
+gm/(\\b(module)(?!\\.)(?=\\b|\\s))|(\\bimport\\b)|(^(\\s*)?(class|instance)\\b)|(\\b(data|(new)?type)\\b)|(\\b(default)(?!\\.)(?=\\b|\\s))|(\\b(infix|infixl|infixr)(?!\\.)(?=\\b|\\s))|(\\bforeign\\b)|(#!\\/usr\\/bin\\/env runhaskell)|(\\{-#)|(^#)|(")|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?))|(\\b[A-Z][\\w']*)|(^[_a-z][\\w']*)|(--)|(\\{-)|(->|<-)
+gm/(\\b(public|private|protected|static|internal|protected|abstract|async|extern|override|unsafe|virtual|new|sealed|partial)(?!\\.)(?=\\b|\\s))|([a-zA-Z]\\w*\\s*(<.+>\\s*)?\\()|(\\()|(//)|(/\\*)|(\\s*[{;=])
+gm/(\\b(public|protected|internal|private|constructor)(?!\\.)(?=\\b|\\s))|([a-zA-Z_]\\w*)|(<)|([,:]\\s*)|(@(?:file|property|field|get|set|receiver|param|setparam|delegate)\\s*:(?:\\s*[a-zA-Z_]\\w*)?)|(@[a-zA-Z_]\\w*)|([:\\{(]|$)|(extends implements)
+gm/(\\b(record)(?!\\.)(?=\\b|\\s))|([a-zA-Z_]\\w*\\s*\\()|(\\()|(//)|(/\\*)|([{;=])
+gm/(\\b[A-Z][A-Za-z0-9_]*)|(\\))
+gm/(\\b[A-Z][A-Za-z0-9_]*)|(\\])
+gm/(\\b[A-Z][\\w']*)|(\\()|(--)|(\\{-)|(where)
+gm/(\\b\\d+(\\.\\d+)?)|(#)|(/\\*)|('')|(")|([a-zA-Z0-9-_]+(\\s*=))
+gm/(\\b\\d+(\\.\\d+)?)|(#)|(/\\*)|('')|(")|([a-zA-Z0-9-_]+(\\s*=))|(\\})
+gm/(\\b\\w+|#\\w+)
+gm/(\\b_\\b)|(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])(([a-zA-Z_]|[\\u00A8\\u00AA\\u00AD\\u00AF\\u00B2-\\u00B5\\u00B7-\\u00BA]|[\\u00BC-\\u00BE\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u00FF]|[\\u0100-\\u02FF\\u0370-\\u167F\\u1681-\\u180D\\u180F-\\u1DBF]|[\\u1E00-\\u1FFF]|[\\u200B-\\u200D\\u202A-\\u202E\\u203F-\\u2040\\u2054\\u2060-\\u206F]|[\\u2070-\\u20CF\\u2100-\\u218F\\u2460-\\u24FF\\u2776-\\u2793]|[\\u2C00-\\u2DFF\\u2E80-\\u2FFF]|[\\u3004-\\u3007\\u3021-\\u302F\\u3031-\\u303F\\u3040-\\uD7FF]|[\\uF900-\\uFD3D\\uFD40-\\uFDCF\\uFDF0-\\uFE1F\\uFE30-\\uFE44]|[\\uFE47-\\uFEFE\\uFF00-\\uFFFD])|\\d|[\\u0300-\\u036F\\u1DC0-\\u1DFF\\u20D0-\\u20FF\\uFE20-\\uFE2F])*)|(:)
+gm/(\\s*)
+gm/(\\s+)
+gm/(\\w+@)|(@[A-Za-z]+)|(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|(\\*/)
+gm/(\\w[\\w\\d_]*)|(\\B|\\b)
+gm/(\\{)
+gm/(\\{)|([A-Za-z$_][0-9A-Za-z$_]*(?=\\s*(-)|$))|((?=[^\\n])\\s)|(\\B|\\b)
+gm/(\\{-#)|(\\b[A-Z][\\w']*)|(\\()|(\\{)|(--)|(\\{-)|($)
+gm/(\\{-#)|(^#)|(\\b[A-Z][\\w]*(\\((\\.\\.|,|\\w+)\\))?)|([_a-z][\\w']*)|(--)|(\\{-)|(\\))|(")
+gm/(\\{-#)|(^#)|(\\b[A-Z][\\w]*(\\((\\.\\.|,|\\w+)\\))?)|([_a-z][\\w']*)|(--)|(\\{-)|(\\})
+gm/(\\{-)|(\\b(a|an|the|are|I'm|isn't|don't|doesn't|won't|but|just|should|pretty|simply|enough|gonna|going|wtf|so|such|will|you|your|they|like|more)\\b)|((?:TODO|FIXME|NOTE|BUG|OPTIMIZE|HACK|XXX):)|(-\\})
+gm/(\\{\\{)|(\\}\\})|(\\\\[\\s\\S])|(\\{)|(")|(\\n)
+gm/(\\|)
+gm/(^#![ ]*\\/)|(^\\s*['"]use strict['"])|(')|(")|(html`)|(css`)|(`)|(\\/\\*\\*(?!\\/))|(/\\*)|(//)|((\\b(0|[1-9](_?[0-9])*|0[0-7]*[89][0-9]*)((\\.([0-9](_?[0-9])*))|\\.)?|(\\.([0-9](_?[0-9])*)))[eE][+-]?([0-9](_?[0-9])*)\\b)|(\\b(0|[1-9](_?[0-9])*|0[0-7]*[89][0-9]*)\\b((\\.([0-9](_?[0-9])*))\\b|\\.)?|(\\.([0-9](_?[0-9])*))\\b)|(\\b(0|[1-9](_?[0-9])*)n\\b)|(\\b0[xX][0-9a-fA-F](_?[0-9a-fA-F])*n?\\b)|(\\b0[bB][0-1](_?[0-1])*n?\\b)|(\\b0[oO][0-7](_?[0-7])*n?\\b)|(\\b0[0-7]+n?\\b)|([{,\\n]\\s*(?=(((\\/\\/.*$)|(\\/\\*(\\*[^/]|[^*])*\\*\\/))\\s*)*[A-Za-z$_][0-9A-Za-z$_]*\\s*:))|((!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~|\\b(case|return|throw)\\b)\\s*)|(\\b(function)(?!\\.)(?=\\b|\\s))|(\\b(while|if|switch|catch|for)(?!\\.)(?=\\b|\\s))|([a-zA-Z_]\\w*\\([^()]*(\\([^()]*(\\([^()]*\\)[^()]*)*\\)[^()]*)*\\)\\s*\\{)|(\\.[A-Za-z$_][0-9A-Za-z$_]*)|(\\$[A-Za-z$_][0-9A-Za-z$_]*)|(\\b(class)(?!\\.)(?=\\b|\\s))|(\\b(?=constructor))|((get|set)\\s+(?=[A-Za-z$_][0-9A-Za-z$_]*\\())|(\\$[(.])|(@[A-Za-z$_][0-9A-Za-z$_]*)|(\\b(namespace)(?!\\.)(?=\\b|\\s))|(\\b(interface)(?!\\.)(?=\\b|\\s))|(#(?![$_A-z]))
+gm/(^#![ ]*\\/.*\\b(fish|bash|zsh|sh|csh|ksh|tcsh|dash|scsh)\\b.*)|(^#![ ]*\\/)|(\\w[\\w\\d_]*\\s*\\(\\s*\\)\\s*\\{)|(\\$\\(\\()|(#)|(<<-?\\s*(?=\\w+))|(")|(\\\\")|(')|(\\$[\\w\\d#@][\\w\\d_]*(?![\\w\\d])(?![$]))|(\\$\\{)
+gm/(^#![ ]*\\/.*\\bgroovy\\b.*)|(//)|(/\\*)|(/\\*\\*)|(""")|(''')|(\\$/)|(')|(")|(~?\\/[^\\/\\n]+\\/)|(\\b(0b[01]+))|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?))|(\\b(class|interface|trait|enum)(?!\\.)(?=\\b|\\s))|(@[A-Za-z]+)|([A-Za-z0-9_$]+[ \u0009]*:)|(\\?)|(^[ \u0009]*(?=[A-Za-z0-9_$]+:))|(#|<\\/)
+gm/(^#![ ]*\\/.*\\bnode\\b.*)|(^\\s*['"]use (strict|asm)['"])|(')|(")|(html`)|(css`)|(`)|(\\/\\*\\*(?!\\/))|(/\\*)|(//)|((\\b(0|[1-9](_?[0-9])*|0[0-7]*[89][0-9]*)((\\.([0-9](_?[0-9])*))|\\.)?|(\\.([0-9](_?[0-9])*)))[eE][+-]?([0-9](_?[0-9])*)\\b)|(\\b(0|[1-9](_?[0-9])*|0[0-7]*[89][0-9]*)\\b((\\.([0-9](_?[0-9])*))\\b|\\.)?|(\\.([0-9](_?[0-9])*))\\b)|(\\b(0|[1-9](_?[0-9])*)n\\b)|(\\b0[xX][0-9a-fA-F](_?[0-9a-fA-F])*n?\\b)|(\\b0[bB][0-1](_?[0-1])*n?\\b)|(\\b0[oO][0-7](_?[0-7])*n?\\b)|(\\b0[0-7]+n?\\b)|([{,\\n]\\s*(?=(((\\/\\/.*$)|(\\/\\*(\\*[^/]|[^*])*\\*\\/))\\s*)*[A-Za-z$_][0-9A-Za-z$_]*\\s*:))|((!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~|\\b(case|return|throw)\\b)\\s*)|(\\b(function)(?!\\.)(?=\\b|\\s))|(\\b(while|if|switch|catch|for)(?!\\.)(?=\\b|\\s))|([a-zA-Z_]\\w*\\([^()]*(\\([^()]*(\\([^()]*\\)[^()]*)*\\)[^()]*)*\\)\\s*\\{)|(\\.[A-Za-z$_][0-9A-Za-z$_]*)|(\\$[A-Za-z$_][0-9A-Za-z$_]*)|(\\b(class)(?!\\.)(?=\\b|\\s))|(\\b(?=constructor))|((get|set)\\s+(?=[A-Za-z$_][0-9A-Za-z$_]*\\())|(\\$[(.])|(#(?![$_A-z]))
+gm/(^#![ ]*\\/.*\\bruby\\b.*)|(^\\s*=>)|(^([>?]>|[\\w#]+\\(\\w+\\):\\d+:\\d+>|(\\w+-)?\\d+\\.\\d+\\.\\d+(p\\d+)?[^\\d][^>]+>)(?=[ ]))|(#<)|(#)|(^=begin)|(^__END__)|(')|(")|(`)|(%[qQwWx]?\\()|(%[qQwWx]?\\[)|(%[qQwWx]?\\{)|(%[qQwWx]?<)|(%[qQwWx]?\\/)|(%[qQwWx]?%)|(%[qQwWx]?-)|(%[qQwWx]?\\|)|(\\B\\?(\\\\\\d{1,3}))|(\\B\\?(\\\\x[A-Fa-f0-9]{1,2}))|(\\B\\?(\\\\u\\{?[A-Fa-f0-9]{1,6}\\}?))|(\\B\\?(\\\\M-\\\\C-|\\\\M-\\\\c|\\\\c\\\\M-|\\\\M-|\\\\C-\\\\M-)[\\x20-\\x7e])|(\\B\\?\\\\(c|C-)[\\x20-\\x7e])|(\\B\\?\\\\?\\S)|(<<[-~]?'?(\\w+)\\n(?:[^\\n]*\\n)*?\\s*\\34\\b)|(\\b(class|module)(?!\\.)(?=\\b|\\s))|(def\\s+(?=([a-zA-Z_]\\w*[!?=]?|[-+~]@|<<|>>|=~|===?|<=>|[<>]=?|\\*\\*|[-/+%^&*~`|]|\\[\\]=?)\\s*(\\(|;|$)))|([a-zA-Z]\\w*::)|([a-zA-Z_]\\w*(!|\\?)?:)|(:(?!\\s))|(\\b([1-9](_?[0-9])*|0)(\\.([0-9](_?[0-9])*))?([eE][+-]?([0-9](_?[0-9])*)|r)?i?\\b)|(\\b0[dD][0-9](_?[0-9])*r?i?\\b)|(\\b0[bB][0-1](_?[0-1])*r?i?\\b)|(\\b0[oO][0-7](_?[0-7])*r?i?\\b)|(\\b0[xX][0-9a-fA-F](_?[0-9a-fA-F])*r?i?\\b)|(\\b0(_?[0-7])+r?i?\\b)|((\\$\\W)|((\\$|@@?)(\\w+))(?=[^@$?])(?![A-Za-z])(?![@$?']))|(\\|)|((!|!=|!==|%|%=|&|&&|&=|\\*|\\*=|\\+|\\+=|,|-|-=|/=|/|:|;|<<|<<=|<=|<|===|==|=|>>>=|>>=|>=|>>>|>>|>|\\?|\\[|\\{|\\(|\\^|\\^=|\\||\\|=|\\|\\||~|unless)\\s*)|(#<)|(#)|(^=begin)|(^__END__)|(\\/\\*)
+gm/(^#{1,6})|((?=^.+?\\n[=-]{2,}$))|(<\\/?[A-Za-z_])|(^[ \u0009]*([*+-]|(\\d+\\.))(?=\\s+))|(_{2})|(\\*{2})|(\\*(?!\\*))|(_(?!_))|(^>\\s+)|((`{3,})[^`](.|\\n)*?\\13`*[ ]*)|((~{3,})[^~](.|\\n)*?\\16~*[ ]*)|(```)|(~~~)|(`.+?`)|((?=^( {4}|\\t)))|(^[-\\*]{3,})|(\\[.+?\\]\\[.*?\\])|(\\[.+?\\]\\(((data|javascript|mailto):|(?:http|ftp)s?:\\/\\/).*?\\))|(\\[.+?\\]\\([A-Za-z][A-Za-z0-9+.-]*:\\/\\/.*?\\))|(\\[.+?\\]\\([./?&#].*?\\))|(\\[.+?\\]\\(.*?\\))|(^\\[[^\\n]+\\]:)
+gm/(^(>>>|\\.\\.\\.) )|((\\b([0-9](_?[0-9])*)|((\\b([0-9](_?[0-9])*))?\\.([0-9](_?[0-9])*)|\\b([0-9](_?[0-9])*)\\.))[eE][+-]?([0-9](_?[0-9])*)[jJ]?\\b)|(((\\b([0-9](_?[0-9])*))?\\.([0-9](_?[0-9])*)|\\b([0-9](_?[0-9])*)\\.)[jJ]?)|(\\b([1-9](_?[0-9])*|0+(_?0)*)[lLjJ]?\\b)|(\\b0[bB](_?[01])+[lL]?\\b)|(\\b0[oO](_?[0-7])+[lL]?\\b)|(\\b0[xX](_?[0-9a-fA-F])+[lL]?\\b)|(\\b([0-9](_?[0-9])*)[jJ]\\b)|(\\bself\\b)|(\\b(if)(?!\\.)(?=\\b|\\s))|(([uU]|[bB]|[rR]|[bB][rR]|[rR][bB])?''')|(([uU]|[bB]|[rR]|[bB][rR]|[rR][bB])?""")|(([fF][rR]|[rR][fF]|[fF])''')|(([fF][rR]|[rR][fF]|[fF])""")|(([uU]|[rR])')|(([uU]|[rR])")|(([bB]|[bB][rR]|[rR][bB])')|(([bB]|[bB][rR]|[rR][bB])")|(([fF][rR]|[rR][fF]|[fF])')|(([fF][rR]|[rR][fF]|[fF])")|(')|(")|((?=# type:))|(#)|(\\b(def)(?!\\.)(?=\\b|\\s))|(\\b(class)(?!\\.)(?=\\b|\\s))|(^[\\t ]*@)|((<\\/|->|\\?)|=>)
+gm/(^@@ +-\\d+,\\d+ +\\+\\d+,\\d+ +@@)|(^\\*\\*\\* +\\d+,\\d+ +\\*\\*\\*\\*$)|(^--- +\\d+,\\d+ +----$)|(Index: )|(^index)|(={3,})|(^-{3})|(^\\*{3} )|(^\\+{3})|(^\\*{15}$)|(^diff --git)|(^\\+)|(^-)|(^!)
+gm/(^[=-]*$)|(^)|(\\B|\\b)
+gm/(^\\s{0,3}[/~\\w\\d[\\]()@-]*[>%$#])
+gm/(_{2})|(\\*{2})|(<\\/?[A-Za-z_])|(\\[.+?\\]\\[.*?\\])|(\\[.+?\\]\\(((data|javascript|mailto):|(?:http|ftp)s?:\\/\\/).*?\\))|(\\[.+?\\]\\([A-Za-z][A-Za-z0-9+.-]*:\\/\\/.*?\\))|(\\[.+?\\]\\([./?&#].*?\\))|(\\[.+?\\]\\(.*?\\))|(\\*)
+gm/(`)
+gm/(decltype\\(auto\\))|(([a-zA-Z_]\\w*::)?[a-zA-Z]\\w*\\s*\\()|(::)|(:)|(\\()|(\\b[a-z\\d_]*_t\\b)|(//)|(/\\*)|(#\\s*[a-z]+\\b)|([{;=])|([^\\w\\s\\*&:<>.])
+gm/(decltype\\(auto\\))|(([a-zA-Z_]\\w*::)?[a-zA-Z]\\w*\\s*\\()|(\\()|(\\b[a-z\\d_]*_t\\b)|(//)|(/\\*)|(#\\s*[a-z]+\\b)|([{;=])|([^\\w\\s\\*&:<>.])
+gm/(r''')|(r""")|(r')|(r")|(''')|(""")|(')|(")|(\\/\\*\\*(?!\\/))|(\\/{3,} ?)|(//)|(/\\*)|(\\b(class|interface)(?!\\.)(?=\\b|\\s))|((-?)(\\b0[xX][a-fA-F0-9]+|(\\b\\d+(\\.\\d*)?|\\.\\d+)([eE][-+]?\\d+)?))|(@[A-Za-z]+)|(=>)
+gm/[A-Za-z$_][0-9A-Za-z$_]*
+gm/[A-Za-z][A-Za-z0-9_]*\\??
+gm/[A-Za-z]\\w+|__\\w+__
+gm/[\\.\\w]+
+gm/[\\w-]+
+gm/[\\w.]+
+gm/[a-zA-Z]\\w*!?
+gm/[a-zA-Z_][a-zA-Z0-9_.]*(!|\\?)?
+gm/[a-zA-Z_]\\w*
+gm/\\b[a-z._-]+\\b
+gm/\\w+
+gm/\\w+[?!]?
+gm/^ {0,3}>[ \\t]?
+gm/^(?: {1,4}| {0,3}\\t)
+gu/(?<=[\\p{L}\\p{N})\\]}\\u{f0001}])\\u{f0004}
+gu/[-_]
+gu/[a-zA-Z0-9_\\u{AD}\\u{C0}-\\u{D6}\\u{D8}-\\u{F6}\\u{F8}-\\u{2C6}\\u{2C8}-\\u{2D7}\\u{2DE}-\\u{2FF}\\u{1E00}-\\u{1EFF}]+|\\s+|[^a-zA-Z0-9_\\u{AD}\\u{C0}-\\u{D6}\\u{D8}-\\u{F6}\\u{F8}-\\u{2C6}\\u{2C8}-\\u{2D7}\\u{2DE}-\\u{2FF}\\u{1E00}-\\u{1EFF}]
+gu/\\\\([\\p{P}\\p{S}])
+gu/\\u{f0000}(\\d+)\\u{f0001}
+gu/\\u{f0005}(?=[\\p{L}\\p{N}\\u221A\\u{f0000}])
+gu/^[^_*]*?\\*\\*[^_*]*?_[^_*]*?(?=\\*\\*)|[^_]+(?=[^_])|(?!_)[\\p{P}\\p{S}](_+)(?=[\\s]|$)|[^\\s\\p{P}\\p{S}](_+)(?!_)(?=[\\s\\p{P}\\p{S}]|$)|(?!_)[\\s\\p{P}\\p{S}](_+)(?=[^\\s\\p{P}\\p{S}])|[\\s](_+)(?!_)(?=[\\p{P}\\p{S}])|(?!_)[\\p{P}\\p{S}](_+)(?!_)(?=[\\p{P}\\p{S}])
+gu/^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)(?!~)[\\p{P}\\p{S}](\\*+)(?=[\\s]|$)|(?:[^\\s\\p{P}\\p{S}]|~)(\\*+)(?!\\*)(?=(?!~)[\\s\\p{P}\\p{S}]|$)|(?!\\*)(?!~)[\\s\\p{P}\\p{S}](\\*+)(?=(?:[^\\s\\p{P}\\p{S}]|~))|[\\s](\\*+)(?!\\*)(?=(?!~)[\\p{P}\\p{S}])|(?!\\*)(?!~)[\\p{P}\\p{S}](\\*+)(?!\\*)(?=(?!~)[\\p{P}\\p{S}])|(?:[^\\s\\p{P}\\p{S}]|~)(\\*+)(?=(?:[^\\s\\p{P}\\p{S}]|~))
+gu/^[^~]+(?=[^~])|(?!~)[\\p{P}\\p{S}](~~?)(?=[\\s]|$)|[^\\s\\p{P}\\p{S}](~~?)(?!~)(?=[\\s\\p{P}\\p{S}]|$)|(?!~)[\\s\\p{P}\\p{S}](~~?)(?=[^\\s\\p{P}\\p{S}])|[\\s](~~?)(?!~)(?=[\\p{P}\\p{S}])|(?!~)[\\p{P}\\p{S}](~~?)(?!~)(?=[\\p{P}\\p{S}])|[^\\s\\p{P}\\p{S}](~~?)(?=[^\\s\\p{P}\\p{S}])
+gu/_
+i/-256(?:color)?$
+i/\\bgfs4\\b
+i/^ {0,1}<(?:[a-z].*>|!--)
+i/^ {0,2}<(?:[a-z].*>|!--)
+i/^ {0,3}(?:<(script|pre|style|textarea)[\\s>][\\s\\S]*?(?:</\\1>[^\\n]*\\n*|$)|<!--(?:-?>|[\\s\\S]*?(?:-->|$))[^\\n]*(\\n+|$)|<\\?[\\s\\S]*?(?:\\?>[^\\n]*\\n*|$)|<![A-Z][\\s\\S]*?(?:>[^\\n]*\\n*|$)|<!\\[CDATA\\[[\\s\\S]*?(?:\\]\\]>[^\\n]*\\n*|$)|</?(address|article|aside|base|basefont|blockquote|body|caption|center|col|colgroup|dd|details|dialog|dir|div|dl|dt|fieldset|figcaption|figure|footer|form|frame|frameset|h[1-6]|head|header|hr|html|iframe|legend|li|link|main|menu|menuitem|meta|nav|noframes|ol|optgroup|option|p|param|search|section|summary|table|tbody|td|tfoot|th|thead|title|tr|track|ul)(?: +|\\n|/?>)[\\s\\S]*?(?:(?:\\n[ \u0009]*)+\\n|$)|<(?!script|pre|style|textarea)([a-z][\\w-]*)(?: +[a-zA-Z:_][\\w.:-]*(?: *= *"[^"\\n]*"| *= *'[^'\\n]*'| *= *[^\\s"'=<>`]+)?)*? */?>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ \u0009]*)+\\n|$)|</(?!script|pre|style|textarea)[a-z][\\w-]*\\s*>(?=[ \\t]*(?:\\n|$))[\\s\\S]*?(?:(?:\\n[ \u0009]*)+\\n|$))
+i/^ {0,3}<(?:[a-z].*>|!--)
+i/^#([\\da-f]{3}|[\\da-f]{6})$
+i/^<(pre|code|kbd|script)(\\s|>)
+i/^<\\/(pre|code|kbd|script)(\\s|>)
+i/^<a 
+i/^[a-z][a-z0-9+.-]*:
+i/^ok(lch|hsl)\\(
+i/^okhsl\\(\\s*([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?)(?:deg)?\\s+([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?)(%)?\\s+([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?)(%)?\\s*\\)$
+i/^oklch\\(\\s*([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?)(%)?\\s+([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?)\\s+([+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:e[+-]?\\d+)?)(?:deg)?\\s*\\)$
+i/^win
+i/mermaid
+im/"
+im/"""
+im/#>
+im/$
+im/'
+im/,
+im/-->
+im/;
+im/<\\/script>
+im/<\\/style>
+im/>
+im/[ \\t]*(\\w+)\\b
+im/[;{]
+im/[;}]
+im/[^\\\\]$
+im/[{;]
+im/\\)
+im/\\*/
+im/\\/?>
+im/\\?>
+im/\\B|\\b
+im/\\]
+im/\\]+
+im/\\]\\]>
+im/\\s*\\{|$
+im/\\{
+im/\\}
+im/^"@
+iu/^https?:\\/\\/
+m/"
+m/"""
+m/"""(?=[^"])
+m/"#
+m/#-\\}
+m/$
+m/$|;
+m/%
+m/'
+m/''
+m/'''
+m/(?=#)|$
+m/(\\(|<)
+m/(\\bProtocol\\b|\\bType\\b|\\binit\\b|\\bself\\b)
+m/(\\s*\\(.*?\\))?[;{]
+m/(\\w+)
+m/,
+m/-\\}
+m//[a-z]*
+m//\\$
+m/:
+m/;
+m/=cut
+m/>
+m/[(]|$
+m/[:={\\[(\\n;]
+m/[:={\\[\\n;]
+m/[:\\{(]|$
+m/[=,\\/]
+m/[^\\\\](?=\\s*$)
+m/[{;:<>=]
+m/[{;=]
+m/[{;]
+m/\\)
+m/\\)([^()\\\\ ]{0,16})"
+m/\\*
+m/\\*/
+m/\\*{2}
+m/\\/
+m/\\/[A-Za-z0-9\\\\._:-]+>|\\/>
+m/\\/[gimuy]*
+m/\\B|\\b
+m/\\]
+m/\\]=*\\]
+m/\\n
+m/\\s*
+m/\\s*(\\{|$)
+m/\\s*=>
+m/\\s*[{;=]
+m/\\s+
+m/\\{
+m/\\|
+m/\\}
+m/^=end
+m/`
+m/where
+u/(?:\\s|(?:(?=\\p{Punctuation})[\\p{Script_Extensions=Han}\\p{Script_Extensions=Hiragana}\\p{Script_Extensions=Katakana}\\p{Script_Extensions=Hangul}\\p{Script_Extensions=Bopomofo}]|[\uff0c\uff0e\uff1a\uff1b\uff01\uff1f\uff08\uff09\uff3b\uff3d\uff5b\uff5d\u201c\u201d\u2018\u2019\u2026\u2014]))
+u/(?:^|(?:\\s|(?:(?=\\p{Punctuation})[\\p{Script_Extensions=Han}\\p{Script_Extensions=Hiragana}\\p{Script_Extensions=Katakana}\\p{Script_Extensions=Hangul}\\p{Script_Extensions=Bopomofo}]|[\uff0c\uff0e\uff1a\uff1b\uff01\uff1f\uff08\uff09\uff3b\uff3d\uff5b\uff5d\u201c\u201d\u2018\u2019\u2026\u2014])))[([{<`]*(?:@"[^"]*|[@#](?:(?!(?:\\s|(?:(?=\\p{Punctuation})[\\p{Script_Extensions=Han}\\p{Script_Extensions=Hiragana}\\p{Script_Extensions=Katakana}\\p{Script_Extensions=Hangul}\\p{Script_Extensions=Bopomofo}]|[\uff0c\uff0e\uff1a\uff1b\uff01\uff1f\uff08\uff09\uff3b\uff3d\uff5b\uff5d\u201c\u201d\u2018\u2019\u2026\u2014]))).)*)$
+u/(?:^|(?:\\s|(?:(?=\\p{Punctuation})[\\p{Script_Extensions=Han}\\p{Script_Extensions=Hiragana}\\p{Script_Extensions=Katakana}\\p{Script_Extensions=Hangul}\\p{Script_Extensions=Bopomofo}]|[\uff0c\uff0e\uff1a\uff1b\uff01\uff1f\uff08\uff09\uff3b\uff3d\uff5b\uff5d\u201c\u201d\u2018\u2019\u2026\u2014])))[([{<`]*(?:@(?:"[^"]*|(?:(?!(?:\\s|(?:(?=\\p{Punctuation})[\\p{Script_Extensions=Han}\\p{Script_Extensions=Hiragana}\\p{Script_Extensions=Katakana}\\p{Script_Extensions=Hangul}\\p{Script_Extensions=Bopomofo}]|[\uff0c\uff0e\uff1a\uff1b\uff01\uff1f\uff08\uff09\uff3b\uff3d\uff5b\uff5d\u201c\u201d\u2018\u2019\u2026\u2014]))).)*)|[#](?:(?!(?:\\s|(?:(?=\\p{Punctuation})[\\p{Script_Extensions=Han}\\p{Script_Extensions=Hiragana}\\p{Script_Extensions=Katakana}\\p{Script_Extensions=Hangul}\\p{Script_Extensions=Bopomofo}]|[\uff0c\uff0e\uff1a\uff1b\uff01\uff1f\uff08\uff09\uff3b\uff3d\uff5b\uff5d\u201c\u201d\u2018\u2019\u2026\u2014]))).)*)$
+u/[\\p{Alphabetic}\\p{N}]
+u/[\\p{L}\\p{N}]
+u/[\\p{Script_Extensions=Han}\\p{Script_Extensions=Hiragana}\\p{Script_Extensions=Katakana}\\p{Script_Extensions=Hangul}\\p{Script_Extensions=Bopomofo}]
+u/\\/$
+u/\\/+$
+u/\\/v1$
+u/^((?![*_])[\\s\\p{P}\\p{S}])
+u/^(?:\\*+(?:((?!\\*)(?!~)[\\p{P}\\p{S}])|([^\\s*]))?)|^_+(?:((?!_)(?!~)[\\p{P}\\p{S}])|([^\\s_]))?
+u/^.*$
+u/^[\\p{ID_Start}_$][\\p{ID_Continue}_$\\u200C\\u200D]*$
+u/^function [A-Za-z_$][\\w$]*\\(\\) \\{ \\[native code\\] \\}$
+u/^x
+u/^~~?(?:((?!~)[\\p{P}\\p{S}])|[^\\s~])
+v/^(?:[\\p{Spacing_Mark}--[\\u1734\\u302E\\u302F]]|[\\u065F\\u0F7F\\u102B\\u102C\\u1031\\u1033-\\u1035\\u1038\\u103A-\\u103E])+$
+v/^(?:\\p{Default_Ignorable_Code_Point}|\\p{Control}|\\p{Format}|\\p{Mark}|\\p{Surrogate})$
+v/^(?:\\p{Default_Ignorable_Code_Point}|\\p{Control}|\\p{Mark}|\\p{Surrogate})+$
+v/^[\\p{Default_Ignorable_Code_Point}\\p{Control}\\p{Format}\\p{Mark}\\p{Surrogate}]+
+v/^\\p{Mark}$
+v/^\\p{RGI_Emoji}$

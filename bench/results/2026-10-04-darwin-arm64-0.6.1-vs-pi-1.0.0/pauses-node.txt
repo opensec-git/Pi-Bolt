@@ -1,4 +1,0 @@
-build        step        wall s  cpu s gap p99 ms longest ms    at  own MB
-node         write:50       8.3   5.92         18         37    1%     156
-node         write:200     35.0  31.55         84       6442   99%     258
-node         write:400    101.6  99.77        113      39513   66%     266

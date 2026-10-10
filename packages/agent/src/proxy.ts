@@ -7,28 +7,16 @@
 import {
 	type AssistantMessage,
 	type AssistantMessageEvent,
-	EventStream,
+	type AssistantMessageEventStream,
+	createAssistantMessageEventStream,
 	type Model,
 	parseStreamingJson,
+	parseStreamingJsonWhileStreaming,
 	type SimpleStreamOptions,
 	type StopReason,
 	type ToolCall,
 	type TranscriptContext,
 } from "@earendil-works/pi-ai";
-
-// Create stream class matching ProxyMessageEventStream
-class ProxyMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
-	constructor() {
-		super(
-			(event) => event.type === "done" || event.type === "error",
-			(event) => {
-				if (event.type === "done") return event.message;
-				if (event.type === "error") return event.error;
-				throw new Error("Unexpected event type");
-			},
-		);
-	}
-}
 
 /**
  * Proxy event types - server sends these with partial field stripped to reduce bandwidth.
@@ -121,8 +109,8 @@ export function streamProxy(
 	model: Model<any>,
 	context: TranscriptContext,
 	options: ProxyStreamOptions,
-): ProxyMessageEventStream {
-	const stream = new ProxyMessageEventStream();
+): AssistantMessageEventStream {
+	const stream = createAssistantMessageEventStream();
 
 	(async () => {
 		// Initialize the partial message that we'll build up from events
@@ -145,6 +133,8 @@ export function streamProxy(
 		};
 
 		let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+		// Tool-call blocks are replaced on every delta, so throttled argument parsing is keyed per content index.
+		const toolCallParseKeys = new Map<number, object>();
 
 		const abortHandler = () => {
 			if (reader) {
@@ -194,7 +184,7 @@ export function streamProxy(
 				const data = line.slice(6).trim();
 				if (!data) return;
 				const proxyEvent = JSON.parse(data) as ProxyAssistantMessageEvent;
-				const event = processProxyEvent(proxyEvent, partial);
+				const event = processProxyEvent(proxyEvent, partial, toolCallParseKeys);
 				if (event) {
 					if (event.type === "done" || event.type === "error") sawTerminalEvent = true;
 					stream.push(event);
@@ -233,6 +223,7 @@ export function streamProxy(
 				// A clean EOF without a done/error event means the server dropped the
 				// response mid-stream. Surface it as an error instead of leaving
 				// consumers waiting on a result that never arrives.
+				parseUnfinishedToolCalls(partial);
 				partial.stopReason = "error";
 				partial.errorMessage = "Connection closed by proxy server before the response completed";
 				stream.push({
@@ -246,6 +237,7 @@ export function streamProxy(
 		} catch (error) {
 			const errorMessage = error instanceof Error ? error.message : String(error);
 			const reason = options.signal?.aborted ? "aborted" : "error";
+			parseUnfinishedToolCalls(partial);
 			partial.stopReason = reason;
 			partial.errorMessage = errorMessage;
 			stream.push({
@@ -267,9 +259,23 @@ export function streamProxy(
 /**
  * Process a proxy event and update the partial message.
  */
+/**
+ * Parses in full the arguments of tool calls that have not ended (no toolcall_end): while streaming they are parsed only as
+ * they grow, so they can lag behind what arrived. A message that ends without their toolcall_end keeps all of it.
+ */
+function parseUnfinishedToolCalls(partial: AssistantMessage): void {
+	for (const content of partial.content) {
+		const partialJson = (content as { partialJson?: string }).partialJson;
+		if (content.type === "toolCall" && partialJson !== undefined) {
+			content.arguments = parseStreamingJson(partialJson) || {};
+		}
+	}
+}
+
 function processProxyEvent(
 	proxyEvent: ProxyAssistantMessageEvent,
 	partial: AssistantMessage,
+	toolCallParseKeys: Map<number, object>,
 ): AssistantMessageEvent | undefined {
 	switch (proxyEvent.type) {
 		case "start":
@@ -347,13 +353,22 @@ function processProxyEvent(
 				arguments: {},
 				partialJson: "",
 			} satisfies ToolCall & { partialJson: string } as ToolCall;
+			toolCallParseKeys.set(proxyEvent.contentIndex, {});
 			return { type: "toolcall_start", contentIndex: proxyEvent.contentIndex, partial };
 
 		case "toolcall_delta": {
 			const content = partial.content[proxyEvent.contentIndex];
 			if (content?.type === "toolCall") {
 				(content as any).partialJson += proxyEvent.delta;
-				content.arguments = parseStreamingJson((content as any).partialJson) || {};
+				// Parsing all that arrived on every delta was quadratic in the arguments' size; toolcall_end carries the
+				// final arguments.
+				let parseKey = toolCallParseKeys.get(proxyEvent.contentIndex);
+				if (!parseKey) {
+					parseKey = {};
+					toolCallParseKeys.set(proxyEvent.contentIndex, parseKey);
+				}
+				content.arguments =
+					parseStreamingJsonWhileStreaming(parseKey, (content as any).partialJson, content.arguments) || {};
 				partial.content[proxyEvent.contentIndex] = { ...content }; // Trigger reactivity
 				return {
 					type: "toolcall_delta",
@@ -381,6 +396,7 @@ function processProxyEvent(
 		}
 
 		case "done":
+			parseUnfinishedToolCalls(partial);
 			partial.stopReason = proxyEvent.reason;
 			partial.usage = proxyEvent.usage;
 			if (proxyEvent.providerThinkingLevel !== undefined) {
@@ -389,6 +405,7 @@ function processProxyEvent(
 			return { type: "done", reason: proxyEvent.reason, message: partial };
 
 		case "error":
+			parseUnfinishedToolCalls(partial);
 			partial.stopReason = proxyEvent.reason;
 			partial.errorMessage = proxyEvent.errorMessage;
 			partial.usage = proxyEvent.usage;

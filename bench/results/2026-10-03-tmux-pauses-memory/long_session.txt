@@ -1,8 +1,0 @@
-== 0.5.1 (exit 0)
-     25:   165.7 ms/prompt   cpu    90.0 ms/prompt   memory 202.9 MB (own 108.0 MB)   request   5.6 MB (~1.4M tokens)
-     50:   349.9 ms/prompt   cpu   199.1 ms/prompt   memory 207.8 MB (own 112.9 MB)   request  11.2 MB (~2.8M tokens)
-     75:   561.6 ms/prompt   cpu   321.7 ms/prompt   memory 228.1 MB (own 133.2 MB)   request  16.9 MB (~4.2M tokens)
-== 0.5.2 (exit 0)
-     25:   159.6 ms/prompt   cpu    83.1 ms/prompt   memory 207.5 MB (own 110.6 MB)   request   5.6 MB (~1.4M tokens)
-     50:   340.1 ms/prompt   cpu   175.9 ms/prompt   memory 298.8 MB (own 201.9 MB)   request  11.2 MB (~2.8M tokens)
-     75:   547.7 ms/prompt   cpu   299.6 ms/prompt   memory 220.5 MB (own 123.5 MB)   request  16.9 MB (~4.2M tokens)

@@ -76,7 +76,6 @@ describe("readClipboardText", () => {
 		["WAYLAND_DISPLAY", "wl-paste", ["--no-newline", "--type", "text"], ["wl-paste"]],
 		["DISPLAY", "xclip", ["-selection", "clipboard", "-out"], ["xclip"]],
 		["DISPLAY", "xsel", ["--clipboard", "--output"], ["xclip", "xsel"]],
-		["TERMUX_VERSION", "termux-clipboard-get", [], ["termux-clipboard-get"]],
 	] as const) {
 		test.each(["clipboard text", ""])(`${command} result %j stops fallback`, async (text) => {
 			// Regression test for #7248: empty Wayland content must not fall through to stale X11.
@@ -99,6 +98,15 @@ describe("readClipboardText", () => {
 		await expect(readClipboardText()).resolves.toBe(text || null);
 		expect(mocks.getNativeClipboard).toHaveBeenCalledExactlyOnceWith();
 		expect(mocks.command.mock.calls.map(([name]) => name)).toEqual(["wl-paste", "xclip", "xsel"]);
+	});
+	test.each(["clipboard text", ""])("Termux reads termux-clipboard-get result %j on Android", async (text) => {
+		// Regression test for #10391: Termux reports platform "android".
+		mocks.platform.mockReturnValue("android");
+		vi.stubEnv("TERMUX_VERSION", "0.119");
+		mocks.command.mockResolvedValue(Buffer.from(text));
+		await expect(readClipboardText()).resolves.toBe(text || null);
+		expect(mocks.command).toHaveBeenCalledExactlyOnceWith("termux-clipboard-get", [], { timeoutMs: 5000 });
+		expect(mocks.getNativeClipboard).not.toHaveBeenCalled();
 	});
 	test("falls back to X11 tools when wl-paste is unavailable", async () => {
 		mocks.platform.mockReturnValue("linux");
@@ -256,6 +264,27 @@ describe("copyToClipboard", () => {
 			"Clipboard unavailable: install `wl-clipboard` (`wl-copy`) or check Wayland access",
 		);
 		expect(mocks.command.mock.calls.map(([name]) => name)).toEqual(["wl-copy", "xclip", "xsel"]);
+	});
+	test("Termux on Android writes through termux-clipboard-set", async () => {
+		mocks.platform.mockReturnValue("android");
+		vi.stubEnv("TERMUX_VERSION", "0.119");
+		mocks.getNativeClipboard.mockReturnValue(undefined);
+		await copyToClipboard("hello");
+		expect(mocks.command).toHaveBeenCalledExactlyOnceWith("termux-clipboard-set", [], {
+			input: "hello",
+			timeoutMs: 5000,
+		});
+		expect(osc52Writes).toHaveLength(0);
+	});
+	test("reports the Termux:API requirement on Android", async () => {
+		// Regression test for #10391: Termux reports platform "android".
+		mocks.platform.mockReturnValue("android");
+		vi.stubEnv("TERMUX_VERSION", "0.119");
+		mocks.getNativeClipboard.mockReturnValue(undefined);
+		mocks.command.mockResolvedValue(undefined);
+		await expect(copyToClipboard("hello")).rejects.toThrow(
+			"Clipboard unavailable: install the Termux:API app and `termux-api` package",
+		);
 	});
 	test("uses OSC 52 when native and command writes fail in a remote session", async () => {
 		vi.stubEnv("SSH_CONNECTION", "client server");

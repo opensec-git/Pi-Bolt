@@ -16,6 +16,10 @@ vi.mock("fs", async (importOriginal) => {
 	return {
 		...actual,
 		existsSync: vi.fn(() => false),
+		// (getToolPath looks a command up in PATH with accessSync rather than running it.)
+		accessSync: vi.fn(() => {
+			throw new Error("not found");
+		}),
 	};
 });
 

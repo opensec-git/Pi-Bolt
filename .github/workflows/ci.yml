@@ -1,59 +1,183 @@
 name: ci
 
+# Every push to pi-bolt and every pull request: lint and types, Pi's own tests, Pi-Bolt built and tested on Linux x86-64 and on
+# macOS on Apple silicon, the installer's checks of what it downloads, and whether the engine patches still apply.
+#
+# The runtime (patched WebKit and Bun) takes about an hour and 40 GB of disk to build, more than GitHub's runners give, so
+# Pi-Bolt is built here with the latest release's runtime (scripts/fetch-runtime.sh checks its signature). A change to the
+# engine itself is checked by scripts/check-patches.sh here, and built and tested before it is released (docs/RELEASING.md).
 on:
   push:
     branches: [pi-bolt]
   pull_request:
     branches: [pi-bolt]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    name: Lint and types
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - name: shellcheck
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Shell scripts
         run: |
           shellcheck -s sh -S warning install.sh npm/bin/pi-bolt
-          shellcheck -x -S warning scripts/*.sh scripts/lib/common.sh scripts/toolchain/*.sh tests/aot/run.sh bench/run-suite.sh
-      - name: python
+          shellcheck -x -S warning scripts/*.sh scripts/lib/common.sh scripts/toolchain/*.sh \
+            tests/aot/run.sh tests/pi/run.sh tests/installer/run.sh tests/runtime/run.sh bench/run-suite.sh
+      - name: Python
         run: python3 -m py_compile bench/*.py scripts/lib/*.py
-      - name: sources.json and versions
+      - name: Versions agree
         run: |
           python3 -c 'import json; json.load(open("sources.json"))'
           test "$(python3 -c 'import json; print(json.load(open("npm/package.json"))["version"])')" = "$(cat VERSION)"
           grep -q "^VERSION=$(cat VERSION)\$" npm/bin/pi-bolt
+          pi=$(python3 -c 'import json; print(json.load(open("sources.json"))["pi"]["tag"][1:])')
+          test -f "profiles/pi-$pi/bytecode.order" || { echo "no training profile for Pi $pi (scripts/train-profile.sh)"; exit 1; }
+      - name: Dependencies and build
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Biome
+        run: npx biome check --error-on-warnings packages scripts
+      - name: TypeScript
+        run: npx tsc --noEmit
 
-  # Builds Pi with the released runtime and runs the engine tests and Pi's end-to-end checks on the result. The runtime itself
-  # (patched WebKit and Bun) takes hours to build, so it comes from the latest release; a change to patches/ is verified by the
-  # release pipeline, which builds it.
-  build-and-test:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
+  unit:
+    name: Pi's tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-      - uses: oven-sh/setup-bun@v2
+          cache: npm
+      - name: ripgrep and fd, which the grep and find tools use
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep fd-find && sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+      - name: Dependencies and build
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: TUI
+        working-directory: packages/tui
+        run: npm test
+      - name: AI
+        working-directory: packages/ai
+        run: npx vitest run --retry 2
+      - name: Agent
+        working-directory: packages/agent
+        run: npx vitest run --retry 2
+      - name: Coding agent
+        working-directory: packages/coding-agent
+        run: npx vitest run --retry 2
+
+  pi-bolt:
+    name: Pi-Bolt on ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64
+            runner: ubuntu-24.04
+          - name: macOS Apple silicon
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: "1.4.2"
-      - name: runtime
+      - name: Tools (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq tmux
+      - name: Tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install bash tmux xz
+      - name: Runtime of the latest release
         run: scripts/fetch-runtime.sh
       - name: Pi
         run: scripts/prepare-pi.sh
-      - name: build
+      - name: Build
         run: |
           scripts/build-pi.sh --out out/pi-bolt
-          out/pi-bolt/pi --version
-          BUN_STATIC_HEAP_VERBOSE=1 out/pi-bolt/pi --version 2>&1 | grep -q "image registered: true"
-      - name: engine tests
+          scripts/build-pi.sh --jit on --out out/pi-bolt-jit
+          out/pi-bolt/pi --version | tee /dev/stderr | grep -q "Pi-Bolt $(cat VERSION)"
+      - name: Pi-Bolt's tests
+        run: |
+          tests/pi/run.sh "$PWD/out/pi-bolt/pi"
+          tests/pi/run.sh "$PWD/out/pi-bolt-jit/pi"
+      - name: Engine tests
         run: tests/aot/run.sh
-      - name: end-to-end tools
+      - name: Runtime tests
+        run: tests/runtime/run.sh
+      - name: The same as stock Pi
         run: |
           scripts/build-pi.sh --stable --out out/pi-stable
-          python3 bench/e2e_tools.py --reference bun=out/pi-stable/pi --build pi-bolt=out/pi-bolt/pi
-      - name: TUI check
-        run: python3 bench/ui_check.py --project . --build pi-bolt=out/pi-bolt/pi
+          python3 bench/e2e_tools.py --reference bun=out/pi-stable/pi --build pi-bolt=out/pi-bolt/pi --build jit=out/pi-bolt-jit/pi
+          python3 bench/e2e_screen.py --reference bun=out/pi-stable/pi --build pi-bolt=out/pi-bolt/pi
+          python3 bench/e2e_fullscreen.py --build pi-bolt=out/pi-bolt/pi
+
+  installer:
+    name: Installer on ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            runner: ubuntu-24.04
+          - name: macOS
+            runner: macos-15
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Signature and checksum checks
+        run: tests/installer/run.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: A bare Debian, with and without OpenSSL
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD/install.sh:/install.sh:ro" debian:12-slim sh -ec '
+            apt-get update -qq >/dev/null && apt-get install -y -qq --no-install-recommends curl ca-certificates >/dev/null
+            run() { env HOME=/root/t PIBOLT_EXTENSIONS=no PIBOLT_NO_START=1 PIBOLT_YES=1 "$@" sh /install.sh </dev/null 2>&1; }
+            run | tee /tmp/a; grep -q "signature verified" /tmp/a
+            dpkg -r --force-depends openssl >/dev/null 2>&1
+            run | tee /tmp/b; grep -q "signature verified" /tmp/b   # checked by the Pi-Bolt installed before
+            rm -rf /root/t
+            run | tee /tmp/c; grep -q "no OpenSSL 3 here" /tmp/c
+            /root/t/.local/bin/pi-bolt --version'
+
+  engine:
+    name: Engine patches apply
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: patches/webkit.patch and patches/bun.patch on the pinned commits
+        run: scripts/check-patches.sh
+      - name: Whether the release's runtime is still this engine
+        run: |
+          stamp=$(scripts/runtime-stamp.sh)
+          released=$(curl -fsSL https://github.com/opensec-git/Pi-Bolt/releases/latest/download/RUNTIME_STAMP || true)
+          if [ "$stamp" != "$released" ]; then
+            echo "::notice title=Engine changed::The engine differs from the latest release's runtime ($released, now $stamp): the next release needs its runtime built (docs/RELEASING.md). The Pi-Bolt jobs above used the released runtime."
+          fi

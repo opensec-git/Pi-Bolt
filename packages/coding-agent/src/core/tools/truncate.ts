@@ -44,15 +44,20 @@ export interface TruncationOptions {
 	maxBytes?: number;
 }
 
-function splitLinesForCounting(content: string): string[] {
+/**
+ * Number of lines in `content`: one per "\n"-separated line, not counting the empty one after a trailing "\n".
+ * Counted without splitting: callers truncate output that can be many megabytes to a few kilobytes, and splitting
+ * would allocate a string per line of all of it.
+ */
+function countLines(content: string): number {
 	if (content.length === 0) {
-		return [];
+		return 0;
 	}
-	const lines = content.split("\n");
-	if (content.endsWith("\n")) {
-		lines.pop();
+	let lines = 1;
+	for (let i = content.indexOf("\n"); i !== -1; i = content.indexOf("\n", i + 1)) {
+		lines++;
 	}
-	return lines;
+	return content.endsWith("\n") ? lines - 1 : lines;
 }
 
 /**
@@ -80,8 +85,7 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 
 	const totalBytes = Buffer.byteLength(content, "utf-8");
-	const lines = splitLinesForCounting(content);
-	const totalLines = lines.length;
+	const totalLines = countLines(content);
 
 	// Check if no truncation needed
 	if (totalLines <= maxLines && totalBytes <= maxBytes) {
@@ -101,7 +105,8 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 	}
 
 	// Check if first line alone exceeds byte limit
-	const firstLineBytes = Buffer.byteLength(lines[0], "utf-8");
+	const firstNewline = content.indexOf("\n");
+	const firstLineBytes = Buffer.byteLength(firstNewline === -1 ? content : content.slice(0, firstNewline), "utf-8");
 	if (firstLineBytes > maxBytes) {
 		return {
 			content: "",
@@ -123,8 +128,10 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
 	let outputBytesCount = 0;
 	let truncatedBy: "lines" | "bytes" = "lines";
 
-	for (let i = 0; i < lines.length && i < maxLines; i++) {
-		const line = lines[i];
+	for (let i = 0, start = 0; i < totalLines && i < maxLines; i++) {
+		const end = content.indexOf("\n", start);
+		const line = end === -1 ? content.slice(start) : content.slice(start, end);
+		start = end + 1;
 		const lineBytes = Buffer.byteLength(line, "utf-8") + (i > 0 ? 1 : 0); // +1 for newline
 
 		if (outputBytesCount + lineBytes > maxBytes) {
@@ -170,8 +177,7 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 	const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 
 	const totalBytes = Buffer.byteLength(content, "utf-8");
-	const lines = splitLinesForCounting(content);
-	const totalLines = lines.length;
+	const totalLines = countLines(content);
 
 	// Check if no truncation needed
 	if (totalLines <= maxLines && totalBytes <= maxBytes) {
@@ -190,14 +196,17 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 		};
 	}
 
-	// Work backwards from the end
+	// Work backwards from the end, collecting the kept lines last first. A trailing "\n" ends the last line.
 	const outputLinesArr: string[] = [];
 	let outputBytesCount = 0;
 	let truncatedBy: "lines" | "bytes" = "lines";
 	let lastLinePartial = false;
 
-	for (let i = lines.length - 1; i >= 0 && outputLinesArr.length < maxLines; i--) {
-		const line = lines[i];
+	let end = content.endsWith("\n") ? content.length - 1 : content.length;
+	for (let i = totalLines - 1; i >= 0 && outputLinesArr.length < maxLines; i--) {
+		const start = i === 0 ? 0 : content.lastIndexOf("\n", end - 1) + 1;
+		const line = content.slice(start, end);
+		end = start - 1;
 		const lineBytes = Buffer.byteLength(line, "utf-8") + (outputLinesArr.length > 0 ? 1 : 0); // +1 for newline
 
 		if (outputBytesCount + lineBytes > maxBytes) {
@@ -206,16 +215,17 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
 			// take the end of the line (partial)
 			if (outputLinesArr.length === 0) {
 				const truncatedLine = truncateStringToBytesFromEnd(line, maxBytes);
-				outputLinesArr.unshift(truncatedLine);
+				outputLinesArr.push(truncatedLine);
 				outputBytesCount = Buffer.byteLength(truncatedLine, "utf-8");
 				lastLinePartial = true;
 			}
 			break;
 		}
 
-		outputLinesArr.unshift(line);
+		outputLinesArr.push(line);
 		outputBytesCount += lineBytes;
 	}
+	outputLinesArr.reverse();
 
 	// If we exited due to line limit
 	if (outputLinesArr.length >= maxLines && outputBytesCount <= maxBytes) {
@@ -291,7 +301,7 @@ export interface MiddleTruncationResult {
  */
 export function truncateMiddle(content: string, maxBytes: number): MiddleTruncationResult {
 	const buf = Buffer.from(content, "utf-8");
-	const totalLines = splitLinesForCounting(content).length;
+	const totalLines = countLines(content);
 	if (buf.length <= maxBytes) {
 		return { content, truncated: false, removedChars: 0, totalBytes: buf.length, totalLines };
 	}

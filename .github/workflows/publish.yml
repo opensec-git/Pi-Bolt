@@ -1,0 +1,146 @@
+name: publish
+
+# Publishes a release the release workflow drafted: signs SHA256SUMS when the draft has no SHA256SUMS.sig yet, checks
+# SHA256SUMS.sig against keys/release.pub and every archive against SHA256SUMS, publishes the GitHub release as the latest, puts
+# install.sh and the site on gh-pages (https://pi-bolt.opensec.in), and publishes the npm packages.
+#
+# Signing: the release key is the secret PIBOLT_SIGNING_KEY of the "release" environment, which only runs this workflow from
+# pi-bolt; it is used in the job below and nowhere else. A draft signed by hand (scripts/sign-release.sh) is published as signed.
+#
+# npm: with trusted publishing (npm's OpenID Connect link to this workflow and its "npm" environment; no token stored here). Set it up once for each of
+# pi-bolt, pi-bolt-linux-x64, pi-bolt-linux-x64-baseline, pi-bolt-linux-x64-jit, pi-bolt-darwin-arm64 and
+# pi-bolt-darwin-arm64-jit (docs/RELEASING.md), then set the repository variable NPM_TRUSTED_PUBLISHING to true. Until then the
+# npm job is skipped and the packages are published from the maintainer's machine.
+#
+# Run it from pi-bolt with the tag (the workflow is pi-bolt's, the files published are the tag's):
+#   gh workflow run publish.yml -R opensec-git/Pi-Bolt -f tag=bolt-vX.Y.Z
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "The signed draft to publish (bolt-vX.Y.Z)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.event.inputs.tag }}
+
+jobs:
+  verify:
+    name: Signature and checksums
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write # (A draft release is only visible to a token that may write.)
+    environment: release
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: The tag
+        run: |
+          [ "$GITHUB_REF" = refs/heads/pi-bolt ] || { echo "run this workflow from pi-bolt"; exit 1; }
+          printf '%s' "$TAG" | grep -Eq '^bolt-v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "not a release tag: $TAG"; exit 1; }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+      - id: version
+        run: echo "version=${TAG#bolt-v}" >> "$GITHUB_OUTPUT"
+      - name: Download the draft
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir release
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Sign
+        working-directory: release
+        run: |
+          if [ -f SHA256SUMS.sig ]; then echo "the draft is signed"; exit 0; fi
+          [ -n "$SIGNING_KEY" ] || { echo "::error::$TAG has no SHA256SUMS.sig and the release environment has no PIBOLT_SIGNING_KEY"; exit 1; }
+          # (What is signed is checked first: the 12 archives of the draft, as SHA256SUMS lists them.)
+          sha256sum -c SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 12
+          key="$RUNNER_TEMP/release-key.pem"
+          trap 'rm -f "$key"' EXIT
+          (umask 077 && printenv SIGNING_KEY > "$key")
+          openssl pkey -in "$key" -pubout | cmp -s - ../keys/release.pub || { echo "::error::PIBOLT_SIGNING_KEY is not the key of keys/release.pub"; exit 1; }
+          openssl pkeyutl -sign -inkey "$key" -rawin -in SHA256SUMS -out SHA256SUMS.sig
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" SHA256SUMS.sig
+        env:
+          SIGNING_KEY: ${{ secrets.PIBOLT_SIGNING_KEY }}
+          GH_TOKEN: ${{ github.token }}
+      - name: Check
+        working-directory: release
+        run: |
+          openssl version
+          openssl pkeyutl -verify -pubin -inkey ../keys/release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
+          sha256sum -c SHA256SUMS
+          test "$(wc -l < SHA256SUMS)" -eq 12
+
+  release:
+    name: GitHub release and site
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
+      - name: Publish the release
+        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: install.sh and the site
+        run: |
+          git config user.name "OpenSec"
+          git config user.email "323596076+opensec-intelligence@users.noreply.github.com"
+          scripts/publish-installer.sh origin
+      - name: The installer serves it
+        run: |
+          for _ in $(seq 30); do
+            curl -fsSL "https://pi-bolt.opensec.in/install.sh?$(date +%s)" | cmp -s - install.sh && exit 0
+            sleep 10
+          done
+          echo "::warning::pi-bolt.opensec.in does not serve this install.sh yet"
+
+  npm:
+    name: npm
+    needs: [verify, release]
+    if: vars.NPM_TRUSTED_PUBLISHING == 'true'
+    runs-on: ubuntu-24.04
+    environment:
+      name: npm
+      url: https://www.npmjs.com/package/pi-bolt
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      # npm 11.5 or later publishes with the workflow's OpenID Connect token (trusted publishing); no token is configured.
+      - name: npm with trusted publishing
+        run: npm install -g npm@11 && npm --version
+      - name: Download the release
+        run: |
+          mkdir -p "dist/$VERSION"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "dist/$VERSION" --pattern '*.tar.xz' --pattern SHA256SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: The builds (pi-bolt-PLATFORM-VARIANT)
+        run: scripts/publish-npm-builds.sh "dist/$VERSION" -- --provenance
+      - name: The pi-bolt package
+        working-directory: npm
+        run: npm publish --access public --provenance

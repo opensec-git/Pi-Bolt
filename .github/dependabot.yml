@@ -1,0 +1,13 @@
+# The actions the workflows use are pinned to commits; Dependabot proposes the newer ones, once a week, in one pull request.
+# (Pi's own npm dependencies follow Pi's releases, which are merged from upstream.)
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: build(ci)

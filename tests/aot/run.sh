@@ -50,7 +50,8 @@ for t in "${tests[@]}"; do
 		env BUN_JSC_useAOTLoopSplitting=1 BUN_JSC_aotLoopSplittingPolicy=5 BUN_JSC_useImmutableIntrinsics=1 $own ${AOT_BUILD_ENV:-} $([ $mode != jit-on ] && echo BUN_AOT_JIT=0) $([ $mode = compact ] && echo BUN_JSC_useAOTInlineFastPathsInLoops=0) BUN_JSC_useJIT=0 BUN_STATIC_HEAP=1 BUN_AOT=1 \
 			BUN_JSC_omitBytecodeFromStaticHeap=1 \
 			"$BUN" build --compile --bytecode --format=esm --target="bun-$PIBOLT_PLATFORM" --bytecode-order="$OUT/$name.order" \
-			"$t" "${extra[@]}" --outfile "$OUT/$name-$mode" >/dev/null 2>&1
+			"$t" "${extra[@]}" --outfile "$OUT/$name-$mode" >"$OUT/$name-$mode.build" 2>&1
+		built=$?
 		BUN_STATIC_HEAP_VERBOSE=1 "$OUT/$name-$mode" >"$OUT/$name.$mode" 2>"$OUT/$name.$mode.err"
 		used=$(grep -c "image registered: true" "$OUT/$name.$mode.err")
 		expected=$(cat "$OUT/$name.expected")
@@ -65,6 +66,10 @@ for t in "${tests[@]}"; do
 		else
 			echo "FAIL $name ($mode): compiled code used: $([ "$used" = 1 ] && echo yes || echo no)"
 			diff <(echo "$expected") <(echo "$actual") | head -5
+			# (What the build said, and the program's errors: the reason is usually there.)
+			echo "  build exit $built; its last lines:"
+			tail -8 "$OUT/$name-$mode.build" | cut -c1-300
+			tail -3 "$OUT/$name.$mode.err" | cut -c1-300
 			status=1
 		fi
 	done

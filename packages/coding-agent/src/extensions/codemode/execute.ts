@@ -15,6 +15,7 @@ import type {
 	Usage,
 } from "@earendil-works/pi-ai";
 import {
+	type CodemodeOutputItem,
 	type CodemodeResult,
 	CodemodeSandbox,
 	type CodemodeTool,
@@ -115,7 +116,7 @@ function describeValue(value: unknown): string {
 }
 
 const CLASSIFIER_CONTEXT_SHAPE =
-	'{ state: { ... }, questions: { <id>: { type: "choice", instructions, criteria: { <label>: <meaning> } } | { type: "score", instructions, criteria: [<lowest level>, ..., <highest level>] } | { type: "bool", instructions, criteria: { true: <meaning>, false: <meaning> } } } }';
+	'{ state: { ... }, images?: [{ type: "image", data: <base64>, mimeType }], questions: { <id>: { type: "choice", instructions, criteria: { <label>: <meaning> } } | { type: "score", instructions, criteria: [<lowest level>, ..., <highest level>] } | { type: "bool", instructions, criteria: { true: <meaning>, false: <meaning> } } } }';
 
 /** Check a script's classifier context, so mistakes fail with the expected shape instead of a provider error. */
 function checkClassifierContext(context: unknown): ClassifierContext {
@@ -125,6 +126,20 @@ function checkClassifierContext(context: unknown): ClassifierContext {
 		);
 	if (!isRecord(context)) throw fail(`expects a context object as its second argument, got ${describeValue(context)}`);
 	if (!isRecord(context.state)) throw fail(`context.state must be an object, got ${describeValue(context.state)}`);
+	const { images } = context;
+	if (images !== undefined) {
+		if (!Array.isArray(images)) throw fail(`context.images must be an array, got ${describeValue(images)}`);
+		images.forEach((image: unknown, index) => {
+			if (
+				!isRecord(image) ||
+				image.type !== "image" ||
+				typeof image.data !== "string" ||
+				typeof image.mimeType !== "string"
+			) {
+				throw fail(`context.images[${index}] must be an image block, got ${describeValue(image)}`);
+			}
+		});
+	}
 	const { questions } = context;
 	if (!isRecord(questions) || Object.keys(questions).length === 0) {
 		throw fail(`context.questions must map question IDs to questions, got ${describeValue(questions)}`);
@@ -236,6 +251,48 @@ const CHARS_PER_TOKEN = 4;
 function valueText(value: unknown): string {
 	if (typeof value === "string") return value;
 	return JSON.stringify(value) ?? String(value);
+}
+
+/**
+ * Lay out the script's output so the model can tell items apart: providers join adjacent text
+ * blocks with a newline or with nothing. With more than one text item (`text()` or the returned
+ * value), each starts with a `==> text N/M <==` line. `console.*` lines follow all other output in
+ * one `<console_output>` block.
+ */
+function formatOutput(output: readonly CodemodeOutputItem[]): (TextContent | ImageContent)[] {
+	const total = output.filter((item) => item.type === "text" && !item.console).length;
+	const items: (TextContent | ImageContent)[] = [];
+	const consoleLines: string[] = [];
+	let index = 0;
+	for (const item of output) {
+		if (item.type === "image") {
+			items.push(item);
+		} else if (item.console) {
+			consoleLines.push(item.text);
+		} else {
+			index++;
+			items.push({ type: "text", text: total > 1 ? `==> text ${index}/${total} <==\n${item.text}` : item.text });
+		}
+	}
+	if (consoleLines.length > 0) {
+		items.push({ type: "text", text: `<console_output>\n${consoleLines.join("\n")}\n</console_output>` });
+	}
+	return items;
+}
+
+/** Join adjacent text items into one, each part starting on its own line. */
+function joinAdjacentText(items: (TextContent | ImageContent)[]): (TextContent | ImageContent)[] {
+	const joined: (TextContent | ImageContent)[] = [];
+	for (const item of items) {
+		const last = joined.at(-1);
+		if (item.type === "text" && last?.type === "text") {
+			const separator = last.text === "" || last.text.endsWith("\n") ? "" : "\n";
+			joined[joined.length - 1] = { type: "text", text: `${last.text}${separator}${item.text}` };
+		} else {
+			joined.push(item);
+		}
+	}
+	return joined;
 }
 
 function formatCallSummary(calls: readonly CodemodeNestedCall[]): string {
@@ -383,7 +440,10 @@ export async function executeCodemode(
 
 	const callable = ctx ? getCodemodeCallableTools(ctx.tools) : [];
 	// ALL_TOOLS entries carry the declaration.
-	const samples = new Map(callable.map((tool) => [tool.name, renderToolSample(toCodemodeDeclaration(tool))]));
+	const guidelines = options.getToolGuidelines?.();
+	const samples = new Map(
+		callable.map((tool) => [tool.name, renderToolSample(toCodemodeDeclaration(tool, guidelines?.get(tool.name)))]),
+	);
 	const sandboxTools: CodemodeTool[] = callable.map((tool) => ({
 		name: tool.name,
 		description: samples.get(tool.name),
@@ -439,19 +499,17 @@ export async function executeCodemode(
 		if (call.status === "running") call.status = "cancelled";
 	}
 
-	const items: (TextContent | ImageContent)[] = result.output.map((item) =>
-		item.type === "text" ? { type: "text", text: item.text } : item,
-	);
+	const scriptOutput = [...result.output];
 	if (result.ok) {
 		const { set, delete: deleted } = result.storeWrites;
 		if (Object.keys(set).length > 0 || deleted.length > 0) {
 			options.appendEntry?.(CODEMODE_STORE_ENTRY_TYPE, { set, delete: deleted });
 		}
 		// pi extension: a returned value is appended like text().
-		if (result.value !== undefined) items.push({ type: "text", text: valueText(result.value) });
-	} else {
-		items.push({ type: "text", text: `Script error:\n${formatError(result, calls)}` });
+		if (result.value !== undefined) scriptOutput.push({ type: "text", text: valueText(result.value) });
 	}
+	const items = formatOutput(scriptOutput);
+	if (!result.ok) items.push({ type: "text", text: `Script error:\n${formatError(result, calls)}` });
 	if (generatedImages > 0 && !items.some((item) => item.type === "image")) {
 		items.push({
 			type: "text",
@@ -459,10 +517,13 @@ export async function executeCodemode(
 		});
 	}
 
-	const truncated = await truncateOutput(items, sourceOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS);
+	const truncated = await truncateOutput(
+		joinAdjacentText(items),
+		sourceOptions.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS,
+	);
 	// After truncation, which joins the text items and moves images after them, so each path stays
 	// next to its image and is never cut.
-	const output = await saveImages(truncated.items);
+	const output = joinAdjacentText(await saveImages(truncated.items));
 	const wallTime = ((performance.now() - startedAt) / 1000).toFixed(1);
 	const header = `${result.ok ? "Script completed" : "Script failed"}\nWall time ${wallTime} seconds\nOutput:\n`;
 	const details = snapshot();

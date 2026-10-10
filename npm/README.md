@@ -81,7 +81,7 @@ placeholder that the package's install script (`install.cjs`, plain Node.js) rep
 
 1. **On the first run**, it downloads the Pi-Bolt build that matches the package version, from the npm registry or, failing
    that, from the [GitHub release](https://github.com/opensec-git/Pi-Bolt/releases). It checks the download against the
-   release's SHA-256 checksums (and, with OpenSSL 3, their signature), then keeps it in `~/.pi-bolt/npm/<version>`.
+   release's SHA-256 checksums and their signature (checked with OpenSSL 3 where there is one), then keeps it in `~/.pi-bolt/npm/<version>`.
 2. **On every run**, it replaces itself with that native executable (`exec`). No Node.js or Bun process stays in between, and
    startup is the same as running the executable directly.
 

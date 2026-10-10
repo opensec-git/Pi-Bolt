@@ -3,8 +3,8 @@
 # (openssl pkeyutl -verify), so a download is known to be Pi-Bolt's and not only intact. The key pair is made once, by a
 # maintainer, with:
 #   openssl genpkey -algorithm ed25519 -out signing-key.pem && openssl pkey -in signing-key.pem -pubout -out keys/release.pub
-# The private key is the PIBOLT_SIGNING_KEY secret of the release workflow (gh secret set PIBOLT_SIGNING_KEY < signing-key.pem);
-# the public key is keys/release.pub, and copied into install.sh (RELEASE_KEY).
+# The publish workflow signs with the same key, a secret of the release environment; this script signs a draft by hand, before
+# publish (docs/RELEASING.md). The public key is keys/release.pub, and copied into install.sh (RELEASE_KEY).
 # Usage: scripts/sign-release.sh --key signing-key.pem dist/<version>
 source "$(dirname "$0")/lib/common.sh"
 need openssl

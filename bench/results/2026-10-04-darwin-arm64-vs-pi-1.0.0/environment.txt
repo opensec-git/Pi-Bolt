@@ -1,6 +1,0 @@
-date: 2026-10-03T23:38Z
-cpu: Apple M5, 10 cores, not pinned
-system: macOS 27.0.1 (27.0.0)
-pi-bolt: 0.5.2, Pi 1.0.0 (Pi-Bolt 0.5.2, darwin-arm64, JIT off)
-bun: 1.4.2
-node: v26.10.0

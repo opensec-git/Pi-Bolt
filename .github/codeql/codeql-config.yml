@@ -1,0 +1,12 @@
+# What ships in Pi-Bolt is scanned; tests, benchmarks, build and maintenance scripts and example extensions are not.
+name: Pi-Bolt
+paths-ignore:
+  - "**/test/**"
+  - "**/tests/**"
+  - "**/*.test.ts"
+  - "**/*.test.mjs"
+  - bench/**
+  - scripts/**
+  - packages/*/scripts/**
+  - packages/coding-agent/examples/**
+  - examples/**

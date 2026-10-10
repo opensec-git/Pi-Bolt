@@ -114,7 +114,9 @@ describe("write call, collapsed", () => {
 				expect(shown(collapsed)).toEqual(shown(expanded));
 				collapsed.setExpanded(false);
 				expect(shown(collapsed)).toEqual(before);
-			});
+				// (The expanded call it is compared with highlights all of the file at every step: a minute at 1 character a
+				// time on a slow machine, such as a CI runner.)
+			}, 120_000);
 		}
 	}
 

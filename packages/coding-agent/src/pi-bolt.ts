@@ -80,8 +80,8 @@ export function piBoltInstallMethod(): "npm" | "installer" {
 
 /**
  * Where this installation is: the folder that holds its variant's folder (~/.pi-bolt/pi-bolt-linux-x64/pi, or
- * pi-bolt-darwin-arm64/pi, pi-bolt-win32-x64\pi-bolt.exe -> ~/.pi-bolt), wherever that is; undefined for an executable that is
- * not in one.
+ * pi-bolt-darwin-arm64/pi-bin, pi-bolt-win32-x64\pi-bolt.exe -> ~/.pi-bolt), wherever that is (~/.pi-bolt, /opt/pi-bolt);
+ * undefined for an executable that is not in one (a build run from its output folder).
  */
 export function piBoltInstallDir(): string | undefined {
 	const variantDir = dirname(process.execPath);
@@ -115,9 +115,8 @@ export function piBoltUpdateEnvironment(version: string): NodeJS.ProcessEnv {
 	return env;
 }
 
-/** The executable the installer puts in `installDir` for this variant. */
+/** The executable the installer puts in `installDir` for this variant (on macOS, the launcher that starts pi-bin). */
 export function piBoltExecutableIn(installDir: string): string {
-	const platform = process.platform === "win32" ? "win32" : process.platform;
-	const folder = `pi-bolt-${platform}-${PIBOLT?.variant ?? "x64"}`;
+	const folder = `pi-bolt-${process.platform}-${PIBOLT?.variant ?? "x64"}`;
 	return join(installDir, folder, process.platform === "win32" ? "pi-bolt.exe" : "pi");
 }

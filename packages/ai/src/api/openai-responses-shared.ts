@@ -37,6 +37,7 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
 import { resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
 import {
+	appendGrammarToolInputJsonChunk,
 	appendGrammarToolInputJsonDelta,
 	type GrammarToolInputJsonBuffer,
 	getGrammarToolInput,
@@ -423,6 +424,17 @@ function appendCustomToolCallInput(block: StreamingToolCall, nextInput: string, 
 	return delta;
 }
 
+function appendCustomToolCallInputChunk(block: StreamingToolCall, inputDelta: string): string | undefined {
+	const customInput = block.customInput;
+	if (!customInput) return undefined;
+	// Input the item started with has not been emitted yet. Afterwards both hold the same string, so this is cheap.
+	const input = getCustomToolCallInput(block);
+	if (input !== customInput.jsonBuffer.input) return appendCustomToolCallInput(block, input + inputDelta, false);
+	const delta = appendGrammarToolInputJsonChunk(customInput.jsonBuffer, customInput.property, inputDelta);
+	block.arguments = { [customInput.property]: customInput.jsonBuffer.input };
+	return delta;
+}
+
 type ResponsesOutputSlot =
 	| { type: "thinking"; block: ThinkingContent; contentIndex: number }
 	| { type: "text"; block: TextContent; contentIndex: number }
@@ -676,10 +688,7 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.custom_tool_call_input.delta") {
 			const slot = getSlot(event.output_index, "toolCall");
 			if (!slot || !slot.block.customInput) continue;
-			pushToolCallDelta(
-				slot,
-				appendCustomToolCallInput(slot.block, getCustomToolCallInput(slot.block) + event.delta, false),
-			);
+			pushToolCallDelta(slot, appendCustomToolCallInputChunk(slot.block, event.delta));
 		} else if (event.type === "response.custom_tool_call_input.done") {
 			const slot = getSlot(event.output_index, "toolCall");
 			if (!slot || !slot.block.customInput) continue;

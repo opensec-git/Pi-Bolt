@@ -192,7 +192,7 @@ export const GenerationTask = defineTask<GenerationInput, GenerationCheckpoint, 
 			}, context);
 			const model = runtime.models.getModel(ref.provider, ref.modelId);
 			if (model === undefined) return failNoModel(runtime, ref, context);
-			const view = await runtime.context(conversationId, context, cutoff);
+			const view = await runtime.context(conversationId, context, { at: cutoff });
 			let messages = view.messages;
 			await runtime.hooks.each("beforeRequest", async (hook) => {
 				const replaced = await hook({ messages }, runtime, context);
@@ -460,7 +460,7 @@ async function classify(
 	const overflow = message.stopReason === "error" && isContextOverflow(message);
 	if (overflow && compacted === undefined && settings.compaction.enabled) {
 		const policy = settings.compaction;
-		const view = await runtime.context(conversationId, context, cutoff);
+		const view = await runtime.context(conversationId, context, { at: cutoff });
 		if (selectCut(view, policy.keepRecentTokens) !== undefined) {
 			const text = message.errorMessage ?? "Context overflow";
 			await runtime.commit(async (tx): Promise<Next> => {
@@ -550,7 +550,8 @@ async function startToolRound(
 	context: Context,
 ): Promise<void> {
 	const conversationId = runtime.conversationId;
-	const messages = request.messages ?? (await runtime.context(conversationId, context, request.cutoff)).messages;
+	const messages =
+		request.messages ?? (await runtime.context(conversationId, context, { at: request.cutoff })).messages;
 	const offered = new Set(getCurrentTools(messages).map((tool) => tool.name));
 	// Read as the round starts; a tool is resolved as its tool task resolves it.
 	const tools = (await runtime.agent(context)).tools;

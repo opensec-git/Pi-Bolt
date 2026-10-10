@@ -1,6 +1,0 @@
-2026-10-03T17:05Z
-cpu: AMD EPYC 7B13, Pi pinned to cores 40-47
-kernel: 7.0.0-1013-gcp; tmux 3.4
-0.5.1: the release (pi-bolt-linux-x64, JIT off)
-0.5.2: this repository (scripts/package-release.sh), linux-x64, JIT off
-model: bench/fake_model_stress.py and bench/fake_model.py on 127.0.0.1 (no provider is called)

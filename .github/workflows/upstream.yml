@@ -1,98 +1,51 @@
 name: upstream
 
-# Once a day, looks for a new Pi release upstream. When there is one, merges its tag into a branch, bumps Pi-Bolt's version,
-# records a training profile for it, runs the tests, and opens a pull request. Merging the pull request and pushing the
-# bolt-vX.Y.Z tag releases it (release.yml). A merge conflict leaves the pull request to be finished by hand.
+# Once a day, looks for a new Pi release. When there is one Pi-Bolt does not run yet, opens an issue (once per release) with
+# its changelog and the files where merging its tag into pi-bolt conflicts, worked out without a checkout (git merge-tree).
+# Merging it: scripts/bump-version.sh --pi X.Y.Z and scripts/train-profile.sh on a branch, and a pull request (docs/RELEASING.md).
 on:
   schedule:
     - cron: "17 4 * * *"
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  issues: write
 
 jobs:
   check:
-    runs-on: ubuntu-latest
-    outputs:
-      pi_tag: ${{ steps.latest.outputs.pi_tag }}
-      new: ${{ steps.latest.outputs.new }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - id: latest
-        run: |
-          latest=$(gh api repos/earendil-works/pi/releases/latest --jq .tag_name)
-          current=$(python3 -c 'import json; print(json.load(open("sources.json"))["pi"]["tag"])')
-          echo "upstream $latest, Pi-Bolt has $current"
-          echo "pi_tag=$latest" >> "$GITHUB_OUTPUT"
-          if [ "$latest" != "$current" ] && ! gh pr list --state all --search "head:upstream/$latest" --json number --jq '.[0]' | grep -q .; then
-            echo "new=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "new=false" >> "$GITHUB_OUTPUT"
-          fi
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-  prepare:
-    needs: check
-    if: needs.check.outputs.new == 'true'
-    runs-on: [self-hosted, linux, x64, pi-bolt]
-    timeout-minutes: 240
-    env:
-      PI_TAG: ${{ needs.check.outputs.pi_tag }}
-    steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.4.2"
-      - name: merge the upstream tag
-        id: merge
+      - name: A new Pi release
         run: |
-          git config user.name "OpenSec"
-          git config user.email "323596076+opensec-intelligence@users.noreply.github.com"
-          git remote add upstream https://github.com/earendil-works/pi.git
-          git fetch -q upstream "refs/tags/$PI_TAG:refs/tags/$PI_TAG"
-          git checkout -b "upstream/$PI_TAG"
-          if git merge --no-edit "$PI_TAG"; then echo "conflict=false" >> "$GITHUB_OUTPUT"; else
-            echo "conflict=true" >> "$GITHUB_OUTPUT"
-            git merge --abort
+          latest=$(gh api repos/earendil-works/pi/releases/latest --jq .tag_name)
+          printf '%s' "$latest" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "unexpected tag: $latest"; exit 1; }
+          current=$(python3 -c 'import json; print(json.load(open("sources.json"))["pi"]["tag"])')
+          echo "Pi $latest upstream; Pi-Bolt runs $current"
+          [ "$latest" != "$current" ] || exit 0
+          title="Pi ${latest#v} is out"
+          if gh issue list --repo "$GITHUB_REPOSITORY" --state all --search "\"$title\" in:title" --json number --jq '.[0].number' | grep -q .; then
+            echo "already reported"; exit 0
           fi
-      - name: bump versions
-        if: steps.merge.outputs.conflict == 'false'
-        run: |
-          pi=${PI_TAG#v}
-          scripts/bump-version.sh --pi "$pi"
-          git add VERSION sources.json npm/package.json npm/bin/pi-bolt
-          git commit -q -m "chore: Pi $pi"
-      - name: runtime, Pi, training profile, tests
-        if: steps.merge.outputs.conflict == 'false'
-        run: |
-          scripts/fetch-runtime.sh
-          scripts/prepare-pi.sh
-          scripts/train-profile.sh
-          git add profiles
-          git commit -q -m "build: training profile for Pi ${PI_TAG#v}"
-          scripts/build-pi.sh --out out/pi-bolt
-          tests/aot/run.sh
-          scripts/build-pi.sh --stable --out out/pi-stable
-          python3 bench/e2e_tools.py --reference bun=out/pi-stable/pi --build pi-bolt=out/pi-bolt/pi
-          python3 bench/ui_check.py --project . --build pi-bolt=out/pi-bolt/pi
-      - name: pull request
-        run: |
-          git push -u origin "upstream/$PI_TAG"
-          if [ "${{ steps.merge.outputs.conflict }}" = true ]; then
-            body="Upstream Pi released $PI_TAG. Merging its tag into \`pi-bolt\` conflicts: merge it by hand on this branch, then run \`scripts/bump-version.sh --pi ${PI_TAG#v}\` and \`scripts/train-profile.sh\`."
-            title="Pi ${PI_TAG#v}: merge conflict"
-          else
-            body="Upstream Pi released $PI_TAG. This branch merges it, bumps Pi-Bolt to $(cat VERSION), and records its training profile. The engine tests and Pi's end-to-end checks passed on the self-hosted runner. Merge it, then push the tag \`bolt-v$(cat VERSION)\` to release."
-            title="Pi ${PI_TAG#v}"
-          fi
-          gh pr create --base pi-bolt --head "upstream/$PI_TAG" --title "$title" --body "$body"
+          git fetch -q https://github.com/earendil-works/pi.git "refs/tags/$latest:refs/tags/$latest"
+          conflicts=$(git merge-tree --write-tree --name-only --no-messages HEAD "$latest" | tail -n +2 || true)
+          {
+            echo "Pi [$latest](https://github.com/earendil-works/pi/releases/tag/$latest) is released; Pi-Bolt runs $current."
+            echo
+            if [ -n "$conflicts" ]; then
+              echo "Merging \`$latest\` into \`pi-bolt\` conflicts in:"
+              echo
+              printf '%s\n' "$conflicts" | while IFS= read -r file; do printf -- "- \`%s\`\n" "$file"; done
+            else
+              echo "\`$latest\` merges into \`pi-bolt\` without conflicts."
+            fi
+            echo
+            echo "To follow it: merge the tag, \`scripts/bump-version.sh --pi ${latest#v}\`, \`scripts/train-profile.sh\` on Linux, the tests, then tag \`bolt-v<version>\` (docs/RELEASING.md)."
+          } > issue.md
+          gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file issue.md
         env:
           GH_TOKEN: ${{ github.token }}

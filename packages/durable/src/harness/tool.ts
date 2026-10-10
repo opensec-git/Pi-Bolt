@@ -190,6 +190,7 @@ async function run(
 		callId: call.id,
 		registry: runtime.registry,
 		agent: runtime.agent,
+		models: runtime.models,
 		output: (chunk, skipped) => {
 			assertLive();
 			if (reported.output.push(chunk, skipped)) progress.mark();
@@ -249,10 +250,17 @@ async function run(
 
 	let result: ToolExecutionResult;
 	let ending = COMPLETED;
+	// Execution time of this attempt; a rerun after recovery measures only itself.
+	let durationMs: number | undefined;
 	try {
 		// Built for this call, so a rerun after recovery gets the conversation's environment at that time.
 		const env = await runtime.env(context);
-		result = await tool.execute(args, { ...api, env }, context);
+		const startedAt = performance.now();
+		try {
+			result = await tool.execute(args, { ...api, env }, context);
+		} finally {
+			durationMs = Math.round(performance.now() - startedAt);
+		}
 	} catch (error) {
 		if (runtime.signal.aborted) {
 			ended = true;
@@ -270,7 +278,7 @@ async function run(
 	const pending = await progress.stop();
 	try {
 		const settled = await finalResult(runtime, call, result, reported, context);
-		await settle(runtime, call, ending, () => settled, context);
+		await settle(runtime, call, ending, () => settled, context, durationMs);
 	} catch (error) {
 		for (const waiter of pending) waiter.reject(error);
 		throw error;
@@ -375,11 +383,12 @@ async function settle(
 	ending: Ending,
 	build: (slot: Readonly<ToolSlot> | undefined) => ToolExecutionResult,
 	context: Context,
+	durationMs?: number,
 ): Promise<void> {
 	await runtime.commit(async (tx) => {
 		const slot = toolSlot(await tx.doc(LiveDoc, runtime.conversationId), runtime.taskId);
 		const result = build(slot);
-		const entry = await appendToolResult(tx, runtime.conversationId, call, result, runtime.now());
+		const entry = await appendToolResult(tx, runtime.conversationId, call, result, runtime.now(), durationMs);
 		if (slot !== undefined) finishSlot(slot, entry.id);
 		const entryId = entry.id;
 		if (ending.status === "aborted")
@@ -451,6 +460,7 @@ export async function appendToolResult(
 	call: ToolCall,
 	result: ToolExecutionResult,
 	timestamp: number,
+	durationMs?: number,
 ): Promise<TypedEntry<{ diagnostics: ToolDiagnostic[] }>> {
 	const diagnostics = [...(result.diagnostics ?? [])];
 	const content: Content = [...(result.content ?? [])];
@@ -463,6 +473,7 @@ export async function appendToolResult(
 		...(result.details === undefined ? {} : { details: result.details }),
 		...(result.usage === undefined ? {} : { usage: result.usage }),
 		isError: result.isError ?? false,
+		...(durationMs === undefined ? {} : { durationMs }),
 		timestamp,
 	} as ToolResultMessage;
 	if (result.usage !== undefined) await recordUsage(tx, conversationId, "tools", call.name, result.usage);

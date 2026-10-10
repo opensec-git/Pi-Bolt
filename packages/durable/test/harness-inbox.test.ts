@@ -256,8 +256,8 @@ describe("inbox", () => {
 		]);
 		const reset = (await allEntries(root)).find((entry) => ResetEntry.is(entry))!;
 		expect(reset.head).toBe(reset.id);
-		// The follow-up's request starts at the reset: the follow-up, then the complete system baseline after the cut.
-		expect(requests).toEqual([["user:f", "system:"]]);
+		// The follow-up's request starts at the reset: the complete system baseline after the cut leads the follow-up.
+		expect(requests).toEqual([["system:", "user:f"]]);
 		expect(setup.faux.state.callCount).toBe(2);
 		await harness.close(context);
 	});

@@ -1,7 +1,0 @@
-date: 2026-10-04T16:41Z
-cpu: AMD EPYC 7B13, pinned to 48-55
-kernel: 7.0.0-1013-gcp
-pi-bolt: 1.0.0 (Pi-Bolt 0.6.1, linux-x64, JIT off), from c4bbecc9f (the archive in the bolt-v0.6.1 release)
-bun: 1.0.0 on stock Bun 1.4.2, Pi 1.0.0 as released (upstream v1.0.0)
-node: v22.23.3 and v24.21.0, Pi 1.0.0's npm bundle
-model: bench/fake_model*.py on 127.0.0.1 (no provider is called)

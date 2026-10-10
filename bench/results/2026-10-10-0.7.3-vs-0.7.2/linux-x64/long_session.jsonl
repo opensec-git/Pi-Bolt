@@ -1,0 +1,14 @@
+{"build": "v072", "exit": 0, "prompt": 10, "ms_per_prompt": 117.4, "cpu_ms_per_prompt": 61.1, "rss_mb": 185.6, "own_mb": 73.1, "request_mb": 2.25, "tokens_m": 0.56}
+{"build": "v072", "exit": 0, "prompt": 20, "ms_per_prompt": 194.3, "cpu_ms_per_prompt": 101.2, "rss_mb": 196.0, "own_mb": 83.5, "request_mb": 4.5, "tokens_m": 1.12}
+{"build": "v072", "exit": 0, "prompt": 30, "ms_per_prompt": 291.9, "cpu_ms_per_prompt": 154.2, "rss_mb": 185.2, "own_mb": 72.7, "request_mb": 6.74, "tokens_m": 1.69}
+{"build": "v072", "exit": 0, "prompt": 40, "ms_per_prompt": 376.4, "cpu_ms_per_prompt": 199.1, "rss_mb": 251.6, "own_mb": 139.1, "request_mb": 8.99, "tokens_m": 2.25}
+{"build": "v072", "exit": 0, "prompt": 50, "ms_per_prompt": 431.0, "cpu_ms_per_prompt": 236.4, "rss_mb": 227.7, "own_mb": 115.2, "request_mb": 11.24, "tokens_m": 2.81}
+{"build": "v072", "exit": 0, "prompt": 60, "ms_per_prompt": 553.7, "cpu_ms_per_prompt": 305.4, "rss_mb": 286.0, "own_mb": 173.4, "request_mb": 13.48, "tokens_m": 3.37}
+{"build": "v072", "exit": 0, "prompt": 70, "ms_per_prompt": 636.3, "cpu_ms_per_prompt": 351.6, "rss_mb": 271.8, "own_mb": 159.3, "request_mb": 15.73, "tokens_m": 3.93}
+{"build": "new", "exit": 0, "prompt": 10, "ms_per_prompt": 124.0, "cpu_ms_per_prompt": 62.7, "rss_mb": 137.8, "own_mb": 60.9, "request_mb": 2.25, "tokens_m": 0.56}
+{"build": "new", "exit": 0, "prompt": 20, "ms_per_prompt": 206.6, "cpu_ms_per_prompt": 100.1, "rss_mb": 183.5, "own_mb": 106.3, "request_mb": 4.5, "tokens_m": 1.12}
+{"build": "new", "exit": 0, "prompt": 30, "ms_per_prompt": 278.4, "cpu_ms_per_prompt": 143.8, "rss_mb": 186.7, "own_mb": 109.4, "request_mb": 6.74, "tokens_m": 1.69}
+{"build": "new", "exit": 0, "prompt": 40, "ms_per_prompt": 379.3, "cpu_ms_per_prompt": 190.2, "rss_mb": 195.2, "own_mb": 118.0, "request_mb": 8.99, "tokens_m": 2.25}
+{"build": "new", "exit": 0, "prompt": 50, "ms_per_prompt": 439.9, "cpu_ms_per_prompt": 229.4, "rss_mb": 206.6, "own_mb": 129.3, "request_mb": 11.24, "tokens_m": 2.81}
+{"build": "new", "exit": 0, "prompt": 60, "ms_per_prompt": 516.7, "cpu_ms_per_prompt": 276.5, "rss_mb": 197.1, "own_mb": 119.8, "request_mb": 13.48, "tokens_m": 3.37}
+{"build": "new", "exit": 0, "prompt": 70, "ms_per_prompt": 583.3, "cpu_ms_per_prompt": 313.5, "rss_mb": 243.7, "own_mb": 166.3, "request_mb": 15.73, "tokens_m": 3.93}

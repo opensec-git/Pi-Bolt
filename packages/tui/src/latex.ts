@@ -612,7 +612,18 @@ function replaceCharacters(value: string, replacements: Readonly<Record<string, 
 }
 
 function normalizeScriptValue(value: string): string {
-	return value.trim().replace(/\s*([=+-])\s*/g, "$1");
+	// The whitespace around each "=", "+" and "-" removed (split rather than /\s*([=+-])\s*/g, which is quadratic on long
+	// runs of whitespace).
+	const parts = value.trim().split(/([=+-])/);
+	return parts
+		.map((part, i) => {
+			if (i % 2 === 1) return part;
+			let text = part;
+			if (i > 0) text = text.trimStart();
+			if (i < parts.length - 1) text = text.trimEnd();
+			return text;
+		})
+		.join("");
 }
 
 function formatUnicodeScript(value: string, kind: "sub" | "sup"): string | undefined {

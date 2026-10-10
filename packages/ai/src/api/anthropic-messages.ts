@@ -405,7 +405,8 @@ function flushSseEvent(state: SseDecoderState): ServerSentEvent | null {
 	const event: ServerSentEvent = {
 		event: state.event,
 		data: state.data.join("\n"),
-		raw: [...state.raw],
+		// Handed over rather than copied: the state gets a new array below.
+		raw: state.raw,
 	};
 	state.event = null;
 	state.data = [];
@@ -439,33 +440,33 @@ function decodeSseLine(line: string, state: SseDecoderState): ServerSentEvent | 
 	return null;
 }
 
-function nextLineBreakIndex(text: string): number {
-	const carriageReturnIndex = text.indexOf("\r");
-	const newlineIndex = text.indexOf("\n");
-	if (carriageReturnIndex === -1) {
-		return newlineIndex;
+/**
+ * Decodes the complete lines in `buffer` and returns what follows the last one. Lines end at "\r\n", "\r" or "\n".
+ * The next "\r" and "\n" are each searched for once per occurrence: searching the rest of the buffer for both after
+ * every line, and slicing that rest off, made decoding a read quadratic in the number of events it carried. A "\r" at
+ * the end of `buffer` waits for the next read unless `final`, since it may be the start of a "\r\n".
+ */
+function* decodeSseLines(buffer: string, state: SseDecoderState, final: boolean): Generator<ServerSentEvent, string> {
+	let lineStart = 0;
+	let carriageReturn = buffer.indexOf("\r");
+	let newline = buffer.indexOf("\n");
+	while (carriageReturn !== -1 || newline !== -1) {
+		const lineEnd =
+			carriageReturn === -1 ? newline : newline === -1 ? carriageReturn : Math.min(carriageReturn, newline);
+		let next = lineEnd + 1;
+		if (lineEnd === carriageReturn) {
+			if (next === buffer.length && !final) break;
+			if (newline === next) next += 1;
+		}
+		const event = decodeSseLine(buffer.slice(lineStart, lineEnd), state);
+		if (event) {
+			yield event;
+		}
+		lineStart = next;
+		if (carriageReturn !== -1 && carriageReturn < next) carriageReturn = buffer.indexOf("\r", next);
+		if (newline !== -1 && newline < next) newline = buffer.indexOf("\n", next);
 	}
-	if (newlineIndex === -1) {
-		return carriageReturnIndex;
-	}
-	return Math.min(carriageReturnIndex, newlineIndex);
-}
-
-function consumeLine(text: string): { line: string; rest: string } | null {
-	const lineBreakIndex = nextLineBreakIndex(text);
-	if (lineBreakIndex === -1) {
-		return null;
-	}
-
-	let nextIndex = lineBreakIndex + 1;
-	if (text[lineBreakIndex] === "\r" && text[nextIndex] === "\n") {
-		nextIndex += 1;
-	}
-
-	return {
-		line: text.slice(0, lineBreakIndex),
-		rest: text.slice(nextIndex),
-	};
+	return lineStart === 0 ? buffer : buffer.slice(lineStart);
 }
 
 async function* iterateSseMessages(
@@ -488,28 +489,10 @@ async function* iterateSseMessages(
 				break;
 			}
 
-			buffer += decoder.decode(value, { stream: true });
-			let consumed = consumeLine(buffer);
-			while (consumed) {
-				buffer = consumed.rest;
-				const event = decodeSseLine(consumed.line, state);
-				if (event) {
-					yield event;
-				}
-				consumed = consumeLine(buffer);
-			}
+			buffer = yield* decodeSseLines(buffer + decoder.decode(value, { stream: true }), state, false);
 		}
 
-		buffer += decoder.decode();
-		let consumed = consumeLine(buffer);
-		while (consumed) {
-			buffer = consumed.rest;
-			const event = decodeSseLine(consumed.line, state);
-			if (event) {
-				yield event;
-			}
-			consumed = consumeLine(buffer);
-		}
+		buffer = yield* decodeSseLines(buffer + decoder.decode(), state, true);
 
 		if (buffer.length > 0) {
 			const event = decodeSseLine(buffer, state);

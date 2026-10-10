@@ -20,6 +20,7 @@ import type {
 	Id,
 	JsonObject,
 	Page,
+	ScanOrder,
 	Seq,
 	Storage,
 	StorageWrite,
@@ -31,6 +32,7 @@ import type {
 	TaskQuery,
 	TaskRecord,
 } from "../types.ts";
+import { nextCursor, type ScanStart, scanStart } from "./scan.ts";
 
 type StoredTask = TaskRecord<JsonValue, JsonValue, JsonValue>;
 type TaskStatus = StoredTask["state"]["status"];
@@ -196,11 +198,26 @@ const isCurrentOnly = (record: DocumentRecord): boolean =>
 
 const tableContaining = (state: State, id: Id<string>): TableName | undefined => state.recordTypes.get(id);
 
-const page = <T extends { readonly id: Id<string> }>(values: readonly T[], limit: number): Page<T, Cursor> => {
+const page = <T extends { readonly id: Id<string> }>(
+	values: readonly T[],
+	limit: number,
+	order: ScanOrder = "ascending",
+): Page<T, Cursor> => {
 	const items = values.slice(0, limit);
 	if (values.length <= limit) return { items: clone(items) };
-	return { items: clone(items), next: { after: items.at(-1)!.id } };
+	return { items: clone(items), next: nextCursor(items.at(-1)!.id, order) };
 };
+
+/** Indexes of sorted `ids` in scan order, after the cursor's ID when there is one. */
+function* scanIndexes(ids: readonly Id<string>[], start: ScanStart): Generator<number> {
+	if (start.order === "ascending") {
+		const first = start.after === undefined ? 0 : upperBound(ids, start.after);
+		for (let index = first; index < ids.length; index++) yield index;
+	} else {
+		const end = start.after === undefined ? ids.length : lowerBound(ids, start.after);
+		for (let index = end - 1; index >= 0; index--) yield index;
+	}
+}
 
 /** A fully validated, detached state mutation whose application performs no fallible preparation. */
 export interface PreparedMemoryCommit {
@@ -432,17 +449,17 @@ export class MemoryStorage implements Storage {
 				: query.ownerConversationId !== undefined
 					? (this.state.conversationIdsByOwnerConversation.get(query.ownerConversationId) ?? [])
 					: this.state.conversationIds;
-		const after = cursorId(cursor);
-		const start = after === undefined ? 0 : upperBound(ids, after);
+		const start = scanStart(query.order, cursor, "ascending");
 		const values: ConversationRecord[] = [];
-		for (let index = start; index < ids.length && values.length <= limit; index++) {
+		for (const index of scanIndexes(ids, start)) {
+			if (values.length > limit) break;
 			const value = this.state.conversations.get(ids[index]!)!;
 			if (query.ownerConversationId !== undefined && value.owner?.conversationId !== query.ownerConversationId) {
 				continue;
 			}
 			values.push(value);
 		}
-		return page(values, limit);
+		return page(values, limit, start.order);
 	}
 
 	entry(id: EntryId, context: Context): Promise<{ readonly entry: EntryRecord; readonly commitSeq: Seq } | undefined>;
@@ -503,15 +520,22 @@ export class MemoryStorage implements Storage {
 		_context: Context,
 	): Promise<Page<EntryRecord, Cursor>> {
 		this.assertOpen();
-		const after = cursorId(cursor);
-		const maxEntryId =
-			after === undefined ? query.maxEntryId : Math.min(query.maxEntryId ?? Number.POSITIVE_INFINITY, after - 1);
+		const { order, after } = scanStart(query.order, cursor, "descending");
+		// The cursor narrows the bound on the side the scan moves away from.
+		let minEntryId: number | undefined = query.minEntryId;
+		let maxEntryId: number | undefined = query.maxEntryId;
+		if (after !== undefined && order === "descending") maxEntryId = Math.min(maxEntryId ?? after, after - 1);
+		if (after !== undefined && order === "ascending") minEntryId = Math.max(minEntryId ?? after, after + 1);
 		const visible: EntryRecord[] = [];
-		for (const entry of this.visibleEntries(query.conversationId, query.minEntryId, maxEntryId)) {
+		const entries =
+			order === "descending"
+				? this.visibleEntries(query.conversationId, minEntryId, maxEntryId)
+				: this.visibleEntriesAscending(query.conversationId, minEntryId, maxEntryId);
+		for (const entry of entries) {
 			visible.push(entry);
 			if (visible.length > limit) break;
 		}
-		return page(visible, limit);
+		return page(visible, limit, order);
 	}
 
 	async task(id: TaskId, _context: Context): Promise<StoredTask | undefined> {
@@ -527,19 +551,19 @@ export class MemoryStorage implements Storage {
 		_context: Context,
 	): Promise<Page<StoredTask, Cursor>> {
 		this.assertOpen();
-		const after = cursorId(cursor);
+		const start = scanStart(query.order, cursor, "ascending");
 		const ids = query.status === undefined ? this.state.taskIds : this.state.taskIdsByStatus[query.status];
-		const start = after === undefined ? 0 : upperBound(ids, after);
 		const values: StoredTask[] = [];
-		for (let index = start; index < ids.length && values.length <= limit; index++) {
-			const value = this.state.tasks.get(ids[index])!;
+		for (const index of scanIndexes(ids, start)) {
+			if (values.length > limit) break;
+			const value = this.state.tasks.get(ids[index]!)!;
 			if (query.conversationId !== undefined && value.conversationId !== query.conversationId) continue;
 			if (query.kind !== undefined && value.kind !== query.kind) continue;
 			if (query.abortRequested !== undefined && value.abortRequested !== query.abortRequested) continue;
 			if (query.background !== undefined && value.background !== query.background) continue;
 			values.push(value);
 		}
-		return page(values, limit);
+		return page(values, limit, start.order);
 	}
 
 	async submission(id: SubmissionId, _context: Context): Promise<SubmissionRecord | undefined> {
@@ -555,17 +579,17 @@ export class MemoryStorage implements Storage {
 		_context: Context,
 	): Promise<Page<SubmissionRecord, Cursor>> {
 		this.assertOpen();
-		const after = cursorId(cursor);
+		const start = scanStart(query.order, cursor, "ascending");
 		const ids =
 			query.status === undefined ? this.state.submissionIds : this.state.submissionIdsByStatus[query.status];
-		const start = after === undefined ? 0 : upperBound(ids, after);
 		const values: SubmissionRecord[] = [];
-		for (let index = start; index < ids.length && values.length <= limit; index++) {
-			const value = this.state.submissions.get(ids[index])!;
+		for (const index of scanIndexes(ids, start)) {
+			if (values.length > limit) break;
+			const value = this.state.submissions.get(ids[index]!)!;
 			if (query.conversationId !== undefined && value.conversationId !== query.conversationId) continue;
 			values.push(value);
 		}
-		return page(values, limit);
+		return page(values, limit, start.order);
 	}
 
 	async submissionByRequest(
@@ -673,6 +697,36 @@ export class MemoryStorage implements Storage {
 			upperEntryId = Math.min(upperEntryId, conversation.parent.at);
 			if (upperEntryId < minEntryId) break;
 			currentId = conversation.parent.conversationId;
+		}
+	}
+
+	/** Visible entries oldest first: the fork chain's segments from the root conversation forward. */
+	private *visibleEntriesAscending(
+		conversationId: ConversationId,
+		minEntryId: number = Number.NEGATIVE_INFINITY,
+		maxEntryId: number = Number.POSITIVE_INFINITY,
+	): Generator<EntryRecord> {
+		if (!this.state.conversations.has(conversationId)) {
+			throw new Error(`Unknown conversation: ${conversationId}`);
+		}
+		const segments: { readonly conversationId: ConversationId; readonly upper: number }[] = [];
+		let currentId = conversationId;
+		let upperEntryId = maxEntryId;
+		while (true) {
+			segments.push({ conversationId: currentId, upper: upperEntryId });
+			const conversation = this.state.conversations.get(currentId)!;
+			if (conversation.parent === undefined) break;
+			upperEntryId = Math.min(upperEntryId, conversation.parent.at);
+			if (upperEntryId < minEntryId) break;
+			currentId = conversation.parent.conversationId;
+		}
+		for (const segment of segments.reverse()) {
+			const ids = this.state.entryIds.get(segment.conversationId) ?? [];
+			for (let index = lowerBound(ids, minEntryId); index < ids.length; index++) {
+				const id = ids[index]!;
+				if (id > segment.upper) break;
+				yield this.state.entries.get(id)!;
+			}
 		}
 	}
 

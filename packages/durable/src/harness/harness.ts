@@ -120,8 +120,8 @@ class ConversationImpl<Tool extends ToolRegistration> implements Conversation {
 		return this.#host.harness.commitWith(change, context, { conversationId: this.id });
 	}
 
-	context(context: Context): Promise<ContextView> {
-		return readContext(this.#host.harness, this.#host.storage, this.id, context);
+	context(context: Context, options?: { readonly at?: EntryId }): Promise<ContextView> {
+		return readContext(this.#host.harness, this.#host.storage, this.id, context, options?.at);
 	}
 
 	entries(
@@ -134,6 +134,7 @@ class ConversationImpl<Tool extends ToolRegistration> implements Conversation {
 			conversationId: this.id,
 			...(query.minEntryId === undefined ? {} : { minEntryId: query.minEntryId }),
 			...(query.maxEntryId === undefined ? {} : { maxEntryId: query.maxEntryId }),
+			...(query.order === undefined ? {} : { order: query.order }),
 		};
 		return this.#host.harness.readOnLine(() => this.#host.storage.scanEntries(bounded, limit, cursor, context));
 	}
@@ -173,7 +174,7 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 	#closed = false;
 
 	constructor(storage: Storage, options: HarnessOptions<Tool>, context: Context) {
-		super(storage);
+		super(storage, options.now);
 		this.#storage = storage;
 		this.#options = options;
 		this.#report = options.onReport ?? (() => {});

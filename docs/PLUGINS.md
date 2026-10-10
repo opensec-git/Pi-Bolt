@@ -20,24 +20,25 @@ and how to write plugin code that the ahead-of-time compiler handles well.
 of Pi.
 
 Measured with the example plugin in [`examples/plugins`](../examples/plugins): a `/words` command that scans a 16.8 MB file
-character by character. Pi 1.0.0, x86-64, medians of 5 sessions ([raw data](../bench/results/2026-10-03-pi-bolt-0.5.2)).
+character by character. Pi-Bolt 0.7.3 (Pi 1.1.0), Linux x86-64, medians of 5 sessions
+([raw data](../bench/results/2026-10-10-pi-bolt-0.7.3)).
 
 | How the plugin is loaded | Launch to ready | `/words` (hot loop) |
 |---|---:|---:|
-| **Compiled in**, Pi-Bolt (JIT off, the default) | **78 ms** | **50 ms** |
-| Compiled in, Pi-Bolt JIT on | 76 ms | 49 ms |
-| Loaded at run time (jiti), Pi-Bolt JIT off | 109 ms | 1,105 ms |
-| Loaded at run time (jiti), Pi-Bolt JIT on | 109 ms | 38 ms |
-| Loaded at run time (jiti), Bun 1.4.2 | 194 ms | 38 ms |
-| *No plugin: Pi-Bolt / Bun* | *75 ms / 128 ms* | |
+| **Compiled in**, Pi-Bolt (JIT off, the default) | **52 ms** | **55 ms** |
+| Compiled in, Pi-Bolt JIT on | 50 ms | 68 ms |
+| Loaded at run time (jiti), Pi-Bolt JIT off | 91 ms | 1,315 ms |
+| Loaded at run time (jiti), Pi-Bolt JIT on | 83 ms | 48 ms |
+| Loaded at run time (jiti), Bun 1.4.2 | 244 ms | 45 ms |
+| *No plugin: Pi-Bolt / Bun* | *52 ms / 149 ms* | |
 
 A compiled-in plugin:
 
-- **Costs little at startup**: about 3 ms. Loading the same plugin with jiti costs 34 ms on Pi-Bolt and 66 ms on Bun.
-- **Runs 22× faster than the interpreter** that run-time plugins get on the JIT-off build. The interpreter is why that row says
-  1,105 ms: the JIT is off and run-time code was never compiled
-  ([details](BENCHMARKS.md#why-is-a-run-time-plugins-loop-1080-ms-on-pi-bolt-and-38-ms-on-bun)).
-- **Stays within 1.3× of fully warmed-up JIT code**, without the JIT's warm-up, compiler threads or memory.
+- **Costs nothing measurable at startup.** Loading the same plugin with jiti costs 39 ms on Pi-Bolt and 95 ms on Bun.
+- **Runs 24× faster than the interpreter** that run-time plugins get on the JIT-off build. The interpreter is why that row says
+  1,315 ms: the JIT is off and run-time code was never compiled
+  ([details](BENCHMARKS.md#why-is-a-run-time-plugins-loop-slow-on-the-default-build)).
+- **Stays within 1.25× of fully warmed-up JIT code**, without the JIT's warm-up, compiler threads or memory.
 
 ## Three ways to run a plugin
 

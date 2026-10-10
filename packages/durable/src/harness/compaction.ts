@@ -151,7 +151,7 @@ export const CompactionTask = defineTask<CompactionInput, CompactionCheckpoint, 
 			const model = runtime.models.getModel(ref.provider, ref.modelId);
 			if (model === undefined) return failNoModel(runtime, ref, context);
 			// The context at `tail` is immutable, so this is the range `select` chose.
-			const view = await runtime.context(runtime.conversationId, context, tail);
+			const view = await runtime.context(runtime.conversationId, context, { at: tail });
 			const cut = view.entries.findIndex((entry) => entry.id === firstKept);
 			const now = runtime.now();
 			const messages: Message[] = [

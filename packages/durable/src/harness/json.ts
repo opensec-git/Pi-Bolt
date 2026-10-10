@@ -9,7 +9,8 @@ type JsonContainer = Record<string, JsonValue> | JsonValue[];
  */
 export function assignJson(target: JsonContainer, key: string | number, value: JsonValue): void {
 	const slots = target as Record<string | number, JsonValue>;
-	const current = slots[key];
+	// Own properties only: a key of parsed JSON is data, so "__proto__" or "toString" must not reach what objects inherit.
+	const current = Object.hasOwn(slots, key) ? slots[key] : undefined;
 	if (isRecord(current) && isRecord(value)) {
 		for (const name of Object.keys(current)) if (!Object.hasOwn(value, name)) delete current[name];
 		for (const [name, child] of Object.entries(value)) assignJson(current, name, child);
@@ -23,7 +24,13 @@ export function assignJson(target: JsonContainer, key: string | number, value: J
 		}
 		return;
 	}
-	if (current !== value) slots[key] = value;
+	if (current === value) return;
+	if (key === "__proto__") {
+		// (Assigning it would set the prototype; JSON.parse() makes it an ordinary property, and so does this.)
+		Object.defineProperty(slots, key, { value, writable: true, enumerable: true, configurable: true });
+	} else {
+		slots[key] = value;
+	}
 }
 
 function isRecord(value: JsonValue | undefined): value is Record<string, JsonValue> {

@@ -1,5 +1,0 @@
-build          step        wall s  pi cpu s tmux cpu s pi wrote KB to client KB  own MB
-pi-bolt        md:20000      16.9      0.94       0.16         528          282      24
-bun            md:20000      16.9      9.74       0.61        3573         1443     206
-node           md:20000      17.0      8.11       0.62        3573         1443     147
-node24         md:20000      16.9      7.57       0.61        3573         1443     224

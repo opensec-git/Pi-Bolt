@@ -31,6 +31,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import harness
 from harness import (
     DONE, MACOS, MODEL_ARGS, PROMPT, WINDOWS, Build, Tty, done, fake_model, maxrss_mb, median, parse_builds, peak_footprint_mb,
     pi_env, pi_home, pinned, warm_page_cache, workdir,
@@ -67,6 +68,7 @@ def run_plain(build, args, env, cwd, cpus):
          "cpu_ms": (ru.ru_utime + ru.ru_stime) * 1e3, "peak_mb": maxrss_mb(ru)}
     if peak_fp is not None:
         r["peak_fp_mb"] = peak_fp
+        r.update(harness.last_exit_counters)
     return out, r
 
 
@@ -112,6 +114,7 @@ def interactive(build, env, cwd, cpus, prompts=5):
         r.update(**windows_memory(ru.result), **windows_io(ru.result), job_cpu_ms=ru.result["job_cpu_ms"])
     if getattr(tty, "peak_footprint_mb", None) is not None:
         r["peak_fp_mb"] = tty.peak_footprint_mb
+        r.update(getattr(tty, "exit_counters", {}))
     return r
 
 
@@ -138,7 +141,7 @@ COLUMNS = {
 if MACOS:
     # (peak_mb, ru_maxrss, counts clean file pages and freed pages the kernel may take back; the footprint does not.)
     for columns in COLUMNS.values():
-        columns.append("peak_fp_mb")
+        columns.extend(["peak_fp_mb", "instr_m"])
 if WINDOWS:
     # peak_mb is the peak working set; peak_private_mb the peak commit charge (private bytes); peak_private_ws_mb the peak
     # private working set. cpu_ms is the main process's, by cycles; job_cpu_ms adds what it started, in clock ticks. (The rise of

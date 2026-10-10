@@ -220,7 +220,7 @@ export interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver
 	/** Undefined when the entry is absent, not visible, or has another kind. */
 	entry<D extends JsonValue>(token: Entry<D>, id: EntryId, context: Context): Promise<TypedEntry<D> | undefined>;
 	/** Committed raw active transcript and model context, optionally cut off at the visible entry `at`. */
-	context(conversationId: ConversationId, context: Context, at?: EntryId): Promise<ContextView>;
+	context(conversationId: ConversationId, context: Context, options?: { readonly at?: EntryId }): Promise<ContextView>;
 	/** The Harness clock. */
 	now(): number;
 	/** Forward a non-fatal failure to `HarnessOptions.onReport`. */
@@ -535,6 +535,14 @@ type TaskRecordBase<I, R> = {
 	readonly background: boolean;
 	/** Durable abort mark checked before run-mode progress is committed. */
 	readonly abortRequested: boolean;
+	/**
+	 * Wall-clock milliseconds of the first change to `running`, stamped by the Session. Kept through waits and recovery,
+	 * so the span to `endedAt` includes them. Absent before the task first runs, and on records written by earlier
+	 * versions.
+	 */
+	readonly startedAt?: number;
+	/** Wall-clock milliseconds of the change to `terminal`, stamped by the Session; absent while live. */
+	readonly endedAt?: number;
 };
 
 /** Complete replacement record for one durable task state machine. */
@@ -603,22 +611,32 @@ export type Page<T, C> = {
 	readonly next?: C;
 };
 
-/** Backend-owned JSON continuation state that callers only round-trip to the same scan. */
+/**
+ * Backend-owned JSON continuation state that callers only round-trip to the same scan. It carries the scan's order: a
+ * scan given a cursor continues in that order, and rejects a different `order` in its query.
+ */
 export type Cursor = Readonly<Record<string, JsonValue>>;
+
+/** ID order of a scan: `ascending` is oldest first, `descending` newest first. */
+export type ScanOrder = "ascending" | "descending";
 
 /** Optional filters for an ordered conversation scan. */
 export type ConversationQuery = {
 	readonly ownerConversationId?: ConversationId;
 	readonly ownerTaskId?: TaskId;
+	/** Default `ascending`; with a cursor, the cursor's order. */
+	readonly order?: ScanOrder;
 };
 
-/** Inclusive ID bounds for a newest-first scan of one conversation's fork-aware history. */
+/** Inclusive ID bounds for a scan of one conversation's fork-aware history. */
 export type EntryQuery = {
 	readonly conversationId: ConversationId;
 	/** Oldest entry ID that may be returned. */
 	readonly minEntryId?: EntryId;
 	/** Newest entry ID that may be returned. */
 	readonly maxEntryId?: EntryId;
+	/** Default `descending`; with a cursor, the cursor's order. */
+	readonly order?: ScanOrder;
 };
 
 /** Optional filters for an ordered scan of durable task records. */
@@ -628,12 +646,16 @@ export type TaskQuery = {
 	readonly status?: TaskState<JsonValue, JsonValue>["status"];
 	readonly abortRequested?: boolean;
 	readonly background?: boolean;
+	/** Default `ascending`; with a cursor, the cursor's order. */
+	readonly order?: ScanOrder;
 };
 
 /** Optional filters for an ordered scan of submission records. */
 export type SubmissionQuery = {
 	readonly conversationId?: ConversationId;
 	readonly status?: SubmissionRecord["status"];
+	/** Default `ascending`; with a cursor, the cursor's order. */
+	readonly order?: ScanOrder;
 };
 
 /** Current state or one historical commit sequence used for document membership and content reads. */
@@ -1002,7 +1024,7 @@ export interface Storage {
 	/** Look up one conversation by exact ID. */
 	conversation(id: ConversationId, context: Context): Promise<ConversationRecord | undefined>;
 
-	/** Scan conversations in ascending ID order. */
+	/** Scan conversations in `query.order` (default ascending) by ID. */
 	scanConversations(
 		query: ConversationQuery,
 		limit: number,
@@ -1029,7 +1051,7 @@ export interface Storage {
 		context: Context,
 	): Promise<(EntryRecord & { readonly head: EntryId }) | undefined>;
 
-	/** Scan the inclusive visible range newest-first, returning at most `limit` entries. */
+	/** Scan the inclusive visible range in `query.order` (default descending), returning at most `limit` entries. */
 	scanEntries(
 		query: EntryQuery,
 		limit: number,
@@ -1040,7 +1062,7 @@ export interface Storage {
 	/** Look up the latest complete record for one task. */
 	task(id: TaskId, context: Context): Promise<TaskRecord<JsonValue, JsonValue, JsonValue> | undefined>;
 
-	/** Scan task records matching every supplied filter. */
+	/** Scan task records matching every supplied filter in `query.order` (default ascending) by ID. */
 	scanTasks(
 		query: TaskQuery,
 		limit: number,
@@ -1051,7 +1073,7 @@ export interface Storage {
 	/** Look up the latest complete record for one admitted submission. */
 	submission(id: SubmissionId, context: Context): Promise<SubmissionRecord | undefined>;
 
-	/** Scan submissions matching every supplied filter in ascending ID order. */
+	/** Scan submissions matching every supplied filter in `query.order` (default ascending) by ID. */
 	scanSubmissions(
 		query: SubmissionQuery,
 		limit: number,

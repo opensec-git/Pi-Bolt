@@ -3,8 +3,7 @@ import { join } from "node:path";
 
 const dependencySections = ["dependencies", "devDependencies", "optionalDependencies"];
 const exactVersionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
-// (.work: the engine's sources and other build inputs, not the repository's: Bun's tests have deliberately broken package.json files.)
-const ignoredDirectories = new Set([".git", ".work", "dist", "node_modules"]);
+const ignoredDirectories = new Set([".git", ".work", "dist", "node_modules", "out"]); // (.work, out: Pi-Bolt's engine checkouts and builds)
 const internalPackageNames = new Set(["@earendil-works/chord"]);
 const packageJsonFiles = [];
 

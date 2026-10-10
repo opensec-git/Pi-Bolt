@@ -1,0 +1,40 @@
+name: Bug report
+description: Pi-Bolt does something that plain Pi does not, or fails to install or start.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead. Error messages as text, please.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: pi-bolt --version
+      placeholder: "1.0.3 (Pi-Bolt 0.7.0, linux-x64, JIT off)"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Linux distribution and CPU, or macOS version and chip.
+      placeholder: "Ubuntu 24.04, AMD Ryzen 7 5800X / macOS 26.1, M4"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installed with
+      options: ["install.sh (curl)", "npm", "pi-bolt update", "built from source"]
+    validations:
+      required: true
+  - type: dropdown
+    id: plain-pi
+    attributes:
+      label: Does plain Pi (on Node or Bun) do the same?
+      options: ["No, only Pi-Bolt", "Yes, plain Pi too", "Not tried"]
+    validations:
+      required: true

@@ -1,14 +1,30 @@
 import * as Diff from "diff";
 import { theme } from "../theme/theme.ts";
 
+/** (".*" matches no line terminator.) */
+function withContent(prefix: string, lineNum: string, content: string) {
+	return /[\n\r\u2028\u2029]/.test(content) ? null : { prefix, lineNum, content };
+}
+
 /**
  * Parse diff line to extract prefix, line number, and content.
  * Format: "+123 content" or "-123 content" or " 123 content" or "     ..."
  */
 function parseDiffLine(line: string): { prefix: string; lineNum: string; content: string } | null {
-	const match = line.match(/^([+-\s])(\s*\d*)\s(.*)$/);
-	if (!match) return null;
-	return { prefix: match[1], lineNum: match[2], content: match[3] };
+	// What /^([+-\s])(\s*\d*)\s(.*)$/ matches, read in one pass (the expression backtracks quadratically on whitespace).
+	const prefix = line[0];
+	if (prefix === undefined || !(prefix === "+" || prefix === "-" || /\s/.test(prefix))) return null;
+	let end = 1;
+	while (end < line.length && /\s/.test(line[end]!)) end++;
+	const digitsStart = end;
+	while (end < line.length && line[end]! >= "0" && line[end]! <= "9") end++;
+	// Digits followed by whitespace: they are the line number.
+	if (end > digitsStart && end < line.length && /\s/.test(line[end]!)) {
+		return withContent(prefix, line.slice(1, end), line.slice(end + 1));
+	}
+	// Otherwise the last of the whitespace separates (there must be one), and the rest is content.
+	if (digitsStart === 1) return null;
+	return withContent(prefix, line.slice(1, digitsStart - 1), line.slice(digitsStart));
 }
 
 /**

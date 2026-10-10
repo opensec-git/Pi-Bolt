@@ -26,16 +26,20 @@ from collections import defaultdict
 from pathlib import Path
 
 LABELS = {"pi-bolt": "Pi-Bolt", "bun": "Bun 1.4.2", "node": "Node 22", "node24": "Node 24", "pi-bolt-jit": "Pi-Bolt (JIT on)"}
-# Pi-Bolt is the accent; every other runtime is the same neutral, so the eye goes to Pi-Bolt and each bar's label names the rest.
-# Checked with the dataviz palette validator against GitHub's page and card surfaces: >= 3:1 contrast in both themes, and the
-# accent and the neutral stay apart for color-blind readers (CVD delta E >= 13.9).
+# Pi-Bolt is the accent; every other build (an earlier Pi-Bolt release too) is the same neutral, so the eye goes to Pi-Bolt and
+# each bar's label names the rest. Checked with the dataviz palette validator against GitHub's page surfaces (#ffffff,
+# #0d1117): >= 3:1 contrast in both themes, accent and neutral >= 15.4 apart in normal vision and >= 12 for color-blind readers.
 ACCENT = {"light": "#2a78d6", "dark": "#3987e5"}
 NEUTRAL = {"light": "#848d97", "dark": "#6e7681"}
-# GitHub's own tokens, so the images sit on its pages as if they were part of them.
+# GitHub's own text and border tokens, on no background of their own: the images take the page's.
 THEME = {
-    "light": {"text": "#1f2328", "muted": "#59636e", "rule": "#d1d9e0", "card": "#f6f8fa", "edge": "#d1d9e0", "pill": "#ddeaf9"},
-    "dark": {"text": "#f0f6fc", "muted": "#9198a1", "rule": "#3d444d", "card": "#151b23", "edge": "#3d444d", "pill": "#1b2f4a"},
+    "light": {"text": "#1f2328", "muted": "#59636e", "rule": "#d1d9e0"},
+    "dark": {"text": "#f0f6fc", "muted": "#9198a1", "rule": "#3d444d"},
 }
+# What ratios compare Pi-Bolt with: Pi on Bun, the runtime Pi ships for.
+REFERENCE = "bun"
+# The Pi version the results are of, from environment.txt.
+PI_VERSION = ["1.0.0"]
 FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif"
 FLOOR = "floor"  # benchmark.py --floor's runs: the process floor
 
@@ -64,21 +68,19 @@ def fmt(value, unit):
 
 
 def color_of(build, i, theme):
-    """Pi-Bolt (and its JIT-on build) in the accent, every other runtime in the neutral."""
-    return ACCENT[theme] if build.lower().startswith("pi-bolt") else NEUTRAL[theme]
+    """Pi-Bolt (and its JIT-on build) in the accent, every other build in the neutral."""
+    ours = (LABELS["pi-bolt"], LABELS["pi-bolt-jit"])
+    return ACCENT[theme] if build in ("pi-bolt", "pi-bolt-jit") or build.startswith(ours) else NEUTRAL[theme]
+
+
+def is_release(build):
+    """An earlier Pi-Bolt release run alongside (pi-bolt-0.7.0)."""
+    return build.startswith("pi-bolt-") and build[8:9].isdigit()
 
 
 def text_width(text, size):
-    """About how wide a line of the system sans is: 0.56 em a character (digits and lowercase), enough to place a pill."""
+    """About how wide a line of the system sans is: 0.56 em a character (digits and lowercase), enough to place a note."""
     return 0.53 * size * len(text)
-
-
-def pill(x, y, text, size, t):
-    """A ratio such as "2.9x faster", in ink on a tint of the accent: it reads first, and its text never wears the data color."""
-    w = text_width(text, size) + 14
-    h = size + 10
-    return (f'<rect x="{x:.1f}" y="{y - size - 3:.1f}" width="{w:.1f}" height="{h}" rx="{h / 2:.1f}" fill="{t["pill"]}"/>'
-            f'<text x="{x + 7:.1f}" y="{y:.1f}" font-size="{size}" font-weight="600" fill="{t["text"]}">{text}</text>'), w
 
 
 def ratio_text(mine, base, kind):
@@ -122,7 +124,7 @@ def chart(title, subtitle, panels, builds, theme, path):
         bar_x = x0 + label_w
         # Room after the longest bar for its value; Pi-Bolt's ratio sits after its own, shorter bar.
         bar_w = col_w - label_w - 84
-        base = values.get(builds[1]) if len(builds) > 1 else None  # what Pi-Bolt is compared with
+        base = values.get(REFERENCE if REFERENCE in builds else builds[1]) if len(builds) > 1 else None  # what Pi-Bolt is compared with
         for i, b in enumerate(builds):
             v = values.get(b)
             y = y0 + 36 + i * row_h
@@ -138,61 +140,76 @@ def chart(title, subtitle, panels, builds, theme, path):
             out.append(f'<text x="{bar_x + w + 8:.1f}" y="{mid:.1f}" font-size="{value_size}" font-weight="{weight}" fill="{t["text"]}">{value}</text>')
             note = ratio_text(v, base, kind) if i == 0 else None
             if note:
-                px = bar_x + w + 16 + text_width(value, value_size)
-                if px + text_width(note, 12) + 14 <= x0 + col_w:  # (only where it fits in its panel)
-                    svg, _ = pill(px, mid, note, 12, t)
-                    out.append(svg)
+                # (After the value, which is bold: wider than text_width says.)
+                px = bar_x + w + 8 + text_width(value, value_size) * 1.12 + 12
+                if px + text_width(note, 12.5) <= x0 + col_w:  # (only where it fits in its panel)
+                    out.append(f'<text x="{px:.1f}" y="{mid:.1f}" font-size="12.5" fill="{t["muted"]}">{note}</text>')
         out.append(f'<line x1="{bar_x}" y1="{y0 + 30}" x2="{bar_x}" y2="{y0 + 36 + len(builds) * row_h - 8}" stroke="{t["rule"]}"/>')
     out.append("</svg>")
     path.write_text("\n".join(out) + "\n")
 
 
 def hero(tiles, builds, theme, path, title=None, subtitle=None):
-    """The README's headline image: one card per metric, Pi-Bolt's figure large, the ratio to Bun, and a bar for every build.
-    tiles: [(title, unit, {build: value}, better)] where better is "faster" or "less". With a title, a heading above the cards."""
+    """The README's headline image: a column per metric, Pi-Bolt's figure large, how it compares in plain words, and a bar for
+    every build. tiles: [(title, unit, {build: value}, better)] where better is "faster" or "less". With a title, a heading.
+    No backgrounds and no badges: hairlines between the columns, text in the page's ink, color only on the bars."""
     t = THEME[theme]
-    width, pad, gap = 880, 24, 14
+    width, pad, gap = 880, 24, 28
     tile_w = (width - 2 * pad - gap * (len(tiles) - 1)) / len(tiles)
     top = 66 if title else 0
-    tile_h = 164 + 30 * (len(builds) - 1)
-    height = top + tile_h + 8
+    reference = REFERENCE if REFERENCE in builds else builds[1]
+    earlier = next((b for b in builds if is_release(b)), None)
+    bars_y = 132 if earlier else 114
+    tile_h = bars_y + 30 * len(builds)
+    height = top + tile_h + 10
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" '
            f'aria-label="{title or "Pi-Bolt compared with Bun and Node"}">',
            f'<style>text{{font-family:{FONT}}}</style>']
     if title:
         out.append(f'<text x="{pad}" y="32" font-size="21" font-weight="650" fill="{t["text"]}">{title}</text>')
         out.append(f'<text x="{pad}" y="54" font-size="13.5" fill="{t["muted"]}">{subtitle or ""}</text>')
+
+    def compared(mine, other, better, name):
+        if not mine or not other:
+            return None
+        ratio = other / mine
+        if abs(ratio - 1) < 0.05:
+            return f"same as {name}"
+        word = better if ratio >= 1 else ("slower" if better == "faster" else "more")
+        r = ratio if ratio >= 1 else 1 / ratio
+        return f"{r:.0f}× {word} than {name}" if r >= 10 else f"{r:.1f}× {word} than {name}"
+
     for i, (name, unit, values, better) in enumerate(tiles):
         x = pad + i * (tile_w + gap)
         y = top + 4
-        out.append(f'<rect x="{x:.1f}" y="{y}" width="{tile_w:.1f}" height="{tile_h}" rx="12" fill="{t["card"]}" stroke="{t["edge"]}"/>')
-        out.append(f'<text x="{x + 16:.1f}" y="{y + 28}" font-size="13.5" font-weight="600" fill="{t["muted"]}">{name}</text>')
-        mine, base = values.get(builds[0]), values.get(builds[1])
+        if i:
+            out.append(f'<line x1="{x - gap / 2:.1f}" y1="{y + 6}" x2="{x - gap / 2:.1f}" y2="{y + tile_h - 6}" stroke="{t["rule"]}"/>')
+        out.append(f'<text x="{x:.1f}" y="{y + 18}" font-size="13" font-weight="600" fill="{t["muted"]}">{name}</text>')
+        mine = values.get(builds[0])
         shown = fmt(mine, unit)
         figure, _, unit_text = shown.rpartition(" ") if " " in shown else (shown, "", "")
         if unit_text:
-            figure += f'<tspan font-size="17" font-weight="600" fill="{t["muted"]}" dx="5">{unit_text}</tspan>'
-        out.append(f'<text x="{x + 16:.1f}" y="{y + 70}" font-size="38" font-weight="700" fill="{t["text"]}">{figure}</text>')
-        if mine and base:
-            ratio = base / mine
-            word = better if ratio >= 1 else ("slower" if better == "faster" else "more")
-            r = ratio if ratio >= 1 else 1 / ratio
-            against = LABELS.get(builds[1], builds[1]).split()[0]
-            label = f"{r:.1f}× {word} than {against}" if r < 10 else f"{r:.0f}× {word} than {against}"
-            svg, _ = pill(x + 16, y + 98, label, 12.5, t)
-            out.append(svg)
+            figure += f'<tspan font-size="16" font-weight="600" fill="{t["muted"]}" dx="5">{unit_text}</tspan>'
+        out.append(f'<text x="{x:.1f}" y="{y + 58}" font-size="36" font-weight="700" fill="{t["text"]}">{figure}</text>')
+        line = compared(mine, values.get(reference), better, LABELS.get(reference, reference).split()[0])
+        if line:
+            out.append(f'<text x="{x:.1f}" y="{y + 84}" font-size="13" font-weight="600" fill="{t["text"]}">{line}</text>')
+        if earlier:
+            line = compared(mine, values.get(earlier), better, LABELS.get(earlier, earlier).replace("Pi-Bolt ", ""))
+            if line:
+                out.append(f'<text x="{x:.1f}" y="{y + 102}" font-size="13" fill="{t["muted"]}">{line}</text>')
         most = max(v for v in values.values() if v)
-        bar_x, bar_w = x + 16, tile_w - 32
         for j, b in enumerate(builds):
             v = values.get(b)
-            yy = y + 132 + j * 30
+            yy = y + bars_y + j * 30
             weight = "650" if j == 0 else "400"
-            out.append(f'<text x="{bar_x:.1f}" y="{yy}" font-size="12.5" font-weight="{weight}" fill="{t["text"] if j == 0 else t["muted"]}">{LABELS.get(b, b).split()[0]}</text>')
+            ink = t["text"] if j == 0 else t["muted"]
+            out.append(f'<text x="{x:.1f}" y="{yy}" font-size="12.5" font-weight="{weight}" fill="{ink}">{LABELS.get(b, b)}</text>')
             if not v:
                 continue
-            out.append(f'<text x="{bar_x + bar_w:.1f}" y="{yy}" font-size="12.5" font-weight="{weight}" text-anchor="end" fill="{t["text"]}">{fmt(v, unit)}</text>')
-            out.append(f'<rect x="{bar_x:.1f}" y="{yy + 7}" width="{bar_w:.1f}" height="8" rx="4" fill="{t["rule"]}" opacity="0.55"/>')
-            out.append(f'<rect x="{bar_x:.1f}" y="{yy + 7}" width="{max(8, bar_w * v / most):.1f}" height="8" rx="4" fill="{color_of(b, j, theme)}"/>')
+            out.append(f'<text x="{x + tile_w:.1f}" y="{yy}" font-size="12.5" font-weight="{weight}" text-anchor="end" fill="{ink}">{fmt(v, unit)}</text>')
+            bw = max(6, tile_w * v / most)
+            out.append(f'<rect x="{x:.1f}" y="{yy + 7}" width="{bw:.1f}" height="6" rx="3" fill="{color_of(b, j, theme)}"/>')
     out.append("</svg>")
     path.write_text("\n".join(out) + "\n")
 
@@ -251,21 +268,33 @@ def main():
     ap.add_argument("--label", action="append", default=[], help="name=text: what a build's column is called (repeatable)")
     a = ap.parse_args()
     builds = a.builds.split(",")
+    for b in builds:
+        if is_release(b):
+            LABELS[b] = f"Pi-Bolt {b[8:]}"
     a.images.mkdir(parents=True, exist_ok=True)
     # The versions the results were taken with, where the run says (environment.txt): "bun: 1.4.2", "node: v26.10.0".
     env = a.results / "environment.txt"
-    pi_version = "1.0.0"
+    pi_version = PI_VERSION[0]
     if env.exists():
         for line in env.read_text(encoding="utf-8-sig").splitlines():
             key, _, value = line.partition(": ")
             # (A line may say more than the version: "bun: Pi 1.0.0 on stock Bun 1.4.2". The runtime's own version is the label.)
             versions = re.findall(r"(?:Bun |^v?)(\d+\.\d+\.\d+)", value.strip())
-            if key == "bun" and versions:
+            if key == "pi-bolt":
+                # "0.7.3, Pi 1.1.0 (Pi-Bolt 0.7.3, linux-x64, JIT off)" or "1.0.0 (Pi-Bolt 0.6.1, linux-x64, JIT off), from ..."
+                bolt = re.search(r"Pi-Bolt (\d+\.\d+\.\d+)", value)
+                if bolt:
+                    LABELS["pi-bolt"] = f"Pi-Bolt {bolt.group(1)}"
+                pi = re.search(r"(\d+\.\d+\.\d+) \(Pi-Bolt", value)
+                if pi:
+                    PI_VERSION[0] = pi.group(1)
+                elif versions:
+                    PI_VERSION[0] = versions[0]  # ("pi-bolt: 1.0.3": the Pi it is)
+                pi_version = PI_VERSION[0]
+            elif key == "bun" and versions:
                 LABELS["bun"] = f"Bun {versions[-1]}"
             elif key in ("node", "node22", "node24") and versions:
                 LABELS[key] = f"Node {versions[-1].split('.')[0]}"
-            elif key == "pi-bolt" and versions:
-                pi_version = versions[0]  # ("pi-bolt: 1.0.3 (Pi-Bolt 0.7.0, ...)": the Pi it is)
     for spec in a.label:
         name, _, text = spec.partition("=")
         LABELS[name] = text

@@ -1,7 +1,0 @@
-build        characters   wall s    cpu s  of a core  own MB
-pi-bolt           20000     16.9     1.23         7%      36
-pi-bolt           60000     50.3     4.95        10%      78
-bun               20000     16.9    10.61        63%     226
-bun               60000     50.4    44.46        88%     117
-node              20000     16.9     8.42        50%     145
-node              60000     50.4    43.51        86%     245

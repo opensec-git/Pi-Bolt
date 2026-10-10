@@ -37,10 +37,10 @@ else
 	status=1
 fi
 run builtin-modules 2
-# Programs started from Pi (on macOS through pi-spawn, so that they have ASLR). The probe says where its code and stack are.
+# Programs started from Pi (on macOS through pi-spawn). The probe says where its code and stack are.
 probe=
 printf '#include <stdio.h>\nint main(void) { int x; printf("%%p/%%p\\n", (void*)main, (void*)&x); return 0; }\n' >"$home/probe.c"
-cc -O1 -o "$home/probe" "$home/probe.c" 2>/dev/null && probe="$home/probe" || echo "(no C compiler: the ASLR checks are skipped)"
+cc -O1 -o "$home/probe" "$home/probe.c" 2>/dev/null && probe="$home/probe" || echo "(no C compiler: the address checks are skipped)"
 run child-processes 3 ${probe:+PIBOLT_TEST_PROBE=$probe}
 
 # Bedrock, the proxy agents and the OAuth flows are loaded when they are first used, with the builtin modules they import

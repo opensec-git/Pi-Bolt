@@ -50,7 +50,7 @@ registerHooks({
 			if (wildcard === undefined) continue;
 			matchedPattern ??= alias.pattern;
 			for (const replacement of alias.replacements) {
-				const resolved = resolveSourcePath(replacement.replace("*", wildcard));
+				const resolved = resolveSourcePath(replacement.replaceAll("*", wildcard));
 				if (resolved) return { url: pathToFileURL(resolved).href, shortCircuit: true };
 			}
 		}

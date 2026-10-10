@@ -1,7 +1,0 @@
-build        step        wall s  cpu s gap p99 ms longest ms    at  own MB
-pi-bolt      write:50       8.2   1.16         19         24   86%      24
-pi-bolt      write:200     32.8   4.54         17         80    0%      32
-pi-bolt      write:400     65.5   8.21         17         81    0%      40
-bun          write:50       8.5   5.77         23        860   98%     178
-bun          write:200     33.4  30.97         32       3300   94%     316
-bun          write:400     85.1 115.02        164      45427   99%     152

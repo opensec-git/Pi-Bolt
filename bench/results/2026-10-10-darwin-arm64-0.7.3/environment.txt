@@ -1,0 +1,7 @@
+date: 2026-10-10T05:40Z
+cpu: Apple M5, 10 cores, not pinned
+system: macOS 27.0.1 (27.0.0)
+pi-bolt: 0.7.3, Pi 1.1.0 (Pi-Bolt 0.7.3, darwin-arm64, JIT off)
+bun: 1.4.2
+node: v26.11.0
+upstream: bun and node run Pi 1.1.0 as released (upstream v1.1.0: scripts/prepare-pi.sh --tag v1.1.0, build-pi.sh --stable)

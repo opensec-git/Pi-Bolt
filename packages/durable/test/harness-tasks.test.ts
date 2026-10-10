@@ -307,6 +307,57 @@ describe("task phases", () => {
 		await harness.close(context);
 	});
 
+	// #10549
+	it("stamps startedAt at the first run and endedAt when terminal, keeping startedAt through a wait", async () => {
+		let clock = 1_000;
+		const gate = deferred();
+		let on: TaskId[] = [];
+		const Waiter = defineTask<null, { phase: "wait" } | { phase: "resume" }, null>({
+			name: "test.timed-waiter",
+			version: 1,
+			initial: () => ({ phase: "wait" }),
+			phases: {
+				wait: (_task, runtime, ctx) => {
+					const checkpoint = { phase: "resume" } as const;
+					return runtime.commit(() => ({ status: "waiting", checkpoint, on, policy: "allSettled" }), ctx);
+				},
+				resume: (_task, runtime, ctx) => runtime.commit(() => completed(null), ctx),
+			},
+			abort: async (_task, runtime, ctx) => runtime.commit(() => abortedWith("test"), ctx),
+		});
+		const Held = gated("test.timed-held", gate.promise);
+		const { harness, root } = await openRoot([Waiter, Held], { now: () => clock });
+		const held = await start(root, Held);
+		on = [held];
+		const waiter = await root.commit(
+			(tx) => tx.createTask(Waiter, null, { ownership: { kind: "conversation" } }),
+			context,
+		);
+		const times = async () =>
+			(await harness.inspect(context)).tasks.map(({ record }) => [record.id, record.startedAt, record.endedAt]);
+		expect(await times()).toEqual([
+			[held, undefined, undefined],
+			[waiter, undefined, undefined],
+		]);
+
+		clock = 2_000;
+		harness.resume();
+		await eventually(async () => (await harness.getTask(waiter, context))?.state.status === "waiting");
+		expect(await times()).toEqual([
+			[held, 2_000, undefined],
+			[waiter, 2_000, undefined],
+		]);
+
+		// The waiter runs again at 5_000; its start stays the first run.
+		clock = 5_000;
+		gate.resolve();
+		const settledWaiter = await harness.waitForTask(waiter, context);
+		const settledHeld = await harness.getTask(held, context);
+		expect([settledHeld?.startedAt, settledHeld?.endedAt]).toEqual([2_000, 5_000]);
+		expect([settledWaiter.startedAt, settledWaiter.endedAt]).toEqual([2_000, 5_000]);
+		await harness.close(context);
+	});
+
 	it("keeps one registry snapshot per phase and refreshes it at the phase boundary", async () => {
 		const seen: { phase: string; tools: string[]; same: boolean }[] = [];
 		const phaseGate = deferred();
@@ -544,8 +595,8 @@ describe("task runtime", () => {
 			);
 			seen.push((await runtime.snapshot(Notes, runtime.conversationId, ctx))?.text);
 			seen.push((await runtime.snapshotAsOf(Notes, runtime.conversationId, first!, ctx))?.text);
-			seen.push((await runtime.context(runtime.conversationId, ctx, first)).entries.length);
-			seen.push((await runtime.context(runtime.conversationId, ctx, second)).messages.length);
+			seen.push((await runtime.context(runtime.conversationId, ctx, { at: first })).entries.length);
+			seen.push((await runtime.context(runtime.conversationId, ctx, { at: second })).messages.length);
 			seen.push(runtime.now());
 			runtime.report(new Error("reported"));
 			await runtime.commit(() => completed(null), ctx);
@@ -799,6 +850,19 @@ describe("task scheduling", () => {
 		await harness.close(context);
 		await expect(harness.waitForIdle(context)).rejects.toThrow("closed");
 		await expect(root.waitForIdle(context)).rejects.toThrow("closed");
+	});
+
+	// #10546
+	it("pages the newest tasks first without scanning older ones", async () => {
+		const Idle = oneStep("test.idle", async () => {});
+		const { harness, root } = await openRoot([Idle]);
+		const ids: TaskId[] = [];
+		for (let index = 0; index < 5; index++) ids.push(await start(root, Idle));
+		const first = await harness.commit((tx) => tx.scanTasks({ order: "descending" }, 2), context);
+		expect(first.items.map(({ id }) => id)).toEqual([ids[4], ids[3]]);
+		const second = await harness.commit((tx) => tx.scanTasks({}, 2, first.next), context);
+		expect(second.items.map(({ id }) => id)).toEqual([ids[2], ids[1]]);
+		await harness.close(context);
 	});
 
 	it("rejects unknown tasks and reports terminal tasks", async () => {

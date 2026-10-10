@@ -29,6 +29,7 @@ import type {
 	ToolNamespace,
 	ToolRenderers,
 } from "../../core/extensions/types.ts";
+import { READ_MCP_RESOURCE_TOOL } from "../../core/mcp-servers.ts";
 import { formatToolCallWithArgs, getTextOutput, replaceTabs } from "../../core/tools/render-utils.ts";
 import { formatSize, truncateMiddle } from "../../core/tools/truncate.ts";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
@@ -51,7 +52,7 @@ export const MCP_OUTPUT_MAX_BYTES = 20 * 1024;
 /** Visual (wrapped) result lines shown before the output is expanded. */
 const OUTPUT_PREVIEW_LINES = 5;
 /** Tool that reads the resources named by resource links. */
-export const READ_MCP_RESOURCE_TOOL = "read_mcp_resource";
+export { READ_MCP_RESOURCE_TOOL };
 
 export interface McpToolDetails {
 	server: string;

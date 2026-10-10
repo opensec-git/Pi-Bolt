@@ -3,37 +3,37 @@
 <text x="24" y="32" font-size="21" font-weight="650" fill="#1f2328">Plugins</text>
 <text x="24" y="56" font-size="13.5" fill="#59636e">A Pi extension compiled into the executable vs loaded at run time. Lower is better.</text>
 <text x="24" y="96" font-size="15" font-weight="600" fill="#1f2328">Hot loop in the plugin (/words)</text>
-<text x="237" y="126.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt, compiled in</text>
-<path d="M247,114 h19.6 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-19.6 z" fill="#2a78d6"/>
-<text x="278.6" y="126.5" font-size="13.5" font-weight="650" fill="#1f2328">50 ms</text>
+<text x="237" y="126.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt 0.7.3, compiled in</text>
+<path d="M247,114 h18.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-18.1 z" fill="#2a78d6"/>
+<text x="277.1" y="126.5" font-size="13.5" font-weight="650" fill="#1f2328">55 ms</text>
 <text x="237" y="156.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt (JIT on), compiled in</text>
-<path d="M247,144 h20.7 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-20.7 z" fill="#2a78d6"/>
-<text x="279.7" y="156.5" font-size="13.5" font-weight="400" fill="#1f2328">53 ms</text>
-<text x="237" y="186.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt, run time</text>
+<path d="M247,144 h23.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-23.1 z" fill="#2a78d6"/>
+<text x="282.1" y="156.5" font-size="13.5" font-weight="400" fill="#1f2328">68 ms</text>
+<text x="237" y="186.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt 0.7.3, run time</text>
 <path d="M247,174 h521.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-521.0 z" fill="#2a78d6"/>
-<text x="780.0" y="186.5" font-size="13.5" font-weight="400" fill="#1f2328">1,119 ms</text>
+<text x="780.0" y="186.5" font-size="13.5" font-weight="400" fill="#1f2328">1,315 ms</text>
 <text x="237" y="216.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt (JIT on), run time</text>
-<path d="M247,204 h15.5 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-15.5 z" fill="#2a78d6"/>
-<text x="274.5" y="216.5" font-size="13.5" font-weight="400" fill="#1f2328">42 ms</text>
+<path d="M247,204 h15.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-15.0 z" fill="#2a78d6"/>
+<text x="274.0" y="216.5" font-size="13.5" font-weight="400" fill="#1f2328">48 ms</text>
 <text x="237" y="246.5" font-size="13.5" text-anchor="end" fill="#59636e">Bun 1.4.2, run time</text>
-<path d="M247,234 h13.9 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-13.9 z" fill="#848d97"/>
-<text x="272.9" y="246.5" font-size="13.5" font-weight="400" fill="#1f2328">38 ms</text>
+<path d="M247,234 h14.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-14.1 z" fill="#848d97"/>
+<text x="273.1" y="246.5" font-size="13.5" font-weight="400" fill="#1f2328">45 ms</text>
 <line x1="247" y1="108" x2="247" y2="256" stroke="#d1d9e0"/>
 <text x="24" y="306" font-size="15" font-weight="600" fill="#1f2328">Launch to interactive</text>
-<text x="237" y="336.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt, compiled in</text>
-<path d="M247,324 h119.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-119.0 z" fill="#2a78d6"/>
-<text x="378.0" y="336.5" font-size="13.5" font-weight="650" fill="#1f2328">46 ms</text>
+<text x="237" y="336.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt 0.7.3, compiled in</text>
+<path d="M247,324 h108.4 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-108.4 z" fill="#2a78d6"/>
+<text x="367.4" y="336.5" font-size="13.5" font-weight="650" fill="#1f2328">52 ms</text>
 <text x="237" y="366.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt (JIT on), compiled in</text>
-<path d="M247,354 h117.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-117.1 z" fill="#2a78d6"/>
-<text x="376.1" y="366.5" font-size="13.5" font-weight="400" fill="#1f2328">45 ms</text>
-<text x="237" y="396.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt, run time</text>
-<path d="M247,384 h199.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-199.0 z" fill="#2a78d6"/>
-<text x="458.0" y="396.5" font-size="13.5" font-weight="400" fill="#1f2328">75 ms</text>
+<path d="M247,354 h103.9 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-103.9 z" fill="#2a78d6"/>
+<text x="362.9" y="366.5" font-size="13.5" font-weight="400" fill="#1f2328">50 ms</text>
+<text x="237" y="396.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt 0.7.3, run time</text>
+<path d="M247,384 h191.7 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-191.7 z" fill="#2a78d6"/>
+<text x="450.7" y="396.5" font-size="13.5" font-weight="400" fill="#1f2328">91 ms</text>
 <text x="237" y="426.5" font-size="13.5" text-anchor="end" fill="#59636e">Pi-Bolt (JIT on), run time</text>
-<path d="M247,414 h208.8 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-208.8 z" fill="#2a78d6"/>
-<text x="467.8" y="426.5" font-size="13.5" font-weight="400" fill="#1f2328">79 ms</text>
+<path d="M247,414 h175.4 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-175.4 z" fill="#2a78d6"/>
+<text x="434.4" y="426.5" font-size="13.5" font-weight="400" fill="#1f2328">83 ms</text>
 <text x="237" y="456.5" font-size="13.5" text-anchor="end" fill="#59636e">Bun 1.4.2, run time</text>
 <path d="M247,444 h521.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-521.0 z" fill="#848d97"/>
-<text x="780.0" y="456.5" font-size="13.5" font-weight="400" fill="#1f2328">195 ms</text>
+<text x="780.0" y="456.5" font-size="13.5" font-weight="400" fill="#1f2328">244 ms</text>
 <line x1="247" y1="318" x2="247" y2="466" stroke="#d1d9e0"/>
 </svg>

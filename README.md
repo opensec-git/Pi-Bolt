@@ -4,9 +4,10 @@
   </a>
 </p>
 <p align="center">
+  <a href="https://github.com/opensec-git/Pi-Bolt/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/opensec-git/Pi-Bolt/ci.yml?branch=pi-bolt&event=push&style=flat-square&label=ci" /></a>
   <a href="https://github.com/opensec-git/Pi-Bolt/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/opensec-git/Pi-Bolt?style=flat-square&color=2a78d6" /></a>
   <a href="https://www.npmjs.com/package/pi-bolt"><img alt="npm" src="https://img.shields.io/npm/v/pi-bolt?style=flat-square&logo=npm&logoColor=white&color=2a78d6" /></a>
-  <a href="https://github.com/earendil-works/pi/releases/tag/v1.0.3"><img alt="Pi 1.0.3" src="https://img.shields.io/badge/pi-1.0.3-f0b03a?style=flat-square" /></a>
+  <a href="https://github.com/earendil-works/pi/releases/tag/v1.1.0"><img alt="Pi 1.1.0" src="https://img.shields.io/badge/pi-1.1.0-f0b03a?style=flat-square" /></a>
   <a href="#requirements"><img alt="Linux x86-64" src="https://img.shields.io/badge/linux-x86--64-444?style=flat-square&logo=linux&logoColor=white" /></a>
   <a href="#requirements"><img alt="macOS Apple silicon" src="https://img.shields.io/badge/macOS-Apple%20silicon-444?style=flat-square&logo=apple&logoColor=white" /></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-1baf7a?style=flat-square" /></a>
@@ -19,16 +20,17 @@ One executable for Linux x86-64 and macOS on Apple silicon. No JIT, nothing to i
 
 Pi-Bolt runs the Pi you already use: its commands, keys, sessions, settings, extensions and providers. What changes is how it
 runs. Every function is compiled to machine code when the executable is built, and stored in it with a prebuilt JavaScript heap,
-so at launch nothing is parsed, interpreted or JIT-compiled. It starts two to three times sooner than Pi on Bun and uses about a
-third of its CPU over a session.
+so at launch nothing is parsed, interpreted or JIT-compiled. It starts three times sooner than Pi on Bun, uses about a third of
+its CPU over a session, and writes large files and streams long answers ten to forty times cheaper.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/bench-hero-dark.svg">
-  <img alt="Pi-Bolt vs Bun 1.4.2 vs Node 22: ready to type 45 / 128 / 303 ms; CPU per session 303 / 844 / 1,242 ms; CPU while streaming 320 / 524 / 605 ms; memory after a long session 201 / 241 / 601 MB" src="docs/images/bench-hero-light.svg">
+  <img alt="Pi-Bolt 0.7.3 vs Pi-Bolt 0.7.0 vs Bun 1.4.2 vs Node 24: ready to type 47 / 48 / 143 / 334 ms; CPU per session 309 / 328 / 913 / 1,312 ms; CPU while streaming 332 / 362 / 646 / 564 ms; memory after a long session 139 / 198 / 296 / 537 MB" src="docs/images/bench-hero-light.svg">
 </picture>
 
-<sub>Pi 1.0.0 on one Linux server (AMD EPYC 7B13): Pi-Bolt against the same release on stock Bun 1.4.2 and on Node 22. Medians of
-interleaved runs; lower is better. Times differ on other machines; the ratios carry over. More under [Benchmarks](#benchmarks).</sub>
+<sub>One Linux server (AMD EPYC 7B13): Pi-Bolt 0.7.3 and 0.7.0 against Pi 1.1.0 as released, on stock Bun 1.4.2 and on Node 24.
+Medians of interleaved runs; lower is better. Times differ on other machines; the ratios carry over. More under
+[Benchmarks](#benchmarks).</sub>
 
 > [!NOTE]
 > Pi-Bolt is an independent fork of [Pi](https://github.com/earendil-works/pi), not affiliated with Pi's authors or with Oven.
@@ -97,6 +99,27 @@ The installer offers two that OpenSec maintains for Pi-Bolt, prebuilt for Bun so
 
 Install them with `pi-bolt install npm:opensec-pi-subagents` and `pi-bolt install npm:opensec-pi-todo`. For scripted
 installs, `PIBOLT_EXTENSIONS=yes` (or `no`) answers the installer's question in advance.
+
+### Pi and Pi-Bolt side by side
+
+Pi-Bolt uses Pi's agent directory (`~/.pi/agent`): logins, models, sessions and settings are shared, and so are installed
+packages. Where both are used and should load different packages, such as `@juicesharp/rpiv-todo` in Pi and its fork
+`opensec-pi-todo` in Pi-Bolt (both provide a `todo` tool, so they cannot load together), give Pi-Bolt a package list of its
+own in `~/.pi/agent/settings.json`:
+
+```json
+{
+  "packages": ["npm:@juicesharp/rpiv-todo"],
+  "piBolt": { "packages": ["npm:opensec-pi-todo"] }
+}
+```
+
+Pi-Bolt then reads and changes `piBolt.packages` (`pi-bolt install`, `remove`, `config`), and Pi keeps `packages`. Without
+`piBolt`, both use `packages`. The installed files are shared: `pi-bolt remove` keeps those of a package Pi's list still uses, and if
+Pi removes one that Pi-Bolt's list uses, Pi-Bolt installs it again when it next starts, as it does any listed package that is
+missing. To keep Pi-Bolt's whole setup apart instead, point it at a directory of its own with
+`PI_CODING_AGENT_DIR`.
+
 ### Requirements
 
 - **Linux** on x86-64 with glibc 2.17 or later: Ubuntu 20.04+, Debian 11+, Rocky Linux 8+, CentOS 7, Amazon Linux 2 and
@@ -107,43 +130,44 @@ installs, `PIBOLT_EXTENSIONS=yes` (or `no`) answers the installer's question in 
 
 ## Benchmarks
 
-The same Pi 1.0.0 run three ways: compiled by Pi-Bolt, as released on stock Bun 1.4.2, and from its npm package on Node. Medians
-of fresh processes, interleaved across the runtimes; lower is better. Each table comes from one machine, so the milliseconds will
-differ on yours; the comparison is what carries over.
+Pi run four ways: compiled by Pi-Bolt 0.7.3, by Pi-Bolt 0.7.0, and Pi 1.1.0 as released on stock
+Bun 1.4.2 and from its npm package on Node. Medians of fresh processes, interleaved across the builds; lower is better. Each
+table comes from one machine, so the milliseconds will differ on yours; the comparison is what carries over.
 
 **Linux x86-64** (AMD EPYC 7B13)
 
-| | Pi-Bolt | Pi on Bun 1.4.2 | Pi on Node 22 |
-|---|---:|---:|---:|
-| Ready to type | **45 ms** | 128 ms | 303 ms |
-| `pi --version` | **14 ms** | 82 ms | 228 ms |
-| One prompt (`pi -p`), CPU | **81 ms** | 329 ms | 572 ms |
-| Interactive session, CPU | **303 ms** | 844 ms | 1,242 ms |
-| Streaming a 60,000-character answer, CPU | **3.8 s** | 43.1 s | 43.7 s |
-| Writing a 200 KB file through a tool call | **0.8 s** | 27.8 s | 44.3 s |
-| Memory of a session in tmux | **27 MB** | 89 MB | 132 MB |
-| A tool turn with a real model, CPU | **0.20 s** | 0.49 s | 0.77 s |
+| Benchmark | Pi-Bolt 0.7.3 | Pi-Bolt 0.7.0 | Pi on Bun 1.4.2 | Pi on Node 24 |
+|---|---:|---:|---:|---:|
+| Writing a 200 KB file through a tool call | **0.8 s** | 0.9 s | 30.0 s | 39.4 s |
+| CPU, streaming a 60,000-character answer | **4.3 s** | 4.5 s | 44.4 s | 42.3 s |
+| Memory after a 4.2M-token session | **139 MB** | 198 MB | 296 MB | 537 MB |
+| Memory of a session in tmux | **28 MB** | 28 MB | 87 MB | 93 MB |
+| CPU, interactive session (5 prompts) | **309 ms** | 328 ms | 913 ms | 1,312 ms |
+| CPU, one prompt (`pi -p`) | **85 ms** | 89 ms | 333 ms | 645 ms |
+| Ready to type | **47 ms** | 48 ms | 143 ms | 334 ms |
+| `pi --version` | **13 ms** | 14 ms | 89 ms | 255 ms |
 
 **macOS on Apple silicon** (M5 MacBook Air)
 
-| | Pi-Bolt | Pi on Bun 1.4.2 | Pi on Node 26 |
-|---|---:|---:|---:|
-| Ready to type | **31 ms** | 63 ms | 193 ms |
-| `pi --version` | **12 ms** | 33 ms | 157 ms |
-| One prompt (`pi -p`), CPU | **32 ms** | 138 ms | 290 ms |
-| Interactive session, CPU | **126 ms** | 363 ms | 544 ms |
-| Streaming a 60,000-character answer, CPU | **6.9 s** | 25.3 s | 24.0 s |
-| Writing a 200 KB file through a tool call | **0.3 s** | 12.0 s | 14.2 s |
-| Memory after a 4.2M-token session | **64 MB** | 95 MB | 1,890 MB |
-| Five prompts with a real model, CPU | **4.3–5.6 s** | 8.9–11.5 s | 8.0–10.1 s |
+| Benchmark | Pi-Bolt 0.7.3 | Pi-Bolt 0.7.0 | Pi on Bun 1.4.2 | Pi on Node 26 |
+|---|---:|---:|---:|---:|
+| Writing a 200 KB file through a tool call | **0.5 s** | 0.5 s | 22.1 s | 26.6 s |
+| CPU, streaming a 60,000-character answer | **7.0 s** | 6.6 s | 38.4 s | 37.8 s |
+| Memory after a 4.2M-token session | **39 MB** | 41 MB | 91 MB | 2,441 MB |
+| Memory of a session in tmux | **25 MB** | 24 MB | 68 MB | 152 MB |
+| CPU, interactive session (5 prompts) | **175 ms** | 185 ms | 555 ms | 915 ms |
+| CPU, one prompt (`pi -p`) | **58 ms** | 59 ms | 236 ms | 525 ms |
+| Ready to type | **46 ms** | 43 ms | 101 ms | 347 ms |
 
-Most rows use a local model server that streams a scripted conversation, so they measure Pi and its runtime, not a network or a
-model. The last row of each table uses a hosted model over the internet: there the user waits the same on every runtime, and
-Pi-Bolt spends less than half the CPU doing it ([With a real model](docs/BENCHMARKS.md#with-a-real-model)).
+Every row uses a local model server that streams a scripted conversation, so they measure Pi and its runtime, not a network or
+a model; with a hosted model Pi-Bolt spends less than half the CPU of Bun and Node for the same wait
+([With a real model](docs/BENCHMARKS.md#with-a-real-model)). On the Mac, 0.7.3 and 0.7.0 differ within the noise of a fanless
+laptop, except where 0.7.3 changed something: a start with Pi-Bolt not in memory (after a restart or an update) takes 64 ms
+instead of 177, and long sessions and commands with large output cost less ([0.7.3 against 0.7.2](docs/BENCHMARKS.md#073-against-072)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/bench-long-dark.svg">
-  <img alt="Long answers and large files, Pi-Bolt vs Bun 1.4.2 vs Node 22: CPU streaming a 20,000-character answer 1.0 / 10.4 / 8.4 s; a 60,000-character answer 3.8 / 43.1 / 43.7 s; share of a core while streaming 8 / 85 / 87%; writing a 200 KB file through a tool call 0.8 / 27.8 / 44.3 s" src="docs/images/bench-long-light.svg">
+  <img alt="Long answers and large files, Pi-Bolt 0.7.3 vs Pi-Bolt 0.7.0 vs Bun 1.4.2 vs Node 24: CPU streaming a 20,000-character answer 1.1 / 1.2 / 10.7 / 8.0 s; a 60,000-character answer 4.3 / 4.5 / 44.4 / 42.3 s; share of a core while streaming 9 / 9 / 88 / 84%; writing a 200 KB file through a tool call 0.8 / 0.9 / 30.0 / 39.4 s" src="docs/images/bench-long-light.svg">
 </picture>
 
 Long answers and large files are where the gap is widest. Pi as released renders a whole answer again as each few words arrive,
@@ -156,17 +180,17 @@ writes a seventh as much to the terminal, and never pauses drawing for more than
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/bench-speed-dark.svg">
-  <img alt="Time on Linux, Pi-Bolt vs Bun 1.4.2 vs Node 22: ready to type 45 / 128 / 303 ms; pi --version 14 / 82 / 228 ms; one prompt 79 / 172 / 404 ms; time per prompt in a 4.2M-token session 562 / 704 / 965 ms" src="docs/images/bench-speed-light.svg">
+  <img alt="Time on Linux, Pi-Bolt 0.7.3 vs 0.7.0 vs Bun 1.4.2 vs Node 24: ready to type 47 / 48 / 143 / 334 ms; pi --version 13 / 14 / 89 / 255 ms; one prompt 83 / 87 / 193 / 454 ms; time per prompt in a 4.2M-token session 565 / 576 / 777 / 961 ms" src="docs/images/bench-speed-light.svg">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/bench-cpu-dark.svg">
-  <img alt="CPU time on Linux, Pi-Bolt vs Bun 1.4.2 vs Node 22: interactive session 303 / 844 / 1,242 ms; one prompt 81 / 329 / 572 ms; pi --version 15 / 145 / 287 ms; per prompt in a 4.2M-token session 301 / 507 / 823 ms" src="docs/images/bench-cpu-light.svg">
+  <img alt="CPU time on Linux, Pi-Bolt 0.7.3 vs 0.7.0 vs Bun 1.4.2 vs Node 24: interactive session 309 / 328 / 913 / 1,312 ms; one prompt 85 / 89 / 333 / 645 ms; pi --version 14 / 15 / 150 / 322 ms; per prompt in a 4.2M-token session 301 / 319 / 548 / 794 ms" src="docs/images/bench-cpu-light.svg">
 </picture>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/bench-memory-dark.svg">
-  <img alt="Memory and streaming on Linux, Pi-Bolt vs Bun 1.4.2 vs Node 22: peak memory 147 / 204 / 214 MB; own memory in tmux 27 / 89 / 132 MB; own memory after a 4.2M-token session 201 / 241 / 601 MB; CPU while replies stream 320 / 524 / 605 ms" src="docs/images/bench-memory-light.svg">
+  <img alt="Memory and streaming on Linux, Pi-Bolt 0.7.3 vs 0.7.0 vs Bun 1.4.2 vs Node 24: peak memory 154 / 170 / 218 / 213 MB; own memory in tmux 28 / 28 / 87 / 93 MB; own memory after a 4.2M-token session 139 / 198 / 296 / 537 MB; CPU while replies stream 332 / 362 / 646 / 564 ms" src="docs/images/bench-memory-light.svg">
 </picture>
 
 </details>
@@ -186,7 +210,7 @@ scripts/build-pi.sh --plugins my-plugins/plugins.ts --out out/pi-bolt-plugins
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/bench-plugins-dark.svg">
-  <img alt="A plugin's hot loop: 50 ms compiled in, 1,119 ms loaded at run time on the JIT-off build, 42 ms on the JIT-on build, 38 ms on Bun" src="docs/images/bench-plugins-light.svg">
+  <img alt="A plugin's hot loop: 55 ms compiled in, 1,315 ms loaded at run time on the JIT-off build, 48 ms on the JIT-on build, 45 ms on Bun" src="docs/images/bench-plugins-light.svg">
 </picture>
 
 [docs/PLUGINS.md](docs/PLUGINS.md) covers porting, compatibility, and writing plugin code the compiler handles well.
@@ -210,7 +234,7 @@ to x86-64, brings it to macOS, and adds its own code-generation and runtime work
 
 ## The fork
 
-`packages/` is Pi at [v1.0.3](https://github.com/earendil-works/pi/releases/tag/v1.0.3), with Pi-Bolt's changes on top as
+`packages/` is Pi at [v1.1.0](https://github.com/earendil-works/pi/releases/tag/v1.1.0), with Pi-Bolt's changes on top as
 separate commits: how the terminal is drawn while answers stream, less work at startup, installing packages without npm, and
 messages that name the `pi-bolt` command. The commands, settings, sessions and extension API are Pi's. Pi-Bolt adds:
 
@@ -234,7 +258,7 @@ see [earendil-works/pi](https://github.com/earendil-works/pi).
 | [Benchmarks](docs/BENCHMARKS.md) | Method, results, raw data, and questions |
 | [Plugins](docs/PLUGINS.md) | Porting Pi extensions, compatibility, writing them for AOT |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Diagnostics, environment variables, known limitations |
-| [Releasing](docs/RELEASING.md) | The release pipeline, the self-hosted runner, signing, following Pi's releases |
+| [Releasing](docs/RELEASING.md) | CI, the release and publish workflows, signing, following Pi's releases |
 
 ## Development
 
@@ -244,7 +268,7 @@ cd Pi-Bolt
 scripts/fetch-sources.sh            # WebKit and Bun at the pinned commits, with Pi-Bolt's patches
 scripts/toolchain/make-sysroot.sh   # glibc 2.17 sysroot with static ICU, for portable executables (Linux only)
 scripts/build-runtime.sh            # the Pi-Bolt Bun runtime
-scripts/prepare-pi.sh               # builds the Pi in this repository (1.0.3)
+scripts/prepare-pi.sh               # builds the Pi in this repository (1.1.0)
 scripts/build-pi.sh                 # out/pi-bolt/pi
 ```
 

@@ -331,10 +331,16 @@ export function createShellToolDefinition(
 				clearUpdateTimer();
 				emitOutputUpdate();
 				const snapshot = output.snapshot({ persistIfTruncated: true });
-				await output.closeTempFile();
+				try {
+					output.closeTempFile();
+				} catch (error) {
+					// A full disk must not cost the model the output and exit code it already has.
+					fullOutputError = error instanceof Error ? error.message : String(error);
+				}
 				return snapshot;
 			};
 
+			let fullOutputError: string | undefined;
 			const formatOutput = (snapshot: Awaited<ReturnType<typeof finishOutput>>, emptyText = "(no output)") => {
 				const truncation = snapshot.truncation;
 				let text = snapshot.content || emptyText;
@@ -343,13 +349,21 @@ export function createShellToolDefinition(
 					details = { truncation, fullOutputPath: snapshot.fullOutputPath };
 					const startLine = truncation.totalLines - truncation.outputLines + 1;
 					const endLine = truncation.totalLines;
+					const fullOutput = snapshot.fullOutputPath
+						? `Full output: ${snapshot.fullOutputPath}`
+						: "The full output could not be saved";
 					if (truncation.lastLinePartial) {
 						const lastLineSize = formatSize(output.getLastLineBytes());
-						text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). Full output: ${snapshot.fullOutputPath}]`;
+						text += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${lastLineSize}). ${fullOutput}]`;
 					} else if (truncation.truncatedBy === "lines") {
-						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${snapshot.fullOutputPath}]`;
+						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. ${fullOutput}]`;
 					} else {
-						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${snapshot.fullOutputPath}]`;
+						text += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). ${fullOutput}]`;
+					}
+					if (fullOutputError) {
+						text += snapshot.fullOutputPath
+							? `\n[The full output file is incomplete: ${fullOutputError}]`
+							: `\n[${fullOutputError}]`;
 					}
 				}
 				return { text, details };

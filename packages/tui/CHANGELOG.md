@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.1.0] - 2026-10-07
+
+### Breaking Changes
+
+- `Terminal` implementations must provide `setProgramStatus(status)`; a terminal without OSC 7501 support can implement it as a no-op ([#10607](https://github.com/earendil-works/pi/issues/10607))
+
+### Added
+
+- Added `Box.setPaddingX(...)` and `Text.setPaddingX(...)` ([#10557](https://github.com/earendil-works/pi/pull/10557) by [@rwachtler](https://github.com/rwachtler))
+- Added `Terminal.setProgramStatus()` and `formatProgramStatus()` for the Program Status Protocol (OSC 7501). `ProcessTerminal` asks the terminal for support at startup and sends reports only if it answers; `PI_PROGRAM_STATUS=1|0` overrides detection ([#10607](https://github.com/earendil-works/pi/issues/10607))
+- Added `TuiAltScreen.resetTextSelection()`, which drops the text selection and multi-click state, for example before a host replaces the transcript ([#9311](https://github.com/earendil-works/pi/issues/9311), [#10567](https://github.com/earendil-works/pi/pull/10567) by [@christianklotz](https://github.com/christianklotz))
+
+### Fixed
+
+- Fixed Markdown links not being clickable in Herdr: `TERM_PROGRAM=herdr` is now detected as supporting OSC 8 hyperlinks ([#10573](https://github.com/earendil-works/pi/issues/10573))
+
+## [1.0.4] - 2026-10-05
+
 ## [1.0.3] - 2026-10-05
 
 ### Changed

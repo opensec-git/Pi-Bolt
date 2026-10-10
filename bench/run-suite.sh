@@ -7,7 +7,8 @@
 # the stock-Bun build (scripts/build-pi.sh --stable --out out/pi-stable) and, for Node, the Pi of this repository, built
 # (scripts/prepare-pi.sh).
 # Environment: PIBOLT_PI (the Pi tree Node runs; default this repository), PIBOLT_STABLE_PI (the stock-Bun executable; default
-# out/pi-stable/pi). Pi-Bolt's tree has changes to Pi of its own: to compare with Pi as released, point both at a build of the
+# out/pi-stable/pi), PIBOLT_COMPARE (more builds to run alongside, as name=command, separated by spaces: an earlier Pi-Bolt release,
+# e.g. "pi-bolt-0.7.0=.work/base-070/pi-bolt-linux-x64/pi"; the report shows them after Pi-Bolt). Pi-Bolt's tree has changes to Pi of its own: to compare with Pi as released, point both at a build of the
 # upstream tag (scripts/build-pi.sh --stable --pi <Pi checkout> --out out/pi-stable-upstream).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -18,6 +19,8 @@ CPUS=40-47
 PI="${PIBOLT_PI:-$ROOT}"
 NODE="node $PI/packages/coding-agent/dist/bundle/cli.js"
 STABLE="${PIBOLT_STABLE_PI:-out/pi-stable/pi}"
+COMPARE=(); COMPARE_NAMES=""
+for spec in ${PIBOLT_COMPARE:-}; do COMPARE+=(--build "$spec"); COMPARE_NAMES+=",${spec%%=*}"; done
 mkdir -p "$OUT"
 cd "$ROOT"
 {
@@ -35,13 +38,13 @@ cd "$ROOT"
 } >"$OUT/environment.txt"
 
 python3 bench/benchmark.py --runs 21 --warmup 3 ${CPUS:+--cpus "$CPUS"} --out "$OUT/benchmark.jsonl" \
-	--build pi-bolt=out/pi-bolt/pi --build bun="$STABLE" --build "node=$NODE" --build pi-bolt-jit=out/pi-bolt-jit/pi --baseline bun
+	--build pi-bolt=out/pi-bolt/pi ${COMPARE[@]+"${COMPARE[@]}"} --build bun="$STABLE" --build "node=$NODE" --build pi-bolt-jit=out/pi-bolt-jit/pi --baseline bun
 for _ in 1 2 3; do
 	python3 bench/long_session.py --prompts 75 --every 25 ${CPUS:+--cpus "$CPUS"} --out "$OUT/long.jsonl" \
-		--build pi-bolt=out/pi-bolt/pi --build bun="$STABLE" --build "node=$NODE"
+		--build pi-bolt=out/pi-bolt/pi ${COMPARE[@]+"${COMPARE[@]}"} --build bun="$STABLE" --build "node=$NODE"
 done
 python3 bench/tmux_check.py --prompts 4 --rounds 5 ${CPUS:+--cpus "$CPUS"} --out "$OUT/tmux.jsonl" \
-	--build pi-bolt=out/pi-bolt/pi --build bun="$STABLE" --build "node=$NODE" >/dev/null
+	--build pi-bolt=out/pi-bolt/pi ${COMPARE[@]+"${COMPARE[@]}"} --build bun="$STABLE" --build "node=$NODE" >/dev/null
 python3 bench/plugin_bench.py --runs 5 ${CPUS:+--cpus "$CPUS"} --out "$OUT/plugins.jsonl" \
 	--compiled pi-bolt=out/pi-bolt-plugins/pi --compiled pi-bolt-jit=out/pi-bolt-plugins-jit/pi \
 	--runtime pi-bolt=out/pi-bolt/pi --runtime pi-bolt-jit=out/pi-bolt-jit/pi --runtime bun="$STABLE" \
@@ -50,4 +53,4 @@ python3 bench/plugin_bench.py --runs 5 ${CPUS:+--cpus "$CPUS"} --out "$OUT/plugi
 IMAGES=docs/images
 [ "$(uname -s)" = Darwin ] && IMAGES=docs/images/darwin-arm64
 mkdir -p "$IMAGES"
-python3 bench/report.py "$OUT" --images "$IMAGES" --builds pi-bolt,bun,node | tee "$OUT/summary.md"
+python3 bench/report.py "$OUT" --images "$IMAGES" --builds "pi-bolt$COMPARE_NAMES,bun,node" | tee "$OUT/summary.md"

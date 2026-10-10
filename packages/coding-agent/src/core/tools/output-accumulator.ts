@@ -1,6 +1,5 @@
-import type { WriteStream } from "node:fs";
 import { open } from "node:fs/promises";
-import { createOutputFileStream } from "../../utils/output-files.ts";
+import { createOutputFile, type OutputFile } from "../../utils/output-files.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, type TruncationResult, truncateTail } from "./truncate.ts";
 
 export interface OutputAccumulatorOptions {
@@ -52,7 +51,9 @@ export class OutputAccumulator {
 	private finished = false;
 
 	private tempFilePath: string | undefined;
-	private tempFileStream: WriteStream | undefined;
+	private tempFile: OutputFile | undefined;
+	/** The full output file was asked for and is missing output: not created, or a write to it failed. */
+	private tempFileFailed = false;
 
 	constructor(options: OutputAccumulatorOptions = {}) {
 		this.maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
@@ -69,9 +70,9 @@ export class OutputAccumulator {
 		this.totalRawBytes += data.length;
 		this.appendDecodedText(this.decoder.decode(data, { stream: true }));
 
-		if (this.tempFileStream || this.shouldUseTempFile()) {
+		if (this.tempFile || this.shouldUseTempFile()) {
 			this.ensureTempFile();
-			this.tempFileStream?.write(data);
+			this.tempFile?.write(data);
 		} else if (data.length > 0) {
 			this.rawChunks.push(data);
 		}
@@ -118,27 +119,12 @@ export class OutputAccumulator {
 		};
 	}
 
-	async closeTempFile(): Promise<void> {
-		if (!this.tempFileStream) {
-			return;
-		}
-
-		const stream = this.tempFileStream;
-		this.tempFileStream = undefined;
-
-		await new Promise<void>((resolve, reject) => {
-			const onError = (error: Error) => {
-				stream.off("finish", onFinish);
-				reject(error);
-			};
-			const onFinish = () => {
-				stream.off("error", onError);
-				resolve();
-			};
-			stream.once("error", onError);
-			stream.once("finish", onFinish);
-			stream.end();
-		});
+	/** Close the full output file. Throws the error of a failed write to it. */
+	closeTempFile(): void {
+		const file = this.tempFile;
+		this.tempFile = undefined;
+		if (file?.failed) this.tempFileFailed = true;
+		file?.close();
 	}
 
 	/**
@@ -147,10 +133,18 @@ export class OutputAccumulator {
 	 * last `maxBytes / 2` bytes around an omission marker.
 	 */
 	async readFullOutput(maxBytes: number): Promise<FullOutput> {
+		if (this.tempFileFailed) {
+			return this.readTailOutput(maxBytes);
+		}
 		if (!this.tempFilePath) {
 			return { content: new TextDecoder().decode(Buffer.concat(this.rawChunks)), truncated: false };
 		}
-		const file = await open(this.tempFilePath, "r");
+		let file: Awaited<ReturnType<typeof open>>;
+		try {
+			file = await open(this.tempFilePath, "r");
+		} catch {
+			return this.readTailOutput(maxBytes);
+		}
 		try {
 			const size = (await file.stat()).size;
 			if (size <= maxBytes) {
@@ -173,6 +167,12 @@ export class OutputAccumulator {
 		} finally {
 			await file.close();
 		}
+	}
+
+	/** What is kept in memory, the end of the output, for when the full output file cannot be read. */
+	private readTailOutput(maxBytes: number): FullOutput {
+		const tail = truncateTail(this.getSnapshotText(), { maxLines: Number.MAX_SAFE_INTEGER, maxBytes });
+		return { content: tail.content, truncated: true };
 	}
 
 	getLastLineBytes(): number {
@@ -243,14 +243,20 @@ export class OutputAccumulator {
 	}
 
 	private ensureTempFile(): void {
-		if (this.tempFilePath) {
+		if (this.tempFilePath || this.tempFileFailed) {
 			return;
 		}
-		const { path, stream } = createOutputFileStream(this.tempFilePrefix, ".log");
-		this.tempFilePath = path;
-		this.tempFileStream = stream;
+		const file = createOutputFile(this.tempFilePrefix, ".log");
+		if (!file.opened) {
+			// Not created (no temp directory, no free descriptor): the output keeps its tail in memory, and says so.
+			this.tempFileFailed = true;
+			this.rawChunks = [];
+			return;
+		}
+		this.tempFilePath = file.path;
+		this.tempFile = file;
 		for (const chunk of this.rawChunks) {
-			this.tempFileStream.write(chunk);
+			file.write(chunk);
 		}
 		this.rawChunks = [];
 	}

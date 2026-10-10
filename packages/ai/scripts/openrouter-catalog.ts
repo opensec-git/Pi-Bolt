@@ -1,4 +1,4 @@
-import type { ClassifierModel, ImageModel, Model, ModelCost } from "../src/types.ts";
+import type { ClassifierModel, ImageModel, Model, ModelCost, ModelCostTier } from "../src/types.ts";
 import { getOpenRouterThinkingLevelMap, type OpenRouterReasoningMetadata } from "./openrouter-reasoning-options.ts";
 
 export interface OpenRouterModelListItem {
@@ -11,6 +11,7 @@ export interface OpenRouterModelListItem {
 		completion?: string;
 		input_cache_read?: string;
 		input_cache_write?: string;
+		overrides?: OpenRouterPricingOverride[];
 	};
 	top_provider?: {
 		context_length?: number;
@@ -18,6 +19,21 @@ export interface OpenRouterModelListItem {
 	};
 	context_length?: number;
 	reasoning?: OpenRouterReasoningMetadata;
+}
+
+/**
+ * A conditional price. `min_prompt_tokens` selects prompt-length pricing; `utc_*` fields select
+ * time-of-day or weekday pricing. Missing rates keep the base price.
+ */
+export interface OpenRouterPricingOverride {
+	min_prompt_tokens?: number;
+	utc_start?: number;
+	utc_end?: number;
+	utc_days?: string[];
+	prompt?: string;
+	completion?: string;
+	input_cache_read?: string;
+	input_cache_write?: string;
 }
 
 export interface OpenRouterCatalog {
@@ -36,14 +52,41 @@ function modalities(values: string[] | undefined): ("text" | "image")[] {
 	);
 }
 
+// Convert pricing from $/token to $/million tokens
+function perMillion(value: string | undefined, fallback: number): number {
+	return value ? roundCost(parseFloat(value) * 1_000_000) : fallback;
+}
+
 function cost(model: OpenRouterModelListItem): ModelCost {
-	// Convert pricing from $/token to $/million tokens
-	return {
-		input: roundCost(parseFloat(model.pricing?.prompt || "0") * 1_000_000),
-		output: roundCost(parseFloat(model.pricing?.completion || "0") * 1_000_000),
-		cacheRead: roundCost(parseFloat(model.pricing?.input_cache_read || "0") * 1_000_000),
-		cacheWrite: roundCost(parseFloat(model.pricing?.input_cache_write || "0") * 1_000_000),
+	const pricing = model.pricing;
+	const base = {
+		input: perMillion(pricing?.prompt, 0),
+		output: perMillion(pricing?.completion, 0),
+		cacheRead: perMillion(pricing?.input_cache_read, 0),
+		cacheWrite: perMillion(pricing?.input_cache_write, 0),
 	};
+	// Prompt-length overrides become request-wide tiers. Time-of-day overrides are skipped
+	// because ModelCost cannot express them.
+	const tiers = (pricing?.overrides ?? []).flatMap((override): ModelCostTier[] => {
+		if (
+			override.min_prompt_tokens === undefined ||
+			override.utc_start !== undefined ||
+			override.utc_end !== undefined ||
+			override.utc_days !== undefined
+		) {
+			return [];
+		}
+		return [
+			{
+				inputTokensAbove: override.min_prompt_tokens,
+				input: perMillion(override.prompt, base.input),
+				output: perMillion(override.completion, base.output),
+				cacheRead: perMillion(override.input_cache_read, base.cacheRead),
+				cacheWrite: perMillion(override.input_cache_write, base.cacheWrite),
+			},
+		];
+	});
+	return tiers.length > 0 ? { ...base, tiers } : base;
 }
 
 /**

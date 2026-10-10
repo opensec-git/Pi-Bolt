@@ -16,7 +16,7 @@ import type {
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
-import { parseStreamingJson } from "../utils/json-parse.ts";
+import { parseStreamingJson, parseStreamingJsonWhileStreaming } from "../utils/json-parse.ts";
 import { getPiUserAgent } from "../utils/pi-user-agent.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
@@ -167,6 +167,11 @@ export const stream: StreamFunction<"mistral-conversations", MistralOptions> = (
 			stream.end();
 		} catch (error) {
 			for (const block of output.content) {
+				// A tool call cut off mid-stream keeps all the arguments that arrived.
+				const partialArgs = (block as { partialArgs?: string }).partialArgs;
+				if (block.type === "toolCall" && partialArgs !== undefined) {
+					block.arguments = parseStreamingJson<ToolCall["arguments"]>(partialArgs);
+				}
 				// partialArgs is only a streaming scratch buffer; never persist it.
 				delete (block as { partialArgs?: string }).partialArgs;
 			}
@@ -732,7 +737,12 @@ async function consumeChatStream(
 					? toolCall.function.arguments
 					: JSON.stringify(toolCall.function.arguments || {});
 			block.partialArgs = (block.partialArgs || "") + argsDelta;
-			block.arguments = parseStreamingJson<ToolCall["arguments"]>(block.partialArgs);
+			// The final arguments are parsed once below, after the stream ends.
+			block.arguments = parseStreamingJsonWhileStreaming<ToolCall["arguments"]>(
+				block,
+				block.partialArgs,
+				block.arguments,
+			);
 			stream.push({
 				type: "toolcall_delta",
 				contentIndex: toolBlocksByKey.get(key)!,
@@ -930,7 +940,8 @@ function mapChatStopReason(reason: string | null): { stopReason: StopReason; err
 		case "tool_calls":
 			return { stopReason: "toolUse" };
 		case "error":
-			return { stopReason: "error", errorMessage: "Provider stopped with: error" };
+			// Mistral reports transient server failures this way; "server error" makes the message retryable.
+			return { stopReason: "error", errorMessage: "Provider stopped with: error (server error)" };
 		default:
 			return { stopReason: "error", errorMessage: `Provider stopped with: ${reason}` };
 	}

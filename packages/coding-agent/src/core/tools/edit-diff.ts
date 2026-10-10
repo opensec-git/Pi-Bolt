@@ -244,8 +244,8 @@ export function fuzzyFindText(content: string, oldText: string): FuzzyMatchResul
 	};
 }
 
-function countOccurrences(content: string, oldText: string): number {
-	const fuzzyContent = normalizeForFuzzyMatch(content);
+/** Occurrences of `oldText` in `fuzzyContent`, which is already fuzzy-normalized. */
+function countOccurrences(fuzzyContent: string, oldText: string): number {
 	const fuzzyOldText = normalizeForFuzzyMatch(oldText);
 	return fuzzyContent.split(fuzzyOldText).length - 1;
 }
@@ -315,7 +315,9 @@ export function applyEditsToNormalizedContent(
 
 	const initialMatches = normalizedEdits.map((edit) => fuzzyFindText(normalizedContent, edit.oldText));
 	const usedFuzzyMatch = initialMatches.some((match) => match.usedFuzzyMatch);
-	const replacementBaseContent = usedFuzzyMatch ? normalizeForFuzzyMatch(normalizedContent) : normalizedContent;
+	// Normalized once for all edits: normalizing a large file per edit took most of a multi-edit call.
+	const fuzzyContent = normalizeForFuzzyMatch(normalizedContent);
+	const replacementBaseContent = usedFuzzyMatch ? fuzzyContent : normalizedContent;
 
 	const matchedEdits: MatchedEdit[] = [];
 	for (let i = 0; i < normalizedEdits.length; i++) {
@@ -325,7 +327,8 @@ export function applyEditsToNormalizedContent(
 			throw getNotFoundError(path, i, normalizedEdits.length);
 		}
 
-		const occurrences = countOccurrences(replacementBaseContent, edit.oldText);
+		// normalizeForFuzzyMatch is idempotent, so this is the normalized replacement base either way.
+		const occurrences = countOccurrences(fuzzyContent, edit.oldText);
 		if (occurrences > 1) {
 			throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
 		}

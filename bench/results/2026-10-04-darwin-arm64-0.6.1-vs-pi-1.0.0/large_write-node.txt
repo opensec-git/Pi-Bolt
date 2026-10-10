@@ -1,3 +1,0 @@
-build           file   wall s    cpu s  result
-node            50 KB      1.1      1.2  ok
-node           200 KB     14.2     14.5  ok

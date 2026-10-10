@@ -183,7 +183,33 @@ export function appendGrammarToolInputJsonDelta(
 
 	const inputDelta = nextInput.slice(buffer.input.length);
 	if (!close && inputDelta.length === 0) return undefined;
+	return encodeGrammarToolInputDelta(buffer, inputProperty, inputDelta, nextInput, close);
+}
 
+/**
+ * Like appendGrammarToolInputJsonDelta() for a streamed piece of input, `inputDelta`, which is appended to what arrived
+ * before without comparing that again. Passing the whole input on every delta compared and flattened all of it each
+ * time, which made streaming a large input quadratic in its size.
+ */
+export function appendGrammarToolInputJsonChunk(
+	buffer: GrammarToolInputJsonBuffer,
+	inputProperty: string,
+	inputDelta: string,
+): string | undefined {
+	if (buffer.closed) {
+		throw new Error(`grammar tool input for property "${inputProperty}" changed after it was closed`);
+	}
+	if (inputDelta.length === 0) return undefined;
+	return encodeGrammarToolInputDelta(buffer, inputProperty, inputDelta, buffer.input + inputDelta, false);
+}
+
+function encodeGrammarToolInputDelta(
+	buffer: GrammarToolInputJsonBuffer,
+	inputProperty: string,
+	inputDelta: string,
+	nextInput: string,
+	close: boolean,
+): string {
 	let delta = "";
 	if (!buffer.started) {
 		delta += `{${JSON.stringify(inputProperty)}:"`;

@@ -12,8 +12,7 @@ import {
 } from "typescript/unstable/ast/is";
 import { API } from "typescript/unstable/sync";
 
-// (.work: the engine's sources and other build inputs, not the repository's.)
-const ignoredDirectories = new Set([".git", ".work", "coverage", "dist", "node_modules"]);
+const ignoredDirectories = new Set([".git", ".work", "coverage", "dist", "node_modules", "out"]); // (.work, out: Pi-Bolt's engine checkouts and builds)
 const files = [];
 
 function collectTypescriptFiles(directory) {

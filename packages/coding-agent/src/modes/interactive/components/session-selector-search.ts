@@ -23,8 +23,27 @@ function normalizeWhitespaceLower(text: string): string {
 	return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 
-function getSessionSearchText(session: SessionInfo): string {
-	return `${session.id} ${session.name ?? ""} ${session.allMessagesText} ${session.cwd}`;
+interface SessionSearchText {
+	text: string;
+	lower: string;
+	normalized?: string;
+}
+
+/**
+ * The search text of each session, made once. The text of a session is all of its messages: making it, lowercasing it
+ * (fuzzyMatch()) and normalizing it again for every session on every key typed in the search box goes over all the text
+ * of every session each time.
+ */
+const sessionSearchTexts = new WeakMap<SessionInfo, SessionSearchText>();
+
+function getSessionSearchText(session: SessionInfo): SessionSearchText {
+	let entry = sessionSearchTexts.get(session);
+	if (!entry) {
+		const text = `${session.id} ${session.name ?? ""} ${session.allMessagesText} ${session.cwd}`;
+		entry = { text, lower: text.toLowerCase() };
+		sessionSearchTexts.set(session, entry);
+	}
+	return entry;
 }
 
 export function hasSessionName(session: SessionInfo): boolean {
@@ -114,7 +133,8 @@ export function parseSearchQuery(query: string): ParsedSearchQuery {
 }
 
 export function matchSession(session: SessionInfo, parsed: ParsedSearchQuery): MatchResult {
-	const text = getSessionSearchText(session);
+	const searchText = getSessionSearchText(session);
+	const text = searchText.text;
 
 	if (parsed.mode === "regex") {
 		if (!parsed.regex) {
@@ -130,13 +150,11 @@ export function matchSession(session: SessionInfo, parsed: ParsedSearchQuery): M
 	}
 
 	let totalScore = 0;
-	let normalizedText: string | null = null;
 
 	for (const token of parsed.tokens) {
 		if (token.kind === "phrase") {
-			if (normalizedText === null) {
-				normalizedText = normalizeWhitespaceLower(text);
-			}
+			searchText.normalized ??= normalizeWhitespaceLower(searchText.lower);
+			const normalizedText = searchText.normalized;
 			const phrase = normalizeWhitespaceLower(token.value);
 			if (!phrase) continue;
 			const idx = normalizedText.indexOf(phrase);
@@ -145,7 +163,8 @@ export function matchSession(session: SessionInfo, parsed: ParsedSearchQuery): M
 			continue;
 		}
 
-		const m = fuzzyMatch(token.value, text);
+		// (Lowercasing text that has no capital letters in it gives the same string, without a copy.)
+		const m = fuzzyMatch(token.value, searchText.lower);
 		if (!m.matches) return { matches: false, score: 0 };
 		totalScore += m.score;
 	}

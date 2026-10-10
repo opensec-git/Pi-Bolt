@@ -76,13 +76,19 @@ def parse_builds(specs: list[str]) -> list[Build]:
 def warm_page_cache(builds: list[Build]) -> None:
     """Reads every build's files once, so that all are equally in the page cache. The kernel maps neighbouring pages of a file
     that are already cached along with the one that faulted, so a freshly written executable shows up to 10% more resident
-    memory than the same executable read from disk; comparing a fresh build with an old one would be unfair either way."""
+    memory than the same executable read from disk; comparing a fresh build with an old one would be unfair either way. On
+    Linux each file is first dropped from the page cache, so that every build is read back from disk the same way: pages a
+    file was written with sit in the cache in smaller units than pages read ahead from disk, and an executable extracted moments
+    before started 17% slower than the same bytes read back (Pi-Bolt 0.7.3, pi --version)."""
     for build in builds:
         # (A macOS build's pi is a launcher: the executable is pi-bin beside it.)
         paths = [*build.argv, *(os.path.join(os.path.dirname(p), "pi-bin") for p in build.argv if "/" in p)]
         for path in paths:
             if ("/" in path or os.sep in path) and os.path.isfile(path):
                 with open(path, "rb") as f:
+                    if hasattr(os, "posix_fadvise") and not MACOS:
+                        os.fsync(f.fileno())
+                        os.posix_fadvise(f.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
                     while f.read(1 << 22):
                         pass
 
@@ -104,10 +110,17 @@ def fake_model(pace_ms: float = 0, script: str = "fake_model.py", log_sizes: str
         args += ["--log-sizes", log_sizes]
     proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     try:
-        for _ in range(100):
-            with contextlib.suppress(OSError), socket.create_connection(("127.0.0.1", port), timeout=0.1):
+        # Up to a minute: Python's first start on a fresh machine (a CI runner) can take many seconds, and a run that starts
+        # before the server listens records a connection error that the reference run does not.
+        deadline = time.time() + 60
+        while True:
+            try:
+                socket.create_connection(("127.0.0.1", port), timeout=0.5).close()
                 break
-            time.sleep(0.05)
+            except OSError:
+                if proc.poll() is not None or time.time() > deadline:
+                    raise RuntimeError(f"the fake model server ({script}) did not start on port {port}")
+                time.sleep(0.05)
         yield port
     finally:
         proc.terminate()
@@ -219,8 +232,14 @@ def peak_footprint_mb(pid: int, block: bool = True) -> float | None:
     if int.from_bytes(info.raw[12:16], "little") != pid:
         return None
     ri = _rusage_macos(pid)
+    global last_exit_counters
+    # Instructions and cycles retired (millions): steadier than CPU time on a machine that moves work between core types.
+    last_exit_counters = {"instr_m": round(ri[29] / 1e6, 1), "cycles_m": round(ri[30] / 1e6, 1)} if ri else {}
     # (Exited, in any case: 0.0 if its figures cannot be read, so that whoever asked goes on to reap it.)
     return round(ri[28] / (1 << 20), 1) if ri else 0.0
+
+
+last_exit_counters: dict = {}
 
 
 class WinTty:
@@ -336,6 +355,8 @@ class Tty:
             if MACOS:
                 # (Before it is reaped, if it has exited. If that cannot be told, wait4 below still can.)
                 self.peak_footprint_mb = peak_footprint_mb(self.pid, block=False) or None
+                if self.peak_footprint_mb is not None:
+                    self.exit_counters = dict(last_exit_counters)
             pid, status, ru = os.wait4(self.pid, os.WNOHANG)
             if pid:
                 os.close(self.fd)

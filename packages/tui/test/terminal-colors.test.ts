@@ -65,6 +65,7 @@ class TestTerminal implements Terminal {
 	setTitle(_title: string): void {}
 
 	setProgress(_active: boolean): void {}
+	setProgramStatus(): void {}
 
 	sendInput(data: string): void {
 		this.inputHandler?.(data);
