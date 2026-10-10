@@ -3,6 +3,36 @@ From: OpenSec <contactus@opensec.in>
 Date: Sat, 10 Oct 2026 17:52:02 +0530
 Subject: [PATCH] Pi-Bolt: ahead-of-time compiled executables
 
+Bun's changes for Pi-Bolt's executables, on Linux x86-64, macOS ARM64 and Windows x64:
+
+- Executables with a prebuilt heap and a code image, made by `bun build --compile` and mapped from the
+  executable when it starts (bundler, StandaloneModuleGraph, ZigSourceProvider).
+- Builtin modules imported in the order Node evaluates them; the names of a builtin module required in
+  a wrapper read once, ahead of the wrapper's dependencies.
+- Stack traces and crash reports of ahead-of-time code: no CodeBlocks made to read a frame, crash
+  reports not uploaded unasked. The default Error.prepareStackTrace takes any object.
+- Memory: garbage collection markers for the prebuilt heap, the allocator's idle sweep every 250 ms,
+  static strings not reference counted from Rust; on macOS a starting heap budget that fits the
+  prebuilt heap, and a collection every 5 seconds while the program waits.
+- fetch: an idle connection waits in the keep-alive pool for 4 seconds, or as long as the server says.
+- macOS: the prebuilt heap and code image mapped from the __BUN section, with the executable where it
+  was linked to be; SharedArrayBuffer with the JIT off; a terminal reopened by its own device, which
+  kqueue can watch; the programs an executable starts are started by Pi-Bolt's launcher helper.
+
+- Windows x64: the prebuilt heap and code image in the executable's PE sections, mapped read-only where
+  nothing writes; DLLs that are delay-loaded only from System32 (a delay-load hook, the dependent load
+  flag, WIC); a build without the JIT stays without it, and the debugging options that reach memory or
+  load code are off in a compiled program; crash reports of compiled code; a collection every second
+  while waiting (5 s measured +40% CPU while a reply streams), and mimalloc's purge delay left at its
+  default; an idle keep-alive connection aged on GetTickCount64; the writer of the prebuilt heap takes a word that
+  looks like an address of the blocks or the build's scratch memory for a number unless it is aligned and its page committed,
+  and says so.
+
+Includes the engine changes of Pi-Bolt 0.7.1 to 0.7.3 on pi-bolt (5f6ad773e, c9bde4b67): writev for
+queued writes, mimalloc from upstream, less idle work, an idle keep-alive's age on a clock nobody sets,
+fetch through a TLS 1.2 renegotiation.
+
+Includes the engine changes of Pi-Bolt 0.7.4 (bolt-v0.7.4): code built into an executable resolves no module or package in the working directory (absolute paths and require.resolve paths still do); internal names and messages cleaned up. Builds on Linux and macOS: the executable's bytes mutable only where Windows rewrites them.
 ---
  Cargo.lock                                    |    1 +
  .../bun-usockets/src/eventing/epoll_kqueue.c  |    7 +-
