@@ -155,12 +155,52 @@ children; the programs are the helper's).
 ## Windows x64
 
 The full suite (`bench\run-suite.ps1`) on Windows 11 25H2 (26200) on an Intel Core i5-1335U laptop (16 GB, on AC, best
-performance, Defender real-time protection on): Pi-Bolt 0.7.0 from `2acfe5ca0` (the runtime `16ed51941` with ThinLTO and Control
-Flow Guard, Pi compiled ahead of time for this CPU, JIT off; the executable that ships, after the hardening round of 2026-10-10),
-Pi 1.0.3 as released on stock Bun 1.4.2, and Pi 1.0.3's npm package on Node 22.23.3 and Node 24.21.0. Medians of 11 runs (2
-warm-up), 4 long sessions of 75 prompts, 5 streaming rounds; streaming runs in a ConPTY rather than tmux
-(`bench\conpty_check.py`: ConPTY passes frames on at about 16 ms, which is the floor of the frame times). Raw data and charts:
-[`bench/results/2026-10-10-windows`](../bench/results/2026-10-10-windows).
+performance, Defender real-time protection on): Pi-Bolt 0.8.0 from `1d373d18b` (Pi 1.1.0; the runtime `8bcf03bc0` with ThinLTO and
+Control Flow Guard, Pi compiled ahead of time for this CPU, JIT off, the prebuilt heap laid out by the Pi 1.1.0 profile), Pi
+1.1.0 as released on stock Bun 1.4.2, and Pi 1.1.0's bundle on Node 22.23.3 and Node 24.21.0. Medians of 11 runs (2 warm-up),
+4 long sessions of 75 prompts, 5 streaming rounds; streaming runs in a ConPTY rather than tmux (`bench\conpty_check.py`: ConPTY
+passes frames on at about 16 ms, which is the floor of the frame times). Raw data and charts:
+[`bench/results/2026-10-10-windows-0.8.0`](../bench/results/2026-10-10-windows-0.8.0).
+
+| | Pi-Bolt 0.8.0 | Pi 1.1.0 on Bun 1.4.2 | Node 22 | Node 24 |
+|---|---:|---:|---:|---:|
+| Launch to interactive (TUI) | **92 ms** | 177 ms | 345 ms | 311 ms |
+| `pi --version` | **35 ms** | 98 ms | 242 ms | 219 ms |
+| `pi -p`: one prompt, 4 tool calls | **113 ms** | 203 ms | 438 ms | 383 ms |
+| Time per prompt, 4.2M-token session | **400 ms** | 506 ms | 816 ms | 794 ms |
+| CPU, interactive session (5 prompts) | **291 ms** | 805 ms | 1,206 ms | 1,125 ms |
+| CPU, `pi -p` | **92 ms** | 329 ms | 582 ms | 544 ms |
+| CPU, `pi --version` | **17 ms** | 133 ms | 277 ms | 268 ms |
+| CPU per prompt, 4.2M-token session | **166 ms** | 298 ms | 684 ms | 634 ms |
+| Peak working set, interactive session | **95 MB** | 164 MB | 165 MB | 178 MB |
+| Peak private working set, interactive session | **56 MB** | 126 MB | 132 MB | 138 MB |
+| Peak private bytes (commit), interactive session | **113 MB** | 345 MB | 176 MB | 197 MB |
+| Private working set, TUI streaming in a ConPTY | **32 MB** | 97 MB | 105 MB | 60 MB |
+| Private working set, end of 4.2M-token session | **159 MB** | 248 MB | 391 MB | 413 MB |
+| Private bytes, end of 4.2M-token session | **245 MB** | 465 MB | 437 MB | 467 MB |
+| CPU, streaming replies (ConPTY) | **840 ms** | 982 ms | 1,468 ms | 1,285 ms |
+| Frame time p99, streaming replies | **17 ms** | 17 ms | 20 ms | 19 ms |
+| Frame time p99 / longest stall, 50 KB file written | **18 / 107 ms** | 59 / 3,612 ms | 75 / 2,727 ms | 64 / 858 ms |
+| Frame time p99 / longest stall, 200 KB file written | **18 / 63 ms** | 154 / 43,934 ms | 302 / 57,962 ms | 71 / 46,595 ms |
+| GC pause p99, 20,000-char answer / longest GC pause | 2.9 / 6.3 ms | 4.3 / 11 ms | **1.6 / 3.6 ms** | 1.6 / 8.4 ms |
+
+Pi-Bolt is the fastest and uses the least memory in every row but the garbage collector's pauses, where Node is shorter (its
+p99 by about a millisecond, its longest pause by 2.7 ms). Against 0.7.0 on Pi 1.0.3 (below), on the same machine:
+- Faster or the same: `pi -p` 124 to 113 ms (CPU 101 to 92), time per prompt in the long session 413 to 400 ms (CPU 188 to
+  166), streaming CPU 959 to 840 ms; launch to interactive 91 to 92 ms, `--version` 35 ms, peak commit 114 to 113 MB.
+- Higher, but within what runs vary by: memory at the end of the long session (private bytes 217 to 245 MB; the four sessions
+  227, 317, 261 and 229 MB, against 226, 175, 250 and 208 the night before, peaks 325-363 against 329-360), and the longest GC
+  pause, 2.9 to 6.3 ms: one collection of 31 in the one round that logs them, with the same count, p99 and CPU. That row would
+  need more rounds to be quoted.
+
+Plugins: the example plugin's loop takes 41 ms compiled into the executable. Loaded at run time it takes 756 ms with the JIT off,
+and 32 ms in the build with the JIT on, as on Bun (32 ms).
+
+### Pi-Bolt 0.7.0, on Pi 1.0.3
+
+The same suite, the day before the merge of 0.7.3: Pi-Bolt 0.7.0 from `2acfe5ca0` (the runtime `16ed51941`; the executable after
+the hardening round of 2026-10-10), Pi 1.0.3 as released on stock Bun 1.4.2, and Pi 1.0.3's npm package on Node 22.23.3 and
+Node 24.21.0. Raw data and charts: [`bench/results/2026-10-10-windows`](../bench/results/2026-10-10-windows).
 
 | | Pi-Bolt | Pi on Bun 1.4.2 | Node 22 | Node 24 |
 |---|---:|---:|---:|---:|
@@ -205,7 +245,7 @@ longest stall of the 50 KB step, and every build pays it.
 Plugins: the example plugin's hot loop takes 37 ms compiled into the executable (`build-pi.ps1 -Plugins`). Loaded at run time,
 it takes 758 ms with the JIT off and 32 ms in the build with the JIT on, the same as on Bun.
 
-### Earlier Windows results
+#### Earlier Windows results
 
 The same scenarios on Windows 11 (26200) on an Intel Core i5-1335U laptop (16 GB, on AC, Defender real-time protection on),
 against Pi 1.0.3 as released on Bun 1.4.2 and its npm package on Node 24.21. Pi-Bolt is the `windows-x64` branch: the runtime without

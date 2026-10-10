@@ -1,0 +1,8 @@
+﻿build            plugin         launch   first /words   steady /words
+pi-bolt          compiled      114.5ms         42.0ms          41.2ms
+pi-bolt-jit      compiled      124.9ms         37.6ms          36.4ms
+pi-bolt          runtime       146.1ms        757.5ms         756.2ms
+pi-bolt-jit      runtime       161.0ms         36.7ms          31.9ms
+bun              runtime       248.8ms         34.0ms          31.8ms
+pi-bolt          none          115.7ms
+bun              none          197.0ms

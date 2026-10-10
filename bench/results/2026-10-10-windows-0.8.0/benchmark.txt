@@ -1,0 +1,36 @@
+
+startup
+  build                          wall_ms          cpu_ms         peak_mb  peak_private_mb  peak_private_ws_mb      job_cpu_ms    io_other_ops
+  floor                        18 (-82%)        4 (-97%)        4 (-95%)        1 (-100%)                   -       16 (-89%)       16 (-79%)
+  pi-bolt                      35 (-65%)       17 (-87%)       21 (-71%)        45 (-68%)                   -       31 (-78%)       37 (-51%)
+  bun                                 98             133              75              141                  29             141              76
+  node                       242 (+146%)     277 (+108%)        76 (+1%)        61 (-57%)           45 (+58%)     281 (+100%)     642 (+745%)
+  node24                     219 (+123%)     268 (+100%)       86 (+15%)        68 (-52%)           43 (+49%)     281 (+100%)     483 (+536%)
+  wall_ms over the floor (18): pi-bolt 17, bun 80, node 224, node24 201
+
+headless
+  build                          wall_ms          cpu_ms         peak_mb  peak_private_mb  peak_private_ws_mb      job_cpu_ms    io_other_ops
+  floor                        18 (-91%)        4 (-99%)        4 (-97%)        1 (-100%)                   -       16 (-96%)       16 (-99%)
+  pi-bolt                     113 (-44%)       92 (-72%)       66 (-46%)        76 (-73%)           15 (-78%)      109 (-71%)      742 (-54%)
+  bun                                203             329             120              278                  68             375            1626
+  node                       438 (+116%)      582 (+77%)      104 (-13%)       114 (-59%)            66 (-3%)      578 (+54%)     2390 (+47%)
+  node24                      383 (+89%)      544 (+66%)       118 (-2%)       124 (-55%)            69 (+1%)      547 (+46%)     2174 (+34%)
+  wall_ms over the floor (18): pi-bolt 95, bun 185, node 420, node24 365
+
+interactive
+  build                           tti_ms        turns_ms         wall_ms          cpu_ms         peak_mb  peak_private_mb  peak_private_ws_mb      job_cpu_ms    io_other_ops
+  floor                        24 (-87%)       86 (-78%)      370 (-60%)       10 (-99%)        4 (-98%)        1 (-100%)           0 (-100%)       16 (-98%)      13 (-100%)
+  pi-bolt                      92 (-48%)      347 (-13%)      765 (-18%)      291 (-64%)       95 (-42%)       113 (-67%)           56 (-56%)      281 (-65%)     1714 (-39%)
+  bun                                177             399             928             805             164              345                 126             812            2827
+  node                        345 (+94%)      595 (+49%)     1383 (+49%)     1206 (+50%)       165 (+0%)       176 (-49%)           132 (+5%)     1203 (+48%)     5265 (+86%)
+  node24                      311 (+75%)      571 (+43%)     1301 (+40%)     1125 (+40%)       178 (+8%)       197 (-43%)           138 (+9%)     1078 (+33%)     5033 (+78%)
+  tti_ms over the floor (24): pi-bolt 68, bun 154, node 321, node24 287
+
+interactive-default-theme
+  build                           tti_ms          cpu_ms  peak_private_mb  peak_private_ws_mb      job_cpu_ms    io_other_ops
+  floor                        21 (-88%)        7 (-98%)        1 (-100%)           0 (-100%)       16 (-97%)       13 (-99%)
+  pi-bolt                      89 (-49%)      122 (-72%)        86 (-71%)           34 (-64%)      109 (-77%)     1261 (-47%)
+  bun                                175             430              300                  95             469            2393
+  node                        343 (+97%)      695 (+62%)       122 (-59%)           73 (-23%)      703 (+50%)     3278 (+37%)
+  node24                      318 (+82%)      678 (+58%)       134 (-55%)           79 (-16%)      672 (+43%)     3046 (+27%)
+  tti_ms over the floor (21): pi-bolt 68, bun 154, node 323, node24 298
