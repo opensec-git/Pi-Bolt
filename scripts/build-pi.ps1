@@ -1,7 +1,7 @@
 # Builds Pi as a single executable with every function compiled ahead of time: Windows' scripts/build-pi.sh.
 #
 # Usage: scripts\build-pi.ps1 [options]
-#   -Pi DIR           a built Pi tree (npm ci --ignore-scripts; npm run build). Default: this repository, which is a fork of Pi
+#   -Pi DIR           a built Pi tree (npm ci --ignore-scripts; npm run build:offline, with the model catalog the repository has). Default: this repository, which is a fork of Pi
 #   -Out DIR          where to put the executable and its assets. Default: out\pi-bolt
 #   -Jit on|off       run with the JIT on (code that is not compiled ahead of time gets JIT-compiled) or off (the default)
 #   -Cpu native|baseline
@@ -54,7 +54,7 @@ trap { Remove-PluginStage; break }
 if (-not $Pi) { $Pi = if ($env:PIBOLT_PI) { $env:PIBOLT_PI } else { $Root } }
 $Pi = (Resolve-Path $Pi).Path
 $Agent = Join-Path $Pi 'packages\coding-agent'
-if (-not (Test-Path (Join-Path $Agent 'dist\bun\cli.js'))) { Die "$Agent\dist\bun\cli.js not found: build Pi first (npm ci --ignore-scripts; npm run build)" }
+if (-not (Test-Path (Join-Path $Agent 'dist\bun\cli.js'))) { Die "$Agent\dist\bun\cli.js not found: build Pi first (npm ci --ignore-scripts; npm run build:offline)" }
 $Version = (Get-Content (Join-Path $Agent 'package.json') -Raw | ConvertFrom-Json).version
 # The executable is made from Pi's built output (each package's dist), not from its sources: a source changed since its package
 # was built would be left out.
@@ -64,7 +64,7 @@ foreach ($package in Get-ChildItem (Split-Path $Agent) -Directory) {
 	$built = Get-ChildItem $dist -Filter *.js -File | Select-Object -First 1
 	if (-not $built) { continue }
 	$stale = Get-ChildItem $src -Recurse -Filter *.ts -File | Where-Object { $_.Name -notlike '*.d.ts' -and $_.LastWriteTime -gt $built.LastWriteTime } | Select-Object -First 1
-	if ($stale) { Die "Pi's sources changed since it was built ($($stale.FullName)): build it again (npm run build in $Pi)" }
+	if ($stale) { Die "Pi's sources changed since it was built ($($stale.FullName)): build it again (npm run build:offline in $Pi)" }
 }
 $PiboltVersion = (Get-Content (Join-Path $Root 'VERSION') -Raw).Trim()
 $Platform = 'win32-x64'

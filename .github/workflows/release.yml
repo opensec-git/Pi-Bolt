@@ -266,7 +266,8 @@ jobs:
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          npm run build
+          # (Offline: the model catalog is the repository's, as in prepare-pi.sh.)
+          npm run build:offline
           if ($LASTEXITCODE -ne 0) { exit 1 }
       - name: Build and package
         run: |

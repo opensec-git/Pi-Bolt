@@ -6,9 +6,9 @@
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#050505">
 <title>Pi-Bolt: the Pi coding agent, compiled to machine code</title>
-<meta name="description" content="Pi-Bolt is the Pi coding agent compiled ahead of time into one native executable for Linux x86-64 and macOS on Apple silicon. It starts three times sooner than Pi on Bun and uses about a third of its CPU.">
+<meta name="description" content="Pi-Bolt is the Pi coding agent compiled ahead of time into one native executable for Linux x86-64, macOS on Apple silicon and Windows x64. It starts two to three times sooner than Pi on Bun and uses about a third of its CPU.">
 <meta property="og:title" content="Pi-Bolt: the Pi coding agent, compiled to machine code">
-<meta property="og:description" content="One native executable for Linux and macOS. Starts three times sooner than Pi on Bun and uses about a third of its CPU.">
+<meta property="og:description" content="One native executable for Linux, macOS and Windows. Starts two to three times sooner than Pi on Bun and uses about a third of its CPU.">
 <meta property="og:url" content="https://pi-bolt.opensec.in/">
 <link rel="icon" href="logo.svg" type="image/svg+xml">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -186,14 +186,14 @@
     <div class="wrap">
       <div>
         <h1>The Pi coding agent, compiled to <span class="pix">machine&nbsp;code.</span></h1>
-        <p class="lede">Pi-Bolt is Pi as one native executable for Linux and macOS. Every function is compiled before you run it, so
-          nothing is parsed or JIT-compiled at launch: it starts three times sooner than Pi on Bun and uses about a third of its
+        <p class="lede">Pi-Bolt is Pi as one native executable for Linux, macOS and Windows. Every function is compiled before you run it, so
+          nothing is parsed or JIT-compiled at launch: it starts two to three times sooner than Pi on Bun and uses about a third of its
           CPU.</p>
         <div class="install">
           <code id="cmd">curl -fsSL https://pi-bolt.opensec.in/install.sh | sh</code>
           <button class="copy" type="button" data-copy="cmd" aria-label="Copy the install command">Copy</button>
         </div>
-        <p class="alt">Or <code>npm install -g pi-bolt</code>. Then run <code>pi-bolt</code> in your project.</p>
+        <p class="alt">On Windows, in PowerShell: <code>powershell -c "irm https://pi-bolt.opensec.in/install.ps1 | iex"</code>. Or <code>npm install -g pi-bolt</code>. Then run <code>pi-bolt</code> in your project.</p>
       </div>
 
       <div class="race" aria-labelledby="race-title">
@@ -283,7 +283,7 @@
     <div>
       <p><strong>Pi-Bolt</strong> is an independent fork of <a href="https://github.com/earendil-works/pi">Pi</a>, not affiliated
         with Pi's authors or with Oven. Built on Pi by Mario Zechner and contributors, and on Bun by Oven.</p>
-      <p>MIT licensed. Linux x86-64 with glibc 2.17 or later; macOS 13 or later on Apple silicon.</p>
+      <p>MIT licensed. Linux x86-64 with glibc 2.17 or later; macOS 13 or later on Apple silicon; Windows 10 (1809) or 11 on x64.</p>
     </div>
     <div>
       <h4>Use it</h4>
