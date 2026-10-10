@@ -1,0 +1,27 @@
+{"extension": "opensec-pi-subagents", "build": "pi-bolt", "loads": true, "exit": 0, "wall_ms": 726, "tools": ["read", "bash", "edit", "write", "Agent", "SubagentWorkflow", "get_subagent_result", "steer_subagent"], "problems": []}
+{"extension": "opensec-pi-subagents", "build": "pi-bolt-jit", "loads": true, "exit": 0, "wall_ms": 13424, "tools": ["read", "bash", "edit", "write", "Agent", "SubagentWorkflow", "get_subagent_result", "steer_subagent"], "problems": []}
+{"extension": "opensec-pi-subagents", "build": "bun", "loads": true, "exit": 0, "wall_ms": 368, "tools": ["read", "bash", "edit", "write", "Agent", "SubagentWorkflow", "get_subagent_result", "steer_subagent"], "problems": []}
+{"extension": "opensec-pi-todo", "build": "pi-bolt", "loads": true, "exit": 0, "wall_ms": 131, "tools": ["read", "bash", "edit", "write", "todo"], "problems": []}
+{"extension": "opensec-pi-todo", "build": "pi-bolt-jit", "loads": true, "exit": 0, "wall_ms": 129, "tools": ["read", "bash", "edit", "write", "todo"], "problems": []}
+{"extension": "opensec-pi-todo", "build": "bun", "loads": true, "exit": 0, "wall_ms": 233, "tools": ["read", "bash", "edit", "write", "todo"], "problems": []}
+{"extension": "pi-mcp-adapter", "build": "pi-bolt", "loads": true, "exit": 0, "wall_ms": 6979, "tools": ["read", "bash", "edit", "write", "mcp"], "problems": []}
+{"extension": "pi-mcp-adapter", "build": "pi-bolt-jit", "loads": true, "exit": 0, "wall_ms": 394, "tools": ["read", "bash", "edit", "write", "mcp"], "problems": []}
+{"extension": "pi-mcp-adapter", "build": "bun", "loads": true, "exit": 0, "wall_ms": 5293, "tools": ["read", "bash", "edit", "write", "mcp"], "problems": []}
+{"extension": "pi-subagents", "build": "pi-bolt", "loads": true, "exit": 0, "wall_ms": 10628, "tools": ["read", "bash", "edit", "write", "subagent", "bg_wait", "subagent_supervisor"], "problems": []}
+{"extension": "pi-subagents", "build": "pi-bolt-jit", "loads": true, "exit": 0, "wall_ms": 635, "tools": ["read", "bash", "edit", "write", "subagent", "bg_wait", "subagent_supervisor"], "problems": []}
+{"extension": "pi-subagents", "build": "bun", "loads": true, "exit": 0, "wall_ms": 6930, "tools": ["read", "bash", "edit", "write", "subagent", "bg_wait", "subagent_supervisor"], "problems": []}
+{"extension": "pi-powerline-footer", "build": "pi-bolt", "loads": true, "exit": 0, "wall_ms": 1109, "tools": ["read", "bash", "edit", "write"], "problems": []}
+{"extension": "pi-powerline-footer", "build": "pi-bolt-jit", "loads": true, "exit": 0, "wall_ms": 159, "tools": ["read", "bash", "edit", "write"], "problems": []}
+{"extension": "pi-powerline-footer", "build": "bun", "loads": true, "exit": 0, "wall_ms": 809, "tools": ["read", "bash", "edit", "write"], "problems": []}
+{"extension": "pi-permission-system", "build": "pi-bolt", "loads": true, "exit": 0, "wall_ms": 3218, "tools": ["read", "bash", "edit", "write"], "problems": []}
+{"extension": "pi-permission-system", "build": "pi-bolt-jit", "loads": true, "exit": 0, "wall_ms": 390, "tools": ["read", "bash", "edit", "write"], "problems": []}
+{"extension": "pi-permission-system", "build": "bun", "loads": true, "exit": 0, "wall_ms": 2882, "tools": ["read", "bash", "edit", "write"], "problems": []}
+{"extension": "pi-lens", "build": "pi-bolt", "loads": true, "exit": 0, "wall_ms": 11654, "tools": ["read", "bash", "edit", "write", "lens_diagnostics", "symbol_search", "effective_config", "project_report", "module_report", "read_symbol", "read_enclosing", "pi_lens_activate_tools"], "problems": []}
+{"extension": "pi-lens", "build": "pi-bolt-jit", "loads": true, "exit": 0, "wall_ms": 895, "tools": ["read", "bash", "edit", "write", "lens_diagnostics", "symbol_search", "effective_config", "project_report", "module_report", "read_symbol", "read_enclosing", "pi_lens_activate_tools"], "problems": []}
+{"extension": "pi-lens", "build": "bun", "loads": true, "exit": 0, "wall_ms": 5106, "tools": ["read", "bash", "edit", "write", "lens_diagnostics", "symbol_search", "effective_config", "project_report", "module_report", "read_symbol", "read_enclosing", "pi_lens_activate_tools"], "problems": []}
+{"extension": "statusline", "build": "pi-bolt", "loads": true, "exit": 0, "wall_ms": 306, "tools": ["read", "bash", "edit", "write"], "problems": []}
+{"extension": "statusline", "build": "pi-bolt-jit", "loads": true, "exit": 0, "wall_ms": 139, "tools": ["read", "bash", "edit", "write"], "problems": []}
+{"extension": "statusline", "build": "bun", "loads": true, "exit": 0, "wall_ms": 340, "tools": ["read", "bash", "edit", "write"], "problems": []}
+{"extension": "pi-docparser", "build": "pi-bolt", "loads": true, "exit": 0, "wall_ms": 438, "tools": ["read", "bash", "edit", "write", "document_parse", "document_search", "document_screenshot"], "problems": []}
+{"extension": "pi-docparser", "build": "pi-bolt-jit", "loads": true, "exit": 0, "wall_ms": 143, "tools": ["read", "bash", "edit", "write", "document_parse", "document_search", "document_screenshot"], "problems": []}
+{"extension": "pi-docparser", "build": "bun", "loads": true, "exit": 0, "wall_ms": 442, "tools": ["read", "bash", "edit", "write", "document_parse", "document_search", "document_screenshot"], "problems": []}
