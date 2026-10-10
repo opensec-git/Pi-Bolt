@@ -139,6 +139,21 @@ scripts/build-pi.sh --plugins my-plugins/plugins.ts --out out/pi-bolt-plugins
 
 See [docs/PLUGINS.md](docs/PLUGINS.md).
 
+## Herdr
+
+In a [Herdr](https://herdr.dev) pane, Pi-Bolt shows up as `pi-bolt`: idle, working (also while background subagents run), or
+blocked when an extension waits for an answer during a run. It also hands Herdr the command that reopens its session, so a
+Herdr restart brings the same conversation back in the same pane. There is nothing to install. Pi-Bolt does not load the file
+`herdr integration install pi` writes (stock Pi still uses it), and `"-builtin:herdr"` in the `extensions` setting turns this
+off. Restoring a session needs Herdr 0.9.2 or later, with `pi-bolt` on the Herdr server's `PATH`: start Herdr from a terminal,
+not with `brew services`.
+
+To start other agents in Herdr panes from a Pi-Bolt session, add the third-party
+[pi-herdr](https://www.npmjs.com/package/@andrewjacop/pi-herdr) (MIT): `pi-bolt install npm:@andrewjacop/pi-herdr`. Herdr
+starts Pi agents as `pi`, so the Pi agents it spawns run stock Pi, which must be installed (Claude Code, Codex and the other
+agents it supports need only their own CLIs). Pi-Bolt turns off pi-herdr's own report of the Pi-Bolt pane
+(`PI_HERDR_NO_SELF_REPORT=1`), so the pane keeps showing `pi-bolt` and can still be restored.
+
 ## How it works
 
 <picture>

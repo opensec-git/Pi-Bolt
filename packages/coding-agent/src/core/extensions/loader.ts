@@ -11,6 +11,8 @@ import type { Provider } from "@earendil-works/pi-ai";
 import type { KeyId } from "@earendil-works/pi-tui";
 import type { createJiti } from "jiti";
 import { CONFIG_DIR_NAME, getAgentDir, isBunBinary, isBundledNode } from "../../config.ts";
+import { isHerdrPiIntegration } from "../../extensions/herdr/integration-file.ts";
+import { PIBOLT } from "../../pi-bolt.ts";
 import { resolvePath } from "../../utils/paths.ts";
 import { createEventBus, type EventBus } from "../event-bus.ts";
 import type { ExecOptions } from "../exec.ts";
@@ -704,6 +706,8 @@ async function loadExtensionsInternal(
 	const resolvedRuntime = runtime ?? createExtensionRuntime();
 
 	for (const extPath of paths) {
+		// Pi-Bolt's built-in Herdr extension takes the place of Herdr's Pi integration.
+		if (PIBOLT && isHerdrPiIntegration(resolvePath(extPath, resolvedCwd))) continue;
 		const { extension, error } = await loadExtension(
 			extPath,
 			resolvedCwd,
