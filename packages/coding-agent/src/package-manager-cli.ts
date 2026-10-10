@@ -24,6 +24,7 @@ import {
 	getSelfUpdateCommand,
 	getSelfUpdateUnavailableInstruction,
 	PACKAGE_NAME,
+	PRODUCT_NAME,
 	type SelfUpdateCommand,
 	type SelfUpdatePackageTarget,
 	VERSION,
@@ -35,7 +36,14 @@ import { type AppMode, resolveProjectTrusted } from "./core/project-trust.ts";
 import { DefaultResourceLoader, isBuiltinExtension } from "./core/resource-loader.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
-import { PIBOLT, PIBOLT_INSTALL_COMMAND, piBoltInstallMethod, piBoltUpdateEnvironment } from "./pi-bolt.ts";
+import {
+	PIBOLT,
+	PIBOLT_INSTALL_COMMAND,
+	piBoltExecutableIn,
+	piBoltInstallerProcess,
+	piBoltInstallMethod,
+	piBoltUpdateEnvironment,
+} from "./pi-bolt.ts";
 import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/child-process.ts";
 import { canonicalizePath, getCwdRelativePath } from "./utils/paths.ts";
 import { getPiUserAgent } from "./utils/pi-user-agent.ts";
@@ -361,24 +369,24 @@ Examples:
 			console.log(`${chalk.bold("Usage:")}
   ${getPackageCommandUsage("update")}
 
-Update pi, installed packages, or model catalogs.
+Update ${PRODUCT_NAME}, installed packages, or model catalogs.
 
 Options:
-  --self                  Update pi only (default when no target is given)
+  --self                  Update ${PRODUCT_NAME} only (default when no target is given)
   --extensions            Update installed packages only
   --models                Refresh model catalogs only
-  --all                   Update pi and installed packages
+  --all                   Update ${PRODUCT_NAME} and installed packages
   --extension <source>    Update one package only
   -a, --approve           Trust project-local files for this command
   -na, --no-approve       Ignore project-local files for this command
-  --force                 Reinstall pi even if the current version is latest
+  --force                 Reinstall ${PRODUCT_NAME} even if the current version is latest
 
 Short forms:
-  ${COMMAND_NAME} update                Update pi only
-  ${COMMAND_NAME} update --all          Update pi and all extensions
+  ${COMMAND_NAME} update                Update ${PRODUCT_NAME} only
+  ${COMMAND_NAME} update --all          Update ${PRODUCT_NAME} and all extensions
   ${COMMAND_NAME} update --models       Refresh model catalogs only
   ${COMMAND_NAME} update <source>       Update one package
-  ${COMMAND_NAME} update pi             Update pi only (self works as alias to pi)
+  ${COMMAND_NAME} update pi             Update ${PRODUCT_NAME} only (self works as alias to pi)
 `);
 			return;
 
@@ -728,9 +736,10 @@ async function runPiBoltSelfUpdate(version: string): Promise<boolean> {
 	}
 	console.log(chalk.dim(`Updating Pi-Bolt to ${version} with ${PIBOLT_INSTALL_COMMAND}...`));
 	const status = await new Promise<number | null>((resolve, reject) => {
-		const child = spawnProcess("sh", ["-c", PIBOLT_INSTALL_COMMAND], {
+		const installer = piBoltInstallerProcess();
+		const child = spawnProcess(installer.command, installer.args, {
 			stdio: "inherit",
-			env: piBoltUpdateEnvironment(),
+			env: piBoltUpdateEnvironment(version),
 		});
 		child.on("error", reject);
 		child.on("close", (code) => resolve(code));
@@ -740,6 +749,15 @@ async function runPiBoltSelfUpdate(version: string): Promise<boolean> {
 	});
 	if (status !== 0) {
 		console.error(chalk.red(`The installer did not finish. You can run it yourself: ${PIBOLT_INSTALL_COMMAND}`));
+		return false;
+	}
+	// What is there now says which version it is: an update that left the old one in place is not reported as done.
+	const installed = piBoltExecutableIn(piBoltUpdateEnvironment(version).PIBOLT_INSTALL ?? "");
+	const check = spawnProcessSync(installed, ["--version"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+	// ("1.0.3 (Pi-Bolt 0.8.1, win32-x64, JIT off)": with the comma, 0.8.10 is not taken for 0.8.1.)
+	if (check.status !== 0 || !check.stdout.includes(`Pi-Bolt ${version},`)) {
+		console.error(chalk.red(`The installer finished, but ${installed} is not Pi-Bolt ${version}.`));
+		console.error(chalk.red(`You can run the installer yourself: ${PIBOLT_INSTALL_COMMAND}`));
 		return false;
 	}
 	console.log(chalk.green(`Updated Pi-Bolt from ${PIBOLT?.version} to ${version}`));

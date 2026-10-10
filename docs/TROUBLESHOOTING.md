@@ -29,7 +29,7 @@ When the compiled code cannot be used, the executable prints one line on stderr,
 but slower to start, and uses more CPU:
 
 ```
-bun: the executable's ahead-of-time compiled code is not used (<reason>); running from bytecode
+pi-bolt: the executable's ahead-of-time compiled code is not used (<reason>); running from bytecode
 ```
 
 | Reason | Cause | What to do |

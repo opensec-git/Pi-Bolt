@@ -5,10 +5,15 @@ Reads the JSONL files the tools append to (--out) from one results folder:
   benchmark.jsonl  bench/benchmark.py       startup, headless, interactive
   long.jsonl       bench/long_session.py    a long session
   tmux.jsonl       bench/tmux_check.py      Pi in a tmux pane, replies streaming at human pace
+  conpty.jsonl     bench/conpty_check.py    the same on Windows, in a ConPTY (read when there is no tmux.jsonl)
+  pauses.jsonl     bench/pauses.py --out    frame times and stalls; GC pauses (--gc): rows added where present
   plugins.jsonl    bench/plugin_bench.py    a plugin compiled in vs loaded at run time
   long_answer-*.txt, large_write-*.txt   bench/long_answer.py, bench/large_write.py (their tables, one file per run)
 and writes, for each chart, a light and a dark SVG (for GitHub's <picture> theme switch) to --images, and the tables (Markdown) to
-stdout. Figures are medians over runs.
+stdout. Figures are medians over runs. Results taken on Windows (benchmark.jsonl with private bytes) get the Windows memory rows:
+peak working set, private working set, private bytes (commit) and the rise of the system's commit charge. Where benchmark.jsonl
+has the process floor (benchmark.py --floor), the Time and CPU tables add its rows and each build's figures over it.
+--label name=text names a build's column (e.g. --label "bun=Pi 1.0.3 on stock Bun 1.4.2").
 
 Example: bench/report.py results/2026-10-02 --images docs/images --builds pi-bolt,bun,node
 """
@@ -36,6 +41,7 @@ REFERENCE = "bun"
 # The Pi version the results are of, from environment.txt.
 PI_VERSION = ["1.0.0"]
 FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif"
+FLOOR = "floor"  # benchmark.py --floor's runs: the process floor
 
 
 def load(path):
@@ -52,7 +58,7 @@ def fmt(value, unit):
         return "–"
     if unit == "ms" and value >= 1000:
         return f"{value:,.0f} ms"
-    if unit == "ms" and value < 10:
+    if unit == "ms" and -10 < value < 10:  # (below zero: a figure over the process floor)
         return f"{value:.1f} ms"
     if unit == "s":
         return f"{value:.1f} s"
@@ -241,6 +247,8 @@ def long_hero(results, images, builds):
         ("Share of a core, streaming", "%", vals(answer_share, "60000"), "less"),
         ("Writing a 200 KB file", "s", vals(write_wall, "200"), "faster"),
     ]
+    if not all(any(tile[2].values()) for tile in tiles):
+        return  # (runs of other sizes than these)
     for theme in ("light", "dark"):
         hero(tiles, builds, theme, images / f"bench-long-{theme}.svg", "Long answers and large files",
              "Answers streamed at 1,200 characters a second; a file written through a tool call. Lower is better.")
@@ -257,6 +265,7 @@ def main():
     ap.add_argument("results", type=Path)
     ap.add_argument("--images", type=Path, required=True)
     ap.add_argument("--builds", default="pi-bolt,bun,node", help="builds to show, in order (the first is compared with the second)")
+    ap.add_argument("--label", action="append", default=[], help="name=text: what a build's column is called (repeatable)")
     a = ap.parse_args()
     builds = a.builds.split(",")
     for b in builds:
@@ -265,8 +274,9 @@ def main():
     a.images.mkdir(parents=True, exist_ok=True)
     # The versions the results were taken with, where the run says (environment.txt): "bun: 1.4.2", "node: v26.10.0".
     env = a.results / "environment.txt"
+    pi_version = PI_VERSION[0]
     if env.exists():
-        for line in env.read_text().splitlines():
+        for line in env.read_text(encoding="utf-8-sig").splitlines():
             key, _, value = line.partition(": ")
             # (A line may say more than the version: "bun: Pi 1.0.0 on stock Bun 1.4.2". The runtime's own version is the label.)
             versions = re.findall(r"(?:Bun |^v?)(\d+\.\d+\.\d+)", value.strip())
@@ -278,10 +288,16 @@ def main():
                 pi = re.search(r"(\d+\.\d+\.\d+) \(Pi-Bolt", value)
                 if pi:
                     PI_VERSION[0] = pi.group(1)
+                elif versions:
+                    PI_VERSION[0] = versions[0]  # ("pi-bolt: 1.0.3": the Pi it is)
+                pi_version = PI_VERSION[0]
             elif key == "bun" and versions:
                 LABELS["bun"] = f"Bun {versions[-1]}"
-            elif key == "node" and versions:
-                LABELS["node"] = f"Node {versions[-1].split('.')[0]}"
+            elif key in ("node", "node22", "node24") and versions:
+                LABELS[key] = f"Node {versions[-1].split('.')[0]}"
+    for spec in a.label:
+        name, _, text = spec.partition("=")
+        LABELS[name] = text
 
     long_hero(a.results, a.images, builds)
     if not (a.results / "benchmark.jsonl").exists():
@@ -300,18 +316,37 @@ def main():
             long_rows[r["build"]].append(r)
     last_prompt = max((r["prompt"] for rs in long_rows.values() for r in rs), default=None)
     def lg(build, key):
-        return med(r[key] for r in long_rows[build] if r["prompt"] == last_prompt)
+        return med(r.get(key) for r in long_rows[build] if r["prompt"] == last_prompt)
     # How large the conversation is at the end of the long session, for the labels ("4.2M-token session").
     tokens = med(r.get("tokens_m") for rs in long_rows.values() for r in rs if r["prompt"] == last_prompt)
     session = f"{tokens:.1f}M-token session" if tokens else "long session"
 
+    # The streaming check: tmux_check.py's, or on Windows conpty_check.py's (the same fields, Pi in a ConPTY).
     tmux = defaultdict(list)
-    for r in load(a.results / "tmux.jsonl"):
+    terminal = "tmux"
+    for r in load(a.results / "tmux.jsonl") or load(a.results / "conpty.jsonl"):
         tmux[r["build"]].append(r)
+        if r.get("terminal") == "conpty":
+            terminal = "ConPTY"
     def tm(build, key):
         return med(r[key] if not isinstance(r[key], dict) else None for r in tmux[build]) if key in (tmux[build][0] if tmux[build] else {}) else None
     def tm_own(build):
         return med(r["memory_at_end"]["own"] for r in tmux[build]) if tmux[build] else None
+    def tm_mem(build, stage, key):
+        return med(r.get(stage, {}).get(key) for r in tmux[build]) if tmux[build] else None
+
+    # Windows: the figures have more than one kind of memory (winproc.py). "Own" there is the private bytes (commit charge).
+    windows = any("peak_private_mb" in r for rs in bench.values() for r in rs)
+
+    # Smoothness (pauses.py --out): frame times from a plain run, GC pauses from a --gc run.
+    pauses = defaultdict(list)
+    for r in load(a.results / "pauses.jsonl"):
+        pauses[(r["build"], r["step"], bool(r.get("gc_logged")))].append(r)
+    def step_name(step):
+        kind, _, size = step.partition(":")
+        return f"{int(size):,}-char answer" if kind == "md" else f"{size} KB file written" if kind == "write" else step
+    def frame_steps(gc):
+        return list(dict.fromkeys(step for (_, step, logged) in pauses if logged == gc))
 
     def vals(fn):
         return {x: fn(x) for x in builds}
@@ -322,22 +357,57 @@ def main():
         ("pi -p: one prompt, 4 tool calls", "ms", vals(lambda x: b(x, "headless", "wall_ms"))),
         (f"Time per prompt, {session}", "ms", vals(lambda x: lg(x, "ms_per_prompt"))),
     ]
+    if any(bench[(x, "interactive-default-theme")] for x in builds):
+        speed.append(("Launch to interactive (TUI), default theme", "ms", vals(lambda x: b(x, "interactive-default-theme", "tti_ms"))))
     cpu = [
         ("Interactive session: 5 prompts", "ms", vals(lambda x: b(x, "interactive", "cpu_ms"))),
         ("pi -p: one prompt", "ms", vals(lambda x: b(x, "headless", "cpu_ms"))),
         ("pi --version", "ms", vals(lambda x: b(x, "startup", "cpu_ms"))),
         (f"Per prompt, {session}", "ms", vals(lambda x: lg(x, "cpu_ms_per_prompt"))),
     ]
-    memory = [
-        ("Peak memory, interactive session", "MB", vals(lambda x: b(x, "interactive", "peak_mb"))),
-        ("Own memory, tmux session", "MB", vals(tm_own)),
-        (f"Own memory, end of {session}", "MB", vals(lambda x: lg(x, "own_mb"))),
-        ("Streaming replies (tmux), CPU", "ms", vals(lambda x: tm(x, "prompt_cpu_ms")), "amount"),
-    ]
+    if not windows:
+        memory = [
+            ("Peak memory, interactive session", "MB", vals(lambda x: b(x, "interactive", "peak_mb"))),
+            (f"Own memory, {terminal} session", "MB", vals(tm_own)),
+            (f"Own memory, end of {session}", "MB", vals(lambda x: lg(x, "own_mb"))),
+            (f"Streaming replies ({terminal}), CPU", "ms", vals(lambda x: tm(x, "prompt_cpu_ms")), "amount"),
+        ]
+        own = "Own memory = private dirty pages"
+    else:
+        # Working set (resident, shared pages too), private working set (resident and the process's own), private bytes (the
+        # commit charge: what it has committed, resident or not), and the rise of the system's commit charge while it ran.
+        memory = [
+            ("Peak working set, interactive session", "MB", vals(lambda x: b(x, "interactive", "peak_mb"))),
+            ("Peak private working set, interactive session", "MB", vals(lambda x: b(x, "interactive", "peak_private_ws_mb"))),
+            ("Peak private bytes (commit), interactive session", "MB", vals(lambda x: b(x, "interactive", "peak_private_mb"))),
+            ("System commit rise, interactive session", "MB", vals(lambda x: b(x, "interactive", "system_commit_peak_mb"))),
+            (f"Private working set, {terminal} session", "MB", vals(lambda x: tm_mem(x, "memory_at_end", "private_ws"))),
+            (f"Private bytes (commit), {terminal} session", "MB", vals(tm_own)),
+            (f"Private working set, end of {session}", "MB", vals(lambda x: lg(x, "private_ws_mb"))),
+            (f"Private bytes (commit), end of {session}", "MB", vals(lambda x: lg(x, "own_mb"))),
+            (f"Streaming replies ({terminal}), CPU", "ms", vals(lambda x: tm(x, "prompt_cpu_ms")), "amount"),
+        ]
+        own = "Private bytes = commit charge"
+    # Smoothness, where measured: the time between two screen updates while streaming (99th percentile), the longest stall,
+    # and the garbage collector's pauses.
+    if tm(builds[0], "frame_ms_p99") is not None:
+        memory.append((f"Frame time p99, streaming replies ({terminal})", "ms", vals(lambda x: tm(x, "frame_ms_p99")), "amount"))
+    for step in frame_steps(False):
+        rows_of = lambda x, s=step: pauses[(x, s, False)]  # noqa: E731
+        memory.append((f"Frame time p99, {step_name(step)}", "ms", vals(lambda x, f=rows_of: med(r["frame_ms_p99"] for r in f(x))), "amount"))
+        if step.startswith("write:"):
+            memory.append((f"Longest stall, {step_name(step)}", "ms", vals(lambda x, f=rows_of: med(r["longest_ms"] for r in f(x))), "amount"))
+    gc_steps = frame_steps(True)
+    for step in gc_steps:
+        memory.append((f"GC pause p99, {step_name(step)}", "ms",
+                       vals(lambda x, s=step: med(r["gc"]["p99_ms"] for r in pauses[(x, s, True)])), "amount"))
+    if gc_steps:
+        memory.append(("Longest GC pause", "ms", vals(lambda x: max((r["gc"]["max_ms"] for s in gc_steps for r in pauses[(x, s, True)]
+                                                                    if r["gc"]["max_ms"] is not None), default=None)), "amount"))
     for name, title, subtitle, panels in [
-        ("speed", "Time", f"Wall-clock time, lower is better. Ratios compare Pi-Bolt with Bun. Pi {PI_VERSION[0]}, medians.", speed),
-        ("cpu", "CPU time", f"All threads, lower is better. Ratios compare Pi-Bolt with Bun. Pi {PI_VERSION[0]}, medians.", cpu),
-        ("memory", "Memory and streaming", "Lower is better. Own memory = private dirty pages. Ratios compare Pi-Bolt with Bun.", memory),
+        ("speed", "Time", f"Wall-clock time, lower is better. Ratios compare Pi-Bolt with Bun. Pi {pi_version}, medians.", speed),
+        ("cpu", "CPU time", f"All threads, lower is better. Ratios compare Pi-Bolt with Bun. Pi {pi_version}, medians.", cpu),
+        ("memory", "Memory and streaming", f"Lower is better. {own}. Ratios compare Pi-Bolt with Bun.", memory),
     ]:
         for theme in ("light", "dark"):
             chart(title, subtitle, panels, builds, theme, a.images / f"bench-{name}-{theme}.svg")
@@ -366,19 +436,45 @@ def main():
             chart("Plugins", "A Pi extension compiled into the executable vs loaded at run time. Lower is better.", panels, order, theme,
                   a.images / f"bench-plugins-{theme}.svg")
 
+    # The process floor (benchmark.py --floor: the build "floor", bench/floor/floor.c), where measured: rows for it, the same in
+    # every column, and for each build what it takes over it. Tables only; the charts are left as they are.
+    floor_speed, floor_cpu = [], []
+    for scenario, key, name in [("interactive", "tti_ms", "launch to interactive"), ("startup", "wall_ms", "--version"),
+                                ("headless", "wall_ms", "-p")]:
+        if b(FLOOR, scenario, key) is not None:
+            floor_speed.append((f"Process floor (minimal program): {name}", "ms", vals(lambda x, s=scenario, k=key: b(FLOOR, s, k))))
+    for scenario, name in [("interactive", "interactive session"), ("headless", "-p"), ("startup", "--version")]:
+        if b(FLOOR, scenario, "cpu_ms") is not None:
+            floor_cpu.append((f"Process floor (minimal program): {name}", "ms", vals(lambda x, s=scenario: b(FLOOR, s, "cpu_ms"))))
+    def over_floor(panels, scenarios, key=None):
+        out = []
+        for (name, unit, values, *_), scenario in zip(panels, scenarios):
+            k = key or ("tti_ms" if scenario == "interactive" else "wall_ms")
+            floor = b(FLOOR, scenario, k)
+            if floor is not None:
+                out.append((f"{name}, over floor", unit, {x: None if v is None else v - floor for x, v in values.items()}))
+        return out
+    if floor_speed:
+        floor_speed += over_floor(speed[:3], ["interactive", "startup", "headless"])
+    if floor_cpu:
+        floor_cpu += over_floor(cpu[:3], ["interactive", "headless", "startup"], "cpu_ms")
+
     # Tables.
     def row(name, unit, values, *_):
         return [name] + [fmt(values.get(x), unit) for x in builds]
     header = ["", *[LABELS.get(x, x) for x in builds]]
-    print("### Time\n\n" + table(header, [row(*p) for p in speed]))
-    print("\n### CPU\n\n" + table(header, [row(*p) for p in cpu]))
+    print("### Time\n\n" + table(header, [row(*p) for p in speed + floor_speed]))
+    print("\n### CPU\n\n" + table(header, [row(*p) for p in cpu + floor_cpu]))
+    if floor_speed or floor_cpu:
+        print("\nProcess floor: a minimal native program (bench/floor/floor.c: prints a line; in the ConPTY, the marker the TUI is "
+              "waited for) started the same way, in the same rounds. Over floor: a build's median less the floor's.")
     print("\n### Memory and streaming\n\n" + table(header, [row(*p) for p in memory]))
     if plugins:
         print("\n### Plugins\n\n" + table(["", "launch", "hot loop"], [[names[k], fmt(med(r["launch_ms"] for r in plugins[k]), "ms"),
               fmt(med(med(r["loop_ms"][1:]) for r in plugins[k]), "ms")] for k in configs]))
     counts = {s: len(bench[(builds[0], s)]) for s in ("startup", "headless", "interactive")}
     print(f"\nruns: {counts}, long sessions: {len({(r['build'], r.get('exit')) for rs in long_rows.values() for r in rs})}, "
-          f"tmux rounds: {len(tmux.get(builds[0], []))}")
+          f"{terminal} rounds: {len(tmux.get(builds[0], []))}")
 
 
 if __name__ == "__main__":

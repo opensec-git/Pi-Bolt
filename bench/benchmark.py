@@ -5,9 +5,15 @@ Scenarios (each run is a fresh process):
   startup      `pi --version`
   headless     `pi -p "<prompt>"`: one prompt, 5 model turns (4 `read` calls + an answer)
   interactive  the real TUI on a pseudo-terminal: time to interactive, 5 prompts (25 model turns), /quit
+  interactive-default-theme
+               the TUI with no theme setting, as a fresh install starts (the others use "dark"): one prompt
 
 Runs are interleaved round-robin across builds, so background load hits all of them alike; pin them to the same cores with
 --cpus. CPU time and peak memory come from wait4() and cover all threads.
+
+--floor PATH adds the process floor to the rounds, as the build "floor": a minimal native program (bench/floor/floor.c) that
+takes Pi's arguments and answers each scenario the way Pi does, so that what process creation, the loader and (on Windows)
+Defender's check of a new process cost can be told from what a build costs. The tables then add each build's figure over it.
 
 Example:
   bench/benchmark.py --runs 15 --cpus 8-15 \\
@@ -27,12 +33,31 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness
 from harness import (
-    DONE, MACOS, MODEL_ARGS, PROMPT, Tty, done, fake_model, maxrss_mb, median, parse_builds, peak_footprint_mb, pi_env, pi_home,
-    pinned, workdir,
+    DONE, MACOS, MODEL_ARGS, PROMPT, WINDOWS, Build, Tty, done, fake_model, maxrss_mb, median, parse_builds, peak_footprint_mb,
+    pi_env, pi_home, pinned, warm_page_cache, workdir,
 )
+
+if WINDOWS:
+    import winproc
+
+
+def windows_memory(res):
+    """The memory figures of a run on Windows (winproc.Measured.result()): peak working set, peak private bytes (commit charge),
+    the peak private working set (sampled every 50 ms) and the rise of the system's commit charge while it ran."""
+    return {k: res[k] for k in ("peak_mb", "peak_private_mb", "peak_private_ws_mb", "system_commit_peak_mb")}
+
+
+def windows_io(res):
+    """The I/O calls of a run on Windows (GetProcessIoCounters of the main process): io_other_ops is mostly file-system calls
+    (opens, stats, directory listings; see winproc.Measured.result())."""
+    return {k: res[k] for k in ("io_read_ops", "io_write_ops", "io_other_ops", "io_other_bytes")}
 
 
 def run_plain(build, args, env, cwd, cpus):
+    if WINDOWS:
+        out, res = winproc.run([*build.argv, *args], env, cwd)
+        return out, {"ok": res["exit"] == 0, "wall_ms": res["wall_ms"], "cpu_ms": res["cpu_ms"], "job_cpu_ms": res["job_cpu_ms"],
+                     **windows_memory(res), **windows_io(res)}
     t0 = time.perf_counter()
     p = subprocess.Popen(pinned([*build.argv, *args], cpus), env=env, cwd=cwd, stdin=subprocess.DEVNULL,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
@@ -85,22 +110,50 @@ def interactive(build, env, cwd, cpus, prompts=5):
     r["wall_ms"] = (time.perf_counter() - t0) * 1e3
     r["cpu_ms"] = (ru.ru_utime + ru.ru_stime) * 1e3
     r["peak_mb"] = maxrss_mb(ru)
+    if WINDOWS:
+        r.update(**windows_memory(ru.result), **windows_io(ru.result), job_cpu_ms=ru.result["job_cpu_ms"])
     if getattr(tty, "peak_footprint_mb", None) is not None:
         r["peak_fp_mb"] = tty.peak_footprint_mb
         r.update(getattr(tty, "exit_counters", {}))
     return r
 
 
-SCENARIOS = {"startup": startup, "headless": headless, "interactive": interactive}
+def interactive_default_theme(build, env, cwd, cpus):
+    """The TUI started as a fresh install starts it: no theme setting, so the system theme, which waits for the terminal's
+    colors before drawing the header (the other scenarios use "dark", which does not). One prompt: what differs is the start."""
+    settings = Path(env["PI_CODING_AGENT_DIR"]) / "settings.json"
+    saved = settings.read_text()
+    settings.write_text(json.dumps({k: v for k, v in json.loads(saved).items() if k != "theme"}))
+    try:
+        return interactive(build, env, cwd, cpus, prompts=1)
+    finally:
+        settings.write_text(saved)
+
+
+SCENARIOS = {"startup": startup, "headless": headless, "interactive": interactive,
+             "interactive-default-theme": interactive_default_theme}
 COLUMNS = {
     "startup": ["wall_ms", "cpu_ms", "peak_mb"],
     "headless": ["wall_ms", "cpu_ms", "peak_mb"],
     "interactive": ["tti_ms", "turns_ms", "wall_ms", "cpu_ms", "peak_mb"],
+    "interactive-default-theme": ["tti_ms", "cpu_ms"],
 }
 if MACOS:
     # (peak_mb, ru_maxrss, counts clean file pages and freed pages the kernel may take back; the footprint does not.)
     for columns in COLUMNS.values():
         columns.extend(["peak_fp_mb", "instr_m"])
+if WINDOWS:
+    # peak_mb is the peak working set; peak_private_mb the peak commit charge (private bytes); peak_private_ws_mb the peak
+    # private working set. cpu_ms is the main process's, by cycles; job_cpu_ms adds what it started, in clock ticks. (The rise of
+    # the system's commit charge, system_commit_peak_mb, is in the JSONL: system-wide, so too noisy for this table.) io_other_ops:
+    # the main process's I/O calls other than reads and writes, mostly the file system's (the other I/O counts are in the JSONL).
+    for columns in COLUMNS.values():
+        columns += ["peak_private_mb", "peak_private_ws_mb", "job_cpu_ms", "io_other_ops"]
+
+
+FLOOR = "floor"  # (the build name of --floor's runs)
+# What is shown over the floor: the time to the answer, or to the TUI being ready.
+OVER_FLOOR = {"startup": "wall_ms", "headless": "wall_ms", "interactive": "tti_ms", "interactive-default-theme": "tti_ms"}
 
 
 def summarize(rows, baseline=None):
@@ -112,7 +165,8 @@ def summarize(rows, baseline=None):
         stats = {n: {c: median([r.get(c) for r in rs if r["build"] == n]) for c in columns} for n in names}
         base = stats.get(baseline) if baseline else None
         print(f"\n{scenario}")
-        print("  " + "build".ljust(22) + "".join(c.rjust(16) for c in columns))
+        width = {c: max(16, len(c) + 2) for c in columns}
+        print("  " + "build".ljust(22) + "".join(c.rjust(width[c]) for c in columns))
         for n in names:
             cells = []
             for c in columns:
@@ -120,8 +174,13 @@ def summarize(rows, baseline=None):
                 cell = "-" if v is None else f"{v:.0f}"
                 if base and base[c] and v is not None and n != baseline:
                     cell += f" ({(v / base[c] - 1) * 100:+.0f}%)"
-                cells.append(cell.rjust(16))
+                cells.append(cell.rjust(width[c]))
             print("  " + n.ljust(22) + "".join(cells))
+        floor = stats.get(FLOOR, {}).get(OVER_FLOOR[scenario])
+        if floor is not None:
+            c = OVER_FLOOR[scenario]
+            over = [f"{n} {stats[n][c] - floor:.0f}" for n in names if n != FLOOR and stats[n][c] is not None]
+            print(f"  {c} over the floor ({floor:.0f}): " + ", ".join(over))
     failed = [r for r in rows if not r["ok"]]
     if failed:
         print(f"\n{len(failed)} failed runs: " + ", ".join(sorted({f'{r["scenario"]}/{r["build"]}' for r in failed})))
@@ -132,12 +191,24 @@ def main():
     ap.add_argument("--build", action="append", required=True, help="name=command that starts Pi (repeatable)")
     ap.add_argument("--runs", type=int, default=10)
     ap.add_argument("--warmup", type=int, default=2)
-    ap.add_argument("--scenarios", default="startup,headless,interactive")
+    ap.add_argument("--scenarios", default="startup,headless,interactive,interactive-default-theme")
     ap.add_argument("--cpus", help="pin every run to these cores (taskset list, e.g. 8-15)")
     ap.add_argument("--baseline", help="build to compare the others with (default: the last --build)")
     ap.add_argument("--out", help="append raw results to this JSONL file")
+    ap.add_argument("--floor", metavar="PATH", help="also run this minimal program (bench/floor/floor.c, built) in every round, "
+                    "as the build 'floor': the process floor")
     a = ap.parse_args()
     builds = parse_builds(a.build)
+    baseline = a.baseline or builds[-1].name
+    if a.floor:
+        if any(b.name == FLOOR for b in builds):
+            raise SystemExit(f"--floor: a build is already called {FLOOR!r}")
+        path = os.path.abspath(a.floor)
+        if not os.path.isfile(path):
+            raise SystemExit(f"--floor: {a.floor} is not a file")
+        # (Not through parse_builds: a path is one argument here, spaces and all.) First in every round.
+        builds.insert(0, Build(FLOOR, [path]))
+        warm_page_cache(builds[:1])
     rows = []
     with fake_model() as port, pi_home(port) as home, workdir() as cwd:
         env = pi_env(home)
@@ -154,7 +225,7 @@ def main():
                         with open(a.out, "a") as f:
                             f.write(json.dumps(r) + "\n")
                 print(f"{scenario}: round {i + 1}/{a.warmup + a.runs}", file=sys.stderr, flush=True)
-    summarize(rows, a.baseline or builds[-1].name)
+    summarize(rows, baseline)
 
 
 if __name__ == "__main__":

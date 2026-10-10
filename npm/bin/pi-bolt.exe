@@ -1,0 +1,21 @@
+# shellcheck shell=sh
+# pi-bolt: a placeholder, which the package's install script (install.cjs) replaces: on Windows with Pi-Bolt's native
+# executable, which npm's pi-bolt.cmd and pi-bolt.ps1 then start directly; on Linux and macOS with the launcher bin/pi-bolt.
+# It has no #! line on purpose: npm makes its Windows commands before install scripts run, and from a #! line they would
+# start pi-bolt.exe with sh.
+#
+# When the install script did not run (npm --ignore-scripts, or pnpm or Bun, which run install scripts only when allowed),
+# this file is what runs, as a shell script: on Linux and macOS it starts the launcher, which works without the install
+# script, as it always has; elsewhere it says how to run the install script.
+here=$(dirname "$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")")
+case "$(uname -s 2>/dev/null)" in
+Linux | Darwin) exec sh "$here/pi-bolt" "$@" ;;
+esac
+echo "pi-bolt: Pi-Bolt's executable is not installed: the package's install script did not run" >&2
+echo "(npm --ignore-scripts, or pnpm or Bun, which run install scripts only when they are allowed)." >&2
+echo "" >&2
+echo "Run the install script now:" >&2
+echo "  node \"$here/../install.cjs\"" >&2
+echo "" >&2
+echo "or install the package again with install scripts allowed." >&2
+exit 1

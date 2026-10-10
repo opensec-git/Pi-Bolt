@@ -1,0 +1,10 @@
+{
+	"name": "pi-bolt-opensec-plugins",
+	"private": true,
+	"description": "OpenSec's extensions compiled into Pi-Bolt's release executables (scripts/package-release.ps1 builds with plugins.ts). The versions are extensions.txt's.",
+	"type": "module",
+	"dependencies": {
+		"opensec-pi-subagents": "0.20.0",
+		"opensec-pi-todo": "2.13.0"
+	}
+}

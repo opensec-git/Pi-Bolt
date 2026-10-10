@@ -215,6 +215,9 @@ export function highlight(code: string, options: HighlightOptions = {}): string 
 }
 
 let onDemandLoaded: (() => void) | undefined;
+// A language outside the eager set was asked for before loadAllHighlightLanguagesOnDemand() (a resumed session's messages are
+// drawn before it): they load as soon as it is called.
+let askedBeforeOnDemand = false;
 
 /**
  * Has the grammars outside the eager set load when a language among them is first asked for, instead of at every start
@@ -223,13 +226,18 @@ let onDemandLoaded: (() => void) | undefined;
  */
 export function loadAllHighlightLanguagesOnDemand(onLoaded: () => void): void {
 	onDemandLoaded = onLoaded;
+	if (askedBeforeOnDemand && !allLanguagesPromise) {
+		void loadAllHighlightLanguages().then(() => onDemandLoaded?.());
+	}
 }
 
 export function supportsLanguage(name: string): boolean {
 	if (hljs.getLanguage(name) !== undefined) {
 		return true;
 	}
-	if (onDemandLoaded && !allLanguagesPromise) {
+	if (!onDemandLoaded) {
+		askedBeforeOnDemand = true;
+	} else if (!allLanguagesPromise) {
 		void loadAllHighlightLanguages().then(() => onDemandLoaded?.());
 	}
 	return false;

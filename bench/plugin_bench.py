@@ -12,6 +12,9 @@ the plugin reaches it:
 Example:
   bench/plugin_bench.py --compiled pi-bolt=out/pi-bolt-plugins/pi --runtime pi-bolt=out/pi-bolt/pi \\
       --runtime bun=out/pi-stable/pi --none pi-bolt=out/pi-bolt/pi
+
+On Windows it runs as it is (Pi in a ConPTY). --runtime and --none need only the usual builds; --compiled needs a build with the
+plugin compiled in, which scripts\\build-pi.ps1 cannot make yet (scripts/build-pi.sh --plugins can, on Linux and macOS).
 """
 
 import argparse
@@ -46,10 +49,10 @@ def session(build, mode, commands, cpus):
         if not tty.wait_for("fake-model", 0, deadline):
             raise RuntimeError(f"{build.name}: never became interactive")
         launch = (time.perf_counter() - t0) * 1000
-        # Pi lists its extensions as it starts; under load the list can be drawn just after the prompt.
-        listed = tty.wait_for("word-count", 0, time.perf_counter() + (5 if mode != "none" else 0.5))
-        if listed != (mode != "none"):
-            raise RuntimeError(f"{build.name} ({mode}): the plugin is {'' if listed else 'not '}loaded")
+        # Whether the plugin is there is what /words says below (it fails if the command does not answer). Pi 1.1.0 no longer lists
+        # its extensions at startup (ctrl+o shows them), so a build without the plugin is only checked not to list it.
+        if mode == "none" and tty.wait_for("word-count", 0, time.perf_counter() + 0.5):
+            raise RuntimeError(f"{build.name} ({mode}): the plugin is loaded")
         tty.settle(0.2, time.perf_counter() + 5)
         loops = []
         for k in range(commands):

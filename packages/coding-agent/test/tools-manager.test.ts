@@ -1,9 +1,16 @@
 import type * as ChildProcess from "node:child_process";
 import type * as Fs from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { accessSync } from "fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ensureTool, getLatestVersion, type ToolStatus } from "../src/utils/tools-manager.ts";
+import { ensureTool, getLatestVersion, getToolPath, type ToolStatus } from "../src/utils/tools-manager.ts";
 
 const originalOffline = process.env.PI_OFFLINE;
+const originalPath = process.env.PATH;
+const originalCwd = process.cwd();
+const temporary: string[] = [];
 
 vi.mock("fs", async (importOriginal) => {
 	const actual = await importOriginal<typeof Fs>();
@@ -28,8 +35,17 @@ vi.mock("child_process", async (importOriginal) => {
 afterEach(() => {
 	if (originalOffline === undefined) delete process.env.PI_OFFLINE;
 	else process.env.PI_OFFLINE = originalOffline;
+	process.env.PATH = originalPath;
+	process.chdir(originalCwd);
+	for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true });
 	vi.unstubAllGlobals();
 });
+
+function temporaryDir(): string {
+	const dir = mkdtempSync(join(tmpdir(), "pi-tools-manager-"));
+	temporary.push(dir);
+	return dir;
+}
 
 function redirectResponse(location: string): Response {
 	return new Response(null, { status: 302, headers: { location } });
@@ -100,6 +116,52 @@ describe("getLatestVersion", () => {
 			"Failed to resolve latest sharkdp/fd release: unexpected redirect to https://github.com/login",
 		);
 	});
+});
+
+describe("getToolPath", () => {
+	it("finds no tool that PATH does not have", () => {
+		process.env.PATH = temporaryDir();
+		expect(getToolPath("rg")).toBeNull();
+	});
+
+	it.runIf(process.platform !== "win32")("finds an executable tool in PATH by its name", () => {
+		const bin = temporaryDir();
+		writeFileSync(join(bin, "rg"), "");
+		chmodSync(join(bin, "rg"), 0o755);
+		process.env.PATH = bin;
+		// (fs is mocked so that nothing else here is found: this lookup's check that the file is executable answers yes.)
+		vi.mocked(accessSync).mockImplementationOnce(() => undefined);
+		expect(getToolPath("rg")).toBe("rg");
+	});
+
+	it.runIf(process.platform === "win32")(
+		"finds a tool in PATH by its path, and not one in the working directory",
+		() => {
+			const bin = temporaryDir();
+			const project = temporaryDir();
+			writeFileSync(join(bin, "rg.cmd"), "");
+			writeFileSync(join(bin, "rg.exe"), "");
+			writeFileSync(join(project, "rg.exe"), "");
+			process.chdir(project);
+			process.env.PATH = `.;${bin}`;
+			expect(getToolPath("rg")).toBe(join(bin, "rg.exe"));
+		},
+	);
+
+	it.runIf(process.platform === "win32")(
+		"does not take a batch file for a tool (cmd.exe would parse the model's patterns again)",
+		() => {
+			const shims = temporaryDir();
+			const bin = temporaryDir();
+			writeFileSync(join(shims, "rg.cmd"), "");
+			writeFileSync(join(shims, "rg.bat"), "");
+			process.env.PATH = shims;
+			expect(getToolPath("rg")).toBeNull();
+			writeFileSync(join(bin, "rg.exe"), "");
+			process.env.PATH = `${shims};${bin}`;
+			expect(getToolPath("rg")).toBe(join(bin, "rg.exe"));
+		},
+	);
 });
 
 describe("ensureTool", () => {

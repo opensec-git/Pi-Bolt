@@ -1,0 +1,19 @@
+# The files a release holds besides SHA256SUMS and SHA256SUMS.sig, each listed in SHA256SUMS (scripts/check-release-files.sh):
+# exactly these. A new platform or variant is added here.
+RUNTIME_STAMP
+extensions.txt
+pi-bolt-darwin-arm64-jit.tar.gz
+pi-bolt-darwin-arm64-jit.tar.xz
+pi-bolt-darwin-arm64.tar.gz
+pi-bolt-darwin-arm64.tar.xz
+pi-bolt-linux-x64-baseline.tar.gz
+pi-bolt-linux-x64-baseline.tar.xz
+pi-bolt-linux-x64-jit.tar.gz
+pi-bolt-linux-x64-jit.tar.xz
+pi-bolt-linux-x64.tar.gz
+pi-bolt-linux-x64.tar.xz
+pi-bolt-runtime-darwin-arm64.tar.gz
+pi-bolt-runtime-linux-x64.tar.gz
+pi-bolt-runtime-win32-x64.zip
+pi-bolt-win32-x64-jit.zip
+pi-bolt-win32-x64.zip

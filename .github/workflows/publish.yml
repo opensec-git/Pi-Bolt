@@ -1,18 +1,21 @@
 name: publish
 
 # Publishes a release the release workflow drafted: signs SHA256SUMS when the draft has no SHA256SUMS.sig yet, checks
-# SHA256SUMS.sig against keys/release.pub and every archive against SHA256SUMS, publishes the GitHub release as the latest, puts
-# install.sh and the site on gh-pages (https://pi-bolt.opensec.in), and publishes the npm packages.
+# SHA256SUMS.sig against keys/release.pub and that SHA256SUMS lists exactly the files of a release, each as it is
+# (scripts/check-release-files.sh, scripts/release-files.txt), publishes the GitHub release as the latest, puts install.sh,
+# install.ps1 and the site on gh-pages (https://pi-bolt.opensec.in), and publishes the npm packages.
 #
 # Signing: the release key is the secret PIBOLT_SIGNING_KEY of the "release" environment, which only runs this workflow from
-# pi-bolt; it is used in the job below and nowhere else. A draft signed by hand (scripts/sign-release.sh) is published as signed.
+# pi-bolt; it is used in one step below and nowhere else. What runs near it is pi-bolt's, not the tag's: the tag must be a commit
+# on pi-bolt, and the checks, the public key, the installers and the site are taken from pi-bolt as this run was started from it.
+# A draft signed by hand (scripts/sign-release.sh) is published as signed.
 #
 # npm: with trusted publishing (npm's OpenID Connect link to this workflow and its "npm" environment; no token stored here). Set it up once for each of
-# pi-bolt, pi-bolt-linux-x64, pi-bolt-linux-x64-baseline, pi-bolt-linux-x64-jit, pi-bolt-darwin-arm64 and
-# pi-bolt-darwin-arm64-jit (docs/RELEASING.md), then set the repository variable NPM_TRUSTED_PUBLISHING to true. Until then the
+# pi-bolt, pi-bolt-linux-x64, pi-bolt-linux-x64-baseline, pi-bolt-linux-x64-jit, pi-bolt-darwin-arm64, pi-bolt-darwin-arm64-jit,
+# pi-bolt-win32-x64 and pi-bolt-win32-x64-jit (docs/RELEASING.md), then set the repository variable NPM_TRUSTED_PUBLISHING to true. Until then the
 # npm job is skipped and the packages are published from the maintainer's machine.
 #
-# Run it from pi-bolt with the tag (the workflow is pi-bolt's, the files published are the tag's):
+# Run it from pi-bolt with the tag (the workflow and its checks are pi-bolt's, the files published are the tag's):
 #   gh workflow run publish.yml -R opensec-git/Pi-Bolt -f tag=bolt-vX.Y.Z
 on:
   workflow_dispatch:
@@ -24,8 +27,9 @@ on:
 permissions:
   contents: read
 
+# (One group for each tag: GitHub keeps only one waiting run per group, and a shared one would drop a tag's run.)
 concurrency:
-  group: release
+  group: publish-${{ github.event.inputs.tag }}
   cancel-in-progress: false
 
 env:
@@ -42,27 +46,33 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - name: The tag
+      - name: The run
         run: |
           [ "$GITHUB_REF" = refs/heads/pi-bolt ] || { echo "run this workflow from pi-bolt"; exit 1; }
           printf '%s' "$TAG" | grep -Eq '^bolt-v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "not a release tag: $TAG"; exit 1; }
+      # pi-bolt as this run was started from it (github.sha), with its history and tags: the checks and the key are its own.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ env.TAG }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: The tag is on pi-bolt
+        run: |
+          git rev-parse -q --verify "refs/tags/$TAG^{commit}" >/dev/null || { echo "no tag $TAG"; exit 1; }
+          git merge-base --is-ancestor "refs/tags/$TAG^{commit}" "$GITHUB_SHA" ||
+            { echo "::error::$TAG is not a commit on pi-bolt ($GITHUB_SHA): only what reached pi-bolt is signed and published"; exit 1; }
       - id: version
         run: echo "version=${TAG#bolt-v}" >> "$GITHUB_OUTPUT"
       - name: Download the draft
         run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir release
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: The files (before anything is signed; no key here)
+        run: scripts/check-release-files.sh release "${TAG#bolt-v}"
       - name: Sign
         working-directory: release
         run: |
           if [ -f SHA256SUMS.sig ]; then echo "the draft is signed"; exit 0; fi
           [ -n "$SIGNING_KEY" ] || { echo "::error::$TAG has no SHA256SUMS.sig and the release environment has no PIBOLT_SIGNING_KEY"; exit 1; }
-          # (What is signed is checked first: the 12 archives of the draft, as SHA256SUMS lists them.)
-          sha256sum -c SHA256SUMS
-          test "$(wc -l < SHA256SUMS)" -eq 12
           key="$RUNNER_TEMP/release-key.pem"
           trap 'rm -f "$key"' EXIT
           (umask 077 && printenv SIGNING_KEY > "$key")
@@ -73,12 +83,10 @@ jobs:
           SIGNING_KEY: ${{ secrets.PIBOLT_SIGNING_KEY }}
           GH_TOKEN: ${{ github.token }}
       - name: Check
-        working-directory: release
         run: |
           openssl version
-          openssl pkeyutl -verify -pubin -inkey ../keys/release.pub -rawin -in SHA256SUMS -sigfile SHA256SUMS.sig
-          sha256sum -c SHA256SUMS
-          test "$(wc -l < SHA256SUMS)" -eq 12
+          openssl pkeyutl -verify -pubin -inkey keys/release.pub -rawin -in release/SHA256SUMS -sigfile release/SHA256SUMS.sig
+          scripts/check-release-files.sh release "${TAG#bolt-v}"
 
   release:
     name: GitHub release and site
@@ -88,26 +96,29 @@ jobs:
     permissions:
       contents: write
     steps:
+      # pi-bolt as this run was started from it: its installers and site go on gh-pages (publish-installer.sh pushes there).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: refs/tags/${{ env.TAG }}
           fetch-depth: 0
       - name: Publish the release
         run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: install.sh and the site
+      - name: install.sh, install.ps1 and the site
         run: |
           git config user.name "OpenSec"
           git config user.email "323596076+opensec-intelligence@users.noreply.github.com"
           scripts/publish-installer.sh origin
-      - name: The installer serves it
+      - name: The installers are served
         run: |
-          for _ in $(seq 30); do
-            curl -fsSL "https://pi-bolt.opensec.in/install.sh?$(date +%s)" | cmp -s - install.sh && exit 0
-            sleep 10
+          for installer in install.sh install.ps1; do
+            served=""
+            for _ in $(seq 30); do
+              curl -fsSL "https://pi-bolt.opensec.in/$installer?$(date +%s)" | cmp -s - "$installer" && { served=1; break; }
+              sleep 10
+            done
+            [ -n "$served" ] || echo "::warning::pi-bolt.opensec.in does not serve this $installer yet"
           done
-          echo "::warning::pi-bolt.opensec.in does not serve this install.sh yet"
 
   npm:
     name: npm
@@ -124,19 +135,22 @@ jobs:
     env:
       VERSION: ${{ needs.verify.outputs.version }}
     steps:
+      # The tag (checked above to be on pi-bolt): the npm package of its version.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-      # npm 11.5 or later publishes with the workflow's OpenID Connect token (trusted publishing); no token is configured.
+      # npm 11.5 or later publishes with the workflow's OpenID Connect token (trusted publishing); no token is configured. An
+      # exact version: this job may publish.
       - name: npm with trusted publishing
-        run: npm install -g npm@11 && npm --version
+        run: npm install -g npm@11.21.0 && npm --version
       - name: Download the release
         run: |
           mkdir -p "dist/$VERSION"
-          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "dist/$VERSION" --pattern '*.tar.xz' --pattern SHA256SUMS
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "dist/$VERSION" --pattern '*.tar.xz' --pattern 'pi-bolt-win32-*.zip' --pattern SHA256SUMS
         env:
           GH_TOKEN: ${{ github.token }}
       - name: The builds (pi-bolt-PLATFORM-VARIANT)

@@ -50,6 +50,7 @@ import {
 	TuiMainScreen,
 	type TuiMouseEvent,
 	type TuiMouseEventResult,
+	ttiTrace,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -64,6 +65,7 @@ import {
 	getAuthPath,
 	getDebugLogPath,
 	getDocsPath,
+	PRODUCT_NAME,
 	VERSION,
 } from "../../config.ts";
 import { type AgentSession, type AgentSessionEvent, parseSkillBlock } from "../../core/agent-session.ts";
@@ -866,10 +868,13 @@ export class InteractiveMode {
 		if (this.settingsManager.getCollapseChangelog()) {
 			const versionMatch = this.changelogMarkdown.match(/##\s+\[?(\d+\.\d+\.\d+)\]?/);
 			const latestVersion = versionMatch ? versionMatch[1] : this.version;
-			const condensedText = `Updated to v${latestVersion}. Use ${theme.bold("/changelog")} to view full changelog.`;
+			// (A Pi-Bolt build shows Pi's changelog: the version is Pi's, not Pi-Bolt's.)
+			const condensedText = `Updated to ${PIBOLT ? "Pi " : "v"}${latestVersion}. Use ${theme.bold("/changelog")} to view full changelog.`;
 			this.chatContainer.addChild(new Text(condensedText, 1, 0));
 		} else {
-			this.chatContainer.addChild(new ThemedText(() => theme.bold(theme.fg("accent", "What's New")), 1, 0));
+			this.chatContainer.addChild(
+				new ThemedText(() => theme.bold(theme.fg("accent", PIBOLT ? "What's New in Pi" : "What's New")), 1, 0),
+			);
 			this.chatContainer.addChild(new Spacer(1));
 			this.chatContainer.addChild(
 				new Markdown(this.changelogMarkdown.trim(), 1, 0, this.getMarkdownThemeWithSettings()),
@@ -1009,12 +1014,78 @@ export class InteractiveMode {
 		this.programStatus.report();
 		this.ensurePngTranscoder();
 
-		this.themeController.applyFromSettings();
-		// The header and startup notices bake theme colors into their text, so build them once the terminal
-		// reported its colors. This ends at the terminal's DA1 reply, or after 100 ms if it answers nothing.
-		await this.themeController.waitForTerminalColors();
+		await this.applyThemeAndShowStartupHeader();
 
-		// Add header with keybindings from config (unless silenced)
+		// Ensure fd and rg are available after mounting the TUI (downloads if missing, adds to PATH via getBinDir)
+		// so slow downloads do not make startup appear frozen.
+		// Both are needed: fd for autocomplete, rg for grep tool and bash commands.
+		const [fdPath] = await Promise.all([
+			ensureTool("fd", (status) => this.showManagedToolStatus(status)),
+			ensureTool("rg", (status) => this.showManagedToolStatus(status)),
+		]);
+		this.fdPath = fdPath;
+		ttiTrace("tools.checked");
+
+		// Enable the remaining input handlers only after managed-tool setup completes.
+		this.setupKeyHandlers();
+		this.setupEditorSubmitHandler();
+		this.ui.requestRender();
+
+		// Initialize extensions first so resources are shown before messages
+		await this.rebindCurrentSession();
+		ttiTrace("session.bound");
+
+		// Render initial messages AFTER showing loaded resources
+		this.renderInitialMessages();
+
+		// Set up theme file watcher
+		onThemeChange(() => {
+			this.ui.invalidate();
+			this.updateEditorBorderColor();
+			this.ui.requestRender();
+		});
+
+		// Set up git branch watcher (uses provider instead of footer)
+		this.footerDataProvider.onBranchChange(() => {
+			this.ui.requestRender();
+		});
+
+		// Initialize available provider count for footer display
+		await this.updateAvailableProviderCount();
+
+		// Flush the completed startup state before loading the remaining syntax grammars.
+		this.ui.renderNow();
+		ttiTrace("startup.done");
+		loadAllHighlightLanguagesOnDemand(() => {
+			if (!this.isInitialized) return;
+			this.ui.invalidate();
+			this.ui.requestRender();
+		});
+	}
+
+	/**
+	 * Apply the theme setting, query the terminal's colors, and add the startup header. The header goes up at once
+	 * when the theme draws it the same with or without the terminal's colors (any theme but the system theme and
+	 * theme pairs), so the first frame carries it; otherwise it waits for the colors, as a header drawn before
+	 * them would change color when they arrive. Either way this resolves once the terminal answered (its DA1
+	 * reply) or 100 ms passed, so what startup does next (extensions, startup notices) sees the same terminal
+	 * colors as before. Colors that arrive later still re-render everything.
+	 */
+	private async applyThemeAndShowStartupHeader(): Promise<void> {
+		this.themeController.applyFromSettings();
+		const terminalColors = this.themeController.waitForTerminalColors();
+		const waitForColors = this.themeController.dependsOnTerminalColors();
+		if (waitForColors) {
+			await terminalColors;
+		}
+		this.addStartupHeader();
+		ttiTrace("header.added", waitForColors ? "after-colors" : "before-colors");
+		this.ui.requestRender();
+		await terminalColors;
+	}
+
+	/** Add the built-in header with keybindings from config, or an empty one when startup is quiet. */
+	private addStartupHeader(): void {
 		if (this.shouldShowStartupHeader()) {
 			const showDetails = this.shouldShowStartupDetails();
 			// Built on demand so the header follows theme changes. The logo's first line carries the version,
@@ -1069,7 +1140,10 @@ export class InteractiveMode {
 					`Press ${keyText("app.tools.expand")} to show full startup help${showDetails ? " and loaded resources" : ""}.`,
 				);
 			const onboarding = () =>
-				theme.fg("dim", `Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`);
+				theme.fg(
+					"dim",
+					`${PIBOLT ? PRODUCT_NAME : "Pi"} can explain its own features and look up its docs. Ask it how to use or extend ${PIBOLT ? PRODUCT_NAME : "Pi"}.`,
+				);
 			const header = new BuiltInHeader(
 				() => `${withLogo(compactInstructions())}\n${compactOnboarding()}\n\n${onboarding()}`,
 				() => `${withLogo(expandedInstructions())}\n\n${onboarding()}`,
@@ -1089,50 +1163,6 @@ export class InteractiveMode {
 			this.builtInHeader = new Text("", 0, 0);
 			this.headerContainer.addChild(this.builtInHeader);
 		}
-		this.ui.requestRender();
-
-		// Ensure fd and rg are available after mounting the TUI (downloads if missing, adds to PATH via getBinDir)
-		// so slow downloads do not make startup appear frozen.
-		// Both are needed: fd for autocomplete, rg for grep tool and bash commands.
-		const [fdPath] = await Promise.all([
-			ensureTool("fd", (status) => this.showManagedToolStatus(status)),
-			ensureTool("rg", (status) => this.showManagedToolStatus(status)),
-		]);
-		this.fdPath = fdPath;
-
-		// Enable the remaining input handlers only after managed-tool setup completes.
-		this.setupKeyHandlers();
-		this.setupEditorSubmitHandler();
-		this.ui.requestRender();
-
-		// Initialize extensions first so resources are shown before messages
-		await this.rebindCurrentSession();
-
-		// Render initial messages AFTER showing loaded resources
-		this.renderInitialMessages();
-
-		// Set up theme file watcher
-		onThemeChange(() => {
-			this.ui.invalidate();
-			this.updateEditorBorderColor();
-			this.ui.requestRender();
-		});
-
-		// Set up git branch watcher (uses provider instead of footer)
-		this.footerDataProvider.onBranchChange(() => {
-			this.ui.requestRender();
-		});
-
-		// Initialize available provider count for footer display
-		await this.updateAvailableProviderCount();
-
-		// Flush the completed startup state before loading the remaining syntax grammars.
-		this.ui.renderNow();
-		loadAllHighlightLanguagesOnDemand(() => {
-			if (!this.isInitialized) return;
-			this.ui.invalidate();
-			this.ui.requestRender();
-		});
 	}
 
 	/**
@@ -1230,7 +1260,7 @@ export class InteractiveMode {
 		if (crash) {
 			const when = new Date(crash.timestamp).toLocaleString();
 			this.showWarning(
-				`${APP_NAME} crashed on ${when} (${crash.message}). Run /bug to report it; the crash details are attached automatically.`,
+				`${PRODUCT_NAME} crashed on ${when} (${crash.message}). Run /bug to report it; the crash details are attached automatically.`,
 			);
 		}
 
@@ -1328,7 +1358,7 @@ export class InteractiveMode {
 		}
 
 		if (extendedKeysFormat === "xterm") {
-			return "tmux extended-keys-format is xterm. Pi works best with csi-u. Add `set -g extended-keys-format csi-u` to ~/.tmux.conf and restart tmux.";
+			return `tmux extended-keys-format is xterm. ${PIBOLT ? PRODUCT_NAME : "Pi"} works best with csi-u. Add \`set -g extended-keys-format csi-u\` to ~/.tmux.conf and restart tmux.`;
 		}
 
 		return undefined;
@@ -4385,7 +4415,7 @@ export class InteractiveMode {
 		try {
 			this.ui.stop();
 		} catch {}
-		console.error(`${APP_NAME} exiting due to uncaughtException:`);
+		console.error(`${PRODUCT_NAME} exiting due to uncaughtException:`);
 		console.error(error);
 		const extensionHint = this.getCrashExtensionHint(error);
 		if (extensionHint) console.error(`\n${extensionHint}`);
@@ -6196,7 +6226,7 @@ export class InteractiveMode {
 			`${providerOption.name} setup`,
 		);
 		dialog.showInfo(
-			`${providerOption.method?.name ?? "Authentication"} is configured outside ${APP_NAME}.`,
+			`${providerOption.method?.name ?? "Authentication"} is configured outside ${PRODUCT_NAME}.`,
 			[],
 			true,
 		);
@@ -6803,7 +6833,9 @@ export class InteractiveMode {
 
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new DynamicBorder());
-		this.chatContainer.addChild(new ThemedText(() => theme.bold(theme.fg("accent", "What's New")), 1, 0));
+		this.chatContainer.addChild(
+			new ThemedText(() => theme.bold(theme.fg("accent", PIBOLT ? "What's New in Pi" : "What's New")), 1, 0),
+		);
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(new Markdown(changelogMarkdown, 1, 1, this.getMarkdownThemeWithSettings()));
 		this.chatContainer.addChild(new DynamicBorder());

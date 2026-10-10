@@ -53,7 +53,10 @@ def screen(build, width, pace_ms):
         time.sleep(0.5)
         tmux("kill-server")
     # The working directory is in the footer, with a name of its own each time.
-    return done, re.sub(r"[^\s\x1b]*/pibolt-work-\w+", "<work>", text)  # (/tmp/... on Linux, /private/var/folders/... on macOS)
+    text = re.sub(r"[^\s\x1b]*/pibolt-work-\w+", "<work>", text)  # (/tmp/... on Linux, /private/var/folders/... on macOS)
+    # So is the share of the context used, which the system prompt counts in: it names the folder the build is installed in
+    # (out/pi-stable, out/pi-bolt), a few characters that can move the rounded figure.
+    return done, re.sub(r"\d+(?:\.\d+)?%/(\d+k)", r"<ctx>%/\1", text)
 
 
 def main():

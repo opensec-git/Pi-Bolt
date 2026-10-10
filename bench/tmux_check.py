@@ -10,6 +10,8 @@ For each build it reports:
   - anything that looks like an error on screen
 
 Example: bench/tmux_check.py --prompts 4 --rounds 3 --build pi-bolt=./out/pi/pi --build bun=./out/pi-stable/pi
+
+On Windows, where there is no tmux, it runs conpty_check.py: the same steps and fields, with Pi in a ConPTY.
 """
 
 import argparse
@@ -24,7 +26,9 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from harness import ANSI, MACOS, MODEL_ARGS, PROMPT, alive, cpu_ms, done, fake_model, median, memory_mb, parse_builds, pi_env, pi_home, workdir
+from harness import (
+    ANSI, MACOS, MODEL_ARGS, PROMPT, WINDOWS, alive, cpu_ms, done, fake_model, median, memory_mb, parse_builds, pi_env, pi_home, workdir,
+)
 
 SOCKET = "pibolt-check"
 ERRORS = re.compile(r"TypeError|ReferenceError|RangeError|SyntaxError|panic\(|Segmentation fault|Bun has crashed|oh no:|Unhandled|uncaught", re.I)
@@ -182,6 +186,10 @@ def check(build, env, cwd, prompts, cpus, out_dir):
 
 
 def main():
+    if WINDOWS:
+        # No tmux on Windows: the same check in a ConPTY, with the same command line and fields (conpty_check.py).
+        import conpty_check
+        return conpty_check.main()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--build", action="append", required=True, help="name=command that starts Pi (repeatable)")
     ap.add_argument("--prompts", type=int, default=4)

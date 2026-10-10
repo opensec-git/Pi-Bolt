@@ -185,6 +185,55 @@ describe("InteractiveThemeController", () => {
 		expect(theme.name).toBe("dark");
 	});
 
+	it("reports whether the terminal's colors can change what the theme draws", async () => {
+		const { ui, queryTerminalColors } = createUi();
+		queryTerminalColors.mockResolvedValue(DARK);
+		let manager = SettingsManager.inMemory();
+		const controller = createController(ui, () => manager);
+		const dependsOn = async (themeSetting: string | undefined) => {
+			manager = SettingsManager.inMemory(themeSetting === undefined ? {} : { theme: themeSetting });
+			controller.applyFromSettings();
+			const before = controller.dependsOnTerminalColors();
+			await controller.waitForTerminalColors();
+			// Asked before the reply (as startup does); the reply does not change the answer.
+			expect(controller.dependsOnTerminalColors()).toBe(before);
+			return before;
+		};
+
+		// The system theme is generated from them; a pair picks its theme by the reported background.
+		expect(await dependsOn(undefined)).toBe(true);
+		expect(await dependsOn("system")).toBe(true);
+		expect(await dependsOn("light/dark")).toBe(true);
+		// Other themes draw with their own colors.
+		expect(await dependsOn("dark")).toBe(false);
+		expect(await dependsOn("light")).toBe(false);
+		// A theme that fails to load falls back to the system theme.
+		expect(await dependsOn("no-such-theme")).toBe(true);
+	});
+
+	it("keeps an explicit theme, and what it draws, when the colors arrive", async () => {
+		const { ui, queryTerminalColors } = createUi();
+		let answer: (colors: TerminalColors) => void = () => {};
+		queryTerminalColors.mockReturnValue(
+			new Promise((resolve) => {
+				answer = resolve;
+			}),
+		);
+		const controller = createController(ui, () => SettingsManager.inMemory({ theme: "dark" }));
+		controller.applyFromSettings();
+		const beforeReply = theme;
+		const header = `${theme.fg("dim", "v1")} ${theme.fg("muted", "hint")} ${theme.fg("accent", "x")}`;
+
+		answer(LIGHT);
+		await controller.waitForTerminalColors();
+
+		// The colors were recorded (a light terminal) and re-rendered, but the theme is the same instance.
+		expect(controller.getTerminalTheme()).toBe("light");
+		expect(ui.requestRender).toHaveBeenCalled();
+		expect(theme).toBe(beforeReply);
+		expect(`${theme.fg("dim", "v1")} ${theme.fg("muted", "hint")} ${theme.fg("accent", "x")}`).toBe(header);
+	});
+
 	it("reloads theme settings when no initial theme was supplied", async () => {
 		const { ui } = createUi();
 		const firstManager = SettingsManager.inMemory({ theme: "dark" });

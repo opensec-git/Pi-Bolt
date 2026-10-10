@@ -11,9 +11,10 @@ import {
 	type StdioPipe,
 } from "node:child_process";
 import { accessSync, constants, statSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 import type { Readable } from "node:stream";
 import crossSpawn from "cross-spawn";
+import { isProgramFile, windowsPathDirectories } from "./windows-path.ts";
 
 const EXIT_STDIO_GRACE_MS = 100;
 
@@ -24,7 +25,9 @@ export function spawnProcess(
 ): ChildProcessByStdio<null, Readable, Readable>;
 export function spawnProcess(command: string, args: string[], options: SpawnOptions): ChildProcess;
 export function spawnProcess(command: string, args: string[], options: SpawnOptions): ChildProcess {
-	return process.platform === "win32" ? crossSpawn(command, args, options) : nodeSpawn(command, args, options);
+	return process.platform === "win32"
+		? crossSpawn(resolveWindowsCommand(command, options.env), args, options)
+		: nodeSpawn(command, args, options);
 }
 
 export function spawnProcessSync(
@@ -33,8 +36,33 @@ export function spawnProcessSync(
 	options: SpawnSyncOptionsWithStringEncoding,
 ): SpawnSyncReturns<string> {
 	return process.platform === "win32"
-		? crossSpawn.sync(command, args, options)
+		? crossSpawn.sync(resolveWindowsCommand(command, options.env), args, options)
 		: nodeSpawnSync(command, args, options);
+}
+
+/**
+ * The file a command named without a path is on Windows, from PATH's absolute directories only. cross-spawn finds one with
+ * `which`, which looks in the working directory first: a repository opened in Pi could put an npm.cmd or git.exe of its own
+ * there, for the package update check to run before any trust decision. Found nowhere, a path that does not exist, so that
+ * spawning it fails as a missing command does. (cross-spawn still runs a .cmd through cmd.exe with its arguments escaped.)
+ */
+function resolveWindowsCommand(command: string, env: NodeJS.ProcessEnv | undefined): string {
+	if (/[\\/]/.test(command)) return command;
+	const source = env ?? process.env;
+	// (An environment merged from two may have both PATH and Path: PATH, as cross-spawn takes it.)
+	const pathKey = "PATH" in source ? "PATH" : Object.keys(source).find((key) => key.toLowerCase() === "path");
+	const dirs = windowsPathDirectories(pathKey ? (source[pathKey] ?? "") : "").filter((dir) => isAbsolute(dir));
+	const pathExtensions = (source.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean);
+	// (As `which` has it: a name with a dot is also tried as it is.)
+	const extensions = command.includes(".") ? ["", ...pathExtensions] : pathExtensions;
+	for (const dir of dirs) {
+		for (const extension of extensions) {
+			const file = join(dir, command + extension);
+			if (isProgramFile(file)) return file;
+		}
+	}
+	// (In a folder that cannot exist: not one of Windows's own programs of that name, were PATH empty.)
+	return join(process.env.SystemRoot ?? "C:\\Windows", "pi-bolt-no-such-command", `${command}.exe`);
 }
 
 /** The first executable file named `command` in the PATH directories, or undefined. Does not run it. */

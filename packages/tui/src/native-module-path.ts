@@ -11,25 +11,21 @@ export interface NativeModuleCandidateOptions {
 	resolvePackage?: (specifier: string) => string;
 }
 
-/** A module embedded in a compiled Bun executable (`/$bunfs/` on POSIX, `B:/~BUN/` on Windows). */
-function isEmbeddedModule(moduleUrl: string): boolean {
-	return moduleUrl.includes("$bunfs") || moduleUrl.includes("~BUN") || moduleUrl.includes("%7EBUN");
-}
+// A module of a compiled executable is in its embedded file system (/$bunfs/ elsewhere, B:\~BUN\ on Windows).
+const EMBEDDED_MODULE_DIR = /^(?:\/\$bunfs\/|[A-Za-z]:[\\/]~BUN[\\/])/;
 
 export function getNativeModuleCandidates(nativePath: string, options: NativeModuleCandidateOptions = {}): string[] {
-	const moduleUrl = options.moduleUrl ?? import.meta.url;
-	const moduleDir = dirname(fileURLToPath(moduleUrl));
+	const moduleDir = dirname(fileURLToPath(options.moduleUrl ?? import.meta.url));
 	const candidates: string[] = [];
 
-	// A compiled executable resolves a package from its embedded modules in the working directory's node_modules, so a
-	// repository Pi is started in could supply the native module. It has no installed TUI package: its native modules are
-	// next to the executable.
-	if (!isEmbeddedModule(moduleUrl)) {
+	// Not in a compiled executable, which has no installed TUI package: resolving one from its embedded files looks up the
+	// working directory's folders instead, so a project's own node_modules would supply the native helper that is loaded.
+	if (!EMBEDDED_MODULE_DIR.test(moduleDir)) {
 		try {
 			const packageEntry = (options.resolvePackage ?? moduleRequire.resolve)(TUI_PACKAGE_NAME);
 			candidates.push(join(dirname(packageEntry), "..", nativePath));
 		} catch {
-			// Not installed as a package.
+			// No installed TUI package.
 		}
 	}
 

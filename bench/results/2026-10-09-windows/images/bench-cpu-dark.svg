@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="798" viewBox="0 0 880 798" role="img" aria-label="CPU time: All threads, lower is better. Ratios compare Pi-Bolt with Bun. Pi 1.0.3, medians.">
+<style>text{font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif}</style>
+<text x="24" y="32" font-size="21" font-weight="650" fill="#f0f6fc">CPU time</text>
+<text x="24" y="56" font-size="13.5" fill="#9198a1">All threads, lower is better. Ratios compare Pi-Bolt with Bun. Pi 1.0.3, medians.</text>
+<text x="24" y="96" font-size="15" font-weight="600" fill="#f0f6fc">Interactive session: 5 prompts</text>
+<text x="223" y="126.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (LTO+CFG AOT)</text>
+<path d="M233,114 h125.7 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-125.7 z" fill="#3987e5"/>
+<text x="370.7" y="126.5" font-size="13.5" font-weight="650" fill="#f0f6fc">295 ms</text>
+<rect x="421.6" y="111.5" width="71.2" height="22" rx="11.0" fill="#1b2f4a"/><text x="428.6" y="126.5" font-size="12" font-weight="600" fill="#f0f6fc">2.8× less</text>
+<text x="223" y="156.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi 1.0.3 on stock Bun 1.4.2</text>
+<path d="M233,144 h353.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-353.1 z" fill="#6e7681"/>
+<text x="598.1" y="156.5" font-size="13.5" font-weight="400" fill="#f0f6fc">812 ms</text>
+<text x="223" y="186.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 22</text>
+<path d="M233,174 h535.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-535.0 z" fill="#6e7681"/>
+<text x="780.0" y="186.5" font-size="13.5" font-weight="400" fill="#f0f6fc">1,225 ms</text>
+<text x="223" y="216.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 24</text>
+<path d="M233,204 h497.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-497.0 z" fill="#6e7681"/>
+<text x="742.0" y="216.5" font-size="13.5" font-weight="400" fill="#f0f6fc">1,139 ms</text>
+<line x1="233" y1="108" x2="233" y2="226" stroke="#3d444d"/>
+<text x="24" y="276" font-size="15" font-weight="600" fill="#f0f6fc">pi -p: one prompt</text>
+<text x="223" y="306.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (LTO+CFG AOT)</text>
+<path d="M233,294 h81.5 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-81.5 z" fill="#3987e5"/>
+<text x="326.5" y="306.5" font-size="13.5" font-weight="650" fill="#f0f6fc">92 ms</text>
+<rect x="370.2" y="291.5" width="71.2" height="22" rx="11.0" fill="#1b2f4a"/><text x="377.2" y="306.5" font-size="12" font-weight="600" fill="#f0f6fc">3.6× less</text>
+<text x="223" y="336.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi 1.0.3 on stock Bun 1.4.2</text>
+<path d="M233,324 h306.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-306.1 z" fill="#6e7681"/>
+<text x="551.1" y="336.5" font-size="13.5" font-weight="400" fill="#f0f6fc">335 ms</text>
+<text x="223" y="366.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 22</text>
+<path d="M233,354 h535.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-535.0 z" fill="#6e7681"/>
+<text x="780.0" y="366.5" font-size="13.5" font-weight="400" fill="#f0f6fc">582 ms</text>
+<text x="223" y="396.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 24</text>
+<path d="M233,384 h508.7 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-508.7 z" fill="#6e7681"/>
+<text x="753.7" y="396.5" font-size="13.5" font-weight="400" fill="#f0f6fc">554 ms</text>
+<line x1="233" y1="288" x2="233" y2="406" stroke="#3d444d"/>
+<text x="24" y="456" font-size="15" font-weight="600" fill="#f0f6fc">pi --version</text>
+<text x="223" y="486.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (LTO+CFG AOT)</text>
+<path d="M233,474 h29.5 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-29.5 z" fill="#3987e5"/>
+<text x="274.5" y="486.5" font-size="13.5" font-weight="650" fill="#f0f6fc">17 ms</text>
+<rect x="318.2" y="471.5" width="71.2" height="22" rx="11.0" fill="#1b2f4a"/><text x="325.2" y="486.5" font-size="12" font-weight="600" fill="#f0f6fc">7.8× less</text>
+<text x="223" y="516.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi 1.0.3 on stock Bun 1.4.2</text>
+<path d="M233,504 h256.8 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-256.8 z" fill="#6e7681"/>
+<text x="501.8" y="516.5" font-size="13.5" font-weight="400" fill="#f0f6fc">135 ms</text>
+<text x="223" y="546.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 22</text>
+<path d="M233,534 h535.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-535.0 z" fill="#6e7681"/>
+<text x="780.0" y="546.5" font-size="13.5" font-weight="400" fill="#f0f6fc">280 ms</text>
+<text x="223" y="576.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 24</text>
+<path d="M233,564 h517.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-517.1 z" fill="#6e7681"/>
+<text x="762.1" y="576.5" font-size="13.5" font-weight="400" fill="#f0f6fc">271 ms</text>
+<line x1="233" y1="468" x2="233" y2="586" stroke="#3d444d"/>
+<text x="24" y="636" font-size="15" font-weight="600" fill="#f0f6fc">Per prompt, 4.2M-token session</text>
+<text x="223" y="666.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (LTO+CFG AOT)</text>
+<path d="M233,654 h141.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-141.1 z" fill="#3987e5"/>
+<text x="386.1" y="666.5" font-size="13.5" font-weight="650" fill="#f0f6fc">186 ms</text>
+<rect x="437.0" y="651.5" width="71.2" height="22" rx="11.0" fill="#1b2f4a"/><text x="444.0" y="666.5" font-size="12" font-weight="600" fill="#f0f6fc">1.7× less</text>
+<text x="223" y="696.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi 1.0.3 on stock Bun 1.4.2</text>
+<path d="M233,684 h242.7 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-242.7 z" fill="#6e7681"/>
+<text x="487.7" y="696.5" font-size="13.5" font-weight="400" fill="#f0f6fc">316 ms</text>
+<text x="223" y="726.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 22</text>
+<path d="M233,714 h535.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-535.0 z" fill="#6e7681"/>
+<text x="780.0" y="726.5" font-size="13.5" font-weight="400" fill="#f0f6fc">691 ms</text>
+<text x="223" y="756.5" font-size="13.5" text-anchor="end" fill="#9198a1">Node 24</text>
+<path d="M233,744 h501.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-501.0 z" fill="#6e7681"/>
+<text x="746.0" y="756.5" font-size="13.5" font-weight="400" fill="#f0f6fc">647 ms</text>
+<line x1="233" y1="648" x2="233" y2="766" stroke="#3d444d"/>
+</svg>

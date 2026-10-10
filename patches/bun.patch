@@ -1,9 +1,9 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: OpenSec <contactus@opensec.in>
-Date: Mon, 5 Oct 2026 19:25:52 +0530
+Date: Sat, 10 Oct 2026 17:52:02 +0530
 Subject: [PATCH] Pi-Bolt: ahead-of-time compiled executables
 
-Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
+Bun's changes for Pi-Bolt's executables, on Linux x86-64, macOS ARM64 and Windows x64:
 
 - Executables with a prebuilt heap and a code image, made by `bun build --compile` and mapped from the
   executable when it starts (bundler, StandaloneModuleGraph, ZigSourceProvider).
@@ -11,73 +11,107 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
   a wrapper read once, ahead of the wrapper's dependencies.
 - Stack traces and crash reports of ahead-of-time code: no CodeBlocks made to read a frame, crash
   reports not uploaded unasked. The default Error.prepareStackTrace takes any object.
-- Memory: garbage collection markers for the prebuilt heap, the allocator's idle sweep every 250 ms and
-  freed memory purged once 25 ms old, static strings not reference counted from Rust; a collection
-  every 5 seconds while the program waits; on macOS a starting heap budget that fits the prebuilt heap.
-- Streams: fs.WriteStream keeps writev, so writes queued behind one in flight go out together, as in
-  Node; a Writable compacts its queue only once half of it has drained.
-- From upstream ahead of the pin: mimalloc 92ef6587 with the event loop handing its heaps to the
-  scavenger only on a poll that can block (#44560, #44575); fetch sets up TLS once per connection
-  (#44507).
+- Memory: garbage collection markers for the prebuilt heap, the allocator's idle sweep every 250 ms,
+  static strings not reference counted from Rust; on macOS a starting heap budget that fits the
+  prebuilt heap, and a collection every 5 seconds while the program waits.
 - fetch: an idle connection waits in the keep-alive pool for 4 seconds, or as long as the server says.
 - macOS: the prebuilt heap and code image mapped from the __BUN section, with the executable where it
   was linked to be; SharedArrayBuffer with the JIT off; a terminal reopened by its own device, which
-  kqueue can watch; the programs an executable starts are started by Pi-Bolt's launcher helper; no
-  read-ahead of bytecode that a prebuilt heap does not run from.
+  kqueue can watch; the programs an executable starts are started by Pi-Bolt's launcher helper.
+
+- Windows x64: the prebuilt heap and code image in the executable's PE sections, mapped read-only where
+  nothing writes; DLLs that are delay-loaded only from System32 (a delay-load hook, the dependent load
+  flag, WIC); a build without the JIT stays without it, and the debugging options that reach memory or
+  load code are off in a compiled program; crash reports of compiled code; a collection every second
+  while waiting (5 s measured +40% CPU while a reply streams), and mimalloc's purge delay left at its
+  default; an idle keep-alive connection aged on GetTickCount64; the writer of the prebuilt heap takes a word that
+  looks like an address of the blocks or the build's scratch memory for a number unless it is aligned and its page committed,
+  and says so.
+
+Includes the engine changes of Pi-Bolt 0.7.1 to 0.7.3 on pi-bolt (5f6ad773e, c9bde4b67): writev for
+queued writes, mimalloc from upstream, less idle work, an idle keep-alive's age on a clock nobody sets,
+fetch through a TLS 1.2 renegotiation.
+
+Includes the engine changes of Pi-Bolt 0.7.4 (bolt-v0.7.4): code built into an executable resolves no module or package in the working directory (absolute paths and require.resolve paths still do); internal names and messages cleaned up. Builds on Linux and macOS: the executable's bytes mutable only where Windows rewrites them.
 ---
- Cargo.lock                                    |   1 +
- .../bun-usockets/src/eventing/epoll_kqueue.c  |   7 +-
- scripts/build/deps/mimalloc.ts                |   2 +-
- scripts/build/deps/webkit.ts                  |  18 +
- src/ast/import_record.rs                      |   4 +
- src/bun_alloc/lib.rs                          |  14 +-
- src/bun_core/env_var.rs                       |   1 +
- src/bundler/LinkerContext.rs                  |  38 ++
- src/bundler/bundle_v2.rs                      |  22 +
- .../linker_context/convertStmtsForChunk.rs    |  68 +++
- .../generateChunksInParallel.rs               |  21 +
- .../linker_context/scanImportsAndExports.rs   |  21 +
- src/bundler/prelinked_module_graph.rs         |  14 +-
- src/crash_handler/lib.rs                      |  41 +-
- src/http/Cargo.toml                           |   1 +
- src/http/HTTPContext.rs                       |  51 +-
- src/http/HTTPThread.rs                        |  11 +
- src/http/HeaderValueIterator.rs               |  20 +
- src/http/InternalState.rs                     |   4 +
- src/http/ProxyTunnel.rs                       |   2 +-
- src/http/lib.rs                               |  68 ++-
- src/js/internal/fs/streams.ts                 |   3 +-
- src/js/internal/streams/writable.ts           |   5 +-
- src/jsc/CachedBytecode.rs                     |  31 ++
- src/jsc/GarbageCollectionController.rs        |  23 +-
- src/jsc/JSType.rs                             | 144 +++---
- src/jsc/VirtualMachine.rs                     |  18 +-
- src/jsc/bindings/BunClientData.cpp            |   8 +-
- src/jsc/bindings/BunClientData.h              |   2 +-
- src/jsc/bindings/ErrorStackTrace.cpp          |  73 ++-
- src/jsc/bindings/FormatStackTraceForJS.cpp    |  27 +-
- src/jsc/bindings/InternalModuleRegistry.cpp   |  15 +-
- src/jsc/bindings/ZigException.cpp             |  14 +-
- src/jsc/bindings/ZigGlobalObject.cpp          |  51 ++
- src/jsc/bindings/ZigSourceProvider.cpp        | 435 +++++++++++++++++-
- src/jsc/bindings/c-bindings.cpp               | 114 +++++
- src/jsc/web_worker.rs                         |   4 +
- src/resolver/resolver.rs                      |   7 +-
- src/runtime/api/BunObject.rs                  |   6 +
- src/runtime/api/bun/subprocess.rs             |   2 +-
- src/runtime/cli/run_command.rs                |   5 +
- src/spawn/process.rs                          |  23 +-
- src/spawn_sys/posix_spawn.rs                  | 173 ++++++-
- src/spawn_sys/spawn_process.rs                |  14 +-
- src/standalone_graph/StandaloneModuleGraph.rs | 223 ++++++++-
- test/js/bun/util/sleepSync.test.ts            |  47 ++
- test/js/node/fs/fs.test.ts                    |  24 +
- test/js/node/stream/node-stream.test.js       |  22 +
- .../fetch.tls.renegotiation-client-fixture.ts |  38 ++
- .../fetch.tls.renegotiation-peer-fixture.mjs  |  86 ++++
- test/js/web/fetch/fetch.tls.test.ts           |  70 ++-
- test/js/web/timers/timer-gc-roots.test.ts     |   3 +
- 52 files changed, 1976 insertions(+), 163 deletions(-)
+ Cargo.lock                                    |    1 +
+ .../bun-usockets/src/eventing/epoll_kqueue.c  |    7 +-
+ .../libuv/win-thread-stack-reservation.patch  |   19 +
+ .../page-commit-on-demand-default.patch       |   22 +
+ scripts/build/CLAUDE.md                       |    2 +-
+ scripts/build/binary-expectations.ts          |   32 +-
+ scripts/build/bun.ts                          |   18 +-
+ scripts/build/deps/libuv.ts                   |    7 +-
+ scripts/build/deps/mimalloc.ts                |   11 +-
+ scripts/build/deps/webkit.ts                  |   56 +-
+ scripts/build/download.ts                     |   28 +-
+ scripts/build/fetch-cli.ts                    |   39 +-
+ scripts/build/flags.ts                        |   39 +-
+ scripts/build/ninja.ts                        |    1 +
+ scripts/build/rust.ts                         |    3 +
+ scripts/build/source.ts                       |   10 +
+ scripts/build/timings.ts                      |    1 +
+ scripts/orderfile/functrace-windows.c         |   24 +-
+ scripts/orderfile/generate.ts                 |   55 +-
+ scripts/orderfile/hints.ts                    |   63 +-
+ src/ast/import_record.rs                      |    4 +
+ src/bun_alloc/lib.rs                          |   14 +-
+ src/bun_core/env_var.rs                       |    1 +
+ src/bundler/LinkerContext.rs                  |   38 +
+ src/bundler/bundle_v2.rs                      |   25 +
+ .../linker_context/convertStmtsForChunk.rs    |   68 +
+ .../generateChunksInParallel.rs               |   21 +
+ .../linker_context/scanImportsAndExports.rs   |   21 +
+ src/bundler/prelinked_module_graph.rs         |   14 +-
+ src/codegen/generate-classes.ts               |   25 +-
+ src/crash_handler/lib.rs                      |   43 +-
+ src/http/Cargo.toml                           |    1 +
+ src/http/HTTPContext.rs                       |   61 +-
+ src/http/HTTPThread.rs                        |   11 +
+ src/http/HeaderValueIterator.rs               |   20 +
+ src/http/InternalState.rs                     |    4 +
+ src/http/ProxyTunnel.rs                       |    2 +-
+ src/http/lib.rs                               |   68 +-
+ src/io/PipeWriter.rs                          |    6 +
+ src/js/internal/fs/streams.ts                 |    3 +-
+ src/js/internal/streams/writable.ts           |    5 +-
+ src/jsc/CachedBytecode.rs                     |   36 +
+ src/jsc/GarbageCollectionController.rs        |   28 +-
+ src/jsc/JSType.rs                             |  144 +-
+ src/jsc/VirtualMachine.rs                     |   19 +-
+ src/jsc/bindings/BunClientData.cpp            |    8 +-
+ src/jsc/bindings/BunClientData.h              |    2 +-
+ src/jsc/bindings/ErrorStackTrace.cpp          |   73 +-
+ src/jsc/bindings/FormatStackTraceForJS.cpp    |   27 +-
+ src/jsc/bindings/InternalModuleRegistry.cpp   |   15 +-
+ src/jsc/bindings/ZigException.cpp             |   14 +-
+ src/jsc/bindings/ZigGlobalObject.cpp          |   77 ++
+ src/jsc/bindings/ZigSourceProvider.cpp        | 1184 ++++++++++++++++-
+ src/jsc/bindings/c-bindings.cpp               |  136 ++
+ .../webcore/SerializedScriptValue.cpp         |    9 +
+ src/jsc/web_worker.rs                         |    4 +
+ src/resolver/resolver.rs                      |    7 +-
+ src/runtime/api/BunObject.rs                  |    6 +
+ src/runtime/api/bun/subprocess.rs             |    2 +-
+ src/runtime/cli/run_command.rs                |    5 +
+ src/runtime/image/backend_wic.rs              |    8 +-
+ src/runtime/node/net/BlockList.rs             |    2 +-
+ src/runtime/timer/mod.rs                      |    5 +
+ src/runtime/webcore/Blob.rs                   |    2 +-
+ src/spawn/process.rs                          |   23 +-
+ src/spawn_sys/posix_spawn.rs                  |  173 ++-
+ src/spawn_sys/spawn_process.rs                |   14 +-
+ src/standalone_graph/StandaloneModuleGraph.rs |  264 +++-
+ test/js/bun/util/sleepSync.test.ts            |   47 +
+ test/js/node/fs/fs.test.ts                    |   24 +
+ test/js/node/stream/node-stream.test.js       |   22 +
+ .../fetch.tls.renegotiation-client-fixture.ts |   38 +
+ .../fetch.tls.renegotiation-peer-fixture.mjs  |   86 ++
+ test/js/web/fetch/fetch.tls.test.ts           |   70 +-
+ test/js/web/timers/timer-gc-roots.test.ts     |    3 +
+ 75 files changed, 3238 insertions(+), 232 deletions(-)
+ create mode 100644 patches/libuv/win-thread-stack-reservation.patch
+ create mode 100644 patches/mimalloc/page-commit-on-demand-default.patch
  create mode 100644 test/js/web/fetch/fetch.tls.renegotiation-client-fixture.ts
  create mode 100644 test/js/web/fetch/fetch.tls.renegotiation-peer-fixture.mjs
 
@@ -111,8 +145,263 @@ index 28a2040abb2..6806c0940e3 100644
      if (!handed_off && will_idle_inside_event_loop) {
          static const uint64_t idle_sweep_interval_ns = 100 * 1000000ULL;
          static _Thread_local uint64_t last_idle_sweep_ns = 0;
+diff --git a/patches/libuv/win-thread-stack-reservation.patch b/patches/libuv/win-thread-stack-reservation.patch
+new file mode 100644
+index 00000000000..293a355f5ce
+--- /dev/null
++++ b/patches/libuv/win-thread-stack-reservation.patch
+@@ -0,0 +1,19 @@
++--- a/src/win/thread.c
+++++ b/src/win/thread.c
++@@ -139,12 +139,14 @@ int uv_thread_create_ex(uv_thread_t* tid,
++   ctx->arg = arg;
++ 
++   /* Create the thread in suspended state so we have a chance to pass
++-   * its own creation handle to it */
+++   * its own creation handle to it. The stack size is a reservation, as it is
+++   * on Unix: without STACK_SIZE_PARAM_IS_A_RESERVATION, Windows commits all of
+++   * it (8 MB for each thread of the threadpool). */
++   thread = (HANDLE) _beginthreadex(NULL,
++                                    (unsigned)stack_size,
++                                    uv__thread_start,
++                                    ctx,
++-                                   CREATE_SUSPENDED,
+++                                   CREATE_SUSPENDED | STACK_SIZE_PARAM_IS_A_RESERVATION,
++                                    NULL);
++   if (thread == NULL) {
++     err = errno;
+diff --git a/patches/mimalloc/page-commit-on-demand-default.patch b/patches/mimalloc/page-commit-on-demand-default.patch
+new file mode 100644
+index 00000000000..9ee928568f8
+--- /dev/null
++++ b/patches/mimalloc/page-commit-on-demand-default.patch
+@@ -0,0 +1,22 @@
++--- a/src/options.c
+++++ b/src/options.c
++@@ -84,6 +84,10 @@ int mi_version(void) {
++ #endif
++ #endif
++ 
+++#ifndef MI_DEFAULT_PAGE_COMMIT_ON_DEMAND
+++#define MI_DEFAULT_PAGE_COMMIT_ON_DEMAND 0
+++#endif
+++
++ #ifndef MI_DEFAULT_PAGEMAP_COMMIT
++ #if defined(__APPLE__) && MI_PAGE_MAP_FLAT  // when overloading malloc, we still get mixed pointers sometimes on macOS; this avoids a bad access
++ #define MI_DEFAULT_PAGEMAP_COMMIT 1
++@@ -169,7 +173,7 @@ static mi_option_desc_t mi_options[_mi_option_last] =
++   { 0,   MI_OPTION_UNINIT, MI_OPTION(max_vabits) },               // max virtual address space bits
++   { MI_DEFAULT_PAGEMAP_COMMIT,
++          MI_OPTION_UNINIT, MI_OPTION(pagemap_commit) },           // commit the full pagemap upfront?
++-  { 0,   MI_OPTION_UNINIT, MI_OPTION(page_commit_on_demand) },    // commit pages on-demand (2 disables this only on overcommit systems (like Linux))
+++  { MI_DEFAULT_PAGE_COMMIT_ON_DEMAND, MI_OPTION_UNINIT, MI_OPTION(page_commit_on_demand) },    // commit pages on-demand (2 disables this only on overcommit systems (like Linux))
++   { MI_DEFAULT_PAGE_MAX_RECLAIM,
++          MI_OPTION_UNINIT, MI_OPTION(page_max_reclaim) },         // don't reclaim (small) pages of the same originating theap if we already own N pages in that size class
++   { MI_DEFAULT_PAGE_CROSS_THREAD_MAX_RECLAIM,
+diff --git a/scripts/build/CLAUDE.md b/scripts/build/CLAUDE.md
+index 4d067e90447..41c47fee81c 100644
+--- a/scripts/build/CLAUDE.md
++++ b/scripts/build/CLAUDE.md
+@@ -292,7 +292,7 @@ Why not auto-register in emit functions? Some rules are shared (`dep_configure`
+ 
+ **Dep order in `allDeps` matters.** `fetchDeps: ["X"]` means X must come first (its `.ref` stamp node must exist). Link order matters too: static linking resolves left→right, providers after users.
+ 
+-**PCH, cc, and no-PCH cxx need implicit dep on `depHeaderSignal`**, not order-only. Local WebKit's sub-build rewrites forwarding headers as an undeclared side effect (only `lib*.a` are declared outputs). Depfiles record those headers, but ninja stats them before the sub-build runs — order-only lags one build. The lib itself is the invalidation signal. Codegen headers stay order-only: they're declared outputs with restat, so depfile tracking is exact.
++**PCH, cc, and no-PCH cxx need implicit dep on `depHeaderSignal`**, not order-only. Local WebKit's sub-build rewrites forwarding headers as an undeclared side effect (only `lib*.a` are declared outputs). Depfiles record those headers, but ninja stats them before the sub-build runs — order-only lags one build. For other nested-cmake deps the lib itself is the invalidation signal. For local WebKit it is `deps/WebKit/headers.stamp` (`emitWebKitHeaderStamp`, `fetch-cli.ts header-stamp`): a hash of the path, size and mtime of every header in its build dir, rewritten (restat) only when the sub-build wrote one. The lib changes with every `.cpp` edit, which would rebuild the PCH and every compile; the headers in WebKit's source tree are never written mid-run, so their depfile entries are exact. Codegen headers stay order-only: they're declared outputs with restat, so depfile tracking is exact.
+ 
+ **`isExecutable` must check `isFile()`.** `X_OK` on a directory means traversable — a `cmake/` dir in PATH would shadow the real cmake binary.
+ 
+diff --git a/scripts/build/binary-expectations.ts b/scripts/build/binary-expectations.ts
+index f18a60b06b5..0ba5981b7f5 100644
+--- a/scripts/build/binary-expectations.ts
++++ b/scripts/build/binary-expectations.ts
+@@ -7,9 +7,9 @@
+  * BEFORE EXTENDING A LIST HERE: these are not build settings, they are the
+  * shipped binary's contract with the machines it runs on and the addons that
+  * load into it. The check failing is the point at which a change that would
+- * otherwise ship unnoticed — a new shared-library dependency, a higher
++ * otherwise ship unnoticed â€” a new shared-library dependency, a higher
+  * minimum glibc, a symbol leaking into the export table, a static initializer,
+- * a lost mitigation — gets decided on purpose. The usual right answer is to
++ * a lost mitigation â€” gets decided on purpose. The usual right answer is to
+  * change the code (link statically, fix the declaration, make the global
+  * lazy), not the expectation. Extend a list only in the same change that
+  * deliberately takes on the new requirement, and say so in the commit.
+@@ -29,7 +29,7 @@ export interface BinaryExpectations {
+    * one of `patterns` (`*` wildcards) by its raw name, or one of
+    * `demangledPatterns` by its demangled name (a version script's
+    * `extern "C++"` block). Nothing may leak past the export lists in src/
+-   * (linker.lds / symbols.txt / symbols.def) — on Windows a stray
++   * (linker.lds / symbols.txt / symbols.def) â€” on Windows a stray
+    * `__declspec(dllexport)` does exactly that.
+    */
+   exports: {
+@@ -81,7 +81,7 @@ export interface BinaryExpectations {
+   /**
+    * Version nodes without a number that the binary may require, exact names.
+    * Bionic tags its symbols by the API level that introduced them (LIBC,
+-   * LIBC_N, LIBC_O, LIBC_P, …), so on Android this list is the API floor the
++   * LIBC_N, LIBC_O, LIBC_P, â€¦), so on Android this list is the API floor the
+    * way maxSymbolVersions is glibc's; on glibc any un-numbered node
+    * (GLIBC_ABI_DT_RELR = a 2.36+ loader, GLIBC_PRIVATE) is a violation.
+    * Judged only where maxSymbolVersions is.
+@@ -106,7 +106,7 @@ export interface BinaryExpectations {
+    *
+    * Not a list to grow: an initializer from bun/JSC/WTF code is a bug
+    * (startup cost on every invocation, init-order hazards). Make the global
+-   * lazy instead — function-local static, LazyNeverDestroyed, constinit.
++   * lazy instead â€” function-local static, LazyNeverDestroyed, constinit.
+    */
+   staticInitializers?: string[];
+   elf?: {
+@@ -128,22 +128,22 @@ export interface BinaryExpectations {
+   macho?: {
+     /** MH_* flags that must be present. */
+     flags: string[];
+-    /** Segment name → maxprot, for the segments that must not gain W or X. */
++    /** Segment name â†’ maxprot, for the segments that must not gain W or X. */
+     segmentMaxProt: Record<string, string>;
+   };
+   /**
+    * The profile executable keeps a symbol table and debug sections (ELF; on
+    * Mach-O debug info lives in the dSYM, on PE in the PDB). `compressed`:
+    * the DWARF sections carry SHF_COMPRESSED (at link, or post-link with
+-   * rust-lld — flags.ts --compress-debug-sections).
++   * rust-lld â€” flags.ts --compress-debug-sections).
+    */
+   debugInfo?: { symtab: boolean; debugSections: boolean; compressed: boolean };
+ }
+ 
+ /**
+  * `global:` patterns of an ld version script (the part before `local:`):
+- * plain ones match mangled names, those inside `extern "C++" { … }` match
+- * demangled names — returned as `patterns` / `demangledPatterns`.
++ * plain ones match mangled names, those inside `extern "C++" { â€¦ }` match
++ * demangled names â€” returned as `patterns` / `demangledPatterns`.
+  */
+ export function versionScriptGlobals(path: string): { patterns: string[]; demangledPatterns: string[] } {
+   const text = readFileSync(path, "utf8")
+@@ -193,7 +193,7 @@ export function binaryFormat(cfg: Config): BinaryFormat {
+ }
+ 
+ /**
+- * Static initializers the runtime libraries contribute on each target — the
++ * Static initializers the runtime libraries contribute on each target â€” the
+  * allowlist for that target and nothing wider, so an entry that starts
+  * showing up somewhere new is noticed too. bun, JSC and WTF add none (WTF's
+  * NeverDestroyed / LazyNeverDestroyed exist so they don't have to); a
+@@ -286,7 +286,7 @@ function forbiddenImports(cfg: Config): string[] {
+     forbidden.push("_Unwind_Resume");
+   }
+   if (cfg.linux && cfg.abi !== "musl") {
+-    // …nor the function-local-static guards (musl/FreeBSD/macOS take them
++    // â€¦nor the function-local-static guards (musl/FreeBSD/macOS take them
+     // from the shared libstdc++/libc++ legitimately).
+     forbidden.push("__cxa_guard_*");
+   }
+@@ -305,8 +305,8 @@ function forbiddenImports(cfg: Config): string[] {
+  * bun-windows-x64 bun.exe: 22 MSVC-mangled members of namespace bmalloc
+  * (`bmalloc::api::*`, `bmalloc::Mutex::lockSlowCase`, `bmalloc::Environment`'s
+  * constructor, `bmalloc::systemHeapCache`, the StaticPerProcess storage of
+- * Environment and SystemHeap) — every one contains `@bmalloc@@`, hence the
+- * pattern, which is as narrow as a pattern over mangled names gets — and the
++ * Environment and SystemHeap) â€” every one contains `@bmalloc@@`, hence the
++ * pattern, which is as narrow as a pattern over mangled names gets â€” and the
+  * C symbol `g_config` (bmalloc/libpas' GigacageConfig slot array).
+  */
+ const PREBUILT_BMALLOC_DLLEXPORTS = {
+@@ -362,10 +362,10 @@ export function binaryExpectations(cfg: Config): BinaryExpectations {
+   const sanitizerLibs = cfg.asan ? ["*clang_rt.asan*", "libgcc_s.so.1"] : [];
+   // Android: -llog (WTF's logging goes to logcat) is linked --as-needed, so
+   // liblog.so is NEEDED exactly when a live __android_log_* reference
+-  // survives — a system library either way, allowed rather than pinned.
++  // survives â€” a system library either way, allowed rather than pinned.
+   // --webkit=local on Linux links the host's ICU (bun.ts systemLibs); the
+   // prebuilt bundles its own statically. A developer-only flavour, never
+-  // shipped, so the sonames (libicuuc.so.78 …) are allowed rather than pinned.
++  // shipped, so the sonames (libicuuc.so.78 â€¦) are allowed rather than pinned.
+   const localWebKitLibs =
+     cfg.webkit === "local" && cfg.linux && cfg.abi !== "android"
+       ? ["libicudata.so.*", "libicui18n.so.*", "libicuuc.so.*"]
+@@ -523,7 +523,7 @@ export function binaryExpectations(cfg: Config): BinaryExpectations {
+         forbiddenImports: forbiddenImports(cfg),
+         // No initializer audit: PE has no symbol table to name .CRT$XCU entries by.
+         pe: {
+-          dllCharacteristics: ["DYNAMIC_BASE", "HIGH_ENTROPY_VA", "NX_COMPAT", "TERMINAL_SERVER_AWARE"],
++          dllCharacteristics: ["DYNAMIC_BASE", "HIGH_ENTROPY_VA", "NX_COMPAT", "GUARD_CF", "TERMINAL_SERVER_AWARE"],
+           subsystem: "IMAGE_SUBSYSTEM_WINDOWS_CUI",
+         },
+       };
+diff --git a/scripts/build/bun.ts b/scripts/build/bun.ts
+index b6214880674..c37eea84aee 100644
+--- a/scripts/build/bun.ts
++++ b/scripts/build/bun.ts
+@@ -21,6 +21,7 @@ import { bunExeName, shouldStrip, type Config } from "./config.ts";
+ import { generateDepVersionsHeader } from "./depVersionsHeader.ts";
+ import { allDeps } from "./deps/index.ts";
+ import { lolhtml } from "./deps/lolhtml.ts";
++import { emitWebKitHeaderStamp } from "./deps/webkit.ts";
+ import { rustArgon2 } from "./deps/rust-argon2.ts";
+ import { assert } from "./error.ts";
+ import {
+@@ -205,7 +206,8 @@ export function emitBun(n: Ninja, cfg: Config, sources: Sources): BunOutput {
+   const depDefines: string[] = [];
+   // Outputs of deps that provide headers — used as implicit inputs on PCH/cc/
+   // no-PCH cxx so a dep rebuild invalidates compiles that #include its headers
+-  // (the .a is the signal — see comment at the PCH step). Deps with no provided
++  // (the .a is the signal — see comment at the PCH step — except for local
++  // WebKit, where it is a stamp of its build-dir headers). Deps with no provided
+   // includes (tinycc, lolhtml) are skipped: nothing to invalidate, and a tinycc
+   // no-op rebuild (ar has no restat) would otherwise cascade to a full PCH+cxx
+   // rebuild. Link still gets every dep via depLibs/depObjects.
+@@ -222,8 +224,14 @@ export function emitBun(n: Ninja, cfg: Config, sources: Sources): BunOutput {
+     depDefines.push(...d.defines);
+     // d.outputs is the "headers are ready" signal: for nested-cmake/
+     // prebuilt that's the .a/stamp (headers are undeclared side-effects),
+-    // for direct deps it's the generated-header set + source stamp.
+-    if (d.includes.length > 0) depHeaderSignal.push(...d.outputs);
++    // for direct deps it's the generated-header set + source stamp. Local
++    // WebKit's .lib changes with every .cpp edit, which would rebuild the PCH
++    // and every compile here; its header stamp changes only when the build
++    // wrote a header.
++    if (d.includes.length > 0) {
++      if (d.name === "WebKit" && cfg.webkit === "local") depHeaderSignal.push(emitWebKitHeaderStamp(n, cfg, d.outputs));
++      else depHeaderSignal.push(...d.outputs);
++    }
+   }
+ 
+   // ─── Step 3: configure-time generated header + assemble flags ───
+@@ -259,6 +267,10 @@ export function emitBun(n: Ninja, cfg: Config, sources: Sources): BunOutput {
+   // PCH is fresh. dep_build then regenerates them. cxx fails with "file
+   // modified since PCH was built". As implicit inputs, restat sees the .a
+   // changed → PCH rebuilds → one-build convergence. See the pch() docstring.
++  // For local WebKit the input is its header stamp, which follows the .lib
++  // but changes only when dep_build wrote a header; the headers it forwards
++  // to in WebKit's source tree are not rewritten mid-run, and the depfile
++  // tracks them.
+   //
+   // Codegen stays order-only: those outputs only change if inputs change,
+   // and inputs don't change mid-build. cppAll (not all): what the C++ side
+diff --git a/scripts/build/deps/libuv.ts b/scripts/build/deps/libuv.ts
+index edcd6bf3b4c..2dc2c347f2b 100644
+--- a/scripts/build/deps/libuv.ts
++++ b/scripts/build/deps/libuv.ts
+@@ -60,7 +60,12 @@ export const libuv: Dependency = {
+   // an in-process loopback fetch().abort() can fall into. To upstream:
+   // send to libuv/libuv with the wepoll/ReactOS references in the patch
+   // comment as the rationale.
+-  patches: ["patches/libuv/win-poll-rearm-before-callback.patch", "patches/libuv/win-poll-abort-with-disconnect.patch"],
++  patches: [
++    "patches/libuv/win-poll-rearm-before-callback.patch",
++    "patches/libuv/win-poll-abort-with-disconnect.patch",
++    // Pi-Bolt: a thread's stack size is a reservation, as on Unix, not 8 MB committed per threadpool thread.
++    "patches/libuv/win-thread-stack-reservation.patch",
++  ],
+ 
+   build: () => ({
+     kind: "direct",
 diff --git a/scripts/build/deps/mimalloc.ts b/scripts/build/deps/mimalloc.ts
-index 2984efa98b8..f162fdf9783 100644
+index 2984efa98b8..fac6b037153 100644
 --- a/scripts/build/deps/mimalloc.ts
 +++ b/scripts/build/deps/mimalloc.ts
 @@ -12,7 +12,7 @@
@@ -124,11 +413,89 @@ index 2984efa98b8..f162fdf9783 100644
  
  export const mimalloc: Dependency = {
    name: "mimalloc",
+@@ -24,6 +24,9 @@ export const mimalloc: Dependency = {
+     commit: MIMALLOC_COMMIT,
+   }),
+ 
++  // Pi-Bolt: page_commit_on_demand's default as a define (MI_DEFAULT_PAGE_COMMIT_ON_DEMAND), set for Windows below.
++  patches: ["patches/mimalloc/page-commit-on-demand-default.patch"],
++
+   build: cfg => {
+     // ─── Override behavior (global malloc replacement) ───
+     //   ASAN:    OFF — ASAN interceptors must see the real malloc.
+@@ -75,6 +78,12 @@ export const mimalloc: Dependency = {
+     // bun_alloc's lazy arena opt out the same way on their side.
+     if (cfg.linux) defines.MI_DEFAULT_ALLOW_THP = 0;
+ 
++    // Pi-Bolt: on Windows, commit a medium or large page (512 KB, 4 MB) as it fills rather than all at once. Windows
++    // charges commit for all of it whether it is touched or not (Linux overcommits, so there it costs nothing, and 2 leaves
++    // it as it is there). Measured on Pi (bench's TUI session): peak private bytes 246 -> 173 MB, headless 200 -> 125 MB,
++    // with the same CPU, working set and time to interactive.
++    if (cfg.windows) defines.MI_DEFAULT_PAGE_COMMIT_ON_DEMAND = 2;
++
+     if (cfg.abi === "musl") defines.MI_LIBC_MUSL = 1;
+     if (override) defines.MI_MALLOC_OVERRIDE = true;
+ 
 diff --git a/scripts/build/deps/webkit.ts b/scripts/build/deps/webkit.ts
-index bba31a2cc89..17a71224f73 100644
+index bba31a2cc89..4171ecfe198 100644
 --- a/scripts/build/deps/webkit.ts
 +++ b/scripts/build/deps/webkit.ts
-@@ -275,6 +275,12 @@ export const webkit: Dependency = {
+@@ -42,8 +42,10 @@ export const WEBKIT_VERSION = "35e8970dfd926abf6661c9d356f5d60d8f611c9b";
+ import { homedir } from "node:os";
+ import { join, resolve } from "node:path";
+ import type { Config } from "../config.ts";
++import { fetchCliPath } from "../fetch-cli.ts";
+ import { computeCpuTargetFlags } from "../flags.ts";
+-import { slash } from "../shell.ts";
++import type { Ninja } from "../ninja.ts";
++import { quote, slash } from "../shell.ts";
+ import { type Dependency, type NestedCmakeBuild, type Source, depBuildDir, depSourceDir } from "../source.ts";
+ 
+ // ───────────────────────────────────────────────────────────────────────────
+@@ -181,6 +183,33 @@ function webkitSrcDir(cfg: Config): string {
+   return resolve(cfg.cwd, env);
+ }
+ 
++/**
++ * Local mode: what bun's compiles take as "WebKit's headers changed", in
++ * place of its libs (bun.ts depHeaderSignal). The libs change with any .cpp
++ * edit; that would rebuild the PCH and every compile of bun's, ~3 minutes.
++ *
++ * The headers bun includes from WebKit's build dir are written by dep_build
++ * as an undeclared side effect: forwarding headers (on Windows a stub that
++ * #includes the source path), copies, DerivedSources, cmakeconfig.h, ICU's.
++ * The stamp is a hash of the path, size and mtime of each of them — what
++ * clang checks a PCH's inputs against — rewritten only when that changes, so
++ * (restat) a rebuild that writes no header prunes everything downstream. The
++ * headers in WebKit's source tree are not written mid-run, and the depfiles
++ * track them as they do any source.
++ */
++export function emitWebKitHeaderStamp(n: Ninja, cfg: Config, libs: string[]): string {
++  const dir = depBuildDir(cfg, "WebKit");
++  const stamp = resolve(dir, "headers.stamp");
++  n.build({
++    rule: "dep_header_stamp",
++    outputs: [stamp],
++    inputs: libs,
++    implicitInputs: [fetchCliPath],
++    vars: { name: "WebKit", dir: quote(dir, cfg.host.os === "windows") },
++  });
++  return stamp;
++}
++
+ // ───────────────────────────────────────────────────────────────────────────
+ // The Dependency
+ // ───────────────────────────────────────────────────────────────────────────
+@@ -252,6 +281,8 @@ export const webkit: Dependency = {
+     // -fno-pic probe object fails R_X86_64_32S relocation, killing FindThreads.
+     if (cfg.unix && cfg.abi !== "android") optFlags.push("-fno-pic", "-fno-pie", "-no-pie");
+     if (cfg.lto) optFlags.push("-flto=thin");
++    // Control Flow Guard, as bun's own C++ (flags.ts).
++    if (cfg.windows) optFlags.push("/guard:cf");
+     if (cfg.pgoGenerate) optFlags.push(`-fprofile-generate=${cfg.pgoGenerate}`);
+     if (cfg.pgoUse) {
+       optFlags.push(
+@@ -275,6 +306,12 @@ export const webkit: Dependency = {
      if (cfg.freebsd && cfg.crossTarget !== undefined) {
        optFlags.push(`--target=${cfg.crossTarget}`, `--sysroot=${cfg.sysroot!}`);
      }
@@ -141,7 +508,7 @@ index bba31a2cc89..17a71224f73 100644
      const optFlagStr = optFlags.join(" ");
      let cxxOptFlagStr = optFlagStr;
      if (cfg.abi === "android") {
-@@ -308,6 +314,18 @@ export const webkit: Dependency = {
+@@ -308,6 +345,18 @@ export const webkit: Dependency = {
              CMAKE_FIND_ROOT_PATH_MODE_INCLUDE: "BOTH",
            }
          : {}),
@@ -160,6 +527,522 @@ index bba31a2cc89..17a71224f73 100644
        ...(cfg.freebsd && cfg.crossTarget !== undefined
          ? {
              CMAKE_SYSTEM_NAME: "FreeBSD",
+@@ -347,7 +396,10 @@ export const webkit: Dependency = {
+ 
+     const spec: NestedCmakeBuild = {
+       kind: "nested-cmake",
+-      targets: ["jsc"],
++      // Windows with LTO: the libraries alone. The jsc shell does not link there — WTF's weak declarations of what bun
++      // defines (WTFTimer__*, Bun__thisThreadHasVM) become duplicate definitions across ThinLTO modules in COFF, and
++      // nothing defines them in the shell — and bun needs only the libraries.
++      targets: cfg.windows && cfg.lto ? ["JavaScriptCore"] : ["jsc"],
+       args,
+       // Release local WebKit keeps debug info so JSC crashes symbolicate.
+       // LTO stays plain Release (debug info + LTO bloats significantly).
+diff --git a/scripts/build/download.ts b/scripts/build/download.ts
+index 42d81846779..daeca6fdc51 100644
+--- a/scripts/build/download.ts
++++ b/scripts/build/download.ts
+@@ -275,13 +275,39 @@ export async function extractTarGz(tarball: string, dest: string, stripComponent
+     });
+   }
+   if (result.status !== 0) {
+-    throw new BuildError(`tar extraction failed (exit ${result.status}): ${result.stderr}`, { file: tarball });
++    // Windows: making a symbolic link needs a privilege (or Developer Mode) that a build usually does not have, and bsdtar
++    // fails the whole extraction for it. Archives of sources have them among their tests (zstd's tests/cli-tests/bin): the
++    // archive is extracted again without them.
++    const links = process.platform === "win32" ? symbolicLinksIn(tarball) : [];
++    if (links.length === 0) {
++      throw new BuildError(`tar extraction failed (exit ${result.status}): ${result.stderr}`, { file: tarball });
++    }
++    const again = spawnSync(tarExe, [...args, ...links.flatMap(link => ["--exclude", link])], {
++      stdio: ["ignore", "ignore", "pipe"],
++      encoding: "utf8",
++    });
++    if (again.status !== 0) {
++      throw new BuildError(`tar extraction failed (exit ${again.status}): ${again.stderr}`, { file: tarball });
++    }
++    console.log(`left out ${links.length} symbolic link(s) of ${tarball}: ${links.join(", ")}`);
+   }
+ 
+   const entries = await readdir(dest);
+   assert(entries.length > 0, `tar extracted nothing from ${tarball}`, { hint: "Tarball may be corrupt" });
+ }
+ 
++/** The paths of the symbolic links in a .tar.gz, as `tar --exclude` takes them. */
++function symbolicLinksIn(tarball: string): string[] {
++  const listing = spawnSync(tarExe, ["-tvzf", tarball], { encoding: "utf8", maxBuffer: 1 << 28 });
++  if (listing.status !== 0) return [];
++  // bsdtar's long listing: the mode first ("lrwxr-xr-x"), the name last, then " -> target".
++  return listing.stdout
++    .split("\n")
++    .filter(line => line.startsWith("l"))
++    .map(line => line.split(" -> ")[0]!.split(/\s+/).pop()!)
++    .filter(Boolean);
++}
++
+ /**
+  * Extract a .zip archive with mtime normalization.
+  *
+diff --git a/scripts/build/fetch-cli.ts b/scripts/build/fetch-cli.ts
+index eebc97cc79e..e8abff80933 100644
+--- a/scripts/build/fetch-cli.ts
++++ b/scripts/build/fetch-cli.ts
+@@ -22,7 +22,7 @@
+ 
+ import { spawnSync } from "node:child_process";
+ import { createHash } from "node:crypto";
+-import { existsSync, readFileSync } from "node:fs";
++import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+ import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+ import { basename, join } from "node:path";
+ import { downloadWithRetry, extractTarGz, fetchPrebuilt } from "./download.ts";
+@@ -90,6 +90,13 @@ async function main(): Promise<void> {
+       return checkUndefined(name, nm, rspfile, stamp, symbols.split(","));
+     }
+ 
++    case "header-stamp": {
++      // fetch-cli.ts header-stamp <dir> <stamp>
++      const [dir, stamp] = args;
++      assert(dir !== undefined && stamp !== undefined, "header-stamp: missing dir/stamp");
++      return headerStamp(dir, stamp);
++    }
++
+     case "prebuilt": {
+       // fetch-cli.ts prebuilt <name> <url> <dest> <identity> [...rm_paths]
+       const [name, url, dest, identity, ...rmPaths] = args;
+@@ -120,6 +127,7 @@ Kinds:
+   prebuilt        <name> <url> <dest> <identity> [...rm_paths]
+   subst           <in> <out> [<from> <to>]...
+   check-undefined <name> <nm> <rspfile> <stamp> <symbol,...>
++  header-stamp    <dir> <stamp>
+ 
+ This is invoked by ninja build rules. You shouldn't need to call it
+ directly — run ninja targets instead.
+@@ -191,6 +199,35 @@ function checkUndefined(name: string, nm: string, rspfile: string, stamp: string
+   writeIfChanged(stamp, "");
+ }
+ 
++// ───────────────────────────────────────────────────────────────────────────
++// header-stamp: has a nested build written any of the headers in its build dir
++// ───────────────────────────────────────────────────────────────────────────
++
++const HEADER_FILE = /\.(h|hh|hpp|hxx|inc|def|ipp|tcc|modulemap)$/i;
++/** CMake's own probes (CMakeFiles/ShowIncludes/foo.h is rewritten by every configure); nothing includes them. */
++const CMAKE_FILES = /(^|[\\/])CMakeFiles[\\/]/;
++
++/**
++ * Hash the relative path, size and mtime of every header under <dir> into
++ * <stamp>, rewriting it only when the hash changed (dep_header_stamp is
++ * restat=1). Size and mtime, not contents: they are what clang checks a PCH's
++ * inputs against, so a header rewritten with the same text must still
++ * rebuild the PCH, and they need no reads (WebKit's build dir has ~3,500
++ * headers, 40 MB). See emitWebKitHeaderStamp in deps/webkit.ts.
++ */
++function headerStamp(dir: string, stamp: string): void {
++  const headers = (readdirSync(dir, { recursive: true, encoding: "utf8" }) as string[])
++    .filter(path => HEADER_FILE.test(path) && !CMAKE_FILES.test(path))
++    .sort();
++  assert(headers.length > 0, `header-stamp: no headers under ${dir}`);
++  const h = createHash("sha256");
++  for (const path of headers) {
++    const st = statSync(join(dir, path), { bigint: true });
++    if (st.isFile()) h.update(`${path.replaceAll("\\", "/")}\0${st.size}\0${st.mtimeNs}\n`);
++  }
++  writeIfChanged(stamp, `${headers.length} headers ${h.digest("hex")}\n`);
++}
++
+ // ───────────────────────────────────────────────────────────────────────────
+ // github-archive dep fetch: download tarball, extract, patch, stamp
+ // ───────────────────────────────────────────────────────────────────────────
+diff --git a/scripts/build/flags.ts b/scripts/build/flags.ts
+index 3d40f647a47..3e1f5d8672b 100644
+--- a/scripts/build/flags.ts
++++ b/scripts/build/flags.ts
+@@ -499,6 +499,13 @@ export const globalFlags: Flag[] = [
+     when: c => c.windows,
+     desc: "Optimize TLS access (assume vars defined in executable)",
+   },
++  {
++    // Control Flow Guard: every indirect call checks its target against the image's table of functions that may be called so
++    // (the link's /guard:cf makes the table and marks the image). WebKit gets it in deps/webkit.ts, Rust in rust.ts.
++    flag: "/guard:cf",
++    when: c => c.windows,
++    desc: "Control Flow Guard: checked indirect calls",
++  },
+ 
+   // ─── Linux-specific codegen ───
+   {
+@@ -961,6 +968,13 @@ export const linkerFlags: Flag[] = [
+     when: c => c.windows && linkRunsLto(c),
+     desc: "LTO level: IR pipeline and code generation (lld-link)",
+   },
++  {
++    // A relink after a small change takes the code of every module whose input, imports and options are unchanged from
++    // here (the key covers all three), instead of compiling all of them again. What it links is the same either way.
++    flag: c => [`/lldltocache:${c.buildDir}/lto-cache`, "/lldltocachepolicy:cache_size_bytes=8g"],
++    when: c => c.windows && linkRunsLto(c),
++    desc: "ThinLTO cache for the link's code generation (lld-link)",
++  },
+ 
+   // ─── PGO (link-side) ───
+   {
+@@ -1007,9 +1021,30 @@ export const linkerFlags: Flag[] = [
+     desc: "Windows cross-compile: MSVC CRT + Windows SDK library search root (xwin splat)",
+   },
+   {
+-    flag: ["/STACK:0x1200000,0x200000", "/errorlimit:0"],
++    // Pi-Bolt: 256 KB committed of each thread's 18 MB, not 2 MB. The header's commit is every thread's default (Rust's,
++    // WTF's, mimalloc's and the system's thread pools create theirs with a reservation size only), and Windows charges it
++    // whether it is used or not; the rest is committed as a thread's stack grows, through its guard page. A thread that runs
++    // JavaScript commits JSC's 5 MB itself (VM.cpp, preCommitStackMemory).
++    flag: ["/STACK:0x1200000,0x40000", "/errorlimit:0"],
++    when: c => c.windows,
++    desc: "18MB stack reserve (JSC uses deep recursion), 256KB committed, no error limit",
++  },
++  {
++    // bmalloc::StaticRegion starts with the section .pbreg on Windows (32 MB, uninitialized): an object file cannot make an
++    // uninitialized section read-only, and read-only, a process is charged only for the pages the engine makes writable. (The
++    // system's commit is charged for all of it while the image is cached: hence the rest of the region is not in the image.)
++    // .pblay is where the region's arenas are (bmalloc::StaticRegionLayout): read-only, since that decides where the engine
++    // reads and writes.
++    flag: ["/SECTION:.pbreg,R", "/SECTION:.pblay,R", "/guard:cf"],
++    when: c => c.windows,
++    desc: "The static region's section is read-only until used; its layout is read-only; Control Flow Guard's table (/guard:cf)",
++  },
++  {
++    // The DLLs the executable imports are system DLLs: from System32 only (LOAD_LIBRARY_SEARCH_SYSTEM32), not from the folder
++    // the executable was unzipped to. The delay-loaded ones go there too (c-bindings.cpp, __pfnDliNotifyHook2).
++    flag: "/DEPENDENTLOADFLAG:0x800",
+     when: c => c.windows,
+-    desc: "18MB stack reserve (JSC uses deep recursion), no error limit",
++    desc: "Imported DLLs from System32 only",
+   },
+   {
+     flag: "/DEBUG:FULL",
+diff --git a/scripts/build/ninja.ts b/scripts/build/ninja.ts
+index e6a4479f14d..b7c38f8aa39 100644
+--- a/scripts/build/ninja.ts
++++ b/scripts/build/ninja.ts
+@@ -69,6 +69,7 @@ const ruleVars = {
+   dep_configure: ["name", "srcdir", "builddir", "args"],
+   dep_fetch: ["name", "repo", "commit", "dest", "cache", "patches"],
+   dep_fetch_prebuilt: ["name", "url", "dest", "identity", "rm_paths"],
++  dep_header_stamp: ["name", "dir"],
+   dep_host_cc: ["flags"],
+   dep_prebuild: ["name", "cwd", "cmd"],
+   dep_subst: ["pairs"],
+diff --git a/scripts/build/rust.ts b/scripts/build/rust.ts
+index ad58bbad630..7137df783c1 100644
+--- a/scripts/build/rust.ts
++++ b/scripts/build/rust.ts
+@@ -325,6 +325,9 @@ export function cargoBuildInvocation(cfg: Config): CargoInvocation {
+   // Keep frame pointers — matches the C++ side's `-fno-omit-frame-pointer`
+   // (flags.ts:293-301). Needed so profilers and crash backtraces can walk Rust frames.
+   rustflags.push("-Cforce-frame-pointers=yes");
++  // Control Flow Guard, as the C and C++ side (flags.ts: /guard:cf): indirect calls are checked against the image's table of
++  // the functions that may be called so, and the table lists the Rust side's too.
++  if (cfg.windows) rustflags.push("-Ccontrol-flow-guard=checks");
+   // Parallel frontend: rustc's default is single-threaded for parse / macro
+   // expansion / typeck / borrowck, so the critical-path crate (`bun_runtime`)
+   // sits on one core while the rest idle. With this, independent compiler
+diff --git a/scripts/build/source.ts b/scripts/build/source.ts
+index ee3163e9f42..636235848cc 100644
+--- a/scripts/build/source.ts
++++ b/scripts/build/source.ts
+@@ -738,6 +738,16 @@ export function registerDepRules(n: Ninja, cfg: Config): void {
+     restat: true,
+   });
+ 
++  // A stamp of the headers a nested build leaves in its build dir (local
++  // WebKit: see emitWebKitHeaderStamp in deps/webkit.ts). Rewritten only when
++  // one of them was written, so (restat) a rebuild that leaves every header
++  // alone prunes the PCH and the compiles that take the stamp.
++  n.rule("dep_header_stamp", {
++    command: `${cfg.jsRuntime} ${fetchCli} header-stamp $dir $out`,
++    description: "stamp $name headers",
++    restat: true,
++  });
++
+   // The `dep` pool: depth-4 balances two concerns. Each nested cmake/cargo
+   // build spawns its own -j parallelism; running all 15 at once would
+   // oversubscribe cores badly (15 × nproc jobs). Four-at-a-time keeps CPU
+diff --git a/scripts/build/timings.ts b/scripts/build/timings.ts
+index 7b13bbc46d7..8eacea8603a 100644
+--- a/scripts/build/timings.ts
++++ b/scripts/build/timings.ts
+@@ -808,6 +808,7 @@ const ruleLane: Record<RuleName, Lane> = {
+   dep_configure: "dependencies",
+   dep_fetch: "dependencies",
+   dep_fetch_prebuilt: "dependencies",
++  dep_header_stamp: "dependencies",
+   dep_host_cc: "dependencies",
+   dep_prebuild: "dependencies",
+   dep_subst: "dependencies",
+diff --git a/scripts/orderfile/functrace-windows.c b/scripts/orderfile/functrace-windows.c
+index 1d34712b461..c1caff89da6 100644
+--- a/scripts/orderfile/functrace-windows.c
++++ b/scripts/orderfile/functrace-windows.c
+@@ -25,7 +25,7 @@
+ //
+ //   clang-cl /O2 -fuse-ld=lld functrace-windows.c    (or: cl /O2 functrace-windows.c)
+ //   set BUN_FUNCTRACE_STARTS=starts.bin
+-//   set BUN_FUNCTRACE_OUT=trace.bin
++//   set BUN_FUNCTRACE_OUT=trace.bin             (a %p in it is the traced process's id)
+ //   functrace-windows build\release\bun-profile.exe -e "console.log(1)"
+ //
+ // Exits with the debuggee's exit code; 2 if the trace itself could not be set up.
+@@ -303,6 +303,26 @@ static int on_exception(const DEBUG_EVENT *event)
+     return 1;
+ }
+ 
++/** The record's path: BUN_FUNCTRACE_OUT with each %p replaced by the traced process's id, as functrace.c does. */
++static wchar_t *record_path(const wchar_t *pattern, DWORD pid)
++{
++    wchar_t id[16];
++    swprintf(id, 16, L"%lu", pid);
++    size_t bound = wcslen(pattern) * 8 + 1, used = 0;
++    wchar_t *path = malloc(bound * sizeof *path);
++    if (!path) die("out of memory");
++    for (const wchar_t *at = pattern; *at; at++) {
++        if (at[0] == L'%' && at[1] == L'p') {
++            for (const wchar_t *digit = id; *digit; digit++) path[used++] = *digit;
++            at++;
++        } else {
++            path[used++] = *at;
++        }
++    }
++    path[used] = L'\0';
++    return path;
++}
++
+ static void write_record(const wchar_t *path)
+ {
+     FILE *f = _wfopen(path, L"wb");
+@@ -536,6 +556,6 @@ int wmain(int argc, wchar_t **argv)
+     CloseHandle(process);
+ 
+     if (console) close_console(console, output_thread);
+-    write_record(out_path);
++    write_record(record_path(out_path, info.dwProcessId));
+     return (int)exit_code;
+ }
+diff --git a/scripts/orderfile/generate.ts b/scripts/orderfile/generate.ts
+index 7383322f94b..56e90ad5b65 100644
+--- a/scripts/orderfile/generate.ts
++++ b/scripts/orderfile/generate.ts
+@@ -512,6 +512,19 @@ function buildUnixTracer(scratch: string): Tracer {
+  * Visual Studio developer shell; $CC names one explicitly.
+  */
+ function buildWindowsTracer(scratch: string): Tracer {
++  const tracer = buildWindowsTracerExecutable(scratch);
++  return {
++    linker: "lld-link /order",
++    launch: (workload, exe) => {
++      const env: Record<string, string> = {};
++      if (workload.tty) env.BUN_FUNCTRACE_TTY = "1";
++      return { cmd: [tracer, exe, ...workload.args], env };
++    },
++  };
++}
++
++/** Builds functrace-windows.c in `scratch`; returns the tracer's path. */
++export function buildWindowsTracerExecutable(scratch: string): string {
+   const tracer = join(scratch, "functrace.exe");
+   const failures: string[] = [];
+   for (const cc of process.env.CC ? [process.env.CC] : ["clang-cl", "cl"]) {
+@@ -533,14 +546,7 @@ function buildWindowsTracer(scratch: string): Tracer {
+   if (!existsSync(tracer)) {
+     throw new Error(`failed to build the tracer — needs clang-cl, or cl in a developer shell:\n${failures.join("\n")}`);
+   }
+-  return {
+-    linker: "lld-link /order",
+-    launch: (workload, exe) => {
+-      const env: Record<string, string> = {};
+-      if (workload.tty) env.BUN_FUNCTRACE_TTY = "1";
+-      return { cmd: [tracer, exe, ...workload.args], env };
+-    },
+-  };
++  return tracer;
+ }
+ 
+ const CLONE_SUFFIXES = /(\.llvm\.\d+|\.cold(\.\d+)?|\.isra\.\d+|\.part\.\d+|\.constprop\.\d+|\.\d+)+$/;
+@@ -548,10 +554,14 @@ const CLONE_SUFFIXES = /(\.llvm\.\d+|\.cold(\.\d+)?|\.isra\.\d+|\.part\.\d+|\.co
+ /** A name without the suffixes the optimizer gives a function's clones (`.llvm.123`, `.cold`, `.isra.0`, …), which differ from build to build. */
+ const withoutCloneSuffix = (name: string) => name.replace(CLONE_SUFFIXES, "");
+ 
+-/** Mach-O puts an underscore before every C-level name: `malloc` is `_malloc` there, `_ZN3JSC…` is `__ZN3JSC…`. */
+-export type ObjectFormat = "elf" | "macho";
++/**
++ * Mach-O puts an underscore before every C-level name: `malloc` is `_malloc` there, `_ZN3JSC…` is `__ZN3JSC…`. COFF names
++ * are MSVC's decorations (`?foo@JSC@@…`), which have no spelling in the other two.
++ */
++export type ObjectFormat = "elf" | "macho" | "coff";
+ 
+-export const hostObjectFormat: ObjectFormat = process.platform === "darwin" ? "macho" : "elf";
++export const hostObjectFormat: ObjectFormat =
++  process.platform === "darwin" ? "macho" : process.platform === "win32" ? "coff" : "elf";
+ 
+ export interface HintList {
+   names: string[];
+@@ -564,13 +574,14 @@ export interface HintList {
+  * spelled for the link it is given to.
+  */
+ export function readHintList(path: string, fallback: ObjectFormat = hostObjectFormat): HintList {
+-  const format = /^#\s*format:\s*(elf|macho)\s*$/m.exec(readFileSync(path, "utf8"))?.[1] as ObjectFormat | undefined;
++  const format = /^#\s*format:\s*(elf|macho|coff)\s*$/m.exec(readFileSync(path, "utf8"))?.[1] as ObjectFormat | undefined;
+   return { names: readNameList(path), format: format ?? fallback };
+ }
+ 
+ /** The list's names as `format` spells them. A Mach-O name with no underscore has no ELF spelling and stays as it is. */
+ export function hintNames(list: HintList, format: ObjectFormat): string[] {
+   if (list.format === format) return list.names;
++  if (list.format === "coff" || format === "coff") return [];
+   return list.names.map(name => (format === "macho" ? `_${name}` : name.replace(/^_/, "")));
+ }
+ 
+@@ -727,13 +738,31 @@ function codeRanges(fd: number, path: string): CodeRange[] {
+           });
+         }
+       }
++    } else if (header.readUInt16LE(0) === 0x5a4d /* MZ */) {
++      // PE: .text, the code the linker laid out. (An executable compiled with this one may add code sections of its own after
++      // the image; what the starts are addresses in is .text.)
++      const pe = header.readUInt32LE(0x3c);
++      const fileHeader = readAt(fd, pe, 24 + 112);
++      if (fileHeader.readUInt32LE(0) !== 0x4550 /* PE\0\0 */) throw new RangeError("not a PE");
++      const sections = fileHeader.readUInt16LE(6);
++      const optionalSize = fileHeader.readUInt16LE(20);
++      const imageBase = fileHeader.readBigUInt64LE(24 + 24);
++      const table = readAt(fd, pe + 24 + optionalSize, sections * 40);
++      for (let at = 0; at < sections * 40; at += 40) {
++        if (table.toString("latin1", at, at + 8).replace(/\0+$/, "") !== ".text") continue;
++        ranges.push({
++          address: imageBase + BigInt(table.readUInt32LE(at + 12)),
++          offset: table.readUInt32LE(at + 20),
++          size: Math.min(table.readUInt32LE(at + 8), table.readUInt32LE(at + 16)),
++        });
++      }
+     } else if (header.readUInt32BE(0) === 0xcafebabe) {
+       throw new Error(`${path} is a universal Mach-O; the tracer follows one architecture (lipo -thin)`);
+     }
+   } catch (error) {
+     if (!(error instanceof RangeError)) throw error; // a header that points past the end of the file
+   }
+-  if (!ranges.length) throw new Error(`cannot find the code of ${path}: not a 64-bit ELF or Mach-O executable?`);
++  if (!ranges.length) throw new Error(`cannot find the code of ${path}: not a 64-bit ELF, Mach-O or PE executable?`);
+   return ranges;
+ }
+ 
+diff --git a/scripts/orderfile/hints.ts b/scripts/orderfile/hints.ts
+index f741ee68855..76ced5def63 100644
+--- a/scripts/orderfile/hints.ts
++++ b/scripts/orderfile/hints.ts
+@@ -24,8 +24,9 @@
+  * binary (/bin/sh, /usr/bin/env) runs, so an application that restarts itself
+  * through a shell is not followed past it.
+  *
+- * Linux and macOS. The Windows tracer is a debugger of one process
+- * (functrace-windows.c) and does not follow it into children.
++ * On Windows the launcher is a batch file that starts the application under
++ * functrace-windows.c, a debugger of that one process: a process the
++ * application starts is not traced, itself or not.
+  */
+ import { spawn, spawnSync } from "node:child_process";
+ import { chmodSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from "node:fs";
+@@ -35,6 +36,7 @@ import { quote } from "../build/shell.ts";
+ import {
+   appendNames,
+   buildTracerLibrary,
++  buildWindowsTracerExecutable,
+   flagValue,
+   hostObjectFormat,
+   KILL_GRACE_MS,
+@@ -105,7 +107,7 @@ export function busiestFirst(traces: number[][]): number[][] {
+ }
+ 
+ export async function traceHints(options: HintOptions): Promise<{ count: number; processes: number }> {
+-  if (process.platform === "win32") throw new Error("hints.ts traces on linux and macOS only");
++  const windows = process.platform === "win32";
+   const profile = resolve(options.profile);
+   const exe = resolve(options.exe);
+   for (const path of [profile, exe]) if (!existsSync(path)) throw new Error(`${path} not found`);
+@@ -117,7 +119,6 @@ export async function traceHints(options: HintOptions): Promise<{ count: number;
+   }
+ 
+   return withScratch("bun-orderfile-hints-", async (scratch, interrupted) => {
+-    const tracer = buildTracerLibrary(scratch);
+     const symbols = readTextSymbols(profile);
+     const starts = join(scratch, "starts.bin");
+     writeStarts(
+@@ -130,21 +131,43 @@ export async function traceHints(options: HintOptions): Promise<{ count: number;
+     // The variables are set here rather than on the command: the command's own
+     // processes (a shell, a test runner, another bun) are not the application,
+     // and the starts would plant breakpoints in the middle of their code.
+-    const launcher = join(scratch, "launch");
+-    writeFileSync(
+-      launcher,
+-      [
+-        "#!/bin/sh",
+-        `export ${tracer.preloadVar}=${sh(tracer.library)}`,
+-        `export BUN_FUNCTRACE_STARTS=${sh(starts)}`,
+-        `export BUN_FUNCTRACE_OUT=${sh(join(traces, "%p.bin"))}`,
+-        "export BUN_FUNCTRACE_CHILDREN=1",
+-        `export BUN_FUNCTRACE_EXE=${sh(exe)}`,
+-        `exec ${sh(exe)} "$@"`,
+-        "",
+-      ].join("\n"),
+-    );
+-    chmodSync(launcher, 0o755);
++    let launcher: string;
++    if (windows) {
++      const tracer = buildWindowsTracerExecutable(scratch);
++      // cmd.exe reads the batch file: a path it would take apart (a quote, a %) cannot be in it.
++      for (const path of [tracer, starts, traces, exe]) {
++        if (/["%]/.test(path)) throw new Error(`${path}: a path with " or % in it cannot be put in the launcher`);
++      }
++      launcher = join(scratch, "launch.cmd");
++      writeFileSync(
++        launcher,
++        [
++          "@echo off",
++          `set "BUN_FUNCTRACE_STARTS=${starts}"`,
++          `set "BUN_FUNCTRACE_OUT=${join(traces, "%%p.bin")}"`, // %% is a % to cmd.exe; %p is the tracer's
++          `"${tracer}" "${exe}" %*`,
++          "exit /b %ERRORLEVEL%",
++          "",
++        ].join("\r\n"),
++      );
++    } else {
++      const tracer = buildTracerLibrary(scratch);
++      launcher = join(scratch, "launch");
++      writeFileSync(
++        launcher,
++        [
++          "#!/bin/sh",
++          `export ${tracer.preloadVar}=${sh(tracer.library)}`,
++          `export BUN_FUNCTRACE_STARTS=${sh(starts)}`,
++          `export BUN_FUNCTRACE_OUT=${sh(join(traces, "%p.bin"))}`,
++          "export BUN_FUNCTRACE_CHILDREN=1",
++          `export BUN_FUNCTRACE_EXE=${sh(exe)}`,
++          `exec ${sh(exe)} "$@"`,
++          "",
++        ].join("\n"),
++      );
++      chmodSync(launcher, 0o755);
++    }
+ 
+     const [program, ...args] = options.command.map(arg => arg.replaceAll("{}", launcher));
+     // Not spawnSync: a signal held for the scratch directory's sake has to be able to stop the session.
+@@ -226,7 +249,7 @@ if (import.meta.main) {
+   }
+   try {
+     const { count, processes } = await traceHints({
+-      profile: join(buildDir, "bun-profile"),
++      profile: join(buildDir, process.platform === "win32" ? "bun-profile.exe" : "bun-profile"),
+       exe,
+       command,
+       outPath: out,
 diff --git a/src/ast/import_record.rs b/src/ast/import_record.rs
 index 6e582f84e53..c41f7e5a16a 100644
 --- a/src/ast/import_record.rs
@@ -312,10 +1195,18 @@ index 354e7135f57..96f5b56a3b4 100644
          self.stmts.push(stmt);
          Ok(())
 diff --git a/src/bundler/bundle_v2.rs b/src/bundler/bundle_v2.rs
-index 871b0495225..df7b61c1e95 100644
+index 871b0495225..666db93fd2d 100644
 --- a/src/bundler/bundle_v2.rs
 +++ b/src/bundler/bundle_v2.rs
-@@ -1544,6 +1544,12 @@ pub mod bv2_impl {
+@@ -1516,6 +1516,7 @@ pub mod bv2_impl {
+                 known_functions: &[u64],
+                 evaluated_modules: &[u64],
+                 not_evaluated_modules: &[u64],
++                hot_strings: &[u64],
+             ) -> core::ptr::NonNull<BytecodeLinkEncoder>;
+             safe fn __bun_jsc_bytecode_link_encoder_destroy(
+                 encoder: core::ptr::NonNull<BytecodeLinkEncoder>,
+@@ -1544,6 +1545,12 @@ pub mod bv2_impl {
                  depth: u32,
                  names: &crate::bytecode_order::CodeNamesRef<'_>,
              ) -> bool;
@@ -328,7 +1219,16 @@ index 871b0495225..df7b61c1e95 100644
              safe fn __bun_jsc_bytecode_link_encoder_finish(
                  encoder: core::ptr::NonNull<BytecodeLinkEncoder>,
                  module_count: usize,
-@@ -1730,6 +1736,13 @@ pub mod bv2_impl {
+@@ -1666,6 +1673,8 @@ pub mod bv2_impl {
+                         &order.known_functions,
+                         &order.evaluated_modules,
+                         &order.not_evaluated_modules,
++                        // (As `EncoderStringTableHandle::take` is given them: the static heap's copy of the table is the same.)
++                        &order.hot_strings,
+                     ),
+                     module_count: 0,
+                 }
+@@ -1730,6 +1739,13 @@ pub mod bv2_impl {
                  self.module_count += ok as usize;
                  ok
              }
@@ -342,7 +1242,7 @@ index 871b0495225..df7b61c1e95 100644
              pub(crate) fn finish(&mut self) -> Option<crate::bytecode_order::LinkedPayload> {
                  __bun_jsc_bytecode_link_encoder_finish(self.encoder, self.module_count)
              }
-@@ -3370,6 +3383,15 @@ pub mod bv2_impl {
+@@ -3370,6 +3386,15 @@ pub mod bv2_impl {
                  }
              }
              this.linker.options.compile_mode = this.transpiler.options.compile_mode;
@@ -585,8 +1485,51 @@ index 497b0694312..9517a930ed1 100644
          ] {
              put(v);
          }
+diff --git a/src/codegen/generate-classes.ts b/src/codegen/generate-classes.ts
+index 52b02fc54f8..402310cfa1d 100644
+--- a/src/codegen/generate-classes.ts
++++ b/src/codegen/generate-classes.ts
+@@ -2079,6 +2079,28 @@ pub type WriteBytesFn = unsafe extern "sysv64" fn(*mut c_void, *const u8, u32);
+ #[cfg(not(all(windows, target_arch = "x86_64")))]
+ pub type WriteBytesFn = unsafe extern "C" fn(*mut c_void, *const u8, u32);
+ 
++/// Calls a \`WriteBytesFn\`. On Windows x64 through C++ (\`Bun__StructuredClone__writeBytes\`,
++/// SerializedScriptValue.cpp): LLVM's Control Flow Guard check of an indirect call to a sysv64
++/// function passes the target in the wrong register, so such a call is made where it can be
++/// checked correctly (WTF's \`callSysV\`).
++#[allow(dead_code, unreachable_pub, unused)]
++#[inline]
++pub unsafe fn call_write_bytes(f: WriteBytesFn, ctx: *mut c_void, ptr: *const u8, len: u32) {
++    #[cfg(all(windows, target_arch = "x86_64"))]
++    {
++        unsafe extern "C" {
++            fn Bun__StructuredClone__writeBytes(f: WriteBytesFn, ctx: *mut c_void, ptr: *const u8, len: u32);
++        }
++        // SAFETY: as the caller's: f is the C++ writer's callback, valid for ctx.
++        unsafe { Bun__StructuredClone__writeBytes(f, ctx, ptr, len) }
++    }
++    #[cfg(not(all(windows, target_arch = "x86_64")))]
++    // SAFETY: as the caller's.
++    unsafe {
++        f(ctx, ptr, len)
++    }
++}
++
+ /// \`JSC::PropertyName\` — opaque pointer-sized handle (UniquedStringImpl*).
+ #[allow(dead_code, unreachable_pub, unused)]
+ #[repr(transparent)]
+@@ -2402,7 +2424,8 @@ class StructuredCloneableSerialize {
+     static std::optional<StructuredCloneableSerialize> fromJS(JSC::JSValue);
+     void write(CloneSerializer* serializer, JSC::JSGlobalObject* globalObject)
+     {
+-      zigFunction(impl, globalObject, serializer, cppWriteBytes);
++      // (A SYSV_ABI function pointer, called so that Control Flow Guard checks it correctly: wtf/SysVCall.h.)
++      callSysV(zigFunction, impl, globalObject, serializer, cppWriteBytes);
+     }
+ };
+ 
 diff --git a/src/crash_handler/lib.rs b/src/crash_handler/lib.rs
-index 91e2ee8025f..c2db8ce80ee 100644
+index 91e2ee8025f..f4246de129b 100644
 --- a/src/crash_handler/lib.rs
 +++ b/src/crash_handler/lib.rs
 @@ -1118,11 +1118,11 @@ mod draft {
@@ -603,7 +1546,7 @@ index 91e2ee8025f..c2db8ce80ee 100644
                              ).is_err() { abort(); }
                              }
                          }
-@@ -1463,10 +1463,31 @@ mod draft {
+@@ -1463,10 +1463,33 @@ mod draft {
              if let Some(url) = env_var::BUN_CRASH_REPORT_URL::get() {
                  return strings::without_trailing_slash(url);
              }
@@ -624,18 +1567,20 @@ index 91e2ee8025f..c2db8ce80ee 100644
 +        Please report it at https://github.com/opensec-git/Pi-Bolt/issues/new\n\
 +        with the link below and what you were doing:\n\n";
 +
++    // A Pi-Bolt executable: one that carries code compiled ahead of time, whether it uses it or not (on a CPU it was not
++    // compiled for, or with BUN_AOT=0, it runs its bytecode, and is Pi-Bolt all the same).
 +    fn is_ahead_of_time_executable() -> bool {
 +        unsafe extern "C" {
-+            fn Bun__AOTImage__isMapped() -> bool;
++            fn Bun__AOTImage__executableHasImage() -> bool;
 +        }
 +        // SAFETY: a plain query of a flag set at startup.
-+        unsafe { Bun__AOTImage__isMapped() }
++        unsafe { Bun__AOTImage__executableHasImage() }
 +    }
 +
      const ARCH_DISPLAY_STRING: &str = if cfg!(target_arch = "aarch64") {
          if cfg!(target_os = "macos") {
              "Silicon"
-@@ -1814,11 +1835,13 @@ mod draft {
+@@ -1814,11 +1837,13 @@ mod draft {
                  } else {
                      let _ = writer.write_all(b": ");
                  }
@@ -652,7 +1597,7 @@ index 91e2ee8025f..c2db8ce80ee 100644
                  if enable_ansi_colors_stderr() {
                      let _ = writer.write_all(&Output::pretty_fmt::<true>("<cyan>"));
                  }
-@@ -2720,6 +2743,14 @@ mod draft {
+@@ -2720,6 +2745,14 @@ mod draft {
              return enable_crash_reporting;
          }
  
@@ -678,10 +1623,10 @@ index da1bf1993a4..dd9b7319d5b 100644
 +libc.workspace = true
  bun_zstd.workspace = true
 diff --git a/src/http/HTTPContext.rs b/src/http/HTTPContext.rs
-index 4f00a0c2069..c60127a7fb3 100644
+index 4f00a0c2069..62757284f94 100644
 --- a/src/http/HTTPContext.rs
 +++ b/src/http/HTTPContext.rs
-@@ -242,8 +242,32 @@ pub struct PooledSocket<const SSL: bool> {
+@@ -242,8 +242,42 @@ pub struct PooledSocket<const SSL: bool> {
      pub(crate) h2_session: Option<RefPtr<h2::ClientSession>>,
      /// `PoolOptions::id` of the fetch session that opened it.
      pub(crate) pool_id: u64,
@@ -695,7 +1640,17 @@ index 4f00a0c2069..c60127a7fb3 100644
 +
 +/// Milliseconds on a clock that keeps going while the machine is suspended (a server closes an idle connection
 +/// meanwhile) and that nobody sets: CLOCK_BOOTTIME on Linux, CLOCK_MONOTONIC on macOS, which counts sleep there
-+/// (CLOCK_UPTIME_RAW does not). Not the wall clock: set back, it made a socket the server had closed look fresh.
++/// (CLOCK_UPTIME_RAW does not), GetTickCount64 on Windows (which counts sleep and hibernation). Not the wall clock:
++/// set back, it made a socket the server had closed look fresh.
++#[cfg(windows)]
++pub(crate) fn parked_clock_ms() -> u64 {
++    unsafe extern "system" {
++        safe fn GetTickCount64() -> u64;
++    }
++    GetTickCount64()
++}
++
++#[cfg(not(windows))]
 +pub(crate) fn parked_clock_ms() -> u64 {
 +    #[cfg(unix)]
 +    {
@@ -715,7 +1670,7 @@ index 4f00a0c2069..c60127a7fb3 100644
  }
  
  /// `&mut` access to a pooled / found-slot HTTP/2 session, for the field
-@@ -687,6 +711,7 @@ impl<const SSL: bool> HTTPContext<SSL> {
+@@ -687,6 +721,7 @@ impl<const SSL: bool> HTTPContext<SSL> {
                  h2_session,
                  pool_id: pool.id,
                  idle_timeout_seconds: pool.idle_timeout_seconds,
@@ -723,7 +1678,7 @@ index 4f00a0c2069..c60127a7fb3 100644
              };
              let parked = match transport {
                  Transport::Tcp => Self::park(self.pending_sockets.get_or_init(), pooled, pool),
-@@ -774,12 +799,17 @@ impl<const SSL: bool> HTTPContext<SSL> {
+@@ -774,12 +809,17 @@ impl<const SSL: bool> HTTPContext<SSL> {
          None
      }
  
@@ -745,7 +1700,7 @@ index 4f00a0c2069..c60127a7fb3 100644
      }
  
      #[allow(clippy::too_many_arguments)]
-@@ -915,6 +945,17 @@ impl<const SSL: bool> HTTPContext<SSL> {
+@@ -915,6 +955,17 @@ impl<const SSL: bool> HTTPContext<SSL> {
                      continue;
                  }
  
@@ -1007,6 +1962,24 @@ index 265ba9db804..f1df19c4016 100644
                  h if h == hash_header_const(b"Last-Modified") => {
                      pretend_304 = self.flags.force_last_modified
                          && response.status_code > 199
+diff --git a/src/io/PipeWriter.rs b/src/io/PipeWriter.rs
+index 859c676aa2f..4ae7382e831 100644
+--- a/src/io/PipeWriter.rs
++++ b/src/io/PipeWriter.rs
+@@ -1785,7 +1785,13 @@ impl StreamBuffer {
+ 
+     pub(crate) fn maybe_shrink(&mut self) {
+         // Runtime page size of the host.
++        #[cfg(not(windows))]
+         let page = bun_core::page_size();
++        // Pi-Bolt: on Windows a terminal frame comes through here on every write (the console's synchronous path resets
++        // after each one): shrinking to a page made every frame grow it again (reallocations and a copy), and mimalloc
++        // decommit and recommit the pages. Up to 256 KB is kept there.
++        #[cfg(windows)]
++        let page = 256 * 1024;
+         if self.list.capacity() > page {
+             // Truncate the buffer's content to `page` bytes AND release the
+             // excess capacity.
 diff --git a/src/js/internal/fs/streams.ts b/src/js/internal/fs/streams.ts
 index 8547718d143..cf631a4ed14 100644
 --- a/src/js/internal/fs/streams.ts
@@ -1038,10 +2011,19 @@ index d192409e5c1..60b8244c4b4 100644
        state.bufferedIndex = 0;
      } else {
 diff --git a/src/jsc/CachedBytecode.rs b/src/jsc/CachedBytecode.rs
-index 2364c15de80..60175edbe91 100644
+index 2364c15de80..ee1948a28d8 100644
 --- a/src/jsc/CachedBytecode.rs
 +++ b/src/jsc/CachedBytecode.rs
-@@ -105,6 +105,15 @@ unsafe extern "C" {
+@@ -75,6 +75,8 @@ unsafe extern "C" {
+         evaluated_module_count: usize,
+         not_evaluated_modules: *const u64,
+         not_evaluated_module_count: usize,
++        hot_strings: *const u64,
++        hot_string_count: usize,
+     ) -> *mut BytecodeLinkEncoder;
+     fn Bun__BytecodeLinkEncoder__destroy(this: *mut BytecodeLinkEncoder);
+     fn Bun__BytecodeLinkEncoder__addModule(
+@@ -105,6 +107,15 @@ unsafe extern "C" {
          depth: u32,
          names: &CodeNamesRef<'_>,
      ) -> bool;
@@ -1057,7 +2039,24 @@ index 2364c15de80..60175edbe91 100644
      fn Bun__BytecodeLinkEncoder__finish(
          this: *mut BytecodeLinkEncoder,
          output_byte_code: *mut Option<NonNull<u8>>,
-@@ -418,6 +427,28 @@ pub(crate) fn __bun_jsc_bytecode_link_encoder_add_internal_module_from_source(
+@@ -318,6 +329,7 @@ pub(crate) fn __bun_jsc_bytecode_link_encoder_new(
+     known_functions: &[u64],
+     evaluated_modules: &[u64],
+     not_evaluated_modules: &[u64],
++    hot_strings: &[u64],
+ ) -> NonNull<BytecodeLinkEncoder> {
+     crate::initialize(crate::InitializeOptions::default());
+     // SAFETY: the slices are valid for the call (C++ copies them); `external_strings` is a live table. `new` never returns null.
+@@ -332,6 +344,8 @@ pub(crate) fn __bun_jsc_bytecode_link_encoder_new(
+             evaluated_modules.len(),
+             not_evaluated_modules.as_ptr(),
+             not_evaluated_modules.len(),
++            hot_strings.as_ptr(),
++            hot_strings.len(),
+         ))
+     }
+ }
+@@ -418,6 +432,28 @@ pub(crate) fn __bun_jsc_bytecode_link_encoder_add_internal_module_from_source(
      }
  }
  
@@ -1087,7 +2086,7 @@ index 2364c15de80..60175edbe91 100644
  /// payload's regions ends (`JSC::BytecodeLinkEncoder`), how many of the order files' hot functions are functions
  /// of this link, and for each module how many functions with code its names did not cover.
 diff --git a/src/jsc/GarbageCollectionController.rs b/src/jsc/GarbageCollectionController.rs
-index 96ff316eafb..dfd2b9f8698 100644
+index 96ff316eafb..78c02e859a6 100644
 --- a/src/jsc/GarbageCollectionController.rs
 +++ b/src/jsc/GarbageCollectionController.rs
 @@ -79,7 +79,7 @@ impl GarbageCollectionController {
@@ -1108,7 +2107,7 @@ index 96ff316eafb..dfd2b9f8698 100644
                  this.gc_repeating_timer_fast.set(false);
              }
          } else {
-@@ -253,3 +253,22 @@ impl Drop for GarbageCollectionController {
+@@ -253,3 +253,27 @@ impl Drop for GarbageCollectionController {
          self.deinit();
      }
  }
@@ -1116,13 +2115,18 @@ index 96ff316eafb..dfd2b9f8698 100644
 +/// The fast interval of the repeating timer, unless `BUN_GC_TIMER_INTERVAL` says. An executable compiled ahead of time: 5 s
 +/// rather than 1 s. Such a program (an interactive one) left waiting still collected every second for half a minute, the only
 +/// thing that woke it (Pi at its prompt: 1.4 ms of CPU a second on macOS; on Linux 7.9 wake-ups a second, 0.73 ms of CPU); at
-+/// 5 s it gives the same memory back as soon, in a fifth of the wake-ups (Linux: 1.9 a second, 0.49 ms).
++/// 5 s it gives the same memory back as soon, in a fifth of the wake-ups (Linux: 1.9 a second, 0.49 ms). Not on Windows: there
++/// Pi's idle CPU at the prompt was the same with 5 s (about 1 ms a second, conpty_check.py), and while a long answer streamed
++/// it collected twice as often, for +40% CPU (docs/RESUME.md).
 +fn default_fast_interval_ms() -> u64 {
-+    unsafe extern "C" {
-+        safe fn Bun__AOTImage__isMapped() -> bool;
-+    }
-+    if Bun__AOTImage__isMapped() {
-+        return 5000;
++    #[cfg(not(windows))]
++    {
++        unsafe extern "C" {
++            safe fn Bun__AOTImage__isMapped() -> bool;
++        }
++        if Bun__AOTImage__isMapped() {
++            return 5000;
++        }
 +    }
 +    1000
 +}
@@ -1574,10 +2578,10 @@ index 3c21ec7b288..6503c62dced 100644
      pub const Event: JSType = JSType(0b11101111);
      pub const DOMWrapper: JSType = JSType(0b11101110);
 diff --git a/src/jsc/VirtualMachine.rs b/src/jsc/VirtualMachine.rs
-index 3848fa534cd..816ff36b6ba 100644
+index 3848fa534cd..8c4730aae58 100644
 --- a/src/jsc/VirtualMachine.rs
 +++ b/src/jsc/VirtualMachine.rs
-@@ -1455,9 +1455,25 @@ impl VirtualMachine {
+@@ -1455,9 +1455,26 @@ impl VirtualMachine {
          }
          const MIN_BUDGET: usize = 8 * 1024 * 1024;
          const MAX_BUDGET: usize = 128 * 1024 * 1024;
@@ -1590,7 +2594,8 @@ index 3848fa534cd..816ff36b6ba 100644
 +        // it a third as much (Pi: 7 of 21 MB); a budget of all those bytes only lets the heap grow larger before its first
 +        // collection. Measured on Pi (budgets of 12, 16, 20 and 24 MB): at 12, a sixth less memory at the peak of a session
 +        // and a few percent less CPU over it, for two small collections while it starts (2-3 ms of CPU, the same time to
-+        // the first frame).
++        // the first frame). Not on Windows: measured there (2026-10-09, Pi, interactive and pauses.py), it saved 10 MB at the
++        // peak of a TUI session but made twice the collections while a long answer streamed, with 40% more CPU and longer pauses.
 +        #[cfg(target_os = "macos")]
 +        {
 +            unsafe extern "C" {
@@ -1942,7 +2947,7 @@ index cfd1059c2e7..e6aa41f79d7 100644
          uint8_t frame_i = 0;
          size_t stack_frame_i = 0;
 diff --git a/src/jsc/bindings/ZigGlobalObject.cpp b/src/jsc/bindings/ZigGlobalObject.cpp
-index 9de807adfae..d5f3606b5e3 100644
+index 9de807adfae..7999522c991 100644
 --- a/src/jsc/bindings/ZigGlobalObject.cpp
 +++ b/src/jsc/bindings/ZigGlobalObject.cpp
 @@ -1,4 +1,5 @@
@@ -1951,7 +2956,7 @@ index 9de807adfae..d5f3606b5e3 100644
  
  #include "ZigGlobalObject.h"
  #include "BunModuleRegistry.h"
-@@ -268,6 +269,18 @@ static consteval unsigned getWebKitBytecodeCacheVersion()
+@@ -268,6 +269,19 @@ static consteval unsigned getWebKitBytecodeCacheVersion()
  {
      return WTF::SuperFastHash::computeHash(WEBKIT_BYTECODE_CACHE_HASH_KEY);
  }
@@ -1966,11 +2971,12 @@ index 9de807adfae..d5f3606b5e3 100644
 +extern "C" bool Bun__shouldCompileAheadOfTime();
 +extern "C" void Bun__setOptionsForAheadOfTimeCode();
 +extern "C" bool Bun__AOTImage__isMapped();
++extern "C" bool Bun__AOTImage__executableRunsWithoutJIT();
 +extern "C" void Bun__AOTImage__register();
  #undef WEBKIT_BYTECODE_CACHE_HASH_KEY
  
  // Declare fuzzilli function registration from FuzzilliREPRL.cpp
-@@ -288,6 +301,15 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -288,6 +302,15 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
      static std::once_flag jsc_init_flag;
      // NOLINTBEGIN
      std::call_once(jsc_init_flag, [evalMode, oneShotStartup, shortLivedGlobals, envp, envc, onCrash]() {
@@ -1986,7 +2992,7 @@ index 9de807adfae..d5f3606b5e3 100644
          Bun__ensureICUDefaultLocale();
          JSC::Config::enableRestrictedOptions();
          // JSC options come from BUN_JSC_* (applied in the callback below), not JSC_*.
-@@ -363,6 +385,19 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -363,6 +386,19 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
                  JSC::Options::thresholdForFTLOptimizeAfterWarmUp() = 1000000;
              }
  
@@ -2006,13 +3012,35 @@ index 9de807adfae..d5f3606b5e3 100644
              if (envc > 0) [[likely]] {
                  auto envc_copy = envc;
                  while (envc_copy--) {
-@@ -378,8 +413,24 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -378,8 +414,49 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
                      }
                  }
              }
 +            // Again after BUN_JSC_*: code compiled ahead of time is only right for bytecode made the way it was compiled from.
 +            if (Bun__AOTImage__isMapped())
 +                Bun__setOptionsForAheadOfTimeCode();
++#ifndef BUN_DEBUG
++            // Machine code comes from the executable or from nowhere: BUN_JSC_aotImagePath would map it from a file nothing has
++            // checked, into a process whose executable is signed, with or without an image of its own (BUN_AOT=0 runs without
++            // it). It is for working on the compiler, in a debug build.
++            JSC::Options::aotImagePath() = nullptr;
++#endif
++            // A program compiled ahead of time is a release, not a test bed: the debugging options that reach into memory or load
++            // code from a file stay off whatever BUN_JSC_* says ($vm reads and writes any address; function overrides replace
++            // the program's own code; the JIT's memory at a chosen address, or dumped to a file).
++            if (Bun__AOTImage__isMapped() || Bun__AOTImage__executableRunsWithoutJIT()) {
++                JSC::Options::useDollarVM() = false;
++                JSC::Options::functionOverrides() = nullptr;
++                JSC::Options::jitMemoryReservationAddress() = 0;
++                JSC::Options::dumpJITMemoryPath() = nullptr;
++                JSC::Options::diskCachePath() = nullptr;
++            }
++            // A build without the JIT stays without it, its code used or not (BUN_AOT=0, a CPU the code was not compiled for): it
++            // interprets the bytecode then, rather than make machine code in writable executable memory (ZigSourceProvider.cpp).
++            // (Without Bun__setOptionsForAheadOfTimeCode(), which is for code compiled ahead of time: JSC's own choices for a VM
++            // that interprets everything apply, mini mode's collector among them.)
++            if (Bun__AOTImage__executableRunsWithoutJIT())
++                JSC::Options::useJIT() = false;
              JSC::Options::assertOptionsAreCoherent();
          }); // end JSC::initialize lambda
 +        Bun__AOTImage__register();
@@ -2025,17 +3053,20 @@ index 9de807adfae..d5f3606b5e3 100644
 +        // Freed memory is purged once it is this old, also while the thread stays busy. At mimalloc's 100 ms a session
 +        // that streams one reply after another keeps what it freed resident (measured on Pi, 50 prompts: 62-91 MB of
 +        // footprint at 100 ms, 43-50 MB at 25 for some 4% more CPU, still 13% less than 0.7.2; at 10 it rose to 74 MB).
-+        // MIMALLOC_PURGE_DELAY overrides.
++        // MIMALLOC_PURGE_DELAY overrides. (Not on Windows until measured there: a purge is a decommit, and the page's next use a
++        // commit and zero fill, which a session streaming replies would do four times as often.)
++#if !OS(WINDOWS)
 +        if (Bun__AOTImage__isMapped() && !getenv("MIMALLOC_PURGE_DELAY"))
 +            mi_option_set(mi_option_purge_delay, 25);
++#endif
  
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH
 diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
-index fbfaa2ffb62..99f21fcdb3e 100644
+index fbfaa2ffb62..7144143e21b 100644
 --- a/src/jsc/bindings/ZigSourceProvider.cpp
 +++ b/src/jsc/bindings/ZigSourceProvider.cpp
-@@ -2,6 +2,14 @@
+@@ -2,6 +2,17 @@
  
  #include "helpers.h"
  
@@ -2046,16 +3077,20 @@ index fbfaa2ffb62..99f21fcdb3e 100644
 +#include <mach-o/dyld.h>
 +#include <mach-o/loader.h>
 +#endif
++#else
++#include <windows.h>
++#include <psapi.h>
 +#endif
  #include "ZigSourceProvider.h"
  #include "MimallocWTFMalloc.h"
  #include "BunAnalyzeTranspiledModule.h"
-@@ -16,8 +24,17 @@
+@@ -16,8 +27,18 @@
  #include <JavaScriptCore/SourceCodeKey.h>
  #include <mimalloc.h>
  #include <JavaScriptCore/CodeCache.h>
 +#include <JavaScriptCore/StaticHeap.h>
 +#include <JavaScriptCore/CachedTypes.h>
++#include <JavaScriptCore/JSCConfig.h>
 +#include <JavaScriptCore/MacroAssembler.h>
 +#include <JavaScriptCore/Options.h>
 +#include <wtf/text/AtomStringTable.h>
@@ -2068,7 +3103,7 @@ index fbfaa2ffb62..99f21fcdb3e 100644
  namespace Zig {
  
  using SourceOrigin = JSC::SourceOrigin;
-@@ -105,6 +122,28 @@ Ref<SourceProvider> SourceProvider::create(
+@@ -105,6 +126,28 @@ Ref<SourceProvider> SourceProvider::create(
              if (resolvedSource.bytecode_cache_persistent)
                  bytecode->setPayloadIsPersistent();
              bytecode->setEntryOffset(resolvedSource.bytecode_cache_entry_offset);
@@ -2097,7 +3132,7 @@ index fbfaa2ffb62..99f21fcdb3e 100644
              auto provider = adoptRef(*new SourceProvider(
                  globalObject->bunVM(),
                  resolvedSource,
-@@ -224,7 +263,7 @@ extern "C" void JSC__Heap__setInitialAllocationBudget(JSC::VM* vm, size_t bytes)
+@@ -224,7 +267,7 @@ extern "C" void JSC__Heap__setInitialAllocationBudget(JSC::VM* vm, size_t bytes)
  extern "C" void Bun__DecoderStringTable__install(JSC::VM* vm, const uint8_t* bytes, size_t len)
  {
      ASSERT(vm->clientData);
@@ -2106,13 +3141,16 @@ index fbfaa2ffb62..99f21fcdb3e 100644
  }
  
  extern "C" uint32_t Bun__EncoderStringTable__slotForLatin1(JSC::EncoderStringTable* table, const Latin1Character* chars, size_t length)
-@@ -290,17 +329,383 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
+@@ -290,17 +333,1093 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
      return generateCachedByteCodeFromSourceCode(sourceProviderURL, inputSourceCode, false, depth, optimize, outputByteCode, outputByteCodeSize, cachedBytecodePtr, externalStrings);
  }
  
 +// BUN_STATIC_HEAP=1 while building: JSC::StaticHeap is also built for the link's payload, and the executable maps it instead of
 +// decoding. The link's string table, and the image while Bun__StaticHeap__takeBuilt has not taken it.
 +static JSC::EncoderStringTable* s_stringsOfLinkEncoder;
++// The order file's strings, hottest first: the heap's copy of the table is written in the order the executable's is
++// (StaticHeap::tryCreateStringTable() takes the heap's only if they are the same), and its atoms are made in that order.
++static Vector<uint64_t> s_hotStringsOfLinkEncoder;
 +static Vector<uint8_t> s_builtStaticHeap;
 +
 +extern "C" bool Bun__AOTImage__isMapped();
@@ -2138,6 +3176,9 @@ index fbfaa2ffb62..99f21fcdb3e 100644
 +    // Not taken for granted by the code, but chosen when it was built (BUN_AOT_JIT=0): the program runs with the JIT off, as code
 +    // compiled ahead of time is meant to. Less memory and no runtime code generation; every function runs the image's code.
 +    static constexpr uint64_t withoutJIT = 2;
++    // Windows: the image is a section of the executable, and only its first page is here (Bun__StaticHeap__takeBuilt()), to say
++    // that the section is this image. sizeOfImage is the section's.
++    static constexpr uint64_t imageIsInExecutable = 4;
 +    uint64_t offsetOfImage;
 +    uint64_t sizeOfImage;
 +    uint64_t cpuFeatures; // What the code was compiled to use (cpuFeaturesOfCode()). A CPU without one of them runs without the image.
@@ -2194,6 +3235,9 @@ index fbfaa2ffb62..99f21fcdb3e 100644
 +}
 +static constexpr size_t pageSizeOfStaticHeap = 16 * 1024;
 +static Vector<uint8_t> s_builtAOTImage;
++#if OS(WINDOWS)
++static Vector<uint8_t> s_heapForExecutable; // What Bun__StaticHeap__takeBuilt() handed out, for Bun__StaticHeap__rewritePE().
++#endif
 +
 +// What the program's code was compiled for is how its bytecode is made, which is set before any is.
 +extern "C" void Bun__setOptionsForAheadOfTimeCode()
@@ -2295,6 +3339,30 @@ index fbfaa2ffb62..99f21fcdb3e 100644
 +        AOTImageTrailer trailer { offsetOfImage, s_builtAOTImage.size(), cpuFeaturesOfCode(), options, AOTImageTrailer::expectedMagic };
 +        memcpy(*data + *size - sizeof(trailer), &trailer, sizeof(trailer));
 +    }
++#if OS(WINDOWS)
++    // The executable's writer puts the arenas and the code in the image as sections (Bun__StaticHeap__rewritePE()), from all of it;
++    // what goes in the module graph is only what says that those sections are this heap's (a heap's copy of its arenas would be
++    // in the executable twice): the header with a sample of the string table, and the image's first page with the trailer.
++    s_heapForExecutable = Vector<uint8_t>(std::span<const uint8_t> { *data, *size });
++    if (auto compact = JSC::StaticHeap::compactForExecutable(s_heapForExecutable.span()); !compact.isEmpty()) {
++        size_t compactImageAt = WTF::roundUpToMultipleOf<pageSizeOfStaticHeap>(compact.size());
++        size_t firstPage = std::min<size_t>(s_builtAOTImage.size(), pageSizeOfStaticHeap);
++        size_t compactSize = s_builtAOTImage.isEmpty() ? compact.size() : compactImageAt + firstPage + sizeof(AOTImageTrailer);
++        auto* compactData = static_cast<uint8_t*>(mi_zalloc(compactSize));
++        memcpy(compactData, compact.span().data(), compact.size());
++        if (!s_builtAOTImage.isEmpty()) {
++            memcpy(compactData + compactImageAt, s_builtAOTImage.span().data(), firstPage);
++            AOTImageTrailer trailer;
++            memcpy(&trailer, *data + *size - sizeof(trailer), sizeof(trailer));
++            trailer.offsetOfImage = compactImageAt;
++            trailer.optionsOfCode |= AOTImageTrailer::imageIsInExecutable;
++            memcpy(compactData + compactSize - sizeof(trailer), &trailer, sizeof(trailer));
++        }
++        mi_free(*data);
++        *data = compactData;
++        *size = compactSize;
++    }
++#endif
 +    s_builtStaticHeap = { };
 +    s_builtAOTImage = { };
 +    return true;
@@ -2334,7 +3402,8 @@ index fbfaa2ffb62..99f21fcdb3e 100644
 +        return true; // A static heap without code.
 +    AOTImageTrailer trailer;
 +    memcpy(&trailer, image + size - sizeof(trailer), sizeof(trailer));
-+    if (trailer.offsetOfImage % pageSizeOfStaticHeap || trailer.offsetOfImage > size || trailer.sizeOfImage > size - trailer.offsetOfImage)
++    bool isInExecutable = trailer.optionsOfCode & AOTImageTrailer::imageIsInExecutable;
++    if (trailer.offsetOfImage % pageSizeOfStaticHeap || trailer.offsetOfImage > size - sizeof(trailer) || (!isInExecutable && trailer.sizeOfImage > size - trailer.offsetOfImage))
 +        return false;
 +    // (Before anything compares stamps: JSCInitialize() sets them again, as Options::initialize() resets every option.)
 +    s_optionsOfMappedCode = trailer.optionsOfCode;
@@ -2347,6 +3416,22 @@ index fbfaa2ffb62..99f21fcdb3e 100644
 +        return false;
 +    }
 +    std::span<const uint8_t> inFile { image + trailer.offsetOfImage, static_cast<size_t>(trailer.sizeOfImage) };
++    // What says that the code where it is expected is this image: its first bytes, here.
++    std::span<const uint8_t> sample = inFile;
++    if (isInExecutable) {
++        // The image is the executable's section; here, only its first page.
++#if OS(WINDOWS)
++        using Region = bmalloc::StaticRegion;
++        if (Region::layout().magic != bmalloc::StaticRegionLayout::expectedMagic || trailer.sizeOfImage > Region::reservationOf(Region::Arena::Image)) {
++            s_whyNotMapped = "the executable does not have the code image it says it has";
++            return false;
++        }
++        sample = { image + trailer.offsetOfImage, size - sizeof(trailer) - trailer.offsetOfImage };
++        inFile = { reinterpret_cast<const uint8_t*>(Region::startOf(Region::Arena::Image)), static_cast<size_t>(trailer.sizeOfImage) };
++#else
++        return false;
++#endif
++    }
 +    auto range = JSC::aotImageCodeRange(inFile);
 +    if (!range || range->first % pageSizeOfStaticHeap) {
 +        if (verbose)
@@ -2355,9 +3440,19 @@ index fbfaa2ffb62..99f21fcdb3e 100644
 +        return false;
 +    }
 +    using Region = bmalloc::StaticRegion;
++#if OS(WINDOWS)
++    // Not mapped: the image is a section of this executable already, the code executable (Bun__StaticHeap__rewritePE()). Its
++    // header, which has no pointers, says whether it is this one. (An executable without it has zeros there.)
++    UNUSED_PARAM(fd);
++    UNUSED_PARAM(offsetInFile);
++    // (An executable whose writer did not put the image in it has the runtime's own layout of the region: nothing is there.)
++    if (Region::layout().magic != bmalloc::StaticRegionLayout::expectedMagic || sample.size() < std::min<size_t>(range->first, 256)
++        || memcmp(reinterpret_cast<const void*>(Region::startOf(Region::Arena::Image)), sample.data(), std::min<size_t>(range->first, 256))) {
++#else
 +    uint64_t at = offsetInFile + trailer.offsetOfImage;
 +    if (!Region::map(Region::Arena::Image, fd, static_cast<off_t>(at), range->first, 0, false)
 +        || !Region::map(Region::Arena::Image, fd, static_cast<off_t>(at + range->first), WTF::roundUpToMultipleOf(WTF::pageSize(), range->second), range->first, true)) {
++#endif
 +        if (verbose)
 +            fprintf(stderr, "[aot] the image could not be mapped\n");
 +        s_whyNotMapped = "the image could not be mapped executable";
@@ -2376,6 +3471,627 @@ index fbfaa2ffb62..99f21fcdb3e 100644
 +    return !s_mappedAOTImage.empty();
 +}
 +
++#if OS(WINDOWS)
++// The executable that `bun build --compile` writes on Windows, when it has a static heap: the runtime's section .pbreg, which is
++// bmalloc::StaticRegion (uninitialized and read-only in the runtime), becomes the arenas of the heap and the code image, as sections
++// at the addresses they were built at, relative to the image. Their pointers into the image (the region itself, and the
++// executable's code and data) are written as if the image were at its preferred base, with a base relocation each: the loader
++// moves them with the image, wherever Windows loads it, once for every process that runs it. The code is position-independent and is
++// not relocated. The rest of the region stays uninitialized (Bss is made writable as it is used), and the rest of the executable
++// is as it was.
++namespace {
++
++struct PESection {
++    char name[8];
++    uint32_t virtualSize;
++    uint32_t virtualAddress;
++    uint32_t sizeOfRawData;
++    uint32_t pointerToRawData;
++    uint32_t pointerToRelocations;
++    uint32_t pointerToLinenumbers;
++    uint16_t numberOfRelocations;
++    uint16_t numberOfLinenumbers;
++    uint32_t characteristics;
++};
++static_assert(sizeof(PESection) == 40);
++
++constexpr uint32_t scnCode = 0x20, scnInitializedData = 0x40, scnUninitializedData = 0x80;
++constexpr uint32_t scnDiscardable = 0x02000000, scnExecute = 0x20000000, scnRead = 0x40000000, scnWrite = 0x80000000;
++
++// A section of what replaces .pbreg: [start, end) of the image (RVAs), with its bytes if it has any.
++struct RegionSection {
++    const char* name;
++    uint32_t start;
++    uint32_t end;
++    uint32_t characteristics;
++    std::span<const uint8_t> bytes;
++};
++
++template<typename T> T readAt(std::span<const uint8_t> bytes, size_t at)
++{
++    T value;
++    RELEASE_ASSERT(at + sizeof(T) <= bytes.size());
++    memcpy(&value, bytes.data() + at, sizeof(T));
++    return value;
++}
++template<typename T> void writeAt(Vector<uint8_t>& bytes, size_t at, T value)
++{
++    RELEASE_ASSERT(at + sizeof(T) <= bytes.size());
++    memcpy(bytes.mutableSpan().data() + at, &value, sizeof(T));
++}
++
++uint32_t alignUp(uint32_t value, uint32_t alignment) { return (value + alignment - 1) & ~(alignment - 1); }
++
++// Base relocation blocks (IMAGE_REL_BASED_DIR64) for these RVAs, which are in order.
++Vector<uint8_t> relocationBlocks(const Vector<uint32_t>& rvas)
++{
++    Vector<uint8_t> out;
++    size_t at = 0;
++    while (at < rvas.size()) {
++        uint32_t page = rvas[at] & ~0xfffu;
++        Vector<uint16_t> entries;
++        for (; at < rvas.size() && (rvas[at] & ~0xfffu) == page; ++at)
++            entries.append(static_cast<uint16_t>(10 << 12 | (rvas[at] & 0xfff)));
++        if (entries.size() % 2)
++            entries.append(0); // IMAGE_REL_BASED_ABSOLUTE: padding
++        uint32_t header[2] = { page, static_cast<uint32_t>(8 + 2 * entries.size()) };
++        out.append(std::span { reinterpret_cast<const uint8_t*>(header), sizeof(header) });
++        out.append(std::span { reinterpret_cast<const uint8_t*>(entries.span().data()), entries.size() * 2 });
++    }
++    return out;
++}
++
++} // namespace
++
++// Returns 1 and the new executable in `out` (mi_free() it), 0 if there is nothing to do (no static heap was built), or -1 with
++// `error` saying why it cannot be done.
++extern "C" int Bun__StaticHeap__rewritePE(const uint8_t* input, size_t inputSize, uint8_t** out, size_t* outSize, const char** error)
++{
++    *out = nullptr;
++    *outSize = 0;
++    *error = nullptr;
++    if (s_heapForExecutable.isEmpty())
++        return 0;
++    auto fail = [&](const char* why) {
++        *error = why;
++        s_heapForExecutable = { };
++        return -1;
++    };
++    std::span<const uint8_t> pe { input, inputSize };
++    std::span<const uint8_t> blob = s_heapForExecutable.span();
++    using Region = bmalloc::StaticRegion;
++
++    // ---- The executable as it is.
++    if (pe.size() < 0x200 || readAt<uint16_t>(pe, 0) != 0x5a4d)
++        return fail("not a PE executable");
++    uint32_t peOffset = readAt<uint32_t>(pe, 0x3c);
++    if (readAt<uint32_t>(pe, peOffset) != 0x4550)
++        return fail("not a PE executable");
++    uint16_t numberOfSections = readAt<uint16_t>(pe, peOffset + 6);
++    uint16_t sizeOfOptionalHeader = readAt<uint16_t>(pe, peOffset + 20);
++    size_t optional = peOffset + 24;
++    if (readAt<uint16_t>(pe, optional) != 0x20b)
++        return fail("not a 64-bit executable");
++    uint64_t preferredBase = readAt<uint64_t>(pe, optional + 24);
++    uint32_t sectionAlignment = readAt<uint32_t>(pe, optional + 32);
++    uint32_t fileAlignment = readAt<uint32_t>(pe, optional + 36);
++    uint32_t sizeOfHeaders = readAt<uint32_t>(pe, optional + 60);
++    size_t directories = optional + 112;
++    size_t sectionTable = optional + sizeOfOptionalHeader;
++    Vector<PESection> sections;
++    for (unsigned i = 0; i < numberOfSections; ++i)
++        sections.append(readAt<PESection>(pe, sectionTable + i * sizeof(PESection)));
++    size_t indexOfRegion = notFound;
++    for (size_t i = 0; i < sections.size(); ++i) {
++        if (!memcmp(sections[i].name, ".pbreg\0\0", 8))
++            indexOfRegion = i;
++    }
++    if (indexOfRegion == notFound)
++        return fail("the executable has no .pbreg section (it is not the Pi-Bolt runtime)");
++    PESection regionSection = sections[indexOfRegion];
++
++    // ---- This process: the runtime the heap was built in, which must be the same executable (its region at the same RVA).
++    auto* image = reinterpret_cast<const uint8_t*>(GetModuleHandleW(nullptr));
++    uintptr_t imageStart = reinterpret_cast<uintptr_t>(image);
++    auto* ownNT = image + *reinterpret_cast<const uint32_t*>(image + 0x3c);
++    uintptr_t imageEnd = imageStart + *reinterpret_cast<const uint32_t*>(ownNT + 24 + 56); // SizeOfImage
++    uint32_t regionRVA = static_cast<uint32_t>(Region::base() - imageStart);
++    if (regionRVA != alignUp(regionSection.virtualAddress, 0x10000))
++        return fail("the static heap was built by another executable than the one being written");
++    if (JSC::StaticHeap::regionBaseOf(blob) != Region::base())
++        return fail("the static heap was built at another address");
++
++    // ---- What goes into the region: the heap's arenas, and the code image with its trailer.
++    auto parts = JSC::StaticHeap::partsOf(blob);
++    if (parts.isEmpty())
++        return fail("the static heap is not one for this engine");
++    struct Part {
++        uint32_t offsetInRegion;
++        std::span<const uint8_t> bytes;
++        uint32_t characteristics;
++        bool hasPointers;
++    };
++    Vector<Part> inRegion;
++    Vector<uint32_t> codeCallTargets; // RVAs of the compiled code's entry points that C++ calls through a pointer
++    for (auto& part : parts) {
++        if (!part.size)
++            continue;
++        if (part.offsetInImage > blob.size() || part.size > blob.size() - part.offsetInImage || part.offsetInRegion > Region::layout().extent || part.size > Region::layout().extent - part.offsetInRegion)
++            return fail("the static heap is malformed");
++        // The arenas that running the program writes to are writable; the others are read-only, which no process is charged for,
++        // and what is written to there all the same is made writable a page at a time (bmalloc::StaticRegion's exception
++        // handler), as on Linux, where they are private mappings of the file.
++        inRegion.append({ static_cast<uint32_t>(part.offsetInRegion), blob.subspan(part.offsetInImage, part.size), part.isMutable ? scnInitializedData | scnRead | scnWrite : scnInitializedData | scnRead, true });
++    }
++    if (hasAOTImageTrailer(blob.data(), blob.size())) {
++        AOTImageTrailer trailer;
++        memcpy(&trailer, blob.data() + blob.size() - sizeof(trailer), sizeof(trailer));
++        if (trailer.offsetOfImage > blob.size() || trailer.sizeOfImage > blob.size() - trailer.offsetOfImage || trailer.sizeOfImage > Region::reservationOf(Region::Arena::Image))
++            return fail("the code image is malformed");
++        auto codeImage = blob.subspan(trailer.offsetOfImage, trailer.sizeOfImage);
++        auto range = JSC::aotImageCodeRange(codeImage);
++        if (!range || range->first % 4096 || range->first + range->second > codeImage.size())
++            return fail("the code image is not one for this engine");
++        uint32_t startOfImage = static_cast<uint32_t>(Region::startOf(Region::Arena::Image) - Region::base());
++        size_t endOfCode = WTF::roundUpToMultipleOf<4096>(range->first + range->second);
++        // The code's tables, before it; the code itself (executable, never writable); what follows it. None has a pointer: the
++        // image has no absolute addresses (AOTImage.h), so none of its bytes is relocated, or taken for an address the
++        // relocation missed (which a number in its tables can look like).
++        inRegion.append({ startOfImage, codeImage.first(range->first), scnInitializedData | scnRead, false });
++        inRegion.append({ startOfImage + static_cast<uint32_t>(range->first), codeImage.subspan(range->first, range->second), scnCode | scnExecute | scnRead, false });
++        for (uint32_t offset : JSC::aotImageIndirectCallTargets(codeImage))
++            codeCallTargets.append(regionRVA + startOfImage + static_cast<uint32_t>(range->first) + offset);
++        if (endOfCode < codeImage.size())
++            inRegion.append({ startOfImage + static_cast<uint32_t>(endOfCode), codeImage.subspan(endOfCode), scnInitializedData | scnRead, true });
++    }
++    std::ranges::sort(inRegion, { }, &Part::offsetInRegion);
++    // Where the region ends in the executable: after the last part (the arenas' room to grow while building is not in it, nor
++    // Arena::Scratch, which only a build has).
++    uint64_t endOfParts = 0;
++    for (auto& part : inRegion)
++        endOfParts = std::max<uint64_t>(endOfParts, part.offsetInRegion + WTF::roundUpToMultipleOf<4096>(part.bytes.size()));
++    // How big the arenas were for this build (BUN_STATIC_REGION_SIZES_OUT): a build after this one with
++    // BUN_STATIC_REGION_SIZES set to it makes the same heap with the arenas side by side, and so an executable without room
++    // between them, which would be uninitialized and charged to the system's commit (scripts\build-pi.ps1 builds twice).
++    if (const char* sizesOut = getenv("BUN_STATIC_REGION_SIZES_OUT")) {
++        // (Each with a little to spare; Scratch, which is in no file, with more.)
++        auto sizeOf = [](Region::Arena arena, size_t spare) { return WTF::roundUpToMultipleOf<0x10000>(Region::used(arena) + spare); };
++        size_t imageSize = 0;
++        if (hasAOTImageTrailer(blob.data(), blob.size())) {
++            AOTImageTrailer trailer;
++            memcpy(&trailer, blob.data() + blob.size() - sizeof(trailer), sizeof(trailer));
++            imageSize = WTF::roundUpToMultipleOf<0x10000>(trailer.sizeOfImage + 0x10000);
++        }
++        if (FILE* file = fopen(sizesOut, "w")) {
++            fprintf(file, "%zu,%zu,%zu,%zu,%zu,%zu,%zu\n", sizeOf(Region::Arena::Data, 0x40000), sizeOf(Region::Arena::Malloc, 0x40000), sizeOf(Region::Arena::Cells, 0x40000),
++                sizeOf(Region::Arena::MutableCells, 0x40000), sizeOf(Region::Arena::MutableMalloc, 0x40000), imageSize, sizeOf(Region::Arena::Scratch, 16 << 20));
++            fclose(file);
++        }
++    }
++
++    // ---- Their pointers into the image, at the preferred base, and a relocation for each. A pointer anywhere else in the
++    // process that a static heap holds would not be good in another process: other modules move at every boot.
++    HMODULE modules[1024];
++    DWORD bytesOfModules = 0;
++    // (Without the list, a pointer into a system library would go unnoticed, and be wrong at the next boot.)
++    if (!EnumProcessModules(GetCurrentProcess(), modules, sizeof(modules), &bytesOfModules))
++        return fail("the process's modules could not be listed");
++    Vector<std::pair<uintptr_t, uintptr_t>> otherModules;
++    // (What it says is how much room all of them need, which may be more than there is: the first 1,024 are what it wrote.)
++    for (unsigned i = 0; i < std::min<size_t>(bytesOfModules, sizeof(modules)) / sizeof(HMODULE); ++i) {
++        MODULEINFO info;
++        if (modules[i] != reinterpret_cast<HMODULE>(const_cast<uint8_t*>(image)) && GetModuleInformation(GetCurrentProcess(), modules[i], &info, sizeof(info)))
++            otherModules.append({ reinterpret_cast<uintptr_t>(info.lpBaseOfDll), reinterpret_cast<uintptr_t>(info.lpBaseOfDll) + info.SizeOfImage });
++    }
++    Vector<Vector<uint8_t>> rebased; // The parts' bytes, with their pointers at the preferred base.
++    Vector<uint32_t> relocations;
++    size_t pointersIntoOtherModules = 0;
++    // The words that hold an address in the region with something in its top 16 bits (and perhaps its low three): the entry word
++    // of compiled code (AOT::EntryWord, the number of parameters above the address), FunctionInfo's executable (its flags above it).
++    // The builder says where they are. The relocation adds the move to the whole word, which leaves those bits as they are: it is a
++    // multiple of 64 KB, and an address of a user's process is below 2^48. Anything else that looks like one is counted, not moved
++    // (a double could): building twice says whether it was a pointer after all (scripts/lib/compare-static-heaps.py).
++    constexpr uint64_t addressBits = (1ull << 48) - 1;
++    auto taggedWords = JSC::StaticHeap::taggedWordsOfBuiltImage();
++    size_t nextTaggedWord = 0;
++    size_t taggedWordsMoved = 0;
++    size_t looksTaggedButIsNotListed = 0;
++    size_t pointersToWhatIsNotKept = 0;
++    size_t wordsThatOnlyLookLikeWhatIsNotKept = 0;
++    uintptr_t endOfExecutable = std::max<uintptr_t>(imageEnd, Region::base() + endOfParts);
++    for (auto& part : inRegion) {
++        Vector<uint8_t> bytes(part.bytes);
++        if (part.hasPointers) {
++            while (nextTaggedWord < taggedWords.size() && taggedWords[nextTaggedWord] < part.offsetInRegion)
++                ++nextTaggedWord;
++            for (size_t at = 0; at + 8 <= bytes.size(); at += 8) {
++                uint64_t word;
++                memcpy(&word, bytes.span().data() + at, 8);
++                uint64_t target = word & addressBits & ~7ull;
++                bool targetIsInRegion = target - Region::base() < endOfParts;
++                if (nextTaggedWord < taggedWords.size() && taggedWords[nextTaggedWord] == part.offsetInRegion + at) {
++                    ++nextTaggedWord;
++                    if (!targetIsInRegion)
++                        return fail("the static heap has an entry word that is not of its code");
++                    writeAt<uint64_t>(bytes, at, (word & ~addressBits) | ((word & addressBits) - imageStart + preferredBase));
++                    relocations.append(regionRVA + part.offsetInRegion + static_cast<uint32_t>(at));
++                    ++taggedWordsMoved;
++                    continue;
++                }
++                // (Arena::Scratch and the blocks are not in the executable: what is there is not kept, or made by a running program,
++                // and nothing may point to it.) A pointer to something there is to an object, at an address that is a multiple of 8,
++                // in memory that is committed (the blocks and the arena are committed as they are used). A word that is neither is
++                // not one: a pair of 32-bit numbers can look like an address there, as the blocks are where a reservation of their
++                // size fits at the top, just below the Control Flow Guard bitmap (0x7DF3...: Pi 1.1.0's data held 0x5002d, 0x7df4).
++                if (word - Region::startOf(Region::Arena::Scratch) < Region::reservationOf(Region::Arena::Scratch) || word - Region::startOfBlocks() < Region::sizeOfBlocks()) {
++                    MEMORY_BASIC_INFORMATION target;
++                    bool couldBeAPointer = !(word & 7)
++                        && VirtualQuery(reinterpret_cast<const void*>(static_cast<uintptr_t>(word)), &target, sizeof(target))
++                        && target.State == MEM_COMMIT;
++                    uintptr_t where = Region::base() + part.offsetInRegion + at;
++                    if (!couldBeAPointer) {
++                        // (Said in every build, so that the log shows it: a pointer with a tag in its low bits, or to a page given
++                        // back, would also be taken for a number here. Building with the blocks elsewhere tells them apart.)
++                        if (wordsThatOnlyLookLikeWhatIsNotKept++ < 10)
++                            fprintf(stderr, "note: a word that looks like an address of what is not kept is taken for a number (%llx, in %s)\n",
++                                static_cast<unsigned long long>(word), JSC::StaticHeap::describeBuiltAddress(where).data());
++                        continue;
++                    }
++                    if (pointersToWhatIsNotKept++ < 10) {
++                        fprintf(stderr, "warning: the static heap points to what is not kept (%llx, at offset %zu of a part at %x, in %s; blocks at %p, scratch at %p)\n",
++                            static_cast<unsigned long long>(word), at, part.offsetInRegion, JSC::StaticHeap::describeBuiltAddress(where).data(),
++                            reinterpret_cast<void*>(Region::startOfBlocks()), reinterpret_cast<void*>(Region::startOf(Region::Arena::Scratch)));
++                    }
++                    continue;
++                }
++                if (word >= imageStart && word < endOfExecutable) {
++                    writeAt<uint64_t>(bytes, at, word - imageStart + preferredBase);
++                    relocations.append(regionRVA + part.offsetInRegion + static_cast<uint32_t>(at));
++                    continue;
++                }
++                if ((word >> 48) && targetIsInRegion)
++                    ++looksTaggedButIsNotListed;
++                for (auto& [start, end] : otherModules) {
++                    if (word >= start && word < end && pointersIntoOtherModules++ < 10)
++                        fprintf(stderr, "warning: the static heap points into another module (%llx, at offset %zu of a part at %x)\n", static_cast<unsigned long long>(word), at, part.offsetInRegion);
++                }
++            }
++        }
++        rebased.append(WTF::move(bytes));
++    }
++    if (pointersIntoOtherModules)
++        return fail("the static heap points into a system library, which moves at every boot");
++    if (wordsThatOnlyLookLikeWhatIsNotKept > 10)
++        fprintf(stderr, "note: %zu words in all look like addresses of what is not kept and are taken for numbers\n", wordsThatOnlyLookLikeWhatIsNotKept);
++    if (pointersToWhatIsNotKept)
++        return fail("the static heap points to memory that is not in the executable (the build's scratch memory, or a running program's blocks)");
++    // What is left that looks like an address in this process's image, now that its pointers are at the preferred base: a pointer
++    // that is not on an 8-byte boundary (a packed one), or bytes that were never written and kept an address from the process
++    // that built the heap. Either would be wrong in another process, and either is told by building twice only by chance. One on an
++    // 8-byte boundary fails the build. Between two such words (a 4-byte boundary) it is only said: there it is the halves of two
++    // words, data as often as not (a number's upper half next to another's lower half), and whether it falls in the range of the
++    // executable depends on where Windows loaded the process, which is the same all through a boot, so failing would stop every
++    // build until the next one. (A packed pointer is caught by building twice, -VerifyDeterminism.)
++    size_t notRelocated = 0;
++    size_t notRelocatedBetweenWords = 0;
++    for (size_t i = 0; i < inRegion.size(); ++i) {
++        if (!inRegion[i].hasPointers)
++            continue;
++        auto bytes = rebased[i].span();
++        for (size_t at = 0; at + 8 <= bytes.size(); at += 4) {
++            uint64_t word;
++            memcpy(&word, bytes.data() + at, 8);
++            if (at % 8) {
++                if (word >= imageStart && word < endOfExecutable && notRelocatedBetweenWords++ < 3 && getenv("BUN_STATIC_HEAP_VERBOSE"))
++                    fprintf(stderr, "[static heap] between two words, something that looks like an address of this process: %llx, at offset %zu of a part at %x\n",
++                        static_cast<unsigned long long>(word), at, inRegion[i].offsetInRegion);
++                continue;
++            }
++            if (word >= imageStart && word < endOfExecutable && notRelocated++ < 10) {
++                fprintf(stderr, "warning: the static heap has an address of the process that built it that is not relocated (%llx, at offset %zu of a part at %x%s); the bytes around it:",
++                    static_cast<unsigned long long>(word), at, inRegion[i].offsetInRegion, inRegion[i].characteristics & scnExecute ? ", code" : "");
++                for (size_t b = at >= 16 ? at - 16 : 0; b < std::min(bytes.size(), at + 24); ++b)
++                    fprintf(stderr, "%s%02x", b == at ? " [" : " ", bytes[b]);
++                uintptr_t where = Region::base() + inRegion[i].offsetInRegion + at;
++                fprintf(stderr, " (at %p, in %s; the structure heap starts at %p)\n", reinterpret_cast<void*>(where),
++                    JSC::StaticHeap::describeBuiltAddress(where).data(), reinterpret_cast<void*>(g_jscConfig.startOfStructureHeap));
++            }
++        }
++    }
++    if (notRelocated)
++        return fail("the static heap has addresses that cannot be relocated (bytes never written, which kept an address of the process that built it)");
++    if (taggedWordsMoved != taggedWords.size())
++        return fail("the static heap's entry words are not all in its parts");
++    if (getenv("BUN_STATIC_HEAP_VERBOSE")) {
++        fprintf(stderr, "[static heap] %zu pointers into the executable, relocated (%zu of them entry words)\n", relocations.size(), taggedWordsMoved);
++        if (looksTaggedButIsNotListed)
++            fprintf(stderr, "[static heap] %zu words look like entry words but are not listed as any; not moved\n", looksTaggedButIsNotListed);
++    }
++
++    // ---- The arenas: sections after the executable's own, where the build had them (the layout says where; .pblay below), with
++    // uninitialized read-only sections where there is nothing (what is left over of an arena, a hole in Arena::Data). .pbreg, the
++    // start of the region and what of Arena::Bss is in the image, stays as it is.
++    uint32_t endOfImage = 0;
++    for (auto& s : sections)
++        endOfImage = std::max(endOfImage, s.virtualAddress + alignUp(std::max(s.virtualSize, s.sizeOfRawData), sectionAlignment));
++    Vector<RegionSection> newSections;
++    uint32_t at = endOfImage;
++    auto gapTo = [&](uint32_t end) {
++        if (end > at)
++            newSections.append({ ".pbgap", at, end, scnUninitializedData | scnRead, { } });
++        at = end;
++    };
++    for (size_t i = 0; i < inRegion.size(); ++i) {
++        auto& part = inRegion[i];
++        uint64_t start = regionRVA + static_cast<uint64_t>(part.offsetInRegion);
++        uint64_t end = start + alignUp(static_cast<uint32_t>(part.bytes.size()), sectionAlignment);
++        if (start < at || end > (1ull << 31))
++            return fail("the static heap's arenas are not after the executable (another runtime than the one that built it?)");
++        gapTo(static_cast<uint32_t>(start));
++        bool isOfCodeImage = part.offsetInRegion >= Region::startOf(Region::Arena::Image) - Region::base();
++        const char* name = part.characteristics & scnExecute ? ".pbcode" : (isOfCodeImage ? ".pbimage" : ".pbheap");
++        newSections.append({ name, static_cast<uint32_t>(start), static_cast<uint32_t>(end), part.characteristics, rebased[i].span() });
++        at = static_cast<uint32_t>(end);
++    }
++    uint32_t endOfRegion = at;
++
++    // ---- The base relocations: the executable's own, then these, in a section of their own at the end.
++    std::span<const uint8_t> oldRelocations;
++    uint32_t relocationsRVA = readAt<uint32_t>(pe, directories + 5 * 8);
++    uint32_t relocationsSize = readAt<uint32_t>(pe, directories + 5 * 8 + 4);
++    auto fileOffsetOf = [&](uint32_t rva) -> std::optional<size_t> {
++        for (auto& s : sections) {
++            if (rva >= s.virtualAddress && rva < s.virtualAddress + std::max(s.virtualSize, s.sizeOfRawData) && rva - s.virtualAddress < s.sizeOfRawData) {
++                if (static_cast<size_t>(s.pointerToRawData) + s.sizeOfRawData > pe.size())
++                    return std::nullopt;
++                return s.pointerToRawData + (rva - s.virtualAddress);
++            }
++        }
++        return std::nullopt;
++    };
++    if (relocationsSize) {
++        auto offset = fileOffsetOf(relocationsRVA);
++        if (!offset || *offset + relocationsSize > pe.size())
++            return fail("the executable's base relocations are malformed");
++        oldRelocations = pe.subspan(*offset, relocationsSize);
++    }
++    Vector<uint8_t> allRelocations(oldRelocations);
++    allRelocations.append(relocationBlocks(relocations).span());
++    RegionSection relocationSection { ".pbreloc", endOfRegion, endOfRegion + alignUp(static_cast<uint32_t>(allRelocations.size()), sectionAlignment), scnInitializedData | scnRead | scnDiscardable, allRelocations.span() };
++
++    // ---- Unwind information for the compiled code, so that stack walks (exceptions, crash reports, debuggers) go through its
++    // frames. For an address in an image Windows only looks at the image's own exception directory: the executable's entries,
++    // then one for the code, sorted (the code's addresses are above the executable's own code). Every frame of compiled code is
++    // the caller's frame pointer and the return address, below which the function keeps its things (push rbp; mov rbp, rsp): one
++    // UNWIND_INFO says so for all of it. (A frameless stub that calls C is taken for the frame of whoever called it, which then
++    // does not show: the walk goes on all the same.)
++    Vector<uint8_t> exceptionData;
++    uint32_t exceptionTableRVA = 0, exceptionTableSize = 0;
++    std::optional<RegionSection> exceptionSection;
++    if (auto code = std::ranges::find_if(inRegion, [](auto& part) { return part.characteristics & scnExecute; }); code != inRegion.end()) {
++        uint32_t oldRVA = readAt<uint32_t>(pe, directories + 3 * 8);
++        uint32_t oldSize = readAt<uint32_t>(pe, directories + 3 * 8 + 4);
++        std::span<const uint8_t> oldEntries;
++        if (oldSize) {
++            auto offset = fileOffsetOf(oldRVA);
++            if (!offset || *offset + oldSize > pe.size() || oldSize % 12)
++                return fail("the executable's exception directory is malformed");
++            oldEntries = pe.subspan(*offset, oldSize);
++        }
++        uint32_t codeStart = regionRVA + code->offsetInRegion;
++        if (!oldEntries.empty() && readAt<uint32_t>(oldEntries, oldEntries.size() - 8) > codeStart)
++            return fail("the executable's code is above the static region");
++        uint32_t sectionRVA = relocationSection.end;
++        // UNWIND_INFO: version 1, no flags, no prologue, two codes, frame register rbp (5) at offset 0; the codes in the reverse
++        // order of the prologue: UWOP_SET_FPREG (3), then UWOP_PUSH_NONVOL (0) of rbp (5).
++        const uint8_t unwindInfo[8] = { 1, 0, 2, 0x05, 0, 0x03, 0, 0x50 };
++        exceptionData.append(std::span { unwindInfo });
++        exceptionTableRVA = sectionRVA + static_cast<uint32_t>(exceptionData.size());
++        exceptionData.append(oldEntries);
++        const uint32_t codeEntry[3] = { codeStart, codeStart + static_cast<uint32_t>(code->bytes.size()), sectionRVA };
++        exceptionData.append(std::span { reinterpret_cast<const uint8_t*>(codeEntry), sizeof(codeEntry) });
++        exceptionTableSize = static_cast<uint32_t>(oldEntries.size() + sizeof(codeEntry));
++        exceptionSection = RegionSection { ".pbpdata", sectionRVA, sectionRVA + alignUp(static_cast<uint32_t>(exceptionData.size()), sectionAlignment), scnInitializedData | scnRead, exceptionData.span() };
++    }
++    // ---- Control Flow Guard: an indirect call is allowed only to a target that the image's table lists (the loader makes its
++    // bitmap of valid targets from it). The compiled code's entry points that C++ calls through a pointer (the regular
++    // expressions, which WTF::callSysV() checks) are added: the executable's table, with them, sorted, in a section of its own,
++    // to which the load configuration then points. (Its pointer to the table already has a base relocation.)
++    Vector<uint8_t> guardTable;
++    std::optional<RegionSection> guardSection;
++    std::optional<size_t> loadConfigOffset;
++    uint32_t guardTableCount = 0;
++    if (uint32_t loadConfigRVA = readAt<uint32_t>(pe, directories + 10 * 8); loadConfigRVA && !codeCallTargets.isEmpty()) {
++        loadConfigOffset = fileOffsetOf(loadConfigRVA);
++        if (!loadConfigOffset || *loadConfigOffset + 0x94 > pe.size() || readAt<uint32_t>(pe, *loadConfigOffset) < 0x94)
++            return fail("the executable's load configuration is malformed");
++        uint64_t tableVA = readAt<uint64_t>(pe, *loadConfigOffset + 0x80); // GuardCFFunctionTable
++        uint64_t count = readAt<uint64_t>(pe, *loadConfigOffset + 0x88); // GuardCFFunctionCount
++        uint32_t guardFlags = readAt<uint32_t>(pe, *loadConfigOffset + 0x90);
++        constexpr uint32_t instrumented = 0x100, tablePresent = 0x400; // IMAGE_GUARD_CF_INSTRUMENTED, IMAGE_GUARD_CF_FUNCTION_TABLE_PRESENT
++        if (guardFlags & instrumented) {
++            if (!(guardFlags & tablePresent) || tableVA < preferredBase)
++                return fail("the executable has Control Flow Guard but no table of the targets it allows");
++            size_t stride = 4 + ((guardFlags >> 28) & 0xf); // an RVA, then that many bytes of flags
++            auto tableOffset = fileOffsetOf(static_cast<uint32_t>(tableVA - preferredBase));
++            if (!tableOffset || count > (pe.size() - *tableOffset) / stride)
++                return fail("the executable's table of Control Flow Guard targets is malformed");
++            auto old = pe.subspan(*tableOffset, count * stride);
++            size_t next = 0;
++            uint32_t last = 0;
++            auto append = [&](uint32_t rva, std::span<const uint8_t> flags) {
++                if (guardTableCount && rva <= last)
++                    return; // (sorted, once each)
++                guardTable.append(std::span { reinterpret_cast<const uint8_t*>(&rva), 4 });
++                guardTable.append(flags);
++                last = rva;
++                ++guardTableCount;
++            };
++            const uint8_t noFlags[16] = { };
++            for (size_t i = 0; i < count; ++i) {
++                uint32_t rva = readAt<uint32_t>(old, i * stride);
++                for (; next < codeCallTargets.size() && codeCallTargets[next] < rva; ++next)
++                    append(codeCallTargets[next], std::span { noFlags }.first(stride - 4));
++                append(rva, old.subspan(i * stride + 4, stride - 4));
++            }
++            for (; next < codeCallTargets.size(); ++next)
++                append(codeCallTargets[next], std::span { noFlags }.first(stride - 4));
++            uint32_t sectionRVA = exceptionSection ? exceptionSection->end : relocationSection.end;
++            guardSection = RegionSection { ".pbgfids", sectionRVA, sectionRVA + alignUp(static_cast<uint32_t>(guardTable.size()), sectionAlignment), scnInitializedData | scnRead, guardTable.span() };
++        }
++    }
++    // ---- The new file: the headers (with room for the new section table), then every section's bytes in the order of their addresses.
++    struct NewSection {
++        PESection header;
++        std::span<const uint8_t> bytes;
++        uint32_t oldPointer; // For finding what of the old file was in it (the debug directory's data).
++    };
++    Vector<NewSection> table;
++    for (auto& s : sections) {
++        if (s.sizeOfRawData && s.pointerToRawData + s.sizeOfRawData > pe.size())
++            return fail("the executable is truncated");
++        table.append({ s, s.sizeOfRawData ? pe.subspan(s.pointerToRawData, s.sizeOfRawData) : std::span<const uint8_t> { }, s.pointerToRawData });
++    }
++    for (auto& n : newSections) {
++        PESection s { };
++        memcpy(s.name, n.name, std::min<size_t>(strlen(n.name), 8));
++        s.virtualAddress = n.start;
++        s.virtualSize = n.end - n.start;
++        s.characteristics = n.characteristics;
++        table.append({ s, n.bytes, 0 });
++    }
++    // (Windows refuses an image of about 2 GB as "not a valid application"; 1.7 GB loads. The .bun section comes after this.)
++    if (static_cast<uint64_t>(guardSection ? guardSection->end : exceptionSection ? exceptionSection->end : relocationSection.end) + blob.size() > 1600ull << 20)
++        return fail("the executable would be too large for Windows to load (over 1.6 GB of image)");
++    uint32_t newEndOfImage = relocationSection.end;
++    for (auto* added : { &relocationSection, exceptionSection ? &*exceptionSection : nullptr, guardSection ? &*guardSection : nullptr }) {
++        if (!added)
++            continue;
++        PESection s { };
++        memcpy(s.name, added->name, std::min<size_t>(strlen(added->name), 8));
++        s.virtualAddress = added->start;
++        s.virtualSize = static_cast<uint32_t>(added->bytes.size());
++        s.characteristics = added->characteristics;
++        table.append({ s, added->bytes, 0 });
++        newEndOfImage = added->end;
++    }
++    // (With room for a few more: .bun is added after this.)
++    uint32_t newSizeOfHeaders = std::max(sizeOfHeaders, alignUp(static_cast<uint32_t>(sectionTable + (table.size() + 4) * sizeof(PESection)), fileAlignment));
++    uint32_t firstSection = UINT32_MAX;
++    for (auto& s : sections)
++        firstSection = std::min(firstSection, s.virtualAddress);
++    if (newSizeOfHeaders > firstSection)
++        return fail("no room in the executable's headers for the static heap's sections");
++    Vector<uint8_t> result;
++    // (Vector::grow() leaves new bytes as they were: what pads the file is zeros.)
++    auto growWithZeros = [&](size_t size) {
++        size_t old = result.size();
++        result.grow(size);
++        memset(result.mutableSpan().data() + old, 0, size - old);
++    };
++    result.append(pe.first(std::min<size_t>(sizeOfHeaders, sectionTable)));
++    growWithZeros(newSizeOfHeaders);
++    Vector<std::pair<uint32_t, uint32_t>> movedFrom; // (old pointer, new pointer), for the debug directory
++    for (auto& s : table) {
++        if (s.bytes.empty()) {
++            s.header.sizeOfRawData = 0;
++            s.header.pointerToRawData = 0;
++            continue;
++        }
++        size_t pointer = WTF::roundUpToMultipleOf(fileAlignment, result.size());
++        growWithZeros(pointer);
++        result.append(s.bytes);
++        growWithZeros(WTF::roundUpToMultipleOf(fileAlignment, result.size()));
++        if (s.oldPointer)
++            movedFrom.append({ s.oldPointer, static_cast<uint32_t>(pointer) });
++        s.header.pointerToRawData = static_cast<uint32_t>(pointer);
++        s.header.sizeOfRawData = static_cast<uint32_t>(WTF::roundUpToMultipleOf(fileAlignment, s.bytes.size()));
++    }
++    for (size_t i = 0; i < table.size(); ++i)
++        writeAt<PESection>(result, sectionTable + i * sizeof(PESection), table[i].header);
++    writeAt<uint16_t>(result, peOffset + 6, static_cast<uint16_t>(table.size()));
++    writeAt<uint32_t>(result, optional + 60, newSizeOfHeaders);
++    writeAt<uint32_t>(result, optional + 56, newEndOfImage); // SizeOfImage
++    if (exceptionSection) {
++        writeAt<uint32_t>(result, directories + 3 * 8, exceptionTableRVA);
++        writeAt<uint32_t>(result, directories + 3 * 8 + 4, exceptionTableSize);
++    }
++    writeAt<uint32_t>(result, optional + 64, 0); // CheckSum: the writer recomputes it after adding .bun
++    writeAt<uint32_t>(result, directories + 5 * 8, relocationSection.start);
++    writeAt<uint32_t>(result, directories + 5 * 8 + 4, static_cast<uint32_t>(allRelocations.size()));
++    // A signature does not survive this (nor the .bun section after it).
++    writeAt<uint32_t>(result, directories + 4 * 8, 0);
++    writeAt<uint32_t>(result, directories + 4 * 8 + 4, 0);
++    // The debug directory's entries say where their data is in the file.
++    uint32_t debugRVA = readAt<uint32_t>(pe, directories + 6 * 8);
++    uint32_t debugSize = readAt<uint32_t>(pe, directories + 6 * 8 + 4);
++    if (debugSize) {
++        auto oldOffset = fileOffsetOf(debugRVA);
++        if (!oldOffset)
++            return fail("the executable's debug directory is malformed");
++        // (Where the directory itself is now: its section moved.)
++        size_t newOffset = 0;
++        for (auto& [from, to] : movedFrom) {
++            for (auto& s : sections) {
++                if (s.pointerToRawData == from && *oldOffset >= from && *oldOffset < from + s.sizeOfRawData)
++                    newOffset = to + (*oldOffset - from);
++            }
++        }
++        for (size_t entry = 0; newOffset && entry + 28 <= debugSize; entry += 28) {
++            uint32_t pointer = readAt<uint32_t>(result.span(), newOffset + entry + 24);
++            uint32_t moved = 0;
++            for (auto& [from, to] : movedFrom) {
++                for (auto& s : sections) {
++                    if (s.pointerToRawData == from && pointer >= from && pointer < from + s.sizeOfRawData)
++                        moved = to + (pointer - from);
++                }
++            }
++            writeAt<uint32_t>(result, newOffset + entry + 24, moved);
++        }
++    }
++    // ---- The load configuration's table of Control Flow Guard targets: the one with the compiled code's (.pbgfids, above).
++    if (guardSection) {
++        uint32_t loadConfigRVA = readAt<uint32_t>(pe, directories + 10 * 8);
++        std::optional<size_t> newOffset;
++        for (auto& s : table) {
++            if (loadConfigRVA >= s.header.virtualAddress && loadConfigRVA - s.header.virtualAddress + 0x94 <= s.header.sizeOfRawData)
++                newOffset = s.header.pointerToRawData + (loadConfigRVA - s.header.virtualAddress);
++        }
++        if (!newOffset)
++            return fail("the executable's load configuration is malformed");
++        writeAt<uint64_t>(result, *newOffset + 0x80, preferredBase + guardSection->start);
++        writeAt<uint64_t>(result, *newOffset + 0x88, guardTableCount);
++        if (getenv("BUN_STATIC_HEAP_VERBOSE"))
++            fprintf(stderr, "[static heap] %zu entry points of the compiled code added to Control Flow Guard's %u targets\n", codeCallTargets.size(), guardTableCount);
++    }
++    // ---- Where the arenas are, for the executable (bmalloc::StaticRegionLayout, the section .pblay): as in this build, up to
++    // the end of the last part. (Nothing of Arena::Scratch; the blocks are reserved when it runs.)
++    {
++        uint32_t layoutRVA = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&Region::layout()) - imageStart);
++        std::optional<size_t> layoutOffset;
++        for (auto& s : table) {
++            if (!memcmp(s.header.name, ".pblay\0\0", 8) && layoutRVA >= s.header.virtualAddress && layoutRVA - s.header.virtualAddress + sizeof(bmalloc::StaticRegionLayout) <= s.header.sizeOfRawData)
++                layoutOffset = s.header.pointerToRawData + (layoutRVA - s.header.virtualAddress);
++        }
++        if (!layoutOffset)
++            return fail("the executable has no .pblay section for the static region's layout (it is not the Pi-Bolt runtime)");
++        bmalloc::StaticRegionLayout layout = Region::layout();
++        layout.magic = bmalloc::StaticRegionLayout::expectedMagic;
++        layout.offset[static_cast<unsigned>(Region::Arena::Scratch)] = endOfRegion - regionRVA;
++        layout.size[static_cast<unsigned>(Region::Arena::Scratch)] = 0;
++        layout.extent = endOfRegion - regionRVA;
++        layout.blocksStart = 0;
++        layout.blocksSize = 0;
++        writeAt<bmalloc::StaticRegionLayout>(result, *layoutOffset, layout);
++    }
++    s_heapForExecutable = { };
++    *outSize = result.size();
++    *out = static_cast<uint8_t*>(mi_malloc(result.size()));
++    memcpy(*out, result.span().data(), result.size());
++    return 1;
++}
++#endif
++
 +// After JSC::initialize(), before any JavaScript runs.
 +extern "C" void Bun__AOTImage__register()
 +{
@@ -2387,7 +4103,7 @@ index fbfaa2ffb62..99f21fcdb3e 100644
 +    if (!registered) {
 +        // The static heap, which is mapped and was built with this code, cannot run without it (short-form executables point into
 +        // it), and the engine is initialized by now: stop here, rather than at the first call.
-+        fprintf(stderr, "bun: the executable's ahead-of-time code image was rejected by the engine; run with BUN_AOT=0 to use the bytecode instead\n");
++        fprintf(stderr, "pi-bolt: the executable's ahead-of-time code image was rejected by the engine; run with BUN_AOT=0 to use the bytecode instead\n");
 +        exit(70); // EX_SOFTWARE
 +    }
 +}
@@ -2409,25 +4125,53 @@ index fbfaa2ffb62..99f21fcdb3e 100644
 +// address would otherwise be found out by an assertion at the first call into the image.
 +static bool structureHeapCanBeWhereTheCodeExpects()
 +{
++#if OS(WINDOWS)
++    // Wherever it is: the code finds it in its runtime table (AOT::structureIDBaseIsFixed).
++    return true;
++#else
 +    using Region = bmalloc::StaticRegion;
-+    void* wanted = reinterpret_cast<void*>(Region::base + Region::reservation);
++    void* wanted = reinterpret_cast<void*>(Region::base() + Region::reservation);
 +    size_t size = 4ULL << 30;
 +    void* result = mmap(wanted, size, PROT_NONE, MAP_PRIVATE | MAP_ANON | MAP_NORESERVE, -1, 0);
 +    if (result == MAP_FAILED)
 +        return false;
 +    munmap(result, size);
 +    return result == wanted;
++#endif
 +}
 +
 +static void noteNotUsed(const char* why)
 +{
 +    // One line, once: the program still runs, from its bytecode, with the JIT; only slower to start.
-+    fprintf(stderr, "bun: the executable's ahead-of-time compiled code is not used (%s); running from bytecode\n", why);
++    fprintf(stderr, "pi-bolt: the executable's ahead-of-time compiled code is not used (%s); running from bytecode\n", why);
++}
++
++// The executable was built to run without the JIT (AOTImageTrailer::withoutJIT): so it runs whether its code is used or not
++// (BUN_AOT=0, a CPU the code was not compiled for, no room for the region). Its fallback interprets the bytecode rather than make
++// machine code in writable executable memory, which a build without the JIT is meant never to have (JSCInitialize()).
++static bool s_executableRunsWithoutJIT;
++extern "C" bool Bun__AOTImage__executableRunsWithoutJIT()
++{
++    return s_executableRunsWithoutJIT;
++}
++
++// The executable carries code compiled ahead of time (a Pi-Bolt executable), used or not: what the crash handler and the notices
++// below call it by.
++static bool s_executableHasImage;
++extern "C" bool Bun__AOTImage__executableHasImage()
++{
++    return s_executableHasImage;
 +}
 +
 +extern "C" bool Bun__StaticHeap__map(const uint8_t* image, size_t size, int fd, uint64_t offsetInFile)
 +{
 +    Bun__setBytecodeCacheVersion();
++    if (hasAOTImageTrailer(image, size)) {
++        AOTImageTrailer trailer;
++        memcpy(&trailer, image + size - sizeof(trailer), sizeof(trailer));
++        s_executableRunsWithoutJIT = trailer.optionsOfCode & AOTImageTrailer::withoutJIT;
++        s_executableHasImage = true;
++    }
 +    bool asked = !(getenv("BUN_AOT") && getenv("BUN_AOT")[0] == '0');
 +#if OS(DARWIN)
 +    // The heap points into this executable where it was linked to be (c-bindings.cpp starts it again there). (Also with BUN_AOT=0:
@@ -2438,7 +4182,7 @@ index fbfaa2ffb62..99f21fcdb3e 100644
 +        return false;
 +    }
 +#endif
-+    if (asked && (bmalloc::StaticRegion::bssMapped() < bmalloc::StaticRegion::arenaReservation || (hasAOTImageTrailer(image, size) && !structureHeapCanBeWhereTheCodeExpects()))) {
++    if (asked && (bmalloc::StaticRegion::bssMapped() < bmalloc::StaticRegion::reservationOf(bmalloc::StaticRegion::Arena::Bss) || !bmalloc::StaticRegion::sizeOfBlocks() || (hasAOTImageTrailer(image, size) && !structureHeapCanBeWhereTheCodeExpects()))) {
 +        noteNotUsed("the address space for it is not available");
 +        return false;
 +    }
@@ -2471,11 +4215,13 @@ index fbfaa2ffb62..99f21fcdb3e 100644
 +
  // `bun build --compile --bytecode` with a payload order file (--bytecode-order): one payload for the whole link.
  // Created, fed and finished on the bundler's bytecode thread (it uses that thread's bytecode VM).
- extern "C" JSC::BytecodeLinkEncoder* Bun__BytecodeLinkEncoder__create(JSC::EncoderStringTable* externalStrings, const uint64_t* hotFunctions, size_t hotFunctionCount, const uint64_t* knownFunctions, size_t knownFunctionCount, const uint64_t* evaluatedModules, size_t evaluatedModuleCount, const uint64_t* notEvaluatedModules, size_t notEvaluatedModuleCount)
+-extern "C" JSC::BytecodeLinkEncoder* Bun__BytecodeLinkEncoder__create(JSC::EncoderStringTable* externalStrings, const uint64_t* hotFunctions, size_t hotFunctionCount, const uint64_t* knownFunctions, size_t knownFunctionCount, const uint64_t* evaluatedModules, size_t evaluatedModuleCount, const uint64_t* notEvaluatedModules, size_t notEvaluatedModuleCount)
++extern "C" JSC::BytecodeLinkEncoder* Bun__BytecodeLinkEncoder__create(JSC::EncoderStringTable* externalStrings, const uint64_t* hotFunctions, size_t hotFunctionCount, const uint64_t* knownFunctions, size_t knownFunctionCount, const uint64_t* evaluatedModules, size_t evaluatedModuleCount, const uint64_t* notEvaluatedModules, size_t notEvaluatedModuleCount, const uint64_t* hotStrings, size_t hotStringCount)
  {
      JSC::VM& vm = vmForBytecodeCache();
      JSC::JSLockHolder locker(vm);
 +    s_stringsOfLinkEncoder = externalStrings;
++    s_hotStringsOfLinkEncoder = Vector<uint64_t>(std::span { hotStrings, hotStringCount });
 +    // (What a link that did not get as far as embedding left behind is not this link's.)
 +    s_builtStaticHeap = { };
 +    s_builtAOTImage = { };
@@ -2490,7 +4236,7 @@ index fbfaa2ffb62..99f21fcdb3e 100644
      return new JSC::BytecodeLinkEncoder(vm, externalStrings, WTF::move(hints));
  }
  
-@@ -331,6 +736,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
+@@ -331,6 +1450,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
      return true;
  }
  
@@ -2513,7 +4259,7 @@ index fbfaa2ffb62..99f21fcdb3e 100644
  // `entryOffsets` has room for one number per successful add* call; `regionEnds` for
  // JSC::BytecodeLinkEncoder::numberOfRegions.
  static_assert(JSC::BytecodeLinkEncoder::numberOfRegions == 6, "bun_resolver::LINKED_BYTECODE_REGION_COUNT");
-@@ -340,6 +761,18 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
+@@ -340,6 +1475,51 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
      auto result = encoder->finish();
      if (!result.payload || result.entryOffsets.size() != entryOffsetCount)
          return false;
@@ -2524,8 +4270,41 @@ index fbfaa2ffb62..99f21fcdb3e 100644
 +        return false;
 +    }
 +    if (s_stringsOfLinkEncoder && shouldBuildStaticHeap()) {
-+        auto strings = s_stringsOfLinkEncoder->serialize();
-+        s_builtStaticHeap = JSC::StaticHeap::build(encoder->vm(), strings.span(), result.payload->span(), result.entryOffsetsOfModules.span(), result.aotImage.span(), 0, nullptr, result.reportableSites.span(), result.variablesExportedByModules.span());
++        auto strings = s_stringsOfLinkEncoder->serialize(s_hotStringsOfLinkEncoder.span());
++        // BUN_STATIC_HEAP_FUNCTIONS_FIRST: a file of the functions a recorded run touched the executables of, one name
++        // (StaticHeap::FunctionCell::function) in hex a line. BUN_STATIC_HEAP_FUNCTION_CELLS_OUT: where to write each
++        // executable's cell, "<offset in the region> <name> <size>" in hex, for making such a list from a trace.
++        Vector<uint64_t> functionsUsedFirst;
++        if (const char* path = getenv("BUN_STATIC_HEAP_FUNCTIONS_FIRST"); path && *path) {
++            if (FILE* file = fopen(path, "r")) {
++                char line[64];
++                while (fgets(line, sizeof(line), file)) {
++                    if (line[0] == '#')
++                        continue;
++                    char* end = nullptr;
++                    unsigned long long name = strtoull(line, &end, 16);
++                    if (end != line && name)
++                        functionsUsedFirst.append(name);
++                }
++                fclose(file);
++            } else {
++                fprintf(stderr, "error: BUN_STATIC_HEAP_FUNCTIONS_FIRST: cannot read %s\n", path);
++                return false;
++            }
++        }
++        const char* cellsOut = getenv("BUN_STATIC_HEAP_FUNCTION_CELLS_OUT");
++        Vector<JSC::StaticHeap::FunctionCell> cellsOfFunctions;
++        s_builtStaticHeap = JSC::StaticHeap::build(encoder->vm(), strings.span(), result.payload->span(), result.entryOffsetsOfModules.span(), result.aotImage.span(), 0, nullptr, result.reportableSites.span(), result.variablesExportedByModules.span(), result.regionEnds, functionsUsedFirst.span(), cellsOut && *cellsOut ? &cellsOfFunctions : nullptr);
++        if (cellsOut && *cellsOut) {
++            FILE* file = fopen(cellsOut, "w");
++            if (!file) {
++                fprintf(stderr, "error: BUN_STATIC_HEAP_FUNCTION_CELLS_OUT: cannot write %s\n", cellsOut);
++                return false;
++            }
++            for (auto& cell : cellsOfFunctions)
++                fprintf(file, "%llx %llx %llx\n", static_cast<unsigned long long>(cell.offsetInRegion), static_cast<unsigned long long>(cell.function), static_cast<unsigned long long>(cell.size));
++            fclose(file);
++        }
 +        s_builtAOTImage = s_builtStaticHeap.isEmpty() ? Vector<uint8_t> { } : WTF::move(result.aotImage);
 +        dataLogLnIf(JSC::Options::verboseDiskCache() || getenv("BUN_STATIC_HEAP_VERBOSE"), "[Bytecode Build] static heap: ", s_builtStaticHeap.size(), " bytes for ", result.entryOffsetsOfModules.size(), " modules; AOT image: ", s_builtAOTImage.size(), " bytes");
 +    }
@@ -2533,7 +4312,7 @@ index fbfaa2ffb62..99f21fcdb3e 100644
      memcpySpan(std::span { regionEnds, JSC::BytecodeLinkEncoder::numberOfRegions }, std::span<const uint32_t> { result.regionEnds });
      *namedHotFunctions = result.namedHotFunctions;
 diff --git a/src/jsc/bindings/c-bindings.cpp b/src/jsc/bindings/c-bindings.cpp
-index a3fd0268c05..cb3c00a7789 100644
+index a3fd0268c05..61f912d07bc 100644
 --- a/src/jsc/bindings/c-bindings.cpp
 +++ b/src/jsc/bindings/c-bindings.cpp
 @@ -21,6 +21,7 @@
@@ -2544,7 +4323,36 @@ index a3fd0268c05..cb3c00a7789 100644
  #endif
  #else
  #include <uv.h>
-@@ -857,9 +858,31 @@ extern "C" int32_t open_as_nonblocking_tty(int32_t fd, int32_t mode)
+@@ -32,6 +33,28 @@
+ #endif // !OS(WINDOWS)
+ #include <lshpack.h>
+ 
++#if OS(WINDOWS)
++#include <delayimp.h>
++// The DLLs the executable delay-loads (/delayload: in scripts/build/flags.ts) are Windows's own: from System32, not from the
++// executable's folder, which a DLL asked for by name is looked for in first and where a planted copy (next to a download
++// unzipped in Downloads) would run inside the process. Only these: what a program loads by name itself (bun:ffi, an addon's
++// own libraries) is looked for as before. If System32 has no such DLL, that is the failure to load it (the exception the
++// delay-load helper raises then), not a search elsewhere.
++static FARPROC WINAPI loadDelayLoadedDLLFromSystem32(unsigned notification, PDelayLoadInfo info)
++{
++    if (notification != dliNotePreLoadLibrary)
++        return nullptr;
++    if (HMODULE module = LoadLibraryExA(info->szDll, nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32))
++        return reinterpret_cast<FARPROC>(module);
++    DWORD error = GetLastError();
++    ULONG_PTR argument = reinterpret_cast<ULONG_PTR>(info);
++    info->dwLastError = error;
++    RaiseException(VcppException(ERROR_SEVERITY_ERROR, ERROR_MOD_NOT_FOUND), 0, 1, &argument);
++    return nullptr;
++}
++extern "C" const PfnDliHook __pfnDliNotifyHook2 = loadDelayLoadedDLLFromSystem32;
++#endif
++
+ // Error condition is encoded as max int32_t.
+ // The only error in this function is ESRCH (no process found)
+ extern "C" int32_t get_process_priority(int32_t pid)
+@@ -857,9 +880,31 @@ extern "C" int32_t open_as_nonblocking_tty(int32_t fd, int32_t mode)
      }
  
      char pathbuf[PATH_MAX + 1];
@@ -2576,7 +4384,7 @@ index a3fd0268c05..cb3c00a7789 100644
  
      return open(pathbuf, mode | O_NONBLOCK | O_NOCTTY | O_CLOEXEC);
  }
-@@ -1182,6 +1205,10 @@ struct BlobHeader {
+@@ -1182,6 +1227,10 @@ struct BlobHeader {
  
  #if OS(DARWIN)
  
@@ -2587,7 +4395,7 @@ index a3fd0268c05..cb3c00a7789 100644
  extern "C" BlobHeader __attribute__((section("__BUN,__bun"))) BUN_COMPILED = { 0, 0 };
  
  extern "C" uint64_t* Bun__getStandaloneModuleGraphMachoLength()
-@@ -1189,6 +1216,93 @@ extern "C" uint64_t* Bun__getStandaloneModuleGraphMachoLength()
+@@ -1189,6 +1238,93 @@ extern "C" uint64_t* Bun__getStandaloneModuleGraphMachoLength()
      return &BUN_COMPILED.size;
  }
  
@@ -2681,6 +4489,26 @@ index a3fd0268c05..cb3c00a7789 100644
  #else // __linux__ / __FreeBSD__ — both ELF, same .bun section approach
  
  extern "C" BlobHeader __attribute__((section(".bun"), aligned(BLOB_HEADER_ALIGNMENT), used)) BUN_COMPILED = { 0 };
+diff --git a/src/jsc/bindings/webcore/SerializedScriptValue.cpp b/src/jsc/bindings/webcore/SerializedScriptValue.cpp
+index 16951a2be47..615ebea99e2 100644
+--- a/src/jsc/bindings/webcore/SerializedScriptValue.cpp
++++ b/src/jsc/bindings/webcore/SerializedScriptValue.cpp
+@@ -2002,6 +2002,15 @@ SYSV_ABI void SerializedScriptValue::writeBytesForBun(CloneSerializer* ctx, cons
+     ctx->write(data, size);
+ }
+ 
++#if OS(WINDOWS) && CPU(X86_64)
++// Pi-Bolt: the Rust side's call of its writer callback (a SYSV_ABI function), made here, where Control Flow Guard can check it
++// correctly (wtf/SysVCall.h); rustc's LLVM would pass the target in the wrong register (generated_classes::call_write_bytes).
++extern "C" void Bun__StructuredClone__writeBytes(void(SYSV_ABI* writeBytes)(CloneSerializer*, const uint8_t*, uint32_t), CloneSerializer* ctx, const uint8_t* data, uint32_t size)
++{
++    callSysV(writeBytes, ctx, data, size);
++}
++#endif
++
+ SerializationReturnCode CloneSerializer::serialize(JSValue in)
+ {
+     VM& vm = m_lexicalGlobalObject->vm();
 diff --git a/src/jsc/web_worker.rs b/src/jsc/web_worker.rs
 index 486a196fc8f..299d3f13781 100644
 --- a/src/jsc/web_worker.rs
@@ -2770,6 +4598,68 @@ index aea7e78ed53..5cede4c334b 100644
          // argv belongs to the compiled program, so a `-e` or `-p` in it is not ours.
          bun_jsc::initialize(bun_jsc::InitializeOptions::default());
          bun_analytics::features::standalone_executable.fetch_add(1, Ordering::Relaxed);
+diff --git a/src/runtime/image/backend_wic.rs b/src/runtime/image/backend_wic.rs
+index 6ad5736f121..ff5f23d0121 100644
+--- a/src/runtime/image/backend_wic.rs
++++ b/src/runtime/image/backend_wic.rs
+@@ -897,8 +897,12 @@ fn factory() -> Result<ComPtr<IWICImagingFactory>, BackendError> {
+ fn load_factory() {
+     // Resolve the one flat C export first; if windowscodecs.dll isn't present
+     // we never attempt CoCreateInstance and the whole backend stays disabled.
+-    // SAFETY: literal C string; LoadLibraryA is safe to call from any thread.
+-    let dll = unsafe { windows::LoadLibraryA(c"windowscodecs.dll".as_ptr()) };
++    // From System32 only: windowscodecs.dll is no KnownDLL, and loaded by bare name it would be looked for in the executable's
++    // folder first, where a planted copy would run inside the process.
++    const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
++    let name: Vec<u16> = "windowscodecs.dll\0".encode_utf16().collect();
++    // SAFETY: `name` is NUL-terminated UTF-16; LoadLibraryExW is safe to call from any thread.
++    let dll = unsafe { windows::kernel32::LoadLibraryExW(name.as_ptr(), ptr::null_mut(), LOAD_LIBRARY_SEARCH_SYSTEM32) };
+     if dll.is_null() {
+         return;
+     }
+diff --git a/src/runtime/node/net/BlockList.rs b/src/runtime/node/net/BlockList.rs
+index af498017cd4..e844c277026 100644
+--- a/src/runtime/node/net/BlockList.rs
++++ b/src/runtime/node/net/BlockList.rs
+@@ -19,7 +19,7 @@ impl bun_io::Write for StructuredCloneWriter {
+         // SAFETY: `ctx` and `impl_` were supplied together by the C++
+         // SerializedScriptValue writer; the callback only reads `len` bytes
+         // from `ptr`, both of which we derive from a single `&[u8]`.
+-        unsafe { (self.impl_)(self.ctx, bytes.as_ptr(), bytes.len() as u32) };
++        unsafe { crate::generated_classes::call_write_bytes(self.impl_, self.ctx, bytes.as_ptr(), bytes.len() as u32) };
+         Ok(())
+     }
+ }
+diff --git a/src/runtime/timer/mod.rs b/src/runtime/timer/mod.rs
+index f701bbd1c8c..6d7a3f706e5 100644
+--- a/src/runtime/timer/mod.rs
++++ b/src/runtime/timer/mod.rs
+@@ -749,7 +749,12 @@ impl All {
+ 
+         // minimum 1ms
+         // https://github.com/nodejs/node/blob/f552c86fecd6c2ba9e832ea129b731dd63abdbe2/src/env.cc#L1512
++        #[cfg(not(windows))]
+         let wait_ms = core::cmp::max(1, wait.ms_unsigned());
++        // Pi-Bolt: on Windows, rounded up. libuv's clock there is in whole milliseconds, and a wait rounded down woke the loop
++        // before the timer was due, to wait again for 1 ms: two wakeups for each timer, and each fired up to 1 ms late.
++        #[cfg(windows)]
++        let wait_ms = core::cmp::max(1, wait.ns().div_ceil(1_000_000));
+ 
+         // SAFETY: `uv_timer_init` ran above; the handle is live.
+         let due_in = unsafe { uv::uv_timer_get_due_in(&self.uv_timer) };
+diff --git a/src/runtime/webcore/Blob.rs b/src/runtime/webcore/Blob.rs
+index 70ad2da7e4d..b11f6279c37 100644
+--- a/src/runtime/webcore/Blob.rs
++++ b/src/runtime/webcore/Blob.rs
+@@ -3740,7 +3740,7 @@ impl StructuredCloneWriter {
+     fn write(&self, bytes: &[u8]) -> usize {
+         // SAFETY: ctx and impl_ are supplied by C++ SerializedScriptValue and valid
+         // for the duration of on_structured_clone_serialize.
+-        unsafe { (self.impl_)(self.ctx, bytes.as_ptr(), bytes.len() as u32) };
++        unsafe { crate::generated_classes::call_write_bytes(self.impl_, self.ctx, bytes.as_ptr(), bytes.len() as u32) };
+         bytes.len()
+     }
+ }
 diff --git a/src/spawn/process.rs b/src/spawn/process.rs
 index 4ae154d480f..193fe0b28a7 100644
 --- a/src/spawn/process.rs
@@ -3097,7 +4987,7 @@ index 0de81dcb9f6..e59e0d6e696 100644
  
              #[cfg(any(target_os = "linux", target_os = "android"))]
 diff --git a/src/standalone_graph/StandaloneModuleGraph.rs b/src/standalone_graph/StandaloneModuleGraph.rs
-index a1cfe230615..d68cc363a95 100644
+index a1cfe230615..000f83a31a8 100644
 --- a/src/standalone_graph/StandaloneModuleGraph.rs
 +++ b/src/standalone_graph/StandaloneModuleGraph.rs
 @@ -63,6 +63,8 @@ pub struct StandaloneModuleGraph {
@@ -3230,7 +5120,7 @@ index a1cfe230615..d68cc363a95 100644
      }
  }
  
-@@ -957,6 +1057,47 @@ fn wtf_latin1_string_hash(bytes: &[u8]) -> u32 {
+@@ -957,6 +1057,57 @@ fn wtf_latin1_string_hash(bytes: &[u8]) -> u32 {
  }
  
  impl StandaloneModuleGraph {
@@ -3264,12 +5154,22 @@ index a1cfe230615..d68cc363a95 100644
 +            let Some((file, offset)) = macho::open_file_of(self.static_heap.as_ptr() as usize) else {
 +                // (Bun__StaticHeap__map() says why for every other reason.)
 +                if !std::env::var_os("BUN_AOT").is_some_and(|value| value.as_encoded_bytes().starts_with(b"0")) {
-+                    eprintln!("bun: the executable's ahead-of-time compiled code is not used (the executable's file could not be opened); running from bytecode");
++                    eprintln!("pi-bolt: the executable's ahead-of-time compiled code is not used (the executable's file could not be opened); running from bytecode");
 +                }
 +                return false;
 +            };
 +            // SAFETY: as above.
 +            return unsafe { Bun__StaticHeap__map(self.static_heap.as_ptr(), self.static_heap.len(), file.fd().native(), offset) };
++        }
++        #[cfg(windows)]
++        {
++            unsafe extern "C" {
++                fn Bun__StaticHeap__map(image: *const u8, size: usize, fd: i32, offset_in_file: u64) -> bool;
++            }
++            // (Nothing is mapped from the file: the arenas and the code are sections of this executable, which
++            // Bun__StaticHeap__rewritePE() put there when it was written. JSC checks that they are this heap's.)
++            // SAFETY: the image is in the executable's .bun section, mapped for the life of the process.
++            return unsafe { Bun__StaticHeap__map(self.static_heap.as_ptr(), self.static_heap.len(), -1, 0) };
 +        }
 +        #[allow(unreachable_code)]
 +        false
@@ -3278,7 +5178,7 @@ index a1cfe230615..d68cc363a95 100644
      fn from_bytes(
          raw_ptr: *mut u8,
          raw_len: usize,
-@@ -977,6 +1118,7 @@ impl StandaloneModuleGraph {
+@@ -977,6 +1128,7 @@ impl StandaloneModuleGraph {
                  prelinked_module_graph: &[],
                  prelinked_module_files: Vec::new(),
                  startup_module_count: 0,
@@ -3286,7 +5186,7 @@ index a1cfe230615..d68cc363a95 100644
                  runtime_options: RuntimeOptions::default(),
              });
          }
-@@ -1180,6 +1322,18 @@ impl StandaloneModuleGraph {
+@@ -1180,6 +1332,18 @@ impl StandaloneModuleGraph {
              // refers to what lies before it, like a module's, so it cannot be decoded as a payload of its own either.
              builtin_bytecode.clear();
          }
@@ -3305,7 +5205,7 @@ index a1cfe230615..d68cc363a95 100644
          let _ = record_at;
          let has_linked_bytecode_payload =
              offsets.flags.contains(Flags::HAS_LINKED_BYTECODE_PAYLOAD);
-@@ -1329,6 +1483,7 @@ impl StandaloneModuleGraph {
+@@ -1329,6 +1493,7 @@ impl StandaloneModuleGraph {
              prelinked_module_files,
              startup_module_count: startup_module_count.min(module_count as u32),
              runtime_options,
@@ -3313,7 +5213,7 @@ index a1cfe230615..d68cc363a95 100644
          })
      }
  
-@@ -1482,6 +1637,10 @@ pub(crate) fn to_bytes(
+@@ -1482,6 +1647,10 @@ pub(crate) fn to_bytes(
      let mut has_entry_point = false;
      let mut string_builder = bun_core::StringBuilder::default();
      let mut module_count: usize = 0;
@@ -3324,7 +5224,7 @@ index a1cfe230615..d68cc363a95 100644
      for output_file in output_files {
          string_builder.count_z(&output_file.dest_path);
          string_builder.count_z(prefix);
-@@ -1591,6 +1750,9 @@ pub(crate) fn to_bytes(
+@@ -1591,6 +1760,9 @@ pub(crate) fn to_bytes(
              .find(|f| f.output_kind == options::OutputKind::BytecodePayload)
              .map(|f| bun_bundler::bytecode_order::split_payload_file(f.value.as_slice()));
      let mut linked_payload_ptr = StringPointer::default();
@@ -3334,7 +5234,7 @@ index a1cfe230615..d68cc363a95 100644
  
      // `Flags::HAS_PRELINKED_MODULE_GRAPH`: graph module index -> file-table position, so the runtime registers a whole
      // import closure by index without looking any path up. Empty (and the graph is not embedded) unless every graph
-@@ -1630,6 +1792,9 @@ pub(crate) fn to_bytes(
+@@ -1630,6 +1802,9 @@ pub(crate) fn to_bytes(
              ));
              if let Some((payload, _)) = linked_payload {
                  linked_payload_ptr = append_bytecode_aligned(&mut string_builder, payload);
@@ -3344,7 +5244,7 @@ index a1cfe230615..d68cc363a95 100644
              }
          }
          let buf_bytes = output_file.value.as_slice();
-@@ -1773,6 +1938,9 @@ pub(crate) fn to_bytes(
+@@ -1773,6 +1948,9 @@ pub(crate) fn to_bytes(
          );
          if let Some((payload, _)) = linked_payload {
              linked_payload_ptr = append_bytecode_aligned(&mut string_builder, payload);
@@ -3354,7 +5254,7 @@ index a1cfe230615..d68cc363a95 100644
          }
          shared
      });
-@@ -1914,6 +2082,13 @@ pub(crate) fn to_bytes(
+@@ -1914,6 +2092,13 @@ pub(crate) fn to_bytes(
          let _ = string_builder.append_count(&record);
          flags |= Flags::HAS_LINKED_BYTECODE_PAYLOAD;
      }
@@ -3368,7 +5268,52 @@ index a1cfe230615..d68cc363a95 100644
      if !target.is_host_platform()
          && output_files
              .iter()
-@@ -3103,6 +3278,14 @@ impl StandaloneModuleGraph {
+@@ -2367,7 +2552,9 @@ pub(crate) fn inject<'a>(
+             ));
+         }
+         CompileTargetOs::Windows => {
+-            let input_bytes = match bun_sys::File::borrow(&cloned_executable_fd).read_to_end() {
++            // (Rewritten in place only on Windows, below.)
++            #[cfg_attr(not(windows), allow(unused_mut))]
++            let mut input_bytes = match bun_sys::File::borrow(&cloned_executable_fd).read_to_end() {
+                 Ok(b) => b,
+                 Err(err) => {
+                     bun_core::pretty_errorln!("Error reading standalone module graph: {}", err);
+@@ -2375,6 +2562,33 @@ pub(crate) fn inject<'a>(
+                     return None;
+                 }
+             };
++            // With a static heap (BUN_STATIC_HEAP=1): its arenas and the code compiled ahead of time become sections of the
++            // executable, in place of the runtime's .pbreg, with base relocations for their pointers.
++            #[cfg(windows)]
++            {
++                unsafe extern "C" {
++                    fn Bun__StaticHeap__rewritePE(input: *const u8, size: usize, out: *mut *mut u8, out_size: *mut usize, error: *mut *const core::ffi::c_char) -> i32;
++                }
++                let mut out: *mut u8 = core::ptr::null_mut();
++                let mut out_size: usize = 0;
++                let mut error: *const core::ffi::c_char = core::ptr::null();
++                // SAFETY: input_bytes is valid for its length; the out-parameters are written by the callee.
++                match unsafe { Bun__StaticHeap__rewritePE(input_bytes.as_ptr(), input_bytes.len(), &mut out, &mut out_size, &mut error) } {
++                    1 => {
++                        // SAFETY: `out` holds `out_size` bytes from mi_malloc.
++                        input_bytes = unsafe { core::slice::from_raw_parts(out, out_size) }.to_vec();
++                        unsafe { bun_alloc::mimalloc::mi_free(out.cast()) };
++                    }
++                    0 => {}
++                    _ => {
++                        // SAFETY: a NUL-terminated static string.
++                        let why = unsafe { core::ffi::CStr::from_ptr(error) }.to_string_lossy();
++                        bun_core::pretty_errorln!("Error placing the static heap in the executable: {}", why);
++                        cleanup(zname, cloned_executable_fd);
++                        return None;
++                    }
++                }
++            }
+             let mut pe_file = match bun_pe::PEFile::init(&input_bytes) {
+                 Ok(f) => f,
+                 Err(e) => {
+@@ -3103,6 +3317,14 @@ impl StandaloneModuleGraph {
          {
              return;
          }
@@ -3383,7 +5328,7 @@ index a1cfe230615..d68cc363a95 100644
          let startup = &self.files.values()[..self.startup_module_count as usize];
          let span = if startup.iter().any(|f| !f.bytecode.is_empty()) {
              // A linked payload follows the string table; its hot front is what any module reads at startup.
-@@ -3348,6 +3531,44 @@ fn append_bytecode_aligned(
+@@ -3348,6 +3570,44 @@ fn append_bytecode_aligned(
      }
  }
  

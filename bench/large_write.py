@@ -14,7 +14,10 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from harness import FIXTURES, MODEL_ARGS, fake_model, parse_builds, pi_env, pi_home, pinned
+from harness import FIXTURES, MODEL_ARGS, WINDOWS, fake_model, parse_builds, pi_env, pi_home, pinned
+
+if WINDOWS:
+    import winproc
 
 
 def main():
@@ -29,19 +32,26 @@ def main():
         for build in parse_builds(a.build):
             for size in [int(s) for s in a.sizes.split(",")]:
                 with tempfile.TemporaryDirectory(prefix="pibolt-write-") as cwd:
+                    argv = [*build.argv, "-p", "--no-session", *MODEL_ARGS, f"SCENARIO write:{size} CWD {cwd}"]
+                    env = pi_env(home, {"TERM": "dumb"})
                     began = time.perf_counter()
-                    p = subprocess.Popen(pinned([*build.argv, "-p", "--no-session", *MODEL_ARGS, f"SCENARIO write:{size} CWD {cwd}"], a.cpus),
-                                         cwd=cwd, env=pi_env(home, {"TERM": "dumb"}), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                    try:
-                        out, _ = p.communicate(timeout=a.timeout)
-                    except subprocess.TimeoutExpired:
-                        p.kill()
-                        out, _ = p.communicate()
+                    if WINDOWS:
+                        # (In a Job object: what Pi starts is counted with it, as RUSAGE_CHILDREN counts it on Linux.)
+                        out, measured = winproc.run(argv, env, cwd, timeout=a.timeout)
+                        returncode, cpu = measured["exit"], measured["job_cpu_ms"] / 1e3
+                    else:
+                        p = subprocess.Popen(pinned(argv, a.cpus), cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                             stderr=subprocess.STDOUT)
+                        try:
+                            out, _ = p.communicate(timeout=a.timeout)
+                        except subprocess.TimeoutExpired:
+                            p.kill()
+                            out, _ = p.communicate()
+                        returncode, cpu = p.returncode, cpu_of_children()
                     wall = time.perf_counter() - began
                     written = Path(cwd, "big", "source.ts")
                     size_ok = written.exists() and written.stat().st_size == size * 1024
-                    result = "ok" if p.returncode == 0 and size_ok and b"Done: write" in out else f"FAILED (exit {p.returncode})"
-                    cpu = cpu_of_children()
+                    result = "ok" if returncode == 0 and size_ok and b"Done: write" in out else f"FAILED (exit {returncode})"
                     print(f"{build.name:12} {size:5} KB {wall:8.1f} {cpu:8.1f}  {result}", flush=True)
 
 

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="880" height="498" viewBox="0 0 880 498" role="img" aria-label="Plugins: A Pi extension compiled into the executable vs loaded at run time. Lower is better.">
+<style>text{font-family:-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', Helvetica, Arial, sans-serif}</style>
+<text x="24" y="32" font-size="21" font-weight="650" fill="#f0f6fc">Plugins</text>
+<text x="24" y="56" font-size="13.5" fill="#9198a1">A Pi extension compiled into the executable vs loaded at run time. Lower is better.</text>
+<text x="24" y="96" font-size="15" font-weight="600" fill="#f0f6fc">Hot loop in the plugin (/words)</text>
+<text x="294" y="126.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (LTO+CFG AOT), compiled in</text>
+<path d="M304,114 h18.8 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-18.8 z" fill="#3987e5"/>
+<text x="334.8" y="126.5" font-size="13.5" font-weight="650" fill="#f0f6fc">36 ms</text>
+<text x="294" y="156.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (JIT on), compiled in</text>
+<path d="M304,144 h18.6 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-18.6 z" fill="#3987e5"/>
+<text x="334.6" y="156.5" font-size="13.5" font-weight="400" fill="#f0f6fc">36 ms</text>
+<text x="294" y="186.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (LTO+CFG AOT), run time</text>
+<path d="M304,174 h464.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-464.0 z" fill="#3987e5"/>
+<text x="780.0" y="186.5" font-size="13.5" font-weight="400" fill="#f0f6fc">750 ms</text>
+<text x="294" y="216.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (JIT on), run time</text>
+<path d="M304,204 h16.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-16.1 z" fill="#3987e5"/>
+<text x="332.1" y="216.5" font-size="13.5" font-weight="400" fill="#f0f6fc">32 ms</text>
+<text x="294" y="246.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi 1.0.3 on stock Bun 1.4.2, run time</text>
+<path d="M304,234 h15.9 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-15.9 z" fill="#6e7681"/>
+<text x="331.9" y="246.5" font-size="13.5" font-weight="400" fill="#f0f6fc">32 ms</text>
+<line x1="304" y1="108" x2="304" y2="256" stroke="#3d444d"/>
+<text x="24" y="306" font-size="15" font-weight="600" fill="#f0f6fc">Launch to interactive</text>
+<text x="294" y="336.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (LTO+CFG AOT), compiled in</text>
+<path d="M304,324 h214.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-214.0 z" fill="#3987e5"/>
+<text x="530.0" y="336.5" font-size="13.5" font-weight="650" fill="#f0f6fc">116 ms</text>
+<text x="294" y="366.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (JIT on), compiled in</text>
+<path d="M304,354 h234.2 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-234.2 z" fill="#3987e5"/>
+<text x="550.2" y="366.5" font-size="13.5" font-weight="400" fill="#f0f6fc">126 ms</text>
+<text x="294" y="396.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (LTO+CFG AOT), run time</text>
+<path d="M304,384 h273.8 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-273.8 z" fill="#3987e5"/>
+<text x="589.8" y="396.5" font-size="13.5" font-weight="400" fill="#f0f6fc">147 ms</text>
+<text x="294" y="426.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi-Bolt (JIT on), run time</text>
+<path d="M304,414 h295.1 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-295.1 z" fill="#3987e5"/>
+<text x="611.1" y="426.5" font-size="13.5" font-weight="400" fill="#f0f6fc">158 ms</text>
+<text x="294" y="456.5" font-size="13.5" text-anchor="end" fill="#9198a1">Pi 1.0.3 on stock Bun 1.4.2, run time</text>
+<path d="M304,444 h464.0 a4,4 0 0 1 4,4 v8 a4,4 0 0 1 -4,4 h-464.0 z" fill="#6e7681"/>
+<text x="780.0" y="456.5" font-size="13.5" font-weight="400" fill="#f0f6fc">248 ms</text>
+<line x1="304" y1="318" x2="304" y2="466" stroke="#3d444d"/>
+</svg>

@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
-import { delimiter, join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 import { spawn, spawnSync } from "child_process";
 import { getBinDir } from "../config.ts";
+import { isProgramFile, windowsPathDirectories } from "./windows-path.ts";
 
 export interface ShellConfig {
 	shell: string;
@@ -21,23 +22,25 @@ function getBashShellConfig(shell: string): ShellConfig {
 	return isLegacyWslBashPath(shell) ? { shell, args: ["-s"], commandTransport: "stdin" } : { shell, args: ["-c"] };
 }
 
+// Windows: what a PATH lookup found, by PATH and name. The shell tools look their shell up on every call, and starting
+// `where` for it took a process start each time.
+const foundOnWindowsPath = new Map<string, string>();
+
 function findExecutableOnPath(executable: string): string | null {
 	if (process.platform === "win32") {
-		// Windows: Use 'where' and verify file exists (where can return non-existent paths)
-		try {
-			const result = spawnSync("where", [executable], {
-				encoding: "utf-8",
-				timeout: 5000,
-				windowsHide: true,
-			});
-			if (result.status === 0 && result.stdout) {
-				const firstMatch = result.stdout.trim().split(/\r?\n/)[0];
-				if (firstMatch && existsSync(firstMatch)) {
-					return firstMatch;
-				}
+		// Windows: the file in PATH's absolute directories, in order. (`where`, which this was, also looks in the working
+		// directory first, so a project's own bash.exe or pwsh.exe would have been taken for the shell.)
+		const path = process.env.PATH ?? "";
+		const key = `${path}\0${executable}`;
+		const cached = foundOnWindowsPath.get(key);
+		if (cached && existsSync(cached)) return cached;
+		for (const dir of windowsPathDirectories(path)) {
+			if (!isAbsolute(dir)) continue;
+			const file = join(dir, executable);
+			if (isProgramFile(file)) {
+				foundOnWindowsPath.set(key, file);
+				return file;
 			}
-		} catch {
-			// Ignore errors
 		}
 		return null;
 	}

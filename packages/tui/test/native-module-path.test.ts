@@ -43,22 +43,22 @@ describe("getNativeModuleCandidates", () => {
 		]);
 	});
 
-	it("does not look the TUI package up from a module embedded in a compiled executable", () => {
-		const execPath = resolve("virtual", "pi-bolt", "pi");
-		const nativePath = join("native", "darwin", "prebuilds", "darwin-arm64", "darwin-platform.node");
-		let looked = false;
-
-		const candidates = getNativeModuleCandidates(nativePath, {
-			moduleUrl: "file:///$bunfs/root/pi",
-			execPath,
-			resolvePackage: () => {
-				looked = true;
-				return resolve("untrusted-repo", "node_modules", "@earendil-works", "pi-tui", "index.js");
-			},
-		});
-
-		assert.equal(looked, false);
-		assert.ok(candidates.every((candidate) => !candidate.includes("untrusted-repo")));
-		assert.equal(candidates.at(-1), join(dirname(execPath), nativePath));
+	it("does not resolve the package from a compiled executable's embedded files (that would look in the working directory)", () => {
+		const nativePath = join("native", "win32", "prebuilds", "win32-x64", "win32-platform.node");
+		const execPath = resolve("virtual", "pi", "pi.exe");
+		for (const moduleUrl of ["file:///$bunfs/root/pi.js", "file:///B:/~BUN/root/pi.js"]) {
+			if (moduleUrl.startsWith("file:///B:") !== (process.platform === "win32")) continue;
+			let asked = false;
+			const candidates = getNativeModuleCandidates(nativePath, {
+				moduleUrl,
+				execPath,
+				resolvePackage: () => {
+					asked = true;
+					return resolve("project", "node_modules", "@earendil-works", "pi-tui", "dist", "index.js");
+				},
+			});
+			assert.equal(asked, false);
+			assert.ok(candidates.includes(join(dirname(execPath), nativePath)));
+		}
 	});
 });

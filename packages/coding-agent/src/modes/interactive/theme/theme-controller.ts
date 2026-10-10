@@ -53,7 +53,8 @@ function sameTerminalColors(a: TerminalColors, b: TerminalColors): boolean {
 /**
  * Applies the theme setting and keeps it in sync with the terminal. The theme applies immediately, and the
  * terminal's colors update it when they arrive; the system theme renders in grayscale until then. Callers
- * that bake theme colors into content can wait for the colors with `waitForTerminalColors()`.
+ * that should not show content in colors that are about to change can check `dependsOnTerminalColors()`
+ * and wait for the colors with `waitForTerminalColors()`.
  */
 export class InteractiveThemeController {
 	private readonly ui: TUI;
@@ -109,12 +110,25 @@ export class InteractiveThemeController {
 	}
 
 	/**
-	 * Wait until the latest color query completed or timed out. Content that bakes theme colors into
-	 * strings, such as the startup header, should be built after this. Terminals answer the DA1 request
-	 * right after the color replies, so this only takes the full timeout when a terminal answers nothing.
+	 * Wait until the latest color query completed or timed out. Content that should not change color when
+	 * the colors arrive, such as the startup header, is built after this when `dependsOnTerminalColors()`.
+	 * Terminals answer the DA1 request right after the color replies, so this only takes the full timeout
+	 * when a terminal answers nothing.
 	 */
 	waitForTerminalColors(): Promise<void> {
 		return this.terminalColorQuery;
+	}
+
+	/**
+	 * Whether the terminal's colors can change what the current theme draws. They can for the system theme,
+	 * which renders in grayscale until they arrive and is then generated from them, and for theme pairs
+	 * ("light/dark"), where the reported background picks the theme. Any other theme's escape sequences are
+	 * fixed when it loads (tokens set to "" are drawn with the terminal's default color, SGR 39/49), and a
+	 * reply leaves the theme in place; the colors only feed `Theme.colors` and `Theme.appearance`, which the
+	 * startup screen does not read. Content built with such a theme is the same before and after the reply.
+	 */
+	dependsOnTerminalColors(): boolean {
+		return this.activeThemeName === SYSTEM_THEME_NAME || parseAutoThemeSetting(this.getThemeSetting()) !== undefined;
 	}
 
 	getThemeSelection(): string | undefined {
