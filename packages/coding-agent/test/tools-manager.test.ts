@@ -3,6 +3,7 @@ import type * as Fs from "node:fs";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { accessSync } from "fs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureTool, getLatestVersion, getToolPath, type ToolStatus } from "../src/utils/tools-manager.ts";
 
@@ -128,6 +129,8 @@ describe("getToolPath", () => {
 		writeFileSync(join(bin, "rg"), "");
 		chmodSync(join(bin, "rg"), 0o755);
 		process.env.PATH = bin;
+		// (fs is mocked so that nothing else here is found: this lookup's check that the file is executable answers yes.)
+		vi.mocked(accessSync).mockImplementationOnce(() => undefined);
 		expect(getToolPath("rg")).toBe("rg");
 	});
 

@@ -1,4 +1,4 @@
-import { Container, setKeybindings, TuiMainScreen } from "@earendil-works/pi-tui";
+import { Container, setCapabilityOverrides, setKeybindings, TuiMainScreen } from "@earendil-works/pi-tui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
@@ -87,6 +87,8 @@ describe("startup header and the terminal color query", () => {
 
 	beforeEach(() => {
 		vi.stubEnv("COLORFGBG", "");
+		// The system theme's colors are checked as 24-bit escapes: a terminal with true color, whatever the one running the tests.
+		setCapabilityOverrides({ trueColor: true });
 		setKeybindings(new KeybindingsManager());
 	});
 
@@ -95,6 +97,7 @@ describe("startup header and the terminal color query", () => {
 		running = undefined;
 		setTerminalColors({});
 		setTerminalColorScheme(undefined);
+		setCapabilityOverrides({});
 		initTheme("dark");
 		vi.unstubAllEnvs();
 	});

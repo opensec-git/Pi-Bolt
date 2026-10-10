@@ -1142,7 +1142,7 @@ export class InteractiveMode {
 			const onboarding = () =>
 				theme.fg(
 					"dim",
-					`${PRODUCT_NAME} can explain its own features and look up its docs. Ask it how to use or extend ${PRODUCT_NAME}.`,
+					`${PIBOLT ? PRODUCT_NAME : "Pi"} can explain its own features and look up its docs. Ask it how to use or extend ${PIBOLT ? PRODUCT_NAME : "Pi"}.`,
 				);
 			const header = new BuiltInHeader(
 				() => `${withLogo(compactInstructions())}\n${compactOnboarding()}\n\n${onboarding()}`,
@@ -1358,7 +1358,7 @@ export class InteractiveMode {
 		}
 
 		if (extendedKeysFormat === "xterm") {
-			return `tmux extended-keys-format is xterm. ${PRODUCT_NAME} works best with csi-u. Add \`set -g extended-keys-format csi-u\` to ~/.tmux.conf and restart tmux.`;
+			return `tmux extended-keys-format is xterm. ${PIBOLT ? PRODUCT_NAME : "Pi"} works best with csi-u. Add \`set -g extended-keys-format csi-u\` to ~/.tmux.conf and restart tmux.`;
 		}
 
 		return undefined;
