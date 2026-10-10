@@ -178,6 +178,15 @@ Smaller items: a glance at JSC's nursery size; in Pi, caching in `Container.rend
   exactly 0x14 in one build. This looks like an index into something whose order depends on the run (the AOT compiler's slot
   order, keyed by addresses). It is consistent within a build but not reproducible across builds. What the object is
   (`describeBuiltAddress(+0x19087ec)`), and making that order stable, is the next step.
+- **Words that look like addresses of what is not kept** (scheduled). Pi 1.1.0's first build stopped: its data held the pair
+  0x0005002d, 0x7df4, which reads as 0x7df40005002d, inside the builder's blocks. With `/guard:cf`, Windows reserves the CFG
+  bitmap at the top of the address space, and the blocks' top-down 4 GB lands just below it, at 0x7DF3.... So a high half of
+  32244 is enough, though `reserveBlocks` assumed one of the few largest numbers. The holder was "not in a cell" (raw data).
+  The writer now refuses such a word only if it could be a pointer (a multiple of 8, to a committed page), and otherwise prints
+  a `note:`, at most ten, in every build; `build-pi.ps1` shows the notes. A pointer with a tag in its low bits, or to a page
+  given back, would also be taken for a number. The exact check is `-VerifyDeterminism` with the blocks elsewhere in the second
+  build (at random, as in a program): a word that moves by exactly the blocks' move is a pointer, and one that stays is a
+  number. To do.
 - **A write to the read-only prebuilt heap** ends the process on Windows (fail closed), where Linux and macOS take a private copy
   of the page: the release posture chosen. A write path that no traced run took would crash a user. Options: (A) as is; (B)
   write-through as elsewhere, losing the Windows-only protection; (C) as is, after a diagnostics runtime

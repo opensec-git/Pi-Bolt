@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: OpenSec <contactus@opensec.in>
-Date: Sat, 10 Oct 2026 14:17:41 +0530
+Date: Sat, 10 Oct 2026 14:53:32 +0530
 Subject: [PATCH] Pi-Bolt: ahead-of-time compiled executables
 
 Bun's changes for Pi-Bolt's executables, on Linux x86-64, macOS ARM64 and Windows x64:
@@ -24,7 +24,9 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64, macOS ARM64 and Window
   flag, WIC); a build without the JIT stays without it, and the debugging options that reach memory or
   load code are off in a compiled program; crash reports of compiled code; a collection every second
   while waiting (5 s measured +40% CPU while a reply streams), and mimalloc's purge delay left at its
-  default; an idle keep-alive connection aged on GetTickCount64.
+  default; an idle keep-alive connection aged on GetTickCount64; the writer of the prebuilt heap takes a word that
+  looks like an address of the blocks or the build's scratch memory for a number unless it is aligned and its page committed,
+  and says so.
 
 Includes the engine changes of Pi-Bolt 0.7.1 to 0.7.3 on pi-bolt (5f6ad773e, c9bde4b67): writev for
 queued writes, mimalloc from upstream, less idle work, an idle keep-alive's age on a clock nobody sets,
@@ -82,7 +84,7 @@ fetch through a TLS 1.2 renegotiation.
  src/jsc/bindings/InternalModuleRegistry.cpp   |   15 +-
  src/jsc/bindings/ZigException.cpp             |   14 +-
  src/jsc/bindings/ZigGlobalObject.cpp          |   77 ++
- src/jsc/bindings/ZigSourceProvider.cpp        | 1163 ++++++++++++++++-
+ src/jsc/bindings/ZigSourceProvider.cpp        | 1184 ++++++++++++++++-
  src/jsc/bindings/c-bindings.cpp               |  135 ++
  .../webcore/SerializedScriptValue.cpp         |    9 +
  src/jsc/web_worker.rs                         |    4 +
@@ -104,7 +106,7 @@ fetch through a TLS 1.2 renegotiation.
  .../fetch.tls.renegotiation-peer-fixture.mjs  |   86 ++
  test/js/web/fetch/fetch.tls.test.ts           |   70 +-
  test/js/web/timers/timer-gc-roots.test.ts     |    3 +
- 74 files changed, 3208 insertions(+), 231 deletions(-)
+ 74 files changed, 3229 insertions(+), 231 deletions(-)
  create mode 100644 patches/libuv/win-thread-stack-reservation.patch
  create mode 100644 patches/mimalloc/page-commit-on-demand-default.patch
  create mode 100644 test/js/web/fetch/fetch.tls.renegotiation-client-fixture.ts
@@ -3058,7 +3060,7 @@ index 9de807ad..7999522c 100644
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH
 diff --git a/src/jsc/bindings/ZigSourceProvider.cpp b/src/jsc/bindings/ZigSourceProvider.cpp
-index fbfaa2ff..dbeca5a1 100644
+index fbfaa2ff..329f425d 100644
 --- a/src/jsc/bindings/ZigSourceProvider.cpp
 +++ b/src/jsc/bindings/ZigSourceProvider.cpp
 @@ -2,6 +2,17 @@
@@ -3136,7 +3138,7 @@ index fbfaa2ff..dbeca5a1 100644
  }
  
  extern "C" uint32_t Bun__EncoderStringTable__slotForLatin1(JSC::EncoderStringTable* table, const Latin1Character* chars, size_t length)
-@@ -290,17 +333,1072 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
+@@ -290,17 +333,1093 @@ extern "C" bool generateCachedCommonJSProgramByteCodeFromSourceCode(const BunStr
      return generateCachedByteCodeFromSourceCode(sourceProviderURL, inputSourceCode, false, depth, optimize, outputByteCode, outputByteCodeSize, cachedBytecodePtr, externalStrings);
  }
  
@@ -3692,6 +3694,7 @@ index fbfaa2ff..dbeca5a1 100644
 +    size_t taggedWordsMoved = 0;
 +    size_t looksTaggedButIsNotListed = 0;
 +    size_t pointersToWhatIsNotKept = 0;
++    size_t wordsThatOnlyLookLikeWhatIsNotKept = 0;
 +    uintptr_t endOfExecutable = std::max<uintptr_t>(imageEnd, Region::base() + endOfParts);
 +    for (auto& part : inRegion) {
 +        Vector<uint8_t> bytes(part.bytes);
@@ -3713,11 +3716,29 @@ index fbfaa2ff..dbeca5a1 100644
 +                    continue;
 +                }
 +                // (Arena::Scratch and the blocks are not in the executable: what is there is not kept, or made by a running program,
-+                // and nothing may point to it. Both are high in the address space, where a word that is not a pointer is as unlikely
-+                // to be as a pointer into the image.)
++                // and nothing may point to it.) A pointer to something there is to an object, at an address that is a multiple of 8,
++                // in memory that is committed (the blocks and the arena are committed as they are used). A word that is neither is
++                // not one: a pair of 32-bit numbers can look like an address there, as the blocks are where a reservation of their
++                // size fits at the top, just below the Control Flow Guard bitmap (0x7DF3...: Pi 1.1.0's data held 0x5002d, 0x7df4).
 +                if (word - Region::startOf(Region::Arena::Scratch) < Region::reservationOf(Region::Arena::Scratch) || word - Region::startOfBlocks() < Region::sizeOfBlocks()) {
-+                    if (pointersToWhatIsNotKept++ < 10)
-+                        fprintf(stderr, "warning: the static heap points to what is not kept (%llx, at offset %zu of a part at %x)\n", static_cast<unsigned long long>(word), at, part.offsetInRegion);
++                    MEMORY_BASIC_INFORMATION target;
++                    bool couldBeAPointer = !(word & 7)
++                        && VirtualQuery(reinterpret_cast<const void*>(static_cast<uintptr_t>(word)), &target, sizeof(target))
++                        && target.State == MEM_COMMIT;
++                    uintptr_t where = Region::base() + part.offsetInRegion + at;
++                    if (!couldBeAPointer) {
++                        // (Said in every build, so that the log shows it: a pointer with a tag in its low bits, or to a page given
++                        // back, would also be taken for a number here. Building with the blocks elsewhere tells them apart.)
++                        if (wordsThatOnlyLookLikeWhatIsNotKept++ < 10)
++                            fprintf(stderr, "note: a word that looks like an address of what is not kept is taken for a number (%llx, in %s)\n",
++                                static_cast<unsigned long long>(word), JSC::StaticHeap::describeBuiltAddress(where).data());
++                        continue;
++                    }
++                    if (pointersToWhatIsNotKept++ < 10) {
++                        fprintf(stderr, "warning: the static heap points to what is not kept (%llx, at offset %zu of a part at %x, in %s; blocks at %p, scratch at %p)\n",
++                            static_cast<unsigned long long>(word), at, part.offsetInRegion, JSC::StaticHeap::describeBuiltAddress(where).data(),
++                            reinterpret_cast<void*>(Region::startOfBlocks()), reinterpret_cast<void*>(Region::startOf(Region::Arena::Scratch)));
++                    }
 +                    continue;
 +                }
 +                if (word >= imageStart && word < endOfExecutable) {
@@ -3737,6 +3758,8 @@ index fbfaa2ff..dbeca5a1 100644
 +    }
 +    if (pointersIntoOtherModules)
 +        return fail("the static heap points into a system library, which moves at every boot");
++    if (wordsThatOnlyLookLikeWhatIsNotKept > 10)
++        fprintf(stderr, "note: %zu words in all look like addresses of what is not kept and are taken for numbers\n", wordsThatOnlyLookLikeWhatIsNotKept);
 +    if (pointersToWhatIsNotKept)
 +        return fail("the static heap points to memory that is not in the executable (the build's scratch memory, or a running program's blocks)");
 +    // What is left that looks like an address in this process's image, now that its pointers are at the preferred base: a pointer
@@ -4210,7 +4233,7 @@ index fbfaa2ff..dbeca5a1 100644
      return new JSC::BytecodeLinkEncoder(vm, externalStrings, WTF::move(hints));
  }
  
-@@ -331,6 +1429,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
+@@ -331,6 +1450,22 @@ extern "C" bool Bun__BytecodeLinkEncoder__addModule(JSC::BytecodeLinkEncoder* en
      return true;
  }
  
@@ -4233,7 +4256,7 @@ index fbfaa2ff..dbeca5a1 100644
  // `entryOffsets` has room for one number per successful add* call; `regionEnds` for
  // JSC::BytecodeLinkEncoder::numberOfRegions.
  static_assert(JSC::BytecodeLinkEncoder::numberOfRegions == 6, "bun_resolver::LINKED_BYTECODE_REGION_COUNT");
-@@ -340,6 +1454,51 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
+@@ -340,6 +1475,51 @@ extern "C" bool Bun__BytecodeLinkEncoder__finish(JSC::BytecodeLinkEncoder* encod
      auto result = encoder->finish();
      if (!result.payload || result.entryOffsets.size() != entryOffsetCount)
          return false;

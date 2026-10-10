@@ -233,7 +233,10 @@ function Build-Pi($runtime, $outfile, $log) {
 	& $runtime @CommonArgs @OrderArgs --define "PIBOLT_BUILD=\`"$build\`"" '--compile-exec-argv=--smol' @Entries --outfile $outfile *> $log
 	$status = $LASTEXITCODE
 	$ErrorActionPreference = 'Stop'
-	Get-Content $log | Where-Object { $_ -notmatch '^AOT: ' } | Select-Object -Last 3
+	# (The writer's notes and warnings about the prebuilt heap are shown wherever they are in the log: a release build's log keeps
+	# them.)
+	Get-Content $log | Where-Object { $_ -match '^(note|warning): ' }
+	Get-Content $log | Where-Object { $_ -notmatch '^AOT: ' -and $_ -notmatch '^(note|warning): ' } | Select-Object -Last 3
 	if ($status -ne 0) { Die "bun build failed (see $log)" }
 }
 Push-Location $Agent
