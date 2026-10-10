@@ -4,7 +4,7 @@
 # replaces this script with the native executable (exec), so the launcher costs no startup time.
 set -eu
 
-VERSION=0.7.3
+VERSION=0.8.0
 HOME_DIR="${PIBOLT_HOME:-$HOME/.pi-bolt}"
 
 if [ "$(uname -s)" = Darwin ]; then PLATFORM=darwin; else PLATFORM=linux; fi
