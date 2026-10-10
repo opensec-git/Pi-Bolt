@@ -126,7 +126,7 @@ function buildZip(variant = "x64", extra = []) {
 	const top = `pi-bolt-win32-${variant}`;
 	return makeZip([
 		{ name: `${top}/pi-bolt.exe`, data: EXE },
-		{ name: `${top}/pi-bolt.txt`, data: Buffer.from(`Pi-Bolt ${VERSION} (Pi 1.0.3), win32-${variant}, JIT off\n`) },
+		{ name: `${top}/pi-bolt.txt`, data: Buffer.from(`Pi-Bolt ${VERSION} (Pi 1.1.0), win32-${variant}, JIT off\n`) },
 		{ name: `${top}/package.json`, data: Buffer.from('{"name":"pi"}\n') },
 		{ name: `${top}/theme/` },
 		{ name: `${top}/theme/dark.json`, data: Buffer.from("{}\n") },

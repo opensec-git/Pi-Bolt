@@ -269,7 +269,9 @@ try {
 if ($VerifyDeterminism) {
 	$python = if (Get-Command py -ErrorAction SilentlyContinue) { 'py' } else { 'python' }
 	& $python (Join-Path $Root 'scripts\lib\compare-static-heaps.py') (Join-Path $Out 'pi.exe') (Join-Path $verify 'pi.exe')
-	if ($LASTEXITCODE -ne 0) { Die "the prebuilt heap depends on where the runtime was loaded (see above)" }
+	# (Exit code 3, apart from other failures: the release workflow builds again for this, and only for this. docs/RESUME.md says
+	# what differs when it does.)
+	if ($LASTEXITCODE -ne 0) { Write-Host 'error: the prebuilt heap depends on where the runtime was loaded (see above)' -ForegroundColor Red; exit 3 }
 	Log 'the prebuilt heap is the same from both builds'
 }
 Stage-Assets $Out

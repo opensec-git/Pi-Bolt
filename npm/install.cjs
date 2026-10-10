@@ -149,10 +149,12 @@ function tarString(block, start, length) {
 	return block.toString("utf8", start, end >= start && end < start + length ? end : start + length);
 }
 
+// (A plain Error, not fail(): a package that is not a tar file this reads is a defect of the package, before anything is
+// verified, and the release on GitHub is tried instead, as for a long name record below.)
 function tarSize(block) {
-	if (block[124] & 0x80) fail("the npm package is not a tar file this installer reads (an entry of 8 GB or more)");
+	if (block[124] & 0x80) throw new Error("the npm package is not a tar file this installer reads (an entry of 8 GB or more)");
 	const text = tarString(block, 124, 12).trim();
-	if (!/^[0-7]*$/.test(text)) fail("the npm package is not a valid tar file");
+	if (!/^[0-7]*$/.test(text)) throw new Error("the npm package is not a valid tar file");
 	return text ? Number.parseInt(text, 8) : 0;
 }
 

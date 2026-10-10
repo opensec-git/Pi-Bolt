@@ -536,6 +536,26 @@ verify_signature() {
 	NOVERIFY=1
 }
 
+# The checksums' first line says which release they are ("# pi-bolt X.Y.Z"): an older release's, signed all the same and served
+# as a newer one's, would otherwise install the older release as if it were the newer. (0.7.1 to 0.7.3 were published without
+# that line; every release from 0.8.0 on has it, as install.ps1 requires.)
+check_release_version() {
+	case "$SHOWN_VERSION" in
+	[0-9]*.[0-9]*.[0-9]*) ;;
+	*) return 0 ;; # (Which release "latest" is was not found out: nothing to compare with.)
+	esac
+	first=$(head -n 1 "$TMP/SHA256SUMS")
+	case "$first" in
+	"# pi-bolt $SHOWN_VERSION") return 0 ;;
+	"# pi-bolt "*) fail "the release's checksums are those of Pi-Bolt ${first#\# pi-bolt }, not $SHOWN_VERSION. Nothing was installed." ;;
+	esac
+	major=${SHOWN_VERSION%%.*}
+	rest=${SHOWN_VERSION#*.}
+	if [ "$major" -gt 0 ] || [ "${rest%%.*}" -ge 8 ]; then
+		fail "the release's checksums do not say which version they are. Nothing was installed."
+	fi
+}
+
 # download URL FINAL SIZE RANGES FILE: fetches URL into FILE with the progress bar, in parts if the server allows; false if it
 # could not.
 download() {
@@ -634,6 +654,7 @@ install_release() {
 		draw_progress "$step" 10000 "${dim}fetching the signature$reset"
 	fi
 	verify_signature
+	check_release_version
 	# The optional extensions this release pins (extensions.txt, covered by the checksums and their signature).
 	PINS=""
 	if fetch "$TMP/extensions.txt" "$BASE/extensions.txt" 2>/dev/null && (cd "$TMP" && check_sum extensions.txt); then

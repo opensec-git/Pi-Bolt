@@ -49,9 +49,12 @@ if (-not $NoBuild) {
 		} finally { Pop-Location }
 		$withPlugins.Plugins = Join-Path $opensec 'plugins.ts'
 	}
+	# (Exit code 3 is passed on: the two builds' prebuilt heaps differed, which the release workflow builds again for.)
 	& (Join-Path $Root 'scripts\build-pi.ps1') -Pi $Pi -Out $Out -VerifyDeterminism @withPlugins
+	if ($LASTEXITCODE -eq 3) { exit 3 }
 	if ($LASTEXITCODE -ne 0) { Die 'the build failed' }
 	& (Join-Path $Root 'scripts\build-pi.ps1') -Pi $Pi -Out $OutJit -Jit on -VerifyDeterminism @withPlugins
+	if ($LASTEXITCODE -eq 3) { exit 3 }
 	if ($LASTEXITCODE -ne 0) { Die 'the JIT build failed' }
 }
 foreach ($dir in $Out, $OutJit) {

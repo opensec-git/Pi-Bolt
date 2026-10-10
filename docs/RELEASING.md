@@ -60,20 +60,24 @@ the engine or the build. On Windows, the same for older CPUs is Intel SDE (`-snb
   with its version and npm integrity. The installers install those versions and only if the registry's tarball has that
   integrity; a release without the file pins none, and they offer nothing. Update it in the repository when either has a new
   release.
-- `SHA256SUMS`: its first line is `# pi-bolt X.Y.Z`, then one line for each archive and for `extensions.txt`. `install.ps1` and the
-  npm package's Windows install refuse checksums whose first line is not their version: an older release, signed all the same,
-  served as a newer one.
-- `SHA256SUMS.sig` ([Signing](#signing)) and `RUNTIME_STAMP`.
+- `RUNTIME_STAMP`: what engine the runtimes were built from (below).
+- `SHA256SUMS`: its first line is `# pi-bolt X.Y.Z`, then one line for each archive, `extensions.txt` and `RUNTIME_STAMP`.
+  `install.ps1` and the npm package's Windows install refuse checksums whose first line is not their version: an older release,
+  signed all the same, served as a newer one.
+- `SHA256SUMS.sig` ([Signing](#signing)).
 
-`publish` checks that `SHA256SUMS` lists exactly the draft's files (`scripts/check-release-files.sh`): a new platform's archives
-need no change there.
+`scripts/release-files.txt` names the files of a release. `release` and `publish` check that `SHA256SUMS` lists exactly those,
+each as it is, and that `extensions.txt` pins at least one extension and has no line the installers could not read
+(`scripts/check-release-files.sh`). A new platform or variant is added to that list.
 
 ## When the engine changed
 
 The runtime (patched WebKit and Bun) takes about 32 GB of RAM, 40 GB of disk and an hour on 16 cores to build, more than
 GitHub's runners give. `release` therefore uses the previous release's runtimes when the engine is the same: `RUNTIME_STAMP`
 is the hash of the engine entries of `sources.json`, the patches and the runtime build scripts
-(`scripts/runtime-stamp.sh`). `ci` says when it differs.
+(`scripts/runtime-stamp.sh`). `ci` says when it differs. The previous release's stamp counts only as its signed `SHA256SUMS`
+gives it, for that release's version (releases before 0.8.0 did not sign it, so their runtimes are not reused). Runtimes
+uploaded to the draft are hashed by `release`'s first job and checked again by each build job before it uses one.
 
 When it changed, build the three runtimes by hand before tagging:
 
@@ -178,10 +182,17 @@ already installed; with neither (a first install on a Mac without OpenSSL 3), it
 `install.ps1`, `scripts/fetch-runtime.sh` and the `publish` workflow require the signature too.
 
 `publish` signs with the secret `PIBOLT_SIGNING_KEY` of the `release` environment. The environment accepts only workflows run
-from `pi-bolt`, a secret cannot be read back from GitHub, and workflows of pull requests from forks get no secrets; what can
-use the key is a workflow on `pi-bolt`, which takes an administrator or a pull request that passes `ci`. It signs only a
-`SHA256SUMS` that lists exactly the draft's files, each checked, and only with the key of `keys/release.pub`. To set the key,
-as an administrator, on the machine that has it:
+from `pi-bolt`, a secret cannot be read back from GitHub, and workflows of pull requests from forks get no secrets. `publish`
+signs only a tag whose commit is on `pi-bolt`, and what runs in that job (the checks, `keys/release.pub`) is `pi-bolt`'s as the
+run was started, not the tag's; the installers and the site it publishes are `pi-bolt`'s too. It signs only a `SHA256SUMS`
+that lists exactly the files of a release, each checked, and only with the key of `keys/release.pub`. The check of the files
+runs in a step of its own, without the key.
+
+Two repository settings complete this, and are the owner's to set: a tag ruleset (Settings → Rules → Rulesets → New tag
+ruleset) for `refs/tags/bolt-v*` that lets only administrators (or the `tag` workflow) create, move or delete such tags, and
+required reviewers on the `release` environment (Settings → Environments → release), so that a signing run waits for one.
+
+To set the key, as an administrator, on the machine that has it:
 
 ```bash
 gh secret set PIBOLT_SIGNING_KEY -R opensec-git/Pi-Bolt --env release < pi-bolt-signing-key.pem
