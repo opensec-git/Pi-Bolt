@@ -4,10 +4,13 @@
 # heap (scripts\lib\train_heap.py says how the runs are traced). The profile is the Pi version's, shared by every platform; this
 # runs on Windows, after scripts/train-profile.sh has made the profile. It builds Pi to trace (with the profile as it is, saying
 # where each function's executables are), then rewrites the profile: build Pi again afterwards.
-# Usage: scripts\train-heap.ps1 [-Profile DIR]
+# Usage: scripts\train-heap.ps1 [-Profile DIR] [-Plugins FILE]
 #   -Profile DIR    the training profile (default: the one build-pi.ps1 uses, profiles\pi-<version>)
+#   -Plugins FILE   train with these extensions compiled in (build-pi.ps1 -Plugins), as the release is built: the functions are
+#                   named by their module's place in the build, which the plugins' modules change
 param(
-	[string]$Profile = ''
+	[string]$Profile = '',
+	[string]$Plugins = ''
 )
 $ErrorActionPreference = 'Stop'
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
@@ -24,7 +27,8 @@ if (-not (Test-Path (Join-Path $Profile 'bytecode.order'))) { Die "no $Profile\b
 $Build = Join-Path $Work 'heap-training'
 $Cells = Join-Path $Work 'heap-training-function-cells.txt'
 Log "a Pi-Bolt build to trace -> $Build"
-& (Join-Path $Root 'scripts\build-pi.ps1') -Out $Build -Profile $Profile -FunctionCellsOut $Cells
+$withPlugins = if ($Plugins) { @{ Plugins = [System.IO.Path]::GetFullPath($Plugins) } } else { @{} }
+& (Join-Path $Root 'scripts\build-pi.ps1') -Out $Build -Profile $Profile -FunctionCellsOut $Cells @withPlugins
 if ($LASTEXITCODE -ne 0) { Die 'the build failed' }
 Log "tracing runs of $Build\pi.exe -> $Profile"
 & py -3 (Join-Path $Root 'scripts\lib\train_heap.py') (Join-Path $Build 'pi.exe') $Cells $Profile

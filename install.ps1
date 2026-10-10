@@ -618,6 +618,14 @@ function Install-PiBoltExtensions($state) {
 		if ($pin) { $e.Version = $pin.Version; $e.Integrity = $pin.Integrity }
 	}
 	$extensions = @($extensions | Where-Object { $_.Version })
+	# What the executable has compiled in already (pi-bolt.txt's `plugins:` line, scripts\build-pi.ps1): not offered again. (It can be
+	# turned off with `-builtin:<name>` in the extensions setting; installed from npm, a copy replaces the compiled one.)
+	$about = Join-Path $state.Dir 'pi-bolt.txt'
+	$compiledIn = if (Test-Path -LiteralPath $about) { (Get-Content -LiteralPath $about | Where-Object { $_ -like 'plugins: *' } | Select-Object -First 1) } else { $null }
+	if ($compiledIn) {
+		$extensions = @($extensions | Where-Object { $compiledIn -notmatch "(^plugins: |, )$([regex]::Escape($_.Package)) " })
+		if (-not $extensions) { return }
+	}
 	if (-not $extensions) {
 		if ($choice -eq 'yes') { Write-Host "  ${dim}this release pins no extensions (extensions.txt): none installed$reset" }
 		return

@@ -92,5 +92,12 @@ Test-Bedrock 'Bedrock loads behind a proxy (the proxy refuses)' @{ AWS_ENDPOINT_
 & py -3 (Join-Path $here 'image.py') $Pi
 if ($LASTEXITCODE -ne 0) { $script:status = 1 }
 
+# OpenSec's extensions, if this executable has them compiled in (its pi-bolt.txt says so): there, working, switchable, replaceable.
+$about = Join-Path (Split-Path $Pi) 'pi-bolt.txt'
+if ((Test-Path -LiteralPath $about) -and (Select-String -LiteralPath $about -Pattern '^plugins: .*opensec-pi-todo' -Quiet)) {
+	& py -3 (Join-Path $here 'compiled-plugins.py') $Pi
+	if ($LASTEXITCODE -ne 0) { $script:status = 1 }
+}
+
 Remove-Item -LiteralPath $home_ -Recurse -Force -ErrorAction SilentlyContinue
 exit $script:status

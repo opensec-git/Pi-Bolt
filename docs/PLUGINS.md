@@ -54,6 +54,18 @@ Run-time loading keeps working in every Pi-Bolt build: `~/.pi/agent/extensions`,
 Pi packages installed with `pi install`. Compile in the plugins you rely on. Keep run-time loading for plugins you are developing
 or trying out.
 
+**Real extensions from npm, measured** (Windows, nine popular ones, [results](../bench/results/2026-10-10-plugins-real/summary.md)):
+with the JIT off, run-time loaded extensions start fastest, use the least memory, and cost nothing per prompt or per frame; their
+typical actions take the same time as with the JIT on, because they spend it in I/O, child processes or a few milliseconds of
+work. The exception is an extension that does heavy JavaScript work itself: pi-lens's `module_report` takes 838 ms with the JIT
+off against 154 ms with it on. **For such an extension, use the JIT build** (`pi-bolt-win32-x64-jit`, `PIBOLT_VARIANT=x64-jit`
+for the installer), or compile it in.
+
+**OpenSec's extensions are compiled into the release executables** (opensec-pi-subagents, opensec-pi-todo; `plugins/opensec`):
+they are there without installing anything. To turn one off, add `-builtin:opensec-pi-todo` (or `-builtin:opensec-pi-subagents`)
+to the `extensions` list in `~/.pi/agent/settings.json`, or use `pi-bolt config`. Installed from npm, a newer version replaces the
+compiled one.
+
 ## Compile plugins into the executable
 
 You need a Pi-Bolt build environment (see [BUILDING.md](BUILDING.md): `scripts/prepare-pi.sh` and either the release runtime or
@@ -102,10 +114,14 @@ that the executable uses its compiled code, and removes the staging folder. Opti
 | `--jit on` | Also JIT-compile what is loaded at run time (for run-time plugins you keep alongside). |
 | `--profile DIR` | A training profile recorded with your plugins (step 4). |
 
-### 3. Remove the run-time copies
+### 3. Turning a compiled-in plugin off, and run-time copies
 
-If a compiled-in plugin also stays in `~/.pi/agent/extensions` (or is installed as a Pi package), Pi loads it twice and reports a
-conflict for its tools and commands. Remove the run-time copy, or leave it out of your settings' `extensions` list.
+A plugin the manifest names (`{ name, factory }`) is compiled in as a built-in extension, `builtin:<name>`, like Pi's own MCP
+support: `-builtin:<name>` in the `extensions` setting (or `pi-bolt config`) turns it off, and `-e builtin:<name>` loads it
+explicitly. It is also replaceable: if the same extension is installed at run time too (in `~/.pi/agent/extensions`, or as a Pi
+package), the run-time copy registers its tools and commands and the compiled-in one steps aside, instead of a conflict. Set
+`builtin: false` (or `replaceable: false`) on an entry to have it load as before; an unnamed factory stays an inline extension that
+cannot be turned off.
 
 ### 4. Optional: train a profile with your plugins
 

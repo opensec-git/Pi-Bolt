@@ -96,7 +96,9 @@ The installer offers two that OpenSec maintains for Pi-Bolt, prebuilt for Bun so
 | [`opensec-pi-todo`](https://www.npmjs.com/package/opensec-pi-todo) | A todo list for the model, shown as a live panel above the editor |
 
 Install them with `pi-bolt install npm:opensec-pi-subagents` and `pi-bolt install npm:opensec-pi-todo`. For scripted
-installs, `PIBOLT_EXTENSIONS=yes` (or `no`) answers the installer's question in advance.
+installs, `PIBOLT_EXTENSIONS=yes` (or `no`) answers the installer's question in advance. On Windows, both are compiled into
+the executable, so there is nothing to install. To turn one off, put `-builtin:opensec-pi-todo` or
+`-builtin:opensec-pi-subagents` in the `extensions` setting ([docs/PLUGINS.md](docs/PLUGINS.md)).
 
 ### Requirements
 

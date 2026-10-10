@@ -79,9 +79,10 @@ The release workflow builds on the Linux runner. The macOS archives (`pi-bolt-da
 
 ## The Windows build
 
-`pi-bolt-win32-x64.zip` and `pi-bolt-runtime-win32-x64.zip` are built on Windows x64 ([WINDOWS.md](WINDOWS.md)):
-`scripts\fetch-sources.ps1`, `scripts\build-runtime.ps1`, then `scripts\package-release.ps1`, which builds Pi twice to check
-that the prebuilt heap does not depend on where the runtime was loaded (`-VerifyDeterminism`). The archives join the others
+`pi-bolt-win32-x64.zip`, `pi-bolt-win32-x64-jit.zip` and `pi-bolt-runtime-win32-x64.zip` are built on Windows x64
+([WINDOWS.md](WINDOWS.md)). Run `scripts\fetch-sources.ps1`, then `scripts\build-runtime.ps1`, then
+`scripts\package-release.ps1`. That script builds each variant twice (`-VerifyDeterminism`) to check that the prebuilt heap
+does not depend on where the runtime was loaded. Both have OpenSec's extensions compiled in unless `-WithoutOpenSec` is given. The archives join the others
 in step 4 above. `install.ps1` verifies the signature itself (it carries an Ed25519 verifier, since Windows has none), and refuses
 a Windows release without one. If the executable is to carry an Authenticode signature, it is signed before the archive is made,
 with the owner's certificate. Publish `install.ps1` next to `install.sh`.
