@@ -19,8 +19,10 @@ it in `.work\runtime`: `bun.exe.ship-cb39be1e` (the 0.7.0 candidate of 2026-10-0
 `bun.exe.heap-hot-6e5c9d5d` (the heap ordering without the executables' tiers),
 `bun.exe.lto-order-4610987b` (the one before any of it), `bun.exe.lto-noorder-*`, `bun.exe.nolto-*`,
 `bun.exe.heap-tag-v1-broken`; the folders `heap-tag-v2`, `heap-hot`, `heap-functions`, `heap-tiers` hold each step's runtime.
-The current Pi build is `out\pi-bolt` (this runtime, the retrained profile), with `out\pi-bolt-aot-lto-jit` (JIT on),
-`out\pi-bolt-plugins` and `out\pi-bolt-plugins-jit` (the example plugin compiled in) for the suite.
+The current Pi build is `out\pi-bolt` (this runtime, with OpenSec's two extensions compiled in: `-Plugins
+plugins\opensec\plugins.ts`, as `package-release.ps1` builds by default; the profile in `profiles\pi-1.0.3` is trained with them).
+`out\pi-bolt.old-20261010125512` is the same build without them. For the suite there are also `out\pi-bolt-aot-lto-jit` (JIT
+on), and `out\pi-bolt-plugins` and `out\pi-bolt-plugins-jit` (the example plugin compiled in).
 
 The LTO build directory is `build/pibolt-release-lto` (made by hand); `scripts\build-runtime.ps1` builds into
 `build/pibolt-release`, so pass `-BuildDir build/pibolt-release-lto` to `train-runtime-hints.ps1` and `tests\cfg\run.ps1` meanwhile.
@@ -138,8 +140,11 @@ queries before DA1; no timeouts. The behaviour is kept.
    theme's functions give, not the component's identity. Measured and not kept on Windows: the 12 MB first heap budget and the 5 s GC timer
    that macOS has (-10 MB peak in the TUI, but twice the collections and +40% CPU while a long answer streams).
 5. **Plugin rows** (done for the example plugin, in the suite): compiled in, its hot loop is 36 ms; loaded at run time with
-   the JIT off, 750 ms (the JIT build: 32 ms). The two OpenSec extensions were not measured: they are not on this machine
-   (downloading them needs the owner's go-ahead). Making run-time plugins fast is an owner decision (below).
+   the JIT off, 750 ms (the JIT build: 32 ms). Nine real extensions from npm, OpenSec's two among them, are measured in
+   `bench\results\2026-10-10-plugins-real`. Their actions cost the same with the JIT off, except pi-lens's (838 ms, against
+   154 ms with the JIT): docs\PLUGINS.md sends such plugins to the JIT build. OpenSec's two, compiled in, are measured in
+   `bench\results\2026-10-10-opensec-compiled`. Every `-p` takes +66 ms (114 -> 180 ms), and that cost is opensec-pi-subagents
+   loading itself; `--version` and the time to the TUI are unchanged.
 6. **Clean suite** (done): `bench\results\2026-10-09-windows`, on the build that ships (`cdad1a5f8`), in
    `docs\BENCHMARKS.md`. The 50 KB write's longest stall (87 ms; 19 ms before the review's fixes) is the step's last tool
    call, `bash`, starting this machine's only `bash.exe`: WSL's launcher with no distribution, ~0.1 s. Node's `statSync`
@@ -151,6 +156,12 @@ Smaller items: a glance at JSC's nursery size; in Pi, caching in `Container.rend
 (each walk is one Pi needs again on a reload).
 
 ## Open items for the owner
+
+- **OpenSec compiled in by default?** This is done, as asked: both can be turned off with `-builtin:<name>`, and an npm copy
+  replaces the compiled one. The cost falls on users who don't use them: +66 ms and +47 ms of CPU on every `-p`, and +18 MB
+  peak in the TUI, all from opensec-pi-subagents' own start-up (`bench\results\2026-10-10-opensec-compiled`). The reviewer
+  recommends keeping them optional in the default build and building it with `package-release.ps1 -WithoutOpenSec`. The real
+  fix would be lazy activation: register the tools and commands from a manifest, and load the module on first use.
 
 - **CET** (`/CETCOMPAT`): off, because JSC jumps to exception handlers without popping the shadow stack; the plan (rdssp/incssp)
   is in `docs\WINDOWS.md`. Needs a decision before work starts.
