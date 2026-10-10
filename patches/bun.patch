@@ -1,9 +1,9 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: OpenSec <contactus@opensec.in>
-Date: Sat, 10 Oct 2026 13:32:07 +0530
+Date: Sat, 10 Oct 2026 14:17:41 +0530
 Subject: [PATCH] Pi-Bolt: ahead-of-time compiled executables
 
-Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
+Bun's changes for Pi-Bolt's executables, on Linux x86-64, macOS ARM64 and Windows x64:
 
 - Executables with a prebuilt heap and a code image, made by `bun build --compile` and mapped from the
   executable when it starts (bundler, StandaloneModuleGraph, ZigSourceProvider).
@@ -18,6 +18,17 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
 - macOS: the prebuilt heap and code image mapped from the __BUN section, with the executable where it
   was linked to be; SharedArrayBuffer with the JIT off; a terminal reopened by its own device, which
   kqueue can watch; the programs an executable starts are started by Pi-Bolt's launcher helper.
+
+- Windows x64: the prebuilt heap and code image in the executable's PE sections, mapped read-only where
+  nothing writes; DLLs that are delay-loaded only from System32 (a delay-load hook, the dependent load
+  flag, WIC); a build without the JIT stays without it, and the debugging options that reach memory or
+  load code are off in a compiled program; crash reports of compiled code; a collection every second
+  while waiting (5 s measured +40% CPU while a reply streams), and mimalloc's purge delay left at its
+  default; an idle keep-alive connection aged on GetTickCount64.
+
+Includes the engine changes of Pi-Bolt 0.7.1 to 0.7.3 on pi-bolt (5f6ad773e, c9bde4b67): writev for
+queued writes, mimalloc from upstream, less idle work, an idle keep-alive's age on a clock nobody sets,
+fetch through a TLS 1.2 renegotiation.
 ---
  Cargo.lock                                    |    1 +
  .../bun-usockets/src/eventing/epoll_kqueue.c  |    7 +-
@@ -51,7 +62,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/codegen/generate-classes.ts               |   25 +-
  src/crash_handler/lib.rs                      |   43 +-
  src/http/Cargo.toml                           |    1 +
- src/http/HTTPContext.rs                       |   51 +-
+ src/http/HTTPContext.rs                       |   61 +-
  src/http/HTTPThread.rs                        |   11 +
  src/http/HeaderValueIterator.rs               |   20 +
  src/http/InternalState.rs                     |    4 +
@@ -70,7 +81,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  src/jsc/bindings/FormatStackTraceForJS.cpp    |   27 +-
  src/jsc/bindings/InternalModuleRegistry.cpp   |   15 +-
  src/jsc/bindings/ZigException.cpp             |   14 +-
- src/jsc/bindings/ZigGlobalObject.cpp          |   74 ++
+ src/jsc/bindings/ZigGlobalObject.cpp          |   77 ++
  src/jsc/bindings/ZigSourceProvider.cpp        | 1163 ++++++++++++++++-
  src/jsc/bindings/c-bindings.cpp               |  135 ++
  .../webcore/SerializedScriptValue.cpp         |    9 +
@@ -93,7 +104,7 @@ Bun's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
  .../fetch.tls.renegotiation-peer-fixture.mjs  |   86 ++
  test/js/web/fetch/fetch.tls.test.ts           |   70 +-
  test/js/web/timers/timer-gc-roots.test.ts     |    3 +
- 74 files changed, 3195 insertions(+), 231 deletions(-)
+ 74 files changed, 3208 insertions(+), 231 deletions(-)
  create mode 100644 patches/libuv/win-thread-stack-reservation.patch
  create mode 100644 patches/mimalloc/page-commit-on-demand-default.patch
  create mode 100644 test/js/web/fetch/fetch.tls.renegotiation-client-fixture.ts
@@ -1607,10 +1618,10 @@ index da1bf199..dd9b7319 100644
 +libc.workspace = true
  bun_zstd.workspace = true
 diff --git a/src/http/HTTPContext.rs b/src/http/HTTPContext.rs
-index 4f00a0c2..c60127a7 100644
+index 4f00a0c2..62757284 100644
 --- a/src/http/HTTPContext.rs
 +++ b/src/http/HTTPContext.rs
-@@ -242,8 +242,32 @@ pub struct PooledSocket<const SSL: bool> {
+@@ -242,8 +242,42 @@ pub struct PooledSocket<const SSL: bool> {
      pub(crate) h2_session: Option<RefPtr<h2::ClientSession>>,
      /// `PoolOptions::id` of the fetch session that opened it.
      pub(crate) pool_id: u64,
@@ -1624,7 +1635,17 @@ index 4f00a0c2..c60127a7 100644
 +
 +/// Milliseconds on a clock that keeps going while the machine is suspended (a server closes an idle connection
 +/// meanwhile) and that nobody sets: CLOCK_BOOTTIME on Linux, CLOCK_MONOTONIC on macOS, which counts sleep there
-+/// (CLOCK_UPTIME_RAW does not). Not the wall clock: set back, it made a socket the server had closed look fresh.
++/// (CLOCK_UPTIME_RAW does not), GetTickCount64 on Windows (which counts sleep and hibernation). Not the wall clock:
++/// set back, it made a socket the server had closed look fresh.
++#[cfg(windows)]
++pub(crate) fn parked_clock_ms() -> u64 {
++    unsafe extern "system" {
++        safe fn GetTickCount64() -> u64;
++    }
++    GetTickCount64()
++}
++
++#[cfg(not(windows))]
 +pub(crate) fn parked_clock_ms() -> u64 {
 +    #[cfg(unix)]
 +    {
@@ -1644,7 +1665,7 @@ index 4f00a0c2..c60127a7 100644
  }
  
  /// `&mut` access to a pooled / found-slot HTTP/2 session, for the field
-@@ -687,6 +711,7 @@ impl<const SSL: bool> HTTPContext<SSL> {
+@@ -687,6 +721,7 @@ impl<const SSL: bool> HTTPContext<SSL> {
                  h2_session,
                  pool_id: pool.id,
                  idle_timeout_seconds: pool.idle_timeout_seconds,
@@ -1652,7 +1673,7 @@ index 4f00a0c2..c60127a7 100644
              };
              let parked = match transport {
                  Transport::Tcp => Self::park(self.pending_sockets.get_or_init(), pooled, pool),
-@@ -774,12 +799,17 @@ impl<const SSL: bool> HTTPContext<SSL> {
+@@ -774,12 +809,17 @@ impl<const SSL: bool> HTTPContext<SSL> {
          None
      }
  
@@ -1674,7 +1695,7 @@ index 4f00a0c2..c60127a7 100644
      }
  
      #[allow(clippy::too_many_arguments)]
-@@ -915,6 +945,17 @@ impl<const SSL: bool> HTTPContext<SSL> {
+@@ -915,6 +955,17 @@ impl<const SSL: bool> HTTPContext<SSL> {
                      continue;
                  }
  
@@ -2921,7 +2942,7 @@ index cfd1059c..e6aa41f7 100644
          uint8_t frame_i = 0;
          size_t stack_frame_i = 0;
 diff --git a/src/jsc/bindings/ZigGlobalObject.cpp b/src/jsc/bindings/ZigGlobalObject.cpp
-index 9de807ad..de5161e2 100644
+index 9de807ad..7999522c 100644
 --- a/src/jsc/bindings/ZigGlobalObject.cpp
 +++ b/src/jsc/bindings/ZigGlobalObject.cpp
 @@ -1,4 +1,5 @@
@@ -2986,7 +3007,7 @@ index 9de807ad..de5161e2 100644
              if (envc > 0) [[likely]] {
                  auto envc_copy = envc;
                  while (envc_copy--) {
-@@ -378,8 +414,46 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -378,8 +414,49 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
                      }
                  }
              }
@@ -3027,9 +3048,12 @@ index 9de807ad..de5161e2 100644
 +        // Freed memory is purged once it is this old, also while the thread stays busy. At mimalloc's 100 ms a session
 +        // that streams one reply after another keeps what it freed resident (measured on Pi, 50 prompts: 62-91 MB of
 +        // footprint at 100 ms, 43-50 MB at 25 for some 4% more CPU, still 13% less than 0.7.2; at 10 it rose to 74 MB).
-+        // MIMALLOC_PURGE_DELAY overrides.
++        // MIMALLOC_PURGE_DELAY overrides. (Not on Windows until measured there: a purge is a decommit, and the page's next use a
++        // commit and zero fill, which a session streaming replies would do four times as often.)
++#if !OS(WINDOWS)
 +        if (Bun__AOTImage__isMapped() && !getenv("MIMALLOC_PURGE_DELAY"))
 +            mi_option_set(mi_option_purge_delay, 25);
++#endif
  
  #if OS(WINDOWS) && (CPU(X86_64) || CPU(ARM64))
          // JSC::initialize() registered unwind info + a language-specific SEH

@@ -1,9 +1,9 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: OpenSec <contactus@opensec.in>
-Date: Sat, 10 Oct 2026 13:32:04 +0530
+Date: Sat, 10 Oct 2026 14:17:39 +0530
 Subject: [PATCH] Pi-Bolt: JavaScriptCore's ahead-of-time compiler
 
-JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS ARM64:
+JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64, macOS ARM64 and Windows x64:
 
 - An x86-64 back end for ahead-of-time code, and the runtime work it needs.
 - Optimizations: inlining of helpers held in module constants and of methods by name, variables
@@ -17,6 +17,16 @@ JavaScriptCore's changes for Pi-Bolt's executables, on Linux x86-64 and macOS AR
   movk, unicode regular expressions in image code, a map of the image's functions, stubs and regular
   expressions.
 - Intl on Darwin: the plain language tags of ICU's lists of locales made without ICU.
+
+- Windows x64: the static region in the executable's image (its arenas reserved after the image while
+  a heap is built; the immutable ones read-only sections, where a write is a fault that says where it
+  was), realm blocks reserved at a random address, the image's pointers relocated with the executable,
+  indirect calls to SysV-convention functions through callSysV() (Control Flow Guard checks them),
+  addresses told apart from numbers by what is committed.
+
+Includes the engine changes of Pi-Bolt 0.7.1 to 0.7.3 on pi-bolt (5f6ad773e, c9bde4b67): image builds
+that fit in 16 GB (MAP_NORESERVE), no false addresses on macOS, threads that give back their free
+memory when idle, Linux's randomness from getrandom(2), an FTL fix for wrong NaNs.
 ---
  .../array-length-increment-large.js           |   15 +
  .../array-set-length-grow-within-vector.js    |   73 +
