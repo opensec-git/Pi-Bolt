@@ -155,6 +155,13 @@ New-Item -ItemType Directory -Force -Path (Join-Path $repo '.pi') | Out-Null
 $r = Invoke-Pi @('--model', 'none/none', '-p', 'hi') @{} $Pi $repo
 if (-not (Test-Path -LiteralPath $elsewhere)) { Write-Host 'PASS an untrusted project''s sessionDir is not used' }
 else { Write-Host "FAIL an untrusted project's sessionDir was created ($elsewhere)"; $script:status = 1 }
+# ...and is, when the user trusts every project (defaultProjectTrust "always"), as the runtime then does.
+$alwaysAgent = Join-Path $home_ 'agent-always'
+New-Item -ItemType Directory -Force -Path $alwaysAgent | Out-Null
+[IO.File]::WriteAllText((Join-Path $alwaysAgent 'settings.json'), (@{ defaultProjectTrust = 'always' } | ConvertTo-Json))
+$r = Invoke-Pi @('--model', 'none/none', '-p', 'hi') @{ PI_CODING_AGENT_DIR = $alwaysAgent } $Pi $repo
+if (Test-Path -LiteralPath $elsewhere) { Write-Host 'PASS a project''s sessionDir is used when every project is trusted' }
+else { Write-Host "FAIL with defaultProjectTrust always, the project's sessionDir was not used ($elsewhere)"; $script:status = 1 }
 
 # Bedrock, the proxy agents and the OAuth flows are loaded when they are first used, with the builtin modules they import. A request
 # that can reach nothing has to fail as a connection that is refused, not as code that is missing or broken.

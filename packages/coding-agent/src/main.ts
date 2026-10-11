@@ -678,11 +678,18 @@ export async function main(args: string[], options?: MainOptions) {
 	// (on Windows a \\host\share, which Windows connects to at once, with the user's credentials), and the session would be
 	// written there even if the user then declined to trust it. A project trusted during this run uses its sessionDir from the
 	// next one.
+	// (As the runtime decides it, short of asking: the saved decision, else the global defaultProjectTrust "always".)
 	const startupCwdHasTrustRequiringResources =
 		parsed.projectTrustOverride === undefined ? hasTrustRequiringProjectResources(cwd) : undefined;
+	const startupTrustDecision = startupCwdHasTrustRequiringResources
+		? new ProjectTrustStore(agentDir).get(cwd)
+		: undefined;
 	const startupProjectTrusted =
 		parsed.projectTrustOverride ??
-		(!startupCwdHasTrustRequiringResources || new ProjectTrustStore(agentDir).get(cwd) === true);
+		(!startupCwdHasTrustRequiringResources ||
+			startupTrustDecision === true ||
+			(startupTrustDecision === null &&
+				SettingsManager.create(cwd, agentDir, { projectTrusted: false }).getDefaultProjectTrust() === "always"));
 	const startupSettingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: startupProjectTrusted });
 	const startupSettingsDiagnostics = collectSettingsDiagnostics(startupSettingsManager);
 	ttiTrace("settings.loaded");
