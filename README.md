@@ -46,7 +46,7 @@ curl -fsSL https://pi-bolt.opensec.in/install.sh | sh
 On Windows, in PowerShell:
 
 ```powershell
-powershell -c "irm https://pi-bolt.opensec.in/install.ps1 | iex"
+powershell -c "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://pi-bolt.opensec.in/install.ps1 | iex"
 ```
 
 or `npm install -g --allow-scripts=pi-bolt pi-bolt`, or `bun add -g --trust pi-bolt` (the flags let the package manager run the
@@ -96,7 +96,7 @@ Download a build from the [latest release](https://github.com/opensec-git/Pi-Bol
 
 - **Linux** x86-64 with glibc 2.17 or later (Ubuntu 20.04+, Debian 11+, RHEL/Rocky 8+, Amazon Linux 2). musl is not supported.
 - **macOS** 13 or later on Apple silicon. Install with the installer or npm ([Troubleshooting](docs/TROUBLESHOOTING.md#macos)).
-- **Windows** 10 (1809) or later, or Windows 11, on x64. Install with the installer or npm ([docs/WINDOWS.md](docs/WINDOWS.md)).
+- **Windows** 10 (1809) or later, or Windows 11, on x64. Install with the installer or npm; for problems, see [Troubleshooting: Windows](docs/TROUBLESHOOTING.md#windows).
 - Linux and Windows on ARM64 are not available yet.
 
 Pi-Bolt installs next to Pi as `pi-bolt`, so both can stay installed. Running the installer again updates, reinstalls or

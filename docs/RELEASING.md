@@ -30,7 +30,7 @@ release key is a secret of the `release` environment, used only by `publish` run
 3. When `ci` passes, `tag` tags the commit `bolt-vX.Y.Z` and runs `release`, which builds and tests for about an hour and leaves
    a draft; `publish` then signs it and publishes it. `tag` leaves a version without its release notes untagged.
 4. Try every install, looking for "signature verified": `curl -fsSL https://pi-bolt.opensec.in/install.sh | sh`,
-   `npm install -g pi-bolt`, and on Windows `powershell -c "irm https://pi-bolt.opensec.in/install.ps1 | iex"`.
+   `npm install -g pi-bolt`, and on Windows `powershell -c "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://pi-bolt.opensec.in/install.ps1 | iex"`.
 
 By hand (with `AUTO_RELEASE` unset, or to redo a step): push the tag yourself
 (`git tag -a bolt-vX.Y.Z -m "Pi-Bolt X.Y.Z" && git push origin bolt-vX.Y.Z`), then, once the draft is there, run `publish` from

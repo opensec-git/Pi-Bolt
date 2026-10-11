@@ -193,7 +193,7 @@
           <code id="cmd">curl -fsSL https://pi-bolt.opensec.in/install.sh | sh</code>
           <button class="copy" type="button" data-copy="cmd" aria-label="Copy the install command">Copy</button>
         </div>
-        <p class="alt">On Windows, in PowerShell: <code>powershell -c "irm https://pi-bolt.opensec.in/install.ps1 | iex"</code>. Or <code>npm install -g --allow-scripts=pi-bolt pi-bolt</code>. Then run <code>pi-bolt</code> in your project.</p>
+        <p class="alt">On Windows, in PowerShell: <code>powershell -c "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://pi-bolt.opensec.in/install.ps1 | iex"</code>. Or <code>npm install -g --allow-scripts=pi-bolt pi-bolt</code>. Then run <code>pi-bolt</code> in your project.</p>
       </div>
 
       <div class="race" aria-labelledby="race-title">

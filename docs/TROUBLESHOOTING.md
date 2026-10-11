@@ -5,6 +5,7 @@
 - [Environment variables](#environment-variables)
 - [Common problems](#common-problems)
 - [macOS](#macos)
+- [Windows](#windows)
 - [Reporting a problem](#reporting-a-problem)
 
 ## Is the compiled code being used?
@@ -153,7 +154,16 @@ console's code page, not UTF-8, and the bash tool reads UTF-8. The PowerShell to
 
 **A program in your project folder is not run by its name.** A command named without a path (`git`, `npm`) is looked up on
 PATH only, never in the working directory, so a repository cannot put its own `git.cmd` in front of yours. Run a program of the
-project by its path: `.\tools\build.cmd`.
+project by its path: `.\tools\build.cmd`. The same holds in the tools' shells, so an npm script that runs `gradlew` or `build`
+of the project's folder by name fails inside Pi; have the script name it by its path (`.\gradlew`).
+
+**A program keeps running after Escape or the bash tool's timeout.** Stopping a command ends the processes it started. On the
+default build, though, a native program whose own parent has already exited (a dev server a launcher started and left) is not
+found, and keeps running: end it in Task Manager, or use the `-jit` build (`$env:PIBOLT_VARIANT = "x64-jit"` before installing),
+which ends those too.
+
+**The bash tool says `shellPath` "is not a bash".** `shellPath` names the bash the bash tool runs (Git Bash's `bash.exe`, say).
+`cmd.exe` and PowerShell are not one; PowerShell commands go through the PowerShell tool.
 
 **SmartScreen warns about `pi-bolt.exe` downloaded with a browser.** The executable has no Authenticode signature yet. The
 installers check the release's own signature and do not mark what they download; install with them rather than from the browser.

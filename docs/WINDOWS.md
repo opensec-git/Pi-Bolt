@@ -1,8 +1,9 @@
 # Pi-Bolt on Windows x64: design notes
 
-Work in progress, on the `windows-x64` branch. This is the design for keeping the prebuilt heap and the code image with every
-Windows mitigation on, and what it rests on: measurements on this machine (Intel Core i5-1335U, Windows 11 26200, Defender on).
-Nothing below has run Pi yet: it is what the port is being built on.
+The design notes of the Windows port, which shipped in 0.8.0: keeping the prebuilt heap and the code image with every Windows
+mitigation on, and what it rests on: measurements on the port's machine (Intel Core i5-1335U, Windows 11 26200, Defender on),
+written while the port was being built. For installing and using Pi-Bolt on Windows, see the README and
+[Troubleshooting: Windows](TROUBLESHOOTING.md#windows).
 
 ## What has to be at a fixed address today
 

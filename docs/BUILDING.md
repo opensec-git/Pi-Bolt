@@ -192,6 +192,25 @@ ahead-of-time compilation, and the outputs are compared. 4,780 of the 4,786 test
 inspect engine internals that do not exist without a JIT (tier-up and reoptimization counters, sampling-profiler frames), or run
 out of memory or stack at limits that differ by design.
 
+## On Windows
+
+The same steps, with the PowerShell scripts (Windows PowerShell 5.1 or PowerShell 7), from a shell with Visual Studio's
+environment loaded (`Launch-VsDevShell.ps1`):
+
+```powershell
+scripts\fetch-sources.ps1                      # WebKit and Bun at the pinned commits, with patches\*.patch applied
+scripts\build-runtime.ps1                      # the runtime -> .work\runtime\bun.exe (-Lto off for a faster build)
+npm ci --ignore-scripts; npm run build:offline # Pi
+scripts\build-pi.ps1                           # -> out\pi-bolt\pi.exe (-Jit on for the -jit build)
+scripts\package-release.ps1                    # the release's win32-x64 archives, the runtime and SHA256SUMS -> dist\<VERSION>\
+```
+
+The runtime needs Visual Studio 2022 (or its Build Tools) with the C++ workload, the Windows SDK and "C++ Clang tools for
+Windows", LLVM 23.1, CMake, Rust, Bun 1.4.2, Go, NASM, Ruby, Python 3 with the `py` launcher and Git for Windows: the head of
+`scripts\build-runtime.ps1` lists them. There is no `fetch-runtime.ps1`: take `pi-bolt-runtime-win32-x64.zip` from a release
+into `.work\runtime\` to build Pi without building the runtime. Tests: `tests\pi\run.ps1 out\pi-bolt\pi.exe` and
+`scripts\windows-selftest.ps1 -Pi out\pi-bolt\pi.exe`; the `bench\` tools run on Windows too (bench/README.md).
+
 ## Where things go
 
 | Path | Contents | In git |
