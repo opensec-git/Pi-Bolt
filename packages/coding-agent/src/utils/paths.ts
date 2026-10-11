@@ -1,5 +1,5 @@
 import { realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { isAbsolute, join, resolve as nodeResolvePath, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnProcessSync } from "./child-process.ts";
@@ -110,6 +110,10 @@ export function normalizePath(input: string, options: PathInputOptions = {}): st
 	}
 	if (process.platform === "win32") {
 		normalized = normalizeWindowsShellPath(normalized);
+		// Git Bash's /tmp is the user's temporary folder (its /etc/fstab: `none /tmp usertemp`): a file the bash tool put in
+		// /tmp/x is there, not in C:\tmp, which every local user may change once a write creates it.
+		const tmp = normalized.match(/^\/tmp(?:\/(.*))?$/);
+		if (tmp) normalized = join(tmpdir(), ...(tmp[1] ? tmp[1].split("/") : []));
 	}
 
 	if (options.expandTilde ?? true) {

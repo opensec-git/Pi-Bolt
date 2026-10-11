@@ -157,6 +157,12 @@ describe("normalizeWindowsShellPath", () => {
 		expect(normalizePath("/c/Users/example")).toBe("C:\\Users\\example");
 		expect(resolvePath("/mnt/c/Users/example", "D:\\work")).toBe(resolve("C:/Users/example"));
 	});
+
+	it.runIf(process.platform === "win32")("takes Git Bash's /tmp for the user's temporary folder, not C:\\tmp", () => {
+		expect(resolvePath("/tmp/out/x.txt", "D:\\work")).toBe(join(tmpdir(), "out", "x.txt"));
+		expect(resolvePath("/tmp", "D:\\work")).toBe(tmpdir());
+		expect(resolvePath("/tmpfile", "D:\\work")).toBe(resolve("/tmpfile"));
+	});
 });
 
 describe("isLocalPath", () => {
