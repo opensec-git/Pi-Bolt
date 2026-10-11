@@ -48,11 +48,17 @@ const DEFAULT_LIMIT = 1000;
 export function globToWindowsPathRegex(glob: string): string {
 	const sep = String.raw`[\\/]`;
 	const notSep = String.raw`[^\\/]`;
+	// A character inside a class, for Rust's regex: `[`, `\`, `&`, `~` (its class operators `&&`, `~~`) and `^` taken as they are.
+	const classChar = (ch: string) => ch.replace(/[[\]\\&~^]/g, "\\$&");
 	let out = "";
 	let braces = 0;
 	for (let i = 0; i < glob.length; i++) {
 		const c = glob[i];
-		if (c === "*" && glob[i + 1] === "*") {
+		if (c === "\\" && i + 1 < glob.length) {
+			// An escaped character (`\[id\]`), as it is.
+			out += glob[i + 1].replace(/[.+*?^$()[\]{}|\\]/g, "\\$&");
+			i++;
+		} else if (c === "*" && glob[i + 1] === "*") {
 			const atStart = i === 0 || glob[i - 1] === "/";
 			if (atStart && glob[i + 2] === "/") {
 				out += `(?:.*${sep})?`; // "**/": no folder or any number of them
@@ -71,14 +77,31 @@ export function globToWindowsPathRegex(glob: string): string {
 		} else if (c === "/") {
 			out += sep;
 		} else if (c === "[") {
-			const end = glob.indexOf("]", i + 2);
-			if (end === -1) {
+			// A class: `[!...]` or `[^...]` negated (within one name, as `?`), a `]` first taken as itself (`[[]`, `[]]`),
+			// `\x` escaped, `a-z` a range.
+			let j = i + 1;
+			const negated = glob[j] === "!" || glob[j] === "^";
+			if (negated) j++;
+			let body = "";
+			let first = true;
+			while (j < glob.length && (glob[j] !== "]" || first)) {
+				if (glob[j] === "\\" && j + 1 < glob.length) {
+					body += classChar(glob[j + 1]);
+					j += 2;
+				} else if (glob[j] === "-" && !first && glob[j + 1] !== "]" && glob[j - 1] !== "-") {
+					body += "-";
+					j++;
+				} else {
+					body += glob[j] === "-" ? "\\-" : classChar(glob[j]);
+					j++;
+				}
+				first = false;
+			}
+			if (j >= glob.length) {
 				out += "\\[";
 			} else {
-				let body = glob.slice(i + 1, end);
-				if (body.startsWith("!")) body = `^${body.slice(1)}`;
-				out += `[${body.replaceAll("\\", "\\\\")}]`;
-				i = end;
+				out += negated ? `[^\\\\/${body}]` : `[${body}]`;
+				i = j;
 			}
 		} else if (c === "{") {
 			out += "(?:";
@@ -89,10 +112,19 @@ export function globToWindowsPathRegex(glob: string): string {
 		} else if (c === "," && braces > 0) {
 			out += "|";
 		} else {
-			out += c.replace(/[.+^$()|\\{}]/g, "\\$&");
+			out += c.replace(/[.+^$()|\\{}[\]]/g, "\\$&");
 		}
 	}
 	return `^${out}$`;
+}
+
+/**
+ * Windows: a glob written with `\` for the separator (`src\**\*.ts`) as one with `/`. A Windows name cannot have `*`, `?` or
+ * `\` in it, so a `\` before one of them, or before a plain character, is a separator; before `[`, `]`, `{`, `}`, `!` or `,`
+ * (which a name may have) it is an escape, and stays.
+ */
+export function windowsGlobSeparators(glob: string): string {
+	return glob.replace(/\\+(?![[\]{}!,])/g, "/");
 }
 
 export interface FindToolDetails {
@@ -256,11 +288,16 @@ export function createFindToolDefinition(
 						// fd --glob matches against the basename unless --full-path is set; in --full-path
 						// mode it matches against the absolute candidate path, so a path-containing
 						// pattern like 'src/**/*.spec.ts' needs a leading '**/' to match anything.
-						let effectivePattern = pattern;
-						if (pattern.includes("/")) {
+						// (Windows: `src\**\*.ts` as `src/**/*.ts`, and `./src/*.ts` as `src/*.ts`: see windowsGlobSeparators.)
+						const globPattern =
+							process.platform === "win32"
+								? windowsGlobSeparators(pattern).replace(/^(?:\.\/)+(?=.)/, "")
+								: pattern;
+						let effectivePattern = globPattern;
+						if (globPattern.includes("/")) {
 							args.push("--full-path");
-							if (!pattern.startsWith("/") && !pattern.startsWith("**/") && pattern !== "**") {
-								effectivePattern = `**/${pattern}`;
+							if (!globPattern.startsWith("/") && !globPattern.startsWith("**/") && globPattern !== "**") {
+								effectivePattern = `**/${globPattern}`;
 							}
 							// Windows: fd matches a full path with its backslashes, and its glob takes neither `/` nor `\` for them
 							// (`[/\\]` in their place stops `**` spanning folders, and lets `*` cross them). The same pattern as a
