@@ -4439,6 +4439,11 @@ export class InteractiveMode {
 		const signals: NodeJS.Signals[] = ["SIGTERM"];
 		if (process.platform !== "win32") {
 			signals.push("SIGHUP");
+		} else {
+			// Windows: Ctrl+Break, and the console window closing (SIGHUP; Windows ends the process a few seconds later).
+			// Without a handler either ends Pi on the spot: the terminal is left on the alternate screen with its input modes
+			// on, and extensions get no session_shutdown.
+			signals.push("SIGBREAK", "SIGHUP");
 		}
 
 		for (const signal of signals) {
