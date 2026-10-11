@@ -12,6 +12,7 @@ import {
 	getShellEnv,
 	killProcessTree,
 	MSYS_SHELL_GROUP_VARIABLE,
+	msysShellSpawn,
 	type ShellConfig,
 	trackDetachedChildPid,
 	untrackDetachedChildPid,
@@ -117,12 +118,15 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 			const msysBash = getMsysBash(shellConfig.shell);
 			const msys = msysBash ? { bash: msysBash, group: randomUUID() } : undefined;
 			const shellEnv = env ?? getShellEnv();
-			const child = spawn(shellConfig.shell, commandFromStdin ? shellConfig.args : [...shellConfig.args, command], {
+			const shellArgs = commandFromStdin ? shellConfig.args : [...shellConfig.args, command];
+			const msysSpawn = commandFromStdin ? undefined : msysShellSpawn(shellConfig.shell, shellArgs);
+			const child = spawn(shellConfig.shell, msysSpawn?.args ?? shellArgs, {
 				cwd,
 				detached: process.platform !== "win32",
 				env: msys ? { ...shellEnv, [MSYS_SHELL_GROUP_VARIABLE]: msys.group } : shellEnv,
 				stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
 				windowsHide: true,
+				...(msysSpawn && { windowsVerbatimArguments: true, argv0: msysSpawn.argv0 }),
 			});
 			if (commandFromStdin) {
 				child.stdin?.on("error", () => {});

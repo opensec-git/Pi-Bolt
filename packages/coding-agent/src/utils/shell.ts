@@ -96,6 +96,14 @@ function findExecutableOnPath(executable: string, accept?: (file: string) => boo
 export function getShellConfig(customShellPath?: string): ShellConfig {
 	// 1. Check user-specified shell path
 	if (customShellPath) {
+		// Windows: cmd.exe and PowerShell are not a bash. Given `-c` and the command, cmd.exe printed its banner, ran nothing,
+		// and exited 0, which reads as the command having succeeded.
+		if (process.platform === "win32" && /^(?:cmd|powershell|pwsh)\.exe$/i.test(basename(customShellPath))) {
+			throw new Error(
+				`shellPath is ${customShellPath}, which is not a bash: the bash tool needs Git Bash (or another bash). ` +
+					"PowerShell commands go through the powershell tool. Remove shellPath, or set it to a bash.exe.",
+			);
+		}
 		if (existsSync(customShellPath)) {
 			return getBashShellConfig(customShellPath);
 		}
@@ -202,13 +210,14 @@ export function sanitizeBinaryOutput(str: string): string {
 const trackedDetachedChildPids = new Set<number>();
 
 /**
- * Windows, in a runtime with Bun's FFI, which needs the JIT (Pi-Bolt's -jit build, Pi on Bun; not the default Pi-Bolt build,
- * where Git Bash's processes are found by their group's variable instead): a job object for each shell a tool starts, so that stopping the
- * command (Escape, its timeout, Pi exiting) ends everything it started. `taskkill /T` alone walks the tree by parent process,
- * and misses a process whose parent has exited (Git Bash's `sleep 25; echo x`, `cd web && npm run dev`: a dev server left
- * holding its port), or one started while it walks. The job is only ended when the command is stopped; one that finishes
- * leaves what it started in the background as before (no kill-on-close). Not available (Node, or a call that fails):
- * taskkill only, as before.
+ * Windows, in a runtime with Bun's FFI, which needs the JIT (Pi-Bolt's -jit build, Pi on Bun): a job object for each shell a
+ * tool starts, so that stopping the command (Escape, its timeout, Pi exiting) ends everything it started. `taskkill /T` alone
+ * walks the tree by parent process, and misses a process whose parent has exited (Git Bash's `sleep 25; echo x`, `cd web &&
+ * npm run dev`: a dev server left holding its port), or one started while it walks. The job is only ended when the command is
+ * stopped; one that finishes leaves what it started in the background as before (no kill-on-close). Not available (the
+ * default Pi-Bolt build, Node, or a call that fails): taskkill, and Git Bash's own processes by their group's variable
+ * (killMsysGroup). A native program whose native parent has exited before the stop (a server a launcher started and left)
+ * is reached by neither there, and keeps running.
  */
 interface WindowsJobs {
 	attach(pid: number): unknown;
@@ -273,6 +282,23 @@ export function getMsysBash(shell: string): string | undefined {
 			return bash;
 	}
 	return undefined;
+}
+
+/**
+ * Windows, a Cygwin-family bash: the arguments and spawn options that give it `args` and `command` byte for byte. Its runtime
+ * parses its own command line, and inside quotes turns `\\` into `\`, so quoted the usual (MSVCRT) way every doubled backslash
+ * in a command reached bash halved, even in single quotes and quoted heredocs: a JSON file written with `C:\\Users` came out
+ * invalid, with the command reported as done. Quoted here for that parser, as verbatim arguments; the program's own name too,
+ * which nothing else quotes then. Undefined for any other shell.
+ */
+export function msysShellSpawn(
+	shell: string,
+	args: readonly string[],
+): { args: string[]; windowsVerbatimArguments: true; argv0: string } | undefined {
+	if (!getMsysBash(shell)) return undefined;
+	const quote = (arg: string) => `"${arg.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+	// (A Windows path has no `"`; its backslashes are single, which the parser keeps.)
+	return { args: args.map(quote), windowsVerbatimArguments: true, argv0: `"${shell}"` };
 }
 
 /**

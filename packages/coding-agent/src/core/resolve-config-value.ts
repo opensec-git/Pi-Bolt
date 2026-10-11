@@ -4,7 +4,7 @@
  */
 
 import { execSync, spawnSync } from "child_process";
-import { getShellConfig } from "../utils/shell.ts";
+import { getShellConfig, msysShellSpawn } from "../utils/shell.ts";
 
 // Cache for shell command results (persists for process lifetime)
 const commandResultCache = new Map<string, string | undefined>();
@@ -154,13 +154,17 @@ function executeWithConfiguredShell(command: string): { executed: boolean; value
 	try {
 		const { shell, args, commandTransport } = getShellConfig();
 		const commandFromStdin = commandTransport === "stdin";
-		const result = spawnSync(shell, commandFromStdin ? args : [...args, command], {
+		const shellArgs = commandFromStdin ? args : [...args, command];
+		// Windows, Git Bash: quoted for its own parser, which halves doubled backslashes otherwise (see msysShellSpawn).
+		const msysSpawn = commandFromStdin ? undefined : msysShellSpawn(shell, shellArgs);
+		const result = spawnSync(shell, msysSpawn?.args ?? shellArgs, {
 			encoding: "utf-8",
 			input: commandFromStdin ? command : undefined,
 			timeout: 10000,
 			stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "ignore"],
 			shell: false,
 			windowsHide: true,
+			...(msysSpawn && { windowsVerbatimArguments: true, argv0: msysSpawn.argv0 }),
 		});
 
 		if (result.error) {
