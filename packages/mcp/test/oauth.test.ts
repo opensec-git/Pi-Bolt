@@ -488,6 +488,42 @@ describe("MCP OAuth", () => {
 		await expect(authorizeMcp(provider, insecure)).rejects.toBeInstanceOf(OAuthInsecureEndpointError);
 	});
 
+	it("opens no authorization endpoint other than https or this machine's http (a file: URL runs the file on Windows)", async () => {
+		for (const endpoint of [
+			"file:///C:/Users/me/Downloads/x.bat",
+			"file://attacker.example/share/x",
+			"http://idp.example/a",
+		]) {
+			const origin = await listen(async (request, response, serverOrigin) => {
+				const url = new URL(request.url ?? "/", serverOrigin);
+				response.setHeader("content-type", "application/json");
+				if (url.pathname === "/idp/metadata.json") {
+					response.end(
+						JSON.stringify({
+							issuer: "https://idp.example",
+							authorization_endpoint: endpoint,
+							token_endpoint: `${serverOrigin}/idp/token`,
+							response_types_supported: ["code"],
+						}),
+					);
+				} else if (url.pathname === "/.well-known/oauth-protected-resource/mcp") {
+					response.end(JSON.stringify({ resource: `${serverOrigin}/mcp`, authorization_servers: [serverOrigin] }));
+				} else {
+					response.statusCode = 404;
+					response.end();
+				}
+			});
+			const provider = new TestOAuthProvider("http://127.0.0.1/callback");
+			provider.client = { client_id: "client" };
+			const options = {
+				serverUrl: `${origin}/mcp`,
+				authorizationServerMetadataUrl: new URL(`${origin}/idp/metadata.json`),
+			};
+			await expect(authorizeMcp(provider, options)).rejects.toBeInstanceOf(OAuthInsecureEndpointError);
+			expect(provider.authorizationUrl).toBeUndefined();
+		}
+	});
+
 	it("exchanges a code only when its iss parameter names the authorization server", async () => {
 		const codes: string[] = [];
 		const origin = await listen(async (request, response) => {
