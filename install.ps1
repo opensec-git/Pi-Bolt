@@ -377,6 +377,44 @@ function Assert-PiBoltFolderOwner([string]$dir) {
 	}
 }
 
+# The folders above it too, up to the drive: whoever may rename or delete one of them (every user may, in a folder a user made
+# in C:\, which inherits that) can put a folder of their own, with their pi-bolt.exe, where this user's PATH points. The folders
+# the installer makes itself are made the user's (Get-PiBoltFirstNewFolder). (S-1-15-*: app capabilities, not users.)
+function Assert-PiBoltFolderParents([string]$dir) {
+	if (Test-PiBoltInProfile $dir) { return }
+	$trusted = @(Get-PiBoltFolderOwners | ForEach-Object Value) + 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+	$risky = [Security.AccessControl.FileSystemRights]'Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+	$parent = Split-Path -Parent $dir
+	while ($parent) {
+		if (Test-Path -LiteralPath $parent) {
+			$why = $null
+			try {
+				$acl = Get-Acl -LiteralPath $parent -ErrorAction Stop
+				$owner = $acl.GetOwner([Security.Principal.SecurityIdentifier])
+				if ($trusted -notcontains $owner.Value) { $why = "it belongs to $(try { $owner.Translate([Security.Principal.NTAccount]).Value } catch { $owner.Value })" }
+				foreach ($rule in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) {
+					if ($why -or $rule.AccessControlType -ne 'Allow' -or ($rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly)) { continue }
+					$sid = $rule.IdentityReference.Value
+					if (($rule.FileSystemRights -band $risky) -and $trusted -notcontains $sid -and -not $sid.StartsWith('S-1-15-')) {
+						$who = try { $rule.IdentityReference.Translate([Security.Principal.NTAccount]).Value } catch { $sid }
+						$why = "$who may rename or delete it"
+					}
+				}
+			} catch { $why = "its permissions cannot be read ($($_.Exception.Message))" }
+			if ($why) {
+				Stop-PiBolt "$dir is in $parent, and $why`: another user could then put their own pi-bolt.exe where your PATH points. Install under your profile (the default), or in a folder whose parents only you and the administrators can change. Nothing was installed."
+			}
+		}
+		$parent = Split-Path -Parent $parent
+	}
+}
+# The highest folder of $dir's path that is not there yet (the installer makes it, and the ones below it), or $null.
+function Get-PiBoltFirstNewFolder([string]$dir) {
+	$first = $null
+	while ($dir -and -not (Test-Path -LiteralPath $dir)) { $first = $dir; $dir = Split-Path -Parent $dir }
+	$first
+}
+
 function Install-PiBoltRelease($state) {
 	$name = $state.Name
 	$tmp = Join-Path ([IO.Path]::GetTempPath()) "pi-bolt-$([Guid]::NewGuid().ToString('N').Substring(0, 12))"
@@ -457,12 +495,14 @@ function Install-PiBoltRelease($state) {
 		Show-PiBoltProgress 'checking the executable'
 		$null = & $exe --version 2>&1
 		if ($LASTEXITCODE -ne 0) { Stop-PiBolt 'the downloaded executable does not run on this system' }
-		# (The folder that holds the variant's too, if the installer is making it: whoever may change that may rename the other.)
-		$madeInstall = -not (Test-Path -LiteralPath $state.Install)
+		# (The highest folder the installer makes too, such as C:\tools for C:\tools\pi-bolt: whoever may change that may rename
+		# the ones in it.)
 		Assert-PiBoltFolderOwner $state.Install
 		Assert-PiBoltFolderOwner $state.Dir
+		Assert-PiBoltFolderParents $state.Dir
+		$made = Get-PiBoltFirstNewFolder $state.Dir
 		New-Item -ItemType Directory -Force -Path $state.Dir | Out-Null
-		if ($madeInstall) { Protect-PiBoltFolder $state.Install }
+		if ($made) { Protect-PiBoltFolder $made }
 		Protect-PiBoltFolder $state.Dir
 		Install-PiBoltFiles (Join-Path $unpacked $name) $state.Dir
 		Clear-PiBoltProgress
@@ -498,7 +538,7 @@ function Test-PiBoltOnPath([string]$dir, [string]$path) {
 	$false
 }
 
-function Add-PiBoltToPath([string]$dir) {
+function Add-PiBoltToPath([string]$dir, [bool]$existed = $false) {
 	# Another variant of this installation on PATH (pi-bolt-win32-x64 when this is -x64-jit, say) would be found first, and the
 	# build just installed would not be the one that runs: it comes off, unless PATH is left as it is.
 	$root = Split-Path $dir
@@ -521,6 +561,10 @@ function Add-PiBoltToPath([string]$dir) {
 				Write-Host "Not added. Run Pi-Bolt as:`n`n  & '$dir\pi-bolt.exe'"
 				return
 			}
+		} elseif ($existed) {
+			# Unasked, over an installation that is there (`pi-bolt update`): a folder that is not on PATH was left off it, by
+			# the user's answer or their own choice, and stays off.
+			return
 		}
 		Set-PiBoltUserPath ((@($userPath.TrimEnd(';')) + $dir | Where-Object { $_ }) -join ';')
 		Write-Host "  ${dim}added $dir to your PATH; new terminals will have it$reset"
@@ -549,6 +593,7 @@ function Select-PiBoltAction($state) {
 	$default = if ($existing) { 'reinstall' } else { 'install' }
 	$installed = if ($existing) { Get-PiBoltInstalledVersion $state.Dir } else { '' }
 	$state.Installed = $installed
+	$state.Existed = $existing
 	if ($existing) {
 		if ($installed -and $installed -ne $state.Shown) { Write-Host "${bold}Pi-Bolt $installed is installed at:$reset`n`n  $($state.Dir)`n" }
 		else { Write-Host "${bold}Pi-Bolt is already installed at:$reset`n`n  $($state.Dir)`n" }
@@ -682,10 +727,14 @@ function Install-PiBoltExtensions($state) {
 		$saved = @{ NPM_CONFIG_REGISTRY = $env:NPM_CONFIG_REGISTRY; NPM_CONFIG_IGNORE_SCRIPTS = $env:NPM_CONFIG_IGNORE_SCRIPTS }
 		$env:NPM_CONFIG_REGISTRY = $registry
 		$env:NPM_CONFIG_IGNORE_SCRIPTS = 'true'
+		# (In Pi-Bolt's own folder, as `list`: in a project with resources that need trust, the commands load the extensions
+		# to settle it, and with them the one just downloaded, before its pin is compared.)
+		Push-Location -LiteralPath (Split-Path $exe)
 		try {
 			$out = & $exe install "npm:$spec" 2>&1
 			$installed = $LASTEXITCODE -eq 0
 		} finally {
+			Pop-Location
 			$env:NPM_CONFIG_REGISTRY = $saved.NPM_CONFIG_REGISTRY
 			$env:NPM_CONFIG_IGNORE_SCRIPTS = $saved.NPM_CONFIG_IGNORE_SCRIPTS
 		}
@@ -694,9 +743,11 @@ function Install-PiBoltExtensions($state) {
 			$check = Test-PiBoltInstalledExtension $exe $e
 			if ($check -ne 'same') {
 				# (Not known is not the pin either: what was installed is a download the installer has not seen.)
-				& $exe remove "npm:$spec" *> $null
+				Push-Location -LiteralPath (Split-Path $exe)
+				try { & $exe remove "npm:$spec" *> $null; $removed = $LASTEXITCODE -eq 0 } finally { Pop-Location }
 				$why = if ($check -eq 'different') { 'is not the one this release pins' } else { 'cannot be checked against the pin (no lockfile says what it is)' }
-				Write-Host "  ${red}removed $spec again: what the package manager installed $why$reset"
+				if ($removed) { Write-Host "  ${red}removed $spec again: what the package manager installed $why$reset" }
+				else { Write-Host "  ${red}$spec $why, and removing it failed: remove it yourself (pi-bolt remove npm:$spec)$reset" }
 				Write-Host "  ${dim}Install it yourself if you want it: pi-bolt install npm:$spec$reset"
 				continue
 			}
@@ -784,7 +835,7 @@ function Install-PiBolt {
 	$exe = Join-Path $state.Dir 'pi-bolt.exe'
 	$word = if ($action -eq 'reinstall' -and $state.Installed -and $state.Installed -ne $state.Shown) { 'updated' } elseif ($action -eq 'reinstall') { 'reinstalled' } else { 'installed' }
 	Write-Host "`nPi-Bolt $($state.Shown) was $word successfully $dim(Pi $(& $exe --version))$reset."
-	Add-PiBoltToPath $state.Dir
+	Add-PiBoltToPath $state.Dir ([bool]$state.Existed)
 	Install-PiBoltExtensions $state
 	if ((Get-Command pi-bolt -ErrorAction SilentlyContinue).Source -ieq $exe) { Write-Host "`nRun it with: ${bold}pi-bolt$reset" }
 	if ((Test-PiBoltCanAsk) -and $env:PIBOLT_NO_START -ne '1') {
