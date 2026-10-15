@@ -46,16 +46,24 @@ jobs:
           scripts/build-pi.sh --out out/pi-bolt
           scripts/build-pi.sh --stable --out out/pi-stable
           { echo "### $(uname -m), $(nproc) CPUs: $(grep -m1 -E 'model name|CPU part' /proc/cpuinfo | cut -d: -f2 | xargs)"; out/pi-bolt/pi --version; } >>"$GITHUB_STEP_SUMMARY"
-      - name: Startup, headless, interactive
+      - name: Startup memory
         run: |
           mkdir -p results
-          python3 bench/benchmark.py --runs 11 --warmup 2 --cpus 1 --out results/benchmark.jsonl \
-            --build pi-bolt=out/pi-bolt/pi --build bun=out/pi-stable/pi --baseline bun | tee results/benchmark.txt
-          { echo '```'; sed -n '/^startup/,$p' results/benchmark.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
-      - name: Long answers
-        run: |
-          python3 bench/long_answer.py --sizes 20000,60000 --cpus 1 --build pi-bolt=out/pi-bolt/pi --build bun=out/pi-stable/pi | tee results/long_answer.txt
-          { echo '```'; cat results/long_answer.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+          sudo apt-get install -y -qq strace >/dev/null
+          gcc -O2 -shared -fPIC -o /tmp/dumpmaps.so bench/diag/dumpmaps.c
+          {
+          echo "== verbose"; BUN_STATIC_HEAP_VERBOSE=1 out/pi-bolt/pi --version </dev/null 2>&1 | head -60
+          grep -m1 flags /proc/cpuinfo
+          for b in pi-bolt pi-stable; do
+            echo "== $b time -v"; /usr/bin/time -v out/$b/pi --version </dev/null 2>&1 | grep -E "Maximum resident|page faults|Elapsed"
+            echo "== $b smaps at exit"; DUMPMAPS_OUT=/tmp/$b.smaps LD_PRELOAD=/tmp/dumpmaps.so out/$b/pi --version </dev/null >/dev/null 2>&1
+            [ -f /tmp/$b.smaps ] && python3 bench/diag/smaps_top.py /tmp/$b.smaps && cp /tmp/$b.smaps results/
+            echo "== $b large mmaps"; strace -f -e trace=mmap,munmap,madvise -o /tmp/$b.strace out/$b/pi --version </dev/null >/dev/null 2>&1
+            awk '/mmap\(/ { if (match($0, /mmap\([^,]*, ([0-9]+)/, m) && m[1] >= 1048576) print }' /tmp/$b.strace | head -40
+            cp /tmp/$b.strace results/
+          done
+          } 2>&1 | tee results/startup_memory.txt
+          { echo '```'; cat results/startup_memory.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bench-${{ runner.arch }}
