@@ -58,6 +58,15 @@ jobs:
             echo "== $b at exit"; python3 bench/diag/exit_smaps.py results/$b.smaps out/$b/pi --version || true
             [ -f results/$b.smaps ] && python3 bench/diag/smaps_top.py results/$b.smaps || true
           done
+          for thp in always madvise; do
+            echo $thp | sudo tee /sys/kernel/mm/transparent_hugepage/enabled >/dev/null
+            echo "== THP $thp"
+            for b in pi-bolt pi-stable; do
+              for i in 1 2 3; do /usr/bin/time -f "$b maxrss_kb %M" out/$b/pi --version </dev/null 2>&1 >/dev/null | tail -1; done
+            done
+            python3 bench/benchmark.py --runs 11 --warmup 2 --cpus 1 --scenarios startup,headless,interactive \
+              --build pi-bolt=out/pi-bolt/pi --build bun=out/pi-stable/pi --baseline bun | sed -n '/^startup/,$p'
+          done
           } 2>&1 | tee results/startup_memory.txt
           { echo '```'; cat results/startup_memory.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -4,7 +4,7 @@ while it waits: what the process has mapped and touched when it is done (VmHWM: 
 import os, subprocess, sys, time
 
 out, cmd = sys.argv[1], sys.argv[2:]
-st = subprocess.Popen(["strace", "-qq", "-e", "trace=none", "-e", "inject=exit_group:delay_enter=3000000", "-o", "/dev/null", *cmd],
+st = subprocess.Popen(["strace", "-qq", "-e", "trace=exit_group", "-e", "inject=exit_group:delay_enter=3000000", "-o", "/dev/null", *cmd],
                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 time.sleep(1.5)
 kids = []
