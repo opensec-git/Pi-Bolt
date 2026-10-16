@@ -46,17 +46,14 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq tmux >/dev/null
           case "$(uname -m)" in x86_64) plat=linux-x64 ;; *) plat=linux-arm64 ;; esac
-          gh run download "$RUNTIME_RUN" --repo "$GITHUB_REPOSITORY" --name "runtime-$plat" --dir .work/rt
-          tar -C .work/rt -xzf ".work/rt/pi-bolt-runtime-$plat.tar.gz"
-          mkdir -p .work/runtime && install -m 755 ".work/rt/pi-bolt-runtime-$plat/bun" .work/runtime/bun
+          scripts/fetch-runtime.sh --version bolt-v0.9.2
           scripts/prepare-pi.sh
-          scripts/build-pi.sh --out out/cand
           scripts/build-pi.sh --stable --out out/pi-stable
           old=bolt-v0.8.5; [ "$plat" = linux-arm64 ] && old=bolt-v0.8.8
           gh release download "$old" --repo "$GITHUB_REPOSITORY" --pattern "pi-bolt-$plat.tar.xz" --dir .work/old
           mkdir -p out/old && tar -C out/old --strip-components=1 -xJf ".work/old/pi-bolt-$plat.tar.xz"
-          gh release download bolt-v0.9.1 --repo "$GITHUB_REPOSITORY" --pattern "pi-bolt-$plat.tar.xz" --dir .work/rel
-          mkdir -p out/rel && tar -C out/rel --strip-components=1 -xJf ".work/rel/pi-bolt-$plat.tar.xz"
+          gh release download bolt-v0.9.2 --repo "$GITHUB_REPOSITORY" --pattern "pi-bolt-$plat.tar.xz" --dir .work/cand
+          mkdir -p out/cand && tar -C out/cand --strip-components=1 -xJf ".work/cand/pi-bolt-$plat.tar.xz"
           # Vanilla Pi 1.2.0 as released on npm, on the official Node 22 and Node 24 binaries.
           npm install --prefix .work/vanilla --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent@1.2.0 >/dev/null
           narch=x64; [ "$plat" = linux-arm64 ] && narch=arm64
@@ -67,20 +64,20 @@ jobs:
             (cd .work && curl -fsSL "$base/SHASUMS256.txt" | grep " $file\$" | sha256sum -c -)
             mkdir -p ".work/node$v" && tar -C ".work/node$v" --strip-components=1 -xJf ".work/$file"
           done
-          for b in old rel cand; do out/$b/pi --version </dev/null; done
+          for b in old cand; do out/$b/pi --version </dev/null; done
           for v in 22 24; do echo "node$v $(.work/node$v/bin/node --version)"; .work/node$v/bin/node .work/vanilla/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js --version </dev/null; done
           echo "THP: $(cat /sys/kernel/mm/transparent_hugepage/enabled)" >>"$GITHUB_STEP_SUMMARY"
       - name: Suites
         run: |
           mkdir -p results
-          B=(--build old=out/old/pi --build rel=out/rel/pi --build cand=out/cand/pi --build bun=out/pi-stable/pi --build "node22=.work/node22/bin/node .work/vanilla/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js" --build "node24=.work/node24/bin/node .work/vanilla/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js")
+          B=(--build old=out/old/pi --build cand=out/cand/pi --build bun=out/pi-stable/pi --build "node22=.work/node22/bin/node .work/vanilla/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js" --build "node24=.work/node24/bin/node .work/vanilla/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js")
           run() { name=$1; shift; echo "## $name" | tee -a results/all.txt; "$@" 2>&1 | grep -vE 'round [0-9]+/' | tee -a results/all.txt || echo "$name failed" | tee -a results/all.txt; }
           run benchmark python3 bench/benchmark.py --runs 11 --warmup 2 --cpus 1 "${B[@]}" --baseline old
           run long_answer python3 bench/long_answer.py --sizes 20000,60000 --cpus 1 "${B[@]}"
           run tmux_load python3 bench/tmux_load.py --steps md:20000,write:50 --cpus 1 "${B[@]}"
           run pauses python3 bench/pauses.py --cpus 1 "${B[@]}"
           run idle python3 bench/idle.py --seconds 20 --rounds 2 "${B[@]}"
-          run long_session python3 bench/long_session.py --prompts 20 --every 10 --cpus 1 "${B[@]}"
+          run long_session python3 bench/long_session.py --prompts 40 --every 20 --cpus 1 "${B[@]}"
           { echo '```'; cat results/all.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
