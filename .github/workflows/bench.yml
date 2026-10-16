@@ -1,0 +1,70 @@
+name: bench
+
+# Pi-Bolt against the same Pi on stock Bun, on GitHub's Linux x86-64 and ARM64 runners side by side: startup, one headless
+# prompt, an interactive session, and the CPU of streaming long answers (bench/benchmark.py, bench/long_answer.py). The builds
+# use the latest release's runtime and this commit's Pi. For comparing the two architectures' compiled code, and a change
+# against the release, on machines of the same class. Results are the job summaries and an artifact per runner.
+#
+#   gh workflow run bench.yml -R opensec-git/Pi-Bolt        (or push a branch bench/<name>)
+on:
+  workflow_dispatch:
+  push:
+    branches: ["bench/**"]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  bench:
+    name: Bench on ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64
+            runner: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.4.2"
+      - name: Builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_RUN: "38823518186"
+        run: |
+          plat=linux-x64
+          git worktree add -q ../base bolt-v0.9.1
+          (cd ../base && npm ci --ignore-scripts >/dev/null 2>&1 && scripts/fetch-runtime.sh --version bolt-v0.9.1 && scripts/prepare-pi.sh && scripts/build-pi.sh --out "$PWD/../Pi-Bolt/out/base")
+          scripts/fetch-runtime.sh --version bolt-v0.9.1
+          scripts/prepare-pi.sh
+          scripts/build-pi.sh --out out/mid
+          gh run download "$RUNTIME_RUN" --repo "$GITHUB_REPOSITORY" --name "runtime-$plat" --dir .work/rt
+          tar -C .work/rt -xzf ".work/rt/pi-bolt-runtime-$plat.tar.gz"
+          install -m 755 ".work/rt/pi-bolt-runtime-$plat/bun" .work/runtime/bun
+          scripts/build-pi.sh --out out/cand
+          for b in base mid cand; do out/$b/pi --version </dev/null; done
+          grep -m1 "model name" /proc/cpuinfo >>"$GITHUB_STEP_SUMMARY"
+      - name: Suites
+        run: |
+          mkdir -p results
+          for order in "base mid cand" "cand mid base"; do
+            args=(); for b in $order; do args+=(--build "$b=out/$b/pi"); done
+            python3 bench/benchmark.py --runs 21 --warmup 3 --cpus 1 --scenarios startup,interactive,interactive-default-theme "${args[@]}" --baseline base 2>&1 | grep -vE 'round [0-9]+/' | tee -a results/all.txt
+          done
+          { echo '```'; cat results/all.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bench-${{ runner.arch }}
+          path: results/
+          retention-days: 30
