@@ -52,16 +52,19 @@ jobs:
           scripts/prepare-pi.sh
           scripts/build-pi.sh --out out/cand
           scripts/build-pi.sh --stable --out out/pi-stable
+          old=bolt-v0.8.5; [ "$plat" = linux-arm64 ] && old=bolt-v0.8.8
+          gh release download "$old" --repo "$GITHUB_REPOSITORY" --pattern "pi-bolt-$plat.tar.xz" --dir .work/old
+          mkdir -p out/old && tar -C out/old --strip-components=1 -xJf ".work/old/pi-bolt-$plat.tar.xz"
           gh release download bolt-v0.9.1 --repo "$GITHUB_REPOSITORY" --pattern "pi-bolt-$plat.tar.xz" --dir .work/rel
           mkdir -p out/rel && tar -C out/rel --strip-components=1 -xJf ".work/rel/pi-bolt-$plat.tar.xz"
-          for b in rel cand; do out/$b/pi --version </dev/null; done
+          for b in old rel cand; do out/$b/pi --version </dev/null; done
           echo "THP: $(cat /sys/kernel/mm/transparent_hugepage/enabled)" >>"$GITHUB_STEP_SUMMARY"
       - name: Suites
         run: |
           mkdir -p results
-          B="--build rel=out/rel/pi --build cand=out/cand/pi --build bun=out/pi-stable/pi"
+          B="--build old=out/old/pi --build rel=out/rel/pi --build cand=out/cand/pi --build bun=out/pi-stable/pi"
           run() { name=$1; shift; echo "## $name" | tee -a results/all.txt; "$@" 2>&1 | grep -vE 'round [0-9]+/' | tee -a results/all.txt || echo "$name failed" | tee -a results/all.txt; }
-          run benchmark python3 bench/benchmark.py --runs 11 --warmup 2 --cpus 1 $B --baseline rel
+          run benchmark python3 bench/benchmark.py --runs 11 --warmup 2 --cpus 1 $B --baseline old
           run long_answer python3 bench/long_answer.py --sizes 20000,60000 --cpus 1 $B
           run tmux_load python3 bench/tmux_load.py --steps md:20000,write:50 --cpus 1 $B
           run pauses python3 bench/pauses.py --cpus 1 $B
