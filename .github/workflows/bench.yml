@@ -57,19 +57,30 @@ jobs:
           mkdir -p out/old && tar -C out/old --strip-components=1 -xJf ".work/old/pi-bolt-$plat.tar.xz"
           gh release download bolt-v0.9.1 --repo "$GITHUB_REPOSITORY" --pattern "pi-bolt-$plat.tar.xz" --dir .work/rel
           mkdir -p out/rel && tar -C out/rel --strip-components=1 -xJf ".work/rel/pi-bolt-$plat.tar.xz"
+          # Vanilla Pi 1.2.0 as released on npm, on the official Node 22 and Node 24 binaries.
+          npm install --prefix .work/vanilla --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent@1.2.0 >/dev/null
+          narch=x64; [ "$plat" = linux-arm64 ] && narch=arm64
+          for v in 22 24; do
+            base="https://nodejs.org/dist/latest-v$v.x"
+            file=$(curl -fsSL "$base/SHASUMS256.txt" | awk -v f="linux-$narch.tar.xz" '$2 ~ f"$" {print $2}')
+            curl -fsSL -o ".work/$file" "$base/$file"
+            (cd .work && curl -fsSL "$base/SHASUMS256.txt" | grep " $file\$" | sha256sum -c -)
+            mkdir -p ".work/node$v" && tar -C ".work/node$v" --strip-components=1 -xJf ".work/$file"
+          done
           for b in old rel cand; do out/$b/pi --version </dev/null; done
+          for v in 22 24; do echo "node$v $(.work/node$v/bin/node --version)"; .work/node$v/bin/node .work/vanilla/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js --version </dev/null; done
           echo "THP: $(cat /sys/kernel/mm/transparent_hugepage/enabled)" >>"$GITHUB_STEP_SUMMARY"
       - name: Suites
         run: |
           mkdir -p results
-          B="--build old=out/old/pi --build rel=out/rel/pi --build cand=out/cand/pi --build bun=out/pi-stable/pi"
+          B=(--build old=out/old/pi --build rel=out/rel/pi --build cand=out/cand/pi --build bun=out/pi-stable/pi --build "node22=.work/node22/bin/node .work/vanilla/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js" --build "node24=.work/node24/bin/node .work/vanilla/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js")
           run() { name=$1; shift; echo "## $name" | tee -a results/all.txt; "$@" 2>&1 | grep -vE 'round [0-9]+/' | tee -a results/all.txt || echo "$name failed" | tee -a results/all.txt; }
-          run benchmark python3 bench/benchmark.py --runs 11 --warmup 2 --cpus 1 $B --baseline old
-          run long_answer python3 bench/long_answer.py --sizes 20000,60000 --cpus 1 $B
-          run tmux_load python3 bench/tmux_load.py --steps md:20000,write:50 --cpus 1 $B
-          run pauses python3 bench/pauses.py --cpus 1 $B
-          run idle python3 bench/idle.py --seconds 20 --rounds 2 $B
-          run long_session python3 bench/long_session.py --prompts 40 --every 20 --cpus 1 $B
+          run benchmark python3 bench/benchmark.py --runs 11 --warmup 2 --cpus 1 "${B[@]}" --baseline old
+          run long_answer python3 bench/long_answer.py --sizes 20000,60000 --cpus 1 "${B[@]}"
+          run tmux_load python3 bench/tmux_load.py --steps md:20000,write:50 --cpus 1 "${B[@]}"
+          run pauses python3 bench/pauses.py --cpus 1 "${B[@]}"
+          run idle python3 bench/idle.py --seconds 20 --rounds 2 "${B[@]}"
+          run long_session python3 bench/long_session.py --prompts 20 --every 10 --cpus 1 "${B[@]}"
           { echo '```'; cat results/all.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
