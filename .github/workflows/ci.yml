@@ -208,7 +208,10 @@ jobs:
             dpkg -r --force-depends openssl >/dev/null 2>&1
             run | tee /tmp/b; grep -q "signature verified" /tmp/b   # checked by the Pi-Bolt installed before
             rm -rf /root/t
-            run | tee /tmp/c; grep -q "no OpenSSL 3 here" /tmp/c
+            # No OpenSSL 3, no Pi-Bolt and no ssh-keygen: nothing can check the signature, so nothing is installed
+            if run >/tmp/c; then cat /tmp/c; echo "installed without checking the signature"; exit 1; fi
+            grep -q "nothing here can check" /tmp/c
+            run PIBOLT_UNVERIFIED=1 | tee /tmp/d; grep -q "signature was not checked" /tmp/d
             /root/t/.local/bin/pi-bolt --version'
 
   engine:
