@@ -85,14 +85,11 @@ jobs:
           trap 'rm -f "$key"' EXIT
           (umask 077 && printenv SIGNING_KEY > "$key")
           openssl pkey -in "$key" -pubout | cmp -s - ../keys/release.pub || { echo "::error::PIBOLT_SIGNING_KEY is not the key of keys/release.pub"; exit 1; }
-          if [ ! -f SHA256SUMS.sig ]; then
-            openssl pkeyutl -sign -inkey "$key" -rawin -in SHA256SUMS -out SHA256SUMS.sig
-            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" SHA256SUMS.sig
-          fi
-          if [ ! -f SHA256SUMS.sshsig ]; then
-            node ../scripts/lib/sshsig.mjs sign "$key" SHA256SUMS SHA256SUMS.sshsig
-            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" SHA256SUMS.sshsig
-          fi
+          # Both signatures are made again whenever one is missing: one left from an earlier SHA256SUMS would not verify.
+          # (Ed25519 signatures are deterministic, so a .sig that was already right comes out the same.)
+          openssl pkeyutl -sign -inkey "$key" -rawin -in SHA256SUMS -out SHA256SUMS.sig
+          node ../scripts/lib/sshsig.mjs sign "$key" SHA256SUMS SHA256SUMS.sshsig
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber SHA256SUMS.sig SHA256SUMS.sshsig
         env:
           SIGNING_KEY: ${{ secrets.PIBOLT_SIGNING_KEY }}
           GH_TOKEN: ${{ github.token }}

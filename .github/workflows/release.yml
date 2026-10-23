@@ -375,8 +375,9 @@ jobs:
               exit 1
             fi
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft --notes-file "docs/releases/$VERSION.md"
-            # (A signature of the SHA256SUMS replaced here no longer holds.)
+            # (A signature of the SHA256SUMS replaced here no longer holds, in either form.)
             gh release delete-asset "$TAG" SHA256SUMS.sig --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
+            gh release delete-asset "$TAG" SHA256SUMS.sshsig --repo "$GITHUB_REPOSITORY" --yes 2>/dev/null || true
             gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber release/*
           else
             gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag --title "Pi-Bolt $VERSION" --notes-file "docs/releases/$VERSION.md" release/*
@@ -399,7 +400,7 @@ jobs:
             echo '```bash'
             echo "gh release download $TAG -R $GITHUB_REPOSITORY -p SHA256SUMS -D dist/$VERSION --clobber"
             echo "scripts/sign-release.sh --key <your key> dist/$VERSION"
-            echo "gh release upload $TAG -R $GITHUB_REPOSITORY dist/$VERSION/SHA256SUMS.sig"
+            echo "gh release upload $TAG -R $GITHUB_REPOSITORY dist/$VERSION/SHA256SUMS.sig dist/$VERSION/SHA256SUMS.sshsig"
             echo '```'
             echo
             echo "Then run the **publish** workflow: \`gh workflow run publish.yml -R $GITHUB_REPOSITORY -f tag=$TAG\` (it signs the draft"
