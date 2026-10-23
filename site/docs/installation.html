@@ -6,9 +6,9 @@
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#050505">
 <title>Installation · Pi-Bolt documentation</title>
-<meta name="description" content="Install Pi-Bolt on Linux, macOS, Windows or Android with the installer or npm, choose a build, verify it, update and uninstall.">
+<meta name="description" content="Install Pi-Bolt on Linux, macOS, Windows or Android with the installer, Homebrew or npm, choose a build, verify it, update and uninstall.">
 <meta property="og:title" content="Installation · Pi-Bolt documentation">
-<meta property="og:description" content="Install Pi-Bolt on Linux, macOS, Windows or Android with the installer or npm, choose a build, verify it, update and uninstall.">
+<meta property="og:description" content="Install Pi-Bolt on Linux, macOS, Windows or Android with the installer, Homebrew or npm, choose a build, verify it, update and uninstall.">
 <meta property="og:url" content="https://pi-bolt.opensec.in/docs/installation.html">
 <link rel="canonical" href="https://pi-bolt.opensec.in/docs/installation.html">
 <link rel="icon" href="../logo.svg" type="image/svg+xml">
@@ -102,6 +102,12 @@ irm https://pi-bolt.opensec.in/install.ps1 | iex</pre>
     <p><code>--allow-scripts=pi-bolt</code> lets npm run the package's install script, which puts the Windows executable in place.
       On macOS and Linux, the first run of <code>pi-bolt</code> downloads the release that matches the package's version.</p>
   </div>
+  <div data-tab="homebrew" data-title="Homebrew">
+<pre data-label="Terminal"><span class="p">$ </span>brew install opensec-git/tap/pi-bolt</pre>
+    <p>On macOS on Apple silicon and on Linux (x86-64 with AVX2, and ARM64). The formula installs the default build of the latest
+      release, checked against its <code>SHA256SUMS</code>, and links <code>pi-bolt</code> into Homebrew's <code>bin</code>. For
+      the JIT build or the x86-64 build for CPUs without AVX2, use the installer.</p>
+  </div>
 </div>
 
 <p>The installer:</p>
@@ -192,12 +198,13 @@ npm install -g --allow-scripts=pi-bolt pi-bolt</pre>
 <span class="p">$ </span>pi-bolt update --channel beta   <span class="c"># take pre-releases too (stable: the latest release only)</span></pre>
 <p>An update keeps the build it replaces; <code>pi-bolt update --rollback</code> puts it back without downloading anything, and
   running it again goes forward again. The channel is kept for the installation. With npm, run <code>npm update -g pi-bolt</code>;
-  the next run downloads the new release. Running the installer again also updates.</p>
+  the next run downloads the new release. With Homebrew, run <code>brew upgrade pi-bolt</code>; <code>pi-bolt update</code>
+  says so and changes nothing, and <code>--rollback</code> is not available. Running the installer again also updates.</p>
 
 <h2 id="uninstall">Uninstall<a class="anchor" href="#uninstall" aria-label="Link to this section">#</a></h2>
 <p>Run the installer again and choose <strong>uninstall</strong>. It removes the Pi-Bolt builds from <code>~/.pi-bolt</code>, the
   one kept for a rollback among them, and the <code>pi-bolt</code> link. With npm, run <code>npm uninstall -g pi-bolt</code>, then delete <code>~/.pi-bolt/npm</code>,
-  where the npm package keeps the release it downloaded.</p>
+  where the npm package keeps the release it downloaded. With Homebrew, run <code>brew uninstall pi-bolt</code>.</p>
 <p>Your Pi configuration in <code>~/.pi/agent</code> belongs to Pi and is not removed.</p>
 
 <h2 id="manual-download">Manual download<a class="anchor" href="#manual-download" aria-label="Link to this section">#</a></h2>

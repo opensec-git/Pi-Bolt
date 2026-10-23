@@ -533,9 +533,15 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 			throw new CompileError("compiling extensions in is not available on Windows yet");
 		if (process.env.PREFIX?.includes("com.termux"))
 			throw new CompileError("compiling extensions in is not available in Termux");
-		if (!options.out && piBoltInstallMethod() === "npm") {
+		const method = piBoltInstallMethod();
+		if (!options.out && method === "npm") {
 			throw new CompileError(
 				"this Pi-Bolt was installed with the npm package, whose folder npm owns: install it with the installer to compile extensions in",
+			);
+		}
+		if (!options.out && method === "homebrew") {
+			throw new CompileError(
+				"this Pi-Bolt was installed with Homebrew, whose folder brew owns: install it with the installer to compile extensions in",
 			);
 		}
 		if (mode === "status") {

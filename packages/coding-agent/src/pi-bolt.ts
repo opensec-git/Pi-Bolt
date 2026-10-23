@@ -6,7 +6,7 @@
  * was built for, scripts/runtime-stamp.sh, when known). In every other build it is undefined and nothing here changes what Pi
  * does.
  */
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -124,16 +124,34 @@ export function piBoltVersionOfTag(tag: unknown): string | undefined {
 	return match ? match[1] : undefined;
 }
 
+export type PiBoltInstallMethod = "npm" | "homebrew" | "installer";
+
+/** The command that updates a Pi-Bolt installed with Homebrew (the formula in opensec-git/homebrew-tap). */
+export const PIBOLT_BREW_UPGRADE = "brew upgrade pi-bolt";
+
 /**
  * How this Pi-Bolt was installed: with the npm package (whose launcher keeps the executable under $PIBOLT_HOME/npm/<version>;
- * on Windows, whose install script puts it in the package's own bin folder, where npm's shims start it directly), or with the
- * installer (anything else).
+ * on Windows, whose install script puts it in the package's own bin folder, where npm's shims start it directly), with
+ * Homebrew (the executable is in its Cellar, <prefix>/Cellar/pi-bolt/<version>/libexec, wherever a link to it is), or with
+ * the installer (anything else).
  */
-export function piBoltInstallMethod(): "npm" | "installer" {
+export function piBoltInstallMethod(): PiBoltInstallMethod {
 	if (process.env.PIBOLT_NPM === "1") return "npm";
 	const execPath = process.execPath;
 	if (/[\\/]npm[\\/]\d+\.\d+\.\d+[\\/]pi-bolt-(linux|darwin|win32)-/.test(execPath)) return "npm";
-	return /[\\/]node_modules[\\/]pi-bolt[\\/]bin[\\/]pi-bolt\.exe$/i.test(execPath) ? "npm" : "installer";
+	if (/[\\/]node_modules[\\/]pi-bolt[\\/]bin[\\/]pi-bolt\.exe$/i.test(execPath)) return "npm";
+	let realPath = execPath;
+	try {
+		realPath = realpathSync(execPath);
+	} catch {
+		// (Not there to resolve: the path as it is.)
+	}
+	return /[\\/]Cellar[\\/]pi-bolt[\\/]/.test(realPath) ? "homebrew" : "installer";
+}
+
+/** The command that updates this Pi-Bolt: `brew upgrade pi-bolt` for Homebrew's, else `pi-bolt update`. */
+export function piBoltUpdateCommand(method: PiBoltInstallMethod = piBoltInstallMethod()): string {
+	return method === "homebrew" ? PIBOLT_BREW_UPGRADE : "pi-bolt update";
 }
 
 /**
@@ -184,10 +202,10 @@ export function piBoltJitVariant(variant: string = PIBOLT?.variant ?? "x64"): st
 /**
  * The command that installs the JIT build in place of this one, as it was installed: the installer with PIBOLT_VARIANT (which
  * keeps the default build's folder, and links `pi-bolt` to the new one), or for npm, PIBOLT_VARIANT where the package reads it
- * (every run on macOS and Linux; when it is installed on Windows).
+ * (every run on macOS and Linux; when it is installed on Windows). Homebrew's is uninstalled for the installer's.
  */
 export function piBoltJitSwitchCommand(
-	method: "npm" | "installer" = piBoltInstallMethod(),
+	method: PiBoltInstallMethod = piBoltInstallMethod(),
 	platform: NodeJS.Platform = process.platform,
 	variant: string = piBoltJitVariant(),
 ): string {
@@ -196,9 +214,11 @@ export function piBoltJitSwitchCommand(
 			? `$env:PIBOLT_VARIANT = "${variant}"; npm install -g --allow-scripts=pi-bolt pi-bolt`
 			: `export PIBOLT_VARIANT=${variant} (in your shell profile)`;
 	}
-	return platform === "win32"
-		? `$env:PIBOLT_VARIANT = "${variant}"; irm https://pi-bolt.opensec.in/install.ps1 | iex`
-		: `curl -fsSL https://pi-bolt.opensec.in/install.sh | PIBOLT_VARIANT=${variant} sh`;
+	if (platform === "win32")
+		return `$env:PIBOLT_VARIANT = "${variant}"; irm https://pi-bolt.opensec.in/install.ps1 | iex`;
+	const installer = `curl -fsSL https://pi-bolt.opensec.in/install.sh | PIBOLT_VARIANT=${variant} sh`;
+	// (The formula installs the default build only: the JIT build comes from the installer, in place of Homebrew's.)
+	return method === "homebrew" ? `brew uninstall pi-bolt && ${installer}` : installer;
 }
 
 /** The executable the installer puts in `installDir` for this variant (on macOS, the launcher that starts pi-bin). */

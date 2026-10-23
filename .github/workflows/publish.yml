@@ -3,7 +3,8 @@ name: publish
 # Publishes a release the release workflow drafted: signs SHA256SUMS when the draft has no SHA256SUMS.sig yet, checks
 # SHA256SUMS.sig against keys/release.pub and that SHA256SUMS lists exactly the files of a release, each as it is
 # (scripts/check-release-files.sh, scripts/release-files.txt), publishes the GitHub release as the latest, puts install.sh,
-# install.ps1 and the site on gh-pages (https://pi-bolt.opensec.in), and publishes the npm packages.
+# install.ps1 and the site on gh-pages (https://pi-bolt.opensec.in), publishes the npm packages, and points the Homebrew formula
+# (opensec-git/homebrew-tap) at the release.
 #
 # Signing: the release key is the secret PIBOLT_SIGNING_KEY of the "release" environment, which only runs this workflow from
 # pi-bolt; it is used in one step below and nowhere else. What runs near it is pi-bolt's, not the tag's: the tag must be a commit
@@ -190,3 +191,58 @@ jobs:
           else
             npm publish --access public --provenance
           fi
+
+  # The Homebrew formula (Formula/pi-bolt.rb in opensec-git/homebrew-tap) is pointed at the release once it and npm are out:
+  # its version, URLs and checksums, from the release's signed SHA256SUMS. With the repository secret HOMEBREW_TAP_TOKEN (a
+  # fine-grained token that may write the tap's contents, docs/RELEASING.md); without it, a notice, and the release stands.
+  # Not for a pre-release: `brew install` takes the latest release.
+  homebrew:
+    name: Homebrew formula
+    needs: [verify, release, npm]
+    # (After npm, or with npm skipped while trusted publishing is not set up.)
+    if: ${{ !cancelled() && needs.release.result == 'success' && needs.npm.result != 'failure' && github.event.inputs.prerelease != 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+    steps:
+      - id: token
+        name: The tap's token
+        run: |
+          if [ -n "$TAP_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No HOMEBREW_TAP_TOKEN secret: the Homebrew formula was not updated (docs/RELEASING.md)"
+          fi
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+      # pi-bolt as this run was started from it: the script and the release key.
+      - if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: steps.token.outputs.present == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: opensec-git/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-tap
+      - name: The release's checksums
+        if: steps.token.outputs.present == 'true'
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/release" --pattern SHA256SUMS --pattern SHA256SUMS.sig
+          openssl pkeyutl -verify -pubin -inkey keys/release.pub -rawin -in "$RUNNER_TEMP/release/SHA256SUMS" -sigfile "$RUNNER_TEMP/release/SHA256SUMS.sig"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Update and push the formula
+        if: steps.token.outputs.present == 'true'
+        run: |
+          node scripts/update-homebrew-formula.mjs homebrew-tap/Formula/pi-bolt.rb "$RUNNER_TEMP/release/SHA256SUMS" "$VERSION"
+          cd homebrew-tap
+          if git diff --quiet; then echo "the formula is already pi-bolt $VERSION"; exit 0; fi
+          git config user.name "OpenSec"
+          git config user.email "323596076+opensec-intelligence@users.noreply.github.com"
+          git commit -am "pi-bolt $VERSION"
+          git push origin HEAD

@@ -9,7 +9,7 @@ import { spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import chalk from "chalk";
-import { PIBOLT, piBoltInstallDir, piBoltInstallMethod } from "./pi-bolt.ts";
+import { PIBOLT, PIBOLT_INSTALL_URL, piBoltInstallDir, piBoltInstallMethod } from "./pi-bolt.ts";
 
 /** "Pi-Bolt 0.9.0 (Pi 1.2.0), linux-x64, JIT off, built ..." and what is compiled in, from a build's pi-bolt.txt. */
 function describe(folder: string): string {
@@ -125,11 +125,20 @@ export function rollBackInstallation(
 /** `pi-bolt update --rollback`. Returns the exit status. */
 export function rollbackPiBolt(): number {
 	if (!PIBOLT) return 1;
-	if (piBoltInstallMethod() === "npm") {
+	const method = piBoltInstallMethod();
+	if (method === "npm") {
 		console.error(
 			"This Pi-Bolt was installed with the npm package. Install the version you want with the package manager that installed it:",
 		);
 		console.error("  npm install -g pi-bolt@<version>      (the versions: npm view pi-bolt versions)");
+		return 1;
+	}
+	// (Homebrew keeps no build before this one: its formula has the latest release only.)
+	if (method === "homebrew") {
+		console.error(
+			"This Pi-Bolt was installed with Homebrew, which keeps no earlier build to go back to. To run another version, uninstall it and install that version with the installer:",
+		);
+		console.error(`  brew uninstall pi-bolt && curl -fsSL ${PIBOLT_INSTALL_URL} | PIBOLT_VERSION=bolt-v<version> sh`);
 		return 1;
 	}
 	if (!piBoltInstallDir()) {

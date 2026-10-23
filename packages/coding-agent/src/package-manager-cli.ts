@@ -41,6 +41,7 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/tru
 import {
 	isPiBoltChannel,
 	PIBOLT,
+	PIBOLT_BREW_UPGRADE,
 	PIBOLT_INSTALL_COMMAND,
 	type PiBoltChannel,
 	piBoltChannel,
@@ -818,17 +819,24 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 
 /**
  * Updates a Pi-Bolt installation to the latest release: the installer, run again, replaces the executable in place (same
- * variant, same folder). One installed with the npm package is updated with the package manager instead.
+ * variant, same folder). One installed with the npm package or Homebrew is updated with the package manager instead.
  */
 async function runPiBoltSelfUpdate(
 	version: string,
 	options: { reinstall?: boolean; recompile?: boolean } = {},
 ): Promise<boolean> {
-	if (piBoltInstallMethod() === "npm") {
+	const method = piBoltInstallMethod();
+	if (method === "npm") {
 		console.log(
 			`This Pi-Bolt was installed with the npm package. Update it with the package manager that installed it:`,
 		);
 		console.log(`  npm install -g pi-bolt@latest      (or: bun add -g pi-bolt@latest)`);
+		return false;
+	}
+	// (Homebrew owns the folder: the installer would replace files Homebrew keeps track of.)
+	if (method === "homebrew") {
+		console.log(`This Pi-Bolt was installed with Homebrew. Update it with Homebrew:`);
+		console.log(`  ${PIBOLT_BREW_UPGRADE}`);
 		return false;
 	}
 	// On Windows, without PowerShell (#82): a program that starts PowerShell to download a script and run it is what malware does,

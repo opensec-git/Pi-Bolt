@@ -35,6 +35,7 @@ import {
 	piBoltInstallDir,
 	piBoltInstallMethod,
 	piBoltJitSwitchCommand,
+	piBoltUpdateCommand,
 } from "../pi-bolt.ts";
 import { findExecutableOnPath, spawnProcessSync } from "../utils/child-process.ts";
 import { getLatestPiRelease, isNewerPackageVersion } from "../utils/version-check.ts";
@@ -105,7 +106,7 @@ interface SelfInfo {
 	/** What to start to run this Pi-Bolt again: the launcher on macOS (and in Termux), else the executable. */
 	command: string;
 	folder: string;
-	method: "npm" | "installer" | "manual" | "not installed";
+	method: "npm" | "homebrew" | "installer" | "manual" | "not installed";
 	installDir: string | undefined;
 }
 
@@ -116,8 +117,9 @@ function selfInfo(): SelfInfo {
 		.map((name) => join(folder, name))
 		.find((path) => existsSync(path));
 	const installDir = piBoltInstallDir();
+	const installMethod = piBoltInstallMethod();
 	let method: SelfInfo["method"];
-	if (piBoltInstallMethod() === "npm") method = "npm";
+	if (installMethod === "npm" || installMethod === "homebrew") method = installMethod;
 	else if (installDir === undefined) method = "not installed";
 	else method = installedByInstaller(installDir, folder) ? "installer" : "manual";
 	return { executable, command: launcher ?? executable, folder, method, installDir };
@@ -369,6 +371,7 @@ async function installSection(
 	const where = self.installDir ? `, in ${self.installDir}` : `, run from ${self.folder}`;
 	const how: Record<SelfInfo["method"], string> = {
 		npm: "npm (the pi-bolt package)",
+		homebrew: "Homebrew (the opensec-git/tap/pi-bolt formula)",
 		installer: "the installer",
 		manual: "by hand (an unpacked archive)",
 		"not installed": "not installed (a build run from its folder)",
@@ -424,7 +427,7 @@ async function installSection(
 		const newer = isNewerPackageVersion(newest, PIBOLT.version);
 		const older = isNewerPackageVersion(PIBOLT.version, newest);
 		rows.push(["latest release", `${newest}${newer ? "" : older ? " (this build is newer)" : " (this one)"}`]);
-		if (newer) report.suggestions.push(`Pi-Bolt ${newest} is out: \`pi-bolt update\`.`);
+		if (newer) report.suggestions.push(`Pi-Bolt ${newest} is out: \`${piBoltUpdateCommand()}\`.`);
 	}
 	return { title: "Installation", rows };
 }
