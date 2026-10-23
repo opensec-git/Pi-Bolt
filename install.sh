@@ -608,8 +608,10 @@ verify_signature() {
 		SIGNED=1
 		return 0
 	fi
-	[ "${PIBOLT_UNVERIFIED:-0}" = 1 ] ||
-		fail "nothing here can check the release's signature (OpenSSL 3, or OpenSSH 8.1 for releases after 0.9.9). Install OpenSSL 3 (brew install openssl@3) and run the installer again, or set PIBOLT_UNVERIFIED=1 to install with the checksum alone. Nothing was installed."
+	if [ "${PIBOLT_UNVERIFIED:-0}" != 1 ]; then
+		if [ "$(uname -s)" = Darwin ]; then how='brew install openssl@3'; else how='OpenSSL 3, or openssh-client (OpenSSH 8.1 or later), from your package manager'; fi
+		fail "nothing here can check the release's signature (OpenSSL 3, or OpenSSH 8.1 for releases after 0.9.9). Install $how and run the installer again, or set PIBOLT_UNVERIFIED=1 to install with the checksum alone. Nothing was installed."
+	fi
 	NOVERIFY=1
 }
 
