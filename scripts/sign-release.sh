@@ -26,7 +26,9 @@ openssl pkeyutl -sign -inkey "$KEY" -rawin -in "$DIST/SHA256SUMS" -out "$DIST/SH
 openssl pkeyutl -verify -pubin -inkey "$PIBOLT_ROOT/keys/release.pub" -rawin -in "$DIST/SHA256SUMS" -sigfile "$DIST/SHA256SUMS.sig" >/dev/null ||
 	die "the signature does not verify with keys/release.pub: is --key the release key?"
 node "$PIBOLT_ROOT/scripts/lib/sshsig.mjs" sign "$KEY" "$DIST/SHA256SUMS" "$DIST/SHA256SUMS.sshsig"
-if command -v ssh-keygen >/dev/null 2>&1; then
+# (Checked here where ssh-keygen can verify: -Y is OpenSSH 8.1 and later; the publish workflow checks it in any case.)
+probe=$(ssh-keygen -Y find-principals 2>&1 || true)
+if command -v ssh-keygen >/dev/null 2>&1 && ! printf '%s' "$probe" | grep -qiE "illegal option|unknown option|invalid option"; then
 	signers="$(mktemp)"
 	printf 'pi-bolt namespaces="pi-bolt-release" %s\n' "$(node "$PIBOLT_ROOT/scripts/lib/sshsig.mjs" pubkey "$PIBOLT_ROOT/keys/release.pub")" >"$signers"
 	ssh-keygen -Y verify -f "$signers" -I pi-bolt -n pi-bolt-release -s "$DIST/SHA256SUMS.sshsig" <"$DIST/SHA256SUMS" >/dev/null ||
