@@ -79,14 +79,20 @@ jobs:
       - name: Sign
         working-directory: release
         run: |
-          if [ -f SHA256SUMS.sig ]; then echo "the draft is signed"; exit 0; fi
-          [ -n "$SIGNING_KEY" ] || { echo "::error::$TAG has no SHA256SUMS.sig and the release environment has no PIBOLT_SIGNING_KEY"; exit 1; }
+          if [ -f SHA256SUMS.sig ] && [ -f SHA256SUMS.sshsig ]; then echo "the draft is signed"; exit 0; fi
+          [ -n "$SIGNING_KEY" ] || { echo "::error::$TAG lacks SHA256SUMS.sig or SHA256SUMS.sshsig and the release environment has no PIBOLT_SIGNING_KEY"; exit 1; }
           key="$RUNNER_TEMP/release-key.pem"
           trap 'rm -f "$key"' EXIT
           (umask 077 && printenv SIGNING_KEY > "$key")
           openssl pkey -in "$key" -pubout | cmp -s - ../keys/release.pub || { echo "::error::PIBOLT_SIGNING_KEY is not the key of keys/release.pub"; exit 1; }
-          openssl pkeyutl -sign -inkey "$key" -rawin -in SHA256SUMS -out SHA256SUMS.sig
-          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" SHA256SUMS.sig
+          if [ ! -f SHA256SUMS.sig ]; then
+            openssl pkeyutl -sign -inkey "$key" -rawin -in SHA256SUMS -out SHA256SUMS.sig
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" SHA256SUMS.sig
+          fi
+          if [ ! -f SHA256SUMS.sshsig ]; then
+            node ../scripts/lib/sshsig.mjs sign "$key" SHA256SUMS SHA256SUMS.sshsig
+            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" SHA256SUMS.sshsig
+          fi
         env:
           SIGNING_KEY: ${{ secrets.PIBOLT_SIGNING_KEY }}
           GH_TOKEN: ${{ github.token }}
@@ -94,6 +100,8 @@ jobs:
         run: |
           openssl version
           openssl pkeyutl -verify -pubin -inkey keys/release.pub -rawin -in release/SHA256SUMS -sigfile release/SHA256SUMS.sig
+          printf 'pi-bolt namespaces="pi-bolt-release" %s\n' "$(node scripts/lib/sshsig.mjs pubkey keys/release.pub)" > "$RUNNER_TEMP/allowed_signers"
+          ssh-keygen -Y verify -f "$RUNNER_TEMP/allowed_signers" -I pi-bolt -n pi-bolt-release -s release/SHA256SUMS.sshsig < release/SHA256SUMS
           scripts/check-release-files.sh release "${TAG#bolt-v}"
 
   release:

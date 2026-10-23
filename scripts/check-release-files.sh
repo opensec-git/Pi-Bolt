@@ -16,7 +16,7 @@ cd "$dir"
 tail -n +2 SHA256SUMS | sha256sum -c --strict --quiet -
 listed=$(tail -n +2 SHA256SUMS | sed -E 's/^[0-9a-f]{64} [ *]//' | LC_ALL=C sort)
 expected=$(grep -v -e '^#' -e '^$' "$manifest" | LC_ALL=C sort)
-present=$(find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig -printf '%f\n' | LC_ALL=C sort)
+present=$(find . -maxdepth 1 -type f ! -name SHA256SUMS ! -name SHA256SUMS.sig ! -name SHA256SUMS.sshsig -printf '%f\n' | LC_ALL=C sort)
 if [ "$listed" != "$expected" ]; then
 	echo "SHA256SUMS does not list the files of a release (scripts/release-files.txt):"
 	diff <(printf '%s\n' "$expected") <(printf '%s\n' "$listed") || true

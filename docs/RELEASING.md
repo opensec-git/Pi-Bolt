@@ -41,7 +41,7 @@ has the key, before `publish`:
 ```bash
 gh release download bolt-vX.Y.Z -R opensec-git/Pi-Bolt -p SHA256SUMS -D dist/X.Y.Z --clobber
 scripts/sign-release.sh --key pi-bolt-signing-key.pem dist/X.Y.Z
-gh release upload bolt-vX.Y.Z -R opensec-git/Pi-Bolt dist/X.Y.Z/SHA256SUMS.sig
+gh release upload bolt-vX.Y.Z -R opensec-git/Pi-Bolt dist/X.Y.Z/SHA256SUMS.sig dist/X.Y.Z/SHA256SUMS.sshsig
 ```
 
 `publish` refuses a draft whose signature does not verify against `keys/release.pub`. Either workflow can be run again with the
@@ -210,9 +210,12 @@ to exclude Pi-Bolt from Defender.
 
 ## Signing
 
-`SHA256SUMS` in every release is signed with an Ed25519 key. The installer carries the public key and refuses a download
-whose signature is missing or does not verify. It checks it with OpenSSL 3 (on `PATH` or Homebrew's), or else with the Pi-Bolt
-already installed; with neither (a first install on a Mac without OpenSSL 3), it checks the checksums alone and says so.
+`SHA256SUMS` in every release is signed with an Ed25519 key, twice: `SHA256SUMS.sig` (raw Ed25519) and, for releases after
+0.9.9, `SHA256SUMS.sshsig` (the same key in OpenSSH's signature format, namespace `pi-bolt-release`, made by
+`scripts/lib/sshsig.mjs`). The installer carries the public key and refuses a download whose signature is missing or does not
+verify. It checks it with OpenSSL 3 (on `PATH` or Homebrew's), or else with the Pi-Bolt already installed, or else with
+`ssh-keygen -Y verify` against `SHA256SUMS.sshsig` (OpenSSH 8.1 or later, which every current Mac has). Where none of them can
+check it, nothing is installed unless the user sets `PIBOLT_UNVERIFIED=1`.
 `install.ps1`, `scripts/fetch-runtime.sh` and the `publish` workflow require the signature too.
 
 `publish` signs with the secret `PIBOLT_SIGNING_KEY` of the `release` environment. The environment accepts only workflows run
@@ -239,7 +242,8 @@ openssl genpkey -algorithm ed25519 -out pi-bolt-signing-key.pem
 openssl pkey -in pi-bolt-signing-key.pem -pubout -out keys/release.pub
 ```
 
-Then copy the contents of `keys/release.pub` into `RELEASE_KEY` in `install.sh`, and its base64 line into `$PiBoltReleaseKey` in
+Then copy the contents of `keys/release.pub` into `RELEASE_KEY` in `install.sh`, the output of
+`node scripts/lib/sshsig.mjs pubkey keys/release.pub` into `RELEASE_SSH_KEY` in `install.sh`, and its base64 line into `$PiBoltReleaseKey` in
 `install.ps1`, commit them, set the secret as above, and keep a copy of `pi-bolt-signing-key.pem` somewhere safe and private (a
 password manager), never in the repository. Rotating the key is the same procedure; releases signed with the old key stay
 verifiable with an installer that carries the old key.
