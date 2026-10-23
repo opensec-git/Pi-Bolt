@@ -180,7 +180,7 @@ npm install -g --allow-scripts=pi-bolt pi-bolt</pre>
 
 <h2 id="verify-the-installation">Verify the installation<a class="anchor" href="#verify-the-installation" aria-label="Link to this section">#</a></h2>
 <pre data-label="Terminal"><span class="p">$ </span>pi-bolt --version
-1.3.0 (Pi-Bolt 0.9.7, darwin-arm64, JIT off)</pre>
+1.4.0 (Pi-Bolt 1.0.0, darwin-arm64, JIT off)</pre>
 <p>The first number is the Pi release this build is made from. The rest is the Pi-Bolt release, the platform, and whether the JIT
   is on. To check that Pi runs its compiled code, see
   <a href="troubleshooting.html#check-the-compiled-code">Check the compiled code</a>.</p>
@@ -232,7 +232,7 @@ npm install -g --allow-scripts=pi-bolt pi-bolt</pre>
   <thead><tr><th>Variable</th><th>Effect</th></tr></thead>
   <tbody>
     <tr><td><code>PIBOLT_VARIANT</code></td><td>The build to install (see <a href="#builds">Builds</a>).</td></tr>
-    <tr><td><code>PIBOLT_VERSION</code></td><td>A release tag such as <code>bolt-v0.9.7</code>. Default: the latest release.</td></tr>
+    <tr><td><code>PIBOLT_VERSION</code></td><td>A release tag such as <code>bolt-v1.0.0</code>. Default: the latest release.</td></tr>
     <tr><td><code>PIBOLT_CHANNEL</code></td><td><code>stable</code> (the latest release; the default) or <code>beta</code> (the newest release, pre-releases included), for this installation and its updates.</td></tr>
     <tr><td><code>PIBOLT_INSTALL</code></td><td>Where to install. Default: <code>~/.pi-bolt</code> (Windows: <code>%USERPROFILE%\.pi-bolt</code>).</td></tr>
     <tr><td><code>PIBOLT_BIN_DIR</code></td><td>macOS and Linux: where to link <code>pi-bolt</code>. Default: <code>~/.local/bin</code>.</td></tr>
