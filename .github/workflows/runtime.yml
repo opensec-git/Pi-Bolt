@@ -160,7 +160,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # LLVM 23 (clang-cl, lld-link), NASM; the image has Visual Studio 2022 with the C++ workload and its Clang tools, Go,
+          # LLVM 23 (clang-cl, lld-link), NASM; the image has Visual Studio 2022 or its Build Tools with C++, Go,
           # Ruby, Python and Git for Windows (perl).
           $tag = (& gh release list -R llvm/llvm-project --limit 60 --json tagName --jq '.[].tagName') | Where-Object { $_ -match '^llvmorg-23\.1\.\d+$' } | Select-Object -First 1
           if (-not $tag) { Write-Host 'no LLVM 23.1 release'; exit 1 }
@@ -197,7 +197,9 @@ jobs:
       - name: Runtime
         if: steps.wanted.outputs.yes
         run: |
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          # (-products *: Visual Studio's Build Tools too, which Blacksmith's image has instead of the IDE; with the C++ tools.)
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { Write-Host 'no Visual Studio 2022 or Build Tools with the C++ tools'; exit 1 }
           & "$vs\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation | Out-Null
           & scripts\build-runtime.ps1 -Jobs 4
           if ($LASTEXITCODE -ne 0) { exit 1 }
