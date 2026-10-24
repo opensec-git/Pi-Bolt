@@ -491,7 +491,8 @@ export function planPlugins(options) {
 	}
 
 	for (const resolved of installed) {
-		const declared = resolved.declared;
+		// (A file named both on its own and through its folder is one extension.)
+		const declared = resolved.declared && [...new Set(resolved.declared)];
 		if (!declared?.length) {
 			skipped.push({ path: resolved.path, reason: `${resolved.label}no entry point and no "pi.extensions"` });
 			continue;

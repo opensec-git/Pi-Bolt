@@ -183,6 +183,102 @@ describe("where it looks", () => {
 });
 
 describe("packages installed with pi install", () => {
+	it("expands a declared directory into concrete imports, as pi-computer-use requires", () => {
+		const agentDir = agent({ packages: ["npm:@injaneity/pi-computer-use"] });
+		const dir = installPackage(agentDir, "@injaneity/pi-computer-use", { pi: { extensions: ["./extensions"] } }, [
+			"extensions/computer-use.ts",
+		]);
+
+		const plan = planPlugins({ agentDir });
+		assert.deepEqual(names(plan), ["injaneity-pi-computer-use"]);
+		assert.equal(plan.plugins[0].entry, join(dir, "extensions", "computer-use.ts"));
+		assert.equal(plan.plugins[0].importPath, "./package-injaneity-pi-computer-use/extensions/computer-use.ts");
+
+		const out = join(scratch(), "folder");
+		const manifest = writePluginFolder(plan, out);
+		assert.match(
+			readFileSync(manifest, "utf8"),
+			/from "\.\/package-injaneity-pi-computer-use\/extensions\/computer-use\.ts";/,
+		);
+		assert.equal(readFileSync(join(out, plan.plugins[0].importPath), "utf8"), FACTORY);
+	});
+
+	it("takes a directory's index before discovering sibling helpers", () => {
+		const agentDir = agent({ packages: ["npm:with-index"] });
+		const dir = installPackage(agentDir, "with-index", { pi: { extensions: ["./extensions"] } }, [
+			"extensions/index.ts",
+			"extensions/index.js",
+			"extensions/helper.ts",
+		]);
+
+		assert.deepEqual(
+			planPlugins({ agentDir }).plugins.map((plugin) => plugin.entry),
+			[join(dir, "extensions", "index.ts")],
+		);
+	});
+
+	it("expands mixed file and directory entries once, without scanning arbitrary nested helpers", () => {
+		const agentDir = agent({ packages: ["npm:mixed"] });
+		const dir = installPackage(
+			agentDir,
+			"mixed",
+			{ pi: { extensions: ["./extensions", "./extra.ts", "./extensions/alpha.ts"] } },
+			[
+				"extensions/alpha.ts",
+				"extensions/beta.js",
+				"extensions/nested/index.ts",
+				"extensions/shared/deeper/helper.ts",
+				"extra.ts",
+			],
+		);
+
+		const plan = planPlugins({ agentDir });
+		assert.deepEqual(names(plan), ["mixed-alpha", "mixed-beta", "mixed-index", "mixed-extra"]);
+		assert.deepEqual(plan.plugins.map((plugin) => plugin.entry), [
+			join(dir, "extensions", "alpha.ts"),
+			join(dir, "extensions", "beta.js"),
+			join(dir, "extensions", "nested", "index.ts"),
+			join(dir, "extra.ts"),
+		]);
+	});
+
+	it("honours a declared directory's own manifest before its index", () => {
+		const agentDir = agent({ packages: ["npm:nested-manifest"] });
+		const dir = installPackage(agentDir, "nested-manifest", { pi: { extensions: ["./extensions"] } }, [
+			"extensions/index.ts",
+			"extensions/src/entry.ts",
+		]);
+		write(join(dir, "extensions", "package.json"), JSON.stringify({ pi: { extensions: ["./src/entry.ts"] } }));
+
+		assert.deepEqual(
+			planPlugins({ agentDir }).plugins.map((plugin) => plugin.entry),
+			[join(dir, "extensions", "src", "entry.ts")],
+		);
+	});
+
+	it("reports a declared directory containing no extension instead of importing the directory", () => {
+		const agentDir = agent({ packages: ["npm:empty-directory"] });
+		const dir = installPackage(agentDir, "empty-directory", { pi: { extensions: ["./extensions"] } }, [
+			"extensions/README.md",
+		]);
+
+		const plan = planPlugins({ agentDir });
+		assert.deepEqual(plan.plugins, []);
+		assert.match(plan.skipped.find((entry) => entry.path === dir).reason, /no entry point/);
+	});
+
+	it("checks concrete directory entries for cores that need vendoring", () => {
+		const agentDir = agent({ packages: ["npm:directory-core"] });
+		const dir = installPackage(agentDir, "directory-core", { pi: { extensions: ["./dist-bun"] } }, [
+			"dist-bun/index.js",
+			"dist-bun/core.cjs",
+		]);
+
+		const plan = planPlugins({ agentDir });
+		assert.deepEqual(plan.plugins, []);
+		assert.match(plan.skipped.find((entry) => entry.path === dir).reason, /vendoring/);
+	});
+
 	it("names a package after the package, not after its entry file", () => {
 		const agentDir = agent({ packages: ["npm:pi-provider-litellm"] });
 		installPackage(agentDir, "pi-provider-litellm", { pi: { extensions: ["./src/index.ts"] } }, ["src/index.ts"]);
