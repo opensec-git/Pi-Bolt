@@ -101,19 +101,92 @@ export function discoverExtensionsInDir(dir) {
 	return found;
 }
 
+/** The ignore files whose rules Pi applies to a folder's entries (package-manager.ts, `IGNORE_FILE_NAMES`). */
+const IGNORE_FILE_NAMES = [".gitignore", ".ignore", ".fdignore"];
+
+/** A gitignore glob of one path segment as a regular expression: `*`, `?`, `[...]` (`[!...]`), and `\` escapes. */
+function segmentPattern(glob) {
+	let source = "";
+	for (let i = 0; i < glob.length; i++) {
+		const char = glob[i];
+		if (char === "\\" && i + 1 < glob.length) {
+			source += glob[++i].replace(/[\\^$.*+?()[\]{}|/-]/g, "\\$&");
+		} else if (char === "*") {
+			source += "[^/]*";
+			while (glob[i + 1] === "*") i++;
+		} else if (char === "?") {
+			source += "[^/]";
+		} else if (char === "[" && glob.indexOf("]", i + 2) !== -1) {
+			const end = glob.indexOf("]", i + 2);
+			const body = glob.slice(i + 1, end);
+			source += `[${body.startsWith("!") ? `^${body.slice(1)}` : body}]`;
+			i = end;
+		} else {
+			source += char.replace(/[\\^$.*+?()[\]{}|/-]/g, "\\$&");
+		}
+	}
+	return new RegExp(`^${source}$`);
+}
+
+/**
+ * Whether a name directly in `dir` (`folder` when it is a folder) is ignored by the rules of `dir`'s own ignore files, as
+ * Pi applies them when it looks for extensions in a folder (package-manager.ts, `addIgnoreRules` and the `ignore` package).
+ * Only names directly in `dir` are tested, so a rule is the gitignore rule reduced to one path segment: one with a `/`
+ * inside it never matches, `**` matches every name, and a trailing `/` matches folders only. The last rule that matches
+ * decides, and a `!` rule takes a name back. scripts/gen-plugin-manifest.test.mjs checks this against the `ignore` package.
+ */
+export function ignoreRulesOf(dir) {
+	const rules = [];
+	for (const file of IGNORE_FILE_NAMES) {
+		let text;
+		try {
+			text = readFileSync(join(dir, file), "utf8");
+		} catch {
+			continue;
+		}
+		for (const line of text.split(/\r?\n/)) {
+			const trimmed = line.trim();
+			if (!trimmed || (trimmed.startsWith("#") && !trimmed.startsWith("\\#"))) continue;
+			let pattern = line;
+			// (Pi strips the `\` of `\!` before the `ignore` package reads the rule, which then takes it for a `!` rule too.)
+			const negated = /^\\?!/.test(pattern);
+			pattern = pattern.replace(/^\\?!/, "");
+			if (pattern.startsWith("/")) pattern = pattern.slice(1);
+			// (Trailing spaces are not part of a rule unless escaped.)
+			pattern = pattern.replace(/(?<!\\)\s+$/, "");
+			const folderOnly = pattern.endsWith("/");
+			if (folderOnly) pattern = pattern.slice(0, -1);
+			while (pattern.startsWith("**/")) pattern = pattern.slice(3);
+			if (!pattern) continue;
+			const every = pattern === "**";
+			const regex = every || pattern.includes("/") ? undefined : segmentPattern(pattern);
+			rules.push({ negated, folderOnly, test: (name) => every || (regex?.test(name) ?? false) });
+		}
+	}
+	return (name, folder) => {
+		let ignored = false;
+		for (const rule of rules) {
+			if ((!rule.folderOnly || folder) && rule.test(name)) ignored = !rule.negated;
+		}
+		return ignored;
+	};
+}
+
 /**
  * A package's "pi.extensions" entry may be a folder: pi-openrouter-session declares "./extensions", which holds
  * openrouter-session.ts and no index. Pi loads that folder's own entries, else what discovery finds in it without dot
- * entries and node_modules (package-manager.ts, `collectAutoExtensionEntries`). Imported as it is, the folder does not
- * resolve and the build stops.
+ * entries, node_modules, and what the folder's .gitignore, .ignore and .fdignore leave out (package-manager.ts,
+ * `collectAutoExtensionEntries`). Imported as it is, the folder does not resolve and the build stops.
  */
 export function expandPackageEntry(entry) {
 	if (!statSync(entry).isDirectory()) return [entry];
+	const ignored = ignoreRulesOf(entry);
 	return (
 		resolveExtensionEntries(entry) ??
 		discoverExtensionsInDir(entry).filter((path) => {
 			const first = relative(entry, path).split(sep)[0];
-			return !first.startsWith(".") && first !== "node_modules";
+			const folder = join(entry, first) !== path;
+			return !first.startsWith(".") && first !== "node_modules" && !ignored(first, folder);
 		})
 	);
 }

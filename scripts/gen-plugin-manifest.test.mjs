@@ -15,8 +15,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import ignore from "ignore";
 import {
 	defaultAgentDir,
+	expandPackageEntry,
+	ignoreRulesOf,
 	pinImportMeta,
 	planPlugins,
 	renderManifest,
@@ -272,6 +275,56 @@ describe("packages installed with pi install", () => {
 		const imports = [...readFileSync(manifest, "utf8").matchAll(/^import \w+ from "\.\/(.+)";$/gm)];
 		assert.equal(imports.length, 3);
 		for (const [, path] of imports) assert.ok(readFileSync(join(out, path), "utf8"));
+	});
+
+	it("leaves out of a folder in pi.extensions what its ignore files leave out, as Pi does", () => {
+		// A named-export-only helper.js listed in .ignore: imported as an extension, the build would stop (PR #110 review).
+		const agentDir = agent({ packages: ["npm:ignoring"] });
+		const dir = installPackage(agentDir, "ignoring", { pi: { extensions: ["./extensions"] } }, [
+			"extensions/extension.js",
+			"extensions/helper.js",
+			"extensions/lib/index.ts",
+			"extensions/kept/index.ts",
+		]);
+		write(join(dir, "extensions", ".ignore"), "helper.js\n");
+		write(join(dir, "extensions", ".gitignore"), "# folders\n*/\n!kept/\n");
+
+		assert.deepEqual(expandPackageEntry(join(dir, "extensions")), [
+			join(dir, "extensions", "extension.js"),
+			join(dir, "extensions", "kept", "index.ts"),
+		]);
+	});
+
+	it("applies ignore rules as the ignore package Pi uses does, for names directly in the folder", () => {
+		const rules = [
+			"*.js", "!keep.js", "/anchored.ts", "dir/", "**/deep.ts", "**", "a/b.ts", "x/**", "[ab].ts", "[!c]x.ts", "?.ts",
+			"file.ts   ", "esc\\ aped\\ ", "\\#hash.ts", "\\!bang.ts", "# comment", "", "a**b.ts", "*.d.ts", "q/",
+		];
+		const names = [
+			["one.js", false], ["keep.js", false], ["anchored.ts", false], ["dir", true], ["dir", false], ["deep.ts", false],
+			["b.ts", false], ["x", true], ["a.ts", false], ["c.ts", false], ["cx.ts", false], ["dx.ts", false], ["z.ts", false],
+			["file.ts", false], ["esc aped ", false], ["#hash.ts", false], ["!bang.ts", false], ["axyb.ts", false],
+			["types.d.ts", false], ["q", true], ["q", false], ["other.md", false],
+		];
+		// Each rule alone, then all of them in order, against Pi's handling (package-manager.ts, addIgnoreRules).
+		for (const set of [...rules.map((rule) => [rule]), rules.filter((rule) => rule !== "**")]) {
+			const dir = scratch();
+			writeFileSync(join(dir, ".fdignore"), set.join("\n"));
+			const ours = ignoreRulesOf(dir);
+			const pis = ignore().add(
+				set
+					.filter((line) => line.trim() && !(line.trim().startsWith("#") && !line.trim().startsWith("\\#")))
+					.map((line) => {
+						const negated = line.startsWith("!");
+						let pattern = negated || line.startsWith("\\!") ? line.slice(1) : line;
+						if (pattern.startsWith("/")) pattern = pattern.slice(1);
+						return negated ? `!${pattern}` : pattern;
+					}),
+			);
+			for (const [name, folder] of names) {
+				assert.equal(ours(name, folder), pis.ignores(folder ? `${name}/` : name), `${JSON.stringify(set)} ${name}${folder ? "/" : ""}`);
+			}
+		}
 	});
 
 	it("says a folder in pi.extensions with no extension in it has no entry point", () => {
