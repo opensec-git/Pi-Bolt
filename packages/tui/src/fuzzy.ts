@@ -9,66 +9,102 @@ export interface FuzzyMatch {
 	score: number;
 }
 
+/** Whether text[i] starts a word: it is the first character, or follows whitespace or one of - _ . / : */
+function isWordBoundary(textLower: string, i: number): boolean {
+	if (i === 0) return true;
+	const code = textLower.charCodeAt(i - 1);
+	// ASCII without a regex test: every candidate alignment checks this for each query character.
+	if (code < 128) {
+		return (
+			code === 32 ||
+			code === 45 ||
+			code === 95 ||
+			code === 46 ||
+			code === 47 ||
+			code === 58 ||
+			(code >= 9 && code <= 13)
+		);
+	}
+	return /\s/.test(textLower[i - 1]!);
+}
+
+/**
+ * Score one alignment of the query in the text, or return Infinity if the query does not match there.
+ * With start === -1 the alignment is greedy: each query character at its first occurrence after the previous one.
+ * Otherwise the query is matched contiguously at start.
+ */
+function scoreAlignment(normalizedQuery: string, textLower: string, start: number): number {
+	let score = 0;
+	let lastMatchIndex = -1;
+	let consecutiveMatches = 0;
+
+	for (let queryIndex = 0; queryIndex < normalizedQuery.length; queryIndex++) {
+		const i = start === -1 ? textLower.indexOf(normalizedQuery[queryIndex]!, lastMatchIndex + 1) : start + queryIndex;
+		if (i === -1) return Number.POSITIVE_INFINITY;
+
+		// Reward consecutive matches
+		if (lastMatchIndex === i - 1) {
+			consecutiveMatches++;
+			score -= consecutiveMatches * 5;
+		} else {
+			consecutiveMatches = 0;
+			// Penalize gaps
+			if (lastMatchIndex >= 0) {
+				score += (i - lastMatchIndex - 1) * 2;
+			}
+		}
+
+		// Reward word boundary matches
+		if (isWordBoundary(textLower, i)) {
+			score -= 10;
+		}
+
+		// Slight penalty for later matches
+		score += i * 0.1;
+
+		lastMatchIndex = i;
+	}
+
+	return score;
+}
+
+function matchQuery(normalizedQuery: string, textLower: string): FuzzyMatch {
+	if (normalizedQuery.length === 0) {
+		return { matches: true, score: 0 };
+	}
+
+	if (normalizedQuery.length > textLower.length) {
+		return { matches: false, score: 0 };
+	}
+
+	let score = scoreAlignment(normalizedQuery, textLower, -1);
+	if (score === Number.POSITIVE_INFINITY) {
+		return { matches: false, score: 0 };
+	}
+
+	// The greedy alignment can scatter the query over an earlier, unrelated part of the text,
+	// e.g. "opus" in "openrouter openrouter/anthropic/claude-opus" takes o, p, u from "openrouter".
+	// Also score every contiguous occurrence and keep the best alignment.
+	for (
+		let start = textLower.indexOf(normalizedQuery);
+		start !== -1;
+		start = textLower.indexOf(normalizedQuery, start + 1)
+	) {
+		score = Math.min(score, scoreAlignment(normalizedQuery, textLower, start));
+	}
+
+	if (normalizedQuery === textLower) {
+		score -= 100;
+	}
+
+	return { matches: true, score };
+}
+
 export function fuzzyMatch(query: string, text: string): FuzzyMatch {
 	const queryLower = query.toLowerCase();
 	const textLower = text.toLowerCase();
 
-	const matchQuery = (normalizedQuery: string): FuzzyMatch => {
-		if (normalizedQuery.length === 0) {
-			return { matches: true, score: 0 };
-		}
-
-		if (normalizedQuery.length > textLower.length) {
-			return { matches: false, score: 0 };
-		}
-
-		let queryIndex = 0;
-		let score = 0;
-		let lastMatchIndex = -1;
-		let consecutiveMatches = 0;
-
-		while (queryIndex < normalizedQuery.length) {
-			const i = textLower.indexOf(normalizedQuery[queryIndex]!, lastMatchIndex + 1);
-			if (i === -1) break;
-
-			const isWordBoundary = i === 0 || /[\s\-_./:]/.test(textLower[i - 1]!);
-
-			// Reward consecutive matches
-			if (lastMatchIndex === i - 1) {
-				consecutiveMatches++;
-				score -= consecutiveMatches * 5;
-			} else {
-				consecutiveMatches = 0;
-				// Penalize gaps
-				if (lastMatchIndex >= 0) {
-					score += (i - lastMatchIndex - 1) * 2;
-				}
-			}
-
-			// Reward word boundary matches
-			if (isWordBoundary) {
-				score -= 10;
-			}
-
-			// Slight penalty for later matches
-			score += i * 0.1;
-
-			lastMatchIndex = i;
-			queryIndex++;
-		}
-
-		if (queryIndex < normalizedQuery.length) {
-			return { matches: false, score: 0 };
-		}
-
-		if (normalizedQuery === textLower) {
-			score -= 100;
-		}
-
-		return { matches: true, score };
-	};
-
-	const primaryMatch = matchQuery(queryLower);
+	const primaryMatch = matchQuery(queryLower, textLower);
 	if (primaryMatch.matches) {
 		return primaryMatch;
 	}
@@ -85,7 +121,7 @@ export function fuzzyMatch(query: string, text: string): FuzzyMatch {
 		return primaryMatch;
 	}
 
-	const swappedMatch = matchQuery(swappedQuery);
+	const swappedMatch = matchQuery(swappedQuery, textLower);
 	if (!swappedMatch.matches) {
 		return primaryMatch;
 	}
