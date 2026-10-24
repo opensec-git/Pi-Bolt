@@ -452,6 +452,8 @@ export function planPlugins(options) {
 	// (`options.packages`: piBolt.packages applied, each with its entries as Pi resolves them); without it, the npm: packages
 	// of the `packages` setting.
 	const installed = [];
+	/** Each package's entry in `installed`, by its stage folder. */
+	const packageOf = new Map();
 	if (options.packages && !options.noPackages) {
 		for (const pkg of options.packages) {
 			const name = readJson(join(pkg.root, "package.json"))?.name;
@@ -496,6 +498,7 @@ export function planPlugins(options) {
 		}
 		const stageDir = unique(`package-${safeName(resolved.name)}`, takenStageDirs);
 		roots.push({ stageDir, root: resolve(resolved.dir), origin: "package" });
+		packageOf.set(stageDir, resolved);
 		for (const entry of declared) {
 			const rel = relative(resolved.dir, entry).split(sep).join("/");
 			const base = declared.length === 1 ? resolved.name : `${resolved.name}-${withoutExtension(basename(entry))}`;
@@ -522,21 +525,38 @@ export function planPlugins(options) {
 		else chosen.push(plugin);
 	}
 
-	// Only the folders something chosen comes from are copied, and only the dependencies of a chosen package.
+	// Only the folders something chosen comes from are copied, and only the dependencies of a chosen package. These share
+	// one node_modules, so a package that needs another version of a dependency than one compiled in before it is passed
+	// over: it keeps running from its installed copy, with its own version.
 	const used = new Set(chosen.map((plugin) => plugin.stageDir));
-	const usedRoots = roots.filter((root) => used.has(root.stageDir));
 	const dependencies = new Map();
-	for (const root of usedRoots) {
-		if (root.origin !== "package") continue;
+	const conflicting = new Set();
+	for (const root of roots) {
+		if (!used.has(root.stageDir) || root.origin !== "package") continue;
+		const pkg = packageOf.get(root.stageDir);
+		const own = new Map();
+		let conflict;
 		for (const { name, from } of dependencyClosure(root.root)) {
-			if (!dependencies.has(name)) dependencies.set(name, from);
+			const version = readJson(join(from, "package.json"))?.version;
+			const before = own.get(name) ?? dependencies.get(name);
+			if (before && before.from !== from && before.version !== version) {
+				conflict = `needs ${name}@${version}, but ${before.owner === pkg ? "it also needs" : `${before.owner.name} is compiled in with`} ${name}@${before.version}`;
+				break;
+			}
+			if (!own.has(name)) own.set(name, { from, version, owner: pkg });
 		}
+		if (conflict) {
+			conflicting.add(root.stageDir);
+			skipped.push({ path: pkg.path, reason: `${pkg.label}${conflict}` });
+			continue;
+		}
+		for (const [name, dependency] of own) if (!dependencies.has(name)) dependencies.set(name, dependency);
 	}
 
 	return {
-		plugins: chosen,
-		roots: usedRoots,
-		dependencies: [...dependencies].map(([name, from]) => ({ name, from })),
+		plugins: chosen.filter((plugin) => !conflicting.has(plugin.stageDir)),
+		roots: roots.filter((root) => used.has(root.stageDir) && !conflicting.has(root.stageDir)),
+		dependencies: [...dependencies].map(([name, { from }]) => ({ name, from })),
 		skipped,
 		excluded,
 	};

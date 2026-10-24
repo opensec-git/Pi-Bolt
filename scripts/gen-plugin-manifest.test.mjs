@@ -450,6 +450,47 @@ describe("the packages pi-bolt compile gives it (--packages)", () => {
 		assert.equal(resolved.status, 0, resolved.stderr);
 	});
 
+	it("passes over a package that needs another version of a dependency compiled in before it, and shares one version", () => {
+		// Two workspaces hoist different versions of `shared`; one node_modules beside the manifest can hold only one.
+		const agentDir = agent();
+		const workspacePlugin = (workspace, name, version) => {
+			const plugin = join(scratch(), workspace, "packages", name);
+			write(join(plugin, "package.json"), JSON.stringify({ name, type: "module", dependencies: { shared: "*" } }));
+			write(join(plugin, "index.js"), 'import shared from "shared";\nexport const value = shared;\nexport default () => {};\n');
+			const shared = join(plugin, "..", "..", "node_modules", "shared");
+			write(join(shared, "package.json"), JSON.stringify({ name: "shared", version, type: "module" }));
+			write(join(shared, "index.js"), `export default ${JSON.stringify(version)};\n`);
+			return { source: `./${workspace}/${name}`, root: plugin, entries: [join(plugin, "index.js")] };
+		};
+		const one = workspacePlugin("one", "plugin-one", "1.0.0");
+		const two = workspacePlugin("two", "plugin-two", "2.0.0");
+		const three = workspacePlugin("three", "plugin-three", "1.0.0");
+
+		const plan = planPlugins({ agentDir, packages: [one, two, three] });
+		assert.deepEqual(names(plan), ["plugin-one", "plugin-three"]);
+		assert.deepEqual(plan.skipped, [
+			{ path: two.source, reason: "needs shared@2.0.0, but plugin-one is compiled in with shared@1.0.0" },
+		]);
+		assert.deepEqual(
+			plan.dependencies.map((dependency) => dependency.name),
+			["shared"],
+		);
+		const out = join(scratch(), "folder");
+		writePluginFolder(plan, out);
+		for (const plugin of plan.plugins) {
+			const loaded = spawnSync(
+				process.execPath,
+				[
+					"--input-type=module",
+					"-e",
+					`import(${JSON.stringify(pathToFileURL(join(out, plugin.importPath)).href)}).then((m) => console.log(m.value))`,
+				],
+				{ encoding: "utf8" },
+			);
+			assert.equal(loaded.stdout.trim(), "1.0.0", loaded.stderr);
+		}
+	});
+
 	it("follows a pnpm link to find what the linked dependency needs beside its target", () => {
 		// plugin/node_modules/foo links to .pnpm/foo@1.0.0/node_modules/foo, whose own dependency bar is beside it there.
 		const agentDir = agent();
