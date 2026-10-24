@@ -16302,3 +16302,177 @@ index 5198ef8b28..549b47109c 100644
 -- 
 2.54.0 (Apple Git-157)
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Sun, 25 Oct 2026 02:05:33 +0530
+Subject: [PATCH] GC timer: no idle full collection that would find the heap as
+ the previous one left it
+
+The idle full collections at 10 s, 2 min and 10 min of quiet ran whether or not anything had happened since the
+previous one. Pi at its prompt allocates nothing after the 10 s one, so the 2-min one marked the same live objects,
+freed nothing (footprint 20.3-20.5 MB before, 20.4-20.7 MB after) and cost 33 M instructions, about 14 ms of CPU on an
+M5, plus the scavenger's purges after it: the largest wake-up left in an idle Pi.
+
+An idle full collection is now skipped when it cannot do anything the previous one did not: nothing has been allocated
+since the previous idle full collection was requested (JSC's running total, which no collection changes), that
+collection has finished, and the heap holds no code that can age (no LLInt, baseline, DFG or FTL CodeBlock: one whose
+lease ran out since the previous collection would be let go in this one; code compiled ahead of time never ages). Both
+start from this timer, so they scan the same stack. The forced allocator collect still runs, for memory other threads
+freed. The last one (10 min) always runs: before it JSC also lets go of code and bytecode it can get back.
+
+One thing a skipped collection does not do: count towards the age of unlinked bytecode held only weakly (dropped after
+seven full collections without running), so such bytecode goes one full collection later.
+---
+ src/jsc/GarbageCollectionController.rs | 32 +++++++++++++++++++++++++-
+ src/jsc/VM.rs                          | 14 +++++++++++
+ src/jsc/bindings/bindings.cpp          | 20 ++++++++++++++++
+ 3 files changed, 65 insertions(+), 1 deletion(-)
+
+diff --git a/src/jsc/GarbageCollectionController.rs b/src/jsc/GarbageCollectionController.rs
+index 32956feb..ed258b8f 100644
+--- a/src/jsc/GarbageCollectionController.rs
++++ b/src/jsc/GarbageCollectionController.rs
+@@ -1,4 +1,4 @@
+-//! Idle GC timer: JSC's own `GCActivityCallback` (via `WTFTimer`) paces eden/full against allocation rate; this adds a 1 s / 30 s idle `collect_async()` so a process that stops allocating still releases memory, and once the heap has been quiet for `BUN_IDLE_GC_SECONDS` (default "10,110,480": 10 s, 2 min and 10 min of quiet; 0 = off) full collections so JSC can age out code that no longer runs, the last of which also drops the bytecode JSC can decode again; each with a forced allocator collect then and at the next tick. A tick that finds nothing allocated since the last collection parks the timer until the program allocates again or the next idle full collection is due, so a program left waiting is not woken. Knobs: `BUN_GC_TIMER_INTERVAL` (ms), `BUN_GC_TIMER_DISABLE`. One per JS thread, not thread-safe.
++//! Idle GC timer: JSC's own `GCActivityCallback` (via `WTFTimer`) paces eden/full against allocation rate; this adds a 1 s / 30 s idle `collect_async()` so a process that stops allocating still releases memory, and once the heap has been quiet for `BUN_IDLE_GC_SECONDS` (default "10,110,480": 10 s, 2 min and 10 min of quiet; 0 = off) full collections so JSC can age out code that no longer runs, the last of which also drops the bytecode JSC can decode again; each with a forced allocator collect then and at the next tick. A tick that finds nothing allocated since the last collection parks the timer until the program allocates again or the next idle full collection is due, so a program left waiting is not woken. An idle full collection that would find the heap as the previous one left it, with no code that can age, is skipped (not the last: it also drops code and bytecode). Knobs: `BUN_GC_TIMER_INTERVAL` (ms), `BUN_GC_TIMER_DISABLE`. One per JS thread, not thread-safe.
+ 
+ use core::cell::Cell;
+ use core::ffi::c_int;
+@@ -31,6 +31,9 @@ pub struct GarbageCollectionController {
+     parked: Cell<bool>,
+     /// What the timer was last armed for (ms): the quiet that its fire stands for.
+     armed_ms: Cell<i32>,
++    /// `VM::total_bytes_allocated` when the last idle full collection was requested: the same now means nothing has been
++    /// allocated since (`idle_full_finds_nothing`).
++    idle_full_allocated_mark: Cell<Option<u64>>,
+ }
+ 
+ bun_event_loop::impl_timer_owner!(
+@@ -52,6 +55,7 @@ impl Default for GarbageCollectionController {
+             idle_release_pending: Cell::new(false),
+             parked: Cell::new(false),
+             armed_ms: Cell::new(0),
++            idle_full_allocated_mark: Cell::new(None),
+         }
+     }
+ }
+@@ -153,6 +157,23 @@ impl GarbageCollectionController {
+         (full, next.map(|due| due - quiet))
+     }
+ 
++    /// Whether the idle full collection due now would do exactly what the previous one did, which is nothing: the
++    /// program has allocated nothing since that one was requested (it starts from the same place, this timer, so it
++    /// scans the same stack), it has finished, and no CodeBlock can age (one whose lease ran out since the previous
++    /// collection would be let go now; code compiled ahead of time never ages). The heap is then as that collection left
++    /// it, and another finds the same live objects and frees nothing. Pi at its prompt: the 2-min collection, 33 M
++    /// instructions (about 14 ms of CPU on an M5) and the purges after it, for no memory. Not the last one (`next_due`
++    /// None): before it JSC also lets go of code and bytecode it can get back (`shrink_footprint_now`).
++    fn idle_full_finds_nothing(&self, vm: &VirtualMachine, next_due: Option<u32>) -> bool {
++        if next_due.is_none() {
++            return false;
++        }
++        let jsc = vm.jsc_vm();
++        self.idle_full_allocated_mark.get() == Some(jsc.total_bytes_allocated())
++            && !jsc.collection_unfinished()
++            && !jsc.has_aging_code()
++    }
++
+     /// Idempotent. Must run before JSC teardown: `~RunLoop::Timer` frees the
+     /// `WTFTimer` nodes sharing the heap, so an unlink afterwards walks freed
+     /// siblings.
+@@ -213,6 +234,8 @@ impl GarbageCollectionController {
+         }
+         let vm = VirtualMachine::get().jsc_vm();
+         if idle_full {
++            self.idle_full_allocated_mark
++                .set(Some(vm.total_bytes_allocated()));
+             vm.collect_async_idle();
+             // Only a forced collect returns the large pages mimalloc keeps for the next burst (oven-sh/mimalloc#52).
+             bun_core::Global::mimalloc_cleanup(true);
+@@ -258,6 +281,13 @@ impl GarbageCollectionController {
+             ms => ms,
+         };
+         let (full, idle_gc_due_in) = this.idle_tick(vm_ref, grew, armed);
++        let full = if full && this.idle_full_finds_nothing(vm_ref, idle_gc_due_in) {
++            // What the collection's forced allocator collect would still have given back: memory other threads freed.
++            bun_core::Global::mimalloc_cleanup(true);
++            false
++        } else {
++            full
++        };
+         // Nothing allocated since the last collection ended: another would find nothing new. A program waiting for input
+         // was woken every 5-30 s for one (Pi at its prompt: 0.3-0.9 ms of CPU each, a third to half of its idle CPU).
+         let allocated = vm_ref.jsc_vm().bytes_allocated_since_last_collection() != 0;
+diff --git a/src/jsc/VM.rs b/src/jsc/VM.rs
+index b7953650..b4572724 100644
+--- a/src/jsc/VM.rs
++++ b/src/jsc/VM.rs
+@@ -42,6 +42,8 @@ unsafe extern "C" {
+     safe fn JSC__VM__blockBytesAllocated(vm: &VM) -> usize;
+     safe fn JSC__VM__bytesAllocatedSinceLastCollection(vm: &VM) -> usize;
+     safe fn JSC__VM__collectionUnfinished(vm: &VM) -> bool;
++    safe fn JSC__VM__totalBytesAllocated(vm: &VM) -> u64;
++    safe fn JSC__VM__hasAgingCode(vm: &VM) -> bool;
+ }
+ 
+ bun_opaque::opaque_ffi! {
+@@ -178,6 +180,18 @@ impl VM {
+     pub(crate) fn collection_unfinished(&self) -> bool {
+         JSC__VM__collectionUnfinished(self)
+     }
++
++    /// Everything the program has allocated so far (cells and reported extra memory); no collection changes it, so the
++    /// same value at two moments means nothing was allocated in between. JS thread only.
++    pub(crate) fn total_bytes_allocated(&self) -> u64 {
++        JSC__VM__totalBytesAllocated(self)
++    }
++
++    /// The heap holds code that a full collection may let age out (an interpreted or JIT-compiled CodeBlock); code
++    /// compiled ahead of time never ages. JS thread only.
++    pub(crate) fn has_aging_code(&self) -> bool {
++        JSC__VM__hasAgingCode(self)
++    }
+ }
+ 
+ /// RAII JSLockHolder returned by [`VM::get_api_lock`]. Released on `Drop`.
+diff --git a/src/jsc/bindings/bindings.cpp b/src/jsc/bindings/bindings.cpp
+index 08db3789..cde86da8 100644
+--- a/src/jsc/bindings/bindings.cpp
++++ b/src/jsc/bindings/bindings.cpp
+@@ -37,6 +37,7 @@
+ #include "JavaScriptCore/SparseArrayValueMap.h"
+ #include "JavaScriptCore/BytecodeIndex.h"
+ #include "JavaScriptCore/CodeBlock.h"
++#include "JavaScriptCore/CodeBlockSetInlines.h"
+ #include "JavaScriptCore/Completion.h"
+ #include "JavaScriptCore/ErrorInstance.h"
+ #include "JavaScriptCore/ExceptionHelpers.h"
+@@ -3195,6 +3196,25 @@ bool JSC__VM__collectionUnfinished(JSC::VM* vm)
+     return WebCore::clientData(*vm)->idleCollectionsPending.load() != 0 || vm->heap.hasUnfinishedCollection();
+ }
+ 
++// Everything the program has allocated so far (cells and reported extra memory); a collection leaves it as it is.
++// GarbageCollectionController: the same as when an idle full collection was requested = nothing allocated since.
++uint64_t JSC__VM__totalBytesAllocated(JSC::VM* vm)
++{
++    return vm->heap.totalBytesAllocated();
++}
++
++// Whether the heap holds code a full collection may let age out: a CodeBlock of a tier with a time to live (LLInt,
++// baseline, DFG, FTL). Code compiled ahead of time, host functions and code not linked yet never age.
++bool JSC__VM__hasAgingCode(JSC::VM* vm)
++{
++    bool aging = false;
++    vm->heap.codeBlockSet().iterate([&](JSC::CodeBlock* codeBlock) {
++        if (!aging && JSC::CodeBlock::timeToLive(codeBlock->jitType()) != WTF::Seconds::infinity())
++            aging = true;
++    });
++    return aging;
++}
++
+ bool JSC__VM__shrinkFootprintNow(JSC::VM* vm)
+ {
+     JSC::JSLockHolder lock(*vm);
+-- 
+2.54.0 (Apple Git-157)
+
