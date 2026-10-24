@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { fauxAssistantMessage } from "../src/providers/faux.ts";
+import type { AssistantMessage } from "../src/types.ts";
 import { isRetryableAssistantError, type RetryPolicy, retryAssistantCall, retryDelayMs } from "../src/utils/retry.ts";
 
 const openAIExplicitRetryMessage =
@@ -173,6 +174,18 @@ describe("retryDelayMs", () => {
 		expect(retryDelayMs({ baseDelayMs: 2000, maxAgentDelayMs: 5000 }, 5)).toBe(5000);
 		expect(retryDelayMs({ baseDelayMs: 2000, maxAgentDelayMs: 0 }, 5)).toBe(0);
 	});
+
+	// earendil-works/pi#10601
+	it("waits at least the server-requested delay, within the cap", () => {
+		expect(retryDelayMs({ baseDelayMs: 2000 }, 1, 30_000)).toBe(30_000);
+		expect(retryDelayMs({ baseDelayMs: 2000 }, 3, 1_000)).toBe(8_000);
+		expect(retryDelayMs({ baseDelayMs: 2000 }, 1, 120_000)).toBe(60_000);
+		expect(retryDelayMs({ baseDelayMs: 2000, maxAgentDelayMs: 10_000 }, 1, 30_000)).toBe(10_000);
+		// A Retry-After date in the past gives a negative delay.
+		expect(retryDelayMs({ baseDelayMs: 2000 }, 1, -5_000)).toBe(2_000);
+		// retry-after: 2.5005 seconds.
+		expect(retryDelayMs({ baseDelayMs: 2000 }, 1, 2_500.5)).toBe(2_501);
+	});
 });
 
 describe("retryAssistantCall", () => {
@@ -234,6 +247,23 @@ describe("retryAssistantCall", () => {
 		await retryAssistantCall(produce, policy, undefined, { onRetryScheduled });
 
 		expect(onRetryScheduled.mock.calls.map((call) => call[2])).toEqual([10, 15, 15, 15]);
+	});
+
+	// earendil-works/pi#10601
+	it("waits for the failed response's retryAfterMs", async () => {
+		const policy: RetryPolicy = { enabled: true, maxRetries: 1, baseDelayMs: 1 };
+		const produce = vi
+			.fn<() => Promise<AssistantMessage>>()
+			.mockResolvedValueOnce({
+				...fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 rate limit" }),
+				retryAfterMs: 20,
+			})
+			.mockResolvedValueOnce(fauxAssistantMessage("recovered"));
+		const onRetryScheduled = vi.fn();
+
+		await retryAssistantCall(produce, policy, undefined, { onRetryScheduled });
+
+		expect(onRetryScheduled.mock.calls.map((call) => call[2])).toEqual([20]);
 	});
 
 	it("stops retrying once a call succeeds", async () => {

@@ -52,6 +52,32 @@ describe("AgentSession retry and event characterization", () => {
 		expect(harness.session.isRetrying).toBe(false);
 	});
 
+	// earendil-works/pi#10601
+	it("waits at least the server's retry-after delay, within maxAgentDelayMs", async () => {
+		const harness = await createHarness({
+			settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1, maxAgentDelayMs: 40 } },
+		});
+		harnesses.push(harness);
+		const delays: number[] = [];
+		harness.session.subscribe((event) => {
+			if (event.type === "auto_retry_start") delays.push(event.delayMs);
+		});
+
+		const rateLimited = (retryAfterMs: number) => ({
+			...fauxAssistantMessage("", { stopReason: "error", errorMessage: "429 rate limit exceeded" }),
+			retryAfterMs,
+		});
+		harness.setResponses([rateLimited(25), rateLimited(30_000), fauxAssistantMessage("recovered")]);
+
+		const startedAt = Date.now();
+		await harness.session.prompt("test");
+
+		// Exponential backoff alone would be 1ms and 2ms.
+		expect(delays).toEqual([25, 40]);
+		expect(Date.now() - startedAt).toBeGreaterThanOrEqual(60);
+		expect(harness.faux.state.callCount).toBe(3);
+	});
+
 	it("retries multiple transient failures and succeeds on the final attempt", async () => {
 		const harness = await createHarness({ settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } } });
 		harnesses.push(harness);

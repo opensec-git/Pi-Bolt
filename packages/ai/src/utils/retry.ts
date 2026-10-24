@@ -139,8 +139,16 @@ export interface RetryPolicy {
 
 export const DEFAULT_MAX_AGENT_RETRY_DELAY_MS = 60_000;
 
-export function retryDelayMs(policy: Pick<RetryPolicy, "baseDelayMs" | "maxAgentDelayMs">, attempt: number): number {
-	const delay = policy.baseDelayMs * 2 ** Math.max(0, attempt - 1);
+/**
+ * Delay before retry `attempt` (1-indexed): the exponential backoff, raised to `serverDelayMs` when the failed response
+ * asked for a longer wait, and capped by `maxAgentDelayMs`.
+ */
+export function retryDelayMs(
+	policy: Pick<RetryPolicy, "baseDelayMs" | "maxAgentDelayMs">,
+	attempt: number,
+	serverDelayMs?: number,
+): number {
+	const delay = Math.max(policy.baseDelayMs * 2 ** Math.max(0, attempt - 1), Math.ceil(serverDelayMs ?? 0));
 	const safeDelay = Number.isSafeInteger(delay) ? delay : Number.MAX_SAFE_INTEGER;
 	return Math.min(safeDelay, policy.maxAgentDelayMs ?? DEFAULT_MAX_AGENT_RETRY_DELAY_MS);
 }
@@ -194,10 +202,11 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
  *   too, so callers do not need to care when cancellation happened.
  * - A non-retryable error (per {@link isRetryableAssistantError}, including quota/
  *   billing exhaustion) is returned immediately so deterministic errors fail fast.
- * - Otherwise retries up to `maxRetries` times with exponential backoff, emitting
- *   `onRetryScheduled` before each sleep, `onRetryAttemptStart` after each sleep before
- *   the retried call starts, and `onRetryFinished` once at the end (whether the loop
- *   ends in success, exhausted retries, or an aborted backoff).
+ * - Otherwise retries up to `maxRetries` times with exponential backoff, waiting at least
+ *   the failed response's `retryAfterMs`, emitting `onRetryScheduled` before each sleep,
+ *   `onRetryAttemptStart` after each sleep before the retried call starts, and
+ *   `onRetryFinished` once at the end (whether the loop ends in success, exhausted
+ *   retries, or an aborted backoff).
  *
  * When `policy` is undefined or disabled, the first response is returned unchanged
  * (equivalent to calling `produce()` directly).
@@ -235,7 +244,7 @@ export async function retryAssistantCall(
 
 		attempt++;
 		lastRetry = { attempt, errorMessage: response.errorMessage || "Unknown error" };
-		const delayMs = retryDelayMs(policy!, attempt);
+		const delayMs = retryDelayMs(policy!, attempt, response.retryAfterMs);
 		await callbacks?.onRetryScheduled?.(attempt, maxAttempts, delayMs, lastRetry.errorMessage);
 
 		// Normalize aborts during retry backoff to the same AssistantMessage shape as

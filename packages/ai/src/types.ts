@@ -592,6 +592,8 @@ export interface AssistantMessage {
 	stopReason: StopReason;
 	deferred?: DeferredHandle;
 	errorMessage?: string;
+	/** Delay in ms the failed response asked for (`retry-after` / `retry-after-ms`). Agent-level retry waits at least this long. */
+	retryAfterMs?: number;
 	rawStopReason?: string;
 	/**
 	 * Provider indication of whether the model explicitly ended its turn.

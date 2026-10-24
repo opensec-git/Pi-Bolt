@@ -50,19 +50,33 @@ function validateServerRetryDelayMs(
 	return delayMs;
 }
 
-function getRetryDelayMs(error: ProviderError, retryIndex: number, maxRetryDelayMs: number | undefined): number {
-	const retryAfterMs = error.headers?.get("retry-after-ms");
+function parseRetryAfterMs(headers: Headers | undefined): number | undefined {
+	const retryAfterMs = headers?.get("retry-after-ms");
 	if (retryAfterMs) {
 		const value = Number.parseFloat(retryAfterMs);
-		if (Number.isFinite(value)) return validateServerRetryDelayMs(value, maxRetryDelayMs, error.message);
+		if (Number.isFinite(value)) return value;
 	}
 
-	const retryAfter = error.headers?.get("retry-after");
+	const retryAfter = headers?.get("retry-after");
 	if (retryAfter) {
 		const seconds = Number.parseFloat(retryAfter);
 		const delayMs = Number.isNaN(seconds) ? Date.parse(retryAfter) - Date.now() : seconds * 1000;
-		if (Number.isFinite(delayMs)) return validateServerRetryDelayMs(delayMs, maxRetryDelayMs, error.message);
+		if (Number.isFinite(delayMs)) return delayMs;
 	}
+	return undefined;
+}
+
+/**
+ * Delay in ms the failed response asked for (`retry-after-ms`, or `retry-after` in seconds or as an HTTP date), for
+ * SDK errors that carry response headers. Undefined when there is none.
+ */
+export function getServerRetryDelayMs(error: unknown): number | undefined {
+	return isProviderError(error) ? parseRetryAfterMs(error.headers) : undefined;
+}
+
+function getRetryDelayMs(error: ProviderError, retryIndex: number, maxRetryDelayMs: number | undefined): number {
+	const serverDelayMs = parseRetryAfterMs(error.headers);
+	if (serverDelayMs !== undefined) return validateServerRetryDelayMs(serverDelayMs, maxRetryDelayMs, error.message);
 
 	const exponentialDelay = Math.min(0.5 * 2 ** retryIndex, 8) * 1000;
 	return exponentialDelay * (1 - Math.random() * 0.25);
