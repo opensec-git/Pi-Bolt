@@ -244,6 +244,45 @@ describe("packages installed with pi install", () => {
 		assert.deepEqual(planPlugins({ agentDir }).dependencies, []);
 	});
 
+	it("takes the files of a folder in pi.extensions, as Pi does, and not the folder", () => {
+		// pi-openrouter-session declares "./extensions", a folder holding one .ts file and no index.
+		const agentDir = agent({ packages: ["npm:pi-openrouter-session", "npm:two-files"] });
+		installPackage(agentDir, "pi-openrouter-session", { pi: { extensions: ["./extensions"] } }, [
+			"extensions/openrouter-session.ts",
+		]);
+		installPackage(agentDir, "two-files", { pi: { extensions: ["./extensions"] } }, [
+			"extensions/a.ts",
+			"extensions/b/index.ts",
+			"extensions/.hidden.ts",
+			"extensions/node_modules/dep/index.ts",
+		]);
+
+		const plan = planPlugins({ agentDir });
+		assert.deepEqual(
+			plan.plugins.map((plugin) => [plugin.name, plugin.importPath]),
+			[
+				["pi-openrouter-session", "./package-pi-openrouter-session/extensions/openrouter-session.ts"],
+				["two-files-a", "./package-two-files/extensions/a.ts"],
+				["two-files-index", "./package-two-files/extensions/b/index.ts"],
+			],
+		);
+
+		const out = join(scratch(), "folder");
+		const manifest = writePluginFolder(plan, out);
+		const imports = [...readFileSync(manifest, "utf8").matchAll(/^import \w+ from "\.\/(.+)";$/gm)];
+		assert.equal(imports.length, 3);
+		for (const [, path] of imports) assert.ok(readFileSync(join(out, path), "utf8"));
+	});
+
+	it("says a folder in pi.extensions with no extension in it has no entry point", () => {
+		const agentDir = agent({ packages: ["npm:empty-folder"] });
+		installPackage(agentDir, "empty-folder", { pi: { extensions: ["./extensions"] } }, ["extensions/README.md"]);
+
+		const plan = planPlugins({ agentDir });
+		assert.deepEqual(plan.plugins, []);
+		assert.match(plan.skipped.map((entry) => entry.reason).join("\n"), /empty-folder: no entry point/);
+	});
+
 	it("passes over a Bun build that loads its core at run time, and says why", () => {
 		const agentDir = agent({ packages: ["npm:opensec-pi-todo"] });
 		const dir = installPackage(agentDir, "opensec-pi-todo", { pi: { extensions: ["./dist-bun/index.js"] } }, [

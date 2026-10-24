@@ -99,6 +99,23 @@ export function discoverExtensionsInDir(dir) {
 	return found;
 }
 
+/**
+ * A package's "pi.extensions" entry may be a folder: pi-openrouter-session declares "./extensions", which holds
+ * openrouter-session.ts and no index. Pi loads that folder's own entries, else what discovery finds in it without dot
+ * entries and node_modules (package-manager.ts, `collectAutoExtensionEntries`). Imported as it is, the folder does not
+ * resolve and the build stops.
+ */
+export function expandPackageEntry(entry) {
+	if (!statSync(entry).isDirectory()) return [entry];
+	return (
+		resolveExtensionEntries(entry) ??
+		discoverExtensionsInDir(entry).filter((path) => {
+			const first = relative(entry, path).split(sep)[0];
+			return !first.startsWith(".") && first !== "node_modules";
+		})
+	);
+}
+
 // --- names ----------------------------------------------------------------------------------------------------------
 
 /** A name the `extensions` setting can carry: it is one flat string, so a space would split it. */
@@ -336,8 +353,8 @@ export function planPlugins(options) {
 			skipped.push({ path: source, reason: resolved.skip });
 			continue;
 		}
-		const declared = resolveExtensionEntries(resolved.dir);
-		if (!declared) {
+		const declared = resolveExtensionEntries(resolved.dir)?.flatMap(expandPackageEntry);
+		if (!declared?.length) {
 			skipped.push({ path: resolved.dir, reason: `${resolved.name}: no entry point and no "pi.extensions"` });
 			continue;
 		}

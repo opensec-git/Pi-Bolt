@@ -284,7 +284,10 @@ function buildEnvironment(kit: Kit, kitDir: string): NodeJS.ProcessEnv {
 	return env;
 }
 
-/** Builds Pi-Bolt with the extensions of `plan` into `stage`, a folder like this build's. */
+/**
+ * Builds Pi-Bolt with the extensions of `plan` into `stage`, a folder like this build's. A failed build leaves all of
+ * what the compiler printed in `log`, outside the work folder that is removed after it.
+ */
 function buildExecutable(
 	kit: Kit,
 	kitDir: string,
@@ -292,6 +295,7 @@ function buildExecutable(
 	plan: ManifestPlan,
 	stage: string,
 	buildDir: string,
+	log: string,
 ): void {
 	const build = PIBOLT!;
 	const agent = join(kitDir, kit.agent);
@@ -316,7 +320,6 @@ function buildExecutable(
 	process.stderr.write(chalk.dim(`compiling Pi ${kit.pi} with ${plan.plugins.length} extension(s)\n`));
 	const result = run(bun, args, { cwd: agent, env: buildEnvironment(kit, kitDir) });
 	if (result.status !== 0 || !existsSync(executable)) {
-		const log = join(dirname(stage), "build.log");
 		writeFileSync(log, `${result.stdout}\n${result.stderr}`);
 		const reason = `${result.stdout}\n${result.stderr}`
 			.split("\n")
@@ -432,7 +435,7 @@ async function compile(options: CompileOptions): Promise<void> {
 
 		const buildDir = where?.buildDir ?? dirname(process.execPath);
 		const stage = join(work, basename(buildDir));
-		buildExecutable(kit, kitDir, bun, plan, stage, buildDir);
+		buildExecutable(kit, kitDir, bun, plan, stage, buildDir, join(workParent, "compile.log"));
 
 		const names = plan.plugins.map((plugin) => plugin.name);
 		if (options.out) {
