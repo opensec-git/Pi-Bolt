@@ -1,6 +1,6 @@
 # OpenSec's optional extensions that the installers offer (install.sh, install.ps1), pinned: the npm package, its version, and
 # that version's npm integrity (`npm view NAME@VERSION dist.integrity`). A release carries this file and covers it with its signed
 # SHA256SUMS; the installers install exactly these versions, and only if the registry's tarball has this integrity.
-opensec-pi-subagents 0.20.0 sha512-2CdDoIrHtiglfSts4x/jgHrPWhQG5VzjSz+rUe36VIBYBnvgUPeODWIL2r/ysj/0n0tyC4+CBMltc5x14MTcnw==
+opensec-pi-subagents 0.20.9 sha512-ihl5P/ZGCYt9nYeAn2/mndWsanwiERhiG0V037YptfgfoCWIKiBPMElI6ZeF0kpQqHn5gl8gim5jFRGl2nhGKA==
 opensec-pi-todo 2.13.1 sha512-f0Ry9stXZ1T26m7Y5tcfgFXXicFPyN3cGVwZizbspH0wMmj7cjJq2tAU9hTPPJg7IXsojIHvI/PFy7kIa9i3GA==
 opensec-pi-fff 0.11.0 sha512-ZHFpKfPIdq3gITJMgOUFUX5ZH8mvcOdCOkN6Cyfopjipuijbrbapp8ljNLkUjHynPJH8oLexH7UTcBD7YR9Ihw==
