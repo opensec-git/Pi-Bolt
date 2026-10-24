@@ -28,7 +28,7 @@ concurrency:
 jobs:
   lint:
     name: Lint and types
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,7 +61,7 @@ jobs:
 
   unit:
     name: Pi's tests
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -95,11 +95,11 @@ jobs:
       matrix:
         include:
           - name: Linux x86-64
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
           - name: Linux ARM64
-            runner: ubuntu-24.04-arm
+            runner: blacksmith-4vcpu-ubuntu-2404-arm
           - name: macOS Apple silicon
-            runner: macos-15
+            runner: blacksmith-6vcpu-macos-26
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
@@ -175,11 +175,11 @@ jobs:
       matrix:
         include:
           - name: Linux
-            runner: ubuntu-24.04
+            runner: blacksmith-4vcpu-ubuntu-2404
           - name: macOS
-            runner: macos-15
+            runner: blacksmith-6vcpu-macos-26
           - name: Windows
-            runner: windows-2025
+            runner: blacksmith-4vcpu-windows-2025
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
@@ -216,7 +216,7 @@ jobs:
 
   engine:
     name: Engine patches apply
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
