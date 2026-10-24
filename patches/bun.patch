@@ -16924,8 +16924,8 @@ The main VM's first collection waits for as many bytes as loading the module gra
 heap the modules are not loaded from those bytes; macOS caps the budget at 12 MB for that reason, Linux did not, and
 Pi's graph made it 24.6 MB there: no collection before the first prompt, and all the garbage of starting plus a
 prompt or two resident at once (BUN_JSC_logGC: first collection at 24.7 MB allocated, during the first prompt).
-Since the heap does not size itself below its largest limit (Heap::updateAllocationLimits keeps the previous
-maximum), that budget also stayed the floor of the later cycles.
+An eden collection keeps that allowance for the next cycle (Heap::updateAllocationLimits sets it anew only after a
+full collection), so the cycles after it allowed 24.6 MB as well.
 
 Linux now caps it at 16 MB. Measured on GitHub's ubuntu-24.04 x64 with Pi-Bolt 1.0.2, pinned to one CPU, with the
 allowance of every cycle capped at 16 MB (BUN_JSC_gcMaxHeapSize; this caps the later cycles too, so the cost is an
