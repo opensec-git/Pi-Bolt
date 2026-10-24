@@ -116,7 +116,11 @@ stage_plugins() {
 		import "../dist/bun/runtime-setup.js";
 		import { setupCli } from "../dist/cli/setup.js";
 		import { main } from "../dist/main.js";
-		import plugins from "./src/$(basename "$manifest")";
+
+		// Required, not imported: the bundler then gives each module of each plugin a function of its own, rather than adding its
+		// top-level code to the program's, one function that the compiler refuses past 256 KB of bytecode (#129). They still run
+		// in the order the manifest imports them, at the same point of the start.
+		const plugins = require("./src/$(basename "$manifest")").default;
 
 		// A named plugin is a built-in extension (\`builtin:<name>\`): it can be turned off (\`-builtin:<name>\` in the \`extensions\`
 		// setting, or the config screen), and an extension of the same tools loaded at run time replaces it (replaceable) instead of

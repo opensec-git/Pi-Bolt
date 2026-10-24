@@ -12,8 +12,13 @@ import {
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
 import {
 	buildFailureReason,
+	bundlePieces,
+	bytecodeSizeLimit,
 	candidateLines,
 	checkReleaseSums,
+	extensionsOfModule,
+	functionTooBig,
+	measuredSizes,
 	recordedExclusions,
 	resolveCompilePackages,
 } from "../src/pi-bolt-compile.ts";
@@ -246,7 +251,13 @@ describe("pi-bolt compile leaves out what compile.json records as excluded", () 
 });
 
 describe("pi-bolt compile says what it does with each extension and package", () => {
-	const plugin = (name: string, origin: string) => ({ name, entry: `/x/${name}.ts`, origin, stageDir: origin });
+	const plugin = (name: string, origin: string) => ({
+		name,
+		entry: `/x/${name}.ts`,
+		origin,
+		stageDir: origin,
+		importPath: `./${origin}/${name}.ts`,
+	});
 	const plan = {
 		plugins: [plugin("pi-codex-goal", "package"), plugin("word-count", "global")],
 		excluded: [
@@ -323,5 +334,140 @@ describe("pi-bolt compile says why a build stopped", () => {
 			"AOT: compiling 2 functions\nAOT: 0 methods are closed",
 		);
 		expect(buildFailureReason("\n")).toBe("(the compiler printed nothing)");
+	});
+});
+
+// Issue #129: the extensions are compiled in each module in a function of its own, so a function too big to compile is one
+// module's or one function's, or (rarely now) the top-level code of the whole program. The message says which.
+describe("pi-bolt compile says which extension a function too big to compile is of (#129)", () => {
+	test("the compiler's line gives the size, and whether it is the top-level code", () => {
+		expect(
+			functionTooBig(
+				"AOT: a function of 355112 bytes of bytecode (a function) is bigger than maximumAOTCandidateBytecodeSize (262144 bytes), ...",
+			),
+		).toEqual({ size: 355112, topLevel: false });
+		expect(
+			functionTooBig(
+				"x\nAOT: a function of 437358 bytes of bytecode (the top-level code of a module) is bigger than maximumAOTCandidateBytecodeSize (262144 bytes)",
+			),
+		).toEqual({ size: 437358, topLevel: true });
+		expect(functionTooBig("AOT: 1 function could not be compiled ahead of time")).toBeUndefined();
+	});
+
+	// A bundle as Bun prints one (--format=esm, not minified): Pi's modules, then the extensions' copies.
+	const bundle = [
+		"var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);",
+		"// ../ai/src/index.ts",
+		"var init_src = __esm(() => {",
+		"  piOwn = 1;",
+		"});",
+		"// .pibolt-plugins/src/global/big/helper.ts",
+		"var helperValue;",
+		"var init_helper = __esm(() => {",
+		"  helperValue = 1;",
+		"});",
+		"// .pibolt-plugins/src/global/big/index.ts",
+		'import { writeFileSync as writeFileSync2 } from "fs";',
+		"function big_default(pi) {",
+		"  return table.length;",
+		"}",
+		"var table;",
+		"var init_big = __esm(async () => {",
+		"  init_helper();",
+		"  table = [1, 2, 3];",
+		"});",
+		"// .pibolt-plugins/src/node_modules/left-pad/index.js",
+		"var require_left_pad = __commonJS((exports, module) => {",
+		"  module.exports = (s) => s;",
+		"});",
+		"// .pibolt-plugins/src/plugins.ts",
+		"var plugins_default = [];",
+		"class Registry {",
+		"  add() {}",
+		"}",
+		"",
+	].join("\n");
+
+	test("a bundle's extension code in pieces: each wrapped module, each function, and what each adds to the top level", () => {
+		const { pieces, names } = bundlePieces(bundle, ".pibolt-plugins/src/");
+		const of = (kind: string) => pieces.filter((piece) => piece.kind === kind);
+		expect(of("esm").map((piece) => [piece.module, piece.async, piece.code])).toEqual([
+			[".pibolt-plugins/src/global/big/helper.ts", false, "  helperValue = 1;"],
+			[".pibolt-plugins/src/global/big/index.ts", true, "  init_helper();\n  table = [1, 2, 3];"],
+		]);
+		expect(of("commonjs").map((piece) => piece.module)).toEqual([
+			".pibolt-plugins/src/node_modules/left-pad/index.js",
+		]);
+		expect(of("function").map((piece) => [piece.name, piece.code])).toEqual([
+			["big_default", "  return table.length;"],
+		]);
+		// (Pi's own modules are not pieces; a wrapper adds its creation, not its body, and declarations and imports add nothing.)
+		expect(of("top-level").map((piece) => [piece.module, piece.code])).toEqual([
+			[".pibolt-plugins/src/global/big/helper.ts", "init_helper = __esm(() => {\n});"],
+			[".pibolt-plugins/src/global/big/index.ts", "init_big = __esm(async () => {\n});"],
+			[
+				".pibolt-plugins/src/node_modules/left-pad/index.js",
+				"require_left_pad = __commonJS((exports, module) => {\n});",
+			],
+			[".pibolt-plugins/src/plugins.ts", "plugins_default = [];\nclass Registry {\n  add() {}\n}\n"],
+		]);
+		for (const name of ["__esm", "init_src", "helperValue", "big_default", "table", "writeFileSync2", "Registry"]) {
+			expect(names).toContain(name);
+		}
+	});
+
+	test("the sizes the engine prints, less what the empty function takes", () => {
+		const printed = [
+			"__pibolt_base#AbCdEf:[0x1->0x2, NoneFunctionCall, 52 (StrictMode)]: 9 instructions",
+			"[   0] enter",
+			"__pibolt_0#Gh1jKl:[0x3->0x4, NoneFunctionCall, 436256 (StrictMode)]: 36020 instructions",
+			"__pibolt_1#MnOpQr:[0x5->0x6, NoneFunctionCall, 9984 (StrictMode)]: 900 instructions",
+		].join("\n");
+		expect([...measuredSizes(printed)]).toEqual([
+			[0, 436204],
+			[1, 9932],
+		]);
+	});
+
+	test("a module is the extension's whose copy it is in; a dependency is nobody's own", () => {
+		const plan = {
+			plugins: [
+				{ name: "big", origin: "global", stageDir: "global", importPath: "./global/big/index.ts" },
+				{ name: "ban-sleep", origin: "global", stageDir: "global", importPath: "./global/ban-sleep.ts" },
+				{ name: "web", origin: "package", stageDir: "package-web", importPath: "./package-web/dist/index.js" },
+				{ name: "tools-a", origin: "configured", stageDir: "path-tools", importPath: "./path-tools/a/index.ts" },
+			].map((plugin) => ({ ...plugin, entry: "" })),
+		};
+		const owner = (module: string) => extensionsOfModule(module, plan);
+		expect(owner(".pibolt-plugins/src/global/big/lib/table.ts")).toEqual(["big"]);
+		expect(owner(".pibolt-plugins/src/global/ban-sleep.ts")).toEqual(["ban-sleep"]);
+		expect(owner(".pibolt-plugins/src/global/ban-sleep.ts.bak")).toEqual([]);
+		expect(owner(".pibolt-plugins/src/package-web/dist/chunk-1.js")).toEqual(["web"]);
+		expect(owner(".pibolt-plugins/src/path-tools/a/util.ts")).toEqual(["tools-a"]);
+		expect(owner(".pibolt-plugins/src/node_modules/left-pad/index.js")).toEqual([]);
+		expect(owner("../ai/src/index.ts")).toEqual([]);
+	});
+
+	test("what is found out is said in place of the general advice", () => {
+		const log =
+			"AOT: a function of 355112 bytes of bytecode (a function) is bigger than maximumAOTCandidateBytecodeSize (262144 bytes).\n";
+		expect(buildFailureReason(log, ["That function is big's.", "Leave it out."]).split("\n").slice(1)).toEqual([
+			"That function is big's.",
+			"Leave it out.",
+		]);
+		expect(buildFailureReason(log)).toContain("compile.json keeps for `pi-bolt update`");
+	});
+});
+
+// Issue #129: a raised limit was lost at the next `pi-bolt update`, which then installed the release without the extensions.
+describe("pi-bolt compile keeps a raised limit on the size of a function (#129)", () => {
+	test("the environment's limit, else the one compile.json records, else the compiler's own", () => {
+		const variable = "BUN_JSC_maximumAOTCandidateBytecodeSize";
+		expect(bytecodeSizeLimit({ [variable]: "400000" }, { maximumBytecodeSize: 300000 })).toBe(400000);
+		expect(bytecodeSizeLimit({}, { maximumBytecodeSize: 300000 })).toBe(300000);
+		expect(bytecodeSizeLimit({ [variable]: "" }, undefined)).toBeUndefined();
+		expect(() => bytecodeSizeLimit({ [variable]: "lots" }, undefined)).toThrow(/not a number of bytes/);
+		// (A compile.json edited by hand into something else is not a limit.)
+		expect(bytecodeSizeLimit({}, { maximumBytecodeSize: "big" as unknown as number })).toBeUndefined();
 	});
 });

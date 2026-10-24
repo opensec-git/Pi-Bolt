@@ -890,6 +890,65 @@ describe("the manifest and its folder", () => {
 		assert.ok(readFileSync(join(out, "global", "shared", "skills.ts"), "utf8"));
 	});
 
+	// Issue #129: imported, the extensions' top-level code joined Pi's in the program's top-level code, one function, which the
+	// compiler refuses past 256 KB of bytecode, so a few extensions together stopped the build. Required, the manifest and each
+	// module it imports are wrapped in a function of their own; each runs once, in the same order, with the same values.
+	it("required as the entry requires it, each module is a function of its own, and runs as imported (#129)", (context) => {
+		const bun = spawnSync("bun", ["--version"], { encoding: "utf8" });
+		if (bun.status !== 0) return context.skip("no bun on PATH");
+		const agentDir = agent();
+		const ran = (name) => `globalThis.ran.push(${JSON.stringify(name)});\n`;
+		write(join(agentDir, "extensions", "shared", "words.ts"), `${ran("shared")}export const words = ["a"];\n`);
+		write(
+			join(agentDir, "extensions", "alpha.ts"),
+			`import { words } from "./shared/words.ts";\n${ran("alpha")}export default () => words;\n`,
+		);
+		write(join(agentDir, "extensions", "beta", "helper.ts"), `${ran("beta helper")}export const two = 2;\n`);
+		write(
+			join(agentDir, "extensions", "beta", "index.ts"),
+			`import { two } from "./helper.ts";\nimport { words } from "../shared/words.ts";\n${ran("beta")}export default () => [two, words];\n`,
+		);
+		// (CommonJS: imported, its default is module.exports itself.)
+		write(join(agentDir, "extensions", "gamma.js"), `${ran("gamma")}module.exports = function gamma() { return 3; };\n`);
+
+		const out = join(scratch(), "build");
+		writePluginFolder(planPlugins({ agentDir }), join(out, "src"));
+		writeFileSync(join(out, "start.ts"), "globalThis.ran = [];\n");
+		const report =
+			"console.log(JSON.stringify({ ran: globalThis.ran, plugins: plugins.map((p) => [p.name, p.factory.name, String(p.factory())]) }));\n";
+		writeFileSync(join(out, "imported.ts"), `import "./start.ts";\nimport plugins from "./src/plugins.ts";\n${report}`);
+		writeFileSync(
+			join(out, "required.ts"),
+			`import "./start.ts";\nconst plugins = require("./src/plugins.ts").default;\n${report}`,
+		);
+		const build = (entry) => {
+			const outdir = join(out, `dist-${entry}`);
+			const built = spawnSync("bun", ["build", "--target=bun", "--format=esm", `./${entry}.ts`, "--outdir", outdir], {
+				cwd: out,
+				encoding: "utf8",
+			});
+			assert.equal(built.status, 0, built.stderr);
+			const bundle = join(outdir, `${entry}.js`);
+			const ranIt = spawnSync("bun", [bundle], { encoding: "utf8" });
+			assert.equal(ranIt.status, 0, ranIt.stderr);
+			return { text: readFileSync(bundle, "utf8"), result: JSON.parse(ranIt.stdout) };
+		};
+		const imported = build("imported");
+		const required = build("required");
+
+		assert.deepEqual(required.result, imported.result);
+		assert.deepEqual(required.result.ran, ["shared", "alpha", "beta helper", "beta", "gamma"]);
+		assert.deepEqual(required.result.plugins.at(-1), ["gamma", "gamma", "3"]);
+		// Each module of the extensions in a function of its own: the ES modules in an `__esm` closure, the CommonJS one in its
+		// `__commonJS` one (as it always was), and none of their code at the top level.
+		const wrapped = (text) => [...text.matchAll(/^var (\w+) = __(?:esm|commonJS)\(/gm)].map((match) => match[1]);
+		for (const name of ["init_words", "init_alpha", "init_helper", "init_beta", "require_gamma", "init_plugins"]) {
+			assert.ok(wrapped(required.text).includes(name), `${name} in ${wrapped(required.text)}`);
+		}
+		assert.doesNotMatch(required.text, /^globalThis\.ran\.push\("(?:shared|alpha|beta)/m);
+		assert.match(imported.text, /^globalThis\.ran\.push\("alpha"\);$/m);
+	});
+
 	it("replaces its own output, and refuses a folder holding anything else", () => {
 		const agentDir = agent();
 		write(join(agentDir, "extensions", "alpha.ts"));

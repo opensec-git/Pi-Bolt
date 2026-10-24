@@ -155,9 +155,15 @@ sibling works out that path as it runs, and a compiled executable has no file th
 modules, which is a job for each package rather than a general one. [`plugins/opensec/`](../plugins/opensec) is the worked
 example. The generator names any it finds and says why, instead of leaving them out in silence.
 
-A large module is the other limit. The compiler refuses a module over 256 KB of bytecode, which a bundled `dist/index.js`
-passes easily. Leave such a plugin out with `--plugins-exclude`. Pull request #7 documents that limit and the three ways
-round it.
+A large module is the other limit. The compiler refuses a function of more than 256 KB of bytecode
+(`maximumAOTCandidateBytecodeSize`). Each module of a compiled-in plugin is a function of its own: the entry loads the manifest
+with `require()`, and the bundler wraps a module that is required, and every module it imports, in a function (an `__esm`
+closure) instead of adding its top-level code to the program's. So the limit is one module's, or one function's: a bundled
+`dist/index.js`, or embedded data such as a tokeniser's rank table, can pass it, and many small plugins together do not. The
+modules still run once each, in the order the manifest imports them. (Until Pi-Bolt 1.0.1 the entry imported the manifest, and
+every plugin's top-level code joined Pi's, about 200 KB of it, in one function: a few plugins together stopped the build, and
+leaving out any one of them did not help, #129.) Leave a plugin with such a module out with `--plugins-exclude`, or raise the
+limit ([Troubleshooting](#troubleshooting)).
 
 ### Whether it is worth it
 
@@ -411,7 +417,7 @@ python3 bench/ui_check.py --project . --build plugins=out/pi-bolt-plugins/pi
 | Symptom | Cause and fix |
 |---|---|
 | The build stops with "the build stopped" | `build-pi.sh` shows the end of what the compiler printed, and the file with all of it (set `PIBOLT_BUILD_LOG` to choose the file). An `AOT: ` line there gives the reason, most often a module the compiler refused, such as a plugin's bundled `dist`: the row below. |
-| `a function of N bytes of bytecode (the top-level code of a module) is bigger than maximumAOTCandidateBytecodeSize` | One module holds more than 256 KB of bytecode, usually a single large literal: a bundled `dist/index.js`, or embedded data such as a tokeniser's rank table. Leave that plugin out of the manifest; or set `BUN_JSC_maximumAOTCandidateBytecodeSize=N` to compile it anyway, which the compiler warns takes minutes and tens of GB; or set `BUN_JSC_omitBytecodeFromStaticHeap=0` to run it from bytecode. A plugin left out still loads at run time, and on the JIT-off build its code runs in the interpreter. |
+| `a function of N bytes of bytecode (...) is bigger than maximumAOTCandidateBytecodeSize` | One function holds more than 256 KB of bytecode. `(a function)`: one module of a plugin, each being a function of its own, usually with a single large literal (a bundled `dist/index.js`, or embedded data such as a tokeniser's rank table), or one very large function. `(the top-level code of a module)`: the top-level code of the whole program, which Pi's own fills to about 200 KB and each module of a plugin adds the few bytes that start it to. `pi-bolt compile` says which module and extension it is, or each extension's share. Leave that plugin out of the manifest; or set `BUN_JSC_maximumAOTCandidateBytecodeSize=N` to compile it anyway (the compiler warns that a big function takes minutes and tens of GB; one of a few hundred KB has taken seconds); or set `BUN_JSC_omitBytecodeFromStaticHeap=0` to run it from bytecode. A plugin left out still loads at run time, and on the JIT-off build its code runs in the interpreter. |
 | `Could not resolve "./something"` during the build | A dynamic import or a file outside the manifest's folder. Use literal imports and keep the plugin's files under the manifest's folder. |
 | `Could not resolve "<package>"` for a plugin's own dependency | The manifest's folder has no `node_modules` entry for that package. Run `npm install` there. An `optionalDependency` counts: once it is installed, the plugin imports it like any other, so it must be in the folder too. |
 | "changed since it was compiled in, so it was loaded from its files" | The extension changed after `pi-bolt compile` compiled it in. Run `pi-bolt compile` again. |

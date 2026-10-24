@@ -103,13 +103,24 @@ function that is not compiled cannot be relied on to run. The message names the 
 change that function. `BUN_JSC_allowAOTDeclinedFunctions=1` builds anyway: the function then runs from bytecode if it uses no
 variables from outside itself, and stops the program when it is called if it does.
 
-**`pi-bolt compile` stops with "is bigger than maximumAOTCandidateBytecodeSize".** One module of an extension holds more than
-256 KB of bytecode, usually one large literal: a package's prebuilt, bundled `dist/` (pi-web-access is one), or embedded data.
+**`pi-bolt compile` stops with "is bigger than maximumAOTCandidateBytecodeSize".** One function of the program holds more than
+256 KB of bytecode. Each module of each extension is compiled as a function of its own, so the limit is one module's, not the
+extensions' together. Below the compiler's line, `pi-bolt compile` says which it is:
+- `(a function)`: the top-level code of one module of an extension, usually one large literal (a package's prebuilt, bundled
+  `dist/`, or embedded data), or one very large function. The message names the file and the extension.
+- `(the top-level code of a module)`: the top-level code of the whole program. Pi's own fills about 200 KB of it, and each
+  module of an extension adds the few bytes that start it. The message gives each extension's share.
+
 Leave that extension out with `pi-bolt compile --exclude <name>`, by the name `pi-bolt compile` prints for it: it still loads
 from its files at run time, and later compiles and `pi-bolt update` leave it out too (`--no-exclude` takes it back). Or compile
-it anyway with `BUN_JSC_maximumAOTCandidateBytecodeSize=<n> pi-bolt compile`, `<n>` being at least the size the message
-gives; the compiler warns that this can take minutes and tens of GB. The message's third remedy,
+it anyway with `BUN_JSC_maximumAOTCandidateBytecodeSize=<n> pi-bolt compile`, `<n>` being at least the size the message gives.
+compile.json keeps that limit: a later `pi-bolt compile` without the variable, and `pi-bolt update`, build with it too, and
+`BUN_JSC_maximumAOTCandidateBytecodeSize=262144 pi-bolt compile` takes it back. The compiler warns that a big function can take
+minutes and tens of GB; one of a few hundred KB has taken seconds. The message's third remedy,
 `BUN_JSC_omitBytecodeFromStaticHeap=0`, does not apply to `pi-bolt compile`: the build keeps the release's setting.
+
+Pi-Bolt 1.0.1 and earlier added the top-level code of every extension to the program's: there a few extensions together passed
+the limit, and leaving out any one of them did not help (#129). A later release compiles each module on its own.
 
 **A run-time plugin is slow.** On the default build, plugins loaded at run time are interpreted. Compile them in
 ([PLUGINS.md](PLUGINS.md)) or use the `linux-x64-jit` build.
