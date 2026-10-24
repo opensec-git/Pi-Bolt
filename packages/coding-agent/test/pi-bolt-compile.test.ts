@@ -10,7 +10,12 @@ import {
 	setCompiledExtensions,
 } from "../src/core/extensions/compiled.ts";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
-import { checkReleaseSums, recordedExclusions, resolveCompilePackages } from "../src/pi-bolt-compile.ts";
+import {
+	candidateLines,
+	checkReleaseSums,
+	recordedExclusions,
+	resolveCompilePackages,
+} from "../src/pi-bolt-compile.ts";
 
 // (Pi-Bolt applies piBolt.packages to `packages` only in a Pi-Bolt build.)
 vi.mock("../src/pi-bolt.ts", async (importOriginal) => ({
@@ -236,5 +241,37 @@ describe("pi-bolt compile leaves out what compile.json records as excluded", () 
 	test("with nothing recorded, nothing is left out", () => {
 		expect(recordedExclusions({}, undefined)).toBeUndefined();
 		expect(recordedExclusions({}, { only: ["a"] })).toBeUndefined();
+	});
+});
+
+describe("pi-bolt compile says what it does with each extension and package", () => {
+	const plugin = (name: string, origin: string) => ({ name, entry: `/x/${name}.ts`, origin, stageDir: origin });
+	const plan = {
+		plugins: [plugin("pi-codex-goal", "package"), plugin("word-count", "global")],
+		excluded: [
+			{ name: "pi-web-access", origin: "package", entry: "/x/w.js", by: "exclude" as const },
+			{ name: "notes", origin: "global", entry: "/x/n.ts", by: "only" as const },
+		],
+		skipped: [{ path: "/agent/extensions/shared", reason: "empty folder" }],
+	};
+	const packages = {
+		passedOver: [{ path: "pi-bolt-bundles/skills-only", reason: "no extensions in it" }],
+		removed: ["npm:pi-web-access"],
+	};
+
+	test("one line each: compiled, excluded and by what, or passed over and why (#108)", () => {
+		expect(candidateLines(plan, packages, true)).toEqual([
+			"pi-codex-goal (package): compiling",
+			"word-count (global): compiling",
+			"pi-web-access (package): excluded (compile.json)",
+			"notes (global): not in --only",
+			"pi-bolt-bundles/skills-only: passed over: no extensions in it",
+			"/agent/extensions/shared: passed over: empty folder",
+			"npm:pi-web-access: excluded by piBolt.packages",
+		]);
+	});
+
+	test("an exclusion given on the command line says so", () => {
+		expect(candidateLines(plan, packages)).toContain("pi-web-access (package): excluded (--exclude)");
 	});
 });

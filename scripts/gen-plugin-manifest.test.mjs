@@ -390,6 +390,18 @@ describe("the packages pi-bolt compile gives it (--packages)", () => {
 	});
 });
 
+describe("what it leaves out", () => {
+	it("lists each extension --only or --exclude leaves out, and by which (#108)", () => {
+		const agentDir = agent();
+		for (const name of ["a", "b", "c"]) write(join(agentDir, "extensions", `${name}.ts`));
+
+		const excluded = (options) => planPlugins({ agentDir, ...options }).excluded.map((entry) => [entry.name, entry.by]);
+		assert.deepEqual(excluded({ exclude: ["b"] }), [["b", "exclude"]]);
+		assert.deepEqual(excluded({ only: ["a", "b"], exclude: ["b"] }), [["b", "exclude"], ["c", "only"]]);
+		assert.deepEqual(excluded({}), []);
+	});
+});
+
 describe("what it passes over", () => {
 	it("reports an empty folder, shared code, and a file that is not .ts or .js", () => {
 		const agentDir = agent();

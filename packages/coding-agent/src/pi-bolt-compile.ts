@@ -54,6 +54,8 @@ interface CompileRecord extends CompileSelection {
 interface CompileOptions extends CompileSelection {
 	/** --no-exclude: none of the exclusions compile.json records. */
 	noExclude?: boolean;
+	/** `exclude` is compile.json's, applied because the command named none itself. */
+	excludeRecorded?: boolean;
 	/** Files to build with instead of the release's: a kit and a runtime (archives or unpacked folders). */
 	kit?: string;
 	runtime?: string;
@@ -159,6 +161,29 @@ interface ManifestPlan {
 	plugins: Array<{ name: string; entry: string; origin: string; stageDir: string }>;
 	roots: Array<{ stageDir: string; root: string; origin: string }>;
 	skipped: Array<{ path: string; reason: string }>;
+	/** Those --only or --exclude left out. */
+	excluded: Array<{ name: string; origin: string; entry: string; by: "only" | "exclude" }>;
+}
+
+/**
+ * One line for each extension and package a compile finds: compiled in, passed over and why, or excluded and by what. None
+ * goes unmentioned: one missing from the list looks like one that is not there.
+ */
+export function candidateLines(
+	plan: Pick<ManifestPlan, "plugins" | "skipped" | "excluded">,
+	packages: Pick<CompilePackages, "passedOver" | "removed">,
+	excludeRecorded = false,
+): string[] {
+	const exclusion = {
+		only: "not in --only",
+		exclude: excludeRecorded ? "excluded (compile.json)" : "excluded (--exclude)",
+	};
+	return [
+		...plan.plugins.map((plugin) => `${plugin.name} (${plugin.origin}): compiling`),
+		...plan.excluded.map((plugin) => `${plugin.name} (${plugin.origin}): ${exclusion[plugin.by]}`),
+		...[...packages.passedOver, ...plan.skipped].map((entry) => `${entry.path}: passed over: ${entry.reason}`),
+		...packages.removed.map((source) => `${source}: excluded by piBolt.packages`),
+	];
 }
 
 class CompileError extends Error {}
@@ -550,11 +575,9 @@ async function compile(options: CompileOptions): Promise<void> {
 		const generated = run(bun, generatorArgs, { env: generatorEnv });
 		if (generated.status !== 0) throw new CompileError(generated.stderr.trim().replace(/^error: /, ""));
 		const plan = JSON.parse(generated.stdout) as ManifestPlan;
-		for (const plugin of plan.plugins) process.stderr.write(`  ${plugin.name} ${chalk.dim(`(${plugin.origin})`)}\n`);
-		for (const entry of [...packages.passedOver, ...plan.skipped])
-			process.stderr.write(chalk.dim(`  passed over: ${entry.path}\n    ${entry.reason}\n`));
-		for (const source of packages.removed)
-			process.stderr.write(chalk.dim(`  ${source}: excluded by piBolt.packages\n`));
+		candidateLines(plan, packages, options.excludeRecorded).forEach((line, index) => {
+			process.stderr.write(`  ${index < plan.plugins.length ? line : chalk.dim(line)}\n`);
+		});
 
 		const buildDir = where?.buildDir ?? dirname(process.execPath);
 		const stage = join(work, basename(buildDir));
@@ -681,6 +704,7 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 		if (options.afterUpdate) Object.assign(options, { only: record!.only, noPackages: record!.noPackages });
 		if (recorded) {
 			options.exclude = recorded;
+			options.excludeRecorded = true;
 			process.stderr.write(
 				chalk.dim(
 					`leaving out what ${join(installDir!, "compile.json")} records as excluded: ${recorded.join(", ")}${options.afterUpdate ? "" : " (--no-exclude compiles them in)"}\n`,

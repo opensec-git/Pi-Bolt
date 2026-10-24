@@ -368,6 +368,7 @@ export function planPlugins(options) {
 			const name = readJson(join(pkg.root, "package.json"))?.name;
 			installed.push({
 				path: pkg.source,
+				label: "",
 				name: typeof name === "string" && name ? name : basename(pkg.root),
 				dir: pkg.root,
 				declared: pkg.entries,
@@ -382,6 +383,8 @@ export function planPlugins(options) {
 			}
 			installed.push({
 				path: resolved.dir,
+				// (The folder alone does not say which package it is.)
+				label: `${resolved.name}: `,
 				name: resolved.name,
 				dir: resolved.dir,
 				declared: resolveExtensionEntries(resolved.dir)?.flatMap(expandPackageEntry),
@@ -392,13 +395,13 @@ export function planPlugins(options) {
 	for (const resolved of installed) {
 		const declared = resolved.declared;
 		if (!declared?.length) {
-			skipped.push({ path: resolved.path, reason: `${resolved.name}: no entry point and no "pi.extensions"` });
+			skipped.push({ path: resolved.path, reason: `${resolved.label}no entry point and no "pi.extensions"` });
 			continue;
 		}
 		if (declared.some(needsVendoring)) {
 			skipped.push({
 				path: resolved.path,
-				reason: `${resolved.name}: a Bun build that loads core.cjs at run time, which needs vendoring per package (plugins/opensec/)`,
+				reason: `${resolved.label}a Bun build that loads core.cjs at run time, which needs vendoring per package (plugins/opensec/)`,
 			});
 			continue;
 		}
@@ -421,9 +424,14 @@ export function planPlugins(options) {
 
 	const only = (options.only ?? []).filter(Boolean);
 	const exclude = new Set(options.exclude ?? []);
-	const chosen = plugins
-		.filter((plugin) => only.length === 0 || only.includes(plugin.name))
-		.filter((plugin) => !exclude.has(plugin.name));
+	const chosen = [];
+	/** Those --only or --exclude leave out, so that each extension found is accounted for. */
+	const excluded = [];
+	for (const plugin of plugins) {
+		const by = only.length > 0 && !only.includes(plugin.name) ? "only" : exclude.has(plugin.name) ? "exclude" : "";
+		if (by) excluded.push({ name: plugin.name, origin: plugin.origin, entry: plugin.entry, by });
+		else chosen.push(plugin);
+	}
 
 	// Only the folders something chosen comes from are copied, and only the dependencies of a chosen package.
 	const used = new Set(chosen.map((plugin) => plugin.stageDir));
@@ -442,6 +450,7 @@ export function planPlugins(options) {
 		roots: usedRoots,
 		dependencies: [...dependencies].map(([name, from]) => ({ name, from })),
 		skipped,
+		excluded,
 	};
 }
 
@@ -924,6 +933,7 @@ if (isCommand()) {
 			process.stderr.write(`  with ${plan.dependencies.length} dependency package(s), copied to node_modules\n`);
 		}
 		for (const entry of plan.skipped) process.stderr.write(`  passed over: ${entry.path}\n    ${entry.reason}\n`);
+		for (const entry of plan.excluded) process.stderr.write(`  left out: ${entry.name} (--${entry.by})\n`);
 		// The manifest's path alone on stdout: build-pi.sh reads it with a command substitution.
 		process.stdout.write(`${manifest}\n`);
 	}
