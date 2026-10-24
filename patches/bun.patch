@@ -16491,3 +16491,426 @@ index 08db3789..cde86da8 100644
 -- 
 2.54.0 (Apple Git-157)
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Sun, 25 Oct 2026 03:17:27 +0530
+Subject: [PATCH] mimalloc: the scavenger sleeps while there is nothing to give
+ back
+
+With nothing scheduled the scavenger still woke for good after 30 s (doubling up to an hour while nothing
+interrupted it): a pass over the arenas, and a second sweep of every thread that stayed parked since its last
+sweep. Pi at its prompt: the first such wake-up after an answer gives back what the GC threads freed into the main
+thread's pages and left when they ended (0.6 MB, M5), each one after that finds nothing (wake-ups at 30, 90, 210 s
+... after the last activity, for the life of the process).
+
+What a second sweep of a parked thread can give back comes from another thread: a block freed into one of its pages,
+or a page abandoned when a thread ends (both are swept with the parked threads). Those now set a flag
+(`xfree_seen`, a load on the free path once it is set); the scavenger notes when it saw it, and sweeps a parked
+thread again 30 s after its last sweep only if the flag was seen since that sweep. With no thread due for that, and
+nothing scheduled, it waits with no timeout. Everything else that leaves memory to give back already wakes it: a
+purge scheduled by a free of arena memory, a thread that parks, and stop(). The first free into another thread's
+page while it waits with no timeout wakes it (seq_cst on both sides, so either the scavenger sees the flag before it
+waits or the free sees it waiting).
+
+Measured with mimalloc's tests on macOS (all 40 pass, test-park-again among them: what another thread frees is given
+back while the owner stays parked, here after 30.5 s) and a test of Pi's pattern (main thread parks, a helper thread
+ends at 2 s, another thread frees main's blocks at 4 s, 130 s): the same bytes purged at the end (0.23 MB), at 30 s
+instead of 32 s, and no wake-up of the scavenger after it, against wake-ups at 32, 92 and 212 s before.
+
+What no longer happens while nothing is going on: a parked thread's retired pages and the large pages its sweep kept
+under purge_holes_large_floor counted down one step per idle sweep (16 and 256 steps): with the doubling wait that
+took days of idling. They go at the thread's next park, as for a thread that is not idle.
+
+Replaces patches/mimalloc/scavenger-idle-backoff.patch.
+---
+ patches/mimalloc/scavenger-idle-backoff.patch |  44 ---
+ .../mimalloc/scavenger-sleep-when-idle.patch  | 309 ++++++++++++++++++
+ scripts/build/deps/mimalloc.ts                |   5 +-
+ 3 files changed, 312 insertions(+), 46 deletions(-)
+ delete mode 100644 patches/mimalloc/scavenger-idle-backoff.patch
+ create mode 100644 patches/mimalloc/scavenger-sleep-when-idle.patch
+
+diff --git a/patches/mimalloc/scavenger-idle-backoff.patch b/patches/mimalloc/scavenger-idle-backoff.patch
+deleted file mode 100644
+index 8af0fbf0..00000000
+--- a/patches/mimalloc/scavenger-idle-backoff.patch
++++ /dev/null
+@@ -1,44 +0,0 @@
+---- a/src/scavenger.c
+-+++ b/src/scavenger.c
+-@@ -198,6 +198,10 @@
+-   mi_subproc_t* const subproc = _mi_subproc_main();
+-   mi_atomic_store_relaxed(&_mi_scavenger_thread_id, _mi_thread_id());
+-   mi_msecs_t park_seen_last = 0;
+-+  // The safety net's wait when nothing is scheduled: doubles after each one that nothing interrupts, so a process left
+-+  // idle is not woken every 30 s for good (a pass over the arenas that finds nothing: 0.1-0.6 ms each, the only thing
+-+  // that still woke an idle Pi); back to 30 s as soon as anything wakes us or is scheduled.
+-+  mi_msecs_t idle_safety_ms = 30000;
+-   while (mi_atomic_load_acquire(&_mi_scavenger_running) != 0) {
+-     // Clear with an RMW, not a plain store: it must be totally ordered against the parker's
+-     // coalescing `exchange(wake, 1)` in `_mi_scavenger_wake`. With a store, our clear and the later
+-@@ -227,7 +231,7 @@
+-       // Nothing scheduled: park until woken. The 30s bound is a pure safety
+-       // net so stop() is guaranteed to take effect and any per-arena expiry
+-       // that did not propagate to subproc is still eventually purged (below).
+--      timeout_ms = 30000;
+-+      timeout_ms = idle_safety_ms;
+-     }
+-     else {
+-       const mi_msecs_t now = _mi_clock_now();
+-@@ -260,11 +264,19 @@
+-       continue;  // stopped polling: look once more for a thread that parked and did not wake us
+-     }
+-     if (mi_atomic_load_acquire(&_mi_scavenger_running) == 0) break;
+-+    const bool safety_wait = (expire == 0 && timeout_ms == idle_safety_ms);
+-     mi_scav_wait(&subproc->scavenger_wake, timeout_ms);
+--    // The safety net: nothing was scheduled and nothing woke us. Look at the arenas all the same.
+--    if (expire == 0 && mi_atomic_load_relaxed(&subproc->scavenger_wake) == 0) {
+-+    const bool woken = (mi_atomic_load_relaxed(&subproc->scavenger_wake) != 0);
+-+    // The safety net: nothing was scheduled and nothing woke us. Look at the arenas all the same.
+-+    if (expire == 0 && !woken) {
+-       _mi_arenas_try_purge(false /* force */, true /* visit_all */, subproc, 0 /* tseq */);
+-     }
+-+    if (safety_wait && !woken) {
+-+      idle_safety_ms = (idle_safety_ms >= 1800000 ? 3600000 : 2*idle_safety_ms);
+-+    }
+-+    else if (woken || expire != 0) {
+-+      idle_safety_ms = 30000;
+-+    }
+-   }
+- }
+- 
+diff --git a/patches/mimalloc/scavenger-sleep-when-idle.patch b/patches/mimalloc/scavenger-sleep-when-idle.patch
+new file mode 100644
+index 00000000..6078d41b
+--- /dev/null
++++ b/patches/mimalloc/scavenger-sleep-when-idle.patch
+@@ -0,0 +1,309 @@
++--- a/include/mimalloc/internal.h
+++++ b/include/mimalloc/internal.h
++@@ -294,6 +294,7 @@ void          _mi_scavenger_start_lazy(void);
++ void          _mi_scavenger_stop(void);
++ void          _mi_scavenger_wake(mi_subproc_t* subproc);
++ bool          _mi_scavenger_is_running(void);
+++void          _mi_scavenger_note_xfree_slow(mi_subproc_t* subproc);
++ 
++ // "page-map.c"
++ bool          _mi_page_map_init(void);
++@@ -345,7 +346,7 @@ void          _mi_theap_collect_abandon(mi_theap_t* theap);
++ 
++ 
++ void          _mi_thread_idle_work(mi_tld_t* tld, mi_theap_t* theap0) mi_attr_noexcept;
++-mi_msecs_t    _mi_theap_sweep_parked(mi_subproc_t* subproc);   // msecs until a park becomes due that was passed over for the rate limit, or that is to be swept again for its large pages (0: none)
+++mi_msecs_t    _mi_theap_sweep_parked(mi_subproc_t* subproc, mi_msecs_t again_since);   // msecs until a park becomes due that was passed over for the rate limit, that is to be swept again for its large pages, or for what other threads did since `again_since` (0: none)
++ void          _mi_park_leave(mi_tld_t* tld);
++ void          _mi_scavenger_forked_child(void);
++ bool          _mi_theap_area_visit_blocks(const mi_heap_area_t* area, mi_page_t* page, mi_block_visit_fun* visitor, void* arg);
++@@ -1887,4 +1888,13 @@ static mi_decl_forceinline void* _mi_memzero_block(mi_block_t* dst, size_t bsize
++   return _mi_memzero_aligned(wdst, bsize);
++ }
++ 
+++// A block freed into a page of another thread, or a page abandoned by its thread: what the scavenger's sweep of a thread
+++// that stays parked may give back (`_mi_theap_sweep_parked`), and nothing else tells it of. The first one since the
+++// scavenger last looked sets the flag (and wakes a scavenger that waits with no timeout); the others are a load.
+++static inline void _mi_scavenger_note_xfree(void) {
+++  mi_subproc_t* const subproc = _mi_subproc_main();
+++  if mi_likely(mi_atomic_load_relaxed(&subproc->xfree_seen) != 0) return;
+++  _mi_scavenger_note_xfree_slow(subproc);
+++}
+++
++ #endif  // MI_INTERNAL_H
++--- a/include/mimalloc/types.h
+++++ b/include/mimalloc/types.h
++@@ -796,6 +796,8 @@ struct mi_subproc_s {
++   mi_lock_t             tlds_lock;                      // guards the `tlds` list structure only -- never held across a sweep
++   _Atomic(uint32_t)     scavenger_polls;                // set while the scavenger looks at the parked threads by itself: a park does not need to wake it
++   _Atomic(uint32_t)     park_seen;                      // set by a thread that parks, cleared by the scavenger
+++  _Atomic(uint32_t)     xfree_seen;                     // set by a free into another thread's page and by a page abandon, cleared by the scavenger
+++  _Atomic(uint32_t)     scavenger_sleeping;             // set while the scavenger waits with no timeout: whoever sets `xfree_seen` then wakes it
++ 
++   _Atomic(size_t)       thread_count;                   // current threads associated with this sub-process
++   _Atomic(size_t)       thread_total_count;             // total created threads associated with this sub-process
++@@ -834,7 +836,7 @@ typedef int64_t  mi_msecs_t;
++ #define MI_PARK_SWEPT_NONE   (0)
++ #define MI_PARK_SWEPT_DONE   (1)
++ #define MI_PARK_SWEPT_SMALL  (2)   // but for large pages that were in use a moment ago: come back for those if the thread stays parked
++-#define MI_PARK_SWEEP_AGAIN_MSECS  (30000)   // a thread that stays parked is swept again after this long (the safety timeout of the scavenger)
+++#define MI_PARK_SWEEP_AGAIN_MSECS  (30000)   // a thread that stays parked is swept again this long after its last sweep, if another thread freed into its pages or abandoned pages since
++ #define MI_PARK_SWEEPS_MAX   (6)   // sweeps of one park at the most (two or three unless a sweeper that moves the epoch is held up)
++ 
++ struct mi_tld_s {
++--- a/src/arena.c
+++++ b/src/arena.c
++@@ -1376,6 +1376,7 @@ void _mi_arenas_page_abandon(mi_page_t* page, mi_theap_t* current_theapx) {
++         mi_atomic_increment_relaxed(&heap->abandoned_count[bin]);
++         mi_theapx_stat_increase(heap, current_theapx, pages_abandoned, 1);
++         mi_abandoned_page_unown(page, current_theapx);
+++        _mi_scavenger_note_xfree();   // (see the end)
++         return;
++       }
++     }
++@@ -1396,6 +1397,9 @@ void _mi_arenas_page_abandon(mi_page_t* page, mi_theap_t* current_theapx) {
++   }
++   mi_theapx_stat_increase(heap, current_theapx, pages_abandoned, 1);
++   mi_abandoned_page_unown(page, current_theapx);
+++  // Its free blocks are for the sweeps of the threads that stay parked. After it is published: a sweep that takes the
+++  // note sees the page.
+++  _mi_scavenger_note_xfree();
++ }
++ 
++ 
++--- a/src/free.c
+++++ b/src/free.c
++@@ -108,6 +108,9 @@ static inline void mi_free_block_mt(mi_page_t* page, mi_block_t* block, bool was
++     // mi_assert_internal(!mi_page_is_abandoned_mapped(page));
++     mi_free_try_collect_mt(page, block, allow_reclaim);
++   }
+++  // Tell the scavenger once the block is where a sweep finds it: on the page's thread free list, or (an abandoned
+++  // page that we owned for a moment) back with the page.
+++  _mi_scavenger_note_xfree();
++ }
++ 
++ 
++--- a/src/scavenger.c
+++++ b/src/scavenger.c
++@@ -21,6 +21,7 @@ void _mi_scavenger_wake(mi_subproc_t* subproc) { MI_UNUSED(subproc); }
++ bool _mi_scavenger_is_running(void) { return false; }
++ void _mi_scavenger_forked_child(void) { }
++ void _mi_scavenger_start_lazy(void) { _mi_scavenger_start(); }
+++void _mi_scavenger_note_xfree_slow(mi_subproc_t* subproc) { MI_UNUSED(subproc); }
++ 
++ #else
++ 
++@@ -32,7 +33,8 @@ static _Atomic(mi_threadid_t) _mi_scavenger_thread_id;
++ // -----------------------------------------------------------------------------
++ // Wait/wake on subproc->scavenger_wake (a uint32_t futex word).
++ //
++-//   mi_scav_wait(addr, timeout_ms) : block while *addr == 0, up to timeout_ms.
+++//   mi_scav_wait(addr, timeout_ms) : block while *addr == 0, up to timeout_ms
+++//                                    (MI_SCAV_FOREVER: until woken).
++ //   mi_scav_wake_one(addr)         : wake one waiter on addr.
++ //
++ // The thread loop re-reads scavenger_wake and purge_expire after every return,
++@@ -40,6 +42,8 @@ static _Atomic(mi_threadid_t) _mi_scavenger_thread_id;
++ // turn the wait into a busy spin.
++ // -----------------------------------------------------------------------------
++ 
+++#define MI_SCAV_FOREVER  ((mi_msecs_t)-1)
+++
++ #if defined(__linux__)
++ 
++ #include <linux/futex.h>
++@@ -47,12 +51,13 @@ static _Atomic(mi_threadid_t) _mi_scavenger_thread_id;
++ #include <unistd.h>
++ 
++ static void mi_scav_wait(_Atomic(uint32_t)* addr, mi_msecs_t timeout_ms) {
+++  const bool forever = (timeout_ms == MI_SCAV_FOREVER);
++   if (timeout_ms <= 0) timeout_ms = 1;
++   struct timespec ts;
++   ts.tv_sec  = (time_t)(timeout_ms / 1000);
++   ts.tv_nsec = (long)((timeout_ms % 1000) * 1000000L);
++   while (mi_atomic_load_acquire(addr) == 0) {
++-    const long rc = syscall(SYS_futex, (uint32_t*)addr, FUTEX_WAIT_PRIVATE, (uint32_t)0, &ts, NULL, 0);
+++    const long rc = syscall(SYS_futex, (uint32_t*)addr, FUTEX_WAIT_PRIVATE, (uint32_t)0, (forever ? NULL : &ts), NULL, 0);
++     if (rc == 0) return;                 // woken by FUTEX_WAKE
++     if (errno == ETIMEDOUT) return;
++     if (errno == EAGAIN) return;         // *addr != 0 at kernel check; caller re-reads
++@@ -81,8 +86,9 @@ extern int __ulock_wake(uint32_t operation, void* addr, uint64_t wake_value);
++ #define MI_ULF_NO_ERRNO         0x01000000
++ 
++ static void mi_scav_wait(_Atomic(uint32_t)* addr, mi_msecs_t timeout_ms) {
+++  const bool forever = (timeout_ms == MI_SCAV_FOREVER);
++   if (timeout_ms <= 0) timeout_ms = 1;
++-  const uint32_t timeout_us = (uint32_t)timeout_ms * 1000u;
+++  const uint32_t timeout_us = (forever ? 0u : (uint32_t)timeout_ms * 1000u);   // (0: no timeout)
++   while (mi_atomic_load_acquire(addr) == 0) {
++     const int rc = __ulock_wait(MI_UL_COMPARE_AND_WAIT | MI_ULF_NO_ERRNO, (void*)addr, 0, timeout_us);
++     if (rc >= 0) return;                 // woken or value already changed
++@@ -113,10 +119,11 @@ VOID WINAPI WakeByAddressSingle(PVOID Address);
++ #endif
++ 
++ static void mi_scav_wait(_Atomic(uint32_t)* addr, mi_msecs_t timeout_ms) {
+++  const bool forever = (timeout_ms == MI_SCAV_FOREVER);
++   if (timeout_ms <= 0) timeout_ms = 1;
++   uint32_t expected = 0;
++   while (mi_atomic_load_acquire(addr) == 0) {
++-    if (!WaitOnAddress((volatile VOID*)addr, &expected, sizeof(uint32_t), (DWORD)timeout_ms)) {
+++    if (!WaitOnAddress((volatile VOID*)addr, &expected, sizeof(uint32_t), (forever ? INFINITE : (DWORD)timeout_ms))) {
++       return;  // timeout (GetLastError() == ERROR_TIMEOUT)
++     }
++     // woken (possibly spuriously): loop re-checks *addr
++@@ -138,6 +145,7 @@ static pthread_mutex_t _mi_scav_mutex;   // initialized in `mi_scav_init` (from
++ static pthread_cond_t  _mi_scav_cond;
++ 
++ static void mi_scav_wait(_Atomic(uint32_t)* addr, mi_msecs_t timeout_ms) {
+++  const bool forever = (timeout_ms == MI_SCAV_FOREVER);
++   if (timeout_ms <= 0) timeout_ms = 1;
++   struct timespec ts;
++   #if defined(CLOCK_REALTIME)
++@@ -151,7 +159,8 @@ static void mi_scav_wait(_Atomic(uint32_t)* addr, mi_msecs_t timeout_ms) {
++   if (ts.tv_nsec >= 1000000000L) { ts.tv_sec += 1; ts.tv_nsec -= 1000000000L; }
++   pthread_mutex_lock(&_mi_scav_mutex);
++   while (mi_atomic_load_acquire(addr) == 0) {
++-    if (pthread_cond_timedwait(&_mi_scav_cond, &_mi_scav_mutex, &ts) == ETIMEDOUT) break;
+++    if (forever) { pthread_cond_wait(&_mi_scav_cond, &_mi_scav_mutex); }
+++    else if (pthread_cond_timedwait(&_mi_scav_cond, &_mi_scav_mutex, &ts) == ETIMEDOUT) break;
++   }
++   pthread_mutex_unlock(&_mi_scav_mutex);
++ }
++@@ -198,6 +207,7 @@ static void mi_scavenger_run(void) {
++   mi_subproc_t* const subproc = _mi_subproc_main();
++   mi_atomic_store_relaxed(&_mi_scavenger_thread_id, _mi_thread_id());
++   mi_msecs_t park_seen_last = 0;
+++  mi_msecs_t again_since = 0;   // when we last saw `xfree_seen`: what a parked thread swept before then is to be swept again
++   while (mi_atomic_load_acquire(&_mi_scavenger_running) != 0) {
++     // Clear with an RMW, not a plain store: it must be totally ordered against the parker's
++     // coalescing `exchange(wake, 1)` in `_mi_scavenger_wake`. With a store, our clear and the later
++@@ -206,9 +216,11 @@ static void mi_scavenger_run(void) {
++     // no syscall, and that park is silently deferred to the safety timeout.
++     mi_atomic_exchange_acq_rel(&subproc->scavenger_wake, (uint32_t)0);
++     const bool park_seen = (mi_atomic_exchange_acq_rel(&subproc->park_seen, (uint32_t)0) != 0);
+++    // (Before the sweep: a free into a thread's page during it is seen as after it.)
+++    if (mi_atomic_exchange_acq_rel(&subproc->xfree_seen, (uint32_t)0) != 0) { again_since = _mi_clock_now(); }
++     // Do the idle work of any thread that parked and handed us its theaps. This is the expensive
++     // part (the hole punch is ~99% madvise) and it is why the owner gets to skip it.
++-    const mi_msecs_t park_due = _mi_theap_sweep_parked(subproc);
+++    const mi_msecs_t park_due = _mi_theap_sweep_parked(subproc, again_since);
++     // Do threads park all the time, or did one go idle?
++     const mi_msecs_t interval = (mi_msecs_t)mi_option_get_clamp(mi_option_purge_holes_min_interval, 1, 3600000);
++     bool poll = false;
++@@ -224,10 +236,12 @@ static void mi_scavenger_run(void) {
++     const mi_msecs_t expire = mi_atomic_loadi64_acquire(&subproc->purge_expire);
++     mi_msecs_t timeout_ms;
++     if (expire == 0) {
++-      // Nothing scheduled: park until woken. The 30s bound is a pure safety
++-      // net so stop() is guaranteed to take effect and any per-arena expiry
++-      // that did not propagate to subproc is still eventually purged (below).
++-      timeout_ms = 30000;
+++      // Nothing scheduled: park until woken, or until a parked thread is due to be swept again (`park_due`, below).
+++      // With nothing due there is nothing to give back that nobody tells us of: a purge is scheduled (and wakes us) by
+++      // whoever frees arena memory, a thread that parks wakes us, so do a free into a parked thread's page and a page
+++      // abandon (`xfree_seen`), and so does stop(). An idle process is then not woken at all (it was every 30 s, the
+++      // last periodic wake-up of an idle process).
+++      timeout_ms = MI_SCAV_FOREVER;
++     }
++     else {
++       const mi_msecs_t now = _mi_clock_now();
++@@ -249,20 +263,32 @@ static void mi_scavenger_run(void) {
++         timeout_ms = (dropped ? 1 : 30000);
++       }
++     }
++-    // a park passed over for `purge_holes_min_interval` is swept when its window ends, not at the safety timeout
++-    if (park_due > 0 && park_due < timeout_ms) { timeout_ms = park_due; }
+++    // a park passed over for `purge_holes_min_interval`, or to be swept again, is swept when it is due
+++    if (park_due > 0 && (timeout_ms == MI_SCAV_FOREVER || park_due < timeout_ms)) { timeout_ms = park_due; }
++     // While threads park all the time, poll them every interval so they don't each have to wake us.
++     if (poll) {
++-      if (interval < timeout_ms) { timeout_ms = interval; }
+++      if (timeout_ms == MI_SCAV_FOREVER || interval < timeout_ms) { timeout_ms = interval; }
++       mi_atomic_store_release(&subproc->scavenger_polls, (uint32_t)1);
++     }
++     else if (mi_atomic_exchange_seq_cst(&subproc->scavenger_polls, (uint32_t)0) != 0) {
++       continue;  // stopped polling: look once more for a thread that parked and did not wake us
++     }
+++    const bool forever = (timeout_ms == MI_SCAV_FOREVER);
+++    if (forever) {
+++      // Say that we wait with no timeout before the last look at `xfree_seen`: a free that sets it after that look sees
+++      // us waiting and wakes us. (Store buffering, so both sides are seq_cst.)
+++      mi_atomic_exchange_seq_cst(&subproc->scavenger_sleeping, (uint32_t)1);
+++      if (mi_atomic_load_seq_cst(&subproc->xfree_seen) != 0) {
+++        mi_atomic_store_relaxed(&subproc->scavenger_sleeping, (uint32_t)0);
+++        continue;
+++      }
+++    }
++     if (mi_atomic_load_acquire(&_mi_scavenger_running) == 0) break;
++     mi_scav_wait(&subproc->scavenger_wake, timeout_ms);
++-    // The safety net: nothing was scheduled and nothing woke us. Look at the arenas all the same.
++-    if (expire == 0 && mi_atomic_load_relaxed(&subproc->scavenger_wake) == 0) {
+++    if (forever) { mi_atomic_store_relaxed(&subproc->scavenger_sleeping, (uint32_t)0); }
+++    // Nothing was scheduled and the wait for a park that was due ran out: look at the arenas as well, as the safety net
+++    // that this wait was did.
+++    if (expire == 0 && !forever && mi_atomic_load_relaxed(&subproc->scavenger_wake) == 0) {
++       _mi_arenas_try_purge(false /* force */, true /* visit_all */, subproc, 0 /* tseq */);
++     }
++   }
++@@ -283,6 +309,13 @@ void _mi_scavenger_wake(mi_subproc_t* subproc) {
++   }
++ }
++ 
+++// The first free into another thread's page (or page abandon) since the scavenger last looked (`_mi_scavenger_note_xfree`).
+++// Wake it if it waits with no timeout: the thread whose page it is may stay parked, and its sweep is due again.
+++void _mi_scavenger_note_xfree_slow(mi_subproc_t* subproc) {
+++  if (mi_atomic_exchange_seq_cst(&subproc->xfree_seen, (uint32_t)1) != 0) return;
+++  if (mi_atomic_load_seq_cst(&subproc->scavenger_sleeping) != 0) { _mi_scavenger_wake(subproc); }
+++}
+++
++ // -----------------------------------------------------------------------------
++ // Thread lifecycle
++ // -----------------------------------------------------------------------------
++--- a/src/subproc.c
+++++ b/src/subproc.c
++@@ -456,6 +456,8 @@ void _mi_process_fork_child(void) {
++     mi_atomic_store_relaxed(&sp->scavenger_wake, (uint32_t)0);
++     mi_atomic_store_relaxed(&sp->scavenger_polls, (uint32_t)0);
++     mi_atomic_store_relaxed(&sp->park_seen, (uint32_t)0);
+++    mi_atomic_store_relaxed(&sp->xfree_seen, (uint32_t)0);
+++    mi_atomic_store_relaxed(&sp->scavenger_sleeping, (uint32_t)0);
++     for (mi_tld_t* t = sp->tlds; t != NULL; t = t->subproc_next) {   // every tld, the forking thread's included, is registered here
++       mi_lock_init(&t->theaps_lock);
++       mi_atomic_store_relaxed(&t->park_state, (uint32_t)MI_PARK_RUNNING);
++--- a/src/theap.c
+++++ b/src/theap.c
++@@ -414,10 +414,10 @@ void mi_on_thread_idle_end(void) mi_attr_noexcept {
++ // path out of a park (`mi_on_thread_idle_end`, and teardown via `_mi_park_leave`) waits for it to
++ // clear before freeing anything. So the lock covers the walk, not the work.
++ //
++-// Returns in how many msecs a park that was passed over for `purge_holes_min_interval`, or one that is to be
++-// swept again for its large pages, becomes due (0: none), so the scavenger can wake for it instead of
++-// leaving it to its safety timeout.
++-mi_msecs_t _mi_theap_sweep_parked(mi_subproc_t* subproc) {
+++// Returns in how many msecs a park that was passed over for `purge_holes_min_interval`, one that is to be
+++// swept again for its large pages, or one that is to be swept again for what other threads did since `again_since`,
+++// becomes due (0: none), so the scavenger can wake for it; with none it sleeps until something wakes it.
+++mi_msecs_t _mi_theap_sweep_parked(mi_subproc_t* subproc, mi_msecs_t again_since) {
++   if (subproc == NULL) return 0;
++   for (;;) {
++     mi_tld_t* claimed = NULL;
++@@ -432,8 +432,17 @@ mi_msecs_t _mi_theap_sweep_parked(mi_subproc_t* subproc) {
++         // we are here because some thread parked). A thread that stays parked is not to hold the floor against the ones
++         // that run. (Its fields are read once it is claimed: its owner writes them when it sweeps itself.)
++         const bool done = (mi_atomic_load_seq_cst(&tld->park_swept) == MI_PARK_SWEPT_DONE);
++-        // Other threads can free the blocks of a thread that stays parked, so sweep it again every now and then.
++-        const bool again = (done && now - tld->holes_sweep_last >= (interval > MI_PARK_SWEEP_AGAIN_MSECS ? interval : MI_PARK_SWEEP_AGAIN_MSECS));
+++        // Other threads can free the blocks of a thread that stays parked, and a thread that ends leaves its pages to the
+++        // sweeps of the others, so sweep it again a while after its last sweep -- if any of that happened since that sweep
+++        // (`again_since`: when the scavenger last saw `xfree_seen`, 0 if never). Nothing else changes a parked thread's
+++        // pages, so a thread swept after it is done: the scavenger can sleep until something wakes it.
+++        const mi_msecs_t again_after = (interval > MI_PARK_SWEEP_AGAIN_MSECS ? interval : MI_PARK_SWEEP_AGAIN_MSECS);
+++        const bool again_pending = (done && again_since != 0 && tld->holes_sweep_last <= again_since);
+++        const bool again = (again_pending && now - tld->holes_sweep_last >= again_after);
+++        if (again_pending && !again && mi_atomic_load_relaxed(&tld->park_state) == MI_PARK_PARKED) {
+++          const mi_msecs_t due = again_after - (now - tld->holes_sweep_last);
+++          if (due_in == 0 || due < due_in) { due_in = due; }
+++        }
++         if (done && !again && (mi_atomic_load_relaxed(&tld->holes_floor_kept) == 0 || mi_atomic_load_relaxed(&tld->park_reclaim) != 0)) continue;   // (most: nothing kept. Or its owner is on the way out)
++         if (!done && interval > 0 && tld->holes_sweep_last != 0 && now - tld->holes_sweep_last < interval) {
++           if (mi_atomic_load_relaxed(&tld->park_state) == MI_PARK_PARKED) {
+diff --git a/scripts/build/deps/mimalloc.ts b/scripts/build/deps/mimalloc.ts
+index d5fb4777..232e2d56 100644
+--- a/scripts/build/deps/mimalloc.ts
++++ b/scripts/build/deps/mimalloc.ts
+@@ -25,8 +25,9 @@ export const mimalloc: Dependency = {
+   }),
+ 
+   // Pi-Bolt: page_commit_on_demand's default as a define (MI_DEFAULT_PAGE_COMMIT_ON_DEMAND), set for Windows below; the
+-  // scavenger's 30 s safety-net wait, when nothing is scheduled, doubles while nothing interrupts it (up to an hour).
+-  patches: ["patches/mimalloc/page-commit-on-demand-default.patch", "patches/mimalloc/scavenger-idle-backoff.patch"],
++  // scavenger waits with no timeout when nothing is scheduled and no parked thread is due to be swept again, instead of
++  // waking every 30 s for good.
++  patches: ["patches/mimalloc/page-commit-on-demand-default.patch", "patches/mimalloc/scavenger-sleep-when-idle.patch"],
+ 
+   build: cfg => {
+     // ─── Override behavior (global malloc replacement) ───
+-- 
+2.54.0 (Apple Git-157)
+
