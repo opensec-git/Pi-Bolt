@@ -52,6 +52,8 @@ interface CompileRecord extends CompileSelection {
 }
 
 interface CompileOptions extends CompileSelection {
+	/** --no-exclude: none of the exclusions compile.json records. */
+	noExclude?: boolean;
 	/** Files to build with instead of the release's: a kit and a runtime (archives or unpacked folders). */
 	kit?: string;
 	runtime?: string;
@@ -172,7 +174,9 @@ again until it is compiled in again. \`pi-bolt update\` compiles the same extens
 
 Options:
   --only a,b         Only these extensions (by the names this command prints)
-  --exclude a,b      Every extension except these
+  --exclude a,b      Every extension except these. They are recorded: a later \`pi-bolt compile\` without --only or
+                     --exclude, and \`pi-bolt update\`, leave them out too
+  --no-exclude       Leave out none of the extensions --exclude left out before
   --no-packages      Leave out the packages \`pi-bolt install\` installed
   --off              Go back to the release's executable, with no extensions compiled in
   --status           Show what is compiled in
@@ -464,6 +468,19 @@ function readRecord(installDir: string): CompileRecord | undefined {
 	}
 }
 
+/**
+ * The exclusions compile.json records that a compile takes: all of them after an update, which compiles what was asked for
+ * before, and for a compile that chooses nothing itself (no --only, --exclude or --no-exclude). Otherwise none.
+ */
+export function recordedExclusions(
+	options: CompileOptions,
+	record: CompileSelection | undefined,
+): string[] | undefined {
+	if (!record?.exclude?.length) return undefined;
+	if (options.afterUpdate) return record.exclude;
+	return options.only?.length || options.exclude?.length || options.noExclude ? undefined : record.exclude;
+}
+
 /** Whether an update should compile extensions into the release it installed (`pi-bolt compile` was run here). */
 export function piBoltCompileWanted(installDir: string): boolean {
 	return existsSync(join(installDir, "compile.json"));
@@ -613,6 +630,9 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 				case "--exclude":
 					options.exclude = parseList(args[++index], arg);
 					break;
+				case "--no-exclude":
+					options.noExclude = true;
+					break;
 				case "--no-packages":
 					options.noPackages = true;
 					break;
@@ -652,10 +672,20 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 			return 0;
 		}
 		if (mode === "off") return (await off(installAgain)) ? 0 : 1;
-		if (options.afterUpdate) {
-			const record = readRecord(installation().installDir);
-			if (!record) return 0;
-			Object.assign(options, { only: record.only, exclude: record.exclude, noPackages: record.noPackages });
+		if (options.exclude?.length && options.noExclude)
+			throw new CompileError("--exclude and --no-exclude go against each other");
+		const installDir = options.out ? piBoltInstallDir() : installation().installDir;
+		const record = installDir ? readRecord(installDir) : undefined;
+		if (options.afterUpdate && !record) return 0;
+		const recorded = recordedExclusions(options, record);
+		if (options.afterUpdate) Object.assign(options, { only: record!.only, noPackages: record!.noPackages });
+		if (recorded) {
+			options.exclude = recorded;
+			process.stderr.write(
+				chalk.dim(
+					`leaving out what ${join(installDir!, "compile.json")} records as excluded: ${recorded.join(", ")}${options.afterUpdate ? "" : " (--no-exclude compiles them in)"}\n`,
+				),
+			);
 		}
 		await compile(options);
 		return 0;

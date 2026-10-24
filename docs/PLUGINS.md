@@ -78,7 +78,8 @@ with them (`scripts\train-heap.ps1 -Plugins plugins\opensec\plugins.ts`), then r
 ```bash
 pi-bolt compile                             # the extensions installed here
 pi-bolt compile --only pdf-reader,preset    # only these
-pi-bolt compile --exclude big-bundle        # all but these
+pi-bolt compile --exclude big-bundle        # all but these, on later compiles and updates too
+pi-bolt compile --no-exclude                # all, those excluded before too
 pi-bolt compile --status                    # what is compiled in
 pi-bolt compile --off                       # the release's executable again
 ```

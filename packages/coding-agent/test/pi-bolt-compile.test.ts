@@ -10,7 +10,7 @@ import {
 	setCompiledExtensions,
 } from "../src/core/extensions/compiled.ts";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
-import { checkReleaseSums, resolveCompilePackages } from "../src/pi-bolt-compile.ts";
+import { checkReleaseSums, recordedExclusions, resolveCompilePackages } from "../src/pi-bolt-compile.ts";
 
 // (Pi-Bolt applies piBolt.packages to `packages` only in a Pi-Bolt build.)
 vi.mock("../src/pi-bolt.ts", async (importOriginal) => ({
@@ -215,5 +215,26 @@ describe("pi-bolt compile takes the packages Pi-Bolt loads", () => {
 		const resolved = await resolveCompilePackages(agentDir, dir);
 		expect(resolved.packages.map((pkg) => pkg.source)).toEqual(["npm:pi-codex-goal"]);
 		expect(resolved.removed).toEqual([]);
+	});
+});
+
+describe("pi-bolt compile leaves out what compile.json records as excluded", () => {
+	const record = { exclude: ["pi-web-access"] };
+
+	test("a compile that names no extensions takes the recorded exclusions, as an update does (#108)", () => {
+		expect(recordedExclusions({}, record)).toEqual(["pi-web-access"]);
+		expect(recordedExclusions({ noPackages: true }, record)).toEqual(["pi-web-access"]);
+		expect(recordedExclusions({ afterUpdate: true }, record)).toEqual(["pi-web-access"]);
+	});
+
+	test("--exclude, --only and --no-exclude choose instead", () => {
+		expect(recordedExclusions({ exclude: ["other"] }, record)).toBeUndefined();
+		expect(recordedExclusions({ only: ["pi-web-access"] }, record)).toBeUndefined();
+		expect(recordedExclusions({ noExclude: true }, record)).toBeUndefined();
+	});
+
+	test("with nothing recorded, nothing is left out", () => {
+		expect(recordedExclusions({}, undefined)).toBeUndefined();
+		expect(recordedExclusions({}, { only: ["a"] })).toBeUndefined();
 	});
 });
