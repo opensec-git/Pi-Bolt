@@ -450,45 +450,80 @@ describe("the packages pi-bolt compile gives it (--packages)", () => {
 		assert.equal(resolved.status, 0, resolved.stderr);
 	});
 
-	it("passes over a package that needs another version of a dependency compiled in before it, and shares one version", () => {
-		// Two workspaces hoist different versions of `shared`; one node_modules beside the manifest can hold only one.
-		const agentDir = agent();
-		const workspacePlugin = (workspace, name, version) => {
-			const plugin = join(scratch(), workspace, "packages", name);
+	describe("one node_modules holds one folder per name", () => {
+		/** A plugin in `workspace/packages/<name>` that needs `shared`, hoisted to `workspace/node_modules/shared`. */
+		const workspacePlugin = (workspace, name, version, leaf) => {
+			const plugin = join(workspace, "packages", name);
 			write(join(plugin, "package.json"), JSON.stringify({ name, type: "module", dependencies: { shared: "*" } }));
 			write(join(plugin, "index.js"), 'import shared from "shared";\nexport const value = shared;\nexport default () => {};\n');
-			const shared = join(plugin, "..", "..", "node_modules", "shared");
+			const shared = join(workspace, "node_modules", "shared");
 			write(join(shared, "package.json"), JSON.stringify({ name: "shared", version, type: "module" }));
-			write(join(shared, "index.js"), `export default ${JSON.stringify(version)};\n`);
-			return { source: `./${workspace}/${name}`, root: plugin, entries: [join(plugin, "index.js")] };
+			if (leaf === undefined) {
+				write(join(shared, "index.js"), `export default ${JSON.stringify(version)};\n`);
+			} else {
+				// shared's own leaf, nested in it: two copies of shared@1.0.0 may carry different ones.
+				write(join(shared, "index.js"), 'import leaf from "leaf";\nexport default leaf;\n');
+				write(join(shared, "node_modules", "leaf", "package.json"), JSON.stringify({ name: "leaf", version: leaf, type: "module" }));
+				write(join(shared, "node_modules", "leaf", "index.js"), `export default ${JSON.stringify(leaf)};\n`);
+			}
+			return { source: `./${name}`, root: plugin, entries: [join(plugin, "index.js")] };
 		};
-		const one = workspacePlugin("one", "plugin-one", "1.0.0");
-		const two = workspacePlugin("two", "plugin-two", "2.0.0");
-		const three = workspacePlugin("three", "plugin-three", "1.0.0");
+		const realShared = (workspace) => realpathSync(join(workspace, "node_modules", "shared"));
+		/** What each plugin of `plan` exports from its staged copy. */
+		const stagedValues = (plan) => {
+			const out = join(scratch(), "folder");
+			writePluginFolder(plan, out);
+			return plan.plugins.map((plugin) => {
+				const url = pathToFileURL(join(out, plugin.importPath)).href;
+				const loaded = spawnSync(
+					process.execPath,
+					["--input-type=module", "-e", `import(${JSON.stringify(url)}).then((m) => console.log(m.value))`],
+					{ encoding: "utf8" },
+				);
+				assert.equal(loaded.status, 0, loaded.stderr);
+				return loaded.stdout.trim();
+			});
+		};
 
-		const plan = planPlugins({ agentDir, packages: [one, two, three] });
-		assert.deepEqual(names(plan), ["plugin-one", "plugin-three"]);
-		assert.deepEqual(plan.skipped, [
-			{ path: two.source, reason: "needs shared@2.0.0, but plugin-one is compiled in with shared@1.0.0" },
-		]);
-		assert.deepEqual(
-			plan.dependencies.map((dependency) => dependency.name),
-			["shared"],
-		);
-		const out = join(scratch(), "folder");
-		writePluginFolder(plan, out);
-		for (const plugin of plan.plugins) {
-			const loaded = spawnSync(
-				process.execPath,
-				[
-					"--input-type=module",
-					"-e",
-					`import(${JSON.stringify(pathToFileURL(join(out, plugin.importPath)).href)}).then((m) => console.log(m.value))`,
-				],
-				{ encoding: "utf8" },
+		it("shares a name among packages that find it in the same folder, and passes over one that finds another", () => {
+			// Two workspaces hoist different versions of `shared`; a third plugin is in the first workspace.
+			const first = scratch();
+			const second = scratch();
+			const one = workspacePlugin(first, "plugin-one", "1.0.0");
+			const two = workspacePlugin(second, "plugin-two", "2.0.0");
+			const three = workspacePlugin(first, "plugin-three", "1.0.0");
+
+			const plan = planPlugins({ agentDir: agent(), packages: [one, two, three] });
+			assert.deepEqual(names(plan), ["plugin-one", "plugin-three"]);
+			assert.deepEqual(plan.skipped, [
+				{
+					path: two.source,
+					reason: `its shared@2.0.0 (${realShared(second)}) differs from the one plugin-one is compiled in with (${realShared(first)})`,
+				},
+			]);
+			assert.deepEqual(
+				plan.dependencies.map((dependency) => dependency.name),
+				["shared"],
 			);
-			assert.equal(loaded.stdout.trim(), "1.0.0", loaded.stderr);
-		}
+			assert.deepEqual(stagedValues(plan), ["1.0.0", "1.0.0"]);
+		});
+
+		it("passes over one whose folder of the same version differs, as two copies with other nested leaves do (PR #114 review)", () => {
+			const first = scratch();
+			const second = scratch();
+			const a = workspacePlugin(first, "plugin-a", "1.0.0", "1");
+			const b = workspacePlugin(second, "plugin-b", "1.0.0", "2");
+
+			const plan = planPlugins({ agentDir: agent(), packages: [a, b] });
+			assert.deepEqual(names(plan), ["plugin-a"]);
+			assert.deepEqual(plan.skipped, [
+				{
+					path: b.source,
+					reason: `its shared@1.0.0 (${realShared(second)}) differs from the one plugin-a is compiled in with (${realShared(first)})`,
+				},
+			]);
+			assert.deepEqual(stagedValues(plan), ["1"]);
+		});
 	});
 
 	it("follows a pnpm link to find what the linked dependency needs beside its target", () => {

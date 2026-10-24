@@ -533,8 +533,9 @@ export function planPlugins(options) {
 	}
 
 	// Only the folders something chosen comes from are copied, and only the dependencies of a chosen package. These share
-	// one node_modules, so a package that needs another version of a dependency than one compiled in before it is passed
-	// over: it keeps running from its installed copy, with its own version.
+	// one node_modules, which holds one folder per name: a name is shared only by packages that find it in the same (real)
+	// folder. Two folders of the same version may still differ (their own node_modules, a patch), so a package that finds a
+	// name elsewhere than one compiled in before it is passed over, and keeps running from its installed copy.
 	const used = new Set(chosen.map((plugin) => plugin.stageDir));
 	const dependencies = new Map();
 	const conflicting = new Set();
@@ -544,13 +545,16 @@ export function planPlugins(options) {
 		const own = new Map();
 		let conflict;
 		for (const { name, from } of dependencyClosure(root.root)) {
-			const version = readJson(join(from, "package.json"))?.version;
 			const before = own.get(name) ?? dependencies.get(name);
-			if (before && before.from !== from && before.version !== version) {
-				conflict = `needs ${name}@${version}, but ${before.owner === pkg ? "it also needs" : `${before.owner.name} is compiled in with`} ${name}@${before.version}`;
+			if (before && before.from !== from) {
+				const its = `${name}@${readJson(join(from, "package.json"))?.version ?? "?"} (${from})`;
+				conflict =
+					before.owner === pkg
+						? `it needs two ${name} folders, ${before.from} and ${from}`
+						: `its ${its} differs from the one ${before.owner.name} is compiled in with (${before.from})`;
 				break;
 			}
-			if (!own.has(name)) own.set(name, { from, version, owner: pkg });
+			if (!own.has(name)) own.set(name, { from, owner: pkg });
 		}
 		if (conflict) {
 			conflicting.add(root.stageDir);
