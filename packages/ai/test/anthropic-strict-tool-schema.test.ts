@@ -40,8 +40,8 @@ function createTool(parameters: Tool["parameters"], constrainedSampling?: Tool["
 	};
 }
 
-function createStrictTool(parameters: Tool["parameters"]): Tool {
-	return createTool(parameters, { type: "json_schema", strict: "prefer" });
+function createStrictTool(parameters: Tool["parameters"], strict: "prefer" | "require" = "require"): Tool {
+	return createTool(parameters, { type: "json_schema", strict });
 }
 
 async function captureFirstTool(tool: Tool): Promise<NonNullable<AnthropicToolPayload["tools"]>[number]> {
@@ -58,11 +58,11 @@ async function captureFirstTool(tool: Tool): Promise<NonNullable<AnthropicToolPa
 			},
 		},
 	);
-	await stream.result();
+	const result = await stream.result();
 
 	const firstTool = payload?.tools?.[0];
 	if (!firstTool) {
-		throw new Error("Expected a tool in the captured Anthropic payload");
+		throw new Error(`Expected a tool in the captured Anthropic payload: ${result.errorMessage}`);
 	}
 	return firstTool;
 }
@@ -98,16 +98,30 @@ describe("Anthropic strict tool schemas", () => {
 		});
 	});
 
+	// earendil-works/pi#10074: strict mode breaks `\uXXXX` escapes in string arguments, so "prefer" tools
+	// (the built-in read, bash, edit and write) go out non-strict even when the model supports strict tools.
+	it("sends prefer tools non-strict with the plain input schema", async () => {
+		const parameters = Type.Object({ value: Type.String(), optional: Type.Optional(Type.Number()) });
+		const tool = await captureFirstTool(createStrictTool(parameters, "prefer"));
+		expect(tool.strict).toBeUndefined();
+		expect(tool.input_schema).toEqual({
+			type: "object",
+			properties: parameters.properties,
+			required: ["value"],
+		});
+	});
+
 	// https://github.com/earendil-works/pi/issues/9953
-	it("sends prefer tools non-strict when they use keywords Anthropic strict mode rejects", async () => {
+	it("rejects require tools locally when they use keywords Anthropic strict mode rejects", async () => {
 		const unsupportedParameters: Tool["parameters"][] = [
 			Type.Object({ timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 300000 })) }),
 			Type.Object({ options: Type.Object({ tags: Type.Array(Type.String(), { minItems: 2 }) }) }),
 			Type.Object({ expression: Type.String({ format: "regex" }) }),
 		];
 		for (const parameters of unsupportedParameters) {
-			const tool = await captureFirstTool(createStrictTool(parameters));
-			expect(tool.strict).toBeUndefined();
+			await expect(captureFirstTool(createStrictTool(parameters))).rejects.toThrow(
+				'Tool "lookup" requires JSON-schema constrained sampling',
+			);
 		}
 
 		const supportedTool = await captureFirstTool(

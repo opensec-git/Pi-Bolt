@@ -500,55 +500,23 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				maxRetries: 0,
 			};
-			let disablePreferredStrictTools = false;
-			let response: Response;
-			for (;;) {
-				options?.signal?.throwIfAborted();
-				const built = buildParams(model, normalizedContext, isOAuth, options, disablePreferredStrictTools);
-				if (built.providerThinkingLevel) output.providerThinkingLevel = built.providerThinkingLevel;
-				let params = built.params;
-				const nextParams = await options?.onPayload?.(params, model);
-				if (nextParams !== undefined) {
-					params = { ...(nextParams as MessageCreateParamsStreaming), stream: true };
-				}
-				// A client passed in by the caller is not wrapped.
-				cacheRequestBody(options?.client ? undefined : client, params.messages, "messages", options?.sessionId);
-				try {
-					response = await retryProviderRequest(
-						() => client.beta.messages.create(params, requestOptions).asResponse(),
-						{
-							maxRetries: options?.maxRetries,
-							maxRetryDelayMs: options?.maxRetryDelayMs,
-							signal: options?.signal,
-						},
-					);
-					break;
-				} catch (error) {
-					// Only downgrade a rejected request, never an already-started stream.
-					if (
-						options?.signal?.aborted ||
-						disablePreferredStrictTools ||
-						!built.hasPreferredStrictTools ||
-						!(error instanceof Anthropic.APIError) ||
-						error.status !== 400 ||
-						error.type !== "invalid_request_error" ||
-						![
-							"The compiled grammar is too large",
-							"Too many strict tools (",
-							"Schemas contains too many parameters with union types (",
-						].some((message) => error.message.includes(message))
-					) {
-						throw error;
-					}
-					disablePreferredStrictTools = true;
-					appendAssistantMessageDiagnostic(output, {
-						type: "anthropic_strict_tools_fallback",
-						timestamp: Date.now(),
-						error: { message: error.message },
-						details: { reason: "strict_tool_limits_exceeded" },
-					});
-				}
+			const built = buildParams(model, normalizedContext, isOAuth, options);
+			if (built.providerThinkingLevel) output.providerThinkingLevel = built.providerThinkingLevel;
+			let params = built.params;
+			const nextParams = await options?.onPayload?.(params, model);
+			if (nextParams !== undefined) {
+				params = { ...(nextParams as MessageCreateParamsStreaming), stream: true };
 			}
+			// A client passed in by the caller is not wrapped.
+			cacheRequestBody(options?.client ? undefined : client, params.messages, "messages", options?.sessionId);
+			const response = await retryProviderRequest(
+				() => client.beta.messages.create(params, requestOptions).asResponse(),
+				{
+					maxRetries: options?.maxRetries,
+					maxRetryDelayMs: options?.maxRetryDelayMs,
+					signal: options?.signal,
+				},
+			);
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
@@ -1024,10 +992,8 @@ function buildParams(
 	context: TranscriptContext,
 	isOAuthToken: boolean,
 	options?: AnthropicOptions,
-	disablePreferredStrictTools = false,
 ): {
 	params: MessageCreateParamsStreaming;
-	hasPreferredStrictTools: boolean;
 	/** Effort of the final effort marker, recorded on the reply so later requests can replay it. */
 	providerThinkingLevel: AnthropicEffort | undefined;
 } {
@@ -1041,26 +1007,14 @@ function buildParams(
 	// by value in a `tool_addition` block, which also expresses same-name redefinitions.
 	// Anthropic rejects a tool list where every tool is deferred, so there must be an initial
 	// active tool to anchor the placeholder. Otherwise the current tool list is sent.
-	let hasPreferredStrictTools = false;
-	const convertToolDefinitions = (tools: Tool[], toolCacheControl?: CacheControlEphemeral): BetaTool[] => {
-		const definitions = convertTools(
+	const convertToolDefinitions = (tools: Tool[], toolCacheControl?: CacheControlEphemeral): BetaTool[] =>
+		convertTools(
 			tools,
 			isOAuthToken,
 			compat.supportsEagerToolInputStreaming,
 			compat.supportsStrictTools,
 			toolCacheControl,
-			disablePreferredStrictTools,
 		);
-		if (
-			definitions.some((definition, index) => {
-				const config = tools[index].constrainedSampling;
-				return definition.strict === true && config && config.type === "json_schema" && config.strict === "prefer";
-			})
-		) {
-			hasPreferredStrictTools = true;
-		}
-		return definitions;
-	};
 	const initialTools = initialSystemMessage?.toolsAdded ?? [];
 	const nativeToolChanges =
 		compat.supportsMidConvoSystemMessages && compat.supportsMidConvoToolChanges && initialTools.length > 0;
@@ -1190,7 +1144,7 @@ function buildParams(
 		params.fallbacks = allowedFallbackModels.map((fallback) => ({ model: fallback.model }));
 	}
 
-	return { params, hasPreferredStrictTools, providerThinkingLevel: effortMessages ? activeEffort : undefined };
+	return { params, providerThinkingLevel: effortMessages ? activeEffort : undefined };
 }
 
 // Normalize tool call IDs to match Anthropic's required pattern and length
@@ -1489,14 +1443,16 @@ function convertTools(
 	supportsEagerToolInputStreaming: boolean,
 	supportsStrictTools: boolean,
 	cacheControl?: CacheControlEphemeral,
-	disablePreferredStrictTools = false,
 ): BetaTool[] {
 	if (!tools) return [];
 
 	return tools.map((tool, index) => {
 		const config = tool.constrainedSampling;
+		// Anthropic's strict grammar breaks `\uXXXX` escapes in string arguments: `—` arrives as
+		// `\b2014`, `\f2014` or `\ndash`, so edits with non-ASCII text fail or corrupt files
+		// (earendil-works/pi#10074). Only "require" tools, which cannot work without it, use strict.
 		const strict =
-			disablePreferredStrictTools && config && config.type === "json_schema" && config.strict === "prefer"
+			config && config.type === "json_schema" && config.strict === "prefer"
 				? undefined
 				: resolveJsonSchemaStrictSampling(tool, supportsStrictTools, isAnthropicStrictUnsupportedKeyword);
 		const parameters = getJsonSchemaToolParameters(tool, strict);
