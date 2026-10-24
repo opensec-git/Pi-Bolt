@@ -32,9 +32,11 @@ import {
 	PIBOLT,
 	PIBOLT_RELEASE_KEY,
 	PIBOLT_RELEASES_URL,
+	type PiBoltPackageManagerId,
 	piBoltInstallDir,
 	piBoltInstallMethod,
 	piBoltJitSwitchCommand,
+	piBoltPackageManager,
 	piBoltUpdateCommand,
 } from "../pi-bolt.ts";
 import { findExecutableOnPath, spawnProcessSync } from "../utils/child-process.ts";
@@ -106,7 +108,7 @@ interface SelfInfo {
 	/** What to start to run this Pi-Bolt again: the launcher on macOS (and in Termux), else the executable. */
 	command: string;
 	folder: string;
-	method: "npm" | "homebrew" | "installer" | "manual" | "not installed";
+	method: "npm" | PiBoltPackageManagerId | "installer" | "manual" | "not installed";
 	installDir: string | undefined;
 }
 
@@ -119,7 +121,7 @@ function selfInfo(): SelfInfo {
 	const installDir = piBoltInstallDir();
 	const installMethod = piBoltInstallMethod();
 	let method: SelfInfo["method"];
-	if (installMethod === "npm" || installMethod === "homebrew") method = installMethod;
+	if (installMethod !== "installer") method = installMethod;
 	else if (installDir === undefined) method = "not installed";
 	else method = installedByInstaller(installDir, folder) ? "installer" : "manual";
 	return { executable, command: launcher ?? executable, folder, method, installDir };
@@ -369,14 +371,23 @@ async function installSection(
 ): Promise<DoctorSection> {
 	const rows: DoctorSection["rows"] = [];
 	const where = self.installDir ? `, in ${self.installDir}` : `, run from ${self.folder}`;
-	const how: Record<SelfInfo["method"], string> = {
-		npm: "npm (the pi-bolt package)",
-		homebrew: "Homebrew (the opensec-git/tap/pi-bolt formula)",
-		installer: "the installer",
-		manual: "by hand (an unpacked archive)",
-		"not installed": "not installed (a build run from its folder)",
+	const how = (method: SelfInfo["method"]): string => {
+		switch (method) {
+			case "npm":
+				return "npm (the pi-bolt package)";
+			case "installer":
+				return "the installer";
+			case "manual":
+				return "by hand (an unpacked archive)";
+			case "not installed":
+				return "not installed (a build run from its folder)";
+			default: {
+				const manager = piBoltPackageManager(method);
+				return manager ? `${manager.name} (${manager.source})` : method;
+			}
+		}
 	};
-	rows.push(["installed", `${how[self.method]}${where}`]);
+	rows.push(["installed", `${how(self.method)}${where}`]);
 	if (self.installDir) {
 		const others = otherVariants(self.installDir, self.folder);
 		if (others.length > 0) rows.push(["also there", others.join("\n")]);

@@ -19,6 +19,8 @@ release key is a secret of the `release` environment, used only by `publish` run
 - [When the engine changed](#when-the-engine-changed)
 - [npm](#npm)
 - [Homebrew](#homebrew)
+- [Scoop](#scoop)
+- [mise](#mise)
 - [A new Pi version](#a-new-pi-version)
 - [The macOS builds](#the-macos-builds)
 - [The Windows builds](#the-windows-builds)
@@ -34,6 +36,8 @@ release key is a secret of the `release` environment, used only by `publish` run
 4. Try every install, looking for "signature verified": `curl -fsSL https://pi-bolt.opensec.in/install.sh | sh`,
    `npm install -g pi-bolt`, `brew install opensec-git/tap/pi-bolt` (macOS or Linux; `brew upgrade pi-bolt` where it is
    installed), and on Windows `irm https://pi-bolt.opensec.in/install.ps1 | iex` (PowerShell) and `powershell -c "irm https://pi-bolt.opensec.in/install.ps1 | iex"` (Command Prompt).
+   The Scoop bucket takes the release by itself within four hours, and mise once the release is older than mise's
+   `minimum_release_age` ([Scoop](#scoop), [mise](#mise)).
 
 By hand (with `AUTO_RELEASE` unset, or to redo a step): push the tag yourself
 (`git tag -a bolt-vX.Y.Z -m "Pi-Bolt X.Y.Z" && git push origin bolt-vX.Y.Z`), then, once the draft is there, run `publish` from
@@ -194,6 +198,31 @@ To create the token:
 
 By hand, from a clone of the tap: `node scripts/update-homebrew-formula.mjs Formula/pi-bolt.rb SHA256SUMS X.Y.Z` with the
 release's `SHA256SUMS`, then `brew style Formula/pi-bolt.rb`, commit and push.
+
+## Scoop
+
+`scoop install opensec-git/pi-bolt` (after `scoop bucket add opensec-git https://github.com/opensec-git/scoop-bucket`) installs
+the manifest `bucket/pi-bolt.json` of [opensec-git/scoop-bucket](https://github.com/opensec-git/scoop-bucket): the default
+Windows build of the latest release (`pi-bolt-win32-x64.zip`), unpacked into `<scoop>\apps\pi-bolt\<version>` with a shim for
+`pi-bolt.exe`. A Pi-Bolt whose executable is there (`...\scoop\apps\pi-bolt\...`, or under `$SCOOP` or `$SCOOP_GLOBAL`)
+knows it: `pi-bolt update` says to run `scoop update pi-bolt`, and `pi-bolt update --rollback` to run
+`scoop reset pi-bolt@<version>`.
+
+Nothing in Pi-Bolt's workflows touches the bucket. Its Excavator workflow (from Scoop's bucket template) runs every four hours:
+it reads the latest release's `bolt-vX.Y.Z` tag, takes the archive's checksum from the release's `SHA256SUMS`, and commits the
+new manifest. Its Install workflow installs the manifest with Scoop on a Windows runner and runs `pi-bolt --version` on every
+push, every pull request and once a day. A pre-release is not taken (the tag comes from the latest release). To update it by
+hand, from a clone of the bucket on Windows with Scoop installed: `.\bin\checkver.ps1 pi-bolt -Update`, then commit and push.
+
+## mise
+
+mise installs Pi-Bolt from the GitHub release with its `github` backend; nothing is published for it. The options (in
+[docs-site/pages/installation.html](../docs-site/pages/installation.html)) pick the default build's archive per platform,
+strip the `bolt-v` tag prefix, rename `pi` to `pi-bolt` and put only `pi-bolt` on PATH. mise takes a release once it is older
+than its `minimum_release_age` setting. A Pi-Bolt in mise's installs folder (`.../mise/installs/<tool>/...`, or under
+`$MISE_DATA_DIR/installs`) knows it: `pi-bolt update` says to run `mise upgrade --bump github:opensec-git/Pi-Bolt`
+(`mise upgrade --bump pi-bolt` once mise's registry has the shorthand), and `pi-bolt update --rollback` to run
+`mise use -g github:opensec-git/Pi-Bolt@<version>`. If a release renames its archives, update the options in the docs.
 
 ## A new Pi version
 

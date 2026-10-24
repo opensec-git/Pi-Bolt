@@ -41,7 +41,6 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/tru
 import {
 	isPiBoltChannel,
 	PIBOLT,
-	PIBOLT_BREW_UPGRADE,
 	PIBOLT_INSTALL_COMMAND,
 	type PiBoltChannel,
 	piBoltChannel,
@@ -49,6 +48,7 @@ import {
 	piBoltInstallDir,
 	piBoltInstallerProcess,
 	piBoltInstallMethod,
+	piBoltPackageManager,
 	piBoltUpdateEnvironment,
 	setPiBoltChannel,
 } from "./pi-bolt.ts";
@@ -819,7 +819,8 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 
 /**
  * Updates a Pi-Bolt installation to the latest release: the installer, run again, replaces the executable in place (same
- * variant, same folder). One installed with the npm package or Homebrew is updated with the package manager instead.
+ * variant, same folder). One installed with the npm package, Homebrew, Scoop or mise is updated with the package manager
+ * instead.
  */
 async function runPiBoltSelfUpdate(
 	version: string,
@@ -833,10 +834,11 @@ async function runPiBoltSelfUpdate(
 		console.log(`  npm install -g pi-bolt@latest      (or: bun add -g pi-bolt@latest)`);
 		return false;
 	}
-	// (Homebrew owns the folder: the installer would replace files Homebrew keeps track of.)
-	if (method === "homebrew") {
-		console.log(`This Pi-Bolt was installed with Homebrew. Update it with Homebrew:`);
-		console.log(`  ${PIBOLT_BREW_UPGRADE}`);
+	// (Homebrew, Scoop and mise own the folder: the installer would replace files they keep track of.)
+	const manager = piBoltPackageManager(method);
+	if (manager) {
+		console.log(`This Pi-Bolt was installed with ${manager.name}. Update it with ${manager.name}:`);
+		console.log(`  ${manager.update}`);
 		return false;
 	}
 	// On Windows, without PowerShell (#82): a program that starts PowerShell to download a script and run it is what malware does,
