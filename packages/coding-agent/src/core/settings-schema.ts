@@ -26,6 +26,20 @@ const CompactionSettingsSchema = Type.Object({
 	),
 });
 
+const AutoTitleSettingsSchema = Type.Object({
+	enabled: Type.Optional(
+		Type.Boolean({
+			description: "Generate a short session title after the first agent run, when the session has no name.",
+			default: SETTINGS_DEFAULTS.autoTitle.enabled,
+		}),
+	),
+	model: Type.Optional(
+		Type.String({
+			description: 'Model for titling, as "provider/modelId". Defaults to the session model.',
+		}),
+	),
+});
+
 const BranchSummarySettingsSchema = Type.Object({
 	reserveTokens: Type.Optional(
 		Type.Number({
@@ -240,6 +254,7 @@ export const SettingsSchema = Type.Object(
 		),
 		theme: Type.Optional(Type.String()),
 		compaction: Type.Optional(CompactionSettingsSchema),
+		autoTitle: Type.Optional(AutoTitleSettingsSchema),
 		branchSummary: Type.Optional(BranchSummarySettingsSchema),
 		retry: Type.Optional(RetrySettingsSchema),
 		hideThinkingBlock: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.hideThinkingBlock })),
@@ -482,6 +497,7 @@ type SettingsInput = Static<typeof SettingsSchema>;
 
 export interface CompactionModelOverride extends Static<typeof CompactionModelOverrideSchema> {}
 export interface CompactionSettings extends Static<typeof CompactionSettingsSchema> {}
+export interface AutoTitleSettings extends Static<typeof AutoTitleSettingsSchema> {}
 export interface BranchSummarySettings extends Static<typeof BranchSummarySettingsSchema> {}
 export interface ProviderRetrySettings extends Static<typeof ProviderRetrySettingsSchema> {}
 export interface RetrySettings extends Omit<Static<typeof RetrySettingsSchema>, "maxDelayMs"> {}

@@ -11,6 +11,9 @@ export const SETTINGS_DEFAULTS = {
 		reserveTokens: 16384,
 		keepRecentTokens: 20000,
 	},
+	autoTitle: {
+		enabled: false,
+	},
 	branchSummary: {
 		reserveTokens: 16384,
 		skipPrompt: false,

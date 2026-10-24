@@ -62,6 +62,14 @@ import { processImage } from "../utils/image-process.ts";
 import { sleep } from "../utils/sleep.ts";
 import { normalizeToolResultImages } from "../utils/tool-result-images.ts";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.ts";
+import {
+	AUTO_TITLE_MIN_PROMPT_CHARS,
+	AUTO_TITLE_SOURCE_MAX_CHARS,
+	AUTO_TITLE_TIMEOUT_MS,
+	autoTitleSourceText,
+	generateSessionTitle,
+	isPromptEchoTitle,
+} from "./auto-title.ts";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.ts";
 import { generateBugReportSummary } from "./bug-report.ts";
 import type { CacheWarmer, CacheWarmingStatus } from "./cache-warmer.ts";
@@ -456,6 +464,7 @@ export class AgentSession {
 	private _isBeforeSettle = false;
 	private _abortDuringBeforeSettle = false;
 	private _isEmittingAgentSettled = false;
+	private _autoTitleAttempted = false;
 	private readonly _deferredSettledActions: Array<() => Promise<void>> = [];
 
 	private _resourceLoader: ResourceLoader;
@@ -1163,6 +1172,12 @@ export class AgentSession {
 		this._isEmittingAgentSettled = true;
 		try {
 			const aborted = this._agentRunAbortRequested;
+			// Title the session before extensions see it settle: a titling
+			// extension that guards on "no name set" sees the native title here
+			// and stays out of the way. Guards run synchronously, so a session
+			// that will not be titled settles on the exact base timing.
+			const titling = this._beginAutoTitle(aborted);
+			if (titling) await titling;
 			await this._extensionRunner.emit({ type: "agent_settled", aborted });
 			this._emit({ type: "agent_settled", aborted });
 		} finally {
@@ -4124,6 +4139,62 @@ export class AgentSession {
 		const event = { type: "session_info_changed", name: this.sessionManager.getSessionName() } as const;
 		this._emit(event);
 		void this._extensionRunner.emit(event);
+	}
+
+	/**
+	 * Guard phase of auto-title, evaluated synchronously at settle: returns
+	 * the generation promise when titling starts, undefined when it is
+	 * skipped. Skips: already attempted this runtime, an aborted run,
+	 * `autoTitle.enabled: false`, a name already set (`--name`, `/name`), a
+	 * prompt too short to title, an unresolvable pinned model, no model.
+	 * A pinned model that does not resolve is a configuration error: skip
+	 * rather than silently titling on a different model.
+	 */
+	private _beginAutoTitle(aborted: boolean): Promise<void> | undefined {
+		if (this._autoTitleAttempted) return undefined;
+		this._autoTitleAttempted = true;
+		if (aborted) return undefined;
+		const settings = this.settingsManager.getAutoTitleSettings();
+		if (!settings.enabled) return undefined;
+		if (this.sessionManager.getSessionName()) return undefined;
+		const sourceText = autoTitleSourceText(this.sessionManager.getBranch()).slice(0, AUTO_TITLE_SOURCE_MAX_CHARS);
+		if (sourceText.trim().length < AUTO_TITLE_MIN_PROMPT_CHARS) return undefined;
+
+		let model = this.model;
+		if (settings.model) {
+			const registry = new ModelRegistry(this._modelRuntime);
+			const slash = settings.model.indexOf("/");
+			const pinned =
+				slash > 0 ? registry.find(settings.model.slice(0, slash), settings.model.slice(slash + 1)) : undefined;
+			if (!pinned) return undefined;
+			model = pinned;
+		}
+		if (!model) return undefined;
+		return this._applyAutoTitle(model, sourceText);
+	}
+
+	/**
+	 * Generation phase: one short model request, adopted through
+	 * `setSessionName` (the `/name` entry) so the selector, footer, and
+	 * embedding hosts pick it up unchanged. Remaining failure modes are
+	 * silent skips: a failed request, a response with no text (e.g. a
+	 * reasoning model that spent the whole budget on thinking), a title that
+	 * just echoes the prompt, the timeout, and a rename set by the user
+	 * while the request was in flight.
+	 */
+	private async _applyAutoTitle(model: Model<any>, sourceText: string): Promise<void> {
+		const controller = new AbortController();
+		const timer = setTimeout(() => controller.abort(), AUTO_TITLE_TIMEOUT_MS);
+		try {
+			const title = await generateSessionTitle(model, this.agent.streamFunction, sourceText, controller.signal);
+			if (!title || isPromptEchoTitle(title, sourceText)) return;
+			if (this.sessionManager.getSessionName()) return; // named while generating
+			this.setSessionName(title);
+		} catch {
+			// Titling is best-effort: the session stays unnamed.
+		} finally {
+			clearTimeout(timer);
+		}
 	}
 
 	// =========================================================================

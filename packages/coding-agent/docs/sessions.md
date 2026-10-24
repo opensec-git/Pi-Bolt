@@ -13,7 +13,7 @@ pi --resume
 
 `--continue` opens the most recent session for the current working directory. `--resume` opens the session picker. In interactive mode, `/resume` opens the same picker and `/new` starts a new session.
 
-Use `/name` or `--name` to assign a recognizable session name. Run `/session` to verify the current session file, ID, message count, token usage, and cost.
+Use `/name` or `--name` to assign a recognizable session name. With `autoTitle.enabled` in settings, unnamed sessions are titled automatically after the first agent run (see [Settings](settings.md#auto-title)); an explicit name always wins and is never overwritten. Run `/session` to verify the current session file, ID, message count, token usage, and cost.
 
 The session picker lets you search, rename, and delete sessions. It can also show paths, change sorting, and limit results to named sessions. See [Keybindings](keybindings.md#sessions) for its shortcuts.
 

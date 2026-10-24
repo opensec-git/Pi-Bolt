@@ -1091,6 +1091,14 @@ export class SettingsManager {
 		};
 	}
 
+	getAutoTitleSettings(): { enabled: boolean; model?: string } {
+		const model = this.settings.autoTitle?.model?.trim();
+		return {
+			enabled: this.settings.autoTitle?.enabled ?? SETTINGS_DEFAULTS.autoTitle.enabled,
+			...(model ? { model } : {}),
+		};
+	}
+
 	getBranchSummarySettings(): { reserveTokens: number; skipPrompt: boolean } {
 		return {
 			reserveTokens: this.settings.branchSummary?.reserveTokens ?? SETTINGS_DEFAULTS.branchSummary.reserveTokens,

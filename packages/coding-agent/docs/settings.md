@@ -76,6 +76,15 @@ CLI tool options override this setting for one invocation. `--tools` with only `
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens retained without summarization. |
 | `compaction.modelOverrides` | object | None | Per-model token settings keyed by exact `provider/modelId`. |
 
+### Auto-title
+
+| Setting | Type | Default | Description |
+|---|---|---|---|
+| `autoTitle.enabled` | boolean | `false` | Name an unnamed session after the first agent run with a model-generated 3-6 word title. Never overwrites a name set by `--name` or `/name`. |
+| `autoTitle.model` | string | session model | Titling model as `provider/modelId`. Skips titling when the pinned model does not resolve. |
+
+The titling request sends the opening of the first prompt (600 characters) to the titling model once per session. Set `autoTitle.enabled` to `true` to turn it on.
+
 <a id="per-model-compaction-overrides"></a>
 
 Compaction token values must be non-negative safe integers. Each value resolves independently from the matching model override, then the ordinary compaction setting, then the built-in default. Project and user objects merge before model lookup.

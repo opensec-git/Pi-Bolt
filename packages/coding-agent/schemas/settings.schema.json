@@ -139,6 +139,20 @@
         }
       }
     },
+    "autoTitle": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Generate a short session title after the first agent run, when the session has no name.",
+          "default": false
+        },
+        "model": {
+          "type": "string",
+          "description": "Model for titling, as \"provider/modelId\". Defaults to the session model."
+        }
+      }
+    },
     "branchSummary": {
       "type": "object",
       "properties": {
