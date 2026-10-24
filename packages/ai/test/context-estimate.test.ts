@@ -37,8 +37,8 @@ const model: Model<"openai-responses"> = {
 	reasoning: false,
 	input: ["text"],
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-	contextWindow: 10_000,
-	maxTokens: 8_000,
+	contextWindow: 20_000,
+	maxTokens: 16_000,
 };
 
 describe("context token estimation", () => {
@@ -54,7 +54,7 @@ describe("context token estimation", () => {
 			trailingTokens: 1_000,
 			lastUsageIndex: 0,
 		});
-		expect(buildBaseOptions(model, context).maxTokens).toBe(2_904);
+		expect(buildBaseOptions(model, context).maxTokens).toBe(12_904);
 	});
 
 	it("ignores stale assistant usage after a newer message is inserted before it", () => {
@@ -73,7 +73,7 @@ describe("context token estimation", () => {
 			trailingTokens: 1_149,
 			lastUsageIndex: null,
 		});
-		expect(buildBaseOptions(model, context).maxTokens).toBe(4_755);
+		expect(buildBaseOptions(model, context).maxTokens).toBe(14_755);
 	});
 
 	it("uses assistant usage again after a response to the inserted context", () => {

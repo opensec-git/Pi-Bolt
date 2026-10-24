@@ -13,12 +13,30 @@ import type {
 import { estimateContextTokens } from "../utils/estimate.ts";
 
 const CONTEXT_SAFETY_TOKENS = 4096;
+/**
+ * Share of the chars/3.5 estimate also kept free, since its error grows with the estimated text. Code and JSON often
+ * run 3.0 to 3.2 chars per token, which the estimate undercounts by 9% to 17% (#10497 measured 3.19); 0.2 covers
+ * ratios down to about 2.9. CJK text, at 1 to 1.5 chars per token, is undercounted 2 to 3.5 times; no margin covers
+ * that and still leaves an output budget, so it relies on the provider's overflow error and compaction.
+ */
+const ESTIMATE_SAFETY_RATIO = 0.2;
+/**
+ * Smallest clamped output limit. Below it the request cannot produce an answer: a limit of 1 (or the 16 some APIs
+ * raise it to) ends in an empty `length` response that is not recognized as an overflow (#11236). With this floor a
+ * request whose estimate overshot still gets an answer, and one that really does not fit gets the provider's overflow
+ * error, which triggers compaction. It equals the fixed margin, so the request exceeds the estimated window only when
+ * the estimate alone leaves no room.
+ */
+const MIN_CLAMPED_MAX_TOKENS = CONTEXT_SAFETY_TOKENS;
 const MIN_MAX_TOKENS = 1;
 
 export function clampMaxTokensToContext(model: Model<Api>, context: TranscriptContext, maxTokens: number): number {
 	if (model.contextWindow <= 0) return Math.max(MIN_MAX_TOKENS, maxTokens);
-	const available = model.contextWindow - estimateContextTokens(context).tokens - CONTEXT_SAFETY_TOKENS;
-	return Math.min(maxTokens, Math.max(MIN_MAX_TOKENS, available));
+	const estimate = estimateContextTokens(context);
+	// Reported usage is the provider's own count; only the estimated tail carries the chars/token error.
+	const margin = Math.max(CONTEXT_SAFETY_TOKENS, Math.ceil(estimate.trailingTokens * ESTIMATE_SAFETY_RATIO));
+	const available = model.contextWindow - estimate.tokens - margin;
+	return Math.min(maxTokens, Math.max(MIN_CLAMPED_MAX_TOKENS, available));
 }
 
 export function resolveSamplingParams(
