@@ -853,6 +853,19 @@ function splitIntoTokensWithAnsi(text: string): string[] {
 				continue;
 			}
 
+			// Codes between a word and the space after it (usually the word's closing style) end that word.
+			// Attached to the space instead, they make it a non-whitespace token, so a line wrapped there
+			// started with the space. The codes stay in the same place in the output.
+			if (pendingAnsi && segmentIsSpace && currentKind !== "space") {
+				if (current) {
+					current += pendingAnsi;
+					pendingAnsi = "";
+				} else if (tokens.length > 0) {
+					tokens[tokens.length - 1] += pendingAnsi;
+					pendingAnsi = "";
+				}
+			}
+
 			const segmentKind = segmentIsSpace ? "space" : "word";
 			if (current && currentKind !== segmentKind) {
 				flushCurrent();

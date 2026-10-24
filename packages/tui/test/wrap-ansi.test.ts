@@ -192,6 +192,24 @@ describe("wrapTextWithAnsi", () => {
 				assert.strictEqual(wrapped[i].endsWith("\x1b[0m"), false);
 			}
 		});
+
+		// earendil-works/pi#10925: the closing code of a styled word was attached to the next space,
+		// so a line wrapped at that space started with it
+		it("should not start a wrapped line with the space after a styled word", () => {
+			const text = "aaaa bbbb \x1b[1mbold\x1b[22m cccc dddd eeee ffff";
+
+			assert.deepStrictEqual(wrapTextWithAnsi(text, 14), [
+				"aaaa bbbb \x1b[1mbold\x1b[22m",
+				"cccc dddd eeee",
+				"ffff",
+			]);
+		});
+
+		it("should not wrap the closing code of a styled word onto an empty line", () => {
+			const text = "\x1b[1maaaa\x1b[22m bbbb";
+
+			assert.deepStrictEqual(wrapTextWithAnsi(text, 4), ["\x1b[1maaaa\x1b[22m", "bbbb"]);
+		});
 	});
 });
 
