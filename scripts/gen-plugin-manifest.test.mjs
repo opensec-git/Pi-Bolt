@@ -354,6 +354,40 @@ describe("the packages pi-bolt compile gives it (--packages)", () => {
 		assert.ok(readFileSync(join(out, "package-pi-bolt-web-access", "node_modules", "own", "index.js"), "utf8"));
 	});
 
+	it("finds a workspace package's dependencies hoisted above it, as Node does", () => {
+		// workspace/packages/plugin imports `hoisted`, installed in workspace/node_modules (PR #114 review).
+		const agentDir = agent();
+		const workspace = join(scratch(), "workspace");
+		const plugin = join(workspace, "packages", "plugin");
+		write(join(plugin, "package.json"), JSON.stringify({ name: "plugin", dependencies: { hoisted: "1", own: "1" } }));
+		write(join(plugin, "index.ts"), 'import value from "hoisted";\nexport default () => value;\n');
+		write(join(plugin, "node_modules", "own", "package.json"), JSON.stringify({ name: "own" }));
+		write(join(workspace, "node_modules", "hoisted", "package.json"), JSON.stringify({ name: "hoisted", dependencies: { deep: "1" } }));
+		write(join(workspace, "node_modules", "hoisted", "index.js"), "export default 1;\n");
+		write(join(workspace, "node_modules", "deep", "package.json"), JSON.stringify({ name: "deep" }));
+
+		const plan = planPlugins({
+			agentDir,
+			packages: [{ source: plugin, root: plugin, entries: [join(plugin, "index.ts")] }],
+		});
+		assert.deepEqual(
+			plan.dependencies.map((dependency) => [dependency.name, dependency.from]),
+			[
+				["hoisted", join(workspace, "node_modules", "hoisted")],
+				["deep", join(workspace, "node_modules", "deep")],
+			],
+		);
+		const out = join(scratch(), "folder");
+		writePluginFolder(plan, out);
+		const staged = join(out, plan.plugins[0].importPath);
+		const resolved = spawnSync(
+			process.execPath,
+			["--input-type=module", "-e", `import("hoisted").then(() => process.exit(0))`],
+			{ cwd: dirname(staged), encoding: "utf8" },
+		);
+		assert.equal(resolved.status, 0, resolved.stderr);
+	});
+
 	it("still passes over a package that needs vendoring, by its source", () => {
 		const agentDir = agent();
 		const dir = installPackage(agentDir, "opensec-pi-todo", {}, ["dist-bun/index.js", "dist-bun/core.cjs"]);

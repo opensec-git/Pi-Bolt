@@ -191,17 +191,6 @@ function managedPackageFolder(entry, agentDir) {
 }
 
 /**
- * The node_modules a package was installed into, where its dependencies are hoisted; undefined for a folder that is not in
- * one (a local package or a git checkout), whose own node_modules is copied with it.
- */
-function enclosingNodeModules(dir) {
-	for (let current = resolve(dir); dirname(current) !== current; current = dirname(current)) {
-		if (basename(dirname(current)) === "node_modules") return dirname(current);
-	}
-	return undefined;
-}
-
-/**
  * Whether a package's entry is the Bun build that loads its real code at run time. Those ship `dist-bun/index.js` beside
  * a `dist-bun/core.cjs`, and the entry requires the core by a path it works out as it runs, which a compiled executable
  * has no file for. Compiling one in means unwrapping the core and handing it Pi's modules, which is a job per package:
@@ -219,29 +208,41 @@ function dependencyNames(manifest) {
 	return names;
 }
 
+/** Where Node finds package `name` required from `dir`: the nearest node_modules/<name> in `dir` or above it. */
+function resolvePackageFrom(dir, name) {
+	for (let at = resolve(dir); ; at = dirname(at)) {
+		if (basename(at) !== "node_modules") {
+			const candidate = join(at, "node_modules", ...name.split("/"));
+			if (existsSync(candidate)) return candidate;
+		}
+		if (dirname(at) === at) return undefined;
+	}
+}
+
 /**
- * Every package a package needs, transitively. `pi install` hoists into one flat node_modules, so a package's
- * dependencies are its siblings and not inside it: copying the package folder alone leaves them for the bundler to fail
- * on. `peerDependencies` are not walked -- those are the host's to provide, and a missing one is a loud build error.
+ * Every package a package in `dir` needs, transitively, that is not inside `dir`. Its dependencies are found as Node finds
+ * them, from each requiring package up through the folders above it: `pi install` hoists into one flat node_modules, so an
+ * npm package's dependencies are its siblings, and a local package in a workspace may have its own hoisted to the
+ * workspace's node_modules. Copying the package folder alone leaves those for the bundler to fail on; the ones inside it
+ * are copied with it. `peerDependencies` are not walked -- those are the host's to provide, and a missing one is a loud
+ * build error.
  */
-function dependencyClosure(dir, root) {
+function dependencyClosure(dir) {
+	const root = resolve(dir);
+	const inside = (path) => !relative(root, path).startsWith("..");
 	const found = new Map();
-	const queue = [dir];
-	const visited = new Set([resolve(dir)]);
+	const queue = [root];
+	const visited = new Set([root]);
 	while (queue.length > 0) {
 		const current = queue.shift();
 		for (const name of dependencyNames(readJson(join(current, "package.json")))) {
-			if (isPiPackage(name) || found.has(name)) continue;
-			// Nested before hoisted, as Node resolves: a package may carry its own copy of a version the root hoisted differently.
-			const nested = join(current, "node_modules", ...name.split("/"));
-			const hoisted = join(root, ...name.split("/"));
-			const resolved = existsSync(nested) ? nested : existsSync(hoisted) ? hoisted : undefined;
-			if (!resolved) continue;
-			found.set(name, resolved);
-			if (!visited.has(resolve(resolved))) {
-				visited.add(resolve(resolved));
-				queue.push(resolved);
-			}
+			if (isPiPackage(name)) continue;
+			// (Nested before hoisted: a package may carry its own copy of a version hoisted differently above it.)
+			const resolved = resolvePackageFrom(current, name);
+			if (!resolved || visited.has(resolved)) continue;
+			visited.add(resolved);
+			queue.push(resolved);
+			if (!inside(resolved) && !found.has(name)) found.set(name, resolved);
 		}
 	}
 	return found;
@@ -438,9 +439,8 @@ export function planPlugins(options) {
 	const usedRoots = roots.filter((root) => used.has(root.stageDir));
 	const dependencies = new Map();
 	for (const root of usedRoots) {
-		const hoisted = root.origin === "package" ? enclosingNodeModules(root.root) : undefined;
-		if (!hoisted) continue;
-		for (const [name, from] of dependencyClosure(root.root, hoisted)) {
+		if (root.origin !== "package") continue;
+		for (const [name, from] of dependencyClosure(root.root)) {
 			if (!dependencies.has(name)) dependencies.set(name, from);
 		}
 	}
