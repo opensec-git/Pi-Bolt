@@ -104,12 +104,13 @@ describe("AgentSession compaction model overrides", () => {
 
 	it.each(["manual", "automatic"] as const)("passes resolved budgets to built-in %s summarization", async (path) => {
 		const harness = await createHarness({
-			models: [{ id: "faux-1", contextWindow: 4000, maxTokens: 3000 }],
+			models: [{ id: "faux-1", contextWindow: 12000, maxTokens: 9000 }],
 			tools: [],
 			settings: {
 				compaction: {
 					reserveTokens: 10,
-					modelOverrides: { "faux/faux-1": { reserveTokens: 2000, keepRecentTokens: 150 } },
+					// Above the 4096-token minimum summary budget, so the override decides it.
+					modelOverrides: { "faux/faux-1": { reserveTokens: 10000, keepRecentTokens: 150 } },
 				},
 			},
 		});
@@ -125,7 +126,7 @@ describe("AgentSession compaction model overrides", () => {
 		]);
 		if (path === "manual") await harness.session.compact();
 		else await harness.session.prompt("continue");
-		expect(budgets).toEqual([1600]);
+		expect(budgets).toEqual([8000]);
 		expect(harness.sessionManager.getEntries().find((entry) => entry.type === "compaction")).toMatchObject({
 			firstKeptEntryId: recentUserId,
 			summary: "built-in summary",
@@ -180,7 +181,7 @@ describe("AgentSession compaction model overrides", () => {
 			settings: {
 				compaction: {
 					modelOverrides: {
-						"faux/first": { reserveTokens: 2000, keepRecentTokens: 150 },
+						"faux/first": { reserveTokens: 10000, keepRecentTokens: 150 },
 						"faux/second": { reserveTokens: 4000, keepRecentTokens: 20000 },
 					},
 				},
@@ -201,6 +202,6 @@ describe("AgentSession compaction model overrides", () => {
 			},
 		]);
 		await harness.session.compact();
-		expect(requests).toEqual([{ id: "first", maxTokens: 1600 }]);
+		expect(requests).toEqual([{ id: "first", maxTokens: 8000 }]);
 	});
 });

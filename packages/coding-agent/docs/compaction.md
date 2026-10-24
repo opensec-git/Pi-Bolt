@@ -32,7 +32,7 @@ Auto-compaction triggers when:
 contextTokens > contextWindow - reserveTokens
 ```
 
-By default, `reserveTokens` is 16384 tokens (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`). This leaves room for the LLM's response. A compaction summary may produce at most 80% of `reserveTokens` (50% for a split turn's prefix), capped by the model's output limit. If reasoning uses that whole limit, the summary is requested again without reasoning.
+By default, `reserveTokens` is 16384 tokens (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`). This leaves room for the LLM's response. A compaction summary may produce at most 80% of `reserveTokens` (50% for a split turn's prefix), and at least 4096 tokens, capped by the model's output limit. If reasoning uses that whole limit, the summary is requested again without reasoning.
 
 During a multi-turn agent run, Pi checks the canonical projected context after tools finish and their results are appended, before starting the next assistant response. If the threshold is crossed, Pi compacts during `prepareNextTurn`, then performs the existing catch-up steering poll before `turn_start`. It skips this between-turn check when the completed tool batch terminates the run and no queued message requires another response. Pi also checks before a new user prompt and performs final-attempt overflow recovery after the low-level run ends.
 

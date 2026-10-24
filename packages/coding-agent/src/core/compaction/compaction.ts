@@ -592,6 +592,15 @@ export function getSummarizationFailure(response: AssistantMessage, label: strin
 	return undefined;
 }
 
+/** Smallest summary output budget, so a zero or tiny `reserveTokens` still allows a summary. */
+const MIN_SUMMARY_OUTPUT_TOKENS = 4096;
+
+/** Summary output budget: a share of `reserveTokens`, at least the minimum, capped by the model's output limit. */
+function getSummaryMaxTokens(model: Model<any>, reserveTokens: number, share: number): number {
+	const budget = Math.max(Math.floor(share * reserveTokens), MIN_SUMMARY_OUTPUT_TOKENS);
+	return model.maxTokens > 0 ? Math.min(budget, model.maxTokens) : budget;
+}
+
 function createSummarizationOptions(
 	model: Model<any>,
 	maxTokens: number,
@@ -717,10 +726,7 @@ export async function generateSummaryWithUsage(
 	callbacks?: RetryCallbacks,
 	sessionId?: string,
 ): Promise<{ text: string; usage: Usage }> {
-	const maxTokens = Math.min(
-		Math.floor(0.8 * reserveTokens),
-		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-	);
+	const maxTokens = getSummaryMaxTokens(model, reserveTokens, 0.8);
 
 	// Use update prompt if we have a previous summary, otherwise initial prompt
 	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
@@ -1097,10 +1103,7 @@ async function generateTurnPrefixSummary(
 	sessionId?: string,
 	customInstructions?: string,
 ): Promise<{ text: string; usage: Usage }> {
-	const maxTokens = Math.min(
-		Math.floor(0.5 * reserveTokens),
-		model.maxTokens > 0 ? model.maxTokens : Number.POSITIVE_INFINITY,
-	); // Smaller budget for turn prefix
+	const maxTokens = getSummaryMaxTokens(model, reserveTokens, 0.5); // Smaller budget for turn prefix
 	const llmMessages = convertToLlm(messages);
 	const conversationText = serializeConversation(llmMessages);
 	let promptText = `# Conversation\n${conversationText}\n\n# Instructions\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;

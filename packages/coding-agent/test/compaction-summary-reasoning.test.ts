@@ -329,6 +329,22 @@ describe("generateSummary reasoning options", () => {
 		expect(completeSimpleMock.mock.calls[0][2]).toMatchObject({ maxTokens: 13107, reasoning: "high" });
 	});
 
+	it("keeps a minimum summary output budget when reserveTokens is zero", async () => {
+		const preparation: CompactionPreparation = {
+			firstKeptEntryId: "entry-keep",
+			messagesToSummarize: messages,
+			turnPrefixMessages: messages,
+			isSplitTurn: true,
+			tokensBefore: 600000,
+			fileOps: { read: new Set(), written: new Set(), edited: new Set() },
+			settings: { enabled: true, reserveTokens: 0, keepRecentTokens: 20000 },
+		};
+
+		await compact(preparation, createModel(false), "test-key");
+
+		expect(completeSimpleMock.mock.calls.map((call) => call[2]?.maxTokens)).toEqual([4096, 4096]);
+	});
+
 	it("summarizes again without reasoning when reasoning uses the whole output cap", async () => {
 		completeSimpleMock.mockResolvedValueOnce({ ...mockSummaryResponse, stopReason: "length", content: [] });
 
