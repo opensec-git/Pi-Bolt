@@ -559,6 +559,129 @@ describe("the packages pi-bolt compile gives it (--packages)", () => {
 	});
 });
 
+describe("the dependencies of a local package, as the staged copy finds them", () => {
+	/** A module's JSON file: its package.json, with `type: module`. */
+	const pkg = (dir, manifest) => write(join(dir, "package.json"), JSON.stringify({ type: "module", ...manifest }));
+	const link = (target, path) => {
+		mkdirSync(dirname(path), { recursive: true });
+		symlinkSync(target, path, "dir");
+	};
+	/** Plans `plugin` (a folder with index.js), writes the folder, and returns what the staged copy's `value` is. */
+	function staged(plugin) {
+		const plan = planPlugins({
+			agentDir: agent(),
+			packages: [{ source: plugin, root: plugin, entries: [join(plugin, "index.js")] }],
+		});
+		const out = join(scratch(), "folder");
+		writePluginFolder(plan, out);
+		const url = pathToFileURL(join(out, plan.plugins[0].importPath)).href;
+		const loaded = spawnSync(
+			process.execPath,
+			["--input-type=module", "-e", `import(${JSON.stringify(url)}).then((m) => console.log(JSON.stringify(m.value)))`],
+			{ encoding: "utf8" },
+		);
+		assert.equal(loaded.status, 0, loaded.stderr);
+		return { plan, value: JSON.parse(loaded.stdout) };
+	}
+	/** A plugin in `workspace/packages/plugin` that needs `dependencies` and exports `value` from `code`. */
+	function workspacePlugin(dependencies, code) {
+		const workspace = join(scratch(), "workspace");
+		const plugin = join(workspace, "packages", "plugin");
+		pkg(plugin, { name: "plugin", dependencies: Object.fromEntries(dependencies.map((name) => [name, "*"])) });
+		write(join(plugin, "index.js"), `${code}\nexport default () => {};\n`);
+		return { workspace, plugin };
+	}
+
+	it("copies each name two links give one folder (PR #114 review)", () => {
+		const { workspace, plugin } = workspacePlugin(
+			["alias-a", "alias-b"],
+			'import a from "alias-a";\nimport b from "alias-b";\nexport const value = [a, b];',
+		);
+		const shared = join(workspace, "store", "shared");
+		pkg(shared, { name: "shared", version: "1.0.0" });
+		write(join(shared, "index.js"), "export default 42;\n");
+		link(shared, join(workspace, "node_modules", "alias-a"));
+		link(shared, join(workspace, "node_modules", "alias-b"));
+
+		const { plan, value } = staged(plugin);
+		assert.deepEqual(value, [42, 42]);
+		assert.deepEqual(
+			plan.dependencies.map((dependency) => dependency.name),
+			["alias-a", "alias-b"],
+		);
+	});
+
+	it("looks again at a folder copied with the package when a dependency outside it needs it too", () => {
+		// plugin/node_modules/m and n come with the plugin's folder; `outer`, hoisted above it, reaches m by a link into it,
+		// and m's copy beside outer then needs n from elsewhere.
+		const { workspace, plugin } = workspacePlugin(
+			["m", "outer"],
+			'import m from "m";\nimport outer from "outer";\nexport const value = [m, outer];',
+		);
+		const m = join(plugin, "node_modules", "m");
+		pkg(m, { name: "m", version: "1.0.0", dependencies: { n: "*" } });
+		write(join(m, "index.js"), 'import n from "n";\nexport default `m+${n}`;\n');
+		pkg(join(plugin, "node_modules", "n"), { name: "n" });
+		write(join(plugin, "node_modules", "n", "index.js"), 'export default "n";\n');
+		const outer = join(workspace, "node_modules", "outer");
+		pkg(outer, { name: "outer", dependencies: { m: "*" } });
+		write(join(outer, "index.js"), 'import m from "m";\nexport default `outer+${m}`;\n');
+		link(m, join(outer, "node_modules", "m"));
+
+		assert.deepEqual(staged(plugin).value, ["m+n", "outer+m+n"]);
+	});
+
+	it("finds a scoped dependency and its own scoped dependency", () => {
+		const { workspace, plugin } = workspacePlugin(["@scope/pkg"], 'import pkg from "@scope/pkg";\nexport const value = pkg;');
+		const scoped = join(workspace, "node_modules", "@scope", "pkg");
+		pkg(scoped, { name: "@scope/pkg", dependencies: { "@scope/dep": "*" } });
+		write(join(scoped, "index.js"), 'import dep from "@scope/dep";\nexport default `pkg+${dep}`;\n');
+		pkg(join(workspace, "node_modules", "@scope", "dep"), { name: "@scope/dep" });
+		write(join(workspace, "node_modules", "@scope", "dep", "index.js"), 'export default "dep";\n');
+
+		const { plan, value } = staged(plugin);
+		assert.equal(value, "pkg+dep");
+		assert.deepEqual(
+			plan.dependencies.map((dependency) => dependency.name),
+			["@scope/pkg", "@scope/dep"],
+		);
+	});
+
+	it("follows a workspace link to another local folder, and finds what that folder needs from where it is", () => {
+		// npm workspaces link workspace/node_modules/lib to packages/lib; lib needs `leaf`, hoisted beside the link.
+		const { workspace, plugin } = workspacePlugin(["lib"], 'import lib from "lib";\nexport const value = lib;');
+		const lib = join(workspace, "packages", "lib");
+		pkg(lib, { name: "lib", dependencies: { leaf: "*" } });
+		write(join(lib, "index.js"), 'import leaf from "leaf";\nexport default `lib+${leaf}`;\n');
+		pkg(join(workspace, "node_modules", "leaf"), { name: "leaf" });
+		write(join(workspace, "node_modules", "leaf", "index.js"), 'export default "leaf";\n');
+		link(lib, join(workspace, "node_modules", "lib"));
+
+		assert.equal(staged(plugin).value, "lib+leaf");
+	});
+
+	it("copies packages that link to each other, or to themselves, without copying them into themselves", () => {
+		// A pnpm workspace links packages/plugin/node_modules/b to ../../b, and b's node_modules/plugin back to the plugin.
+		const { workspace, plugin } = workspacePlugin(["b", "plugin"], 'import b from "b";\nexport const value = b;');
+		const b = join(workspace, "packages", "b");
+		pkg(b, { name: "b", dependencies: { plugin: "*" } });
+		write(join(b, "index.js"), 'export default "b";\n');
+		link(b, join(plugin, "node_modules", "b"));
+		link(plugin, join(b, "node_modules", "plugin"));
+		link(plugin, join(plugin, "node_modules", "plugin"));
+
+		assert.equal(staged(plugin).value, "b");
+	});
+
+	it("copies a dependency whose name only begins like one of Pi's own packages", () => {
+		const { workspace, plugin } = workspacePlugin(["typebox-extra"], 'import extra from "typebox-extra";\nexport const value = extra;');
+		pkg(join(workspace, "node_modules", "typebox-extra"), { name: "typebox-extra" });
+		write(join(workspace, "node_modules", "typebox-extra", "index.js"), 'export default "extra";\n');
+
+		assert.equal(staged(plugin).value, "extra");
+	});
+});
+
 describe("what it leaves out", () => {
 	it("lists each extension --only or --exclude leaves out, and by which (#108)", () => {
 		const agentDir = agent();

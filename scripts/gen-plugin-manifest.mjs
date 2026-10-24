@@ -31,6 +31,7 @@ import {
 	chmodSync,
 	cpSync,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	readdirSync,
 	readFileSync,
@@ -312,9 +313,13 @@ function dependencyClosure(dir) {
 	};
 	const root = realpathSync(dir);
 	const needed = [];
-	/** Each package to look at: its real folder, and the copied folder it is in. */
+	const listed = new Set();
+	/**
+	 * Each package to look at: its real folder, and the copied folder it is in. What it needs depends on both, so a package
+	 * reached again from another copied folder is looked at again (once per pair, which also ends a cycle).
+	 */
 	const queue = [{ real: root, copied: root }];
-	const visited = new Set([root]);
+	const visited = new Set([`${root}\0${root}`]);
 	while (queue.length > 0) {
 		const current = queue.shift();
 		for (const name of dependencyNames(readJson(join(current.real, "package.json")))) {
@@ -323,14 +328,16 @@ function dependencyClosure(dir) {
 			const found = resolvePackageFrom(current.real, name);
 			if (!found) continue;
 			const real = realpathSync(found);
-			if (visited.has(real)) continue;
-			visited.add(real);
-			if (real === resolve(found) && inside(current.copied, real)) {
-				queue.push({ real, copied: current.copied });
-			} else {
+			const travels = real === resolve(found) && inside(current.copied, real);
+			// (Listed by the name it is required by: two names may lead to one folder, and each is imported by its own.)
+			if (!travels && !listed.has(`${name}\0${real}`)) {
+				listed.add(`${name}\0${real}`);
 				needed.push({ name, from: real });
-				queue.push({ real, copied: real });
 			}
+			const next = { real, copied: travels ? current.copied : real };
+			if (visited.has(`${next.real}\0${next.copied}`)) continue;
+			visited.add(`${next.real}\0${next.copied}`);
+			queue.push(next);
 		}
 	}
 	return needed;
@@ -896,14 +903,40 @@ export function renderManifest(plan) {
 }
 
 /** Pi's own packages, which the build resolves to Pi's modules. A copy of one inside a plugin would be a second Pi. */
-const EXCLUDED = [join("node_modules", "typebox"), join("node_modules", "@earendil-works")];
+const isPiCopy = (source) => {
+	const parts = source.split(sep);
+	return parts.some((part, i) => part === "node_modules" && (parts[i + 1] === "typebox" || parts[i + 1] === "@earendil-works"));
+};
+
+/**
+ * Whether `source`, in the folder `from` being copied, is a link to a folder it is in: followed, it would be copied into
+ * itself without end. A pnpm workspace has these when two of its packages need each other, or one needs itself.
+ */
+function linksBack(source, from) {
+	let target;
+	try {
+		if (!lstatSync(source).isSymbolicLink()) return false;
+		target = realpathSync(source);
+	} catch {
+		return false;
+	}
+	for (let at = dirname(source); ; at = dirname(at)) {
+		try {
+			if (realpathSync(at) === target) return true;
+		} catch {
+			// (Not there: it is not the target.)
+		}
+		if (at === from || dirname(at) === at) return false;
+	}
+}
 
 function copyRoot(from, to) {
-	cpSync(from, to, {
+	const start = resolve(from);
+	cpSync(start, to, {
 		recursive: true,
 		// An extension may be a symbolic link to somewhere else on this machine, which the executable has no file for.
 		dereference: true,
-		filter: (source) => basename(source) !== ".git" && !EXCLUDED.some((part) => source.includes(part)),
+		filter: (source) => basename(source) !== ".git" && !isPiCopy(source) && !linksBack(source, start),
 	});
 }
 
