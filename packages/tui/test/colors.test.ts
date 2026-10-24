@@ -37,6 +37,24 @@ describe("colors", () => {
 		}
 	});
 
+	it("gives the same frozen color for the same input, and computes again what failed", () => {
+		for (const value of ["#4f8eb3", "oklch(62% 0.1 200)", "okhsl(250 60% 55%)"]) {
+			const first = parseColor(value);
+			assert.ok(Object.isFrozen(first));
+			assert.strictEqual(parseColor(value), first);
+		}
+		assert.strictEqual(okhslColor(250, 0.6, 0.55), okhslColor(250, 0.6, 0.55));
+		assert.deepStrictEqual(okhslColor(-0, 0.6, 0.55), okhslColor(0, 0.6, 0.55));
+		assert.throws(() => parseColor("okhsl(250 160% 55%)"), /s must be between 0 and 1/);
+		assert.throws(() => parseColor("okhsl(250 160% 55%)"), /s must be between 0 and 1/);
+		// More distinct inputs than the caches keep: still the right colors.
+		for (let index = 0; index < 1500; index++) {
+			const hex = `#${index.toString(16).padStart(6, "0")}`;
+			assert.deepStrictEqual(parseColor(hex), rgbColor(0, (index >> 8) & 255, index & 255));
+		}
+		assert.deepStrictEqual(parseColor("#4f8eb3"), rgbColor(0x4f, 0x8e, 0xb3));
+	});
+
 	it("styles text and closes sequences in reverse order", () => {
 		assert.strictEqual(
 			styleText("Ready", { fg: rgbColor(18, 52, 86), bg: indexedColor(9), bold: true, italic: true }, "truecolor"),

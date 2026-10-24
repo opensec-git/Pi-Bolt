@@ -139,12 +139,15 @@ export async function createAgentSessionServices(
 	ttiTrace("services.start");
 	const cwd = resolvePath(options.cwd);
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getAgentDir();
+	// Not refreshed on creation: the refresh below, after the extensions' registrations, does the same work (cached catalogs,
+	// availability) and replaces everything a refresh here would set; nothing reads the runtime in between.
 	const modelRuntime =
 		options.modelRuntime ??
 		(await ModelRuntime.create({
 			authPath: join(agentDir, "auth.json"),
 			modelsPath: join(agentDir, "models.json"),
 			signal: options.modelRuntimeSignal,
+			refreshOnCreate: false,
 		}));
 	ttiTrace("models.loaded");
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);

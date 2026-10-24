@@ -1,10 +1,10 @@
 import { readFile as fsReadFile, stat as fsStat } from "node:fs/promises";
-import { createInterface } from "node:readline";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { spawn } from "child_process";
 import path from "path";
 import { type Static, Type } from "typebox";
 import { PIBOLT } from "../../pi-bolt.ts";
+import { createInterface } from "../../utils/readline.ts";
 import { detachString } from "../../utils/text.ts";
 import { ensureTool } from "../../utils/tools-manager.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";

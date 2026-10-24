@@ -388,8 +388,7 @@ export class ModelRuntime implements Models {
 
 	private async runAvailabilityRefresh(seq: number, errorSeq: number, signal: AbortSignal): Promise<void> {
 		const providers = this.models.getProviders();
-		const [available, checks, credentials] = await Promise.all([
-			this.models.getAvailable(undefined, { signal }),
+		const [checks, credentials] = await Promise.all([
 			Promise.all(
 				providers.map(
 					async (provider): Promise<[string, AuthCheck | undefined]> => [
@@ -400,6 +399,19 @@ export class ModelRuntime implements Models {
 			),
 			this.credentials.list({ signal }),
 		]);
+		// What getAvailable() returns, without checking every provider's auth a second time: the models of each provider
+		// whose check found auth, in order. Only a provider that filters its models by credential is asked for them.
+		const available = (
+			await Promise.all(
+				providers.map((provider, index) =>
+					checks[index][1] === undefined
+						? []
+						: provider.filterModels
+							? this.models.getAvailable(provider.id, { signal })
+							: provider.getModels(),
+				),
+			)
+		).flat();
 		if (seq !== this.availabilityRefreshSeq) return;
 		const auth = new Map(checks);
 		const configuredProviders = new Set(

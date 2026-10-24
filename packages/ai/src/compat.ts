@@ -39,7 +39,7 @@ import { openAICompletionsApi } from "./api/openai-completions.lazy.ts";
 import { openAIResponsesApi } from "./api/openai-responses.lazy.ts";
 import { piMessagesApi } from "./api/pi-messages.lazy.ts";
 import { getEnvApiKey } from "./env-api-keys.ts";
-import type { ModelsApiStreamOptions } from "./models.ts";
+import type { ModelsApiStreamOptions, MutableModels } from "./models.ts";
 import { builtinModels, getBuiltinModel, getBuiltinModels, getBuiltinProviders } from "./providers/all.ts";
 
 export type { BuiltinProvider } from "./providers/all.ts";
@@ -214,7 +214,13 @@ export function resetApiProviders(): void {
 
 registerBuiltInApiProviders();
 
-const compatModels = builtinModels();
+// Made when a model of a built-in provider is first streamed through this API: building every built-in provider here would
+// cost every program that imports this module (Pi at each start) whether or not it uses the API.
+let builtinCompatModels: MutableModels | undefined;
+function compatModels(): MutableModels {
+	builtinCompatModels ??= builtinModels();
+	return builtinCompatModels;
+}
 const AMBIENT_AUTH_MARKER = "<authenticated>";
 
 function hasExplicitApiKey(apiKey: string | undefined): apiKey is string {
@@ -237,7 +243,7 @@ function hasResolvedCloudflareAuth(options: StreamOptions | undefined): boolean 
 
 function getBuiltinProviderForModel(model: Model<Api>) {
 	if (getApiProvider(model.api) !== builtinApiProviderInstances.get(model.api)) return undefined;
-	const provider = compatModels.getProvider(model.provider);
+	const provider = compatModels().getProvider(model.provider);
 	return provider?.getModels().some((candidate) => candidate.api === model.api) ? provider : undefined;
 }
 
@@ -258,7 +264,7 @@ export function stream<TApi extends Api>(
 	const builtinProvider = getBuiltinProviderForModel(model);
 	if (builtinProvider) {
 		if (model.provider.startsWith("cloudflare-") && !hasResolvedCloudflareAuth(options)) {
-			return compatModels.stream(model, transcript, options as ModelsApiStreamOptions<TApi> | undefined);
+			return compatModels().stream(model, transcript, options as ModelsApiStreamOptions<TApi> | undefined);
 		}
 		return builtinProvider.stream(model, transcript, withEnvApiKey(model, options) as ApiStreamOptions<TApi>);
 	}
@@ -284,7 +290,7 @@ export function streamSimple<TApi extends Api>(
 	const builtinProvider = getBuiltinProviderForModel(model);
 	if (builtinProvider) {
 		if (model.provider.startsWith("cloudflare-") && !hasResolvedCloudflareAuth(options)) {
-			return compatModels.streamSimple(model, transcript, options);
+			return compatModels().streamSimple(model, transcript, options);
 		}
 		return builtinProvider.streamSimple(model, transcript, withEnvApiKey(model, options));
 	}

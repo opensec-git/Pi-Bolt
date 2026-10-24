@@ -97,6 +97,19 @@ const OKHSL_PATTERN = new RegExp(
 	"i",
 );
 
+// Colors are frozen values, so one made before for the same input can be given again. A theme is built several times as
+// Pi starts (and again on every theme or terminal color change), from the same few dozen values, and an OKHSL conversion
+// searches the gamut each time.
+const COLOR_CACHE_LIMIT = 1024;
+const okhslColors = new Map<string, RgbColorValue>();
+const parsedColors = new Map<string, Color>();
+
+function remember<T extends Color>(cache: Map<string, T>, key: string, color: T): T {
+	if (cache.size >= COLOR_CACHE_LIMIT) cache.clear();
+	cache.set(key, color);
+	return color;
+}
+
 /**
  * An OKHSL color, converted to sRGB. Saturation is relative to the sRGB gamut at the hue and lightness,
  * so equal saturation looks equally colorful across hues and lightness.
@@ -110,8 +123,12 @@ export function okhslColor(h: number, s: number, l: number): RgbColorValue {
 	requireFinite(l, "l");
 	if (s < 0 || s > 1) throw new Error(`s must be between 0 and 1: ${s}`);
 	if (l < 0 || l > 1) throw new Error(`l must be between 0 and 1: ${l}`);
+	// (-0 is a key of its own: a template string would make it 0.)
+	const key = `${Object.is(h, -0) ? "-0" : h} ${Object.is(s, -0) ? "-0" : s} ${Object.is(l, -0) ? "-0" : l}`;
+	const cached = okhslColors.get(key);
+	if (cached) return cached;
 	const { r, g, b } = okhslToRgb(h, s, l);
-	return rgbColor(r, g, b);
+	return remember(okhslColors, key, rgbColor(r, g, b));
 }
 
 export function colorToOkhsl(color: Color): OkhslChannels {
@@ -120,7 +137,12 @@ export function colorToOkhsl(color: Color): OkhslChannels {
 
 export function parseColor(value: string | number): Color {
 	if (typeof value === "number") return indexedColor(value);
+	const cached = parsedColors.get(value);
+	if (cached) return cached;
+	return remember(parsedColors, value, parseColorString(value));
+}
 
+function parseColorString(value: string): Color {
 	const hex = /^#([\da-f]{3}|[\da-f]{6})$/i.exec(value);
 	if (hex) {
 		const digits = hex[1].length === 3 ? [...hex[1]].map((digit) => digit + digit).join("") : hex[1];

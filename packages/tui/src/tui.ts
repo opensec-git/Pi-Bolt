@@ -2,7 +2,6 @@
  * Minimal TUI implementation with differential rendering
  */
 
-import { performance } from "node:perf_hooks";
 import { isKeyRelease, matchesKey } from "./keys.ts";
 import { invalidateRenderedMarkdown } from "./rendered-markdown.ts";
 import type { Terminal } from "./terminal.ts";

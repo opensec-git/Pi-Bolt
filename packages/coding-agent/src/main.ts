@@ -5,7 +5,6 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
-import { createInterface } from "node:readline";
 import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
 import { setCapabilityOverrides, ttiTrace } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -80,6 +79,7 @@ import {
 } from "./package-manager-cli.ts";
 import { PIBOLT } from "./pi-bolt.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
+import { createInterface } from "./utils/readline.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
 
 const EXTENSION_LOAD_FAILURE_HINT = `Hint: Start without extensions using "${COMMAND_NAME} -ne".`;
