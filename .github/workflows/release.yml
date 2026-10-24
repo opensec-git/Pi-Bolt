@@ -8,9 +8,10 @@ name: release
 # it; otherwise publish is run by hand (docs/RELEASING.md).
 #
 # The runtime: when the engine (patches/, sources.json, the runtime build scripts) is the latest release's, its runtime archives
-# are used again. When it changed, build the runtimes by hand (scripts/build-runtime.sh on Linux x86-64, on Linux ARM64 and on
-# a Mac, scripts\build-runtime.ps1 on Windows) and upload pi-bolt-runtime-linux-x64.tar.gz, pi-bolt-runtime-linux-arm64.tar.gz,
-# pi-bolt-runtime-darwin-arm64.tar.gz and pi-bolt-runtime-win32-x64.zip to a draft release of the tag before this runs.
+# are used again. When it changed, the runtime workflow builds them from pi-bolt and attaches them to the tag's draft release
+# before this runs (gh workflow run runtime.yml -f tag=bolt-vX.Y.Z). Either way the prepare job checks each runtime's build
+# provenance attestation and stops the release when one does not verify (docs/RELEASING.md, "Provenance"). Each build job
+# attests the archives it makes.
 on:
   push:
     tags: ["bolt-v*"]
@@ -40,9 +41,10 @@ jobs:
   prepare:
     name: Versions and runtime
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: write # (A draft release, and the runtimes uploaded to it, are only visible to a token that may write.)
+      attestations: read # (To check the runtimes' attestations.)
     outputs:
       version: ${{ steps.check.outputs.version }}
       stamp: ${{ steps.check.outputs.stamp }}
@@ -104,12 +106,76 @@ jobs:
               echo "pi-bolt-runtime-${platform#*:}: $sum" | tee -a "$GITHUB_STEP_SUMMARY"
             done
           else
-            echo "::error title=Runtime needed::The engine changed since $previous (runtime stamp ${released:-not signed}, now $stamp). Build the runtimes (scripts/build-runtime.sh on Linux x86-64, on Linux ARM64 and on a Mac, scripts\\build-runtime.ps1 on Windows), upload pi-bolt-runtime-linux-x64.tar.gz, pi-bolt-runtime-linux-arm64.tar.gz, pi-bolt-runtime-darwin-arm64.tar.gz and pi-bolt-runtime-win32-x64.zip to a draft release of $TAG, and run this workflow again."
+            echo "::error title=Runtime needed::The engine changed since $previous (runtime stamp ${released:-not signed}, now $stamp). Build the runtimes with the runtime workflow from pi-bolt (gh workflow run runtime.yml -R $GITHUB_REPOSITORY -f tag=$TAG), which attaches them to a draft release of $TAG, and run this workflow again."
             exit 1
           fi
           { echo "version=$version"; echo "stamp=$stamp"; echo "runtime_from=$runtime_from"; } >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
+      # Where each runtime the build jobs will use was built, as its build provenance attestation says (docs/RELEASING.md,
+      # "Provenance"). One uploaded to the draft must be attested by the runtime workflow run from pi-bolt. One of the previous
+      # release is the copy that release's build jobs packaged (package-release.sh archives the runtime again), attested by its
+      # run of this workflow: from pi-bolt (where the tag workflow starts it) or from its tag. A runtime without such an
+      # attestation stops the release, unless its SHA-256 is in the list below.
+      - name: Runtime provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUNTIME_FROM: ${{ steps.check.outputs.runtime_from }}
+          # (Set only when the runtimes are the draft's, as in the build jobs.)
+          FROM_DRAFT: ${{ steps.check.outputs.runtime_sha_linux }}
+        run: |
+          # The exception: runtimes released before attestations existed, accepted without one, each with a warning. Only what
+          # a release can reuse is listed: 1.0.1's runtimes, whose bun executables are 1.0.0's, byte for byte those the runtime
+          # workflow built in run 39963518293 (branch runtime/v1.0.0b, commit ca41028c). A release reusing them attests its
+          # own copies, so the list can go once such a release is out (or the engine changes). A runtime is added here only in
+          # a reviewed commit, with where it was built.
+          unattested='
+          9978b1d5128799c09fcf09f7802e31ac0117c5ac3de73e56bdbaafec8f0d2eb3  pi-bolt-runtime-linux-x64.tar.gz
+          c9cc01452b1ea5194a8d53767b506c32dc16ac505ad254dfa3acb7e365b1056b  pi-bolt-runtime-linux-arm64.tar.gz
+          270d802270477e46ba80ee676a9fe371772b0f4eed2aaf92f37a92a6c4b132ab  pi-bolt-runtime-darwin-arm64.tar.gz
+          baafcdd97d363f4addf3ade6a9fdae41baeb1a4e08f16b90ee40df091ee486e4  pi-bolt-runtime-win32-x64.zip
+          '
+          if [ -n "$FROM_DRAFT" ]; then
+            dir=.work/draft
+            signers="runtime.yml@refs/heads/pi-bolt"
+          else
+            # (The check above verified this release's SHA256SUMS: its signature, and that it is $RUNTIME_FROM's.)
+            dir=.work/previous
+            gh release download "$RUNTIME_FROM" --repo "$GITHUB_REPOSITORY" --dir "$dir" --pattern 'pi-bolt-runtime-*'
+            signers="release.yml@refs/heads/pi-bolt release.yml@refs/tags/$RUNTIME_FROM runtime.yml@refs/heads/pi-bolt"
+          fi
+          echo "### Runtime provenance" >> "$GITHUB_STEP_SUMMARY"
+          failed=0
+          for name in pi-bolt-runtime-linux-x64.tar.gz pi-bolt-runtime-linux-arm64.tar.gz pi-bolt-runtime-darwin-arm64.tar.gz pi-bolt-runtime-win32-x64.zip; do
+            sum=$(sha256sum "$dir/$name" | cut -c1-64)
+            if [ -z "$FROM_DRAFT" ] && ! grep -qxF "$sum  $name" "$dir/SHA256SUMS"; then
+              echo "::error::$name ($sum) is not the one $RUNTIME_FROM's signed checksums list"
+              exit 1
+            fi
+            verified=""
+            : > "$RUNNER_TEMP/attestation.log"
+            for signer in $signers; do
+              echo "--- ${signer%%@*} from ${signer#*@}" >> "$RUNNER_TEMP/attestation.log"
+              if gh attestation verify "$dir/$name" --repo "$GITHUB_REPOSITORY" \
+                   --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/${signer%%@*}" --source-ref "${signer#*@}" \
+                   >> "$RUNNER_TEMP/attestation.log" 2>&1; then
+                verified=$signer
+                break
+              fi
+            done
+            if [ -n "$verified" ]; then
+              echo "- $name \`$sum\`: attested by ${verified%%@*} from ${verified#*@}" | tee -a "$GITHUB_STEP_SUMMARY"
+            elif printf '%s\n' "$unattested" | grep -qxF "$sum  $name"; then
+              echo "::warning title=Runtime without attestation::$name ($sum) has no attestation. It is accepted because release.yml lists it as released before attestations existed."
+              echo "- $name \`$sum\`: no attestation, accepted as listed (released before attestations existed)" >> "$GITHUB_STEP_SUMMARY"
+            else
+              cat "$RUNNER_TEMP/attestation.log"
+              echo "::error title=Runtime not attested::$name ($sum, from $RUNTIME_FROM) has no attestation by ${signers// / or }."
+              echo "- $name \`$sum\`: **not attested**" >> "$GITHUB_STEP_SUMMARY"
+              failed=1
+            fi
+          done
+          exit "$failed"
 
   build:
     name: Build and test on ${{ matrix.name }}
@@ -131,6 +197,8 @@ jobs:
     timeout-minutes: 120
     permissions:
       contents: write # (To download the runtimes from this tag's draft release.)
+      id-token: write # (To attest the archives: actions/attest-build-provenance.)
+      attestations: write
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       RUNTIME_FROM: ${{ needs.prepare.outputs.runtime_from }}
@@ -208,6 +276,13 @@ jobs:
           python3 bench/e2e_tools.py --reference bun=out/pi-stable/pi --build pi-bolt=.work/unpacked/pi-bolt-${{ matrix.platform }}/pi
           python3 bench/e2e_screen.py --reference bun=out/pi-stable/pi --build pi-bolt=.work/unpacked/pi-bolt-${{ matrix.platform }}/pi
           python3 bench/e2e_fullscreen.py --build pi-bolt=.work/unpacked/pi-bolt-${{ matrix.platform }}/pi
+      # A build provenance attestation of every archive, the runtime's included (which a later release reusing it checks):
+      # docs/RELEASING.md, "Provenance". Made in dry runs too.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/${{ env.VERSION }}/*.tar.gz
+            dist/${{ env.VERSION }}/*.tar.xz
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.platform }}
@@ -224,6 +299,8 @@ jobs:
     timeout-minutes: 180
     permissions:
       contents: write # (To download the runtime from this tag's draft release.)
+      id-token: write # (To attest the archives, as in the build job above.)
+      attestations: write
     defaults:
       run:
         # Windows PowerShell 5.1, which the Windows scripts are written for (as Windows 10 has it).
@@ -329,6 +406,9 @@ jobs:
           & tests\aot\run.ps1
           if ($LASTEXITCODE -ne 0) { $failed = 1 }
           exit $failed
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/${{ env.VERSION }}/*.zip
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: win32-x64

@@ -7,9 +7,9 @@ ARM64), 4 vCPU Windows Server 2025 and 6 vCPU macOS 26. `publish` runs on GitHub
 |---|---|---|
 | `ci` | every push to `pi-bolt`, every pull request | lint and types (the workflows too, with actionlint), Pi's tests, Pi-Bolt built and tested on Linux x86-64, Linux ARM64, macOS (Apple silicon: its tests and its comparison with stock Pi side by side) and Windows x64, the installer's checks, whether the engine patches apply. A pull request that changes only documentation builds and tests nothing |
 | `tag` | `ci` passed on a push to `pi-bolt` | when `VERSION` has no `bolt-vX.Y.Z` tag yet, tags that commit and runs `release` |
-| `release` | a `bolt-vX.Y.Z` tag | builds the 20 archives on Linux (x86-64 and ARM64), macOS and Windows, tests each as unpacked from its archive, makes a **draft** release with `SHA256SUMS`, `extensions.txt` and `RUNTIME_STAMP`, and runs `publish` |
+| `release` | a `bolt-vX.Y.Z` tag | checks the runtimes' attestations, builds the 20 archives on Linux (x86-64 and ARM64), macOS and Windows, tests each as unpacked from its archive, attests each, makes a **draft** release with `SHA256SUMS`, `extensions.txt` and `RUNTIME_STAMP`, and runs `publish` |
 | `publish` | after `release`, or by hand | signs `SHA256SUMS`, checks the signature and the checksums, publishes the release, puts `install.sh`, `install.ps1` and the site on `gh-pages`, publishes npm, and updates the Homebrew formula |
-| `runtime` | by hand, when the engine changed | builds the four runtimes, each on its platform's runner, and attaches them to the tag's draft ([below](#when-the-engine-changed)) |
+| `runtime` | by hand, when the engine changed | builds the four runtimes, each on its platform's runner, attests them, and attaches them to the tag's draft ([below](#when-the-engine-changed)) |
 | `upstream` | daily | opens an issue when Pi has a new release, with the files where merging it conflicts |
 
 `tag` and the hand-over from `release` to `publish` run only when the repository variable `AUTO_RELEASE` is `true`. The
@@ -18,6 +18,7 @@ release key is a secret of the `release` environment, used only by `publish` run
 - [A release, step by step](#a-release-step-by-step)
 - [What a release holds](#what-a-release-holds)
 - [When the engine changed](#when-the-engine-changed)
+- [Provenance](#provenance)
 - [npm](#npm)
 - [Homebrew](#homebrew)
 - [Scoop](#scoop)
@@ -111,7 +112,8 @@ gh workflow run runtime.yml -R opensec-git/Pi-Bolt -f tag=bolt-vX.Y.Z
 ```
 
 It builds each runtime on its platform's runner (Linux x86-64 and ARM64, macOS, Windows), runs `tests/aot` and `tests/runtime`
-on it, and attaches the four archives to the tag's draft release (making the draft if there is none). The runners are smaller than
+on it, attests the four archives ([Provenance](#provenance)) and attaches them to the tag's draft release (making the draft if
+there is none). The runners are smaller than
 the machine [BUILDING.md](BUILDING.md) asks for, so the build runs with swap and four jobs, for two to four hours. A branch
 `runtime/<name>` builds its commit's runtimes the same way, as workflow artifacts, to try an engine change. Then push the tag (or
 run `release` for it): it builds Pi on those runtimes.
@@ -122,12 +124,68 @@ container](BUILDING.md#linux-arm64-in-a-container)), on Windows `scripts\fetch-s
 ([WINDOWS.md](WINDOWS.md)); then `scripts/package-release.sh --runtime-only` (Windows: `scripts\package-release.ps1
 -RuntimeOnly`), and upload `dist/X.Y.Z/pi-bolt-runtime-<platform>.tar.gz` (Windows: `.zip`) to a draft of the tag:
 `gh release create bolt-vX.Y.Z --draft --title "Pi-Bolt X.Y.Z" --notes ""`, then `gh release upload bolt-vX.Y.Z <archive>`.
+A runtime built by hand has no attestation: `release` takes it only once its SHA-256 is in the list of the exception
+([Provenance](#provenance)), added in a reviewed commit.
 `fetch-sources` stops when `.work/webkit` or `.work/bun` is not the pinned commit with the current patch applied (sources of an
 earlier engine, or a fetch that stopped halfway): delete that folder and run it again.
 
 Say in the release notes, for each runtime, where it was built, the engine commits it was built from (`.work/webkit` and
 `.work/bun`, whose trees the patches make) and its SHA-256, so that it can be built again elsewhere and compared. (A runtime is
 not yet built bit for bit the same twice; the prebuilt heap of a Pi build is checked that way: `-VerifyDeterminism`.)
+
+## Provenance
+
+Every archive of a release has a build provenance attestation (`actions/attest-build-provenance`): a statement of which
+workflow run built it, from which commit, signed with that run's GitHub identity through Sigstore and kept in the repository's
+[attestations](https://github.com/opensec-git/Pi-Bolt/attestations). `runtime` attests the runtimes it builds; `release`'s build
+jobs attest every archive they make, dry runs included. It is a second check beside the signature of `SHA256SUMS`: the signature
+says the release key's holder approved a file, and the attestation says which run made it. Releases up to 1.0.1 have no
+attestations.
+
+To check a downloaded file (GitHub CLI 2.49 or later):
+
+```bash
+gh attestation verify pi-bolt-linux-x64.tar.xz -R opensec-git/Pi-Bolt
+# Stricter: made by the release workflow, run from pi-bolt (the tag workflow starts it there) or from the release's tag.
+gh attestation verify pi-bolt-linux-x64.tar.xz -R opensec-git/Pi-Bolt \
+  --signer-workflow opensec-git/Pi-Bolt/.github/workflows/release.yml --source-ref refs/heads/pi-bolt
+```
+
+A runtime that `runtime` built and that is still on a draft is checked with
+`--signer-workflow opensec-git/Pi-Bolt/.github/workflows/runtime.yml --source-ref refs/heads/pi-bolt`. The runners are
+Blacksmith's, which GitHub counts as self-hosted, so `--deny-self-hosted-runners` fails on every Pi-Bolt attestation. An
+attestation names the commit its run started from: `release` builds the tag's commit, and `runtime` run with `-f ref=...`
+builds that commit, which the run's inputs give.
+
+`release`'s first job checks each runtime the build will use before anything is built, and stops the release when one does not
+verify:
+
+- runtimes uploaded to the draft: attested by `runtime.yml` run from `pi-bolt`. A run from another branch (a `runtime/<name>`
+  trial) does not count.
+- the previous release's runtimes, used again: first checked against that release's signed `SHA256SUMS`. Each release packages
+  the runtime again (a new `.tar.gz` or `.zip`, so a new SHA-256), so these are attested by that release's run of `release.yml`,
+  from `pi-bolt` or from its tag (`runtime.yml` from `pi-bolt` counts too).
+
+The exception: runtimes released before attestations existed have none. `release.yml` lists the SHA-256 of each one it accepts
+without an attestation, in its "Runtime provenance" step. Each one it accepts gets a warning in the run and a line in its summary,
+so nothing is skipped silently. The list holds only 1.0.1's four runtimes, the ones the next release reuses. Their `bun`
+executables are 1.0.0's, and those are byte for byte the ones run
+[39963518293](https://github.com/opensec-git/Pi-Bolt/actions/runs/39963518293) of `runtime` built (branch `runtime/v1.0.0b`,
+commit `ca41028c`):
+
+| Runtime of 1.0.1 | SHA-256 |
+|---|---|
+| `pi-bolt-runtime-linux-x64.tar.gz` | `9978b1d5128799c09fcf09f7802e31ac0117c5ac3de73e56bdbaafec8f0d2eb3` |
+| its `bun` | `fe95fb4e64a1ac36b1689eba5d76baf26404174d46f3faec3ad6096402e07d2c` |
+| `pi-bolt-runtime-linux-arm64.tar.gz` | `c9cc01452b1ea5194a8d53767b506c32dc16ac505ad254dfa3acb7e365b1056b` |
+| its `bun` | `67b81894b0ed2c945556342ce47800ad51ce828ea404af8b62c92e4acbeae772` |
+| `pi-bolt-runtime-darwin-arm64.tar.gz` | `270d802270477e46ba80ee676a9fe371772b0f4eed2aaf92f37a92a6c4b132ab` |
+| its `bun` | `f04a349113682de46b9aefa7786f92e588c85a4918941fd6b1dc8c90d1d6fe8b` |
+| `pi-bolt-runtime-win32-x64.zip` | `baafcdd97d363f4addf3ade6a9fdae41baeb1a4e08f16b90ee40df091ee486e4` |
+| its `bun.exe` | `1457c97b5a0f236e880daa1bd203aaa10933d052a66f1c13d6ea92cf63c3d79c` |
+
+The release after 1.0.1 attests its own copies of those runtimes, and the one after that verifies those copies. Then the list can
+be emptied. A runtime is added to it only in a reviewed commit that says where it was built.
 
 ## npm
 

@@ -3,7 +3,8 @@ name: runtime
 # Builds the Pi-Bolt runtime (patched WebKit and Bun: scripts/build-runtime.sh, scripts\build-runtime.ps1) of every platform on
 # GitHub's runners, each on its own: Linux x86-64 and ARM64, macOS on Apple silicon, Windows x64. It is what a release needs when
 # the engine changed (docs/RELEASING.md, "When the engine changed"): run it from pi-bolt with the release's tag, and it attaches
-# pi-bolt-runtime-<platform>.tar.gz (Windows: .zip) to that tag's draft release, which the release workflow then uses. A push to
+# pi-bolt-runtime-<platform>.tar.gz (Windows: .zip) to that tag's draft release, which the release workflow then uses once it has
+# checked their attestations (the attest job below: only a run from pi-bolt counts for a release). A push to
 # a branch runtime/<name> builds its commit's runtimes as workflow artifacts only: all four, or the one the name is
 # (runtime/win32-x64).
 #
@@ -228,9 +229,31 @@ jobs:
           & "$env:GITHUB_WORKSPACE\tests\runtime\run.ps1"
           if ($LASTEXITCODE -ne 0) { exit 1 }
 
+  # A build provenance attestation of each runtime archive (signed with this workflow's identity through Sigstore, recorded in
+  # the repository's attestations), which the release workflow checks before it uses a runtime from a draft
+  # (docs/RELEASING.md, "Provenance"). In a job of its own: the build jobs run the engine's build tools and get no OIDC token.
+  attest:
+    name: Attest the runtimes
+    needs: [unix, windows]
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: runtime-*
+          path: runtimes
+          merge-multiple: true
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: runtimes/pi-bolt-runtime-*
+
   draft:
     name: Attach to the draft of ${{ github.event.inputs.tag }}
-    needs: [unix, windows]
+    needs: [unix, windows, attest]
     if: ${{ github.event.inputs.tag != '' && github.ref == 'refs/heads/pi-bolt' }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 20
