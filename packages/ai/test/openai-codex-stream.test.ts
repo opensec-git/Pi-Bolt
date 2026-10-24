@@ -1742,6 +1742,129 @@ describe("openai-codex streaming", () => {
 		});
 	});
 
+	// earendil-works/pi#10721
+	it("retries websocket after an SSE fallback cooldown that grows with consecutive failures", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-05-13T00:00:00Z"));
+		const token = mockToken();
+		const encoder = new TextEncoder();
+		const sse = buildSSEPayload({ status: "completed" });
+		const sessionId = "ws-fallback-cooldown";
+		let websocketHealthy = false;
+		let connections = 0;
+
+		const fetchMock = vi.fn(
+			async () =>
+				new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(encoder.encode(sse));
+							controller.close();
+						},
+					}),
+					{ status: 200, headers: { "content-type": "text/event-stream" } },
+				),
+		);
+		vi.stubGlobal("fetch", fetchMock);
+
+		class MockWebSocket extends EventTarget {
+			static OPEN = 1;
+			readyState = MockWebSocket.OPEN;
+
+			constructor() {
+				super();
+				connections++;
+				const healthy = websocketHealthy;
+				queueMicrotask(() => {
+					if (healthy) {
+						this.dispatchEvent(new Event("open"));
+					} else {
+						this.readyState = 3;
+						this.dispatchEvent(Object.assign(new Event("error"), { message: "network blip" }));
+					}
+				});
+			}
+
+			send(): void {
+				const event = {
+					type: "response.completed",
+					response: {
+						id: `resp_${connections}`,
+						status: "completed",
+						usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
+					},
+				};
+				queueMicrotask(() => {
+					this.dispatchEvent(Object.assign(new Event("message"), { data: JSON.stringify(event) }));
+				});
+			}
+
+			close(): void {
+				this.readyState = 3;
+			}
+		}
+		vi.stubGlobal("WebSocket", MockWebSocket);
+
+		const model: Model<"openai-codex-responses"> = {
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: "https://chatgpt.com/backend-api",
+			reasoning: true,
+			input: ["text"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: 400000,
+			maxTokens: 128000,
+		};
+		const request = async () => {
+			const result = await streamOpenAICodexResponses(model, normalizeContext({ systemPrompt: "", messages: [] }), {
+				apiKey: token,
+				sessionId,
+				transport: "auto",
+			}).result();
+			expect(result.stopReason).toBe("stop");
+		};
+		const advance = (ms: number) => vi.setSystemTime(Date.now() + ms);
+		const expectTransports = (expected: { connections: number; sseRequests: number; fallbackActive: boolean }) => {
+			expect(connections).toBe(expected.connections);
+			expect(fetchMock).toHaveBeenCalledTimes(expected.sseRequests);
+			expect(getOpenAICodexWebSocketDebugStats(sessionId)?.websocketFallbackActive).toBe(expected.fallbackActive);
+		};
+
+		// First failure: SSE for the next minute without new WebSocket attempts.
+		await request();
+		expectTransports({ connections: 1, sseRequests: 1, fallbackActive: true });
+		await request();
+		expectTransports({ connections: 1, sseRequests: 2, fallbackActive: true });
+
+		// The cooldown expires: the debug stats show it before the next request, which retries WebSocket.
+		advance(60_000);
+		expectTransports({ connections: 1, sseRequests: 2, fallbackActive: false });
+		await request();
+		expectTransports({ connections: 2, sseRequests: 3, fallbackActive: true });
+
+		// The second consecutive failure doubles the cooldown to two minutes.
+		advance(60_000);
+		await request();
+		expectTransports({ connections: 2, sseRequests: 4, fallbackActive: true });
+		advance(60_000);
+		websocketHealthy = true;
+		await request();
+		expectTransports({ connections: 3, sseRequests: 4, fallbackActive: false });
+		expect(getOpenAICodexWebSocketDebugStats(sessionId)).toMatchObject({ websocketFailures: 2, sseFallbacks: 4 });
+
+		// A WebSocket success resets the backoff, so the next failure waits one minute again.
+		closeOpenAICodexWebSocketSessions(sessionId);
+		websocketHealthy = false;
+		await request();
+		expectTransports({ connections: 4, sseRequests: 5, fallbackActive: true });
+		advance(60_000);
+		websocketHealthy = true;
+		await request();
+		expectTransports({ connections: 5, sseRequests: 5, fallbackActive: false });
+	});
+
 	it("reconnects once when the websocket connection limit is reached before output starts", async () => {
 		const token = mockToken();
 		let connections = 0;

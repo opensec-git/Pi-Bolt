@@ -348,6 +348,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 							throw new Error("Request was aborted");
 						}
 						assertSuccessfulOutput(output);
+						recordWebSocketSuccess(cacheSessionId);
 						stream.push({
 							type: "done",
 							reason: output.stopReason,
@@ -931,9 +932,19 @@ export interface OpenAICodexWebSocketDebugStats {
 	lastWebSocketError?: string;
 }
 
+// After a WebSocket failure a session uses SSE until `retryAt`, then tries WebSocket again. Each
+// consecutive failure doubles the cooldown up to the maximum; a WebSocket success clears the state.
+interface WebSocketSseFallbackState {
+	consecutiveFailures: number;
+	retryAt: number;
+}
+
+const WEBSOCKET_SSE_FALLBACK_BASE_COOLDOWN_MS = 60 * 1000;
+const WEBSOCKET_SSE_FALLBACK_MAX_COOLDOWN_MS = 30 * 60 * 1000;
+
 const websocketSessionCache = new Map<string, Map<string, CachedWebSocketConnection>>();
 const websocketDebugStats = new Map<string, OpenAICodexWebSocketDebugStats>();
-const websocketSseFallbackSessions = new Set<string>();
+const websocketSseFallbackSessions = new Map<string, WebSocketSseFallbackState>();
 
 function getOrCreateWebSocketDebugStats(sessionId: string): OpenAICodexWebSocketDebugStats {
 	let stats = websocketDebugStats.get(sessionId);
@@ -957,7 +968,11 @@ function getOrCreateWebSocketDebugStats(sessionId: string): OpenAICodexWebSocket
 
 export function getOpenAICodexWebSocketDebugStats(sessionId: string): OpenAICodexWebSocketDebugStats | undefined {
 	const stats = websocketDebugStats.get(sessionId);
-	return stats ? { ...stats } : undefined;
+	if (!stats) return undefined;
+	// The fallback expires with time rather than with a request, so report its current state.
+	return stats.websocketFallbackActive === undefined
+		? { ...stats }
+		: { ...stats, websocketFallbackActive: isWebSocketSseFallbackActive(sessionId) };
 }
 
 export function resetOpenAICodexWebSocketDebugStats(sessionId?: string): void {
@@ -989,7 +1004,8 @@ export function closeOpenAICodexWebSocketSessions(sessionId?: string): void {
 registerSessionResourceCleanup(closeOpenAICodexWebSocketSessions);
 
 function isWebSocketSseFallbackActive(sessionId: string | undefined): boolean {
-	return sessionId ? websocketSseFallbackSessions.has(sessionId) : false;
+	const state = sessionId ? websocketSseFallbackSessions.get(sessionId) : undefined;
+	return state !== undefined && Date.now() < state.retryAt;
 }
 
 function recordWebSocketSseFallback(sessionId: string | undefined): void {
@@ -1001,12 +1017,27 @@ function recordWebSocketSseFallback(sessionId: string | undefined): void {
 
 function recordWebSocketFailure(sessionId: string | undefined, error: unknown): void {
 	if (!sessionId) return;
-	websocketSseFallbackSessions.add(sessionId);
+	// A concurrent request that fails during an active cooldown does not count as another
+	// failed retry, so only extend the backoff once the previous cooldown has run out.
+	if (!isWebSocketSseFallbackActive(sessionId)) {
+		const consecutiveFailures = (websocketSseFallbackSessions.get(sessionId)?.consecutiveFailures ?? 0) + 1;
+		const cooldownMs = Math.min(
+			WEBSOCKET_SSE_FALLBACK_BASE_COOLDOWN_MS * 2 ** (consecutiveFailures - 1),
+			WEBSOCKET_SSE_FALLBACK_MAX_COOLDOWN_MS,
+		);
+		websocketSseFallbackSessions.set(sessionId, { consecutiveFailures, retryAt: Date.now() + cooldownMs });
+	}
 
 	const stats = getOrCreateWebSocketDebugStats(sessionId);
 	stats.websocketFailures++;
 	stats.lastWebSocketError = formatThrownValue(error);
 	stats.websocketFallbackActive = true;
+}
+
+function recordWebSocketSuccess(sessionId: string | undefined): void {
+	if (!sessionId || !websocketSseFallbackSessions.delete(sessionId)) return;
+	const stats = websocketDebugStats.get(sessionId);
+	if (stats) stats.websocketFallbackActive = false;
 }
 
 type WebSocketConstructor = new (
