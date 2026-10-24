@@ -22,6 +22,8 @@
 #   PIBOLT_CONNECTIONS  connections to download over at once (default: 4; 1 for a single connection)
 #   PIBOLT_SOURCE    where to download the executable from: auto (npm, then GitHub; the default), npm or github
 #   PIBOLT_NPM_REGISTRY  the npm registry or mirror to use (default: https://registry.npmjs.org)
+#   PIBOLT_UNVERIFIED=1  install even where nothing here can check the release's signature (no OpenSSL 3, OpenSSH 8.1 or
+#                    earlier Pi-Bolt); the checksum is still checked. A signature that does not verify always stops the install.
 #   PIBOLT_EXTENSIONS  yes or no: whether to install OpenSec's optional extensions (opensec-pi-subagents, opensec-pi-todo, opensec-pi-fff)
 #                    without asking. Without it the installer asks when it can; a run that cannot ask, or PIBOLT_YES=1,
 #                    installs none. They are installed at the versions the release pins (its extensions.txt, covered by the
@@ -513,9 +515,25 @@ rate_and_eta() {
 
 # The checksums are signed by Pi-Bolt's release key, from 0.6.0 on. For those releases the signature is required: one that
 # cannot be downloaded, or that does not verify, stops the install, whatever the download base. It is checked with OpenSSL 3
-# (LibreSSL, macOS's own openssl, cannot check Ed25519), or else with the Pi-Bolt already installed here; with neither, the
-# checksums alone are checked, and that is said. The signature is fetched in the background while the release downloads.
-fetch_signature() { fetch "$TMP/SHA256SUMS.sig.part" "$BASE/SHA256SUMS.sig" 2>/dev/null && mv "$TMP/SHA256SUMS.sig.part" "$TMP/SHA256SUMS.sig"; }
+# (LibreSSL, macOS's own openssl, cannot check Ed25519), or else with the Pi-Bolt already installed here, or else with
+# ssh-keygen against SHA256SUMS.sshsig, the same key's signature in OpenSSH's format (published for releases after 0.9.9; macOS has
+# OpenSSH). Where none of them can, nothing is installed unless PIBOLT_UNVERIFIED=1: the checksums come from the same place
+# as the files, so they alone do not show that a release is Pi-Bolt's. Both signatures are fetched in the background while
+# the release downloads.
+fetch_signature() {
+	if fetch "$TMP/SHA256SUMS.sig.part" "$BASE/SHA256SUMS.sig" 2>/dev/null; then mv "$TMP/SHA256SUMS.sig.part" "$TMP/SHA256SUMS.sig"; fi
+	if fetch "$TMP/SHA256SUMS.sshsig.part" "$BASE/SHA256SUMS.sshsig" 2>/dev/null; then mv "$TMP/SHA256SUMS.sshsig.part" "$TMP/SHA256SUMS.sshsig"; fi
+	return 0
+}
+
+# The release key in OpenSSH's form, for SHA256SUMS.sshsig (node scripts/lib/sshsig.mjs pubkey keys/release.pub).
+RELEASE_SSH_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKC26CarSmqCEj6n35NN7x2a/tbEQRt7iESFnijnsPmm"
+
+# Whether ssh-keygen can verify signatures (-Y, OpenSSH 8.1 and later).
+ssh_keygen_verifies() {
+	command -v ssh-keygen >/dev/null 2>&1 || return 1
+	case "$(ssh-keygen -Y find-principals 2>&1)" in *"illegal option"* | *"unknown option"* | *"invalid option"*) return 1 ;; esac
+}
 
 # Whether this release is from after signing began; one whose version is not known counts as one.
 signed_release() {
@@ -582,6 +600,17 @@ verify_signature() {
 			SIGNED=1
 			return 0
 		fi
+	fi
+	if [ -f "$TMP/SHA256SUMS.sshsig" ] && ssh_keygen_verifies; then
+		printf 'pi-bolt namespaces="pi-bolt-release" %s\n' "$RELEASE_SSH_KEY" >"$TMP/allowed_signers"
+		ssh-keygen -Y verify -f "$TMP/allowed_signers" -I pi-bolt -n pi-bolt-release -s "$TMP/SHA256SUMS.sshsig" <"$TMP/SHA256SUMS" >/dev/null 2>&1 ||
+			fail "the release's signature does not verify: the download is not Pi-Bolt's. Nothing was installed."
+		SIGNED=1
+		return 0
+	fi
+	if [ "${PIBOLT_UNVERIFIED:-0}" != 1 ]; then
+		if [ "$(uname -s)" = Darwin ]; then how='brew install openssl@3'; else how='OpenSSL 3, or openssh-client (OpenSSH 8.1 or later), from your package manager'; fi
+		fail "nothing here can check the release's signature (OpenSSL 3, or OpenSSH 8.1 for releases after 0.9.9). Install $how and run the installer again, or set PIBOLT_UNVERIFIED=1 to install with the checksum alone. Nothing was installed."
 	fi
 	NOVERIFY=1
 }
@@ -756,7 +785,7 @@ install_release() {
 	finish_progress
 	printf '  %s%s%s install complete %s(%s, %s MB from %s%s)%s\n' "$green" "$CHECK" "$reset" "$dim" "$PLATFORM-$VARIANT" "$(mb "${total:-0}")" "$FROM" "${SIGNED:+, signature verified}" "$reset"
 	[ -z "$UNSIGNED" ] || printf '  %snote: this release is not signed (it is from before Pi-Bolt signed releases); its checksum was verified%s\n' "$dim" "$reset"
-	[ -z "$NOVERIFY" ] || printf '  %snote: there is no OpenSSL 3 here to check the release'"'"'s signature (install it to have it checked); its checksum was verified%s\n' "$dim" "$reset"
+	[ -z "$NOVERIFY" ] || printf '  %snote: the release'"'"'s signature was not checked (PIBOLT_UNVERIFIED=1); its checksum was verified%s\n' "$dim" "$reset"
 }
 
 uninstall() {
@@ -782,6 +811,29 @@ read_key() {
 	key=$(dd bs=1 count=1 2>/dev/null </dev/tty || true)
 	[ -n "$old" ] && stty "$old" </dev/tty 2>/dev/null
 	printf '%s' "$key"
+}
+
+# drop_typeahead: drops what was typed at the terminal before a question. read_key takes one key, so the Enter typed after
+# it stays in the terminal's input, and would answer the next question with its default (#103).
+drop_typeahead() {
+	old=$(stty -g </dev/tty 2>/dev/null || true)
+	if [ -n "$old" ] && stty -icanon min 0 time 0 </dev/tty 2>/dev/null; then
+		# (With min 0 and time 0 a read returns at once, with nothing once the input is empty.)
+		drained=0
+		while [ "$drained" -lt 64 ] && [ "$(dd bs=256 count=1 2>/dev/null </dev/tty | wc -c | tr -d ' ')" != 0 ]; do
+			drained=$((drained + 1))
+		done
+		stty "$old" </dev/tty 2>/dev/null || true
+	fi
+}
+
+# ask FORMAT [ARG...]: asks a question (printf arguments) and sets `answer` to the line typed after it. What was typed before
+# is dropped before the question is shown, so an answer typed as soon as it appears is kept.
+ask() {
+	drop_typeahead
+	# shellcheck disable=SC2059
+	printf "$@"
+	answer=$(head -n 1 </dev/tty || true)
 }
 
 choose_action() {
@@ -862,8 +914,7 @@ path_hint() {
 		return 0
 	fi
 	if has_tty; then
-		printf 'Add it to your PATH in %s now? [Y/n] ' "$(tilde "$config")"
-		answer=$(head -n 1 </dev/tty || true)
+		ask 'Add it to your PATH in %s now? [Y/n] ' "$(tilde "$config")"
 		case "$answer" in
 		n | N | no | NO) ;;
 		*)
@@ -954,8 +1005,7 @@ offer_extensions() {
 			case " $wanted " in *" $package "*) printf '  %s%-22s%s %s\n' "$cyan" "$package" "$reset" "${rest%:*}" ;; esac
 		done
 		IFS=$old_ifs
-		printf '\nInstall them? [Y/n] '
-		answer=$(head -n 1 </dev/tty || true)
+		ask '\nInstall them? [Y/n] '
 		case "$answer" in
 		n | N | no | NO)
 			printf '%sYou can install them later with: pi-bolt install --pi-bolt npm:<name>%s\n' "$dim" "$reset"
@@ -993,8 +1043,7 @@ offer_extensions() {
 
 offer_start() {
 	[ -t 1 ] && has_tty && [ "${PIBOLT_NO_START:-0}" != 1 ] || return 0
-	printf '\nStart pi-bolt now? [Y/n] '
-	answer=$(head -n 1 </dev/tty || true)
+	ask '\nStart pi-bolt now? [Y/n] '
 	case "$answer" in
 	n | N | no | NO) return 0 ;;
 	esac
@@ -1033,8 +1082,7 @@ setup_termux() {
 		printf "%sTermux's glibc is needed.%s Pi-Bolt is a glibc program, and Termux runs it with its glibc packages:\n\n" "$bold" "$reset"
 		printf '  pkg install glibc-repo && pkg install glibc\n\n'
 		if has_tty; then
-			printf 'Install them now? [Y/n] '
-			answer=$(head -n 1 </dev/tty || true)
+			ask 'Install them now? [Y/n] '
 			case "$answer" in n | N | no | NO) fail "Pi-Bolt needs Termux's glibc: install it with the command above, then run this again" ;; esac
 		fi
 		# (A package list fetched before glibc-repo was added, or never, does not have it: fetched again first.)
