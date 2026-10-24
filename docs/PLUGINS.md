@@ -84,8 +84,9 @@ pi-bolt compile --off                       # the release's executable again
 ```
 
 `pi-bolt compile` builds your Pi-Bolt again with the extensions installed on this machine compiled in: the agent directory's
-`extensions` folder, the paths in its `extensions` setting, and the packages `pi-bolt install` installed (`--no-packages`
-leaves those out). It needs no checkout of this repository and no tools. It downloads its own release's runtime and compile
+`extensions` folder, the paths in its `extensions` setting, and the packages Pi-Bolt loads: `packages` with `piBolt.packages`
+applied, as `pi-bolt list` shows them, npm packages, git checkouts and local folders alike (`--no-packages` leaves those out).
+It needs no checkout of this repository and no tools. It downloads its own release's runtime and compile
 kit, checks them against the release's signed `SHA256SUMS` as the installer does, and keeps them in `~/.pi-bolt/cache`. A build
 takes about 20 seconds.
 

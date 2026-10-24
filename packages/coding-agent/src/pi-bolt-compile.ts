@@ -29,10 +29,13 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { getAgentDir } from "./config.ts";
 import { type CompiledExtensionSource, extensionFingerprint } from "./core/extensions/compiled.ts";
+import { DefaultPackageManager } from "./core/package-manager.ts";
+import { getPackageIdentity } from "./core/package-source.ts";
+import { SettingsManager } from "./core/settings-manager.ts";
 import { PIBOLT, PIBOLT_RELEASE_KEY, PIBOLT_RELEASES_URL, piBoltInstallDir, piBoltInstallMethod } from "./pi-bolt.ts";
 
 /** What `pi-bolt compile` was asked for, kept in <install>/compile.json for the next update. */
@@ -66,6 +69,86 @@ interface Kit {
 	entries: string[];
 	args: string[];
 	env: Record<string, string>;
+}
+
+/**
+ * A package Pi-Bolt loads, with the extension files Pi loads from it: what gen-plugin-manifest.mjs takes with --packages.
+ * An npm package is fingerprinted by its version; a local folder or a git checkout, which can change without one, by its
+ * files; a local file by itself (core/extensions/compiled.ts).
+ */
+export interface CompilePackage {
+	source: string;
+	kind: "npm" | "git" | "folder" | "file";
+	root: string;
+	entries: string[];
+}
+
+/** The packages a compile takes, as Pi-Bolt loads them (piBolt.packages applied to `packages`). */
+export interface CompilePackages {
+	packages: CompilePackage[];
+	/** Packages Pi-Bolt loads that have nothing to compile in, and why. */
+	passedOver: Array<{ path: string; reason: string }>;
+	/** Packages of Pi's `packages` list that piBolt.packages removes. */
+	removed: string[];
+}
+
+/**
+ * The packages in the agent directory's settings, resolved as `pi-bolt list` and `pi-bolt doctor` resolve them: the
+ * settings manager applies piBolt.packages (additions, `-` removals, replacements) to `packages`, and the package manager
+ * finds each one's folder and the extension files Pi loads from it. A project's settings are not read: what is compiled in
+ * is for every project, as gen-plugin-manifest.mjs reads only the agent directory too. Nothing is installed.
+ */
+export async function resolveCompilePackages(agentDir: string, cwd = process.cwd()): Promise<CompilePackages> {
+	const settingsManager = SettingsManager.create(cwd, agentDir, { projectTrusted: false });
+	const packageManager = new DefaultPackageManager({ cwd, agentDir, settingsManager });
+	const sourceOfEntry = (entry: string | { source: string }) => (typeof entry === "string" ? entry : entry.source);
+	const loaded = settingsManager.getResolvedPackages("global", agentDir).map(sourceOfEntry);
+	const loadedIdentities = new Set(loaded.map((source) => getPackageIdentity(source, agentDir)));
+	const removed = (settingsManager.getGlobalSettings().packages ?? [])
+		.map(sourceOfEntry)
+		.filter((source) => !loadedIdentities.has(getPackageIdentity(source, agentDir)));
+
+	const missing = new Set<string>();
+	const { extensions } = await packageManager.resolve(async (source) => {
+		missing.add(source);
+		return "skip";
+	});
+	const packages: CompilePackage[] = [];
+	const passedOver: CompilePackages["passedOver"] = [];
+	for (const source of loaded) {
+		const identity = getPackageIdentity(source, agentDir);
+		const own = extensions.filter(
+			(resource) =>
+				resource.metadata.origin === "package" &&
+				resource.metadata.scope === "user" &&
+				resource.metadata.source === source,
+		);
+		const entries = own.filter((resource) => resource.enabled).map((resource) => resource.path);
+		if (entries.length === 0) {
+			const installed = !missing.has(source) && packageManager.getInstalledPath(source, "user") !== undefined;
+			passedOver.push({
+				path: source,
+				reason: !installed
+					? identity.startsWith("local:")
+						? "not found"
+						: "not installed, or not the version the settings name"
+					: own.length > 0
+						? "its extensions are turned off in settings"
+						: "no extensions in it",
+			});
+			continue;
+		}
+		const packageRoot = own[0].metadata.packageRoot;
+		const kind = identity.startsWith("npm:")
+			? "npm"
+			: identity.startsWith("git:")
+				? "git"
+				: packageRoot
+					? "folder"
+					: "file";
+		packages.push({ source, kind, root: packageRoot ?? dirname(entries[0]), entries });
+	}
+	return { packages, passedOver, removed };
 }
 
 /** The plan gen-plugin-manifest.mjs prints with --json. */
@@ -224,13 +307,22 @@ function runtimeBun(path: string): string {
 	return bun;
 }
 
-/** How each extension is fingerprinted (core/extensions/compiled.ts), from where the generator found it. */
-function sourceOf(plugin: ManifestPlan["plugins"][number], roots: ManifestPlan["roots"]): CompiledExtensionSource {
+/**
+ * How each extension is fingerprinted (core/extensions/compiled.ts), from where the generator found it. `kinds`: each
+ * package's kind by its folder.
+ */
+function sourceOf(
+	plugin: ManifestPlan["plugins"][number],
+	roots: ManifestPlan["roots"],
+	kinds: ReadonlyMap<string, CompilePackage["kind"]>,
+): CompiledExtensionSource {
 	const root = roots.find((r) => r.stageDir === plugin.stageDir)?.root ?? dirname(plugin.entry);
 	const entry = realpathSync(plugin.entry);
 	let source: Omit<CompiledExtensionSource, "fingerprint">;
 	if (plugin.origin === "package") {
-		source = { name: plugin.name, entry, scope: "package", root };
+		const kind = kinds.get(root) ?? "npm";
+		const scope = kind === "npm" ? "package" : kind === "file" ? "file" : "folder";
+		source = { name: plugin.name, entry, scope, root };
 	} else {
 		const segments = relative(root, plugin.entry).split(sep);
 		if (segments.length > 1) {
@@ -296,11 +388,12 @@ function buildExecutable(
 	stage: string,
 	buildDir: string,
 	log: string,
+	kinds: ReadonlyMap<string, CompilePackage["kind"]>,
 ): void {
 	const build = PIBOLT!;
 	const agent = join(kitDir, kit.agent);
 	const staging = join(agent, ".pibolt-plugins");
-	const sources = Object.fromEntries(plan.plugins.map((plugin) => [plugin.name, sourceOf(plugin, plan.roots)]));
+	const sources = Object.fromEntries(plan.plugins.map((plugin) => [plugin.name, sourceOf(plugin, plan.roots, kinds)]));
 	writeFileSync(join(staging, "sources.json"), `${JSON.stringify(sources, null, "\t")}\n`);
 	writeFileSync(join(staging, "entry.ts"), ENTRY);
 
@@ -420,22 +513,35 @@ async function compile(options: CompileOptions): Promise<void> {
 		rmSync(staging, { recursive: true, force: true });
 		mkdirSync(staging, { recursive: true });
 		const generatorArgs = [join(kitDir, "gen-plugin-manifest.mjs"), "--out", join(staging, "src"), "--json"];
-		generatorArgs.push("--agent-dir", getAgentDir());
+		const agentDir = getAgentDir();
+		generatorArgs.push("--agent-dir", agentDir);
 		if (options.only?.length) generatorArgs.push("--only", options.only.join(","));
 		if (options.exclude?.length) generatorArgs.push("--exclude", options.exclude.join(","));
+		// The packages as Pi-Bolt loads them, not the `packages` setting the generator reads by itself.
+		const packages: CompilePackages = options.noPackages
+			? { packages: [], passedOver: [], removed: [] }
+			: await resolveCompilePackages(agentDir);
 		if (options.noPackages) generatorArgs.push("--no-packages");
+		else {
+			const list = join(work, "packages.json");
+			writeFileSync(list, JSON.stringify(packages.packages));
+			generatorArgs.push("--packages", list);
+		}
+		const kinds = new Map(packages.packages.map((pkg) => [resolve(pkg.root), pkg.kind]));
 		const generatorEnv = { ...process.env };
 		delete generatorEnv.BUN_BE_BUN;
 		const generated = run(bun, generatorArgs, { env: generatorEnv });
 		if (generated.status !== 0) throw new CompileError(generated.stderr.trim().replace(/^error: /, ""));
 		const plan = JSON.parse(generated.stdout) as ManifestPlan;
 		for (const plugin of plan.plugins) process.stderr.write(`  ${plugin.name} ${chalk.dim(`(${plugin.origin})`)}\n`);
-		for (const entry of plan.skipped)
+		for (const entry of [...packages.passedOver, ...plan.skipped])
 			process.stderr.write(chalk.dim(`  passed over: ${entry.path}\n    ${entry.reason}\n`));
+		for (const source of packages.removed)
+			process.stderr.write(chalk.dim(`  ${source}: excluded by piBolt.packages\n`));
 
 		const buildDir = where?.buildDir ?? dirname(process.execPath);
 		const stage = join(work, basename(buildDir));
-		buildExecutable(kit, kitDir, bun, plan, stage, buildDir, join(workParent, "compile.log"));
+		buildExecutable(kit, kitDir, bun, plan, stage, buildDir, join(workParent, "compile.log"), kinds);
 
 		const names = plan.plugins.map((plugin) => plugin.name);
 		if (options.out) {

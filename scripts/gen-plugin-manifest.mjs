@@ -19,6 +19,8 @@
  *   --only a,b          only these extensions, by the name this prints (repeatable)
  *   --exclude a,b       every extension except these (repeatable)
  *   --no-packages       leave out the packages `pi install` installed
+ *   --packages FILE     the packages to compile in, instead of the `packages` setting's npm: packages: a JSON list of
+ *                       { source, root, entries }, as `pi-bolt compile` resolves them (piBolt.packages applied)
  *   --json              print the plan as JSON instead of a summary
  *
  * The agent directory's `settings.json` supplies the `extensions` paths and the `packages` list. A project's settings are
@@ -189,6 +191,17 @@ function managedPackageFolder(entry, agentDir) {
 }
 
 /**
+ * The node_modules a package was installed into, where its dependencies are hoisted; undefined for a folder that is not in
+ * one (a local package or a git checkout), whose own node_modules is copied with it.
+ */
+function enclosingNodeModules(dir) {
+	for (let current = resolve(dir); dirname(current) !== current; current = dirname(current)) {
+		if (basename(dirname(current)) === "node_modules") return dirname(current);
+	}
+	return undefined;
+}
+
+/**
  * Whether a package's entry is the Bun build that loads its real code at run time. Those ship `dist-bun/index.js` beside
  * a `dist-bun/core.cjs`, and the entry requires the core by a path it works out as it runs, which a compiled executable
  * has no file for. Compiling one in means unwrapping the core and handing it Pi's modules, which is a job per package:
@@ -346,21 +359,45 @@ export function planPlugins(options) {
 
 	const skipped = [...passedOver, ...roots.flatMap((root) => describeSkipped(root.root, seen))];
 
-	const hoisted = join(agentDir, "npm", "node_modules");
-	for (const source of packages) {
-		const resolved = managedPackageFolder(source, agentDir);
-		if (resolved.skip) {
-			skipped.push({ path: source, reason: resolved.skip });
-			continue;
+	// Each package: its folder, the name it is known by, and its entries. `pi-bolt compile` gives the packages Pi-Bolt loads
+	// (`options.packages`: piBolt.packages applied, each with its entries as Pi resolves them); without it, the npm: packages
+	// of the `packages` setting.
+	const installed = [];
+	if (options.packages && !options.noPackages) {
+		for (const pkg of options.packages) {
+			const name = readJson(join(pkg.root, "package.json"))?.name;
+			installed.push({
+				path: pkg.source,
+				name: typeof name === "string" && name ? name : basename(pkg.root),
+				dir: pkg.root,
+				declared: pkg.entries,
+			});
 		}
-		const declared = resolveExtensionEntries(resolved.dir)?.flatMap(expandPackageEntry);
+	} else {
+		for (const source of packages) {
+			const resolved = managedPackageFolder(source, agentDir);
+			if (resolved.skip) {
+				skipped.push({ path: source, reason: resolved.skip });
+				continue;
+			}
+			installed.push({
+				path: resolved.dir,
+				name: resolved.name,
+				dir: resolved.dir,
+				declared: resolveExtensionEntries(resolved.dir)?.flatMap(expandPackageEntry),
+			});
+		}
+	}
+
+	for (const resolved of installed) {
+		const declared = resolved.declared;
 		if (!declared?.length) {
-			skipped.push({ path: resolved.dir, reason: `${resolved.name}: no entry point and no "pi.extensions"` });
+			skipped.push({ path: resolved.path, reason: `${resolved.name}: no entry point and no "pi.extensions"` });
 			continue;
 		}
 		if (declared.some(needsVendoring)) {
 			skipped.push({
-				path: resolved.dir,
+				path: resolved.path,
 				reason: `${resolved.name}: a Bun build that loads core.cjs at run time, which needs vendoring per package (plugins/opensec/)`,
 			});
 			continue;
@@ -393,7 +430,8 @@ export function planPlugins(options) {
 	const usedRoots = roots.filter((root) => used.has(root.stageDir));
 	const dependencies = new Map();
 	for (const root of usedRoots) {
-		if (root.origin !== "package") continue;
+		const hoisted = root.origin === "package" ? enclosingNodeModules(root.root) : undefined;
+		if (!hoisted) continue;
 		for (const [name, from] of dependencyClosure(root.root, hoisted)) {
 			if (!dependencies.has(name)) dependencies.set(name, from);
 		}
@@ -790,11 +828,39 @@ const HELP = `Usage: scripts/gen-plugin-manifest.mjs --out DIR [options]
   --only a,b          only these extensions, by the name this prints (repeatable)
   --exclude a,b       every extension except these (repeatable)
   --no-packages       leave out the packages "pi install" installed
+  --packages FILE     these packages (a JSON list of { source, root, entries }) instead of the "packages" setting's
   --json              print the plan as JSON
 `;
 
+/** The list --packages names: each package's source, folder, and entry files. */
+function readPackageList(file) {
+	let list;
+	try {
+		list = JSON.parse(readFileSync(file, "utf8"));
+	} catch (error) {
+		die(`--packages ${file}: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	const valid = (pkg) =>
+		pkg &&
+		typeof pkg.source === "string" &&
+		typeof pkg.root === "string" &&
+		Array.isArray(pkg.entries) &&
+		pkg.entries.every((entry) => typeof entry === "string");
+	if (!Array.isArray(list) || !list.every(valid)) die(`--packages ${file}: not a list of { source, root, entries }`);
+	return list;
+}
+
 function parseArgs(argv) {
-	const options = { out: "", agentDir: "", cwd: "", only: [], exclude: [], noPackages: false, json: false };
+	const options = {
+		out: "",
+		agentDir: "",
+		cwd: "",
+		only: [],
+		exclude: [],
+		noPackages: false,
+		packages: undefined,
+		json: false,
+	};
 	let index = 0;
 	while (index < argv.length) {
 		const arg = argv[index];
@@ -812,6 +878,7 @@ function parseArgs(argv) {
 			case "--only": options.only.push(...needsValue().split(",").map((n) => n.trim()).filter(Boolean)); break;
 			case "--exclude": options.exclude.push(...needsValue().split(",").map((n) => n.trim()).filter(Boolean)); break;
 			case "--no-packages": options.noPackages = true; break;
+			case "--packages": options.packages = readPackageList(needsValue()); break;
 			case "--json": options.json = true; break;
 			case "-h":
 			case "--help": process.stdout.write(HELP); process.exit(0); break;

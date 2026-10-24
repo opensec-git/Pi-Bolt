@@ -314,6 +314,82 @@ describe("packages installed with pi install", () => {
 	});
 });
 
+describe("the packages pi-bolt compile gives it (--packages)", () => {
+	it("takes them instead of the packages setting, local folders too, each with the entries given (#108)", () => {
+		// The settings name npm:pi-web-access; piBolt.packages removed it and added these, which pi-bolt compile resolved.
+		const agentDir = agent({ packages: ["npm:pi-web-access"] });
+		installPackage(agentDir, "pi-web-access", { pi: { extensions: ["./index.js"] } }, ["index.js"]);
+		const fff = installPackage(agentDir, "opensec-pi-fff", { dependencies: { direct: "1" } }, ["src/index.ts"]);
+		installPackage(agentDir, "direct", {}, ["index.js"]);
+		const bundle = join(agentDir, "pi-bolt-bundles", "pi-bolt-web-access");
+		write(join(bundle, "package.json"), JSON.stringify({ name: "pi-bolt-web-access", dependencies: { own: "1" } }));
+		write(join(bundle, "extensions", "a.ts"));
+		write(join(bundle, "node_modules", "own", "index.js"));
+		const bare = join(agentDir, "pi-bolt-bundles", "no-manifest");
+		write(join(bare, "index.ts"));
+
+		const plan = planPlugins({
+			agentDir,
+			packages: [
+				{ source: "npm:opensec-pi-fff@0.11.0", root: fff, entries: [join(fff, "src", "index.ts")] },
+				{ source: "pi-bolt-bundles/pi-bolt-web-access", root: bundle, entries: [join(bundle, "extensions", "a.ts")] },
+				{ source: "pi-bolt-bundles/no-manifest", root: bare, entries: [join(bare, "index.ts")] },
+			],
+		});
+		assert.deepEqual(
+			plan.plugins.map((plugin) => [plugin.name, plugin.origin, plugin.importPath]),
+			[
+				["opensec-pi-fff", "package", "./package-opensec-pi-fff/src/index.ts"],
+				["pi-bolt-web-access", "package", "./package-pi-bolt-web-access/extensions/a.ts"],
+				["no-manifest", "package", "./package-no-manifest/index.ts"],
+			],
+		);
+		// An npm package's dependencies are hoisted beside it; a local folder's are in its own node_modules, copied with it.
+		assert.deepEqual(
+			plan.dependencies.map((dependency) => dependency.name),
+			["direct"],
+		);
+		const out = join(scratch(), "folder");
+		writePluginFolder(plan, out);
+		assert.ok(readFileSync(join(out, "package-pi-bolt-web-access", "node_modules", "own", "index.js"), "utf8"));
+	});
+
+	it("still passes over a package that needs vendoring, by its source", () => {
+		const agentDir = agent();
+		const dir = installPackage(agentDir, "opensec-pi-todo", {}, ["dist-bun/index.js", "dist-bun/core.cjs"]);
+
+		const plan = planPlugins({
+			agentDir,
+			packages: [{ source: "npm:opensec-pi-todo@2.13.1", root: dir, entries: [join(dir, "dist-bun", "index.js")] }],
+		});
+		assert.deepEqual(plan.plugins, []);
+		assert.match(plan.skipped.find((entry) => entry.path === "npm:opensec-pi-todo@2.13.1").reason, /vendoring/);
+	});
+
+	it("reads them from a file given to the command", () => {
+		const agentDir = agent();
+		const bundle = join(agentDir, "pi-bolt-bundles", "b");
+		write(join(bundle, "index.ts"));
+		const list = join(scratch(), "packages.json");
+		writeFileSync(list, JSON.stringify([{ source: "pi-bolt-bundles/b", root: bundle, entries: [join(bundle, "index.ts")] }]));
+		const out = join(scratch(), "out");
+		const script = fileURLToPath(new URL("./gen-plugin-manifest.mjs", import.meta.url));
+		const run = (file) =>
+			spawnSync(process.execPath, [script, "--out", out, "--agent-dir", agentDir, "--packages", file, "--json"], {
+				encoding: "utf8",
+			});
+
+		const result = run(list);
+		assert.equal(result.status, 0, result.stderr);
+		assert.deepEqual(
+			JSON.parse(result.stdout).plugins.map((plugin) => plugin.name),
+			["b"],
+		);
+		writeFileSync(list, JSON.stringify([{ source: "x" }]));
+		assert.match(run(list).stderr, /not a list of \{ source, root, entries \}/);
+	});
+});
+
 describe("what it passes over", () => {
 	it("reports an empty folder, shared code, and a file that is not .ts or .js", () => {
 		const agentDir = agent();
