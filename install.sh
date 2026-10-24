@@ -813,6 +813,21 @@ read_key() {
 	printf '%s' "$key"
 }
 
+# read_answer: a line typed at the terminal, once what was typed before the question is dropped. read_key takes one key, so
+# the Enter typed after it stays in the terminal's input, and would answer the next question with its default (#103).
+read_answer() {
+	old=$(stty -g </dev/tty 2>/dev/null || true)
+	if [ -n "$old" ] && stty -icanon min 0 time 0 </dev/tty 2>/dev/null; then
+		# (With min 0 and time 0 a read returns at once, with nothing once the input is empty.)
+		drained=0
+		while [ "$drained" -lt 64 ] && [ "$(dd bs=256 count=1 2>/dev/null </dev/tty | wc -c | tr -d ' ')" != 0 ]; do
+			drained=$((drained + 1))
+		done
+		stty "$old" </dev/tty 2>/dev/null || true
+	fi
+	head -n 1 </dev/tty || true
+}
+
 choose_action() {
 	if [ -n "$EXISTING" ]; then default=reinstall; else default=install; fi
 	if [ -n "$EXISTING" ]; then
@@ -892,7 +907,7 @@ path_hint() {
 	fi
 	if has_tty; then
 		printf 'Add it to your PATH in %s now? [Y/n] ' "$(tilde "$config")"
-		answer=$(head -n 1 </dev/tty || true)
+		answer=$(read_answer)
 		case "$answer" in
 		n | N | no | NO) ;;
 		*)
@@ -984,7 +999,7 @@ offer_extensions() {
 		done
 		IFS=$old_ifs
 		printf '\nInstall them? [Y/n] '
-		answer=$(head -n 1 </dev/tty || true)
+		answer=$(read_answer)
 		case "$answer" in
 		n | N | no | NO)
 			printf '%sYou can install them later with: pi-bolt install --pi-bolt npm:<name>%s\n' "$dim" "$reset"
@@ -1023,7 +1038,7 @@ offer_extensions() {
 offer_start() {
 	[ -t 1 ] && has_tty && [ "${PIBOLT_NO_START:-0}" != 1 ] || return 0
 	printf '\nStart pi-bolt now? [Y/n] '
-	answer=$(head -n 1 </dev/tty || true)
+	answer=$(read_answer)
 	case "$answer" in
 	n | N | no | NO) return 0 ;;
 	esac
@@ -1063,7 +1078,7 @@ setup_termux() {
 		printf '  pkg install glibc-repo && pkg install glibc\n\n'
 		if has_tty; then
 			printf 'Install them now? [Y/n] '
-			answer=$(head -n 1 </dev/tty || true)
+			answer=$(read_answer)
 			case "$answer" in n | N | no | NO) fail "Pi-Bolt needs Termux's glibc: install it with the command above, then run this again" ;; esac
 		fi
 		# (A package list fetched before glibc-repo was added, or never, does not have it: fetched again first.)
