@@ -16914,3 +16914,63 @@ index d5fb4777..232e2d56 100644
 -- 
 2.54.0 (Apple Git-157)
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Sun, 25 Oct 2026 03:49:39 +0530
+Subject: [PATCH] Heap: on Linux, a static heap's first collection comes after
+ 16 MB, not after the graph's bytes
+
+The main VM's first collection waits for as many bytes as loading the module graph reads (8-128 MB). With a static
+heap the modules are not loaded from those bytes; macOS caps the budget at 12 MB for that reason, Linux did not, and
+Pi's graph made it 24.6 MB there: no collection before the first prompt, and all the garbage of starting plus a
+prompt or two resident at once (BUN_JSC_logGC: first collection at 24.7 MB allocated, during the first prompt).
+Since the heap does not size itself below its largest limit (Heap::updateAllocationLimits keeps the previous
+maximum), that budget also stayed the floor of the later cycles.
+
+Linux now caps it at 16 MB. Measured on GitHub's ubuntu-24.04 x64 with Pi-Bolt 1.0.2, pinned to one CPU, with the
+allowance of every cycle capped at 16 MB (BUN_JSC_gcMaxHeapSize; this caps the later cycles too, so the cost is an
+upper bound), 15 interleaved runs and a second copy of the release as the noise floor:
+- TUI session, 5 prompts: peak own memory 32 -> 29 MB (copy: 33), CPU 155 -> 151 ms (copy: 152);
+- `pi -p`: CPU 51 -> 52 ms (copy: 50), peak own memory 20 MB on all: it allocates less than 16 MB and does not collect;
+- 60,000-character answer: medians of five rounds 2.25 s against 2.15 and 2.40 s;
+- 40 prompts: CPU per prompt 47.1 / 45.1 against 42.7 / 43.8 and 44.3 / 43.2 ms (the cap holds the later cycles of
+  a large heap at 16 MB; this change does not, they size themselves from the live heap as before).
+At 12 MB, `pi -p` collected once (CPU +10%): hence 16.
+---
+ src/jsc/VirtualMachine.rs | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/src/jsc/VirtualMachine.rs b/src/jsc/VirtualMachine.rs
+index 8c4730aa..86887891 100644
+--- a/src/jsc/VirtualMachine.rs
++++ b/src/jsc/VirtualMachine.rs
+@@ -1463,14 +1463,23 @@ impl VirtualMachine {
+         // it a third as much (Pi: 7 of 21 MB); a budget of all those bytes only lets the heap grow larger before its first
+         // collection. Measured on Pi (budgets of 12, 16, 20 and 24 MB): at 12, a sixth less memory at the peak of a session
+         // and a few percent less CPU over it, for two small collections while it starts (2-3 ms of CPU, the same time to
+-        // the first frame). Not on Windows: measured there (2026-10-09, Pi, interactive and pauses.py), it saved 10 MB at the
+-        // peak of a TUI session but made twice the collections while a long answer streamed, with 40% more CPU and longer pauses.
+-        #[cfg(target_os = "macos")]
++        // the first frame). Linux: the same at 16 MB (Pi's graph made it 24.6 MB, so the first collection came during the
++        // first prompt). Measured on GitHub's ubuntu-24.04 x64, pinned to one CPU, with the collection allowance capped at 16 MB
++        // (gcMaxHeapSize, which caps every cycle, so an upper bound of the cost): a tenth less memory at the peak of a TUI
++        // session (own 32 -> 29 MB), the same CPU for it and for `pi -p` (which allocates less than 16 MB and still does not
++        // collect), a 60,000-character answer within the noise (medians of five rounds 2.25 s against 2.15 and 2.40 s); at
++        // 12 MB `pi -p` collected once more, for 10% more CPU. Not on Windows: measured there (2026-10-09, Pi, interactive and
++        // pauses.py), it saved 10 MB at the peak of a TUI session but made twice the collections while a long answer streamed,
++        // with 40% more CPU and longer pauses.
++        #[cfg(any(target_os = "macos", target_os = "linux"))]
+         {
+             unsafe extern "C" {
+                 safe fn Bun__AOTImage__isMapped() -> bool;
+             }
++            #[cfg(target_os = "macos")]
+             const STATIC_HEAP_BUDGET: usize = 12 * 1024 * 1024;
++            #[cfg(target_os = "linux")]
++            const STATIC_HEAP_BUDGET: usize = 16 * 1024 * 1024;
+             if Bun__AOTImage__isMapped() {
+                 budget = budget.min(STATIC_HEAP_BUDGET);
+             }
+-- 
+2.54.0 (Apple Git-157)
+
