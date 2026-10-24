@@ -74,10 +74,10 @@ const subagents: InlineExtension = {
 			import("typebox"),
 			import("typebox/value"),
 		]);
-		provideHostModules("opensec-pi-subagents@0.20.0", {
+		provideHostModules("opensec-pi-subagents@0.20.9", {
 			"@earendil-works/pi-coding-agent": piCodingAgent,
 			"@earendil-works/pi-tui": piTui,
-			"@sinclair/typebox": typebox,
+			typebox: typebox,
 			"typebox/value": typeboxValue,
 		});
 		const core = require("./vendor/opensec-pi-subagents.core.cjs");
