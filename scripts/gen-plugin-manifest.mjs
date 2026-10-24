@@ -336,8 +336,18 @@ export function planPlugins(options) {
 			skipped.push({ path: source, reason: resolved.skip });
 			continue;
 		}
-		const declared = resolveExtensionEntries(resolved.dir);
-		if (!declared) {
+		// Package resources may be directories, unlike the concrete imports the bundler needs. Expand them as Pi's
+		// package manager does: a directory's manifest or index wins, otherwise discover its extension entries.
+		const declared = [
+			...new Set(
+				(resolveExtensionEntries(resolved.dir) ?? []).flatMap((entry) =>
+					statSync(entry).isDirectory()
+						? resolveExtensionEntries(entry) ?? discoverExtensionsInDir(entry)
+						: [entry],
+				),
+			),
+		];
+		if (declared.length === 0) {
 			skipped.push({ path: resolved.dir, reason: `${resolved.name}: no entry point and no "pi.extensions"` });
 			continue;
 		}
