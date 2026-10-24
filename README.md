@@ -8,22 +8,30 @@
 
 <p align="center">
   <b>The <a href="https://github.com/earendil-works/pi">Pi</a> coding agent, compiled ahead of time to native code.</b><br>
-  One executable for Linux x86-64 and ARM64, macOS on Apple silicon and Windows x64.<br>
+  One executable for Linux x86-64 and ARM64, Android (Termux), macOS on Apple silicon and Windows x64.<br>
   No JIT, no Node.js or Bun required.
 </p>
 
 <p align="center">
-  <a href="https://github.com/opensec-git/Pi-Bolt/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/opensec-git/Pi-Bolt/ci.yml?branch=pi-bolt&event=push&style=flat-square&label=ci" /></a>
-  <a href="https://github.com/opensec-git/Pi-Bolt/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/opensec-git/Pi-Bolt?style=flat-square&color=2a78d6" /></a>
-  <a href="https://www.npmjs.com/package/pi-bolt"><img alt="npm" src="https://img.shields.io/npm/v/pi-bolt?style=flat-square&logo=npm&logoColor=white&color=2a78d6" /></a>
-  <a href="https://www.npmjs.com/package/pi-bolt"><img alt="npm downloads" src="https://img.shields.io/npm/dm/pi-bolt?style=flat-square&color=2a78d6" /></a>
-  <a href="https://github.com/opensec-git/Pi-Bolt/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/opensec-git/Pi-Bolt?style=flat-square&color=f0b03a" /></a>
-  <a href="sources.json"><img alt="The Pi release Pi-Bolt is built on" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fopensec-git%2FPi-Bolt%2Fpi-bolt%2Fsources.json&query=%24.pi.tag&label=pi&color=f0b03a&style=flat-square" /></a>
-  <br>
-  <a href="#requirements"><img alt="Linux x86-64" src="https://img.shields.io/badge/linux-x86--64-444?style=flat-square&logo=linux&logoColor=white" /></a>
-  <a href="#requirements"><img alt="macOS Apple silicon" src="https://img.shields.io/badge/macOS-Apple%20silicon-444?style=flat-square&logo=apple&logoColor=white" /></a>
-  <a href="#requirements"><img alt="Windows x64" src="https://img.shields.io/badge/windows-x64-444?style=flat-square&logo=windows&logoColor=white" /></a>
+  <a href="https://github.com/opensec-git/Pi-Bolt/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/opensec-git/Pi-Bolt/ci.yml?branch=pi-bolt&event=push&style=flat-square&label=ci&logo=githubactions&logoColor=white" /></a>
+  <a href="https://github.com/opensec-git/Pi-Bolt/releases/latest"><img alt="Latest release" src="https://img.shields.io/npm/v/pi-bolt?style=flat-square&label=release&color=2a78d6" /></a>
+  <a href="https://www.npmjs.com/package/pi-bolt"><img alt="npm downloads" src="https://img.shields.io/npm/dm/pi-bolt?style=flat-square&logo=npm&logoColor=white&label=downloads&color=2a78d6" /></a>
+  <a href="https://github.com/opensec-git/Pi-Bolt/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/opensec-git/Pi-Bolt?style=flat-square&logo=github&logoColor=white&color=f0b03a" /></a>
+  <a href="sources.json"><img alt="The Pi release Pi-Bolt is built on" src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fopensec-git%2FPi-Bolt%2Fpi-bolt%2Fsources.json&query=%24.pi.tag&label=built%20on%20pi&color=f0b03a&style=flat-square" /></a>
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-1baf7a?style=flat-square" /></a>
+  <br>
+  <a href="#requirements"><img alt="Linux x86-64" src="https://img.shields.io/badge/Linux-x86--64-FCC624?style=flat-square&logo=linux&logoColor=white" /></a>
+  <a href="#requirements"><img alt="Linux ARM64" src="https://img.shields.io/badge/Linux-ARM64-FCC624?style=flat-square&logo=linux&logoColor=white" /></a>
+  <a href="#requirements"><img alt="macOS on Apple silicon" src="https://img.shields.io/badge/macOS-Apple%20silicon-000000?style=flat-square&logo=apple&logoColor=white" /></a>
+  <a href="#requirements"><img alt="Windows x64" src="https://img.shields.io/badge/Windows-x64-0078D4?style=flat-square&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0wIDBoMTEuNHYxMS40SDB6TTEyLjYgMEgyNHYxMS40SDEyLjZ6TTAgMTIuNmgxMS40VjI0SDB6TTEyLjYgMTIuNkgyNFYyNEgxMi42eiIvPjwvc3ZnPg%3D%3D" /></a>
+  <a href="#android-termux"><img alt="Android in Termux" src="https://img.shields.io/badge/Android-ARM64%20%C2%B7%20Termux-3DDC84?style=flat-square&logo=android&logoColor=white" /></a>
+  <br>
+  <a href="#quick-start"><img alt="Install with curl or PowerShell" src="https://img.shields.io/badge/install-curl%20%C2%B7%20PowerShell-555?style=flat-square&logo=gnubash&logoColor=white" /></a>
+  <a href="#quick-start"><img alt="Homebrew" src="https://img.shields.io/badge/Homebrew-opensec--git%2Ftap-FBB040?style=flat-square&logo=homebrew&logoColor=black" /></a>
+  <a href="#quick-start"><img alt="Scoop" src="https://img.shields.io/badge/Scoop-opensec--git-3d8fd1?style=flat-square&logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI%2BPHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0wIDBoMTEuNHYxMS40SDB6TTEyLjYgMEgyNHYxMS40SDEyLjZ6TTAgMTIuNmgxMS40VjI0SDB6TTEyLjYgMTIuNkgyNFYyNEgxMi42eiIvPjwvc3ZnPg%3D%3D" /></a>
+  <a href="#quick-start"><img alt="npm" src="https://img.shields.io/badge/npm-pi--bolt-CB3837?style=flat-square&logo=npm&logoColor=white" /></a>
+  <a href="#quick-start"><img alt="mise" src="https://img.shields.io/badge/mise-github%20backend-6c47ff?style=flat-square" /></a>
+  <a href="https://aur.archlinux.org/packages/pi-bolt-avx2-bin-release-git"><img alt="AUR" src="https://img.shields.io/badge/AUR-pi--bolt-1793d1?style=flat-square&logo=archlinux&logoColor=white" /></a>
 </p>
 
 <p align="center">
