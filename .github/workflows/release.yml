@@ -166,6 +166,7 @@ jobs:
             if [ -n "$verified" ]; then
               echo "- $name \`$sum\`: attested by ${verified%%@*} from ${verified#*@}" | tee -a "$GITHUB_STEP_SUMMARY"
             elif printf '%s\n' "$unattested" | grep -qxF "$sum  $name"; then
+              echo "::group::gh attestation verify $name"; cat "$RUNNER_TEMP/attestation.log"; echo "::endgroup::"
               echo "::warning title=Runtime without attestation::$name ($sum) has no attestation. It is accepted because release.yml lists it as released before attestations existed."
               echo "- $name \`$sum\`: no attestation, accepted as listed (released before attestations existed)" >> "$GITHUB_STEP_SUMMARY"
             else
