@@ -1710,9 +1710,10 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	 * its viewport changes, though all but a few only move. Scrolling those rows in the terminal and drawing what differs
 	 * afterwards writes a fraction of what drawing every row does: less for the terminal to parse, and for a multiplexer
 	 * (tmux, zmx) or an ssh connection between Pi and the screen to carry and draw again. Returns undefined when it would
-	 * not save rows. PI_TUI_SCROLL_ROWS=0 turns it off.
+	 * not save rows. PI_TUI_SCROLL_ROWS=0 turns it off. `images`: whether either frame has a row that isImageLine() (rows with
+	 * images are drawn row by row); when neither has one, no row is looked at for one.
 	 */
-	private findMovedRows(screen: readonly string[], height: number): MovedRows | undefined {
+	private findMovedRows(screen: readonly string[], height: number, images: boolean): MovedRows | undefined {
 		const previous = this.previousScreen;
 		let top = 0;
 		while (top < height && screen[top] === previous[top]) top++;
@@ -1726,7 +1727,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			if (line === previous[row]) continue;
 			changed++;
 			// Images are placed and deleted by their own sequences: frames with one are drawn row by row.
-			if (isImageLine(line) || isImageLine(previous[row] ?? "")) return undefined;
+			if (images && (isImageLine(line) || isImageLine(previous[row] ?? ""))) return undefined;
 		}
 		if (changed <= MIN_ROWS_SAVED_BY_SCROLLING) return undefined;
 
@@ -1750,8 +1751,10 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			}
 		}
 		if (changed - (span - best) < MIN_ROWS_SAVED_BY_SCROLLING) return undefined;
-		for (let row = top; row <= bottom; row++) {
-			if (isImageLine(previous[row] ?? "")) return undefined;
+		if (images) {
+			for (let row = top; row <= bottom; row++) {
+				if (isImageLine(previous[row] ?? "")) return undefined;
+			}
 		}
 		return { top, bottom, up };
 	}
@@ -1871,7 +1874,9 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			const moved =
 				fullRedraw || redrawImages || process.env.PI_TUI_SCROLL_ROWS === "0"
 					? undefined
-					: this.findMovedRows(screen, height);
+					: // (A row of the frame before is an image row exactly when it is in previousImageRows: the set was made of the
+						// finished rows that are, as imageRows is made now.)
+						this.findMovedRows(screen, height, imageRows.size > 0 || previousImageRows.size > 0);
 			if (moved) {
 				buffer += `\x1b[${moved.top + 1};${moved.bottom + 1}r`;
 				buffer +=

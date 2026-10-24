@@ -296,12 +296,12 @@ export class FooterComponent implements Component {
 	}
 
 	/**
-	 * Drops the lines render() keeps. (Not needed for what they show: they are kept with everything they were drawn from,
-	 * and drawn again when any of it changes. The git branch is cached and invalidated by the provider.)
+	 * Keeps the lines render() keeps: they are kept with everything they are drawn from (FooterInputs, the theme instance
+	 * among them, whose colors do not change), and drawn again when any of it changes. Interactive mode invalidates the
+	 * footer on every agent event, and while a reply streams in that is every chunk: the footer was drawn again for each.
+	 * (The git branch is cached and invalidated by the provider.)
 	 */
-	invalidate(): void {
-		this.rendered = undefined;
-	}
+	invalidate(): void {}
 
 	/**
 	 * Clean up resources.

@@ -1,6 +1,7 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
 import { Text } from "../src/components/text.ts";
+import { isImageLine } from "../src/terminal-image.ts";
 import { TuiAltScreen } from "../src/tui-alt-screen.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
@@ -136,5 +137,38 @@ describe("TuiAltScreen: rows that moved are scrolled", () => {
 			scrolled += terminal.scrolled;
 		}
 		assert.ok(scrolled > 50, `frames were scrolled (${scrolled})`);
+	});
+
+	// Rows of either frame are looked at for images only when imageRows says one has some: imageRows must hold exactly the
+	// rows of the frame drawn that isImageLine() takes for images.
+	it("keeps the image rows of the frame drawn", async () => {
+		let withImages = 0;
+		for (let seed = 1; seed <= 6; seed++) {
+			const next = random(seed);
+			const terminal = new CountingTerminal(50, 10);
+			const tui = new TuiAltScreen(terminal);
+			const lines = Array.from({ length: 20 }, (_, index) => `line ${index}`);
+			const text = new Text(lines.join("\n"), 0, 0);
+			tui.addChild(text);
+			tui.start();
+			await terminal.waitForRender();
+			for (let step = 0; step < 50; step++) {
+				const action = next();
+				if (action < 0.4) lines.push(`added ${step}`);
+				else if (action < 0.6) lines.push(`\x1b_Ga=p,i=${1 + Math.floor(next() * 3)},q=2;\x1b\\image ${step}`);
+				else if (action < 0.75) lines.push(`\x1b]1337;File=inline=1:AAAA\x07 ${step}`);
+				else if (action < 0.9 && lines.length > 0) lines.splice(Math.floor(next() * lines.length), 1);
+				else terminal.sendInput(next() < 0.5 ? "\x1b[<64;1;1M" : "\x1b[<65;1;1M");
+				text.setText(lines.join("\n"));
+				tui.requestRender();
+				await terminal.waitForRender();
+				const state = tui as unknown as { imageRows: Set<string>; previousScreen: string[] };
+				const expected = new Set(state.previousScreen.filter((row) => isImageLine(row)));
+				assert.deepStrictEqual(state.imageRows, expected, `seed ${seed}, step ${step}`);
+				if (expected.size > 0) withImages++;
+			}
+			tui.stop();
+		}
+		assert.ok(withImages > 50, `frames had image rows (${withImages})`);
 	});
 });

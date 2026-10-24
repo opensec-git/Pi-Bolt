@@ -43,6 +43,14 @@ interface MarkdownBlock {
 	component: Markdown;
 }
 
+/** A part of what buildContent() adds to the content container (planContent()). */
+type ContentPart =
+	| { kind: "spacer" }
+	| { kind: "text"; text: string }
+	| { kind: "thinking"; runIndex: number; hidden: boolean; text: string }
+	| { kind: "toolCalls"; present: boolean }
+	| { kind: "error"; text: string };
+
 /**
  * Component that renders a complete assistant message
  */
@@ -69,6 +77,11 @@ export class AssistantMessageComponent extends Container {
 	 * invalidate() (theme changes), and while a reply streams, for every block but the one growing.
 	 */
 	private markdownBlocks: MarkdownBlock[] = [];
+	/**
+	 * What the content was last built for while the reply streamed in (buildContent()): the plan's key and the theme. Dropped
+	 * when anything the components were made with may have changed (invalidate() and the setters).
+	 */
+	private built?: { key: string; theme: unknown };
 
 	constructor(
 		message?: AssistantMessage,
@@ -97,6 +110,7 @@ export class AssistantMessageComponent extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		this.built = undefined;
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -116,6 +130,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	setHideThinkingBlock(hide: boolean): void {
+		this.built = undefined;
 		this.hideThinkingBlock = hide;
 		this.thinkingVisibilityOverrides.clear();
 		if (this.lastMessage) {
@@ -124,6 +139,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	setHiddenThinkingLabel(label: string): void {
+		this.built = undefined;
 		this.hiddenThinkingLabel = label;
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
@@ -131,6 +147,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	setOutputPad(padding: number): void {
+		this.built = undefined;
 		this.outputPad = padding;
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
@@ -227,20 +244,19 @@ export class AssistantMessageComponent extends Container {
 		return component;
 	}
 
-	private buildContent(message: AssistantMessage): void {
-		this.contentIsStale = false;
-		const previousBlocks = this.markdownBlocks;
-		this.markdownBlocks = [];
-		// Clear content container
-		this.contentContainer.clear();
-
+	/**
+	 * What buildContent() adds to the content container for `message`, in order. While a reply streams in, a chunk usually
+	 * changes only the texts of its Markdown components: the same plan but for those texts (planKey()).
+	 */
+	private planContent(message: AssistantMessage): ContentPart[] {
+		const parts: ContentPart[] = [];
 		// (/\S/ finds what trim() leaves without copying the text: both take the same characters for white space.)
 		const hasVisibleContent = message.content.some(
 			(c) => (c.type === "text" && /\S/.test(c.text)) || (c.type === "thinking" && /\S/.test(c.thinking)),
 		);
 
 		if (hasVisibleContent) {
-			this.contentContainer.addChild(new Spacer(1));
+			parts.push({ kind: "spacer" });
 		}
 
 		// Render content in order
@@ -250,19 +266,7 @@ export class AssistantMessageComponent extends Container {
 			if (content.type === "text" && content.text.trim()) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				const text = content.text.trim();
-				this.contentContainer.addChild(
-					this.markdownFor(
-						"text",
-						text,
-						previousBlocks,
-						() =>
-							new Markdown(text, this.outputPad, 0, this.markdownTheme, undefined, {
-								transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
-								complete: !this.isStreaming,
-							}),
-					),
-				);
+				parts.push({ kind: "text", text: content.text.trim() });
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
 				for (; i < message.content.length; i++) {
@@ -289,7 +293,98 @@ export class AssistantMessageComponent extends Container {
 
 				const runIndex = thinkingRunIndex++;
 				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
-				const thinkingText = hidden ? "" : thinkingBlocks.join("\n\n");
+				parts.push({ kind: "thinking", runIndex, hidden, text: hidden ? "" : thinkingBlocks.join("\n\n") });
+				if (hasVisibleContentAfter) {
+					parts.push({ kind: "spacer" });
+				}
+			}
+		}
+
+		// Check if incomplete/failed - show after partial content.
+		// For aborted/error tool calls, tool execution components show the error.
+		// Length stops can happen before a tool call is complete, so surface them here too.
+		const hasToolCalls = message.content.some((c) => c.type === "toolCall");
+		parts.push({ kind: "toolCalls", present: hasToolCalls });
+		if (message.stopReason === "length") {
+			parts.push({ kind: "spacer" });
+			parts.push({ kind: "error", text: "Response was truncated before completion." });
+		} else if (!hasToolCalls) {
+			if (message.stopReason === "aborted") {
+				const abortMessage =
+					message.errorMessage && message.errorMessage !== "Request was aborted"
+						? message.errorMessage
+						: "Operation aborted";
+				parts.push({ kind: "spacer" });
+				parts.push({ kind: "error", text: abortMessage });
+			} else if (message.stopReason === "error") {
+				const errorMsg = message.errorMessage || "Unknown error";
+				parts.push({ kind: "spacer" });
+				parts.push({ kind: "error", text: `Error: ${errorMsg}` });
+			}
+		}
+		return parts;
+	}
+
+	/**
+	 * Everything the components buildContent() makes for `parts` depend on but the texts of the Markdown components: two
+	 * plans with the same key give the same components, but for the text each Markdown component is given.
+	 */
+	private planKey(parts: readonly ContentPart[]): string {
+		let key = `${this.isStreaming}|${this.outputPad}|${this.hiddenThinkingLabel}`;
+		for (const part of parts) {
+			if (part.kind === "thinking") key += `|thinking:${part.runIndex}:${part.hidden}`;
+			else if (part.kind === "toolCalls") key += `|toolCalls:${part.present}`;
+			else if (part.kind === "error") key += `|error:${part.text}`;
+			else key += `|${part.kind}`;
+		}
+		return key;
+	}
+
+	private buildContent(message: AssistantMessage): void {
+		this.contentIsStale = false;
+		const parts = this.planContent(message);
+		const key = this.planKey(parts);
+		// A reply streaming in, built the last time with the same plan, the same theme and nothing invalidated since: the same
+		// components, each Markdown component given its text as markdownFor() gives it (the text changed, or none).
+		const built = this.built;
+		if (this.isStreaming && built !== undefined && built.key === key && built.theme === theme) {
+			let index = 0;
+			for (const part of parts) {
+				if (part.kind !== "text" && (part.kind !== "thinking" || part.hidden)) continue;
+				const block = this.markdownBlocks[index++]!;
+				if (block.text !== part.text) {
+					block.text = part.text;
+					block.component.setText(part.text);
+				}
+			}
+			return;
+		}
+		this.built = this.isStreaming ? { key, theme } : undefined;
+
+		const previousBlocks = this.markdownBlocks;
+		this.markdownBlocks = [];
+		// Clear content container
+		this.contentContainer.clear();
+
+		for (const part of parts) {
+			if (part.kind === "spacer") {
+				this.contentContainer.addChild(new Spacer(1));
+			} else if (part.kind === "text") {
+				const text = part.text;
+				this.contentContainer.addChild(
+					this.markdownFor(
+						"text",
+						text,
+						previousBlocks,
+						() =>
+							new Markdown(text, this.outputPad, 0, this.markdownTheme, undefined, {
+								transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
+								complete: !this.isStreaming,
+							}),
+					),
+				);
+			} else if (part.kind === "thinking") {
+				const { runIndex, hidden, text: thinkingText } = part;
 				const thinkingComponent = hidden
 					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0)
 					: this.markdownFor(
@@ -324,34 +419,10 @@ export class AssistantMessageComponent extends Container {
 						return { handled: true };
 					}),
 				);
-				if (hasVisibleContentAfter) {
-					this.contentContainer.addChild(new Spacer(1));
-				}
-			}
-		}
-
-		// Check if incomplete/failed - show after partial content.
-		// For aborted/error tool calls, tool execution components show the error.
-		// Length stops can happen before a tool call is complete, so surface them here too.
-		const hasToolCalls = message.content.some((c) => c.type === "toolCall");
-		this.hasToolCalls = hasToolCalls;
-		if (message.stopReason === "length") {
-			this.contentContainer.addChild(new Spacer(1));
-			this.contentContainer.addChild(
-				new Text(theme.fg("error", "Response was truncated before completion."), this.outputPad, 0),
-			);
-		} else if (!hasToolCalls) {
-			if (message.stopReason === "aborted") {
-				const abortMessage =
-					message.errorMessage && message.errorMessage !== "Request was aborted"
-						? message.errorMessage
-						: "Operation aborted";
-				this.contentContainer.addChild(new Spacer(1));
-				this.contentContainer.addChild(new Text(theme.fg("error", abortMessage), this.outputPad, 0));
-			} else if (message.stopReason === "error") {
-				const errorMsg = message.errorMessage || "Unknown error";
-				this.contentContainer.addChild(new Spacer(1));
-				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
+			} else if (part.kind === "toolCalls") {
+				this.hasToolCalls = part.present;
+			} else {
+				this.contentContainer.addChild(new Text(theme.fg("error", part.text), this.outputPad, 0));
 			}
 		}
 	}

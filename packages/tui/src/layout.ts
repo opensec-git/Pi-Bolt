@@ -360,7 +360,7 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
 			// string through ANSI/grapheme segmentation every frame; padding is
 			// unnecessary because rows are written with erase-line and the final
 			// width clamp still truncates over-wide lines.
-			if (box.rect.x === 0 && box.rect.width >= totalWidth && (isImageLine(line) || !screen[row])) {
+			if (box.rect.x === 0 && box.rect.width >= totalWidth && (!screen[row] || isImageLine(line))) {
 				screen[row] = line;
 			} else {
 				screen[row] = compositeTuiLine(screen[row] ?? "", line, box.rect.x, box.rect.width, totalWidth);

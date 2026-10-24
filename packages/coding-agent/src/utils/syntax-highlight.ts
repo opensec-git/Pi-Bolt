@@ -218,15 +218,143 @@ export function renderHighlightedHtml(html: string, theme: HighlightTheme = {}):
 	return output;
 }
 
+/** A node of highlight.js's token tree (TokenTree in highlight.js/lib/core.js): a text, or a scope and what is in it. */
+type TokenNode = string | { kind?: string; sublanguage?: boolean; children?: TokenNode[] };
+
+interface TreeEmitter {
+	rootNode: TokenNode;
+	options: { classPrefix: string };
+	toHTML(): string;
+}
+
+const HTML_SPECIAL = /[&<>"']/;
+
+/** escapeHTML() of highlight.js (not exported): its five replacements, made only for a text that has one of the characters. */
+function escapeHtml(text: string): string {
+	return HTML_SPECIAL.test(text)
+		? text
+				.replace(/&/g, "&amp;")
+				.replace(/</g, "&lt;")
+				.replace(/>/g, "&gt;")
+				.replace(/"/g, "&quot;")
+				.replace(/'/g, "&#x27;")
+		: text;
+}
+
+/** The class of the span HTMLRenderer (highlight.js/lib/core.js) wraps a node in, or undefined for a node it does not wrap. */
+function spanClass(node: { kind?: string; sublanguage?: boolean }, classPrefix: string): string | undefined {
+	if (!node.kind) return undefined;
+	return node.sublanguage ? node.kind : `${classPrefix}${node.kind}`;
+}
+
+/** What HTMLRenderer makes of a token tree: each text escaped, each node with a kind in a span with its class. */
+function tokenTreeHtml(node: TokenNode, classPrefix: string): string {
+	if (typeof node === "string") return escapeHtml(node);
+	if (!node.children) return "";
+	const className = spanClass(node, classPrefix);
+	let html = className === undefined ? "" : `<span class="${className}">`;
+	for (const child of node.children) html += tokenTreeHtml(child, classPrefix);
+	return className === undefined ? html : `${html}${SPAN_CLOSE}`;
+}
+
+/** The HTML each emitter's toHTML() returned, and the class prefix it was made with (FastHtmlEmitter). */
+const emittedHtml = new WeakMap<object, { html: string; classPrefix: string }>();
+let fastEmitterInstalled = false;
+
+/**
+ * Has highlight.js make its HTML with tokenTreeHtml(): the same HTML as its own renderer, which escapes every text with five
+ * regular expression replacements, made in a fraction of the time, and kept with the emitter, whose token tree highlight()
+ * then renders from instead of reading the HTML back. Only when the emitter in use is highlight.js's own (TokenTreeEmitter).
+ */
+function installFastHtmlEmitter(): void {
+	if (fastEmitterInstalled) return;
+	fastEmitterInstalled = true;
+	// (The emitter highlight.js is set up with: highlightAuto() of no languages makes one and runs no plugin.)
+	const base = (hljs.highlightAuto("", []).emitter as { constructor: new (options: unknown) => TreeEmitter })
+		.constructor;
+	if (base.name !== "TokenTreeEmitter" || typeof base.prototype.toHTML !== "function") return;
+	class FastHtmlEmitter extends base {
+		override toHTML(): string {
+			const classPrefix = this.options.classPrefix;
+			const html = tokenTreeHtml(this.rootNode, classPrefix);
+			emittedHtml.set(this, { html, classPrefix });
+			return html;
+		}
+	}
+	hljs.configure({ __emitter: FastHtmlEmitter });
+}
+
+const scopesOfClasses = new Map<string, string | undefined>();
+
+/**
+ * renderHighlightedHtml() of the HTML tokenTreeHtml() makes of `root`, from the tree: the same texts with the same scopes
+ * open. Undefined when a class has a ">", which would end the span tag where the class does not.
+ */
+function renderHighlightedTree(root: TokenNode, classPrefix: string, theme: HighlightTheme): string | undefined {
+	let output = "";
+	let textBuffer = "";
+	const scopes: Array<string | undefined> = [];
+	const flushText = () => {
+		if (!textBuffer) return;
+		const formatter = getActiveFormatter(scopes, theme);
+		if (!formatter) output += textBuffer;
+		else if (!textBuffer.includes("\n")) output += formatter(textBuffer);
+		else
+			output += textBuffer
+				.split("\n")
+				.map((line) => (line ? formatter(line) : line))
+				.join("\n");
+		textBuffer = "";
+	};
+	const walk = (node: TokenNode): boolean => {
+		if (typeof node === "string") {
+			textBuffer += node;
+			return true;
+		}
+		if (!node.children) return true;
+		const className = spanClass(node, classPrefix);
+		if (className !== undefined) {
+			if (className.includes(">")) return false;
+			let scope = scopesOfClasses.get(className);
+			if (scope === undefined && !scopesOfClasses.has(className)) {
+				scope = getScopeFromSpanTag(`<span class="${className}">`);
+				scopesOfClasses.set(className, scope);
+			}
+			flushText();
+			scopes.push(scope);
+		}
+		for (const child of node.children) {
+			if (!walk(child)) return false;
+		}
+		if (className !== undefined) {
+			flushText();
+			scopes.pop();
+		}
+		return true;
+	};
+	if (!walk(root)) return undefined;
+	flushText();
+	return output;
+}
+
 export function highlight(code: string, options: HighlightOptions = {}): string {
 	registerEagerLanguages();
-	const html = options.language
+	installFastHtmlEmitter();
+	const result = options.language
 		? hljs.highlight(code, {
 				language: options.language,
 				ignoreIllegals: options.ignoreIllegals,
-			}).value
-		: hljs.highlightAuto(code, options.languageSubset).value;
-	return renderHighlightedHtml(html, options.theme);
+			})
+		: hljs.highlightAuto(code, options.languageSubset);
+	// The HTML is what the emitter made of its tree, unless the result is not (an illegal match or an error gives the code
+	// escaped) or a plugin changed it: the tree is rendered then as the HTML would be.
+	const emitter = result.emitter as TreeEmitter;
+	const emitted = emittedHtml.get(emitter);
+	if (emitted !== undefined && emitted.html === result.value) {
+		const rendered = renderHighlightedTree(emitter.rootNode, emitted.classPrefix, options.theme ?? {});
+		if (rendered !== undefined) return rendered;
+	}
+	return renderHighlightedHtml(result.value, options.theme);
 }
 
 let onDemandLoaded: ((languages: ReadonlySet<string>) => void) | undefined;

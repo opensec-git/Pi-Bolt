@@ -1,5 +1,7 @@
 interface HighlightJsResult {
 	value: string;
+	/** What made the result (its token tree): the emitter class the API is configured with. */
+	emitter: unknown;
 }
 
 interface HighlightJsOptions {
@@ -18,6 +20,7 @@ interface HighlightJsApi {
 	highlightAuto(code: string, languageSubset?: string[]): HighlightJsResult;
 	getLanguage(name: string): HighlightJsLanguageDefinition | undefined;
 	registerLanguage(name: string, language: HighlightJsLanguageFactory): void;
+	configure(options: { __emitter?: new (options: unknown) => unknown }): void;
 }
 
 declare module "highlight.js/lib/core.js" {

@@ -446,6 +446,9 @@ function getRegisteredKittyImageMetadataFromControls(controls: string): Register
 }
 
 function getRegisteredKittyImageMetadata(line: string): RegisteredKittyImageMetadata | undefined {
+	// (No image registered: the line is not searched for a Kitty command, which could name none.) Layout asks this of every
+	// row it paints, on every frame.
+	if (kittyImageMetadata.size === 0) return undefined;
 	const controls = findKittyControls(line)?.controls;
 	return controls === undefined ? undefined : getRegisteredKittyImageMetadataFromControls(controls);
 }
