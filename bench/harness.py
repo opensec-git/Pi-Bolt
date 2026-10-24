@@ -394,6 +394,9 @@ class Tty:
             if STARTUP_IN_PROGRESS in ANSI.sub(b"", self.buf[startup_scan:]):
                 startup_scan = len(self.buf)
                 startup_seen = now
+            else:
+                # (Only the end is read again: reading all that a long transcript wrote, at every read, took minutes.)
+                startup_scan = max(startup_scan, len(self.buf) - 8192)
             if startup_seen >= 0 and now - startup_seen < 10 and now - sent > 0.3:
                 self.send(b"\r")
                 sent = now

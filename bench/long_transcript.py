@@ -146,12 +146,18 @@ def run(build, entries, mode, a):
         frames = tty.buf.count(b"\x1b[?2026h", start)
         written = len(tty.buf) - start
         after = instructions(tty.pid)
+        ri = _rusage_macos(tty.pid) if MACOS else None
         tty.quit()
     row = {"build": build.name, "entries": entries, "mode": mode, "size": a.size, "wall_s": round(wall, 2), "cpu_s": round(used, 3),
            "frames": frames, "fps": round(frames / wall, 1), "kb_written": round(written / 1024)}
     if instr is not None and after is not None:
         row["minstr"] = round((after - instr) / 1e6)
         row["minstr_per_frame"] = round((after - instr) / 1e6 / max(frames, 1), 2)
+    if ri:
+        # (Physical footprint when the answer is done, and the largest it was, startup included.)
+        row["own_mb_end"] = round(ri[7] / (1 << 20), 1)
+    if getattr(tty, "peak_footprint_mb", None):
+        row["peak_own_mb"] = round(tty.peak_footprint_mb, 1)
     if latencies:
         row["echo_ms_median"] = round(statistics.median(latencies), 1)
         row["echo_ms_p95"] = round(sorted(latencies)[min(len(latencies) - 1, int(len(latencies) * 0.95))], 1)
@@ -192,7 +198,7 @@ def main():
         for mode, entries, name in keys:
             group = [row for row in rows if (row["mode"], row["entries"], row["build"]) == (mode, entries, name)]
             out = {"build": name, "mode": mode, "entries": entries}
-            for field in ("cpu_s", "fps", "minstr_per_frame", "echo_ms_median", "echo_ms_p95", "echo_ms_max"):
+            for field in ("cpu_s", "fps", "minstr_per_frame", "own_mb_end", "peak_own_mb", "echo_ms_median", "echo_ms_p95", "echo_ms_max"):
                 values = [row[field] for row in group if field in row]
                 if values:
                     out[field] = round(statistics.median(values), 2)
