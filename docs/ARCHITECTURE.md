@@ -188,6 +188,19 @@ bytecode it carries included, so it can warn about a word that only happens to e
 (`warning: the static heap points at ...`): a real pointer is reported on every machine, such a word on one machine and not on
 another. If the executable is not at its address after all, it runs from bytecode.
 
+**Binding libSystem's imports.** dyld looks each of `pi-bin`'s ~480 libSystem imports up in libSystem's 39 re-exported
+libraries one after another until one exports it (about 24 lookups each: libsystem_kernel, which has 175 of them, is 32nd), some
+25 million instructions at every start. The runtime loads `@rpath/libSystem.B.dylib`, with the rpaths
+`@executable_path/libsystem` and `/usr/lib` ([`scripts/build-runtime.sh`](../scripts/build-runtime.sh)), and the build puts a
+`libsystem/libSystem.B.dylib` beside `pi-bin` ([`scripts/lib/darwin_libsystem.py`](../scripts/lib/darwin_libsystem.py)): no
+code, it re-exports libsystem_c, \_m, \_kernel, \_platform and \_pthread, in libSystem's order, then libSystem itself. 420 of the
+imports are found in two to six lookups and the rest through libSystem as before: 16 million fewer instructions per start. The
+binary names no library of libSystem's, so nothing depends on how a macOS splits libSystem: a symbol that moves to another of
+its libraries is found through libSystem; a library that is gone is replaced by an empty one from `libsystem/fallback`; without
+`libsystem/` (a copied `pi-bin`, the runtime on its own) dyld loads `/usr/lib/libSystem.B.dylib`. libSystem's libraries export no
+name twice, so each import binds to what it bound to before; the build checks that with a program importing the same symbols,
+with, without and through the fallback, and leaves `libsystem/` out if one address differs.
+
 **A start from disk.** When `pi-bin` is not in memory (after a restart or an update), a start reads its pages one by one as each
 is first touched, and waits for the disk each time: about 170 ms instead of 30. `build-pi.sh` records which parts of `pi-bin` a
 start reads (`pi-bin.hot`, from [`scripts/lib/darwin_hot_pages.py`](../scripts/lib/darwin_hot_pages.py): the TUI with one prompt

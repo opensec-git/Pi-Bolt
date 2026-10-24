@@ -64,6 +64,17 @@ fi
 mkdir -p "$PIBOLT_WORK/runtime"
 cp "$BUN_SRC/$BUILD_DIR/bun" "$PIBOLT_WORK/runtime/bun"
 cp "$BUN_SRC/$BUILD_DIR/bun-profile" "$PIBOLT_WORK/runtime/bun-profile" 2>/dev/null || true
+# macOS: libSystem from @rpath, first @executable_path/libsystem, which scripts/build-pi.sh puts beside pi-bin (dyld then binds
+# the runtime's libSystem imports in a fifth of the time: scripts/lib/darwin_libsystem.py), then /usr/lib, where it is
+# otherwise loaded from as before.
+if [ "$PIBOLT_OS" = darwin ]; then
+	for executable in "$PIBOLT_WORK/runtime/bun" "$PIBOLT_WORK/runtime/bun-profile"; do
+		[ -f "$executable" ] || continue
+		install_name_tool -change /usr/lib/libSystem.B.dylib @rpath/libSystem.B.dylib \
+			-add_rpath @executable_path/libsystem -add_rpath /usr/lib "$executable"
+		codesign -s - -f -i bun "$executable"
+	done
+fi
 # Which engine it is (scripts/build-pi.sh records it in the executables it builds, for `pi-bolt doctor`).
 "$PIBOLT_ROOT/scripts/runtime-stamp.sh" >"$PIBOLT_WORK/runtime/RUNTIME_STAMP" 2>/dev/null || rm -f "$PIBOLT_WORK/runtime/RUNTIME_STAMP"
 log "runtime: $PIBOLT_WORK/runtime/bun ($("$PIBOLT_WORK/runtime/bun" --version))"

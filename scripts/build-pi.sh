@@ -214,6 +214,9 @@ if [ "$PIBOLT_OS" = darwin ]; then
 	CLANG=(xcrun clang -O2 -Wall -arch arm64 -mmacosx-version-min=13.0 -I"$PIBOLT_ROOT/scripts/lib")
 	"${CLANG[@]}" -o "$OUT/pi" "$PIBOLT_ROOT/scripts/lib/darwin-launcher.c" "$PIBOLT_ROOT/scripts/lib/darwin-spawn-helper.c"
 	"${CLANG[@]}" -o "$OUT/pi-spawn" "$PIBOLT_ROOT/scripts/lib/darwin-spawn-proxy.c"
+	# A libSystem through which dyld binds pi-bin's imports in a fifth of the time (scripts/lib/darwin_libsystem.py). Only
+	# for speed: without it pi-bin binds through /usr/lib/libSystem.B.dylib as before.
+	python3 "$PIBOLT_ROOT/scripts/lib/darwin_libsystem.py" "$OUT"
 fi
 stage_assets "$OUT"
 printf 'Pi-Bolt %s (Pi %s), %s-%s, JIT %s, built %s\n' "$PIBOLT_VERSION" "$VERSION" "$PIBOLT_OS" "$CPU_VARIANT" "$JIT" "$(date -u +%Y-%m-%d)" >"$OUT/pi-bolt.txt"
