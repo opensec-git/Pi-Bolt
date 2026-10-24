@@ -1,10 +1,11 @@
 # Releasing Pi-Bolt
 
-Six workflows, all on GitHub's own runners:
+Six workflows. All but `publish` run on [Blacksmith](https://www.blacksmith.sh)'s runners: 4 vCPU Ubuntu 24.04 (x86-64 and
+ARM64), 4 vCPU Windows Server 2025 and 6 vCPU macOS 26. `publish` runs on GitHub's, as npm's trusted publishing needs them:
 
 | Workflow | When | What |
 |---|---|---|
-| `ci` | every push to `pi-bolt`, every pull request | lint and types, Pi's tests, Pi-Bolt built and tested on Linux x86-64, Linux ARM64 and macOS (Apple silicon), the installer's checks, whether the engine patches apply |
+| `ci` | every push to `pi-bolt`, every pull request | lint and types (the workflows too, with actionlint), Pi's tests, Pi-Bolt built and tested on Linux x86-64, Linux ARM64, macOS (Apple silicon: its tests and its comparison with stock Pi side by side) and Windows x64, the installer's checks, whether the engine patches apply. A pull request that changes only documentation builds and tests nothing |
 | `tag` | `ci` passed on a push to `pi-bolt` | when `VERSION` has no `bolt-vX.Y.Z` tag yet, tags that commit and runs `release` |
 | `release` | a `bolt-vX.Y.Z` tag | builds the 20 archives on Linux (x86-64 and ARM64), macOS and Windows, tests each as unpacked from its archive, makes a **draft** release with `SHA256SUMS`, `extensions.txt` and `RUNTIME_STAMP`, and runs `publish` |
 | `publish` | after `release`, or by hand | signs `SHA256SUMS`, checks the signature and the checksums, publishes the release, puts `install.sh`, `install.ps1` and the site on `gh-pages`, publishes npm, and updates the Homebrew formula |
@@ -237,14 +238,15 @@ By hand:
    (the model catalog of the new Pi, `packages/ai/src/providers/data`), then `scripts/train-profile.sh` **on Linux**, and commit
    `profiles/pi-X.Y.Z` and the catalog. A profile recorded on Linux serves every platform. On Windows, `scripts\train-heap.ps1`
    then adds the prebuilt heap's order to it (`heap-functions.txt`, and the strings' order in `bytecode.order`): commit that too.
-   The `heap-profile` workflow runs it on GitHub's Windows runner with the latest release's runtime
+   The `heap-profile` workflow runs it on the Windows runner with the latest release's runtime
    (`gh workflow run heap-profile.yml -R opensec-git/Pi-Bolt --ref <branch>`), uploads the profile as an artifact and pushes it to
    the branch `heap-profile/pi-X.Y.Z`; open a pull request from that branch by hand.
 3. Push; `ci` builds and tests it, and it is released as above.
 
 ## The macOS builds
 
-`release` builds them on GitHub's macOS runners (Apple silicon). The executables are signed ad hoc, as `bun build --compile`
+`release` builds them on the macOS 26 runners (Apple silicon), for macOS 13 and later: `scripts/check-macos-floor.sh` checks that
+no executable or library asks for a later macOS. The executables are signed ad hoc, as `bun build --compile`
 signs them, which is what an install through `install.sh` or npm needs: neither quarantines what it downloads. A build downloaded
 with a browser is quarantined, and Gatekeeper only accepts a Developer ID signature that is notarized. Notarization requires the
 hardened runtime, under which the executable needs the entitlement `com.apple.security.cs.disable-library-validation` to map
@@ -253,7 +255,7 @@ its compiled code from its own file (and the `-jit` build `com.apple.security.cs
 
 ## The Windows builds
 
-`release` builds them on GitHub's Windows runners, on the Windows runtime: `scripts\package-release.ps1` makes
+`release` builds them on the Windows runners, on the Windows runtime: `scripts\package-release.ps1` makes
 `pi-bolt-win32-x64.zip` (JIT off) and `pi-bolt-win32-x64-jit.zip` (JIT on, for extensions that do heavy JavaScript work at run
 time: [PLUGINS.md](PLUGINS.md)). Each is built twice to check that its prebuilt heap does not depend on where the runtime was
 loaded (`-VerifyDeterminism`); that check sometimes fails on one record of the heap ([WINDOWS.md](WINDOWS.md#the-design)), and `release` builds
