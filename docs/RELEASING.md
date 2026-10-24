@@ -86,7 +86,11 @@ the engine or the build. On Windows, the same for older CPUs is Intel SDE (`-snb
   integrity; a release without the file pins none, and they offer nothing. Update it in the repository when either has a new
   release.
 - `RUNTIME_STAMP`: what engine the runtimes were built from (below).
-- `SHA256SUMS`: its first line is `# pi-bolt X.Y.Z`, then one line for each archive, `extensions.txt` and `RUNTIME_STAMP`.
+- `install.sh` and `install.ps1`, as they are in the tagged commit. `pi-bolt update` runs the release's own installer, and only
+  once `SHA256SUMS` verifies with the release key built into the executable and lists the installer's checksum. A release up to
+  1.0.1 does not list its installers: updating to one runs the installer the site serves, with a notice.
+- `SHA256SUMS`: its first line is `# pi-bolt X.Y.Z`, then one line for each archive, `extensions.txt`, `RUNTIME_STAMP`,
+  `install.sh` and `install.ps1`.
   `install.ps1` and the npm package's Windows install refuse checksums whose first line is not their version: an older release,
   signed all the same, served as a newer one.
 - `SHA256SUMS.sig` ([Signing](#signing)).

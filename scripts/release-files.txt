@@ -2,6 +2,8 @@
 # exactly these. A new platform or variant is added here.
 RUNTIME_STAMP
 extensions.txt
+install.ps1
+install.sh
 pi-bolt-darwin-arm64-jit.tar.gz
 pi-bolt-darwin-arm64-jit.tar.xz
 pi-bolt-darwin-arm64.tar.gz

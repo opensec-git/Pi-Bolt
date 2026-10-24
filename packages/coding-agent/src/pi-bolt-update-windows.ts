@@ -10,7 +10,8 @@
  * renamed into place the way install.ps1 does it, the executable last.
  *
  * An installation outside the user's profile still goes through the installer: install.ps1 checks and sets who may change
- * such a folder (Windows ACLs), which is not done here.
+ * such a folder (Windows ACLs), which is not done here. That is the release's own install.ps1, checked against the same signed
+ * SHA256SUMS before it runs (pi-bolt-installer.ts).
  */
 import { spawnSync } from "node:child_process";
 import { createHash, createPublicKey, verify } from "node:crypto";
@@ -208,7 +209,8 @@ export function keepPrevious(dir: string, incoming: string, note: (text: string)
 	}
 }
 
-async function download(url: string, what: string | undefined): Promise<Buffer | undefined> {
+/** A file over HTTPS, or undefined if it could not be downloaded whole; with `what`, a progress line on a terminal. */
+export async function download(url: string, what: string | undefined): Promise<Buffer | undefined> {
 	let response: Response;
 	try {
 		response = await fetch(url, { headers: { "user-agent": "pi-bolt-updater" }, redirect: "follow" });
@@ -237,34 +239,48 @@ async function download(url: string, what: string | undefined): Promise<Buffer |
 	return Buffer.concat(chunks);
 }
 
-/** Updates the installation in `installDir` (its `variant` folder) to release `version`. Throws with what went wrong. */
-export async function updatePiBoltWindows(version: string, installDir: string, variant: string): Promise<void> {
-	const name = `pi-bolt-win32-${variant}`;
-	const archive = `${name}.zip`;
-	const dir = join(installDir, name);
-	const base = `${REPO}/releases/download/bolt-v${version}`;
+/** Where release `version`'s files are downloaded from. */
+export function releaseDownloadBase(version: string): string {
+	return `${REPO}/releases/download/bolt-v${version}`;
+}
+
+/**
+ * Release `version`'s SHA256SUMS, once its signature (SHA256SUMS.sig) verifies with the release key and its first line names
+ * that version. Throws otherwise: nothing else is looked at in a release whose checksums are not Pi-Bolt's.
+ */
+export async function fetchSignedSums(version: string, publicKeyPem: string = PIBOLT_RELEASE_KEY): Promise<string> {
+	const base = releaseDownloadBase(version);
 	const sumsBytes = await download(`${base}/SHA256SUMS`, undefined);
 	if (!sumsBytes) throw new Error(`download failed: ${base}/SHA256SUMS`);
-	const sums = sumsBytes.toString("utf8");
-	const expected = sumsEntry(sums, archive);
-	if (!expected)
-		throw new Error(`this release has no build for this installation (${archive} is not in its SHA256SUMS)`);
-	// The signature first: nothing else is looked at in a release whose checksums are not Pi-Bolt's.
 	const signature = await download(`${base}/SHA256SUMS.sig`, undefined);
 	if (!signature)
 		throw new Error(
-			"the release has no signature (SHA256SUMS.sig), and every Windows release is signed. Nothing was installed.",
+			"the release has no signature (SHA256SUMS.sig), and every release since 0.6.0 is signed. Nothing was installed.",
 		);
-	if (!sumsSignatureValid(sumsBytes, signature)) {
+	if (!sumsSignatureValid(sumsBytes, signature, publicKeyPem)) {
 		throw new Error("the release's signature does not verify: the download is not Pi-Bolt's. Nothing was installed.");
 	}
 	// The first line says which release the signed files are: an older release (signed all the same) is not taken for a newer one.
+	const sums = sumsBytes.toString("utf8");
 	const signedVersion = sumsVersion(sums);
 	if (signedVersion !== version) {
 		throw new Error(
 			`the download is Pi-Bolt ${signedVersion ?? "(unknown)"}, not ${version}. Nothing was installed.`,
 		);
 	}
+	return sums;
+}
+
+/** Updates the installation in `installDir` (its `variant` folder) to release `version`. Throws with what went wrong. */
+export async function updatePiBoltWindows(version: string, installDir: string, variant: string): Promise<void> {
+	const name = `pi-bolt-win32-${variant}`;
+	const archive = `${name}.zip`;
+	const dir = join(installDir, name);
+	const base = releaseDownloadBase(version);
+	const sums = await fetchSignedSums(version);
+	const expected = sumsEntry(sums, archive);
+	if (!expected)
+		throw new Error(`this release has no build for this installation (${archive} is not in its SHA256SUMS)`);
 	// From npm (its package of this build is a .tgz with the release's .zip in it), else from GitHub, as install.ps1 does.
 	let zip: Buffer | undefined;
 	let from = "npm";

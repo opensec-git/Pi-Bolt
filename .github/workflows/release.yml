@@ -357,15 +357,17 @@ jobs:
         with:
           path: release
           merge-multiple: true
-      - name: SHA256SUMS, extensions.txt and RUNTIME_STAMP
+      - name: SHA256SUMS, extensions.txt, RUNTIME_STAMP and the installers
         working-directory: release
         run: |
           # The optional extensions the installers offer, pinned (without it they offer none).
           cp ../extensions.txt .
+          # The installers of the tagged commit, signed with the rest: `pi-bolt update` runs one only once it matches SHA256SUMS.
+          cp ../install.sh ../install.ps1 .
           # (Signed with the rest: a later release reuses this release's runtimes only if its signed stamp says the same engine.)
           echo "$STAMP" > RUNTIME_STAMP
           # The first line says which release this is: install.ps1 and the npm package's Windows install refuse another's.
-          { echo "# pi-bolt $VERSION"; sha256sum -- *.tar.gz *.tar.xz *.zip extensions.txt RUNTIME_STAMP; } > SHA256SUMS
+          { echo "# pi-bolt $VERSION"; sha256sum -- *.tar.gz *.tar.xz *.zip extensions.txt RUNTIME_STAMP install.sh install.ps1; } > SHA256SUMS
           # Exactly the files of a release (scripts/release-files.txt), each as listed.
           ../scripts/check-release-files.sh . "$VERSION"
           cat SHA256SUMS

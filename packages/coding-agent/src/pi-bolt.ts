@@ -34,20 +34,37 @@ export const PIBOLT_INSTALL_COMMAND =
 	process.platform === "win32"
 		? `powershell -c "irm ${PIBOLT_INSTALL_URL} | iex"`
 		: `curl -fsSL ${PIBOLT_INSTALL_URL} | sh`;
-/** The installer as a command to spawn (with piBoltUpdateEnvironment()): it exits non-zero if it did not install. */
-export function piBoltInstallerProcess(): { command: string; args: string[] } {
+/**
+ * The installer as a command to spawn (with piBoltUpdateEnvironment()): it exits non-zero if it did not install. With
+ * `installerFile`, the release's installer already checked against its signed checksums (pi-bolt-installer.ts) is run from that
+ * file; without it, the one the site serves is downloaded and run (a release up to 1.0.1 does not list its installer).
+ */
+export function piBoltInstallerProcess(installerFile?: string): { command: string; args: string[] } {
 	if (process.platform === "win32") {
 		// By its full path: a bare name may be looked up in the current folder first, where anything could be called that.
+		const command = join(
+			process.env.SystemRoot ?? "C:\\Windows",
+			"System32",
+			"WindowsPowerShell",
+			"v1.0",
+			"powershell.exe",
+		);
+		if (installerFile) {
+			// Run as `irm ... | iex` runs it (install.ps1 is written for iex), from the file's text: ReadAllText reads it as UTF-8.
+			const path = installerFile.replace(/'/g, "''");
+			return {
+				command,
+				args: [
+					"-NoProfile",
+					"-Command",
+					`${WINDOWS_TLS12}; iex ([IO.File]::ReadAllText('${path}')); exit $LASTEXITCODE`,
+				],
+			};
+		}
+		// (If the download fails, nothing was installed: that is an exit code too. `irm ... | iex; exit $LASTEXITCODE` exited 0,
+		// as no program had run to set it.)
 		return {
-			command: join(
-				process.env.SystemRoot ?? "C:\\Windows",
-				"System32",
-				"WindowsPowerShell",
-				"v1.0",
-				"powershell.exe",
-			),
-			// (If the download fails, nothing was installed: that is an exit code too. `irm ... | iex; exit $LASTEXITCODE` exited 0,
-			// as no program had run to set it.)
+			command,
 			args: [
 				"-NoProfile",
 				"-Command",
@@ -55,6 +72,7 @@ export function piBoltInstallerProcess(): { command: string; args: string[] } {
 			],
 		};
 	}
+	if (installerFile) return { command: "sh", args: [installerFile] };
 	// With curl or wget, whichever there is (the installer itself works with either); a failed download is an exit code too.
 	const url = PIBOLT_INSTALL_URL;
 	return {
@@ -280,12 +298,14 @@ export function piBoltUpdateEnvironment(version: string): NodeJS.ProcessEnv {
 		PIBOLT_VERSION: `bolt-v${version}`,
 		PIBOLT_INSTALL: piBoltInstallDir() ?? process.env.PIBOLT_INSTALL ?? join(homedir(), ".pi-bolt"),
 	};
-	// (And what would make the installer only define its functions, install nothing, and exit 0.)
+	// (And what would make the installer only define its functions, install nothing, and exit 0; or install a release whose
+	// signature it could not check.)
 	for (const name of [
 		"PIBOLT_DOWNLOAD_BASE",
 		"PIBOLT_LAUNCHER",
 		"PIBOLT_SOURCE",
 		"PIBOLT_ALLOW_UNSIGNED",
+		"PIBOLT_UNVERIFIED",
 		"PIBOLT_INSTALLER_NO_MAIN",
 	]) {
 		delete env[name];

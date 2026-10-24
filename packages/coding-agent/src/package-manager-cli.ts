@@ -46,13 +46,13 @@ import {
 	piBoltChannel,
 	piBoltExecutableIn,
 	piBoltInstallDir,
-	piBoltInstallerProcess,
 	piBoltInstallMethod,
 	piBoltPackageManager,
 	piBoltUpdateEnvironment,
 	setPiBoltChannel,
 } from "./pi-bolt.ts";
 import { piBoltCompileWanted, runPiBoltCompile } from "./pi-bolt-compile.ts";
+import { fetchReleaseInstaller, type ReleaseInstaller, runReleaseInstaller } from "./pi-bolt-installer.ts";
 import { rollbackPiBolt } from "./pi-bolt-rollback.ts";
 import { isInProfile, updatePiBoltWindows } from "./pi-bolt-update-windows.ts";
 import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/child-process.ts";
@@ -848,18 +848,25 @@ async function runPiBoltSelfUpdate(
 	if (process.platform === "win32" && runningFrom && isInProfile(runningFrom)) {
 		return runPiBoltWindowsUpdate(version, runningFrom, options);
 	}
-	console.log(chalk.dim(`Updating Pi-Bolt to ${version} with ${PIBOLT_INSTALL_COMMAND}...`));
-	const status = await new Promise<number | null>((resolve, reject) => {
-		const installer = piBoltInstallerProcess();
-		// (From the home folder: the installer has nothing to do with the folder the update was asked for in.)
-		const child = spawnProcess(installer.command, installer.args, {
-			cwd: homedir(),
-			stdio: "inherit",
-			env: piBoltUpdateEnvironment(version),
-		});
-		child.on("error", reject);
-		child.on("close", (code) => resolve(code));
-	}).catch((error: unknown) => {
+	// The release's own installer, checked against its signed checksums before it runs (pi-bolt-installer.ts).
+	let installer: ReleaseInstaller;
+	try {
+		installer = await fetchReleaseInstaller(version);
+	} catch (error) {
+		console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
+		return false;
+	}
+	if (installer.script) {
+		console.log(chalk.dim(`Updating Pi-Bolt to ${version} with its ${installer.name} (signature verified)...`));
+	} else {
+		console.log(
+			chalk.yellow(
+				`Pi-Bolt ${version} does not list ${installer.name} in its signed SHA256SUMS (releases up to 1.0.1): the installer is not checked before it runs. The installer still checks the release's signature.`,
+			),
+		);
+		console.log(chalk.dim(`Updating Pi-Bolt to ${version} with ${PIBOLT_INSTALL_COMMAND}...`));
+	}
+	const status = await runReleaseInstaller(installer, piBoltUpdateEnvironment(version)).catch((error: unknown) => {
 		console.error(chalk.red(`Error: ${error instanceof Error ? error.message : String(error)}`));
 		return 1;
 	});
