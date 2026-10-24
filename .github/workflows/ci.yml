@@ -395,6 +395,12 @@ jobs:
           exit $LASTEXITCODE
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Type-ahead before a question (install.ps1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          & tests\installer\typeahead.ps1
+          exit $LASTEXITCODE
       - name: A bare Debian, with and without OpenSSL
         if: runner.os == 'Linux'
         run: |

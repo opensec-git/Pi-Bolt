@@ -590,8 +590,7 @@ function Add-PiBoltToPath([string]$dir, [bool]$existed = $false) {
 			return
 		}
 		if (Test-PiBoltCanAsk) {
-			Write-Host -NoNewline "`nAdd $dir to your PATH (for your user account)? [Y/n] "
-			$answer = Read-Host
+			$answer = Read-PiBoltAnswer "`nAdd $dir to your PATH (for your user account)? [Y/n] "
 			if ($answer -match '^(n|no)$') {
 				Write-Host "Not added. Run Pi-Bolt as:`n`n  & '$dir\pi-bolt.exe'"
 				return
@@ -621,6 +620,21 @@ function Test-PiBoltCanAsk { $env:PIBOLT_YES -ne '1' -and [Environment]::UserInt
 
 function Read-PiBoltKey {
 	try { return [string][Console]::ReadKey($true).KeyChar } catch { return '' }
+}
+
+# Clear-PiBoltTypeahead: drops what was typed at the console before a question. Read-PiBoltKey takes one key, so the Enter typed
+# after it stays in the console's input, and would answer the next question with its default (#103). Without a console to read
+# (input redirected, say) [Console]::KeyAvailable throws, and nothing was typed ahead.
+function Clear-PiBoltTypeahead {
+	try { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } } catch { }
+}
+
+# Read-PiBoltAnswer PROMPT: asks a question and returns the line typed after it. What was typed before is dropped before the
+# question is shown, so an answer typed as soon as it appears is kept.
+function Read-PiBoltAnswer([string]$prompt) {
+	Clear-PiBoltTypeahead
+	Write-Host -NoNewline $prompt
+	Read-Host
 }
 
 function Select-PiBoltAction($state) {
@@ -747,8 +761,7 @@ function Install-PiBoltExtensions($state) {
 	if (-not $choice) {
 		Write-Host "`n${bold}Optional extensions by OpenSec$reset $dim(open source, built for Pi-Bolt)$reset`n"
 		foreach ($e in $wanted) { Write-Host ("  $cyan{0,-22}$reset {1}" -f $e.Package, $e.What) }
-		Write-Host -NoNewline "`nInstall them? [Y/n] "
-		if ((Read-Host) -match '^(n|no)$') { Write-Host "${dim}You can install them later with: pi-bolt install --pi-bolt npm:<name>$reset"; return }
+		if ((Read-PiBoltAnswer "`nInstall them? [Y/n] ") -match '^(n|no)$') { Write-Host "${dim}You can install them later with: pi-bolt install --pi-bolt npm:<name>$reset"; return }
 	}
 	$registry = if ($env:PIBOLT_NPM_REGISTRY) { $env:PIBOLT_NPM_REGISTRY.TrimEnd('/') } else { 'https://registry.npmjs.org' }
 	foreach ($e in $wanted) {
@@ -896,8 +909,7 @@ function Install-PiBolt {
 	Install-PiBoltExtensions $state
 	if ((Get-Command pi-bolt -ErrorAction SilentlyContinue).Source -ieq $exe) { Write-Host "`nRun it with: ${bold}pi-bolt$reset" }
 	if ((Test-PiBoltCanAsk) -and $env:PIBOLT_NO_START -ne '1') {
-		Write-Host -NoNewline "`nStart pi-bolt now? [Y/n] "
-		if ((Read-Host) -notmatch '^(n|no)$') { Write-Host ''; & $exe }
+		if ((Read-PiBoltAnswer "`nStart pi-bolt now? [Y/n] ") -notmatch '^(n|no)$') { Write-Host ''; & $exe }
 	}
 }
 
