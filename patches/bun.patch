@@ -16323,13 +16323,13 @@ freed. The last one (10 min) always runs: before it JSC also lets go of code and
 One thing a skipped collection does not do: count towards the age of unlinked bytecode held only weakly (dropped after
 seven full collections without running), so such bytecode goes one full collection later.
 ---
- src/jsc/GarbageCollectionController.rs | 32 +++++++++++++++++++++++++-
- src/jsc/VM.rs                          | 14 +++++++++++
- src/jsc/bindings/bindings.cpp          | 20 ++++++++++++++++
- 3 files changed, 65 insertions(+), 1 deletion(-)
+ src/jsc/GarbageCollectionController.rs | 38 ++++++++++++++++++++++++--
+ src/jsc/VM.rs                          | 14 ++++++++++
+ src/jsc/bindings/bindings.cpp          | 20 ++++++++++++++
+ 3 files changed, 70 insertions(+), 2 deletions(-)
 
 diff --git a/src/jsc/GarbageCollectionController.rs b/src/jsc/GarbageCollectionController.rs
-index 32956feb..ed258b8f 100644
+index 32956feb..35eddf7e 100644
 --- a/src/jsc/GarbageCollectionController.rs
 +++ b/src/jsc/GarbageCollectionController.rs
 @@ -1,4 +1,4 @@
@@ -16389,13 +16389,26 @@ index 32956feb..ed258b8f 100644
              vm.collect_async_idle();
              // Only a forced collect returns the large pages mimalloc keeps for the next burst (oven-sh/mimalloc#52).
              bun_core::Global::mimalloc_cleanup(true);
-@@ -258,6 +281,13 @@ impl GarbageCollectionController {
+@@ -238,7 +261,8 @@ impl GarbageCollectionController {
+             return;
+         }
+         this.parked.set(false);
+-        if this.idle_release_pending.replace(false) {
++        let released = this.idle_release_pending.replace(false);
++        if released {
+             // ..and once more for what that collection has freed since.
+             bun_core::Global::mimalloc_cleanup(true);
+         }
+@@ -258,6 +282,16 @@ impl GarbageCollectionController {
              ms => ms,
          };
          let (full, idle_gc_due_in) = this.idle_tick(vm_ref, grew, armed);
 +        let full = if full && this.idle_full_finds_nothing(vm_ref, idle_gc_due_in) {
-+            // What the collection's forced allocator collect would still have given back: memory other threads freed.
-+            bun_core::Global::mimalloc_cleanup(true);
++            // What the collection's forced allocator collect would still have given back: memory other threads freed
++            // (unless that collect has just run, above).
++            if !released {
++                bun_core::Global::mimalloc_cleanup(true);
++            }
 +            false
 +        } else {
 +            full
