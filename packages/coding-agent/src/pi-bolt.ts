@@ -6,7 +6,7 @@
  * was built for, scripts/runtime-stamp.sh, when known). In every other build it is undefined and nothing here changes what Pi
  * does.
  */
-import { readFileSync, rmSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
@@ -124,16 +124,134 @@ export function piBoltVersionOfTag(tag: unknown): string | undefined {
 	return match ? match[1] : undefined;
 }
 
+export type PiBoltPackageManagerId = "homebrew" | "scoop" | "mise";
+export type PiBoltInstallMethod = "npm" | PiBoltPackageManagerId | "installer";
+
+/** The real path of `path` (through links, and on Windows junctions such as Scoop's `current`), or `path` if it is not there. */
+function realPathOf(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return path;
+	}
+}
+
+/**
+ * `path` relative to `folder` with forward slashes, if it is inside it (or inside its real path), else undefined. Letter case
+ * does not count on Windows.
+ */
+function pathInside(path: string, folder: string): string | undefined {
+	const normalize = (p: string) => {
+		const slashes = p.replace(/\\/g, "/").replace(/\/+$/, "");
+		return process.platform === "win32" ? slashes.toLowerCase() : slashes;
+	};
+	const inner = normalize(path);
+	for (const outer of [folder, realPathOf(folder)].map(normalize)) {
+		if (inner.startsWith(`${outer}/`)) return path.replace(/\\/g, "/").slice(outer.length + 1);
+	}
+	return undefined;
+}
+
+/**
+ * Whether `path` is in Scoop's folder for Pi-Bolt, <root>\apps\pi-bolt\<version> (with `current` linked to the version in use):
+ * <root> is ~\scoop or $SCOOP, and for a global install %ProgramData%\scoop or $SCOOP_GLOBAL.
+ */
+function isScoopPath(path: string): boolean {
+	if (/[\\/]scoop[\\/]apps[\\/]pi-bolt[\\/]/i.test(path)) return true;
+	return [process.env.SCOOP, process.env.SCOOP_GLOBAL].some(
+		(root) => !!root && pathInside(path, join(root, "apps", "pi-bolt")) !== undefined,
+	);
+}
+
+/**
+ * The tool a Pi-Bolt that mise installed goes by, from the folder mise put it in, <data>/installs/<folder>/<version>: <data> is
+ * ~/.local/share/mise (%LOCALAPPDATA%\mise on Windows) or $MISE_DATA_DIR, and <folder> is `pi-bolt` for the registry's
+ * shorthand or `github-opensec-git-pi-bolt` for `github:opensec-git/Pi-Bolt`. Undefined if mise did not install it.
+ */
+export function piBoltMiseTool(path: string = realPathOf(process.execPath)): string | undefined {
+	let folder = /[\\/]mise[\\/]installs[\\/]([^\\/]+)[\\/]/.exec(path)?.[1];
+	const dataDir = process.env.MISE_DATA_DIR;
+	if (folder === undefined && dataDir) folder = pathInside(path, join(dataDir, "installs"))?.split("/")[0];
+	if (!folder || !/pi-bolt/i.test(folder)) return undefined;
+	return folder.startsWith("github-") ? "github:opensec-git/Pi-Bolt" : "pi-bolt";
+}
+
 /**
  * How this Pi-Bolt was installed: with the npm package (whose launcher keeps the executable under $PIBOLT_HOME/npm/<version>;
- * on Windows, whose install script puts it in the package's own bin folder, where npm's shims start it directly), or with the
- * installer (anything else).
+ * on Windows, whose install script puts it in the package's own bin folder, where npm's shims start it directly), with
+ * Homebrew (the executable is in its Cellar, <prefix>/Cellar/pi-bolt/<version>/libexec, wherever a link to it is), with Scoop
+ * (in <root>\apps\pi-bolt, started by Scoop's shim), with mise (in <data>/installs/<tool>), or with the installer (anything
+ * else).
  */
-export function piBoltInstallMethod(): "npm" | "installer" {
+export function piBoltInstallMethod(): PiBoltInstallMethod {
 	if (process.env.PIBOLT_NPM === "1") return "npm";
 	const execPath = process.execPath;
 	if (/[\\/]npm[\\/]\d+\.\d+\.\d+[\\/]pi-bolt-(linux|darwin|win32)-/.test(execPath)) return "npm";
-	return /[\\/]node_modules[\\/]pi-bolt[\\/]bin[\\/]pi-bolt\.exe$/i.test(execPath) ? "npm" : "installer";
+	if (/[\\/]node_modules[\\/]pi-bolt[\\/]bin[\\/]pi-bolt\.exe$/i.test(execPath)) return "npm";
+	const realPath = realPathOf(execPath);
+	if (/[\\/]Cellar[\\/]pi-bolt[\\/]/.test(realPath)) return "homebrew";
+	if (isScoopPath(realPath)) return "scoop";
+	if (piBoltMiseTool(realPath)) return "mise";
+	return "installer";
+}
+
+/** A package manager that installed this Pi-Bolt. It owns the folder: Pi-Bolt neither updates nor changes it itself. */
+export interface PiBoltPackageManager {
+	/** Its name in messages: "Homebrew". */
+	name: string;
+	/** Its command: "brew". */
+	command: string;
+	/** What it installed Pi-Bolt from: "the opensec-git/tap/pi-bolt formula". */
+	source: string;
+	update: string;
+	uninstall: string;
+	/** The command that switches to another version; undefined for Homebrew, whose formula has the latest release only. */
+	switchVersion?: string;
+}
+
+/** The package manager that installed this Pi-Bolt (or one installed as `method`); undefined for npm and the installer. */
+export function piBoltPackageManager(
+	method: PiBoltInstallMethod = piBoltInstallMethod(),
+): PiBoltPackageManager | undefined {
+	switch (method) {
+		case "homebrew":
+			return {
+				name: "Homebrew",
+				command: "brew",
+				source: "the opensec-git/tap/pi-bolt formula",
+				update: "brew upgrade pi-bolt",
+				uninstall: "brew uninstall pi-bolt",
+			};
+		case "scoop":
+			// (Scoop keeps the versions it updated from, until `scoop cleanup`: reset switches to one.)
+			return {
+				name: "Scoop",
+				command: "scoop",
+				source: "the opensec-git/pi-bolt manifest",
+				update: "scoop update pi-bolt",
+				uninstall: "scoop uninstall pi-bolt",
+				switchVersion: "scoop reset pi-bolt@<version>",
+			};
+		case "mise": {
+			// (--bump: a version pinned in mise's config, as `mise use tool@1.0.0` writes it, is otherwise kept.)
+			const tool = piBoltMiseTool() ?? "pi-bolt";
+			return {
+				name: "mise",
+				command: "mise",
+				source: tool,
+				update: `mise upgrade --bump ${tool}`,
+				uninstall: `mise unuse -g ${tool}`,
+				switchVersion: `mise use -g ${tool}@<version>`,
+			};
+		}
+		default:
+			return undefined;
+	}
+}
+
+/** The command that updates this Pi-Bolt: its package manager's (`brew upgrade pi-bolt`), else `pi-bolt update`. */
+export function piBoltUpdateCommand(method: PiBoltInstallMethod = piBoltInstallMethod()): string {
+	return piBoltPackageManager(method)?.update ?? "pi-bolt update";
 }
 
 /**
@@ -184,10 +302,11 @@ export function piBoltJitVariant(variant: string = PIBOLT?.variant ?? "x64"): st
 /**
  * The command that installs the JIT build in place of this one, as it was installed: the installer with PIBOLT_VARIANT (which
  * keeps the default build's folder, and links `pi-bolt` to the new one), or for npm, PIBOLT_VARIANT where the package reads it
- * (every run on macOS and Linux; when it is installed on Windows).
+ * (every run on macOS and Linux; when it is installed on Windows). One a package manager installed is uninstalled for the
+ * installer's.
  */
 export function piBoltJitSwitchCommand(
-	method: "npm" | "installer" = piBoltInstallMethod(),
+	method: PiBoltInstallMethod = piBoltInstallMethod(),
 	platform: NodeJS.Platform = process.platform,
 	variant: string = piBoltJitVariant(),
 ): string {
@@ -196,9 +315,15 @@ export function piBoltJitSwitchCommand(
 			? `$env:PIBOLT_VARIANT = "${variant}"; npm install -g --allow-scripts=pi-bolt pi-bolt`
 			: `export PIBOLT_VARIANT=${variant} (in your shell profile)`;
 	}
-	return platform === "win32"
-		? `$env:PIBOLT_VARIANT = "${variant}"; irm https://pi-bolt.opensec.in/install.ps1 | iex`
-		: `curl -fsSL https://pi-bolt.opensec.in/install.sh | PIBOLT_VARIANT=${variant} sh`;
+	// (Homebrew, Scoop and mise install the default build only: the JIT build comes from the installer, in place of theirs.
+	// Windows PowerShell 5.1 has no &&.)
+	const manager = piBoltPackageManager(method);
+	if (platform === "win32") {
+		const installer = `$env:PIBOLT_VARIANT = "${variant}"; irm https://pi-bolt.opensec.in/install.ps1 | iex`;
+		return manager ? `${manager.uninstall}; ${installer}` : installer;
+	}
+	const installer = `curl -fsSL https://pi-bolt.opensec.in/install.sh | PIBOLT_VARIANT=${variant} sh`;
+	return manager ? `${manager.uninstall} && ${installer}` : installer;
 }
 
 /** The executable the installer puts in `installDir` for this variant (on macOS, the launcher that starts pi-bin). */

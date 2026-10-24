@@ -36,7 +36,14 @@ import { type CompiledExtensionSource, extensionFingerprint } from "./core/exten
 import { DefaultPackageManager } from "./core/package-manager.ts";
 import { getPackageIdentity } from "./core/package-source.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
-import { PIBOLT, PIBOLT_RELEASE_KEY, PIBOLT_RELEASES_URL, piBoltInstallDir, piBoltInstallMethod } from "./pi-bolt.ts";
+import {
+	PIBOLT,
+	PIBOLT_RELEASE_KEY,
+	PIBOLT_RELEASES_URL,
+	piBoltInstallDir,
+	piBoltInstallMethod,
+	piBoltPackageManager,
+} from "./pi-bolt.ts";
 
 /** What `pi-bolt compile` was asked for, kept in <install>/compile.json for the next update. */
 export interface CompileSelection {
@@ -712,9 +719,16 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 			throw new CompileError("compiling extensions in is not available on Windows yet");
 		if (process.env.PREFIX?.includes("com.termux"))
 			throw new CompileError("compiling extensions in is not available in Termux");
-		if (!options.out && piBoltInstallMethod() === "npm") {
+		const method = piBoltInstallMethod();
+		if (!options.out && method === "npm") {
 			throw new CompileError(
 				"this Pi-Bolt was installed with the npm package, whose folder npm owns: install it with the installer to compile extensions in",
+			);
+		}
+		const manager = piBoltPackageManager(method);
+		if (!options.out && manager) {
+			throw new CompileError(
+				`this Pi-Bolt was installed with ${manager.name}, whose folder ${manager.command} owns: install it with the installer to compile extensions in`,
 			);
 		}
 		if (mode === "status") {

@@ -78,6 +78,12 @@ irm https://pi-bolt.opensec.in/install.ps1 | iex
 Or:
 
 - Command Prompt: `powershell -c "irm https://pi-bolt.opensec.in/install.ps1 | iex"`
+- Homebrew (macOS on Apple silicon, Linux): `brew install opensec-git/tap/pi-bolt`, updated with `brew upgrade pi-bolt`
+- Scoop (Windows): `scoop bucket add opensec-git https://github.com/opensec-git/scoop-bucket`, then
+  `scoop install opensec-git/pi-bolt`, updated with `scoop update pi-bolt`
+- mise: `github:opensec-git/Pi-Bolt` with the options in the
+  [installation guide](https://pi-bolt.opensec.in/docs/installation.html), updated with
+  `mise upgrade --bump github:opensec-git/Pi-Bolt`
 - npm: `npm install -g --allow-scripts=pi-bolt pi-bolt`
 - Bun: `bun add -g --trust pi-bolt`
 - Arch Linux: the community AUR package
@@ -173,9 +179,9 @@ and `hosts` to `$PREFIX/glibc/etc`, where Termux's glibc reads them.
 - **Linux** x86-64 or ARM64 with glibc 2.17 or later (Ubuntu 20.04+, Debian 11+, RHEL/Rocky 8+, Amazon Linux 2, Raspberry Pi
   OS 64-bit). musl is not supported.
 - **Android** 7 or later on 64-bit ARM, in Termux.
-- **macOS** 13 or later on Apple silicon. Install with the installer or npm
+- **macOS** 13 or later on Apple silicon. Install with the installer, Homebrew, mise or npm
   ([Troubleshooting](docs/TROUBLESHOOTING.md#macos)).
-- **Windows** 10 (1809) or later, or Windows 11, on x64. Install with the installer or npm; for problems, see
+- **Windows** 10 (1809) or later, or Windows 11, on x64. Install with the installer, Scoop, mise or npm; for problems, see
   [Troubleshooting: Windows](docs/TROUBLESHOOTING.md#windows).
 - Windows on ARM64 runs the x64 build, in Windows 11's x64 emulation.
 

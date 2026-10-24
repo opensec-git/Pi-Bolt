@@ -1,4 +1,4 @@
-<!-- {"title": "Installation", "description": "Install Pi-Bolt on Linux, macOS, Windows or Android with the installer or npm, choose a build, verify it, update and uninstall."} -->
+<!-- {"title": "Installation", "description": "Install Pi-Bolt on Linux, macOS, Windows or Android with the installer, Homebrew, Scoop, mise or npm, choose a build, verify it, update and uninstall."} -->
 <p class="eyebrow">Get started</p>
 <h1>Installation</h1>
 <p class="lede">Install Pi-Bolt with one command. The installer downloads the release for your system, checks its checksum and
@@ -34,6 +34,34 @@ irm https://pi-bolt.opensec.in/install.ps1 | iex</pre>
 <pre data-label="Terminal"><span class="p">$ </span>npm install -g --allow-scripts=pi-bolt pi-bolt</pre>
     <p><code>--allow-scripts=pi-bolt</code> lets npm run the package's install script, which puts the Windows executable in place.
       On macOS and Linux, the first run of <code>pi-bolt</code> downloads the release that matches the package's version.</p>
+  </div>
+  <div data-tab="homebrew" data-title="Homebrew">
+<pre data-label="Terminal"><span class="p">$ </span>brew install opensec-git/tap/pi-bolt</pre>
+    <p>On macOS on Apple silicon and on Linux (x86-64 with AVX2, and ARM64). The formula installs the default build of the latest
+      release, checked against its <code>SHA256SUMS</code>, and links <code>pi-bolt</code> into Homebrew's <code>bin</code>. For
+      the JIT build or the x86-64 build for CPUs without AVX2, use the installer.</p>
+  </div>
+  <div data-tab="scoop" data-title="Scoop">
+<pre data-label="PowerShell">scoop bucket add opensec-git https://github.com/opensec-git/scoop-bucket
+scoop install opensec-git/pi-bolt</pre>
+    <p>On Windows x64. The manifest in <a href="https://github.com/opensec-git/scoop-bucket">opensec-git/scoop-bucket</a>
+      installs the default build of the latest release, checked against the checksum in its <code>SHA256SUMS</code>, and puts
+      <code>pi-bolt</code> on your PATH with a Scoop shim. For the JIT build, use the installer.</p>
+  </div>
+  <div data-tab="mise" data-title="mise">
+<pre data-label="~/.config/mise/config.toml">[tools."github:opensec-git/Pi-Bolt"]
+version = "latest"
+version_prefix = "bolt-v"
+asset_pattern = 'pi-bolt-{{ os(macos="darwin", windows="win32") }}-{{ arch() }}.tar.gz'
+platforms.windows-x64 = { asset_pattern = "pi-bolt-win32-x64.zip" }
+platforms.macos-arm64 = { rename_exe = { pi = "pi-bolt" }, filter_bins = "pi-bolt" }
+platforms.linux-x64 = { rename_exe = { pi = "pi-bolt" }, filter_bins = "pi-bolt" }
+platforms.linux-arm64 = { rename_exe = { pi = "pi-bolt" }, filter_bins = "pi-bolt" }</pre>
+<pre data-label="Terminal"><span class="p">$ </span>mise install</pre>
+    <p>On macOS on Apple silicon, Linux (x86-64 with AVX2, and ARM64) and Windows x64, with mise's <code>github</code> backend.
+      It installs the default build of the latest release, checked against the digest GitHub reports for it, renames the
+      launcher <code>pi</code> to <code>pi-bolt</code>, and puts only <code>pi-bolt</code> on your PATH. For the JIT build, use
+      the installer.</p>
   </div>
 </div>
 
@@ -125,12 +153,18 @@ npm install -g --allow-scripts=pi-bolt pi-bolt</pre>
 <span class="p">$ </span>pi-bolt update --channel beta   <span class="c"># take pre-releases too (stable: the latest release only)</span></pre>
 <p>An update keeps the build it replaces; <code>pi-bolt update --rollback</code> puts it back without downloading anything, and
   running it again goes forward again. The channel is kept for the installation. With npm, run <code>npm update -g pi-bolt</code>;
-  the next run downloads the new release. Running the installer again also updates.</p>
+  the next run downloads the new release. With Homebrew, run <code>brew upgrade pi-bolt</code>; <code>pi-bolt update</code>
+  says so and changes nothing, and <code>--rollback</code> is not available. With Scoop, run <code>scoop update pi-bolt</code>,
+  and <code>scoop reset pi-bolt@&lt;version&gt;</code> to go back to a version Scoop still keeps. With mise, run
+  <code>mise upgrade --bump github:opensec-git/Pi-Bolt</code>, and <code>mise use -g github:opensec-git/Pi-Bolt@&lt;version&gt;</code>
+  for another version. <code>pi-bolt update</code> and <code>--rollback</code> give these commands for a Pi-Bolt that Scoop or
+  mise installed, and change nothing. Running the installer again also updates.</p>
 
 <h2>Uninstall</h2>
 <p>Run the installer again and choose <strong>uninstall</strong>. It removes the Pi-Bolt builds from <code>~/.pi-bolt</code>, the
   one kept for a rollback among them, and the <code>pi-bolt</code> link. With npm, run <code>npm uninstall -g pi-bolt</code>, then delete <code>~/.pi-bolt/npm</code>,
-  where the npm package keeps the release it downloaded.</p>
+  where the npm package keeps the release it downloaded. With Homebrew, run <code>brew uninstall pi-bolt</code>; with Scoop,
+  <code>scoop uninstall pi-bolt</code>; with mise, <code>mise unuse -g github:opensec-git/Pi-Bolt</code>.</p>
 <p>Your Pi configuration in <code>~/.pi/agent</code> belongs to Pi and is not removed.</p>
 
 <h2>Manual download</h2>

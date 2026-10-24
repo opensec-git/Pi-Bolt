@@ -48,6 +48,7 @@ import {
 	piBoltInstallDir,
 	piBoltInstallerProcess,
 	piBoltInstallMethod,
+	piBoltPackageManager,
 	piBoltUpdateEnvironment,
 	setPiBoltChannel,
 } from "./pi-bolt.ts";
@@ -818,17 +819,26 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 
 /**
  * Updates a Pi-Bolt installation to the latest release: the installer, run again, replaces the executable in place (same
- * variant, same folder). One installed with the npm package is updated with the package manager instead.
+ * variant, same folder). One installed with the npm package, Homebrew, Scoop or mise is updated with the package manager
+ * instead.
  */
 async function runPiBoltSelfUpdate(
 	version: string,
 	options: { reinstall?: boolean; recompile?: boolean } = {},
 ): Promise<boolean> {
-	if (piBoltInstallMethod() === "npm") {
+	const method = piBoltInstallMethod();
+	if (method === "npm") {
 		console.log(
 			`This Pi-Bolt was installed with the npm package. Update it with the package manager that installed it:`,
 		);
 		console.log(`  npm install -g pi-bolt@latest      (or: bun add -g pi-bolt@latest)`);
+		return false;
+	}
+	// (Homebrew, Scoop and mise own the folder: the installer would replace files they keep track of.)
+	const manager = piBoltPackageManager(method);
+	if (manager) {
+		console.log(`This Pi-Bolt was installed with ${manager.name}. Update it with ${manager.name}:`);
+		console.log(`  ${manager.update}`);
 		return false;
 	}
 	// On Windows, without PowerShell (#82): a program that starts PowerShell to download a script and run it is what malware does,

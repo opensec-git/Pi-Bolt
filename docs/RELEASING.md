@@ -7,7 +7,7 @@ Six workflows, all on GitHub's own runners:
 | `ci` | every push to `pi-bolt`, every pull request | lint and types, Pi's tests, Pi-Bolt built and tested on Linux x86-64, Linux ARM64 and macOS (Apple silicon), the installer's checks, whether the engine patches apply |
 | `tag` | `ci` passed on a push to `pi-bolt` | when `VERSION` has no `bolt-vX.Y.Z` tag yet, tags that commit and runs `release` |
 | `release` | a `bolt-vX.Y.Z` tag | builds the 20 archives on Linux (x86-64 and ARM64), macOS and Windows, tests each as unpacked from its archive, makes a **draft** release with `SHA256SUMS`, `extensions.txt` and `RUNTIME_STAMP`, and runs `publish` |
-| `publish` | after `release`, or by hand | signs `SHA256SUMS`, checks the signature and the checksums, publishes the release, puts `install.sh`, `install.ps1` and the site on `gh-pages`, and publishes npm |
+| `publish` | after `release`, or by hand | signs `SHA256SUMS`, checks the signature and the checksums, publishes the release, puts `install.sh`, `install.ps1` and the site on `gh-pages`, publishes npm, and updates the Homebrew formula |
 | `runtime` | by hand, when the engine changed | builds the four runtimes, each on its platform's runner, and attaches them to the tag's draft ([below](#when-the-engine-changed)) |
 | `upstream` | daily | opens an issue when Pi has a new release, with the files where merging it conflicts |
 
@@ -18,6 +18,9 @@ release key is a secret of the `release` environment, used only by `publish` run
 - [What a release holds](#what-a-release-holds)
 - [When the engine changed](#when-the-engine-changed)
 - [npm](#npm)
+- [Homebrew](#homebrew)
+- [Scoop](#scoop)
+- [mise](#mise)
 - [A new Pi version](#a-new-pi-version)
 - [The macOS builds](#the-macos-builds)
 - [The Windows builds](#the-windows-builds)
@@ -31,7 +34,10 @@ release key is a secret of the `release` environment, used only by `publish` run
 3. When `ci` passes, `tag` tags the commit `bolt-vX.Y.Z` and runs `release`, which builds and tests for about an hour and leaves
    a draft; `publish` then signs it and publishes it. `tag` leaves a version without its release notes untagged.
 4. Try every install, looking for "signature verified": `curl -fsSL https://pi-bolt.opensec.in/install.sh | sh`,
-   `npm install -g pi-bolt`, and on Windows `irm https://pi-bolt.opensec.in/install.ps1 | iex` (PowerShell) and `powershell -c "irm https://pi-bolt.opensec.in/install.ps1 | iex"` (Command Prompt).
+   `npm install -g pi-bolt`, `brew install opensec-git/tap/pi-bolt` (macOS or Linux; `brew upgrade pi-bolt` where it is
+   installed), and on Windows `irm https://pi-bolt.opensec.in/install.ps1 | iex` (PowerShell) and `powershell -c "irm https://pi-bolt.opensec.in/install.ps1 | iex"` (Command Prompt).
+   The Scoop bucket takes the release by itself within four hours, and mise once the release is older than mise's
+   `minimum_release_age` ([Scoop](#scoop), [mise](#mise)).
 
 By hand (with `AUTO_RELEASE` unset, or to redo a step): push the tag yourself
 (`git tag -a bolt-vX.Y.Z -m "Pi-Bolt X.Y.Z" && git push origin bolt-vX.Y.Z`), then, once the draft is there, run `publish` from
@@ -52,7 +58,7 @@ same tag: the draft's files are replaced (a signature of the old `SHA256SUMS` is
 
 A release can be staged before it is made the latest: `publish` with `-f prerelease=true` publishes it as a GitHub pre-release.
 Only the beta channel takes it (`pi-bolt update --channel beta`, or `PIBOLT_CHANNEL=beta` for the installers); its builds go to
-npm under the dist-tag `beta`, and the `pi-bolt` package, the installers and the site are left as they are. Running `publish`
+npm under the dist-tag `beta`, and the `pi-bolt` package, the installers, the site and the Homebrew formula are left as they are. Running `publish`
 again for the same tag without it makes the release the latest and publishes the `pi-bolt` package.
 
 ```bash
@@ -165,6 +171,58 @@ scripts/publish-npm-builds.sh dist/X.Y.Z
 ```
 
 npm answers a publish with "being processed": a new version can take a few minutes to appear.
+
+## Homebrew
+
+`brew install opensec-git/tap/pi-bolt` installs the formula `Formula/pi-bolt.rb` of
+[opensec-git/homebrew-tap](https://github.com/opensec-git/homebrew-tap): the default build of the latest release for macOS on
+Apple silicon, Linux x86-64 and Linux ARM64 (the `.tar.gz` archives), unpacked into the keg's `libexec` with `pi-bolt` linked to
+`pi`. Intel Macs are refused by the formula's `arm64` requirement. A Pi-Bolt whose executable is in a Homebrew Cellar
+(`.../Cellar/pi-bolt/...`) knows it: `pi-bolt update` says to run `brew upgrade pi-bolt`, and `pi-bolt compile` and
+`pi-bolt update --rollback` refuse.
+
+`publish`'s last job, `homebrew`, points the formula at the release once the release and npm are done (not for a
+pre-release): it checks the release's `SHA256SUMS` against `keys/release.pub`, rewrites the formula's version, URLs and
+checksums with `scripts/update-homebrew-formula.mjs`, and pushes the commit `pi-bolt X.Y.Z` to the tap as OpenSec. It needs the
+repository secret `HOMEBREW_TAP_TOKEN`; without it the job prints a notice and does nothing, and the release is not affected.
+To create the token:
+
+1. GitHub → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token.
+2. Resource owner: `opensec-git`. Expiration: one year (set a reminder to rotate it).
+3. Repository access: Only select repositories → `opensec-git/homebrew-tap`.
+4. Permissions → Repository permissions → Contents: Read and write (Metadata: Read-only is added with it). Nothing else.
+5. If the organization requires approval for fine-grained tokens, an owner approves it under the organization's Settings →
+   Personal access tokens → Pending requests.
+6. opensec-git/Pi-Bolt → Settings → Secrets and variables → Actions → New repository secret, named `HOMEBREW_TAP_TOKEN`. (A
+   repository secret, not one of the `release` environment: a job in that environment waits for its reviewers.)
+
+By hand, from a clone of the tap: `node scripts/update-homebrew-formula.mjs Formula/pi-bolt.rb SHA256SUMS X.Y.Z` with the
+release's `SHA256SUMS`, then `brew style Formula/pi-bolt.rb`, commit and push.
+
+## Scoop
+
+`scoop install opensec-git/pi-bolt` (after `scoop bucket add opensec-git https://github.com/opensec-git/scoop-bucket`) installs
+the manifest `bucket/pi-bolt.json` of [opensec-git/scoop-bucket](https://github.com/opensec-git/scoop-bucket): the default
+Windows build of the latest release (`pi-bolt-win32-x64.zip`), unpacked into `<scoop>\apps\pi-bolt\<version>` with a shim for
+`pi-bolt.exe`. A Pi-Bolt whose executable is there (`...\scoop\apps\pi-bolt\...`, or under `$SCOOP` or `$SCOOP_GLOBAL`)
+knows it: `pi-bolt update` says to run `scoop update pi-bolt`, and `pi-bolt update --rollback` to run
+`scoop reset pi-bolt@<version>`.
+
+Nothing in Pi-Bolt's workflows touches the bucket. Its Excavator workflow (from Scoop's bucket template) runs every four hours:
+it reads the latest release's `bolt-vX.Y.Z` tag, takes the archive's checksum from the release's `SHA256SUMS`, and commits the
+new manifest. Its Install workflow installs the manifest with Scoop on a Windows runner and runs `pi-bolt --version` on every
+push, every pull request and once a day. A pre-release is not taken (the tag comes from the latest release). To update it by
+hand, from a clone of the bucket on Windows with Scoop installed: `.\bin\checkver.ps1 pi-bolt -Update`, then commit and push.
+
+## mise
+
+mise installs Pi-Bolt from the GitHub release with its `github` backend; nothing is published for it. The options (in
+[docs-site/pages/installation.html](../docs-site/pages/installation.html)) pick the default build's archive per platform,
+strip the `bolt-v` tag prefix, rename `pi` to `pi-bolt` and put only `pi-bolt` on PATH. mise takes a release once it is older
+than its `minimum_release_age` setting. A Pi-Bolt in mise's installs folder (`.../mise/installs/<tool>/...`, or under
+`$MISE_DATA_DIR/installs`) knows it: `pi-bolt update` says to run `mise upgrade --bump github:opensec-git/Pi-Bolt`
+(`mise upgrade --bump pi-bolt` once mise's registry has the shorthand), and `pi-bolt update --rollback` to run
+`mise use -g github:opensec-git/Pi-Bolt@<version>`. If a release renames its archives, update the options in the docs.
 
 ## A new Pi version
 
