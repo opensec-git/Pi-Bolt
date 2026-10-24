@@ -16320,8 +16320,10 @@ lease ran out since the previous collection would be let go in this one; code co
 start from this timer, so they scan the same stack. The forced allocator collect still runs, for memory other threads
 freed. The last one (10 min) always runs: before it JSC also lets go of code and bytecode it can get back.
 
-One thing a skipped collection does not do: count towards the age of unlinked bytecode held only weakly (dropped after
-seven full collections without running), so such bytecode goes one full collection later.
+What a skipped collection does not do: count towards the age of unlinked bytecode held only weakly (dropped after seven
+full collections without running), so such bytecode goes one full collection later; and collect an object kept alive by
+native pending activity that ended without the program allocating (a socket or subprocess that finished with no JS
+callback), which goes at the next collection instead.
 ---
  src/jsc/GarbageCollectionController.rs | 38 ++++++++++++++++++++++++--
  src/jsc/VM.rs                          | 14 ++++++++++
