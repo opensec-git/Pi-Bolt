@@ -259,6 +259,9 @@ describe.skipIf(!has("rg") || !has("fd"))("the same results as ripgrep and fd", 
 		{ pattern: "(?i)NEEDLE (two|upper)" },
 		{ pattern: "\\x6eeedle" },
 		{ pattern: "n\\u{65}edle \\w+" },
+		// earendil-works/pi#10998
+		{ pattern: "needle", glob: "src/**/*.ts" },
+		{ pattern: "needle", path: "src", glob: "sub/*.ts" },
 	])("grep %o", async (input) => {
 		const withRg = await createGrepTool(root, { native: false }).execute("t", input);
 		const inProcess = await createGrepTool(root, { native: true }).execute("t", input);

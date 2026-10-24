@@ -1008,6 +1008,27 @@ describe("Coding Agent Tools", () => {
 			expect(getTextOutput(result)).toContain("No matches found");
 			expect(existsSync(marker)).toBe(false);
 		});
+
+		// earendil-works/pi#10998: the search path is not the process cwd, so rg anchored path globs at the wrong folder.
+		it.each([false, true])("should match globs with a / below the search path (native: %s)", async (native) => {
+			for (const file of ["src/a.ts", "src/sub/b.ts", "lib/src/c.ts", "x.ts", "src/e.md"]) {
+				mkdirSync(join(testDir, file, ".."), { recursive: true });
+				writeFileSync(join(testDir, file), "needle\n");
+			}
+			const tool = createGrepTool(testDir, { native });
+			const matchedFiles = async (input: { path?: string; glob: string }) =>
+				getTextOutput(await tool.execute("test-call-grep-path-glob", { pattern: "needle", ...input }))
+					.split("\n")
+					.map((line) => line.split(":")[0])
+					.sort();
+
+			expect(await matchedFiles({ glob: "src/**/*.ts" })).toEqual(["lib/src/c.ts", "src/a.ts", "src/sub/b.ts"]);
+			expect(await matchedFiles({ path: "lib", glob: "src/*.ts" })).toEqual(["src/c.ts"]);
+			expect(await matchedFiles({ path: "src", glob: "**/sub/*.ts" })).toEqual(["sub/b.ts"]);
+			// Globs without a / and negated globs are unchanged.
+			expect(await matchedFiles({ glob: "*.ts" })).toEqual(["lib/src/c.ts", "src/a.ts", "src/sub/b.ts", "x.ts"]);
+			expect(await matchedFiles({ glob: "!*.ts" })).toEqual(["src/e.md"]);
+		});
 	});
 
 	describe("find tool", () => {

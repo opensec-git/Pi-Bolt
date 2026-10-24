@@ -225,6 +225,18 @@ export function createGrepToolDefinition(
 							return;
 						}
 
+						// rg matches a glob with a `/` against the path relative to its own working directory, so
+						// `src/**/*.ts` finds nothing when the search path is a subfolder of it, outside it, or reached
+						// through a symbolic link. A leading `**/` matches it at any depth, as the find tool does. Globs
+						// without a `/`, anchored (`/...`) and negated (`!...`) ones are passed as they are.
+						const effectiveGlob =
+							glob?.includes("/") &&
+							!glob.startsWith("/") &&
+							!glob.startsWith("**/") &&
+							!glob.startsWith("!") &&
+							glob !== "**"
+								? `**/${glob}`
+								: glob;
 						const contextValue = context && context > 0 ? context : 0;
 						const effectiveLimit = Math.max(1, limit ?? DEFAULT_LIMIT);
 						const formatPath = (filePath: string): string => {
@@ -259,7 +271,7 @@ export function createGrepToolDefinition(
 								pattern,
 								ignoreCase,
 								literal,
-								glob,
+								glob: effectiveGlob,
 								limit: effectiveLimit,
 								keepChars: MATCH_TEXT_KEEP_CHARS,
 								signal,
@@ -286,7 +298,7 @@ export function createGrepToolDefinition(
 						const args: string[] = ["--no-config", "--json", "--line-number", "--color=never", "--hidden"];
 						if (ignoreCase) args.push("--ignore-case");
 						if (literal) args.push("--fixed-strings");
-						if (glob) args.push("--glob", glob);
+						if (effectiveGlob) args.push("--glob", effectiveGlob);
 						args.push("--", pattern, searchPath);
 
 						const child = spawn(rgPath, args, { stdio: ["ignore", "pipe", "pipe"] });
