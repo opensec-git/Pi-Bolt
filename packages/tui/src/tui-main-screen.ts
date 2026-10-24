@@ -218,25 +218,40 @@ export class TuiMainScreen extends TuiBase implements TUI {
 	private finishedImageRows: number[] = [];
 	/** The root's live lines and the revision the last frame was rendered from (renderLiveLines()). */
 	private frameLive?: { live: LiveLines; revision: number; width: number; lines: string[] };
+	/**
+	 * The finished lines of the frame before finishedLines' (an array no longer shown), which the next frame's finished
+	 * lines are written into instead of a new array, and how many of its leading lines are those of finishedLines.
+	 */
+	private spareFinishedLines?: string[];
+	private spareFinishedAgree = 0;
 
 	/**
 	 * applyLineResets() for a frame, taking each line that is the same string as the frame before from the frame before:
 	 * most lines of a long transcript are. Unchanged lines are then the same strings as the lines shown, so the diff
 	 * below compares them by identity. Also counts image lines: applyLineResets() leaves only those as they are.
+	 * `previousRawTail` holds the frame before's raw lines from `unchanged` on when `raw` is that frame's array, changed in
+	 * place from there (renderChangedLines()); otherwise rawLines is that frame's.
 	 */
-	private finishLines(raw: string[], unchanged: number): { lines: string[]; imageLines: number } {
-		const previousRaw = this.rawLines;
+	private finishLines(
+		raw: string[],
+		unchanged: number,
+		previousRawTail?: readonly string[],
+	): { lines: string[]; imageLines: number } {
 		const previousFinished = this.finishedLines;
+		const previousRawLength =
+			previousRawTail === undefined ? this.rawLines.length : unchanged + previousRawTail.length;
+		const previousRawAt = (i: number): string | undefined =>
+			previousRawTail === undefined ? this.rawLines[i] : previousRawTail[i - unchanged];
 		// (The first `unchanged` lines are those of the frame before: taken as they were finished, without reading them.)
-		const from = Math.min(unchanged, previousRaw.length, raw.length);
-		const lines: string[] = from > 0 ? previousFinished.slice(0, from) : [];
+		const from = Math.min(unchanged, previousRawLength, raw.length);
+		const lines = this.finishedLinesFrom(from);
 		lines.length = raw.length;
 		const imageRows = this.finishedImageRows.filter((row) => row < from);
 		const single = [""];
 		for (let i = from; i < raw.length; i++) {
 			const line = raw[i]!;
 			let finished: string;
-			if (i < previousRaw.length && line === previousRaw[i]) {
+			if (i < previousRawLength && line === previousRawAt(i)) {
 				finished = previousFinished[i]!;
 			} else {
 				single[0] = line;
@@ -246,9 +261,85 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			lines[i] = finished;
 		}
 		this.rawLines = raw;
+		this.spareFinishedLines = previousFinished;
+		this.spareFinishedAgree = from;
 		this.finishedLines = lines;
 		this.finishedImageRows = imageRows;
 		return { lines, imageLines: imageRows.length };
+	}
+
+	/**
+	 * An array whose first `count` lines are those of finishedLines, for a frame's finished lines: the spare array
+	 * (spareFinishedLines) brought up to date when it is not shown or in use, which copies only the lines it misses
+	 * instead of all `count` of them; a new array otherwise.
+	 */
+	private finishedLinesFrom(count: number): string[] {
+		const spare = this.spareFinishedLines;
+		this.spareFinishedLines = undefined;
+		const finished = this.finishedLines;
+		if (spare === undefined || spare === this.previousLines || spare === finished) {
+			return count > 0 ? finished.slice(0, count) : [];
+		}
+		const agree = Math.min(this.spareFinishedAgree, count, spare.length);
+		spare.length = agree;
+		for (let i = agree; i < count; i++) spare.push(finished[i]!);
+		return spare;
+	}
+
+	/**
+	 * The lines of a frame whose first `unchanged` lines are those of the frame before (renderLiveLines() says so, and no
+	 * overlay is shown), made by changing the last frame's arrays in place from that line on: the root's lines
+	 * (frameLive.lines), resolveFakeCursors()'s, and the raw lines after the cursor marker is taken out. Line for line
+	 * what resolveFrameFakeCursors(), extractCursorPosition() and finishLines() make of a copy of the root's lines, but
+	 * without copying the lines above `unchanged`: a frame then costs time in proportion to what changed, not to the
+	 * length of the transcript. Undefined when the last frame's arrays are not those this needs (resolveFrameFakeCursors()
+	 * and finishLines() then make the frame).
+	 */
+	private renderChangedLines(
+		live: LiveLines,
+		root: string[],
+		unchanged: number,
+		height: number,
+	): { lines: string[]; imageLines: number; cursorPos: { row: number; col: number } | null } | undefined {
+		const resolved = this.resolvedLines;
+		const raw = this.rawLines;
+		if (
+			unchanged <= 0 ||
+			this.unresolvedLines !== root ||
+			resolved.length !== root.length ||
+			raw === resolved ||
+			raw === root ||
+			raw.length < unchanged ||
+			this.finishedLines.length !== raw.length
+		) {
+			return undefined;
+		}
+		const source = live.lines;
+		const rootTail = root.slice(unchanged);
+		root.length = unchanged;
+		for (let i = unchanged; i < source.length; i++) root.push(source[i]!);
+
+		const resolvedTail = resolved.slice(unchanged);
+		resolved.length = unchanged;
+		const single = [""];
+		for (let i = unchanged; i < root.length; i++) {
+			const line = root[i]!;
+			const k = i - unchanged;
+			if (k < rootTail.length && line === rootTail[k]) {
+				resolved.push(resolvedTail[k]!);
+			} else {
+				single[0] = line;
+				resolved.push(this.resolveFakeCursors(single)[0]!);
+			}
+		}
+
+		const rawTail = raw.slice(unchanged);
+		raw.length = unchanged;
+		for (let i = unchanged; i < resolved.length; i++) raw.push(resolved[i]!);
+		// (Only the last `height` lines are read, all of them from `unchanged` on.)
+		const cursorPos = this.extractCursorPosition(raw, height);
+		const finished = this.finishLines(raw, unchanged, rawTail);
+		return { ...finished, cursorPos };
 	}
 
 	private collectKittyImageIds(lines: string[]): Set<number> {
@@ -343,13 +434,6 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		// not read again: a frame costs time in proportion to what changed, not to the length of the transcript.
 		const live = renderLiveLines(this, width);
 		const before = this.frameLive;
-		// (A copy of the live lines, which change at the next render: made again only when they changed.)
-		const root =
-			live === undefined
-				? renderSharedLines(this, width)
-				: before?.live === live && before.width === width && before.revision === live.revision
-					? before.lines
-					: live.lines.slice();
 		let unchanged = 0;
 		if (
 			live !== undefined &&
@@ -363,23 +447,44 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			unchanged = Math.min(
 				live.changedSince(before.revision),
 				before.lines.length,
-				root.length - height,
+				live.lines.length - height,
 				this.previousLines.length - height,
 			);
 		}
 		unchanged = Math.max(0, unchanged);
-		this.frameLive = live === undefined ? undefined : { live, revision: live.revision, width, lines: root };
-		let newLines = this.resolveFrameFakeCursors(root, unchanged);
+		// (When the lines above `unchanged` are those of the last frame, its arrays are changed from there on.)
+		const changed =
+			live !== undefined && before !== undefined && unchanged > 0
+				? this.renderChangedLines(live, before.lines, unchanged, height)
+				: undefined;
+		let newLines: string[];
+		let cursorPos: { row: number; col: number } | null;
+		let finished: { lines: string[]; imageLines: number };
+		if (changed !== undefined) {
+			this.frameLive = { live: live!, revision: live!.revision, width, lines: before!.lines };
+			cursorPos = changed.cursorPos;
+			finished = changed;
+		} else {
+			// (A copy of the live lines, which change at the next render: made again only when they changed.)
+			const root =
+				live === undefined
+					? renderSharedLines(this, width)
+					: before?.live === live && before.width === width && before.revision === live.revision
+						? before.lines
+						: live.lines.slice();
+			this.frameLive = live === undefined ? undefined : { live, revision: live.revision, width, lines: root };
+			newLines = this.resolveFrameFakeCursors(root, unchanged);
 
-		// Composite overlays into the rendered lines (before differential compare)
-		if (this.hasOverlayEntries) {
-			newLines = this.compositeOverlays(newLines, width, height);
+			// Composite overlays into the rendered lines (before differential compare)
+			if (this.hasOverlayEntries) {
+				newLines = this.compositeOverlays(newLines, width, height);
+			}
+
+			// Extract cursor position before applying line resets (marker must be found first)
+			cursorPos = this.extractCursorPosition(newLines, height);
+
+			finished = this.finishLines(newLines, unchanged);
 		}
-
-		// Extract cursor position before applying line resets (marker must be found first)
-		const cursorPos = this.extractCursorPosition(newLines, height);
-
-		const finished = this.finishLines(newLines, unchanged);
 		newLines = finished.lines;
 		// Kitty image bookkeeping scans every line: only needed while an image is shown or was shown the frame before.
 		const imagesShown = finished.imageLines > 0 || this.previousKittyImageIds.size > 0;
