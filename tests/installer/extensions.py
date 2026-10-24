@@ -21,8 +21,8 @@ PACKAGES = ("opensec-pi-subagents", "opensec-pi-todo", "opensec-pi-fff")
 
 
 def run_in_terminal(command, cwd, env, typed, timeout=10):
-    """Run command on a pseudo-terminal of its own (its /dev/tty), typing each (prompt, keys) pair's keys one at a time once
-    prompt is on screen, as a person would. Returns the output."""
+    """Run command on a pseudo-terminal of its own (its /dev/tty), typing each (prompt, keys[, delay]) entry's keys one at a
+    time once prompt is on screen, as a person would (delay seconds before each key, 0.1 by default). Returns the output."""
     pid, fd = pty.fork()
     if pid == 0:
         os.chdir(cwd)
@@ -32,9 +32,9 @@ def run_in_terminal(command, cwd, env, typed, timeout=10):
     deadline = time.time() + timeout
     while time.time() < deadline:
         if pending and pending[0][0].encode() in out:
-            _, keys = pending.pop(0)
+            _, keys, *rest = pending.pop(0)
             for key in keys:
-                time.sleep(0.1)
+                time.sleep(rest[0] if rest else 0.1)
                 os.write(fd, key.encode())
         ready, _, _ = select.select([fd], [], [], 0.1)
         if not ready:
@@ -142,6 +142,13 @@ offer_extensions
     @unittest.skipIf(os.name == "nt", "POSIX terminal")
     def test_no_typed_after_the_menu_does_not_install(self):
         commands, output = self.run_offer(choice="", typed=[("Choose an action", "y\r"), ("Install them?", "n\r")])
+        self.assertEqual(commands, [], output)
+        self.assertIn("You can install them later", output)
+
+    # Regression for #103: an answer typed the moment the question appears is the answer, not type-ahead.
+    @unittest.skipIf(os.name == "nt", "POSIX terminal")
+    def test_no_typed_as_soon_as_asked_does_not_install(self):
+        commands, output = self.run_offer(choice="", typed=[("Choose an action", "y\r"), ("Install them?", "n\r", 0)])
         self.assertEqual(commands, [], output)
         self.assertIn("You can install them later", output)
 

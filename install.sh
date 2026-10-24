@@ -813,9 +813,9 @@ read_key() {
 	printf '%s' "$key"
 }
 
-# read_answer: a line typed at the terminal, once what was typed before the question is dropped. read_key takes one key, so
-# the Enter typed after it stays in the terminal's input, and would answer the next question with its default (#103).
-read_answer() {
+# drop_typeahead: drops what was typed at the terminal before a question. read_key takes one key, so the Enter typed after
+# it stays in the terminal's input, and would answer the next question with its default (#103).
+drop_typeahead() {
 	old=$(stty -g </dev/tty 2>/dev/null || true)
 	if [ -n "$old" ] && stty -icanon min 0 time 0 </dev/tty 2>/dev/null; then
 		# (With min 0 and time 0 a read returns at once, with nothing once the input is empty.)
@@ -825,7 +825,15 @@ read_answer() {
 		done
 		stty "$old" </dev/tty 2>/dev/null || true
 	fi
-	head -n 1 </dev/tty || true
+}
+
+# ask FORMAT [ARG...]: asks a question (printf arguments) and sets `answer` to the line typed after it. What was typed before
+# is dropped before the question is shown, so an answer typed as soon as it appears is kept.
+ask() {
+	drop_typeahead
+	# shellcheck disable=SC2059
+	printf "$@"
+	answer=$(head -n 1 </dev/tty || true)
 }
 
 choose_action() {
@@ -906,8 +914,7 @@ path_hint() {
 		return 0
 	fi
 	if has_tty; then
-		printf 'Add it to your PATH in %s now? [Y/n] ' "$(tilde "$config")"
-		answer=$(read_answer)
+		ask 'Add it to your PATH in %s now? [Y/n] ' "$(tilde "$config")"
 		case "$answer" in
 		n | N | no | NO) ;;
 		*)
@@ -998,8 +1005,7 @@ offer_extensions() {
 			case " $wanted " in *" $package "*) printf '  %s%-22s%s %s\n' "$cyan" "$package" "$reset" "${rest%:*}" ;; esac
 		done
 		IFS=$old_ifs
-		printf '\nInstall them? [Y/n] '
-		answer=$(read_answer)
+		ask '\nInstall them? [Y/n] '
 		case "$answer" in
 		n | N | no | NO)
 			printf '%sYou can install them later with: pi-bolt install --pi-bolt npm:<name>%s\n' "$dim" "$reset"
@@ -1037,8 +1043,7 @@ offer_extensions() {
 
 offer_start() {
 	[ -t 1 ] && has_tty && [ "${PIBOLT_NO_START:-0}" != 1 ] || return 0
-	printf '\nStart pi-bolt now? [Y/n] '
-	answer=$(read_answer)
+	ask '\nStart pi-bolt now? [Y/n] '
 	case "$answer" in
 	n | N | no | NO) return 0 ;;
 	esac
@@ -1077,8 +1082,7 @@ setup_termux() {
 		printf "%sTermux's glibc is needed.%s Pi-Bolt is a glibc program, and Termux runs it with its glibc packages:\n\n" "$bold" "$reset"
 		printf '  pkg install glibc-repo && pkg install glibc\n\n'
 		if has_tty; then
-			printf 'Install them now? [Y/n] '
-			answer=$(read_answer)
+			ask 'Install them now? [Y/n] '
 			case "$answer" in n | N | no | NO) fail "Pi-Bolt needs Termux's glibc: install it with the command above, then run this again" ;; esac
 		fi
 		# (A package list fetched before glibc-repo was added, or never, does not have it: fetched again first.)
