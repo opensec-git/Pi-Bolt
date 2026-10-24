@@ -11,6 +11,7 @@ import {
 } from "../src/core/extensions/compiled.ts";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
 import {
+	buildFailureReason,
 	candidateLines,
 	checkReleaseSums,
 	recordedExclusions,
@@ -273,5 +274,54 @@ describe("pi-bolt compile says what it does with each extension and package", ()
 
 	test("an exclusion given on the command line says so", () => {
 		expect(candidateLines(plan, packages)).toContain("pi-web-access (package): excluded (--exclude)");
+	});
+});
+
+describe("pi-bolt compile says why a build stopped", () => {
+	// What the compiler printed for pi-web-access 0.41.0's bundled dist/ (#108), with progress lines around it.
+	const tooBig =
+		"AOT: a function of 413499 bytes of bytecode (the top-level code of a module) is bigger than " +
+		"maximumAOTCandidateBytecodeSize (262144 bytes), and compiling one that big takes minutes and tens of GB. Split it up " +
+		"(it is likely one big literal), or build with BUN_JSC_maximumAOTCandidateBytecodeSize=413499 to compile it anyway, " +
+		"or with BUN_JSC_omitBytecodeFromStaticHeap=0 to run it from bytecode.";
+	const log = [
+		"[0.12ms] bundle 2104 modules",
+		"AOT: compiling 48211 functions",
+		"AOT: 0 methods are closed",
+		tooBig,
+		"",
+	].join("\n");
+
+	test("the AOT line that says why is shown, with the ways round it (#108)", () => {
+		const reason = buildFailureReason(log);
+		expect(reason.split("\n")).toEqual([
+			"[0.12ms] bundle 2104 modules",
+			tooBig,
+			expect.stringContaining("pi-bolt compile --exclude <name>"),
+		]);
+		expect(reason).toContain("BUN_JSC_maximumAOTCandidateBytecodeSize=<n> pi-bolt compile");
+		expect(reason).not.toContain("methods are closed");
+	});
+
+	test("a declined function is shown with the compiler's own summary", () => {
+		const declined =
+			"AOT: the function `parse` (module 3, at 120 of its source) cannot be compiled ahead of time: no reason given";
+		const summary =
+			"AOT: 1 function could not be compiled ahead of time, and in this executable ... the build stops.";
+		expect(buildFailureReason(`AOT: 0 methods are closed\n${declined}\n${summary}\n`)).toBe(
+			`${declined}\n${summary}`,
+		);
+	});
+
+	test("an error of the bundler is shown as before", () => {
+		const output = `AOT: 0 methods are closed\nerror: Could not resolve: "./missing"\n    at plugins.ts:3:20\n`;
+		expect(buildFailureReason(output)).toBe('error: Could not resolve: "./missing"\n    at plugins.ts:3:20');
+	});
+
+	test("with only progress printed, the last of it; with nothing, says so", () => {
+		expect(buildFailureReason("AOT: compiling 2 functions\nAOT: 0 methods are closed\n")).toBe(
+			"AOT: compiling 2 functions\nAOT: 0 methods are closed",
+		);
+		expect(buildFailureReason("\n")).toBe("(the compiler printed nothing)");
 	});
 });

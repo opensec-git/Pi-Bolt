@@ -103,6 +103,14 @@ function that is not compiled cannot be relied on to run. The message names the 
 change that function. `BUN_JSC_allowAOTDeclinedFunctions=1` builds anyway: the function then runs from bytecode if it uses no
 variables from outside itself, and stops the program when it is called if it does.
 
+**`pi-bolt compile` stops with "is bigger than maximumAOTCandidateBytecodeSize".** One module of an extension holds more than
+256 KB of bytecode, usually one large literal: a package's prebuilt, bundled `dist/` (pi-web-access is one), or embedded data.
+Leave that extension out with `pi-bolt compile --exclude <name>`, by the name `pi-bolt compile` prints for it: it still loads
+from its files at run time, and later compiles and `pi-bolt update` leave it out too (`--no-exclude` takes it back). Or compile
+it anyway with `BUN_JSC_maximumAOTCandidateBytecodeSize=<n> pi-bolt compile`, `<n>` being at least the size the message
+gives; the compiler warns that this can take minutes and tens of GB. The message's third remedy,
+`BUN_JSC_omitBytecodeFromStaticHeap=0`, does not apply to `pi-bolt compile`: the build keeps the release's setting.
+
 **A run-time plugin is slow.** On the default build, plugins loaded at run time are interpreted. Compile them in
 ([PLUGINS.md](PLUGINS.md)) or use the `linux-x64-jit` build.
 

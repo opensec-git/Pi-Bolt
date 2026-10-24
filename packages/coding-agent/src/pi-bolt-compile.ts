@@ -405,6 +405,30 @@ function buildEnvironment(kit: Kit, kitDir: string): NodeJS.ProcessEnv {
 	return env;
 }
 
+/** The compiler's "AOT: " lines that say why a build stops (the others report its progress). */
+const AOT_STOP = /cannot be compiled ahead of time|could not be compiled ahead of time|maximumAOTCandidateBytecodeSize/;
+
+/**
+ * Why a build stopped, from what the compiler printed: each "AOT: " line that says so (a function too big to compile, or
+ * one the compiler declined), and the last lines of the rest. The reason is often an "AOT: " line alone, and those lines
+ * are otherwise mostly progress.
+ */
+export function buildFailureReason(output: string): string {
+	const lines = output.split(/\r?\n/).filter((line) => line.trim());
+	const indexes = (keep: (line: string) => boolean) => lines.flatMap((line, index) => (keep(line) ? [index] : []));
+	const stops = indexes((line) => line.startsWith("AOT: ") && AOT_STOP.test(line)).slice(-22);
+	const kept = new Set([...stops, ...indexes((line) => !line.startsWith("AOT: ")).slice(-8)]);
+	const reason = lines.filter((_, index) => kept.has(index));
+	if (reason.length === 0) return lines.slice(-8).join("\n") || "(the compiler printed nothing)";
+	if (stops.some((index) => lines[index].includes("maximumAOTCandidateBytecodeSize"))) {
+		reason.push(
+			"Leave that extension out with `pi-bolt compile --exclude <name>`, or compile it anyway with " +
+				"`BUN_JSC_maximumAOTCandidateBytecodeSize=<n> pi-bolt compile` (docs/TROUBLESHOOTING.md).",
+		);
+	}
+	return reason.join("\n");
+}
+
 /**
  * Builds Pi-Bolt with the extensions of `plan` into `stage`, a folder like this build's. A failed build leaves all of
  * what the compiler printed in `log`, outside the work folder that is removed after it.
@@ -442,13 +466,16 @@ function buildExecutable(
 	process.stderr.write(chalk.dim(`compiling Pi ${kit.pi} with ${plan.plugins.length} extension(s)\n`));
 	const result = run(bun, args, { cwd: agent, env: buildEnvironment(kit, kitDir) });
 	if (result.status !== 0 || !existsSync(executable)) {
-		writeFileSync(log, `${result.stdout}\n${result.stderr}`);
-		const reason = `${result.stdout}\n${result.stderr}`
-			.split("\n")
-			.filter((line) => line.trim() && !line.startsWith("AOT: "))
-			.slice(-8)
-			.join("\n");
-		throw new CompileError(`the build stopped:\n${reason}\n(all of what the compiler printed: ${log})`);
+		const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+		writeFileSync(log, output);
+		const how = result.error
+			? `the compiler did not run: ${result.error.message}\n`
+			: result.signal
+				? `the compiler was stopped by ${result.signal}\n`
+				: "";
+		throw new CompileError(
+			`the build stopped:\n${how}${buildFailureReason(output)}\n(all of what the compiler printed: ${log})`,
+		);
 	}
 	// Everything else is this build's: the macOS launcher and pi-spawn, Pi's documentation, themes and native modules.
 	const own = new Set(darwin ? ["pi-bin", "pi-bin.hot"] : ["pi"]);
