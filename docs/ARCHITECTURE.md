@@ -183,8 +183,10 @@ the engine's classes, the text of static strings. On Linux the runtime is linked
 On macOS the executable runs at the address it was linked for: `pi` is a small launcher
 ([`scripts/lib/darwin-launcher.c`](../scripts/lib/darwin-launcher.c)) that starts `pi-bin`, the executable beside it, that way in
 the same process (`posix_spawn` with `POSIX_SPAWN_SETEXEC`). The system's libraries still move at every boot; the build checks
-that the heap points at none of their functions or objects. If the executable is not at its address after all, it runs from
-bytecode.
+that the heap points at none of their functions or objects. The check reads every 8-byte word of the heap, data such as the
+bytecode it carries included, so it can warn about a word that only happens to equal a library symbol's address at that boot
+(`warning: the static heap points at ...`): a real pointer is reported on every machine, such a word on one machine and not on
+another. If the executable is not at its address after all, it runs from bytecode.
 
 **A start from disk.** When `pi-bin` is not in memory (after a restart or an update), a start reads its pages one by one as each
 is first touched, and waits for the disk each time: about 170 ms instead of 30. `build-pi.sh` records which parts of `pi-bin` a

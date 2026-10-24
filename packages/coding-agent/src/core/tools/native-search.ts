@@ -80,18 +80,22 @@ function matchClass(p: string, start: number, c: string): { matched: boolean; en
 
 // Each `*` tries every place it could end, and the parts after it again from each of those. On some patterns that takes
 // exponential time: `*a*a*a*a*a*a*a*a*a*a*b` against 40 `a`s took 28 seconds. So a match runs in up to two ways:
-// - `globFrom` tries every place, and gives up after `FREE_STEPS` calls (each a pass over at most the pattern and the text).
-//   Nearly every match ends well before that.
-// - `globFromMarked` then starts again, and marks each place a `*` was tried from. A place tried before has failed (success
-//   ends the match), so none is tried twice: the match takes time proportional to the pattern's length times the text's.
-// They are two functions, not one with a flag: the marking code in the first made common matches up to 15% slower.
+// - `globFrom` tries every place. Its own `*` loop (one at most: it returns after it) makes at most one call per place in the
+//   text; the parts after it run in `globFromCounted`, which pays for each `*` loop it starts out of `freeSteps`. When that
+//   runs out, `outOfSteps` decides the match. Nearly every match ends long before that.
+// - `globFromMarked`, used by `outOfSteps`, starts again and marks each place a `*` was tried from. A place tried before has
+//   failed (success ends the match), so none is tried twice: time proportional to the pattern's length times the text's.
+// The budget is not reset for each match, and the first `*` loop is not paid for: on a build without the JIT, the reset and
+// the count in every call cost a search over a large tree 3% more instructions. The loops below are paid for at their
+// start, with at least half the calls they can make, rather than call by call, for the same reason. They are separate
+// functions, not one with a flag: the marking code in the first made common matches up to 15% slower.
 
-const FREE_STEPS = 1024;
-let freeSteps = 0;
+/** What `globFromCounted` may spend before `outOfSteps` decides the match: about that many calls, twice that at most. */
+const FREE_STEPS = 65536;
+let freeSteps = FREE_STEPS;
 
-/** Whether `s` from `si` on matches `p` from `pi` on; false too when `freeSteps` runs out (it is below 0 then). */
+/** Whether `s` from `si` on matches `p` from `pi` on: the start of a match (see above). */
 function globFrom(p: string, pi: number, s: string, si: number): boolean {
-	if (--freeSteps < 0) return false;
 	while (pi < p.length) {
 		const c = p[pi];
 		if (c === "*") {
@@ -99,21 +103,21 @@ function globFrom(p: string, pi: number, s: string, si: number): boolean {
 				const next = pi + 2;
 				if (p[next] === "/") {
 					// `**/`: no folder, or any number of them.
-					if (globFrom(p, next + 1, s, si)) return true;
+					if (globFromCounted(p, next + 1, s, si)) return true;
 					for (let k = si; k < s.length; k++) {
-						if (s[k] === "/" && globFrom(p, next + 1, s, k + 1)) return true;
+						if (s[k] === "/" && globFromCounted(p, next + 1, s, k + 1)) return true;
 					}
 					return false;
 				}
 				// `**` otherwise: anything, across folders.
 				for (let k = s.length; k >= si; k--) {
-					if (globFrom(p, next, s, k)) return true;
+					if (globFromCounted(p, next, s, k)) return true;
 				}
 				return false;
 			}
 			// `*`: anything within one name.
 			for (let k = si; ; k++) {
-				if (globFrom(p, pi + 1, s, k)) return true;
+				if (globFromCounted(p, pi + 1, s, k)) return true;
 				if (k >= s.length || s[k] === "/") return false;
 			}
 		}
@@ -140,6 +144,77 @@ function globFrom(p: string, pi: number, s: string, si: number): boolean {
 		si++;
 	}
 	return si === s.length;
+}
+
+/** `globFrom` for the parts after a `*`, paying for each `*` loop it starts; `outOfSteps` decides when it runs out. */
+function globFromCounted(p: string, pi: number, s: string, si: number): boolean {
+	while (pi < p.length) {
+		const c = p[pi];
+		if (c === "*") {
+			freeSteps -= s.length;
+			if (freeSteps < 0) return outOfSteps(p, s);
+			if (p[pi + 1] === "*") {
+				const next = pi + 2;
+				if (p[next] === "/") {
+					// `**/`: no folder, or any number of them.
+					if (globFromCounted(p, next + 1, s, si)) return true;
+					for (let k = si; k < s.length; k++) {
+						if (s[k] === "/" && globFromCounted(p, next + 1, s, k + 1)) return true;
+					}
+					return false;
+				}
+				// `**` otherwise: anything, across folders.
+				for (let k = s.length; k >= si; k--) {
+					if (globFromCounted(p, next, s, k)) return true;
+				}
+				return false;
+			}
+			// `*`: anything within one name.
+			for (let k = si; ; k++) {
+				if (globFromCounted(p, pi + 1, s, k)) return true;
+				if (k >= s.length || s[k] === "/") return false;
+			}
+		}
+		if (si >= s.length) return false;
+		if (c === "?") {
+			if (s[si] === "/") return false;
+			pi++;
+			si++;
+			continue;
+		}
+		if (c === "[") {
+			const result = s[si] === "/" ? undefined : matchClass(p, pi, s[si]);
+			if (result) {
+				if (!result.matched) return false;
+				pi = result.end;
+				si++;
+				continue;
+			}
+			if (s[si] === "/") return false;
+		}
+		const literal = c === "\\" && pi + 1 < p.length ? p[++pi] : c;
+		if (s[si] !== literal) return false;
+		pi++;
+		si++;
+	}
+	return si === s.length;
+}
+
+/** The last match `outOfSteps` found no match for: the loops of that match still running end at once. */
+const noMatch = { pattern: "", text: "" };
+
+/**
+ * Whether `s` matches `p`, decided with `globMatchMarked` once `freeSteps` runs out; the budget starts again. The loops still
+ * running in `globFrom` and `globFromCounted` then end: on a match, with it; otherwise each `*` they start gets false. (The
+ * matches before this one may have used up the budget: a common match that runs out is decided the same way.)
+ */
+function outOfSteps(p: string, s: string): boolean {
+	if (p === noMatch.pattern && s === noMatch.text) return false;
+	freeSteps = FREE_STEPS;
+	if (globMatchMarked(p, s)) return true;
+	noMatch.pattern = p;
+	noMatch.text = s;
+	return false;
 }
 
 /**
@@ -237,8 +312,7 @@ function globMatchMarked(pattern: string, text: string): boolean {
 
 /** Whether `text` (a path with `/`) matches the glob `pattern`: `*`, `?` and `[...]` within a name, `**` across them. */
 export function globMatch(pattern: string, text: string): boolean {
-	freeSteps = FREE_STEPS;
-	return globFrom(pattern, 0, text, 0) || (freeSteps < 0 && globMatchMarked(pattern, text));
+	return globFrom(pattern, 0, text, 0);
 }
 
 const GLOB_META = /[*?[\\]/;
@@ -261,7 +335,7 @@ export function compileGlob(pattern: string): (text: string) => boolean {
 		const name = compileGlob(pattern.slice(3));
 		return (text) => name(text.slice(text.lastIndexOf("/") + 1));
 	}
-	return (text) => globMatch(pattern, text);
+	return (text) => globFrom(pattern, 0, text, 0);
 }
 
 // --- ignore files -------------------------------------------------------------------------------------------------------

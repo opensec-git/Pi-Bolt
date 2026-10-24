@@ -90,6 +90,16 @@ describe("globs", () => {
 		expect(globMatch(`**/${stars}`, `${as}/${"a".repeat(10)}b`)).toBe(true);
 		expect(globMatch(`${"**/".repeat(10)}${stars}`, `${"a/".repeat(30)}${as}`)).toBe(false);
 		expect(globMatch(`${"**a".repeat(10)}**b`, `${as}/${as}`)).toBe(false);
+		// The budget carries over from one match to the next: a match after a hard one starts with what is left.
+		const match = compileGlob(stars);
+		expect([
+			match(as),
+			match(`${as}b`),
+			match(as),
+			match(`${"a".repeat(10)}b`),
+			match("ab"),
+			match(`${as}b`),
+		]).toEqual([false, true, false, true, false, true]);
 		expect(performance.now() - start).toBeLessThan(100);
 	});
 
