@@ -293,32 +293,47 @@ function resolvePackageFrom(dir, name) {
 }
 
 /**
- * Every package a package in `dir` needs, transitively, that is not inside `dir`. Its dependencies are found as Node finds
- * them, from each requiring package up through the folders above it: `pi install` hoists into one flat node_modules, so an
- * npm package's dependencies are its siblings, and a local package in a workspace may have its own hoisted to the
- * workspace's node_modules. Copying the package folder alone leaves those for the bundler to fail on; the ones inside it
- * are copied with it. `peerDependencies` are not walked -- those are the host's to provide, and a missing one is a loud
- * build error.
+ * Every package a package in `dir` needs, transitively, that is not copied with it: `{ name, from }`, `from` a real path.
+ *
+ * Its dependencies are found as Node finds them, from the real folder of each requiring package up through the folders
+ * above it: `pi install` hoists into one flat node_modules, so an npm package's dependencies are its siblings; a local
+ * package in a workspace may have its own hoisted to the workspace's node_modules; and pnpm links each dependency into
+ * `.pnpm/<name>@<version>/node_modules`, with the dependencies it needs beside the link's target.
+ *
+ * The copies follow links, so a dependency is copied with the folder of the package that needs it only when it is in that
+ * folder and nothing on the way is a link: then it is found from the copy as from the original. Any other is listed, to
+ * be copied into the node_modules beside the manifest. `peerDependencies` are not walked -- those are the host's to
+ * provide, and a missing one is a loud build error.
  */
 function dependencyClosure(dir) {
-	const root = resolve(dir);
-	const inside = (path) => !relative(root, path).startsWith("..");
-	const found = new Map();
-	const queue = [root];
+	const inside = (folder, path) => {
+		const rel = relative(folder, path);
+		return !rel.startsWith("..") && resolve(folder, rel) === path;
+	};
+	const root = realpathSync(dir);
+	const needed = [];
+	/** Each package to look at: its real folder, and the copied folder it is in. */
+	const queue = [{ real: root, copied: root }];
 	const visited = new Set([root]);
 	while (queue.length > 0) {
 		const current = queue.shift();
-		for (const name of dependencyNames(readJson(join(current, "package.json")))) {
+		for (const name of dependencyNames(readJson(join(current.real, "package.json")))) {
 			if (isPiPackage(name)) continue;
 			// (Nested before hoisted: a package may carry its own copy of a version hoisted differently above it.)
-			const resolved = resolvePackageFrom(current, name);
-			if (!resolved || visited.has(resolved)) continue;
-			visited.add(resolved);
-			queue.push(resolved);
-			if (!inside(resolved) && !found.has(name)) found.set(name, resolved);
+			const found = resolvePackageFrom(current.real, name);
+			if (!found) continue;
+			const real = realpathSync(found);
+			if (visited.has(real)) continue;
+			visited.add(real);
+			if (real === resolve(found) && inside(current.copied, real)) {
+				queue.push({ real, copied: current.copied });
+			} else {
+				needed.push({ name, from: real });
+				queue.push({ real, copied: real });
+			}
 		}
 	}
-	return found;
+	return needed;
 }
 
 // --- the plan -------------------------------------------------------------------------------------------------------
@@ -513,7 +528,7 @@ export function planPlugins(options) {
 	const dependencies = new Map();
 	for (const root of usedRoots) {
 		if (root.origin !== "package") continue;
-		for (const [name, from] of dependencyClosure(root.root)) {
+		for (const { name, from } of dependencyClosure(root.root)) {
 			if (!dependencies.has(name)) dependencies.set(name, from);
 		}
 	}

@@ -10,7 +10,16 @@
 
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	chmodSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, describe, it } from "node:test";
@@ -426,8 +435,8 @@ describe("the packages pi-bolt compile gives it (--packages)", () => {
 		assert.deepEqual(
 			plan.dependencies.map((dependency) => [dependency.name, dependency.from]),
 			[
-				["hoisted", join(workspace, "node_modules", "hoisted")],
-				["deep", join(workspace, "node_modules", "deep")],
+				["hoisted", join(realpathSync(workspace), "node_modules", "hoisted")],
+				["deep", join(realpathSync(workspace), "node_modules", "deep")],
 			],
 		);
 		const out = join(scratch(), "folder");
@@ -439,6 +448,38 @@ describe("the packages pi-bolt compile gives it (--packages)", () => {
 			{ cwd: dirname(staged), encoding: "utf8" },
 		);
 		assert.equal(resolved.status, 0, resolved.stderr);
+	});
+
+	it("follows a pnpm link to find what the linked dependency needs beside its target", () => {
+		// plugin/node_modules/foo links to .pnpm/foo@1.0.0/node_modules/foo, whose own dependency bar is beside it there.
+		const agentDir = agent();
+		const plugin = join(scratch(), "plugin");
+		const store = join(plugin, "node_modules", ".pnpm", "foo@1.0.0", "node_modules");
+		write(join(plugin, "package.json"), JSON.stringify({ name: "plugin", type: "module", dependencies: { foo: "1" } }));
+		write(join(plugin, "index.js"), 'import foo from "foo";\nexport const value = foo;\nexport default () => {};\n');
+		write(join(store, "foo", "package.json"), JSON.stringify({ name: "foo", type: "module", dependencies: { bar: "1" } }));
+		write(join(store, "foo", "index.js"), 'import bar from "bar";\nexport default bar;\n');
+		write(join(store, "bar", "package.json"), JSON.stringify({ name: "bar", type: "module" }));
+		write(join(store, "bar", "index.js"), "export default 42;\n");
+		symlinkSync(join(store, "foo"), join(plugin, "node_modules", "foo"), "dir");
+
+		const plan = planPlugins({
+			agentDir,
+			packages: [{ source: plugin, root: plugin, entries: [join(plugin, "index.js")] }],
+		});
+		assert.deepEqual(
+			plan.dependencies.map((dependency) => dependency.name),
+			["foo", "bar"],
+		);
+		const out = join(scratch(), "folder");
+		writePluginFolder(plan, out);
+		const staged = join(out, plan.plugins[0].importPath);
+		const loaded = spawnSync(
+			process.execPath,
+			["--input-type=module", "-e", `import(${JSON.stringify(pathToFileURL(staged).href)}).then((m) => console.log(m.value))`],
+			{ encoding: "utf8" },
+		);
+		assert.equal(loaded.stdout.trim(), "42", loaded.stderr);
 	});
 
 	it("still passes over a package that needs vendoring, by its source", () => {
@@ -690,9 +731,10 @@ describe("import.meta in the copies", () => {
 		const copy = await import(pathToFileURL(join(out, "global", "with-skills", "src", "index.js")).href);
 		assert.equal(copy.skills(), join(extension, "skills"));
 		assert.equal(readFileSync(join(extension, "src", "index.js"), "utf8"), RESOLVES);
+		// (A dependency is pinned to its real path: where it is when the installed extension imports it, as Node resolves links.)
 		assert.equal(
 			readFileSync(join(out, "node_modules", "dep", "index.js"), "utf8"),
-			`export const here = ${JSON.stringify(dep)};\n`,
+			`export const here = ${JSON.stringify(realpathSync(dep))};\n`,
 		);
 		assert.equal(readFileSync(join(dep, "index.js"), "utf8"), "export const here = import.meta.dirname;\n");
 	});
