@@ -78,7 +78,20 @@ function matchClass(p: string, start: number, c: string): { matched: boolean; en
 	return { matched: matched !== negated, end: i + 1 };
 }
 
+// Each `*` tries every place it could end, and the parts after it again from each of those. On some patterns that takes
+// exponential time: `*a*a*a*a*a*a*a*a*a*a*b` against 40 `a`s took 28 seconds. So a match runs in up to two ways:
+// - `globFrom` tries every place, and gives up after `FREE_STEPS` calls (each a pass over at most the pattern and the text).
+//   Nearly every match ends well before that.
+// - `globFromMarked` then starts again, and marks each place a `*` was tried from. A place tried before has failed (success
+//   ends the match), so none is tried twice: the match takes time proportional to the pattern's length times the text's.
+// They are two functions, not one with a flag: the marking code in the first made common matches up to 15% slower.
+
+const FREE_STEPS = 1024;
+let freeSteps = 0;
+
+/** Whether `s` from `si` on matches `p` from `pi` on; false too when `freeSteps` runs out (it is below 0 then). */
 function globFrom(p: string, pi: number, s: string, si: number): boolean {
+	if (--freeSteps < 0) return false;
 	while (pi < p.length) {
 		const c = p[pi];
 		if (c === "*") {
@@ -129,9 +142,103 @@ function globFrom(p: string, pi: number, s: string, si: number): boolean {
 	return si === s.length;
 }
 
+/**
+ * The places each `*` has been tried from in the current marked match: `marks[pi * width + si] === stamp` once the `*` at
+ * `p[pi]` has been tried from `s[si]` on (for a `**` followed by `/`, row `pi + 1` holds the slashes tried from). One table
+ * serves every match (a match is synchronous and never starts another); a new stamp clears it.
+ */
+const tried = { marks: new Uint32Array(0), stamp: 0, width: 0 };
+
+/** Whether the `*` at `p[pi]` was tried from `s[si]` on before in this match; marks it tried. */
+function triedBefore(pi: number, si: number): boolean {
+	const at = pi * tried.width + si;
+	if (tried.marks[at] === tried.stamp) return true;
+	tried.marks[at] = tried.stamp;
+	return false;
+}
+
+/**
+ * `globFrom` without the limit, never trying a `*` twice from the same place. (A `*` is reached only from the parts before it,
+ * so while a later part runs, the one loop of this `*` still going is the caller's, which has not reached the places after
+ * its own: a marked place is one whose loop ended, in failure.) Each `*` loop goes forward, so that a marked place stands for
+ * every place after it too.
+ */
+function globFromMarked(p: string, pi: number, s: string, si: number): boolean {
+	while (pi < p.length) {
+		const c = p[pi];
+		if (c === "*") {
+			if (p[pi + 1] === "*") {
+				const next = pi + 2;
+				if (p[next] === "/") {
+					// `**/`: no folder, or any number of them.
+					if (triedBefore(pi, si)) return false;
+					if (globFromMarked(p, next + 1, s, si)) return true;
+					for (let k = si; k < s.length; k++) {
+						if (s[k] !== "/") continue;
+						if (triedBefore(pi + 1, k)) return false;
+						if (globFromMarked(p, next + 1, s, k + 1)) return true;
+					}
+					return false;
+				}
+				// `**` otherwise: anything, across folders.
+				if (next === p.length) return true;
+				for (let k = si; k <= s.length; k++) {
+					if (triedBefore(pi, k)) return false;
+					if (globFromMarked(p, next, s, k)) return true;
+				}
+				return false;
+			}
+			// `*`: anything within one name.
+			for (let k = si; ; k++) {
+				if (triedBefore(pi, k)) return false;
+				if (globFromMarked(p, pi + 1, s, k)) return true;
+				if (k >= s.length || s[k] === "/") return false;
+			}
+		}
+		if (si >= s.length) return false;
+		if (c === "?") {
+			if (s[si] === "/") return false;
+			pi++;
+			si++;
+			continue;
+		}
+		if (c === "[") {
+			const result = s[si] === "/" ? undefined : matchClass(p, pi, s[si]);
+			if (result) {
+				if (!result.matched) return false;
+				pi = result.end;
+				si++;
+				continue;
+			}
+			if (s[si] === "/") return false;
+		}
+		const literal = c === "\\" && pi + 1 < p.length ? p[++pi] : c;
+		if (s[si] !== literal) return false;
+		pi++;
+		si++;
+	}
+	return si === s.length;
+}
+
+/** `globFromMarked` from the start, with the table made ready. */
+function globMatchMarked(pattern: string, text: string): boolean {
+	tried.width = text.length + 1;
+	const size = (pattern.length + 1) * tried.width;
+	if (tried.marks.length < size) {
+		tried.marks = new Uint32Array(Math.max(size, 2 * tried.marks.length));
+		tried.stamp = 0;
+	} else if (tried.stamp === 0xffffffff) {
+		tried.marks.fill(0);
+		tried.stamp = 0;
+	}
+	tried.stamp++;
+	return globFromMarked(pattern, 0, text, 0);
+}
+
 /** Whether `text` (a path with `/`) matches the glob `pattern`: `*`, `?` and `[...]` within a name, `**` across them. */
 export function globMatch(pattern: string, text: string): boolean {
-	return globFrom(pattern, 0, text, 0);
+	freeSteps = FREE_STEPS;
+	return globFrom(pattern, 0, text, 0) || (freeSteps < 0 && globMatchMarked(pattern, text));
 }
 
 const GLOB_META = /[*?[\\]/;
@@ -154,7 +261,7 @@ export function compileGlob(pattern: string): (text: string) => boolean {
 		const name = compileGlob(pattern.slice(3));
 		return (text) => name(text.slice(text.lastIndexOf("/") + 1));
 	}
-	return (text) => globFrom(pattern, 0, text, 0);
+	return (text) => globMatch(pattern, text);
 }
 
 // --- ignore files -------------------------------------------------------------------------------------------------------

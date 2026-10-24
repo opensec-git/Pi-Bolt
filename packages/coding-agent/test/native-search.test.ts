@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createFindTool } from "../src/core/tools/find.ts";
 import { createGrepTool } from "../src/core/tools/grep.ts";
 import {
+	compileGlob,
 	expandBraces,
 	globMatch,
 	nativeFind,
@@ -75,6 +76,21 @@ describe("globs", () => {
 		expect(globMatch("[!a-c]x", "bx")).toBe(false);
 		expect(globMatch("\\*x", "*x")).toBe(true);
 		expect(globMatch("[x", "[x")).toBe(true);
+	});
+
+	// Trying every way each `*` could end took 28 s on the first of these (exponential time); it is linear now.
+	test("many stars match in linear time", () => {
+		const stars = `${"*a".repeat(10)}*b`;
+		const as = "a".repeat(40);
+		const start = performance.now();
+		expect(globMatch(stars, as)).toBe(false);
+		expect(compileGlob(stars)(as)).toBe(false);
+		expect(globMatch(stars, `${as}b`)).toBe(true);
+		// A match found only after the search the first way gives up on.
+		expect(globMatch(`**/${stars}`, `${as}/${"a".repeat(10)}b`)).toBe(true);
+		expect(globMatch(`${"**/".repeat(10)}${stars}`, `${"a/".repeat(30)}${as}`)).toBe(false);
+		expect(globMatch(`${"**a".repeat(10)}**b`, `${as}/${as}`)).toBe(false);
+		expect(performance.now() - start).toBeLessThan(100);
 	});
 
 	test("braces expand", () => {
