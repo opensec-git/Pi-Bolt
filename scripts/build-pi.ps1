@@ -120,10 +120,12 @@ function Stage-Plugins($manifest) {
 		'import { setupCli } from "../dist/cli/setup.js";'
 		'import { main } from "../dist/main.js";'
 		''
-		'// Required, not imported: the bundler then gives each module of each plugin a function of its own, rather than adding its'
-		'// top-level code to the program''s, one function that the compiler refuses past 256 KB of bytecode (#129). They still run'
-		'// in the order the manifest imports them, at the same point of the start.'
-		"const plugins = require(`"./src/$(Split-Path $manifest -Leaf)`").default;"
+		'// Loaded with import(), as pi-bolt-compile.ts''s ENTRY explains: imported with this module, the plugins'' top-level code'
+		'// would join Pi''s in one function, which the compiler refuses past 256 KB of bytecode (#129); required, a plugin with an'
+		'// `await` at its top level would stop the bundler (#142). Not split, the bundler gives each module of each plugin a'
+		'// function of its own. They run in the order the manifest imports them, at the same point of the start, except that'
+		'// a plugin that waits at its top level runs after the plugins beside it that do not.'
+		"const { default: plugins } = await import(`"./src/$(Split-Path $manifest -Leaf)`");"
 		''
 		'// A named plugin is a built-in extension (`builtin:<name>`): it can be turned off (`-builtin:<name>` in the `extensions` setting,'
 		'// or the config screen), and an extension of the same tools loaded at run time replaces it (replaceable) instead of conflicting.'
