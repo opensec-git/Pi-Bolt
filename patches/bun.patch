@@ -16974,3 +16974,341 @@ index 8c4730aa..86887891 100644
 -- 
 2.54.0 (Apple Git-157)
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Sun, 25 Oct 2026 07:57:09 +0530
+Subject: [PATCH] GC timer: one synchronous collection once an interactive
+ program goes quiet
+
+After a burst of work (Pi: an answer) an idle program was woken four to six times over the next 15 s to collect
+the burst's garbage piece by piece. Pi at its prompt after one answer (BUN_JSC_logGC, M5):
+- ~5 s: the timer's tick finds allocation and runs an eden collection;
+- ~7 s: JSC's FullGCActivityCallback starts a concurrent full collection, which the parked program finishes only at
+  the timer's next tick (~10 s);
+- the incremental sweeper sweeps after it;
+- ~15 s: the idle full collection (10 s of quiet) runs again over the same heap.
+
+Now, in a program whose terminal is in raw mode (a TUI reading keys), the timer looks every BUN_GC_SETTLE_MS (500)
+while the program is active; the first look that finds nothing allocated since the previous one, after a burst of
+4 MB or more, runs one synchronous, idle-tagged full collection that also sweeps, plus the allocator's forced
+collect. It stands for the first idle full collection: the timer parks until the program allocates again or the
+next idle full collection is due (2 min, then 10 min, as before; skipped as before when nothing changed and no code
+can age). JSC's activity callback is cancelled by the full collection, and nothing is left for the sweeper.
+PiG does the same from Go (one collection 500 ms after a run).
+
+Not changed: programs whose stdin is not a terminal in raw mode (pipes, `pi -p`, rpc), Workers, a debugger session,
+Windows (BUN_GC_SETTLE_MS defaults to 0 there), and everything while the program allocates (the regular ticks run as
+before, reached through the looks). BUN_GC_SETTLE_MS=0 restores the timer as it was.
+
+Theoretical differences: garbage is collected at a different moment (FinalizationRegistry callbacks and WeakRef
+clearing may come earlier or later, as with any change of GC timing); interpreted and JIT code that the 10 s idle
+collection let age out now ages out at the 2-minute one (the settle collection sees the burst's code as recently run,
+so it keeps it), which in the measurement below was within the memory noise.
+---
+ src/jsc/GarbageCollectionController.rs | 168 ++++++++++++++++++++++++-
+ src/jsc/VM.rs                          |   7 ++
+ src/jsc/bindings/bindings.cpp          |  13 ++
+ 3 files changed, 184 insertions(+), 4 deletions(-)
+
+diff --git a/src/jsc/GarbageCollectionController.rs b/src/jsc/GarbageCollectionController.rs
+index 35eddf7ee6..314234bddd 100644
+--- a/src/jsc/GarbageCollectionController.rs
++++ b/src/jsc/GarbageCollectionController.rs
+@@ -1,4 +1,4 @@
+-//! Idle GC timer: JSC's own `GCActivityCallback` (via `WTFTimer`) paces eden/full against allocation rate; this adds a 1 s / 30 s idle `collect_async()` so a process that stops allocating still releases memory, and once the heap has been quiet for `BUN_IDLE_GC_SECONDS` (default "10,110,480": 10 s, 2 min and 10 min of quiet; 0 = off) full collections so JSC can age out code that no longer runs, the last of which also drops the bytecode JSC can decode again; each with a forced allocator collect then and at the next tick. A tick that finds nothing allocated since the last collection parks the timer until the program allocates again or the next idle full collection is due, so a program left waiting is not woken. An idle full collection that would find the heap as the previous one left it, with no code that can age, is skipped (not the last: it also drops code and bytecode). Knobs: `BUN_GC_TIMER_INTERVAL` (ms), `BUN_GC_TIMER_DISABLE`. One per JS thread, not thread-safe.
++//! Idle GC timer: JSC's own `GCActivityCallback` (via `WTFTimer`) paces eden/full against allocation rate; this adds a 1 s / 30 s idle `collect_async()` so a process that stops allocating still releases memory, and once the heap has been quiet for `BUN_IDLE_GC_SECONDS` (default "10,110,480": 10 s, 2 min and 10 min of quiet; 0 = off) full collections so JSC can age out code that no longer runs, the last of which also drops the bytecode JSC can decode again; each with a forced allocator collect then and at the next tick. A tick that finds nothing allocated since the last collection parks the timer until the program allocates again or the next idle full collection is due, so a program left waiting is not woken. An idle full collection that would find the heap as the previous one left it, with no code that can age, is skipped (not the last: it also drops code and bytecode). An interactive program (its terminal in raw mode) that goes quiet after a burst is collected once, synchronously, `BUN_GC_SETTLE_MS` (default 500; 0 = off) after its last allocation, and that collection stands for the first idle full one. Knobs: `BUN_GC_TIMER_INTERVAL` (ms), `BUN_GC_TIMER_DISABLE`, `BUN_GC_SETTLE_MS`. One per JS thread, not thread-safe.
+ 
+ use core::cell::Cell;
+ use core::ffi::c_int;
+@@ -11,6 +11,9 @@ use crate::JsCell;
+ use crate::virtual_machine::VirtualMachine;
+ 
+ const SLOW_REPEAT_INTERVAL_MS: i32 = 30_000;
++/// What a burst must have allocated since the last settle or idle full collection before going quiet earns another one: less
++/// is a keystroke or two, which the timer's own collections cover.
++const SETTLE_MIN_BYTES: u64 = 4 * 1024 * 1024;
+ 
+ pub struct GarbageCollectionController {
+     pub gc_repeating_timer: JsCell<EventLoopTimer>,
+@@ -34,6 +37,16 @@ pub struct GarbageCollectionController {
+     /// `VM::total_bytes_allocated` when the last idle full collection was requested: the same now means nothing has been
+     /// allocated since (`idle_full_finds_nothing`).
+     idle_full_allocated_mark: Cell<Option<u64>>,
++    /// The settle collection (`settle_probe`): ms of quiet after the last allocation (0 = off), whether the timer is armed
++    /// as a probe for it, the regular tick the probes stand in for and how much of it has passed, what the last probe was
++    /// armed for, and `VM::total_bytes_allocated` at the last probe and at the last settle or idle full collection.
++    settle_ms: Cell<i32>,
++    probing: Cell<bool>,
++    probe_due_ms: Cell<i32>,
++    probe_elapsed_ms: Cell<i32>,
++    probe_armed_ms: Cell<i32>,
++    probe_last_total: Cell<u64>,
++    settle_base_total: Cell<u64>,
+ }
+ 
+ bun_event_loop::impl_timer_owner!(
+@@ -56,6 +69,13 @@ impl Default for GarbageCollectionController {
+             parked: Cell::new(false),
+             armed_ms: Cell::new(0),
+             idle_full_allocated_mark: Cell::new(None),
++            settle_ms: Cell::new(0),
++            probing: Cell::new(false),
++            probe_due_ms: Cell::new(0),
++            probe_elapsed_ms: Cell::new(0),
++            probe_armed_ms: Cell::new(0),
++            probe_last_total: Cell::new(0),
++            settle_base_total: Cell::new(0),
+         }
+     }
+ }
+@@ -124,6 +144,7 @@ impl GarbageCollectionController {
+             *slot = sum;
+         }
+         self.idle_gc_at_ms.set(at);
++        self.settle_ms.set(settle_ms_from_env());
+     }
+ 
+     /// Decides whether this tick's collection should be a full one. After the first `BUN_IDLE_GC_SECONDS` entry
+@@ -199,7 +220,7 @@ impl GarbageCollectionController {
+             return;
+         }
+         if self.gc_repeating_timer.get().state == TimerState::PENDING {
+-            self.arm_self(VirtualMachine::get_mut_ptr(), self.repeat_interval());
++            self.arm_active(VirtualMachine::get_mut_ptr(), self.repeat_interval(), true);
+         } else if self.parked.get() {
+             self.unpark_if_allocated();
+         }
+@@ -213,7 +234,7 @@ impl GarbageCollectionController {
+             return;
+         }
+         self.parked.set(false);
+-        self.arm_self(vm, self.repeat_interval());
++        self.arm_active(vm, self.repeat_interval(), false);
+     }
+ 
+     fn arm_self(&self, vm: *mut VirtualMachine, ms: i32) {
+@@ -228,6 +249,109 @@ impl GarbageCollectionController {
+         );
+     }
+ 
++    /// Arms the timer for a tick `ms` from now while the program is active. When a settle collection can follow this burst,
++    /// the tick is reached through probes `settle_ms` apart that each look whether the program has gone quiet meanwhile. At
++    /// start-up (`starting`) the terminal is not in raw mode yet, so the probes run until the first tick whatever its mode:
++    /// a session whose first answer comes within that tick settles too (`settle_probe` checks the mode again).
++    fn arm_active(&self, vm: *mut VirtualMachine, ms: i32, starting: bool) {
++        let settle = self.settle_ms.get();
++        // SAFETY: JS thread; the per-thread VM is live while its event loop runs.
++        let vm_ref = unsafe { &*vm };
++        let may = if starting { self.may_settle_but_terminal(vm_ref) } else { self.may_settle(vm_ref) };
++        if settle <= 0 || settle >= ms || !may {
++            self.probing.set(false);
++            self.arm_self(vm, ms);
++            return;
++        }
++        self.armed_ms.set(ms);
++        self.probing.set(true);
++        self.probe_due_ms.set(ms);
++        self.probe_elapsed_ms.set(0);
++        self.probe_armed_ms.set(settle);
++        self.probe_last_total.set(vm_ref.jsc_vm().total_bytes_allocated());
++        Self::arm(vm, self.timer_ptr(), settle);
++    }
++
++    fn timer_ptr(&self) -> *mut EventLoopTimer {
++        // whole-struct provenance: from_field_ptr recovers the container on fire
++        core::ptr::addr_of!(self.gc_repeating_timer)
++            .cast::<bun_event_loop::EventLoopTimer::EventLoopTimer>()
++            .cast_mut()
++    }
++
++    /// Whether a settle collection may follow this burst: the main JS thread of an interactive program (its terminal in raw
++    /// mode: a TUI waiting for keys; a program run in a pipeline or printing an answer keeps the timer as it was), with idle
++    /// full collections on, at least two of them (the last also lets go of code, which this one does not), and no debugger.
++    fn may_settle(&self, vm: &VirtualMachine) -> bool {
++        self.may_settle_but_terminal(vm) && terminal_in_raw_mode()
++    }
++
++    fn may_settle_but_terminal(&self, vm: &VirtualMachine) -> bool {
++        let dues = self.idle_gc_at_ms.get();
++        dues[1] != 0 && vm.is_main_thread() && !vm.is_inspector_enabled()
++    }
++
++    /// A probe's fire: true if it was handled (the program settled and was collected, or another probe is armed); false when
++    /// the regular tick it stood in for is due, which then runs as if the timer had been armed for it.
++    ///
++    /// The program has settled when nothing at all was allocated since the previous probe and the burst before allocated
++    /// `SETTLE_MIN_BYTES` or more: one synchronous idle full collection then, with the allocator's forced collect, instead of
++    /// what followed a burst (a collection at the next tick, JSC's full collection a few seconds later that finished at a
++    /// later tick, the incremental sweeper after it, and the idle full collection 10 s on: four to six wake-ups that did the
++    /// work of this one). Like PiG's idle collection after a run (D172), in the engine: Pi at its prompt after an answer.
++    fn settle_probe(&self, vm: *mut VirtualMachine) -> bool {
++        // SAFETY: JS thread; the per-thread VM is live while its event loop runs.
++        let vm_ref = unsafe { &*vm };
++        let jsc = vm_ref.jsc_vm();
++        let elapsed = self
++            .probe_elapsed_ms
++            .get()
++            .saturating_add(self.probe_armed_ms.get());
++        let total = jsc.total_bytes_allocated();
++        let quiet = total == self.probe_last_total.get();
++        self.probe_last_total.set(total);
++        if quiet
++            && total.saturating_sub(self.settle_base_total.get()) >= SETTLE_MIN_BYTES
++            && !jsc.collection_unfinished()
++            && self.may_settle(vm_ref)
++        {
++            self.probing.set(false);
++            self.settle(vm);
++            return true;
++        }
++        let due = self.probe_due_ms.get();
++        if elapsed < due {
++            let next = self.settle_ms.get().min(due - elapsed);
++            self.probe_elapsed_ms.set(elapsed);
++            self.probe_armed_ms.set(next);
++            Self::arm(vm, self.timer_ptr(), next);
++            return true;
++        }
++        self.probing.set(false);
++        false
++    }
++
++    /// The settle collection, which stands for the first idle full collection: the quiet counts from that one's due, and the
++    /// timer parks until the program allocates again or the next one is due (2 min, then 10 min, as before; skipped as
++    /// before when the heap is as this one left it and no code can age).
++    fn settle(&self, vm: *mut VirtualMachine) {
++        // SAFETY: JS thread; the per-thread VM is live while its event loop runs.
++        let jsc = unsafe { &*vm }.jsc_vm();
++        jsc.collect_now_idle();
++        // What it freed goes back to the OS now (oven-sh/mimalloc#52), not at the next scavenger pass.
++        bun_core::Global::mimalloc_cleanup(true);
++        let total = jsc.total_bytes_allocated();
++        self.settle_base_total.set(total);
++        self.idle_full_allocated_mark.set(Some(total));
++        self.gc_last_heap_size.set(jsc.block_bytes_allocated());
++        let dues = self.idle_gc_at_ms.get();
++        self.idle_quiet_ms.set(dues[0]);
++        self.parked.set(true);
++        if let Some(due) = dues.into_iter().find(|&due| due > dues[0]) {
++            self.arm_self(vm, (due - dues[0]).max(1000).min(i32::MAX as u32) as i32);
++        }
++    }
++
+     pub(crate) fn perform_gc(&self, idle_full: bool) {
+         if self.disabled.get() {
+             return;
+@@ -236,6 +360,7 @@ impl GarbageCollectionController {
+         if idle_full {
+             self.idle_full_allocated_mark
+                 .set(Some(vm.total_bytes_allocated()));
++            self.settle_base_total.set(vm.total_bytes_allocated());
+             vm.collect_async_idle();
+             // Only a forced collect returns the large pages mimalloc keeps for the next burst (oven-sh/mimalloc#52).
+             bun_core::Global::mimalloc_cleanup(true);
+@@ -260,6 +385,9 @@ impl GarbageCollectionController {
+         if this.disabled.get() {
+             return;
+         }
++        if this.probing.get() && this.settle_probe(vm) {
++            return;
++        }
+         this.parked.set(false);
+         let released = this.idle_release_pending.replace(false);
+         if released {
+@@ -331,7 +459,7 @@ impl GarbageCollectionController {
+             Some(ms) => this.repeat_interval().min(ms.max(1000) as i32),
+             None => this.repeat_interval(),
+         };
+-        this.arm_self(vm, interval);
++        this.arm_active(vm, interval, false);
+     }
+ }
+ 
+@@ -364,3 +492,35 @@ fn default_fast_interval_ms() -> u64 {
+ fn quiet_ticks_until_slow(fast_interval_ms: i32) -> u8 {
+     (30_000 / fast_interval_ms.max(1000)).clamp(1, 30) as u8
+ }
++
++/// `BUN_GC_SETTLE_MS`: ms of quiet after a burst before the settle collection; 0 = none. Default 500 (not on Windows, where Pi's
++/// idle at the prompt was measured with the timer as it is).
++fn settle_ms_from_env() -> i32 {
++    // SAFETY: a NUL-terminated name; read once at init on the JS thread.
++    let value = unsafe { libc::getenv(c"BUN_GC_SETTLE_MS".as_ptr()) };
++    if !value.is_null() {
++        // SAFETY: getenv returns a NUL-terminated string that lives until the environment changes.
++        let bytes = unsafe { core::ffi::CStr::from_ptr(value) }.to_bytes();
++        return bun_core::fmt::parse_int::<u32>(bun_core::strings::trim(bytes, b" "), 10)
++            .unwrap_or(0)
++            .min(60_000) as i32;
++    }
++    if cfg!(windows) { 0 } else { 500 }
++}
++
++/// Standard input is a terminal in raw mode (no line editing): a full-screen or line-editing program reading keys.
++fn terminal_in_raw_mode() -> bool {
++    #[cfg(unix)]
++    {
++        // SAFETY: termios is plain data (integers and arrays of them), valid when zeroed; tcgetattr fills it from fd 0 and fails
++        // (ENOTTY, EBADF) when that is not a terminal.
++        unsafe {
++            let mut t: libc::termios = core::mem::zeroed();
++            libc::tcgetattr(0, &raw mut t) == 0 && (t.c_lflag & libc::ICANON) == 0
++        }
++    }
++    #[cfg(not(unix))]
++    {
++        false
++    }
++}
+diff --git a/src/jsc/VM.rs b/src/jsc/VM.rs
+index b457272494..0c15e69c3b 100644
+--- a/src/jsc/VM.rs
++++ b/src/jsc/VM.rs
+@@ -30,6 +30,7 @@ unsafe extern "C" {
+     safe fn JSC__VM__heapSize(vm: &VM) -> usize;
+     safe fn JSC__VM__collectAsync(vm: &VM, full: bool);
+     safe fn JSC__VM__collectAsyncIdle(vm: &VM);
++    safe fn JSC__VM__collectNowIdle(vm: &VM);
+     safe fn JSC__VM__shrinkFootprintNow(vm: &VM) -> bool;
+     safe fn JSC__VM__setStartupJITDeferralScale(vm: &VM, scale: f64);
+     safe fn JSC__VM__executionForbidden(vm: &VM) -> bool;
+@@ -111,6 +112,12 @@ impl VM {
+         JSC__VM__collectAsyncIdle(self)
+     }
+ 
++    /// The same idle-tagged full collection, synchronous: returns once it has finished and its garbage is swept, so no
++    /// collector thread, end phase or incremental sweeper is left to wake the program afterwards.
++    pub(crate) fn collect_now_idle(&self) {
++        JSC__VM__collectNowIdle(self)
++    }
++
+     /// Let go of what JSC gets back cheaply, of functions that have no linked code any more (an idle collection has found
+     /// them not running): unlinked bytecode it can decode again from a bytecode cache, the parser's caches. Nothing that
+     /// would have to be parsed again. The caller's next full collection frees it. `false`: nothing was done, because JS
+diff --git a/src/jsc/bindings/bindings.cpp b/src/jsc/bindings/bindings.cpp
+index cde86da88e..858a7a1faa 100644
+--- a/src/jsc/bindings/bindings.cpp
++++ b/src/jsc/bindings/bindings.cpp
+@@ -3190,6 +3190,19 @@ size_t JSC__VM__bytesAllocatedSinceLastCollection(JSC::VM* vm)
+     return vm->heap.bytesAllocatedSinceLastCollection();
+ }
+ 
++// GarbageCollectionController's collection once the program has gone quiet after a burst: the idle full collection, run to
++// the end now (marking, then sweeping everything it freed), so that nothing of it is left to finish on the collector thread
++// or in the incremental sweeper's timer later.
++void JSC__VM__collectNowIdle(JSC::VM* vm)
++{
++    JSC::JSLockHolder lock(*vm);
++    if (!JSC::Options::useGC())
++        return;
++    JSC::GCRequest request(JSC::CollectionScope::Full);
++    request.isIdle = true;
++    vm->heap.collectNow(JSC::Sync, request);
++}
++
+ // Whether a collection (an idle one JSC__VM__collectAsyncIdle requested among them) has not finished yet.
+ bool JSC__VM__collectionUnfinished(JSC::VM* vm)
+ {
+-- 
+2.54.0 (Apple Git-157)
+
