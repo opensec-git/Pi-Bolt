@@ -337,8 +337,8 @@ describe("pi-bolt compile says why a build stopped", () => {
 	});
 });
 
-// Issue #129: the extensions are compiled in each module in a function of its own, so a function too big to compile is one
-// module's or one function's, or (rarely now) the top-level code of the whole program. The message says which.
+// Issue #129: a function too big to compile is one function of an extension, or the top-level code of a module: of the file
+// the extensions' modules are in (#142), or of the whole program in a build that does not split its code. The message says which.
 describe("pi-bolt compile says which extension a function too big to compile is of (#129)", () => {
 	test("the compiler's line gives the size, and whether it is the top-level code", () => {
 		expect(
@@ -414,6 +414,48 @@ describe("pi-bolt compile says which extension a function too big to compile is 
 		for (const name of ["__esm", "init_src", "helperValue", "big_default", "table", "writeFileSync2", "Registry"]) {
 			expect(names).toContain(name);
 		}
+	});
+
+	// #142: the entry loads the manifest with import(), and the build splits its code, so the extensions' modules are a file of
+	// their own, not wrapped: each module's statements are its share of that file's top-level code.
+	test("a split build's file of the extensions: its imports and exports are nobody's code, and their names are variables", () => {
+		const chunk = [
+			"// @bun",
+			"import {",
+			"  visibleWidth,",
+			"  truncateToWidth as truncate",
+			'} from "./entry-6nbwg67y.js";',
+			'import"./entry-fj682nbm.js";',
+			"",
+			"// .pibolt-plugins/src/global/aaa-first.ts",
+			"(globalThis.__tlaOrder ??= []).push(visibleWidth);",
+			"function aaa_first_default() {",
+			"  return 1;",
+			"}",
+			"",
+			"// .pibolt-plugins/src/global/tla-probe/index.ts",
+			'var { greeting } = await import("./greeting-yv0h5cmh.js");',
+			"order.push(truncate);",
+			"",
+			"// .pibolt-plugins/src/plugins.ts",
+			"var plugins = [aaa_first_default];",
+			"var plugins_default = plugins;",
+			"export {",
+			"  plugins_default as default",
+			"};",
+			"",
+		].join("\n");
+		const { pieces, names } = bundlePieces(chunk, ".pibolt-plugins/src/");
+		expect(pieces.filter((piece) => piece.kind === "top-level").map((piece) => [piece.module, piece.code])).toEqual([
+			[".pibolt-plugins/src/global/aaa-first.ts", "(globalThis.__tlaOrder ??= []).push(visibleWidth);\n"],
+			[
+				".pibolt-plugins/src/global/tla-probe/index.ts",
+				'{ greeting } = await import("./greeting-yv0h5cmh.js");\norder.push(truncate);\n',
+			],
+			[".pibolt-plugins/src/plugins.ts", "plugins = [aaa_first_default];\nplugins_default = plugins;\n"],
+		]);
+		for (const name of ["visibleWidth", "truncate", "aaa_first_default", "plugins_default"])
+			expect(names).toContain(name);
 	});
 
 	test("the sizes the engine prints, less what the empty function takes", () => {
