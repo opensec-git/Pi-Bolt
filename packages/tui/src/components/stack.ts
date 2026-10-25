@@ -83,7 +83,13 @@ export function visibleStackEntries(
 	entries: readonly StackLayoutEntry[],
 	viewport: LayoutViewport,
 ): StackLayoutEntry[] {
-	return entries.filter((entry) => entry.visible?.(viewport) ?? true);
+	// (A loop rather than filter() with a closure: every frame lays out every stack.)
+	const visible: StackLayoutEntry[] = [];
+	for (let index = 0; index < entries.length; index++) {
+		const entry = entries[index]!;
+		if (entry.visible?.(viewport) ?? true) visible.push(entry);
+	}
+	return visible;
 }
 
 function clampSize(size: number, entry: StackLayoutEntry): number {
@@ -99,22 +105,31 @@ function distribute(
 	mode: "grow" | "shrink",
 ): void {
 	let remaining = amount;
+	// (Loops over the indexes of the candidates rather than map(), filter() and reduce() with closures: every frame lays out
+	// every stack.)
+	const candidates: number[] = [];
 	while (remaining > 0) {
-		const candidates = entries
-			.map((entry, index) => ({ entry, index }))
-			.filter(({ entry, index }) => {
-				if (mode === "grow") {
-					return (entry.grow ?? 0) > 0 && sizes[index]! < (entry.maxSize ?? Number.MAX_SAFE_INTEGER);
-				}
-				return (entry.shrink ?? 1) > 0 && sizes[index]! > (entry.minSize ?? 0);
-			});
+		candidates.length = 0;
+		for (let index = 0; index < entries.length; index++) {
+			const entry = entries[index]!;
+			const candidate =
+				mode === "grow"
+					? (entry.grow ?? 0) > 0 && sizes[index]! < (entry.maxSize ?? Number.MAX_SAFE_INTEGER)
+					: (entry.shrink ?? 1) > 0 && sizes[index]! > (entry.minSize ?? 0);
+			if (candidate) candidates.push(index);
+		}
 		if (candidates.length === 0) return;
 
-		const totalWeight = candidates.reduce((sum, { entry, index }) => {
-			return sum + (mode === "grow" ? (entry.grow ?? 0) : (entry.shrink ?? 1) * Math.max(1, sizes[index]!));
-		}, 0);
+		let totalWeight = 0;
+		for (let i = 0; i < candidates.length; i++) {
+			const index = candidates[i]!;
+			const entry = entries[index]!;
+			totalWeight += mode === "grow" ? (entry.grow ?? 0) : (entry.shrink ?? 1) * Math.max(1, sizes[index]!);
+		}
 		let distributed = 0;
-		for (const { entry, index } of candidates) {
+		for (let i = 0; i < candidates.length; i++) {
+			const index = candidates[i]!;
+			const entry = entries[index]!;
 			if (remaining <= 0) break;
 			const weight = mode === "grow" ? (entry.grow ?? 0) : (entry.shrink ?? 1) * Math.max(1, sizes[index]!);
 			const proposed = Math.max(1, Math.floor((remaining * weight) / totalWeight));
@@ -138,16 +153,19 @@ export function allocateStackSizes(
 	availableSize: number | undefined,
 	gap: number,
 ): number[] {
-	const sizes = entries.map((entry, index) =>
-		clampSize(
+	const sizes: number[] = new Array(entries.length);
+	for (let index = 0; index < entries.length; index++) {
+		const entry = entries[index]!;
+		sizes[index] = clampSize(
 			entry.basis === undefined || entry.basis === "auto" ? (intrinsicSizes[index] ?? 0) : entry.basis,
 			entry,
-		),
-	);
+		);
+	}
 	if (availableSize === undefined) return sizes;
 
 	const contentSize = Math.max(0, Math.floor(availableSize) - Math.max(0, entries.length - 1) * gap);
-	const total = sizes.reduce((sum, size) => sum + size, 0);
+	let total = 0;
+	for (let index = 0; index < sizes.length; index++) total += sizes[index]!;
 	if (total < contentSize) distribute(sizes, entries, contentSize - total, "grow");
 	else if (total > contentSize) distribute(sizes, entries, total - contentSize, "shrink");
 	return sizes;

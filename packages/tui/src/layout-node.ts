@@ -46,6 +46,6 @@ export interface LayoutComponent extends Component {
 }
 
 export function getLayoutNode(component: Component): LayoutNode | undefined {
-	const candidate = component as Partial<LayoutComponent>;
-	return typeof candidate[LAYOUT_NODE] === "function" ? candidate[LAYOUT_NODE]() : undefined;
+	const layoutNode = (component as Partial<LayoutComponent>)[LAYOUT_NODE];
+	return typeof layoutNode === "function" ? layoutNode.call(component) : undefined;
 }

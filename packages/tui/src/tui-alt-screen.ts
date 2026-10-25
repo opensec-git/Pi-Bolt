@@ -221,6 +221,10 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private finishedRows = new Map<string, string>();
 	private finishedRowsWidth = 0;
 	private imageRows = new Set<string>();
+	// The rows of the frame before as the layout drew them, by what they became without the prompt markers and with the fake
+	// cursors resolved, and whether the hardware cursor was shown.
+	private resolvedRows = new Map<string, string>();
+	private resolvedRowsCursor = false;
 	private layoutRoot: Component | undefined;
 	private currentLayout: LayoutFrame | undefined;
 	private readonly implicitDocument: Component;
@@ -1768,10 +1772,23 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		if (this.refreshSearch(nextLayout)) {
 			nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
 		}
-		// Resolve fake cursors before highlighting and compositing, which only track SGR codes
-		let screen = this.resolveFakeCursors(
-			nextLayout.lines.map((line) => (line.startsWith("\x1b]133;") ? line.replace(OSC133_ZONE_PREFIX, "") : line)),
-		);
+		// Resolve fake cursors before highlighting and compositing, which only track SGR codes. A row that is a row of the frame
+		// before (most of the screen, while a reply streams in) is resolved as that one was, and is that same string.
+		const showHardwareCursor = this.getShowHardwareCursor();
+		const knownResolved = this.resolvedRowsCursor === showHardwareCursor ? this.resolvedRows : undefined;
+		const resolvedRows = new Map<string, string>();
+		const single = [""];
+		let screen = nextLayout.lines.map((line) => {
+			let resolved = knownResolved?.get(line);
+			if (resolved === undefined) {
+				single[0] = line.startsWith("\x1b]133;") ? line.replace(OSC133_ZONE_PREFIX, "") : line;
+				resolved = this.resolveFakeCursors(single)[0]!;
+			}
+			resolvedRows.set(line, resolved);
+			return resolved;
+		});
+		this.resolvedRows = resolvedRows;
+		this.resolvedRowsCursor = showHardwareCursor;
 		screen = this.applySearchHighlights(screen, nextLayout);
 		screen = this.compositeScrollToEndIndicator(screen, nextLayout, width);
 		screen = this.compositeOverlays(screen, width, height);

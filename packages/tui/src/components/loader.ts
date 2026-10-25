@@ -10,6 +10,12 @@ export interface LoaderIndicatorOptions {
 
 const DEFAULT_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const DEFAULT_INTERVAL_MS = 80;
+/**
+ * How long the frame for an animation step may wait for a frame drawn for something else (TUI.requestRenderWithin()): while a
+ * reply streams in, frames are drawn every few dozen milliseconds, and a step drawn by one of them needs no frame of its own.
+ * Shorter than a step, so that each is drawn.
+ */
+const STEP_FRAME_DELAY_MS = 40;
 
 /**
  * Loader component that updates with an optional spinning animation.
@@ -93,7 +99,7 @@ export class Loader extends Text {
 		}
 		this.intervalId = setInterval(() => {
 			this.currentFrame = (this.currentFrame + 1) % this.frames.length;
-			this.updateDisplay();
+			this.updateDisplay(Math.min(STEP_FRAME_DELAY_MS, this.intervalMs / 2));
 		}, this.intervalMs);
 	}
 
@@ -102,12 +108,13 @@ export class Loader extends Text {
 		return this.renderIndicatorVerbatim ? frame : this.spinnerColorFn(frame);
 	}
 
-	private updateDisplay(): void {
+	/** Sets the text and asks for a frame: at once, or within `frameDelayMs` (an animation step). */
+	private updateDisplay(frameDelayMs?: number): void {
 		const renderedFrame = this.getRenderedIndicator();
 		const indicator = renderedFrame.length > 0 ? `${renderedFrame} ` : "";
 		this.setText(`${indicator}${this.messageColorFn(this.message)}`);
-		if (this.ui) {
-			this.ui.requestRender();
-		}
+		if (!this.ui) return;
+		if (frameDelayMs !== undefined && this.ui.requestRenderWithin) this.ui.requestRenderWithin(frameDelayMs);
+		else this.ui.requestRender();
 	}
 }

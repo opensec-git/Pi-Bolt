@@ -935,12 +935,17 @@ export class Container implements Component {
 			for (let i = 0; i < tail; i++) again.push(i);
 		} else {
 			again = [];
-			for (const child of changed) {
+			// (Indexed loops: for-of goes through the array iterator in compiled code, and this runs for every container on
+			// every frame.)
+			for (let i = 0; i < changed.length; i++) {
+				const child = changed[i]!;
 				const index = before.children.lastIndexOf(child);
 				if (index === -1) dropRenderOwner(child, this);
 				else if (index < tail) again.push(index);
 			}
-			for (const index of before.unreported) {
+			const unreported = before.unreported;
+			for (let i = 0; i < unreported.length; i++) {
+				const index = unreported[i]!;
 				if (index >= tail) break;
 				again.push(index);
 			}
@@ -954,7 +959,8 @@ export class Container implements Component {
 		/** The first child whose recorded lines or height may differ from those of the render before. */
 		let firstChanged = tail;
 		let reportsChanged = false;
-		for (const index of again) {
+		for (let i = 0; i < again.length; i++) {
+			const index = again[i]!;
 			const child = children[index]!;
 			const rendered = renderChildForContainer(this, child, width);
 			const changedFrom = childChangedFrom(before, index, child, rendered, joined, before.offsets[index]!);
@@ -1177,6 +1183,11 @@ export interface TUI extends Component {
 	stop(options?: TuiStopOptions): void;
 	renderNow(force?: boolean): void;
 	requestRender(force?: boolean): void;
+	/**
+	 * A frame within `delayMs`: when any frame is drawn in that time it draws the change, and only when none is is one asked
+	 * for (requestRender()) once the time is up. For a change that need not be drawn at once, such as a spinner's next step.
+	 */
+	requestRenderWithin?(delayMs: number): void;
 	addInputListener(listener: TuiInputListener): () => void;
 	removeInputListener(listener: TuiInputListener): void;
 	onTerminalColorSchemeChange(listener: (scheme: TerminalColorScheme) => void): () => void;
@@ -1209,6 +1220,10 @@ export abstract class TuiBase extends Container implements TUI {
 	private renderRequested = false;
 	private immediateRenderScheduled = false;
 	private renderTimer: NodeJS.Timeout | undefined;
+	/** Frames drawn so far: a frame asked for with requestRenderWithin() is not needed when one was drawn since. */
+	private framesDrawn = 0;
+	/** The timer of requestRenderWithin(). */
+	private deferredRenderTimer: NodeJS.Timeout | undefined;
 	private lastRenderAt = 0;
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
 	/** How long the last frame took to draw (FRAME_SPACING_FACTOR). */
@@ -1266,6 +1281,7 @@ export abstract class TuiBase extends Container implements TUI {
 	/** Render a frame; with PI_TTI_TRACE set, record when the first frames were handed to the terminal. */
 	private renderFrame(): void {
 		const start = renderClock();
+		this.framesDrawn++;
 		this.doRender();
 		this.lastFrameDuration = this.nextFrameUnspaced ? 0 : renderClock() - start;
 		this.nextFrameUnspaced = false;
@@ -1750,6 +1766,10 @@ export abstract class TuiBase extends Container implements TUI {
 		this.stopped = true;
 		process.off("exit", this.exitRestoreHandler);
 		this.cancelRenderTimer();
+		if (this.deferredRenderTimer) {
+			clearTimeout(this.deferredRenderTimer);
+			this.deferredRenderTimer = undefined;
+		}
 		if (this.terminalColorSchemeNotificationsEnabled) {
 			this.terminal.write("\x1b[?2031l");
 		}
@@ -1785,6 +1805,16 @@ export abstract class TuiBase extends Container implements TUI {
 		if (this.renderRequested) return;
 		this.renderRequested = true;
 		process.nextTick(() => this.scheduleRender());
+	}
+
+	requestRenderWithin(delayMs: number): void {
+		// (A frame asked for already draws the change, and so does one asked for within the time already.)
+		if (this.stopped || this.renderRequested || this.deferredRenderTimer) return;
+		const drawn = this.framesDrawn;
+		this.deferredRenderTimer = setTimeout(() => {
+			this.deferredRenderTimer = undefined;
+			if (this.framesDrawn === drawn) this.requestRender();
+		}, delayMs);
 	}
 
 	private requestImmediateRender(): void {

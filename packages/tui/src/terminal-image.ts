@@ -415,10 +415,16 @@ export interface KittyImagePlacement {
 }
 
 const kittyImageMetadata = new Map<number, RegisteredKittyImageMetadata>();
+/**
+ * Whether an image was ever registered: from then on kittyImageMetadata is never empty (an entry is only deleted to be set
+ * again, or for the next one). Read for every row the layout paints, on every frame.
+ */
+let kittyImageRegistered = false;
 let kittyTransmissionGeneration = 0;
 
 export function registerKittyImageMetadata(metadata: KittyImageMetadata): void {
 	kittyTransmissionGeneration += 1;
+	kittyImageRegistered = true;
 	kittyImageMetadata.delete(metadata.imageId);
 	kittyImageMetadata.set(metadata.imageId, { ...metadata, transmissionGeneration: kittyTransmissionGeneration });
 	if (kittyImageMetadata.size > 1000) {
@@ -448,7 +454,7 @@ function getRegisteredKittyImageMetadataFromControls(controls: string): Register
 function getRegisteredKittyImageMetadata(line: string): RegisteredKittyImageMetadata | undefined {
 	// (No image registered: the line is not searched for a Kitty command, which could name none.) Layout asks this of every
 	// row it paints, on every frame.
-	if (kittyImageMetadata.size === 0) return undefined;
+	if (!kittyImageRegistered) return undefined;
 	const controls = findKittyControls(line)?.controls;
 	return controls === undefined ? undefined : getRegisteredKittyImageMetadataFromControls(controls);
 }

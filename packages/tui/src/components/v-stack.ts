@@ -39,14 +39,15 @@ export class VStack extends Stack {
 	measureHeight(width: number, heightOf: (component: Component, width: number) => number): number {
 		const viewport: LayoutViewport = { width: Math.max(1, width), height: Number.MAX_SAFE_INTEGER };
 		const entries = visibleStackEntries(this.entries, viewport);
-		const sizes = allocateStackSizes(
-			entries,
-			entries.map((entry) => (typeof entry.basis === "number" ? 0 : heightOf(entry.component, viewport.width))),
-			undefined,
-			this.gap,
-		);
+		// (Loops rather than map() with a closure and for-of: the layout measures the input dock on every frame.)
+		const heights: number[] = new Array(entries.length);
+		for (let index = 0; index < entries.length; index++) {
+			const entry = entries[index]!;
+			heights[index] = typeof entry.basis === "number" ? 0 : heightOf(entry.component, viewport.width);
+		}
+		const sizes = allocateStackSizes(entries, heights, undefined, this.gap);
 		let height = Math.max(0, entries.length - 1) * this.gap;
-		for (const size of sizes) height += size;
+		for (let index = 0; index < sizes.length; index++) height += sizes[index]!;
 		return height;
 	}
 }

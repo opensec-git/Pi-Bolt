@@ -51,9 +51,18 @@ export interface ScrollbarGeometry {
 	maxScrollTop: number;
 }
 
+/** A component's lines at the width it was rendered at first this frame, and at any other widths it was rendered at. */
+interface RenderedAt {
+	width: number;
+	lines: readonly string[];
+	others?: Map<number, readonly string[]>;
+}
+
 interface LayoutContext {
 	viewport: { width: number; height: number };
-	renderCache: Map<Component, Map<number, readonly string[]>>;
+	renderCache: Map<Component, RenderedAt>;
+	/** measureHeight() in this context, for VStack.measureHeight(): made once a frame. */
+	heightOf: (component: Component, width: number) => number;
 	requestRender: () => void;
 	primaryScrollView: ScrollView | undefined;
 }
@@ -68,17 +77,19 @@ function intersect(a: LayoutRect, b: LayoutRect): LayoutRect {
 
 function renderCached(context: LayoutContext, component: Component, width: number): readonly string[] {
 	const safeWidth = Math.max(1, Math.floor(width));
-	let widths = context.renderCache.get(component);
-	if (!widths) {
-		widths = new Map<number, readonly string[]>();
-		context.renderCache.set(component, widths);
+	const known = context.renderCache.get(component);
+	if (known !== undefined) {
+		if (known.width === safeWidth) return known.lines;
+		const other = known.others?.get(safeWidth);
+		if (other !== undefined) return other;
 	}
-	let lines = widths.get(safeWidth);
-	if (!lines) {
-		// (Shared lines, or live lines that change at the next render: the layout reads them for this frame only, and the
-		// frame's boxes until the next one is laid out.)
-		lines = renderLiveLines(component, safeWidth)?.lines ?? renderSharedLines(component, safeWidth);
-		widths.set(safeWidth, lines);
+	// (Shared lines, or live lines that change at the next render: the layout reads them for this frame only, and the
+	// frame's boxes until the next one is laid out.)
+	const lines = renderLiveLines(component, safeWidth)?.lines ?? renderSharedLines(component, safeWidth);
+	if (known === undefined) context.renderCache.set(component, { width: safeWidth, lines });
+	else {
+		known.others ??= new Map();
+		known.others.set(safeWidth, lines);
 	}
 	return lines;
 }
@@ -90,9 +101,7 @@ function renderCached(context: LayoutContext, component: Component, width: numbe
  */
 function measureHeight(context: LayoutContext, component: Component, width: number): number {
 	if (component instanceof VStack && component.render === VStack.prototype.render) {
-		return component.measureHeight(Math.max(1, Math.floor(width)), (child, childWidth) =>
-			measureHeight(context, child, childWidth),
-		);
+		return component.measureHeight(Math.max(1, Math.floor(width)), context.heightOf);
 	}
 	return renderCached(context, component, width).length;
 }
@@ -108,12 +117,14 @@ function withParent(box: LayoutBox, parent: LayoutBox): LayoutBox {
 
 function translateBox(box: LayoutBox, deltaY: number): void {
 	box.rect.y += deltaY;
-	for (const child of box.children) translateBox(child, deltaY);
+	const children = box.children;
+	for (let i = 0; i < children.length; i++) translateBox(children[i]!, deltaY);
 }
 
 function updateClips(box: LayoutBox, parentClip: LayoutRect): void {
 	box.clip = intersect(parentClip, box.rect);
-	for (const child of box.children) updateClips(child, box.clip);
+	const children = box.children;
+	for (let i = 0; i < children.length; i++) updateClips(children[i]!, box.clip);
 }
 
 function layoutComponent(
@@ -183,11 +194,17 @@ function layoutComponent(
 	const entries = visibleStackEntries(node.entries, context.viewport);
 	const gapTotal = Math.max(0, entries.length - 1) * node.gap;
 	if (node.type === "vstack") {
-		const intrinsicHeights = entries.map((entry) =>
-			typeof entry.basis === "number" ? entry.basis : measureHeight(context, entry.component, safeWidth),
-		);
+		// (Loops rather than map() and reduce() with closures: a frame lays out every stack.)
+		const intrinsicHeights: number[] = new Array(entries.length);
+		for (let index = 0; index < entries.length; index++) {
+			const entry = entries[index]!;
+			intrinsicHeights[index] =
+				typeof entry.basis === "number" ? entry.basis : measureHeight(context, entry.component, safeWidth);
+		}
 		const sizes = allocateStackSizes(entries, intrinsicHeights, height, node.gap);
-		const naturalHeight = sizes.reduce((sum, size) => sum + size, 0) + gapTotal;
+		let sizesTotal = 0;
+		for (let index = 0; index < sizes.length; index++) sizesTotal += sizes[index]!;
+		const naturalHeight = sizesTotal + gapTotal;
 		const allocatedHeight = height === undefined ? naturalHeight : Math.max(0, Math.floor(height));
 		const rect = { x, y, width: safeWidth, height: allocatedHeight };
 		const box: LayoutBox = {
@@ -348,7 +365,11 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
 		for (let row = firstRow; row < lastRow; row++) {
 			const sourceLine = box.lines[offset + row - box.rect.y];
 			if (sourceLine === undefined) continue;
-			let line = sourceLine.startsWith("\x1b]133;") ? sourceLine.replace(OSC133_ZONE_PREFIX, "") : sourceLine;
+			// (The first character is looked at first: startsWith() is a call into the runtime, for every row of every frame.)
+			let line =
+				sourceLine.charCodeAt(0) === 0x1b && sourceLine.startsWith("\x1b]133;")
+					? sourceLine.replace(OSC133_ZONE_PREFIX, "")
+					: sourceLine;
 			const imageMetadata = getKittyImageMetadata(line);
 			if (imageMetadata) {
 				const clipBottom = Math.min(screen.length, box.clip.y + box.clip.height);
@@ -367,7 +388,8 @@ function paintBox(box: LayoutBox, screen: string[], totalWidth: number): void {
 			}
 		}
 	}
-	for (const child of box.children) paintBox(child, screen, totalWidth);
+	const children = box.children;
+	for (let i = 0; i < children.length; i++) paintBox(children[i]!, screen, totalWidth);
 
 	if (box.scrollView && box.scrollContentLines && box.scrollView.scrollTop > 0 && box.rect.height > 0) {
 		for (let imageRow = box.scrollView.scrollTop - 1; imageRow >= 0; imageRow--) {
@@ -400,6 +422,7 @@ export function renderLayoutFrame(
 	const context: LayoutContext = {
 		viewport: { width: safeWidth, height: safeHeight },
 		renderCache: new Map(),
+		heightOf: (component, width) => measureHeight(context, component, width),
 		requestRender,
 		primaryScrollView: undefined,
 	};
@@ -409,7 +432,9 @@ export function renderLayoutFrame(
 		width: safeWidth,
 		height: safeHeight,
 	});
-	const lines = Array.from({ length: safeHeight }, () => "");
+	// (A loop: Array.from() with a mapping function runs as a generic builtin, on every frame.)
+	const lines: string[] = [];
+	for (let row = 0; row < safeHeight; row++) lines.push("");
 	paintBox(rootBox, lines, safeWidth);
 	return {
 		root: rootBox,
