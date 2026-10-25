@@ -15567,3 +15567,1691 @@ index 467d8f6c19..61ebc19424 100644
 -- 
 2.54.0 (Apple Git-157)
 
+
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yusuke Suzuki <ysuzuki@apple.com>
+Date: Thu, 15 Oct 2026 12:34:54 -0700
+Subject: [PATCH] [JSC] B3 foldPathConstants should treat a boolean branch
+ condition as 1 on the taken edge
+
+https://bugs.webkit.org/show_bug.cgi?id=327633 rdar://190084203
+
+Reviewed by Keith Miller.
+
+When you have a code like this,
+
+    x === 32 || x === 9 || ..
+
+the graph likes this is generated.
+
+    BB#0: (root)
+        Int32 @0 = ArgumentReg(x0)                 // x
+        Int32 @1 = Const32(36)
+        Int32 @2 = Equal(@0, @1)
+        Void  @3 = Branch(@2), Successors: Then:#1, Else:#2
+
+    BB#1: (firstTaken)  preds: #0
+        Void  @4 = Upsilon(@2, ^10)                // passes the compare itself into the Phi
+        Void  @5 = Jump, Successors: #4
+
+    BB#2: (secondCompare)  preds: #0
+        Int32 @6 = Const32(95)
+        Int32 @7 = Equal(@0, @6)
+        Void  @8 = Branch(@7), Successors: Then:#3, Else:#6
+
+    BB#3: (secondTaken)  preds: #2
+        Void  @9 = Upsilon(@7, ^10)
+        Void  @11 = Jump, Successors: #4
+
+    BB#4: (join)  preds: #1, #3
+        Int32 @10 = Phi                            // the merged "||" result
+        ...
+        Void  @15 = Branch(@10), Successors: Then:#5, Else:#6
+
+    BB#5: (matched)
+        ...
+
+    BB#6: (unmatched)  preds: #2, #4
+        Void  @17 = Return($5)
+
+In foldPathConstants, we can install 1 for taken path if the Branch's
+input returns bool (e.g. `===`). Then in the above case, @4 and @9 are
+replaced with Constant 1, then @10 will be folded into 1 since both are
+the same constant input, and @15 will become jump since input is always 1.
+
+Tests: Source/JavaScriptCore/b3/testb3_1.cpp
+       Source/JavaScriptCore/b3/testb3_5.cpp
+
+* Source/JavaScriptCore/b3/B3FoldPathConstants.cpp:
+* Source/JavaScriptCore/b3/testb3.h:
+* Source/JavaScriptCore/b3/testb3_1.cpp:
+(run):
+* Source/JavaScriptCore/b3/testb3_5.cpp:
+(testBranchOnPhiOfTakenComparesFoldPathConstant):
+
+Canonical link: https://commits.webkit.org/323859@main
+
+Backported to Pi-Bolt's WebKit pin from oven-sh/WebKit a54d5f756c (WebKit 323859@main); test context adjusted.
+---
+ .../JavaScriptCore/b3/B3FoldPathConstants.cpp |  4 +-
+ Source/JavaScriptCore/b3/testb3.h             |  1 +
+ Source/JavaScriptCore/b3/testb3_1.cpp         |  1 +
+ Source/JavaScriptCore/b3/testb3_5.cpp         | 62 +++++++++++++++++++
+ 4 files changed, 67 insertions(+), 1 deletion(-)
+
+diff --git a/Source/JavaScriptCore/b3/B3FoldPathConstants.cpp b/Source/JavaScriptCore/b3/B3FoldPathConstants.cpp
+index 5d1f1191e6..ca8f536951 100644
+--- a/Source/JavaScriptCore/b3/B3FoldPathConstants.cpp
++++ b/Source/JavaScriptCore/b3/B3FoldPathConstants.cpp
+@@ -95,7 +95,9 @@ public:
+                     continue;
+                 addOverride(
+                     block, branch->child(0),
+-                    Override::nonZero(block->successorBlock(0)));
++                    branch->child(0)->returnsBool()
++                        ? Override::constant(block->successorBlock(0), 1)
++                        : Override::nonZero(block->successorBlock(0)));
+                 addOverride(
+                     block, branch->child(0),
+                     Override::constant(block->successorBlock(1), 0));
+diff --git a/Source/JavaScriptCore/b3/testb3.h b/Source/JavaScriptCore/b3/testb3.h
+index 69c66bab34..4414604a2c 100644
+--- a/Source/JavaScriptCore/b3/testb3.h
++++ b/Source/JavaScriptCore/b3/testb3.h
+@@ -1194,6 +1194,7 @@ void testSwitchSameCaseAsDefault();
+ void testSwitchChillDiv(unsigned degree, unsigned gap);
+ void testSwitchTargettingSameBlock();
+ void testSwitchTargettingSameBlockFoldPathConstant();
++void testBranchOnPhiOfTakenComparesFoldPathConstant();
+ void testSwitchSparseI64RangeOverflow();
+ void testTruncFold(int64_t value);
+ void testZExt32(int32_t value);
+diff --git a/Source/JavaScriptCore/b3/testb3_1.cpp b/Source/JavaScriptCore/b3/testb3_1.cpp
+index 811be2f5e6..96f014d746 100644
+--- a/Source/JavaScriptCore/b3/testb3_1.cpp
++++ b/Source/JavaScriptCore/b3/testb3_1.cpp
+@@ -917,6 +917,7 @@ void run(const TestConfig* config)
+ 
+     RUN(testSwitchTargettingSameBlock());
+     RUN(testSwitchTargettingSameBlockFoldPathConstant());
++    RUN(testBranchOnPhiOfTakenComparesFoldPathConstant());
+     RUN(testSwitchSparseI64RangeOverflow());
+ 
+     RUN(testTrunc(0));
+diff --git a/Source/JavaScriptCore/b3/testb3_5.cpp b/Source/JavaScriptCore/b3/testb3_5.cpp
+index a08f91de4d..b4b6a6c105 100644
+--- a/Source/JavaScriptCore/b3/testb3_5.cpp
++++ b/Source/JavaScriptCore/b3/testb3_5.cpp
+@@ -2910,6 +2910,68 @@ void testSwitchTargettingSameBlockFoldPathConstant()
+     }
+ }
+ 
++void testBranchOnPhiOfTakenComparesFoldPathConstant()
++{
++    // Models `if (x === 36 || x === 95)`: each compare's taken edge feeds the compare itself to a Phi
++    // that is branched on again.
++    Procedure proc;
++    BasicBlock* root = proc.addBlock();
++    BasicBlock* firstTaken = proc.addBlock();
++    BasicBlock* secondCompare = proc.addBlock();
++    BasicBlock* secondTaken = proc.addBlock();
++    BasicBlock* join = proc.addBlock();
++    BasicBlock* matched = proc.addBlock();
++    BasicBlock* unmatched = proc.addBlock();
++
++    auto arguments = cCallArgumentValues<int32_t>(proc, root);
++    Value* argument = arguments[0];
++    Value* firstEqual = root->appendNew<Value>(proc, Equal, Origin(), argument, root->appendNew<Const32Value>(proc, Origin(), 36));
++    root->setSuccessors(FrequentedBlock(firstTaken), FrequentedBlock(secondCompare));
++    root->appendNew<Value>(proc, Branch, Origin(), firstEqual);
++
++    Value* phi = join->appendNew<Value>(proc, Phi, Int32, Origin());
++
++    UpsilonValue* firstUpsilon = firstTaken->appendNew<UpsilonValue>(proc, Origin(), firstEqual);
++    firstUpsilon->setPhi(phi);
++    firstTaken->setSuccessors(FrequentedBlock(join));
++    firstTaken->appendNew<Value>(proc, Jump, Origin());
++
++    Value* secondEqual = secondCompare->appendNew<Value>(proc, Equal, Origin(), argument, secondCompare->appendNew<Const32Value>(proc, Origin(), 95));
++    secondCompare->setSuccessors(FrequentedBlock(secondTaken), FrequentedBlock(unmatched));
++    secondCompare->appendNew<Value>(proc, Branch, Origin(), secondEqual);
++
++    UpsilonValue* secondUpsilon = secondTaken->appendNew<UpsilonValue>(proc, Origin(), secondEqual);
++    secondUpsilon->setPhi(phi);
++    secondTaken->setSuccessors(FrequentedBlock(join));
++    secondTaken->appendNew<Value>(proc, Jump, Origin());
++
++    // Large enough that duplicateTails does not copy the join into its predecessors.
++    Value* incremented = join->appendNew<Value>(proc, Add, Origin(), argument, join->appendNew<Const32Value>(proc, Origin(), 1));
++    Value* squared = join->appendNew<Value>(proc, Mul, Origin(), incremented, incremented);
++    Value* result = join->appendNew<Value>(proc, Add, Origin(), squared, join->appendNew<Const32Value>(proc, Origin(), 7));
++    join->setSuccessors(FrequentedBlock(matched), FrequentedBlock(unmatched));
++    join->appendNew<Value>(proc, Branch, Origin(), phi);
++
++    matched->clearSuccessors();
++    matched->appendNew<Value>(proc, Return, Origin(), result);
++    unmatched->clearSuccessors();
++    unmatched->appendNew<Value>(proc, Return, Origin(), unmatched->appendNew<Const32Value>(proc, Origin(), 5));
++
++    auto code = compileProc(proc);
++
++    if (proc.optLevel() >= 2) {
++        if (isARM64())
++            checkDoesNotUseInstruction(*code, "cset");
++        if (isX86())
++            checkDoesNotUseInstruction(*code, "sete");
++    }
++
++    for (int32_t i : { 0, 35, 36, 37, 94, 95, 96, -36 }) {
++        int32_t expected = (i == 36 || i == 95) ? (i + 1) * (i + 1) + 7 : 5;
++        CHECK_EQ(invoke<int32_t>(*code, i), expected);
++    }
++}
++
+ void testSwitchSparseI64RangeOverflow()
+ {
+     static constexpr auto caseValues = WTF::toArray<int64_t>({
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yusuke Suzuki <ysuzuki@apple.com>
+Date: Tue, 20 Oct 2026 09:33:12 -0700
+Subject: [PATCH] [JSC] B3 ReduceStrength should not fold
+ Trunc(SShr(Shl(SExt32(x), c), c)) to x for a negative c
+
+https://bugs.webkit.org/show_bug.cgi?id=328174 rdar://2
+
+Reviewed by Tadeu Zagallo.
+
+Previously this conversion only checks constant is < 31. But when it is
+negative number, since it is masked with width of value (64 - 1 etc.),
+it can be larger than 31 still, but it passed. This patch fixes it by
+adding non-negative check.
+
+We also do this masking generally for shift operations.
+
+Tests: Source/JavaScriptCore/b3/testb3_1.cpp
+       Source/JavaScriptCore/b3/testb3_7.cpp
+
+* Source/JavaScriptCore/b3/B3ReduceStrength.cpp:
+* Source/JavaScriptCore/b3/testb3.h:
+* Source/JavaScriptCore/b3/testb3_1.cpp:
+(run):
+* Source/JavaScriptCore/b3/testb3_7.cpp:
+(testTruncSShrShlSExt32):
+
+Canonical link: https://commits.webkit.org/324247@main
+
+Backported to Pi-Bolt's WebKit pin from oven-sh/WebKit df5a49f70d (WebKit 324247@main).
+---
+ Source/JavaScriptCore/b3/B3ReduceStrength.cpp | 41 +++++++++++++++++--
+ Source/JavaScriptCore/b3/testb3.h             |  1 +
+ Source/JavaScriptCore/b3/testb3_1.cpp         | 13 ++++++
+ Source/JavaScriptCore/b3/testb3_7.cpp         | 18 ++++++++
+ 4 files changed, 69 insertions(+), 4 deletions(-)
+
+diff --git a/Source/JavaScriptCore/b3/B3ReduceStrength.cpp b/Source/JavaScriptCore/b3/B3ReduceStrength.cpp
+index 452b0bc23d..89264119d0 100644
+--- a/Source/JavaScriptCore/b3/B3ReduceStrength.cpp
++++ b/Source/JavaScriptCore/b3/B3ReduceStrength.cpp
+@@ -366,6 +366,7 @@ public:
+     template<typename T>
+     IntRange NODELETE shl(int32_t shiftAmount)
+     {
++        shiftAmount &= static_cast<int32_t>(sizeof(T) * 8 - 1);
+         T newMin = static_cast<T>(m_min) << static_cast<T>(shiftAmount);
+         T newMax = static_cast<T>(m_max) << static_cast<T>(shiftAmount);
+ 
+@@ -394,6 +395,7 @@ public:
+     template<typename T>
+     IntRange NODELETE sShr(int32_t shiftAmount)
+     {
++        shiftAmount &= static_cast<int32_t>(sizeof(T) * 8 - 1);
+         T newMin = static_cast<T>(m_min) >> static_cast<T>(shiftAmount);
+         T newMax = static_cast<T>(m_max) >> static_cast<T>(shiftAmount);
+ 
+@@ -416,6 +418,8 @@ public:
+     template<typename T>
+     IntRange NODELETE zShr(int32_t shiftAmount)
+     {
++        shiftAmount &= static_cast<int32_t>(sizeof(T) * 8 - 1);
++
+         // This is an awkward corner case for all of the other logic.
+         if (!shiftAmount)
+             return *this;
+@@ -1876,6 +1880,8 @@ private:
+             break;
+ 
+         case Shl:
++            maskConstantShiftAmount();
++
+             // Turn this: Shl(constant1, constant2)
+             // Into this: constant1 << constant2
+             if (Value* constant = m_value->child(0)->shlConstant(m_proc, m_value->child(1))) {
+@@ -1900,6 +1906,8 @@ private:
+             break;
+ 
+         case SShr:
++            maskConstantShiftAmount();
++
+             // Turn this: SShr(constant1, constant2)
+             // Into this: constant1 >> constant2
+             if (Value* constant = m_value->child(0)->sShrConstant(m_proc, m_value->child(1))) {
+@@ -1976,6 +1984,8 @@ private:
+             break;
+ 
+         case ZShr:
++            maskConstantShiftAmount();
++
+             // Turn this: ZShr(constant1, constant2)
+             // Into this: (unsigned)constant1 >> constant2
+             if (Value* constant = m_value->child(0)->zShrConstant(m_proc, m_value->child(1))) {
+@@ -2046,6 +2056,8 @@ private:
+             break;
+ 
+         case RotR:
++            maskConstantShiftAmount();
++
+             // Turn this: RotR(constant1, constant2)
+             // Into this: (constant1 >> constant2) | (constant1 << sizeof(constant1) * 8 - constant2)
+             if (Value* constant = m_value->child(0)->rotRConstant(m_proc, m_value->child(1))) {
+@@ -2057,6 +2069,8 @@ private:
+             break;
+ 
+         case RotL:
++            maskConstantShiftAmount();
++
+             // Turn this: RotL(constant1, constant2)
+             // Into this: (constant1 << constant2) | (constant1 >> sizeof(constant1) * 8 - constant2)
+             if (Value* constant = m_value->child(0)->rotLConstant(m_proc, m_value->child(1))) {
+@@ -2460,13 +2474,18 @@ private:
+                 int32_t shiftAmountConstant = m_value->child(0)->child(1)->asInt32();
+                 auto sshrArg0 = m_value->child(0)->child(0);
+ 
+-                // Turn this: Trunc(SShr(Shl(SExt32(@a), $12), $12))
++                // Turn this: Trunc(SShr(Shl(SExt32(@a), $c), $c)) where (c & 63) <= 32
+                 // Into this: @a
++                // SExt32 makes the top 33 bits copies of the sign bit, so shifting out up to 32 of them
++                // and shifting back in loses nothing.
+                 if (sshrArg0->opcode() == Shl && sshrArg0->child(1)->hasInt32()
+-                    && sshrArg0->child(1)->asInt32() == shiftAmountConstant && shiftAmountConstant < 31
+                     && sshrArg0->child(0)->opcode() == SExt32) {
+-                    replaceWithIdentity(sshrArg0->child(0)->child(0));
+-                    break;
++                    unsigned shlAmount = sshrArg0->child(1)->asInt32() & 63;
++                    unsigned sshrAmount = shiftAmountConstant & 63;
++                    if (shlAmount == sshrAmount && sshrAmount <= 32) {
++                        replaceWithIdentity(sshrArg0->child(0)->child(0));
++                        break;
++                    }
+                 }
+ 
+                 // Shl(SExt32(@a), $12)
+@@ -4799,6 +4818,20 @@ private:
+         m_changed = true;
+     }
+ 
++    // Shifts and rotates use their amount modulo the operand width. Reducing a constant amount to
++    // that range up front lets the shift patterns compare and compute with it directly.
++    void maskConstantShiftAmount()
++    {
++        if (!m_value->child(1)->hasInt32())
++            return;
++        int32_t amount = m_value->child(1)->asInt32();
++        int32_t maskedAmount = amount & static_cast<int32_t>(sizeofType(m_value->type()) * 8 - 1);
++        if (amount == maskedAmount)
++            return;
++        m_value->child(1) = m_insertionSet.insert<Const32Value>(m_index, m_value->origin(), maskedAmount);
++        m_changed = true;
++    }
++
+     void handleShiftAmount()
+     {
+         // Shift anything by zero is identity.
+diff --git a/Source/JavaScriptCore/b3/testb3.h b/Source/JavaScriptCore/b3/testb3.h
+index 4414604a2c..c4e6496dd8 100644
+--- a/Source/JavaScriptCore/b3/testb3.h
++++ b/Source/JavaScriptCore/b3/testb3.h
+@@ -1463,6 +1463,7 @@ void testSShrCompare64(int64_t);
+ void testInt52RoundTripUnary(int32_t);
+ void testInt52RoundTripBinary();
+ void testTruncSShrAddUnalignedConstant();
++void testTruncSShrShlSExt32(int32_t);
+ 
+ void testMulHigh32();
+ void testMulHigh64();
+diff --git a/Source/JavaScriptCore/b3/testb3_1.cpp b/Source/JavaScriptCore/b3/testb3_1.cpp
+index 96f014d746..299763d87b 100644
+--- a/Source/JavaScriptCore/b3/testb3_1.cpp
++++ b/Source/JavaScriptCore/b3/testb3_1.cpp
+@@ -636,6 +636,19 @@ void run(const TestConfig* config)
+     RUN_UNARY(testInt52RoundTripUnary, int32Operands());
+     RUN(testInt52RoundTripBinary());
+     RUN(testTruncSShrAddUnalignedConstant());
++    RUN(testTruncSShrShlSExt32(-64));
++    RUN(testTruncSShrShlSExt32(-33));
++    RUN(testTruncSShrShlSExt32(-32));
++    RUN(testTruncSShrShlSExt32(-31));
++    RUN(testTruncSShrShlSExt32(-1));
++    RUN(testTruncSShrShlSExt32(0));
++    RUN(testTruncSShrShlSExt32(1));
++    RUN(testTruncSShrShlSExt32(12));
++    RUN(testTruncSShrShlSExt32(30));
++    RUN(testTruncSShrShlSExt32(31));
++    RUN(testTruncSShrShlSExt32(32));
++    RUN(testTruncSShrShlSExt32(63));
++    RUN(testTruncSShrShlSExt32(64));
+ 
+     RUN_UNARY(testCheckAddRemoveCheckWithSExt8, int8Operands());
+     RUN_UNARY(testCheckAddRemoveCheckWithSExt16, int16Operands());
+diff --git a/Source/JavaScriptCore/b3/testb3_7.cpp b/Source/JavaScriptCore/b3/testb3_7.cpp
+index 1789ff4ab2..be38314acc 100644
+--- a/Source/JavaScriptCore/b3/testb3_7.cpp
++++ b/Source/JavaScriptCore/b3/testb3_7.cpp
+@@ -3826,6 +3826,24 @@ void testTruncSShrAddUnalignedConstant()
+     CHECK_EQ(invoke<int32_t>(*code, static_cast<int64_t>(-2048)), static_cast<int32_t>((-2048LL + constant) >> 12));
+ }
+ 
++void testTruncSShrShlSExt32(int32_t amount)
++{
++    Procedure proc;
++    BasicBlock* root = proc.addBlock();
++    auto arguments = cCallArgumentValues<int32_t>(proc, root);
++    Value* extended = root->appendNew<Value>(proc, SExt32, Origin(), arguments[0]);
++    Value* shl = root->appendNew<Value>(proc, Shl, Origin(), extended, root->appendNew<Const32Value>(proc, Origin(), amount));
++    Value* sshr = root->appendNew<Value>(proc, SShr, Origin(), shl, root->appendNew<Const32Value>(proc, Origin(), amount));
++    root->appendNew<Value>(proc, Return, Origin(), root->appendNew<Value>(proc, Trunc, Origin(), sshr));
++    auto code = compileProc(proc);
++
++    unsigned maskedAmount = amount & 63;
++    for (auto operand : int32Operands()) {
++        int64_t shifted = static_cast<int64_t>(static_cast<uint64_t>(static_cast<int64_t>(operand.value)) << maskedAmount);
++        CHECK_EQ(invoke<int32_t>(*code, operand.value), static_cast<int32_t>(shifted >> maskedAmount));
++    }
++}
++
+ // Test XOR-and-rotate-right pattern matching for XAR instruction (SHA3).
+ // Pattern: VectorOr(VectorShl(VectorXor(a, b), shlConst), VectorShr(VectorXor(a, b), shrConst))
+ // Should be folded into a single XAR instruction on ARM64 with SHA3 support.
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yusuke Suzuki <ysuzuki@apple.com>
+Date: Fri, 25 Sep 2026 19:09:52 -0700
+Subject: [PATCH] [JSC] B3 specializeSelect must not clone Phis
+
+https://bugs.webkit.org/show_bug.cgi?id=325312 rdar://188290503
+
+Reviewed by Dan Hecht.
+
+B3 specializeSelect's job is like this.
+
+    Turn this:
+
+        @a = Select(@p, @x, 42)
+        @b = Add(@a, 35)
+        Check(@b)
+
+    into this:
+
+        Branch(@p, #truecase, #falsecase)
+
+      BB#truecase:
+        @b_truecase = Add(@x, 35)
+        Check(@b_truecase)
+        Upsilon(@x, ^a)
+        Upsilon(@b_truecase, ^b)
+        Jump(#continuation)
+
+      BB#falsecase:
+        @b_falsecase = Add(42, 35)
+        Check(@b_falsecase)
+        Upsilon(42, ^a)
+        Upsilon(@b_falsecase, ^b)
+        Jump(#continuation)
+
+      BB#continuation:
+        @a = Phi()
+        @b = Phi()
+
+We need to clone values between Select and Check. But this should not
+include `Phi` node. Let's see the example,
+
+    b@63 = Select(b@52, $7, $6)
+           Upsilon(b@63, ^11)
+    b@11 = Phi()
+    b@65 = BitAnd(b@63, $-562949953421310)
+    b@66 = NotEqual(b@65, $0)
+           Check(b@66, b@63:ColdAny, b@52:ColdAny, b@11:ColdAny)
+           Patchpoint(...) / CCall / Oops
+
+gets converted to,
+
+    BB#5:
+            Branch(b@52) -> #6, #7
+    BB#6:                                          ; true arm
+            Upsilon($7, ^63)
+            Upsilon($7, ^11)          ; correct: writes 7 into b@11's slot
+        b@64 = Phi()                  ; clone of b@11: its slot is never written -> garbage
+            Upsilon(b@64, ^11)        ; overwrites the 7 with the garbage
+        b@81 = BitAnd($7, $-562949953421310)
+            Upsilon(b@81, ^65)
+        b@85 = NotEqual(b@81, $0)
+            Upsilon(b@85, ^66)
+            Check(b@85, $7:ColdAny, b@52:ColdAny, b@64:ColdAny)   ; exit state for `v` = garbage
+            Jump #8
+    BB#7:                                          ; false arm, same shape with $6 and b@79
+            ...
+    BB#8:
+        b@63 = Phi()
+        b@11 = Phi()                  ; receives garbage from both arms
+        b@65 = Phi()
+        b@66 = Phi()
+            Patchpoint(b@63, ...) / Oops
+
+Then b@64 Phi is broken since no value is written into this slot.
+
+This patch fixes this issue by avoiding Phi cloning.
+
+Tests: JSTests/stress/b3-specialize-select-should-not-clone-phis.js
+       Source/JavaScriptCore/b3/testb3_1.cpp
+       Source/JavaScriptCore/b3/testb3_6.cpp
+
+* JSTests/stress/b3-specialize-select-should-not-clone-phis.js: Added.
+(f):
+* Source/JavaScriptCore/b3/B3SpecializeSelect.cpp:
+* Source/JavaScriptCore/b3/testb3.h:
+* Source/JavaScriptCore/b3/testb3_1.cpp:
+(run):
+* Source/JavaScriptCore/b3/testb3_6.cpp:
+(testCheckSelectWithPhiBeforeCheck):
+(testCheckSelectWithUpsilonBeforeCheck):
+
+Canonical link: https://commits.webkit.org/321956@main
+
+Backported to Pi-Bolt's WebKit pin from oven-sh/WebKit 6dd325c7d0 (WebKit 321956@main). At the pin specializeSelect is still part of B3ReduceStrength.cpp; the same check is added to its cloneability loop.
+---
+ ...specialize-select-should-not-clone-phis.js |  21 ++++
+ Source/JavaScriptCore/b3/B3ReduceStrength.cpp |   8 ++
+ Source/JavaScriptCore/b3/testb3.h             |   2 +
+ Source/JavaScriptCore/b3/testb3_1.cpp         |   2 +
+ Source/JavaScriptCore/b3/testb3_6.cpp         | 103 ++++++++++++++++++
+ 5 files changed, 136 insertions(+)
+ create mode 100644 JSTests/stress/b3-specialize-select-should-not-clone-phis.js
+
+diff --git a/JSTests/stress/b3-specialize-select-should-not-clone-phis.js b/JSTests/stress/b3-specialize-select-should-not-clone-phis.js
+new file mode 100644
+index 0000000000..a31d3403c5
+--- /dev/null
++++ b/JSTests/stress/b3-specialize-select-should-not-clone-phis.js
+@@ -0,0 +1,21 @@
++//@ runDefault("--useConcurrentJIT=0", "--forceEagerCompilation=1")
++
++// B3's specializeSelect phase clones every value between a Select and the Check it feeds into
++// both arms of the branch it introduces, rewiring the clones by remapping their children. A Phi
++// cannot be rewired that way: its value comes from an Upsilon writing the Phi's local-state slot,
++// so the clone was an orphan Phi holding garbage, and an Upsilon then forwarded that garbage into
++// the original Phi. Here the Phi is the loop variable, so `v` became a bogus JSValue that
++// operationValueAddProfiled then dereferenced as a cell.
++function f(g) {
++    const b = !g;
++    let v = b;
++    for (; v < 100; v = v + 100)
++        b.x = 1;
++    return v;
++}
++
++for (let i = 0; i < 2000; i++) {
++    const result = f(f);
++    if (result !== 100)
++        throw new Error(`bad result at iteration ${i}: ${result}`);
++}
+diff --git a/Source/JavaScriptCore/b3/B3ReduceStrength.cpp b/Source/JavaScriptCore/b3/B3ReduceStrength.cpp
+index 89264119d0..1694e2e526 100644
+--- a/Source/JavaScriptCore/b3/B3ReduceStrength.cpp
++++ b/Source/JavaScriptCore/b3/B3ReduceStrength.cpp
+@@ -3322,6 +3322,13 @@ private:
+                     canClone = false;
+                     break;
+                 }
++                // A Phi reads a slot written by its Upsilons, not its children, so remapping children
++                // cannot rewire a clone of it: the clone would read a slot nothing writes. Cloning an
++                // Upsilon is fine, since each arm then writes the original Phi.
++                if (value->opcode() == Phi) {
++                    canClone = false;
++                    break;
++                }
+                 if (value == select)
+                     break;
+                 RELEASE_ASSERT(i); // Select should be found
+@@ -4385,6 +4392,7 @@ private:
+ 
+         auto cloneValue = [&] (Value* value) {
+             ASSERT(value != source);
++            ASSERT(value->opcode() != Phi);
+ 
+             for (unsigned i = 0; i < numCases; ++i) {
+                 Value* clone = m_proc.clone(value);
+diff --git a/Source/JavaScriptCore/b3/testb3.h b/Source/JavaScriptCore/b3/testb3.h
+index c4e6496dd8..58a4d6914a 100644
+--- a/Source/JavaScriptCore/b3/testb3.h
++++ b/Source/JavaScriptCore/b3/testb3.h
+@@ -664,6 +664,8 @@ void testCheckSelect();
+ void testCheckSelectCheckSelect();
+ void testCheckSelectAndCSE();
+ void testCheckSelectAndDeadCheckCSE();
++void testCheckSelectWithPhiBeforeCheck();
++void testCheckSelectWithUpsilonBeforeCheck();
+ void testPowDoubleByIntegerLoop(double xOperand, int32_t yOperand);
+ double b3Pow(double x, int y);
+ void testTruncOrHigh();
+diff --git a/Source/JavaScriptCore/b3/testb3_1.cpp b/Source/JavaScriptCore/b3/testb3_1.cpp
+index 299763d87b..11db48d0f7 100644
+--- a/Source/JavaScriptCore/b3/testb3_1.cpp
++++ b/Source/JavaScriptCore/b3/testb3_1.cpp
+@@ -1002,6 +1002,8 @@ void run(const TestConfig* config)
+     RUN(testCheckSelectCheckSelect());
+     RUN(testCheckSelectAndCSE());
+     RUN(testCheckSelectAndDeadCheckCSE());
++    RUN(testCheckSelectWithPhiBeforeCheck());
++    RUN(testCheckSelectWithUpsilonBeforeCheck());
+     RUN_BINARY(testPowDoubleByIntegerLoop, floatingPointOperands<double>(), int64Operands());
+ 
+     RUN(testTruncOrHigh());
+diff --git a/Source/JavaScriptCore/b3/testb3_6.cpp b/Source/JavaScriptCore/b3/testb3_6.cpp
+index 26312a3ea6..b25f42969b 100644
+--- a/Source/JavaScriptCore/b3/testb3_6.cpp
++++ b/Source/JavaScriptCore/b3/testb3_6.cpp
+@@ -1035,6 +1035,109 @@ void testCheckSelectAndDeadCheckCSE()
+     CHECK_EQ(invoke<intptr_t>(*code, 1, 0), 0);
+ }
+ 
++void testCheckSelectWithPhiBeforeCheck()
++{
++    // A Phi fed by an Upsilon in its own block, sitting between a specializable Select and the Check,
++    // as FTL emits for a value with a single incoming definition:
++    //
++    //   @sel = Select(arg0 & 0xff, -42, 35)
++    //          Upsilon(@sel, ^phi)
++    //   @phi = Phi()
++    //   @add = Add(@sel, 42)
++    //          Check(@add)
++    //          Return(@phi)
++    //
++    // A Phi takes its value from Upsilons rather than from its children, so it cannot be cloned into
++    // the arms of a specialized Select.
++    Procedure proc;
++    if (proc.optLevel() < 1)
++        return;
++    BasicBlock* root = proc.addBlock();
++    auto arguments = cCallArgumentValues<int32_t>(proc, root);
++
++    auto* constant = root->appendNew<ConstPtrValue>(proc, Origin(), 42);
++    auto* selectValue = root->appendNew<Value>(
++        proc, Select, Origin(),
++        root->appendNew<Value>(
++            proc, BitAnd, Origin(),
++            arguments[0],
++            root->appendNew<Const32Value>(proc, Origin(), 0xff)),
++        root->appendNew<ConstPtrValue>(proc, Origin(), -42),
++        root->appendNew<ConstPtrValue>(proc, Origin(), 35));
++    UpsilonValue* upsilon = root->appendNew<UpsilonValue>(proc, Origin(), selectValue);
++    Value* phi = root->appendNew<Value>(proc, Phi, pointerType(), Origin());
++    upsilon->setPhi(phi);
++    auto* addValue = root->appendNew<Value>(proc, Add, Origin(), selectValue, constant);
++
++    CheckValue* check = root->appendNew<CheckValue>(proc, Check, Origin(), addValue);
++    check->setGenerator(
++        [&] (CCallHelpers& jit, const StackmapGenerationParams&) {
++            AllowMacroScratchRegisterUsage allowScratch(jit);
++            jit.move(CCallHelpers::TrustedImm32(666), GPRInfo::returnValueGPR);
++            jit.emitFunctionEpilogue();
++            jit.ret();
++        });
++
++    root->appendNewControlValue(proc, Return, Origin(), phi);
++
++    auto code = compileProc(proc);
++    CHECK_EQ(invoke<intptr_t>(*code, true), -42);
++    CHECK_EQ(invoke<intptr_t>(*code, false), 666);
++}
++
++void testCheckSelectWithUpsilonBeforeCheck()
++{
++    // An Upsilon between a specializable Select and the Check, feeding a Phi in a later block:
++    //
++    //   root:
++    //     @sel = Select(arg0 & 0xff, -42, 35)
++    //            Upsilon(@sel, ^phi)
++    //     @add = Add(@sel, 42)
++    //            Check(@add)
++    //            Jump(#tail)
++    //   tail:
++    //     @phi = Phi()
++    //            Return(@phi)
++    //
++    // Specialization clones the Upsilon into both arms, each writing the same Phi.
++    Procedure proc;
++    if (proc.optLevel() < 1)
++        return;
++    BasicBlock* root = proc.addBlock();
++    BasicBlock* tail = proc.addBlock();
++    auto arguments = cCallArgumentValues<int32_t>(proc, root);
++
++    auto* constant = root->appendNew<ConstPtrValue>(proc, Origin(), 42);
++    auto* selectValue = root->appendNew<Value>(
++        proc, Select, Origin(),
++        root->appendNew<Value>(
++            proc, BitAnd, Origin(),
++            arguments[0],
++            root->appendNew<Const32Value>(proc, Origin(), 0xff)),
++        root->appendNew<ConstPtrValue>(proc, Origin(), -42),
++        root->appendNew<ConstPtrValue>(proc, Origin(), 35));
++    UpsilonValue* upsilon = root->appendNew<UpsilonValue>(proc, Origin(), selectValue);
++    auto* addValue = root->appendNew<Value>(proc, Add, Origin(), selectValue, constant);
++
++    CheckValue* check = root->appendNew<CheckValue>(proc, Check, Origin(), addValue);
++    check->setGenerator(
++        [&] (CCallHelpers& jit, const StackmapGenerationParams&) {
++            AllowMacroScratchRegisterUsage allowScratch(jit);
++            jit.move(CCallHelpers::TrustedImm32(666), GPRInfo::returnValueGPR);
++            jit.emitFunctionEpilogue();
++            jit.ret();
++        });
++    root->appendNewControlValue(proc, Jump, Origin(), FrequentedBlock(tail));
++
++    Value* phi = tail->appendNew<Value>(proc, Phi, pointerType(), Origin());
++    upsilon->setPhi(phi);
++    tail->appendNewControlValue(proc, Return, Origin(), phi);
++
++    auto code = compileProc(proc);
++    CHECK_EQ(invoke<intptr_t>(*code, true), -42);
++    CHECK_EQ(invoke<intptr_t>(*code, false), 666);
++}
++
+ double NODELETE b3Pow(double x, int y)
+ {
+     if (y < 0 || y > 1000)
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Sosuke Suzuki <sosuke@bun.com>
+Date: Fri, 16 Oct 2026 00:37:23 -0700
+Subject: [PATCH] [JSC] Six-operand `MoveConditionallyTest64` should declare
+ its test operands as 64-bit
+
+https://bugs.webkit.org/show_bug.cgi?id=327768
+
+Reviewed by Yusuke Suzuki.
+
+The six-operand form of MoveConditionallyTest64 declared its two test operands
+as U:G:32, while the five-operand form declares them as U:G:64. On x86-64 the
+register allocator turns `Move %a, %b` into Move32 when every use of %b is
+32-bit, so a 64-bit value used only by this instruction lost its upper half,
+and Select picked the wrong arm when the low 32 bits were zero.
+
+    Move32 %rdi, %rax
+    MoveConditionallyTest64 NonZero, %rax, %rax, %rsi, %rdx, %rax
+
+ARM64 has the same declaration but generates correct code, since only x86-64
+narrows Move based on the use width, and spill slots are sized by the larger of
+the use and def widths.
+
+This patch declares them as U:G:64.
+
+Tests: JSTests/wasm/stress/omg-select-i64-test-high-bits.js
+       Source/JavaScriptCore/b3/testb3_1.cpp
+       Source/JavaScriptCore/b3/testb3_6.cpp
+
+* JSTests/wasm/stress/omg-select-i64-test-high-bits.js: Added.
+(m.call):
+* Source/JavaScriptCore/b3/air/AirOpcode.opcodes:
+* Source/JavaScriptCore/b3/testb3.h:
+* Source/JavaScriptCore/b3/testb3_1.cpp:
+(run):
+* Source/JavaScriptCore/b3/testb3_6.cpp:
+(testSelectTestHighBits):
+
+Canonical link: https://commits.webkit.org/323931@main
+
+Backported to Pi-Bolt's WebKit pin from oven-sh/WebKit a1b4772be7.
+---
+ .../stress/omg-select-i64-test-high-bits.js   | 30 +++++++++++++++++++
+ .../JavaScriptCore/b3/air/AirOpcode.opcodes   |  2 +-
+ Source/JavaScriptCore/b3/testb3.h             |  1 +
+ Source/JavaScriptCore/b3/testb3_1.cpp         |  1 +
+ Source/JavaScriptCore/b3/testb3_6.cpp         | 21 +++++++++++++
+ 5 files changed, 54 insertions(+), 1 deletion(-)
+ create mode 100644 JSTests/wasm/stress/omg-select-i64-test-high-bits.js
+
+diff --git a/JSTests/wasm/stress/omg-select-i64-test-high-bits.js b/JSTests/wasm/stress/omg-select-i64-test-high-bits.js
+new file mode 100644
+index 0000000000..88c4e84fdc
+--- /dev/null
++++ b/JSTests/wasm/stress/omg-select-i64-test-high-bits.js
+@@ -0,0 +1,30 @@
++import { instantiate } from "../wabt-wrapper.js"
++import * as assert from "../assert.js"
++
++const wat = `
++(module
++    (import "m" "call" (func $call))
++    (func (export "eqz") (param $x i64) (param $a i64) (param $b i64) (result i64)
++        (call $call)
++        (select (local.get $a) (local.get $b) (i64.eqz (local.get $x))))
++    (func (export "and") (param $x i64) (param $y i64) (param $a i64) (param $b i64) (result i64)
++        (call $call)
++        (select (local.get $a) (local.get $b) (i64.eqz (i64.and (local.get $x) (local.get $y)))))
++)
++`;
++
++const instance = await instantiate(wat, { m: { call() { } } });
++const { eqz, and } = instance.exports;
++
++for (let i = 0; i < wasmTestLoopCount; ++i) {
++    assert.eq(eqz(0n, 1n, 2n), 1n);
++    assert.eq(eqz(42n, 1n, 2n), 2n);
++    assert.eq(eqz(0x100000000n, 1n, 2n), 2n);
++    assert.eq(eqz(-0x100000000n, 1n, 2n), 2n);
++
++    assert.eq(and(0n, -1n, 1n, 2n), 1n);
++    assert.eq(and(42n, -1n, 1n, 2n), 2n);
++    assert.eq(and(0x100000000n, -1n, 1n, 2n), 2n);
++    assert.eq(and(-1n, 0x100000000n, 1n, 2n), 2n);
++    assert.eq(and(0x100000000n, 0xffffffffn, 1n, 2n), 1n);
++}
+diff --git a/Source/JavaScriptCore/b3/air/AirOpcode.opcodes b/Source/JavaScriptCore/b3/air/AirOpcode.opcodes
+index 192cc3c535..1187b59c88 100644
+--- a/Source/JavaScriptCore/b3/air/AirOpcode.opcodes
++++ b/Source/JavaScriptCore/b3/air/AirOpcode.opcodes
+@@ -1719,7 +1719,7 @@ BranchNeg32 U:G:32, UZD:G:32 /branch
+     ResCond, Tmp, Tmp, Tmp, Tmp
+     x86_64: ResCond, Tmp, Imm, Tmp, Tmp
+ 
+-64: MoveConditionallyTest64 U:G:32, U:G:32, U:G:32, U:G:Ptr, U:G:Ptr, D:G:Ptr
++64: MoveConditionallyTest64 U:G:32, U:G:64, U:G:64, U:G:Ptr, U:G:Ptr, D:G:Ptr
+     ResCond, Tmp, Tmp, Tmp, Tmp, Tmp
+     x86_64: ResCond, Tmp, Imm, Tmp, Tmp, Tmp
+     arm64: ResCond, Tmp, Tmp, Tmp, ZeroReg, Tmp
+diff --git a/Source/JavaScriptCore/b3/testb3.h b/Source/JavaScriptCore/b3/testb3.h
+index 58a4d6914a..2a1cefa2d4 100644
+--- a/Source/JavaScriptCore/b3/testb3.h
++++ b/Source/JavaScriptCore/b3/testb3.h
+@@ -608,6 +608,7 @@ void testBitAndZeroShiftRightArgImmMask32();
+ void testBitAndZeroShiftRightArgImmMask64();
+ void testBasicSelect();
+ void testSelectTest();
++void testSelectTestHighBits();
+ void testAddWithLeftShift32();
+ void testAddWithRightShift32();
+ void testAddWithUnsignedRightShift32();
+diff --git a/Source/JavaScriptCore/b3/testb3_1.cpp b/Source/JavaScriptCore/b3/testb3_1.cpp
+index 11db48d0f7..12a93441ea 100644
+--- a/Source/JavaScriptCore/b3/testb3_1.cpp
++++ b/Source/JavaScriptCore/b3/testb3_1.cpp
+@@ -981,6 +981,7 @@ void run(const TestConfig* config)
+ 
+     RUN(testBasicSelect());
+     RUN(testSelectTest());
++    RUN(testSelectTestHighBits());
+     RUN(testSelectCompareDouble());
+     RUN_BINARY(testSelectCompareFloat, floatingPointOperands<float>(), floatingPointOperands<float>());
+     RUN_BINARY(testSelectCompareFloatToDouble, floatingPointOperands<float>(), floatingPointOperands<float>());
+diff --git a/Source/JavaScriptCore/b3/testb3_6.cpp b/Source/JavaScriptCore/b3/testb3_6.cpp
+index b25f42969b..57e987c8ea 100644
+--- a/Source/JavaScriptCore/b3/testb3_6.cpp
++++ b/Source/JavaScriptCore/b3/testb3_6.cpp
+@@ -95,6 +95,27 @@ void testSelectTest()
+     CHECK_EQ(invoke<intptr_t>(*code, 0, 642462, 32533), 32533);
+ }
+ 
++void testSelectTestHighBits()
++{
++    Procedure proc;
++    BasicBlock* root = proc.addBlock();
++    auto arguments = cCallArgumentValues<int64_t, int64_t, int64_t>(proc, root);
++
++    PatchpointValue* patchpoint = root->appendNew<PatchpointValue>(proc, Void, Origin());
++    patchpoint->clobberLate(RegisterSet(GPRInfo::argumentGPR0));
++    patchpoint->setGenerator([](CCallHelpers&, const StackmapGenerationParams&) { });
++
++    Value* select = root->appendNew<Value>(proc, Select, Origin(), arguments[0], arguments[1], arguments[2]);
++    root->clearSuccessors();
++    root->appendNew<Value>(proc, Return, Origin(), select);
++
++    auto code = compileProc(proc);
++    CHECK_EQ(invoke<int64_t>(*code, 42, 1, 2), 1);
++    CHECK_EQ(invoke<int64_t>(*code, 0x100000000ll, 1, 2), 1);
++    CHECK_EQ(invoke<int64_t>(*code, 0xffffffff00000000ull, 1, 2), 1);
++    CHECK_EQ(invoke<int64_t>(*code, 0, 1, 2), 2);
++}
++
+ void testSelectCompareDouble()
+ {
+     Procedure proc;
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Yusuke Suzuki <ysuzuki@apple.com>
+Date: Thu, 15 Oct 2026 12:36:37 -0700
+Subject: [PATCH] [JSC] LLInt should not poll the JIT worklist on every
+ execution while a baseline compile is in flight
+
+https://bugs.webkit.org/show_bug.cgi?id=327603 rdar://190060754
+
+Reviewed by Vassili Bykov.
+
+When LLInt execution counter crossed the threshold and enqueueing
+Baseline JIT compilation, we keep this counter crossed. As a result, we
+end up running this slow path every time until Baseline JIT code is
+installed. If Baseline JIT code takes long time to be compiled, it makes
+LLInt much slower.
+We follow to what DFG is doing for Baseline JIT. We reset the counter,
+and we make it fired when Baseline JIT code is installed.
+
+* Source/JavaScriptCore/bytecode/CodeBlock.cpp:
+(JSC::CodeBlock::checkIfJITThresholdReached):
+* Source/JavaScriptCore/bytecode/CodeBlock.h:
+(JSC::CodeBlock::checkIfJITThresholdReached): Deleted.
+* Source/JavaScriptCore/dfg/DFGPlan.h:
+* Source/JavaScriptCore/jit/BaselineJITPlan.cpp:
+(JSC::BaselineJITPlan::notifyReady):
+(JSC::BaselineJITPlan::finalize):
+* Source/JavaScriptCore/jit/BaselineJITPlan.h:
+* Source/JavaScriptCore/llint/LLIntSlowPaths.cpp:
+(JSC::LLInt::jitCompileAndSetHeuristics):
+
+Canonical link: https://commits.webkit.org/323860@main
+
+Backported to Pi-Bolt's WebKit pin from oven-sh/WebKit ad96437625 (WebKit 323860@main). The pin's checkIfJITThresholdReached() keeps its startup JIT deferral scale, and the pin enqueues Baseline plans through g_compilerHooks.
+---
+ Source/JavaScriptCore/bytecode/CodeBlock.cpp  | 11 ++++++
+ Source/JavaScriptCore/bytecode/CodeBlock.h    |  5 +--
+ Source/JavaScriptCore/dfg/DFGPlan.h           |  4 +--
+ Source/JavaScriptCore/jit/BaselineJITPlan.cpp |  9 ++++-
+ Source/JavaScriptCore/jit/BaselineJITPlan.h   |  3 +-
+ .../JavaScriptCore/llint/LLIntSlowPaths.cpp   | 35 +++++++++++++------
+ 6 files changed, 48 insertions(+), 19 deletions(-)
+
+diff --git a/Source/JavaScriptCore/bytecode/CodeBlock.cpp b/Source/JavaScriptCore/bytecode/CodeBlock.cpp
+index b07369e6ec..15511bbff0 100644
+--- a/Source/JavaScriptCore/bytecode/CodeBlock.cpp
++++ b/Source/JavaScriptCore/bytecode/CodeBlock.cpp
+@@ -4343,6 +4343,17 @@ std::optional<BytecodeIndex> CodeBlock::bytecodeIndexFromCallSiteIndex(CallSiteI
+     return bytecodeIndex;
+ }
+ 
++bool CodeBlock::checkIfJITThresholdReached()
++{
++#if ENABLE(JIT)
++    if (JITWorklist* worklist = JITWorklist::existingGlobalWorklistOrNull()) {
++        if (worklist->compilationState(*m_vm, JITCompilationKey(m_unlinkedCode.get(), JITCompilationMode::Baseline)) == JITWorklist::Compiled)
++            return true;
++    }
++#endif
++    return m_unlinkedCode->llintExecuteCounter().checkIfThresholdCrossedAndSet(this, jitType() == JITType::BaselineJIT ? 1 : vm().startupJITDeferralScale());
++}
++
+ void CodeBlock::jitSoon()
+ {
+     m_unlinkedCode->llintExecuteCounter().setNewThreshold(unlinkedCodeBlock()->thresholdForJIT(Options::thresholdForJITSoon()), this);
+diff --git a/Source/JavaScriptCore/bytecode/CodeBlock.h b/Source/JavaScriptCore/bytecode/CodeBlock.h
+index a4c3690397..77cc1c679d 100644
+--- a/Source/JavaScriptCore/bytecode/CodeBlock.h
++++ b/Source/JavaScriptCore/bytecode/CodeBlock.h
+@@ -653,10 +653,7 @@ public:
+     // Functions for controlling when JITting kicks in, in a mixed mode
+     // execution world.
+ 
+-    bool checkIfJITThresholdReached()
+-    {
+-        return m_unlinkedCode->llintExecuteCounter().checkIfThresholdCrossedAndSet(this, jitType() == JITType::BaselineJIT ? 1 : vm().startupJITDeferralScale());
+-    }
++    bool checkIfJITThresholdReached();
+ 
+     void dontJITAnytimeSoon()
+     {
+diff --git a/Source/JavaScriptCore/dfg/DFGPlan.h b/Source/JavaScriptCore/dfg/DFGPlan.h
+index 4ee1ffdfd6..bd06898bb8 100644
+--- a/Source/JavaScriptCore/dfg/DFGPlan.h
++++ b/Source/JavaScriptCore/dfg/DFGPlan.h
+@@ -65,7 +65,7 @@ public:
+ 
+     size_t codeSize() const final;
+     void reconcileWeakReferencesAtGCEnd() final;
+-    CompilationResult finalize() override;
++    CompilationResult finalize() final;
+ 
+     void notifyReady() final;
+     void cancel() final;
+@@ -106,7 +106,7 @@ public:
+     std::unique_ptr<JITData> tryFinalizeJITData(const DFG::JITCode&);
+ 
+ private:
+-    CompilationPath compileInThreadImpl() override;
++    CompilationPath compileInThreadImpl() final;
+     void finalizeInThread(Ref<JSC::JITCode>);
+     
+     bool isStillValidCodeBlock();
+diff --git a/Source/JavaScriptCore/jit/BaselineJITPlan.cpp b/Source/JavaScriptCore/jit/BaselineJITPlan.cpp
+index 3f709e6de9..66d5796006 100644
+--- a/Source/JavaScriptCore/jit/BaselineJITPlan.cpp
++++ b/Source/JavaScriptCore/jit/BaselineJITPlan.cpp
+@@ -84,6 +84,12 @@ size_t BaselineJITPlan::codeSize() const
+     return 0;
+ }
+ 
++void BaselineJITPlan::notifyReady()
++{
++    Base::notifyReady();
++    m_codeBlock->unlinkedCodeBlock()->llintExecuteCounter().forceSlowPathConcurrently();
++}
++
+ bool BaselineJITPlan::isKnownToBeLiveAfterGC()
+ {
+     // If stage is not JITPlanStage::Canceled, we should keep this alive and mark underlying CodeBlock anyway.
+@@ -112,7 +118,8 @@ CompilationResult BaselineJITPlan::finalize()
+         WTF::crossModifyingCodeFence();
+         dataLogLnIf(Options::verboseOSR(), "    JIT compilation successful.");
+         m_codeBlock->ownerExecutable()->installCode(m_codeBlock);
+-        m_codeBlock->jitSoon();
++        // Frames still in LLInt (entered before the install, or arriving via OSR exit) should switch at their next check.
++        m_codeBlock->jitNextInvocation();
+         break;
+     default:
+         RELEASE_ASSERT_NOT_REACHED();
+diff --git a/Source/JavaScriptCore/jit/BaselineJITPlan.h b/Source/JavaScriptCore/jit/BaselineJITPlan.h
+index 2430b2b0d8..4922f5c3af 100644
+--- a/Source/JavaScriptCore/jit/BaselineJITPlan.h
++++ b/Source/JavaScriptCore/jit/BaselineJITPlan.h
+@@ -43,7 +43,8 @@ public:
+ 
+     CompilationPath compileInThreadImpl() final;
+     size_t codeSize() const final;
+-    CompilationResult finalize() override;
++    void notifyReady() final;
++    CompilationResult finalize() final;
+ 
+     CompilationPath compileSync(JITCompilationEffort);
+ 
+diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+index 6405ce4476..bfe3df838f 100644
+--- a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
++++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+@@ -383,14 +383,18 @@ static inline bool jitCompileAndSetHeuristics(VM& vm, CodeBlock* codeBlock)
+     DeferGCForAWhile deferGC(vm); // My callers don't set top callframe, so we don't want to GC here at all.
+     ASSERT(Options::useJIT());
+ 
+-    if (codeBlock->jitType() != JITType::BaselineJIT) {
+-        if (RefPtr<BaselineJITCode> baselineRef = codeBlock->unlinkedCodeBlock()->m_unlinkedBaselineCode) {
+-            codeBlock->setupWithUnlinkedBaselineCode(baselineRef.releaseNonNull());
+-            codeBlock->ownerExecutable()->installCode(codeBlock);
+-            codeBlock->jitNextInvocation();
+-            return true;
+-        }
+-    }
++    auto installSharedBaselineCode = [&] {
++        RefPtr<BaselineJITCode> baselineRef = codeBlock->unlinkedCodeBlock()->m_unlinkedBaselineCode;
++        if (!baselineRef)
++            return false;
++        codeBlock->setupWithUnlinkedBaselineCode(baselineRef.releaseNonNull());
++        codeBlock->ownerExecutable()->installCode(codeBlock);
++        codeBlock->jitNextInvocation();
++        return true;
++    };
++
++    if (codeBlock->jitType() != JITType::BaselineJIT && installSharedBaselineCode())
++        return true;
+ 
+     if (!codeBlock->checkIfJITThresholdReached()) {
+         CODEBLOCK_LOG_EVENT(codeBlock, "delayJITCompile", ("threshold not reached, counter = ", codeBlock->llintExecuteCounter()));
+@@ -398,19 +402,28 @@ static inline bool jitCompileAndSetHeuristics(VM& vm, CodeBlock* codeBlock)
+         return false;
+     }
+ 
++    // Must precede the worklist query so that a plan becoming ready afterwards can still force the slow path. finalize() overrides it.
++    codeBlock->jitSoon();
++
+     JITWorklist::State worklistState = JITWorklist::ensureGlobalWorklist().completeAllReadyPlansForVM(vm, JITCompilationKey(codeBlock->unlinkedCodeBlock(), JITCompilationMode::Baseline));
+ 
+     if (codeBlock->jitType() == JITType::BaselineJIT) {
+         dataLogLnIf(Options::verboseOSR(), "    Code was already compiled.");
+-        codeBlock->jitSoon();
++        codeBlock->jitNextInvocation();
+         return true;
+     }
+ 
+-    if (worklistState == JITWorklist::NotKnown) {
++    switch (worklistState) {
++    case JITWorklist::NotKnown:
+         g_compilerHooks.enqueueBaselinePlan(codeBlock);
+         return codeBlock->jitType() == JITType::BaselineJIT;
++    case JITWorklist::Compiled:
++        // Either our compile failed, or the plan belonged to another CodeBlock sharing this UnlinkedCodeBlock.
++        return installSharedBaselineCode();
++    case JITWorklist::Compiling:
++        return false;
+     }
+-
++    RELEASE_ASSERT_NOT_REACHED();
+     return false;
+ }
+ 
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Dylan Conway <dylan.conway567@gmail.com>
+Date: Mon, 5 Oct 2026 23:54:39 -0700
+Subject: [PATCH] [JSC] A catch OSR entrypoint needs a sample of every operand
+ (#772)
+
+* [JSC] A catch OSR entrypoint needs a sample of every operand
+
+The DFG takes a SpecNone prediction for code that never ran. getPrediction() puts a
+ForceOSRExit in front of such a node, and later phases rely on that: ArrayMode::refine()
+keeps a Double array mode for a value without a prediction, and FixupPhase turns a
+DoubleRepUse edge to a node that does not predict a number into
+DoubleRep(NotCellNorBigIntUse), which is ToNumber and not a check.
+
+op_catch made an entrypoint wherever its value-profile buffer existed and gave each
+ExtractCatchLocal / SetArgumentDefinitely whatever the buffer predicted, SpecNone
+included. That operand is reachable. Where the rest of the function made it a double,
+a local or an argument that held null, true, undefined or false when the exception was
+caught went on as 0, 1, NaN or 0:
+
+    function f(record, bad) {
+        const t = record.p;              // a double on the hot path
+        try { risky(bad); } catch { }
+        return JSON.stringify({ t });    // {"t":0} for record.p === null
+    }
+
+There were two ways to such an operand.
+
+1. Options::useLazyCatchLiveness() creates the buffer at the first DFG threshold, apart
+   from an execution of the catch. If the catch does not run again during the one
+   warm-up it is given, the buffer has no sample at all. DFG::compile() also created
+   buffers right before the parse so that the parser would make an entrypoint from them.
+
+2. With or without the option: an empty bucket means "no sample", and profiling stored
+   each operand as it was. An operand that held the empty value (a local in its TDZ, the
+   completion value of an enclosing finally, |this| before super()) left no sample and
+   erased the one waiting in the bucket. A handler that had run with doubles could end up
+   with SpecNone for them.
+
+ValueProfileAndVirtualRegister::sample() now merges SpecEmpty into the prediction for the
+empty value and leaves the bucket alone, so one pass over the buffer gives every operand a
+prediction. The parser computes the predictions first and makes the entrypoint only if
+none is SpecNone; otherwise the catch is treated like one that has yet to execute. That
+also covers a compiler thread that reads a buffer the mutator is still filling for the
+first time. A try/catch inside a try/finally always has an empty operand, and keeps its
+entrypoint because that operand now predicts Empty.
+
+DFG::compile() no longer creates buffers: one created there cannot have a sample for the
+plan it was created for. operationOptimize still creates them and delays the tier-up.
+
+* JSTests/stress/catch-osr-entry-operand-without-sample.js: Added.
+* Source/JavaScriptCore/bytecode/CodeBlock.h:
+* Source/JavaScriptCore/bytecode/ValueProfile.h:
+(JSC::ValueProfileAndVirtualRegister::sample):
+* Source/JavaScriptCore/dfg/DFGByteCodeParser.cpp:
+(JSC::DFG::ByteCodeParser::parseBlock):
+* Source/JavaScriptCore/dfg/DFGDriver.cpp:
+(JSC::DFG::compileImpl):
+* Source/JavaScriptCore/jit/JITOperations.cpp:
+* Source/JavaScriptCore/llint/LLIntSlowPaths.cpp:
+
+* Test that sample() keeps an entrypoint, and make the test of the values stricter
+
+No change in behavior.
+
+JSTests/stress/catch-osr-entry-is-made.js asks the handler of a try/catch inside a
+try/finally whether it ever runs in optimized code. It fails if sample() stores the empty
+value in the bucket again: the completion value of the finally then has no prediction and
+the parser makes no entrypoint. The values stay right in that case, so no test noticed.
+
+catch-osr-entry-operand-without-sample.js:
+
+- Every shape returns a string, so that one exact answer is accepted.
+- sampledWhileEmpty runs its handler with a double once instead of ten times. With
+  --thresholdForJITAfterWarmUp=100, which every no-cjit configuration of the harness passes,
+  the Baseline plan started during those ten calls and merged the double into the
+  prediction, so that with the option off the case passed on an engine without the fix.
+- Its comment said that t is in its TDZ in each sample that reaches the prediction, which
+  is what the fix changes.
+- It is in the style of its neighbours.
+
+The comment in the parser also names the buffer that the mutator is still filling.
+
+* JSTests/stress/catch-osr-entry-is-made.js: Added.
+* JSTests/stress/catch-osr-entry-operand-without-sample.js:
+* Source/JavaScriptCore/bytecode/CodeBlock.h:
+* Source/JavaScriptCore/dfg/DFGByteCodeParser.cpp:
+(JSC::DFG::ByteCodeParser::parseBlock):
+
+* sample() sets a flag for the empty value instead of writing the prediction
+
+sample() merged SpecEmpty into m_prediction on the mutator, with a plain load, or and store.
+computeUpdatedPrediction() does the same on a compiler thread after it has cleared the
+bucket, so one of the two merges could overwrite the other: either the sample from the
+bucket or SpecEmpty was lost. The values stay right, since a prediction only chooses which
+checks are made. The cost was a narrower prediction than the samples support.
+
+The empty value now follows the protocol of the bucket: the mutator only stores, into
+m_sawEmptyValue, and whoever updates the prediction merges SpecEmpty for it. The flag is
+never cleared, so SpecEmpty cannot be lost. The two places that update the prediction of a
+catch profile, the parser and CodeBlock::updateAllNonLazyValueProfilePredictionsAndCountLiveness(),
+both take a ValueProfileAndVirtualRegister&. The struct stays 24 bytes.
+
+* Source/JavaScriptCore/bytecode/ValueProfile.h:
+(JSC::ValueProfileAndVirtualRegister::sample):
+(JSC::ValueProfileAndVirtualRegister::computeUpdatedPrediction):
+
+* Revert "sample() sets a flag for the empty value instead of writing the prediction"
+
+This reverts commit 7a52d8f2138ee10771c550efdd2adc3f5efb472a.
+
+It took one writer of m_prediction away and left the race. The mutator, the Baseline plan,
+the concurrent markers and the DFG / FTL parser all still merge into that word with a plain
+load, or and store, through computeUpdatedPrediction(), and the flag was itself a plain
+bool written on one thread and read on others. It also hid a non-virtual method of the base
+class. A lost merge costs a narrower prediction, which only chooses which checks are made.
+
+* Source/JavaScriptCore/bytecode/ValueProfile.h:
+(JSC::ValueProfileAndVirtualRegister::sample):
+
+Backported to Pi-Bolt's WebKit pin from oven-sh/WebKit f590e0d0fe.
+---
+ JSTests/stress/catch-osr-entry-is-made.js     | 35 +++++++
+ .../catch-osr-entry-operand-without-sample.js | 98 +++++++++++++++++++
+ Source/JavaScriptCore/bytecode/CodeBlock.h    |  2 +-
+ Source/JavaScriptCore/bytecode/ValueProfile.h |  9 ++
+ .../JavaScriptCore/dfg/DFGByteCodeParser.cpp  | 16 ++-
+ Source/JavaScriptCore/dfg/DFGDriver.cpp       |  2 -
+ Source/JavaScriptCore/jit/JITOperations.cpp   |  2 +-
+ .../JavaScriptCore/llint/LLIntSlowPaths.cpp   |  2 +-
+ 8 files changed, 157 insertions(+), 9 deletions(-)
+ create mode 100644 JSTests/stress/catch-osr-entry-is-made.js
+ create mode 100644 JSTests/stress/catch-osr-entry-operand-without-sample.js
+
+diff --git a/JSTests/stress/catch-osr-entry-is-made.js b/JSTests/stress/catch-osr-entry-is-made.js
+new file mode 100644
+index 0000000000..956c9879d8
+--- /dev/null
++++ b/JSTests/stress/catch-osr-entry-is-made.js
+@@ -0,0 +1,35 @@
++//@ runFTLNoCJIT; run("ftl-no-cjit-eager-catch-liveness", "--useFTLJIT=true", "--useConcurrentJIT=false", "--useLazyCatchLiveness=false")
++
++// This handler has to get a catch OSR entrypoint: at some point it runs in optimized code.
++
++function thrower(shouldThrow) {
++    if (shouldThrow)
++        throw new Error("thrown");
++}
++noInline(thrower);
++
++function shouldEnter(f) {
++    for (let i = 0; i < 10 * testLoopCount; ++i) {
++        if (f(!(i % 10)))
++            return;
++    }
++    if ($vm.useDFGJIT())
++        throw new Error(f.name + ": the handler never ran in optimized code");
++}
++
++// The completion value of the finally is live at the catch and always the empty value there.
++function catchInsideFinally(shouldThrow) {
++    let optimized = false;
++    try {
++        try {
++            thrower(shouldThrow);
++        } catch {
++            optimized = $vm.dfgTrue();
++        }
++    } finally {
++        thrower(false);
++    }
++    return optimized;
++}
++noInline(catchInsideFinally);
++shouldEnter(catchInsideFinally);
+diff --git a/JSTests/stress/catch-osr-entry-operand-without-sample.js b/JSTests/stress/catch-osr-entry-operand-without-sample.js
+new file mode 100644
+index 0000000000..14fbe224ce
+--- /dev/null
++++ b/JSTests/stress/catch-osr-entry-operand-without-sample.js
+@@ -0,0 +1,98 @@
++//@ defaultRun; run("eager-catch-liveness", "--useLazyCatchLiveness=false")
++
++// A catch OSR entrypoint must not give the DFG an operand without a prediction. The DFG takes SpecNone for code that
++// never ran: a double use of such a value is DoubleRep(NotCellNorBigIntUse), which is ToNumber, not a check.
++
++function shouldBe(actual, expected, name) {
++    if (actual !== expected)
++        throw new Error(name + ": expected " + expected + " but got " + actual);
++}
++
++function thrower(shouldThrow) {
++    if (shouldThrow)
++        throw new Error("thrown");
++}
++noInline(thrower);
++
++const notNumbers = [null, true, undefined, false];
++
++// With Options::useLazyCatchLiveness() these catches run before their value-profile buffer exists and not again
++// until the DFG has compiled the function, so the buffer has no sample at all.
++const neverSampled = {
++    localAfterCatch(value, shouldThrow) {
++        const t = value.p;
++        try {
++            thrower(shouldThrow);
++        } catch { }
++        return String(t);
++    },
++
++    localInFinally(value, shouldThrow) {
++        const t = value.p;
++        let result;
++        try {
++            try {
++                thrower(shouldThrow);
++            } finally {
++                result = String(t);
++            }
++        } catch { }
++        return result;
++    },
++
++    localInNewArrayInCatch(value, shouldThrow) {
++        const t = value.p;
++        try {
++            thrower(shouldThrow);
++        } catch {
++            return String([t][0]);
++        }
++        return t;
++    },
++
++    argumentInNewArrayInCatch(value, shouldThrow, t) {
++        try {
++            thrower(shouldThrow);
++        } catch {
++            return String([t][0]);
++        }
++        return t;
++    },
++};
++
++for (const name in neverSampled) {
++    const f = neverSampled[name];
++    noInline(f);
++    f({ p: 0.5 }, true, 0.5);
++    for (let i = 0; i < testLoopCount; ++i)
++        f({ p: i + 0.5 }, false, i + 0.5);
++    for (const value of notNumbers)
++        shouldBe(f({ p: value }, true, value), String(value), name);
++}
++
++// With or without the option: the last sample before each update of the prediction has t in its TDZ, the empty value.
++function sampledWhileEmpty(skipDeclaration, value, shouldThrow, array) {
++    switch (skipDeclaration) {
++    case 0:
++        let t = value.p;
++    case 1:
++        try {
++            thrower(shouldThrow);
++        } catch {
++            if (!skipDeclaration) {
++                array[0] = t;
++                return String(array[0]);
++            }
++        }
++    }
++}
++noInline(sampledWhileEmpty);
++
++sampledWhileEmpty(0, { p: 0.5 }, true, [0.5]);
++for (let i = 0; i < testLoopCount; ++i) {
++    sampledWhileEmpty(0, { p: i + 0.5 }, false, [0.5]);
++    if (!(i % 20))
++        sampledWhileEmpty(1, { p: 0.5 }, true, [0.5]);
++}
++for (const value of notNumbers)
++    shouldBe(sampledWhileEmpty(0, { p: value }, true, [0.5]), String(value), "sampledWhileEmpty");
+diff --git a/Source/JavaScriptCore/bytecode/CodeBlock.h b/Source/JavaScriptCore/bytecode/CodeBlock.h
+index 77cc1c679d..6fc04d2cae 100644
+--- a/Source/JavaScriptCore/bytecode/CodeBlock.h
++++ b/Source/JavaScriptCore/bytecode/CodeBlock.h
+@@ -933,7 +933,7 @@ public:
+ 
+     // Null while Options::useLazyCatchLiveness() defers creating the buffer; op_catch does not profile until then.
+     ValueProfileAndVirtualRegisterBuffer* ensureCatchLivenessIsComputedForBytecodeIndex(BytecodeIndex);
+-    // Mutator only, on the baseline block, before a DFG / FTL plan parses it: creates the buffers useLazyCatchLiveness deferred. True if it created one.
++    // Mutator only, on the baseline block: creates the buffers useLazyCatchLiveness deferred. True if it created one, which has no samples.
+     bool ensureCatchLivenessIsComputedForExecutedCatches()
+     {
+         if (m_hasCatchThatExecutedWithoutBuffer) [[unlikely]]
+diff --git a/Source/JavaScriptCore/bytecode/ValueProfile.h b/Source/JavaScriptCore/bytecode/ValueProfile.h
+index ef614b64c0..0b721800ec 100644
+--- a/Source/JavaScriptCore/bytecode/ValueProfile.h
++++ b/Source/JavaScriptCore/bytecode/ValueProfile.h
+@@ -157,6 +157,15 @@ struct ArgumentValueProfile : public ValueProfileBase<1, 1> {
+ };
+ 
+ struct ValueProfileAndVirtualRegister : public ValueProfile {
++    // An empty bucket means no sample, so the empty value goes to the prediction: a sampled operand never predicts SpecNone.
++    void sample(JSValue value)
++    {
++        if (value)
++            m_buckets[0] = JSValue::encode(value);
++        else
++            mergeSpeculation(m_prediction, SpecEmpty);
++    }
++
+     VirtualRegister m_operand;
+ };
+ 
+diff --git a/Source/JavaScriptCore/dfg/DFGByteCodeParser.cpp b/Source/JavaScriptCore/dfg/DFGByteCodeParser.cpp
+index 5e3765d4e7..100c111c7a 100644
+--- a/Source/JavaScriptCore/dfg/DFGByteCodeParser.cpp
++++ b/Source/JavaScriptCore/dfg/DFGByteCodeParser.cpp
+@@ -10217,18 +10217,16 @@ void ByteCodeParser::parseBlock(unsigned limit)
+                 NEXT_OPCODE(op_catch); // This catch has yet to execute. Note: this load can be racy with the main thread.
+             }
+ 
+-            // We're now committed to compiling this as an entrypoint.
+-            m_currentBlock->isCatchEntrypoint = true;
+-            m_graph.m_roots.append(m_currentBlock);
+-
+             Vector<SpeculatedType> argumentPredictions(m_numArguments);
+             Vector<SpeculatedType> localPredictions;
+             UncheckedKeyHashSet<unsigned, WTF::IntHash<unsigned>, WTF::UnsignedWithZeroKeyHashTraits<unsigned>> seenArguments;
++            bool everyOperandIsSampled = true;
+ 
+             {
+                 buffer->forEach([&](ValueProfileAndVirtualRegister& profile) {
+                     VirtualRegister operand(profile.m_operand);
+                     SpeculatedType prediction = profile.computeUpdatedPrediction();
++                    everyOperandIsSampled &= prediction != SpecNone;
+                     if (operand.isLocal())
+                         localPredictions.append(prediction);
+                     else {
+@@ -10246,6 +10244,16 @@ void ByteCodeParser::parseBlock(unsigned limit)
+                 }
+             }
+ 
++            if (!everyOperandIsSampled) {
++                // A buffer exists before its first sample: Options::useLazyCatchLiveness() creates it at a tier-up check, and the
++                // mutator may still be filling it. The DFG takes SpecNone for code that never ran and converts the value unchecked.
++                NEXT_OPCODE(op_catch);
++            }
++
++            // We're now committed to compiling this as an entrypoint.
++            m_currentBlock->isCatchEntrypoint = true;
++            m_graph.m_roots.append(m_currentBlock);
++
+             // We're not allowed to exit here since we would not properly recover values.
+             // We first need to bootstrap the catch entrypoint state.
+             m_exitOK = false; 
+diff --git a/Source/JavaScriptCore/dfg/DFGDriver.cpp b/Source/JavaScriptCore/dfg/DFGDriver.cpp
+index b555922a65..c74df71019 100644
+--- a/Source/JavaScriptCore/dfg/DFGDriver.cpp
++++ b/Source/JavaScriptCore/dfg/DFGDriver.cpp
+@@ -147,8 +147,6 @@ static CompilationResult compileImpl(
+         vm.typeProfilerLog()->processLogEntries(vm, "Preparing for DFG compilation."_s);
+ 
+     prepareLazyStateOfInlineCandidates(vm, codeBlock, profiledDFGCodeBlock, mode);
+-    if (mode != JITCompilationMode::FTLForOSREntry)
+-        codeBlock->baselineAlternative()->ensureCatchLivenessIsComputedForExecutedCatches(); // the parser makes a catch OSR entrypoint only where the buffer exists
+ 
+     Ref<Plan> plan = adoptRef(*new Plan(codeBlock, profiledDFGCodeBlock, mode, osrEntryBytecodeIndex, WTF::move(mustHandleValues)));
+ 
+diff --git a/Source/JavaScriptCore/jit/JITOperations.cpp b/Source/JavaScriptCore/jit/JITOperations.cpp
+index 751085f3f6..75e1f10368 100644
+--- a/Source/JavaScriptCore/jit/JITOperations.cpp
++++ b/Source/JavaScriptCore/jit/JITOperations.cpp
+@@ -3254,7 +3254,7 @@ JSC_DEFINE_JIT_OPERATION(operationTryOSREnterAtCatchAndValueProfile, UGPRPair, (
+     if (!buffer)
+         OPERATION_RETURN(scope, encodeResult(nullptr, nullptr));
+     buffer->forEach([&] (ValueProfileAndVirtualRegister& profile) {
+-        profile.m_buckets[0] = JSValue::encode(callFrame->uncheckedR(profile.m_operand).jsValue());
++        profile.sample(callFrame->uncheckedR(profile.m_operand).jsValue());
+     });
+ 
+     OPERATION_RETURN(scope, encodeResult(nullptr, nullptr));
+diff --git a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+index bfe3df838f..028b315a31 100644
+--- a/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
++++ b/Source/JavaScriptCore/llint/LLIntSlowPaths.cpp
+@@ -2611,7 +2611,7 @@ LLINT_SLOW_PATH_DECL(slow_path_profile_catch)
+     if (!buffer)
+         LLINT_END();
+     buffer->forEach([&] (ValueProfileAndVirtualRegister& profile) {
+-        profile.m_buckets[0] = JSValue::encode(callFrame->uncheckedR(profile.m_operand).jsValue());
++        profile.sample(callFrame->uncheckedR(profile.m_operand).jsValue());
+     });
+ 
+     LLINT_END();
+-- 
+2.54.0 (Apple Git-157)
+
+
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Dylan Conway <dylan.conway567@gmail.com>
+Date: Thu, 22 Oct 2026 20:40:37 -0700
+Subject: [PATCH] [JSC] A direct tail call from the FTL builds the callee's
+ frame above the stack pointer
+
+A signal that arrived during a direct tail call from the FTL could
+overwrite the callee's arguments.
+
+The FTL reserved stack for the callee's frame for every kind of call
+except DirectTailCall. When the callee's frame was larger than the
+caller's, CallFrameShuffler wrote it below the stack pointer, which it
+moves only after the last write. The OS builds signal frames there. The
+caller's stack check did not cover that memory either, so near the stack
+limit the frame could reach past the end of the stack.
+
+A large frame is easy to get: the arguments elimination phase turns
+`return f(...a, ...a)` with array literals into a tail call with a
+static argument count, with no upper bound.
+
+DirectTailCall now reserves the call argument area like the other calls.
+CallFrameShuffler::prepareForTailCall asserts that the new frame does
+not reach below the stack pointer.
+
+Backported to Pi-Bolt's WebKit pin from oven-sh/WebKit#887 (three commits: the fix and its two tests, squashed).
+---
+ ...l-call-callee-frame-below-stack-pointer.js | 45 +++++++++++
+ ...il-call-stack-check-covers-callee-frame.js | 77 +++++++++++++++++++
+ Source/JavaScriptCore/ftl/FTLLowerDFGToB3.cpp | 11 +--
+ .../JavaScriptCore/jit/CallFrameShuffler.cpp  |  4 +
+ 4 files changed, 132 insertions(+), 5 deletions(-)
+ create mode 100644 JSTests/stress/ftl-direct-tail-call-callee-frame-below-stack-pointer.js
+ create mode 100644 JSTests/stress/ftl-direct-tail-call-stack-check-covers-callee-frame.js
+
+diff --git a/JSTests/stress/ftl-direct-tail-call-callee-frame-below-stack-pointer.js b/JSTests/stress/ftl-direct-tail-call-callee-frame-below-stack-pointer.js
+new file mode 100644
+index 0000000000..3fa97cd156
+--- /dev/null
++++ b/JSTests/stress/ftl-direct-tail-call-callee-frame-below-stack-pointer.js
+@@ -0,0 +1,45 @@
++//@ runDefault("--useConcurrentJIT=0", "--thresholdForJITAfterWarmUp=20", "--thresholdForOptimizeAfterWarmUp=100", "--thresholdForFTLOptimizeAfterWarmUp=400")
++//@ runDefault("--useConcurrentJIT=0", "--thresholdForJITAfterWarmUp=20", "--thresholdForOptimizeAfterWarmUp=100", "--thresholdForFTLOptimizeAfterWarmUp=400", "--useSamplingProfiler=1", "--sampleInterval=50")
++
++// A direct tail call from the FTL must not write the callee's frame below the
++// stack pointer. The OS builds a signal frame there whenever a signal arrives,
++// which overwrites the arguments that are already in place. Where threads are
++// suspended with a signal, the sampling profiler sends one per sample.
++//
++// CallFrameShuffler::prepareForTailCall asserts this when it generates the
++// code, so a build with assertions fails on every run, not once in a while.
++
++"use strict";
++
++function sum() {
++    let t = arguments.length;
++    for (let i = 0; i < arguments.length; i++)
++        t = (t * 31 + arguments[i]) % 1000003;
++    return t;
++}
++noInline(sum);
++
++function test(f) {
++    noInline(f);
++
++    // Below the FTL: gives the call site a profile, and the result to expect.
++    const expected = f(0, true);
++
++    for (let i = 0; i < testLoopCount; i++)
++        f(i, false);
++
++    for (let i = 0; i < 20; i++) {
++        const got = f(0, true);
++        if (got !== expected)
++            throw new Error(`${f.name}: got ${got} from the FTL, expected ${expected}`);
++    }
++}
++
++const values = Array.from({ length: 1000 }, (_, i) => (i * 7 + 3) % 11);
++
++// More arguments than the caller's own frame has slots.
++test(new Function("sum", `"use strict"; return function few(x, rare) { if (rare) return sum(${values.slice(0, 64).join(",")}); return x + 1; }`)(sum));
++
++// Spreads of an array literal: the arguments elimination phase turns the
++// varargs tail call into one with a static argument count, here 60000.
++test(new Function("sum", `"use strict"; return function many(x, rare) { if (rare) { const a = [${values.join(",")}]; return sum(${Array(60).fill("...a").join(",")}); } return x + 1; }`)(sum));
+diff --git a/JSTests/stress/ftl-direct-tail-call-stack-check-covers-callee-frame.js b/JSTests/stress/ftl-direct-tail-call-stack-check-covers-callee-frame.js
+new file mode 100644
+index 0000000000..494df4aaff
+--- /dev/null
++++ b/JSTests/stress/ftl-direct-tail-call-stack-check-covers-callee-frame.js
+@@ -0,0 +1,77 @@
++//@ runDefault("--useConcurrentJIT=0", "--thresholdForJITAfterWarmUp=20", "--thresholdForOptimizeAfterWarmUp=100", "--thresholdForFTLOptimizeAfterWarmUp=400", "--maxPerThreadStackUsage=4294967295")
++
++// The stack check of an FTL function must cover the frame that a direct tail
++// call builds for its callee. The callee does check the stack, but only once
++// its arguments are in place, and the LLInt prologue calls into C++ before it.
++//
++// The callee's frame here is 192KB, more than the zone that is reserved below
++// the stack limit, so at the limit a frame that nothing checked reaches past
++// the end of the stack. With no cap on the stack usage the limit is that zone
++// above the end of the stack, however large the agent's stack is.
++
++"use strict";
++
++function agent() {
++    "use strict";
++
++    function count() { return arguments.length; }
++    noInline(count);
++
++    const chunk = Array.from({ length: 1000 }, (_, i) => i % 11);
++    const spreads = 24;
++    const f = new Function("count", `"use strict"; return function many(x, rare) { if (rare) { const a = [${chunk.join(",")}]; return count(${Array(spreads).fill("...a").join(",")}); } return x + 1; }`)(count);
++    noInline(f);
++
++    // Once below the FTL, so that the call site has a profile.
++    if (f(3, true) !== chunk.length * spreads)
++        throw new Error("wrong count before the FTL");
++    for (let i = 0; i < testLoopCount; i++)
++        f(i, false);
++
++    // Down to the stack limit, then the call from each frame on the way back
++    // up until there is room for it. The frames above catch whatever is thrown
++    // here, so a failure is kept for later.
++    let overflows = 0;
++    let done = false;
++    let failure = null;
++    function recurse() {
++        try {
++            recurse();
++        } catch { }
++        if (done)
++            return;
++        try {
++            if (f(3, true) !== chunk.length * spreads)
++                failure = "wrong count from the FTL";
++            done = true;
++        } catch (e) {
++            if (!(e instanceof RangeError))
++                failure = "unexpected " + e;
++            overflows++;
++        }
++    }
++    noInline(recurse);
++    recurse();
++
++    if (failure)
++        throw new Error(failure);
++    if (!overflows)
++        throw new Error("the call never ran out of stack");
++    if (!done)
++        throw new Error("the call never had room");
++}
++
++$.agent.start(`
++    try {
++        (${agent})();
++        $.agent.report("ok");
++    } catch (e) {
++        $.agent.report(String(e));
++    }
++`);
++
++let report;
++while (!(report = $.agent.getReport()))
++    $.agent.sleep(1);
++if (report !== "ok")
++    throw new Error(report);
+diff --git a/Source/JavaScriptCore/ftl/FTLLowerDFGToB3.cpp b/Source/JavaScriptCore/ftl/FTLLowerDFGToB3.cpp
+index 2b1d40c454..1e68868486 100644
+--- a/Source/JavaScriptCore/ftl/FTLLowerDFGToB3.cpp
++++ b/Source/JavaScriptCore/ftl/FTLLowerDFGToB3.cpp
+@@ -14203,12 +14203,13 @@ IGNORE_CLANG_WARNINGS_END
+ 
+         LValue jsCallee = lowJSValue(m_graph.varArgChild(node, 0));
+ 
+-        if (!isTail) {
+-            unsigned frameSize = (CallFrame::headerSizeInRegisters + numAllocatedArgs) * sizeof(EncodedJSValue);
+-            unsigned alignedFrameSize = WTF::roundUpToMultipleOf<stackAlignmentBytes()>(frameSize);
++        // A tail call needs this too. The shuffler writes the callee's frame before it moves the stack
++        // pointer, so our frame has to reach at least as low as the callee's: what is below the stack
++        // pointer is overwritten by a signal frame, and is not covered by our stack check.
++        unsigned frameSize = (CallFrame::headerSizeInRegisters + numAllocatedArgs) * sizeof(EncodedJSValue);
++        unsigned alignedFrameSize = WTF::roundUpToMultipleOf<stackAlignmentBytes()>(frameSize);
+ 
+-            m_proc.requestCallArgAreaSizeInBytes(alignedFrameSize);
+-        }
++        m_proc.requestCallArgAreaSizeInBytes(alignedFrameSize);
+ 
+         Vector<ConstrainedValue> arguments;
+ 
+diff --git a/Source/JavaScriptCore/jit/CallFrameShuffler.cpp b/Source/JavaScriptCore/jit/CallFrameShuffler.cpp
+index d6df2e6501..38c2a82037 100644
+--- a/Source/JavaScriptCore/jit/CallFrameShuffler.cpp
++++ b/Source/JavaScriptCore/jit/CallFrameShuffler.cpp
+@@ -370,6 +370,10 @@ void CallFrameShuffler::prepareForTailCall()
+     UNREACHABLE_FOR_PLATFORM();
+ #endif
+ 
++    // The stack pointer moves only once the new frame is complete, and until then a signal frame
++    // overwrites whatever is below it.
++    ASSERT(newAsOld(firstNew() - m_newFrameOffset) >= firstOld());
++
+     if (verbose)
+         dataLog("  Emitting code for computing the new frame base\n");
+ 
+-- 
+2.54.0 (Apple Git-157)
+
