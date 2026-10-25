@@ -14,6 +14,7 @@ import {
 	chmodSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
@@ -198,7 +199,7 @@ describe("packages installed with pi install", () => {
 		const manifest = writePluginFolder(plan, out);
 		assert.match(
 			readFileSync(manifest, "utf8"),
-			/from "\.\/package-injaneity-pi-computer-use\/extensions\/computer-use\.ts";/,
+			/await import\("\.\/package-injaneity-pi-computer-use\/extensions\/computer-use\.ts"\)/,
 		);
 		assert.equal(readFileSync(join(out, plan.plugins[0].importPath), "utf8"), FACTORY);
 	});
@@ -377,7 +378,7 @@ describe("packages installed with pi install", () => {
 
 		const out = join(scratch(), "folder");
 		const manifest = writePluginFolder(plan, out);
-		const imports = [...readFileSync(manifest, "utf8").matchAll(/^import \w+ from "\.\/(.+)";$/gm)];
+		const imports = [...readFileSync(manifest, "utf8").matchAll(/await import\("\.\/(.+?)"\)/g)];
 		assert.equal(imports.length, 3);
 		for (const [, path] of imports) assert.ok(readFileSync(join(out, path), "utf8"));
 	});
@@ -856,26 +857,29 @@ describe("what it passes over", () => {
 });
 
 describe("the manifest and its folder", () => {
-	it("imports the type only, and names each plugin a replaceable built-in", () => {
+	it("imports the type only, loads each plugin with import(), and names it a replaceable built-in", () => {
 		const agentDir = agent();
 		write(join(agentDir, "extensions", "pdf-reader", "index.ts"));
 
 		const text = renderManifest(planPlugins({ agentDir }));
 		assert.match(text, /^import type \{ InlineExtension \}/m);
-		assert.match(text, /^import pdfReader from "\.\/global\/pdf-reader\/index\.ts";$/m);
-		assert.match(text, /\{ name: "pdf-reader", builtin: true, replaceable: true, factory: pdfReader \},/);
-		// A value import would evaluate Pi's whole public API at every launch.
-		assert.doesNotMatch(text, /^import \{/m);
+		assert.match(
+			text,
+			/\{ name: "pdf-reader", builtin: true, replaceable: true, factory: \(await import\("\.\/global\/pdf-reader\/index\.ts"\)\)\.default \},/,
+		);
+		// A value import would evaluate Pi's whole public API at every launch; a static one would join the plugins' top-level
+		// code in one function (#129).
+		assert.doesNotMatch(text, /^import (?!type )/m);
 	});
 
-	it("writes a manifest whose every import resolves to a file it copied", () => {
+	it("writes a manifest whose every import() resolves to a file it copied", () => {
 		const agentDir = agent();
 		write(join(agentDir, "extensions", "ban-sleep.ts"));
 		write(join(agentDir, "extensions", "pdf-reader", "index.ts"));
 
 		const out = join(scratch(), "folder");
 		const manifest = writePluginFolder(planPlugins({ agentDir }), out);
-		const imports = [...readFileSync(manifest, "utf8").matchAll(/^import \w+ from "\.\/(.+)";$/gm)];
+		const imports = [...readFileSync(manifest, "utf8").matchAll(/await import\("\.\/(.+?)"\)/g)];
 		assert.equal(imports.length, 2);
 		for (const [, path] of imports) assert.ok(readFileSync(join(out, path), "utf8"));
 	});
@@ -890,13 +894,12 @@ describe("the manifest and its folder", () => {
 		assert.ok(readFileSync(join(out, "global", "shared", "skills.ts"), "utf8"));
 	});
 
-	// Issue #129: imported with the entry, the extensions' top-level code joined Pi's in the program's top-level code, one
-	// function, which the compiler refuses past 256 KB of bytecode, so a few extensions together stopped the build.
-	// #142: required instead, an extension with an `await` at its top level stopped the bundler. Loaded with import() in a build
-	// that splits its code, as the entry and the build do, the manifest and its modules are a file of their own, and they run
-	// once each, in the order the entry that imported the manifest ran them, an extension that waits before the next one, with
-	// the same values.
-	it("loaded as the entry loads it, the extensions are a file of their own and run as imported (#129, #142)", (context) => {
+	// Issue #129: imported, the extensions' top-level code joined Pi's in the program's top-level code, one function, which the
+	// compiler refuses past 256 KB of bytecode, so a few extensions together stopped the build. #142: required instead, an
+	// extension with an `await` at its top level stopped the bundler. The manifest loads each extension with import(), and the
+	// entry loads the manifest so, in a build that splits its code: each extension is a file of its own, and they run once each
+	// in the order a manifest that imported them ran them, an extension that waits before the next one, with the same values.
+	it("each extension is a file of its own, and runs as when the manifest imported it (#129, #142)", (context) => {
 		const bun = spawnSync("bun", ["--version"], { encoding: "utf8" });
 		if (bun.status !== 0) return context.skip("no bun on PATH");
 		const agentDir = agent();
@@ -923,11 +926,21 @@ describe("the manifest and its folder", () => {
 		write(join(agentDir, "extensions", "gamma.js"), `${ran("gamma")}module.exports = function gamma() { return 3; };\n`);
 
 		const out = join(scratch(), "build");
-		writePluginFolder(planPlugins({ agentDir }), join(out, "src"));
+		const plan = planPlugins({ agentDir });
+		writePluginFolder(plan, join(out, "src"));
+		// (The manifest as it was until #142: each extension imported with it.)
+		writeFileSync(
+			join(out, "src", "imported.ts"),
+			[
+				...plan.plugins.map((plugin, index) => `import p${index} from "${plugin.importPath}";`),
+				`export default [${plan.plugins.map((plugin, index) => `{ name: "${plugin.name}", factory: p${index} }`).join(", ")}];`,
+				"",
+			].join("\n"),
+		);
 		writeFileSync(join(out, "start.ts"), "globalThis.ran = [];\n");
 		const report =
 			"console.log(JSON.stringify({ ran: globalThis.ran, plugins: plugins.map((p) => [p.name, p.factory.name, String(p.factory())]) }));\n";
-		writeFileSync(join(out, "imported.ts"), `import "./start.ts";\nimport plugins from "./src/plugins.ts";\n${report}`);
+		writeFileSync(join(out, "imported.ts"), `import "./start.ts";\nimport plugins from "./src/imported.ts";\n${report}`);
 		writeFileSync(
 			join(out, "loaded.ts"),
 			`import "./start.ts";\nconst { default: plugins } = await import("./src/plugins.ts");\n${report}`,
@@ -942,7 +955,8 @@ describe("the manifest and its folder", () => {
 			assert.equal(built.status, 0, built.stderr);
 			const ranIt = spawnSync("bun", [join(outdir, `${entry}.js`)], { encoding: "utf8" });
 			assert.equal(ranIt.status, 0, ranIt.stderr);
-			return { text: readFileSync(join(outdir, `${entry}.js`), "utf8"), result: JSON.parse(ranIt.stdout) };
+			const files = readdirSync(outdir).map((name) => readFileSync(join(outdir, name), "utf8"));
+			return { files, result: JSON.parse(ranIt.stdout) };
 		};
 		const imported = build("imported");
 		const loaded = build("loaded");
@@ -950,10 +964,12 @@ describe("the manifest and its folder", () => {
 		assert.deepEqual(loaded.result, imported.result);
 		assert.deepEqual(loaded.result.ran, ["shared", "alpha", "beta", "beta helper", "beta after await", "gamma"]);
 		assert.deepEqual(loaded.result.plugins.at(-1), ["gamma", "gamma", "3"]);
-		// None of the extensions' code at the entry's top level: it is in the file the entry loads.
-		assert.match(imported.text, /^globalThis\.ran\.push\("alpha"\);$/m);
-		assert.doesNotMatch(loaded.text, /^globalThis\.ran\.push\(/m);
-		assert.match(loaded.text, /await import\("\.\/plugins-\w+\.js"\)/);
+		// Imported, the extensions' top-level code is all in one file; loaded, each extension's is in a file of its own.
+		const fileOf = (files, name) => files.filter((text) => text.includes(`globalThis.ran.push("${name}")`));
+		assert.equal(fileOf(imported.files, "alpha")[0], fileOf(imported.files, "beta")[0]);
+		const own = ["alpha", "beta", "gamma"].map((name) => fileOf(loaded.files, name));
+		for (const files of own) assert.equal(files.length, 1);
+		assert.equal(new Set(own.flat()).size, 3);
 	});
 
 	it("replaces its own output, and refuses a folder holding anything else", () => {

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,6 +20,7 @@ import {
 	extensionsOfModule,
 	functionTooBig,
 	measuredSizes,
+	measurePieces,
 	recordedExclusions,
 	resolveCompilePackages,
 } from "../src/pi-bolt-compile.ts";
@@ -337,8 +339,8 @@ describe("pi-bolt compile says why a build stopped", () => {
 	});
 });
 
-// Issue #129: a function too big to compile is one function of an extension, or the top-level code of a module: of the file
-// the extensions' modules are in (#142), or of the whole program in a build that does not split its code. The message says which.
+// Issue #129: a function too big to compile is one function of an extension, or the top-level code of a module: of one
+// extension's file (#142), or of the whole program in a build that does not split its code. The message says which.
 describe("pi-bolt compile says which extension a function too big to compile is of (#129)", () => {
 	test("the compiler's line gives the size, and whether it is the top-level code", () => {
 		expect(
@@ -416,8 +418,8 @@ describe("pi-bolt compile says which extension a function too big to compile is 
 		}
 	});
 
-	// #142: the entry loads the manifest with import(), and the build splits its code, so the extensions' modules are a file of
-	// their own, not wrapped: each module's statements are its share of that file's top-level code.
+	// #142: the manifest loads each extension with import(), and the build splits its code, so each extension's modules are a
+	// file of their own, not wrapped: each module's statements are its share of that file's top-level code.
 	test("a split build's file of the extensions: its imports and exports are nobody's code, and their names are variables", () => {
 		const chunk = [
 			"// @bun",
@@ -450,12 +452,41 @@ describe("pi-bolt compile says which extension a function too big to compile is 
 			[".pibolt-plugins/src/global/aaa-first.ts", "(globalThis.__tlaOrder ??= []).push(visibleWidth);\n"],
 			[
 				".pibolt-plugins/src/global/tla-probe/index.ts",
-				'{ greeting } = await import("./greeting-yv0h5cmh.js");\norder.push(truncate);\n',
+				'var { greeting } = await import("./greeting-yv0h5cmh.js");\norder.push(truncate);\n',
 			],
 			[".pibolt-plugins/src/plugins.ts", "plugins = [aaa_first_default];\nplugins_default = plugins;\n"],
 		]);
 		for (const name of ["visibleWidth", "truncate", "aaa_first_default", "plugins_default"])
 			expect(names).toContain(name);
+	});
+
+	// #142: an extension may wait at its top level. Its top-level code is measured in an async function: in a plain one the
+	// \`await\` does not parse, and the extension that passed the limit came out with nothing (PR #152 review).
+	test("the top-level code of a module that waits at its top level is measured, large literal and all", (context) => {
+		if (spawnSync("bun", ["--version"]).status !== 0) return context.skip();
+		const chunk = [
+			"// .pibolt-plugins/src/global/big/index.ts",
+			'var { greeting } = await import("./greeting-1.js");',
+			// (Not constants, which are one instruction: what each element is worked out from.)
+			`var table = [${Array.from({ length: 3000 }, (_, i) => `${i} * greeting.length`).join(", ")}];`,
+			"// .pibolt-plugins/src/global/small.ts",
+			"var small = [1, 2, 3];",
+			"",
+		].join("\n");
+		const { pieces, names } = bundlePieces(chunk, ".pibolt-plugins/src/");
+		expect(pieces.map((piece) => [piece.module, piece.kind, piece.async])).toEqual([
+			[".pibolt-plugins/src/global/big/index.ts", "top-level", false],
+			[".pibolt-plugins/src/global/small.ts", "top-level", false],
+		]);
+		const work = mkdtempSync(join(tmpdir(), "pibolt-measure-"));
+		try {
+			const sizes = measurePieces("bun", pieces, names, work);
+			expect(sizes.get(0)).toBeGreaterThan(10000);
+			expect(sizes.get(1)).toBeGreaterThan(0);
+			expect(sizes.get(0)!).toBeGreaterThan(sizes.get(1)! * 50);
+		} finally {
+			rmSync(work, { recursive: true, force: true });
+		}
 	});
 
 	test("the sizes the engine prints, less what the empty function takes", () => {

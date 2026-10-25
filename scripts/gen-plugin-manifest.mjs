@@ -203,16 +203,6 @@ function safeName(raw) {
 	return cleaned.length > 0 ? cleaned : "extension";
 }
 
-/** `pdf-reader` -> `pdfReader`, the binding the manifest imports the factory as. */
-function toIdentifier(name) {
-	const camel = name
-		.split(/[^A-Za-z0-9]+/)
-		.filter(Boolean)
-		.map((part, index) => (index === 0 ? part : part[0].toUpperCase() + part.slice(1)))
-		.join("");
-	return /^[A-Za-z_$]/.test(camel) ? camel : `ext${camel}`;
-}
-
 const withoutExtension = (file) => file.replace(/\.(ts|js)$/, "");
 
 /** Unique within `taken`, by a suffix and then a number. Adds to `taken`. */
@@ -416,7 +406,6 @@ export function planPlugins(options) {
 
 	const takenStageDirs = new Set();
 	const takenNames = new Set();
-	const takenIdentifiers = new Set();
 	const stageDirs = new Map();
 	const roots = [];
 	const plugins = [];
@@ -445,7 +434,6 @@ export function planPlugins(options) {
 		const name = unique(safeName(baseName(rel, siblings, basename(root))), takenNames, entry.origin);
 		plugins.push({
 			name,
-			identifier: unique(toIdentifier(name), takenIdentifiers),
 			entry: entry.path,
 			origin: entry.origin,
 			stageDir: stageDirs.get(root),
@@ -513,7 +501,6 @@ export function planPlugins(options) {
 			const name = unique(safeName(base), takenNames, "package");
 			plugins.push({
 				name,
-				identifier: unique(toIdentifier(name), takenIdentifiers),
 				entry,
 				origin: "package",
 				stageDir,
@@ -894,14 +881,21 @@ export function renderManifest(plan) {
 		" *",
 		" * Each is named, so it is a built-in extension once compiled in: `-builtin:<name>` in the `extensions` setting",
 		" * turns one off, and the same extension installed at run time replaces it instead of conflicting.",
+		" *",
+		" * Each is loaded with import(), one after the other: the build splits its code (--splitting), so each extension, with",
+		" * the modules only it imports, is a file of its own, whose top-level code the compiler takes as one function and refuses",
+		" * past 256 KB of bytecode (#129). Imported here, all the extensions' top-level code would be one function. They still",
+		" * run in this order, and one that waits at its top level (`await`) finishes before the next starts (#142).",
 		" */",
 		// A value import from the package would evaluate Pi's whole public API at every launch (docs/PLUGINS.md).
 		'import type { InlineExtension } from "@earendil-works/pi-coding-agent";',
+		"",
+		"const plugins: InlineExtension[] = [",
 	);
-	for (const plugin of plan.plugins) lines.push(`import ${plugin.identifier} from "${plugin.importPath}";`);
-	lines.push("", "const plugins: InlineExtension[] = [");
 	for (const plugin of plan.plugins) {
-		lines.push(`\t{ name: "${plugin.name}", builtin: true, replaceable: true, factory: ${plugin.identifier} },`);
+		lines.push(
+			`\t{ name: "${plugin.name}", builtin: true, replaceable: true, factory: (await import("${plugin.importPath}")).default },`,
+		);
 	}
 	lines.push("];", "", "export default plugins;");
 	return `${lines.join("\n")}\n`;

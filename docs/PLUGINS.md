@@ -156,15 +156,17 @@ modules, which is a job for each package rather than a general one. [`plugins/op
 example. The generator names any it finds and says why, instead of leaving them out in silence.
 
 A large module is the other limit. The compiler refuses a function of more than 256 KB of bytecode
-(`maximumAOTCandidateBytecodeSize`). The entry loads the manifest with `import()`, and the build splits its code
-(`--splitting`): the manifest and the modules only plugins import are a file of their own, a module whose top-level code is the
-plugins' alone, apart from Pi's (about 200 KB of it). So the limit is that top-level code, all the plugins' together, or one
-function's: a bundled `dist/index.js`, or embedded data such as a tokeniser's rank table, can pass it. The modules still run
-once each, in the order the manifest imports them, and a plugin that waits at its top level (`await`) finishes before the next
-one starts. (Until Pi-Bolt 1.0.1 the entry imported the manifest, and every plugin's top-level code joined Pi's in one
-function: a few plugins together stopped the build, and leaving out any one of them did not help, #129. Pi-Bolt 1.0.2 required
-it, which cannot load a plugin with an `await` at its top level, #142.) Leave a plugin with such a module out with
-`--plugins-exclude`, or raise the limit ([Troubleshooting](#troubleshooting)).
+(`maximumAOTCandidateBytecodeSize`), and it takes the top-level code of each module of the build as one function. The build
+splits its code (`--splitting`), and the generated manifest loads each plugin with `import()`, one after the other: each plugin,
+with the modules only it imports, is a file of its own, apart from Pi's code and from the other plugins. So the limit is one
+plugin's top-level code, or one function's: a bundled `dist/index.js`, or embedded data such as a tokeniser's rank table, can
+pass it, and many small plugins together do not. The plugins still run in the manifest's order, and one that waits at its top
+level (`await`) finishes before the next one starts. (Until Pi-Bolt 1.0.1 the manifest imported the plugins, and every plugin's
+top-level code joined Pi's, about 200 KB of it, in one function: a few plugins together stopped the build, and leaving out any
+one of them did not help, #129. Pi-Bolt 1.0.2 required the manifest, which cannot load a plugin with an `await` at its top
+level, #142.) Leave a plugin with such a module out with `--plugins-exclude`, or raise the limit
+([Troubleshooting](#troubleshooting)). A manifest you write yourself (below) that imports its plugins puts their top-level code
+in one file; `factory: (await import("./extensions/jira/index.ts")).default` gives a plugin a file of its own.
 
 ### Whether it is worth it
 

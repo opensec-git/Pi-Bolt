@@ -104,12 +104,12 @@ change that function. `BUN_JSC_allowAOTDeclinedFunctions=1` builds anyway: the f
 variables from outside itself, and stops the program when it is called if it does.
 
 **`pi-bolt compile` stops with "is bigger than maximumAOTCandidateBytecodeSize".** One function of the program holds more than
-256 KB of bytecode. The extensions' modules are a file of their own, compiled apart from Pi's code. Below the compiler's line,
-`pi-bolt compile` says which it is:
+256 KB of bytecode. Each extension, with the modules only it imports, is a file of its own, compiled apart from Pi's code and
+from the other extensions, so the limit is one extension's. Below the compiler's line, `pi-bolt compile` says which it is:
 - `(a function)`: one very large function of an extension, or a CommonJS module (a package's prebuilt, bundled `dist/`). The
   message names the file and the extension.
-- `(the top-level code of a module)`: the top-level code of that file, every extension's together, usually one large literal
-  (embedded data) or a great many extensions. The message gives each extension's share.
+- `(the top-level code of a module)`: the top-level code of one extension, usually one large literal (embedded data). The
+  message names the extension.
 
 Leave that extension out with `pi-bolt compile --exclude <name>`, by the name `pi-bolt compile` prints for it: it still loads
 from its files at run time, and later compiles and `pi-bolt update` leave it out too (`--no-exclude` takes it back). Or compile
@@ -121,7 +121,8 @@ minutes and tens of GB; one of a few hundred KB has taken seconds. The message's
 
 Pi-Bolt 1.0.1 and earlier added the top-level code of every extension to the program's, about 200 KB of which is Pi's: there a
 few extensions together passed the limit, and leaving out any one of them did not help (#129). Pi-Bolt 1.0.2 compiled each
-module on its own, but stopped at an extension with an `await` at its top level (#142).
+module on its own, but stopped at an extension with an `await` at its top level (#142). Pi-Bolt 1.0.3 compiles each
+extension on its own, `await` or not.
 
 **A run-time plugin is slow.** On the default build, plugins loaded at run time are interpreted. Compile them in
 ([PLUGINS.md](PLUGINS.md)) or use the `linux-x64-jit` build.
