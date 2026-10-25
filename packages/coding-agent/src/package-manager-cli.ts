@@ -786,16 +786,24 @@ interface SelfUpdatePlan {
 async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 	// (A Pi-Bolt build is versioned, and updated, as Pi-Bolt.)
 	const currentVersion = PIBOLT ? PIBOLT.version : VERSION;
+	// (Pi-Bolt: how to update without it, as the installation was installed.)
+	const method = PIBOLT ? piBoltInstallMethod() : undefined;
+	const fallback =
+		method === undefined
+			? ""
+			: ` You can update without it: ${method === "npm" ? "npm install -g pi-bolt@latest" : (piBoltPackageManager(method)?.update ?? PIBOLT_INSTALL_COMMAND)}`;
 	let latestRelease: Awaited<ReturnType<typeof getLatestPiRelease>>;
 	try {
 		latestRelease = await getLatestPiRelease(currentVersion, { retry: true });
 	} catch (error: unknown) {
-		throw new Error(`Could not determine latest ${COMMAND_NAME} version: ${formatVersionCheckError(error)}`, {
-			cause: error,
-		});
+		throw new Error(
+			`Could not determine latest ${COMMAND_NAME} version: ${formatVersionCheckError(error)}.${fallback}`,
+			{ cause: error },
+		);
 	}
 	if (!latestRelease) {
-		throw new Error(`Could not determine latest ${COMMAND_NAME} version.`);
+		const offline = process.env.PI_OFFLINE ? " (PI_OFFLINE is set)" : "";
+		throw new Error(`Could not determine latest ${COMMAND_NAME} version${offline}.${fallback}`);
 	}
 
 	const packageName = latestRelease.packageName ?? PACKAGE_NAME;

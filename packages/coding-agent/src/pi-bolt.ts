@@ -91,6 +91,10 @@ export const PIBOLT_RELEASE_KEY = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAoLboJqtKaoISPqffk03vHZr+1sRBG3uIRIWeKOew+aY=
 -----END PUBLIC KEY-----
 `;
+/** Redirects to the latest release's page (.../releases/tag/bolt-v1.0.2); not counted against GitHub's API limit. */
+export const PIBOLT_LATEST_RELEASE_URL = `${PIBOLT_RELEASES_URL}/latest`;
+/** The releases, pre-releases among them, as an Atom feed; not counted against GitHub's API limit either. */
+export const PIBOLT_RELEASES_FEED = `${PIBOLT_RELEASES_URL}.atom`;
 export const PIBOLT_LATEST_RELEASE_API = "https://api.github.com/repos/opensec-git/Pi-Bolt/releases/latest";
 /** The releases, newest first, pre-releases among them (drafts are not shown to anyone without write access). */
 export const PIBOLT_RELEASES_API = "https://api.github.com/repos/opensec-git/Pi-Bolt/releases?per_page=30";

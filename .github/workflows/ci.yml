@@ -353,6 +353,16 @@ jobs:
             if ($LASTEXITCODE -ne 0) { $failed = 1 }
           }
           exit $failed
+      - name: Update finds the latest release
+        run: |
+          # pi-bolt update online, as a user runs it: it finds the latest release where releases/latest redirects, as the
+          # installers do, not only through GitHub's API, which answers 403 once an address has used its hourly requests (#149).
+          # This build is the latest release or newer, so nothing is installed.
+          $out = (& out\pi-bolt\pi.exe update --self | Out-String)
+          Write-Host $out
+          if ($LASTEXITCODE -ne 0 -or $out -notmatch 'already up to date') { exit 1 }
+        env:
+          PI_TELEMETRY: "0"
       - name: Engine tests
         run: |
           & tests\aot\run.ps1

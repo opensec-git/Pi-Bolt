@@ -2,7 +2,9 @@ import { compare, valid } from "semver";
 import {
 	PIBOLT,
 	PIBOLT_LATEST_RELEASE_API,
+	PIBOLT_LATEST_RELEASE_URL,
 	PIBOLT_RELEASES_API,
+	PIBOLT_RELEASES_FEED,
 	piBoltChannel,
 	piBoltVersionOfTag,
 } from "../pi-bolt.ts";
@@ -95,36 +97,127 @@ export async function getLatestPiRelease(
 	};
 }
 
+/** The highest of `versions` (X.Y.Z), or undefined if there are none. */
+function highestVersion(versions: Iterable<string | undefined>): string | undefined {
+	let highest: string | undefined;
+	for (const version of versions) {
+		if (version && (!highest || (comparePackageVersions(version, highest) ?? 0) > 0)) highest = version;
+	}
+	return highest;
+}
+
 /** The newest Pi-Bolt version among GitHub's releases (pre-releases too; drafts never). */
 export function newestPiBoltVersion(releases: unknown): string | undefined {
 	if (!Array.isArray(releases)) return undefined;
-	let newest: string | undefined;
-	for (const release of releases as Array<{ tag_name?: unknown; draft?: unknown }>) {
-		if (release?.draft === true) continue;
-		const version = piBoltVersionOfTag(release?.tag_name);
-		if (version && (!newest || (comparePackageVersions(version, newest) ?? 0) > 0)) newest = version;
+	return highestVersion(
+		(releases as Array<{ tag_name?: unknown; draft?: unknown }>).map((release) =>
+			release?.draft === true ? undefined : piBoltVersionOfTag(release?.tag_name),
+		),
+	);
+}
+
+/** The version of a release page's address (".../releases/tag/bolt-v1.0.2" -> "1.0.2"), or undefined for any other. */
+export function piBoltVersionOfReleaseUrl(url: string | null | undefined): string | undefined {
+	if (!url) return undefined;
+	try {
+		const tag = /\/releases\/tag\/([^/]+)$/.exec(new URL(url, PIBOLT_LATEST_RELEASE_URL).pathname)?.[1];
+		return tag ? piBoltVersionOfTag(decodeURIComponent(tag)) : undefined;
+	} catch {
+		return undefined;
 	}
-	return newest;
+}
+
+/**
+ * The newest Pi-Bolt version GitHub's releases feed (releases.atom) lists, pre-releases included: each release is an entry
+ * whose link is its page. (Release notes are in the feed as escaped HTML, so links in them are not taken for entries.)
+ */
+export function newestPiBoltVersionInFeed(feed: string): string | undefined {
+	const links = feed.matchAll(/<link\b[^>]*\bhref="([^"]*\/releases\/tag\/[^"]*)"/g);
+	return highestVersion(Array.from(links, (link) => piBoltVersionOfReleaseUrl(link[1])));
+}
+
+/** "HTTP 403 (rate limit exceeded)": an unsuccessful response, in a message. */
+function describeResponse(response: Response): string {
+	const rateLimited = response.status === 403 || response.status === 429;
+	return rateLimited && response.headers.get("x-ratelimit-remaining") === "0"
+		? `HTTP ${response.status} (rate limit exceeded)`
+		: `HTTP ${response.status}`;
 }
 
 /**
  * Pi-Bolt updates as a whole (its Pi and its engine together), so a Pi-Bolt build looks at Pi-Bolt's releases, by Pi-Bolt
  * version: the latest release, or on the beta channel the newest, pre-releases included.
+ *
+ * The latest release is the one github.com/.../releases/latest redirects to, as the installers find it (#149): GitHub's API
+ * allows 60 requests an hour from an address without a token, which a shared address (an office, a VPN, a carrier's NAT)
+ * uses up, and then answers 403. The API is asked only if the redirect does not say. The beta channel needs pre-releases,
+ * which the redirect does not include: the API's list, else the releases feed (which, like the redirect, is not limited).
+ * Throws, saying what each answered, when none says.
  */
 async function getLatestPiBoltRelease(
 	currentVersion: string,
 	options: { timeoutMs?: number; retry?: boolean },
 ): Promise<LatestPiRelease | undefined> {
-	const beta = piBoltChannel() === "beta";
-	const response = await fetchWithRetry(
-		beta ? PIBOLT_RELEASES_API : PIBOLT_LATEST_RELEASE_API,
-		{ headers: { "User-Agent": getPiUserAgent(currentVersion), accept: "application/vnd.github+json" } },
-		{ maxRetries: options.retry ? 2 : 0, timeoutMs: options.timeoutMs ?? DEFAULT_VERSION_CHECK_TIMEOUT_MS },
-	);
-	if (!response.ok) return undefined;
-	const data = (await response.json()) as unknown;
-	const version = beta ? newestPiBoltVersion(data) : piBoltVersionOfTag((data as { tag_name?: unknown }).tag_name);
-	return version ? { version } : undefined;
+	const headers = { "User-Agent": getPiUserAgent(currentVersion) };
+	// One time budget for the whole lookup: a network that does not answer is not waited for once per source.
+	const signal = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_VERSION_CHECK_TIMEOUT_MS);
+	const retry = { maxRetries: options.retry ? 2 : 0 };
+	const latestRedirect = async (): Promise<string | undefined> => {
+		const response = await fetchWithRetry(PIBOLT_LATEST_RELEASE_URL, { headers, redirect: "manual", signal }, retry);
+		try {
+			await response.body?.cancel();
+		} catch {
+			// Only the status and the Location header are read.
+		}
+		const location = response.status >= 300 && response.status < 400 ? response.headers.get("location") : null;
+		const version = piBoltVersionOfReleaseUrl(location);
+		if (!version) throw new Error(location ? `redirected to ${location}` : describeResponse(response));
+		return version;
+	};
+	const api = async (url: string, versionOf: (data: unknown) => string | undefined): Promise<string | undefined> => {
+		const response = await fetchWithRetry(
+			url,
+			{ headers: { ...headers, accept: "application/vnd.github+json" }, signal },
+			retry,
+		);
+		if (!response.ok) throw new Error(describeResponse(response));
+		const version = versionOf(await response.json());
+		if (!version) throw new Error("no Pi-Bolt release in the answer");
+		return version;
+	};
+	const feed = async (): Promise<string | undefined> => {
+		const response = await fetchWithRetry(PIBOLT_RELEASES_FEED, { headers, signal }, retry);
+		if (!response.ok) throw new Error(describeResponse(response));
+		const version = newestPiBoltVersionInFeed(await response.text());
+		if (!version) throw new Error("no Pi-Bolt release in the feed");
+		return version;
+	};
+	const sources: Array<[string, () => Promise<string | undefined>]> =
+		piBoltChannel() === "beta"
+			? [
+					[PIBOLT_RELEASES_API, () => api(PIBOLT_RELEASES_API, newestPiBoltVersion)],
+					[PIBOLT_RELEASES_FEED, feed],
+				]
+			: [
+					[PIBOLT_LATEST_RELEASE_URL, latestRedirect],
+					[
+						PIBOLT_LATEST_RELEASE_API,
+						() =>
+							api(PIBOLT_LATEST_RELEASE_API, (data) =>
+								piBoltVersionOfTag((data as { tag_name?: unknown } | null)?.tag_name),
+							),
+					],
+				];
+	const failures: string[] = [];
+	for (const [url, lookup] of sources) {
+		try {
+			const version = await lookup();
+			if (version) return { version };
+		} catch (error) {
+			failures.push(`${url}: ${formatVersionCheckError(error)}`);
+		}
+	}
+	throw new Error(failures.join("; "));
 }
 
 export async function getLatestPiVersion(
