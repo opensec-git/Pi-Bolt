@@ -46,6 +46,11 @@ const markCharRegex = /^\p{Mark}$/v;
 const terminalSpacingMarkRegex =
 	/^(?:[\p{Spacing_Mark}--[\u1734\u302E\u302F]]|[\u065F\u0F7F\u102B\u102C\u1031\u1033-\u1035\u1038\u103A-\u103E])+$/v;
 const rgiEmojiRegex = /^\p{RGI_Emoji}$/v;
+// RGI_Emoji restricted to a single code point: Emoji_Presentation without the regional indicators
+// (test/rgi-emoji-single-code-point.test.ts checks every code point). The first test of rgiEmojiRegex
+// builds its matcher for all of RGI_Emoji's sequences, which costs tens of millions of instructions
+// for each string width; this one costs about as much as the other property regexes.
+const singleCodePointEmojiRegex = /^(?![\u{1F1E6}-\u{1F1FF}])\p{Emoji_Presentation}$/u;
 
 // Cache for non-ASCII strings
 const WIDTH_CACHE_SIZE = 512;
@@ -174,6 +179,12 @@ function finalizeTruncatedResult(
 	return pad ? result + " ".repeat(Math.max(0, maxWidth - visibleWidth)) : result;
 }
 
+/** Whether a grapheme cluster matches `rgiEmojiRegex`. Exported for its test. */
+export function isRgiEmoji(segment: string): boolean {
+	const singleCodePoint = segment.length === (segment.codePointAt(0)! > 0xffff ? 2 : 1);
+	return singleCodePoint ? singleCodePointEmojiRegex.test(segment) : rgiEmojiRegex.test(segment);
+}
+
 /**
  * Calculate the terminal width of a single grapheme cluster.
  * Based on code from the string-width library, but includes a possible-emoji
@@ -197,7 +208,7 @@ function graphemeWidth(segment: string): number {
 	}
 
 	// Emoji check with pre-filter
-	if (couldBeEmoji(segment) && rgiEmojiRegex.test(segment)) {
+	if (couldBeEmoji(segment) && isRgiEmoji(segment)) {
 		return 2;
 	}
 
