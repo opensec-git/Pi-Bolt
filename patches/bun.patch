@@ -16974,3 +16974,70 @@ index 8c4730aa..86887891 100644
 -- 
 2.54.0 (Apple Git-157)
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Sun, 25 Oct 2026 07:57:09 +0530
+Subject: [PATCH] Heap: a batch run starts with a 48 MB collection allowance
+
+A static heap's first collection allowance is capped at 12 MB (macOS) / 16 MB (Linux) so that an interactive
+session's peak memory stays low. `pi -p` allocates just over 12 MB on macOS, so every such run made one eden
+collection right before it exited (BUN_JSC_logGC: "bytes allocated this cycle: 12.5 MB exceed bytes allowed:
+12 MB"), with its marking threads, for memory that the exit gives back a moment later.
+
+A run whose standard input or standard output is not a terminal (a pipe or a file: a script, an editor or another
+agent driving it; Pi's own rule for print mode) now starts with 48 MB (BUN_GC_BATCH_BUDGET_MB; 0 = the cap as
+before). After its first full collection the allowance is sized from the live heap as before, so a long rpc or
+`-p --session` run is paced as before after that. Interactive runs (both ends a terminal) keep 12/16 MB.
+
+Measured on an M5 (benchmark.py headless, 15 interleaved runs, same binary with BUN_GC_BATCH_BUDGET_MB=0 as the
+baseline, twice): `pi -p` instructions 247 / 246 M -> 225 M (-9%), CPU 23 -> 20 ms, peak footprint 23 MB in all
+three (the eden collection freed nothing the process gave back before exiting); interactive unchanged.
+This is a memory-for-CPU trade in principle (garbage up to 48 MB may stay until the first collection); in `pi -p`
+the peak did not move.
+---
+ src/jsc/VirtualMachine.rs | 25 +++++++++++++++++++++++++
+ 1 file changed, 25 insertions(+)
+
+diff --git a/src/jsc/VirtualMachine.rs b/src/jsc/VirtualMachine.rs
+index 8688789155..eac0b00f73 100644
+--- a/src/jsc/VirtualMachine.rs
++++ b/src/jsc/VirtualMachine.rs
+@@ -1482,6 +1482,16 @@ impl VirtualMachine {
+             const STATIC_HEAP_BUDGET: usize = 16 * 1024 * 1024;
+             if Bun__AOTImage__isMapped() {
+                 budget = budget.min(STATIC_HEAP_BUDGET);
++                // A run whose standard input or output is not a terminal (a pipe, a file: a script, an editor or another
++                // agent driving it) is a batch run, short or serving requests, never one somebody watches the memory of
++                // between prompts: it starts with a larger allowance, `BUN_GC_BATCH_BUDGET_MB` (default 48; 0 = as
++                // above). After the first full collection the allowance is sized from the live heap as before. Pi
++                // decides the same way between its TUI and print mode (stdin or stdout not a terminal).
++                let batch_mb = batch_budget_mb_from_env();
++                // SAFETY: isatty on the standard descriptors has no preconditions.
++                if batch_mb > 0 && unsafe { libc::isatty(0) == 0 || libc::isatty(1) == 0 } {
++                    budget = batch_mb * 1024 * 1024;
++                }
+             }
+         }
+         if budget > MIN_BUDGET {
+@@ -7726,3 +7736,18 @@ impl Drop for ContextScope<'_> {
+         }
+     }
+ }
++
++/// `BUN_GC_BATCH_BUDGET_MB`: the first collection allowance of a batch run (`let_heap_take_initial_module_graph`); 0 = none.
++#[cfg(any(target_os = "macos", target_os = "linux"))]
++fn batch_budget_mb_from_env() -> usize {
++    // SAFETY: a NUL-terminated name; read once at start-up on the JS thread.
++    let value = unsafe { libc::getenv(c"BUN_GC_BATCH_BUDGET_MB".as_ptr()) };
++    if value.is_null() {
++        return 48;
++    }
++    // SAFETY: getenv returns a NUL-terminated string that lives until the environment changes.
++    let bytes = unsafe { core::ffi::CStr::from_ptr(value) }.to_bytes();
++    bun_core::fmt::parse_int::<usize>(bun_core::strings::trim(bytes, b" "), 10)
++        .unwrap_or(0)
++        .min(1024)
++}
+-- 
+2.54.0 (Apple Git-157)
+
