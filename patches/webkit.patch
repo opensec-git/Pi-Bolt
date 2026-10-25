@@ -15655,3 +15655,236 @@ index 785bc51..f447eb2 100644
 -- 
 2.54.0 (Apple Git-157)
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Sun, 25 Oct 2026 08:48:56 +0000
+Subject: [PATCH] AOT: a method that strings and arrays both have is the
+ string's or the array's, as `this` is
+
+A call such as `x.includes(y)`, `x.indexOf(y)` or `x.slice(a, b)` on an `x` whose type the compiler
+does not know was made as a generic call. Graph::findBuiltinsCalled() takes a method for a built-in
+only when exactly one kind of receiver has a method of that name, and String.prototype and
+Array.prototype both have these. So the call read the method through the property cache and entered
+the host function through the native call trampoline.
+
+Now both are tried. For a string, the call is lowered as for a receiver known to be a string, and for
+an array as the realm makes it, as for a receiver known to be an array (lowerCallOfBuiltin(), with
+the same checks of `this` and of the arguments). For anything else (a String object, an array of a
+subclass, a typed array, an object with a method of its own) the call is made as before. The methods
+are the frozen intrinsics (useImmutableIntrinsics), as for a receiver of one kind.
+
+Instructions per call (AOT, JIT off, receiver alternating between strings and arrays): includes
+539 -> 353, indexOf 502 -> 354, slice 583 -> 460.
+
+Option useAOTBuiltinsOfStringOrArray (build time, default on).
+---
+ Source/JavaScriptCore/aot/AOTBuiltins.cpp     | 15 +++++++++++
+ Source/JavaScriptCore/aot/AOTBuiltins.h       |  3 +++
+ Source/JavaScriptCore/aot/AOTGraph.cpp        | 14 +++++++++-
+ Source/JavaScriptCore/aot/AOTGraph.h          |  2 ++
+ .../JavaScriptCore/aot/AOTLowerBuiltins.cpp   | 24 ++++++++++++++---
+ Source/JavaScriptCore/aot/AOTLowerCalls.cpp   | 27 +++++++++++++++++++
+ Source/JavaScriptCore/aot/AOTLowering.h       |  1 +
+ Source/JavaScriptCore/runtime/OptionsList.h   |  1 +
+ 8 files changed, 82 insertions(+), 5 deletions(-)
+
+diff --git a/Source/JavaScriptCore/aot/AOTBuiltins.cpp b/Source/JavaScriptCore/aot/AOTBuiltins.cpp
+index b0912a8..7cee018 100644
+--- a/Source/JavaScriptCore/aot/AOTBuiltins.cpp
++++ b/Source/JavaScriptCore/aot/AOTBuiltins.cpp
+@@ -338,6 +338,21 @@ Receiver receiverLikelyToHave(Type type, const StringImpl& name)
+     return found;
+ }
+ 
++bool isStringOrArrayLikelyToHave(Type type, const StringImpl& name)
++{
++    unsigned found = 0;
++    for (Receiver receiver : receiversThereAre) {
++        if (receiver == Receiver::Number || !mayBe(type, typeOf(receiver)))
++            continue;
++        if (builtinWithNumber(intrinsicFoundOn(receiver, name)) == Builtin::None)
++            continue;
++        if (receiver != Receiver::String && receiver != Receiver::Array)
++            return false;
++        ++found;
++    }
++    return found == 2;
++}
++
+ } } // namespace JSC::AOT
+ 
+ #endif // ENABLE(FTL_JIT)
+diff --git a/Source/JavaScriptCore/aot/AOTBuiltins.h b/Source/JavaScriptCore/aot/AOTBuiltins.h
+index 2c52c9f..5657400 100644
+--- a/Source/JavaScriptCore/aot/AOTBuiltins.h
++++ b/Source/JavaScriptCore/aot/AOTBuiltins.h
+@@ -98,6 +98,9 @@ Receiver receiverOfType(Type);
+ // Math.floor.
+ Receiver requiredReceiver(unsigned intrinsic);
+ Receiver receiverLikelyToHave(Type, const StringImpl& name);
++// Where receiverLikelyToHave() finds two, a string and an array (`includes`, `indexOf`, `slice`): the method is the one or the other, as `this` is
++// a string or an array as the realm makes them.
++bool isStringOrArrayLikelyToHave(Type, const StringImpl& name);
+ 
+ } } // namespace JSC::AOT
+ 
+diff --git a/Source/JavaScriptCore/aot/AOTGraph.cpp b/Source/JavaScriptCore/aot/AOTGraph.cpp
+index 3fd8029..e0aff7d 100644
+--- a/Source/JavaScriptCore/aot/AOTGraph.cpp
++++ b/Source/JavaScriptCore/aot/AOTGraph.cpp
+@@ -857,8 +857,20 @@ void Graph::findBuiltinsCalled()
+                     receiver = Receiver::Array;
+                 else if (Receiver hinted = tag ? static_cast<Receiver>(TypeTable::shared()->receiverHintOf(tag)) : Receiver::None; hinted != Receiver::None && hinted != Receiver::Number && mayBe(base->type, typeOf(hinted)))
+                     receiver = hinted;
+-                else if (!tag || !TypeTable::shared()->isShape(tag))
++                else if (!tag || !TypeTable::shared()->isShape(tag)) {
+                     receiver = receiverLikelyToHave(base->type, name);
++                    // A string or an array: the one or the other, whichever `this` turns out to be.
++                    if (receiver == Receiver::None && Options::useAOTBuiltinsOfStringOrArray() && isStringOrArrayLikelyToHave(base->type, name)) {
++                        unsigned number = intrinsicFoundOn(Receiver::String, name);
++                        unsigned other = intrinsicFoundOn(Receiver::Array, name);
++                        if (number && other && builtinWithNumber(number) != Builtin::None && builtinWithNumber(other) != Builtin::None) {
++                            node->builtinCalled = callee->builtinCalled = number;
++                            node->receiverOfBuiltin = callee->receiverOfBuiltin = static_cast<uint8_t>(Receiver::String);
++                            node->otherBuiltinCalled = callee->otherBuiltinCalled = other;
++                        }
++                        continue;
++                    }
++                }
+             }
+             if (receiver == Receiver::None)
+                 continue;
+diff --git a/Source/JavaScriptCore/aot/AOTGraph.h b/Source/JavaScriptCore/aot/AOTGraph.h
+index 43a9411..9287094 100644
+--- a/Source/JavaScriptCore/aot/AOTGraph.h
++++ b/Source/JavaScriptCore/aot/AOTGraph.h
+@@ -254,6 +254,8 @@ struct Node {
+     // Receiver (none means any receiver). The same fields are set on the read of the callee. See Graph::findBuiltinsCalled().
+     uint16_t builtinCalled { 0 };
+     uint8_t receiverOfBuiltin { 0 };
++    // And where the receiver may be either of two kinds (a string or an array): the built-in function for the other, Receiver::Array.
++    uint16_t otherBuiltinCalled { 0 };
+     bool structureIsChecked { false }; // For a property access guard: another guard has already checked the base's Structure.
+     bool slotIsPlain { false }; // For a property access guard: another guard has already checked SlotIsPlain.
+     bool calleeIsChecked { false };
+diff --git a/Source/JavaScriptCore/aot/AOTLowerBuiltins.cpp b/Source/JavaScriptCore/aot/AOTLowerBuiltins.cpp
+index 6e1211c..8f40f9d 100644
+--- a/Source/JavaScriptCore/aot/AOTLowerBuiltins.cpp
++++ b/Source/JavaScriptCore/aot/AOTLowerBuiltins.cpp
+@@ -103,24 +103,40 @@ LValue Lowering::isSuchAReceiver(Node* read, Node* baseNode, LValue base, Receiv
+ void Lowering::lowerReadOfBuiltin(Node* node, Node* baseNode)
+ {
+     unsigned number = std::exchange(node->builtinCalled, 0);
++    unsigned other = std::exchange(node->otherBuiltinCalled, 0);
++    LValue base = lowJSValue(baseNode);
+     LValue known = m_out.load64(m_instance, m_heaps.AOTInstance_intrinsics[number]);
+-    LValue isSuch = isSuchAReceiver(node, baseNode, lowJSValue(baseNode), static_cast<Receiver>(node->receiverOfBuiltin));
++    LValue isSuch = isSuchAReceiver(node, baseNode, base, static_cast<Receiver>(node->receiverOfBuiltin));
+     m_receiverChecks.set(node, isSuch);
++    // A string or an array (Graph::findBuiltinsCalled()): the array's method if it is not the one but the other. (Both checks are
++    // made here, where the call comes after them.)
++    LValue isOther = other ? isSuchAReceiver(node, baseNode, base, Receiver::Array) : nullptr;
++    LValue otherKnown = other ? m_out.load64(m_instance, m_heaps.AOTInstance_intrinsics[other]) : nullptr;
++    if (isOther)
++        m_otherReceiverChecks.set(node, isOther);
+     if (!isSuch)
+         setJSValue(node, known);
+     else {
+         LBasicBlock otherwise = m_out.newBlock();
+         LBasicBlock continuation = m_out.newBlock();
+-        ValueFromBlock quick = m_out.anchor(known);
++        Vector<ValueFromBlock, 3> values;
++        values.append(m_out.anchor(known));
+         m_out.branch(isSuch, unsure(continuation), unsure(otherwise));
+         m_out.appendTo(otherwise);
++        if (isOther) {
++            LBasicBlock neither = m_out.newBlock();
++            values.append(m_out.anchor(otherKnown));
++            m_out.branch(isOther, unsure(continuation), unsure(neither));
++            m_out.appendTo(neither);
++        }
+         lowerGetById(node);
+-        ValueFromBlock found = m_out.anchor(lowJSValue(node));
++        values.append(m_out.anchor(lowJSValue(node)));
+         m_out.jump(continuation);
+         m_out.appendTo(continuation);
+-        setJSValue(node, m_out.phi(Int64, quick, found));
++        setJSValue(node, m_out.phi(Int64, values));
+     }
+     node->builtinCalled = number;
++    node->otherBuiltinCalled = other;
+ }
+ 
+ // False: nothing has been done. Otherwise, if `afterwards` is left null, the call has been dealt with. If not, it has been if what it is made on and with is what it takes, with
+diff --git a/Source/JavaScriptCore/aot/AOTLowerCalls.cpp b/Source/JavaScriptCore/aot/AOTLowerCalls.cpp
+index 4c9b5bd..2bcd7fe 100644
+--- a/Source/JavaScriptCore/aot/AOTLowerCalls.cpp
++++ b/Source/JavaScriptCore/aot/AOTLowerCalls.cpp
+@@ -296,6 +296,27 @@ void Lowering::lowerCall(Node* node, VirtualRegister calleeRegister, unsigned ar
+         // (What comes after a call in tail position returns what it returned.)
+         mode = CallMode::Call;
+     }
++    // Or the array's, where `this` may be a string or an array (Graph::findBuiltinsCalled()): where the string's does not apply.
++    LBasicBlock afterOther = nullptr;
++    Vector<ValueFromBlock, 2> resultsOfOther;
++    if (node->otherBuiltinCalled && mode != CallMode::Construct) {
++        auto isArray = m_otherReceiverChecks.find(calleeNode);
++        auto isString = m_receiverChecks.find(calleeNode);
++        if (isArray != m_otherReceiverChecks.end() && isString != m_receiverChecks.end()) {
++            unsigned number = std::exchange(node->builtinCalled, node->otherBuiltinCalled);
++            uint8_t receiver = std::exchange(node->receiverOfBuiltin, static_cast<uint8_t>(Receiver::Array));
++            LValue stringCheck = std::exchange(isString->value, isArray->value);
++            bool handled = lowerCallOfBuiltin(node, calleeNode, argc, argv, arguments, hasResult, afterOther, resultsOfOther);
++            m_receiverChecks.find(calleeNode)->value = stringCheck;
++            node->builtinCalled = number;
++            node->receiverOfBuiltin = receiver;
++            if (handled) {
++                // (`this` is checked, so there is always the call to make where it is neither.)
++                RELEASE_ASSERT(afterOther);
++                mode = CallMode::Call;
++            }
++        }
++    }
+     // What the callee was found as says what it may well be.
+     StubIntrinsic intrinsic = StubIntrinsic::None;
+     if (mode != CallMode::Construct && calleeNode->isBytecode(op_get_by_id))
+@@ -310,6 +331,12 @@ void Lowering::lowerCall(Node* node, VirtualRegister calleeRegister, unsigned ar
+         mode = CallMode::Call;
+     }
+     LValue result = emitCall(node, callee, arguments, mode, intrinsic);
++    if (afterOther) {
++        resultsOfOther.append(m_out.anchor(result));
++        m_out.jump(afterOther);
++        m_out.appendTo(afterOther);
++        result = m_out.phi(Int64, resultsOfOther);
++    }
+     if (afterBuiltin) {
+         resultsOfBuiltin.append(m_out.anchor(result));
+         m_out.jump(afterBuiltin);
+diff --git a/Source/JavaScriptCore/aot/AOTLowering.h b/Source/JavaScriptCore/aot/AOTLowering.h
+index 17ad851..38fba80 100644
+--- a/Source/JavaScriptCore/aot/AOTLowering.h
++++ b/Source/JavaScriptCore/aot/AOTLowering.h
+@@ -431,6 +431,7 @@ private:
+     void lowerReadOfBuiltin(Node*, Node* baseNode);
+     bool lowerCallOfBuiltin(Node*, Node* calleeNode, unsigned argc, unsigned argv, const Arguments&, bool hasResult, LBasicBlock& afterwards, Vector<ValueFromBlock, 2>& results);
+     UncheckedKeyHashMap<Node*, LValue> m_receiverChecks; // Result of isSuchAReceiver(), keyed by the read of the callee.
++    UncheckedKeyHashMap<Node*, LValue> m_otherReceiverChecks; // The same for Node::otherBuiltinCalled: whether `this` is an array.
+ 
+     Graph& m_graph;
+ 
+diff --git a/Source/JavaScriptCore/runtime/OptionsList.h b/Source/JavaScriptCore/runtime/OptionsList.h
+index 812cfda..194482c 100644
+--- a/Source/JavaScriptCore/runtime/OptionsList.h
++++ b/Source/JavaScriptCore/runtime/OptionsList.h
+@@ -181,6 +181,7 @@ bool hasCapacityToUseLargeGigacage();
+     v(Bool, useAOTVariableNarrowing, true, Normal, "In the fast copy of a loop, a read of a closure or module variable is taken for what the program writes to it, behind a check (which leaves for the generic copy), rather than for that or the undefined or hole it starts as: `i < N` with a module constant N is then a compare of numbers."_s) \
+     v(Unsigned, maximumAOTMethodCandidates, 6, Normal, "In the fast copy of a loop, a method call whose name the program gives to up to this many functions is made part of the loop with a check for each, in turn; one that is none of them leaves for the generic copy, which makes the call. 1: only names given to one function (useAOTMethodInliningByName)."_s) \
+     v(Unsigned, maximumAOTMethodCandidatesBytecodeCost, 160, Normal, "The most bytecode the functions taken for one method call may have between them (maximumAOTMethodCandidates)."_s) \
++    v(Bool, useAOTBuiltinsOfStringOrArray, true, Normal, "A method call on what may be a string or an array, of a name both have a built-in method of (`includes`, `indexOf`, `slice`): the string's when `this` is a string, the array's when it is an array as the realm makes it, as for a receiver of one kind; otherwise the call is made. Build-time option."_s) \
+     v(Bool, useAOTMethodInliningByName, true, Normal, "A method call whose callee is not known (`base.name(...)`) is taken for the one function the program stores under that name, if there is exactly one, and inlined behind a check that the callee is that function; otherwise the call is made. For programs without a type table."_s) \
+     v(Unsigned, maximumAOTCandidateBytecodeSize, 262144, Normal, "The AOT compiler leaves a function whose bytecode is bigger than this many bytes to the other tiers: the back end's time and memory grow faster than the size (a module that is one big literal: minutes, tens of GB), and such a function is data, not a hot path. A program that goes without its bytecode (omitBytecodeFromStaticHeap) has no other tier, so its build stops with a message instead."_s) \
+     v(Unsigned, aotLoopSplittingPolicy, 3, Normal, "Which loops useAOTLoopSplitting applies to. 1: all. 2: loops that contain something the fast copy improves (arithmetic, indexed element accesses, a call it can elide). 3: loops that make no calls. 4: loops that satisfy both 2 and 3. 5: loops that make no calls, or that contain a call the fast copy elides or an indexed element access."_s) \
+-- 
+2.54.0 (Apple Git-157)
+
