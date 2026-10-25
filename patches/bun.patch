@@ -17005,13 +17005,13 @@ clearing may come earlier or later, as with any change of GC timing); interprete
 collection let age out now ages out at the 2-minute one (the settle collection sees the burst's code as recently run,
 so it keeps it), which in the measurement below was within the memory noise.
 ---
- src/jsc/GarbageCollectionController.rs | 168 ++++++++++++++++++++++++-
- src/jsc/VM.rs                          |   7 ++
+ src/jsc/GarbageCollectionController.rs | 170 ++++++++++++++++++++++++-
+ src/jsc/VM.rs                          |   7 +
  src/jsc/bindings/bindings.cpp          |  13 ++
- 3 files changed, 184 insertions(+), 4 deletions(-)
+ 3 files changed, 186 insertions(+), 4 deletions(-)
 
 diff --git a/src/jsc/GarbageCollectionController.rs b/src/jsc/GarbageCollectionController.rs
-index 35eddf7ee6..314234bddd 100644
+index 35eddf7ee6..f9341b80c8 100644
 --- a/src/jsc/GarbageCollectionController.rs
 +++ b/src/jsc/GarbageCollectionController.rs
 @@ -1,4 +1,4 @@
@@ -17087,7 +17087,7 @@ index 35eddf7ee6..314234bddd 100644
      }
  
      fn arm_self(&self, vm: *mut VirtualMachine, ms: i32) {
-@@ -228,6 +249,109 @@ impl GarbageCollectionController {
+@@ -228,6 +249,111 @@ impl GarbageCollectionController {
          );
      }
  
@@ -17173,9 +17173,9 @@ index 35eddf7ee6..314234bddd 100644
 +        false
 +    }
 +
-+    /// The settle collection, which stands for the first idle full collection: the quiet counts from that one's due, and the
-+    /// timer parks until the program allocates again or the next one is due (2 min, then 10 min, as before; skipped as
-+    /// before when the heap is as this one left it and no code can age).
++    /// The settle collection, which stands for the first idle full collection: the timer parks until the program allocates
++    /// again or the next one is due, after as much quiet as before counted from now (2 min, then 10 min; skipped as before
++    /// when the heap is as this one left it and no code can age).
 +    fn settle(&self, vm: *mut VirtualMachine) {
 +        // SAFETY: JS thread; the per-thread VM is live while its event loop runs.
 +        let jsc = unsafe { &*vm }.jsc_vm();
@@ -17189,15 +17189,17 @@ index 35eddf7ee6..314234bddd 100644
 +        let dues = self.idle_gc_at_ms.get();
 +        self.idle_quiet_ms.set(dues[0]);
 +        self.parked.set(true);
++        // (Armed for the whole of the next due: the quiet then reads one first due more than has passed, which only moves
++        // the last one, 10 min, that much earlier.)
 +        if let Some(due) = dues.into_iter().find(|&due| due > dues[0]) {
-+            self.arm_self(vm, (due - dues[0]).max(1000).min(i32::MAX as u32) as i32);
++            self.arm_self(vm, due.max(1000).min(i32::MAX as u32) as i32);
 +        }
 +    }
 +
      pub(crate) fn perform_gc(&self, idle_full: bool) {
          if self.disabled.get() {
              return;
-@@ -236,6 +360,7 @@ impl GarbageCollectionController {
+@@ -236,6 +362,7 @@ impl GarbageCollectionController {
          if idle_full {
              self.idle_full_allocated_mark
                  .set(Some(vm.total_bytes_allocated()));
@@ -17205,7 +17207,7 @@ index 35eddf7ee6..314234bddd 100644
              vm.collect_async_idle();
              // Only a forced collect returns the large pages mimalloc keeps for the next burst (oven-sh/mimalloc#52).
              bun_core::Global::mimalloc_cleanup(true);
-@@ -260,6 +385,9 @@ impl GarbageCollectionController {
+@@ -260,6 +387,9 @@ impl GarbageCollectionController {
          if this.disabled.get() {
              return;
          }
@@ -17215,7 +17217,7 @@ index 35eddf7ee6..314234bddd 100644
          this.parked.set(false);
          let released = this.idle_release_pending.replace(false);
          if released {
-@@ -331,7 +459,7 @@ impl GarbageCollectionController {
+@@ -331,7 +461,7 @@ impl GarbageCollectionController {
              Some(ms) => this.repeat_interval().min(ms.max(1000) as i32),
              None => this.repeat_interval(),
          };
@@ -17224,7 +17226,7 @@ index 35eddf7ee6..314234bddd 100644
      }
  }
  
-@@ -364,3 +492,35 @@ fn default_fast_interval_ms() -> u64 {
+@@ -364,3 +494,35 @@ fn default_fast_interval_ms() -> u64 {
  fn quiet_ticks_until_slow(fast_interval_ms: i32) -> u8 {
      (30_000 / fast_interval_ms.max(1000)).clamp(1, 30) as u8
  }
