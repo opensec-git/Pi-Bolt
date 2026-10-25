@@ -6,6 +6,7 @@ import { Markdown, type MarkdownTheme } from "../src/components/markdown.ts";
 import { resetCapabilitiesCache, setCapabilities } from "../src/terminal-image.ts";
 import type { Component, TUI } from "../src/tui.ts";
 import { TuiMainScreen } from "../src/tui-main-screen.ts";
+import { visibleWidth } from "../src/utils.ts";
 import { defaultMarkdownTheme } from "./test-themes.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
@@ -228,7 +229,7 @@ describe("Markdown component", () => {
 			assert.deepStrictEqual(lines, ["- [ ] beep", "- [x] boop"]);
 		});
 
-		it("shades code blocks without fence lines or trailing spaces when the theme has codeBlockBg", () => {
+		it("shades code blocks to the full width without fence lines when the theme has codeBlockBg", () => {
 			const theme: MarkdownTheme = {
 				...defaultMarkdownTheme,
 				codeBlockBg: (text) => `\x1b[48;5;236m${text}\x1b[49m`,
@@ -242,8 +243,9 @@ describe("Markdown component", () => {
 				plain.map((line) => line.trimEnd()),
 				["ts", "  const a = 1;", "      nested();"],
 			);
-			// Shaded to the end of the text, then plain padding to the width; nothing shaded past the text.
-			assert.match(rendered[1], /^\x1b\[48;5;236m {2}.*const a = 1;\x1b\[39m\x1b\[49m {2,}$/);
+			// Shaded to the width: the padding after the text is inside the shading.
+			assert.match(rendered[1], /^\x1b\[48;5;236m {2}.*const a = 1;\x1b\[39m {2,}\x1b\[49m$/);
+			for (const line of rendered) assert.strictEqual(visibleWidth(line), 40);
 		});
 
 		it("keeps the indent on wrapped lines of a shaded code block", () => {

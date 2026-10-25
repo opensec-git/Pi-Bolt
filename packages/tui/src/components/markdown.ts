@@ -1325,12 +1325,12 @@ export class Markdown implements Component {
 					: token.text.split("\n").map((codeLine: string) => this.theme.codeBlock(codeLine));
 				const shade = this.theme.codeBlockBg;
 				if (shade) {
-					// Each line is shaded up to the end of its text only, so copied code has no trailing spaces. Wrapped here,
-					// not by renderBlock(), so continuation lines keep the block's indent.
+					// Each line is shaded to the full width, so the block is one rectangle (and keeps its shape while a reply
+					// streams in). Wrapped here, not by renderBlock(), so continuation lines keep the block's indent.
+					const fill = (line: string) => line + " ".repeat(Math.max(0, width - visibleWidth(line)));
 					if (token.lang) {
-						// (Wrapped before it is shaded, as the code lines are: the padding after a short fragment stays unshaded.)
 						for (const label of this.wrapLine(this.theme.codeBlockBorder(token.lang), width)) {
-							lines.push(shade(label));
+							lines.push(shade(fill(label)));
 						}
 					}
 					const codeWidth = Math.max(1, width - visibleWidth(indent));
@@ -1350,7 +1350,7 @@ export class Markdown implements Component {
 									);
 								}
 							}
-							lines.push(shade(line));
+							lines.push(shade(fill(line)));
 						}
 					}
 				} else {

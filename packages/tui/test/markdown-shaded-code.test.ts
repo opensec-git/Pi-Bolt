@@ -6,8 +6,8 @@ import { type LiveLines, renderLiveLines } from "../src/tui.ts";
 import { applyBackgroundAround, getActiveBackgroundAnsi, visibleWidth } from "../src/utils.ts";
 import { defaultMarkdownTheme } from "./test-themes.ts";
 
-// Shaded code blocks (MarkdownTheme.codeBlockBg): each code line is drawn on the code block's background up to the end of its
-// text, without fence lines, and wrapped lines keep the block's indent. A reply streams into one Markdown component, which
+// Shaded code blocks (MarkdownTheme.codeBlockBg): each code line is drawn on the code block's background to the full width,
+// without fence lines, and wrapped lines keep the block's indent. A reply streams into one Markdown component, which
 // keeps what it rendered (blocks, wraps, inline tokens, live lines) from one chunk to the next; whatever happens in between
 // (a chunk, a resize, a theme change), what it shows must be what the same text renders to from nothing.
 
@@ -136,7 +136,7 @@ describe("Shaded code blocks", () => {
 		});
 	}
 
-	it("draws no fence lines and shades each line only to the end of its text", () => {
+	it("draws no fence lines and shades each line to the full width", () => {
 		Object.assign(palette, PALETTES[0]);
 		const source = "```ts\nconst a = 1;\n\n    nested();\n```\n\nafter";
 		const lines = new Markdown(source, 0, 0, shadedTheme).render(30);
@@ -146,11 +146,12 @@ describe("Shaded code blocks", () => {
 		for (const line of code) {
 			const end = line.indexOf("\x1b[49m");
 			assert.ok(end > 0);
-			// After the shading: only the padding to the width, unshaded.
-			assert.match(line.slice(end + "\x1b[49m".length), /^ *$/);
+			// The shading covers the whole width, padding included, and nothing comes after it.
+			assert.strictEqual(visibleWidth(line.slice(0, end)), 30);
+			assert.strictEqual(line.slice(end + "\x1b[49m".length), "");
 			assert.strictEqual(getActiveBackgroundAnsi(line), "");
 		}
-		assert.strictEqual(visibleWidth(code[2]!.slice(0, code[2]!.indexOf("\x1b[49m"))), 2); // the empty line: the indent
+		assert.strictEqual(visibleWidth(code[2]!.slice(0, code[2]!.indexOf("\x1b[49m"))), 30); // the empty line too
 	});
 
 	it("keeps the shading after a full reset from the highlighter", () => {
@@ -218,8 +219,9 @@ describe("Shaded code blocks", () => {
 			assert.strictEqual(shaded.length, 1);
 			const line = shaded[0]!;
 			const afterText = line.indexOf("short") + "short".length;
-			// The code's background up to the end of its text, the surrounding one from there to the end of the line.
+			// The code's background over its text and the padding after it; the surrounding one around the block.
 			assert.strictEqual(getActiveBackgroundAnsi(line.slice(0, afterText)), palette.bg);
+			assert.strictEqual(getActiveBackgroundAnsi(line.slice(0, afterText + 5)), palette.bg);
 			assert.strictEqual(getActiveBackgroundAnsi(line.slice(0, line.lastIndexOf("\x1b[49m"))), palette.outer);
 			assert.strictEqual(visibleWidth(line), 30);
 		}
@@ -264,7 +266,7 @@ describe("Shaded code blocks", () => {
 		}
 	});
 
-	it("wraps a long language label before shading it", () => {
+	it("wraps a long language label and shades each part to the full width", () => {
 		Object.assign(palette, PALETTES[0]);
 		const lines = new Markdown("```ts title=a-long-title\ncode\n```", 0, 0, shadedTheme).render(12);
 		const labels = lines.slice(
@@ -274,8 +276,8 @@ describe("Shaded code blocks", () => {
 		assert.ok(labels.length > 1);
 		for (const line of labels) {
 			const end = line.lastIndexOf("\x1b[49m");
-			assert.match(line.slice(end + "\x1b[49m".length), /^ *$/);
-			assert.ok(!/ $/.test(line.slice(0, end).replace(/\x1b\[[0-9;]*m/g, "")), JSON.stringify(line));
+			assert.strictEqual(line.slice(end + "\x1b[49m".length), "");
+			assert.strictEqual(visibleWidth(line.slice(0, end)), 12, JSON.stringify(line));
 		}
 	});
 
