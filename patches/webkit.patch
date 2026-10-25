@@ -15888,3 +15888,99 @@ index 812cfda..194482c 100644
 -- 
 2.54.0 (Apple Git-157)
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <323596076+opensec-intelligence@users.noreply.github.com>
+Date: Sun, 25 Oct 2026 09:30:00 +0000
+Subject: [PATCH] [JSC] Linux: map a new MarkedBlock's pages in one call
+
+Linux maps fresh anonymous memory one 4 KB page per fault. A new 16 KB
+MarkedBlock then costs a page fault for each of its pages as cells are
+first allocated in them (or as the warm-up thread touches them). Cells
+are handed out in order and a block is nearly always filled before the
+next one is made, so its pages become resident anyway:
+MADV_POPULATE_WRITE maps them in one call, in MarkedBlock::tryCreate()
+and in the warm-up thread's makeResident().
+
+Kernels before 5.14 answer EINVAL and the pages fault in as before.
+Pages already resident (memory the allocator reuses, a warmed-up block)
+are left as they are. Option populateNewMarkedBlocks (default true)
+turns it off.
+---
+diff --git a/Source/JavaScriptCore/heap/FastMallocAlignedMemoryAllocator.cpp b/Source/JavaScriptCore/heap/FastMallocAlignedMemoryAllocator.cpp
+index d433a5d..568acfd 100644
+--- a/Source/JavaScriptCore/heap/FastMallocAlignedMemoryAllocator.cpp
++++ b/Source/JavaScriptCore/heap/FastMallocAlignedMemoryAllocator.cpp
+@@ -38,6 +38,13 @@
+ #include <wtf/StdLibExtras.h>
+ #include <wtf/TZoneMallocInlines.h>
+ #include <wtf/Vector.h>
++
++#if OS(LINUX)
++#include <sys/mman.h>
++#ifndef MADV_POPULATE_WRITE
++#define MADV_POPULATE_WRITE 23
++#endif
++#endif
+ 
+ namespace JSC {
+ 
+@@ -197,6 +204,11 @@
+ 
+     static void makeResident(void* block)
+     {
++#if OS(LINUX)
++        // One call maps the whole block (Linux 5.14+); an earlier kernel answers EINVAL and the stores below fault it in.
++        if (Options::populateNewMarkedBlocks() && !madvise(block, MarkedBlock::blockSize, MADV_POPULATE_WRITE))
++            return;
++#endif
+         // One store per page is what takes the fault. Striding by the real page size rather than by
+         // the smallest a supported system could have avoids repeating the store within a page.
+         size_t pageSize = WTF::pageSize();
+diff --git a/Source/JavaScriptCore/heap/MarkedBlock.cpp b/Source/JavaScriptCore/heap/MarkedBlock.cpp
+index 962a423..7e7103f 100644
+--- a/Source/JavaScriptCore/heap/MarkedBlock.cpp
++++ b/Source/JavaScriptCore/heap/MarkedBlock.cpp
+@@ -38,6 +38,13 @@
+ #include <wtf/PageBlock.h>
+ #include <wtf/Scope.h>
+ 
++#if OS(LINUX)
++#include <sys/mman.h>
++#ifndef MADV_POPULATE_WRITE
++#define MADV_POPULATE_WRITE 23
++#endif
++#endif
++
+ #if PLATFORM(COCOA)
+ #include <wtf/cocoa/CrashReporter.h>
+ #endif
+@@ -66,6 +73,14 @@
+     void* blockSpace = alignedMemoryAllocator->tryAllocateAlignedMemory(blockSize, blockSize);
+     if (!blockSpace)
+         return nullptr;
++#if OS(LINUX)
++    // Linux maps fresh anonymous memory one 4 KB page per fault, so a new block costs a fault for each page its cells
++    // reach, each a trap into the kernel. Cells are handed out in order and a block is nearly always filled before the next
++    // one is made, so its pages become resident anyway: one call maps them all at once. Kernels before 5.14 answer EINVAL
++    // and the pages fault in as before; pages already resident (memory the allocator reuses) are left as they are.
++    if (Options::populateNewMarkedBlocks())
++        madvise(blockSpace, blockSize, MADV_POPULATE_WRITE);
++#endif
+     if (scribbleFreeCells())
+         scribble(blockSpace, blockSize);
+     return new Handle(heap, alignedMemoryAllocator, blockSpace);
+diff --git a/Source/JavaScriptCore/runtime/OptionsList.h b/Source/JavaScriptCore/runtime/OptionsList.h
+index 194482c..ee461bb 100644
+--- a/Source/JavaScriptCore/runtime/OptionsList.h
++++ b/Source/JavaScriptCore/runtime/OptionsList.h
+@@ -345,6 +345,7 @@
+     v(Unsigned, warmUpMarkedBlockStartAfterBlocks, 64, Normal, "how many MarkedBlocks the process allocates before the helper thread starts; a program that stops before that never creates it"_s) \
+     v(Double, warmUpMarkedBlockIdleTimeout, 10, Normal, "seconds without a MarkedBlock request before the helper thread releases what it is holding and shuts down"_s) \
+     v(Bool, scribbleFreeCells, false, Normal, nullptr) \
++    v(Bool, populateNewMarkedBlocks, true, Normal, "Linux: map a new MarkedBlock's pages in one call (MADV_POPULATE_WRITE) rather than one page fault per page as its cells are first used"_s) \
+     v(Bool, decommitUnusedMarkedBlockPages, true, Normal, "after sweeping a MarkedBlock, return its interior OS pages that hold no live cell to the OS (only where OS pages are smaller than a MarkedBlock)") \
+     v(Bool, evacuateAuxiliaryBlocksAfterEveryFullCollection, false, Normal, "testing: evacuate every Auxiliary block after each full collection, wherever the mutator happens to be, and scribble the old copies"_s) \
+     v(Bool, poisonDecommittedMarkedBlockPages, false, Normal, "testing: make any read of a decommitted MarkedBlock page before the block's next sweep to a free list fail (ASan poison; without ASan a 0xbd fill)"_s) \
+-- 
+2.54.0 (Apple Git-157)
+
