@@ -1220,9 +1220,7 @@ export abstract class TuiBase extends Container implements TUI {
 	private renderRequested = false;
 	private immediateRenderScheduled = false;
 	private renderTimer: NodeJS.Timeout | undefined;
-	/** Frames drawn so far: a frame asked for with requestRenderWithin() is not needed when one was drawn since. */
-	private framesDrawn = 0;
-	/** The timer of requestRenderWithin(). */
+	/** The timer of requestRenderWithin(), until a frame is drawn: that frame draws the changes it was set for. */
 	private deferredRenderTimer: NodeJS.Timeout | undefined;
 	private lastRenderAt = 0;
 	private static readonly MIN_RENDER_INTERVAL_MS = 16;
@@ -1281,7 +1279,10 @@ export abstract class TuiBase extends Container implements TUI {
 	/** Render a frame; with PI_TTI_TRACE set, record when the first frames were handed to the terminal. */
 	private renderFrame(): void {
 		const start = renderClock();
-		this.framesDrawn++;
+		if (this.deferredRenderTimer) {
+			clearTimeout(this.deferredRenderTimer);
+			this.deferredRenderTimer = undefined;
+		}
 		this.doRender();
 		this.lastFrameDuration = this.nextFrameUnspaced ? 0 : renderClock() - start;
 		this.nextFrameUnspaced = false;
@@ -1810,10 +1811,9 @@ export abstract class TuiBase extends Container implements TUI {
 	requestRenderWithin(delayMs: number): void {
 		// (A frame asked for already draws the change, and so does one asked for within the time already.)
 		if (this.stopped || this.renderRequested || this.deferredRenderTimer) return;
-		const drawn = this.framesDrawn;
 		this.deferredRenderTimer = setTimeout(() => {
 			this.deferredRenderTimer = undefined;
-			if (this.framesDrawn === drawn) this.requestRender();
+			this.requestRender();
 		}, delayMs);
 	}
 

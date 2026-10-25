@@ -156,6 +156,26 @@ describe("loader frames", () => {
 		tui.stop();
 	});
 
+	it("draws a change asked for after a frame that met an earlier request", async () => {
+		const { tui, recorder } = setup();
+		tui.start();
+		await advance(20);
+		recorder.starts = [];
+		// One loader's step asks for a frame within 40 ms; a frame drawn for something else meets it 10 ms later; another
+		// loader's step, 10 ms after that, still gets a frame of its own.
+		tui.requestRenderWithin(40);
+		await advance(10);
+		tui.requestRender();
+		await advance(10);
+		const framesBefore = recorder.starts.length;
+		const asked = now;
+		tui.requestRenderWithin(40);
+		await advance(100);
+		assert.ok(recorder.starts.length > framesBefore, "no frame after the second request");
+		assert.ok(recorder.starts[recorder.starts.length - 1]! >= asked + 40);
+		tui.stop();
+	});
+
 	it("draws a message change at once, and asks for no frame after stop()", async () => {
 		const { tui, recorder } = setup();
 		tui.start();
