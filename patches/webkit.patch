@@ -15567,3 +15567,91 @@ index 467d8f6c19..61ebc19424 100644
 -- 
 2.54.0 (Apple Git-157)
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Dylan Conway <dylan.conway567@gmail.com>
+Date: Sat, 24 Oct 2026 03:53:54 +0000
+Subject: [PATCH] [JSC] A completely full block that the allocator stumbles on
+ is recorded as allocated
+
+LocalAllocator::tryAllocateIn() can sweep a block that has no free cell. It
+gave the block up with unsweepWithNoNewlyAllocated(), which does not set the
+block's allocated bit. Sweeping to a free list discards the newlyAllocated
+bits, so afterwards neither bit says that the cells allocated since the last
+collection are live, and isLive() and forEachLiveCellOfSettledBlock() (the
+idle evacuation of sparse blocks and the census) took only the marked cells.
+
+didConsumeFreeList() sets the allocated bit, as when an allocator uses up a
+free list. unsweepWithNoNewlyAllocated() has no other caller and goes.
+
+(cherry picked from oven-sh/WebKit 60b049b7a18d, oven-sh/WebKit#892)
+---
+ Source/JavaScriptCore/heap/Heap.cpp           | 2 +-
+ Source/JavaScriptCore/heap/LocalAllocator.cpp | 4 +++-
+ Source/JavaScriptCore/heap/MarkedBlock.cpp    | 7 -------
+ Source/JavaScriptCore/heap/MarkedBlock.h      | 2 --
+ 4 files changed, 4 insertions(+), 11 deletions(-)
+
+diff --git a/Source/JavaScriptCore/heap/Heap.cpp b/Source/JavaScriptCore/heap/Heap.cpp
+index 69ead03..4cd7b22 100644
+--- a/Source/JavaScriptCore/heap/Heap.cpp
++++ b/Source/JavaScriptCore/heap/Heap.cpp
+@@ -1465,7 +1465,7 @@ SUPPRESS_ASAN static void forEachWordInSpanConservatively(void* begin, void* end
+ }
+ 
+ // The live cells of a block that no allocator is in the middle of (no valid newlyAllocated bits): all of them if the block
+-// was filled up since the last collection, otherwise the marked ones. This is MarkedBlock::Handle::isLive() outside of
++// is allocated, otherwise the marked ones. This is MarkedBlock::Handle::isLive() outside of
+ // marking, decided once per block instead of once per cell.
+ template<typename Func>
+ static void forEachLiveCellOfSettledBlock(MarkedBlock::Handle& handle, const Func& func)
+diff --git a/Source/JavaScriptCore/heap/LocalAllocator.cpp b/Source/JavaScriptCore/heap/LocalAllocator.cpp
+index 564d7a1..106555a 100644
+--- a/Source/JavaScriptCore/heap/LocalAllocator.cpp
++++ b/Source/JavaScriptCore/heap/LocalAllocator.cpp
+@@ -252,9 +252,11 @@ void* LocalAllocator::tryAllocateIn(MarkedBlock::Handle* block, size_t cellSize)
+     
+     // It's possible to stumble on a completely full block. Marking tries to retire these, but
+     // that algorithm is racy and may forget to do it sometimes.
++    // Sweeping to a free list discards the newlyAllocated bits, so the allocated bit has to
++    // record that every cell in this block is live.
+     if (m_freeList.allocationWillFail()) {
+         ASSERT(block->isFreeListed());
+-        block->unsweepWithNoNewlyAllocated();
++        block->didConsumeFreeList();
+         ASSERT(!block->isFreeListed());
+         ASSERT(!m_directory->isEmpty(block));
+         ASSERT(!m_directory->isCanAllocate(block));
+diff --git a/Source/JavaScriptCore/heap/MarkedBlock.cpp b/Source/JavaScriptCore/heap/MarkedBlock.cpp
+index 64c6806..962a423 100644
+--- a/Source/JavaScriptCore/heap/MarkedBlock.cpp
++++ b/Source/JavaScriptCore/heap/MarkedBlock.cpp
+@@ -117,13 +117,6 @@ MarkedBlock::Header::Header(VM& vm, Handle& handle)
+ 
+ MarkedBlock::Header::~Header() = default;
+ 
+-void MarkedBlock::Handle::unsweepWithNoNewlyAllocated()
+-{
+-    RELEASE_ASSERT(m_isFreeListed);
+-    m_isFreeListed = false;
+-    m_directory->didFinishUsingBlock(this);
+-}
+-
+ void MarkedBlock::Handle::stopAllocating(const FreeList& freeList, StopAllocatingMode mode)
+ {
+     Locker locker { blockHeader().m_lock };
+diff --git a/Source/JavaScriptCore/heap/MarkedBlock.h b/Source/JavaScriptCore/heap/MarkedBlock.h
+index 785bc51..f447eb2 100644
+--- a/Source/JavaScriptCore/heap/MarkedBlock.h
++++ b/Source/JavaScriptCore/heap/MarkedBlock.h
+@@ -159,8 +159,6 @@ public:
+         template<typename DestroyFunc>
+         void finishSweepKnowingHeapCellType(FreeList*, const DestroyFunc&);
+         
+-        void unsweepWithNoNewlyAllocated();
+-        
+         inline void shrink();
+         // Return interior OS pages that hold no live cell to the OS (after a sweep-only sweep); re-commit them
+         // before the block is handed to an allocator or freed. No-op when an OS page is not smaller than a block.
+-- 
+2.54.0 (Apple Git-157)
+
