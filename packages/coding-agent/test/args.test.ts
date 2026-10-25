@@ -428,6 +428,14 @@ describe("parseArgs", () => {
 		});
 	});
 
+	describe("--herdr-shim flag", () => {
+		test("parses --herdr-shim as a known flag, not an extension flag", () => {
+			const result = parseArgs(["--herdr-shim"]);
+			expect(result.herdrShim).toBe(true);
+			expect(result.unknownFlags.size).toBe(0);
+		});
+	});
+
 	describe("--tui-mode flag", () => {
 		test.each(["regular", "fullscreen"] as const)("parses %s mode", (mode) => {
 			const result = parseArgs(["--tui-mode", mode]);

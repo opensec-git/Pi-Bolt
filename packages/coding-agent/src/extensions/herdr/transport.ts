@@ -22,6 +22,30 @@ export type HerdrRequest =
 				resume_argv?: string[];
 			};
 	  }
+	| {
+			method: "pane.report_agent_session";
+			params: {
+				pane_id: string;
+				source: string;
+				agent: string;
+				seq: number;
+				agent_session_path?: string;
+				agent_session_id?: string;
+				session_start_source?: string;
+				resume_argv?: string[];
+			};
+	  }
+	| {
+			method: "pane.report_metadata";
+			params: {
+				pane_id: string;
+				source: string;
+				agent?: string;
+				applies_to_source?: string;
+				display_agent?: string;
+				seq?: number;
+			};
+	  }
 	| { method: "pane.release_agent"; params: { pane_id: string; source: string; agent: string; seq: number } };
 
 /**
@@ -115,10 +139,39 @@ export function executableTransport(bin: string): HerdrTransport {
  * message that starts with `-` stays a value.
  */
 export function herdrArguments(request: HerdrRequest): string[] {
-	const { pane_id, source, agent, seq } = request.params;
+	const { pane_id, source } = request.params;
+	if (request.method === "pane.report_metadata") {
+		const { agent, applies_to_source, display_agent, seq } = request.params;
+		return [
+			"pane",
+			"report-metadata",
+			pane_id,
+			"--source",
+			source,
+			...(agent ? ["--agent", agent] : []),
+			...(applies_to_source ? ["--applies-to-source", applies_to_source] : []),
+			...(display_agent ? ["--display-agent", display_agent] : []),
+			...(seq !== undefined ? ["--seq", String(seq)] : []),
+		];
+	}
+	const { agent, seq } = request.params;
 	const common = ["--source", source, "--agent", agent, "--seq", String(seq)];
 	if (request.method === "pane.release_agent") return ["pane", "release-agent", pane_id, ...common];
-	const { state, message, agent_session_path, agent_session_id, resume_argv } = request.params;
+	const { agent_session_path, agent_session_id, resume_argv } = request.params;
+	if (request.method === "pane.report_agent_session") {
+		const { session_start_source } = request.params;
+		return [
+			"pane",
+			"report-agent-session",
+			pane_id,
+			...common,
+			...(agent_session_path ? ["--agent-session-path", agent_session_path] : []),
+			...(agent_session_id ? ["--agent-session-id", agent_session_id] : []),
+			...(session_start_source ? ["--session-start-source", session_start_source] : []),
+			...(resume_argv ? ["--", ...resume_argv] : []),
+		];
+	}
+	const { state, message } = request.params;
 	return [
 		"pane",
 		"report-agent",
