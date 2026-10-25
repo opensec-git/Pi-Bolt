@@ -162,6 +162,16 @@ with pauses of a second; 256 MB or more leaves it alone. A CPU limit (`--cpus`) 
 include `pi-bolt`: start Herdr from a terminal, not with `brew services`. Agents that pi-herdr starts in other panes run stock
 Pi (`pi`), which must be installed.
 
+**`herdr agent list` shows the Pi-Bolt pane without a session.** Herdr stores an agent's session (`agent_session`) only for
+the integrations it ships, and Pi-Bolt is not one of them. The pane's state and its resume command are stored anyway, so the
+sidebar and a Herdr restart work; what is missing is the session, which automation reading `herdr agent list` or
+`herdr pane get` does not find. Start Pi-Bolt in the pane with `pi-bolt --herdr-shim`, which reports as Herdr's own Pi
+integration so the session is stored ([README](../README.md#herdr)). The flag needs the running process to be named `pi`: on
+Linux and macOS Pi-Bolt re-executes itself through a temporary `pi` symlink, and on Windows the process has to start from a
+file named `pi.exe`, a hardlink or a copy. When that did not happen, a startup warning says so and Pi-Bolt reports as
+`pi-bolt` after all. On Windows the session is stored only for the run started as `pi.exe`: the reported resume command
+starts `pi-bolt`, so a restored pane reports as `pi-bolt` again.
+
 **Startup is slower than expected.** Check that the compiled code is used (above). Check `PI_TIMING=1` for slow extension
 factories. A cold page cache (the first start after boot or install) adds the time to read the executable from disk.
 
