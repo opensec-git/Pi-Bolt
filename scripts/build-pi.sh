@@ -193,8 +193,12 @@ BUILD_ENV+=("BUN_JSC_useImmutableIntrinsics=${BUN_JSC_useImmutableIntrinsics:-1}
 # in a large directory cost a millisecond or more at every start.
 # Extensions resolve their own packages as on Node, which needs their package.json files (the "exports" and "main" of
 # sharp, for one). Pi's own code still resolves nothing in the working directory (the runtime: tests/runtime, workdir).
+# --splitting: what Pi imports with import() (the rest of Pi after `pi --version`, the interactive mode, the providers' APIs) is a
+# chunk of its own, loaded when it is imported. One file is one module, and all of a module's function declarations are created
+# before any of it runs: `pi --version` made every function of Pi (87 -> 73 M instructions on the M5 without them), `pi -p` every
+# function of the interactive mode (-4 M; -12 M with the JIT on).
 BUILD_ARGS=(build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json
-	--target="bun-$PIBOLT_PLATFORM" --bytecode --format=esm "${ORDER_ARGS[@]}" --compile-exec-argv=--smol)
+	--target="bun-$PIBOLT_PLATFORM" --bytecode --format=esm --splitting "${ORDER_ARGS[@]}" --compile-exec-argv=--smol)
 if ! (
 	cd "$AGENT" || exit 1
 	# What `pi --version` and `pi update` know themselves by (packages/coding-agent/src/pi-bolt.ts).
