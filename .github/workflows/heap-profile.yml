@@ -23,7 +23,7 @@ concurrency:
 jobs:
   runtime:
     name: Pi version and runtime
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       pi: ${{ steps.check.outputs.pi }}
@@ -58,7 +58,7 @@ jobs:
   train:
     name: Heap order on Windows x64
     needs: runtime
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: windows-2025
     timeout-minutes: 180
     defaults:
       run:
@@ -128,7 +128,7 @@ jobs:
   branch:
     name: Branch with the profile
     needs: [runtime, train]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: write

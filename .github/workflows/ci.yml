@@ -41,7 +41,7 @@ jobs:
   # every build. Only code=false skips: if this job fails, everything runs.
   changes:
     name: What changed
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       code: ${{ steps.files.outputs.code }}
@@ -77,7 +77,7 @@ jobs:
     name: Lint and types
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -120,7 +120,7 @@ jobs:
     name: Pi's tests
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -158,10 +158,10 @@ jobs:
       matrix:
         include:
           - name: Linux x86-64
-            runner: blacksmith-4vcpu-ubuntu-2404
+            runner: ubuntu-24.04
             part: all
           - name: Linux ARM64
-            runner: blacksmith-4vcpu-ubuntu-2404-arm
+            runner: ubuntu-24.04-arm
             part: all
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -253,7 +253,7 @@ jobs:
             label: tests
           - part: stock
             label: the same as stock Pi
-    runs-on: blacksmith-6vcpu-macos-26
+    runs-on: macos-15
     timeout-minutes: 60
     steps: *pi-bolt-steps
 
@@ -261,7 +261,7 @@ jobs:
     name: Pi-Bolt on macOS Apple silicon
     needs: pi-bolt-macos-part
     if: ${{ !cancelled() }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Its tests and the comparison with stock Pi passed
@@ -277,7 +277,7 @@ jobs:
     name: Pi-Bolt on Windows x64
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: windows-2025
     timeout-minutes: 60
     defaults:
       run:
@@ -382,11 +382,11 @@ jobs:
       matrix:
         include:
           - name: Linux
-            runner: blacksmith-4vcpu-ubuntu-2404
+            runner: ubuntu-24.04
           - name: macOS
-            runner: blacksmith-6vcpu-macos-26
+            runner: macos-15
           - name: Windows
-            runner: blacksmith-4vcpu-windows-2025
+            runner: windows-2025
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     steps:
@@ -431,7 +431,7 @@ jobs:
     name: Engine patches apply
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.code != 'false' }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

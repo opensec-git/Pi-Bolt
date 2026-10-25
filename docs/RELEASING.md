@@ -1,7 +1,6 @@
 # Releasing Pi-Bolt
 
-Six workflows. All but `publish` run on [Blacksmith](https://www.blacksmith.sh)'s runners: 4 vCPU Ubuntu 24.04 (x86-64 and
-ARM64), 4 vCPU Windows Server 2025 and 6 vCPU macOS 26. `publish` runs on GitHub's, as npm's trusted publishing needs them:
+Six workflows, all on GitHub's own runners (Ubuntu 24.04 x86-64 and ARM64, Windows Server 2025, macOS 15 on Apple silicon):
 
 | Workflow | When | What |
 |---|---|---|
@@ -156,8 +155,9 @@ gh attestation verify pi-bolt-linux-x64.tar.xz -R opensec-git/Pi-Bolt \
 ```
 
 A runtime that `runtime` built and that is still on a draft is checked with
-`--signer-workflow opensec-git/Pi-Bolt/.github/workflows/runtime.yml --source-ref refs/heads/pi-bolt`. The runners are
-Blacksmith's, which GitHub counts as self-hosted, so `--deny-self-hosted-runners` fails on every Pi-Bolt attestation. An
+`--signer-workflow opensec-git/Pi-Bolt/.github/workflows/runtime.yml --source-ref refs/heads/pi-bolt`. Releases 1.0.2 and
+1.0.3 were built on Blacksmith's runners, which GitHub counts as self-hosted, so `--deny-self-hosted-runners` fails on their
+attestations; later releases are built on GitHub's runners again. An
 attestation names the commit its run started from: `release` builds the tag's commit, and `runtime` run with `-f ref=...`
 builds that commit, which the run's inputs give.
 
@@ -307,7 +307,7 @@ By hand:
 
 ## The macOS builds
 
-`release` builds them on the macOS 26 runners (Apple silicon), for macOS 13 and later: `scripts/check-macos-floor.sh` checks that
+`release` builds them on the macOS 15 runners (Apple silicon), for macOS 13 and later: `scripts/check-macos-floor.sh` checks that
 no executable or library asks for a later macOS. The executables are signed ad hoc, as `bun build --compile`
 signs them, which is what an install through `install.sh` or npm needs: neither quarantines what it downloads. A build downloaded
 with a browser is quarantined, and Gatekeeper only accepts a Developer ID signature that is notarized. Notarization requires the

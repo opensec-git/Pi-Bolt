@@ -40,7 +40,7 @@ env:
 jobs:
   prepare:
     name: Versions and runtime
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: write # (A draft release, and the runtimes uploaded to it, are only visible to a token that may write.)
@@ -186,13 +186,13 @@ jobs:
       matrix:
         include:
           - name: Linux x86-64
-            runner: blacksmith-4vcpu-ubuntu-2404
+            runner: ubuntu-24.04
             platform: linux-x64
           - name: Linux ARM64
-            runner: blacksmith-4vcpu-ubuntu-2404-arm
+            runner: ubuntu-24.04-arm
             platform: linux-arm64
           - name: macOS Apple silicon
-            runner: blacksmith-6vcpu-macos-26
+            runner: macos-15
             platform: darwin-arm64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
@@ -296,7 +296,7 @@ jobs:
   build-windows:
     name: Build and test on Windows x64
     needs: prepare
-    runs-on: blacksmith-4vcpu-windows-2025
+    runs-on: windows-2025
     timeout-minutes: 180
     permissions:
       contents: write # (To download the runtime from this tag's draft release.)
@@ -421,7 +421,7 @@ jobs:
     name: Draft release
     needs: [prepare, build, build-windows]
     if: ${{ !inputs.dry_run }}
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: write

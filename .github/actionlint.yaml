@@ -1,11 +1,4 @@
 # actionlint (the Workflows step of ci.yml's Lint and types job).
-self-hosted-runner:
-  # Blacksmith's runners.
-  labels:
-    - blacksmith-4vcpu-ubuntu-2404
-    - blacksmith-4vcpu-ubuntu-2404-arm
-    - blacksmith-4vcpu-windows-2025
-    - blacksmith-6vcpu-macos-26
 paths:
   .github/workflows/publish.yml:
     ignore:
