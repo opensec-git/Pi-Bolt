@@ -20,6 +20,7 @@ import {
 	extensionsOfModule,
 	functionTooBig,
 	importAtRunTime,
+	jsStringLiteral,
 	leaveUnresolvedImportsToRunTime,
 	measuredSizes,
 	measurePieces,
@@ -551,8 +552,13 @@ describe("pi-bolt compile keeps a raised limit on the size of a function (#129)"
 // Issue #160: @plannotator/pi-extension loads the Claude Agent SDK and the OpenCode SDK with import(), declares neither, and
 // works without them when loaded from its files. The bundler stopped the whole build at those import()s.
 describe("pi-bolt compile leaves an import() it cannot resolve to run time (#160)", () => {
+	test("strings put into the generated code are escaped", () => {
+		expect(jsStringLiteral("a/b</script>\u2028")).toBe('"a\\u002fb\\u003c\\u002fscript\\u003e\\u2028"');
+		expect(new Function(`return ${jsStringLiteral('a/b</script>\u2028"\\')}`)()).toBe('a/b</script>\u2028"\\');
+	});
+
 	const resolvedFrom = (specifier: string, from: string) =>
-		`(() => { try { return Bun.resolveSync(${JSON.stringify(specifier)}, ${JSON.stringify(from)}); } catch { return ${JSON.stringify(specifier)}; } })()`;
+		`(() => { try { return Bun.resolveSync(${jsStringLiteral(specifier)}, ${jsStringLiteral(from)}); } catch { return ${jsStringLiteral(specifier)}; } })()`;
 
 	test("the import()'s string is resolved when it runs, from the installed file's folder", () => {
 		const source = 'let sdk;\nasync function getSDK() {\n\tsdk = await import("@opencode-ai/sdk");\n}\n';

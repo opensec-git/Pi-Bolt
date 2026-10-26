@@ -834,6 +834,14 @@ export function originalOfCopy(
 	return root && join(root.root, ...segments.slice(1));
 }
 
+/** `text` as a JavaScript string literal, with the characters that can end a script or a line written as escapes. */
+export function jsStringLiteral(text: string): string {
+	return JSON.stringify(text).replace(
+		/[<>/\u2028\u2029]/g,
+		(char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+	);
+}
+
 /**
  * `source` with the import() of `at` resolving its string when it runs, from the folder `from`, as Bun resolves it for a
  * module there; when it does not resolve, the import() is of the string as it was, and fails as it does in a module loaded
@@ -855,8 +863,8 @@ export function importAtRunTime(source: string, at: Omit<UnresolvedImport, "file
 		}
 	}
 	if (!found) return undefined;
-	const specifier = JSON.stringify(at.specifier);
-	const resolved = `(() => { try { return Bun.resolveSync(${specifier}, ${JSON.stringify(from)}); } catch { return ${specifier}; } })()`;
+	const specifier = jsStringLiteral(at.specifier);
+	const resolved = `(() => { try { return Bun.resolveSync(${specifier}, ${jsStringLiteral(from)}); } catch { return ${specifier}; } })()`;
 	lines[at.line - 1] = `${text.slice(0, found.index)}${resolved}${text.slice(found.index + found.length)}`;
 	return lines.join("\n");
 }
