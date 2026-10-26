@@ -378,9 +378,21 @@ function describeSkipped(root, discovered) {
 	for (const entry of entries) {
 		const path = join(root, entry.name);
 		if (discovered.has(resolve(path))) continue;
-		if (entry.isDirectory() || entry.isSymbolicLink()) {
+		let folder = entry.isDirectory();
+		let file = entry.isFile();
+		if (entry.isSymbolicLink()) {
+			// (A link is what it leads to; one to nothing is passed over, as Pi passes it over.)
+			try {
+				const stats = statSync(path);
+				folder = stats.isDirectory();
+				file = stats.isFile();
+			} catch {
+				continue;
+			}
+		}
+		if (folder) {
 			if (resolveExtensionEntries(path)) continue;
-			const empty = existsSync(path) && readdirSync(path).length === 0;
+			const empty = readdirSync(path).length === 0;
 			skipped.push({
 				path,
 				reason: empty
@@ -389,7 +401,7 @@ function describeSkipped(root, discovered) {
 			});
 			continue;
 		}
-		if (entry.isFile() && !isExtensionFile(entry.name)) skipped.push({ path, reason: "not a .ts or .js file" });
+		if (file && !isExtensionFile(entry.name)) skipped.push({ path, reason: "not a .ts or .js file" });
 	}
 	return skipped;
 }
@@ -1168,7 +1180,8 @@ const LOADERS = { ".ts": "ts", ".mts": "ts", ".cts": "ts", ".tsx": "tsx", ".js":
 /**
  * The files of `root` (relative to it) that the modules `files` are, and import by a relative path, transitively, with the folder's
  * package.json (its `type` and `imports` say how they are read). Undefined when they cannot be known: without Bun, whose
- * transpiler reads the imports, or when a module does not parse or imports a file outside `root`.
+ * transpiler reads the imports, or when a module does not parse, or imports a file outside `root` or one that does not
+ * resolve.
  */
 function importClosure(files, root) {
 	if (typeof globalThis.Bun?.Transpiler !== "function") return undefined;
@@ -1189,12 +1202,13 @@ function importClosure(files, root) {
 			return undefined;
 		}
 		for (const { path } of imports) {
-			if (!/^\.\.?(\/|$)/.test(path)) continue;
+			// (A relative path, or a name the folder's package.json `imports` maps.)
+			if (!/^(?:\.\.?(?:\/|$)|#)/.test(path)) continue;
 			let resolved;
 			try {
 				resolved = globalThis.Bun.resolveSync(path, dirname(file));
 			} catch {
-				continue;
+				return undefined;
 			}
 			if (relative(realRoot, resolved).startsWith("..")) return undefined;
 			queue.push(resolved);

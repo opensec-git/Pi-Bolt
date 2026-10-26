@@ -188,7 +188,10 @@ describe("where it looks", () => {
 		symlinkSync(join(agentDir, "nowhere", "gone"), join(extensions, "gone.ts"));
 		write(join(extensions, "scratch.ts"));
 		write(join(extensions, "drafts", "index.ts"));
-		writeFileSync(join(extensions, ".gitignore"), "scratch.ts\ndrafts/\n");
+		// (An ignored link to a file: PR #179 review.)
+		write(join(agentDir, "elsewhere", "linked.ts"));
+		symlinkSync(join(agentDir, "elsewhere", "linked.ts"), join(extensions, "ignored-link.ts"));
+		writeFileSync(join(extensions, ".gitignore"), "scratch.ts\ndrafts/\nignored-link.ts\n");
 
 		const plan = planPlugins({ agentDir });
 		assert.deepEqual(names(plan), ["kept"]);
@@ -239,9 +242,13 @@ describe("where it looks", () => {
 		if (bun.status !== 0) return context.skip("no bun on PATH");
 		const home = scratch("pibolt-home-");
 		write(join(home, "ext.ts"), 'import { helper } from "./lib/helper.ts";\nexport default () => helper;\n');
-		write(join(home, "lib", "helper.ts"), 'export { data as helper } from "./data.json";\n');
+		write(join(home, "lib", "helper.ts"), 'export { data as helper } from "./data.json";\nexport * from "./uses-mapped.ts";\n');
 		write(join(home, "lib", "data.json"), '{ "data": 1 }\n');
 		write(join(home, "lib", "unrelated.ts"), "export const unrelated = 1;\n");
+		// (A name the folder's package.json maps: PR #179 review.)
+		write(join(home, "package.json"), JSON.stringify({ imports: { "#mapped": "./mapped.ts" } }));
+		write(join(home, "mapped.ts"), "export const mapped = 1;\n");
+		write(join(home, "lib", "uses-mapped.ts"), 'export { mapped } from "#mapped";\n');
 		write(join(home, "Downloads", "big.bin"), "x".repeat(1024));
 		const agentDir = agent({ extensions: [join(home, "ext.ts")] });
 
@@ -263,7 +270,14 @@ describe("where it looks", () => {
 			readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
 				entry.isDirectory() ? files(join(dir, entry.name), `${prefix}${entry.name}/`) : [`${prefix}${entry.name}`],
 			);
-		assert.deepEqual(files(staged).sort(), ["ext.ts", "lib/data.json", "lib/helper.ts"]);
+		assert.deepEqual(files(staged).sort(), [
+			"ext.ts",
+			"lib/data.json",
+			"lib/helper.ts",
+			"lib/uses-mapped.ts",
+			"mapped.ts",
+			"package.json",
+		]);
 	});
 
 	it("keeps a project and a global extension of the same name apart", () => {
