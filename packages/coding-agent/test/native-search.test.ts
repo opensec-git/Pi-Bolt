@@ -157,6 +157,14 @@ describe("the walk", () => {
 		]);
 	});
 
+	test("keeps only the entries asked for, and still walks the folders it does not keep", async () => {
+		const all = await walk({ root, requireGit: true });
+		const kept = await walk({ root, requireGit: true, keep: (rel, kind) => kind === "file" && rel.endsWith(".ts") });
+		const ts = all.filter((entry) => entry.kind === "file" && entry.rel.endsWith(".ts"));
+		expect(kept.map((entry) => entry.rel).sort()).toEqual(ts.map((entry) => entry.rel).sort());
+		expect(kept.map((entry) => entry.rel)).toContain("src/sub/b.ts");
+	});
+
 	test("a folder below the repository's root still has its parents' rules", async () => {
 		const files = (await walk({ root: join(root, "src"), requireGit: true })).map((entry) => entry.rel).sort();
 		expect(files).toEqual([".gitignore", "a.ts", "sub", "sub/b.ts", "sub/rooted.ts"]);
@@ -231,6 +239,40 @@ describe("grep", () => {
 		const result = await grep("needle", { limit: 3 });
 		expect(result.limitReached).toBe(true);
 		expect(result.matches).toHaveLength(3);
+	});
+
+	// A file larger than `wholeFileBytes` is read a piece at a time: the same matches, line numbers and lines as when it is
+	// read whole, with lines cut by the pieces anywhere (the 7-byte pieces cut most lines, and the long line many times).
+	test("a file read a piece at a time has the matches of the file read whole", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pibolt-pieces-"));
+		try {
+			const long = `${"x".repeat(5000)} needle in a long line ${"y".repeat(3000)}`;
+			writeFileSync(join(dir, "a.txt"), `needle\nno\r\nNEEDLE two\r\n\n  \n${long}\nend needle`);
+			writeFileSync(join(dir, "b.txt"), "first\nneedle\n\n");
+			writeFileSync(join(dir, "c.txt"), `needle before a NUL\n${"z".repeat(100)}\0\n`);
+			writeFileSync(join(dir, "d.txt"), "é needle ü\n日本 needle\n");
+			const search = (pattern: string, extra: Partial<Parameters<typeof nativeGrep>[0]>) =>
+				nativeGrep({ root: dir, isDirectory: true, pattern, limit: 100, keepChars: 60, ...extra });
+			for (const query of [
+				{ pattern: "needle", literal: true },
+				{ pattern: "NEEDLE", literal: true, ignoreCase: true },
+				{ pattern: "needle\\s\\w+" },
+				{ pattern: "(?i)needle (two|in)" },
+				{ pattern: "^\\s*$" },
+				{ pattern: "^" },
+				{ pattern: "e$" },
+				{ pattern: "x+ needle" },
+				{ pattern: "needle", limit: 3 },
+			]) {
+				const whole = await search(query.pattern, query);
+				expect(whole.matches.length).toBeGreaterThan(0);
+				for (const pieceBytes of [1, 7, 64, 4096]) {
+					expect(await search(query.pattern, { ...query, wholeFileBytes: 0, pieceBytes })).toEqual(whole);
+				}
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	test("a file of its own, and a bad expression", async () => {

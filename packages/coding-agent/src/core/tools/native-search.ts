@@ -11,7 +11,7 @@
  * within one line.
  */
 import { type Dirent, existsSync, readFileSync, statSync } from "node:fs";
-import { readdir, readFile } from "node:fs/promises";
+import { type FileHandle, open, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 
@@ -466,6 +466,11 @@ export interface WalkOptions {
 	requireGit: boolean;
 	/** Files this takes are walked even when an ignore file leaves them out (ripgrep's --glob overrides them). */
 	override?: (rel: string) => boolean;
+	/**
+	 * The entries returned (default: all). Folders are walked whether or not they are kept: what a search does not want is not
+	 * held while the walk goes on (a walk through a whole disk finds millions of entries).
+	 */
+	keep?: (rel: string, kind: WalkEntry["kind"]) => boolean;
 	signal?: AbortSignal;
 }
 
@@ -476,7 +481,7 @@ interface DirTask {
 	git: boolean;
 }
 
-/** Every entry below `root` that the ignore files leave in, in no particular order. */
+/** Every entry below `root` that the ignore files leave in (and `keep` takes), in no particular order. */
 export async function walk(options: WalkOptions): Promise<WalkEntry[]> {
 	const root = path.resolve(options.root);
 	const repository = repositoryOf(root);
@@ -537,7 +542,7 @@ export async function walk(options: WalkOptions): Promise<WalkEntry[]> {
 				if (kind === "dir" || !options.override?.(rel)) continue;
 			}
 			const abs = path.join(task.abs, dirent.name);
-			entries.push({ rel, abs, kind });
+			if (!options.keep || options.keep(rel, kind)) entries.push({ rel, abs, kind });
 			if (kind === "dir") subdirs.push({ abs, rel, rules: taskRules, git: taskGit });
 		}
 		return subdirs;
@@ -573,13 +578,11 @@ export async function nativeFind(options: NativeFindOptions): Promise<string[]> 
 	if (pattern.startsWith("/")) pattern = pattern.slice(1);
 	else if (fullPath && !pattern.startsWith("**/") && pattern !== "**") pattern = `**/${pattern}`;
 	const patterns = expandBraces(pattern).map(compileGlob);
-	const entries = await walk({ root: options.root, requireGit: false, signal: options.signal });
-	const results: WalkEntry[] = [];
-	for (const entry of entries) {
-		const subject = fullPath ? entry.rel : entry.rel.slice(entry.rel.lastIndexOf("/") + 1);
-		if (patterns.some((matches) => matches(subject))) results.push(entry);
-	}
-	return results
+	const keep = (rel: string) => {
+		const subject = fullPath ? rel : rel.slice(rel.lastIndexOf("/") + 1);
+		return patterns.some((matches) => matches(subject));
+	};
+	return (await walk({ root: options.root, requireGit: false, keep, signal: options.signal }))
 		.sort(byPath)
 		.slice(0, Math.max(0, options.limit))
 		.map((entry) => (entry.kind === "dir" ? `${entry.rel}/` : entry.rel));
@@ -607,6 +610,9 @@ export interface NativeGrepOptions {
 	/** Characters of a long line kept (the tool cuts them shorter still). */
 	keepChars: number;
 	signal?: AbortSignal;
+	/** Files larger than this are read a piece at a time, of `pieceBytes` (defaults: WHOLE_FILE_BYTES, PIECE_BYTES). */
+	wholeFileBytes?: number;
+	pieceBytes?: number;
 }
 
 /**
@@ -723,7 +729,15 @@ function stripCr(line: string): string {
 interface Matcher {
 	/** Bytes every matching file has (a fast check before anything else). */
 	prefilter?: Buffer;
-	search(buffer: Buffer, filePath: string, budget: number, keepChars: number, out: NativeGrepMatch[]): void;
+	/** Searches whole lines: a file, or a part of one that ends with a line break; `firstLine` is the number of its first. */
+	search(
+		buffer: Buffer,
+		filePath: string,
+		budget: number,
+		keepChars: number,
+		out: NativeGrepMatch[],
+		firstLine: number,
+	): void;
 }
 
 const isAscii = (text: string) => /^[\x00-\x7f]*$/.test(text);
@@ -758,9 +772,9 @@ function searchLines(
 	buffer: Buffer,
 	next: (from: number) => number,
 	test: ((line: string) => boolean) | undefined,
-	match: { filePath: string; budget: number; keepChars: number; out: NativeGrepMatch[] },
+	match: { filePath: string; budget: number; keepChars: number; out: NativeGrepMatch[]; firstLine: number },
 ): void {
-	let line = 1;
+	let line = match.firstLine;
 	let counted = 0;
 	let found = 0;
 	for (let at = next(0); at !== -1 && found < match.budget; ) {
@@ -789,24 +803,25 @@ function literalMatcher(pattern: string, ignoreCase: boolean): Matcher {
 	if (ignoreCase) {
 		const needle = Buffer.from(pattern.toLowerCase(), "utf8");
 		return {
-			search: (buffer, filePath, budget, keepChars, out) =>
+			search: (buffer, filePath, budget, keepChars, out, firstLine) =>
 				searchLines(buffer, (from) => indexOfIgnoringCase(buffer, needle, from), undefined, {
 					filePath,
 					budget,
 					keepChars,
 					out,
+					firstLine,
 				}),
 		};
 	}
 	const needle = Buffer.from(pattern, "utf8");
 	return {
 		prefilter: needle.length > 0 ? needle : undefined,
-		search: (buffer, filePath, budget, keepChars, out) =>
+		search: (buffer, filePath, budget, keepChars, out, firstLine) =>
 			searchLines(
 				buffer,
 				(from) => (needle.length > 0 ? buffer.indexOf(needle, from) : from < buffer.length ? from : -1),
 				undefined,
-				{ filePath, budget, keepChars, out },
+				{ filePath, budget, keepChars, out, firstLine },
 			),
 	};
 }
@@ -828,26 +843,33 @@ function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 		const needle = Buffer.from(literal, "utf8");
 		return {
 			prefilter: needle,
-			search: (buffer, filePath, budget, keepChars, out) =>
-				searchLines(buffer, (from) => buffer.indexOf(needle, from), test, { filePath, budget, keepChars, out }),
+			search: (buffer, filePath, budget, keepChars, out, firstLine) =>
+				searchLines(buffer, (from) => buffer.indexOf(needle, from), test, {
+					filePath,
+					budget,
+					keepChars,
+					out,
+					firstLine,
+				}),
 		};
 	}
 	if (literal && isAscii(literal)) {
 		const needle = Buffer.from(literal.toLowerCase(), "utf8");
 		return {
-			search: (buffer, filePath, budget, keepChars, out) =>
+			search: (buffer, filePath, budget, keepChars, out, firstLine) =>
 				searchLines(buffer, (from) => indexOfIgnoringCase(buffer, needle, from), test, {
 					filePath,
 					budget,
 					keepChars,
 					out,
+					firstLine,
 				}),
 		};
 	}
 	return {
-		search(buffer, filePath, budget, keepChars, out) {
+		search(buffer, filePath, budget, keepChars, out, firstLine) {
 			const text = buffer.toString("utf8");
-			let line = 1;
+			let line = firstLine;
 			let counted = 0;
 			let found = 0;
 			all.lastIndex = 0;
@@ -901,6 +923,73 @@ function globFilter(glob: string | undefined): { take: (rel: string) => boolean;
 /** How many files are read at once. */
 const READ_AHEAD = 32;
 
+/**
+ * Files up to this size are read whole; a larger one a piece at a time (`searchInPieces`). Reading every file whole let a
+ * search through large files (a virtual disk, a model's weights, a long log) hold all of them in memory at once: gigabytes,
+ * read at the disk's speed. At most READ_AHEAD files of this size are in memory now, and one piece of a larger one.
+ */
+const WHOLE_FILE_BYTES = 4 * 1024 * 1024;
+/** What a larger file is read in. */
+const PIECE_BYTES = 1024 * 1024;
+
+/**
+ * `matcher.search` over a file read a piece at a time, with the outcome of a search of the file read whole: each piece is
+ * searched up to its last line break and the rest goes with the next, so a match is within a line as before; and a file with
+ * a NUL byte anywhere (binary) has no matches, so it is read to its end, or to its first NUL byte. Undefined for a binary
+ * file or one that could not be read. Memory: a piece, and the line a piece ends inside of.
+ */
+async function searchInPieces(
+	file: string,
+	matcher: Matcher,
+	budget: number,
+	keepChars: number,
+	pieceBytes: number,
+	signal: AbortSignal | undefined,
+): Promise<NativeGrepMatch[] | undefined> {
+	let handle: FileHandle;
+	try {
+		handle = await open(file, "r");
+	} catch {
+		return undefined;
+	}
+	try {
+		const found: NativeGrepMatch[] = [];
+		const piece = Buffer.allocUnsafe(pieceBytes);
+		// The start of a line that no piece so far has ended (copies: `piece` is read into again).
+		let partial: Buffer[] = [];
+		let line = 1;
+		for (;;) {
+			if (signal?.aborted) throw new Error("Operation aborted");
+			let bytesRead: number;
+			try {
+				({ bytesRead } = await handle.read(piece, 0, pieceBytes, null));
+			} catch {
+				return undefined;
+			}
+			const read = piece.subarray(0, bytesRead);
+			if (read.indexOf(0) !== -1) return undefined; // (Binary.)
+			const end = bytesRead === 0;
+			// The lines this piece ends: up to its last line break; at the end of the file, the last line, if it has no break.
+			const upTo = end ? 0 : read.lastIndexOf(NEWLINE) + 1;
+			if (!end && upTo === 0) {
+				partial.push(Buffer.from(read));
+				continue;
+			}
+			const lines =
+				partial.length > 0 ? Buffer.concat([...partial, read.subarray(0, upTo)]) : read.subarray(0, upTo);
+			partial = upTo === read.length ? [] : [Buffer.from(read.subarray(upTo))];
+			// (Not the nothing after a last line break: as in a file read whole, there is no line there.)
+			if (lines.length > 0 && found.length < budget) {
+				matcher.search(lines, file, budget - found.length, keepChars, found, line);
+			}
+			if (end) return found;
+			line += countLines(lines, 0, lines.length);
+		}
+	} finally {
+		await handle.close().catch(() => {});
+	}
+}
+
 /** The lines that match, file by file in path order, at most `limit`; and whether the limit stopped the search. */
 export async function nativeGrep(
 	options: NativeGrepOptions,
@@ -919,9 +1008,8 @@ export async function nativeGrep(
 	let files: string[];
 	if (options.isDirectory) {
 		const { take, include } = globFilter(options.glob);
-		const entries = await walk({ root: options.root, requireGit: true, override: include, signal: options.signal });
-		files = entries
-			.filter((entry) => entry.kind === "file" && take(entry.rel))
+		const keep = (rel: string, kind: WalkEntry["kind"]) => kind === "file" && take(rel);
+		files = (await walk({ root: options.root, requireGit: true, override: include, keep, signal: options.signal }))
 			.sort(byPath)
 			.map((entry) => entry.abs);
 	} else {
@@ -929,17 +1017,40 @@ export async function nativeGrep(
 	}
 
 	const matches: NativeGrepMatch[] = [];
-	const read = (file: string) => readFile(file).catch(() => undefined);
+	const wholeFileBytes = options.wholeFileBytes ?? WHOLE_FILE_BYTES;
+	// A file's contents; for a file too large to read whole, its size: it is read a piece at a time in its turn.
+	const read = async (file: string): Promise<Buffer | number | undefined> => {
+		try {
+			const { size } = await stat(file);
+			return size > wholeFileBytes ? size : await readFile(file);
+		} catch {
+			return undefined;
+		}
+	};
 	const queue = files.slice(0, READ_AHEAD).map(read);
 	for (let index = 0; index < files.length; index++) {
 		if (options.signal?.aborted) throw new Error("Operation aborted");
-		const buffer = await queue[index];
+		const contents = await queue[index];
 		if (index + READ_AHEAD < files.length) queue.push(read(files[index + READ_AHEAD]));
 		queue[index] = Promise.resolve(undefined); // (Done with it: let it go.)
-		if (!buffer || buffer.length === 0) continue;
-		if (matcher.prefilter && buffer.indexOf(matcher.prefilter) === -1) continue;
-		if (buffer.indexOf(0) !== -1) continue; // (Binary.)
-		matcher.search(buffer, files[index], options.limit - matches.length, options.keepChars, matches);
+		if (typeof contents === "number") {
+			const budget = options.limit - matches.length;
+			const pieceBytes = options.pieceBytes ?? PIECE_BYTES;
+			const found = await searchInPieces(
+				files[index],
+				matcher,
+				budget,
+				options.keepChars,
+				pieceBytes,
+				options.signal,
+			);
+			if (found) matches.push(...found);
+		} else {
+			if (!contents || contents.length === 0) continue;
+			if (matcher.prefilter && contents.indexOf(matcher.prefilter) === -1) continue;
+			if (contents.indexOf(0) !== -1) continue; // (Binary.)
+			matcher.search(contents, files[index], options.limit - matches.length, options.keepChars, matches, 1);
+		}
 		if (matches.length >= options.limit) return { matches, limitReached: true };
 	}
 	return { matches, limitReached: false };
