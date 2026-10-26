@@ -590,8 +590,9 @@ export class ProcessTerminal implements Terminal {
 	}
 
 	setTitle(title: string): void {
-		// OSC 0;title BEL - set terminal window title
-		process.stdout.write(`\x1b]0;${title}\x07`);
+		// OSC 0;title BEL - set terminal window title. Without control characters: the title holds a session's name, which a
+		// session file can set, and a BEL or ESC in it would end the sequence and start another.
+		process.stdout.write(`\x1b]0;${title.replace(/[\x00-\x1f\x7f-\x9f]/g, "")}\x07`);
 	}
 
 	setProgramStatus(status: ProgramStatus): void {

@@ -1,7 +1,13 @@
 import * as os from "node:os";
 import { pathToFileURL } from "node:url";
 import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
-import { getCapabilities, getImageDimensions, hyperlink, imageFallback } from "@earendil-works/pi-tui";
+import {
+	getCapabilities,
+	getImageDimensions,
+	hyperlink,
+	imageFallback,
+	sanitizeTerminalText,
+} from "@earendil-works/pi-tui";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../utils/ansi.ts";
 import { resolvePath } from "../../utils/paths.ts";
@@ -23,8 +29,12 @@ export function linkPath(styledText: string, rawPath: string, cwd: string): stri
 	return hyperlink(styledText, pathToFileURL(absolutePath).href);
 }
 
+/**
+ * A tool call argument as text to show, or null when it is not a string. The model wrote it: escape sequences in it are
+ * removed (sanitizeTerminalText()), so it cannot draw over the call's header or its command line.
+ */
 export function str(value: unknown): string | null {
-	if (typeof value === "string") return value;
+	if (typeof value === "string") return sanitizeTerminalText(value);
 	if (value == null) return "";
 	return null;
 }
@@ -95,7 +105,9 @@ const COLLAPSED_ARGS_CHARS = 100;
  * line below the title, with strings shown raw and continuation lines indented.
  */
 export function formatToolCallWithArgs(title: string, args: unknown, theme: Theme, expanded: boolean): string {
-	const header = theme.fg("toolTitle", theme.bold(title));
+	// (The title can come from an MCP server, the arguments from the model: sanitizeTerminalText() keeps escape sequences in
+	// either from acting on the terminal. JSON.stringify() escapes C0 controls, but not DEL and C1 controls.)
+	const header = theme.fg("toolTitle", theme.bold(sanitizeTerminalText(title)));
 	if (args == null) return header;
 	const entries =
 		typeof args === "object" && !Array.isArray(args)
@@ -105,13 +117,14 @@ export function formatToolCallWithArgs(title: string, args: unknown, theme: Them
 	if (expanded) {
 		const lines = entries.map(([key, value]) => {
 			const text = typeof value === "string" ? value : (JSON.stringify(value, null, 2) ?? String(value));
-			return `  ${key}: ${replaceTabs(text).replace(/\r/g, "").split("\n").join("\n    ")}`;
+			const shown = replaceTabs(sanitizeTerminalText(text)).replace(/\r/g, "");
+			return `  ${sanitizeTerminalText(key)}: ${shown.split("\n").join("\n    ")}`;
 		});
 		return `${header}\n${theme.fg("muted", lines.join("\n"))}`;
 	}
 	const pairs = entries.map(([key, value]) => `${key}=${JSON.stringify(value) ?? String(value)}`).join(" ");
 	const preview = pairs.length > COLLAPSED_ARGS_CHARS ? `${pairs.slice(0, COLLAPSED_ARGS_CHARS - 3)}...` : pairs;
-	return `${header} ${theme.fg("muted", preview)}`;
+	return `${header} ${theme.fg("muted", sanitizeTerminalText(preview))}`;
 }
 
 /** Duration as `4.2s` below a minute, then `1m 30s` and `2h 3m 4s`. */

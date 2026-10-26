@@ -37,7 +37,8 @@ export class CompactionSummaryMessageComponent extends Box {
 		this.clear();
 		const content = new Container();
 
-		const tokenStr = this.message.tokensBefore.toLocaleString();
+		// (A number, as Pi writes it; a session file can hold anything there, which is shown as a number all the same.)
+		const tokenStr = Number(this.message.tokensBefore).toLocaleString();
 		const label = theme.fg("customMessageLabel", `\x1b[1m[compaction]\x1b[22m`);
 		content.addChild(new Text(label, 0, 0));
 		content.addChild(new Spacer(1));

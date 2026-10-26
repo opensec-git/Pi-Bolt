@@ -27,7 +27,7 @@
  */
 
 import { join, resolve } from "node:path";
-import type { SelectItem } from "@earendil-works/pi-tui";
+import { type SelectItem, sanitizeTerminalText } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
 import { getAgentDir } from "../../config.ts";
 import type {
@@ -120,12 +120,14 @@ const EXPOSURE_DESCRIPTIONS: Record<Exclude<McpExposure, "hidden">, string> = {
 	direct: "declared to the model like built-in tools",
 };
 
+/** An error's message, to show: it can hold what an MCP server sent, whose escape sequences would act on the terminal. */
 function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
+	return sanitizeTerminalText(error instanceof Error ? error.message : String(error));
 }
 
+/** The first line of text an MCP server sent (a description, an error), to show. */
 function firstLine(text: string): string {
-	return text.split("\n", 1)[0] ?? "";
+	return sanitizeTerminalText(text.split("\n", 1)[0] ?? "");
 }
 
 function isEnabled(server: Pick<McpServer, "entry">): boolean {
@@ -1032,7 +1034,7 @@ export function createMcpExtension(options: McpExtensionOptions = {}): Extension
 						: (connection?.state ?? "starting");
 				const error =
 					connection?.error && connection.state !== "connected"
-						? `\n    ${connection.error.split("\n").join("\n    ")}`
+						? `\n    ${sanitizeTerminalText(connection.error).split("\n").join("\n    ")}`
 						: "";
 				return `${name}: ${state}${tools} (${exposure})${error}`;
 			});

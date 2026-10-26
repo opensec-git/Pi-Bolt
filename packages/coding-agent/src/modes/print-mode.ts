@@ -7,6 +7,7 @@
  */
 
 import type { AssistantMessage, ImageContent } from "@earendil-works/pi-ai";
+import { sanitizeTerminalText } from "@earendil-works/pi-tui";
 import type { AgentSessionRuntime } from "../core/agent-session-runtime.ts";
 import { flushRawStdout, waitForRawStdoutBackpressure, writeRawStdout } from "../core/output-guard.ts";
 import { killTrackedDetachedChildren } from "../utils/shell.ts";
@@ -139,12 +140,13 @@ export async function runPrintMode(runtimeHost: AgentSessionRuntime, options: Pr
 			if (lastMessage?.role === "assistant") {
 				const assistantMsg = lastMessage as AssistantMessage;
 				if (assistantMsg.stopReason === "error" || assistantMsg.stopReason === "aborted") {
-					console.error(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`);
+					console.error(sanitizeTerminalText(assistantMsg.errorMessage || `Request ${assistantMsg.stopReason}`));
 					exitCode = 1;
 				} else {
 					for (const content of assistantMsg.content) {
 						if (content.type === "text") {
-							writeRawStdout(`${content.text}\n`);
+							// The reply as text: escape sequences in it would act on the terminal it is printed to.
+							writeRawStdout(`${sanitizeTerminalText(content.text)}\n`);
 						}
 					}
 					if (assistantMsg.stopReason === "length") {

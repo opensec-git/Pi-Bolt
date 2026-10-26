@@ -91,6 +91,34 @@ describe("Radius OAuth", () => {
 		expect(urls).toEqual([`${GATEWAY}/v1/oauth/device`, `${GATEWAY}/v1/oauth/token`]);
 	});
 
+	it("rejects a device verification URI that is not a web URL", async () => {
+		for (const verificationUri of ["file:///System/Applications/Calculator.app", "-aTerminal", "vscode://x"]) {
+			const events: AuthEvent[] = [];
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async (input: unknown) => {
+					const url = requestUrl(input);
+					if (url === `${GATEWAY}/v1/oauth/device`) {
+						return jsonResponse({
+							device_code: "device-code",
+							user_code: "ABCD-1234",
+							verification_uri: verificationUri,
+							expires_in: 600,
+							interval: 5,
+						});
+					}
+					throw new Error(`Unexpected request: ${url}`);
+				}),
+			);
+
+			const oauth = createRadiusOAuth({ name: "Radius", gateway: GATEWAY });
+			await expect(oauth.login(interaction("device-code", events)), verificationUri).rejects.toThrow(
+				"invalid verification_uri",
+			);
+			expect(events).toEqual([]);
+		}
+	});
+
 	it("refreshes directly through the gateway without discovery", async () => {
 		const fetchMock = vi.fn(async (input: unknown, init?: RequestInit) => {
 			expect(requestUrl(input)).toBe(`${GATEWAY}/v1/oauth/token`);

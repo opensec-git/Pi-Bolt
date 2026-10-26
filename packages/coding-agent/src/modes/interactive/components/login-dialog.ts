@@ -1,10 +1,30 @@
 import type { AuthInfoLink, OAuthDeviceCodeInfo } from "@earendil-works/pi-ai";
-import { Container, type Focusable, getKeybindings, Input, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
+import {
+	Container,
+	type Focusable,
+	getKeybindings,
+	Input,
+	isWebLink,
+	Spacer,
+	sanitizeTerminalText,
+	Text,
+	type TUI,
+} from "@earendil-works/pi-tui";
 import { openBrowser } from "../../../utils/open-browser.ts";
 import { theme } from "../theme/theme.ts";
 import { AuthUrlComponent } from "./auth-url.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint } from "./keybinding-hints.ts";
+
+/**
+ * `text` as a clickable terminal hyperlink to `url` when that is a web link; otherwise `text` alone. The URL comes from the
+ * provider's server: another scheme (file:, an app's handler) could run a program when clicked, and escape sequences in it
+ * would act on the terminal.
+ */
+function webLink(text: string, url: string): string {
+	const shown = sanitizeTerminalText(text);
+	return isWebLink(url) && url === sanitizeTerminalText(url) ? `\x1b]8;;${url}\x07${shown}\x1b]8;;\x07` : shown;
+}
 
 /**
  * Login dialog component - replaces editor during OAuth login flow
@@ -118,14 +138,16 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.authUrl = undefined;
 		this.contentContainer.clear();
 		this.contentContainer.addChild(new Spacer(1));
-		const linkedUrl = `\x1b]8;;${info.verificationUri}\x07${info.verificationUri}\x1b]8;;\x07`;
+		const linkedUrl = webLink(info.verificationUri, info.verificationUri);
 		this.contentContainer.addChild(new Text(theme.fg("accent", linkedUrl), 1, 0));
 
 		const clickHint = process.platform === "darwin" ? "Cmd+click to open" : "Ctrl+click to open";
-		const hyperlink = `\x1b]8;;${info.verificationUri}\x07${clickHint}\x1b]8;;\x07`;
+		const hyperlink = webLink(clickHint, info.verificationUri);
 		this.contentContainer.addChild(new Text(theme.fg("dim", hyperlink), 1, 0));
 		this.contentContainer.addChild(new Spacer(1));
-		this.contentContainer.addChild(new Text(theme.fg("warning", `Enter code: ${info.userCode}`), 1, 0));
+		this.contentContainer.addChild(
+			new Text(theme.fg("warning", `Enter code: ${sanitizeTerminalText(info.userCode)}`), 1, 0),
+		);
 
 		this.tui.requestRender();
 	}
@@ -192,8 +214,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.contentContainer.addChild(new Text(theme.fg("text", message), 1, 0));
 		for (const link of links) {
 			const text = link.label ? `${link.label}: ${link.url}` : link.url;
-			const hyperlink = `\x1b]8;;${link.url}\x07${text}\x1b]8;;\x07`;
-			this.contentContainer.addChild(new Text(theme.fg("accent", hyperlink), 1, 0));
+			this.contentContainer.addChild(new Text(theme.fg("accent", webLink(text, link.url)), 1, 0));
 		}
 		if (showCloseHint) {
 			this.contentContainer.addChild(new Spacer(1));

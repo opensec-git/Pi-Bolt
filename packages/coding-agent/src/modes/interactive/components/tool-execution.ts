@@ -10,6 +10,7 @@ import {
 	reportRenderChange,
 	reportsChanges,
 	Spacer,
+	sanitizeTerminalText,
 	setSubtreeReportsChanges,
 	Text,
 	type TUI,
@@ -432,10 +433,11 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private formatToolExecution(): string {
-		let text = theme.fg("toolTitle", theme.bold(this.toolName));
+		let text = theme.fg("toolTitle", theme.bold(sanitizeTerminalText(this.toolName)));
 		const content = JSON.stringify(this.args, null, 2);
 		if (content) {
-			text += `\n\n${content}`;
+			// (JSON.stringify() escapes C0 controls in the model's arguments, but not DEL and C1 controls.)
+			text += `\n\n${sanitizeTerminalText(content)}`;
 		}
 		const output = this.getTextOutput();
 		if (output) {

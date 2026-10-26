@@ -11,6 +11,7 @@ import {
 	markReportsChanges,
 	reportRenderChange,
 	Spacer,
+	sanitizeTerminalText,
 	Text,
 } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
@@ -422,7 +423,10 @@ export class AssistantMessageComponent extends Container {
 			} else if (part.kind === "toolCalls") {
 				this.hasToolCalls = part.present;
 			} else {
-				this.contentContainer.addChild(new Text(theme.fg("error", part.text), this.outputPad, 0));
+				// (An error's text can come from the provider's response: escape sequences in it would act on the terminal.)
+				this.contentContainer.addChild(
+					new Text(theme.fg("error", sanitizeTerminalText(part.text)), this.outputPad, 0),
+				);
 			}
 		}
 	}

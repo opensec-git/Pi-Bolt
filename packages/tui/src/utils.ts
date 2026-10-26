@@ -337,6 +337,40 @@ export function stripTerminalSequences(str: string): string {
 	return result;
 }
 
+/**
+ * Text a terminal would act on rather than show: C0 controls but tab and line feed (a carriage return not before a line
+ * feed included), DEL, and C1 controls.
+ */
+const TERMINAL_CONTROL_REGEX = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]|\r(?!\n)/;
+
+/**
+ * A complete escape sequence (CSI; OSC, DCS, SOS, PM or APC up to its terminator; any other ESC sequence), a lone
+ * carriage return, or one control character of TERMINAL_CONTROL_REGEX (a lone ESC among them).
+ */
+const TERMINAL_SEQUENCE_GLOBAL_REGEX =
+	/\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b[\]PX^_][^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)|\x1b[\x20-\x2f]*[\x30-\x4f\x51-\x57\x59\x5a\x5c\x60-\x7e]|\r(?!\n)|[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g;
+
+/**
+ * Text from outside Pi (a model's reply, a tool call's arguments, a tool's or MCP server's output) made safe to draw:
+ * escape sequences and control characters are removed, so the text cannot set the clipboard (OSC 52) or the window
+ * title, add hyperlinks, move the cursor or clear lines (which would let it draw over what Pi drew, such as a tool's
+ * header or a shell command line). Tabs and line breaks are kept; a carriage return alone becomes a line break, as
+ * Markdown and wrapTextWithAnsi() read it. An escape sequence that is not complete loses its ESC, and the rest is shown
+ * as text. Text without any of these is returned as it is.
+ */
+export function sanitizeTerminalText(text: string): string {
+	if (!TERMINAL_CONTROL_REGEX.test(text)) return text;
+	return text.replace(TERMINAL_SEQUENCE_GLOBAL_REGEX, (match) => (match === "\r" ? "\n" : ""));
+}
+
+/**
+ * Whether a link may be drawn as a clickable terminal hyperlink (OSC 8): a web or mail link, which only a browser or mail
+ * program opens.
+ */
+export function isWebLink(url: string): boolean {
+	return /^(?:https?|mailto):/i.test(url);
+}
+
 interface GraphemeCellRange {
 	start: number;
 	end: number;

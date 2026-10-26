@@ -689,6 +689,14 @@
           .replace(/'/g, '&#39;');
       }
 
+      /**
+       * A count from the session file (Pi writes a number there) as page text. A hand-made session file can hold
+       * anything in its place, so it is read as a number and escaped.
+       */
+      function formatCount(value) {
+        return escapeHtml(Number(value).toLocaleString());
+      }
+
       function sanitizeMarkdownUrl(value) {
         const href = String(value || '').trim().replace(/[\x00-\x1f\x7f]/g, '');
         if (!href) return href;
@@ -766,7 +774,7 @@
             return labelHtml + `<span class="tree-muted">[${escapeHtml(msg.role)}]</span>`;
           }
           case 'compaction':
-            return labelHtml + `<span class="tree-compaction">[compaction: ${Math.round(entry.tokensBefore/1000)}k tokens]</span>`;
+            return labelHtml + `<span class="tree-compaction">[compaction: ${escapeHtml(Math.round(entry.tokensBefore/1000))}k tokens]</span>`;
           case 'branch_summary': {
             const summary = truncate(normalize(entry.summary || ''));
             return labelHtml + `<span class="tree-branch-summary">[branch summary]:</span> ${escapeHtml(summary)}`;
@@ -1392,7 +1400,7 @@
             if (msg.cancelled) {
               html += '<div style="color: var(--warning)">(cancelled)</div>';
             } else if (msg.exitCode !== 0 && msg.exitCode !== null) {
-              html += `<div style="color: var(--error)">(exit ${msg.exitCode})</div>`;
+              html += `<div style="color: var(--error)">(exit ${escapeHtml(msg.exitCode)})</div>`;
             }
             html += '</div>';
             return html;
@@ -1426,8 +1434,8 @@
         if (entry.type === 'compaction') {
           return `<div class="compaction" id="${entryDomId}" onclick="if(window.getSelection().toString())return;this.classList.toggle('expanded')">
             <div class="compaction-label">[compaction]</div>
-            <div class="compaction-collapsed">Compacted from ${entry.tokensBefore.toLocaleString()} tokens</div>
-            <div class="compaction-content"><strong>Compacted from ${entry.tokensBefore.toLocaleString()} tokens</strong>\n\n${escapeHtml(entry.summary)}</div>
+            <div class="compaction-collapsed">Compacted from ${formatCount(entry.tokensBefore)} tokens</div>
+            <div class="compaction-content"><strong>Compacted from ${formatCount(entry.tokensBefore)} tokens</strong>\n\n${escapeHtml(entry.summary)}</div>
           </div>`;
         }
 
@@ -1468,15 +1476,16 @@
               assistantMessages++;
               if (msg.model) models.add(msg.provider ? `${msg.provider}/${msg.model}` : msg.model);
               if (msg.usage) {
-                tokens.input += msg.usage.input || 0;
-                tokens.output += msg.usage.output || 0;
-                tokens.cacheRead += msg.usage.cacheRead || 0;
-                tokens.cacheWrite += msg.usage.cacheWrite || 0;
+                // (Numbers, as Pi writes them; read as numbers, as a session file can hold anything there.)
+                tokens.input += Number(msg.usage.input) || 0;
+                tokens.output += Number(msg.usage.output) || 0;
+                tokens.cacheRead += Number(msg.usage.cacheRead) || 0;
+                tokens.cacheWrite += Number(msg.usage.cacheWrite) || 0;
                 if (msg.usage.cost) {
-                  cost.input += msg.usage.cost.input || 0;
-                  cost.output += msg.usage.cost.output || 0;
-                  cost.cacheRead += msg.usage.cost.cacheRead || 0;
-                  cost.cacheWrite += msg.usage.cost.cacheWrite || 0;
+                  cost.input += Number(msg.usage.cost.input) || 0;
+                  cost.output += Number(msg.usage.cost.output) || 0;
+                  cost.cacheRead += Number(msg.usage.cost.cacheRead) || 0;
+                  cost.cacheWrite += Number(msg.usage.cost.cacheWrite) || 0;
                 }
               }
               toolCalls += msg.content.filter(c => c.type === 'toolCall').length;
@@ -1744,17 +1753,19 @@
             out += '>' + this.parser.parseInline(token.tokens) + '</a>';
             return out;
           },
-          // Sanitize image src URLs with the same scheme allow-list.
+          // Images are shown as links to them, not loaded: opening the page must not fetch anything, as an image URL
+          // can carry text from the session out to its server. Sanitized with the same scheme allow-list as links.
           image(token) {
             const href = sanitizeMarkdownUrl(token.href);
-            if (href === null) {
-              return escapeHtml(token.text || '');
+            const text = escapeHtml(token.text || token.href || '');
+            if (!href) {
+              return text;
             }
-            let out = '<img src="' + escapeHtml(href) + '" alt="' + escapeHtml(token.text || '') + '"';
+            let out = '<a href="' + escapeHtml(href) + '" class="markdown-image-link"';
             if (token.title) {
               out += ' title="' + escapeHtml(token.title) + '"';
             }
-            out += '>';
+            out += '>' + text + '</a>';
             return out;
           },
           // Code blocks: syntax highlight, no HTML escaping

@@ -12,7 +12,14 @@ import {
 	markStableRender,
 	reportRenderChange,
 } from "../tui.ts";
-import { applyBackgroundToLine, flattenLines, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
+import {
+	applyBackgroundToLine,
+	flattenLines,
+	isWebLink,
+	sanitizeTerminalText,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "../utils.ts";
 
 const SGR_SEQUENCE_ALL = /\x1b\[([0-9;:]*)m/g;
 
@@ -827,7 +834,8 @@ export class Markdown implements Component {
 		defaultTextStyle?: DefaultTextStyle,
 		options?: MarkdownOptions,
 	) {
-		this.text = text;
+		// (The text is a model's reply or someone else's: escape sequences in it would act on the terminal.)
+		this.text = sanitizeTerminalText(text);
 		this.paddingX = paddingX;
 		this.paddingY = paddingY;
 		this.theme = theme;
@@ -836,7 +844,7 @@ export class Markdown implements Component {
 	}
 
 	setText(text: string): void {
-		this.text = text;
+		this.text = sanitizeTerminalText(text);
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
@@ -1537,7 +1545,9 @@ export class Markdown implements Component {
 					if (getCapabilities().hyperlinks) {
 						// OSC 8: render as a clickable hyperlink. The URL is not printed inline,
 						// so we always show only the link text regardless of whether it matches href.
-						result += hyperlink(styledLink, token.href) + stylePrefix;
+						// Only a web or mail link is clickable: a click on a local path or another scheme (file:, an app's
+						// handler, or a target read as an option by `open`) could run a program instead of showing a page.
+						result += (isWebLink(token.href) ? hyperlink(styledLink, token.href) : styledLink) + stylePrefix;
 					} else {
 						// Fallback: print URL in parentheses when text differs from href.
 						// Compare raw token.text (not styled) against href for the equality check.

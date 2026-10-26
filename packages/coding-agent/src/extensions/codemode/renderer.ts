@@ -7,7 +7,7 @@
  * Nested calls are not separate tool rows because they never reach the model as tool calls.
  */
 
-import { Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Spacer, sanitizeTerminalText, Text } from "@earendil-works/pi-tui";
 import type { ToolDefinition } from "../../core/extensions/types.ts";
 import { getTextOutput, replaceTabs, startToolTimer, str, toolTimerText } from "../../core/tools/render-utils.ts";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.ts";
@@ -49,16 +49,21 @@ function statusIcon(call: CodemodeNestedCall, theme: Theme): string {
 }
 
 function formatCall(call: CodemodeNestedCall, theme: Theme, expanded: boolean): string {
+	// (The script, which the model wrote, chose the name and arguments: sanitizeTerminalText() keeps escape sequences in them
+	// from acting on the terminal.)
+	const callArgs = sanitizeTerminalText(call.args);
 	const args =
-		!expanded && call.args.length > COLLAPSED_ARGS_CHARS
-			? `${call.args.slice(0, COLLAPSED_ARGS_CHARS - 3)}...`
-			: call.args;
+		!expanded && callArgs.length > COLLAPSED_ARGS_CHARS
+			? `${callArgs.slice(0, COLLAPSED_ARGS_CHARS - 3)}...`
+			: callArgs;
 	const duration = formatDuration(call.durationMs);
-	let line = `${statusIcon(call, theme)} ${theme.fg("toolTitle", call.name)}`;
+	let line = `${statusIcon(call, theme)} ${theme.fg("toolTitle", sanitizeTerminalText(call.name))}`;
 	if (args) line += ` ${theme.fg("muted", args)}`;
 	if (duration) line += ` ${theme.fg("dim", duration)}`;
 	if (call.cost) line += ` ${theme.fg("dim", formatCost(call.cost))}`;
-	if (expanded && call.error) line += `\n    ${theme.fg("error", call.error.split("\n").join("\n    "))}`;
+	if (expanded && call.error) {
+		line += `\n    ${theme.fg("error", sanitizeTerminalText(call.error).split("\n").join("\n    "))}`;
+	}
 	return line;
 }
 

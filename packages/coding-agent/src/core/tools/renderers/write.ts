@@ -6,7 +6,7 @@
  * definition, so the tool's public shape is unchanged.
  */
 
-import { Container, Text } from "@earendil-works/pi-tui";
+import { Container, sanitizeTerminalText, Text } from "@earendil-works/pi-tui";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import { getLanguageFromPath, highlightCode, type Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
@@ -229,7 +229,7 @@ function formatWriteResult(
 	if (!output) {
 		return undefined;
 	}
-	return `\n${theme.fg("error", output)}`;
+	return `\n${theme.fg("error", sanitizeTerminalText(output))}`;
 }
 
 export const writeRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "renderResult"> = {

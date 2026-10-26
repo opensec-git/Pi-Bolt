@@ -6,7 +6,7 @@
  * definition, so the tool's public shape is unchanged.
  */
 
-import { Box, type Component, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, type Component, Container, Spacer, sanitizeTerminalText, Text } from "@earendil-works/pi-tui";
 import { renderDiff } from "../../../modes/interactive/components/diff.ts";
 import { getThemeInstance, type Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../../extensions/types.ts";
@@ -120,7 +120,7 @@ function formatEditResult(
 		if (!errorText || errorText === previewError) {
 			return undefined;
 		}
-		return theme.fg("error", errorText);
+		return theme.fg("error", sanitizeTerminalText(errorText));
 	}
 
 	const resultDiff = result.details?.diff;
@@ -170,7 +170,7 @@ function buildEditCallComponent(
 	if (preview) {
 		let body: string;
 		if ("error" in preview) {
-			body = theme.fg("error", preview.error);
+			body = theme.fg("error", sanitizeTerminalText(preview.error));
 		} else {
 			built.diff = preview.diff;
 			built.renderedDiff =

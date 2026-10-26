@@ -11,6 +11,7 @@ import {
 	type SelectItem,
 	SelectList,
 	Spacer,
+	sanitizeTerminalText,
 	Text,
 	type TUI,
 	truncateToWidth,
@@ -70,6 +71,26 @@ function frame(theme: Theme, title: string, body: Component[], footer?: string):
 
 const MAX_VISIBLE_ITEMS = 12;
 
+/**
+ * `menu` with its texts made safe to draw: they hold what MCP servers sent (tool names and descriptions, errors and their
+ * stderr), and escape sequences in those would act on the terminal. Item values are kept as they are.
+ */
+function sanitizeMenu(menu: McpMenu): McpMenu {
+	const text = (value: string | undefined) => (value === undefined ? undefined : sanitizeTerminalText(value));
+	return {
+		...menu,
+		title: sanitizeTerminalText(menu.title),
+		details: text(menu.details),
+		error: text(menu.error),
+		empty: text(menu.empty),
+		items: menu.items.map((item) => ({
+			...item,
+			label: sanitizeTerminalText(item.label),
+			description: text(item.description),
+		})),
+	};
+}
+
 export class McpManagerView implements McpUi, Component, Focusable {
 	private readonly tui: TUI;
 	private readonly theme: Theme;
@@ -116,7 +137,7 @@ export class McpManagerView implements McpUi, Component, Focusable {
 			};
 			let selected: string | undefined;
 			const render = () => {
-				const menu = build();
+				const menu = sanitizeMenu(build());
 				const wanted = selected ?? menu.selected;
 				const body: Component[] = [];
 				if (menu.details) body.push(new Text(this.theme.fg("muted", menu.details), 1, 0));
@@ -157,14 +178,17 @@ export class McpManagerView implements McpUi, Component, Focusable {
 	}
 
 	status(title: string, message: string, onCancel?: () => void): void {
-		const body = [new Spacer(1), new Text(this.theme.fg("muted", message), 1, 0)];
+		const body = [new Spacer(1), new Text(this.theme.fg("muted", sanitizeTerminalText(message)), 1, 0)];
 		if (!onCancel) {
-			this.setContent(frame(this.theme, title, body));
+			this.setContent(frame(this.theme, sanitizeTerminalText(title), body));
 			return;
 		}
-		this.setContent(frame(this.theme, title, body, keyHint("tui.select.cancel", "cancel")), (data) => {
-			if (this.keybindings.matches(data, "tui.select.cancel")) onCancel();
-		});
+		this.setContent(
+			frame(this.theme, sanitizeTerminalText(title), body, keyHint("tui.select.cancel", "cancel")),
+			(data) => {
+				if (this.keybindings.matches(data, "tui.select.cancel")) onCancel();
+			},
+		);
 	}
 
 	redirectUrl(title: string, authorizationUrl: string, signal: AbortSignal): Promise<string | undefined> {

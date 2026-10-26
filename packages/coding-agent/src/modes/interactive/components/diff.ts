@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "@earendil-works/pi-tui";
 import * as Diff from "diff";
 import { theme } from "../theme/theme.ts";
 
@@ -93,7 +94,8 @@ export interface RenderDiffOptions {
  * - Added lines: green, with inverse on changed tokens
  */
 export function renderDiff(diffText: string, _options: RenderDiffOptions = {}): string {
-	const lines = diffText.split("\n");
+	// (The lines are the model's new text and the file's: escape sequences in them would act on the terminal.)
+	const lines = sanitizeTerminalText(diffText).split("\n");
 	const result: string[] = [];
 
 	let i = 0;
