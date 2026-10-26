@@ -40,7 +40,7 @@ describe("AgentSession virtual models", () => {
 		const requests: ModelRouteRequest[] = [];
 		const harness = await createHarness({
 			...options,
-			models: [
+			models: options.models ?? [
 				{ id: "small", contextWindow: 1000 },
 				{ id: "large", contextWindow: 50_000, maxTokens: 4000, reasoning: true },
 			],
@@ -253,6 +253,46 @@ describe("AgentSession virtual models", () => {
 
 		expect(harness.eventsOfType("compaction_start").map((event) => event.reason)).toEqual(["threshold"]);
 		expect(compactedBeforeSmall).toBe(true);
+		expect(dispatched().at(-1)).toBe("faux/small:off");
+	});
+
+	it("sizes window-scaled compaction settings for the routed model", async () => {
+		const keptBudgets: number[] = [];
+		const { harness, dispatched } = await createRoutedHarness(defaultRoute, {
+			models: [
+				{ id: "small", contextWindow: 40_000 },
+				{ id: "large", contextWindow: 1_000_000, maxTokens: 4000, reasoning: true },
+			],
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async ({ preparation }) => {
+						keptBudgets.push(preparation.settings.keepRecentTokens);
+						const { firstKeptEntryId, tokensBefore } = preparation;
+						return { compaction: { summary: "compacted", firstKeptEntryId, tokensBefore } };
+					});
+				},
+			],
+		});
+		let compactedBeforeSmall = false;
+		harness.setResponses([
+			fauxAssistantMessage("y".repeat(180_000)),
+			() => {
+				compactedBeforeSmall = harness.eventsOfType("compaction_end").length === 1;
+				return fauxAssistantMessage("small answer");
+			},
+		]);
+		await harness.session.prompt("hello");
+		expect(harness.eventsOfType("compaction_start")).toHaveLength(0);
+
+		// About 45k tokens: below 900k on the large model that answered last, above 23,616 on the 40k
+		// small model. Kept recent tokens come from the small model (20k), not the large one (50k, which
+		// would keep the whole history and leave nothing to compact).
+		harness.session.setThinkingLevel("low");
+		await harness.session.prompt("next");
+
+		expect(keptBudgets).toEqual([20_000]);
+		expect(compactedBeforeSmall).toBe(true);
+		expect(harness.eventsOfType("compaction_end").map((event) => event.errorMessage)).toEqual([undefined]);
 		expect(dispatched().at(-1)).toBe("faux/small:off");
 	});
 

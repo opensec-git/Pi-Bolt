@@ -143,9 +143,11 @@ describe("compaction bounds", () => {
 		const update = await harness.session.compact("focus on tests");
 		captured.push({ scenario: "update", summary: update.summary, details: update.details });
 
+		// An explicit reserveTokens keeps the summary cap derived from it alone, as before the cap
+		// scaled with the context window.
 		const large = await createHarness({
 			models: [{ id: "faux-1m", contextWindow: 1_000_000, maxTokens: 64_000 }],
-			settings: { compaction: { keepRecentTokens: 600 } },
+			settings: { compaction: { keepRecentTokens: 600, reserveTokens: 16_384 } },
 		});
 		harnesses.push(large);
 		seedTurn(large, 1, ["src/a.ts", "src/b.ts"]);
@@ -157,6 +159,46 @@ describe("compaction bounds", () => {
 		const expected = JSON.parse(
 			readFileSync(join(import.meta.dirname, "../fixtures/compaction-normal-requests.json"), "utf-8"),
 		);
+		expect(captured).toEqual(expected);
+	});
+
+	// Without an explicit reserveTokens, a 1M window raises only the summary caps of the same requests.
+	it("scales only the summary caps of a 1M-window compaction by default", async () => {
+		const captured: Array<Record<string, unknown>> = [];
+		const large = await createHarness({
+			models: [{ id: "faux-1m", contextWindow: 1_000_000, maxTokens: 64_000 }],
+			settings: { compaction: { keepRecentTokens: 600 } },
+		});
+		harnesses.push(large);
+		seedTurn(large, 1, ["src/a.ts", "src/b.ts"]);
+		seedTurn(large, 2, ["src/c.ts", "src/d.ts", "src/e.ts", "src/f.ts", "src/g.ts", "src/h.ts"]);
+		large.setResponses(
+			Array.from({ length: 6 }, (_, request) => (context: TranscriptContext, options) => {
+				captured.push({
+					scenario: "split",
+					request,
+					messages: context.messages.map((message) => ({ ...message, timestamp: 0 })),
+					maxTokens: options?.maxTokens,
+					reasoning: options?.reasoning,
+					cacheRetention: options?.cacheRetention,
+				});
+				return fauxAssistantMessage(`summary split ${request}`);
+			}),
+		);
+		const split = await large.session.compact();
+		captured.push({ scenario: "split", summary: split.summary, details: split.details });
+
+		const fixture: Array<Record<string, unknown>> = JSON.parse(
+			readFileSync(join(import.meta.dirname, "../fixtures/compaction-normal-requests.json"), "utf-8"),
+		);
+		// 3.2% and 1.6% of the window instead of 80% and 50% of reserveTokens (13107 and 8192).
+		const scaledCaps = [32_000, 16_000];
+		const expected = fixture
+			.filter((entry) => entry.scenario === "split")
+			.map((entry) =>
+				entry.maxTokens === undefined ? entry : { ...entry, maxTokens: scaledCaps[entry.request as number] },
+			);
+		expect(expected.map((entry) => entry.maxTokens)).toEqual([...scaledCaps, undefined]);
 		expect(captured).toEqual(expected);
 	});
 

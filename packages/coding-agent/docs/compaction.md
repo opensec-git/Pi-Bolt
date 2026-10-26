@@ -29,10 +29,22 @@ Both use closely related structured formats and track file operations cumulative
 Auto-compaction triggers when:
 
 ```
-contextTokens > contextWindow - reserveTokens
+contextTokens > min(contextWindow - reserveTokens, floor(contextWindow * thresholdPercent / 100))
 ```
 
-By default, `reserveTokens` is 16384 tokens (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`). This leaves room for the LLM's response. A compaction summary may produce at most 80% of `reserveTokens` (50% for a split turn's prefix), and at least 4096 tokens, capped by the model's output limit. If reasoning uses that whole limit, the summary is requested again without reasoning.
+By default, `reserveTokens` is 16384 tokens and `thresholdPercent` is 90 (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`). The reserve leaves room for the LLM's response; the percentage keeps headroom on large context windows, where 16384 tokens is a small share. Up to a 163840-token window the reserve is the lower limit, so the threshold is `contextWindow - reserveTokens`.
+
+A compaction summary may produce at most the largest of 80% of `reserveTokens`, 4096 tokens and 3.2% of the summarizer's context window, capped by the model's output limit. A split turn's prefix summary gets half the shares: 50% of `reserveTokens`, 4096 tokens or 1.6% of the window. If reasoning uses that whole limit, the summary is requested again without reasoning.
+
+The defaults scale with the context window only while the matching setting is unset:
+
+| Context window | Threshold | `keepRecentTokens` | Summary cap (split-turn prefix) |
+|---|---|---|---|
+| 128K (128000) | 111616 (`contextWindow - reserveTokens`) | 20000 | 13107 (8192) |
+| 200K (200000) | 180000 (90%) | 20000 | 13107 (8192) |
+| 1M (1000000) | 900000 (90%) | 50000 (5%) | 32000 (16000) |
+
+Summary caps are also capped by the model's output limit. Setting `reserveTokens` (globally or in a model override) restores `contextWindow - reserveTokens` as the threshold and 80% of `reserveTokens` (at least 4096) as the summary cap, unless `thresholdPercent` or `summaryMaxTokens` is set too. Setting `keepRecentTokens` keeps that many tokens on every window. Setting `summaryMaxTokens` fixes the summary cap (half of it for a split turn's prefix).
 
 During a multi-turn agent run, Pi checks the canonical projected context after tools finish and their results are appended, before starting the next assistant response. If the threshold is crossed, Pi compacts during `prepareNextTurn`, then performs the existing catch-up steering poll before `turn_start`. It skips this between-turn check when the completed tool batch terminates the run and no queued message requires another response. Pi also checks before a new user prompt and performs final-attempt overflow recovery after the low-level run ends.
 
@@ -42,7 +54,7 @@ You can also trigger manually with `/compact [instructions]`, where optional ins
 
 ### How It Works
 
-1. **Find cut point**: Walk backwards through the finalized session projection, accumulating token estimates until `keepRecentTokens` (default 20k, configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`) is reached
+1. **Find cut point**: Walk backwards through the finalized session projection, accumulating token estimates until `keepRecentTokens` (default: the larger of 20k and 5% of the context window, configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`) is reached
 2. **Extract messages**: Collect projected messages from the previous kept boundary (or session start) up to the cut point
 3. **Generate summary**: Call LLM to summarize with structured format, passing the previous summary as iterative context when present
 4. **Append entry**: Save `CompactionEntry` with summary and `firstKeptEntryId`
@@ -441,8 +453,10 @@ Configure compaction in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settin
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
-| `reserveTokens` | `16384` | Tokens to reserve for LLM response |
-| `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
+| `reserveTokens` | `16384` | Tokens to reserve for LLM response. Setting it turns off the `thresholdPercent` default and the context-window share of the summary cap |
+| `keepRecentTokens` | larger of `20000` and 5% of the context window | Recent tokens to keep (not summarized) |
+| `thresholdPercent` | `90` while `reserveTokens` is unset | Also compact above this percentage of the context window, when that is below `contextWindow - reserveTokens`. An integer from 1 to 100 |
+| `summaryMaxTokens` | see [When It Triggers](#when-it-triggers) | Output cap of a summary; a split turn's prefix gets half. Capped by the model's output limit |
 
 Disable auto-compaction with `"enabled": false`. You can still compact manually with `/compact`.
 
@@ -464,9 +478,9 @@ Use `compaction.modelOverrides` to tune token budgets for different models:
 }
 ```
 
-For a model with a 1M context window, this override triggers compaction above 600K tokens and keeps the ordinary 20000 recent tokens. Other models retain the ordinary 16384-token reserve. `reserveTokens` also influences summarization output limits, capped by the model's maximum output tokens; it is not solely a trigger threshold.
+For a model with a 1M context window, this override triggers compaction above 600K tokens and keeps 50000 recent tokens (5% of the window, since `keepRecentTokens` is unset). Other models retain the ordinary 16384-token reserve. `reserveTokens` also influences summarization output limits, capped by the model's maximum output tokens; it is not solely a trigger threshold.
 
-Keys are exact, case-sensitive `provider/modelId` values, including any slashes within the model ID. Each `reserveTokens` and `keepRecentTokens` value falls back independently from the model override to the ordinary setting to the built-in default. Values must be non-negative safe integers. Invalid values in the matching model override produce an error when read; only omitted fields fall back to the ordinary setting. Model override entries must be objects. Invalid ordinary token settings produce an error when read, even if the active model has a valid override. Only omitted ordinary values use built-in defaults. `enabled` remains global, not model-specific.
+Keys are exact, case-sensitive `provider/modelId` values, including any slashes within the model ID. Each `reserveTokens`, `keepRecentTokens`, `thresholdPercent` and `summaryMaxTokens` value falls back independently from the model override to the ordinary setting to the built-in default; a value set in either place counts as set for the window-scaled defaults. `reserveTokens` and `keepRecentTokens` must be non-negative safe integers, `thresholdPercent` an integer from 1 to 100, and `summaryMaxTokens` a positive safe integer. Invalid values in the matching model override produce an error when read; only omitted fields fall back to the ordinary setting. Model override entries must be objects. Invalid ordinary token settings produce an error when read, even if the active model has a valid override. Only omitted ordinary values use built-in defaults. `enabled` remains global, not model-specific.
 
 These resolved values are used for manual compaction, all automatic threshold checks, overflow recovery, and extension-visible `preparation.settings`. Model switches affect subsequent checks and compactions without changing ordinary settings. Compaction already in progress uses the model and settings captured for that operation. Branch summarization settings are unaffected.
 

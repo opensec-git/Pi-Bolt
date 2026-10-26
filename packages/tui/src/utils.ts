@@ -339,9 +339,9 @@ export function stripTerminalSequences(str: string): string {
 
 /**
  * Text a terminal would act on rather than show: C0 controls but tab and line feed (a carriage return not before a line
- * feed included), DEL, and C1 controls.
+ * feed included), DEL, and C1 controls. Searched from lastIndex.
  */
-const TERMINAL_CONTROL_REGEX = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]|\r(?!\n)/;
+const TERMINAL_CONTROL_REGEX = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]|\r(?!\n)/g;
 
 /**
  * A complete escape sequence (CSI; OSC, DCS, SOS, PM or APC up to its terminator; any other ESC sequence), a lone
@@ -359,8 +359,119 @@ const TERMINAL_SEQUENCE_GLOBAL_REGEX =
  * as text. Text without any of these is returned as it is.
  */
 export function sanitizeTerminalText(text: string): string {
+	TERMINAL_CONTROL_REGEX.lastIndex = 0;
 	if (!TERMINAL_CONTROL_REGEX.test(text)) return text;
 	return text.replace(TERMINAL_SEQUENCE_GLOBAL_REGEX, (match) => (match === "\r" ? "\n" : ""));
+}
+
+/**
+ * At a lone ESC (lastIndex): the start of an escape sequence that runs to the end of the text, which more text could
+ * complete (a CSI, OSC, DCS, SOS, PM, APC or other ESC sequence without its last character or terminator).
+ */
+const PENDING_ESCAPE_REGEX = /\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*|[\]PX^_][^\x07\x1b\x9c]*\x1b?|[\x20-\x2f]*)$/y;
+
+/** What sanitizeTerminalTextFrom() made of a text: the start of what it makes of a longer text that begins with it. */
+export interface SanitizedTerminalText {
+	/** The text. */
+	readonly raw: string;
+	/** sanitizeTerminalText(raw). */
+	readonly text: string;
+	/** Whether `text` is `raw`: nothing was removed or replaced. */
+	readonly unchanged: boolean;
+	/**
+	 * Where in `raw` no escape sequence or carriage return is pending: every text that begins with `raw` sanitises, up to
+	 * there, to the first `safeLength` characters of `text`, and from there as if it began there.
+	 */
+	readonly safeRaw: number;
+	readonly safeLength: number;
+	/**
+	 * When `text` is the text of the `previous` result given for it with more text after it: that text (empty when the
+	 * text is the same). A message streaming in is lexed from what was lexed for it before and what was added.
+	 */
+	readonly added: string | undefined;
+}
+
+/**
+ * sanitizeTerminalText(text), with what it made of a shorter text (`previous`). When `text` begins with that text (a
+ * message streaming in), only what follows the last point where no escape sequence was pending is gone through, so the
+ * cost of each chunk does not grow with the length of the message. The result is the same as sanitizeTerminalText()'s.
+ *
+ * Example: "a\x1b[3" then "a\x1b[31mb". The first sanitises to "a[3" (an escape sequence that is not complete loses its
+ * ESC), but the ESC is pending: the second is gone through from the ESC, and gives "ab", as all of it would.
+ */
+export function sanitizeTerminalTextFrom(text: string, previous?: SanitizedTerminalText): SanitizedTerminalText {
+	let start = 0;
+	let prefix = "";
+	let unchanged = true;
+	// (Whether the result is the previous text with more after it.)
+	let extendsPrevious = false;
+	if (previous !== undefined && text.length >= previous.raw.length && text.startsWith(previous.raw)) {
+		if (text.length === previous.raw.length) return { ...previous, added: "" };
+		start = previous.safeRaw;
+		unchanged = previous.unchanged;
+		prefix =
+			previous.safeLength === previous.text.length ? previous.text : previous.text.slice(0, previous.safeLength);
+		extendsPrevious = prefix.length === previous.text.length;
+	}
+
+	TERMINAL_CONTROL_REGEX.lastIndex = start;
+	if (!TERMINAL_CONTROL_REGEX.test(text)) {
+		const tail = text.slice(start);
+		const sanitized = unchanged ? text : prefix + tail;
+		return {
+			raw: text,
+			text: sanitized,
+			unchanged,
+			safeRaw: text.length,
+			safeLength: sanitized.length,
+			added: extendsPrevious ? tail : undefined,
+		};
+	}
+
+	// As sanitizeTerminalText() replaces, from `start`, noting the first match that more text could make another: a lone
+	// ESC that begins an escape sequence not complete yet, or a carriage return at the end (it is a line break unless a
+	// line feed follows).
+	let added = "";
+	let last = start;
+	let safeRaw = -1;
+	let safeLength = 0;
+	// (Regular expressions as literals: one built from a string at run time is not compiled ahead of time.)
+	const regex = TERMINAL_SEQUENCE_GLOBAL_REGEX;
+	regex.lastIndex = start;
+	for (let match = regex.exec(text); match !== null; match = regex.exec(text)) {
+		const at = match.index;
+		const sequence = match[0];
+		if (safeRaw < 0) {
+			let pending = false;
+			if (sequence === "\r") {
+				pending = at + 1 === text.length;
+			} else if (sequence === "\x1b") {
+				PENDING_ESCAPE_REGEX.lastIndex = at;
+				pending = PENDING_ESCAPE_REGEX.test(text);
+			}
+			if (pending) {
+				safeRaw = at;
+				safeLength = prefix.length + added.length + (at - last);
+			}
+		}
+		added += text.slice(last, at);
+		if (sequence === "\r") added += "\n";
+		last = at + sequence.length;
+	}
+	added += text.slice(last);
+	const sanitized = prefix + added;
+	if (safeRaw < 0) {
+		safeRaw = text.length;
+		safeLength = sanitized.length;
+	}
+	return {
+		raw: text,
+		text: sanitized,
+		unchanged: false,
+		safeRaw,
+		safeLength,
+		added: extendsPrevious ? added : undefined,
+	};
 }
 
 /**

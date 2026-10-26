@@ -843,7 +843,7 @@ export class AgentSession {
 		return shouldCompact(
 			this._contextTokenEstimate().tokens,
 			model.contextWindow,
-			this.settingsManager.getCompactionSettings(this.model),
+			this.settingsManager.getCompactionSettings(this.model, model.contextWindow),
 		);
 	}
 
@@ -892,7 +892,7 @@ export class AgentSession {
 		if (!model || isVirtualModel(model) || !this._exceedsCompactionThreshold(model)) {
 			return { ...context, messages: projection.messages };
 		}
-		await this._runAutoCompaction("threshold", false);
+		await this._runAutoCompaction("threshold", false, undefined, model.contextWindow);
 		return { ...context, messages: this.sessionManager.buildSessionProjection().messages };
 	}
 
@@ -948,7 +948,8 @@ export class AgentSession {
 			// The route stands: the router already decided this request. The state entry does not change
 			// the projection.
 			if (this._exceedsCompactionThreshold(route.model)) {
-				await this._runAutoCompaction("threshold", false);
+				// Size the kept tail for the routed model too, not the model of the latest response.
+				await this._runAutoCompaction("threshold", false, undefined, route.model.contextWindow);
 				({ previous, context } = await prepare());
 			}
 			return { ...previous, context, model: route.model, thinkingLevel: route.thinkingLevel };
@@ -2976,7 +2977,7 @@ export class AgentSession {
 				throw new Error(formatNoModelSelectedMessage());
 			}
 
-			const settings = this.settingsManager.getCompactionSettings(model);
+			const settings = this.settingsManager.getCompactionSettings(model, this._limitsModel()?.contextWindow);
 			const pathEntries = this.sessionManager.getBranch();
 
 			const preparation = prepareCompaction(pathEntries, settings);
@@ -3147,8 +3148,7 @@ export class AgentSession {
 	 * @returns Whether the post-run loop should call `agent.continue()` for overflow recovery or queued messages
 	 */
 	private async _checkCompaction(assistantMessage: AssistantMessage, skipAbortedCheck = true): Promise<boolean> {
-		const settings = this.settingsManager.getCompactionSettings(this.model);
-		if (!settings.enabled) return false;
+		if (!this.settingsManager.getCompactionEnabled()) return false;
 
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
 		if (skipAbortedCheck && assistantMessage.stopReason === "aborted") return false;
@@ -3161,6 +3161,7 @@ export class AgentSession {
 		const messageModel = this._modelForMessage(assistantMessage);
 		const sameModel = messageModel !== undefined;
 		const contextWindow = (messageModel ?? this.model)?.contextWindow ?? 0;
+		const settings = this.settingsManager.getCompactionSettings(this.model, contextWindow);
 
 		// Skip compaction checks if this assistant message is older than the latest
 		// compaction boundary. This prevents a stale pre-compaction usage/error
@@ -3211,7 +3212,7 @@ export class AgentSession {
 			// Case 2: the response completed successfully. Compact, but do not retry because
 			// agent.continue() cannot continue from a completed assistant response.
 			if (!willRetry) {
-				return await this._runAutoCompaction("overflow", false);
+				return await this._runAutoCompaction("overflow", false, undefined, contextWindow);
 			}
 
 			// A truncated response gets one compact-and-retry attempt. A context overflow gets one per
@@ -3229,7 +3230,12 @@ export class AgentSession {
 			// Persistently omit the selected final attempt before post-run recovery compaction.
 			this._overflowRecoveryAttempts++;
 			this._omitRecoveryAttempt(assistantMessage);
-			const retry = await this._runAutoCompaction("overflow", willRetry, contextOverflow ? attempts : undefined);
+			const retry = await this._runAutoCompaction(
+				"overflow",
+				willRetry,
+				contextOverflow ? attempts : undefined,
+				contextWindow,
+			);
 			if (retry) this._failedResponse = assistantMessage;
 			return retry;
 		}
@@ -3267,7 +3273,7 @@ export class AgentSession {
 			contextTokens = directContextTokens;
 		}
 		if (shouldCompact(contextTokens, contextWindow, settings)) {
-			return await this._runAutoCompaction("threshold", false);
+			return await this._runAutoCompaction("threshold", false, undefined, contextWindow);
 		}
 		return false;
 	}
@@ -3342,15 +3348,17 @@ export class AgentSession {
 	 * @param reason Automatic trigger selected by `_checkCompaction()`
 	 * @param willRetry Whether to continue the interrupted turn after overflow compaction
 	 * @param recoveryStep Context overflow recovery step (see `getOverflowRecoveryStep()`), when retrying after an overflow
+	 * @param contextWindow Window of the model the compacted context is sent to; it sizes window-scaled settings
 	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
 	private async _runAutoCompaction(
 		reason: "overflow" | "threshold",
 		willRetry: boolean,
 		recoveryStep?: number,
+		contextWindow = this._limitsModel()?.contextWindow,
 	): Promise<boolean> {
 		const model = this.model;
-		const baseSettings = this.settingsManager.getCompactionSettings(model);
+		const baseSettings = this.settingsManager.getCompactionSettings(model, contextWindow);
 		const recovery = recoveryStep === undefined ? undefined : getOverflowRecoveryStep(baseSettings, recoveryStep);
 		const settings =
 			recovery && recovery.keepRecentTokens !== baseSettings.keepRecentTokens

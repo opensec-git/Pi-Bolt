@@ -16,7 +16,9 @@ import {
 	applyBackgroundToLine,
 	flattenLines,
 	isWebLink,
+	type SanitizedTerminalText,
 	sanitizeTerminalText,
+	sanitizeTerminalTextFrom,
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "../utils.ts";
@@ -580,13 +582,23 @@ function lexMarkdown(source: string, complete = false, extended?: ExtendedSource
 const textsWithoutTabs: Array<{ text: string; replaced: string; lexed?: LexedMarkdown }> = [];
 const TEXTS_WITHOUT_TABS_KEPT = 4;
 
+/** A text that is `from`, a text rendered before, with `added` after it (Markdown.grown). */
+interface GrownText {
+	from: string;
+	added: string;
+}
+
 /**
  * `text` with each tab replaced by three spaces. A message that is streaming in is rendered again each time it grows: what
  * was replaced in it the last time is kept, and only the text added since is gone through. When the text is that one with
  * text added, the result is the last result with the added text after it: `extended` says so (for lexMarkdown()), and
- * `remember` keeps what the result was lexed to.
+ * `remember` keeps what the result was lexed to. `grown`, when known, says which text that is, and what was added to it:
+ * the text is then not compared with the ones kept.
  */
-function replaceTabs(text: string): {
+function replaceTabs(
+	text: string,
+	grown?: GrownText,
+): {
 	text: string;
 	extended?: ExtendedSource;
 	remember: (lexed: LexedMarkdown | undefined) => void;
@@ -600,15 +612,23 @@ function replaceTabs(text: string): {
 	}
 	let replaced: string | undefined;
 	let extended: ExtendedSource | undefined;
+	let grownFrom = -1;
+	if (grown !== undefined) {
+		for (let i = textsWithoutTabs.length - 1; i >= 0 && grownFrom < 0; i--) {
+			if (textsWithoutTabs[i].text === grown.from) grownFrom = i;
+		}
+	}
 	for (let i = textsWithoutTabs.length - 1; i >= 0 && replaced === undefined; i--) {
 		const entry = textsWithoutTabs[i];
-		if (text.length >= entry.text.length && text.startsWith(entry.text)) {
+		if (grownFrom >= 0 ? i === grownFrom : text.length >= entry.text.length && text.startsWith(entry.text)) {
 			if (text.length === entry.text.length) {
 				replaced = entry.replaced;
 			} else {
 				// (The added text as a string of its own: a part of `text` keeps all of `text` in memory, and the result keeps
 				// the part, as the next result keeps this one: every chunk of a reply would keep the whole reply as it was.)
-				const added = ownString(text.slice(entry.text.length)).replace(/\t/g, "   ");
+				const added = ownString(
+					grownFrom >= 0 && grown !== undefined ? grown.added : text.slice(entry.text.length),
+				).replace(/\t/g, "   ");
 				replaced = entry.replaced + added;
 				// (What the last result was lexed to was kept with it: its source is that result.)
 				if (entry.lexed !== undefined) extended = { from: entry.lexed, added };
@@ -789,6 +809,15 @@ interface InlineStyleContext {
 
 export class Markdown implements Component {
 	private text: string;
+	/** What the text given to setText() last was sanitised to (sanitizeTerminalTextFrom()). */
+	private sanitized?: SanitizedTerminalText;
+	/**
+	 * The text when its tokens were last made (when the transform, if any, left it as it was), what it was lexed to when it
+	 * was lexed as it is (it had no tabs to replace), and the text setText() added to it since, while each text set was the one before with more
+	 * after it. A message streaming in is then lexed from that (replaceTabs()' `grown`, lexMarkdown()'s `extended`) without
+	 * comparing it with the text before again: setText() did (sanitizeTerminalTextFrom()).
+	 */
+	private grown?: GrownText & { lexed?: LexedMarkdown };
 	private paddingX: number; // Left/right padding
 	private paddingY: number; // Top/bottom padding
 	private defaultTextStyle?: DefaultTextStyle;
@@ -844,7 +873,14 @@ export class Markdown implements Component {
 	}
 
 	setText(text: string): void {
-		this.text = sanitizeTerminalText(text);
+		// (A reply streaming in is set again for each chunk: only what was added is sanitised.)
+		this.sanitized = sanitizeTerminalTextFrom(text, this.sanitized);
+		this.text = this.sanitized.text;
+		const added = this.sanitized.added;
+		if (this.grown !== undefined) {
+			if (added === undefined) this.grown = undefined;
+			else this.grown.added += added;
+		}
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
@@ -1001,7 +1037,10 @@ export class Markdown implements Component {
 		}
 
 		// Replace tabs with 3 spaces for consistent rendering
-		const normalized = replaceTabs(text);
+		// (Only for the text as it is: a transform, such as one an extension adds, may give another.)
+		const transformed = text !== this.text;
+		const grown = !transformed && this.grown?.added ? this.grown : undefined;
+		const normalized = replaceTabs(text, grown);
 		const normalizedText = normalized.text;
 
 		// Parse markdown to HTML-like tokens
@@ -1011,8 +1050,17 @@ export class Markdown implements Component {
 				? cached.tokens
 				: undefined;
 		if (!tokens) {
-			tokens = lexMarkdown(normalizedText, this.options.complete, normalized.extended);
-			normalized.remember(lastLexed?.tokens === tokens ? lastLexed : undefined);
+			// (The text as it is, without tabs: lexed from what it was lexed to before, with what setText() added since.)
+			const asIs = normalizedText === this.text;
+			const extended =
+				normalized.extended ??
+				(asIs && grown?.lexed !== undefined ? { from: grown.lexed, added: grown.added } : undefined);
+			tokens = lexMarkdown(normalizedText, this.options.complete, extended);
+			const lexed = lastLexed?.tokens === tokens ? lastLexed : undefined;
+			normalized.remember(lexed);
+			this.grown = transformed
+				? undefined
+				: { from: this.text, added: "", ...(asIs && lexed !== undefined ? { lexed } : {}) };
 			this.cachedTokens = new WeakRef({ source: normalizedText, tokens });
 		}
 		return { tokens, contentWidth };

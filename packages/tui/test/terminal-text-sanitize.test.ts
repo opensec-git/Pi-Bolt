@@ -3,7 +3,12 @@ import { afterEach, describe, it } from "node:test";
 import { Markdown } from "../src/components/markdown.ts";
 import { ProcessTerminal } from "../src/terminal.ts";
 import { resetCapabilitiesCache, setCapabilities } from "../src/terminal-image.ts";
-import { getOsc8LinkAtColumn, sanitizeTerminalText } from "../src/utils.ts";
+import {
+	getOsc8LinkAtColumn,
+	type SanitizedTerminalText,
+	sanitizeTerminalText,
+	sanitizeTerminalTextFrom,
+} from "../src/utils.ts";
 import { defaultMarkdownTheme } from "./test-themes.ts";
 
 // Sequences a model's reply can carry that a terminal acts on: the clipboard (OSC 52), the window title (OSC 0/2), a
@@ -49,6 +54,156 @@ describe("sanitizeTerminalText", () => {
 	it("returns text without control characters as it is", () => {
 		const text = "plain — ünïcödé 中文 🙂 text";
 		assert.strictEqual(sanitizeTerminalText(text), text);
+	});
+});
+
+/** A deterministic random number generator (mulberry32), so that a failure can be replayed. */
+function random(seed: number): () => number {
+	let state = seed >>> 0;
+	return () => {
+		state = (state + 0x6d2b79f5) >>> 0;
+		let t = state;
+		t = Math.imul(t ^ (t >>> 15), t | 1);
+		t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+	};
+}
+
+// Pieces of text that make escape sequences (complete, cut short, nested) when strung together at random.
+const PIECES = [
+	"\x1b",
+	"\x1b[",
+	"\x1b]",
+	"\x1bP",
+	"\x1b\\",
+	"[",
+	"]",
+	"\\",
+	"0;",
+	"52;c;",
+	"31",
+	";",
+	"m",
+	"K",
+	" ",
+	"(",
+	"B",
+	"\x07",
+	"\x9c",
+	"\x9b",
+	"\x9d",
+	"\r",
+	"\n",
+	"\r\n",
+	"\t",
+	"\x00",
+	"\x7f",
+	"\x85",
+	"text",
+	"a",
+	"é",
+	"中",
+	"🙂",
+];
+
+function randomText(next: () => number, pieces: number): string {
+	let text = "";
+	for (let i = 0; i < pieces; i++) {
+		text += next() < 0.5 ? PIECES[Math.floor(next() * PIECES.length)] : "plain words ";
+	}
+	return text;
+}
+
+describe("sanitizeTerminalTextFrom", () => {
+	it("gives what sanitizeTerminalText() gives for every chunk of a text streaming in", () => {
+		for (let seed = 1; seed <= 400; seed++) {
+			const next = random(seed);
+			const full = randomText(next, 20 + Math.floor(next() * 120));
+			let previous: SanitizedTerminalText | undefined;
+			let end = 0;
+			while (end < full.length) {
+				// Chunks of 0 to 12 code units: sequences, surrogate pairs and CR LF are split at any point.
+				end = Math.min(full.length, end + Math.floor(next() * 13));
+				const text = full.slice(0, end);
+				const before = previous;
+				previous = sanitizeTerminalTextFrom(text, previous);
+				assert.strictEqual(previous.raw, text);
+				// (`added`, when set, is what the text adds to the one before.)
+				if (previous.added !== undefined) assert.strictEqual((before?.text ?? "") + previous.added, previous.text);
+				assert.strictEqual(
+					previous.text,
+					sanitizeTerminalText(text),
+					`seed ${seed}, ${JSON.stringify(text)} after ${JSON.stringify(full.slice(0, end))}`,
+				);
+			}
+		}
+	});
+
+	it("gives what sanitizeTerminalText() gives for a text that does not begin with the one before", () => {
+		for (let seed = 1; seed <= 200; seed++) {
+			const next = random(seed);
+			let previous: SanitizedTerminalText | undefined;
+			for (let step = 0; step < 20; step++) {
+				const last = previous?.raw ?? "";
+				// Longer, shorter, or another text.
+				const choice = next();
+				const text =
+					choice < 0.6
+						? last + randomText(next, Math.floor(next() * 4))
+						: choice < 0.8
+							? last.slice(0, Math.floor(next() * last.length))
+							: randomText(next, Math.floor(next() * 30));
+				const before = previous;
+				previous = sanitizeTerminalTextFrom(text, previous);
+				assert.strictEqual(previous.text, sanitizeTerminalText(text), `seed ${seed}, ${JSON.stringify(text)}`);
+				if (previous.added !== undefined) assert.strictEqual((before?.text ?? "") + previous.added, previous.text);
+			}
+		}
+	});
+
+	it("returns text without control characters as it is", () => {
+		const first = sanitizeTerminalTextFrom("plain ");
+		const second = sanitizeTerminalTextFrom("plain text", first);
+		assert.strictEqual(second.text, "plain text");
+		assert.ok(second.unchanged);
+		assert.strictEqual(second.added, "text");
+		const same = sanitizeTerminalTextFrom("plain text", second);
+		assert.strictEqual(same.text, "plain text");
+		assert.strictEqual(same.added, "");
+	});
+
+	it("goes through a sequence again once more text completes it", () => {
+		const cut = sanitizeTerminalTextFrom("a\x1b]0;tit");
+		assert.strictEqual(cut.text, "a]0;tit");
+		assert.strictEqual(sanitizeTerminalTextFrom("a\x1b]0;title\x1b", cut).text, "a]0;title");
+		assert.strictEqual(sanitizeTerminalTextFrom("a\x1b]0;title\x1b\\b", cut).text, "ab");
+		const cr = sanitizeTerminalTextFrom("line\r");
+		assert.strictEqual(cr.text, "line\n");
+		assert.strictEqual(sanitizeTerminalTextFrom("line\r\nnext", cr).text, "line\r\nnext");
+	});
+});
+
+describe("Markdown streaming in text with escape sequences", () => {
+	afterEach(() => resetCapabilitiesCache());
+
+	it("renders each chunk as a Markdown made from that text", () => {
+		setCapabilities({ images: null, trueColor: false, hyperlinks: false });
+		for (let seed = 1; seed <= 40; seed++) {
+			const next = random(seed);
+			const full = randomText(next, 60);
+			const streamed = new Markdown("", 0, 0, defaultMarkdownTheme);
+			let end = 0;
+			while (end < full.length) {
+				end = Math.min(full.length, end + 1 + Math.floor(next() * 12));
+				const text = full.slice(0, end);
+				streamed.setText(text);
+				assert.deepStrictEqual(
+					streamed.render(60),
+					new Markdown(text, 0, 0, defaultMarkdownTheme).render(60),
+					`seed ${seed}, ${JSON.stringify(text)}`,
+				);
+			}
+		}
 	});
 });
 

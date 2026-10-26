@@ -160,6 +160,41 @@ describe("Markdown lexing of a growing source", () => {
 		});
 	}
 
+	it("one component given each chunk with setText(), rendered after some of them", () => {
+		// (With tabs too: a text with tabs is lexed from what replacing them gave the time before.)
+		const documents = Object.entries(DOCUMENTS).flatMap(([name, text]) => [
+			[name, text],
+			[`${name} with tabs`, text.replace(/^ {2}/gm, "\t").replace(/ {4}/g, "\t")],
+		]);
+		// (No transform, one that gives the text as it is, as the coding agent's when no extension adds one, and one that
+		// changes it.)
+		const transforms = [undefined, (markdown: string) => markdown, (markdown: string) => markdown.replace(/e/g, "E")];
+		for (const [name, text] of documents) {
+			for (let seed = 1; seed <= 3; seed++) {
+				const next = random(seed);
+				const document = `<!-- ${name} set ${Math.random()} -->\n\n${text}`;
+				const transform = transforms[seed - 1];
+				const options = transform === undefined ? undefined : { transform };
+				const component = new Markdown("", 1, 0, defaultMarkdownTheme, undefined, options);
+				let length = 0;
+				while (length < document.length) {
+					length = Math.min(document.length, length + 1 + Math.floor(next() * 40));
+					let source = document.slice(0, length);
+					// Now and then a text that is not the one before with text added (a message edited, or set again).
+					if (next() < 0.05) source = `${source.slice(0, Math.floor(source.length / 2))}\n\nchanged`;
+					component.setText(source);
+					// (Several chunks can come between two renders.)
+					if (next() < 0.4 && length < document.length) continue;
+					const rendered = component.render(72);
+					setMarkdownCachingForTest(false);
+					const fresh = new Markdown(source, 1, 0, defaultMarkdownTheme, undefined, options).render(72);
+					setMarkdownCachingForTest(true);
+					assert.deepStrictEqual(rendered, fresh, `${name}#${seed}: rendered lines differ at length ${length}`);
+				}
+			}
+		}
+	});
+
 	it("random documents made of blocks in random order", () => {
 		const blocks = Object.values(DOCUMENTS)
 			.join("\n\n")

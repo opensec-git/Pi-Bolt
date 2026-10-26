@@ -10,6 +10,7 @@ export const SETTINGS_DEFAULTS = {
 		enabled: true,
 		reserveTokens: 16384,
 		keepRecentTokens: 20000,
+		thresholdPercent: 90,
 	},
 	branchSummary: {
 		reserveTokens: 16384,

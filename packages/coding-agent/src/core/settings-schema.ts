@@ -2,7 +2,7 @@ import { ModelThinkingLevelSchema } from "@earendil-works/pi-ai/providers/model-
 import { type Static, type TSchemaOptions, Type } from "typebox";
 import { SETTINGS_DEFAULTS } from "./settings-defaults.ts";
 
-function nonNegativeSafeInteger(options: { default?: number } = {}) {
+function nonNegativeSafeInteger(options: TSchemaOptions = {}) {
 	return Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER, ...options });
 }
 
@@ -10,15 +10,50 @@ function timeoutSetting(options?: TSchemaOptions) {
 	return Type.Union([Type.Number({ minimum: 0 }), Type.Literal("disabled")], options);
 }
 
+function compactionThresholdPercent(options: TSchemaOptions = {}) {
+	return Type.Integer({ minimum: 1, maximum: 100, ...options });
+}
+
+function summaryMaxTokens(options: TSchemaOptions = {}) {
+	return Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, ...options });
+}
+
 const CompactionModelOverrideSchema = Type.Object({
 	reserveTokens: Type.Optional(nonNegativeSafeInteger()),
 	keepRecentTokens: Type.Optional(nonNegativeSafeInteger()),
+	thresholdPercent: Type.Optional(compactionThresholdPercent()),
+	summaryMaxTokens: Type.Optional(summaryMaxTokens()),
 });
 
 const CompactionSettingsSchema = Type.Object({
 	enabled: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.compaction.enabled })),
-	reserveTokens: Type.Optional(nonNegativeSafeInteger({ default: SETTINGS_DEFAULTS.compaction.reserveTokens })),
-	keepRecentTokens: Type.Optional(nonNegativeSafeInteger({ default: SETTINGS_DEFAULTS.compaction.keepRecentTokens })),
+	reserveTokens: Type.Optional(
+		nonNegativeSafeInteger({
+			description:
+				"Tokens reserved for the model response: compaction triggers above contextWindow - reserveTokens. Setting it turns off the thresholdPercent default and the context-window share of the summary cap.",
+			default: SETTINGS_DEFAULTS.compaction.reserveTokens,
+		}),
+	),
+	keepRecentTokens: Type.Optional(
+		nonNegativeSafeInteger({
+			description:
+				"Recent tokens kept without summarization. Unset: the larger of 20000 and 5% of the context window.",
+			default: SETTINGS_DEFAULTS.compaction.keepRecentTokens,
+		}),
+	),
+	thresholdPercent: Type.Optional(
+		compactionThresholdPercent({
+			description:
+				"Also compact above this percentage of the context window when that is below contextWindow - reserveTokens. The default applies only while reserveTokens is unset.",
+			default: SETTINGS_DEFAULTS.compaction.thresholdPercent,
+		}),
+	),
+	summaryMaxTokens: Type.Optional(
+		summaryMaxTokens({
+			description:
+				"Output cap of a compaction summary; a split turn's prefix summary gets half. Unset: the largest of 80% of reserveTokens, 4096 and (while reserveTokens is unset) 3.2% of the context window, capped by the model's output limit.",
+		}),
+	),
 	modelOverrides: Type.Optional(
 		Type.Record(Type.String(), CompactionModelOverrideSchema, {
 			description: 'Per-model overrides keyed by exact "provider/modelId" strings.',
