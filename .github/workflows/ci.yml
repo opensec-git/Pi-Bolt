@@ -405,6 +405,12 @@ jobs:
           exit $LASTEXITCODE
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Ed25519 of install.ps1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          & tests\installer\ed25519.ps1
+          exit $LASTEXITCODE
       - name: Type-ahead before a question (install.ps1)
         if: runner.os == 'Windows'
         shell: powershell
@@ -424,7 +430,16 @@ jobs:
             # No OpenSSL 3, no Pi-Bolt and no ssh-keygen: nothing can check the signature, so nothing is installed
             if run >/tmp/c; then cat /tmp/c; echo "installed without checking the signature"; exit 1; fi
             grep -q "nothing here can check" /tmp/c
-            run PIBOLT_UNVERIFIED=1 | tee /tmp/d; grep -q "signature was not checked" /tmp/d
+            # An opt-in left in the environment is not one: only the SHA-256 of the SHA256SUMS of this release lets it in
+            if run PIBOLT_UNVERIFIED=1 >/tmp/d; then cat /tmp/d; echo "installed with PIBOLT_UNVERIFIED=1"; exit 1; fi
+            # A build there before that does not say what it checked (an exit status alone) is not taken for a check
+            mkdir -p /root/t/.pi-bolt/pi-bolt-linux-x64 && printf "#!/bin/sh\nexit 0\n" >/root/t/.pi-bolt/pi-bolt-linux-x64/pi
+            chmod 755 /root/t/.pi-bolt/pi-bolt-linux-x64/pi
+            if run >/tmp/e; then cat /tmp/e; echo "an exit status was taken for a check"; exit 1; fi
+            grep -q "nothing here can check" /tmp/e
+            rm -rf /root/t
+            sums=$(curl -fsSL https://github.com/opensec-git/Pi-Bolt/releases/latest/download/SHA256SUMS | sha256sum | cut -c1-64)
+            run PIBOLT_UNVERIFIED=$sums | tee /tmp/f; grep -q "signature was not checked" /tmp/f
             /root/t/.local/bin/pi-bolt --version'
 
   engine:

@@ -25,7 +25,10 @@
 #                    without asking. Without it the installer asks when it can; a run that cannot ask, or PIBOLT_YES=1,
 #                    installs none.
 #   PIBOLT_DOWNLOAD_BASE  a mirror of a release to download everything from (its SHA256SUMS.sig too)
-#   PIBOLT_ALLOW_UNSIGNED=1  install a release whose checksums have no signature (a build of your own); never needed otherwise
+#   PIBOLT_ALLOW_UNSIGNED  the SHA-256 of a release's SHA256SUMS (the installer shows it), to install that download although it
+#                    has no signature (a build of your own); never needed otherwise. It matches those checksums only, so a
+#                    value left in the environment does nothing for another download. A signature that does not verify always
+#                    stops the install.
 #
 # A folder given in PIBOLT_INSTALL outside your profile is made yours, SYSTEM's and the Administrators' only.
 
@@ -112,7 +115,15 @@ function Get-Ed25519Multiple($curve, $scalar, $point) {
 	$sum
 }
 
-# Whether $signature (64 bytes) is $publicKey's (32 bytes) signature of $message.
+# Whether $point's order is 1, 2, 4 or 8 ([8]P is the neutral point, X = 0 and Y = Z). Neither a public key nor a signature's R
+# has one; with them, a "signature" can verify for any message.
+function Test-Ed25519SmallOrder($curve, $point) {
+	$eight = Get-Ed25519Multiple $curve ([System.Numerics.BigInteger]8) $point
+	(Get-Ed25519Mod $curve $eight[0]).IsZero -and (Get-Ed25519Mod $curve ($eight[1] - $eight[2])).IsZero
+}
+
+# Whether $signature (64 bytes) is $publicKey's (32 bytes) signature of $message. Strict: A and R must be canonical encodings of
+# points on the curve (y < p; x = 0 only with its sign bit 0) of more than small order, and s below L (RFC 8032, 5.1.7).
 function Test-Ed25519Signature([byte[]]$publicKey, [byte[]]$message, [byte[]]$signature) {
 	if ($publicKey.Length -ne 32 -or $signature.Length -ne 64) { return $false }
 	if ($null -eq $message) { $message = [byte[]]::new(0) }
@@ -120,6 +131,7 @@ function Test-Ed25519Signature([byte[]]$publicKey, [byte[]]$message, [byte[]]$si
 	$A = Get-Ed25519Point $curve $publicKey
 	$R = Get-Ed25519Point $curve ([byte[]]$signature[0..31])
 	if ($null -eq $A -or $null -eq $R) { return $false }
+	if ((Test-Ed25519SmallOrder $curve $A) -or (Test-Ed25519SmallOrder $curve $R)) { return $false }
 	$s = ConvertFrom-Ed25519Bytes ([byte[]]$signature[32..63])
 	if ($s -ge $curve.L) { return $false }
 	$sha = [System.Security.Cryptography.SHA512]::Create()
@@ -162,6 +174,14 @@ function Stop-PiBolt([string]$message) {
 }
 
 # --- Steps ------------------------------------------------------------------------------------------------------------
+
+# Whether the user let the download whose SHA256SUMS has the SHA-256 $hash be installed without a signature:
+# PIBOLT_ALLOW_UNSIGNED is that SHA-256, which no other download has (a value kept in the environment does not let another
+# release in). Never in the npm package's first run (PIBOLT_LAUNCHER).
+function Test-PiBoltUnsignedAllowed([string]$hash) {
+	$allowed = $env:PIBOLT_ALLOW_UNSIGNED
+	$env:PIBOLT_LAUNCHER -ne '1' -and $allowed -and $allowed.Trim().ToLowerInvariant() -eq $hash
+}
 
 function Test-PiBoltPrerequisites {
 	$problems = @()
@@ -453,9 +473,13 @@ function Install-PiBoltRelease($state) {
 				Stop-PiBolt "the release's signature does not verify: the download is not Pi-Bolt's. Nothing was installed."
 			}
 			$signed = $true
-		} elseif ($env:PIBOLT_ALLOW_UNSIGNED -ne '1') {
+		} else {
 			# (A mirror, PIBOLT_DOWNLOAD_BASE, copies the signature too: it is not a reason to do without it.)
-			Stop-PiBolt "the release has no signature (SHA256SUMS.sig), and every Windows release is signed. Nothing was installed."
+			$sumsHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sums).Hash.ToLowerInvariant()
+			if (-not (Test-PiBoltUnsignedAllowed $sumsHash)) {
+				$stale = if ($env:PIBOLT_ALLOW_UNSIGNED) { ' (PIBOLT_ALLOW_UNSIGNED is set, but not to this download''s SHA-256: it applies to one download only)' } else { '' }
+				Stop-PiBolt "the release has no signature (SHA256SUMS.sig), and every Windows release is signed. Nothing was installed$stale. Only for a build of your own: run the installer again with PIBOLT_ALLOW_UNSIGNED=$sumsHash, the SHA-256 of its SHA256SUMS."
+			}
 		}
 		# The signature covers the files, and the first line says which release they are: without it, an older release (signed all the
 		# same) could be served as a newer one.
@@ -543,7 +567,7 @@ function Install-PiBoltRelease($state) {
 		Clear-PiBoltProgress
 		$size = (Get-Item -LiteralPath $file).Length
 		Write-Host ("  $green" + 'ok' + "$reset install complete $dim($($state.Platform)-$($state.Variant), $(Format-MB $size) MB from $from$(if ($signed) { ', signature verified' }))$reset")
-		if (-not $signed) { Write-Host "  ${dim}note: $from has no signature for this release (SHA256SUMS.sig): only its checksum was verified$reset" }
+		if (-not $signed) { [Console]::Error.WriteLine("  $bold${red}WARNING:$reset $from has no signature for this release (SHA256SUMS.sig). It was installed because PIBOLT_ALLOW_UNSIGNED is the SHA-256 of its SHA256SUMS: that checksum is all that shows what it is.") }
 	} finally {
 		Clear-PiBoltProgress
 		Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue

@@ -188,4 +188,52 @@ describe("piBoltUpdateEnvironment", () => {
 			else process.env.PIBOLT_UNVERIFIED = saved;
 		}
 	});
+
+	// An opt-in left in the user's environment is not one for the update's download; nor is a variable that only a later
+	// installer reads.
+	test("passes on only the installers' variables it names, and everything else", () => {
+		const set: Record<string, string> = {
+			PIBOLT_ALLOW_UNSIGNED: "1",
+			PIBOLT_UNVERIFIED: "0".repeat(64),
+			PIBOLT_DOWNLOAD_BASE: "http://mirror.test",
+			PIBOLT_SOURCE: "github",
+			PIBOLT_LAUNCHER: "1",
+			PIBOLT_INSTALLER_NO_MAIN: "1",
+			PIBOLT_SOMETHING_LATER: "1",
+			PIBOLT_CHANNEL: "beta",
+			PIBOLT_NPM_REGISTRY: "https://registry.test",
+			PIBOLT_CONNECTIONS: "2",
+			PIBOLT_EXTENSIONS: "no",
+			NOT_PIBOLT_VARIABLE: "kept",
+		};
+		const saved = Object.fromEntries(Object.keys(set).map((name) => [name, process.env[name]]));
+		Object.assign(process.env, set);
+		try {
+			const env = piBoltUpdateEnvironment(VERSION);
+			for (const name of [
+				"PIBOLT_ALLOW_UNSIGNED",
+				"PIBOLT_UNVERIFIED",
+				"PIBOLT_DOWNLOAD_BASE",
+				"PIBOLT_SOURCE",
+				"PIBOLT_LAUNCHER",
+				"PIBOLT_INSTALLER_NO_MAIN",
+				"PIBOLT_SOMETHING_LATER",
+			]) {
+				expect(name in env, name).toBe(false);
+			}
+			expect(env.PIBOLT_CHANNEL).toBe("beta");
+			expect(env.PIBOLT_NPM_REGISTRY).toBe("https://registry.test");
+			expect(env.PIBOLT_CONNECTIONS).toBe("2");
+			expect(env.PIBOLT_EXTENSIONS).toBe("no");
+			expect(env.NOT_PIBOLT_VARIABLE).toBe("kept");
+			expect(env.PATH).toBe(process.env.PATH);
+			expect(env.PIBOLT_VERSION).toBe(`bolt-v${VERSION}`);
+			expect(env.PIBOLT_YES).toBe("1");
+		} finally {
+			for (const [name, value] of Object.entries(saved)) {
+				if (value === undefined) delete process.env[name];
+				else process.env[name] = value;
+			}
+		}
+	});
 });

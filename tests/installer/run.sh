@@ -3,6 +3,11 @@
 #   - the release as published installs, its signature verified;
 #   - without SHA256SUMS.sig it is not installed (a signed release must carry its signature);
 #   - an archive replaced together with its checksum is not installed (the signature of SHA256SUMS does not match);
+#   - a signature that is not one (a page of HTML served in its place) is not taken for a missing one;
+#   - a release from before releases were signed is installed only with PIBOLT_UNVERIFIED set to the SHA-256 of its SHA256SUMS
+#     (not with PIBOLT_UNVERIFIED=1), and then with a warning;
+#   - a mirror is taken for the release asked for only: without PIBOLT_VERSION, when which release is the latest cannot be found
+#     out, nothing is installed;
 #   - a PIBOLT_BIN_DIR with quotes, $(...) and backquotes stays a folder name in the line given for the shell's configuration;
 #   - an update keeps the build it replaces as <name>.previous (for pi-bolt update --rollback), and the same build installed
 #     again does not replace the one kept;
@@ -30,6 +35,9 @@ for attempt in 1 2 3; do
 	sleep 10
 done
 cp -R "$WORK/good" "$WORK/nosig" && rm "$WORK/nosig/SHA256SUMS.sig"
+cp -R "$WORK/good" "$WORK/htmlsig" && printf '<!DOCTYPE html><html><body>Not Found</body></html>\n' >"$WORK/htmlsig/SHA256SUMS.sig"
+# (As a release from before 0.6.0: no signature, and checksums that say that version.)
+cp -R "$WORK/nosig" "$WORK/unsigned" && { echo "# pi-bolt 0.5.99"; tail -n +2 "$WORK/good/SHA256SUMS"; } >"$WORK/unsigned/SHA256SUMS"
 cp -R "$WORK/good" "$WORK/tampered"
 (
 	cd "$WORK/tampered"
@@ -72,6 +80,31 @@ if ! installed && grep -q "could not download the release's signature" <<<"$out"
 out=$(install tampered)
 if ! installed && grep -q "signature does not verify" <<<"$out"; then pass "replaced archive and checksum: not installed"; else
 	fail "replaced archive and checksum: not installed"; printf '%s\n' "$out"; fi
+
+out=$(install htmlsig)
+if ! installed && grep -q "signature does not verify" <<<"$out"; then pass "a page of HTML for the signature: not installed"; else
+	fail "a page of HTML for the signature: not installed"; printf '%s\n' "$out"; fi
+
+sums_sha=$(if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi <"$WORK/unsigned/SHA256SUMS" | cut -c1-64)
+out=$(install unsigned PIBOLT_VERSION=bolt-v0.5.99)
+if ! installed && grep -q "from before Pi-Bolt signed its releases" <<<"$out" && grep -q "PIBOLT_UNVERIFIED=$sums_sha" <<<"$out"; then
+	pass "a release from before signing: not installed, and the SHA-256 to give is said"; else
+	fail "a release from before signing: not installed, and the SHA-256 to give is said"; printf '%s\n' "$out"; fi
+# (An opt-in left in the environment, or one for another download, is not one for this download.)
+for value in 1 "$(printf '%064d' 0)"; do
+	out=$(install unsigned PIBOLT_VERSION=bolt-v0.5.99 PIBOLT_UNVERIFIED="$value")
+	if ! installed && grep -q "not to this download's SHA-256" <<<"$out"; then pass "a release from before signing, PIBOLT_UNVERIFIED=${value:0:8}...: not installed"; else
+		fail "a release from before signing, PIBOLT_UNVERIFIED=${value:0:8}...: not installed"; printf '%s\n' "$out"; fi
+done
+out=$(install unsigned PIBOLT_VERSION=bolt-v0.5.99 PIBOLT_UNVERIFIED="$sums_sha")
+if installed && grep -q "WARNING:" <<<"$out"; then pass "a release from before signing, PIBOLT_UNVERIFIED=<its SHA-256>: installed, with a warning"; else
+	fail "a release from before signing, PIBOLT_UNVERIFIED=<its SHA-256>: installed, with a warning"; printf '%s\n' "$out"; fi
+
+# (GitHub out of reach through a proxy that is not there; the mirror is on this machine, which the proxy is not used for.)
+out=$(install good https_proxy=http://127.0.0.1:9 HTTPS_PROXY=http://127.0.0.1:9)
+if ! installed && grep -q "set PIBOLT_VERSION to the release it serves" <<<"$out"; then
+	pass "a mirror, and the latest release not known: not installed"; else
+	fail "a mirror, and the latest release not known: not installed"; printf '%s\n' "$out"; fi
 
 bin="$WORK/home/b\"\$(touch $WORK/pwned)\`touch $WORK/pwned\`"
 out=$(install good PIBOLT_BIN_DIR="$bin")

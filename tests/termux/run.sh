@@ -8,8 +8,8 @@
 #     glibc's rseq is off, as in Termux's glibc;
 #   - Android's 39-bit address space (512 GB): what Pi-Bolt maps at fixed addresses must be below it. (Only where it is: qemu-user's
 #     reserved_va, which would make the limit real, stops on stock Bun as well, at mimalloc's address hints above it.)
-# The build is served from a local folder as a release from before releases were signed, which install.sh takes with its
-# checksum. Not covered: Termux's patched glibc itself, Android's SELinux policy and kernel.
+# The build is served from a local folder as a release from before releases were signed, which install.sh takes with
+# PIBOLT_UNVERIFIED set to the SHA-256 of its SHA256SUMS. Not covered: Termux's patched glibc itself, Android's SELinux policy and kernel.
 #
 # Usage: tests/termux/run.sh --build DIR    (DIR: an unpacked pi-bolt-linux-arm64 build, or out/pi-bolt)
 # Run it as root in a throwaway container (it writes /data and /system), for instance:
@@ -69,6 +69,7 @@ mkdir -p "$WORK/release/$NAME"
 cp -R "$BUILD/." "$WORK/release/$NAME/"
 (cd "$WORK/release" && tar -cf - "$NAME" | xz -T0 -1 >"$NAME.tar.xz" && rm -rf "$NAME" &&
 	{ echo "# pi-bolt 0.5.99"; sha256sum "$NAME.tar.xz"; } >SHA256SUMS)
+SUMS_SHA256=$(sha256sum "$WORK/release/SHA256SUMS" | cut -c1-64)
 port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
 python3 -m http.server "$port" --bind 127.0.0.1 --directory "$WORK/release" >/dev/null 2>&1 &
 SERVER=$!
@@ -89,14 +90,14 @@ for repo in "https://termux.net stable main|Google Play" "https://mirror.example
 	printf 'deb %s\n' "${repo%|*}" >"$PREFIX/etc/apt/sources.list"
 	want=${repo#*|}
 	what="without glibc-repo in Termux's repository, install.sh says so ($want)"
-	out=$(PIBOLT_VERSION=bolt-v0.5.99 PIBOLT_DOWNLOAD_BASE="http://127.0.0.1:$port" PIBOLT_YES=1 PIBOLT_EXTENSIONS=no PIBOLT_NO_START=1 \
+	out=$(PIBOLT_VERSION=bolt-v0.5.99 PIBOLT_UNVERIFIED="$SUMS_SHA256" PIBOLT_DOWNLOAD_BASE="http://127.0.0.1:$port" PIBOLT_YES=1 PIBOLT_EXTENSIONS=no PIBOLT_NO_START=1 \
 		/bin/sh "$ROOT/install.sh" </dev/null 2>&1)
 	if [ $? -ne 0 ] && grep -qF "$want" <<<"$out" && [ ! -e "$WORK/pkg-calls" ]; then pass "$what"; else fail "$what" "$out"; fi
 done
 rm -f "$PREFIX/bin/apt-get" "$PREFIX/bin/apt-cache" "$PREFIX/bin/pkg" "$PREFIX/etc/apt/sources.list"
 ln -sf /lib/ld-linux-aarch64.so.1 "$PREFIX/glibc/lib/ld-linux-aarch64.so.1"
 
-out=$(PIBOLT_VERSION=bolt-v0.5.99 PIBOLT_DOWNLOAD_BASE="http://127.0.0.1:$port" PIBOLT_YES=1 PIBOLT_EXTENSIONS=no PIBOLT_NO_START=1 \
+out=$(PIBOLT_VERSION=bolt-v0.5.99 PIBOLT_UNVERIFIED="$SUMS_SHA256" PIBOLT_DOWNLOAD_BASE="http://127.0.0.1:$port" PIBOLT_YES=1 PIBOLT_EXTENSIONS=no PIBOLT_NO_START=1 \
 	/bin/sh "$ROOT/install.sh" </dev/null 2>&1)
 if [ -x "$INSTALL/$NAME/pi-termux" ] && [ "$(readlink "$PREFIX/bin/pi-bolt")" = "$INSTALL/$NAME/pi-termux" ]; then
 	pass "install.sh installs it, pi-bolt in \$PREFIX/bin is the Termux launcher"

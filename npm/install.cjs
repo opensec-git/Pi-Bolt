@@ -15,7 +15,9 @@
 //   PIBOLT_SOURCE         auto (npm, then GitHub; the default), npm or github
 //   PIBOLT_NPM_REGISTRY   the npm registry or mirror to download the build from (default: https://registry.npmjs.org)
 //   PIBOLT_DOWNLOAD_BASE  a mirror of the release to download everything from instead (its SHA256SUMS.sig too)
-//   PIBOLT_ALLOW_UNSIGNED=1  install a release whose checksums have no signature (a build of one's own)
+//   PIBOLT_ALLOW_UNSIGNED  the SHA-256 of a release's SHA256SUMS, to install that download although it has no signature (a
+//                         build of one's own). It matches those checksums only: a value left in the environment does nothing
+//                         for another download.
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -49,10 +51,11 @@ function checksumOf(sums, name) {
 /**
  * Checks the release's SHA256SUMS before anything else in the release is looked at: its signature by the release key, and
  * that its first line says it is `version` (otherwise an older release, signed all the same, could be served as this one).
- * A release without a signature is refused, unless PIBOLT_ALLOW_UNSIGNED=1 (a build of one's own), as install.ps1 does; the caller
- * then says that only the checksum was verified. Returns whether the signature was verified, and the checksums as text.
+ * A release without a signature is refused, unless `allowUnsigned` (PIBOLT_ALLOW_UNSIGNED: a build of one's own) is the
+ * SHA-256 of these checksums, as install.ps1 does; the caller then warns that only the checksum was verified. Returns whether
+ * the signature was verified, and the checksums as text.
  */
-function checkSums({ sums, signature, version, key = RELEASE_KEY, unsignedAllowed = false }) {
+function checkSums({ sums, signature, version, key = RELEASE_KEY, allowUnsigned = "" }) {
 	let signed = false;
 	if (signature) {
 		let publicKey;
@@ -71,8 +74,12 @@ function checkSums({ sums, signature, version, key = RELEASE_KEY, unsignedAllowe
 		}
 		if (!verified) fail("the release's signature does not verify: the download is not Pi-Bolt's. Nothing was installed.");
 		signed = true;
-	} else if (!unsignedAllowed) {
-		fail("the release has no signature (SHA256SUMS.sig), and every Windows release is signed. Nothing was installed.");
+	} else {
+		const hash = crypto.createHash("sha256").update(sums).digest("hex");
+		if ((allowUnsigned || "").trim().toLowerCase() !== hash) {
+			const stale = allowUnsigned ? " (PIBOLT_ALLOW_UNSIGNED is set, but not to this download's SHA-256: it applies to one download only)" : "";
+			fail(`the release has no signature (SHA256SUMS.sig), and every Windows release is signed. Nothing was installed${stale}. Only for a build of your own: install it again with PIBOLT_ALLOW_UNSIGNED=${hash}, the SHA-256 of its SHA256SUMS.`);
+		}
 	}
 	const text = sums.toString("utf8");
 	const match = /^# pi-bolt (\d+\.\d+\.\d+)\r?$/.exec(text.split("\n", 1)[0]);
@@ -476,7 +483,7 @@ async function installWindows({
 		if (!sums) fail(`download failed: ${base}/SHA256SUMS`);
 		const signature = await fetchBytes(fetchImpl, `${base}/SHA256SUMS.sig`);
 		// (A mirror copies the signature too; only a build of one's own, PIBOLT_ALLOW_UNSIGNED=1, has none.)
-		const { signed, text } = checkSums({ sums, signature, version, key, unsignedAllowed: env.PIBOLT_ALLOW_UNSIGNED === "1" });
+		const { signed, text } = checkSums({ sums, signature, version, key, allowUnsigned: env.PIBOLT_ALLOW_UNSIGNED });
 		if (!variant) {
 			variant = "x64";
 			if (checksumOf(text, "pi-bolt-win32-x64-baseline.zip") && !avx2()) variant = "x64-baseline";
@@ -520,7 +527,9 @@ async function installWindows({
 		moveFiles(tree, bin, Date.now(), "pi-bolt.exe");
 		const size = (fs.statSync(zip).size / 1048576).toFixed(1);
 		log(`pi-bolt: installed Pi-Bolt ${version} (win32-${variant}, ${size} MB from ${from}${signed ? ", signature verified" : ""})`);
-		if (!signed) log(`pi-bolt: note: ${from} has no signature for this release (SHA256SUMS.sig): only its checksum was verified`);
+		if (!signed) {
+			log(`pi-bolt: WARNING: ${from} has no signature for this release (SHA256SUMS.sig). It was installed because PIBOLT_ALLOW_UNSIGNED is the SHA-256 of its SHA256SUMS: that checksum is all that shows what it is.`);
+		}
 		return { variant, from, signed };
 	} finally {
 		fs.rmSync(stage, { recursive: true, force: true });

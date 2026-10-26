@@ -1,7 +1,8 @@
 # Windows' tests/installer/run.sh: install.ps1's checks of what it downloads, against the latest release served from a local
 # folder (PIBOLT_DOWNLOAD_BASE):
 #   - the release as published installs, its signature verified;
-#   - without SHA256SUMS.sig it is not installed (every Windows release is signed);
+#   - without SHA256SUMS.sig it is not installed (every Windows release is signed), with PIBOLT_ALLOW_UNSIGNED=1 neither: only
+#     with PIBOLT_ALLOW_UNSIGNED set to the SHA-256 of that SHA256SUMS, which is then said in a warning;
 #   - an archive replaced together with its checksum is not installed (the signature of SHA256SUMS does not match);
 #   - an update keeps the build it replaces as <name>.previous (for pi-bolt update --rollback), and the same build installed
 #     again does not replace the one kept;
@@ -83,6 +84,18 @@ try {
 	$out = Invoke-Installer nosig
 	if (-not (Test-Installed) -and $out -match 'the release has no signature') { Write-Pass 'no signature: not installed' }
 	else { Write-Fail 'no signature: not installed' $out }
+
+	# (An opt-in left in the environment: it is not one for this download.)
+	$out = Invoke-Installer nosig @{ PIBOLT_ALLOW_UNSIGNED = '1' }
+	if (-not (Test-Installed) -and $out -match 'the release has no signature') { Write-Pass 'no signature, PIBOLT_ALLOW_UNSIGNED=1: not installed' }
+	else { Write-Fail 'no signature, PIBOLT_ALLOW_UNSIGNED=1: not installed' $out }
+	$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $nosig 'SHA256SUMS')).Hash.ToLowerInvariant()
+	$out = Invoke-Installer nosig @{ PIBOLT_ALLOW_UNSIGNED = $hash }
+	if ((Test-Installed) -and $out -match 'WARNING:') { Write-Pass 'no signature, PIBOLT_ALLOW_UNSIGNED=<its SHA-256>: installed, with a warning' }
+	else { Write-Fail 'no signature, PIBOLT_ALLOW_UNSIGNED=<its SHA-256>: installed, with a warning' $out }
+	$out = Invoke-Installer tampered @{ PIBOLT_ALLOW_UNSIGNED = $hash }
+	if (-not (Test-Installed) -and $out -match 'signature does not verify') { Write-Pass 'a signature that does not verify stops it, PIBOLT_ALLOW_UNSIGNED or not' }
+	else { Write-Fail 'a signature that does not verify stops it, PIBOLT_ALLOW_UNSIGNED or not' $out }
 
 	$out = Invoke-Installer tampered
 	if (-not (Test-Installed) -and $out -match 'signature does not verify') { Write-Pass 'replaced archive and checksum: not installed' }

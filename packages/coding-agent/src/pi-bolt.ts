@@ -287,14 +287,34 @@ export function piBoltInstallDir(): string | undefined {
 }
 
 /**
+ * The installers' variables an update passes on from the user's environment: which releases updates take, where the npm
+ * registry is (what comes from it is checked against the signed checksums), how many connections, where `pi-bolt` is linked,
+ * the extensions, and Termux's LD_PRELOAD, which Pi-Bolt gives back to the programs it starts.
+ */
+const PIBOLT_UPDATE_PASSED_ON = new Set([
+	"PIBOLT_CHANNEL",
+	"PIBOLT_NPM_REGISTRY",
+	"PIBOLT_CONNECTIONS",
+	"PIBOLT_BIN_DIR",
+	"PIBOLT_EXTENSIONS",
+	"PIBOLT_TERMUX_LD_PRELOAD",
+]);
+
+/**
  * The environment that makes the installer replace this installation with release `version`, keeping its variant and place.
- * The version is the one the update was decided on (not "latest" again), and what in the user's environment would change
- * where the release comes from (a mirror, which may be unsigned; the npm launcher's mode; the source) is left out. PATH is
- * left as the user set it: the installer would otherwise add this folder without asking (and take other variants off).
+ * The version is the one the update was decided on (not "latest" again). Of the installers' own variables (PIBOLT_*), only
+ * those above are passed on: none that changes where the release comes from (a mirror, the source), whether its signature is
+ * checked (PIBOLT_UNVERIFIED, PIBOLT_ALLOW_UNSIGNED), or what the installer does (the npm launcher's mode, functions only), and
+ * none an installer may read in the future. PATH is left as the user set it: the installer would otherwise add this folder
+ * without asking (and take other variants off).
  */
 export function piBoltUpdateEnvironment(version: string): NodeJS.ProcessEnv {
-	const env: NodeJS.ProcessEnv = {
-		...process.env,
+	const env: NodeJS.ProcessEnv = {};
+	for (const [name, value] of Object.entries(process.env)) {
+		if (!/^PIBOLT_/i.test(name) || PIBOLT_UPDATE_PASSED_ON.has(name)) env[name] = value;
+	}
+	return {
+		...env,
 		PIBOLT_YES: "1",
 		PIBOLT_NO_START: "1",
 		PIBOLT_NO_PATH: "1",
@@ -302,19 +322,6 @@ export function piBoltUpdateEnvironment(version: string): NodeJS.ProcessEnv {
 		PIBOLT_VERSION: `bolt-v${version}`,
 		PIBOLT_INSTALL: piBoltInstallDir() ?? process.env.PIBOLT_INSTALL ?? join(homedir(), ".pi-bolt"),
 	};
-	// (And what would make the installer only define its functions, install nothing, and exit 0; or install a release whose
-	// signature it could not check.)
-	for (const name of [
-		"PIBOLT_DOWNLOAD_BASE",
-		"PIBOLT_LAUNCHER",
-		"PIBOLT_SOURCE",
-		"PIBOLT_ALLOW_UNSIGNED",
-		"PIBOLT_UNVERIFIED",
-		"PIBOLT_INSTALLER_NO_MAIN",
-	]) {
-		delete env[name];
-	}
-	return env;
 }
 
 /** The JIT build for the CPU of `variant`: x64-jit for x64 and x64-baseline, arm64-jit for arm64. */

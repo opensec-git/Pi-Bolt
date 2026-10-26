@@ -22,15 +22,20 @@
 #   PIBOLT_CONNECTIONS  connections to download over at once (default: 4; 1 for a single connection)
 #   PIBOLT_SOURCE    where to download the executable from: auto (npm, then GitHub; the default), npm or github
 #   PIBOLT_NPM_REGISTRY  the npm registry or mirror to use (default: https://registry.npmjs.org)
-#   PIBOLT_UNVERIFIED=1  install even where nothing here can check the release's signature (no OpenSSL 3, OpenSSH 8.1 or
-#                    earlier Pi-Bolt); the checksum is still checked. A signature that does not verify always stops the install.
+#   PIBOLT_UNVERIFIED  the SHA-256 of a release's SHA256SUMS (the installer shows it), to install that download without a
+#                    check of its signature: where nothing here can check it (no OpenSSL 3, OpenSSH 8.1 or Pi-Bolt installed
+#                    before), or for a release from before 0.6.0, which has none. It matches those checksums only, so a value
+#                    left in the environment does nothing for another download; the npm package's first run ignores it. The
+#                    checksum is still checked, and a signature that does not verify always stops the install.
+#   PIBOLT_DOWNLOAD_BASE  a mirror of a release to download everything from (its signatures too); needs PIBOLT_VERSION when
+#                    which release is the latest cannot be found out
 #   PIBOLT_EXTENSIONS  yes or no: whether to install OpenSec's optional extensions (opensec-pi-subagents, opensec-pi-todo, opensec-pi-fff)
 #                    without asking. Without it the installer asks when it can; a run that cannot ask, or PIBOLT_YES=1,
 #                    installs none. They are installed at the versions the release pins (its extensions.txt, covered by the
 #                    signed checksums), and only if the registry's tarball has the pinned integrity.
 
 # The public key that releases are signed with (keys/release.pub in the repository; scripts/sign-release.sh), from 0.6.0. A
-# release from before has no signature, which is said.
+# release from before has no signature: it is installed only with PIBOLT_UNVERIFIED.
 RELEASE_KEY="-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAoLboJqtKaoISPqffk03vHZr+1sRBG3uIRIWeKOew+aY=
 -----END PUBLIC KEY-----"
@@ -52,6 +57,13 @@ main() {
 	if [ -n "$TERMUX" ]; then BIN_DIR="${PIBOLT_BIN_DIR:-$PREFIX/bin}"; else BIN_DIR="${PIBOLT_BIN_DIR:-$HOME/.local/bin}"; fi
 	LAUNCHER="${PIBOLT_LAUNCHER:-0}"
 	setup_style
+	# (The npm package's first run is not asked for by the user: nothing is installed there without a signature check.)
+	[ "$LAUNCHER" != 1 ] || unset PIBOLT_UNVERIFIED
+	case "$VERSION" in
+	latest) ;;
+	bolt-v[0-9]*.[0-9]*.[0-9]*) case "${VERSION#bolt-v}" in *[!0-9.]*) fail "PIBOLT_VERSION must be a release tag such as bolt-v1.0.3" ;; esac ;;
+	*) fail "PIBOLT_VERSION must be a release tag such as bolt-v1.0.3" ;;
+	esac
 	case "${PIBOLT_CHANNEL:-}" in
 	"" | stable) ;;
 	beta)
@@ -85,6 +97,14 @@ main() {
 	SHOWN_VERSION=$(cat "$version_file")
 	rm -f "$version_file"
 	[ -n "$SHOWN_VERSION" ] || SHOWN_VERSION="$VERSION"
+	# A mirror's checksums are taken for the release asked for only: without knowing which one that is, an older release (signed
+	# all the same) could be served as the latest.
+	if [ -n "${PIBOLT_DOWNLOAD_BASE:-}" ]; then
+		case "$SHOWN_VERSION" in
+		[0-9]*.[0-9]*.[0-9]*) ;;
+		*) fail "which release is the latest could not be found out ($REPO/releases/latest), and a mirror (PIBOLT_DOWNLOAD_BASE) is taken for the release asked for only: set PIBOLT_VERSION to the release it serves, such as bolt-v1.0.3" ;;
+		esac
+	fi
 
 	VARIANT="${PIBOLT_VARIANT:-}"
 	if [ -z "$VARIANT" ]; then
@@ -515,11 +535,12 @@ rate_and_eta() {
 
 # The checksums are signed by Pi-Bolt's release key, from 0.6.0 on. For those releases the signature is required: one that
 # cannot be downloaded, or that does not verify, stops the install, whatever the download base. It is checked with OpenSSL 3
-# (LibreSSL, macOS's own openssl, cannot check Ed25519), or else with the Pi-Bolt already installed here, or else with
-# ssh-keygen against SHA256SUMS.sshsig, the same key's signature in OpenSSH's format (published for releases after 0.9.9; macOS has
-# OpenSSH). Where none of them can, nothing is installed unless PIBOLT_UNVERIFIED=1: the checksums come from the same place
-# as the files, so they alone do not show that a release is Pi-Bolt's. Both signatures are fetched in the background while
-# the release downloads.
+# (LibreSSL, macOS's own openssl, cannot check Ed25519), or else with ssh-keygen against SHA256SUMS.sshsig, the same key's
+# signature in OpenSSH's format (published for releases after 0.9.9; macOS has OpenSSH), or else with the Pi-Bolt installed
+# here before. Where none of them can, or for a release from before 0.6.0 (which has no signature), nothing is installed
+# unless PIBOLT_UNVERIFIED is the SHA-256 of these checksums (unverified_allowed): the checksums come from the same place as
+# the files, so they alone do not show that a release is Pi-Bolt's. Both signatures are fetched in the background while the
+# release downloads.
 fetch_signature() {
 	if fetch "$TMP/SHA256SUMS.sig.part" "$BASE/SHA256SUMS.sig" 2>/dev/null; then mv "$TMP/SHA256SUMS.sig.part" "$TMP/SHA256SUMS.sig"; fi
 	if fetch "$TMP/SHA256SUMS.sshsig.part" "$BASE/SHA256SUMS.sshsig" 2>/dev/null; then mv "$TMP/SHA256SUMS.sshsig.part" "$TMP/SHA256SUMS.sshsig"; fi
@@ -557,9 +578,16 @@ openssl3() {
 	return 1
 }
 
-# A Pi-Bolt executable installed here before, which checks the signature with its own crypto (BUN_BE_BUN=1 runs a script).
+# The SHA-256 of FILE, in lower case.
+sha256_of() {
+	if command -v sha256sum >/dev/null 2>&1; then sha256sum <"$1"; else shasum -a 256 <"$1"; fi | cut -c1-64 | tr 'A-F' 'a-f'
+}
+
+# A Pi-Bolt executable installed here before, which checks the signature with its own crypto (BUN_BE_BUN=1 runs a script):
+# a build in its own folder (not one kept for a rollback, nor one left by an update that stopped).
 installed_pibolt() {
 	for candidate in "$INSTALL/$NAME/pi-bin" "$INSTALL/$NAME/pi" "$INSTALL"/pi-bolt-"$PLATFORM"-*/pi-bin "$INSTALL"/pi-bolt-"$PLATFORM"-*/pi; do
+		case "${candidate#"$INSTALL"/}" in *.*/*) continue ;; esac
 		if [ -f "$candidate" ] && [ -x "$candidate" ]; then
 			printf '%s' "$candidate"
 			return 0
@@ -567,24 +595,54 @@ installed_pibolt() {
 	done
 	return 1
 }
+# (It says what it checked: the SHA-256 of the checksums whose signature verified. An exit status alone is not taken for a
+# check: a program that does not run the script, or runs it otherwise, can end with 0 too.)
 VERIFY_SCRIPT='const c = require("node:crypto"), f = require("node:fs");
-let ok;
-try { ok = c.verify(null, f.readFileSync(process.argv[2]), f.readFileSync(process.argv[3], "utf8"), f.readFileSync(process.argv[4])); } catch { process.exit(4); }
-process.exit(ok ? 0 : 3);'
+let ok, sums;
+try { sums = f.readFileSync(process.argv[2]); ok = c.verify(null, sums, f.readFileSync(process.argv[3], "utf8"), f.readFileSync(process.argv[4])); } catch { process.exit(4); }
+if (!ok) process.exit(3);
+process.stdout.write("verified " + c.createHash("sha256").update(sums).digest("hex") + "\n");'
+
+# Whether the user let this download be installed without a signature check: PIBOLT_UNVERIFIED is the SHA-256 of its
+# SHA256SUMS, which no other download has (a value kept in a profile does not let another release in).
+unverified_allowed() {
+	[ -n "${PIBOLT_UNVERIFIED:-}" ] && [ "$(printf '%s' "$PIBOLT_UNVERIFIED" | tr 'A-F' 'a-f')" = "$SUMS_SHA256" ]
+}
+
+# fail_unverified WHY: stops, saying how to install this download all the same.
+fail_unverified() {
+	if [ "$LAUNCHER" = 1 ]; then
+		fail "$1 Nothing was installed. Install Pi-Bolt with its installer instead (curl -fsSL https://pi-bolt.opensec.in/install.sh | sh), which says how to go on."
+	fi
+	case "$SHOWN_VERSION" in [0-9]*.[0-9]*.[0-9]*) page="$REPO/releases/tag/bolt-v$SHOWN_VERSION" ;; *) page="$REPO/releases/latest" ;; esac
+	stale=""
+	if [ -n "${PIBOLT_UNVERIFIED:-}" ]; then stale=" (PIBOLT_UNVERIFIED is set, but not to this download's SHA-256: it applies to one download only)"; fi
+	fail "$1 Nothing was installed$stale. To install this download without the check, compare the SHA-256 of its SHA256SUMS, $SUMS_SHA256, with the one GitHub shows for SHA256SUMS on $page from a device you trust, and run the installer again with PIBOLT_UNVERIFIED=$SUMS_SHA256."
+}
 
 verify_signature() {
 	[ -n "$RELEASE_KEY" ] || return 0
 	# (Whether it worked is whether the file is there: under set -e a failed wait would end the script without a word.)
 	if [ -n "$SIG_PID" ]; then wait "$SIG_PID" 2>/dev/null || true; fi
+	SUMS_SHA256=$(sha256_of "$TMP/SHA256SUMS")
+	bad="the release's signature does not verify: the download is not Pi-Bolt's. Nothing was installed."
 	if [ ! -f "$TMP/SHA256SUMS.sig" ]; then
 		signed_release && fail "could not download the release's signature from $BASE/SHA256SUMS.sig. Pi-Bolt $SHOWN_VERSION is signed, so nothing was installed: try again."
+		unverified_allowed || fail_unverified "Pi-Bolt $SHOWN_VERSION is from before Pi-Bolt signed its releases: nothing shows that this download is Pi-Bolt's."
 		UNSIGNED=1
 		return 0
 	fi
+	# (An Ed25519 signature is 64 bytes: anything else, such as a page of HTML served in its place, is not one.)
+	[ "$(wc -c <"$TMP/SHA256SUMS.sig" | tr -d ' ')" = 64 ] || fail "$bad"
 	printf '%s\n' "$RELEASE_KEY" >"$TMP/release.pub"
 	if ssl=$(openssl3) && "$ssl" pkey -pubin -in "$TMP/release.pub" -noout >/dev/null 2>&1; then
-		"$ssl" pkeyutl -verify -pubin -inkey "$TMP/release.pub" -rawin -in "$TMP/SHA256SUMS" -sigfile "$TMP/SHA256SUMS.sig" >/dev/null 2>&1 ||
-			fail "the release's signature does not verify: the download is not Pi-Bolt's. Nothing was installed."
+		"$ssl" pkeyutl -verify -pubin -inkey "$TMP/release.pub" -rawin -in "$TMP/SHA256SUMS" -sigfile "$TMP/SHA256SUMS.sig" >/dev/null 2>&1 || fail "$bad"
+		SIGNED=1
+		return 0
+	fi
+	if [ -f "$TMP/SHA256SUMS.sshsig" ] && ssh_keygen_verifies; then
+		printf 'pi-bolt namespaces="pi-bolt-release" %s\n' "$RELEASE_SSH_KEY" >"$TMP/allowed_signers"
+		ssh-keygen -Y verify -f "$TMP/allowed_signers" -I pi-bolt -n pi-bolt-release -s "$TMP/SHA256SUMS.sshsig" <"$TMP/SHA256SUMS" >/dev/null 2>&1 || fail "$bad"
 		SIGNED=1
 		return 0
 	fi
@@ -594,23 +652,16 @@ verify_signature() {
 		printf '%s\n' "$VERIFY_SCRIPT" >"$TMP/verify.js"
 		status=0
 		# (Run in the download's own folder, which holds only the release's files.)
-		(cd "$TMP" && BUN_BE_BUN=1 "$exe" ./verify.js SHA256SUMS release.pub SHA256SUMS.sig) >/dev/null 2>&1 || status=$?
-		[ "$status" != 3 ] || fail "the release's signature does not verify: the download is not Pi-Bolt's. Nothing was installed."
-		if [ "$status" = 0 ]; then
+		said=$(cd "$TMP" && BUN_BE_BUN=1 "$exe" ./verify.js SHA256SUMS release.pub SHA256SUMS.sig 2>/dev/null) || status=$?
+		[ "$status" != 3 ] || fail "$bad"
+		if [ "$status" = 0 ] && [ "$said" = "verified $SUMS_SHA256" ]; then
 			SIGNED=1
 			return 0
 		fi
 	fi
-	if [ -f "$TMP/SHA256SUMS.sshsig" ] && ssh_keygen_verifies; then
-		printf 'pi-bolt namespaces="pi-bolt-release" %s\n' "$RELEASE_SSH_KEY" >"$TMP/allowed_signers"
-		ssh-keygen -Y verify -f "$TMP/allowed_signers" -I pi-bolt -n pi-bolt-release -s "$TMP/SHA256SUMS.sshsig" <"$TMP/SHA256SUMS" >/dev/null 2>&1 ||
-			fail "the release's signature does not verify: the download is not Pi-Bolt's. Nothing was installed."
-		SIGNED=1
-		return 0
-	fi
-	if [ "${PIBOLT_UNVERIFIED:-0}" != 1 ]; then
-		if [ "$(uname -s)" = Darwin ]; then how='brew install openssl@3'; else how='OpenSSL 3, or openssh-client (OpenSSH 8.1 or later), from your package manager'; fi
-		fail "nothing here can check the release's signature (OpenSSL 3, or OpenSSH 8.1 for releases after 0.9.9). Install $how and run the installer again, or set PIBOLT_UNVERIFIED=1 to install with the checksum alone. Nothing was installed."
+	if ! unverified_allowed; then
+		if [ "$(uname -s)" = Darwin ]; then how='OpenSSL 3 (brew install openssl@3)'; else how='OpenSSL 3, or openssh-client (OpenSSH 8.1 or later), from your package manager'; fi
+		fail_unverified "nothing here can check the release's signature (OpenSSL 3, or OpenSSH 8.1 for releases after 0.9.9). Install $how and run the installer again."
 	fi
 	NOVERIFY=1
 }
@@ -784,8 +835,10 @@ install_release() {
 	trap - EXIT INT TERM
 	finish_progress
 	printf '  %s%s%s install complete %s(%s, %s MB from %s%s)%s\n' "$green" "$CHECK" "$reset" "$dim" "$PLATFORM-$VARIANT" "$(mb "${total:-0}")" "$FROM" "${SIGNED:+, signature verified}" "$reset"
-	[ -z "$UNSIGNED" ] || printf '  %snote: this release is not signed (it is from before Pi-Bolt signed releases); its checksum was verified%s\n' "$dim" "$reset"
-	[ -z "$NOVERIFY" ] || printf '  %snote: the release'"'"'s signature was not checked (PIBOLT_UNVERIFIED=1); its checksum was verified%s\n' "$dim" "$reset"
+	if [ -n "$UNSIGNED$NOVERIFY" ]; then
+		if [ -n "$UNSIGNED" ]; then why="this release has no signature (it is from before Pi-Bolt signed releases)"; else why="the release's signature was not checked (nothing here can)"; fi
+		printf '  %s%sWARNING:%s %s. It was installed because PIBOLT_UNVERIFIED is the SHA-256 of its SHA256SUMS: that checksum is all that shows what it is.\n' "$bold" "$red" "$reset" "$why" >&2
+	fi
 }
 
 uninstall() {

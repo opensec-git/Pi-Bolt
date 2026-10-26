@@ -335,9 +335,13 @@ to exclude Pi-Bolt from Defender.
 `SHA256SUMS` in every release is signed with an Ed25519 key, twice: `SHA256SUMS.sig` (raw Ed25519) and, for releases after
 0.9.9, `SHA256SUMS.sshsig` (the same key in OpenSSH's signature format, namespace `pi-bolt-release`, made by
 `scripts/lib/sshsig.mjs`). The installer carries the public key and refuses a download whose signature is missing or does not
-verify. It checks it with OpenSSL 3 (on `PATH` or Homebrew's), or else with the Pi-Bolt already installed, or else with
-`ssh-keygen -Y verify` against `SHA256SUMS.sshsig` (OpenSSH 8.1 or later, which every current Mac has). Where none of them can
-check it, nothing is installed unless the user sets `PIBOLT_UNVERIFIED=1`.
+verify. It checks it with OpenSSL 3 (on `PATH` or Homebrew's), or else with `ssh-keygen -Y verify` against `SHA256SUMS.sshsig`
+(OpenSSH 8.1 or later, which every current Mac has), or else with the Pi-Bolt already installed (which must print the SHA-256 of
+the checksums it verified; an exit status alone does not count). Where none of them can check it, and for a release from before
+0.6.0, which has no signature, nothing is installed unless `PIBOLT_UNVERIFIED` is the SHA-256 of that release's `SHA256SUMS`
+(the installer shows it): the value matches one download only, so one left in a profile lets nothing else in, and the npm
+package's first run and `pi-bolt update` never pass it on. `install.ps1` and the npm package's install script take
+`PIBOLT_ALLOW_UNSIGNED` (a build of one's own) the same way.
 `install.ps1`, `scripts/fetch-runtime.sh` and the `publish` workflow require the signature too.
 
 `publish` signs with the secret `PIBOLT_SIGNING_KEY` of the `release` environment. The environment accepts only workflows run

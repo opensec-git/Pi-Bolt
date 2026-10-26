@@ -340,16 +340,43 @@ test("Windows: a mirror (PIBOLT_DOWNLOAD_BASE) without a signature is refused", 
 	assertPlaceholder(pkgDir);
 });
 
-test("Windows: an unsigned release only with PIBOLT_ALLOW_UNSIGNED=1, and only the checksum is verified, which is said", async (t) => {
+// An opt-in left in the environment (a profile, setx, a CI image) would otherwise let any later download in without its signature.
+test("Windows: PIBOLT_ALLOW_UNSIGNED=1, or the SHA-256 of other checksums, does not let an unsigned release in", async (t) => {
+	const release = makeRelease();
+	const other = sha256(makeRelease({ sumsVersion: "0.0.1" }).SHA256SUMS);
+	for (const value of ["1", "yes", other]) {
+		const { fetch } = fakeFetch(githubRoutes(release, "http://mirror.test/pi-bolt"));
+		const pkgDir = makePackage(t);
+		const env = { PIBOLT_DOWNLOAD_BASE: "http://mirror.test/pi-bolt", PIBOLT_ALLOW_UNSIGNED: value };
+		await assert.rejects(run(pkgDir, { fetch, key: install.RELEASE_KEY, env }).promise, (error) => {
+			assert.match(error.message, /has no signature/);
+			assert.match(error.message, /not to this download's SHA-256/);
+			assert.ok(error.message.includes(`PIBOLT_ALLOW_UNSIGNED=${sha256(release.SHA256SUMS)}`), "it says the value for this download");
+			return true;
+		});
+		assertPlaceholder(pkgDir);
+	}
+});
+
+test("Windows: an unsigned release only with PIBOLT_ALLOW_UNSIGNED set to the SHA-256 of its SHA256SUMS, with a warning", async (t) => {
 	const mirror = "http://mirror.test/pi-bolt/";
 	const release = makeRelease();
 	const { fetch, asked } = fakeFetch(githubRoutes(release, "http://mirror.test/pi-bolt"));
 	const pkgDir = makePackage(t);
-	const env = { PIBOLT_DOWNLOAD_BASE: mirror, PIBOLT_ALLOW_UNSIGNED: "1" };
+	const env = { PIBOLT_DOWNLOAD_BASE: mirror, PIBOLT_ALLOW_UNSIGNED: sha256(release.SHA256SUMS).toUpperCase() };
 	const { promise, log } = run(pkgDir, { fetch, key: install.RELEASE_KEY, env });
 	assert.deepEqual(await promise, { variant: "x64", from: "http://mirror.test/pi-bolt", signed: false });
 	assert.ok(asked.every((url) => url.startsWith("http://mirror.test/pi-bolt/")));
-	assert.match(log.join("\n"), /note: http:\/\/mirror\.test\/pi-bolt has no signature for this release \(SHA256SUMS\.sig\): only its checksum was verified/);
+	assert.match(log.join("\n"), /WARNING: http:\/\/mirror\.test\/pi-bolt has no signature for this release \(SHA256SUMS\.sig\)/);
+});
+
+test("Windows: a signature that does not verify is refused, PIBOLT_ALLOW_UNSIGNED or not", async (t) => {
+	const release = makeRelease({ signer: newKey() });
+	const { fetch } = fakeFetch(githubRoutes(release, "http://mirror.test"));
+	const pkgDir = makePackage(t);
+	const env = { PIBOLT_DOWNLOAD_BASE: "http://mirror.test", PIBOLT_ALLOW_UNSIGNED: sha256(release.SHA256SUMS) };
+	await assert.rejects(run(pkgDir, { fetch, key: install.RELEASE_KEY, env }).promise, /signature does not verify/);
+	assertPlaceholder(pkgDir);
 });
 
 test("Windows: a mirror's signature is checked all the same", async (t) => {
@@ -540,6 +567,30 @@ test("the launcher's first run of a version removes the versions installed befor
 	assert.equal(result.stdout, "the build: --version\n", result.stderr);
 	assert.equal(result.status, 0);
 	assert.deepEqual(readdirSync(join(home, "npm")).sort(), ["0.7.3", VERSION, "notes"]);
+});
+
+// The first run is not asked for by the user: an opt-in to installing without a signature check, left in their environment, is
+// not passed on to the installer (which ignores it in the first run as well).
+test("the launcher's first run does not pass PIBOLT_UNVERIFIED on to the installer", { skip: (!findSh() || process.platform === "win32") && "no sh" }, (t) => {
+	const pkgDir = makePackage(t);
+	const home = join(pkgDir, "home");
+	writeFileSync(
+		join(pkgDir, "install.sh"),
+		'mkdir -p "$PIBOLT_INSTALL/pi-bolt-linux-x64" && printf \'#!/bin/sh\\necho "the build"\\n\' > "$PIBOLT_INSTALL/pi-bolt-linux-x64/pi" && chmod 755 "$PIBOLT_INSTALL/pi-bolt-linux-x64/pi"\necho "installer: PIBOLT_UNVERIFIED=${PIBOLT_UNVERIFIED-unset} PIBOLT_LAUNCHER=$PIBOLT_LAUNCHER" >&2\n',
+	);
+	const result = spawnSync("sh", [join(pkgDir, "bin", "pi-bolt")], {
+		encoding: "utf8",
+		env: {
+			...process.env,
+			PIBOLT_HOME: home,
+			PIBOLT_VARIANT: "x64",
+			PIBOLT_UNVERIFIED: "1",
+			PATH: `${fakeUname(pkgDir, "Linux")}:${process.env.PATH}`,
+		},
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.match(result.stderr, /installer: PIBOLT_UNVERIFIED=unset PIBOLT_LAUNCHER=1/);
+	assert.equal(result.stdout, "the build\n");
 });
 
 test("an archive entry's name: inside its folder, with / between its parts and no \\, :, .. or empty part", () => {
