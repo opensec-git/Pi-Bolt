@@ -16,7 +16,9 @@ import {
 	applyBackgroundToLine,
 	flattenLines,
 	isWebLink,
+	type SanitizedTerminalText,
 	sanitizeTerminalText,
+	sanitizeTerminalTextFrom,
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "../utils.ts";
@@ -789,6 +791,8 @@ interface InlineStyleContext {
 
 export class Markdown implements Component {
 	private text: string;
+	/** What the text given to setText() last was sanitised to (sanitizeTerminalTextFrom()). */
+	private sanitized?: SanitizedTerminalText;
 	private paddingX: number; // Left/right padding
 	private paddingY: number; // Top/bottom padding
 	private defaultTextStyle?: DefaultTextStyle;
@@ -844,7 +848,9 @@ export class Markdown implements Component {
 	}
 
 	setText(text: string): void {
-		this.text = sanitizeTerminalText(text);
+		// (A reply streaming in is set again for each chunk: only what was added is sanitised.)
+		this.sanitized = sanitizeTerminalTextFrom(text, this.sanitized);
+		this.text = this.sanitized.text;
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;

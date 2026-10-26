@@ -1,10 +1,16 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { resetCapabilitiesCache, setCapabilities, setKeybindings, type TUI } from "@earendil-works/pi-tui";
+import {
+	resetCapabilitiesCache,
+	sanitizeTerminalText,
+	setCapabilities,
+	setKeybindings,
+	type TUI,
+} from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type * as OutputGuard from "../src/core/output-guard.ts";
 import { createBashToolDefinition } from "../src/core/tools/bash.ts";
-import { getTextOutput } from "../src/core/tools/render-utils.ts";
+import { getTextOutput, str } from "../src/core/tools/render-utils.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
 import { createMcpToolRenderers } from "../src/extensions/mcp/tools.ts";
 import { McpManagerView } from "../src/extensions/mcp/ui.ts";
@@ -128,6 +134,18 @@ describe("terminal escape sequences from a model, a tool or an MCP server", () =
 			component.setExpanded(true);
 			component.updateResult({ content: [{ type: "text", text: `failed ${PAYLOAD}` }], isError: true });
 			expectInert(component.render(100).join("\n"));
+		}
+	});
+
+	test("a long argument streaming in is sanitised as a whole at every chunk", () => {
+		// (Long enough for str() to sanitise from the text before; the sequences are cut at every point by the chunks.)
+		const full = `${"const content = 1;\n".repeat(80)}${PAYLOAD}\r${PAYLOAD}\r\n${"tail\n".repeat(20)}${PAYLOAD}`;
+		const other = `${"other file\n".repeat(120)}${TITLE}`;
+		for (let end = 1000; end <= full.length; end += 3) {
+			const text = full.slice(0, end);
+			expect(str(text)).toBe(sanitizeTerminalText(text));
+			// (Another argument shown in between, as a call's path or a second call's content.)
+			expect(str(other.slice(0, end))).toBe(sanitizeTerminalText(other.slice(0, end)));
 		}
 	});
 

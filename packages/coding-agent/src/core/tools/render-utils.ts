@@ -6,7 +6,9 @@ import {
 	getImageDimensions,
 	hyperlink,
 	imageFallback,
+	type SanitizedTerminalText,
 	sanitizeTerminalText,
+	sanitizeTerminalTextFrom,
 } from "@earendil-works/pi-tui";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../../utils/ansi.ts";
@@ -34,9 +36,38 @@ export function linkPath(styledText: string, rawPath: string, cwd: string): stri
  * removed (sanitizeTerminalText()), so it cannot draw over the call's header or its command line.
  */
 export function str(value: unknown): string | null {
-	if (typeof value === "string") return sanitizeTerminalText(value);
+	if (typeof value === "string") return sanitizeArgument(value);
 	if (value == null) return "";
 	return null;
+}
+
+/**
+ * Long arguments str() sanitised last, most recent last. An argument streaming in (a file's content) is shown again for
+ * each chunk: what was sanitised of it the time before is kept, and only the text added since is gone through.
+ */
+const sanitizedArguments: SanitizedTerminalText[] = [];
+const SANITIZED_ARGUMENTS_KEPT = 4;
+/** Shorter arguments (a path, a pattern) are sanitised whole: that costs less than looking for them. */
+const SANITIZED_ARGUMENT_MIN_LENGTH = 1024;
+
+/** sanitizeTerminalText(text), from what a shorter text it begins with was sanitised to when there is one. */
+function sanitizeArgument(text: string): string {
+	if (text.length < SANITIZED_ARGUMENT_MIN_LENGTH) return sanitizeTerminalText(text);
+	let previous: SanitizedTerminalText | undefined;
+	for (let i = sanitizedArguments.length - 1; i >= 0; i--) {
+		const entry = sanitizedArguments[i];
+		if (text.length >= entry.raw.length && text.startsWith(entry.raw)) {
+			previous = entry;
+			sanitizedArguments.splice(i, 1);
+			break;
+		}
+	}
+	const sanitized = sanitizeTerminalTextFrom(text, previous);
+	sanitizedArguments.push(sanitized);
+	if (sanitizedArguments.length > SANITIZED_ARGUMENTS_KEPT) {
+		sanitizedArguments.shift();
+	}
+	return sanitized.text;
 }
 
 function parseLineNumber(value: unknown): number | undefined {

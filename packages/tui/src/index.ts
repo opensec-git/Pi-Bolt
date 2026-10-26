@@ -206,7 +206,9 @@ export { TuiMainScreen, type TuiMainScreenRenderState } from "./tui-main-screen.
 export {
 	getOsc8LinkAtColumn,
 	isWebLink,
+	type SanitizedTerminalText,
 	sanitizeTerminalText,
+	sanitizeTerminalTextFrom,
 	sliceByColumn,
 	stripTerminalSequences,
 	truncateToWidth,
