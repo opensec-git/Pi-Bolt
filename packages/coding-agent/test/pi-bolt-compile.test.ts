@@ -293,6 +293,16 @@ describe("pi-bolt compile leaves out what compile.json records as excluded", () 
 		expect(selection.exclude).toEqual(["word-count"]);
 	});
 
+	test("an update's --only, compile.json's, leaves out a name no longer there; one given on the command line is an error", () => {
+		const update = chooseExtensions(
+			found,
+			{ afterUpdate: true, only: ["word-count", "gone"] },
+			{ only: ["word-count", "gone"] },
+		);
+		expect(update).toMatchObject({ only: ["word-count"], staleOnly: ["gone"], unknown: [] });
+		expect(chooseExtensions(found, { only: ["word-count", "gone"] }, undefined).unknown).toEqual(["gone"]);
+	});
+
 	test("with nothing recorded, nothing is left out", () => {
 		expect(chooseExtensions(found, {}, undefined).exclude).toEqual([]);
 		expect(chosen({}, { only: ["a"] })).toEqual({ exclude: [], recorded: [] });

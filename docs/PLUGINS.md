@@ -143,7 +143,9 @@ it. The generator copies that dependency closure to a `node_modules` beside the 
 expects. It copies only the dependencies of the packages being compiled in. An `optionalDependency` counts once it is
 installed, because the plugin then imports it like any other package.
 
-Pi's own packages are left out of every copy, so a plugin cannot carry a second Pi.
+Pi's own packages are left out of every copy, so a plugin cannot carry a second Pi. So are an extension's `tsconfig.json`
+and `jsconfig.json`, which Pi's loader does not read either: the bundler takes the nearest one, and under the extension's own
+its imports of Pi's packages found a second copy of them, whose classes are not Pi's.
 
 Pi's extension loader also gives an extension Pi's modules under other names: `@mariozechner/pi-tui`,
 `@mariozechner/pi-coding-agent`, `@mariozechner/pi-ai` and `@mariozechner/pi-agent-core` (with their subpaths `compat`,

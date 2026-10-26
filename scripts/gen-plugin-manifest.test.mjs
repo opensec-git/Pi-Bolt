@@ -1239,6 +1239,17 @@ describe("Pi's other names for its modules in the copies", () => {
 		assert.equal(readFileSync(join(out, "node_modules", "helper", "index.js"), "utf8"), 'export { Type } from "typebox";\n');
 		assert.equal(readFileSync(join(agentDir, "extensions", "old.ts"), "utf8"), OLD);
 	});
+
+	it("are not hidden by an extension's own tsconfig.json or jsconfig.json, which are not copied", () => {
+		const agentDir = agent();
+		write(join(agentDir, "extensions", "typed", "index.ts"));
+		write(join(agentDir, "extensions", "typed", "tsconfig.json"), "{}\n");
+		write(join(agentDir, "extensions", "typed", "web", "jsconfig.json"), "{}\n");
+		const out = join(scratch(), "folder");
+		writePluginFolder(planPlugins({ agentDir }), out);
+		assert.deepEqual(readdirSync(join(out, "global", "typed")).sort(), ["index.ts", "web"]);
+		assert.deepEqual(readdirSync(join(out, "global", "typed", "web")), []);
+	});
 });
 
 describe("the command", () => {

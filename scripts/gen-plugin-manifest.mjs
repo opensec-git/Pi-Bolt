@@ -1045,13 +1045,22 @@ function linksBack(source, from) {
 	}
 }
 
+/**
+ * The files a copy leaves out besides .git: an extension's own TypeScript settings. The bundler takes the nearest
+ * tsconfig.json (or jsconfig.json) for each module, and the kit tree's own is what resolves Pi's packages to the modules Pi
+ * is built from. Under one of an extension's own, its imports of @earendil-works/pi-tui and pi-ai found the packages' dist
+ * instead: a second copy of each, whose classes are not Pi's (`instanceof` fails) and whose state is not Pi's. Pi's loader
+ * reads no tsconfig either, so the extension is built as it runs there.
+ */
+const NOT_COPIED = new Set([".git", "tsconfig.json", "jsconfig.json"]);
+
 function copyRoot(from, to) {
 	const start = resolve(from);
 	cpSync(start, to, {
 		recursive: true,
 		// An extension may be a symbolic link to somewhere else on this machine, which the executable has no file for.
 		dereference: true,
-		filter: (source) => basename(source) !== ".git" && !isPiCopy(source) && !linksBack(source, start),
+		filter: (source) => !NOT_COPIED.has(basename(source)) && !isPiCopy(source) && !linksBack(source, start),
 	});
 }
 

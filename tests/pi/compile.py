@@ -6,7 +6,8 @@ of a package that is not installed is left to run time, where it fails inside th
 static import of one still stops the build (#160), and the message names the extension. An extension that imports Pi's modules by
 the other names Pi's loader gives them (@mariozechner/pi-*, @sinclair/typebox, the pi-ai root's compat entry) compiles in and
 gets Pi's modules; an --exclude that names no extension stops before the build; --list lists without building; --exclude
-takes a file too and adds to compile.json's, and --include takes one back (#174). Uses the bench fake model.
+takes a file too and adds to compile.json's, and --include takes one back (#174); a tsconfig.json beside an extension does
+not give it second copies of Pi's modules. Uses the bench fake model.
   python3 tests/pi/compile.py PI KIT RUNTIME     (KIT: pi-bolt-kit-<platform>.tar.gz or its folder; RUNTIME: the runtime's bun)
 """
 import json
@@ -71,14 +72,18 @@ export default async function () {
 """
 
 # #174: Pi's modules by the other names Pi's loader gives them, as pi-system-prompt imports "@mariozechner/pi-tui".
+# Its folder has a tsconfig.json of its own, which Pi's loader does not read: compiled in, it gave the extension a second copy
+# of pi-tui, whose Editor is not the one Pi's CustomEditor extends.
 OLD_NAMES = """import { writeFileSync } from "node:fs";
-import { visibleWidth } from "@mariozechner/pi-tui";
+import { CustomEditor } from "@mariozechner/pi-coding-agent";
+import { Editor, visibleWidth } from "@mariozechner/pi-tui";
 import { getModel } from "@earendil-works/pi-ai";
 import { Type } from "@sinclair/typebox";
 export default async function () {
 	const how = new Error().stack.split("\\n")[1].includes("/$bunfs/") ? "compiled" : "files";
 	const { Container } = await import("@mariozechner/pi-tui");
-	const got = [visibleWidth("abc"), typeof getModel, typeof Type.Object, typeof Container].join(",");
+	const same = Object.getPrototypeOf(CustomEditor) === Editor;
+	const got = [visibleWidth("abc"), typeof getModel, typeof Type.Object, typeof Container, same].join(",");
 	writeFileSync(`${process.env.PIBOLT_PROBE}/old-names-ext`, `${how} ${got}`);
 }
 """
@@ -101,6 +106,7 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
     (folder / "helper.ts").write_text("export const one = 1;\n")
     (agent / "extensions" / "optional-ext.ts").write_text(OPTIONAL)
     (agent / "extensions" / "old-names-ext.ts").write_text(OLD_NAMES)
+    (agent / "extensions" / "tsconfig.json").write_text("{}\n")
     (folder / "src").mkdir()
     (folder / "src" / "resources.ts").write_text(RESOURCES)
     (folder / "src" / "skills" / "probe-skill").mkdir(parents=True)
@@ -147,7 +153,7 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
         check("before: an import() of a package that is not installed fails inside the extension (#160)",
               loaded["optional-ext"] == ("files", "caught"), str(loaded))
         check("before: Pi's modules by their other names, loaded from its files (#174)",
-              loaded["old-names-ext"] == ("files", "3,function,function,function"), str(loaded))
+              loaded["old-names-ext"] == ("files", "3,function,function,function,true"), str(loaded))
         from_files = {name: loaded[name][1] for name in ("file-ext", "folder-ext")}
         resources = commands()
         check("before: the skill and prompt beside the module are loaded",
@@ -180,7 +186,7 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
         check("compiled in, the import() of a package that is not installed fails inside the extension, as loaded from its files (#160)",
               loaded["optional-ext"] == ("compiled", "caught"), str(loaded))
         check("compiled in, Pi's modules by their other names are Pi's modules, as loaded from its files (#174)",
-              loaded["old-names-ext"] == ("compiled", "3,function,function,function"), str(loaded))
+              loaded["old-names-ext"] == ("compiled", "3,function,function,function,true"), str(loaded))
         resources = commands()
         check("compiled in, the skill and prompt beside the module are still loaded (#53)",
               resources == ["probe-prompt", "skill:probe-skill"], str(resources))

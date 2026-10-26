@@ -1086,8 +1086,10 @@ export interface Selection {
 	exclude: string[];
 	/** Those of `exclude` compile.json records (and this command does not name). */
 	recorded: string[];
-	/** Those compile.json records that no extension here is named any more. */
+	/** Those compile.json records as excluded that no extension here is named any more. */
 	stale: string[];
+	/** Those of an update's --only, compile.json's, that no extension here is named any more: left out. */
+	staleOnly: string[];
 	/** The values given that name no extension found. */
 	unknown: string[];
 }
@@ -1103,8 +1105,16 @@ export function chooseExtensions(
 	options: Pick<CompileOptions, "only" | "exclude" | "include" | "noExclude" | "afterUpdate">,
 	record: CompileSelection | undefined,
 ): Selection {
-	const given = [...(options.only ?? []), ...(options.exclude ?? []), ...(options.include ?? [])];
-	const unknown = given.filter((value) => !found.some((plugin) => namesPlugin(value, plugin)));
+	const known = (value: string) => found.some((plugin) => namesPlugin(value, plugin));
+	// (An update's --only is compile.json's: one of those removed since is left out, not an error, or no update would
+	// compile anything in again.)
+	const savedOnly = options.afterUpdate ? (options.only ?? []) : [];
+	const given = [
+		...(options.afterUpdate ? [] : (options.only ?? [])),
+		...(options.exclude ?? []),
+		...(options.include ?? []),
+	];
+	const unknown = given.filter((value) => !known(value));
 	const named = (values: string[] = []) =>
 		found.filter((plugin) => values.some((value) => namesPlugin(value, plugin))).map((plugin) => plugin.name);
 	const kept = options.afterUpdate || !(options.noExclude || options.only?.length) ? (record?.exclude ?? []) : [];
@@ -1117,6 +1127,7 @@ export function chooseExtensions(
 		exclude: [...new Set([...recorded, ...own])],
 		recorded: recorded.filter((name) => !own.includes(name)),
 		stale,
+		staleOnly: savedOnly.filter((value) => !known(value)),
 		unknown,
 	};
 }
@@ -1147,6 +1158,18 @@ async function planCompile(
 		process.stderr.write(
 			chalk.dim(`leaving out what compile.json records as excluded: ${selection.recorded.join(", ")}${how}\n`),
 		);
+	}
+	if (selection.staleOnly.length > 0) {
+		process.stderr.write(
+			chalk.yellow(
+				`compile.json names in --only ${selection.staleOnly.join(", ")}, which no extension here is named\n`,
+			),
+		);
+		if (selection.only?.length === 0) {
+			throw new CompileError(
+				`none of the extensions compile.json names in --only is here any more: run pi-bolt compile to choose again`,
+			);
+		}
 	}
 	if (selection.stale.length > 0) {
 		process.stderr.write(
