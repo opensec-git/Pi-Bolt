@@ -1707,14 +1707,17 @@ export class DefaultPackageManager implements PackageManager {
 	): Promise<string> {
 		const npmCommand = this.getNpmCommand();
 		let viewArgs = ["view", packageSpec, "version", "--json"];
+		const installRoot = this.getNpmInstallRoot(scope, false);
 		if (this.getPackageManagerName() === "bun") {
 			// bun has no `view` command; `bun pm view` needs a package.json in its working directory.
-			const installRoot = this.getNpmInstallRoot(scope, false);
 			this.ensureNpmProject(installRoot);
 			viewArgs = ["pm", ...viewArgs, "--cwd", installRoot];
 		}
 		const stdout = await this.runCommandCapture(npmCommand.command, [...npmCommand.args, ...viewArgs], {
-			cwd: this.cwd,
+			// Not in the opened folder, whose npm config (.npmrc) npm would read, trusted or not: it can name another
+			// registry and have npm send it the tokens it expands. The install root has the config of Pi's own folder (or,
+			// for a trusted project's packages, of the project's), and the user's.
+			cwd: existsSync(installRoot) ? installRoot : this.agentDir,
 			timeoutMs: NETWORK_TIMEOUT_MS,
 			...(npmCommand.env ? { env: npmCommand.env } : {}),
 		});

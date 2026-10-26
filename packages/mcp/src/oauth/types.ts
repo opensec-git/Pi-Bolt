@@ -138,6 +138,15 @@ export function isHttpUrl(url: URL): boolean {
 	return url.protocol === "http:" || url.protocol === "https:";
 }
 
+export function isLoopbackHost(hostname: string): boolean {
+	return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+}
+
+/** https, or http to this machine: what OAuth endpoints that receive credentials or metadata may use. */
+export function isSecureOAuthUrl(url: URL): boolean {
+	return url.protocol === "https:" || (url.protocol === "http:" && isLoopbackHost(url.hostname));
+}
+
 function optionalUrl(value: unknown, name: string): string | undefined {
 	return absent(value) ? undefined : safeUrl(value, name);
 }

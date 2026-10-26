@@ -41,7 +41,7 @@ import { attachJsonlLineReader } from "../../modes/rpc/jsonl.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { clientUIContext, settleWithin } from "../client-ui.ts";
 import { errorText, isRecord, JsonRpcConnection, JsonRpcError } from "../json-rpc.ts";
-import { setSessionMcpServers } from "./extension.ts";
+import { READ_ONLY_TOOLS, setSessionMcpServers, setSessionReadOnly } from "./extension.ts";
 import {
 	bashExitCode,
 	bashOutputTail,
@@ -123,7 +123,6 @@ const ACP_MODES: { id: AcpModeId; name: string; description: string }[] = [
 	{ id: "default", name: "Default", description: "Pi's usual tools: it reads, edits, and runs commands" },
 	{ id: "read-only", name: "Read-only", description: "Only tools that read: read, grep, find, and ls" },
 ];
-const READ_ONLY_TOOLS = ["read", "grep", "find", "ls"];
 
 /** Runs ACP on stdin and stdout until the editor closes them. */
 export async function runAcpMode(options: AcpModeOptions): Promise<never> {
@@ -439,6 +438,8 @@ class AcpSession {
 	private mode: AcpModeId = "default";
 	/** The tools that were active before read-only mode, to give back. */
 	private toolsBeforeReadOnly: string[] | undefined;
+	/** The Pi session id that ACP's extension holds to read-only mode (the session's id can change). */
+	private readOnlySessionId: string | undefined;
 	/** Set while the editor changes a setting, whose response carries the new settings. */
 	private settingConfig = false;
 	/** The compaction running, for clients that show compactions. */
@@ -536,6 +537,7 @@ class AcpSession {
 		if (this.disposed) return;
 		this.disposed = true;
 		for (const live of this.liveOutput.values()) clearTimeout(live.timer);
+		this.holdReadOnly(false);
 		this.unsubscribe?.();
 		this.unsubscribeBackpressure?.();
 		await this.runtime.dispose();
@@ -555,6 +557,8 @@ class AcpSession {
 
 	private async runPrompt(blocks: ContentBlock[]): Promise<{ stopReason: StopReason }> {
 		this.cancelled = false;
+		// Tools registered since the mode was set (an MCP server that connected) are not offered in read-only mode.
+		this.applyMode();
 		const { text, images } = promptToPi(blocks);
 		const command = /^\/([a-z-]+)(?:\s+([\s\S]*))?$/.exec(text.trim());
 		if (command && ACP_COMMAND_NAMES.has(command[1]) && images.length === 0) {
@@ -643,7 +647,7 @@ class AcpSession {
 				try {
 					const file = path?.endsWith(".jsonl")
 						? session.exportToJsonl(path)
-						: await session.exportToHtml(path ?? join(this.cwd, `pi-session-${session.sessionId}.html`));
+						: await session.exportToHtml(path ?? join(this.cwd, exportFileName(session.sessionId)));
 					this.send({
 						sessionUpdate: "agent_message_chunk",
 						messageId: randomUUID(),
@@ -808,17 +812,29 @@ class AcpSession {
 			this.applyMode();
 		} else {
 			this.mode = mode;
+			this.holdReadOnly(false);
 			if (this.toolsBeforeReadOnly) session.setActiveToolsByName(this.toolsBeforeReadOnly);
 			this.toolsBeforeReadOnly = undefined;
 		}
 	}
 
-	/** Puts read-only mode's tools back after something set the session's tools again (a reload, another session). */
+	/**
+	 * Puts read-only mode's tools back after something set the session's tools again (a reload, another session). The
+	 * active tools are what the model is offered; ACP's extension also blocks any other tool when it is called.
+	 */
 	private applyMode(): void {
 		if (this.mode !== "read-only") return;
 		const session = this.session;
+		this.holdReadOnly(true);
 		const registered = new Set(session.getAllTools().map((tool) => tool.name));
 		session.setActiveToolsByName(READ_ONLY_TOOLS.filter((name) => registered.has(name)));
+	}
+
+	/** Tells ACP's extension whether the session's current Pi session is read-only. */
+	private holdReadOnly(readOnly: boolean): void {
+		if (this.readOnlySessionId !== undefined) setSessionReadOnly(this.readOnlySessionId, false);
+		this.readOnlySessionId = readOnly ? this.session.sessionId : undefined;
+		if (this.readOnlySessionId !== undefined) setSessionReadOnly(this.readOnlySessionId, true);
 	}
 
 	// =========================================================================
@@ -1192,6 +1208,15 @@ function sessionInfoText(session: AgentSession): string {
 	);
 	if (stats.cost > 0) lines.push(`Cost: $${stats.cost.toFixed(3)}`);
 	return lines.join("\n");
+}
+
+/**
+ * The file `/export` writes in the session's directory when given no path. The id comes from the session file's header,
+ * which is not checked when a session is loaded: only letters, digits, ".", "_" and "-" of it are kept, so the name stays
+ * one file name in that directory.
+ */
+export function exportFileName(sessionId: string): string {
+	return `pi-session-${sessionId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 128)}.html`;
 }
 
 /** A path argument, without the quotes around it. */

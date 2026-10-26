@@ -10,6 +10,7 @@ import {
 	discoverAuthorizationServerMetadata,
 	discoverOAuthServerInfo,
 	parseWwwAuthenticate,
+	readOAuthResponseText,
 	selectResource,
 } from "./discovery.ts";
 import {
@@ -22,6 +23,8 @@ import {
 import {
 	type AuthorizationServerMetadata,
 	isHttpUrl,
+	isLoopbackHost,
+	isSecureOAuthUrl,
 	type OAuthClientInformation,
 	type OAuthClientInformationFull,
 	type OAuthClientInformationMixed,
@@ -103,10 +106,6 @@ export interface TokenRequestOptions {
 	signal?: AbortSignal;
 }
 
-function loopback(hostname: string): boolean {
-	return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
-}
-
 /**
  * The OpenID Connect `application_type` for `redirect_uris` (MCP SEP-837). Without one, OpenID Connect servers
  * assume `web`, which rejects http loopback redirect URIs. Loopback hosts and custom schemes are native (RFC 8252).
@@ -115,14 +114,14 @@ function applicationType(redirectUris: readonly string[]): "native" | "web" {
 	const native = redirectUris.some((uri) => {
 		if (!URL.canParse(uri)) return false;
 		const url = new URL(uri);
-		return (url.protocol !== "http:" && url.protocol !== "https:") || loopback(url.hostname);
+		return (url.protocol !== "http:" && url.protocol !== "https:") || isLoopbackHost(url.hostname);
 	});
 	return native ? "native" : "web";
 }
 
 function secureEndpoint(value: string | URL): URL {
 	const url = new URL(value);
-	if (url.protocol !== "https:" && !loopback(url.hostname)) throw new OAuthInsecureEndpointError(url.href);
+	if (!isSecureOAuthUrl(url)) throw new OAuthInsecureEndpointError(url.href);
 	return url;
 }
 
@@ -232,7 +231,7 @@ async function tokenRequest(
 		body: params,
 		signal: options.signal,
 	});
-	const text = await response.text();
+	const text = await readOAuthResponseText(response);
 	let value: unknown;
 	try {
 		value = JSON.parse(text);
@@ -262,8 +261,9 @@ export async function registerClient(
 	const endpoint = options.metadata?.registration_endpoint;
 	if (options.metadata && !endpoint)
 		throw new Error("Authorization server does not support dynamic client registration");
+	// https (or http to this machine), as for the token endpoint: the response carries the client's secret, if any.
 	const response = await (options.fetch ?? globalThis.fetch)(
-		new URL(endpoint ?? new URL("/register", authorizationServerUrl)),
+		secureEndpoint(endpoint ?? new URL("/register", authorizationServerUrl)),
 		{
 			method: "POST",
 			headers: { Accept: "application/json", "content-type": "application/json" },
@@ -276,8 +276,9 @@ export async function registerClient(
 			signal: options.signal,
 		},
 	);
-	if (!response.ok) throw new OAuthRegistrationError(response.status, await response.text());
-	return parseClientInformation(await response.json());
+	const text = await readOAuthResponseText(response);
+	if (!response.ok) throw new OAuthRegistrationError(response.status, text);
+	return parseClientInformation(JSON.parse(text));
 }
 
 export async function exchangeAuthorizationCode(
@@ -333,6 +334,7 @@ async function runFlow(provider: OAuthClientProvider, options: OAuthFlowOptions)
 				authorizationServerMetadata:
 					cached.authorizationServerMetadata ??
 					(await discoverAuthorizationServerMetadata(cached.authorizationServerUrl, {
+						serverUrl: options.serverUrl,
 						fetch: options.fetch,
 						skipIssuerValidation: options.skipIssuerValidation,
 						signal: options.signal,

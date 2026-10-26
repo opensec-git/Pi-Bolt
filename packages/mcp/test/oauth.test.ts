@@ -5,6 +5,7 @@ import {
 	adaptOAuthProvider,
 	authorizeMcp,
 	discoverAuthorizationServerMetadata,
+	discoverProtectedResourceMetadata,
 	McpOAuthAuthorizationRequiredError,
 	McpOAuthProvider,
 	MemoryOAuthStateStore,
@@ -16,6 +17,7 @@ import {
 	OAuthInsecureEndpointError,
 	OAuthIssuerMismatchError,
 	type OAuthTokens,
+	parseWwwAuthenticate,
 	registerClient,
 	startAuthorization,
 } from "../src/oauth/index.ts";
@@ -604,6 +606,95 @@ describe("MCP OAuth", () => {
 		);
 		expect(await exchange("no-metadata", undefined, false, false)).toBe("AUTHORIZED");
 		expect(codes).toEqual(["matching", "omitted", "no-metadata"]);
+	});
+
+	it("loads OAuth metadata only over https, from this machine, or from the MCP server's own origin", async () => {
+		const requested: string[] = [];
+		const recording = async (input: string | URL) => {
+			requested.push(String(input));
+			return new Response("{}", { status: 404 });
+		};
+		// A challenge that names a URL of another scheme names none.
+		expect(parseWwwAuthenticate('Bearer resource_metadata="file:///dev/zero"').resourceMetadataUrl).toBeUndefined();
+		for (const url of ["file:///dev/zero", "http://internal.example/metadata"]) {
+			await expect(
+				discoverProtectedResourceMetadata("https://mcp.example/mcp", {
+					resourceMetadataUrl: url,
+					fetch: recording,
+				}),
+			).rejects.toBeInstanceOf(OAuthInsecureEndpointError);
+		}
+		await expect(
+			discoverAuthorizationServerMetadata("http://internal.example", {
+				serverUrl: "https://mcp.example/mcp",
+				fetch: recording,
+			}),
+		).rejects.toBeInstanceOf(OAuthInsecureEndpointError);
+		expect(requested).toEqual([]);
+
+		// The MCP server's own origin keeps the scheme the user configured.
+		expect(
+			await discoverAuthorizationServerMetadata("http://mcp.internal.example", {
+				serverUrl: "http://mcp.internal.example/mcp",
+				fetch: recording,
+			}),
+		).toBeUndefined();
+		expect(requested[0]).toBe("http://mcp.internal.example/.well-known/oauth-authorization-server");
+
+		// Redirects are checked as the first URL is.
+		const origin = await listen(async (_request, response) => {
+			response.writeHead(302, { location: "http://internal.example/metadata" });
+			response.end();
+		});
+		const followed: string[] = [];
+		const fetch = async (input: string | URL, init?: RequestInit) => {
+			followed.push(String(input));
+			return globalThis.fetch(input, init);
+		};
+		await expect(discoverAuthorizationServerMetadata(origin, { fetch })).rejects.toBeInstanceOf(
+			OAuthInsecureEndpointError,
+		);
+		expect(followed).toEqual([`${origin}/.well-known/oauth-authorization-server`]);
+	});
+
+	it("reads at most 1 MiB of an OAuth response", async () => {
+		const origin = await listen(async (_request, response) => {
+			response.setHeader("content-type", "application/json");
+			// No content-length: the body is streamed, and it is never-ending as far as the client knows.
+			for (let i = 0; i < 64 && !response.destroyed; i++) response.write(Buffer.alloc(64 * 1024, 0x20));
+			response.end("{}");
+		});
+		await expect(discoverAuthorizationServerMetadata(origin)).rejects.toThrow("larger than 1 MiB");
+		await expect(
+			registerClient(origin, { clientMetadata: { redirect_uris: ["http://127.0.0.1/callback"] } }),
+		).rejects.toThrow("larger than 1 MiB");
+	});
+
+	it("registers a client only over https or this machine's http", async () => {
+		const requested: string[] = [];
+		const fetch = async (input: string | URL) => {
+			requested.push(String(input));
+			return new Response(JSON.stringify({ client_id: "client" }), { status: 201 });
+		};
+		const clientMetadata = { redirect_uris: ["http://127.0.0.1/callback"] };
+		await expect(registerClient("http://idp.example", { clientMetadata, fetch })).rejects.toBeInstanceOf(
+			OAuthInsecureEndpointError,
+		);
+		const metadata = {
+			issuer: "https://idp.example",
+			authorization_endpoint: "https://idp.example/authorize",
+			token_endpoint: "https://idp.example/token",
+			registration_endpoint: "http://idp.example/register",
+			response_types_supported: ["code"],
+		};
+		await expect(registerClient("https://idp.example", { metadata, clientMetadata, fetch })).rejects.toBeInstanceOf(
+			OAuthInsecureEndpointError,
+		);
+		expect(requested).toEqual([]);
+		expect(await registerClient("https://idp.example", { clientMetadata, fetch })).toMatchObject({
+			client_id: "client",
+		});
+		expect(requested).toEqual(["https://idp.example/register"]);
 	});
 
 	// #10565

@@ -3,7 +3,6 @@
  * Handles TUI rendering and user interaction, delegating business logic to AgentSession.
  */
 
-import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -137,7 +136,7 @@ import {
 	parseChangelog,
 } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardFilePaths, readClipboardText } from "../../utils/clipboard.ts";
-import { extensionForImageMimeType, readClipboardImage } from "../../utils/clipboard-image.ts";
+import { readClipboardImage, writePastedImage } from "../../utils/clipboard-image.ts";
 import { parseGitUrl } from "../../utils/git.ts";
 import { ensurePngTranscoderOnFirstUse } from "../../utils/image-convert.ts";
 import { getCwdRelativePath } from "../../utils/paths.ts";
@@ -3222,13 +3221,7 @@ export class InteractiveMode {
 
 			const image = await readClipboardImage();
 			if (image) {
-				const tmpDir = os.tmpdir();
-				const ext = extensionForImageMimeType(image.mimeType) ?? "png";
-				const fileName = `pi-clipboard-${crypto.randomUUID()}.${ext}`;
-				const filePath = path.join(tmpDir, fileName);
-				fs.writeFileSync(filePath, Buffer.from(image.bytes));
-
-				this.editor.insertTextAtCursor?.(filePath);
+				this.editor.insertTextAtCursor?.(writePastedImage(image));
 				this.ui.requestRender();
 				return;
 			}

@@ -1,6 +1,6 @@
 import { getNativeClipboard } from "@earendil-works/pi-tui";
 import { randomUUID } from "crypto";
-import { readFileSync, unlinkSync } from "fs";
+import { mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -237,4 +237,38 @@ export async function readClipboardImage(options?: {
 	}
 
 	return image;
+}
+
+/** The folder of this process's pasted images, made on the first paste. */
+let pastedImageDir: string | undefined;
+
+/**
+ * Writes a pasted image where the model can read it, and returns its path. Only the user can read it (the folder is
+ * 0700, the file 0600; on Windows the temp folder is the user's own), and the folder is removed when Pi exits: the
+ * conversation has the image by then, or it was never sent.
+ */
+export function writePastedImage(image: ClipboardImage): string {
+	if (pastedImageDir === undefined) {
+		pastedImageDir = mkdtempSync(join(tmpdir(), "pi-clipboard-"));
+		process.once("exit", removePastedImages);
+	}
+	const path = join(
+		pastedImageDir,
+		`pi-clipboard-${randomUUID()}.${extensionForImageMimeType(image.mimeType) ?? "png"}`,
+	);
+	writeFileSync(path, image.bytes, { mode: 0o600, flag: "wx" });
+	return path;
+}
+
+/** Removes the pasted images of this process. */
+export function removePastedImages(): void {
+	const dir = pastedImageDir;
+	if (dir === undefined) return;
+	pastedImageDir = undefined;
+	process.removeListener("exit", removePastedImages);
+	try {
+		rmSync(dir, { recursive: true, force: true });
+	} catch {
+		// Exiting anyway: the system's temp cleanup removes it later.
+	}
 }

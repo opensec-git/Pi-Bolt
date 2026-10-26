@@ -1,5 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -455,6 +455,29 @@ describe("MCP mode", () => {
 		const again = await second.call({ prompt: "[hello] by id", sessionId });
 		expect(again.isError).toBeUndefined();
 		expect(requests.at(-1)?.users).toEqual(["[hello] elsewhere", "[hello] by id"]);
+	});
+
+	it("decides project trust for each new session, not once when the process started", async () => {
+		const dir = join(root, "late-project");
+		mkdirSync(dir, { recursive: true });
+		const marker = join(root, "late-project-extension-ran");
+		const client = new McpTestClient(dir, agentDir);
+		clients.push(client);
+		await client.request("initialize", {
+			protocolVersion: "2025-11-25",
+			capabilities: {},
+			clientInfo: { name: "test-client", version: "1.0.0" },
+		});
+		expect((await client.call({ prompt: "[hello] first" })).isError).toBeUndefined();
+		// The project's extension arrives after the process started (a pull, a branch switch). Nothing answered a trust
+		// prompt, so it does not load.
+		mkdirSync(join(dir, ".pi", "extensions"), { recursive: true });
+		writeFileSync(
+			join(dir, ".pi", "extensions", "marker.ts"),
+			`import { writeFileSync } from "node:fs";\nexport default function () { writeFileSync(${JSON.stringify(marker)}, "ran"); }\n`,
+		);
+		expect((await client.call({ prompt: "[hello] second" })).isError).toBeUndefined();
+		expect(existsSync(marker)).toBe(false);
 	});
 
 	it("uses the model and thinking level a call names", async () => {

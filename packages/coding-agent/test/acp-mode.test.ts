@@ -1,5 +1,14 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -51,6 +60,7 @@ const SCRIPTS: Record<string, Step[]> = {
 		{ text: "Ran it." },
 	],
 	timeout: [{ tool: { name: "bash", args: { command: "echo started; sleep 5", timeout: 1 } } }, { text: "Ran it." }],
+	touch: [{ tool: { name: "touch", args: {} } }, { text: "Touched." }],
 	slow: [{ hang: true }],
 };
 
@@ -697,6 +707,91 @@ process.stdin.on("data", (chunk) => {
 		expect(bad.error?.code).toBe(-32602);
 		// The editor's own changes are answered by their responses, not by updates.
 		expect(client.updatesOf("config_option_update")).toEqual([]);
+	});
+
+	it("holds read-only mode for a tool registered after the mode was set", async () => {
+		const marker = join(root, "late-tool-ran");
+		const extensionPath = join(root, "late-tool-extension.ts");
+		writeFileSync(
+			extensionPath,
+			`import { writeFileSync } from "node:fs";
+export default function (pi) {
+	let registered = false;
+	pi.on("input", () => {
+		if (registered) return;
+		registered = true;
+		pi.registerTool({
+			name: "touch",
+			label: "touch",
+			description: "Writes a file",
+			parameters: { type: "object", properties: {} },
+			execute: async () => {
+				writeFileSync(${JSON.stringify(marker)}, "ran");
+				return { content: [{ type: "text", text: "touched" }], details: {} };
+			},
+		});
+	});
+}
+`,
+		);
+		const { client } = await startClient(["-e", extensionPath]);
+		const { sessionId } = await client.request<SessionResponse>("session/new", { cwd: projectDir, mcpServers: [] });
+		await client.request("session/set_mode", { sessionId, modeId: "read-only" });
+		await client.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "[touch] go" }] });
+		expect(existsSync(marker)).toBe(false);
+		const [call] = client.updatesOf("tool_call").filter((update) => update.name === "touch");
+		const result = client.updatesOf("tool_call_update").find((update) => update.toolCallId === call?.toolCallId);
+		expect(result?.status).toBe("failed");
+		expect(toolText(result?.content)).toContain("Read-only mode");
+
+		// The next prompt does not offer it.
+		await client.request("session/prompt", { sessionId, prompt: [{ type: "text", text: "[hello] tools?" }] });
+		expect(offeredTools.sort()).toEqual(["find", "grep", "ls", "read"]);
+	});
+
+	it("decides project trust for each new session, not once when the process started", async () => {
+		// (The real path: the process's directory is, and the startup check is of it.)
+		const dir = join(realpathSync(root), "late-project");
+		mkdirSync(dir, { recursive: true });
+		const marker = join(root, "late-project-extension-ran");
+		const client = new AcpTestClient(dir, agentDir);
+		clients.push(client);
+		await client.request("initialize", { protocolVersion: 1, clientCapabilities: CLIENT_CAPABILITIES });
+		await client.request<SessionResponse>("session/new", { cwd: dir, mcpServers: [] });
+		// The project's extension arrives after the process started (a pull, a branch switch). Nothing answered a trust
+		// prompt, so it does not load.
+		mkdirSync(join(dir, ".pi", "extensions"), { recursive: true });
+		writeFileSync(
+			join(dir, ".pi", "extensions", "marker.ts"),
+			`import { writeFileSync } from "node:fs";\nexport default function () { writeFileSync(${JSON.stringify(marker)}, "ran"); }\n`,
+		);
+		await client.request<SessionResponse>("session/new", { cwd: dir, mcpServers: [] });
+		expect(existsSync(marker)).toBe(false);
+	});
+
+	it("exports to a file of the session's directory whatever the session id says", async () => {
+		const sessionDir = join(root, "export-sessions");
+		const dir = join(root, "export-project", "nested");
+		mkdirSync(sessionDir, { recursive: true });
+		mkdirSync(dir, { recursive: true });
+		const id = "/../../escaped";
+		const header = { type: "session", version: 3, id, timestamp: new Date().toISOString(), cwd: dir };
+		const message = {
+			type: "message",
+			id: "m1",
+			parentId: null,
+			timestamp: new Date().toISOString(),
+			message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: Date.now() },
+		};
+		writeFileSync(
+			join(sessionDir, "2026-01-01T00-00-00-000Z_crafted.jsonl"),
+			`${JSON.stringify(header)}\n${JSON.stringify(message)}\n`,
+		);
+		const { client } = await startClient(["--session-dir", sessionDir]);
+		await client.request("session/load", { sessionId: id, cwd: dir, mcpServers: [] });
+		await client.request("session/prompt", { sessionId: id, prompt: [{ type: "text", text: "/export" }] });
+		expect(existsSync(join(root, "export-project", "escaped.html"))).toBe(false);
+		expect(readdirSync(dir).filter((file) => file.endsWith(".html"))).toEqual(["pi-session-_.._.._escaped.html"]);
 	});
 
 	it("runs Pi's commands that need no terminal", async () => {

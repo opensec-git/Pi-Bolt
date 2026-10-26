@@ -2515,7 +2515,7 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			expect(runCommandCaptureSpy).toHaveBeenCalledWith(
 				"npm",
 				["view", "example@^1.0.0", "version", "--json"],
-				expect.objectContaining({ cwd: tempDir, timeoutMs: expect.any(Number) }),
+				expect.objectContaining({ cwd: join(tempDir, ".pi", "npm"), timeoutMs: expect.any(Number) }),
 			);
 			expect(runCommandSpy).toHaveBeenCalledWith(
 				"npm",
@@ -2540,7 +2540,7 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			expect(runCommandCaptureSpy).toHaveBeenCalledWith(
 				"npm",
 				["view", "example@^1.0.0", "version", "--json"],
-				expect.objectContaining({ cwd: tempDir, timeoutMs: expect.any(Number) }),
+				expect.objectContaining({ cwd: join(tempDir, ".pi", "npm"), timeoutMs: expect.any(Number) }),
 			);
 			expect(runCommandSpy).not.toHaveBeenCalled();
 		});
@@ -2559,9 +2559,29 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			expect(runCommandCaptureSpy).toHaveBeenCalledWith(
 				"npm",
 				["view", "example", "version", "--json"],
-				expect.objectContaining({ cwd: tempDir, timeoutMs: expect.any(Number) }),
+				expect.objectContaining({ cwd: join(tempDir, ".pi", "npm"), timeoutMs: expect.any(Number) }),
 			);
 			expect(runCommandSpy).not.toHaveBeenCalled();
+		});
+
+		it("checks for npm updates outside the opened folder, whose .npmrc npm would read", async () => {
+			// npm reads the project config of the folder it runs in, trusted or not; it can name another registry and have
+			// npm send it the tokens it expands.
+			writeFileSync(join(tempDir, ".npmrc"), "registry=http://127.0.0.1:9/\n");
+			const installedPath = join(agentDir, "npm", "node_modules", "example");
+			mkdirSync(installedPath, { recursive: true });
+			writeFileSync(join(installedPath, "package.json"), JSON.stringify({ name: "example", version: "1.0.0" }));
+			settingsManager.setPackages(["npm:example"]);
+			const runCommandCaptureSpy = vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.1.0"');
+
+			const updates = await packageManager.checkForAvailableUpdates();
+
+			expect(updates.map((update) => update.source)).toEqual(["npm:example"]);
+			expect(runCommandCaptureSpy).toHaveBeenCalledWith(
+				"npm",
+				["view", "example", "version", "--json"],
+				expect.objectContaining({ cwd: join(agentDir, "npm") }),
+			);
 		});
 
 		it("should migrate legacy user npm installs into the managed npm root during update", async () => {
@@ -2893,7 +2913,7 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			expect(runCommandCaptureSpy).toHaveBeenCalledWith(
 				"npm",
 				["view", "example", "version", "--json"],
-				expect.objectContaining({ cwd: tempDir, timeoutMs: expect.any(Number) }),
+				expect.objectContaining({ cwd: agentDir, timeoutMs: expect.any(Number) }),
 			);
 		});
 
@@ -2914,7 +2934,8 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			expect(runCommandCaptureSpy).toHaveBeenCalledWith(
 				"mise",
 				["exec", "node@20", "--", "npm", "view", "@scope/pkg", "version", "--json"],
-				expect.objectContaining({ cwd: tempDir }),
+				// (No packages installed yet: Pi's folder.)
+				expect.objectContaining({ cwd: agentDir }),
 			);
 		});
 

@@ -815,6 +815,10 @@ export async function main(args: string[], options?: MainOptions) {
 	const acp = parsed.mode === "acp" ? await loadAcpMode() : undefined;
 	const mcp = parsed.mode === "mcp" ? await loadMcpMode() : undefined;
 	const runtimeExtensionFactories = acp ? [...extensionFactories, acp.acpExtension] : extensionFactories;
+	// Only the runtime this process starts with uses the startup check. ACP and MCP create every runtime later, on the
+	// client's request, and without a session_start event; the directory may have changed by then (a pull, a branch switch),
+	// so each of their runtimes checks again.
+	let startupRuntimePending = !acp && !mcp;
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
 		cwd,
 		agentDir,
@@ -825,7 +829,9 @@ export async function main(args: string[], options?: MainOptions) {
 		const isInitialRuntime = sessionStartEvent === undefined;
 		const projectTrustDiagnostics: AgentSessionRuntimeDiagnostic[] = [];
 		const cachedProjectTrust = projectTrustByCwd.get(cwd);
-		const hasTrustRequiringResources = isInitialRuntime
+		const usesStartupCheck = isInitialRuntime && startupRuntimePending;
+		startupRuntimePending = false;
+		const hasTrustRequiringResources = usesStartupCheck
 			? hasTrustRequiringResourcesAtStartup(cwd)
 			: hasTrustRequiringProjectResources(cwd);
 		const shouldResolveProjectTrust =

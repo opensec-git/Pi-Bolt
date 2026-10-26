@@ -203,9 +203,13 @@ const EARLY_TOOL_NAMES: ReadonlySet<string> = new Set(PIBOLT ? ["read", "ls", "g
 
 /**
  * Extensions whose `tool_call` handlers let calls of the tools in EARLY_TOOL_NAMES through unchanged. The built-in MCP
- * extension's handler waits only for MCP servers that the called tool reaches (MCP tools, codemode, tool_search).
+ * extension's handler waits only for MCP servers that the called tool reaches (MCP tools, codemode, tool_search); ACP
+ * mode's blocks only tools that read-only mode does not keep, and it keeps these.
  */
-const EARLY_TOOL_CALL_PASSTHROUGH_EXTENSIONS: ReadonlySet<string> = new Set([`${BUILTIN_PATH_PREFIX}mcp`]);
+const EARLY_TOOL_CALL_PASSTHROUGH_EXTENSIONS: ReadonlySet<string> = new Set([
+	`${BUILTIN_PATH_PREFIX}mcp`,
+	`${BUILTIN_PATH_PREFIX}acp`,
+]);
 
 /** Tool execution events of calls a tool made through `ctx.executeTool()` carry `parentToolCallId`. */
 type WithParentToolCallId<E> = E extends {

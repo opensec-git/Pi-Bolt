@@ -207,7 +207,7 @@ describe.skipIf(process.platform === "win32")("DefaultPackageManager in a compil
 		expect(runCommandCaptureSpy).toHaveBeenCalledWith(
 			"bun",
 			["pm", "view", "example@^2", "version", "--json", "--cwd", join(tempDir, ".pi", "npm")],
-			expect.objectContaining({ cwd: tempDir, timeoutMs: expect.any(Number) }),
+			expect.objectContaining({ cwd: join(tempDir, ".pi", "npm"), timeoutMs: expect.any(Number) }),
 		);
 	});
 

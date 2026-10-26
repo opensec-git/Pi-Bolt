@@ -11,6 +11,18 @@ import type { McpServer } from "./types.ts";
 /** MCP servers by Pi session id, set by ACP mode before it creates or loads the session. */
 const sessionMcpServers = new Map<string, McpServer[]>();
 
+/** The tools read-only mode keeps: they only read. */
+export const READ_ONLY_TOOLS: readonly string[] = ["read", "grep", "find", "ls"];
+const readOnlyTools = new Set(READ_ONLY_TOOLS);
+
+/** Pi session ids whose ACP session is in read-only mode. */
+const readOnlySessions = new Set<string>();
+
+export function setSessionReadOnly(sessionId: string, readOnly: boolean): void {
+	if (readOnly) readOnlySessions.add(sessionId);
+	else readOnlySessions.delete(sessionId);
+}
+
 export function setSessionMcpServers(sessionId: string, servers: readonly McpServer[] | undefined): void {
 	if (servers && servers.length > 0) sessionMcpServers.set(sessionId, [...servers]);
 	else sessionMcpServers.delete(sessionId);
@@ -54,6 +66,16 @@ export const acpExtension: InlineExtension = {
 	name: "acp",
 	builtin: true,
 	factory: (pi) => {
+		// Read-only mode holds when each call is made, not only for the tools active when it was chosen: a tool registered
+		// later (an MCP server that connects during a prompt, an extension's tool) is active at once. The tools it keeps
+		// pass unchanged, so they still may start early.
+		pi.on("tool_call", (event, ctx) => {
+			if (readOnlyTools.has(event.toolName) || !readOnlySessions.has(ctx.sessionManager.getSessionId())) return;
+			return {
+				block: true,
+				reason: `Read-only mode: ${event.toolName} is not available. Only read, grep, find and ls are.`,
+			};
+		});
 		let registered: string[] = [];
 		pi.on("session_start", (_event, ctx) => {
 			for (const name of registered) pi.unregisterMcpServer(name);

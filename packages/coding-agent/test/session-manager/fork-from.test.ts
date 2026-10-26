@@ -54,7 +54,8 @@ describe("SessionManager.forkFrom", () => {
 		const newFile = forked.getSessionFile()!;
 
 		const writeOpens = openSyncSpy.mock.calls.filter(([path, flags]) => path === newFile && flags !== "r");
-		expect(writeOpens).toEqual([[newFile, "wx"]]);
+		// (Readable only by the user.)
+		expect(writeOpens).toEqual([[newFile, "wx", 0o600]]);
 		expect(appendFileSyncSpy.mock.calls.filter(([path]) => path === newFile)).toHaveLength(0);
 
 		const written = readFileSync(newFile, "utf8").trimEnd().split("\n");

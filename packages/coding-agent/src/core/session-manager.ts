@@ -16,6 +16,7 @@ import {
 	appendFileSync,
 	closeSync,
 	existsSync,
+	fchmodSync,
 	fstatSync,
 	mkdirSync,
 	openSync,
@@ -585,6 +586,36 @@ export function buildSessionContext(
 }
 
 /**
+ * Modes of the folders and files that hold transcripts: only the user reads them (on a shared machine, other accounts
+ * could otherwise read every conversation). Windows keeps only the read-only bit of a mode; there the files inherit the
+ * access list of the user's profile folder.
+ */
+const SESSION_DIR_MODE = 0o700;
+const SESSION_FILE_MODE = 0o600;
+
+/**
+ * Takes away other users' access to a transcript Pi is about to write, which earlier versions created readable by them.
+ * Only files Pi writes to are changed, and only their group and other permissions.
+ */
+function restrictSessionFile(fd: number, mode: number): void {
+	if (process.platform !== "win32" && (mode & 0o077) !== 0) fchmodSync(fd, mode & 0o700);
+}
+
+/** Opens a transcript for writing, readable only by the user. */
+function openSessionFile(path: string, flags: "w" | "wx" | "a"): number {
+	const fd = openSync(path, flags, SESSION_FILE_MODE);
+	if (flags !== "wx") {
+		try {
+			restrictSessionFile(fd, fstatSync(fd).mode);
+		} catch (error) {
+			closeSync(fd);
+			throw error;
+		}
+	}
+	return fd;
+}
+
+/**
  * Compute the default session directory for a cwd.
  * Encodes cwd into a safe directory name under ~/.pi/agent/sessions/.
  */
@@ -598,7 +629,7 @@ function getDefaultSessionDirPath(cwd: string, agentDir: string = getDefaultAgen
 export function getDefaultSessionDir(cwd: string, agentDir: string = getDefaultAgentDir()): string {
 	const sessionDir = getDefaultSessionDirPath(cwd, agentDir);
 	if (!existsSync(sessionDir)) {
-		mkdirSync(sessionDir, { recursive: true });
+		mkdirSync(sessionDir, { recursive: true, mode: SESSION_DIR_MODE });
 	}
 	return sessionDir;
 }
@@ -1145,7 +1176,10 @@ class SessionInfoIndex {
 		for (const [file, entry] of this.next) sessions[file] = entry;
 		const tempPath = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
 		try {
-			await writeFile(tempPath, JSON.stringify({ version: SESSION_INDEX_VERSION, sessions }));
+			// It holds the text of every listed session's messages.
+			await writeFile(tempPath, JSON.stringify({ version: SESSION_INDEX_VERSION, sessions }), {
+				mode: SESSION_FILE_MODE,
+			});
 			await rename(tempPath, this.path);
 		} catch {
 			// The index only saves work. A folder that cannot be written is listed by reading every session.
@@ -1295,9 +1329,10 @@ class SessionAppendFile {
 
 	constructor(path: string) {
 		this.path = path;
-		this.fd = openSync(path, "a");
+		this.fd = openSync(path, "a", SESSION_FILE_MODE);
 		try {
 			const stats = fstatSync(this.fd);
+			restrictSessionFile(this.fd, stats.mode);
 			this.dev = stats.dev;
 			this.ino = stats.ino;
 		} catch (error) {
@@ -1402,7 +1437,7 @@ export class SessionManager {
 		this.sessionDir = normalizePath(sessionDir);
 		this.persist = persist;
 		if (persist && this.sessionDir && !existsSync(this.sessionDir)) {
-			mkdirSync(this.sessionDir, { recursive: true });
+			mkdirSync(this.sessionDir, { recursive: true, mode: SESSION_DIR_MODE });
 		}
 
 		if (sessionFile) {
@@ -1525,7 +1560,7 @@ export class SessionManager {
 
 	private _rewriteFile(): void {
 		if (!this.persist || !this.sessionFile) return;
-		const fd = openSync(this.sessionFile, "w");
+		const fd = openSessionFile(this.sessionFile, "w");
 		try {
 			for (const entry of this.fileEntries) {
 				writeFileSync(fd, `${JSON.stringify(entry)}\n`);
@@ -1576,7 +1611,7 @@ export class SessionManager {
 
 		if (!this.flushed) {
 			if (!this._hasConversation()) return;
-			const fd = openSync(this.sessionFile, "wx");
+			const fd = openSessionFile(this.sessionFile, "wx");
 			try {
 				for (const e of this.fileEntries) {
 					writeFileSync(fd, `${JSON.stringify(e)}\n`);
@@ -1593,7 +1628,7 @@ export class SessionManager {
 	private _appendLine(path: string, line: string): void {
 		// An open file can keep others from deleting or renaming it on Windows.
 		if (process.platform === "win32") {
-			appendFileSync(path, line);
+			appendFileSync(path, line, { mode: SESSION_FILE_MODE });
 			return;
 		}
 		if (!this.appendFile?.isFor(path)) {
@@ -2334,7 +2369,7 @@ export class SessionManager {
 
 		const dir = sessionDir ? normalizePath(sessionDir) : getDefaultSessionDir(resolvedTargetCwd);
 		if (!existsSync(dir)) {
-			mkdirSync(dir, { recursive: true });
+			mkdirSync(dir, { recursive: true, mode: SESSION_DIR_MODE });
 		}
 
 		// Create new session file with new ID but forked content
@@ -2357,7 +2392,7 @@ export class SessionManager {
 		};
 		// Write the header and all non-header entries through one fd. Reopening the file per entry
 		// is slow where open/close is expensive (e.g. filesystem security monitors).
-		const fd = openSync(newSessionFile, "wx");
+		const fd = openSessionFile(newSessionFile, "wx");
 		try {
 			writeFileSync(fd, `${JSON.stringify(newHeader)}\n`);
 			for (const entry of sourceEntries) {
