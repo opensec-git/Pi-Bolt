@@ -372,3 +372,66 @@ describe.skipIf(!has("git"))("a linked worktree", () => {
 		}
 	});
 });
+
+describe("limits", () => {
+	test("braces expand to at most 1024 patterns", async () => {
+		expect(expandBraces("{a,b}".repeat(10))).toHaveLength(1024);
+		expect(() => expandBraces("{a,b}".repeat(11))).toThrow("too many patterns");
+		// (Twenty groups would be a million patterns, built before the first match.)
+		await expect(nativeFind({ root, pattern: "{a,b}".repeat(20), limit: 10 })).rejects.toThrow("too many patterns");
+	});
+
+	test.skipIf(process.platform === "win32")(
+		"an ignore file that is a device or a pipe is passed over, not read",
+		async () => {
+			const dir = mkdtempSync(join(tmpdir(), "pibolt-special-"));
+			try {
+				writeFileSync(join(dir, "a.ts"), "needle\n");
+				symlinkSync("/dev/zero", join(dir, ".gitignore"));
+				expect(spawnSync("mkfifo", [join(dir, ".ignore")]).status).toBe(0);
+				// (The link is listed, as fd lists links; the pipe is neither a file nor a folder.)
+				expect((await walk({ root: dir, requireGit: false })).map((entry) => entry.rel).sort()).toEqual([
+					".gitignore",
+					"a.ts",
+				]);
+				// A search of the pipe itself: nothing to read.
+				const fifo = await nativeGrep({
+					root: join(dir, ".ignore"),
+					isDirectory: false,
+					pattern: "x",
+					limit: 10,
+					keepChars: 100,
+				});
+				expect(fifo.matches).toEqual([]);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
+		},
+		10_000,
+	);
+
+	// An expression that backtracks a long time on each line (about 40 ms here): the search lets the event loop run between
+	// lines, so the abort comes through at once instead of after every line was tried.
+	test("a slow expression can be aborted", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pibolt-slow-"));
+		try {
+			writeFileSync(join(dir, "slow.txt"), `${"xyz".padEnd(25, "a")}\n`.repeat(60));
+			const controller = new AbortController();
+			setTimeout(() => controller.abort(), 100);
+			const start = performance.now();
+			await expect(
+				nativeGrep({
+					root: dir,
+					isDirectory: true,
+					pattern: "xyz(a+)+c",
+					limit: 10,
+					keepChars: 100,
+					signal: controller.signal,
+				}),
+			).rejects.toThrow("Operation aborted");
+			expect(performance.now() - start).toBeLessThan(1000);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
