@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { resetCapabilitiesCache, setCapabilities, setKeybindings, type TUI } from "@earendil-works/pi-tui";
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
+import type * as OutputGuard from "../src/core/output-guard.ts";
 import { createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { getTextOutput } from "../src/core/tools/render-utils.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
@@ -17,7 +18,7 @@ import { stripAnsi } from "../src/utils/ansi.ts";
 
 const { rawStdout } = vi.hoisted(() => ({ rawStdout: [] as string[] }));
 vi.mock("../src/core/output-guard.ts", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../src/core/output-guard.ts")>()),
+	...(await importOriginal<typeof OutputGuard>()),
 	writeRawStdout: (text: string) => rawStdout.push(text),
 	flushRawStdout: async () => {},
 }));
