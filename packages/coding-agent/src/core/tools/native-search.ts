@@ -930,15 +930,18 @@ function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 	return {
 		search(buffer, filePath, budget, keepChars, out, firstLine, deadline) {
 			let found = 0;
-			// The window: its bytes `from` up to `to` (just past a line break, or the end), as text; the number of its first line.
+			// The window: its bytes `from` up to `to` (just past a line break, or the end), as text.
 			let from = 0;
 			let to = 0;
 			let text = "";
-			let windowLine = firstLine;
-			// Where the search of the window goes on (-1: the next window), and the line number up to `counted` in it.
+			// Where the search of the window goes on (-1: the next window).
 			let lastIndex = -1;
-			let line = firstLine;
+			// Line numbers, counted only up to the matches: `line` is that of `counted` in the window (-1: not counted yet),
+			// `knownLine` that of the byte `knownAt`.
+			let line = -1;
 			let counted = 0;
+			let knownLine = firstLine;
+			let knownAt = 0;
 			const run = (deadline: number): SearchRest | undefined => {
 				while (found < budget) {
 					if (lastIndex === -1) {
@@ -948,15 +951,13 @@ function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 							from + WINDOW_BYTES < buffer.length ? buffer.indexOf(NEWLINE, from + WINDOW_BYTES - 1) : -1;
 						to = lastBreak === -1 ? buffer.length : lastBreak + 1;
 						text = buffer.toString("utf8", from, to);
-						line = windowLine;
 						lastIndex = 0;
-						counted = 0;
+						line = -1;
 					}
 					all.lastIndex = lastIndex;
 					const match = all.lastIndex <= text.length ? all.exec(text) : null;
 					// (An empty match after the window's last line break: that is the next window's first line.)
 					if (!match || (match.index === text.length && match.index > 0 && text[match.index - 1] === "\n")) {
-						windowLine += countLines(buffer, from, to);
 						lastIndex = -1;
 					} else {
 						const at = match.index;
@@ -968,6 +969,12 @@ function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 						if (pastLine && !one.test(text.slice(start, end))) {
 							lastIndex = at + 1;
 						} else {
+							if (line === -1) {
+								knownLine += countLines(buffer, knownAt, from);
+								knownAt = from;
+								line = knownLine;
+								counted = 0;
+							}
 							line += countLinesIn(text, counted, start);
 							counted = start;
 							out.push({
