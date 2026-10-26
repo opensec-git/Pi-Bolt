@@ -317,7 +317,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 
 		await checkCompaction(errorAssistant);
 
-		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false);
+		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false, undefined, model.contextWindow);
 	});
 
 	it("should not trigger threshold compaction for error messages when no prior usage exists", async () => {

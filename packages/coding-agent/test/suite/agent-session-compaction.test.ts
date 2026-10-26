@@ -732,9 +732,9 @@ describe("AgentSession compaction characterization", () => {
 		}
 
 		expect(runAutoCompactionSpy.mock.calls).toEqual([
-			["overflow", true, 0],
-			["overflow", true, 1],
-			["overflow", true, 2],
+			["overflow", true, 0, 100],
+			["overflow", true, 1, 100],
+			["overflow", true, 2, 100],
 		]);
 		expect(compactionErrors).toEqual([
 			expect.stringMatching(/^Context overflow recovery failed after 3 compact-and-retry attempts/),
@@ -834,9 +834,9 @@ describe("AgentSession compaction characterization", () => {
 		}
 
 		expect(runAutoCompactionSpy.mock.calls).toEqual([
-			["overflow", true, 0],
-			["overflow", true, 1],
-			["overflow", true, 2],
+			["overflow", true, 0, 128_000],
+			["overflow", true, 1, 128_000],
+			["overflow", true, 2, 128_000],
 		]);
 		expect(compactionErrors).toEqual([
 			"Context overflow recovery failed after 3 compact-and-retry attempts: even the smallest context Pi can build (system prompt, summary and the latest messages, with large messages shortened) exceeds the model's limit. Try switching to a larger-context model or starting a new session.",
@@ -937,7 +937,12 @@ describe("AgentSession compaction characterization", () => {
 
 		await sessionInternals._checkCompaction(errorAssistant);
 
-		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false);
+		expect(runAutoCompactionSpy).toHaveBeenCalledWith(
+			"threshold",
+			false,
+			undefined,
+			harness.getModel().contextWindow,
+		);
 	});
 
 	it("does not trigger threshold compaction for error messages when no prior usage exists", async () => {
