@@ -2,7 +2,8 @@ import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
 	type CompiledExtension,
@@ -14,9 +15,11 @@ import type { ExtensionFactory } from "../src/core/extensions/types.ts";
 import {
 	buildFailureReason,
 	bundlePieces,
+	bundlerErrorAdvice,
 	bytecodeSizeLimit,
 	candidateLines,
 	checkReleaseSums,
+	chooseExtensions,
 	extensionsOfModule,
 	functionTooBig,
 	importAtRunTime,
@@ -25,7 +28,6 @@ import {
 	measuredSizes,
 	measurePieces,
 	originalOfCopy,
-	recordedExclusions,
 	resolveCompilePackages,
 } from "../src/pi-bolt-compile.ts";
 
@@ -237,22 +239,63 @@ describe("pi-bolt compile takes the packages Pi-Bolt loads", () => {
 
 describe("pi-bolt compile leaves out what compile.json records as excluded", () => {
 	const record = { exclude: ["pi-web-access"] };
+	const found = [
+		{ name: "pi-web-access", aliases: ["pi-web-access", "npm:pi-web-access@0.41.0", "npm:pi-web-access"] },
+		{ name: "acme-pi-tools", aliases: ["@acme/pi-tools", "/agent/npm/node_modules/@acme/pi-tools"] },
+		{ name: "word-count", aliases: ["/agent/extensions/word-count.ts"] },
+	];
+	const chosen = (
+		options: Parameters<typeof chooseExtensions>[1],
+		from: Parameters<typeof chooseExtensions>[2] = record,
+	) => {
+		const { only, exclude, recorded } = chooseExtensions(found, options, from);
+		return { only, exclude, recorded };
+	};
 
 	test("a compile that names no extensions takes the recorded exclusions, as an update does (#108)", () => {
-		expect(recordedExclusions({}, record)).toEqual(["pi-web-access"]);
-		expect(recordedExclusions({ noPackages: true }, record)).toEqual(["pi-web-access"]);
-		expect(recordedExclusions({ afterUpdate: true }, record)).toEqual(["pi-web-access"]);
+		for (const options of [{}, { noPackages: true }, { afterUpdate: true }]) {
+			expect(chosen(options)).toEqual({ exclude: ["pi-web-access"], recorded: ["pi-web-access"] });
+		}
 	});
 
-	test("--exclude, --only and --no-exclude choose instead", () => {
-		expect(recordedExclusions({ exclude: ["other"] }, record)).toBeUndefined();
-		expect(recordedExclusions({ only: ["pi-web-access"] }, record)).toBeUndefined();
-		expect(recordedExclusions({ noExclude: true }, record)).toBeUndefined();
+	test("--exclude adds to them, --include takes one back, --no-exclude and --only drop them (#174)", () => {
+		expect(chosen({ exclude: ["word-count"] })).toEqual({
+			exclude: ["pi-web-access", "word-count"],
+			recorded: ["pi-web-access"],
+		});
+		expect(chosen({ include: ["pi-web-access"] })).toEqual({ exclude: [], recorded: [] });
+		expect(chosen({ noExclude: true })).toEqual({ exclude: [], recorded: [] });
+		expect(chosen({ noExclude: true, exclude: ["word-count"] })).toEqual({ exclude: ["word-count"], recorded: [] });
+		expect(chosen({ only: ["pi-web-access"] })).toEqual({ only: ["pi-web-access"], exclude: [], recorded: [] });
+		// (Named by this command too: the command's.)
+		expect(chosen({ exclude: ["pi-web-access"] })).toEqual({ exclude: ["pi-web-access"], recorded: [] });
+	});
+
+	test("an extension is named by its name, its package's name or source, or its file; the plan's names are recorded (#174)", () => {
+		expect(
+			chosen({ exclude: ["@acme/pi-tools", "npm:pi-web-access", "/agent/extensions/word-count.ts"] }, {}),
+		).toEqual({
+			exclude: ["pi-web-access", "acme-pi-tools", "word-count"],
+			recorded: [],
+		});
+	});
+
+	test("a value that names no extension, and a recorded one no longer there, are told apart", () => {
+		const selection = chooseExtensions(
+			found,
+			{ exclude: ["@mariozechner/pi-tui"], include: ["nope"] },
+			{
+				exclude: ["gone", "word-count"],
+			},
+		);
+		expect(selection.unknown).toEqual(["@mariozechner/pi-tui", "nope"]);
+		expect(selection.stale).toEqual(["gone"]);
+		expect(selection.exclude).toEqual(["word-count"]);
 	});
 
 	test("with nothing recorded, nothing is left out", () => {
-		expect(recordedExclusions({}, undefined)).toBeUndefined();
-		expect(recordedExclusions({}, { only: ["a"] })).toBeUndefined();
+		expect(chooseExtensions(found, {}, undefined).exclude).toEqual([]);
+		expect(chosen({}, { only: ["a"] })).toEqual({ exclude: [], recorded: [] });
 	});
 });
 
@@ -263,6 +306,7 @@ describe("pi-bolt compile says what it does with each extension and package", ()
 		origin,
 		stageDir: origin,
 		importPath: `./${origin}/${name}.ts`,
+		aliases: [],
 	});
 	const plan = {
 		plugins: [plugin("pi-codex-goal", "package"), plugin("word-count", "global")],
@@ -278,7 +322,7 @@ describe("pi-bolt compile says what it does with each extension and package", ()
 	};
 
 	test("one line each: compiled, excluded and by what, or passed over and why (#108)", () => {
-		expect(candidateLines(plan, packages, true)).toEqual([
+		expect(candidateLines(plan, packages, ["pi-web-access"])).toEqual([
 			"pi-codex-goal (package): compiling",
 			"word-count (global): compiling",
 			"pi-web-access (package): excluded (compile.json)",
@@ -513,7 +557,7 @@ describe("pi-bolt compile says which extension a function too big to compile is 
 				{ name: "ban-sleep", origin: "global", stageDir: "global", importPath: "./global/ban-sleep.ts" },
 				{ name: "web", origin: "package", stageDir: "package-web", importPath: "./package-web/dist/index.js" },
 				{ name: "tools-a", origin: "configured", stageDir: "path-tools", importPath: "./path-tools/a/index.ts" },
-			].map((plugin) => ({ ...plugin, entry: "" })),
+			].map((plugin) => ({ ...plugin, entry: "", aliases: [] })),
 		};
 		const owner = (module: string) => extensionsOfModule(module, plan);
 		expect(owner(".pibolt-plugins/src/global/big/lib/table.ts")).toEqual(["big"]);
@@ -645,6 +689,7 @@ describe("pi-bolt compile leaves an import() it cannot resolve to run time (#160
 					origin: "global",
 					stageDir: "global",
 					importPath: "./global/optional.ts",
+					aliases: [],
 				},
 			],
 			roots: [{ stageDir: "global", root: installed, origin: "global" }],
@@ -689,5 +734,124 @@ describe("pi-bolt compile leaves an import() it cannot resolve to run time (#160
 		} finally {
 			rmSync(work, { recursive: true, force: true });
 		}
+	});
+});
+
+// #174: pi-system-prompt imports "@mariozechner/pi-tui", a name Pi's loader gives its TUI module; the build could not resolve
+// it, said only the bundler's error, and `--exclude "@mariozechner/pi-tui"` (a package, not an extension) left out nothing.
+describe("pi-bolt compile and Pi's other names for its modules (#174)", () => {
+	const plan = {
+		plugins: [
+			{
+				name: "pi-system-prompt",
+				entry: "/agent/npm/node_modules/pi-system-prompt/extensions/system-prompt.ts",
+				origin: "package",
+				stageDir: "package-pi-system-prompt",
+				importPath: "./package-pi-system-prompt/extensions/system-prompt.ts",
+				aliases: ["pi-system-prompt", "npm:pi-system-prompt"],
+			},
+			{
+				name: "word-count",
+				entry: "/agent/extensions/word-count.ts",
+				origin: "global",
+				stageDir: "global",
+				importPath: "./global/word-count.ts",
+				aliases: ["/agent/extensions/word-count.ts"],
+			},
+		],
+		excluded: [{ name: "big-bundle", origin: "package", entry: "/x/b.js", by: "exclude" as const }],
+	};
+	const at = (file: string, line: number) =>
+		`    at /home/u/.pi-bolt/.compile-BTqjF3/kit/pi-bolt-kit-linux-x64/tree/packages/coding-agent/.pibolt-plugins/src/${file}:${line}:60`;
+	// What the compiler printed for the issue's pi-system-prompt.
+	const stopped = [
+		'6 | import { matchesKey, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";',
+		"                                                               ^",
+		'error: Could not resolve: "@mariozechner/pi-tui". Maybe you need to "bun install"?',
+		at("package-pi-system-prompt/extensions/system-prompt.ts", 6),
+		"",
+	].join("\n");
+
+	test("a build stopped in an extension names it, and the --exclude that leaves it out with those left out already", () => {
+		expect(bundlerErrorAdvice(stopped, plan, { exclude: ["big-bundle"] })).toEqual([
+			"That is in the extension pi-system-prompt (package-pi-system-prompt/extensions/system-prompt.ts:6). Leave it out with `pi-bolt compile --exclude big-bundle,pi-system-prompt`: it then loads from its files, as before it was compiled in.",
+		]);
+		const two = `${stopped}error: No matching export in "x.ts" for import "y"\n${at("global/word-count.ts", 2)}\n`;
+		expect(bundlerErrorAdvice(two, plan, {})).toEqual([
+			"Those are in the extensions pi-system-prompt, word-count (package-pi-system-prompt/extensions/system-prompt.ts:6, global/word-count.ts:2). Leave them out with `pi-bolt compile --exclude pi-system-prompt,word-count`: they then load from their files, as before they were compiled in.",
+		]);
+		// (With --only, the others of --only.)
+		expect(bundlerErrorAdvice(two, plan, { only: ["pi-system-prompt", "word-count", "notes"] })[0]).toContain(
+			"`pi-bolt compile --only notes`",
+		);
+	});
+
+	test("a build stopped in a dependency, or outside the extensions, says so or nothing", () => {
+		const dependency = `error: Could not resolve: "missing"\n${at("node_modules/helper/index.js", 3)}\n`;
+		expect(bundlerErrorAdvice(dependency, plan, {})).toEqual([
+			"That is in a package the extensions depend on (node_modules/helper/index.js:3). Leave out the extensions that use it with `pi-bolt compile --exclude <name>`, by the names listed above.",
+		]);
+		expect(bundlerErrorAdvice('error: Could not resolve: "./missing"\n    at plugins.ts:3:20\n', plan, {})).toEqual(
+			[],
+		);
+	});
+
+	test("with the bundler: the generator's copy of an extension that imports them builds, importing Pi's own names", (context) => {
+		if (spawnSync("bun", ["--version"]).status !== 0) return context.skip();
+		const agentDir = join(dir, "agent");
+		mkdirSync(join(agentDir, "extensions"), { recursive: true });
+		writeFileSync(join(agentDir, "settings.json"), "{}");
+		const extension = [
+			'import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";',
+			'import { matchesKey } from "@mariozechner/pi-tui";',
+			'import { getModel } from "@earendil-works/pi-ai";',
+			'import { Type } from "@sinclair/typebox";',
+			"export default async function (pi: ExtensionAPI) {",
+			'\tconst { models } = await import("@mariozechner/pi-ai/models");',
+			'\tconst core = require("@mariozechner/pi-agent-core");',
+			"\treturn [pi, matchesKey, getModel, Type, models, core];",
+			"}",
+			"",
+		].join("\n");
+		writeFileSync(join(agentDir, "extensions", "old-names.ts"), extension);
+		const generator = join(dirname(fileURLToPath(import.meta.url)), "../../../scripts/gen-plugin-manifest.mjs");
+		const generated = spawnSync(
+			process.execPath,
+			[generator, "--out", join(dir, "src"), "--agent-dir", agentDir, "--no-packages", "--json"],
+			{ encoding: "utf8" },
+		);
+		expect(generated.status, generated.stderr).toBe(0);
+		// (Pi's modules are outside this folder: the kit's tree has them, here they are left to whoever runs the bundle.)
+		const bundle = (entry: string) =>
+			spawnSync(
+				"bun",
+				[
+					"build",
+					"--target=bun",
+					"--format=esm",
+					"--external=@earendil-works/*",
+					"--external=typebox",
+					entry,
+					"--outdir",
+					join(dir, "out"),
+				],
+				{ encoding: "utf8" },
+			);
+		expect(bundle(join(agentDir, "extensions", "old-names.ts")).stderr).toContain(
+			'Could not resolve: "@mariozechner/pi-tui"',
+		);
+		const built = bundle(join(dir, "src", "global", "old-names.ts"));
+		expect(built.status, built.stderr).toBe(0);
+		const code = readFileSync(join(dir, "out", "old-names.js"), "utf8");
+		for (const name of [
+			"@earendil-works/pi-tui",
+			"@earendil-works/pi-ai/compat",
+			"typebox",
+			"@earendil-works/pi-ai/models",
+			"@earendil-works/pi-agent-core",
+		]) {
+			expect(code).toContain(`"${name}"`);
+		}
+		expect(code).not.toMatch(/@mariozechner|@sinclair|"@earendil-works\/pi-ai"/);
 	});
 });

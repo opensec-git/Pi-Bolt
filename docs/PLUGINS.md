@@ -77,8 +77,10 @@ with them (`scripts\train-heap.ps1 -Plugins plugins\opensec\plugins.ts`), then r
 
 ```bash
 pi-bolt compile                             # the extensions installed here
+pi-bolt compile --list                      # which those are, by name: nothing is downloaded or built
 pi-bolt compile --only pdf-reader,preset    # only these
-pi-bolt compile --exclude big-bundle        # all but these, on later compiles and updates too
+pi-bolt compile --exclude big-bundle        # all but these, and those excluded before, on later compiles and updates too
+pi-bolt compile --include big-bundle        # this one again, excluded before
 pi-bolt compile --no-exclude                # all, those excluded before too
 pi-bolt compile --status                    # what is compiled in
 pi-bolt compile --off                       # the release's executable again
@@ -98,6 +100,10 @@ without them, and the update says so.
 An extension compiled in stands in for its installed copy while that copy is unchanged. Pi finds, orders and turns extensions on
 and off as always, and uses the compiled one instead of loading the files. An extension changed since (a package updated, a file
 edited) is loaded from its files, with a warning to run `pi-bolt compile` again. One removed or turned off is not loaded.
+
+`--only`, `--exclude` and `--include` take each extension by the name `pi-bolt compile` lists for it, a package also by its
+name or source (`@acme/pi-tools`, which is listed as `acme-pi-tools`; `npm:pi-lens`) or its folder, and any extension by its
+file or folder. A name that matches no extension stops the compile, with the names there are, before anything is downloaded.
 
 It works in installations made with the installer, on Linux and macOS. On Windows, in Termux and with the npm package, build in
 a checkout of this repository ([below](#compile-in-the-plugins-you-already-have)). The [checklist](#compatibility-checklist)
@@ -138,6 +144,16 @@ expects. It copies only the dependencies of the packages being compiled in. An `
 installed, because the plugin then imports it like any other package.
 
 Pi's own packages are left out of every copy, so a plugin cannot carry a second Pi.
+
+Pi's extension loader also gives an extension Pi's modules under other names: `@mariozechner/pi-tui`,
+`@mariozechner/pi-coding-agent`, `@mariozechner/pi-ai` and `@mariozechner/pi-agent-core` (with their subpaths `compat`,
+`models`, `oauth` and `providers/all`), the names Pi's packages had before they were `@earendil-works/`;
+`@sinclair/typebox` (and `/compile`, `/value`) for `typebox`; and for `@earendil-works/pi-ai` itself, its `compat` entry,
+which keeps the old global API (`getModel`, `complete`, `stream`). The bundler knows none of these, and stopped at
+`Could not resolve: "@mariozechner/pi-tui"` (#174) or `No matching export ... for import "getModel"`. In the copies, an import
+by one of these names (`import`, `export ... from`, `import()`, `require()`) imports the module by the name the build
+resolves to the same module, `@earendil-works/pi-tui`, `typebox` or `@earendil-works/pi-ai/compat`. A string that imports
+nothing keeps its text, and so does any other subpath of those packages.
 
 `pi-bolt compile` also handles an `import()` of a package the extension neither declares nor has installed, made only for
 something it does when that package is there (`@plannotator/pi-extension` loads the Claude Agent SDK and the OpenCode SDK
@@ -261,7 +277,8 @@ scripts/build-pi.sh --plugins my-plugins/plugins.ts --profile profiles/my-plugin
 These are the rules for any code bundled into a single executable. Most plugins already follow them.
 
 **Import Pi from its packages, and do not bundle a copy.** Import Pi's API from `@earendil-works/pi-coding-agent`,
-`@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-tui` and `typebox`. List these as
+`@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-tui` and `typebox` (`pi-bolt compile` and
+`gen-plugin-manifest.mjs` also take the older names Pi's loader takes: [what it copies](#what-it-copies)). List these as
 `peerDependencies` (as Pi's [package guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)
 requires), not as `dependencies`. The build resolves them to Pi's own modules and leaves out any copy found in the plugin's
 `node_modules`. A second copy would mean duplicate classes and registries.

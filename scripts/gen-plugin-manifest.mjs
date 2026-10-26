@@ -432,12 +432,19 @@ export function planPlugins(options) {
 		const rel = relative(entry.root, entry.path).split(sep).join("/");
 		const siblings = perFolder.get(`${root} ${rel.split("/")[0]}`) ?? 1;
 		const name = unique(safeName(baseName(rel, siblings, basename(root))), takenNames, entry.origin);
+		const segments = rel.split("/");
 		plugins.push({
 			name,
 			entry: entry.path,
 			origin: entry.origin,
 			stageDir: stageDirs.get(root),
 			importPath: `./${stageDirs.get(root)}/${rel}`,
+			// (Its file, its folder, and a configured path as the setting gives it.)
+			aliases: [
+				resolve(entry.path),
+				...(segments.length > 1 ? [join(root, segments[0])] : []),
+				...(entry.origin === "configured" ? [root] : []),
+			],
 		});
 	}
 
@@ -505,20 +512,34 @@ export function planPlugins(options) {
 				origin: "package",
 				stageDir,
 				importPath: `./${stageDir}/${rel}`,
+				// (The package's name, its source as the settings give it and without its version, its folder, and the file.)
+				aliases: [
+					resolved.name,
+					resolved.path,
+					...(/^npm:/.test(resolved.path) ? [`npm:${resolved.name}`] : []),
+					resolve(resolved.dir),
+					resolve(entry),
+				],
 			});
 		}
 	}
 
 	const only = (options.only ?? []).filter(Boolean);
-	const exclude = new Set(options.exclude ?? []);
+	const exclude = (options.exclude ?? []).filter(Boolean);
 	const chosen = [];
 	/** Those --only or --exclude leave out, so that each extension found is accounted for. */
 	const excluded = [];
+	/** Those both --only and --exclude name. */
+	const contradicted = [];
 	for (const plugin of plugins) {
-		const by = only.length > 0 && !only.includes(plugin.name) ? "only" : exclude.has(plugin.name) ? "exclude" : "";
+		const inOnly = only.some((value) => namesPlugin(value, plugin));
+		const inExclude = exclude.some((value) => namesPlugin(value, plugin));
+		if (inOnly && inExclude) contradicted.push(plugin.name);
+		const by = only.length > 0 && !inOnly ? "only" : inExclude ? "exclude" : "";
 		if (by) excluded.push({ name: plugin.name, origin: plugin.origin, entry: plugin.entry, by });
 		else chosen.push(plugin);
 	}
+	const unknown = (values) => values.filter((value) => !plugins.some((plugin) => namesPlugin(value, plugin)));
 
 	// Only the folders something chosen comes from are copied, and only the dependencies of a chosen package. These share
 	// one node_modules, which holds one folder per name: a name is shared only by packages that find it in the same (real)
@@ -558,7 +579,90 @@ export function planPlugins(options) {
 		dependencies: [...dependencies].map(([name, { from }]) => ({ name, from })),
 		skipped,
 		excluded,
+		found: plugins.map((plugin) => ({ name: plugin.name, aliases: plugin.aliases })),
+		unknown: { only: unknown(only), exclude: unknown(exclude) },
+		contradicted,
 	};
+}
+
+/**
+ * Whether `value`, given to --only or --exclude, names `plugin`: by the name this prints for it, or (#174) as the user knows
+ * it: a package by its name (`@acme/pi-tools`, which this names acme-pi-tools), its source (`npm:pi-lens`, without its version
+ * too) or its folder, and any extension by its file or its folder. A path is taken from the current folder, `~` for home.
+ */
+export function namesPlugin(value, plugin) {
+	if (value === plugin.name || plugin.aliases.includes(value)) return true;
+	return plugin.aliases.includes(resolve(value.startsWith("~") ? join(homedir(), value.slice(1)) : value));
+}
+
+/**
+ * What is wrong with what --only and --exclude ask of `plan`, as an error message (#174): a value that names no extension,
+ * which would otherwise leave out nothing and say nothing; an extension both name; nothing left to compile. Undefined when
+ * nothing is wrong. `agentDir`: where the extensions were looked for.
+ */
+export function selectionProblem(plan, agentDir) {
+	const unknown = [...plan.unknown.only, ...plan.unknown.exclude];
+	if (unknown.length > 0) {
+		return plan.found.length === 0
+			? `no extension is named ${unknown.join(", ")}: there are no extensions to compile in (in ${agentDir})`
+			: `no extension is named ${unknown.join(", ")}. The extensions here are ${plan.found.map((plugin) => plugin.name).join(", ")} (a package's also by its name or source, any one by its file or folder)`;
+	}
+	if (plan.contradicted.length > 0) return `${plan.contradicted.join(", ")}: both in --only and in --exclude`;
+	if (plan.plugins.length > 0) return undefined;
+	if (plan.found.length === 0) return `no extensions found to compile in (in ${agentDir})`;
+	return plan.excluded.length === plan.found.length
+		? `all ${plan.found.length} extensions found are left out (${[...new Set(plan.excluded.map((plugin) => `--${plugin.by}`))].join(", ")})`
+		: "the extensions left are passed over (above): nothing to compile in";
+}
+
+// --- the names Pi gives its modules besides their own ---------------------------------------------------------------
+
+/*
+ * Pi's extension loader hands an extension its own modules under more names than the packages have: the names Pi's packages
+ * had before they were @earendil-works' (@mariozechner/pi-*), @sinclair/typebox for typebox, and the root of pi-ai for its
+ * compat entry, which keeps the old global API (packages/coding-agent/src/core/extensions/virtual-modules.ts, VIRTUAL_MODULES,
+ * and loader.ts, getAliases). An extension that imports `matchesKey` from "@mariozechner/pi-tui" or `getModel` from
+ * "@earendil-works/pi-ai" works loaded from its files. The build resolves names as Node does instead: it finds no
+ * @mariozechner/pi-tui and stops (#174), and gives the pi-ai root's own entry, which has no `getModel`.
+ *
+ * So each copy has those names, where it imports a module by them, replaced with the name the build resolves to the module
+ * Pi gives: the same module as loaded from its files. scripts/gen-plugin-manifest.test.mjs checks the table against
+ * VIRTUAL_MODULES, so a name Pi adds shows up as a failing test.
+ */
+
+/** Each name Pi's loader resolves to a module of another name, and that name (VIRTUAL_MODULES). */
+export const PI_MODULE_ALIASES = {
+	"@earendil-works/pi-ai": "@earendil-works/pi-ai/compat",
+	"@mariozechner/pi-agent-core": "@earendil-works/pi-agent-core",
+	"@mariozechner/pi-ai": "@earendil-works/pi-ai/compat",
+	"@mariozechner/pi-ai/compat": "@earendil-works/pi-ai/compat",
+	"@mariozechner/pi-ai/models": "@earendil-works/pi-ai/models",
+	"@mariozechner/pi-ai/oauth": "@earendil-works/pi-ai/oauth",
+	"@mariozechner/pi-ai/providers/all": "@earendil-works/pi-ai/providers/all",
+	"@mariozechner/pi-coding-agent": "@earendil-works/pi-coding-agent",
+	"@mariozechner/pi-tui": "@earendil-works/pi-tui",
+	"@sinclair/typebox": "typebox",
+	"@sinclair/typebox/compile": "typebox/compile",
+	"@sinclair/typebox/value": "typebox/value",
+};
+
+/** What a file holds when it may import one of those names: the start of each (a quick test before scanning it). */
+const ALIASED_PREFIXES = ["@earendil-works/pi-ai", "@mariozechner/", "@sinclair/typebox"];
+
+/** PI_MODULE_ALIASES, to look names up in (an object would also give "constructor" and the like). */
+const ALIASES = new Map(Object.entries(PI_MODULE_ALIASES));
+
+/**
+ * Whether the string that ends before `end` in `source`, after the token `previous`, names the module something imports:
+ * after `from` or `import`, or the only argument of `import(` or `require(` (followed by `)`, or by `,` and an import's
+ * options).
+ */
+function importsByName(previous, source, end) {
+	if (previous.kind === "word") return !previous.property && (previous.text === "from" || previous.text === "import");
+	if (!(previous.kind === "punctuator" && previous.text === "(" && previous.call)) return false;
+	let i = end;
+	while (i < source.length && /\s/.test(source[i])) i++;
+	return source[i] === ")" || source[i] === ",";
 }
 
 // --- import.meta in the copies --------------------------------------------------------------------------------------
@@ -605,11 +709,15 @@ const isWordChar = (char) => /[\w$\u0080-￿]/.test(char);
 const isWordStart = (char) => char !== undefined && isWordChar(char) && !/[0-9]/.test(char);
 
 /**
- * `source` with each `import.meta.<property>` above replaced by its value for a module at `file`, as a string literal.
+ * `source`, the copy of a module at `file`, as the build is to have it: each `import.meta.<property>` above replaced by its
+ * value for a module at `file`, as a string literal, and each of Pi's other names for its modules (PI_MODULE_ALIASES) that
+ * it imports a module by replaced with the name the build resolves: the string of an `import ... from`, `export ... from`
+ * or `import "..."`, or the only argument of an `import()` or a `require()` (TypeScript's `import x = require()` too).
  *
  * Only code is changed: the scan steps over comments, strings, the text of template literals (not what is inside `${}`),
  * regular expressions and, in a .jsx or .tsx file, JSX text and attribute strings (not what is inside `{}`). A comment or a
- * message that mentions `import.meta.url` therefore keeps it. Line numbers do not change.
+ * message that mentions `import.meta.url` therefore keeps it, and so does a string "@mariozechner/pi-tui" that imports
+ * nothing. Line numbers do not change.
  *
  * It is a scanner, not a parser, and guesses where a parser would know:
  * - A `/` begins a regular expression or divides, by the token before it, as JavaScript tools commonly do. After `)` it
@@ -623,12 +731,13 @@ const isWordStart = (char) => char !== undefined && isWordChar(char) && !/[0-9]/
  * A wrong guess either leaves an `import.meta.url` in code as it was, which is what bundling gave it before, or changes one
  * in text.
  */
-export function pinImportMeta(source, file) {
+export function rewriteCopy(source, file) {
 	const jsx = /\.[jt]sx$/.test(file);
 	const edits = [];
 	/**
-	 * The last token, for the guesses: a word (its text), a value, or a punctuator (its text). `expression` on a punctuator
-	 * overrides whether an expression may begin after it (a `)` or a `}`).
+	 * The last token, for the guesses: a word (its text, and whether it is a `property`, after a `.`), a value, or a
+	 * punctuator (its text). `expression` on a punctuator overrides whether an expression may begin after it (a `)` or a
+	 * `}`); `call` on a `(` says it opens the arguments of an `import()` or a `require()`.
 	 */
 	let previous = { kind: "punctuator", text: "" };
 	/** The open `(`: whether each came after `if`, `while`, `for` or `with`. */
@@ -753,7 +862,12 @@ export function pinImportMeta(source, file) {
 		} else if (/\s/.test(char)) {
 			i++;
 		} else if (char === "'" || char === '"') {
+			const start = i;
 			skipQuoted(char);
+			const alias = source[i - 1] === char ? ALIASES.get(source.slice(start + 1, i - 1)) : undefined;
+			if (alias !== undefined && importsByName(previous, source, i)) {
+				edits.push({ start, end: i, value: alias, breaks: "" });
+			}
 			previous = { kind: "value" };
 		} else if (char === "`") {
 			i++;
@@ -765,7 +879,9 @@ export function pinImportMeta(source, file) {
 			}
 		} else if (char === "(") {
 			parens.push(previous.kind === "word" && BEFORE_CONDITION.has(previous.text));
-			previous = { kind: "punctuator", text: "(" };
+			const call =
+				previous.kind === "word" && !previous.property && (previous.text === "import" || previous.text === "require");
+			previous = { kind: "punctuator", text: "(", call };
 			i++;
 		} else if (char === ")") {
 			previous = { kind: "punctuator", text: ")", expression: parens.pop() === true };
@@ -818,7 +934,7 @@ export function pinImportMeta(source, file) {
 					continue;
 				}
 			}
-			previous = { kind: "word", text: word };
+			previous = { kind: "word", text: word, property: previous.kind === "punctuator" && previous.text === "." };
 		} else if (/[0-9]/.test(char)) {
 			for (i++; i < length && /[\w.]/.test(source[i]); i++);
 			previous = { kind: "value" };
@@ -828,41 +944,41 @@ export function pinImportMeta(source, file) {
 		}
 	}
 
-	let pinned = "";
+	let rewritten = "";
 	let at = 0;
 	for (const edit of edits) {
-		pinned += `${source.slice(at, edit.start)}${JSON.stringify(edit.value)}${edit.breaks}`;
+		rewritten += `${source.slice(at, edit.start)}${JSON.stringify(edit.value)}${edit.breaks}`;
 		at = edit.end;
 	}
-	return pinned + source.slice(at);
+	return rewritten + source.slice(at);
 }
 
 /** The scripts Bun bundles, less type declarations (which hold no values). */
 const isScript = (name) => /\.(?:[cm]?[jt]s|[jt]sx)$/.test(name) && !/\.d\.[cm]?ts$/.test(name);
 
 /**
- * Pins `import.meta` (pinImportMeta) in every script of `staged`, a copy of `original`, to the file it was copied from.
- * `original` is the path as Pi finds it, not resolved through links: Pi loads an extension by that path, and so do the
- * modules it imports.
+ * Rewrites every script of `staged`, a copy of `original`, as the build is to have it (rewriteCopy): `import.meta` pinned
+ * to the file it was copied from, and Pi's other names for its modules replaced. `original` is the path as Pi finds it, not
+ * resolved through links: Pi loads an extension by that path, and so do the modules it imports.
  */
-function pinImportMetaInCopy(staged, original) {
+function rewriteCopies(staged, original) {
 	for (const entry of readdirSync(staged, { withFileTypes: true })) {
 		const path = join(staged, entry.name);
 		if (entry.isDirectory()) {
-			pinImportMetaInCopy(path, join(original, entry.name));
+			rewriteCopies(path, join(original, entry.name));
 			continue;
 		}
 		if (!entry.isFile() || !isScript(entry.name)) continue;
 		const bytes = readFileSync(path);
-		if (!bytes.includes("meta")) continue;
+		if (!bytes.includes("meta") && !ALIASED_PREFIXES.some((prefix) => bytes.includes(prefix))) continue;
 		const source = bytes.toString("utf8");
 		// (A file that is not UTF-8 is left as it is rather than rewritten with replacement characters.)
 		if (!Buffer.from(source, "utf8").equals(bytes)) continue;
-		const pinned = pinImportMeta(source, join(original, entry.name));
-		if (pinned === source) continue;
+		const rewritten = rewriteCopy(source, join(original, entry.name));
+		if (rewritten === source) continue;
 		// (A copy keeps its file's mode, and an installed file may be read-only.)
 		chmodSync(path, statSync(path).mode | 0o200);
-		writeFileSync(path, pinned);
+		writeFileSync(path, rewritten);
 	}
 }
 
@@ -954,14 +1070,14 @@ export function writePluginFolder(plan, out) {
 	mkdirSync(out, { recursive: true });
 	for (const root of plan.roots) {
 		copyRoot(root.root, join(out, root.stageDir));
-		pinImportMetaInCopy(join(out, root.stageDir), root.root);
+		rewriteCopies(join(out, root.stageDir), root.root);
 	}
 	// One node_modules beside the manifest, as the hoisted root it came from has and as docs/PLUGINS.md expects: Node
 	// resolution walks up from each staged folder, so every package finds its dependencies here.
 	for (const dependency of plan.dependencies) {
 		const staged = join(out, "node_modules", ...dependency.name.split("/"));
 		copyRoot(dependency.from, staged);
-		pinImportMetaInCopy(staged, dependency.from);
+		rewriteCopies(staged, dependency.from);
 	}
 	writeFileSync(manifest, renderManifest(plan));
 	return manifest;
@@ -1044,8 +1160,12 @@ export function defaultAgentDir(env = process.env) {
 	return join(homedir(), CONFIG_DIR_NAME, "agent");
 }
 
-/** Whether this file is the command being run. Both sides through their links: `/var` is `/private/var` on macOS. */
+/**
+ * Whether this file is the command being run. Both sides through their links: `/var` is `/private/var` on macOS. (Its name
+ * first: `pi-bolt compile` has this module in Pi-Bolt itself, which asks this at every start, without a file system call.)
+ */
 function isCommand() {
+	if (basename(process.argv[1] ?? "") !== "gen-plugin-manifest.mjs") return false;
 	try {
 		return realpathSync(process.argv[1] ?? "") === realpathSync(join(HERE, "gen-plugin-manifest.mjs"));
 	} catch {
@@ -1053,15 +1173,14 @@ function isCommand() {
 	}
 }
 
-// Imported by the test; run only as a command.
+// Imported by the test and by `pi-bolt compile`; run only as a command.
 if (isCommand()) {
 	const options = parseArgs(process.argv.slice(2));
 	if (!options.out) die("--out DIR is required");
-	const plan = planPlugins({ ...options, agentDir: options.agentDir || defaultAgentDir() });
-
-	const missing = options.only.filter((name) => !plan.plugins.some((plugin) => plugin.name === name));
-	if (missing.length > 0) die(`no extension is named ${missing.join(", ")}`);
-	if (plan.plugins.length === 0) die("no extensions found to compile in");
+	const agentDir = options.agentDir || defaultAgentDir();
+	const plan = planPlugins({ ...options, agentDir });
+	const problem = selectionProblem(plan, agentDir);
+	if (problem) die(problem);
 
 	const manifest = writePluginFolder(plan, resolve(options.out));
 

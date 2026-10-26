@@ -112,7 +112,7 @@ from the other extensions, so the limit is one extension's. Below the compiler's
   message names the extension.
 
 Leave that extension out with `pi-bolt compile --exclude <name>`, by the name `pi-bolt compile` prints for it: it still loads
-from its files at run time, and later compiles and `pi-bolt update` leave it out too (`--no-exclude` takes it back). Or compile
+from its files at run time, and later compiles and `pi-bolt update` leave it out too (`--include <name>` takes it back). Or compile
 it anyway with `BUN_JSC_maximumAOTCandidateBytecodeSize=<n> pi-bolt compile`, `<n>` being at least the size the message gives.
 compile.json keeps that limit: a later `pi-bolt compile` without the variable, and `pi-bolt update`, build with it too, and
 `BUN_JSC_maximumAOTCandidateBytecodeSize=262144 pi-bolt compile` takes it back. The compiler warns that a big function can take
@@ -130,6 +130,13 @@ declare with `import()`, usually for a feature that needs that package (#160). T
 you want that feature: then install the package where the extension finds it. A static `import` of a package that is not
 there still stops the build with `Could not resolve`: install it, or leave the extension out with `pi-bolt compile --exclude
 <name>`.
+
+**`pi-bolt compile` stops with `Could not resolve` or another error of the bundler in an extension.** Below the bundler's
+error, `pi-bolt compile` names the extension it is in and gives the `pi-bolt compile --exclude <name>` that leaves it out: it
+then loads from its files, as it does without `pi-bolt compile`. `--exclude` takes the names `pi-bolt compile --list` gives,
+such as `pi-system-prompt` in `pi-system-prompt (package): compiling`, or the package's name or the extension's file, not a
+package the extension imports: one that names no extension stops the compile and lists the names there are. Pi-Bolt 1.0.4 and earlier also stopped at Pi's older names for its modules, such as
+`@mariozechner/pi-tui` (#174); later releases compile those in ([what it copies](PLUGINS.md#what-it-copies)).
 
 **A run-time plugin is slow.** On the default build, plugins loaded at run time are interpreted. Compile them in
 ([PLUGINS.md](PLUGINS.md)) or use the `linux-x64-jit` build.

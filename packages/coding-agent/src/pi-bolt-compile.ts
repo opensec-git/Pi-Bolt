@@ -32,6 +32,7 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import chalk from "chalk";
+import { namesPlugin, type PluginPlan, planPlugins, selectionProblem } from "../../../scripts/gen-plugin-manifest.mjs";
 import { getAgentDir } from "./config.ts";
 import { type CompiledExtensionSource, extensionFingerprint } from "./core/extensions/compiled.ts";
 import { DefaultPackageManager } from "./core/package-manager.ts";
@@ -67,8 +68,10 @@ interface CompileRecord extends CompileSelection {
 interface CompileOptions extends CompileSelection {
 	/** --no-exclude: none of the exclusions compile.json records. */
 	noExclude?: boolean;
-	/** `exclude` is compile.json's, applied because the command named none itself. */
-	excludeRecorded?: boolean;
+	/** --include: these compiled in again, which compile.json records as excluded. */
+	include?: string[];
+	/** --list: the extensions a compile takes, and nothing downloaded or built. */
+	list?: boolean;
 	/** Files to build with instead of the release's: a kit and a runtime (archives or unpacked folders). */
 	kit?: string;
 	runtime?: string;
@@ -168,34 +171,28 @@ export async function resolveCompilePackages(agentDir: string, cwd = process.cwd
 	return { packages, passedOver, removed };
 }
 
-/** The plan gen-plugin-manifest.mjs prints with --json. */
-interface ManifestPlan {
-	manifest: string;
-	plugins: Array<{ name: string; entry: string; origin: string; stageDir: string; importPath: string }>;
-	roots: Array<{ stageDir: string; root: string; origin: string }>;
-	/** The packages copied into the node_modules beside the manifest, and the folder each was copied from. */
-	dependencies: Array<{ name: string; from: string }>;
-	skipped: Array<{ path: string; reason: string }>;
-	/** Those --only or --exclude left out. */
-	excluded: Array<{ name: string; origin: string; entry: string; by: "only" | "exclude" }>;
-}
+/** The plan gen-plugin-manifest.mjs prints with --json: planPlugins's, and where it wrote the manifest. */
+type ManifestPlan = PluginPlan & { manifest: string };
 
 /**
  * One line for each extension and package a compile finds: compiled in, passed over and why, or excluded and by what. None
- * goes unmentioned: one missing from the list looks like one that is not there.
+ * goes unmentioned: one missing from the list looks like one that is not there. `recorded`: the exclusions that are
+ * compile.json's rather than this command's.
  */
 export function candidateLines(
 	plan: Pick<ManifestPlan, "plugins" | "skipped" | "excluded">,
 	packages: Pick<CompilePackages, "passedOver" | "removed">,
-	excludeRecorded = false,
+	recorded: string[] = [],
 ): string[] {
-	const exclusion = {
-		only: "not in --only",
-		exclude: excludeRecorded ? "excluded (compile.json)" : "excluded (--exclude)",
-	};
+	const exclusion = (plugin: ManifestPlan["excluded"][number]) =>
+		plugin.by === "only"
+			? "not in --only"
+			: recorded.includes(plugin.name)
+				? "excluded (compile.json)"
+				: "excluded (--exclude)";
 	return [
 		...plan.plugins.map((plugin) => `${plugin.name} (${plugin.origin}): compiling`),
-		...plan.excluded.map((plugin) => `${plugin.name} (${plugin.origin}): ${exclusion[plugin.by]}`),
+		...plan.excluded.map((plugin) => `${plugin.name} (${plugin.origin}): ${exclusion(plugin)}`),
 		...[...packages.passedOver, ...plan.skipped].map((entry) => `${entry.path}: passed over: ${entry.reason}`),
 		...packages.removed.map((source) => `${source}: excluded by piBolt.packages`),
 	];
@@ -213,16 +210,21 @@ nothing to load. Each one compiled in is used while its installed copy is unchan
 again until it is compiled in again. \`pi-bolt update\` compiles the same extensions into the release it installs.
 
 Options:
-  --only a,b         Only these extensions (by the names this command prints)
-  --exclude a,b      Every extension except these. They are recorded: a later \`pi-bolt compile\` without --only or
-                     --exclude, and \`pi-bolt update\`, leave them out too
-  --no-exclude       Leave out none of the extensions --exclude left out before
+  --list             List the extensions a compile takes, by the names it gives them, and stop: nothing is downloaded
+  --only a,b         Only these extensions
+  --exclude a,b      Every extension except these. They are recorded: later compiles without --only, and
+                     \`pi-bolt update\`, leave them out too, and a later --exclude adds to them
+  --include a,b      Compile these in again, which --exclude left out before
+  --no-exclude       Leave out none of the extensions --exclude left out before (with --exclude: only those it names)
   --no-packages      Leave out the packages \`pi-bolt install\` installed
   --off              Go back to the release's executable, with no extensions compiled in
   --status           Show what is compiled in
   --kit FILE         Build with this compile kit instead of the release's (an archive or an unpacked folder)
   --runtime FILE     Build with this runtime instead of the release's (an archive, a folder, or the bun executable)
   --out DIR          Build into DIR and install nothing
+
+--only, --exclude and --include take an extension by the name --list gives it, a package also by its name or source
+(@acme/pi-tools, npm:pi-lens) or its folder, and any extension by its file or folder.
 
 Environment:
   BUN_JSC_maximumAOTCandidateBytecodeSize=N
@@ -781,6 +783,56 @@ function explainTooBig(
 	];
 }
 
+// --- a bundler error in an extension (#174) --------------------------------------------------------------------------
+
+/** An error of the bundler and where it is: `error: <message>`, then `    at <file>:<line>:<column>` (absolute). */
+const BUNDLER_ERROR = /^error: .+\n[ \t]+at (.+):(\d+):\d+$/gm;
+
+/**
+ * Which extensions the bundler's errors in `output` are in, and how to leave them out: each then loads from its files, as
+ * before it was compiled in. `chosen`: what this compile was asked for (the extensions' names), which the command given
+ * replaces. Nothing when no error is in a copy the generator made.
+ */
+export function bundlerErrorAdvice(
+	output: string,
+	plan: Pick<ManifestPlan, "plugins">,
+	chosen: { only?: string[]; exclude?: string[] },
+): string[] {
+	const names = new Set<string>();
+	const inExtensions: string[] = [];
+	const inDependencies: string[] = [];
+	for (const match of output.matchAll(BUNDLER_ERROR)) {
+		const at = match[1].indexOf(`/${PLUGIN_SOURCES}`);
+		if (at === -1) continue;
+		const module = match[1].slice(at + 1);
+		const file = `${module.slice(PLUGIN_SOURCES.length)}:${match[2]}`;
+		const of = extensionsOfModule(module, plan);
+		for (const name of of) names.add(name);
+		const list = of.length > 0 ? inExtensions : inDependencies;
+		if (!list.includes(file)) list.push(file);
+	}
+	const advice: string[] = [];
+	if (names.size > 0) {
+		const one = names.size === 1;
+		const rest = chosen.only?.filter((name) => !names.has(name));
+		const command = rest
+			? rest.length > 0 && `pi-bolt compile --only ${rest.join(",")}`
+			: `pi-bolt compile --exclude ${[...new Set([...(chosen.exclude ?? []), ...names])].join(",")}`;
+		advice.push(
+			`${one ? "That is in the extension" : "Those are in the extensions"} ${[...names].join(", ")} (${inExtensions.join(", ")}).` +
+				(command
+					? ` Leave ${one ? "it" : "them"} out with \`${command}\`: ${one ? "it then loads from its files, as before it was" : "they then load from their files, as before they were"} compiled in.`
+					: ""),
+		);
+	}
+	if (inDependencies.length > 0) {
+		advice.push(
+			`${inDependencies.length === 1 ? "That is in a package" : "Those are in packages"} the extensions depend on (${inDependencies.join(", ")}). Leave out the extensions that use ${inDependencies.length === 1 ? "it" : "them"} with \`pi-bolt compile --exclude <name>\`, by the names listed above.`,
+		);
+	}
+	return advice;
+}
+
 // --- an import() the bundler cannot resolve (#160) --------------------------------------------------------------------
 
 /*
@@ -931,7 +983,8 @@ export function leaveUnresolvedImportsToRunTime(
 
 /**
  * Builds Pi-Bolt with the extensions of `plan` into `stage`, a folder like this build's. A failed build leaves all of
- * what the compiler printed in `log`, outside the work folder that is removed after it.
+ * what the compiler printed in `log`, outside the work folder that is removed after it. `chosen`: what the compile was asked
+ * for, for the advice on leaving out an extension the bundler stopped at.
  */
 function buildExecutable(
 	kit: Kit,
@@ -943,6 +996,7 @@ function buildExecutable(
 	log: string,
 	kinds: ReadonlyMap<string, CompilePackage["kind"]>,
 	maximumBytecodeSize: number | undefined,
+	chosen: { only?: string[]; exclude?: string[] },
 ): void {
 	const build = PIBOLT!;
 	const agent = join(kitDir, kit.agent);
@@ -978,8 +1032,9 @@ function buildExecutable(
 		const explained = tooBig
 			? explainTooBig(tooBig, plan, bun, agent, dirname(stage), kit.args.includes("--splitting"))
 			: [];
+		const advice = bundlerErrorAdvice(output, plan, chosen).map((line) => `\n${line}`);
 		throw new CompileError(
-			`the build stopped:\n${how}${buildFailureReason(output, explained)}\n(all of what the compiler printed: ${log})`,
+			`the build stopped:\n${how}${buildFailureReason(output, explained)}${advice.join("")}\n(all of what the compiler printed: ${log})`,
 		);
 	}
 	// Everything else is this build's: the macOS launcher and pi-spawn, Pi's documentation, themes and native modules.
@@ -1025,17 +1080,45 @@ function readRecord(installDir: string): CompileRecord | undefined {
 	}
 }
 
+/** What a compile takes: the extensions --only names and those it leaves out, by the names the plan gives them. */
+export interface Selection {
+	only?: string[];
+	exclude: string[];
+	/** Those of `exclude` compile.json records (and this command does not name). */
+	recorded: string[];
+	/** Those compile.json records that no extension here is named any more. */
+	stale: string[];
+	/** The values given that name no extension found. */
+	unknown: string[];
+}
+
 /**
- * The exclusions compile.json records that a compile takes: all of them after an update, which compiles what was asked for
- * before, and for a compile that chooses nothing itself (no --only, --exclude or --no-exclude). Otherwise none.
+ * What a compile takes of the extensions `found` (#174). An update compiles what was asked for before: compile.json's
+ * --only and exclusions. Otherwise compile.json's exclusions stand, less those --include names, and --exclude adds to
+ * them; --no-exclude drops them, and --only chooses without them. The values given may name an extension by any of its
+ * names (namesPlugin); what is recorded is the names the plan gives.
  */
-export function recordedExclusions(
-	options: CompileOptions,
+export function chooseExtensions(
+	found: PluginPlan["found"],
+	options: Pick<CompileOptions, "only" | "exclude" | "include" | "noExclude" | "afterUpdate">,
 	record: CompileSelection | undefined,
-): string[] | undefined {
-	if (!record?.exclude?.length) return undefined;
-	if (options.afterUpdate) return record.exclude;
-	return options.only?.length || options.exclude?.length || options.noExclude ? undefined : record.exclude;
+): Selection {
+	const given = [...(options.only ?? []), ...(options.exclude ?? []), ...(options.include ?? [])];
+	const unknown = given.filter((value) => !found.some((plugin) => namesPlugin(value, plugin)));
+	const named = (values: string[] = []) =>
+		found.filter((plugin) => values.some((value) => namesPlugin(value, plugin))).map((plugin) => plugin.name);
+	const kept = options.afterUpdate || !(options.noExclude || options.only?.length) ? (record?.exclude ?? []) : [];
+	const included = named(options.include);
+	const stale = kept.filter((name) => !found.some((plugin) => plugin.name === name));
+	const recorded = kept.filter((name) => !stale.includes(name) && !included.includes(name));
+	const own = named(options.exclude);
+	return {
+		...(options.only?.length ? { only: named(options.only) } : {}),
+		exclude: [...new Set([...recorded, ...own])],
+		recorded: recorded.filter((name) => !own.includes(name)),
+		stale,
+		unknown,
+	};
 }
 
 /** Whether an update should compile extensions into the release it installed (`pi-bolt compile` was run here). */
@@ -1043,8 +1126,49 @@ export function piBoltCompileWanted(installDir: string): boolean {
 	return existsSync(join(installDir, "compile.json"));
 }
 
-async function compile(options: CompileOptions): Promise<void> {
+/**
+ * The extensions a compile takes, planned with the generator's own planPlugins before anything is downloaded (#174): each
+ * printed with the name it gets, the names given checked against them, and a compile that would take none stopped.
+ * `record`: compile.json, if there is one.
+ */
+async function planCompile(
+	options: CompileOptions,
+	record: CompileSelection | undefined,
+): Promise<{ agentDir: string; packages: CompilePackages; plan: PluginPlan; selection: Selection }> {
+	const agentDir = getAgentDir();
+	// The packages as Pi-Bolt loads them, not the `packages` setting the generator reads by itself.
+	const packages: CompilePackages = options.noPackages
+		? { packages: [], passedOver: [], removed: [] }
+		: await resolveCompilePackages(agentDir);
+	const planOptions = { agentDir, packages: packages.packages, noPackages: options.noPackages };
+	const selection = chooseExtensions(planPlugins(planOptions).found, options, record);
+	if (selection.recorded.length > 0) {
+		const how = options.afterUpdate ? "" : ` (--include ${selection.recorded.join(",")} compiles them in)`;
+		process.stderr.write(
+			chalk.dim(`leaving out what compile.json records as excluded: ${selection.recorded.join(", ")}${how}\n`),
+		);
+	}
+	if (selection.stale.length > 0) {
+		process.stderr.write(
+			chalk.dim(
+				`compile.json records as excluded ${selection.stale.join(", ")}, which no extension here is named\n`,
+			),
+		);
+	}
+	const plan = planPlugins({ ...planOptions, only: selection.only, exclude: selection.exclude });
+	candidateLines(plan, packages, selection.recorded).forEach((line, index) => {
+		process.stderr.write(`  ${index < plan.plugins.length ? line : chalk.dim(line)}\n`);
+	});
+	// (The values as given: the plan was made with the names they gave.)
+	const problem = selectionProblem({ ...plan, unknown: { only: [], exclude: selection.unknown } }, agentDir);
+	if (problem) throw new CompileError(problem);
+	return { agentDir, packages, plan, selection };
+}
+
+async function compile(options: CompileOptions, record: CompileSelection | undefined): Promise<void> {
 	const build = PIBOLT!;
+	const { agentDir, packages, plan: planned, selection } = await planCompile(options, record);
+	if (options.list) return;
 	const where = options.out ? undefined : installation();
 	const platform = platformName();
 	const workParent = where?.installDir ?? dirname(options.out!);
@@ -1087,14 +1211,9 @@ async function compile(options: CompileOptions): Promise<void> {
 		rmSync(staging, { recursive: true, force: true });
 		mkdirSync(staging, { recursive: true });
 		const generatorArgs = [join(kitDir, "gen-plugin-manifest.mjs"), "--out", join(staging, "src"), "--json"];
-		const agentDir = getAgentDir();
 		generatorArgs.push("--agent-dir", agentDir);
-		if (options.only?.length) generatorArgs.push("--only", options.only.join(","));
-		if (options.exclude?.length) generatorArgs.push("--exclude", options.exclude.join(","));
-		// The packages as Pi-Bolt loads them, not the `packages` setting the generator reads by itself.
-		const packages: CompilePackages = options.noPackages
-			? { packages: [], passedOver: [], removed: [] }
-			: await resolveCompilePackages(agentDir);
+		if (selection.only?.length) generatorArgs.push("--only", selection.only.join(","));
+		if (selection.exclude.length > 0) generatorArgs.push("--exclude", selection.exclude.join(","));
 		if (options.noPackages) generatorArgs.push("--no-packages");
 		else {
 			const list = join(work, "packages.json");
@@ -1107,9 +1226,11 @@ async function compile(options: CompileOptions): Promise<void> {
 		const generated = run(bun, generatorArgs, { env: generatorEnv });
 		if (generated.status !== 0) throw new CompileError(generated.stderr.trim().replace(/^error: /, ""));
 		const plan = JSON.parse(generated.stdout) as ManifestPlan;
-		candidateLines(plan, packages, options.excludeRecorded).forEach((line, index) => {
-			process.stderr.write(`  ${index < plan.plugins.length ? line : chalk.dim(line)}\n`);
-		});
+		const names = plan.plugins.map((plugin) => plugin.name);
+		// (The kit's generator is this release's, as planPlugins is: it finds the same.)
+		if (names.join("\n") !== planned.plugins.map((plugin) => plugin.name).join("\n")) {
+			throw new CompileError(`the kit's generator found other extensions to compile in: ${names.join(", ")}`);
+		}
 		for (const line of leaveUnresolvedImportsToRunTime(bun, plan, join(kitDir, kit.agent), work)) {
 			process.stderr.write(`  ${chalk.dim(line)}\n`);
 		}
@@ -1126,9 +1247,9 @@ async function compile(options: CompileOptions): Promise<void> {
 			join(workParent, "compile.log"),
 			kinds,
 			options.maximumBytecodeSize,
+			selection,
 		);
 
-		const names = plan.plugins.map((plugin) => plugin.name);
 		if (options.out) {
 			rmSync(options.out, { recursive: true, force: true });
 			renameSync(stage, options.out);
@@ -1141,8 +1262,8 @@ async function compile(options: CompileOptions): Promise<void> {
 		const record: CompileRecord = {
 			version: build.version,
 			extensions: names,
-			...(options.only?.length ? { only: options.only } : {}),
-			...(options.exclude?.length ? { exclude: options.exclude } : {}),
+			...(selection.only?.length ? { only: selection.only } : {}),
+			...(selection.exclude.length > 0 ? { exclude: selection.exclude } : {}),
 			...(options.noPackages ? { noPackages: true } : {}),
 			// (The compiler's own limit is not recorded: setting it so is how a raised one is taken back.)
 			...(options.maximumBytecodeSize !== undefined && options.maximumBytecodeSize !== DEFAULT_SIZE_LIMIT
@@ -1202,6 +1323,12 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 				case "--exclude":
 					options.exclude = parseList(args[++index], arg);
 					break;
+				case "--include":
+					options.include = parseList(args[++index], arg);
+					break;
+				case "--list":
+					options.list = true;
+					break;
 				case "--no-exclude":
 					options.noExclude = true;
 					break;
@@ -1213,7 +1340,8 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 				case "--out": {
 					const value = args[++index];
 					if (!value) throw new CompileError(`${arg} needs a path`);
-					options[arg.slice(2) as "kit" | "runtime" | "out"] = value;
+					// (Absolute: the build runs the runtime in the kit's folder.)
+					options[arg.slice(2) as "kit" | "runtime" | "out"] = resolve(value);
 					break;
 				}
 				case "--after-update":
@@ -1235,13 +1363,15 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 		if (process.env.PREFIX?.includes("com.termux"))
 			throw new CompileError("compiling extensions in is not available in Termux");
 		const method = piBoltInstallMethod();
-		if (!options.out && method === "npm") {
+		// (--out and --list install nothing.)
+		const installs = !options.out && !options.list;
+		if (installs && method === "npm") {
 			throw new CompileError(
 				"this Pi-Bolt was installed with the npm package, whose folder npm owns: install it with the installer to compile extensions in",
 			);
 		}
 		const manager = piBoltPackageManager(method);
-		if (!options.out && manager) {
+		if (installs && manager) {
 			throw new CompileError(
 				`this Pi-Bolt was installed with ${manager.name}, whose folder ${manager.command} owns: install it with the installer to compile extensions in`,
 			);
@@ -1251,12 +1381,9 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 			return 0;
 		}
 		if (mode === "off") return (await off(installAgain)) ? 0 : 1;
-		if (options.exclude?.length && options.noExclude)
-			throw new CompileError("--exclude and --no-exclude go against each other");
-		const installDir = options.out ? piBoltInstallDir() : installation().installDir;
+		const installDir = installs ? installation().installDir : piBoltInstallDir();
 		const record = installDir ? readRecord(installDir) : undefined;
 		if (options.afterUpdate && !record) return 0;
-		const recorded = recordedExclusions(options, record);
 		if (options.afterUpdate) Object.assign(options, { only: record!.only, noPackages: record!.noPackages });
 		options.maximumBytecodeSize = bytecodeSizeLimit(process.env, record);
 		if (options.maximumBytecodeSize !== undefined && !process.env[SIZE_LIMIT]) {
@@ -1266,16 +1393,7 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 				),
 			);
 		}
-		if (recorded) {
-			options.exclude = recorded;
-			options.excludeRecorded = true;
-			process.stderr.write(
-				chalk.dim(
-					`leaving out what ${join(installDir!, "compile.json")} records as excluded: ${recorded.join(", ")}${options.afterUpdate ? "" : " (--no-exclude compiles them in)"}\n`,
-				),
-			);
-		}
-		await compile(options);
+		await compile(options, record);
 		return 0;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

@@ -30,9 +30,12 @@ import {
 	defaultAgentDir,
 	expandPackageEntry,
 	ignoreRulesOf,
-	pinImportMeta,
+	namesPlugin,
+	PI_MODULE_ALIASES,
 	planPlugins,
 	renderManifest,
+	rewriteCopy,
+	selectionProblem,
 	writePluginFolder,
 } from "./gen-plugin-manifest.mjs";
 
@@ -824,6 +827,43 @@ describe("what it leaves out", () => {
 		assert.deepEqual(excluded({ only: ["a", "b"], exclude: ["b"] }), [["b", "exclude"], ["c", "only"]]);
 		assert.deepEqual(excluded({}), []);
 	});
+
+	// #174: `--exclude "@mariozechner/pi-tui"` (a package the extension imports) and `--exclude @acme/pi-tools` (named
+	// acme-pi-tools here) left out nothing, without a word.
+	it("takes an extension by its name, a package by its name, source or folder, and either by its file or folder", () => {
+		const agentDir = agent({ extensions: [] });
+		write(join(agentDir, "extensions", "hello.ts"));
+		write(join(agentDir, "extensions", "word-tools", "index.ts"));
+		const tools = installPackage(agentDir, "@acme/pi-tools", { pi: { extensions: ["./a.ts", "./b.ts"] } }, ["a.ts", "b.ts"]);
+		const packages = [{ source: "npm:@acme/pi-tools@1.2.0", root: tools, entries: [join(tools, "a.ts"), join(tools, "b.ts")] }];
+		const plan = planPlugins({ agentDir, packages });
+		const named = (value) => plan.plugins.filter((plugin) => namesPlugin(value, plugin)).map((plugin) => plugin.name);
+		assert.deepEqual(named("acme-pi-tools-a"), ["acme-pi-tools-a"]);
+		for (const value of ["@acme/pi-tools", "npm:@acme/pi-tools@1.2.0", "npm:@acme/pi-tools", tools]) {
+			assert.deepEqual(named(value), ["acme-pi-tools-a", "acme-pi-tools-b"], value);
+		}
+		assert.deepEqual(named(join(tools, "b.ts")), ["acme-pi-tools-b"]);
+		assert.deepEqual(named(join(agentDir, "extensions", "hello.ts")), ["hello"]);
+		assert.deepEqual(named(join(agentDir, "extensions", "word-tools")), ["word-tools"]);
+		assert.deepEqual(named("@mariozechner/pi-tui"), []);
+		assert.deepEqual(
+			planPlugins({ agentDir, packages, exclude: ["@acme/pi-tools"] }).plugins.map((plugin) => plugin.name),
+			["hello", "word-tools"],
+		);
+	});
+
+	it("says what is wrong with --only and --exclude: a value that names nothing, one both name, nothing left", () => {
+		const agentDir = agent();
+		for (const name of ["a", "b"]) write(join(agentDir, "extensions", `${name}.ts`));
+		const problem = (options) => selectionProblem(planPlugins({ agentDir, ...options }), agentDir);
+		assert.equal(problem({ exclude: ["b"] }), undefined);
+		assert.match(problem({ exclude: ["@mariozechner/pi-tui"] }), /^no extension is named @mariozechner\/pi-tui\. The extensions here are a, b /);
+		assert.match(problem({ only: ["nope"] }), /^no extension is named nope\./);
+		assert.equal(problem({ only: ["a"], exclude: ["a"] }), "a: both in --only and in --exclude");
+		assert.equal(problem({ exclude: ["a", "b"] }), "all 2 extensions found are left out (--exclude)");
+		const empty = agent();
+		assert.equal(selectionProblem(planPlugins({ agentDir: empty }), empty), `no extensions found to compile in (in ${empty})`);
+	});
 });
 
 describe("what it passes over", () => {
@@ -996,7 +1036,7 @@ describe("import.meta in the copies", () => {
 			"const b = [import.meta.dir, import.meta.dirname, import.meta.filename, import.meta.path, import.meta.file];",
 		].join("\n");
 		assert.equal(
-			pinImportMeta(source, FILE),
+			rewriteCopy(source, FILE),
 			[
 				`const a = ${URL_OF};`,
 				'const b = ["/installed/ext/src", "/installed/ext/src", "/installed/ext/src/index.ts", "/installed/ext/src/index.ts", "index.ts"];',
@@ -1014,20 +1054,20 @@ describe("import.meta in the copies", () => {
 			"const t = `import.meta.url`;",
 			"const keep = [import.meta.main, import.meta.resolve, import.meta.urls, import.meta.url$, x.import];",
 		].join("\n");
-		assert.equal(pinImportMeta(source, FILE), source);
+		assert.equal(rewriteCopy(source, FILE), source);
 	});
 
 	it("replaces inside a template literal's expressions, and tells a division from a regular expression", () => {
 		assert.equal(
-			pinImportMeta("`at ${import.meta.url} in ${ { f: import.meta.file }.f }`", FILE),
+			rewriteCopy("`at ${import.meta.url} in ${ { f: import.meta.file }.f }`", FILE),
 			`\`at \${${URL_OF}} in \${ { f: "index.ts" }.f }\``,
 		);
 		assert.equal(
-			pinImportMeta("const n = total / 2 / import.meta.url.length;", FILE),
+			rewriteCopy("const n = total / 2 / import.meta.url.length;", FILE),
 			`const n = total / 2 / ${URL_OF}.length;`,
 		);
 		assert.equal(
-			pinImportMeta("if (x) return /'/.test(y) ? import.meta.url : 'it\\'s';", FILE),
+			rewriteCopy("if (x) return /'/.test(y) ? import.meta.url : 'it\\'s';", FILE),
 			`if (x) return /'/.test(y) ? ${URL_OF} : 'it\\'s';`,
 		);
 	});
@@ -1040,14 +1080,14 @@ describe("import.meta in the copies", () => {
 			`for (;;) /"/.test(s) && import.meta.url;`,
 			`function f() {} /'/.test(s) && import.meta.url;`,
 		]) {
-			assert.equal(pinImportMeta(source, FILE), source.replace("import.meta.url", URL_OF), source);
+			assert.equal(rewriteCopy(source, FILE), source.replace("import.meta.url", URL_OF), source);
 		}
 		for (const source of [
 			`const n = f(x) / y; const s = '/'; const u = import.meta.url;`,
 			`const n = { a: 1 } / y; const s = '/'; const u = import.meta.url;`,
 			`const n = (() => {}) / y; const s = '/'; const u = import.meta.url;`,
 		]) {
-			assert.equal(pinImportMeta(source, FILE), source.replace("import.meta.url", URL_OF), source);
+			assert.equal(rewriteCopy(source, FILE), source.replace("import.meta.url", URL_OF), source);
 		}
 	});
 
@@ -1068,18 +1108,18 @@ describe("import.meta in the copies", () => {
 			["const id = <T,>(x: T) => x; const u = import.meta.url;", `const id = <T,>(x: T) => x; const u = ${url};`],
 			["const less = a < b && c > d; const u = import.meta.url;", `const less = a < b && c > d; const u = ${url};`],
 		];
-		for (const [source, expected] of cases) assert.equal(pinImportMeta(source, TSX), expected, source);
+		for (const [source, expected] of cases) assert.equal(rewriteCopy(source, TSX), expected, source);
 		// (A .ts file has no JSX: there `<number>value` is a type assertion.)
 		assert.equal(
-			pinImportMeta("const n = <number>value; const u = import.meta.url;", FILE),
+			rewriteCopy("const n = <number>value; const u = import.meta.url;", FILE),
 			`const n = <number>value; const u = ${URL_OF};`,
 		);
 	});
 
 	it("keeps line numbers, and writes any path as a valid string literal", () => {
-		assert.equal(pinImportMeta("f(import\n\t.meta\n\t.url);\ng();", FILE), `f(${URL_OF}\n\n);\ng();`);
+		assert.equal(rewriteCopy("f(import\n\t.meta\n\t.url);\ng();", FILE), `f(${URL_OF}\n\n);\ng();`);
 		const odd = '/home/o"brien/a\\b/ext.ts';
-		assert.equal(pinImportMeta("x = import.meta.filename;", odd), `x = ${JSON.stringify(odd)};`);
+		assert.equal(rewriteCopy("x = import.meta.filename;", odd), `x = ${JSON.stringify(odd)};`);
 	});
 
 	it("pins the copies to the installed files, and leaves the installed files as they were", async () => {
@@ -1117,7 +1157,104 @@ describe("import.meta in the copies", () => {
 	});
 });
 
+// Issue #174: Pi's loader gives an extension its modules under the names they had before (@mariozechner/pi-*), and
+// @sinclair/typebox, and the pi-ai root's compat entry; the build resolved none of these as Pi does, and stopped.
+describe("Pi's other names for its modules in the copies", () => {
+	const FILE = "/installed/ext/index.ts";
+
+	it("are the names VIRTUAL_MODULES gives: each name Pi's loader has, the module the build resolves for it", () => {
+		const virtual = readFileSync(
+			new URL("../packages/coding-agent/src/core/extensions/virtual-modules.ts", import.meta.url),
+			"utf8",
+		);
+		// (Each module by the variable it is imported as: `import * as bundledPiTui from "@earendil-works/pi-tui";`. The
+		// coding agent's is its own index.)
+		const modules = new Map(
+			[...virtual.matchAll(/^import \* as (\w+) from "([^"]+)";$/gm)].map(([, name, from]) => [
+				name,
+				from === "../../index.ts" ? "@earendil-works/pi-coding-agent" : from,
+			]),
+		);
+		const named = [...virtual.matchAll(/^\t"?([^":\s]+)"?: (\w+),$/gm)].map(([, name, module]) => [name, modules.get(module)]);
+		assert.ok(named.length >= 20, `VIRTUAL_MODULES not found in virtual-modules.ts (${named.length} names)`);
+		for (const [name, module] of named) {
+			assert.equal(PI_MODULE_ALIASES[name] ?? name, module, name);
+		}
+		assert.deepEqual(
+			Object.keys(PI_MODULE_ALIASES).filter((name) => !named.some(([known]) => known === name)),
+			[],
+		);
+	});
+
+	it("are replaced where a module is imported by one: import, export, import(), require()", () => {
+		const source = [
+			'import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";',
+			"import { matchesKey } from '@mariozechner/pi-tui';",
+			'import "@mariozechner/pi-agent-core";',
+			'export * from "@sinclair/typebox/value";',
+			'const ai = await import( "@mariozechner/pi-ai" );',
+			'const compat = await import("@earendil-works/pi-ai", { with: {} });',
+			'const { Type } = require("@sinclair/typebox");',
+			'import oauth = require("@mariozechner/pi-ai/oauth");',
+		].join("\n");
+		assert.equal(
+			rewriteCopy(source, FILE),
+			[
+				'import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";',
+				'import { matchesKey } from "@earendil-works/pi-tui";',
+				'import "@earendil-works/pi-agent-core";',
+				'export * from "typebox/value";',
+				'const ai = await import( "@earendil-works/pi-ai/compat" );',
+				'const compat = await import("@earendil-works/pi-ai/compat", { with: {} });',
+				'const { Type } = require("typebox");',
+				'import oauth = require("@earendil-works/pi-ai/oauth");',
+			].join("\n"),
+		);
+	});
+
+	it("are left where nothing is imported by them, and other names are left", () => {
+		const source = [
+			'const name = "@mariozechner/pi-tui"; // import "@mariozechner/pi-tui"',
+			'/* from "@sinclair/typebox" */ log(`import("@mariozechner/pi-ai")`);',
+			'loader.require("@mariozechner/pi-tui"); f("@mariozechner/pi-tui"); require("@mariozechner/pi-tui" + suffix);',
+			'import { x } from "@mariozechner/pi-tui/dist/utils.js"; import { y } from "@mariozechner/clipboard";',
+			'import { z } from "@earendil-works/pi-ai/models"; import { w } from "constructor";',
+		].join("\n");
+		assert.equal(rewriteCopy(source, FILE), source);
+	});
+
+	it("are replaced in the copies of extensions and of their dependencies, and not in the installed files", () => {
+		const agentDir = agent({ packages: ["npm:old-names"] });
+		const OLD = 'import { matchesKey } from "@mariozechner/pi-tui";\nexport default () => matchesKey;\n';
+		write(join(agentDir, "extensions", "old.ts"), OLD);
+		installPackage(agentDir, "old-names", { pi: { extensions: ["./index.js"] }, dependencies: { helper: "1" } }, []);
+		write(join(agentDir, "npm", "node_modules", "old-names", "index.js"), "export default () => {};\n");
+		const helper = installPackage(agentDir, "helper", { type: "module" }, []);
+		write(join(helper, "index.js"), 'export { Type } from "@sinclair/typebox";\n');
+
+		const out = join(scratch(), "folder");
+		writePluginFolder(planPlugins({ agentDir }), out);
+
+		assert.equal(readFileSync(join(out, "global", "old.ts"), "utf8"), OLD.replace("@mariozechner", "@earendil-works"));
+		assert.equal(readFileSync(join(out, "node_modules", "helper", "index.js"), "utf8"), 'export { Type } from "typebox";\n');
+		assert.equal(readFileSync(join(agentDir, "extensions", "old.ts"), "utf8"), OLD);
+	});
+});
+
 describe("the command", () => {
+	it("stops at an --exclude that names no extension, and lists the extensions (#174)", () => {
+		const agentDir = agent();
+		write(join(agentDir, "extensions", "hello.ts"));
+		const generator = fileURLToPath(new URL("./gen-plugin-manifest.mjs", import.meta.url));
+		const result = spawnSync(
+			process.execPath,
+			[generator, "--out", join(scratch(), "out"), "--agent-dir", agentDir, "--exclude", "@mariozechner/pi-tui"],
+			{ encoding: "utf8" },
+		);
+		assert.equal(result.status, 1);
+		assert.match(result.stderr, /^error: no extension is named @mariozechner\/pi-tui\. The extensions here are hello /);
+	});
+
 	it("runs when started through a link to it, as /var is to /private/var on macOS", () => {
 		const link = join(scratch(), "gen-plugin-manifest.mjs");
 		symlinkSync(fileURLToPath(new URL("./gen-plugin-manifest.mjs", import.meta.url)), link);
