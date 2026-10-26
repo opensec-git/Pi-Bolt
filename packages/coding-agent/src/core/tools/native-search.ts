@@ -756,6 +756,12 @@ function countLines(buffer: Buffer, from: number, to: number): number {
 	return count;
 }
 
+function countLinesIn(text: string, from: number, to: number): number {
+	let count = 0;
+	for (let at = text.indexOf("\n", from); at !== -1 && at < to; at = text.indexOf("\n", at + 1)) count++;
+	return count;
+}
+
 function stripCr(line: string): string {
 	return line.endsWith("\r") ? line.slice(0, -1) : line;
 }
@@ -917,27 +923,62 @@ function regexMatcher(source: string, ignoreCase: boolean): Matcher {
 				),
 		};
 	}
-	// Line by line: an expression run over the whole text tries every place in it within one call, which a backtracking
-	// expression can make take minutes with no chance to stop it. A match is within one line as before (ripgrep's rule);
-	// only lookbehind and lookahead no longer see the lines around.
+	// A window of lines at a time: an expression run over the whole text tries every place in it within one call, which a
+	// backtracking expression can make take minutes with no chance to stop it. A match is within one line as before
+	// (ripgrep's rule); only lookbehind and lookahead do not see past a window's first and last lines.
+	const all = new RegExp(source, `${flags}gm`);
 	return {
 		search(buffer, filePath, budget, keepChars, out, firstLine, deadline) {
-			const text = buffer.toString("utf8");
-			let line = firstLine;
-			let start = 0;
 			let found = 0;
+			// The window: its bytes `from` up to `to` (just past a line break, or the end), as text; the number of its first line.
+			let from = 0;
+			let to = 0;
+			let text = "";
+			let windowLine = firstLine;
+			// Where the search of the window goes on (-1: the next window), and the line number up to `counted` in it.
+			let lastIndex = -1;
+			let line = firstLine;
+			let counted = 0;
 			const run = (deadline: number): SearchRest | undefined => {
-				// (Not the nothing after a last line break: there is no line there.)
-				while (found < budget && start < text.length) {
-					let end = text.indexOf("\n", start);
-					if (end === -1) end = text.length;
-					const lineText = text.slice(start, end);
-					if (one.test(lineText)) {
-						out.push({ filePath, lineNumber: line, lineText: stripCr(lineText.slice(0, keepChars)) });
-						found++;
+				while (found < budget) {
+					if (lastIndex === -1) {
+						if (to >= buffer.length) return undefined;
+						from = to;
+						const lastBreak =
+							from + WINDOW_BYTES < buffer.length ? buffer.indexOf(NEWLINE, from + WINDOW_BYTES - 1) : -1;
+						to = lastBreak === -1 ? buffer.length : lastBreak + 1;
+						text = buffer.toString("utf8", from, to);
+						line = windowLine;
+						lastIndex = 0;
+						counted = 0;
 					}
-					line++;
-					start = end + 1;
+					all.lastIndex = lastIndex;
+					const match = all.lastIndex <= text.length ? all.exec(text) : null;
+					// (An empty match after the window's last line break: that is the next window's first line.)
+					if (!match || (match.index === text.length && match.index > 0 && text[match.index - 1] === "\n")) {
+						windowLine += countLines(buffer, from, to);
+						lastIndex = -1;
+					} else {
+						const at = match.index;
+						const start = at === 0 ? 0 : text.lastIndexOf("\n", at - 1) + 1;
+						let end = text.indexOf("\n", at);
+						if (end === -1) end = text.length;
+						// Within one line, as ripgrep matches: a match that runs past it counts if the line alone has one.
+						const pastLine = at + match[0].length > end || (at === end && end < text.length);
+						if (pastLine && !one.test(text.slice(start, end))) {
+							lastIndex = at + 1;
+						} else {
+							line += countLinesIn(text, counted, start);
+							counted = start;
+							out.push({
+								filePath,
+								lineNumber: line,
+								lineText: stripCr(text.slice(start, Math.min(end, start + keepChars))),
+							});
+							found++;
+							lastIndex = end + 1;
+						}
+					}
 					if (performance.now() > deadline) return run;
 				}
 				return undefined;
@@ -963,6 +1004,9 @@ function globFilter(glob: string | undefined): { take: (rel: string) => boolean;
 	};
 	return { take: (rel) => matches(rel) !== exclude, include: exclude ? undefined : matches };
 }
+
+/** How much of a file an expression without a literal is run over at once (whole lines). */
+const WINDOW_BYTES = 16 * 1024;
 
 /** How many files are read at once. */
 const READ_AHEAD = 32;

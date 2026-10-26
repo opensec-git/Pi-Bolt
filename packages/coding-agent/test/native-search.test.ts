@@ -275,6 +275,43 @@ describe("grep", () => {
 		}
 	});
 
+	// An expression without a literal runs over 16 KB windows of whole lines: the lines that match, as line by line.
+	test("an expression without a literal finds the lines that match, across windows", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pibolt-windows-"));
+		try {
+			const lines = Array.from({ length: 6000 }, (_, i) =>
+				i % 7 === 0 ? "" : i % 11 === 0 ? `  ${i}x\r` : `${"w".repeat(i % 40)} ${i} line`,
+			);
+			const contents = `${lines.join("\n")}\n`;
+			writeFileSync(join(dir, "big.txt"), contents);
+			for (const [pattern, flags] of [
+				["^\\s*$", ""],
+				["^", ""],
+				["e$", ""],
+				["[0-9]{3}x", ""],
+				["W{3} [0-9]+5 LINE", "i"],
+			]) {
+				const regex = new RegExp(pattern, `${flags}m`);
+				const expected = lines
+					.map((text, i) => ({ text, lineNumber: i + 1 }))
+					.filter(({ text }) => regex.test(text))
+					.slice(0, 2000)
+					.map(({ text, lineNumber }) => `${lineNumber}:${text.replace(/\r$/, "")}`);
+				const result = await nativeGrep({
+					root: join(dir, "big.txt"),
+					isDirectory: false,
+					pattern,
+					ignoreCase: flags === "i",
+					limit: 2000,
+					keepChars: 100,
+				});
+				expect(result.matches.map((m) => `${m.lineNumber}:${m.lineText}`)).toEqual(expected);
+			}
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("a file of its own, and a bad expression", async () => {
 		const result = await nativeGrep({
 			root: join(root, "src", "a.ts"),
