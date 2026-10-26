@@ -27,6 +27,17 @@ function webLink(text: string, url: string): string {
 }
 
 /**
+ * The `http:` or `https:` URL `value` names, normalized, or undefined. The shared launcher also opens files and custom
+ * protocols, so login only opens web URLs. Normalizing percent-encodes control characters, which would otherwise end a
+ * terminal hyperlink early.
+ */
+function webUrl(value: string): string | undefined {
+	if (!URL.canParse(value)) return undefined;
+	const url = new URL(value);
+	return url.protocol === "https:" || url.protocol === "http:" ? url.href : undefined;
+}
+
+/**
  * Login dialog component - replaces editor during OAuth login flow
  */
 export class LoginDialogComponent extends Container implements Focusable {
@@ -119,7 +130,8 @@ export class LoginDialogComponent extends Container implements Focusable {
 	showAuth(url: string, instructions?: string): void {
 		this.contentContainer.clear();
 		this.contentContainer.addChild(new Spacer(1));
-		this.authUrl = new AuthUrlComponent(this.tui, url);
+		const target = webUrl(url);
+		this.authUrl = new AuthUrlComponent(this.tui, target ?? sanitizeTerminalText(url));
 		this.contentContainer.addChild(this.authUrl);
 
 		if (instructions) {
@@ -127,7 +139,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 			this.contentContainer.addChild(new Text(theme.fg("warning", instructions), 1, 0));
 		}
 
-		openBrowser(url);
+		if (target !== undefined) openBrowser(target);
 		this.tui.requestRender();
 	}
 

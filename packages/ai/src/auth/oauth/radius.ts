@@ -14,6 +14,7 @@ import type { OAuthAuth, OAuthCredential, ProviderAuthInteraction } from "../typ
 import { startOAuthCallbackServer } from "./callback-server.ts";
 import { pollOAuthDeviceCodeFlow } from "./device-code.ts";
 import { generatePKCE } from "./pkce.ts";
+import { trustedHttpUrl } from "./trusted-url.ts";
 
 const CALLBACK_HOST = "127.0.0.1";
 const CALLBACK_PORT = 1456;
@@ -51,10 +52,11 @@ async function loadRadiusOAuthDiscovery(gateway: string, signal: AbortSignal): P
 	}
 
 	const discovery = (await response.json()) as Partial<RadiusOAuthDiscovery>;
-	if (typeof discovery.authorizationEndpoint !== "string") {
+	const authorizationEndpoint = trustedHttpUrl(discovery.authorizationEndpoint);
+	if (!authorizationEndpoint) {
 		throw new Error(`Invalid Radius OAuth config from ${gateway}`);
 	}
-	return { authorizationEndpoint: discovery.authorizationEndpoint };
+	return { authorizationEndpoint };
 }
 
 class OAuthResponseError extends Error {

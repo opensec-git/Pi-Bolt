@@ -1,9 +1,11 @@
 import type * as ChildProcess from "node:child_process";
 import type * as Fs from "node:fs";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type * as Os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { accessSync } from "fs";
+import { arch, platform } from "os";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureTool, getLatestVersion, getToolPath, type ToolStatus } from "../src/utils/tools-manager.ts";
 
@@ -24,6 +26,15 @@ vi.mock("fs", async (importOriginal) => {
 	};
 });
 
+vi.mock("os", async (importOriginal) => {
+	const actual = await importOriginal<typeof Os>();
+	return {
+		...actual,
+		arch: vi.fn(() => "x64"),
+		platform: vi.fn(() => "linux"),
+	};
+});
+
 vi.mock("child_process", async (importOriginal) => {
 	const actual = await importOriginal<typeof ChildProcess>();
 	return {
@@ -39,6 +50,8 @@ afterEach(() => {
 	process.chdir(originalCwd);
 	for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true });
 	vi.unstubAllGlobals();
+	vi.mocked(arch).mockReturnValue("x64");
+	vi.mocked(platform).mockReturnValue("linux");
 });
 
 function temporaryDir(): string {
@@ -202,6 +215,26 @@ describe("ensureTool", () => {
 			{
 				type: "warning",
 				message: "Failed to download fd: fetch failed: connect ETIMEDOUT 140.82.113.3:443",
+			},
+		]);
+	});
+
+	// #11209: ARM32 previously fell back to x86-64 release archives.
+	it.each(["arm", "ia32"])("does not download x86-64 binaries on %s", async (architecture) => {
+		delete process.env.PI_OFFLINE;
+		vi.mocked(arch).mockReturnValue(architecture as NodeJS.Architecture);
+		const fetchMock = vi.fn();
+		vi.stubGlobal("fetch", fetchMock);
+		const statuses: ToolStatus[] = [];
+
+		const result = await ensureTool("rg", (status) => statuses.push(status));
+
+		expect(result).toBeUndefined();
+		expect(fetchMock).not.toHaveBeenCalled();
+		expect(statuses).toEqual([
+			{
+				type: "warning",
+				message: `ripgrep not found. Automatic download is not supported on linux/${architecture}. Install ripgrep with your system package manager.`,
 			},
 		]);
 	});

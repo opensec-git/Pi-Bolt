@@ -1465,7 +1465,7 @@
         let userMessages = 0, assistantMessages = 0, toolResults = 0;
         let customMessages = 0, compactions = 0, branchSummaries = 0, toolCalls = 0;
         const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-        const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+        const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
         const models = new Set();
 
         for (const entry of entryList) {
@@ -1482,10 +1482,18 @@
                 tokens.cacheRead += Number(msg.usage.cacheRead) || 0;
                 tokens.cacheWrite += Number(msg.usage.cacheWrite) || 0;
                 if (msg.usage.cost) {
+                  const componentTotal =
+                    (Number(msg.usage.cost.input) || 0) +
+                    (Number(msg.usage.cost.output) || 0) +
+                    (Number(msg.usage.cost.cacheRead) || 0) +
+                    (Number(msg.usage.cost.cacheWrite) || 0);
                   cost.input += Number(msg.usage.cost.input) || 0;
                   cost.output += Number(msg.usage.cost.output) || 0;
                   cost.cacheRead += Number(msg.usage.cost.cacheRead) || 0;
                   cost.cacheWrite += Number(msg.usage.cost.cacheWrite) || 0;
+                  // Provider-reported totals can intentionally differ from catalog-estimated components.
+                  // Fall back to the component sum for sessions written before cost.total was recorded.
+                  cost.total += typeof msg.usage.cost.total === 'number' ? msg.usage.cost.total : componentTotal;
                 }
               }
               toolCalls += msg.content.filter(c => c.type === 'toolCall').length;
@@ -1506,7 +1514,7 @@
       const globalStats = computeStats(entries);
 
       function renderHeader() {
-        const totalCost = globalStats.cost.input + globalStats.cost.output + globalStats.cost.cacheRead + globalStats.cost.cacheWrite;
+        const totalCost = globalStats.cost.total;
 
         const tokenParts = [];
         if (globalStats.tokens.input) tokenParts.push(`↑${formatTokens(globalStats.tokens.input)}`);
