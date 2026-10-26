@@ -6,7 +6,8 @@ Pi-Bolt is a fork of [Pi](https://github.com/earendil-works/pi). If something al
 This repository takes what Pi-Bolt adds: the engine patches, the installers and updater, `pi-bolt compile`, the tools Pi-Bolt
 replaces, scripts, benchmarks and docs.
 
-Security problems: never in a public issue. See [SECURITY.md](SECURITY.md).
+Security problems: never in a public issue. See [SECURITY.md](SECURITY.md). Everyone taking part follows the
+[Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Opening an issue
 
