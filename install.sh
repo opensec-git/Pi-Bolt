@@ -159,6 +159,10 @@ main() {
 	elif [ "$ACTION" = reinstall ]; then word=reinstalled
 	else word=installed; fi
 	printf '\nPi-Bolt %s was %s successfully %s(Pi %s)%s.\n' "$SHOWN_VERSION" "$word" "$dim" "$("$INSTALL/$NAME/pi" --version)" "$reset"
+	# `pi-bolt compile` compiled extensions into a build here: this one, the release's, has none (they load from their files).
+	if [ -f "$INSTALL/compile.json" ]; then
+		printf 'Extensions were compiled into the build this replaced: run %spi-bolt compile%s to compile them into this one.\n' "$bold" "$reset"
+	fi
 	offer_extensions
 	if [ "$(command -v pi-bolt 2>/dev/null || true)" = "$BIN_DIR/pi-bolt" ]; then
 		printf '\nRun it with: %spi-bolt%s\n' "$bold" "$reset"

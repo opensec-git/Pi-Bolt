@@ -3,8 +3,10 @@
  * is and how it was installed, whether its release's signature verifies, which extensions are compiled in, run at run time or
  * fail, how Pi's and Pi-Bolt's package lists differ, the Herdr and editor (ACP) setup, and what is known to be wrong.
  *
- * It installs nothing and changes no setting. It loads the extensions that a start would load (their factories run, as at any
- * start; no session starts), and it goes online for the release's signature and the latest version unless asked not to.
+ * It installs nothing and changes no setting. It loads the extensions that a start would load from their files (their factories
+ * run, as at any start; no session starts), and it goes online for the release's signature and the latest version unless asked
+ * not to. Those `pi-bolt compile` compiled in are listed, not loaded: doctor starts without them (core/extensions/compiled.ts,
+ * startsWithoutCompiledExtensions), so that it reports whatever one of them does as it loads.
  * Nothing secret is printed: settings' values are not, environment variables only from a list of Pi-Bolt's own, credentials in
  * URLs and anything shaped like a key are masked, and the home folder is shown as ~.
  *
@@ -18,6 +20,7 @@ import { arch, cpus, homedir, release, totalmem } from "node:os";
 import { basename, delimiter, dirname, extname, isAbsolute, join, relative } from "node:path";
 import { CONFIG_DIR_NAME, VERSION } from "../config.ts";
 import { createEventBus } from "../core/event-bus.ts";
+import { compiledExtensionList, compiledStateLines, extensionFingerprint } from "../core/extensions/compiled.ts";
 import { isJitRequiredMessage, JIT_REQUIRED_MESSAGE, jitHint } from "../core/extensions/jit-hint.ts";
 import { createExtensionRuntime, JIT_ONLY_PACKAGES, loadExtensions } from "../core/extensions/loader.ts";
 import type { InlineExtension } from "../core/extensions/types.ts";
@@ -585,7 +588,7 @@ export function findBunFfiImport(root: string): string | undefined {
 
 export interface ExtensionReport {
 	name: string;
-	state: "loaded" | "failed" | "skipped" | "disabled";
+	state: "loaded" | "failed" | "skipped" | "disabled" | "compiled";
 	detail: string;
 	/** Load CPU time in ms, for one loaded at run time. */
 	cpuMs?: number;
@@ -724,6 +727,7 @@ export function extensionRows(
 				: "";
 		if (extension.state === "loaded")
 			rows.push(["run time", `${extension.name}: ${runTime}, ${extension.detail}${ffi}`]);
+		else if (extension.state === "compiled") rows.push(["compiled in", `${extension.name}: ${extension.detail}`]);
 		else rows.push([extension.state, `${extension.name}: ${extension.detail}${ffi}`]);
 	}
 	if (extensions.length === 0) rows.push(["run time", "none"]);
@@ -788,6 +792,13 @@ async function extensionSections(
 		entriesOfPackage.set(root, (entriesOfPackage.get(root) ?? 0) + 1);
 	}
 
+	// (Those `pi-bolt compile` compiled in, by their entry's real path: listed while unchanged, not loaded.)
+	const compiledIn = PIBOLT ? compiledExtensionList() : [];
+	const compiledAt = (path: string) => {
+		if (compiledIn.length === 0) return undefined;
+		const real = realpathOr(path);
+		return compiledIn.find((extension) => extension.entry === path || extension.entry === real);
+	};
 	const extensions: ExtensionReport[] = [];
 	let loading: ExtensionReport | undefined;
 	const restoreFfi = recordFfiCalls((jitRequired) => {
@@ -823,6 +834,13 @@ async function extensionSections(
 				entry.detail = "Herdr's Pi integration; Pi-Bolt's built-in Herdr support reports in its place";
 				continue;
 			}
+			const compiled = compiledAt(resource.path);
+			const changed = compiled !== undefined && extensionFingerprint(compiled) !== compiled.fingerprint;
+			if (compiled && !changed) {
+				entry.state = "compiled";
+				entry.detail = "by pi-bolt compile (doctor does not load it)";
+				continue;
+			}
 			const scanRoot =
 				resource.metadata.packageRoot ??
 				(basename(resource.path).startsWith("index.") ? dirname(resource.path) : resource.path);
@@ -855,7 +873,7 @@ async function extensionSections(
 				continue;
 			}
 			entry.cpuMs = Math.round((cpuUsed.user + cpuUsed.system) / 1000);
-			entry.detail = `loaded in ${Math.round(wall)} ms (CPU ${entry.cpuMs} ms)`;
+			entry.detail = `loaded in ${Math.round(wall)} ms (CPU ${entry.cpuMs} ms)${changed ? "; changed since it was compiled in, so loaded from its files" : ""}`;
 		}
 	} finally {
 		consoleMethods.forEach((method, index) => {
@@ -874,6 +892,10 @@ async function extensionSections(
 				`${entry.name} takes ${entry.cpuMs} ms of CPU to load, interpreted: the JIT build runs heavy extensions faster (${piBoltJitSwitchCommand()}), or compile it in (docs/PLUGINS.md).`,
 			);
 		}
+	}
+	if (PIBOLT && self.installDir) {
+		const record = readJson(join(self.installDir, "compile.json")) as { extensions?: string[] } | undefined;
+		report.problems.push(...compiledStateLines(compiledIn, record));
 	}
 	if (missing.length > 0) {
 		report.problems.push(

@@ -99,6 +99,26 @@ An extension compiled in stands in for its installed copy while that copy is unc
 and off as always, and uses the compiled one instead of loading the files. An extension changed since (a package updated, a file
 edited) is loaded from its files, with a warning to run `pi-bolt compile` again. One removed or turned off is not loaded.
 
+A compiled-in extension's code runs when Pi loads that extension, as from its files: one turned off never runs, and one whose
+top-level code throws fails alone, with Pi's own error. One that fails compiled in but not from its files (its top-level code
+reads a file beside its module, say: [what it copies](#what-it-copies)) is loaded from its files, with a warning. `pi-bolt
+doctor`, `pi-bolt compile` and `pi-bolt update --rollback` run no compiled-in extension's code at all, so they work whatever an
+extension does as it loads.
+
+Pi loads each extension on its own, and `pi-bolt compile` compiles in what it can: an extension it cannot build (a static
+`import` or `require()` that does not resolve, such as a package that is not installed), one whose function is too big for the
+compiler, and one that fails in the new build as it starts (it checks the build with `pi --help`, which loads every extension)
+are each left out, with a line that names it and says why, and load from their files. The rest are compiled in. These are found
+again at each compile, not recorded.
+
+`pi-bolt compile --status` and `pi-bolt doctor` say which extensions are compiled in, which changed since and load from their
+files, and when the build has none of the extensions compile.json records: the installer, run again, or a switch to or from the
+JIT build installs the release's executable. Run `pi-bolt compile` to compile them in again.
+
+One difference remains: a compiled-in extension's modules are loaded once per process. Pi loads an extension from its files
+again at `/reload`, with fresh module state; compiled in, `/reload` calls its factory again with the module state it had (a
+counter, a guard against registering twice, a timer started at the top level). Keep such state in the factory.
+
 It works in installations made with the installer, on Linux and macOS. On Windows, in Termux and with the npm package, build in
 a checkout of this repository ([below](#compile-in-the-plugins-you-already-have)). The [checklist](#compatibility-checklist)
 applies as to any compiled-in plugin; `--exclude` leaves out one the compiler refuses.
@@ -143,9 +163,9 @@ Pi's own packages are left out of every copy, so a plugin cannot carry a second 
 something it does when that package is there (`@plannotator/pi-extension` loads the Claude Agent SDK and the OpenCode SDK
 this way). The bundler would stop the whole build at it (#160). Instead, in the copy, the `import()` resolves its string
 when it runs, from the installed file's folder, and prints a line saying so. It then fails as it does when Pi loads the
-extension from its files, inside the extension's own error handling, and finds the package if it is installed later. A
-static `import` or a `require()` that does not resolve still stops the build: the extension needs it. A build with
-`build-pi.sh --plugins-from-installed` does not do this.
+extension from its files, inside the extension's own error handling, and finds the package if it is installed later. An
+extension with a static `import` or a `require()` that does not resolve needs it: `pi-bolt compile` leaves it out of the build,
+and it loads (or fails) from its files. A build with `build-pi.sh --plugins-from-installed` does neither.
 
 In the copies, `import.meta.url` is the URL of the file it was copied from, and `import.meta.dir`, `dirname`, `filename`,
 `path` and `file` are that file's too. Bundling would otherwise make each one the executable's (`/$bunfs/root/...`). An
@@ -154,7 +174,8 @@ extension that finds its `skills/`, `prompts/` or themes beside its own module, 
 it from its files. Only the copies are changed, and only in code: comments and strings keep their text. `pi-bolt compile` uses a
 compiled-in extension only while its installed copy is unchanged, so those files are always there. An executable built with
 `--plugins-from-installed` has no such check: keep its extensions installed. `__dirname` and `__filename` are not changed:
-the bundler makes them the path of the copy, which is removed after the build.
+the bundler makes them the path of the copy, which is removed after the build. An extension that reads a file from there as it
+loads fails compiled in: `pi-bolt compile` finds that when it checks the new build, and leaves it out.
 
 ### What it cannot do
 
@@ -168,8 +189,9 @@ A large module is the other limit. The compiler refuses a function of more than 
 splits its code (`--splitting`), and the generated manifest loads each plugin with `import()`, one after the other: each plugin,
 with the modules only it imports, is a file of its own, apart from Pi's code and from the other plugins. So the limit is one
 plugin's top-level code, or one function's: a bundled `dist/index.js`, or embedded data such as a tokeniser's rank table, can
-pass it, and many small plugins together do not. The plugins still run in the manifest's order, and one that waits at its top
-level (`await`) finishes before the next one starts. (Until Pi-Bolt 1.0.1 the manifest imported the plugins, and every plugin's
+pass it, and many small plugins together do not. Each plugin's module runs when Pi loads that plugin, as from its files, one
+after the other: one that waits at its top level (`await`) finishes before the next one starts. `pi-bolt compile` leaves a
+plugin with a function too big to compile out of the build, with a line naming it, and it loads from its files. (Until Pi-Bolt 1.0.1 the manifest imported the plugins, and every plugin's
 top-level code joined Pi's, about 200 KB of it, in one function: a few plugins together stopped the build, and leaving out any
 one of them did not help, #129. Pi-Bolt 1.0.2 required the manifest, which cannot load a plugin with an `await` at its top
 level, #142.) Leave a plugin with such a module out with `--plugins-exclude`, or raise the limit

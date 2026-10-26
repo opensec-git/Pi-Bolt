@@ -882,19 +882,26 @@ export function renderManifest(plan) {
 		" * Each is named, so it is a built-in extension once compiled in: `-builtin:<name>` in the `extensions` setting",
 		" * turns one off, and the same extension installed at run time replaces it instead of conflicting.",
 		" *",
-		" * Each is loaded with import(), one after the other: the build splits its code (--splitting), so each extension, with",
-		" * the modules only it imports, is a file of its own, whose top-level code the compiler takes as one function and refuses",
-		" * past 256 KB of bytecode (#129). Imported here, all the extensions' top-level code would be one function. They still",
-		" * run in this order, and one that waits at its top level (`await`) finishes before the next starts (#142).",
+		" * Each is loaded with an import() of its own, when Pi loads it and not before: the build splits its code (--splitting),",
+		" * so each extension, with the modules only it imports, is a file of its own, whose top-level code the compiler takes as",
+		" * one function and refuses past 256 KB of bytecode (#129). Imported here, all the extensions' top-level code would be one",
+		" * function. Pi loads its extensions one after the other, so each module runs, and one that waits at its top level",
+		" * (`await`) finishes, before the next one starts (#142), as when Pi loads them from their files. One turned off is",
+		" * never run, and one whose top-level code throws fails as it loads, as from its files, not every start.",
 		" */",
 		// A value import from the package would evaluate Pi's whole public API at every launch (docs/PLUGINS.md).
 		'import type { InlineExtension } from "@earendil-works/pi-coding-agent";',
+		"",
+		"/** The factory of the extension `module` imports, imported when it is first called. */",
+		'function lazy(module: () => Promise<{ default: InlineExtension["factory"] }>): InlineExtension["factory"] {',
+		"\treturn async (pi) => (await module()).default(pi);",
+		"}",
 		"",
 		"const plugins: InlineExtension[] = [",
 	);
 	for (const plugin of plan.plugins) {
 		lines.push(
-			`\t{ name: "${plugin.name}", builtin: true, replaceable: true, factory: (await import("${plugin.importPath}")).default },`,
+			`\t{ name: "${plugin.name}", builtin: true, replaceable: true, factory: lazy(() => import("${plugin.importPath}")) },`,
 		);
 	}
 	lines.push("];", "", "export default plugins;");

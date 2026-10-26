@@ -199,7 +199,7 @@ describe("packages installed with pi install", () => {
 		const manifest = writePluginFolder(plan, out);
 		assert.match(
 			readFileSync(manifest, "utf8"),
-			/await import\("\.\/package-injaneity-pi-computer-use\/extensions\/computer-use\.ts"\)/,
+			/\(\) => import\("\.\/package-injaneity-pi-computer-use\/extensions\/computer-use\.ts"\)/,
 		);
 		assert.equal(readFileSync(join(out, plan.plugins[0].importPath), "utf8"), FACTORY);
 	});
@@ -378,7 +378,7 @@ describe("packages installed with pi install", () => {
 
 		const out = join(scratch(), "folder");
 		const manifest = writePluginFolder(plan, out);
-		const imports = [...readFileSync(manifest, "utf8").matchAll(/await import\("\.\/(.+?)"\)/g)];
+		const imports = [...readFileSync(manifest, "utf8").matchAll(/\(\) => import\("\.\/(.+?)"\)/g)];
 		assert.equal(imports.length, 3);
 		for (const [, path] of imports) assert.ok(readFileSync(join(out, path), "utf8"));
 	});
@@ -857,7 +857,7 @@ describe("what it passes over", () => {
 });
 
 describe("the manifest and its folder", () => {
-	it("imports the type only, loads each plugin with import(), and names it a replaceable built-in", () => {
+	it("imports the type only, loads each plugin with import() of its own, and names it a replaceable built-in", () => {
 		const agentDir = agent();
 		write(join(agentDir, "extensions", "pdf-reader", "index.ts"));
 
@@ -865,7 +865,7 @@ describe("the manifest and its folder", () => {
 		assert.match(text, /^import type \{ InlineExtension \}/m);
 		assert.match(
 			text,
-			/\{ name: "pdf-reader", builtin: true, replaceable: true, factory: \(await import\("\.\/global\/pdf-reader\/index\.ts"\)\)\.default \},/,
+			/^\t\{ name: "pdf-reader", builtin: true, replaceable: true, factory: lazy\(\(\) => import\("\.\/global\/pdf-reader\/index\.ts"\)\) \},$/m,
 		);
 		// A value import would evaluate Pi's whole public API at every launch; a static one would join the plugins' top-level
 		// code in one function (#129).
@@ -879,7 +879,7 @@ describe("the manifest and its folder", () => {
 
 		const out = join(scratch(), "folder");
 		const manifest = writePluginFolder(planPlugins({ agentDir }), out);
-		const imports = [...readFileSync(manifest, "utf8").matchAll(/await import\("\.\/(.+?)"\)/g)];
+		const imports = [...readFileSync(manifest, "utf8").matchAll(/\(\) => import\("\.\/(.+?)"\)/g)];
 		assert.equal(imports.length, 2);
 		for (const [, path] of imports) assert.ok(readFileSync(join(out, path), "utf8"));
 	});
@@ -938,8 +938,13 @@ describe("the manifest and its folder", () => {
 			].join("\n"),
 		);
 		writeFileSync(join(out, "start.ts"), "globalThis.ran = [];\n");
-		const report =
-			"console.log(JSON.stringify({ ran: globalThis.ran, plugins: plugins.map((p) => [p.name, p.factory.name, String(p.factory())]) }));\n";
+		// (As Pi's loader does: each factory called, and waited for, one after the other.)
+		const report = [
+			"const results = [];",
+			"for (const p of plugins) results.push([p.name, String(await p.factory())]);",
+			"console.log(JSON.stringify({ ran: globalThis.ran, plugins: results }));",
+			"",
+		].join("\n");
 		writeFileSync(join(out, "imported.ts"), `import "./start.ts";\nimport plugins from "./src/imported.ts";\n${report}`);
 		writeFileSync(
 			join(out, "loaded.ts"),
@@ -963,13 +968,69 @@ describe("the manifest and its folder", () => {
 
 		assert.deepEqual(loaded.result, imported.result);
 		assert.deepEqual(loaded.result.ran, ["shared", "alpha", "beta", "beta helper", "beta after await", "gamma"]);
-		assert.deepEqual(loaded.result.plugins.at(-1), ["gamma", "gamma", "3"]);
+		assert.deepEqual(loaded.result.plugins.at(-1), ["gamma", "3"]);
 		// Imported, the extensions' top-level code is all in one file; loaded, each extension's is in a file of its own.
 		const fileOf = (files, name) => files.filter((text) => text.includes(`globalThis.ran.push("${name}")`));
 		assert.equal(fileOf(imported.files, "alpha")[0], fileOf(imported.files, "beta")[0]);
 		const own = ["alpha", "beta", "gamma"].map((name) => fileOf(loaded.files, name));
 		for (const files of own) assert.equal(files.length, 1);
 		assert.equal(new Set(own.flat()).size, 3);
+	});
+
+	// Every compiled-in extension's module ran before Pi started, turned off or not, and one that threw stopped every start of
+	// the build. Each module is imported when its factory is first called, as Pi loads it: one that throws fails then, alone.
+	it("runs an extension's module only when its factory is called; one that throws fails alone", (context) => {
+		const bun = spawnSync("bun", ["--version"], { encoding: "utf8" });
+		if (bun.status !== 0) return context.skip("no bun on PATH");
+		const agentDir = agent();
+		const ran = (name) => `globalThis.ran.push(${JSON.stringify(name)});\n`;
+		write(join(agentDir, "extensions", "alpha.ts"), `${ran("alpha")}export default () => "alpha";\n`);
+		write(
+			join(agentDir, "extensions", "broken.ts"),
+			`${ran("broken")}import { readFileSync } from "node:fs";\nreadFileSync("/pibolt-no-such-dir/package.json");\nexport default () => "broken";\n`,
+		);
+		write(join(agentDir, "extensions", "off.ts"), `${ran("off")}export default () => "off";\n`);
+		write(join(agentDir, "extensions", "gamma.ts"), `${ran("gamma")}export default (pi) => pi;\n`);
+
+		const out = join(scratch(), "build");
+		writePluginFolder(planPlugins({ agentDir }), join(out, "src"));
+		writeFileSync(
+			join(out, "loaded.ts"),
+			[
+				"globalThis.ran = [];",
+				'const { default: plugins } = await import("./src/plugins.ts");',
+				'const before = [...globalThis.ran];',
+				"const results = [];",
+				'for (const p of plugins.filter((p) => p.name !== "off")) {',
+				'\ttry { results.push([p.name, await p.factory("api")]); } catch (error) { results.push([p.name, error.code]); }',
+				"}",
+				"console.log(JSON.stringify({ before, ran: globalThis.ran, results, names: plugins.map((p) => [p.name, p.builtin, p.replaceable]) }));",
+				"",
+			].join("\n"),
+		);
+		const outdir = join(out, "dist");
+		const built = spawnSync("bun", ["build", "--target=bun", "--format=esm", "--splitting", "./loaded.ts", "--outdir", outdir], {
+			cwd: out,
+			encoding: "utf8",
+		});
+		assert.equal(built.status, 0, built.stderr);
+		const ranIt = spawnSync("bun", [join(outdir, "loaded.js")], { encoding: "utf8" });
+		assert.equal(ranIt.status, 0, ranIt.stderr);
+		assert.deepEqual(JSON.parse(ranIt.stdout), {
+			before: [],
+			ran: ["alpha", "broken", "gamma"],
+			results: [
+				["alpha", "alpha"],
+				["broken", "ENOENT"],
+				["gamma", "api"],
+			],
+			names: [
+				["alpha", true, true],
+				["broken", true, true],
+				["gamma", true, true],
+				["off", true, true],
+			],
+		});
 	});
 
 	it("replaces its own output, and refuses a folder holding anything else", () => {
