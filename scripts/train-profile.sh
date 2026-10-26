@@ -41,7 +41,15 @@ for kind in split whole; do
 	log "training sessions ($kind)"
 	python3 "$PIBOLT_ROOT/scripts/lib/train_session.py" "$TMP/$kind/pi" "$TMP/$kind/bytecode.order" "$TMP/$kind/regexps.txt"
 done
+# The strings' order of the profile this one replaces goes first: scripts\train-heap.ps1 records it from the prebuilt heap, which
+# is what a start touches, and a string is named by its text, so it still holds (the heap order is recorded again after this).
+ORDERS=()
+if [ -f "$OUT/bytecode.order" ]; then
+	{ echo v2; grep '^S ' "$OUT/bytecode.order" || true; } >"$TMP/strings.order"
+	ORDERS+=("$TMP/strings.order")
+fi
 mkdir -p "$OUT"
-python3 "$PIBOLT_ROOT/scripts/lib/merge_orders.py" "$TMP/split/bytecode.order" "$TMP/whole/bytecode.order" >"$OUT/bytecode.order"
+python3 "$PIBOLT_ROOT/scripts/lib/merge_orders.py" "${ORDERS[@]}" "$TMP/split/bytecode.order" "$TMP/whole/bytecode.order" >"$TMP/bytecode.order"
+mv "$TMP/bytecode.order" "$OUT/bytecode.order"
 sort -u "$TMP/split/regexps.txt" "$TMP/whole/regexps.txt" >"$OUT/regexps.txt"
 log "profile: $OUT ($(wc -l < "$OUT/regexps.txt") regular expressions)"
