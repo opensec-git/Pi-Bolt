@@ -298,7 +298,8 @@ By hand:
    (`git log vX.Y.Z..pi-bolt -- packages/`).
 2. `scripts/bump-version.sh --pi X.Y.Z` (the last number goes up by one, as for any release), `scripts/prepare-pi.sh --refresh-models`
    (the model catalog of the new Pi, `packages/ai/src/providers/data`), then `scripts/train-profile.sh` **on Linux**, and commit
-   `profiles/pi-X.Y.Z` and the catalog. A profile recorded on Linux serves every platform. On Windows, `scripts\train-heap.ps1`
+   `profiles/pi-X.Y.Z` and the catalog. A profile recorded on Linux serves every platform (recorded on macOS first with
+   `--out DIR` and merged in on Linux with `--with DIR`, it also places what only macOS runs). On Windows, `scripts\train-heap.ps1`
    then adds the prebuilt heap's order to it (`heap-functions.txt`, and the strings' order in `bytecode.order`): commit that too.
    The `heap-profile` workflow runs it on the Windows runner with the latest release's runtime
    (`gh workflow run heap-profile.yml -R opensec-git/Pi-Bolt --ref <branch>`), uploads the profile as an artifact and pushes it to

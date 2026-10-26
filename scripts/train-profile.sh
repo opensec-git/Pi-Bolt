@@ -2,16 +2,19 @@
 # Records a training profile for a Pi version: which functions run and in which order (the executable lays them out together,
 # so starting touches fewer pages), and the regular expressions Pi builds from strings at run time (compiled into the image like
 # literals). A profile belongs to one Pi version and one entry point; scripts/build-pi.sh picks profiles/pi-<version> up.
-# Usage: scripts/train-profile.sh [--pi DIR] [--plugins FILE] [--out DIR]
+# Usage: scripts/train-profile.sh [--pi DIR] [--plugins FILE] [--out DIR] [--with DIR]
 #   --plugins FILE    train the build that has these extensions compiled in (scripts/build-pi.sh --plugins): give the profile its
 #                     own --out, and pass it to build-pi.sh with --profile
+#   --with DIR        merge in a profile this script recorded on another platform (with --out DIR there): what only that
+#                     platform runs, and the regular expressions only it builds, go in this one too
 source "$(dirname "$0")/lib/common.sh"
-PI_DIR="$PIBOLT_PI"; PLUGINS=""; OUT=""
+PI_DIR="$PIBOLT_PI"; PLUGINS=""; OUT=""; WITH=""
 while [ $# -gt 0 ]; do
 	case "$1" in
 	--pi) PI_DIR="$2"; shift ;;
 	--plugins) PLUGINS="$2"; shift ;;
 	--out) OUT="$2"; shift ;;
+	--with) WITH="$2"; shift ;;
 	*) die "unknown option $1" ;;
 	esac
 	shift
@@ -49,7 +52,15 @@ if [ -f "$OUT/bytecode.order" ]; then
 	ORDERS+=("$TMP/strings.order")
 fi
 mkdir -p "$OUT"
-python3 "$PIBOLT_ROOT/scripts/lib/merge_orders.py" "${ORDERS[@]}" "$TMP/split/bytecode.order" "$TMP/whole/bytecode.order" >"$TMP/bytecode.order"
+ORDERS+=("$TMP/split/bytecode.order" "$TMP/whole/bytecode.order")
+REGEXPS=("$TMP/split/regexps.txt" "$TMP/whole/regexps.txt")
+if [ -n "$WITH" ]; then
+	[ -f "$WITH/bytecode.order" ] && [ -f "$WITH/regexps.txt" ] || die "--with: $WITH is not a profile (bytecode.order, regexps.txt)"
+	ORDERS+=("$WITH/bytecode.order")
+	REGEXPS+=("$WITH/regexps.txt")
+fi
+python3 "$PIBOLT_ROOT/scripts/lib/merge_orders.py" "${ORDERS[@]}" >"$TMP/bytecode.order"
+sort -u "${REGEXPS[@]}" >"$TMP/regexps.txt"
 mv "$TMP/bytecode.order" "$OUT/bytecode.order"
-sort -u "$TMP/split/regexps.txt" "$TMP/whole/regexps.txt" >"$OUT/regexps.txt"
+mv "$TMP/regexps.txt" "$OUT/regexps.txt"
 log "profile: $OUT ($(wc -l < "$OUT/regexps.txt") regular expressions)"
