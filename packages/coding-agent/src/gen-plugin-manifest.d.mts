@@ -1,4 +1,4 @@
-/** The types of gen-plugin-manifest.mjs, which `pi-bolt compile` (packages/coding-agent/src/pi-bolt-compile.ts) imports. */
+/** The types of gen-plugin-manifest.mjs, which `pi-bolt compile` (pi-bolt-compile.ts) imports. */
 
 /** An extension the plan compiles in. */
 export interface PlannedPlugin {
@@ -56,3 +56,4 @@ export function rewriteCopy(source: string, file: string): string;
 export function renderManifest(plan: Pick<PluginPlan, "plugins" | "roots">): string;
 export function writePluginFolder(plan: PluginPlan, out: string): string;
 export function defaultAgentDir(env?: Record<string, string | undefined>): string;
+export function main(argv: string[]): void;

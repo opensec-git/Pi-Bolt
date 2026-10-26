@@ -32,12 +32,12 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import chalk from "chalk";
-import { namesPlugin, type PluginPlan, planPlugins, selectionProblem } from "../../../scripts/gen-plugin-manifest.mjs";
 import { getAgentDir } from "./config.ts";
 import { type CompiledExtensionSource, extensionFingerprint } from "./core/extensions/compiled.ts";
 import { DefaultPackageManager } from "./core/package-manager.ts";
 import { getPackageIdentity } from "./core/package-source.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
+import { namesPlugin, type PluginPlan, planPlugins, selectionProblem } from "./gen-plugin-manifest.mjs";
 import {
 	PIBOLT,
 	PIBOLT_RELEASE_KEY,
@@ -1229,7 +1229,7 @@ async function compile(options: CompileOptions, record: CompileSelection | undef
 			);
 		}
 
-		// The extensions installed here, copied into the kit's tree with a manifest (scripts/gen-plugin-manifest.mjs).
+		// The extensions installed here, copied into the kit's tree with a manifest (the kit's gen-plugin-manifest.mjs, this release's).
 		const staging = join(kitDir, kit.agent, ".pibolt-plugins");
 		rmSync(staging, { recursive: true, force: true });
 		mkdirSync(staging, { recursive: true });

@@ -1,5 +1,6 @@
 /**
- * Covers gen-plugin-manifest.mjs, and in particular the discovery rules it repeats from Pi.
+ * Covers gen-plugin-manifest.mjs (packages/coding-agent/src/, run by scripts/gen-plugin-manifest.mjs), and in particular
+ * the discovery rules it repeats from Pi.
  *
  * Those rules are Pi's: packages/coding-agent/src/core/extensions/loader.ts, `discoverExtensionsInDir` and
  * `resolveExtensionEntries`. The generator cannot import them, because they are private to Pi and this script belongs to
@@ -37,7 +38,7 @@ import {
 	rewriteCopy,
 	selectionProblem,
 	writePluginFolder,
-} from "./gen-plugin-manifest.mjs";
+} from "../packages/coding-agent/src/gen-plugin-manifest.mjs";
 
 const temporary = [];
 function scratch(prefix = "pibolt-plugins-") {
@@ -1266,12 +1267,14 @@ describe("the command", () => {
 		assert.match(result.stderr, /^error: no extension is named @mariozechner\/pi-tui\. The extensions here are hello /);
 	});
 
-	it("runs when started through a link to it, as /var is to /private/var on macOS", () => {
-		const link = join(scratch(), "gen-plugin-manifest.mjs");
-		symlinkSync(fileURLToPath(new URL("./gen-plugin-manifest.mjs", import.meta.url)), link);
-		const result = spawnSync(process.execPath, [link, "--help"], { encoding: "utf8" });
-		assert.equal(result.status, 0, result.stderr);
-		assert.match(result.stdout, /^Usage: scripts\/gen-plugin-manifest\.mjs/);
+	it("runs when started through a link to it, as /var is to /private/var on macOS: in a checkout and in a kit", () => {
+		for (const file of ["./gen-plugin-manifest.mjs", "../packages/coding-agent/src/gen-plugin-manifest.mjs"]) {
+			const link = join(scratch(), "gen-plugin-manifest.mjs");
+			symlinkSync(fileURLToPath(new URL(file, import.meta.url)), link);
+			const result = spawnSync(process.execPath, [link, "--help"], { encoding: "utf8" });
+			assert.equal(result.status, 0, result.stderr);
+			assert.match(result.stdout, /^Usage: scripts\/gen-plugin-manifest\.mjs/, file);
+		}
 	});
 });
 
