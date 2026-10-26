@@ -1102,12 +1102,16 @@ async function searchInPieces(
 	} catch {
 		return undefined;
 	}
+	// The read of the next piece, started while this one is searched (-1: it failed).
+	let next: Promise<number> | undefined;
 	try {
 		if (!(await handle.stat()).isFile()) return undefined;
 		const found: NativeGrepMatch[] = [];
 		// `buffer` holds the file from `bufferAt` on: up to `kept`, the start of a line no piece so far has ended; the next
-		// piece is read after it, from `readAt`.
-		let buffer = Buffer.allocUnsafe(pieceBytes);
+		// piece is read after it, from `readAt`. The next piece is read into `spare` while this one is searched, after the
+		// rest of the line it ends inside of, and the two change places.
+		let buffer: Buffer = Buffer.allocUnsafe(pieceBytes);
+		let spare: Buffer | undefined;
 		let kept = 0;
 		let bufferAt = 0;
 		let readAt = 0;
@@ -1117,16 +1121,22 @@ async function searchInPieces(
 		let again: Buffer | undefined;
 		for (;;) {
 			if (turns.due()) await turns.check();
-			if (buffer.length - kept < pieceBytes) {
-				const larger = Buffer.allocUnsafe(Math.max(kept + pieceBytes, 2 * buffer.length));
-				buffer.copy(larger, 0, 0, kept);
-				buffer = larger;
-			}
 			let bytesRead: number;
-			try {
-				({ bytesRead } = await handle.read(buffer, kept, pieceBytes, readAt));
-			} catch {
-				return undefined;
+			if (next) {
+				bytesRead = await next;
+				next = undefined;
+				if (bytesRead === -1) return undefined;
+			} else {
+				if (buffer.length - kept < pieceBytes) {
+					const larger = Buffer.allocUnsafe(Math.max(kept + pieceBytes, 2 * buffer.length));
+					buffer.copy(larger, 0, 0, kept);
+					buffer = larger;
+				}
+				try {
+					({ bytesRead } = await handle.read(buffer, kept, pieceBytes, readAt));
+				} catch {
+					return undefined;
+				}
 			}
 			readAt += bytesRead;
 			const filled = kept + bytesRead;
@@ -1141,6 +1151,16 @@ async function searchInPieces(
 				continue;
 			}
 			const lines = buffer.subarray(0, upTo);
+			if (!end) {
+				const rest = filled - upTo;
+				if (!spare || spare.length < rest + pieceBytes) spare = Buffer.allocUnsafe(rest + pieceBytes + (rest >> 1));
+				buffer.copy(spare, 0, upTo, filled);
+				next = handle.read(spare, rest, pieceBytes, readAt).then(
+					(result) => result.bytesRead,
+					() => -1,
+				);
+				kept = rest;
+			}
 			// (Not the nothing after a last line break: as in a file read whole, there is no line there.)
 			if (
 				lines.length > 0 &&
@@ -1173,11 +1193,11 @@ async function searchInPieces(
 				}
 			}
 			if (end) return found;
-			buffer.copyWithin(0, upTo, filled);
-			kept = filled - upTo;
 			bufferAt += upTo;
+			[buffer, spare] = [spare ?? buffer, buffer];
 		}
 	} finally {
+		await next;
 		await handle.close().catch(() => {});
 	}
 }
