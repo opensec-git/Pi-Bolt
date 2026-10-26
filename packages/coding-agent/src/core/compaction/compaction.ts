@@ -9,6 +9,7 @@ import type { AgentMessage, StreamFn, ThinkingLevel } from "@earendil-works/pi-a
 import {
 	contentText,
 	getCurrentSystemMessage,
+	type Message,
 	normalizeContext,
 	type RetryCallbacks,
 	type RetryPolicy,
@@ -17,13 +18,15 @@ import {
 } from "@earendil-works/pi-ai";
 import type {
 	AssistantMessage,
+	ImageContent,
 	Model,
 	SimpleStreamOptions,
 	SystemMessage,
+	TextContent,
 	TranscriptContext,
 	Usage,
 } from "@earendil-works/pi-ai/compat";
-import { completeSimple } from "@earendil-works/pi-ai/compat";
+import { completeSimple, isContextOverflow } from "@earendil-works/pi-ai/compat";
 import { convertToLlm } from "../messages.ts";
 import {
 	buildSessionProjection,
@@ -346,6 +349,31 @@ export function estimateTokens(message: AgentMessage): number {
 	}
 
 	return 0;
+}
+
+/** Keep the start and end of `text` within `maxChars`, with a marker for the omitted middle. */
+function truncateMiddle(text: string, maxChars: number): string {
+	const half = Math.floor(maxChars / 2);
+	const head = splitIndex(text, half);
+	const tail = tailStart(text, half);
+	return `${text.slice(0, head)}\n\n[... ${tail - head} characters omitted to fit the model's context window ...]\n\n${text.slice(tail)}`;
+}
+
+/**
+ * Shorten message content to about `maxChars` estimated characters for context overflow recovery.
+ * Text keeps its start and end around a marker; images become text markers. Returns undefined
+ * when the content already fits.
+ */
+export function truncateContentForContext(
+	content: string | Array<TextContent | ImageContent>,
+	maxChars: number,
+): string | TextContent[] | undefined {
+	if (estimateTextAndImageContentChars(content) <= maxChars) return undefined;
+	if (typeof content === "string") return truncateMiddle(content, maxChars);
+	const text = content
+		.map((block) => (block.type === "text" ? block.text : "[image omitted to fit the model's context window]"))
+		.join("\n");
+	return [{ type: "text", text: text.length > maxChars ? truncateMiddle(text, maxChars) : text }];
 }
 
 function isCutPointMessage(message: AgentMessage): boolean {
@@ -727,25 +755,6 @@ export async function generateSummaryWithUsage(
 	sessionId?: string,
 ): Promise<{ text: string; usage: Usage }> {
 	const maxTokens = getSummaryMaxTokens(model, reserveTokens, 0.8);
-
-	// Use update prompt if we have a previous summary, otherwise initial prompt
-	let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
-	if (customInstructions) {
-		basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
-	}
-
-	// Serialize conversation to text so model doesn't try to continue it
-	// Convert to LLM messages first (handles custom types like bashExecution, custom, etc.)
-	const llmMessages = convertToLlm(currentMessages);
-	const conversationText = serializeConversation(llmMessages);
-
-	// Build the prompt with conversation wrapped in tags
-	let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
-	if (previousSummary) {
-		promptText += `<previous-summary>\n${previousSummary}\n</previous-summary>\n\n`;
-	}
-	promptText += basePrompt;
-
 	const completionOptions = createSummarizationOptions(
 		model,
 		maxTokens,
@@ -757,26 +766,223 @@ export async function generateSummaryWithUsage(
 		sessionId,
 	);
 
-	const response = await completeSummarization(
-		model,
-		buildSummarizationContext(promptText),
-		completionOptions,
-		streamFn,
-		retry,
-		callbacks,
-	);
+	return summarizeWithinWindow(currentMessages, previousSummary, model, maxTokens, {
+		label: "Summarization",
+		signal,
+		buildPrompt: (conversationText, summary) => {
+			// Use update prompt if we have a previous summary, otherwise initial prompt
+			let basePrompt = summary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
+			if (customInstructions) {
+				basePrompt = `${basePrompt}\n\nAdditional focus: ${customInstructions}`;
+			}
+			// Build the prompt with conversation wrapped in tags
+			let promptText = `<conversation>\n${conversationText}\n</conversation>\n\n`;
+			if (summary) {
+				promptText += `<previous-summary>\n${summary}\n</previous-summary>\n\n`;
+			}
+			return promptText + basePrompt;
+		},
+		send: (promptText) =>
+			completeSummarization(
+				model,
+				buildSummarizationContext(promptText),
+				completionOptions,
+				streamFn,
+				retry,
+				callbacks,
+			),
+	});
+}
 
-	const failure = getSummarizationFailure(response, "Summarization");
+// ============================================================================
+// Summary requests that fit the summarizer's context window
+// ============================================================================
+
+/** One kind of summary request: how to build its prompt and send it. */
+interface SummaryRequest {
+	/** Prefix for error messages, e.g. "Summarization" */
+	label: string;
+	signal: AbortSignal | undefined;
+	/** Build the prompt for serialized conversation text, optionally updating an earlier summary. */
+	buildPrompt(conversationText: string, previousSummary: string | undefined): string;
+	send(promptText: string): Promise<AssistantMessage>;
+}
+
+/**
+ * Below this many tokens of room for conversation text, a summary request is not split any
+ * further and summarization fails.
+ */
+const MIN_SUMMARY_CHUNK_TOKENS = 1024;
+/** Smallest input budget a summary request is split for; below it, the single request is sent as before. */
+const MIN_SUMMARY_SPLIT_TOKENS = 8192;
+/** Most requests a split summary makes. Older history beyond them is omitted with a marker. */
+const MAX_SUMMARY_CHUNKS = 12;
+/** Most times a split summary halves its budget because the provider still reports an overflow. */
+const MAX_SUMMARY_BUDGET_HALVINGS = 6;
+
+/** Estimated input tokens of a summary request: system prompt plus prompt text, chars/4 like {@link estimateTokens}. */
+function estimateSummaryRequestTokens(promptText: string): number {
+	return Math.ceil((SUMMARIZATION_SYSTEM_PROMPT.length + promptText.length) / 4);
+}
+
+function readSummary(response: AssistantMessage, label: string): { text: string; usage: Usage } {
+	const failure = getSummarizationFailure(response, label);
 	if (failure) {
 		throw new Error(failure);
 	}
 	if (response.content.some((block) => block.type === "toolCall")) {
-		throw new Error("Summarization attempted to call a tool");
+		throw new Error(`${label} attempted to call a tool`);
+	}
+	return { text: contentText(response.content), usage: response.usage };
+}
+
+/**
+ * Summarize messages in one request when it fits the summarizer's context window, as before.
+ * A request that is estimated not to fit, or that the provider rejects as too long, is split
+ * into smaller requests by {@link foldSummary} instead of failing (earendil-works/pi#11281).
+ */
+async function summarizeWithinWindow(
+	messages: AgentMessage[],
+	previousSummary: string | undefined,
+	model: Model<any>,
+	maxTokens: number,
+	request: SummaryRequest,
+): Promise<{ text: string; usage: Usage }> {
+	// Serialize conversation to text so model doesn't try to continue it
+	// Convert to LLM messages first (handles custom types like bashExecution, custom, etc.)
+	const llmMessages = convertToLlm(messages);
+	const promptText = request.buildPrompt(serializeConversation(llmMessages), previousSummary);
+	const requestTokens = estimateSummaryRequestTokens(promptText);
+	const windowBudget = model.contextWindow > 0 ? model.contextWindow - maxTokens : undefined;
+	if (windowBudget !== undefined && windowBudget >= MIN_SUMMARY_SPLIT_TOKENS && requestTokens > windowBudget) {
+		return foldSummary(llmMessages, previousSummary, windowBudget, request);
 	}
 
-	const textContent = contentText(response.content);
+	const response = await request.send(promptText);
+	if (!isContextOverflow(response)) {
+		return readSummary(response, request.label);
+	}
+	// The summarizer's real limit is below this request: a declared window can be larger than the
+	// served one, and chars/4 underestimates some text (for example CJK). Retrying the same request
+	// cannot succeed, so split it into requests of at most half its estimated size.
+	const budget = Math.floor(requestTokens / 2);
+	if (budget < MIN_SUMMARY_SPLIT_TOKENS) return readSummary(response, request.label);
+	const folded = await foldSummary(llmMessages, previousSummary, budget, request);
+	return { text: folded.text, usage: combineUsage(response.usage, folded.usage) };
+}
 
-	return { text: textContent, usage: response.usage };
+/** Index at most `maxChars` into `text` that does not split a surrogate pair. */
+function splitIndex(text: string, maxChars: number): number {
+	const index = Math.max(1, Math.min(maxChars, text.length));
+	const code = text.charCodeAt(index - 1);
+	return code >= 0xd800 && code <= 0xdbff && index > 1 ? index - 1 : index;
+}
+
+/** Start index of the last `maxChars` of `text` that does not split a surrogate pair. */
+function tailStart(text: string, maxChars: number): number {
+	const start = Math.max(0, text.length - maxChars);
+	const code = text.charCodeAt(start);
+	return code >= 0xdc00 && code <= 0xdfff ? start + 1 : start;
+}
+
+/**
+ * Summarize messages in consecutive requests that each fit `budget` input tokens, folding each
+ * request's summary into the next one as its previous summary. A message larger than one request
+ * is split across requests. A previous summary too large to carry is summarized as history. When
+ * more than {@link MAX_SUMMARY_CHUNKS} requests would be needed, the oldest messages are omitted
+ * with a marker. A request the provider still rejects as too long is retried with half the budget.
+ */
+async function foldSummary(
+	messages: Message[],
+	previousSummary: string | undefined,
+	initialBudget: number,
+	request: SummaryRequest,
+): Promise<{ text: string; usage: Usage }> {
+	let budget = initialBudget;
+	let pieces = messages.map((message) => serializeConversation([message])).filter((piece) => piece.length > 0);
+	let summary = previousSummary || undefined;
+	if (summary && estimateSummaryRequestTokens(request.buildPrompt("", summary)) > budget / 2) {
+		pieces = [`[Previous summary]:\n${summary}`, ...pieces];
+		summary = undefined;
+	}
+
+	let usage: Usage | undefined;
+	let requests = 0;
+	let halvings = 0;
+	let omitted = 0;
+	while (pieces.length > 0) {
+		request.signal?.throwIfAborted();
+		const roomTokens = budget - estimateSummaryRequestTokens(request.buildPrompt("", summary));
+		if (roomTokens < MIN_SUMMARY_CHUNK_TOKENS) {
+			throw new Error(`${request.label} failed: the summary request does not fit the model's context window`);
+		}
+		const roomChars = roomTokens * 4;
+
+		// Omit the oldest messages that the remaining requests cannot cover.
+		const allowedChars = (MAX_SUMMARY_CHUNKS - requests) * roomChars;
+		let keptChars = 0;
+		let keepFrom = pieces.length;
+		while (keepFrom > 0 && keptChars + pieces[keepFrom - 1].length + 2 <= allowedChars) {
+			keepFrom--;
+			keptChars += pieces[keepFrom].length + 2;
+		}
+		if (keepFrom === pieces.length) {
+			// The newest message alone needs more requests than remain: keep its end.
+			const newest = pieces[pieces.length - 1];
+			const start = tailStart(newest, allowedChars);
+			pieces[pieces.length - 1] = `[... ${start} earlier characters omitted]\n${newest.slice(start)}`;
+			keepFrom = pieces.length - 1;
+		}
+		if (keepFrom > 0) {
+			omitted += keepFrom;
+			pieces = pieces.slice(keepFrom);
+		}
+
+		const marker =
+			omitted > 0
+				? `[${omitted} earlier messages omitted: they did not fit the summarizer's context window]`
+				: undefined;
+		const parts: string[] = marker ? [marker] : [];
+		let usedChars = marker ? marker.length : 0;
+		let taken = 0;
+		let remainder: string | undefined;
+		for (const piece of pieces) {
+			const separator = parts.length > 0 ? 2 : 0;
+			if (usedChars + separator + piece.length <= roomChars) {
+				parts.push(piece);
+				usedChars += separator + piece.length;
+				taken++;
+				continue;
+			}
+			if (taken === 0) {
+				// A message larger than one request: send its start now and the rest next.
+				const cut = splitIndex(piece, roomChars - usedChars - separator);
+				parts.push(piece.slice(0, cut));
+				remainder = `[... continued]: ${piece.slice(cut)}`;
+				taken = 1;
+			}
+			break;
+		}
+
+		const response = await request.send(request.buildPrompt(parts.join("\n\n"), summary));
+		usage = usage ? combineUsage(usage, response.usage) : response.usage;
+		if (isContextOverflow(response)) {
+			if (++halvings > MAX_SUMMARY_BUDGET_HALVINGS) {
+				throw new Error(getSummarizationFailure(response, request.label));
+			}
+			budget = Math.floor(budget / 2);
+			continue;
+		}
+		summary = readSummary(response, request.label).text;
+		pieces = remainder === undefined ? pieces.slice(taken) : [remainder, ...pieces.slice(taken)];
+		requests++;
+		omitted = 0;
+	}
+
+	if (summary === undefined || usage === undefined) {
+		throw new Error(`${request.label} failed: nothing to summarize`);
+	}
+	return { text: summary, usage };
 }
 
 // ============================================================================
@@ -1069,8 +1275,8 @@ export async function compact(
 	}
 
 	// Compute file lists and append to summary
-	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-	summary += formatFileOperations(readFiles, modifiedFiles);
+	const { readFiles, modifiedFiles, omittedReadFiles, omittedModifiedFiles } = computeFileLists(fileOps);
+	summary += formatFileOperations(readFiles, modifiedFiles, omittedReadFiles, omittedModifiedFiles);
 
 	if (!firstKeptEntryId) {
 		throw new Error("First kept entry has no UUID - session may need migration");
@@ -1104,32 +1310,21 @@ async function generateTurnPrefixSummary(
 	customInstructions?: string,
 ): Promise<{ text: string; usage: Usage }> {
 	const maxTokens = getSummaryMaxTokens(model, reserveTokens, 0.5); // Smaller budget for turn prefix
-	const llmMessages = convertToLlm(messages);
-	const conversationText = serializeConversation(llmMessages);
-	let promptText = `# Conversation\n${conversationText}\n\n# Instructions\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
-	if (customInstructions) {
-		promptText = `${promptText}\n\nAdditional focus: ${customInstructions}`;
-	}
-
-	const response = await completeSummarization(
-		model,
-		buildSummarizationContext(promptText),
-		createSummarizationOptions(model, maxTokens, apiKey, headers, env, signal, thinkingLevel, sessionId),
-		streamFn,
-		retry,
-		callbacks,
-	);
-
-	const failure = getSummarizationFailure(response, "Turn prefix summarization");
-	if (failure) {
-		throw new Error(failure);
-	}
-	if (response.content.some((block) => block.type === "toolCall")) {
-		throw new Error("Turn prefix summarization attempted to call a tool");
-	}
-
-	return {
-		text: contentText(response.content),
-		usage: response.usage,
-	};
+	const options = createSummarizationOptions(model, maxTokens, apiKey, headers, env, signal, thinkingLevel, sessionId);
+	return summarizeWithinWindow(messages, undefined, model, maxTokens, {
+		label: "Turn prefix summarization",
+		signal,
+		buildPrompt: (conversationText, checkpoint) => {
+			// A split request carries the checkpoint of the turn's earlier messages forward.
+			let promptText = checkpoint
+				? `# Earlier checkpoint\n${checkpoint}\n\n# Conversation\n${conversationText}\n\n# Instructions\n${TURN_PREFIX_SUMMARIZATION_PROMPT}\n\nThe earlier checkpoint covers the messages before the ones above. Update it with the messages above, in the same format.`
+				: `# Conversation\n${conversationText}\n\n# Instructions\n${TURN_PREFIX_SUMMARIZATION_PROMPT}`;
+			if (customInstructions) {
+				promptText = `${promptText}\n\nAdditional focus: ${customInstructions}`;
+			}
+			return promptText;
+		},
+		send: (promptText) =>
+			completeSummarization(model, buildSummarizationContext(promptText), options, streamFn, retry, callbacks),
+	});
 }

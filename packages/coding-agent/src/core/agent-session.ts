@@ -68,6 +68,7 @@ import type { CacheWarmer, CacheWarmingStatus } from "./cache-warmer.ts";
 import {
 	type CompactionPreparation,
 	type CompactionResult,
+	type CompactionSettings,
 	calculateContextTokens,
 	collectEntriesForBranchSummary,
 	compact,
@@ -77,6 +78,7 @@ import {
 	generateBranchSummary,
 	prepareCompaction,
 	shouldCompact,
+	truncateContentForContext,
 } from "./compaction/index.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
@@ -398,6 +400,29 @@ function estimateMessagesTokens(messages: AgentMessage[]): number {
 	return tokens;
 }
 
+/**
+ * Context overflow recovery steps, used in order while the retried request still overflows. Step 0
+ * is the ordinary compaction. Later steps keep a smaller recent tail and shorten messages in it that
+ * are larger than `messageTokenCap`, so each retry is smaller instead of repeating the request that
+ * overflowed. The kept tail can be too large when it holds a huge tool result or pasted text, when
+ * replayed reasoning or CJK text is underestimated, or when the provider serves a smaller window
+ * than the model declares.
+ */
+const OVERFLOW_RECOVERY_STEPS = 3;
+
+function getOverflowRecoveryStep(
+	settings: CompactionSettings,
+	step: number,
+): { keepRecentTokens: number; messageTokenCap?: number; shortenUserMessages: boolean } {
+	if (step === 0) return { keepRecentTokens: settings.keepRecentTokens, shortenUserMessages: false };
+	if (step === 1) {
+		const keepRecentTokens = Math.floor(settings.keepRecentTokens / 4);
+		return { keepRecentTokens, messageTokenCap: Math.max(keepRecentTokens, 2000), shortenUserMessages: false };
+	}
+	// Last step: keep only the latest turn's tail, and shorten user messages too.
+	return { keepRecentTokens: 0, messageTokenCap: 1000, shortenUserMessages: true };
+}
+
 // ============================================================================
 // AgentSession Class
 // ============================================================================
@@ -429,7 +454,8 @@ export class AgentSession {
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
-	private _overflowRecoveryAttempted = false;
+	/** Overflow recovery steps taken since the last user message or successful response */
+	private _overflowRecoveryAttempts = 0;
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -1209,7 +1235,7 @@ export class AgentSession {
 		// When a user message starts, check if it's from either queue and remove it BEFORE emitting
 		// This ensures the UI sees the updated queue state
 		if (event.type === "message_start" && event.message.role === "user") {
-			this._overflowRecoveryAttempted = false;
+			this._overflowRecoveryAttempts = 0;
 			const messageText = contentText(event.message.content, "");
 			if (messageText) {
 				// Check steering queue first
@@ -1267,7 +1293,7 @@ export class AgentSession {
 				const assistantMsg = event.message as AssistantMessage;
 				this._lastAssistantMessage = assistantMsg;
 				if (assistantMsg.stopReason !== "error" && assistantMsg.stopReason !== "length") {
-					this._overflowRecoveryAttempted = false;
+					this._overflowRecoveryAttempts = 0;
 				}
 
 				// Reset retry counter immediately on successful assistant response
@@ -3188,32 +3214,22 @@ export class AgentSession {
 				return await this._runAutoCompaction("overflow", false);
 			}
 
-			if (this._overflowRecoveryAttempted) {
-				const errorMessage = contextOverflow
-					? "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model."
-					: "Truncated response recovery failed after one compact-and-retry attempt.";
-				this._emit({
-					type: "compaction_end",
-					reason: "overflow",
-					result: undefined,
-					aborted: false,
-					willRetry: false,
-					errorMessage,
-				});
-				await this._emitSessionCompactFailed({
-					reason: "overflow",
-					errorMessage,
-					aborted: false,
-					willRetry: false,
-					fromExtension: false,
-				});
+			// A truncated response gets one compact-and-retry attempt. A context overflow gets one per
+			// recovery step, each building a smaller request than the one that overflowed.
+			const attempts = this._overflowRecoveryAttempts;
+			if (attempts > 0 && (!contextOverflow || attempts >= OVERFLOW_RECOVERY_STEPS)) {
+				await this._emitOverflowRecoveryFailure(
+					contextOverflow
+						? `Context overflow recovery failed after ${attempts} compact-and-retry attempts: even the smallest context Pi can build (system prompt, summary and the latest messages, with large messages shortened) exceeds the model's limit. Try switching to a larger-context model or starting a new session.`
+						: "Truncated response recovery failed after one compact-and-retry attempt.",
+				);
 				return false;
 			}
 
 			// Persistently omit the selected final attempt before post-run recovery compaction.
-			this._overflowRecoveryAttempted = true;
+			this._overflowRecoveryAttempts++;
 			this._omitRecoveryAttempt(assistantMessage);
-			const retry = await this._runAutoCompaction("overflow", willRetry);
+			const retry = await this._runAutoCompaction("overflow", willRetry, contextOverflow ? attempts : undefined);
 			if (retry) this._failedResponse = assistantMessage;
 			return retry;
 		}
@@ -3256,6 +3272,67 @@ export class AgentSession {
 		return false;
 	}
 
+	private async _emitOverflowRecoveryFailure(errorMessage: string): Promise<void> {
+		this._emit({
+			type: "compaction_end",
+			reason: "overflow",
+			result: undefined,
+			aborted: false,
+			willRetry: false,
+			errorMessage,
+		});
+		await this._emitSessionCompactFailed({
+			reason: "overflow",
+			errorMessage,
+			aborted: false,
+			willRetry: false,
+			fromExtension: false,
+		});
+	}
+
+	/**
+	 * Shorten projected messages above `messageTokenCap` estimated tokens with context edits, so the
+	 * retried request is smaller. Tool results and custom messages are shortened, and user messages
+	 * when `shortenUserMessages` is set. Returns whether any message was shortened.
+	 */
+	private _shortenOversizedMessages(messageTokenCap: number, shortenUserMessages: boolean): boolean {
+		let shortened = false;
+		for (const entry of this.sessionManager.buildSessionProjection().entries) {
+			const source = entry.sourceEntry;
+			const message = entry.messages[0];
+			if ((source.type !== "message" && source.type !== "custom_message") || entry.messages.length !== 1) continue;
+			if (message.role !== "toolResult" && message.role !== "custom" && message.role !== "user") continue;
+			if (message.role === "user" && !shortenUserMessages) continue;
+			if (estimateTokens(message) <= messageTokenCap) continue;
+			const content = truncateContentForContext(message.content, messageTokenCap * 4);
+			if (content === undefined) continue;
+			const editId = this.sessionManager.appendContextEdit(source.id, { content });
+			const edit = this.sessionManager.getEntry(editId);
+			if (edit) this._emit({ type: "entry_appended", entry: edit });
+			shortened = true;
+		}
+		if (shortened) this._refreshFinalizedContext();
+		return shortened;
+	}
+
+	/**
+	 * Shorten oversized messages when overflow recovery has nothing left to compact. Uses the first
+	 * step from `step` on that shortens something, and reports a failure when none does.
+	 */
+	private async _shortenForOverflowRetry(settings: CompactionSettings, step: number): Promise<boolean> {
+		for (let next = Math.max(step, 1); next < OVERFLOW_RECOVERY_STEPS; next++) {
+			const { messageTokenCap, shortenUserMessages } = getOverflowRecoveryStep(settings, next);
+			if (messageTokenCap !== undefined && this._shortenOversizedMessages(messageTokenCap, shortenUserMessages)) {
+				this._overflowRecoveryAttempts = next + 1;
+				return true;
+			}
+		}
+		await this._emitOverflowRecoveryFailure(
+			"Context overflow recovery failed: there is nothing left to compact and no message large enough to shorten. Try switching to a larger-context model or starting a new session.",
+		);
+		return false;
+	}
+
 	/**
 	 * Execute threshold or overflow compaction. Manual compaction uses
 	 * `AgentSession.compact()` instead. Both paths call the lower-level `compact()`
@@ -3264,11 +3341,21 @@ export class AgentSession {
 	 *
 	 * @param reason Automatic trigger selected by `_checkCompaction()`
 	 * @param willRetry Whether to continue the interrupted turn after overflow compaction
+	 * @param recoveryStep Context overflow recovery step (see `getOverflowRecoveryStep()`), when retrying after an overflow
 	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
-	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+	private async _runAutoCompaction(
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		recoveryStep?: number,
+	): Promise<boolean> {
 		const model = this.model;
-		const settings = this.settingsManager.getCompactionSettings(model);
+		const baseSettings = this.settingsManager.getCompactionSettings(model);
+		const recovery = recoveryStep === undefined ? undefined : getOverflowRecoveryStep(baseSettings, recoveryStep);
+		const settings =
+			recovery && recovery.keepRecentTokens !== baseSettings.keepRecentTokens
+				? { ...baseSettings, keepRecentTokens: recovery.keepRecentTokens }
+				: baseSettings;
 		let abortController: AbortController | undefined;
 		let started = false;
 		let fromExtension = false;
@@ -3282,7 +3369,7 @@ export class AgentSession {
 			const pathEntries = this.sessionManager.getBranch();
 			const preparation = prepareCompaction(pathEntries, settings);
 			if (!preparation) {
-				return false;
+				return recoveryStep === undefined ? false : await this._shortenForOverflowRetry(baseSettings, recoveryStep);
 			}
 
 			abortController = new AbortController();
@@ -3349,6 +3436,9 @@ export class AgentSession {
 			this.sessionManager.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, fromExtension, usage);
 			const newEntries = this.sessionManager.getEntries();
 			this._refreshFinalizedContext();
+			if (recovery?.messageTokenCap !== undefined) {
+				this._shortenOversizedMessages(recovery.messageTokenCap, recovery.shortenUserMessages);
+			}
 			const estimatedTokensAfter = estimateMessagesTokens(this.sessionManager.buildSessionProjection().messages);
 
 			// Get the saved compaction entry for the extension event

@@ -17,7 +17,11 @@ import { createHarness, getUserTexts, type Harness } from "./harness.ts";
 
 type SessionWithCompactionInternals = {
 	_checkCompaction: (assistantMessage: AssistantMessage, skipAbortedCheck?: boolean) => Promise<boolean>;
-	_runAutoCompaction: (reason: "overflow" | "threshold", willRetry: boolean) => Promise<boolean>;
+	_runAutoCompaction: (
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		recoveryStep?: number,
+	) => Promise<boolean>;
 };
 
 function createUsage(totalTokens: number) {
@@ -723,13 +727,18 @@ describe("AgentSession compaction characterization", () => {
 			}
 		});
 
-		await sessionInternals._checkCompaction(lengthOverflowMessage);
-		await sessionInternals._checkCompaction({ ...lengthOverflowMessage, timestamp: Date.now() + 1 });
+		for (let attempt = 0; attempt < 4; attempt++) {
+			await sessionInternals._checkCompaction({ ...lengthOverflowMessage, timestamp: Date.now() + attempt });
+		}
 
-		expect(runAutoCompactionSpy).toHaveBeenCalledTimes(1);
-		expect(compactionErrors).toContain(
-			"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
-		);
+		expect(runAutoCompactionSpy.mock.calls).toEqual([
+			["overflow", true, 0],
+			["overflow", true, 1],
+			["overflow", true, 2],
+		]);
+		expect(compactionErrors).toEqual([
+			expect.stringMatching(/^Context overflow recovery failed after 3 compact-and-retry attempts/),
+		]);
 	});
 
 	it("cancels in-progress manual compaction when abortCompaction is called", async () => {
@@ -802,7 +811,8 @@ describe("AgentSession compaction characterization", () => {
 		await expect(sessionInternals._runAutoCompaction("threshold", false)).resolves.toBe(true);
 	});
 
-	it("does not retry overflow recovery more than once", async () => {
+	// earendil-works/pi#11281: each further attempt uses the next, smaller recovery step, up to the last one.
+	it("stops overflow recovery after the last recovery step", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
 		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
@@ -819,13 +829,18 @@ describe("AgentSession compaction characterization", () => {
 			}
 		});
 
-		await sessionInternals._checkCompaction(overflowMessage);
-		await sessionInternals._checkCompaction({ ...overflowMessage, timestamp: Date.now() + 1 });
+		for (let attempt = 0; attempt < 4; attempt++) {
+			await sessionInternals._checkCompaction({ ...overflowMessage, timestamp: Date.now() + attempt });
+		}
 
-		expect(runAutoCompactionSpy).toHaveBeenCalledTimes(1);
-		expect(compactionErrors).toContain(
-			"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
-		);
+		expect(runAutoCompactionSpy.mock.calls).toEqual([
+			["overflow", true, 0],
+			["overflow", true, 1],
+			["overflow", true, 2],
+		]);
+		expect(compactionErrors).toEqual([
+			"Context overflow recovery failed after 3 compact-and-retry attempts: even the smallest context Pi can build (system prompt, summary and the latest messages, with large messages shortened) exceeds the model's limit. Try switching to a larger-context model or starting a new session.",
+		]);
 	});
 
 	it("compacts successful overflow responses without retrying", async () => {

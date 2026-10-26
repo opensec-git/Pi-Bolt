@@ -22,6 +22,11 @@ describe("compaction file operations", () => {
 		};
 		const fileOps = createFileOps();
 		extractFileOpsFromMessage(result, fileOps);
-		expect(computeFileLists(fileOps)).toEqual({ readFiles: ["a.ts"], modifiedFiles: ["b.ts"] });
+		expect(computeFileLists(fileOps)).toEqual({
+			readFiles: ["a.ts"],
+			modifiedFiles: ["b.ts"],
+			omittedReadFiles: 0,
+			omittedModifiedFiles: 0,
+		});
 	});
 });

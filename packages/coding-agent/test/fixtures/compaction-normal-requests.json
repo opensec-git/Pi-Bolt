@@ -1,0 +1,188 @@
+[
+ {
+  "scenario": "initial",
+  "request": 0,
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.",
+    "timestamp": 0
+   },
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "<conversation>\n[User]: turn 1: please work on src/a.ts, src/b.ts, src/c.ts\n\n[Assistant tool calls]: read(path=\"src/a.ts\"); edit(path=\"src/b.ts\"); read(path=\"src/c.ts\")\n\n[Tool result]: contents of src/a.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n[Tool result]: contents of src/b.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n[Tool result]: contents of src/c.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n[Assistant]: done with turn 1\n</conversation>\n\nThe messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.\n\nUse this EXACT format:\n\n## Goal\n[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]\n\n## Constraints & Preferences\n- [Any constraints, preferences, or requirements mentioned by user]\n- [Or \"(none)\" if none were mentioned]\n\n## Progress\n### Done\n- [x] [Completed tasks/changes]\n\n### In Progress\n- [ ] [Current work]\n\n### Blocked\n- [Issues preventing progress, if any]\n\n## Key Decisions\n- **[Decision]**: [Brief rationale]\n\n## Next Steps\n1. [Ordered list of what should happen next]\n\n## Critical Context\n- [Any data, examples, or references needed to continue]\n- [Or \"(none)\" if not applicable]\n\nKeep each section concise. Preserve exact file paths, function names, and error messages."
+     }
+    ],
+    "timestamp": 0
+   }
+  ],
+  "maxTokens": 13107,
+  "cacheRetention": "none"
+ },
+ {
+  "scenario": "initial",
+  "request": 1,
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.",
+    "timestamp": 0
+   },
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "# Conversation\n[User]: turn 2: please work on src/d.ts, src/a.ts\n\n[Assistant tool calls]: read(path=\"src/d.ts\"); edit(path=\"src/a.ts\")\n\n[Tool result]: contents of src/d.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n[Tool result]: contents of src/a.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n# Instructions\nThe messages above are earlier context from an ongoing conversation. Later messages are stored separately and do not need to be reconstructed.\n\nCreate a concise checkpoint of the user's request and the progress shown above. This checkpoint will be placed before the later messages so the conversation can continue with the necessary context.\n\n## Original Request\n[What did the user ask for?]\n\n## Progress So Far\n- [Key decisions and work completed in these messages]\n\n## Context Needed to Continue\n- [Information from these messages needed to understand the later work]\n\nOnly summarize information explicitly present above. Do not infer or recreate later messages."
+     }
+    ],
+    "timestamp": 0
+   }
+  ],
+  "maxTokens": 8192,
+  "cacheRetention": "none"
+ },
+ {
+  "scenario": "initial",
+  "summary": "summary initial 0\n\n---\n\n**Turn Context (split turn):**\n\nsummary initial 1\n\n<read-files>\nsrc/c.ts\nsrc/d.ts\n</read-files>\n\n<modified-files>\nsrc/a.ts\nsrc/b.ts\n</modified-files>",
+  "details": {
+   "readFiles": [
+    "src/c.ts",
+    "src/d.ts"
+   ],
+   "modifiedFiles": [
+    "src/a.ts",
+    "src/b.ts"
+   ]
+  }
+ },
+ {
+  "scenario": "update",
+  "request": 0,
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.",
+    "timestamp": 0
+   },
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "<conversation>\n[Assistant]: done with turn 2\n</conversation>\n\n<previous-summary>\nsummary initial 0\n\n---\n\n**Turn Context (split turn):**\n\nsummary initial 1\n\n<read-files>\nsrc/c.ts\nsrc/d.ts\n</read-files>\n\n<modified-files>\nsrc/a.ts\nsrc/b.ts\n</modified-files>\n</previous-summary>\n\nThe messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.\n\nUpdate the existing structured summary with new information. RULES:\n- PRESERVE all existing information from the previous summary\n- ADD new progress, decisions, and context from the new messages\n- UPDATE the Progress section: move items from \"In Progress\" to \"Done\" when completed\n- UPDATE \"Next Steps\" based on what was accomplished\n- PRESERVE exact file paths, function names, and error messages\n- If something is no longer relevant, you may remove it\n\nUse this EXACT format:\n\n## Goal\n[Preserve existing goals, add new ones if the task expanded]\n\n## Constraints & Preferences\n- [Preserve existing, add new ones discovered]\n\n## Progress\n### Done\n- [x] [Include previously done items AND newly completed items]\n\n### In Progress\n- [ ] [Current work - update based on progress]\n\n### Blocked\n- [Current blockers - remove if resolved]\n\n## Key Decisions\n- **[Decision]**: [Brief rationale] (preserve all previous, add new)\n\n## Next Steps\n1. [Update based on current state]\n\n## Critical Context\n- [Preserve important context, add new if needed]\n\nKeep each section concise. Preserve exact file paths, function names, and error messages.\n\nAdditional focus: focus on tests"
+     }
+    ],
+    "timestamp": 0
+   }
+  ],
+  "maxTokens": 13107,
+  "cacheRetention": "none"
+ },
+ {
+  "scenario": "update",
+  "request": 1,
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.",
+    "timestamp": 0
+   },
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "# Conversation\n[User]: turn 3: please work on src/e.ts, src/b.ts, src/f.ts\n\n[Assistant tool calls]: read(path=\"src/e.ts\"); edit(path=\"src/b.ts\"); read(path=\"src/f.ts\")\n\n[Tool result]: contents of src/e.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n[Tool result]: contents of src/b.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n[Tool result]: contents of src/f.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n# Instructions\nThe messages above are earlier context from an ongoing conversation. Later messages are stored separately and do not need to be reconstructed.\n\nCreate a concise checkpoint of the user's request and the progress shown above. This checkpoint will be placed before the later messages so the conversation can continue with the necessary context.\n\n## Original Request\n[What did the user ask for?]\n\n## Progress So Far\n- [Key decisions and work completed in these messages]\n\n## Context Needed to Continue\n- [Information from these messages needed to understand the later work]\n\nOnly summarize information explicitly present above. Do not infer or recreate later messages.\n\nAdditional focus: focus on tests"
+     }
+    ],
+    "timestamp": 0
+   }
+  ],
+  "maxTokens": 8192,
+  "cacheRetention": "none"
+ },
+ {
+  "scenario": "update",
+  "summary": "summary update 0\n\n---\n\n**Turn Context (split turn):**\n\nsummary update 1\n\n<read-files>\nsrc/c.ts\nsrc/d.ts\nsrc/e.ts\nsrc/f.ts\n</read-files>\n\n<modified-files>\nsrc/a.ts\nsrc/b.ts\n</modified-files>",
+  "details": {
+   "readFiles": [
+    "src/c.ts",
+    "src/d.ts",
+    "src/e.ts",
+    "src/f.ts"
+   ],
+   "modifiedFiles": [
+    "src/a.ts",
+    "src/b.ts"
+   ]
+  }
+ },
+ {
+  "scenario": "split",
+  "request": 0,
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.",
+    "timestamp": 0
+   },
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "<conversation>\n[User]: turn 1: please work on src/a.ts, src/b.ts\n\n[Assistant tool calls]: read(path=\"src/a.ts\"); edit(path=\"src/b.ts\")\n\n[Tool result]: contents of src/a.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n[Tool result]: contents of src/b.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n[Assistant]: done with turn 1\n</conversation>\n\nThe messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.\n\nUse this EXACT format:\n\n## Goal\n[What is the user trying to accomplish? Can be multiple items if the session covers different tasks.]\n\n## Constraints & Preferences\n- [Any constraints, preferences, or requirements mentioned by user]\n- [Or \"(none)\" if none were mentioned]\n\n## Progress\n### Done\n- [x] [Completed tasks/changes]\n\n### In Progress\n- [ ] [Current work]\n\n### Blocked\n- [Issues preventing progress, if any]\n\n## Key Decisions\n- **[Decision]**: [Brief rationale]\n\n## Next Steps\n1. [Ordered list of what should happen next]\n\n## Critical Context\n- [Any data, examples, or references needed to continue]\n- [Or \"(none)\" if not applicable]\n\nKeep each section concise. Preserve exact file paths, function names, and error messages."
+     }
+    ],
+    "timestamp": 0
+   }
+  ],
+  "maxTokens": 13107,
+  "cacheRetention": "none"
+ },
+ {
+  "scenario": "split",
+  "request": 1,
+  "messages": [
+   {
+    "role": "system",
+    "content": "You are a context summarization assistant. Your task is to read a conversation between a user and an AI assistant, then produce a structured summary following the exact format specified.\n\nDo NOT continue the conversation. Do NOT respond to any questions in the conversation. ONLY output the structured summary.",
+    "timestamp": 0
+   },
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "text",
+      "text": "# Conversation\n[User]: turn 2: please work on src/c.ts, src/d.ts, src/e.ts, src/f.ts, src/g.ts, src/h.ts\n\n[Assistant tool calls]: read(path=\"src/c.ts\"); edit(path=\"src/d.ts\"); read(path=\"src/e.ts\"); edit(path=\"src/f.ts\"); read(path=\"src/g.ts\"); edit(path=\"src/h.ts\")\n\n[Tool result]: contents of src/c.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n[Tool result]: contents of src/d.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n[Tool result]: contents of src/e.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n[Tool result]: contents of src/f.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n[Tool result]: contents of src/g.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n[Tool result]: contents of src/h.ts\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\nline\n\n\n# Instructions\nThe messages above are earlier context from an ongoing conversation. Later messages are stored separately and do not need to be reconstructed.\n\nCreate a concise checkpoint of the user's request and the progress shown above. This checkpoint will be placed before the later messages so the conversation can continue with the necessary context.\n\n## Original Request\n[What did the user ask for?]\n\n## Progress So Far\n- [Key decisions and work completed in these messages]\n\n## Context Needed to Continue\n- [Information from these messages needed to understand the later work]\n\nOnly summarize information explicitly present above. Do not infer or recreate later messages."
+     }
+    ],
+    "timestamp": 0
+   }
+  ],
+  "maxTokens": 8192,
+  "cacheRetention": "none"
+ },
+ {
+  "scenario": "split",
+  "summary": "summary split 0\n\n---\n\n**Turn Context (split turn):**\n\nsummary split 1\n\n<read-files>\nsrc/a.ts\nsrc/c.ts\nsrc/e.ts\nsrc/g.ts\n</read-files>\n\n<modified-files>\nsrc/b.ts\nsrc/d.ts\nsrc/f.ts\nsrc/h.ts\n</modified-files>",
+  "details": {
+   "readFiles": [
+    "src/a.ts",
+    "src/c.ts",
+    "src/e.ts",
+    "src/g.ts"
+   ],
+   "modifiedFiles": [
+    "src/b.ts",
+    "src/d.ts",
+    "src/f.ts",
+    "src/h.ts"
+   ]
+  }
+ }
+]

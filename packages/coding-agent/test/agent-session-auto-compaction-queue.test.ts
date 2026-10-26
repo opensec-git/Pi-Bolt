@@ -132,7 +132,8 @@ describe("AgentSession auto-compaction queue resume", () => {
 		expect(continueSpy).not.toHaveBeenCalled();
 	});
 
-	it("should not compact repeatedly after overflow recovery already attempted", async () => {
+	// earendil-works/pi#11281: recovery takes each smaller recovery step once, then stops.
+	it("should stop overflow recovery after the last recovery step", async () => {
 		const model = session.model!;
 		const overflowMessage: AssistantMessage = {
 			role: "assistant",
@@ -175,16 +176,18 @@ describe("AgentSession auto-compaction queue resume", () => {
 			}
 		)._checkCompaction.bind(session);
 
-		await checkCompaction(overflowMessage);
-		await checkCompaction({ ...overflowMessage, timestamp: Date.now() + 1 });
+		for (let attempt = 0; attempt < 4; attempt++) {
+			await checkCompaction({ ...overflowMessage, timestamp: Date.now() + attempt });
+		}
 
-		expect(runAutoCompactionSpy).toHaveBeenCalledTimes(1);
-		expect(events).toContainEqual({
-			type: "compaction_end",
-			reason: "overflow",
-			errorMessage:
-				"Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.",
-		});
+		expect(runAutoCompactionSpy).toHaveBeenCalledTimes(3);
+		expect(events).toEqual([
+			{
+				type: "compaction_end",
+				reason: "overflow",
+				errorMessage: expect.stringMatching(/^Context overflow recovery failed after 3 compact-and-retry attempts/),
+			},
+		]);
 	});
 
 	it("should ignore stale pre-compaction assistant usage on pre-prompt compaction checks", async () => {

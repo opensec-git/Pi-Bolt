@@ -196,6 +196,8 @@ export function prepareBranchEntries(entries: SessionEntry[], tokenBudget: numbe
 	const messages: AgentMessage[] = [];
 	const fileOps = createFileOps();
 	let totalTokens = 0;
+	// Messages whose file operations are recorded, newest first
+	const visited: AgentMessage[] = [];
 
 	// First pass: collect file ops from ALL entries (even if they don't fit in token budget)
 	// This ensures we capture cumulative file tracking from nested branch summaries
@@ -221,8 +223,7 @@ export function prepareBranchEntries(entries: SessionEntry[], tokenBudget: numbe
 		const message = getMessageFromEntry(entry);
 		if (!message) continue;
 
-		// Extract file ops from assistant messages (tool calls)
-		extractFileOpsFromMessage(message, fileOps);
+		visited.push(message);
 
 		const tokens = estimateTokens(message);
 
@@ -241,6 +242,11 @@ export function prepareBranchEntries(entries: SessionEntry[], tokenBudget: numbe
 
 		messages.unshift(message);
 		totalTokens += tokens;
+	}
+
+	// Extract file ops from tool calls oldest first, so the newest touch of a path counts as its most recent.
+	for (let i = visited.length - 1; i >= 0; i--) {
+		extractFileOpsFromMessage(visited[i], fileOps);
 	}
 
 	return { messages, fileOps, totalTokens };
@@ -370,8 +376,8 @@ export async function generateBranchSummary(
 	summary = BRANCH_SUMMARY_PREAMBLE + summary;
 
 	// Compute file lists and append to summary
-	const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-	summary += formatFileOperations(readFiles, modifiedFiles);
+	const { readFiles, modifiedFiles, omittedReadFiles, omittedModifiedFiles } = computeFileLists(fileOps);
+	summary += formatFileOperations(readFiles, modifiedFiles, omittedReadFiles, omittedModifiedFiles);
 
 	return {
 		summary: summary || "No summary generated",

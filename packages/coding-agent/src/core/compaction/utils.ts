@@ -49,38 +49,95 @@ function addFileOp(toolName: string, args: Record<string, unknown> | undefined, 
 	if (!path) return;
 	switch (toolName) {
 		case "read":
-			fileOps.read.add(path);
+			touchFile(fileOps.read, path);
 			break;
 		case "write":
-			fileOps.written.add(path);
+			touchFile(fileOps.written, path);
 			break;
 		case "edit":
-			fileOps.edited.add(path);
+			touchFile(fileOps.edited, path);
 			break;
 	}
 }
 
-/**
- * Compute final file lists from file operations.
- * Returns readFiles (files only read, not modified) and modifiedFiles.
- */
-export function computeFileLists(fileOps: FileOperations): { readFiles: string[]; modifiedFiles: string[] } {
-	const modified = new Set([...fileOps.edited, ...fileOps.written]);
-	const readOnly = [...fileOps.read].filter((f) => !modified.has(f)).sort();
-	const modifiedFiles = [...modified].sort();
-	return { readFiles: readOnly, modifiedFiles };
+/** Add a path as the most recently touched: sets keep insertion order, so re-adding moves it to the end. */
+function touchFile(files: Set<string>, path: string): void {
+	files.delete(path);
+	files.add(path);
 }
 
 /**
- * Format file operations as XML tags for summary.
+ * Most paths each file list keeps. Lists are carried from one compaction (or branch summary) to the
+ * next, so without a cap a long session appends thousands of stale paths to every summary.
  */
-export function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
+export const MAX_FILE_LIST_ENTRIES = 100;
+
+export interface FileLists {
+	/** Files only read, not modified, sorted */
+	readFiles: string[];
+	/** Files edited or written, sorted */
+	modifiedFiles: string[];
+	/** Older read-only files dropped by the {@link MAX_FILE_LIST_ENTRIES} cap */
+	omittedReadFiles: number;
+	/** Older modified files dropped by the {@link MAX_FILE_LIST_ENTRIES} cap */
+	omittedModifiedFiles: number;
+}
+
+/**
+ * Keep the most recently touched paths. Each set is ordered from least to most recently touched,
+ * so a path is ranked by its distance from the end of the sets that contain it.
+ */
+function keepMostRecent(paths: string[], sets: Set<string>[]): { kept: string[]; omitted: number } {
+	if (paths.length <= MAX_FILE_LIST_ENTRIES) return { kept: paths, omitted: 0 };
+	const age = new Map<string, number>();
+	for (const set of sets) {
+		let index = set.size;
+		for (const path of set) {
+			index--;
+			age.set(path, Math.min(age.get(path) ?? index, index));
+		}
+	}
+	const newest = [...paths].sort((a, b) => (age.get(a) ?? 0) - (age.get(b) ?? 0)).slice(0, MAX_FILE_LIST_ENTRIES);
+	return { kept: newest.sort(), omitted: paths.length - newest.length };
+}
+
+/**
+ * Compute final file lists from file operations: read-only files and modified files, each capped
+ * at the {@link MAX_FILE_LIST_ENTRIES} most recently touched paths.
+ */
+export function computeFileLists(fileOps: FileOperations): FileLists {
+	const modified = new Set([...fileOps.edited, ...fileOps.written]);
+	const readOnly = [...fileOps.read].filter((f) => !modified.has(f)).sort();
+	const read = keepMostRecent(readOnly, [fileOps.read]);
+	const written = keepMostRecent([...modified].sort(), [fileOps.edited, fileOps.written]);
+	return {
+		readFiles: read.kept,
+		modifiedFiles: written.kept,
+		omittedReadFiles: read.omitted,
+		omittedModifiedFiles: written.omitted,
+	};
+}
+
+function formatFileList(files: string[], omitted: number): string {
+	return omitted > 0 ? `${files.join("\n")}\n[${omitted} older files omitted]` : files.join("\n");
+}
+
+/**
+ * Format file operations as XML tags for summary. A list shortened by {@link computeFileLists} ends
+ * with a line saying how many older files were omitted.
+ */
+export function formatFileOperations(
+	readFiles: string[],
+	modifiedFiles: string[],
+	omittedReadFiles = 0,
+	omittedModifiedFiles = 0,
+): string {
 	const sections: string[] = [];
 	if (readFiles.length > 0) {
-		sections.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
+		sections.push(`<read-files>\n${formatFileList(readFiles, omittedReadFiles)}\n</read-files>`);
 	}
 	if (modifiedFiles.length > 0) {
-		sections.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
+		sections.push(`<modified-files>\n${formatFileList(modifiedFiles, omittedModifiedFiles)}\n</modified-files>`);
 	}
 	if (sections.length === 0) return "";
 	return `\n\n${sections.join("\n\n")}`;
