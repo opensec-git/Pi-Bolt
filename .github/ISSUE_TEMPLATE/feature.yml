@@ -1,0 +1,27 @@
+name: Feature request
+description: Something Pi-Bolt could add or do better.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Pi's own features are decided upstream: if stock Pi would need the change too, open it at github.com/earendil-works/pi.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would it solve
+      description: What you are trying to do and what gets in the way today.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd like
+      description: The behaviour you have in mind. Alternatives you considered are welcome too.
+    validations:
+      required: true
+  - type: dropdown
+    id: contribute
+    attributes:
+      label: Would you open a pull request for it?
+      options: ["Yes", "Maybe, with guidance", "No"]

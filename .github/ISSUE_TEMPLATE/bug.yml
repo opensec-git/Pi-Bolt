@@ -1,40 +1,84 @@
 name: Bug report
-description: Pi-Bolt does something that plain Pi does not, or fails to install or start.
+description: Pi-Bolt does something stock Pi does not, or fails to install, update, compile or start.
 labels: [bug]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Before you file: update (`pi-bolt update`), search existing issues, and try stock Pi (`npx @earendil-works/pi-coding-agent`).
+        A security problem? Don't file it here: report it privately (see SECURITY.md).
   - type: textarea
     id: what
     attributes:
       label: What happened
-      description: What you did, what you expected, and what happened instead. Error messages as text, please.
+      description: What you did, what you expected, and what happened instead. Paste error messages as text.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest steps that show it, starting from `pi-bolt` in a folder.
+      placeholder: |
+        1. pi-bolt in a folder with ...
+        2. ask ...
+        3. see ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Install or update
+        - Startup or crash
+        - Screen, keys or terminal
+        - Tools (bash, read, edit, grep, find)
+        - Extensions or pi-bolt compile
+        - Model or provider
+        - Speed or memory
+        - Other
     validations:
       required: true
   - type: input
     id: version
     attributes:
       label: pi-bolt --version
-      placeholder: "1.0.3 (Pi-Bolt 0.7.0, linux-x64, JIT off)"
+      placeholder: "1.4.0 (Pi-Bolt 1.0.4, darwin-arm64, JIT off)"
     validations:
       required: true
   - type: input
     id: system
     attributes:
       label: System
-      description: Linux distribution and CPU, or macOS version and chip.
-      placeholder: "Ubuntu 24.04, AMD Ryzen 7 5800X / macOS 26.1, M4"
+      description: OS and version, CPU or chip, and terminal.
+      placeholder: "macOS 26.1, M4, Ghostty / Ubuntu 24.04, Ryzen 7 5800X / Windows 11, Windows Terminal"
     validations:
       required: true
   - type: dropdown
     id: install
     attributes:
       label: Installed with
-      options: ["install.sh (curl)", "npm", "pi-bolt update", "built from source"]
+      options:
+        - install.sh (curl)
+        - install.ps1 (PowerShell)
+        - npm
+        - bun
+        - Homebrew
+        - Scoop
+        - mise
+        - built from source
     validations:
       required: true
   - type: dropdown
     id: plain-pi
     attributes:
-      label: Does plain Pi (on Node or Bun) do the same?
-      options: ["No, only Pi-Bolt", "Yes, plain Pi too", "Not tried"]
+      label: Does stock Pi (on Node or Bun) do the same?
+      options: ["No, only Pi-Bolt", "Yes, stock Pi too", "Not tried"]
     validations:
       required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or `pi-bolt doctor` output (optional)
+      render: text
