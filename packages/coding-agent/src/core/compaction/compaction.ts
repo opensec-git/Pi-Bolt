@@ -124,12 +124,30 @@ export interface CompactionSettings {
 	enabled: boolean;
 	reserveTokens: number;
 	keepRecentTokens: number;
+	/**
+	 * Also compact once the context exceeds this percentage of the context window, when that is
+	 * below `contextWindow - reserveTokens`. Absent: only `reserveTokens` sets the threshold.
+	 */
+	thresholdPercent?: number;
+	/** Output cap of the summary; a split turn's prefix summary gets half. Absent: derived from `reserveTokens`. */
+	summaryMaxTokens?: number;
+	/**
+	 * Let the summary cap derived from `reserveTokens` grow with the summarizer's context window:
+	 * to 3.2% of it (1.6% for a split turn's prefix).
+	 */
+	scaleSummaryWithContextWindow?: boolean;
 }
 
+/**
+ * Built-in defaults. `keepRecentTokens` is the minimum: the settings manager raises it to 5% of the
+ * context window when the setting is unset.
+ */
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
 	enabled: true,
 	reserveTokens: 16384,
 	keepRecentTokens: 20000,
+	thresholdPercent: 90,
+	scaleSummaryWithContextWindow: true,
 };
 
 // ============================================================================
@@ -265,11 +283,21 @@ export function estimateProjectedContextTokens(
 }
 
 /**
+ * Context size above which compaction triggers: `contextWindow - reserveTokens`, or
+ * `thresholdPercent` of the window when that is lower.
+ */
+export function getCompactionThreshold(contextWindow: number, settings: CompactionSettings): number {
+	const reserveThreshold = contextWindow - settings.reserveTokens;
+	if (settings.thresholdPercent === undefined) return reserveThreshold;
+	return Math.min(reserveThreshold, Math.floor((contextWindow * settings.thresholdPercent) / 100));
+}
+
+/**
  * Check if compaction should trigger based on context usage.
  */
 export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
 	if (!settings.enabled) return false;
-	return contextTokens > contextWindow - settings.reserveTokens;
+	return contextTokens > getCompactionThreshold(contextWindow, settings);
 }
 
 // ============================================================================
@@ -623,9 +651,28 @@ export function getSummarizationFailure(response: AssistantMessage, label: strin
 /** Smallest summary output budget, so a zero or tiny `reserveTokens` still allows a summary. */
 const MIN_SUMMARY_OUTPUT_TOKENS = 4096;
 
-/** Summary output budget: a share of `reserveTokens`, at least the minimum, capped by the model's output limit. */
-function getSummaryMaxTokens(model: Model<any>, reserveTokens: number, share: number): number {
-	const budget = Math.max(Math.floor(share * reserveTokens), MIN_SUMMARY_OUTPUT_TOKENS);
+/**
+ * Output cap of a summary, capped by the model's output limit. An explicit `summaryMaxTokens` is used
+ * as set (half of it for a split turn's prefix). Otherwise the cap is 80% of `reserveTokens` (50% for
+ * the prefix), at least the minimum, and with `scaleSummaryWithContextWindow` at least 3.2% of the
+ * model's context window (1.6% for the prefix).
+ */
+export function getSummaryMaxTokens(
+	model: Model<any>,
+	settings: Pick<CompactionSettings, "reserveTokens" | "summaryMaxTokens" | "scaleSummaryWithContextWindow">,
+	part: "summary" | "turnPrefix" = "summary",
+): number {
+	let budget: number;
+	if (settings.summaryMaxTokens !== undefined) {
+		budget = part === "summary" ? settings.summaryMaxTokens : Math.ceil(settings.summaryMaxTokens / 2);
+	} else {
+		const share = part === "summary" ? 0.8 : 0.5;
+		budget = Math.max(Math.floor(share * settings.reserveTokens), MIN_SUMMARY_OUTPUT_TOKENS);
+		if (settings.scaleSummaryWithContextWindow && model.contextWindow > 0) {
+			const perMille = part === "summary" ? 32 : 16;
+			budget = Math.max(budget, Math.floor((model.contextWindow * perMille) / 1000));
+		}
+	}
 	return model.maxTokens > 0 ? Math.min(budget, model.maxTokens) : budget;
 }
 
@@ -754,7 +801,41 @@ export async function generateSummaryWithUsage(
 	callbacks?: RetryCallbacks,
 	sessionId?: string,
 ): Promise<{ text: string; usage: Usage }> {
-	const maxTokens = getSummaryMaxTokens(model, reserveTokens, 0.8);
+	return generateHistorySummary(
+		currentMessages,
+		model,
+		getSummaryMaxTokens(model, { reserveTokens }),
+		apiKey,
+		headers,
+		signal,
+		customInstructions,
+		previousSummary,
+		thinkingLevel,
+		streamFn,
+		env,
+		retry,
+		callbacks,
+		sessionId,
+	);
+}
+
+/** Generate or update a conversation summary with an output cap of `maxTokens`. */
+async function generateHistorySummary(
+	currentMessages: AgentMessage[],
+	model: Model<any>,
+	maxTokens: number,
+	apiKey: string | undefined,
+	headers: Record<string, string> | undefined,
+	signal: AbortSignal | undefined,
+	customInstructions: string | undefined,
+	previousSummary: string | undefined,
+	thinkingLevel: ThinkingLevel | undefined,
+	streamFn: StreamFn | undefined,
+	env: Record<string, string> | undefined,
+	retry: RetryPolicy | undefined,
+	callbacks: RetryCallbacks | undefined,
+	sessionId: string | undefined,
+): Promise<{ text: string; usage: Usage }> {
 	const completionOptions = createSummarizationOptions(
 		model,
 		maxTokens,
@@ -1215,10 +1296,10 @@ export async function compact(
 		let historyText = previousSummary ?? "No prior history.";
 		let historyUsage: Usage | undefined;
 		if (messagesToSummarize.length > 0) {
-			const historyResult = await generateSummaryWithUsage(
+			const historyResult = await generateHistorySummary(
 				messagesToSummarize,
 				model,
-				settings.reserveTokens,
+				getSummaryMaxTokens(model, settings),
 				apiKey,
 				headers,
 				signal,
@@ -1237,7 +1318,7 @@ export async function compact(
 		const turnPrefixResult = await generateTurnPrefixSummary(
 			turnPrefixMessages,
 			model,
-			settings.reserveTokens,
+			getSummaryMaxTokens(model, settings, "turnPrefix"),
 			apiKey,
 			headers,
 			env,
@@ -1254,10 +1335,10 @@ export async function compact(
 		summaryUsage = historyUsage ? combineUsage(historyUsage, turnPrefixResult.usage) : turnPrefixResult.usage;
 	} else {
 		// Just generate history summary
-		const result = await generateSummaryWithUsage(
+		const result = await generateHistorySummary(
 			messagesToSummarize,
 			model,
-			settings.reserveTokens,
+			getSummaryMaxTokens(model, settings),
 			apiKey,
 			headers,
 			signal,
@@ -1297,7 +1378,7 @@ export async function compact(
 async function generateTurnPrefixSummary(
 	messages: AgentMessage[],
 	model: Model<any>,
-	reserveTokens: number,
+	maxTokens: number,
 	apiKey: string | undefined,
 	headers?: Record<string, string>,
 	env?: Record<string, string>,
@@ -1309,7 +1390,6 @@ async function generateTurnPrefixSummary(
 	sessionId?: string,
 	customInstructions?: string,
 ): Promise<{ text: string; usage: Usage }> {
-	const maxTokens = getSummaryMaxTokens(model, reserveTokens, 0.5); // Smaller budget for turn prefix
 	const options = createSummarizationOptions(model, maxTokens, apiKey, headers, env, signal, thinkingLevel, sessionId);
 	return summarizeWithinWindow(messages, undefined, model, maxTokens, {
 		label: "Turn prefix summarization",

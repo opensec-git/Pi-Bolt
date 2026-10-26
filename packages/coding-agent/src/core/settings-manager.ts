@@ -9,6 +9,7 @@ import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { PIBOLT } from "../pi-bolt.ts";
 import { getFileRevision, normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
+import type { CompactionSettings as ResolvedCompactionSettings } from "./compaction/compaction.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { getPackageIdentity, resolvePackageOverlay } from "./package-source.ts";
 import { SETTINGS_DEFAULTS } from "./settings-defaults.ts";
@@ -55,10 +56,19 @@ export type {
 /** Cache-warming profile. "idle" also warms between agent runs. */
 export const CACHE_WARMING_MODES = ["off", "streaming", "idle"] as const satisfies readonly CacheWarmingMode[];
 
-const DEFAULT_COMPACTION_TOKEN_SETTINGS: Required<CompactionModelOverride> = {
-	reserveTokens: SETTINGS_DEFAULTS.compaction.reserveTokens,
-	keepRecentTokens: SETTINGS_DEFAULTS.compaction.keepRecentTokens,
+/** Valid range of each compaction token setting, for its ordinary value and model overrides. */
+const COMPACTION_SETTING_RANGES: Record<keyof CompactionModelOverride, { min: number; max: number }> = {
+	reserveTokens: { min: 0, max: Number.MAX_SAFE_INTEGER },
+	keepRecentTokens: { min: 0, max: Number.MAX_SAFE_INTEGER },
+	thresholdPercent: { min: 1, max: 100 },
+	summaryMaxTokens: { min: 1, max: Number.MAX_SAFE_INTEGER },
 };
+
+/** Share of the context window kept as recent context when keepRecentTokens is unset, in percent. */
+const KEEP_RECENT_WINDOW_PERCENT = 5;
+
+/** A model whose compaction settings are resolved: its key for model overrides and its context window. */
+type CompactionSettingsModel = Pick<Model<string>, "provider" | "id"> & Partial<Pick<Model<string>, "contextWindow">>;
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1042,16 +1052,22 @@ export class SettingsManager {
 		this.save();
 	}
 
-	private getCompactionTokenSetting(
+	/** The compaction setting the user set, from the model override or the ordinary setting, if any. */
+	private getExplicitCompactionSetting(
 		field: keyof CompactionModelOverride,
 		model?: Pick<Model<string>, "provider" | "id">,
-	): number {
+	): number | undefined {
+		const { min, max } = COMPACTION_SETTING_RANGES[field];
+		const range =
+			min === 0 && max === Number.MAX_SAFE_INTEGER
+				? "a non-negative safe integer"
+				: `an integer from ${min} to ${max}`;
+		const isValid = (value: unknown): value is number =>
+			typeof value === "number" && Number.isSafeInteger(value) && value >= min && value <= max;
 		const compaction = this.settings.compaction;
 		const ordinary = compaction?.[field];
-		if (ordinary !== undefined && (typeof ordinary !== "number" || !Number.isSafeInteger(ordinary) || ordinary < 0)) {
-			throw new Error(
-				`Invalid compaction.${field} setting: ${String(ordinary)}. Expected a non-negative safe integer.`,
-			);
+		if (ordinary !== undefined && !isValid(ordinary)) {
+			throw new Error(`Invalid compaction.${field} setting: ${String(ordinary)}. Expected ${range}.`);
 		}
 
 		const modelKey = model ? `${model.provider}/${model.id}` : undefined;
@@ -1062,32 +1078,54 @@ export class SettingsManager {
 			);
 		}
 		const override = entry?.[field];
-		if (override !== undefined && (typeof override !== "number" || !Number.isSafeInteger(override) || override < 0)) {
+		if (override !== undefined && !isValid(override)) {
 			throw new Error(
-				`Invalid compaction.modelOverrides["${modelKey}"].${field} setting: ${String(override)}. Expected a non-negative safe integer.`,
+				`Invalid compaction.modelOverrides["${modelKey}"].${field} setting: ${String(override)}. Expected ${range}.`,
 			);
 		}
-		return override ?? ordinary ?? DEFAULT_COMPACTION_TOKEN_SETTINGS[field];
+		return override ?? ordinary;
 	}
 
 	getCompactionReserveTokens(model?: Pick<Model<string>, "provider" | "id">): number {
-		return this.getCompactionTokenSetting("reserveTokens", model);
+		return this.getExplicitCompactionSetting("reserveTokens", model) ?? SETTINGS_DEFAULTS.compaction.reserveTokens;
 	}
 
-	getCompactionKeepRecentTokens(model?: Pick<Model<string>, "provider" | "id">): number {
-		return this.getCompactionTokenSetting("keepRecentTokens", model);
+	/** Explicit keepRecentTokens, else the larger of the default and 5% of the context window. */
+	getCompactionKeepRecentTokens(model?: CompactionSettingsModel, contextWindow = model?.contextWindow ?? 0): number {
+		return (
+			this.getExplicitCompactionSetting("keepRecentTokens", model) ??
+			Math.max(
+				SETTINGS_DEFAULTS.compaction.keepRecentTokens,
+				Math.floor((Math.max(contextWindow, 0) * KEEP_RECENT_WINDOW_PERCENT) / 100),
+			)
+		);
 	}
 
-	/** Resolve each token setting through model override, ordinary setting, then built-in default. */
-	getCompactionSettings(model?: Pick<Model<string>, "provider" | "id">): {
-		enabled: boolean;
-		reserveTokens: number;
-		keepRecentTokens: number;
-	} {
+	/**
+	 * Resolve each setting through model override, ordinary setting, then built-in default. Unset
+	 * defaults scale with `contextWindow` (default: the model's): the threshold is also capped at
+	 * thresholdPercent of the window, keepRecentTokens grows to 5% of it, and the summary cap to 3.2%
+	 * of the summarizer's window. An explicit reserveTokens keeps the threshold and summary cap derived
+	 * from reserveTokens alone, unless thresholdPercent or summaryMaxTokens is set too.
+	 */
+	getCompactionSettings(
+		model?: CompactionSettingsModel,
+		contextWindow = model?.contextWindow ?? 0,
+	): ResolvedCompactionSettings {
+		const explicitReserveTokens = this.getExplicitCompactionSetting("reserveTokens", model);
+		const thresholdPercent =
+			this.getExplicitCompactionSetting("thresholdPercent", model) ??
+			(explicitReserveTokens === undefined ? SETTINGS_DEFAULTS.compaction.thresholdPercent : undefined);
+		const summaryMaxTokens = this.getExplicitCompactionSetting("summaryMaxTokens", model);
 		return {
 			enabled: this.getCompactionEnabled(),
-			reserveTokens: this.getCompactionReserveTokens(model),
-			keepRecentTokens: this.getCompactionKeepRecentTokens(model),
+			reserveTokens: explicitReserveTokens ?? SETTINGS_DEFAULTS.compaction.reserveTokens,
+			keepRecentTokens: this.getCompactionKeepRecentTokens(model, contextWindow),
+			...(thresholdPercent === undefined ? {} : { thresholdPercent }),
+			...(summaryMaxTokens === undefined ? {} : { summaryMaxTokens }),
+			...(explicitReserveTokens === undefined && summaryMaxTokens === undefined
+				? { scaleSummaryWithContextWindow: true }
+				: {}),
 		};
 	}
 

@@ -3,7 +3,14 @@ import { InMemorySettingsStorage, SettingsManager } from "../src/core/settings-m
 
 const model = { provider: "provider", id: "family/model" };
 const modelKey = "provider/family/model";
-const defaults = { enabled: true, reserveTokens: 16384, keepRecentTokens: 20000 };
+// Without an explicit reserveTokens, the threshold and summary cap also scale with the context window.
+const defaults = {
+	enabled: true,
+	reserveTokens: 16384,
+	keepRecentTokens: 20000,
+	thresholdPercent: 90,
+	scaleSummaryWithContextWindow: true,
+};
 
 // Regression coverage for #8133.
 describe("compaction model overrides", () => {
@@ -109,7 +116,11 @@ describe("compaction model overrides", () => {
 		manager.setCompactionEnabled(false);
 		await manager.flush();
 		await manager.reload();
-		expect(manager.getCompactionSettings(model)).toEqual({ ...defaults, enabled: false, reserveTokens: 400000 });
+		expect(manager.getCompactionSettings(model)).toEqual({
+			enabled: false,
+			reserveTokens: 400000,
+			keepRecentTokens: 20000,
+		});
 	});
 
 	describe.each(["reserveTokens", "keepRecentTokens"] as const)("model override %s", (field) => {

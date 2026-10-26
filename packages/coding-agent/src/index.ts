@@ -44,6 +44,7 @@ export {
 	generateBranchSummary,
 	generateSummary,
 	generateSummaryWithUsage,
+	getCompactionThreshold,
 	getLastAssistantUsage,
 	prepareBranchEntries,
 	serializeConversation,
