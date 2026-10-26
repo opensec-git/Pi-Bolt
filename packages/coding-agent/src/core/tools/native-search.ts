@@ -10,7 +10,17 @@
  * order. Regular expressions are JavaScript's, with ripgrep's (?i) and (?P<name>...) understood; like ripgrep, a match is
  * within one line.
  */
-import { closeSync, constants, type Dirent, existsSync, fstatSync, openSync, readSync, statSync } from "node:fs";
+import {
+	closeSync,
+	constants,
+	type Dirent,
+	existsSync,
+	fstatSync,
+	openSync,
+	readSync,
+	type Stats,
+	statSync,
+} from "node:fs";
 import { type FileHandle, open, readdir, readFile, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
@@ -1015,8 +1025,13 @@ function globFilter(glob: string | undefined): { take: (rel: string) => boolean;
 /** How much of a file an expression without a literal is run over at once (whole lines). */
 const WINDOW_BYTES = 16 * 1024;
 
-/** How many files are read at once. */
-const READ_AHEAD = 32;
+/**
+ * How many files are read at once at most, and how many are asked for their size ahead of being read. Both are asked for half
+ * of that at a time: a request on its own wakes a worker thread, and its answer the main thread; a batch keeps them busy.
+ * (With a request per file and 32 files read at once, grep over 20,000 small files took 10-20% longer.)
+ */
+const READ_AHEAD = 64;
+const STAT_AHEAD = 256;
 
 /** How long grep searches before the rest of Pi (the screen, the Escape that aborts the search) has a turn. */
 const TURN_MS = 50;
@@ -1030,6 +1045,11 @@ class Turns {
 	constructor(signal: AbortSignal | undefined) {
 		this.signal = signal;
 		this.deadline = performance.now() + TURN_MS;
+	}
+
+	/** Whether `check` has something to do: this turn is over, or the search was aborted. */
+	due(): boolean {
+		return performance.now() > this.deadline || this.signal?.aborted === true;
 	}
 
 	/** Throws if the search was aborted; when this turn is over, lets the event loop run first. */
@@ -1050,9 +1070,9 @@ class Turns {
 /**
  * Files up to this size are read whole; a larger one a piece at a time (`searchInPieces`). Reading every file whole let a
  * search through large files (a virtual disk, a model's weights, a long log) hold all of them in memory at once: gigabytes,
- * read at the disk's speed. At most READ_AHEAD files of this size are in memory now, and one piece of a larger one.
+ * read at the disk's speed. At most READ_AHEAD files of this size are in memory now (128 MB), and one piece of a larger one.
  */
-const WHOLE_FILE_BYTES = 4 * 1024 * 1024;
+const WHOLE_FILE_BYTES = 2 * 1024 * 1024;
 /** What a larger file is read in. */
 const PIECE_BYTES = 1024 * 1024;
 
@@ -1061,6 +1081,11 @@ const PIECE_BYTES = 1024 * 1024;
  * searched up to its last line break and the rest goes with the next, so a match is within a line as before; and a file with
  * a NUL byte anywhere (binary) has no matches, so it is read to its end, or to its first NUL byte. Undefined for a binary
  * file or one that could not be read. Memory: a piece, and the line a piece ends inside of.
+ *
+ * Its speed is that of a search of the file read whole: one buffer, read into again (the start of a line a piece ends inside
+ * of is moved to its front); and line breaks are counted only up to the last piece that can have a match, as a file read
+ * whole counts them only up to its matches: a piece without the matcher's prefilter is not counted, and when a later piece
+ * has it, the pieces since are read again and counted then.
  */
 async function searchInPieces(
 	file: string,
@@ -1072,48 +1097,91 @@ async function searchInPieces(
 ): Promise<NativeGrepMatch[] | undefined> {
 	let handle: FileHandle;
 	try {
-		handle = await open(file, "r");
+		// (Without blocking: what was a file when it was found may be a pipe by now.)
+		handle = await open(file, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0));
 	} catch {
 		return undefined;
 	}
 	try {
+		if (!(await handle.stat()).isFile()) return undefined;
 		const found: NativeGrepMatch[] = [];
-		const piece = Buffer.allocUnsafe(pieceBytes);
-		// The start of a line that no piece so far has ended (copies: `piece` is read into again).
-		let partial: Buffer[] = [];
+		// `buffer` holds the file from `bufferAt` on: up to `kept`, the start of a line no piece so far has ended; the next
+		// piece is read after it, from `readAt`.
+		let buffer = Buffer.allocUnsafe(pieceBytes);
+		let kept = 0;
+		let bufferAt = 0;
+		let readAt = 0;
+		// The line at `countedAt` is number `line`.
+		let countedAt = 0;
 		let line = 1;
+		let again: Buffer | undefined;
 		for (;;) {
-			await turns.check();
+			if (turns.due()) await turns.check();
+			if (buffer.length - kept < pieceBytes) {
+				const larger = Buffer.allocUnsafe(Math.max(kept + pieceBytes, 2 * buffer.length));
+				buffer.copy(larger, 0, 0, kept);
+				buffer = larger;
+			}
 			let bytesRead: number;
 			try {
-				({ bytesRead } = await handle.read(piece, 0, pieceBytes, null));
+				({ bytesRead } = await handle.read(buffer, kept, pieceBytes, readAt));
 			} catch {
 				return undefined;
 			}
-			const read = piece.subarray(0, bytesRead);
-			if (read.indexOf(0) !== -1) return undefined; // (Binary.)
+			readAt += bytesRead;
+			const filled = kept + bytesRead;
+			if (buffer.subarray(kept, filled).indexOf(0) !== -1) return undefined; // (Binary.)
 			const end = bytesRead === 0;
 			// The lines this piece ends: up to its last line break; at the end of the file, the last line, if it has no break.
-			const upTo = end ? 0 : read.lastIndexOf(NEWLINE) + 1;
+			const upTo = end ? filled : buffer.lastIndexOf(NEWLINE, filled - 1) + 1;
 			if (!end && upTo === 0) {
-				partial.push(Buffer.from(read));
+				kept = filled;
 				continue;
 			}
-			const lines =
-				partial.length > 0 ? Buffer.concat([...partial, read.subarray(0, upTo)]) : read.subarray(0, upTo);
-			partial = upTo === read.length ? [] : [Buffer.from(read.subarray(upTo))];
+			const lines = buffer.subarray(0, upTo);
 			// (Not the nothing after a last line break: as in a file read whole, there is no line there.)
-			if (lines.length > 0 && found.length < budget) {
+			if (
+				lines.length > 0 &&
+				found.length < budget &&
+				(!matcher.prefilter || lines.indexOf(matcher.prefilter) !== -1)
+			) {
+				while (countedAt < bufferAt) {
+					if (turns.due()) await turns.check();
+					again ??= Buffer.allocUnsafe(pieceBytes);
+					let count: number;
+					try {
+						({ bytesRead: count } = await handle.read(
+							again,
+							0,
+							Math.min(again.length, bufferAt - countedAt),
+							countedAt,
+						));
+					} catch {
+						return undefined;
+					}
+					if (count === 0) return undefined; // (Cut short since: as a file that could not be read.)
+					line += countLines(again, 0, count);
+					countedAt += count;
+				}
 				const rest = matcher.search(lines, file, budget - found.length, keepChars, found, line, turns.deadline);
 				if (rest) await turns.finish(rest);
+				if (!end && found.length < budget) {
+					line += countLines(lines, 0, upTo);
+					countedAt += upTo;
+				}
 			}
 			if (end) return found;
-			line += countLines(lines, 0, lines.length);
+			buffer.copyWithin(0, upTo, filled);
+			kept = filled - upTo;
+			bufferAt += upTo;
 		}
 	} finally {
 		await handle.close().catch(() => {});
 	}
 }
+
+/** A file's contents; for a file too large to read whole, its size; undefined for one that is not searched. */
+type Contents = Buffer | number | undefined;
 
 /** The lines that match, file by file in path order, at most `limit`; and whether the limit stopped the search. */
 export async function nativeGrep(
@@ -1143,24 +1211,34 @@ export async function nativeGrep(
 
 	const matches: NativeGrepMatch[] = [];
 	const wholeFileBytes = options.wholeFileBytes ?? WHOLE_FILE_BYTES;
-	// A file's contents; for a file too large to read whole, its size: it is read a piece at a time in its turn. Only
-	// regular files: a device or a pipe (a search of one path names what it likes) would be read without end, or wait.
-	const read = async (file: string): Promise<Buffer | number | undefined> => {
-		try {
-			const stats = await stat(file);
-			if (!stats.isFile()) return undefined;
-			return stats.size > wholeFileBytes ? stats.size : await readFile(file);
-		} catch {
-			return undefined;
-		}
-	};
+	const skip = () => undefined;
+	// The files' sizes, then their contents: `sizes[i]` and `reads[i]` for the files from `index` on, as far as they have been
+	// asked for. Only regular files are read: a device or a pipe (a search of one path names what it likes) would be read
+	// without end, or wait.
+	const sizes: (Promise<Stats | undefined> | undefined)[] = [];
+	const reads: (Promise<Contents> | undefined)[] = [];
+	let sized = 0;
+	let requested = 0;
 	const turns = new Turns(options.signal);
-	const queue = files.slice(0, READ_AHEAD).map(read);
 	for (let index = 0; index < files.length; index++) {
-		if (options.signal?.aborted || performance.now() > turns.deadline) await turns.check();
-		const contents = await queue[index];
-		if (index + READ_AHEAD < files.length) queue.push(read(files[index + READ_AHEAD]));
-		queue[index] = Promise.resolve(undefined); // (Done with it: let it go.)
+		if (turns.due()) await turns.check();
+		if (sized <= index + STAT_AHEAD / 2) {
+			for (const end = Math.min(files.length, index + STAT_AHEAD); sized < end; sized++) {
+				sizes[sized] = stat(files[sized]).catch(skip);
+			}
+		}
+		if (requested <= index + READ_AHEAD / 2) {
+			for (const end = Math.min(files.length, index + READ_AHEAD); requested < end; requested++) {
+				const file = files[requested];
+				reads[requested] = (sizes[requested] ?? stat(file).catch(skip)).then(
+					(stats): Contents | Promise<Contents> =>
+						!stats?.isFile() ? undefined : stats.size > wholeFileBytes ? stats.size : readFile(file).catch(skip),
+				);
+				sizes[requested] = undefined;
+			}
+		}
+		const contents = await reads[index];
+		reads[index] = undefined; // (Done with it: let it go.)
 		if (typeof contents === "number") {
 			const budget = options.limit - matches.length;
 			const pieceBytes = options.pieceBytes ?? PIECE_BYTES;

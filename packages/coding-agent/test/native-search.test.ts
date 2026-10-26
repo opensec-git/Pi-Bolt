@@ -251,6 +251,11 @@ describe("grep", () => {
 			writeFileSync(join(dir, "b.txt"), "first\nneedle\n\n");
 			writeFileSync(join(dir, "c.txt"), `needle before a NUL\n${"z".repeat(100)}\0\n`);
 			writeFileSync(join(dir, "d.txt"), "é needle ü\n日本 needle\n");
+			// Matches many pieces apart: the line breaks of the pieces between, which have no match, are counted later.
+			writeFileSync(
+				join(dir, "e.txt"),
+				`${"pad\n".repeat(500)}needle far\n${"pad\r\n".repeat(300)}a needle farther\n${"tail\n".repeat(200)}`,
+			);
 			const search = (pattern: string, extra: Partial<Parameters<typeof nativeGrep>[0]>) =>
 				nativeGrep({ root: dir, isDirectory: true, pattern, limit: 100, keepChars: 60, ...extra });
 			for (const query of [
