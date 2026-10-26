@@ -7,7 +7,7 @@
  * out of the manifest still loads at run time. The session looks right and only the compiled-in list is short.
  *
  * The discovery rules below are Pi's, and Pi is the source of truth for them:
- * packages/coding-agent/src/core/extensions/loader.ts, `discoverExtensionsInDir` and `resolveExtensionEntries`. They are
+ * packages/coding-agent/src/core/package-manager.ts, `collectAutoExtensionEntries` and `resolveExtensionEntries`. They are
  * repeated here rather than imported because this script belongs to Pi-Bolt and those functions are Pi's, and private.
  * `assertMatchesPiRules` in scripts/gen-plugin-manifest.test.mjs covers each rule, so a change in Pi shows up as a failing
  * test rather than as a short manifest.
@@ -21,6 +21,10 @@
  *   --no-packages       leave out the packages `pi install` installed
  *   --packages FILE     the packages to compile in, instead of the `packages` setting's npm: packages: a JSON list of
  *                       { source, root, entries }, as `pi-bolt compile` resolves them (piBolt.packages applied)
+ *   --enabled FILE      the extensions Pi loads, as `pi-bolt compile` resolves them (a JSON list of paths): any other
+ *                       found is one the `extensions` setting turns off, and is passed over
+ *   --no-jit            for the build without the JIT: package.json files without their "bun" conditions, and a failing
+ *                       import in place of each package that needs bun:ffi, as Pi loads them from their files there
  *   --json              print the plan as JSON instead of a summary
  *
  * The agent directory's `settings.json` supplies the `extensions` paths and the `packages` list. A project's settings are
@@ -77,29 +81,6 @@ export function resolveExtensionEntries(dir) {
 		if (existsSync(join(dir, index))) return [join(dir, index)];
 	}
 	return undefined;
-}
-
-/** Rule 1 and rules 2-3 for each subfolder. One level only, as Pi does. */
-export function discoverExtensionsInDir(dir) {
-	if (!existsSync(dir)) return [];
-	let entries;
-	try {
-		entries = readdirSync(dir, { withFileTypes: true });
-	} catch {
-		return [];
-	}
-	const found = [];
-	for (const entry of entries) {
-		const path = join(dir, entry.name);
-		if ((entry.isFile() || entry.isSymbolicLink()) && isExtensionFile(entry.name)) {
-			found.push(path);
-			continue;
-		}
-		if (entry.isDirectory() || entry.isSymbolicLink()) {
-			found.push(...(resolveExtensionEntries(path) ?? []));
-		}
-	}
-	return found;
 }
 
 /** The ignore files whose rules Pi applies to a folder's entries (package-manager.ts, `IGNORE_FILE_NAMES`). */
@@ -174,22 +155,53 @@ export function ignoreRulesOf(dir) {
 }
 
 /**
+ * The extensions Pi finds in a folder it looks in by itself (package-manager.ts, `collectAutoExtensionEntries`): the agent
+ * directory's extensions/, a project's .pi/extensions, a folder in the `extensions` setting, a folder a package's
+ * "pi.extensions" names. The folder's own entries (rules 3 and 2) when it has them: then only those, its other files being
+ * their helpers. Otherwise rules 1 to 3 for what is in it, less dot entries (an editor's `.#name.ts` lock file), node_modules,
+ * a link that leads nowhere, and what the folder's .gitignore, .ignore and .fdignore leave out (#8 of the loader-parity
+ * review: each was compiled in, or stopped the generator, where Pi passes it over).
+ */
+export function collectAutoExtensionEntries(dir) {
+	if (!existsSync(dir)) return [];
+	const own = resolveExtensionEntries(dir);
+	if (own) return own;
+	let entries;
+	try {
+		entries = readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return [];
+	}
+	const ignored = ignoreRulesOf(dir);
+	const found = [];
+	for (const entry of entries) {
+		if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+		const path = join(dir, entry.name);
+		let folder = entry.isDirectory();
+		let file = entry.isFile();
+		if (entry.isSymbolicLink()) {
+			try {
+				const stats = statSync(path);
+				folder = stats.isDirectory();
+				file = stats.isFile();
+			} catch {
+				continue;
+			}
+		}
+		if (ignored(entry.name, folder)) continue;
+		if (file && isExtensionFile(entry.name)) found.push(path);
+		else if (folder) found.push(...(resolveExtensionEntries(path) ?? []));
+	}
+	return found;
+}
+
+/**
  * A package's "pi.extensions" entry may be a folder: pi-openrouter-session declares "./extensions", which holds
- * openrouter-session.ts and no index. Pi loads that folder's own entries, else what discovery finds in it without dot
- * entries, node_modules, and what the folder's .gitignore, .ignore and .fdignore leave out (package-manager.ts,
- * `collectAutoExtensionEntries`). Imported as it is, the folder does not resolve and the build stops.
+ * openrouter-session.ts and no index. Pi loads what it finds in that folder (collectAutoExtensionEntries). Imported as it
+ * is, the folder does not resolve and the build stops.
  */
 export function expandPackageEntry(entry) {
-	if (!statSync(entry).isDirectory()) return [entry];
-	const ignored = ignoreRulesOf(entry);
-	return (
-		resolveExtensionEntries(entry) ??
-		discoverExtensionsInDir(entry).filter((path) => {
-			const first = relative(entry, path).split(sep)[0];
-			const folder = join(entry, first) !== path;
-			return !first.startsWith(".") && first !== "node_modules" && !ignored(first, folder);
-		})
-	);
+	return statSync(entry).isDirectory() ? collectAutoExtensionEntries(entry) : [entry];
 }
 
 // --- names ----------------------------------------------------------------------------------------------------------
@@ -234,8 +246,22 @@ function baseName(entryRelative, siblings, rootName) {
 
 // --- packages installed with `pi install` ---------------------------------------------------------------------------
 
-/** Pi's own packages: the build resolves these to Pi's modules, and a copy of one would be a second Pi. */
-const isPiPackage = (name) => name === "typebox" || name.startsWith("@earendil-works/pi-");
+/**
+ * Pi's own packages: the build resolves these to Pi's modules, and a copy of one would be a second Pi. Only those Pi gives
+ * extensions (VIRTUAL_MODULES, and make-kit.mjs's PROVIDED): another package of the @earendil-works scope, such as
+ * @earendil-works/chord or pi-web-ui, is a dependency like any other, which the build finds only if it is copied.
+ */
+const PI_PACKAGES = new Set([
+	"typebox",
+	"@earendil-works/pi-coding-agent",
+	"@earendil-works/pi-ai",
+	"@earendil-works/pi-agent-core",
+	"@earendil-works/pi-tui",
+]);
+const isPiPackage = (name) => PI_PACKAGES.has(name);
+/** The packages Pi gives an extension at run time, by every name it gives them (VIRTUAL_MODULES). */
+const isProvidedByPi = (name) =>
+	isPiPackage(name) || name === "@sinclair/typebox" || /^@mariozechner\/pi-(agent-core|ai|coding-agent|tui)$/.test(name);
 
 /**
  * The folder `pi install` put a package in. The `packages` setting records a source and not a path: `npm:pi-lens`,
@@ -262,12 +288,17 @@ function managedPackageFolder(entry, agentDir) {
  */
 const needsVendoring = (entry) => existsSync(join(dirname(entry), "core.cjs"));
 
-/** A package.json's dependency names that a build has to resolve: the required ones, and the optional ones installed. */
+/**
+ * A package.json's dependency names that a build has to resolve: the required ones, and the optional ones and peers
+ * installed. A peer Pi gives extensions is Pi's (npm may install an old copy of it beside the package, which Pi never
+ * loads); any other is installed beside the package by npm, and loaded from there by Pi.
+ */
 function dependencyNames(manifest) {
 	const names = [];
-	for (const field of ["dependencies", "optionalDependencies"]) {
+	for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
 		const value = manifest?.[field];
-		if (value && typeof value === "object") names.push(...Object.keys(value));
+		if (!value || typeof value !== "object") continue;
+		names.push(...Object.keys(value).filter((name) => field !== "peerDependencies" || !isProvidedByPi(name)));
 	}
 	return names;
 }
@@ -293,8 +324,8 @@ function resolvePackageFrom(dir, name) {
  *
  * The copies follow links, so a dependency is copied with the folder of the package that needs it only when it is in that
  * folder and nothing on the way is a link: then it is found from the copy as from the original. Any other is listed, to
- * be copied into the node_modules beside the manifest. `peerDependencies` are not walked -- those are the host's to
- * provide, and a missing one is a loud build error.
+ * be copied into the node_modules beside the manifest. `peerDependencies` are walked too, when installed: Pi's own are
+ * Pi's to provide (isPiPackage), and npm installs any other beside the package that needs it.
  */
 function dependencyClosure(dir) {
 	const inside = (folder, path) => {
@@ -379,29 +410,47 @@ export function planPlugins(options) {
 
 	const seen = new Set();
 	const entries = [];
-	const addEntry = (path, origin, root) => {
+	const addEntry = (path, origin, root, single = false) => {
 		if (seen.has(resolve(path))) return;
 		seen.add(resolve(path));
-		entries.push({ path, origin, root });
+		entries.push({ path, origin, root, single });
 	};
 	for (const source of sources) {
-		for (const path of discoverExtensionsInDir(source.root)) addEntry(path, source.origin, source.root);
+		for (const path of collectAutoExtensionEntries(source.root)) addEntry(path, source.origin, source.root);
 	}
 	const passedOver = [];
 	for (const raw of configured) {
 		// A pattern (`-path`, `!path`, `+path`, a glob) or `builtin:<name>` filters what Pi loads; it names no extension to copy.
 		if (/^[!+-]/.test(raw) || /[*?]/.test(raw) || raw.startsWith("builtin:")) continue;
-		const path = resolve(raw.startsWith("~") ? join(homedir(), raw.slice(1)) : raw);
-		if (!existsSync(path)) {
+		// (As Pi takes it: trimmed, `~` for home, and a relative path from the agent directory, whose setting it is.)
+		const trimmed = raw.trim();
+		const path = resolve(
+			agentDir,
+			trimmed === "~" ? homedir() : trimmed.startsWith("~/") ? join(homedir(), trimmed.slice(2)) : trimmed,
+		);
+		let stats;
+		try {
+			stats = statSync(path);
+		} catch {
 			passedOver.push({ path, reason: "in the extensions setting, but not found" });
 			continue;
 		}
-		if (statSync(path).isDirectory()) {
-			const declared = resolveExtensionEntries(path);
-			for (const entry of declared ?? discoverExtensionsInDir(path)) addEntry(entry, "configured", path);
+		if (stats.isDirectory()) {
+			for (const entry of collectAutoExtensionEntries(path)) addEntry(entry, "configured", path);
 			continue;
 		}
-		addEntry(path, "configured", dirname(path));
+		// (A file of its own: only it and what it imports are copied, not its whole folder, which may be the home folder.)
+		addEntry(path, "configured", dirname(path), true);
+	}
+	// The extensions Pi loads, when `pi-bolt compile` gives them (--enabled): those the `extensions` setting turns off are
+	// not loaded by Pi, so not compiled in, and one that would not build does not stop the build (#8 of the loader-parity
+	// review).
+	if (options.enabled) {
+		const enabled = new Set(options.enabled.map((path) => resolve(path)));
+		for (const entry of entries.filter((candidate) => !enabled.has(resolve(candidate.path)))) {
+			passedOver.push({ path: entry.path, reason: "turned off in the extensions setting" });
+			entries.splice(entries.indexOf(entry), 1);
+		}
 	}
 
 	const takenStageDirs = new Set();
@@ -422,14 +471,41 @@ export function planPlugins(options) {
 		perFolder.set(key, (perFolder.get(key) ?? 0) + 1);
 	}
 
+	/**
+	 * How the manifest imports an entry at `rel` (from its root, with `/`), or why it cannot. A `"` or a `\` in a path is a
+	 * problem for the bundler, which takes a `\` for a folder separator and names a split file after its module without
+	 * escaping a `"` where it imports that file (#14 of the loader-parity review). An entry whose own name has one is imported
+	 * through a copy beside it, under a name that has none; one in a folder whose name has one loads from its files.
+	 */
+	let entryCopies = 0;
+	const importOf = (rel) => {
+		const segments = rel.split("/");
+		if (segments.slice(0, -1).some((segment) => /["\\]/.test(segment))) {
+			return { why: "a `\"` or a `\\` in the name of a folder on its path, which the bundler cannot import: it loads from its files" };
+		}
+		if (!/["\\]/.test(segments.at(-1))) return { as: rel };
+		const extension = segments.at(-1).match(/\.[^.]*$/)?.[0] ?? "";
+		const as = [...segments.slice(0, -1), `.pibolt-entry-${++entryCopies}${extension}`].join("/");
+		return { as, entryCopy: { from: rel, to: as } };
+	};
+	const passedOverEntries = [];
 	for (const entry of entries) {
 		const root = resolve(entry.root);
+		const rel = relative(entry.root, entry.path).split(sep).join("/");
+		const imported = importOf(rel);
+		if (imported.why) {
+			passedOverEntries.push({ path: entry.path, reason: imported.why });
+			continue;
+		}
 		if (!stageDirs.has(root)) {
 			const stageDir = stageDirFor(entry.origin, root);
 			stageDirs.set(root, stageDir);
-			roots.push({ stageDir, root, origin: entry.origin });
+			roots.push({ stageDir, root, origin: entry.origin, ...(entry.single ? { files: [] } : {}) });
 		}
-		const rel = relative(entry.root, entry.path).split(sep).join("/");
+		// (A folder is copied whole once any extension in it is a folder's.)
+		const of = roots.find((candidate) => candidate.root === root);
+		if (of.files && entry.single) of.files.push(entry.path);
+		else delete of.files;
 		const siblings = perFolder.get(`${root} ${rel.split("/")[0]}`) ?? 1;
 		const name = unique(safeName(baseName(rel, siblings, basename(root))), takenNames, entry.origin);
 		plugins.push({
@@ -437,11 +513,12 @@ export function planPlugins(options) {
 			entry: entry.path,
 			origin: entry.origin,
 			stageDir: stageDirs.get(root),
-			importPath: `./${stageDirs.get(root)}/${rel}`,
+			importPath: `./${stageDirs.get(root)}/${imported.as}`,
+			...(imported.entryCopy ? { entryCopy: imported.entryCopy } : {}),
 		});
 	}
 
-	const skipped = [...passedOver, ...roots.flatMap((root) => describeSkipped(root.root, seen))];
+	const skipped = [...passedOver, ...passedOverEntries, ...roots.flatMap((root) => describeSkipped(root.root, seen))];
 
 	// Each package: its folder, the name it is known by, and its entries. `pi-bolt compile` gives the packages Pi-Bolt loads
 	// (`options.packages`: piBolt.packages applied, each with its entries as Pi resolves them); without it, the npm: packages
@@ -480,7 +557,13 @@ export function planPlugins(options) {
 
 	for (const resolved of installed) {
 		// (A file named both on its own and through its folder is one extension.)
-		const declared = resolved.declared && [...new Set(resolved.declared)];
+		const declared =
+			resolved.declared &&
+			[...new Set(resolved.declared)].filter((entry) => {
+				const { why } = importOf(relative(resolved.dir, entry).split(sep).join("/"));
+				if (why) skipped.push({ path: entry, reason: `${resolved.label}${why}` });
+				return !why;
+			});
 		if (!declared?.length) {
 			skipped.push({ path: resolved.path, reason: `${resolved.label}no entry point and no "pi.extensions"` });
 			continue;
@@ -496,7 +579,7 @@ export function planPlugins(options) {
 		roots.push({ stageDir, root: resolve(resolved.dir), origin: "package" });
 		packageOf.set(stageDir, resolved);
 		for (const entry of declared) {
-			const rel = relative(resolved.dir, entry).split(sep).join("/");
+			const imported = importOf(relative(resolved.dir, entry).split(sep).join("/"));
 			const base = declared.length === 1 ? resolved.name : `${resolved.name}-${withoutExtension(basename(entry))}`;
 			const name = unique(safeName(base), takenNames, "package");
 			plugins.push({
@@ -504,7 +587,8 @@ export function planPlugins(options) {
 				entry,
 				origin: "package",
 				stageDir,
-				importPath: `./${stageDir}/${rel}`,
+				importPath: `./${stageDir}/${imported.as}`,
+				...(imported.entryCopy ? { entryCopy: imported.entryCopy } : {}),
 			});
 		}
 	}
@@ -578,8 +662,12 @@ export function planPlugins(options) {
  * changed. A manifest written by hand (`--plugins`) is not this script's, and is built as it is: its folder may be anywhere,
  * and the executable may go to another machine.
  *
- * `import.meta.main`, `import.meta.resolve()` and the like are left alone, and so are `__dirname` and `__filename`, which
- * the bundler replaces itself, per module, with the path of the copy.
+ * The same goes for what the bundler resolves per module against the copy, which `pi-bolt compile` deletes, or leaves to
+ * resolve as the program runs from the executable's own file system, `/$bunfs` (#5 of the loader-parity review): `__dirname`
+ * and `__filename` (a data file, or a native addon loaded as node-gyp-build and bindings load one), `require.resolve()`,
+ * `import.meta.resolve()`, and a require() or an import() of anything but a string (a module chosen as it runs). Each is
+ * replaced with what it is for the file the copy was made from, so it finds what the installed extension finds. A module
+ * that declares `__dirname`, `__filename` or `require` itself keeps its own. `import.meta.main` and the like are left alone.
  */
 
 /** The `import.meta` properties the bundler resolves to the output file, and what each is for a module at `file`. */
@@ -592,6 +680,29 @@ const IMPORT_META = {
 	file: (file) => basename(file),
 };
 const IMPORT_META_AT = new RegExp(`import\\s*\\.\\s*meta\\s*\\.\\s*(${Object.keys(IMPORT_META).join("|")})(?![\\w$])`, "y");
+const IMPORT_META_RESOLVE_AT = /import\s*\.\s*meta\s*\.\s*resolve(?![\w$])/y;
+/** `.resolve` after `require`. */
+const REQUIRE_RESOLVE_AT = /\s*\.\s*resolve(?![\w$])/y;
+/** The `(` of a call whose first argument is not a string or a template literal, which the bundler resolves itself. */
+const CALL_OF_EXPRESSION_AT = /\s*\((?=\s*[^\s"'`)])/y;
+
+/** Pi's names for its own modules, which Pi gives an extension whatever it has installed (VIRTUAL_MODULES). */
+const PI_MODULE = "/^(?:typebox|@sinclair\\/typebox|@(?:earendil-works|mariozechner)\\/pi-(?:agent-core|ai|coding-agent|tui))(?:\\/|$)/";
+
+/** Code for `require` as in the module at `file`: createRequire for that file. */
+const requireFrom = (file) => `process.getBuiltinModule("node:module").createRequire(${JSON.stringify(file)})`;
+
+/**
+ * Code for a function that resolves an import()'s specifier as from the module at `file`: a path, or a package installed
+ * there, to its file; Pi's own modules, a URL, a built-in, and what does not resolve, as they are (the import() then finds
+ * those as it did).
+ */
+const resolveFrom = (file) =>
+	`((s) => { if (typeof s !== "string" || ${PI_MODULE}.test(s) || /^[a-z][a-z0-9+.-]*:/i.test(s)) return s; try { return Bun.resolveSync(s, ${JSON.stringify(dirname(file))}); } catch { return s; } })`;
+
+/** Code for `import.meta.resolve` of the module at `file`: the URL of what a specifier resolves to from there. */
+const metaResolveFrom = (file) =>
+	`((s) => { const p = Bun.resolveSync(s, ${JSON.stringify(dirname(file))}); return p.startsWith("/") ? Bun.pathToFileURL(p).href : p; })`;
 
 /** Words after which a `/` begins a regular expression rather than dividing, and a `{` an object rather than a block. */
 const BEFORE_EXPRESSION = new Set(
@@ -605,7 +716,9 @@ const isWordChar = (char) => /[\w$\u0080-￿]/.test(char);
 const isWordStart = (char) => char !== undefined && isWordChar(char) && !/[0-9]/.test(char);
 
 /**
- * `source` with each `import.meta.<property>` above replaced by its value for a module at `file`, as a string literal.
+ * `source` with each `import.meta.<property>` above replaced by its value for a module at `file`, as a string literal, and
+ * `__dirname`, `__filename`, `require.resolve`, `import.meta.resolve` and each require() or import() of an expression with
+ * code for what they are at `file` (above). A method named `import` or `require` is not a call.
  *
  * Only code is changed: the scan steps over comments, strings, the text of template literals (not what is inside `${}`),
  * regular expressions and, in a .jsx or .tsx file, JSX text and attribute strings (not what is inside `{}`). A comment or a
@@ -626,6 +739,52 @@ const isWordStart = (char) => char !== undefined && isWordChar(char) && !/[0-9]/
 export function pinImportMeta(source, file) {
 	const jsx = /\.[jt]sx$/.test(file);
 	const edits = [];
+	/**
+	 * Whether the `(` at `open`, after a name, begins a method's parameters rather than a call's arguments (`async
+	 * import(url) {`, `require(id): Module {`): after a modifier or a `*`, or followed by a body (`{`) or, where a member
+	 * begins, a return type (`:`). Undecided (a `(` without its `)` on the way) counts as a method.
+	 */
+	const isMethod = (open) => {
+		if (previous.kind === "word" && /^(?:async|get|set|static|public|private|protected|override|readonly)$/.test(previous.text)) {
+			return true;
+		}
+		if (previous.kind === "punctuator" && previous.text === "*") return true;
+		let depth = 0;
+		let j = open;
+		for (; j < length; j++) {
+			const char = source[j];
+			if (char === "(") depth++;
+			else if (char === ")" && --depth === 0) break;
+			else if (char === '"' || char === "'" || char === "`") {
+				for (j++; j < length && source[j] !== char; j++) if (source[j] === "\\") j++;
+			}
+		}
+		if (j >= length) return true;
+		const after = source.slice(j + 1).match(/^\s*(.)/s)?.[1];
+		const member = previous.kind === "punctuator" && ["{", "}", ";", ","].includes(previous.text);
+		return after === "{" || (after === ":" && member);
+	};
+	const declared = new Map();
+	/** Whether the module declares `name` itself (then its own is left alone): a guess, which errs towards yes. */
+	const declares = (name) => {
+		if (!declared.has(name)) {
+			declared.set(
+				name,
+				new RegExp(
+					[
+						`\\b(?:const|let|var|function|class)\\s+${name}\\b`,
+						`(?<![.\\w$])${name}\\s*=(?![=>])`,
+						`\\bimport\\s*(?:\\*\\s*as\\s+)?${name}\\b`,
+						`\\bimport\\s*\\{[^}]*\\b${name}\\b`,
+						`[(,]\\s*${name}\\s*(?:[,=][^()]*)?\\)\\s*(?::[^=;{]*)?(?:=>|\\{)`,
+						// (A shorthand property, which may be a destructuring pattern that declares it.)
+						`[{,]\\s*${name}\\s*[,}]`,
+					].join("|"),
+				).test(source),
+			);
+		}
+		return declared.get(name);
+	};
 	/**
 	 * The last token, for the guesses: a word (its text), a value, or a punctuator (its text). `expression` on a punctuator
 	 * overrides whether an expression may begin after it (a `)` or a `}`).
@@ -806,15 +965,56 @@ export function pinImportMeta(source, file) {
 			for (i++; i < length && isWordChar(source[i]); i++);
 			const word = source.slice(start, i);
 			// (Not after a `.`: `x.import` is a property, not the keyword.)
-			if (word === "import" && !(previous.kind === "punctuator" && previous.text === ".")) {
+			const property = previous.kind === "punctuator" && previous.text === ".";
+			/** Replaces `source` from `start` to `end` with `code`, and goes on after it, `previous` being a value. */
+			const replace = (end, code) => {
+				// (Followed by the line breaks it spanned, if any, so that line numbers stay as they were.)
+				const breaks = "\n".repeat(source.slice(start, end).split("\n").length - 1);
+				edits.push({ start, end, code, breaks });
+				i = end;
+				previous = { kind: "value" };
+			};
+			if (word === "import" && !property) {
 				IMPORT_META_AT.lastIndex = start;
 				const match = IMPORT_META_AT.exec(source);
 				if (match) {
-					// (Followed by the line breaks it spanned, if any, so that line numbers stay as they were.)
-					const breaks = "\n".repeat(match[0].split("\n").length - 1);
-					edits.push({ start, end: start + match[0].length, value: IMPORT_META[match[1]](file), breaks });
-					i = start + match[0].length;
-					previous = { kind: "value" };
+					replace(start + match[0].length, JSON.stringify(IMPORT_META[match[1]](file)));
+					continue;
+				}
+				IMPORT_META_RESOLVE_AT.lastIndex = start;
+				const resolveMatch = IMPORT_META_RESOLVE_AT.exec(source);
+				if (resolveMatch) {
+					replace(start + resolveMatch[0].length, metaResolveFrom(file));
+					continue;
+				}
+				// (An import() of anything but a string: from the installed file, not from the executable's file system.)
+				CALL_OF_EXPRESSION_AT.lastIndex = i;
+				const call = CALL_OF_EXPRESSION_AT.exec(source);
+				if (call && !isMethod(i + call[0].length - 1)) {
+					replace(i + call[0].length, `((s, o) => import(${resolveFrom(file)}(s), o))(`);
+					continue;
+				}
+			}
+			if ((word === "__dirname" || word === "__filename") && !property && !declares(word)) {
+				// (Not a property's name, `{ __dirname: ... }` or a method's.)
+				const after = source.slice(i).match(/^\s*(.)/s)?.[1];
+				const key = previous.kind === "punctuator" && (previous.text === "{" || previous.text === ",");
+				if (!(key && (after === ":" || after === "("))) {
+					replace(i, JSON.stringify(word === "__dirname" ? dirname(file) : file));
+					continue;
+				}
+			}
+			if (word === "require" && !property && !declares(word)) {
+				REQUIRE_RESOLVE_AT.lastIndex = i;
+				const resolveMatch = REQUIRE_RESOLVE_AT.exec(source);
+				if (resolveMatch) {
+					replace(i + resolveMatch[0].length, `${requireFrom(file)}.resolve`);
+					continue;
+				}
+				CALL_OF_EXPRESSION_AT.lastIndex = i;
+				const call = CALL_OF_EXPRESSION_AT.exec(source);
+				if (call && !isMethod(i + call[0].length - 1)) {
+					replace(i + call[0].length, `${requireFrom(file)}(`);
 					continue;
 				}
 			}
@@ -831,11 +1031,14 @@ export function pinImportMeta(source, file) {
 	let pinned = "";
 	let at = 0;
 	for (const edit of edits) {
-		pinned += `${source.slice(at, edit.start)}${JSON.stringify(edit.value)}${edit.breaks}`;
+		pinned += `${source.slice(at, edit.start)}${edit.code}${edit.breaks}`;
 		at = edit.end;
 	}
 	return pinned + source.slice(at);
 }
+
+/** What a module holds when pinImportMeta may change it (a quick test before scanning it). */
+const REWRITTEN = ["meta", "__dirname", "__filename", "require", "import"];
 
 /** The scripts Bun bundles, less type declarations (which hold no values). */
 const isScript = (name) => /\.(?:[cm]?[jt]s|[jt]sx)$/.test(name) && !/\.d\.[cm]?ts$/.test(name);
@@ -854,7 +1057,7 @@ function pinImportMetaInCopy(staged, original) {
 		}
 		if (!entry.isFile() || !isScript(entry.name)) continue;
 		const bytes = readFileSync(path);
-		if (!bytes.includes("meta")) continue;
+		if (!REWRITTEN.some((word) => bytes.includes(word))) continue;
 		const source = bytes.toString("utf8");
 		// (A file that is not UTF-8 is left as it is rather than rewritten with replacement characters.)
 		if (!Buffer.from(source, "utf8").equals(bytes)) continue;
@@ -868,6 +1071,23 @@ function pinImportMetaInCopy(staged, original) {
 
 // --- output ---------------------------------------------------------------------------------------------------------
 
+/**
+ * The factory of an extension's module as Pi's loader takes it from its files: jiti's `default: true` interop, `default`
+ * when the module has one, else the module itself. TypeScript's CommonJS output (`exports.__esModule = true; exports.default
+ * = factory`) is imported by the bundler as `{ default: module.exports }`, so its factory is one `default` further down.
+ * Anything but a function is no factory, which Pi reports as it does for a module loaded from its files.
+ */
+const FACTORY_OF = [
+	"/** The factory of an extension's module, as Pi's loader takes it from its files (jiti's `default` interop). */",
+	'function factoryOf(module: { default?: unknown }): InlineExtension["factory"] {',
+	"\tlet value: unknown = module.default ?? module;",
+	'\tif (typeof value !== "function" && value !== null && typeof value === "object" && "default" in value) {',
+	"\t\tvalue = (value as { default?: unknown }).default;",
+	"\t}",
+	'\treturn (typeof value === "function" ? value : undefined) as InlineExtension["factory"];',
+	"}",
+];
+
 export function renderManifest(plan) {
 	const lines = [
 		"/**",
@@ -876,7 +1096,8 @@ export function renderManifest(plan) {
 		" * Written by scripts/gen-plugin-manifest.mjs. Do not edit: the generator replaces this file, and the folders",
 		" * beside it, every time it runs. The extensions came from",
 	];
-	for (const root of plan.roots) lines.push(` *   ${root.stageDir}/ <- ${root.root}`);
+	// (A path is the user's: a `*/` or a line break in it would end the comment.)
+	for (const root of plan.roots) lines.push(` *   ${root.stageDir}/ <- ${JSON.stringify(root.root).replaceAll("*/", "*\\/")}`);
 	lines.push(
 		" *",
 		" * Each is named, so it is a built-in extension once compiled in: `-builtin:<name>` in the `extensions` setting",
@@ -890,34 +1111,47 @@ export function renderManifest(plan) {
 		// A value import from the package would evaluate Pi's whole public API at every launch (docs/PLUGINS.md).
 		'import type { InlineExtension } from "@earendil-works/pi-coding-agent";',
 		"",
+		...FACTORY_OF,
+		"",
 		"const plugins: InlineExtension[] = [",
 	);
+	// (Each string as a literal: a file name may hold a `"` or a `\`, which would end or change it.)
 	for (const plugin of plan.plugins) {
 		lines.push(
-			`\t{ name: "${plugin.name}", builtin: true, replaceable: true, factory: (await import("${plugin.importPath}")).default },`,
+			`\t{ name: ${JSON.stringify(plugin.name)}, builtin: true, replaceable: true, factory: factoryOf(await import(${JSON.stringify(plugin.importPath)})) },`,
 		);
 	}
 	lines.push("];", "", "export default plugins;");
 	return `${lines.join("\n")}\n`;
 }
 
-/** Pi's own packages, which the build resolves to Pi's modules. A copy of one inside a plugin would be a second Pi. */
+/** Pi's own packages (isPiPackage), which the build resolves to Pi's modules. A copy of one inside a plugin would be a second Pi. */
 const isPiCopy = (source) => {
 	const parts = source.split(sep);
-	return parts.some((part, i) => part === "node_modules" && (parts[i + 1] === "typebox" || parts[i + 1] === "@earendil-works"));
+	return parts.some(
+		(part, i) =>
+			part === "node_modules" &&
+			(isPiPackage(parts[i + 1]) || (parts[i + 1]?.startsWith("@") && isPiPackage(`${parts[i + 1]}/${parts[i + 2]}`))),
+	);
 };
 
 /**
- * Whether `source`, in the folder `from` being copied, is a link to a folder it is in: followed, it would be copied into
- * itself without end. A pnpm workspace has these when two of its packages need each other, or one needs itself.
+ * Whether `source`, in the folder `from` being copied, is a link not to follow: one to a folder it is in, which followed
+ * would be copied into itself without end (a pnpm workspace has these when two of its packages need each other, or one needs
+ * itself); or one to nothing, such as an editor's `.#name.ts` lock file, which nothing can read (#8 of the loader-parity
+ * review: copying it stopped the generator).
  */
-function linksBack(source, from) {
+function notToFollow(source, from) {
 	let target;
 	try {
 		if (!lstatSync(source).isSymbolicLink()) return false;
-		target = realpathSync(source);
 	} catch {
 		return false;
+	}
+	try {
+		target = realpathSync(source);
+	} catch {
+		return true;
 	}
 	for (let at = dirname(source); ; at = dirname(at)) {
 		try {
@@ -929,14 +1163,116 @@ function linksBack(source, from) {
 	}
 }
 
+const LOADERS = { ".ts": "ts", ".mts": "ts", ".cts": "ts", ".tsx": "tsx", ".js": "js", ".mjs": "js", ".cjs": "js", ".jsx": "jsx" };
+
+/**
+ * The files of `root` (relative to it) that the modules `files` are, and import by a relative path, transitively, with the folder's
+ * package.json (its `type` and `imports` say how they are read). Undefined when they cannot be known: without Bun, whose
+ * transpiler reads the imports, or when a module does not parse or imports a file outside `root`.
+ */
+function importClosure(files, root) {
+	if (typeof globalThis.Bun?.Transpiler !== "function") return undefined;
+	// (Real paths throughout, as the resolver gives them: /var is /private/var on macOS.)
+	const realRoot = realpathSync(root);
+	const found = new Set(existsSync(join(realRoot, "package.json")) ? [join(realRoot, "package.json")] : []);
+	const queue = files.map((file) => realpathSync(file));
+	while (queue.length > 0) {
+		const file = queue.pop();
+		if (found.has(file)) continue;
+		found.add(file);
+		const loader = LOADERS[file.match(/\.[^./]*$/)?.[0] ?? ""];
+		if (!loader) continue;
+		let imports;
+		try {
+			imports = new globalThis.Bun.Transpiler({ loader }).scanImports(readFileSync(file, "utf8"));
+		} catch {
+			return undefined;
+		}
+		for (const { path } of imports) {
+			if (!/^\.\.?(\/|$)/.test(path)) continue;
+			let resolved;
+			try {
+				resolved = globalThis.Bun.resolveSync(path, dirname(file));
+			} catch {
+				continue;
+			}
+			if (relative(realRoot, resolved).startsWith("..")) return undefined;
+			queue.push(resolved);
+		}
+	}
+	return [...found].map((file) => relative(realRoot, file));
+}
+
 function copyRoot(from, to) {
 	const start = resolve(from);
 	cpSync(start, to, {
 		recursive: true,
 		// An extension may be a symbolic link to somewhere else on this machine, which the executable has no file for.
 		dereference: true,
-		filter: (source) => basename(source) !== ".git" && !isPiCopy(source) && !linksBack(source, start),
+		filter: (source) => basename(source) !== ".git" && !isPiCopy(source) && !notToFollow(source, start),
 	});
+}
+
+// --- the build without the JIT -------------------------------------------------------------------------------------
+
+/*
+ * Pi loads an extension's packages from their files with Node's conditions: of `"exports": { "bun": ..., "node": ... }` it
+ * takes `node`. The bundler takes `bun` first, which in the build without the JIT may be code that cannot run there: a
+ * package that calls native code through bun:ffi fails when it is called ("bun:ffi requires the JIT"), after its import
+ * succeeded, so an extension that falls back to a Node package when the import fails never does (#11 of the loader-parity
+ * review: pi-fff, @ff-labs/fff-bun then @ff-labs/fff-node). So, for that build (--no-jit), the copies of package.json files
+ * lose their `bun` conditions, and each package Pi's loader refuses there (loader.ts, JIT_ONLY_PACKAGES) is replaced with
+ * one whose import fails as it does from its files.
+ */
+
+/** Packages that work only through bun:ffi (core/extensions/loader.ts, JIT_ONLY_PACKAGES). */
+const JIT_ONLY_PACKAGES = ["@ff-labs/fff-bun"];
+
+/** `value` (a package.json's `exports` or `imports`) without its `bun` conditions, at any depth. */
+export function withoutBunCondition(value) {
+	if (Array.isArray(value)) return value.map(withoutBunCondition);
+	if (!value || typeof value !== "object") return value;
+	return Object.fromEntries(
+		Object.entries(value)
+			.filter(([key]) => key !== "bun")
+			.map(([key, inner]) => [key, withoutBunCondition(inner)]),
+	);
+}
+
+/**
+ * Takes the `bun` conditions out of every package.json in `dir` (the plugin folder), and puts a failing import in each
+ * JIT-only package.
+ */
+export function forBuildWithoutJit(dir) {
+	const scope = basename(dir).startsWith("@") ? basename(dir) : undefined;
+	const inNodeModules = basename(scope ? dirname(dir) : dir) === "node_modules";
+	for (const entry of readdirSync(dir, { withFileTypes: true })) {
+		const path = join(dir, entry.name);
+		if (entry.isDirectory()) {
+			const name = scope ? `${scope}/${entry.name}` : entry.name;
+			if (inNodeModules && JIT_ONLY_PACKAGES.includes(name)) {
+				rmSync(path, { recursive: true, force: true });
+				mkdirSync(path);
+				writeFileSync(join(path, "package.json"), `${JSON.stringify({ name, main: "index.js" })}\n`);
+				writeFileSync(
+					join(path, "index.js"),
+					`throw new Error(${JSON.stringify(`${name} needs the JIT (bun:ffi), which this build of Pi-Bolt does not have: install the -jit build`)});\n`,
+				);
+				continue;
+			}
+			forBuildWithoutJit(path);
+			continue;
+		}
+		if (entry.name !== "package.json" || !entry.isFile()) continue;
+		const manifest = readJson(path);
+		if (!manifest || (!manifest.exports && !manifest.imports)) continue;
+		const changed = { ...manifest };
+		if (manifest.exports) changed.exports = withoutBunCondition(manifest.exports);
+		if (manifest.imports) changed.imports = withoutBunCondition(manifest.imports);
+		if (JSON.stringify(changed) === JSON.stringify(manifest)) continue;
+		chmodSync(path, statSync(path).mode | 0o200);
+		writeFileSync(path, `${JSON.stringify(changed, null, "\t")}\n`);
+	}
 }
 
 /**
@@ -953,8 +1289,19 @@ export function writePluginFolder(plan, out) {
 	}
 	mkdirSync(out, { recursive: true });
 	for (const root of plan.roots) {
-		copyRoot(root.root, join(out, root.stageDir));
+		const files = root.files && importClosure(root.files, resolve(root.root));
+		if (files) {
+			for (const file of files) cpSync(join(root.root, file), join(out, root.stageDir, file), { dereference: true });
+		} else {
+			copyRoot(root.root, join(out, root.stageDir));
+		}
 		pinImportMetaInCopy(join(out, root.stageDir), root.root);
+	}
+	// (An entry imported under another name: a copy of its copy, beside it, so that its imports resolve as they did.)
+	for (const plugin of plan.plugins) {
+		if (plugin.entryCopy) {
+			cpSync(join(out, plugin.stageDir, plugin.entryCopy.from), join(out, plugin.stageDir, plugin.entryCopy.to));
+		}
 	}
 	// One node_modules beside the manifest, as the hoisted root it came from has and as docs/PLUGINS.md expects: Node
 	// resolution walks up from each staged folder, so every package finds its dependencies here.
@@ -965,6 +1312,72 @@ export function writePluginFolder(plan, out) {
 	}
 	writeFileSync(manifest, renderManifest(plan));
 	return manifest;
+}
+
+/** The file a copy in the plugin folder `out` (a real path) was made from, by the plan that made it. */
+function originalOf(file, out, plan) {
+	const rel = relative(out, file);
+	if (rel.startsWith("..")) return undefined;
+	const segments = rel.split(sep);
+	if (segments[0] === "node_modules") {
+		const length = segments[1]?.startsWith("@") ? 2 : 1;
+		const name = segments.slice(1, 1 + length).join("/");
+		const dependency = plan.dependencies.find((candidate) => candidate.name === name);
+		return dependency && join(dependency.from, ...segments.slice(1 + length));
+	}
+	const root = plan.roots.find((candidate) => candidate.stageDir === segments[0]);
+	return root && join(root.root, ...segments.slice(1));
+}
+
+/**
+ * Copies into the node_modules of the plugin folder `out` each package a copy imports that the build cannot resolve from
+ * the copy but Pi finds from the file it was copied from (#7 of the loader-parity review): an extension in the agent
+ * directory's extensions/ that imports a package installed in the agent directory's node_modules, a configured path in a
+ * workspace whose packages are hoisted above it, a package that imports what it does not declare. Pi loads those from
+ * their files and finds them, as Node resolution walks up from the file; the copy is elsewhere, and the build stopped.
+ *
+ * Found with the bundler (Bun.build, which only Bun has: under Node this does nothing), until it finds no more. Only a
+ * static import or a require() is followed: an import() that does not resolve is left to run time (#160). Pi's own packages
+ * are not: the build resolves those to Pi's. Adds what it copies to `plan.dependencies`. Returns what it copied.
+ */
+export async function copyDependenciesFound(plan, out) {
+	if (typeof globalThis.Bun?.build !== "function") return [];
+	const manifest = join(out, "plugins.ts");
+	const realOut = realpathSync(out);
+	const copied = [];
+	for (let pass = 0; pass < 16; pass++) {
+		const result = await globalThis.Bun.build({
+			entrypoints: [manifest],
+			target: "bun",
+			format: "esm",
+			splitting: true,
+			throw: false,
+		});
+		let more = false;
+		for (const log of result.logs) {
+			const specifier = log.specifier;
+			if (typeof specifier !== "string" || !log.position?.file) continue;
+			if (log.importKind !== "import-statement" && log.importKind !== "require-call") continue;
+			if (/^[./]/.test(specifier) || /^[a-z]+:/.test(specifier)) continue;
+			const name = specifier.split("/").slice(0, specifier.startsWith("@") ? 2 : 1).join("/");
+			if (isProvidedByPi(name) || plan.dependencies.some((dependency) => dependency.name === name)) continue;
+			const original = originalOf(log.position.file, realOut, plan);
+			const found = original && resolvePackageFrom(dirname(original), name);
+			if (!found) continue;
+			const from = realpathSync(found);
+			for (const dependency of [{ name, from }, ...dependencyClosure(from)]) {
+				if (plan.dependencies.some((known) => known.name === dependency.name)) continue;
+				const staged = join(out, "node_modules", ...dependency.name.split("/"));
+				copyRoot(dependency.from, staged);
+				pinImportMetaInCopy(staged, dependency.from);
+				plan.dependencies.push(dependency);
+				copied.push(dependency);
+				more = true;
+			}
+		}
+		if (!more) break;
+	}
+	return copied;
 }
 
 // --- the command ----------------------------------------------------------------------------------------------------
@@ -978,6 +1391,8 @@ const HELP = `Usage: scripts/gen-plugin-manifest.mjs --out DIR [options]
   --exclude a,b       every extension except these (repeatable)
   --no-packages       leave out the packages "pi install" installed
   --packages FILE     these packages (a JSON list of { source, root, entries }) instead of the "packages" setting's
+  --enabled FILE      the extensions Pi loads (a JSON list of paths): any other found is turned off, and passed over
+  --no-jit            for the build without the JIT: packages as Pi loads them there (no "bun" condition, no bun:ffi)
   --json              print the plan as JSON
 `;
 
@@ -999,6 +1414,18 @@ function readPackageList(file) {
 	return list;
 }
 
+/** The list --enabled names: the paths of the extensions Pi loads. */
+function readPathList(file) {
+	let list;
+	try {
+		list = JSON.parse(readFileSync(file, "utf8"));
+	} catch (error) {
+		die(`--enabled ${file}: ${error instanceof Error ? error.message : String(error)}`);
+	}
+	if (!Array.isArray(list) || !list.every((path) => typeof path === "string")) die(`--enabled ${file}: not a list of paths`);
+	return list;
+}
+
 function parseArgs(argv) {
 	const options = {
 		out: "",
@@ -1008,6 +1435,8 @@ function parseArgs(argv) {
 		exclude: [],
 		noPackages: false,
 		packages: undefined,
+		enabled: undefined,
+		noJit: false,
 		json: false,
 	};
 	let index = 0;
@@ -1028,6 +1457,8 @@ function parseArgs(argv) {
 			case "--exclude": options.exclude.push(...needsValue().split(",").map((n) => n.trim()).filter(Boolean)); break;
 			case "--no-packages": options.noPackages = true; break;
 			case "--packages": options.packages = readPackageList(needsValue()); break;
+			case "--enabled": options.enabled = readPathList(needsValue()); break;
+			case "--no-jit": options.noJit = true; break;
 			case "--json": options.json = true; break;
 			case "-h":
 			case "--help": process.stdout.write(HELP); process.exit(0); break;
@@ -1064,6 +1495,8 @@ if (isCommand()) {
 	if (plan.plugins.length === 0) die("no extensions found to compile in");
 
 	const manifest = writePluginFolder(plan, resolve(options.out));
+	const found = await copyDependenciesFound(plan, resolve(options.out));
+	if (options.noJit) forBuildWithoutJit(resolve(options.out));
 
 	if (options.json) {
 		process.stdout.write(`${JSON.stringify({ manifest, ...plan }, null, 2)}\n`);
@@ -1071,6 +1504,9 @@ if (isCommand()) {
 		for (const plugin of plan.plugins) process.stderr.write(`  ${plugin.name} (${plugin.origin})\n`);
 		if (plan.dependencies.length > 0) {
 			process.stderr.write(`  with ${plan.dependencies.length} dependency package(s), copied to node_modules\n`);
+		}
+		for (const dependency of found) {
+			process.stderr.write(`  ${dependency.name}: imported without being a dependency, copied from ${dependency.from}\n`);
 		}
 		for (const entry of plan.skipped) process.stderr.write(`  passed over: ${entry.path}\n    ${entry.reason}\n`);
 		for (const entry of plan.excluded) process.stderr.write(`  left out: ${entry.name} (--${entry.by})\n`);

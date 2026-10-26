@@ -120,8 +120,11 @@ On Windows: `scripts\build-pi.ps1 -PluginsFromInstalled`, with `-PluginsOnly`, `
 `-PluginsNoPackages`.
 
 It takes the agent directory's `extensions` folder, the paths in that directory's `extensions` setting, and the packages
-`pi install` installed. `--cwd DIR` adds a project's own `.pi/extensions`. A project's *settings* are not read, because Pi
-honours those only in a trusted project and a script cannot tell whether a project is trusted.
+`pi install` installed, as Pi finds them: a relative path in the setting is from the agent directory, and dot files, a link to
+nothing, `node_modules` and what the folder's `.gitignore`, `.ignore` and `.fdignore` leave out are passed over. `pi-bolt
+compile` also passes over what the setting turns off (`-path`, `!pattern`). `--cwd DIR` adds a project's own `.pi/extensions`.
+A project's *settings* are not read, because Pi honours those only in a trusted project and a script cannot tell whether a
+project is trusted.
 
 The generated manifest names every plugin, so each is a built-in extension that
 [step 3](#3-turning-a-compiled-in-plugin-off-and-run-time-copies) can turn off. Whatever it writes is an ordinary manifest:
@@ -130,14 +133,23 @@ read it, edit it, commit it, and build it with `--plugins`.
 ### What it copies
 
 The copy is of the whole `extensions` folder, not of each entry. An extension that imports a sibling which is not an
-extension itself, such as a `shared/` folder with no `index.ts`, therefore keeps working.
+extension itself, such as a `shared/` folder with no `index.ts`, therefore keeps working. A single file in the `extensions`
+setting is copied with the modules it imports, not with the rest of its folder.
 
 `pi install` hoists packages into one flat `node_modules`, so a package's dependencies are its siblings rather than inside
 it. The generator copies that dependency closure to a `node_modules` beside the manifest, which is the layout step 1
 expects. It copies only the dependencies of the packages being compiled in. An `optionalDependency` counts once it is
-installed, because the plugin then imports it like any other package.
+installed, because the plugin then imports it like any other package, and so does a `peerDependency` that is not Pi's. A
+package an extension imports without declaring it, such as one installed in the agent directory's `node_modules` above
+`extensions/`, is copied too when Pi finds it from the extension's file (with Bun, which `pi-bolt compile` runs it with).
 
-Pi's own packages are left out of every copy, so a plugin cannot carry a second Pi.
+Pi's own packages are left out of every copy, so a plugin cannot carry a second Pi: `typebox` and
+`@earendil-works/pi-coding-agent`, `pi-ai`, `pi-agent-core` and `pi-tui`. Other packages of the `@earendil-works` scope are
+dependencies like any other.
+
+Without the JIT (`pi-bolt compile` on a build without `-jit`), a package's `"bun"` export condition is not taken, so the
+bundler takes the `"node"` one, as Pi does loading the package from its files; and a package that works only through
+`bun:ffi` (`@ff-labs/fff-bun`) fails at its import, as there, so an extension falls back to its Node package.
 
 `pi-bolt compile` also handles an `import()` of a package the extension neither declares nor has installed, made only for
 something it does when that package is there (`@plannotator/pi-extension` loads the Claude Agent SDK and the OpenCode SDK
@@ -151,10 +163,13 @@ In the copies, `import.meta.url` is the URL of the file it was copied from, and 
 `path` and `file` are that file's too. Bundling would otherwise make each one the executable's (`/$bunfs/root/...`). An
 extension that finds its `skills/`, `prompts/` or themes beside its own module, such as
 `join(dirname(fileURLToPath(import.meta.url)), "..", "skills")`, then finds them where it is installed, as it does when Pi loads
-it from its files. Only the copies are changed, and only in code: comments and strings keep their text. `pi-bolt compile` uses a
-compiled-in extension only while its installed copy is unchanged, so those files are always there. An executable built with
-`--plugins-from-installed` has no such check: keep its extensions installed. `__dirname` and `__filename` are not changed:
-the bundler makes them the path of the copy, which is removed after the build.
+it from its files. So are `__dirname` and `__filename` (a data file read with `join(__dirname, "data.json")`, a native addon
+loaded as node-gyp-build and bindings load one), `require.resolve()` and `import.meta.resolve()`, and a `require()` or
+`import()` of a path or name computed as it runs resolves from the installed file, where a module it loads from disk gets Pi's
+own packages as from its files. A module that declares `__dirname`, `__filename` or `require` itself keeps its own. Only the
+copies are changed, and only in code: comments and strings keep their text. `pi-bolt compile` uses a compiled-in extension only
+while its installed copy is unchanged, so those files are always there. An executable built with `--plugins-from-installed`
+has no such check: keep its extensions installed.
 
 ### What it cannot do
 
@@ -435,4 +450,4 @@ python3 bench/ui_check.py --project . --build plugins=out/pi-bolt-plugins/pi
 | A tool or command "conflicts" at startup | The plugin is also loaded at run time. Remove the run-time copy ([step 3](#3-remove-the-run-time-copies)). |
 | `ENOENT` for a file next to the plugin's source | Embed the file with an `import ... with { type: "text" }` or `{ type: "file" }`. |
 | A plugin's hot path is slow on the JIT-off build | Check it against the [performance guide](#performance-guide). As a stopgap, build with `--jit on`. |
-| `instanceof` fails, or a registry is empty | A second copy of a Pi package. Move Pi packages to `peerDependencies`; the build excludes `node_modules/@earendil-works/pi-*` and `node_modules/typebox` from the plugin folder. |
+| `instanceof` fails, or a registry is empty | A second copy of a Pi package. Move Pi packages to `peerDependencies`; the build excludes Pi's own packages (`typebox`, `@earendil-works/pi-coding-agent`, `pi-ai`, `pi-agent-core`, `pi-tui`) from the plugin folder. |

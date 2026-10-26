@@ -3,7 +3,8 @@ the extensions installed here are compiled in and used in place of their files, 
 modules from import.meta.url as they do loaded from their files (#53); one changed since is loaded from its files with a warning; one removed since is not loaded; the build it replaced is kept, and `pi-bolt update --rollback` swaps the two
 (and back); `pi-bolt update --channel beta` is kept for the installation; and `--out` builds without installing. An import()
 of a package that is not installed is left to run time, where it fails inside the extension as loaded from its files, while a
-static import of one still stops the build (#160). Uses the bench fake model.
+static import of one still stops the build (#160); and an extension finds files, modules and Pi's packages from where it is
+installed, as loaded from its files (loader parity). Uses the bench fake model.
   python3 tests/pi/compile.py PI KIT RUNTIME     (KIT: pi-bolt-kit-<platform>.tar.gz or its folder; RUNTIME: the runtime's bun)
 """
 import json
@@ -67,6 +68,46 @@ export default async function () {
 }
 """
 
+# Loader parity: what a compiled-in extension finds from where it is installed, as loaded from its files. #4: TypeScript's
+# CommonJS output (`exports.__esModule`, `exports.default`). #5: __dirname, __filename, require.resolve, import.meta.resolve and a
+# require() of a computed path, which the bundler resolved against the copy it deleted or the executable's own file system. #6: a
+# module loaded from disk as it runs, which imports Pi's packages.
+TSC_CJS = """"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.default = default_1;
+function default_1() {
+	const how = new Error().stack.split("\\n")[1].includes("/$bunfs/") ? "compiled" : "files";
+	require("node:fs").writeFileSync(`${process.env.PIBOLT_PROBE}/tsc-cjs`, how);
+}
+"""
+PARITY = """import { readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+const name = (n) => n;
+export default async function () {
+	const how = new Error().stack.split("\\n")[1].includes("/$bunfs/") ? "compiled" : "files";
+	const seen = {};
+	const see = async (key, f) => {
+		try {
+			seen[key] = await f();
+		} catch (error) {
+			seen[key] = `error: ${error.message}`;
+		}
+	};
+	await see("dirname", () => readFileSync(join(__dirname, "data.txt"), "utf8"));
+	await see("filename", () => __filename);
+	await see("requireResolve", () => require.resolve("./data.txt"));
+	await see("require", () => require(name("./dyn.cjs")));
+	await see("metaResolve", () => import.meta.resolve("./data.txt"));
+	await see("fromDisk", async () => (await import(pathToFileURL(join(__dirname, name("disk.ts"))).href)).found);
+	writeFileSync(`${process.env.PIBOLT_PROBE}/parity-ext`, `${how} ${JSON.stringify(seen)}`);
+}
+"""
+DISK = """import { Type } from "typebox";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
+export const found = [typeof Type.Object, typeof getAgentDir];
+"""
+
 version = subprocess.run([pi, "--version"], capture_output=True, text=True, check=True).stdout
 platform, variant = re.search(r"Pi-Bolt [^,]+, (\w+)-(\S+), JIT", version).groups()
 with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
@@ -84,6 +125,13 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
                                                                                    "export default function (pi) {\n\tresources(pi);"))
     (folder / "helper.ts").write_text("export const one = 1;\n")
     (agent / "extensions" / "optional-ext.ts").write_text(OPTIONAL)
+    (agent / "extensions" / "tsc-cjs.js").write_text(TSC_CJS)
+    parity = agent / "extensions" / "parity-ext"
+    parity.mkdir()
+    (parity / "index.js").write_text(PARITY)
+    (parity / "data.txt").write_text("data")
+    (parity / "dyn.cjs").write_text('module.exports = "dyn";\n')
+    (parity / "disk.ts").write_text(DISK)
     (folder / "src").mkdir()
     (folder / "src" / "resources.ts").write_text(RESOURCES)
     (folder / "src" / "skills" / "probe-skill").mkdir(parents=True)
@@ -109,7 +157,8 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
             r = subprocess.run([str(build / "pi"), "-p", "--model", "fake/fake-model", "hello"], env=env,
                                capture_output=True, text=True, stdin=subprocess.DEVNULL, cwd=tmp)
             loaded = {name: tuple((probe / name).read_text().split(" ", 1)) if (probe / name).exists() else (None, None)
-                      for name in ("file-ext", "folder-ext", "optional-ext")}
+                      for name in ("file-ext", "folder-ext", "optional-ext", "parity-ext")}
+            loaded["tsc-cjs"] = ((probe / "tsc-cjs").read_text(), None) if (probe / "tsc-cjs").exists() else (None, None)
             return r, loaded
 
         def commands():
@@ -130,6 +179,10 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
         check("before: an import() of a package that is not installed fails inside the extension (#160)",
               loaded["optional-ext"] == ("files", "caught"), str(loaded))
         from_files = {name: loaded[name][1] for name in ("file-ext", "folder-ext")}
+        parity_from_files = loaded["parity-ext"]
+        check("before: the loader-parity probes load from their files",
+              parity_from_files[0] == "files" and loaded["tsc-cjs"][0] == "files"
+              and json.loads(parity_from_files[1])["fromDisk"] == ["function", "function"], str(loaded))
         resources = commands()
         check("before: the skill and prompt beside the module are loaded",
               resources == ["probe-prompt", "skill:probe-skill"], str(resources))
@@ -145,7 +198,8 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
         print(f"     (compile took {took:.1f} s)")
         record = json.loads((install / "compile.json").read_text()) if (install / "compile.json").exists() else {}
         check("compile.json keeps the extensions for the next update",
-              sorted(record.get("extensions", [])) == ["file-ext", "folder-ext", "optional-ext"], str(record))
+              sorted(record.get("extensions", [])) == ["file-ext", "folder-ext", "optional-ext", "parity-ext", "tsc-cjs"],
+              str(record))
         check("the build it replaced is kept as .previous", (install / f"{build.name}.previous" / "pi").exists())
         about = (build / "pi-bolt.txt").read_text()
         check("pi-bolt.txt says what is compiled in", "Extensions compiled in" in about and "file-ext" in about, about)
@@ -160,6 +214,10 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
               {name: loaded[name][1] for name in ("file-ext", "folder-ext")} == from_files, f"{loaded} vs {from_files}")
         check("compiled in, the import() of a package that is not installed fails inside the extension, as loaded from its files (#160)",
               loaded["optional-ext"] == ("compiled", "caught"), str(loaded))
+        check("compiled in, TypeScript's CommonJS output loads, as from its files (loader parity #4)",
+              loaded["tsc-cjs"][0] == "compiled", str(loaded))
+        check("compiled in, paths, require() and modules loaded from disk are as from its files (loader parity #5, #6)",
+              loaded["parity-ext"] == ("compiled", parity_from_files[1]), f"{loaded['parity-ext']} vs {parity_from_files}")
         resources = commands()
         check("compiled in, the skill and prompt beside the module are still loaded (#53)",
               resources == ["probe-prompt", "skill:probe-skill"], str(resources))

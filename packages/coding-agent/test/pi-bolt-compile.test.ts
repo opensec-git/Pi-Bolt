@@ -233,6 +233,25 @@ describe("pi-bolt compile takes the packages Pi-Bolt loads", () => {
 		expect(resolved.packages.map((pkg) => pkg.source)).toEqual(["npm:pi-codex-goal"]);
 		expect(resolved.removed).toEqual([]);
 	});
+
+	// Loader-parity review #8: the extensions besides packages, as Pi finds them, for gen-plugin-manifest.mjs --enabled.
+	test("gives the other extensions Pi loads: a relative path from the agent directory, less those turned off", async () => {
+		const agentDir = join(dir, "agent");
+		mkdirSync(join(agentDir, "extensions"), { recursive: true });
+		mkdirSync(join(agentDir, "my-tools"), { recursive: true });
+		writeFileSync(join(agentDir, "extensions", "on.ts"), "export default () => {};\n");
+		writeFileSync(join(agentDir, "extensions", "off.ts"), "export default () => {};\n");
+		writeFileSync(join(agentDir, "my-tools", "configured.ts"), "export default () => {};\n");
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ extensions: ["my-tools/configured.ts", "-extensions/off.ts"] }),
+		);
+
+		const resolved = await resolveCompilePackages(agentDir, dir);
+		expect([...resolved.enabled].sort()).toEqual(
+			[join(agentDir, "my-tools", "configured.ts"), join(agentDir, "extensions", "on.ts")].sort(),
+		);
+	});
 });
 
 describe("pi-bolt compile leaves out what compile.json records as excluded", () => {

@@ -107,6 +107,11 @@ export interface CompilePackages {
 	passedOver: Array<{ path: string; reason: string }>;
 	/** Packages of Pi's `packages` list that piBolt.packages removes. */
 	removed: string[];
+	/**
+	 * The other extensions Pi loads from the agent directory: those of its extensions/ and of the `extensions` setting, less
+	 * those the setting turns off (gen-plugin-manifest.mjs --enabled).
+	 */
+	enabled: string[];
 }
 
 /**
@@ -165,7 +170,16 @@ export async function resolveCompilePackages(agentDir: string, cwd = process.cwd
 					: "file";
 		packages.push({ source, kind, root: packageRoot ?? dirname(entries[0]), entries });
 	}
-	return { packages, passedOver, removed };
+	const enabled = extensions
+		.filter(
+			(resource) =>
+				resource.enabled &&
+				resource.metadata.scope === "user" &&
+				resource.metadata.origin === "top-level" &&
+				(resource.metadata.source === "auto" || resource.metadata.source === "local"),
+		)
+		.map((resource) => resource.path);
+	return { packages, passedOver, removed, enabled };
 }
 
 /** The plan gen-plugin-manifest.mjs prints with --json. */
@@ -1091,16 +1105,22 @@ async function compile(options: CompileOptions): Promise<void> {
 		generatorArgs.push("--agent-dir", agentDir);
 		if (options.only?.length) generatorArgs.push("--only", options.only.join(","));
 		if (options.exclude?.length) generatorArgs.push("--exclude", options.exclude.join(","));
-		// The packages as Pi-Bolt loads them, not the `packages` setting the generator reads by itself.
+		// The packages as Pi-Bolt loads them, not the `packages` setting the generator reads by itself; and the other
+		// extensions, with those the `extensions` setting turns off left out, as Pi leaves them out.
+		const resolved = await resolveCompilePackages(agentDir);
 		const packages: CompilePackages = options.noPackages
-			? { packages: [], passedOver: [], removed: [] }
-			: await resolveCompilePackages(agentDir);
+			? { packages: [], passedOver: [], removed: [], enabled: resolved.enabled }
+			: resolved;
 		if (options.noPackages) generatorArgs.push("--no-packages");
 		else {
 			const list = join(work, "packages.json");
 			writeFileSync(list, JSON.stringify(packages.packages));
 			generatorArgs.push("--packages", list);
 		}
+		writeFileSync(join(work, "enabled.json"), JSON.stringify(packages.enabled));
+		generatorArgs.push("--enabled", join(work, "enabled.json"));
+		// (Without the JIT, a package's Bun build is not what Pi loads from its files: --no-jit in gen-plugin-manifest.mjs.)
+		if (!build.jit) generatorArgs.push("--no-jit");
 		const kinds = new Map(packages.packages.map((pkg) => [resolve(pkg.root), pkg.kind]));
 		const generatorEnv = { ...process.env };
 		delete generatorEnv.BUN_BE_BUN;
