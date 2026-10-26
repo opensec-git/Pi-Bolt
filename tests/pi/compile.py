@@ -1,8 +1,9 @@
 """`pi-bolt compile` with a release's compile kit and runtime, into an installation made from the build under test:
 the extensions installed here are compiled in and used in place of their files, and find the skills and prompts beside their
 modules from import.meta.url as they do loaded from their files (#53); one changed since is loaded from its files with a warning; one removed since is not loaded; the build it replaced is kept, and `pi-bolt update --rollback` swaps the two
-(and back); `pi-bolt update --channel beta` is kept for the installation; and `--out` builds without installing. Uses the bench
-fake model.
+(and back); `pi-bolt update --channel beta` is kept for the installation; and `--out` builds without installing. An import()
+of a package that is not installed is left to run time, where it fails inside the extension as loaded from its files, while a
+static import of one still stops the build (#160). Uses the bench fake model.
   python3 tests/pi/compile.py PI KIT RUNTIME     (KIT: pi-bolt-kit-<platform>.tar.gz or its folder; RUNTIME: the runtime's bun)
 """
 import json
@@ -47,6 +48,25 @@ export function resources(pi) {
 }
 """
 
+# #160: an import() of a package the extension neither declares nor has installed, for something it does only when that
+# package is there (as @plannotator/pi-extension loads the Claude Agent SDK). Loaded from its files, it fails when it runs, and
+# the extension carries on.
+OPTIONAL = """import { writeFileSync } from "node:fs";
+async function sdk() {
+	return await import("pibolt-missing-sdk-160");
+}
+export default async function () {
+	const how = new Error().stack.split("\\n")[1].includes("/$bunfs/") ? "compiled" : "files";
+	let found = "found";
+	try {
+		await sdk();
+	} catch (error) {
+		found = "caught";
+	}
+	writeFileSync(`${process.env.PIBOLT_PROBE}/optional-ext`, `${how} ${found}`);
+}
+"""
+
 version = subprocess.run([pi, "--version"], capture_output=True, text=True, check=True).stdout
 platform, variant = re.search(r"Pi-Bolt [^,]+, (\w+)-(\S+), JIT", version).groups()
 with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
@@ -63,6 +83,7 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
                                      + PROBE.replace("NAME", "folder-ext").replace("export default function () {",
                                                                                    "export default function (pi) {\n\tresources(pi);"))
     (folder / "helper.ts").write_text("export const one = 1;\n")
+    (agent / "extensions" / "optional-ext.ts").write_text(OPTIONAL)
     (folder / "src").mkdir()
     (folder / "src" / "resources.ts").write_text(RESOURCES)
     (folder / "src" / "skills" / "probe-skill").mkdir(parents=True)
@@ -88,7 +109,7 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
             r = subprocess.run([str(build / "pi"), "-p", "--model", "fake/fake-model", "hello"], env=env,
                                capture_output=True, text=True, stdin=subprocess.DEVNULL, cwd=tmp)
             loaded = {name: tuple((probe / name).read_text().split(" ", 1)) if (probe / name).exists() else (None, None)
-                      for name in ("file-ext", "folder-ext")}
+                      for name in ("file-ext", "folder-ext", "optional-ext")}
             return r, loaded
 
         def commands():
@@ -103,9 +124,12 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
 
         r, loaded = session()
         check("before: both extensions load from their files",
-              r.returncode == 0 and all(how == "files" and url.startswith("file:") for how, url in loaded.values()),
+              r.returncode == 0 and all(loaded[name][0] == "files" and loaded[name][1].startswith("file:")
+                                        for name in ("file-ext", "folder-ext")),
               f"{loaded} {r.stderr[-300:]}")
-        from_files = {name: url for name, (_, url) in loaded.items()}
+        check("before: an import() of a package that is not installed fails inside the extension (#160)",
+              loaded["optional-ext"] == ("files", "caught"), str(loaded))
+        from_files = {name: loaded[name][1] for name in ("file-ext", "folder-ext")}
         resources = commands()
         check("before: the skill and prompt beside the module are loaded",
               resources == ["probe-prompt", "skill:probe-skill"], str(resources))
@@ -115,10 +139,13 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
         took = time.time() - started
         check("pi-bolt compile succeeds", r.returncode == 0, r.stdout[-500:] + r.stderr[-1500:])
         check("it names what it compiled in", "file-ext" in r.stderr and "folder-ext" in r.stderr, r.stderr[-500:])
+        check("it says the import() that does not resolve is left to run time (#160)",
+              'optional-ext: import("pibolt-missing-sdk-160") does not resolve: left to run time' in r.stderr,
+              r.stderr[-800:])
         print(f"     (compile took {took:.1f} s)")
         record = json.loads((install / "compile.json").read_text()) if (install / "compile.json").exists() else {}
         check("compile.json keeps the extensions for the next update",
-              sorted(record.get("extensions", [])) == ["file-ext", "folder-ext"], str(record))
+              sorted(record.get("extensions", [])) == ["file-ext", "folder-ext", "optional-ext"], str(record))
         check("the build it replaced is kept as .previous", (install / f"{build.name}.previous" / "pi").exists())
         about = (build / "pi-bolt.txt").read_text()
         check("pi-bolt.txt says what is compiled in", "Extensions compiled in" in about and "file-ext" in about, about)
@@ -130,7 +157,9 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
               r.returncode == 0 and all(how == "compiled" for how, _ in loaded.values()), f"{loaded} {r.stderr[-300:]}")
         check("no warning while they are unchanged", "changed since" not in r.stderr, r.stderr[-300:])
         check("compiled in, import.meta.url is the installed file's, as loaded from its files (#53)",
-              {name: url for name, (_, url) in loaded.items()} == from_files, f"{loaded} vs {from_files}")
+              {name: loaded[name][1] for name in ("file-ext", "folder-ext")} == from_files, f"{loaded} vs {from_files}")
+        check("compiled in, the import() of a package that is not installed fails inside the extension, as loaded from its files (#160)",
+              loaded["optional-ext"] == ("compiled", "caught"), str(loaded))
         resources = commands()
         check("compiled in, the skill and prompt beside the module are still loaded (#53)",
               resources == ["probe-prompt", "skill:probe-skill"], str(resources))
@@ -178,6 +207,14 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
               r.stderr[-800:])
         leftovers = [p.name for p in install.iterdir() if p.name.startswith(".compile-")]
         check("nothing is left of the work folder", not leftovers, str(leftovers))
+
+        # (#160) A static import of a package that is not there is the extension's own need: the build stops at it, as before.
+        required = agent / "extensions" / "required-ext.ts"
+        required.write_text('import { sdk } from "pibolt-missing-sdk-160";\nexport default function () {\n\treturn sdk;\n}\n')
+        r = compile_("--only", "required-ext", "--out", str(tmp / "required"))
+        check("a static import of a package that is not installed still stops the build (#160)",
+              r.returncode != 0 and 'Could not resolve: "pibolt-missing-sdk-160"' in r.stderr, r.stderr[-800:])
+        required.unlink()
 
 print("compile:", "all passed" if failures == 0 else f"{failures} failed")
 sys.exit(1 if failures else 0)

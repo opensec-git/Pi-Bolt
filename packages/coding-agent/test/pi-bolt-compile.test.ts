@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -19,8 +19,11 @@ import {
 	checkReleaseSums,
 	extensionsOfModule,
 	functionTooBig,
+	importAtRunTime,
+	leaveUnresolvedImportsToRunTime,
 	measuredSizes,
 	measurePieces,
+	originalOfCopy,
 	recordedExclusions,
 	resolveCompilePackages,
 } from "../src/pi-bolt-compile.ts";
@@ -542,5 +545,143 @@ describe("pi-bolt compile keeps a raised limit on the size of a function (#129)"
 		expect(() => bytecodeSizeLimit({ [variable]: "lots" }, undefined)).toThrow(/not a number of bytes/);
 		// (A compile.json edited by hand into something else is not a limit.)
 		expect(bytecodeSizeLimit({}, { maximumBytecodeSize: "big" as unknown as number })).toBeUndefined();
+	});
+});
+
+// Issue #160: @plannotator/pi-extension loads the Claude Agent SDK and the OpenCode SDK with import(), declares neither, and
+// works without them when loaded from its files. The bundler stopped the whole build at those import()s.
+describe("pi-bolt compile leaves an import() it cannot resolve to run time (#160)", () => {
+	const resolvedFrom = (specifier: string, from: string) =>
+		`(() => { try { return Bun.resolveSync(${JSON.stringify(specifier)}, ${JSON.stringify(from)}); } catch { return ${JSON.stringify(specifier)}; } })()`;
+
+	test("the import()'s string is resolved when it runs, from the installed file's folder", () => {
+		const source = 'let sdk;\nasync function getSDK() {\n\tsdk = await import("@opencode-ai/sdk");\n}\n';
+		const from = "/agent/npm/node_modules/@plannotator/pi-extension/generated/ai/providers";
+		expect(importAtRunTime(source, { specifier: "@opencode-ai/sdk", line: 3, column: 21 }, from)).toBe(
+			`let sdk;\nasync function getSDK() {\n\tsdk = await import(${resolvedFrom("@opencode-ai/sdk", from)});\n}\n`,
+		);
+	});
+
+	test("the literal at the bundler's column when the line has the string twice; nothing when the line has none", () => {
+		const line = "const a = 'sdk', b = import('sdk');";
+		expect(importAtRunTime(line, { specifier: "sdk", line: 1, column: 29 }, "/x")).toBe(
+			`const a = 'sdk', b = import(${resolvedFrom("sdk", "/x")});`,
+		);
+		expect(importAtRunTime("import(name);", { specifier: "sdk", line: 1, column: 8 }, "/x")).toBeUndefined();
+		expect(importAtRunTime("x", { specifier: "sdk", line: 4, column: 1 }, "/x")).toBeUndefined();
+	});
+
+	test("a copy's module is the file of the extension or dependency it was copied from", () => {
+		const plan = {
+			roots: [
+				{
+					stageDir: "package-plannotator-pi-extension",
+					root: "/agent/npm/node_modules/@plannotator/pi-extension",
+					origin: "package",
+				},
+			],
+			dependencies: [
+				{ name: "@pierre/diffs", from: "/agent/npm/node_modules/@pierre/diffs" },
+				{ name: "diff", from: "/agent/npm/node_modules/diff" },
+			],
+		};
+		const of = (file: string) => originalOfCopy(join("/stage/src", file), "/stage/src", plan);
+		expect(of("package-plannotator-pi-extension/generated/ai/index.ts")).toBe(
+			"/agent/npm/node_modules/@plannotator/pi-extension/generated/ai/index.ts",
+		);
+		expect(of("node_modules/@pierre/diffs/dist/index.js")).toBe(
+			"/agent/npm/node_modules/@pierre/diffs/dist/index.js",
+		);
+		expect(of("node_modules/diff/lib/index.mjs")).toBe("/agent/npm/node_modules/diff/lib/index.mjs");
+		expect(of("plugins.ts")).toBeUndefined();
+		expect(originalOfCopy("/elsewhere/x.ts", "/stage/src", plan)).toBeUndefined();
+	});
+
+	test("with the bundler: an optional import() no longer stops the build and fails or resolves when it runs, a static import still stops it", (context) => {
+		if (spawnSync("bun", ["--version"]).status !== 0) return context.skip();
+		// The installed extension, with a package installed beside it that it does not declare either.
+		const installed = join(dir, "installed");
+		mkdirSync(join(installed, "node_modules", "pibolt-present-160"), { recursive: true });
+		writeFileSync(
+			join(installed, "node_modules", "pibolt-present-160", "package.json"),
+			JSON.stringify({ name: "pibolt-present-160", type: "module", exports: "./index.js" }),
+		);
+		writeFileSync(
+			join(installed, "node_modules", "pibolt-present-160", "index.js"),
+			'export const found = "present";\n',
+		);
+		const optional = [
+			"async function load(name) {",
+			'\tif (name === "missing") return await import("pibolt-missing-160");',
+			'\treturn await import("pibolt-present-160");',
+			"}",
+			"export default async function () {",
+			"\tconst said = [];",
+			'\ttry { await load("missing"); said.push("loaded"); } catch (error) { said.push("caught " + error.code); }',
+			'\tsaid.push((await load("present")).found);',
+			"\treturn said;",
+			"}",
+			"",
+		].join("\n");
+		writeFileSync(join(installed, "optional.ts"), optional);
+		// Its copy, as the generator makes it (the copy has no node_modules: neither package is declared).
+		const src = join(dir, "stage", "src");
+		mkdirSync(join(src, "global"), { recursive: true });
+		writeFileSync(join(src, "global", "optional.ts"), optional);
+		const manifest = join(src, "plugins.ts");
+		writeFileSync(manifest, 'export default [(await import("./global/optional.ts")).default];\n');
+		const plan = {
+			manifest,
+			plugins: [
+				{
+					name: "optional",
+					entry: join(installed, "optional.ts"),
+					origin: "global",
+					stageDir: "global",
+					importPath: "./global/optional.ts",
+				},
+			],
+			roots: [{ stageDir: "global", root: installed, origin: "global" }],
+			dependencies: [],
+		};
+		const work = mkdtempSync(join(tmpdir(), "pibolt-unresolved-"));
+		const bundle = () =>
+			spawnSync(
+				"bun",
+				["build", "--target=bun", "--format=esm", "--splitting", manifest, "--outdir", join(dir, "out")],
+				{
+					encoding: "utf8",
+				},
+			);
+		try {
+			expect(bundle().status).not.toBe(0);
+			const said = leaveUnresolvedImportsToRunTime("bun", plan, dir, work);
+			expect(said).toEqual([
+				'optional: import("pibolt-missing-160") does not resolve: left to run time, as loaded from its files (global/optional.ts:2)',
+				'optional: import("pibolt-present-160") does not resolve: left to run time, as loaded from its files (global/optional.ts:3)',
+			]);
+			// (Line for line as it was.)
+			expect(readFileSync(join(src, "global", "optional.ts"), "utf8").split("\n").length).toBe(
+				optional.split("\n").length,
+			);
+			const built = bundle();
+			expect(built.status, built.stderr).toBe(0);
+			writeFileSync(
+				join(dir, "out", "run.mjs"),
+				'const [f] = (await import("./plugins.js")).default;\nconsole.log(JSON.stringify(await f()));\n',
+			);
+			const ran = spawnSync("bun", [join(dir, "out", "run.mjs")], { encoding: "utf8", cwd: tmpdir() });
+			expect(JSON.parse(ran.stdout)).toEqual(["caught ERR_MODULE_NOT_FOUND", "present"]);
+
+			// A static import is the extension's own need: left as it is, and the build stops at it as before.
+			const required = 'import { x } from "pibolt-missing-160";\nexport default () => x;\n';
+			writeFileSync(join(src, "global", "required.ts"), required);
+			writeFileSync(manifest, 'export default [(await import("./global/required.ts")).default];\n');
+			expect(leaveUnresolvedImportsToRunTime("bun", plan, dir, work)).toEqual([]);
+			expect(readFileSync(join(src, "global", "required.ts"), "utf8")).toBe(required);
+			expect(bundle().stderr).toContain('Could not resolve: "pibolt-missing-160"');
+		} finally {
+			rmSync(work, { recursive: true, force: true });
+		}
 	});
 });

@@ -139,6 +139,14 @@ installed, because the plugin then imports it like any other package.
 
 Pi's own packages are left out of every copy, so a plugin cannot carry a second Pi.
 
+`pi-bolt compile` also handles an `import()` of a package the extension neither declares nor has installed, made only for
+something it does when that package is there (`@plannotator/pi-extension` loads the Claude Agent SDK and the OpenCode SDK
+this way). The bundler would stop the whole build at it (#160). Instead, in the copy, the `import()` resolves its string
+when it runs, from the installed file's folder, and prints a line saying so. It then fails as it does when Pi loads the
+extension from its files, inside the extension's own error handling, and finds the package if it is installed later. A
+static `import` or a `require()` that does not resolve still stops the build: the extension needs it. A build with
+`build-pi.sh --plugins-from-installed` does not do this.
+
 In the copies, `import.meta.url` is the URL of the file it was copied from, and `import.meta.dir`, `dirname`, `filename`,
 `path` and `file` are that file's too. Bundling would otherwise make each one the executable's (`/$bunfs/root/...`). An
 extension that finds its `skills/`, `prompts/` or themes beside its own module, such as
@@ -421,7 +429,7 @@ python3 bench/ui_check.py --project . --build plugins=out/pi-bolt-plugins/pi
 |---|---|
 | The build stops with "the build stopped" | `build-pi.sh` shows the end of what the compiler printed, and the file with all of it (set `PIBOLT_BUILD_LOG` to choose the file). An `AOT: ` line there gives the reason, most often a module the compiler refused, such as a plugin's bundled `dist`: the row below. |
 | `a function of N bytes of bytecode (...) is bigger than maximumAOTCandidateBytecodeSize` | One function holds more than 256 KB of bytecode. `(a function)`: one module of a plugin, each being a function of its own, usually with a single large literal (a bundled `dist/index.js`, or embedded data such as a tokeniser's rank table), or one very large function. `(the top-level code of a module)`: the top-level code of the whole program, which Pi's own fills to about 200 KB and each module of a plugin adds the few bytes that start it to. `pi-bolt compile` says which module and extension it is, or each extension's share. Leave that plugin out of the manifest; or set `BUN_JSC_maximumAOTCandidateBytecodeSize=N` to compile it anyway (the compiler warns that a big function takes minutes and tens of GB; one of a few hundred KB has taken seconds); or set `BUN_JSC_omitBytecodeFromStaticHeap=0` to run it from bytecode. A plugin left out still loads at run time, and on the JIT-off build its code runs in the interpreter. |
-| `Could not resolve "./something"` during the build | A dynamic import or a file outside the manifest's folder. Use literal imports and keep the plugin's files under the manifest's folder. |
+| `Could not resolve "./something"` during the build | A dynamic import or a file outside the manifest's folder. Use literal imports and keep the plugin's files under the manifest's folder. (`pi-bolt compile` leaves an `import()` it cannot resolve to run time: [what it copies](#what-it-copies).) |
 | `Could not resolve "<package>"` for a plugin's own dependency | The manifest's folder has no `node_modules` entry for that package. Run `npm install` there. An `optionalDependency` counts: once it is installed, the plugin imports it like any other, so it must be in the folder too. |
 | "changed since it was compiled in, so it was loaded from its files" | The extension changed after `pi-bolt compile` compiled it in. Run `pi-bolt compile` again. |
 | A tool or command "conflicts" at startup | The plugin is also loaded at run time. Remove the run-time copy ([step 3](#3-remove-the-run-time-copies)). |

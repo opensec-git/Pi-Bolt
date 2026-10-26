@@ -124,6 +124,13 @@ few extensions together passed the limit, and leaving out any one of them did no
 module on its own, but stopped at an extension with an `await` at its top level (#142). Pi-Bolt 1.0.3 compiles each
 extension on its own, `await` or not.
 
+**`pi-bolt compile` says an `import()` "does not resolve: left to run time".** The extension loads a package it does not
+declare with `import()`, usually for a feature that needs that package (#160). The build goes on, and when that code runs the
+`import()` finds the package from where the extension is installed, or fails as it does without Pi-Bolt. Nothing to do unless
+you want that feature: then install the package where the extension finds it. A static `import` of a package that is not
+there still stops the build with `Could not resolve`: install it, or leave the extension out with `pi-bolt compile --exclude
+<name>`.
+
 **A run-time plugin is slow.** On the default build, plugins loaded at run time are interpreted. Compile them in
 ([PLUGINS.md](PLUGINS.md)) or use the `linux-x64-jit` build.
 

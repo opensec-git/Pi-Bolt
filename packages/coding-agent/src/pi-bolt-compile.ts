@@ -17,6 +17,7 @@
 import { spawnSync } from "node:child_process";
 import { createHash, verify } from "node:crypto";
 import {
+	chmodSync,
 	cpSync,
 	existsSync,
 	mkdirSync,
@@ -29,7 +30,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import chalk from "chalk";
 import { getAgentDir } from "./config.ts";
 import { type CompiledExtensionSource, extensionFingerprint } from "./core/extensions/compiled.ts";
@@ -172,6 +173,8 @@ interface ManifestPlan {
 	manifest: string;
 	plugins: Array<{ name: string; entry: string; origin: string; stageDir: string; importPath: string }>;
 	roots: Array<{ stageDir: string; root: string; origin: string }>;
+	/** The packages copied into the node_modules beside the manifest, and the folder each was copied from. */
+	dependencies: Array<{ name: string; from: string }>;
 	skipped: Array<{ path: string; reason: string }>;
 	/** Those --only or --exclude left out. */
 	excluded: Array<{ name: string; origin: string; entry: string; by: "only" | "exclude" }>;
@@ -778,6 +781,146 @@ function explainTooBig(
 	];
 }
 
+// --- an import() the bundler cannot resolve (#160) --------------------------------------------------------------------
+
+/*
+ * An extension may load a package it does not depend on with import(), for something it does only when that package is
+ * there: @plannotator/pi-extension's providers for the Claude Agent SDK and the OpenCode SDK, whose packages it neither
+ * declares nor installs. Loaded from its files, the import() fails when it runs, the extension catches that, and the rest of
+ * it works. The bundler instead stops the whole build at an import() it cannot resolve, unless the import() is in a `try`
+ * block of its own (which it leaves to run time without a word).
+ *
+ * So before the build, the bundler is run on the extensions alone (UNRESOLVED: a fraction of a second, nothing written), and
+ * each import() of a string it cannot resolve has that string, in the copy, replaced with code that resolves it when it
+ * runs, from the file the copy was made from: the import() then finds what it finds loaded from its files (a package
+ * installed since, too), and fails as it fails there otherwise. Only import() of a literal is changed: a static `import` or
+ * a require() that does not resolve is something the extension needs, and still stops the build with the bundler's error.
+ */
+
+/** Prints, as JSON, each import() the bundler could not resolve in a build of the module `process.argv[2]`. */
+const UNRESOLVED = `const result = await Bun.build({ entrypoints: [process.argv[2]], target: "bun", format: "esm", splitting: true, throw: false });
+const found = [];
+for (const log of result.logs) {
+	if (log.importKind !== "dynamic-import" || typeof log.specifier !== "string" || !log.position) continue;
+	found.push({ specifier: log.specifier, file: log.position.file, line: log.position.line, column: log.position.column });
+}
+process.stdout.write(JSON.stringify(found));
+`;
+
+/** An import() the bundler could not resolve: the string it imports, and where (`line` and `column` count from 1). */
+export interface UnresolvedImport {
+	specifier: string;
+	file: string;
+	line: number;
+	column: number;
+}
+
+/** The file a module of the generator's folder `src` was copied from: an extension's folder, or a dependency's. */
+export function originalOfCopy(
+	file: string,
+	src: string,
+	plan: Pick<ManifestPlan, "roots" | "dependencies">,
+): string | undefined {
+	const rel = relative(src, file);
+	if (rel.startsWith("..") || isAbsolute(rel)) return undefined;
+	const segments = rel.split(sep);
+	if (segments[0] === "node_modules") {
+		const length = segments[1]?.startsWith("@") ? 2 : 1;
+		const name = segments.slice(1, 1 + length).join("/");
+		const dependency = plan.dependencies.find((candidate) => candidate.name === name);
+		return dependency && join(dependency.from, ...segments.slice(1 + length));
+	}
+	const root = plan.roots.find((candidate) => candidate.stageDir === segments[0]);
+	return root && join(root.root, ...segments.slice(1));
+}
+
+/**
+ * `source` with the import() of `at` resolving its string when it runs, from the folder `from`, as Bun resolves it for a
+ * module there; when it does not resolve, the import() is of the string as it was, and fails as it does in a module loaded
+ * from its files. Nothing throws before the import(), which returns its promise as before. Undefined when the string is not
+ * found on its line as a literal (the build then stops at it as before). The line keeps its number.
+ */
+export function importAtRunTime(source: string, at: Omit<UnresolvedImport, "file">, from: string): string | undefined {
+	const lines = source.split("\n");
+	const text = lines[at.line - 1];
+	if (text === undefined) return undefined;
+	// (The literal at the column the bundler gives, or the nearest: a line may hold the same string more than once.)
+	let found: { index: number; length: number } | undefined;
+	for (const quote of ['"', "'", "`"]) {
+		const literal = `${quote}${at.specifier}${quote}`;
+		for (let index = text.indexOf(literal); index !== -1; index = text.indexOf(literal, index + 1)) {
+			if (!found || Math.abs(index - (at.column - 1)) < Math.abs(found.index - (at.column - 1))) {
+				found = { index, length: literal.length };
+			}
+		}
+	}
+	if (!found) return undefined;
+	const specifier = JSON.stringify(at.specifier);
+	const resolved = `(() => { try { return Bun.resolveSync(${specifier}, ${JSON.stringify(from)}); } catch { return ${specifier}; } })()`;
+	lines[at.line - 1] = `${text.slice(0, found.index)}${resolved}${text.slice(found.index + found.length)}`;
+	return lines.join("\n");
+}
+
+/**
+ * Leaves each import() of the extensions' copies that the bundler cannot resolve to run time (above), the extensions'
+ * manifest being `plan.manifest`. Returns a line for each, to print. What the bundler stops at otherwise is left for the
+ * build to report.
+ */
+export function leaveUnresolvedImportsToRunTime(
+	bun: string,
+	plan: Pick<ManifestPlan, "manifest" | "plugins" | "roots" | "dependencies">,
+	cwd: string,
+	work: string,
+): string[] {
+	const env: NodeJS.ProcessEnv = { ...process.env };
+	delete env.BUN_BE_BUN;
+	delete env.BUN_INTERNAL_SPAWN_HELPER;
+	writeFileSync(join(work, "unresolved.mjs"), UNRESOLVED);
+	// (Through its links, as the bundler names the files: /var is /private/var on macOS.)
+	const src = realpathSync(dirname(plan.manifest));
+	const left: Array<UnresolvedImport & { module: string }> = [];
+	const done = new Set<string>();
+	// (Again after a change, in case the bundler reports what it finds after the first it cannot resolve only then.)
+	for (let pass = 0; pass < 8; pass++) {
+		const result = run(bun, [join(work, "unresolved.mjs"), plan.manifest], { cwd, env });
+		let found: unknown;
+		try {
+			found = JSON.parse(result.stdout ?? "");
+		} catch {
+			break;
+		}
+		if (!Array.isArray(found)) break;
+		// (Last first: a change to a line then leaves the columns of those before it on that line as they were.)
+		const fresh = (found as UnresolvedImport[])
+			.filter((at) => !done.has(`${at.file}:${at.line}:${at.column}:${at.specifier}`))
+			.sort((a, b) => a.file.localeCompare(b.file) || b.line - a.line || b.column - a.column);
+		let changed = false;
+		for (const at of fresh) {
+			done.add(`${at.file}:${at.line}:${at.column}:${at.specifier}`);
+			const original = originalOfCopy(at.file, src, plan);
+			if (!original) continue;
+			const changedSource = importAtRunTime(
+				readFileSync(at.file, "utf8"),
+				at,
+				dirname(existsSync(original) ? realpathSync(original) : original),
+			);
+			if (changedSource === undefined) continue;
+			// (A copy keeps its file's mode, and an installed file may be read-only.)
+			chmodSync(at.file, statSync(at.file).mode | 0o200);
+			writeFileSync(at.file, changedSource);
+			changed = true;
+			left.push({ ...at, module: `${PLUGIN_SOURCES}${relative(src, at.file).split(sep).join("/")}` });
+		}
+		if (!changed) break;
+	}
+	return left
+		.sort((a, b) => a.module.localeCompare(b.module) || a.line - b.line || a.column - b.column)
+		.map(
+			(at) =>
+				`${ownerOfModule(at.module, plan)}: import("${at.specifier}") does not resolve: left to run time, as loaded from its files (${at.module.slice(PLUGIN_SOURCES.length)}:${at.line})`,
+		);
+}
+
 /**
  * Builds Pi-Bolt with the extensions of `plan` into `stage`, a folder like this build's. A failed build leaves all of
  * what the compiler printed in `log`, outside the work folder that is removed after it.
@@ -959,6 +1102,9 @@ async function compile(options: CompileOptions): Promise<void> {
 		candidateLines(plan, packages, options.excludeRecorded).forEach((line, index) => {
 			process.stderr.write(`  ${index < plan.plugins.length ? line : chalk.dim(line)}\n`);
 		});
+		for (const line of leaveUnresolvedImportsToRunTime(bun, plan, join(kitDir, kit.agent), work)) {
+			process.stderr.write(`  ${chalk.dim(line)}\n`);
+		}
 
 		const buildDir = where?.buildDir ?? dirname(process.execPath);
 		const stage = join(work, basename(buildDir));
