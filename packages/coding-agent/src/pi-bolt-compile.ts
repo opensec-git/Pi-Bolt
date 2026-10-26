@@ -6,7 +6,7 @@
  * compile kit (pi-bolt-kit-<platform>.tar.gz: the files of Pi the release was built from, the training profile and the build's
  * command; scripts/make-kit.mjs). Both are this build's own release's, checked as the installers check a release: the
  * signature of its SHA256SUMS by the release key, the version its first line names, then each file's SHA-256. They are kept
- * in <install>/cache for the next compile.
+ * in <install>/cache with the SHA256SUMS and its signature, checked again each time: the next compile needs no network.
  *
  * The new executable takes the place of this one, in the same folder; the one it replaces is kept beside it as
  * <folder>.previous (`pi-bolt update --rollback` puts it back). <install>/compile.json keeps what was asked for (and a raised
@@ -14,7 +14,7 @@
  *
  * Each extension compiled in stands in for its installed copy while that is unchanged (core/extensions/compiled.ts).
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash, verify } from "node:crypto";
 import {
 	chmodSync,
@@ -32,9 +32,9 @@ import {
 } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import chalk from "chalk";
-import { getAgentDir } from "./config.ts";
+import { CONFIG_DIR_NAME, getAgentDir } from "./config.ts";
 import { type CompiledExtensionSource, extensionFingerprint } from "./core/extensions/compiled.ts";
-import { DefaultPackageManager } from "./core/package-manager.ts";
+import { collectAutoExtensionEntries, DefaultPackageManager } from "./core/package-manager.ts";
 import { getPackageIdentity } from "./core/package-source.ts";
 import { SettingsManager } from "./core/settings-manager.ts";
 import {
@@ -212,6 +212,10 @@ Compile the extensions installed on this machine into Pi-Bolt: they then run as 
 nothing to load. Each one compiled in is used while its installed copy is unchanged; a changed one is loaded from its files
 again until it is compiled in again. \`pi-bolt update\` compiles the same extensions into the release it installs.
 
+The first compile downloads this release's runtime and compile kit (37-52 MB) and keeps them, with the release's signed
+checksums, in the installation's cache: later compiles of this version need no network. A project's own extensions
+(.pi/extensions) are not compiled in: they load from their files.
+
 Options:
   --only a,b         Only these extensions (by the names this command prints)
   --exclude a,b      Every extension except these. They are recorded: a later \`pi-bolt compile\` without --only or
@@ -222,7 +226,7 @@ Options:
   --status           Show what is compiled in
   --kit FILE         Build with this compile kit instead of the release's (an archive or an unpacked folder)
   --runtime FILE     Build with this runtime instead of the release's (an archive, a folder, or the bun executable)
-  --out DIR          Build into DIR and install nothing
+  --out DIR          Build into DIR and install nothing (its work folder, and compile.log when it fails, go beside DIR)
 
 Environment:
   BUN_JSC_maximumAOTCandidateBytecodeSize=N
@@ -278,10 +282,67 @@ function untar(archive: string, into: string): void {
 	if (result.status !== 0) throw new CompileError(`could not unpack ${archive}: ${result.stderr.trim()}`);
 }
 
-async function download(url: string): Promise<Buffer> {
-	const response = await fetch(url, { redirect: "follow" });
-	if (!response.ok) throw new CompileError(`download failed (${response.status}): ${url}`);
-	return Buffer.from(await response.arrayBuffer());
+/**
+ * How long a download may go without receiving anything, connecting included, before it is given up: a black-holed route
+ * otherwise waits for the system's own timeout (75 s on macOS) with nothing printed.
+ */
+const DOWNLOAD_IDLE_SECONDS = 20;
+
+/** What to do when a download fails: said after the reason. */
+const NETWORK_HINT =
+	"pi-bolt compile downloads this release's runtime and compile kit once (37-52 MB), then compiles offline from its cache. Check the connection or the proxy (HTTPS_PROXY), or give the files with --kit and --runtime (docs/PLUGINS.md#pi-bolt-compile).";
+
+function megabytes(bytes: number): string {
+	return `${(bytes / 1e6).toFixed(bytes < 1e7 ? 1 : 0)} MB`;
+}
+
+/**
+ * Downloads `url`. A failure names the URL and why, and gives up after `idleSeconds` with nothing received. `onSize`: the size
+ * the server gives, before the body comes.
+ */
+export async function download(
+	url: string,
+	options: { idleSeconds?: number; onSize?: (bytes: number | undefined) => void } = {},
+): Promise<Buffer> {
+	const idleSeconds = options.idleSeconds ?? DOWNLOAD_IDLE_SECONDS;
+	const controller = new AbortController();
+	let timedOut = false;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const wait = () => {
+		clearTimeout(timer);
+		timer = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, idleSeconds * 1000);
+	};
+	wait();
+	try {
+		const response = await fetch(url, { redirect: "follow", signal: controller.signal });
+		if (!response.ok) {
+			throw new CompileError(`could not download ${url}: the server answered ${response.status}\n${NETWORK_HINT}`);
+		}
+		const length = Number(response.headers.get("content-length"));
+		options.onSize?.(Number.isFinite(length) && length > 0 ? length : undefined);
+		if (!response.body) return Buffer.from(await response.arrayBuffer());
+		const chunks: Uint8Array[] = [];
+		const reader = response.body.getReader();
+		for (;;) {
+			wait();
+			const { done, value } = await reader.read();
+			if (done) break;
+			chunks.push(value);
+		}
+		return Buffer.concat(chunks);
+	} catch (error) {
+		if (error instanceof CompileError) throw error;
+		const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
+		const reason = timedOut
+			? `nothing came for ${idleSeconds} s`
+			: `${error instanceof Error ? error.message : String(error)}${cause}`;
+		throw new CompileError(`could not download ${url}: ${reason}\n${NETWORK_HINT}`);
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 /**
@@ -313,16 +374,24 @@ export function checkReleaseSums(
 	return sha;
 }
 
-/** The release's file `name`: from the cache when it is there with the signed checksum, else downloaded into it. */
-async function releaseFile(base: string, name: string, sha: Map<string, string>, cacheDir: string): Promise<string> {
+/** The cached archive of the release's file `name`, by its signed checksum. */
+function cachedArchive(cacheDir: string, name: string, sha: Map<string, string>): string {
 	const expected = sha.get(name);
 	if (!expected)
 		throw new CompileError(`the release has no ${name}: it cannot compile extensions in on ${platformName()}`);
-	const cached = join(cacheDir, `${expected.slice(0, 16)}-${name}`);
-	if (existsSync(cached) && sha256File(cached) === expected) return cached;
-	process.stderr.write(chalk.dim(`downloading ${name}\n`));
-	const data = await download(`${base}/${name}`);
-	if (createHash("sha256").update(data).digest("hex") !== expected) {
+	return join(cacheDir, `${expected.slice(0, 16)}-${name}`);
+}
+
+/** The release's file `name`: from the cache when it is there with the signed checksum, else downloaded into it. */
+async function releaseFile(base: string, name: string, sha: Map<string, string>, cacheDir: string): Promise<string> {
+	const cached = cachedArchive(cacheDir, name, sha);
+	if (existsSync(cached) && sha256File(cached) === sha.get(name)) return cached;
+	const url = `${base}/${name}`;
+	const data = await download(url, {
+		onSize: (bytes) =>
+			process.stderr.write(chalk.dim(`downloading ${name}${bytes ? ` (${megabytes(bytes)})` : ""}: ${url}\n`)),
+	});
+	if (createHash("sha256").update(data).digest("hex") !== sha.get(name)) {
 		throw new CompileError(`checksum mismatch: the download of ${name} is corrupt or incomplete`);
 	}
 	mkdirSync(cacheDir, { recursive: true });
@@ -332,16 +401,71 @@ async function releaseFile(base: string, name: string, sha: Map<string, string>,
 	return cached;
 }
 
-/** Keeps only `keep` in the cache: a compile needs the files of one release. */
-function pruneCache(cacheDir: string, keep: string[]): void {
-	if (!existsSync(cacheDir)) return;
-	for (const name of readdirSync(cacheDir)) {
-		if (!keep.includes(join(cacheDir, name))) rmSync(join(cacheDir, name), { recursive: true, force: true });
+/** Where the cache keeps the release's signed checksums, which a compile checks the cached archives against. */
+const CACHED_SUMS = "SHA256SUMS";
+const CACHED_SIGNATURE = "SHA256SUMS.sig";
+
+/** The checksums the cache keeps, if they are Pi-Bolt `version`'s and their signature verifies (checkReleaseSums). */
+function cachedReleaseSums(cacheDir: string, version: string, key: string): Map<string, string> | undefined {
+	try {
+		return checkReleaseSums(
+			readFileSync(join(cacheDir, CACHED_SUMS)),
+			readFileSync(join(cacheDir, CACHED_SIGNATURE)),
+			version,
+			key,
+		);
+	} catch {
+		return undefined;
 	}
 }
 
+/**
+ * The release's runtime and compile kit for `platform`, checked against its signed checksums. They are kept in `cacheDir` with
+ * the checksums and their signature, which are checked again each time as the downloaded ones are: with all of them cached,
+ * no network is needed. Otherwise the checksums are downloaded (or taken from the cache), then what is missing.
+ */
+export async function releaseArchives(
+	base: string,
+	version: string,
+	platform: string,
+	cacheDir: string,
+	key = PIBOLT_RELEASE_KEY,
+): Promise<{ runtime: string; kit: string }> {
+	const names = { runtime: `pi-bolt-runtime-${platform}.tar.gz`, kit: `pi-bolt-kit-${platform}.tar.gz` };
+	let sha = cachedReleaseSums(cacheDir, version, key);
+	const cached =
+		sha &&
+		Object.values(names).every((name) => {
+			const path = cachedArchive(cacheDir, name, sha!);
+			return existsSync(path) && sha256File(path) === sha!.get(name);
+		});
+	if (cached) {
+		process.stderr.write(
+			chalk.dim(`using the runtime and kit in ${cacheDir}, checked against the release's signed checksums\n`),
+		);
+	} else if (!sha) {
+		process.stderr.write(chalk.dim(`checking the release: ${base}/SHA256SUMS\n`));
+		const sums = await download(`${base}/SHA256SUMS`);
+		const signature = await download(`${base}/SHA256SUMS.sig`);
+		sha = checkReleaseSums(sums, signature, version, key);
+		mkdirSync(cacheDir, { recursive: true });
+		writeFileSync(join(cacheDir, CACHED_SUMS), sums);
+		writeFileSync(join(cacheDir, CACHED_SIGNATURE), signature);
+	}
+	const runtime = await releaseFile(base, names.runtime, sha!, cacheDir);
+	const kit = await releaseFile(base, names.kit, sha!, cacheDir);
+	// (A compile needs the files of one release: the others go.)
+	const keep = [runtime, kit, join(cacheDir, CACHED_SUMS), join(cacheDir, CACHED_SIGNATURE)];
+	for (const name of readdirSync(cacheDir)) {
+		if (!keep.includes(join(cacheDir, name))) rmSync(join(cacheDir, name), { recursive: true, force: true });
+	}
+	return { runtime, kit };
+}
+
 /** A kit or runtime given on the command line: an unpacked folder as it is, an archive unpacked into `work`. */
-function localFile(path: string, work: string, folder: string): string {
+function localFile(given: string, work: string, folder: string): string {
+	// (As an absolute path: the build runs in the kit's folder.)
+	const path = resolve(given);
 	if (!existsSync(path)) throw new CompileError(`${path} not found`);
 	if (statSync(path).isDirectory() || !/\.(tar\.gz|tgz)$/.test(path)) return path;
 	untar(path, join(work, folder));
@@ -364,6 +488,7 @@ function sourceOf(
 	plugin: ManifestPlan["plugins"][number],
 	roots: ManifestPlan["roots"],
 	kinds: ReadonlyMap<string, CompilePackage["kind"]>,
+	files: string[] | undefined,
 ): CompiledExtensionSource {
 	const root = roots.find((r) => r.stageDir === plugin.stageDir)?.root ?? dirname(plugin.entry);
 	const entry = realpathSync(plugin.entry);
@@ -385,6 +510,7 @@ function sourceOf(
 			source = { name: plugin.name, entry, scope: "file", root };
 		}
 	}
+	if (files) source = { ...source, files: files.includes(entry) ? files : [entry, ...files] };
 	const fingerprint = extensionFingerprint(source);
 	if (!fingerprint) throw new CompileError(`${plugin.entry}: could not read it`);
 	return { ...source, fingerprint };
@@ -815,6 +941,80 @@ export interface UnresolvedImport {
 	column: number;
 }
 
+/** Prints, as JSON, each module of a build of `process.argv[2]` and the modules it imports (the bundler's metafile). */
+const INPUTS = `const result = await Bun.build({ entrypoints: [process.argv[2]], target: "bun", format: "esm", throw: false, metafile: true });
+const inputs = {};
+for (const [path, input] of Object.entries(result.metafile?.inputs ?? {})) {
+	inputs[path] = input.imports.filter((imported) => !imported.external).map((imported) => imported.path);
+}
+process.stdout.write(JSON.stringify(inputs));
+`;
+
+/**
+ * The files each extension of `plan` was compiled from, as installed, by its name: the modules its entry reaches in the
+ * bundler's graph (`inputs`, paths relative to `cwd`) that are in the generator's folder `src`, each mapped to the file it was
+ * copied from (its own, or a dependency's). Pi's modules, which the build has from the kit, are not the extension's.
+ */
+export function bundledFiles(
+	inputs: Record<string, string[]>,
+	cwd: string,
+	src: string,
+	plan: Pick<ManifestPlan, "manifest" | "plugins" | "roots" | "dependencies">,
+): Map<string, string[]> {
+	const graph = new Map(
+		Object.entries(inputs).map(([path, imports]) => [
+			resolve(cwd, path),
+			imports.map((imported) => resolve(cwd, imported)),
+		]),
+	);
+	const files = new Map<string, string[]>();
+	for (const plugin of plan.plugins) {
+		const start = resolve(src, plugin.importPath);
+		if (!graph.has(start)) continue;
+		const seen = new Set<string>([start]);
+		const queue = [start];
+		while (queue.length > 0) {
+			for (const next of graph.get(queue.pop()!) ?? []) {
+				if (seen.has(next) || !graph.has(next)) continue;
+				seen.add(next);
+				queue.push(next);
+			}
+		}
+		const originals = new Set<string>();
+		for (const copy of seen) {
+			const original = originalOfCopy(copy, src, plan);
+			if (!original) continue;
+			originals.add(existsSync(original) ? realpathSync(original) : original);
+		}
+		files.set(plugin.name, [...originals].sort());
+	}
+	return files;
+}
+
+/**
+ * The files each extension is compiled from (bundledFiles), from a build of the manifest by the bundler, in `cwd` (a fraction
+ * of a second, nothing written). Empty when the bundler gives no graph: each extension is then fingerprinted by its scope.
+ */
+export function extensionFiles(
+	bun: string,
+	plan: Pick<ManifestPlan, "manifest" | "plugins" | "roots" | "dependencies">,
+	cwd: string,
+	work: string,
+): Map<string, string[]> {
+	const env: NodeJS.ProcessEnv = { ...process.env };
+	delete env.BUN_BE_BUN;
+	delete env.BUN_INTERNAL_SPAWN_HELPER;
+	writeFileSync(join(work, "inputs.mjs"), INPUTS);
+	const result = run(bun, [join(work, "inputs.mjs"), plan.manifest], { cwd, env });
+	try {
+		const inputs = JSON.parse(result.stdout ?? "") as Record<string, string[]>;
+		// (Through its links, as the bundler names the files: /var is /private/var on macOS.)
+		return bundledFiles(inputs, realpathSync(cwd), realpathSync(dirname(plan.manifest)), plan);
+	} catch {
+		return new Map();
+	}
+}
+
 /** The file a module of the generator's folder `src` was copied from: an extension's folder, or a dependency's. */
 export function originalOfCopy(
 	file: string,
@@ -929,11 +1129,79 @@ export function leaveUnresolvedImportsToRunTime(
 		);
 }
 
+/** What a run of the build ended with: its exit status or the signal that stopped it, and all it printed. */
+interface BuildResult {
+	status: number | null;
+	signal: NodeJS.Signals | null;
+	output: string;
+	error?: Error;
+}
+
+/** The signals that stop a compile: Ctrl-C (the terminal sends it to the build too), and those a session sends as it ends. */
+const STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+
+/**
+ * Runs the build, keeping what it prints and giving each line to `onLine` as it comes. A stop signal sent to this process is
+ * passed on to the build, and this process waits for the build to end: the work folder is then removed (compile's `finally`),
+ * and the compile says it was interrupted.
+ */
+export function runBuild(
+	command: string,
+	args: string[],
+	options: { cwd?: string; env?: NodeJS.ProcessEnv },
+	onLine: (line: string) => void = () => {},
+): Promise<BuildResult & { interrupted?: NodeJS.Signals }> {
+	return new Promise((resolvePromise) => {
+		const child = spawn(command, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
+		const chunks: Buffer[] = [];
+		let interrupted: NodeJS.Signals | undefined;
+		const handlers = STOP_SIGNALS.map((signal) => {
+			const handler = () => {
+				interrupted = signal;
+				child.kill(signal);
+			};
+			process.on(signal, handler);
+			return [signal, handler] as const;
+		});
+		const lines = (stream: NodeJS.ReadableStream) => {
+			let partial = "";
+			stream.on("data", (chunk: Buffer) => {
+				chunks.push(chunk);
+				const text = partial + chunk.toString("utf8");
+				const complete = text.split(/\r?\n/);
+				partial = complete.pop() ?? "";
+				for (const line of complete) onLine(line);
+			});
+		};
+		lines(child.stdout!);
+		lines(child.stderr!);
+		let error: Error | undefined;
+		child.on("error", (err) => {
+			error = err;
+		});
+		child.on("close", (status, signal) => {
+			for (const [name, handler] of handlers) process.off(name, handler);
+			const stoppedBy =
+				interrupted ?? (signal && (STOP_SIGNALS as readonly string[]).includes(signal) ? signal : undefined);
+			resolvePromise({
+				status,
+				signal,
+				output: Buffer.concat(chunks).toString("utf8"),
+				...(error ? { error } : {}),
+				...(stoppedBy ? { interrupted: stoppedBy } : {}),
+			});
+		});
+	});
+}
+
+/** The first line of a compile.log this command wrote: a log without it may be someone else's file of that name. */
+const LOG_HEADER = "# pi-bolt compile: all of what the compiler printed";
+
 /**
  * Builds Pi-Bolt with the extensions of `plan` into `stage`, a folder like this build's. A failed build leaves all of
  * what the compiler printed in `log`, outside the work folder that is removed after it.
  */
-function buildExecutable(
+async function buildExecutable(
 	kit: Kit,
 	kitDir: string,
 	bun: string,
@@ -943,11 +1211,14 @@ function buildExecutable(
 	log: string,
 	kinds: ReadonlyMap<string, CompilePackage["kind"]>,
 	maximumBytecodeSize: number | undefined,
-): void {
+): Promise<void> {
 	const build = PIBOLT!;
 	const agent = join(kitDir, kit.agent);
 	const staging = join(agent, ".pibolt-plugins");
-	const sources = Object.fromEntries(plan.plugins.map((plugin) => [plugin.name, sourceOf(plugin, plan.roots, kinds)]));
+	const files = extensionFiles(bun, plan, agent, dirname(stage));
+	const sources = Object.fromEntries(
+		plan.plugins.map((plugin) => [plugin.name, sourceOf(plugin, plan.roots, kinds, files.get(plugin.name))]),
+	);
 	writeFileSync(join(staging, "sources.json"), `${JSON.stringify(sources, null, "\t")}\n`);
 	writeFileSync(join(staging, "entry.ts"), ENTRY);
 
@@ -964,22 +1235,35 @@ function buildExecutable(
 		"--outfile",
 		executable,
 	];
-	process.stderr.write(chalk.dim(`compiling Pi ${kit.pi} with ${plan.plugins.length} extension(s)\n`));
-	const result = run(bun, args, { cwd: agent, env: buildEnvironment(kit, kitDir, maximumBytecodeSize) });
+	process.stderr.write(chalk.dim(`bundling Pi ${kit.pi} with ${plan.plugins.length} extension(s)\n`));
+	// (The compiler's first "AOT: " line: the bundle is made, and its code is being compiled.)
+	let compiling = false;
+	const result = await runBuild(
+		bun,
+		args,
+		{ cwd: agent, env: buildEnvironment(kit, kitDir, maximumBytecodeSize) },
+		(line) => {
+			if (compiling || !line.startsWith("AOT: ")) return;
+			compiling = true;
+			process.stderr.write(chalk.dim(`compiling ahead of time to machine code (about ${build.jit ? 40 : 20} s)\n`));
+		},
+	);
+	if (result.interrupted) throw new CompileError(`interrupted (${result.interrupted}): nothing was installed`);
 	if (result.status !== 0 || !existsSync(executable)) {
-		const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
-		writeFileSync(log, output);
+		const output = result.output;
+		const logged = output.trim() !== "";
+		if (logged) writeFileSync(log, `${LOG_HEADER}, ${new Date().toISOString()}\n${output}`);
 		const how = result.error
 			? `the compiler did not run: ${result.error.message}\n`
 			: result.signal
-				? `the compiler was stopped by ${result.signal}\n`
+				? `the compiler was stopped by ${result.signal}${result.signal === "SIGKILL" ? " (by the system when memory runs out, most often)" : ""}\n`
 				: "";
 		const tooBig = functionTooBig(output);
 		const explained = tooBig
 			? explainTooBig(tooBig, plan, bun, agent, dirname(stage), kit.args.includes("--splitting"))
 			: [];
 		throw new CompileError(
-			`the build stopped:\n${how}${buildFailureReason(output, explained)}\n(all of what the compiler printed: ${log})`,
+			`the build stopped:\n${how}${buildFailureReason(output, explained)}${logged ? `\n(all of what the compiler printed: ${log})` : ""}`,
 		);
 	}
 	// Everything else is this build's: the macOS launcher and pi-spawn, Pi's documentation, themes and native modules.
@@ -1043,14 +1327,112 @@ export function piBoltCompileWanted(installDir: string): boolean {
 	return existsSync(join(installDir, "compile.json"));
 }
 
+/** A compile's work folder (mkdtemp's six characters), and the file in it that names the process using it. */
+const WORK_FOLDER = /^\.compile-[A-Za-z0-9]{6}$/;
+const WORK_OWNER = "pid";
+
+function processRunning(pid: number): boolean {
+	if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		// (EPERM: it runs, as another user.)
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+/**
+ * Removes the work folders in `parent` that a compile stopped by SIGKILL (the system's, when memory runs out) left: those whose
+ * process no longer runs. One that names no process (Pi-Bolt 1.0.4's, or one being made) is taken only with `unnamed` (in an
+ * installation's folder, where nothing else makes them) and after an hour, longer than any compile. Returns those removed.
+ */
+export function removeStaleWorkFolders(parent: string, unnamed: boolean, now = Date.now()): string[] {
+	let names: string[];
+	try {
+		names = readdirSync(parent);
+	} catch {
+		return [];
+	}
+	const removed: string[] = [];
+	for (const name of names) {
+		if (!WORK_FOLDER.test(name)) continue;
+		const path = join(parent, name);
+		let stale = false;
+		try {
+			stale = !processRunning(Number(readFileSync(join(path, WORK_OWNER), "utf8").trim()));
+		} catch {
+			try {
+				const stats = statSync(path);
+				stale = unnamed && stats.isDirectory() && now - stats.mtimeMs > 3_600_000;
+			} catch {
+				stale = false;
+			}
+		}
+		if (!stale) continue;
+		rmSync(path, { recursive: true, force: true });
+		removed.push(path);
+	}
+	return removed;
+}
+
+/**
+ * Removes the compile.log a failed compile left, once one succeeds: it describes an old failure. `ours`: the file is in the
+ * installation's folder, where nothing else writes one; elsewhere (beside --out) only a log this command wrote is removed.
+ */
+export function removeOldLog(log: string, ours: boolean): void {
+	try {
+		if (ours || readFileSync(log, "utf8").startsWith(LOG_HEADER)) rmSync(log, { force: true });
+	} catch {
+		// (None there.)
+	}
+}
+
+/**
+ * The extensions of the project in `cwd` (its .pi/extensions, and the extensions and packages its settings name), each with
+ * why it is not compiled in: what is compiled in is for every project, and a project's extensions load from their files,
+ * as Pi loads them, in a trusted project. Read only: nothing of the project is run.
+ */
+export function projectExtensionLines(cwd: string, agentDir: string): string[] {
+	const projectDir = resolve(cwd, CONFIG_DIR_NAME);
+	if (projectDir === resolve(agentDir)) return [];
+	const reason = "not compiled in: a project's extensions load from their files (docs/PLUGINS.md#pi-bolt-compile)";
+	const shown = (path: string) => relative(cwd, path) || path;
+	const lines = collectAutoExtensionEntries(join(projectDir, "extensions")).map(
+		(entry) => `${shown(entry)} (project): ${reason}`,
+	);
+	let settings: { extensions?: unknown; packages?: unknown } = {};
+	try {
+		settings = JSON.parse(readFileSync(join(projectDir, "settings.json"), "utf8"));
+	} catch {
+		// (No project settings, or none that parse: Pi warns about those itself.)
+	}
+	for (const key of ["extensions", "packages"] as const) {
+		const list = settings[key];
+		if (!Array.isArray(list)) continue;
+		for (const item of list) {
+			const source = typeof item === "string" ? item : (item as { source?: unknown })?.source;
+			// (A `-`, `+` or `!` entry turns one on or off: it is not an extension of its own.)
+			if (typeof source !== "string" || /^[-+!]/.test(source)) continue;
+			lines.push(`${source} (project ${CONFIG_DIR_NAME}/settings.json ${key}): ${reason}`);
+		}
+	}
+	return lines;
+}
+
 async function compile(options: CompileOptions): Promise<void> {
 	const build = PIBOLT!;
+	const started = Date.now();
 	const where = options.out ? undefined : installation();
 	const platform = platformName();
-	const workParent = where?.installDir ?? dirname(options.out!);
+	const workParent = where?.installDir ?? dirname(resolve(options.out!));
 	mkdirSync(workParent, { recursive: true });
+	for (const path of removeStaleWorkFolders(workParent, where !== undefined)) {
+		process.stderr.write(chalk.dim(`removed what a compile that was killed left: ${path}\n`));
+	}
 	// (Beside the installation: the new build is then moved into place on the same file system.)
 	const work = mkdtempSync(join(workParent, ".compile-"));
+	writeFileSync(join(work, WORK_OWNER), `${process.pid}\n`);
 	try {
 		let kitDir: string;
 		let bun: string;
@@ -1062,15 +1444,12 @@ async function compile(options: CompileOptions): Promise<void> {
 			const base =
 				process.env.PIBOLT_DOWNLOAD_BASE?.replace(/\/+$/, "") ??
 				`${PIBOLT_RELEASES_URL}/download/bolt-v${build.version}`;
-			const sums = await download(`${base}/SHA256SUMS`);
-			const signature = await download(`${base}/SHA256SUMS.sig`);
-			const sha = checkReleaseSums(sums, signature, build.version);
-			const cacheDir = join(where?.installDir ?? work, "cache");
-			const runtimeArchive = await releaseFile(base, `pi-bolt-runtime-${platform}.tar.gz`, sha, cacheDir);
-			const kitArchive = await releaseFile(base, `pi-bolt-kit-${platform}.tar.gz`, sha, cacheDir);
-			pruneCache(cacheDir, [runtimeArchive, kitArchive]);
-			untar(runtimeArchive, join(work, "runtime"));
-			untar(kitArchive, join(work, "kit"));
+			// (The installation's cache, with --out too.)
+			const installDir = where?.installDir ?? piBoltInstallDir();
+			const archives = await releaseArchives(base, build.version, platform, join(installDir ?? work, "cache"));
+			process.stderr.write(chalk.dim("unpacking the runtime and kit\n"));
+			untar(archives.runtime, join(work, "runtime"));
+			untar(archives.kit, join(work, "kit"));
 			bun = runtimeBun(join(work, "runtime", `pi-bolt-runtime-${platform}`));
 			kitDir = join(work, "kit", `pi-bolt-kit-${platform}`);
 		}
@@ -1083,6 +1462,7 @@ async function compile(options: CompileOptions): Promise<void> {
 		}
 
 		// The extensions installed here, copied into the kit's tree with a manifest (scripts/gen-plugin-manifest.mjs).
+		process.stderr.write(chalk.dim("finding the extensions\n"));
 		const staging = join(kitDir, kit.agent, ".pibolt-plugins");
 		rmSync(staging, { recursive: true, force: true });
 		mkdirSync(staging, { recursive: true });
@@ -1110,13 +1490,14 @@ async function compile(options: CompileOptions): Promise<void> {
 		candidateLines(plan, packages, options.excludeRecorded).forEach((line, index) => {
 			process.stderr.write(`  ${index < plan.plugins.length ? line : chalk.dim(line)}\n`);
 		});
+		for (const line of projectExtensionLines(process.cwd(), agentDir)) process.stderr.write(`  ${chalk.dim(line)}\n`);
 		for (const line of leaveUnresolvedImportsToRunTime(bun, plan, join(kitDir, kit.agent), work)) {
 			process.stderr.write(`  ${chalk.dim(line)}\n`);
 		}
 
 		const buildDir = where?.buildDir ?? dirname(process.execPath);
 		const stage = join(work, basename(buildDir));
-		buildExecutable(
+		await buildExecutable(
 			kit,
 			kitDir,
 			bun,
@@ -1129,11 +1510,15 @@ async function compile(options: CompileOptions): Promise<void> {
 		);
 
 		const names = plan.plugins.map((plugin) => plugin.name);
+		removeOldLog(join(workParent, "compile.log"), where !== undefined);
+		const took = `${Math.round((Date.now() - started) / 1000)} s`;
 		if (options.out) {
 			rmSync(options.out, { recursive: true, force: true });
 			renameSync(stage, options.out);
 			console.log(
-				chalk.green(`Built Pi-Bolt ${build.version} with ${names.join(", ")} compiled in: ${options.out}`),
+				chalk.green(
+					`Built Pi-Bolt ${build.version} with ${names.join(", ")} compiled in, in ${took}: ${options.out}`,
+				),
 			);
 			return;
 		}
@@ -1150,7 +1535,7 @@ async function compile(options: CompileOptions): Promise<void> {
 				: {}),
 		};
 		writeFileSync(join(where!.installDir, "compile.json"), `${JSON.stringify(record, null, "\t")}\n`);
-		console.log(chalk.green(`Compiled into Pi-Bolt ${build.version}: ${names.join(", ")}`));
+		console.log(chalk.green(`Compiled into Pi-Bolt ${build.version} in ${took}: ${names.join(", ")}`));
 		if (!options.afterUpdate) {
 			console.log(chalk.dim(`The build before is kept: pi-bolt update --rollback puts it back.`));
 		}

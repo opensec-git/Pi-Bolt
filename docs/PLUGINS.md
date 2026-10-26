@@ -50,7 +50,7 @@ A compiled-in plugin:
 | Startup cost | none | jiti + TypeScript compile per start | jiti + TypeScript compile per start |
 | Hot code runs as | AOT machine code | bytecode interpreter | interpreter, then JIT after warm-up |
 | Memory | lowest | low | higher (JIT code and compiler threads) |
-| Update the plugin | `pi-bolt compile` again (~20 s) | edit the file and restart | edit the file and restart |
+| Update the plugin | `pi-bolt compile` again (~20 s; ~40 s on a JIT build) | edit the file and restart | edit the file and restart |
 | Best for | plugins you use every day | trying out a plugin, light plugins | many third-party plugins you cannot rebuild |
 
 Run-time loading keeps working in every Pi-Bolt build: `~/.pi/agent/extensions`, project `.pi/extensions`, `pi --extension`, and
@@ -87,17 +87,41 @@ pi-bolt compile --off                       # the release's executable again
 `pi-bolt compile` builds your Pi-Bolt again with the extensions installed on this machine compiled in: the agent directory's
 `extensions` folder, the paths in its `extensions` setting, and the packages Pi-Bolt loads: `packages` with `piBolt.packages`
 applied, as `pi-bolt list` shows them, npm packages, git checkouts and local folders alike (`--no-packages` leaves those out).
-It needs no checkout of this repository and no tools. It downloads its own release's runtime and compile
-kit, checks them against the release's signed `SHA256SUMS` as the installer does, and keeps them in `~/.pi-bolt/cache`. A build
-takes about 20 seconds.
+It needs no checkout of this repository and no tools.
+
+**Network.** The first compile of a version downloads that release's runtime and compile kit (37 MB on macOS, 51-52 MB on Linux)
+from GitHub, checks them against the release's signed `SHA256SUMS` as the installer does, and keeps them in `~/.pi-bolt/cache`
+with the `SHA256SUMS` and its signature. Later compiles of that version, `--out` ones included, check the cached files against
+the cached signed checksums again and need no network. A download that gets nothing for 20 seconds is given up, and the error
+names the URL. Offline from the start, give the two files with `--kit` and `--runtime`. `pi-bolt update` downloads the new
+release's two files when it compiles the extensions into it.
+
+**Time.** About 20 seconds on a fast machine for the default build, and about 40 seconds for a JIT build, plus the first
+download. It says what it is doing as it goes (checking the release, downloading, unpacking, finding the extensions, bundling,
+compiling ahead of time) and how long the whole compile took.
+
+**A project's extensions** (`.pi/extensions`, and the extensions and packages a project's `.pi/settings.json` names) are not
+compiled in: what is compiled in is for every project, and Pi loads a project's extensions only in a trusted project. They load
+from their files as before. `pi-bolt compile` lists the ones of the folder it runs in, with that reason.
+
+**`--exclude`** leaves out the extensions it names (by the names `pi-bolt compile` prints), and compile.json records them: a
+later `pi-bolt compile` without `--only` or `--exclude`, and `pi-bolt update`, leave them out too. A compile with `--exclude`
+records its own list in place of the one before, and `--no-exclude` compiles them all in again.
+
+A compile works in a folder `.compile-*` beside the installation (beside the `--out` folder with `--out`), removed when it ends.
+One left by a compile that was killed is removed by the next one. A failed build leaves all the compiler printed in
+`compile.log` there; the next successful compile removes it.
 
 The new executable takes the place of the installed one, and the one it replaces is kept: `pi-bolt update --rollback` puts it
 back. `pi-bolt update` compiles the same extensions into each release it installs; when that fails, the release is installed
 without them, and the update says so.
 
 An extension compiled in stands in for its installed copy while that copy is unchanged. Pi finds, orders and turns extensions on
-and off as always, and uses the compiled one instead of loading the files. An extension changed since (a package updated, a file
-edited) is loaded from its files, with a warning to run `pi-bolt compile` again. One removed or turned off is not loaded.
+and off as always, and uses the compiled one instead of loading the files. "Unchanged" is by the files it was compiled from: each
+module of the extension and of its dependencies that the bundler took in, by size and modification time. An extension changed
+since (a package updated, a module edited, a dependency patched) is loaded from its files, with a warning to run `pi-bolt
+compile` again; files it writes into its own folder (state, logs, caches) are not a change. One removed or turned off is not
+loaded.
 
 It works in installations made with the installer, on Linux and macOS. On Windows, in Termux and with the npm package, build in
 a checkout of this repository ([below](#compile-in-the-plugins-you-already-have)). The [checklist](#compatibility-checklist)
@@ -432,7 +456,7 @@ python3 bench/ui_check.py --project . --build plugins=out/pi-bolt-plugins/pi
 | `Could not resolve "./something"` during the build | A dynamic import or a file outside the manifest's folder. Use literal imports and keep the plugin's files under the manifest's folder. (`pi-bolt compile` leaves an `import()` it cannot resolve to run time: [what it copies](#what-it-copies).) |
 | `Could not resolve "<package>"` for a plugin's own dependency | The manifest's folder has no `node_modules` entry for that package. Run `npm install` there. An `optionalDependency` counts: once it is installed, the plugin imports it like any other, so it must be in the folder too. |
 | "changed since it was compiled in, so it was loaded from its files" | The extension changed after `pi-bolt compile` compiled it in. Run `pi-bolt compile` again. |
-| A tool or command "conflicts" at startup | The plugin is also loaded at run time. Remove the run-time copy ([step 3](#3-remove-the-run-time-copies)). |
+| A tool or command "conflicts" at startup | The plugin is also loaded at run time. Remove the run-time copy ([step 3](#3-turning-a-compiled-in-plugin-off-and-run-time-copies)). |
 | `ENOENT` for a file next to the plugin's source | Embed the file with an `import ... with { type: "text" }` or `{ type: "file" }`. |
 | A plugin's hot path is slow on the JIT-off build | Check it against the [performance guide](#performance-guide). As a stopgap, build with `--jit on`. |
 | `instanceof` fails, or a registry is empty | A second copy of a Pi package. Move Pi packages to `peerDependencies`; the build excludes `node_modules/@earendil-works/pi-*` and `node_modules/typebox` from the plugin folder. |

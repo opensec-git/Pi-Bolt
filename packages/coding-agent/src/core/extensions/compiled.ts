@@ -6,6 +6,7 @@
  * instead of being loaded from its files (jiti) again. One changed since is loaded from its files, with a warning; one removed
  * since, or turned off, is not loaded at all. With nothing compiled in (every other build), nothing here is used.
  */
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ExtensionFactory } from "./types.ts";
@@ -22,6 +23,13 @@ export interface CompiledExtensionSource {
 	 */
 	scope: "file" | "folder" | "package";
 	root: string;
+	/**
+	 * The files the bundler compiled in for it, as installed: its own modules and its dependencies'. When the compile recorded
+	 * them, the fingerprint covers exactly these, whatever the scope: a file the extension writes into its folder (state, a
+	 * log, a cache) does not make it changed, and an edit to any module it was compiled from (one of an npm package's, npm
+	 * link, patch-package) does.
+	 */
+	files?: string[];
 	fingerprint: string;
 }
 
@@ -43,11 +51,16 @@ function statPart(path: string): string {
 	return `${stats.size}:${Math.trunc(stats.mtimeMs)}`;
 }
 
-/** The fingerprint of an extension's files as they are now; undefined when its entry is gone. */
+/** The fingerprint of an extension's files as they are now; undefined when its entry, or one of its `files`, is gone. */
 export function extensionFingerprint(
-	source: Pick<CompiledExtensionSource, "entry" | "scope" | "root">,
+	source: Pick<CompiledExtensionSource, "entry" | "scope" | "root" | "files">,
 ): string | undefined {
 	try {
+		if (source.files) {
+			const hash = createHash("sha256");
+			for (const file of source.files) hash.update(`${statPart(file)}\n`);
+			return `files:${source.files.length}:${hash.digest("hex").slice(0, 32)}`;
+		}
 		switch (source.scope) {
 			case "file":
 				return `file:${statPart(source.entry)}`;
