@@ -370,6 +370,16 @@ export function sanitizeTerminalText(text: string): string {
  */
 const PENDING_ESCAPE_REGEX = /\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*|[\]PX^_][^\x07\x1b\x9c]*\x1b?|[\x20-\x2f]*)$/y;
 
+/**
+ * text.startsWith(prefix), comparing the part of `text` as long as `prefix` with it. A message streaming in is the text before
+ * with the text added to it (`text += delta`): the engine keeps that as the two strings joined, not as one copy of both,
+ * until it is read; it then copies all of it into one. The part of it that is the text before is that string itself, which
+ * compares with the text before without reading either. (startsWith() reads all of `text`, and so copies it.)
+ */
+export function startsWithText(text: string, prefix: string): boolean {
+	return text.length >= prefix.length && text.slice(0, prefix.length) === prefix;
+}
+
 /** What sanitizeTerminalTextFrom() made of a text: the start of what it makes of a longer text that begins with it. */
 export interface SanitizedTerminalText {
 	/** The text. */
@@ -405,7 +415,7 @@ export function sanitizeTerminalTextFrom(text: string, previous?: SanitizedTermi
 	let unchanged = true;
 	// (Whether the result is the previous text with more after it.)
 	let extendsPrevious = false;
-	if (previous !== undefined && text.length >= previous.raw.length && text.startsWith(previous.raw)) {
+	if (previous !== undefined && startsWithText(text, previous.raw)) {
 		if (text.length === previous.raw.length) return { ...previous, added: "" };
 		start = previous.safeRaw;
 		unchanged = previous.unchanged;
@@ -414,9 +424,11 @@ export function sanitizeTerminalTextFrom(text: string, previous?: SanitizedTermi
 		extendsPrevious = prefix.length === previous.text.length;
 	}
 
-	TERMINAL_CONTROL_REGEX.lastIndex = start;
-	if (!TERMINAL_CONTROL_REGEX.test(text)) {
-		const tail = text.slice(start);
+	// (Only the text from `start` is read: for a text made of the previous one and the text added to it, reading all of it
+	// would copy all of it. No expression here looks behind or anchors at the start, so they match the same there.)
+	const tail = start === 0 ? text : text.slice(start);
+	TERMINAL_CONTROL_REGEX.lastIndex = 0;
+	if (!TERMINAL_CONTROL_REGEX.test(tail)) {
 		const sanitized = unchanged ? text : prefix + tail;
 		return {
 			raw: text,
@@ -431,34 +443,35 @@ export function sanitizeTerminalTextFrom(text: string, previous?: SanitizedTermi
 	// As sanitizeTerminalText() replaces, from `start`, noting the first match that more text could make another: a lone
 	// ESC that begins an escape sequence not complete yet, or a carriage return at the end (it is a line break unless a
 	// line feed follows).
+	// (Positions in `tail`.)
 	let added = "";
-	let last = start;
+	let last = 0;
 	let safeRaw = -1;
 	let safeLength = 0;
 	// (Regular expressions as literals: one built from a string at run time is not compiled ahead of time.)
 	const regex = TERMINAL_SEQUENCE_GLOBAL_REGEX;
-	regex.lastIndex = start;
-	for (let match = regex.exec(text); match !== null; match = regex.exec(text)) {
+	regex.lastIndex = 0;
+	for (let match = regex.exec(tail); match !== null; match = regex.exec(tail)) {
 		const at = match.index;
 		const sequence = match[0];
 		if (safeRaw < 0) {
 			let pending = false;
 			if (sequence === "\r") {
-				pending = at + 1 === text.length;
+				pending = at + 1 === tail.length;
 			} else if (sequence === "\x1b") {
 				PENDING_ESCAPE_REGEX.lastIndex = at;
-				pending = PENDING_ESCAPE_REGEX.test(text);
+				pending = PENDING_ESCAPE_REGEX.test(tail);
 			}
 			if (pending) {
-				safeRaw = at;
+				safeRaw = start + at;
 				safeLength = prefix.length + added.length + (at - last);
 			}
 		}
-		added += text.slice(last, at);
+		added += tail.slice(last, at);
 		if (sequence === "\r") added += "\n";
 		last = at + sequence.length;
 	}
-	added += text.slice(last);
+	added += tail.slice(last);
 	const sanitized = prefix + added;
 	if (safeRaw < 0) {
 		safeRaw = text.length;

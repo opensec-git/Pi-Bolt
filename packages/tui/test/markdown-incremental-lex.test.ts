@@ -195,6 +195,54 @@ describe("Markdown lexing of a growing source", () => {
 		}
 	});
 
+	it("a text given with text added to it, white space only at first, with tabs and escape sequences later", () => {
+		// setText() finds whether the text has a character that is not white space, and a tab, from the text added only
+		// (and sanitises only that): what it renders must be what a component given all of the text renders.
+		const pieces = [
+			" ",
+			"\n",
+			"\n\n",
+			"\t",
+			"\u00a0",
+			"\u2028",
+			"\ufeff",
+			"a",
+			"**b** ",
+			"x\ty",
+			"\x1b[3",
+			"1m",
+			"\r",
+			"\r\n",
+		];
+		const blocks = ["```ts\nconst a = 1;\n", "```\n", "- item\n", "# h\n", "| a | b |\n|---|---|\n", "> q\n"];
+		for (let seed = 1; seed <= 30; seed++) {
+			const next = random(seed * 104729);
+			const transform = seed % 3 === 0 ? (markdown: string) => markdown : undefined;
+			const options = transform === undefined ? undefined : { transform };
+			const component = new Markdown("", 1, 0, defaultMarkdownTheme, undefined, options);
+			// (A prefix of its own, made of white space: nothing kept from another test is taken up.)
+			let text = " ".repeat(seed) + "\n".repeat(seed % 4);
+			for (let step = 0; step < 120; step++) {
+				const r = next();
+				const piece =
+					r < 0.25 && step > 10
+						? blocks[Math.floor(next() * blocks.length)]
+						: pieces[Math.floor(next() * (step < 15 ? 7 : pieces.length))];
+				text += piece;
+				// Now and then a text that is not the one before with text added.
+				if (next() < 0.03) text = text.slice(0, Math.floor(text.length / 2));
+				component.setText(text);
+				// (Several chunks can come between two renders.)
+				if (next() < 0.5) continue;
+				const rendered = component.render(48);
+				setMarkdownCachingForTest(false);
+				const fresh = new Markdown(text, 1, 0, defaultMarkdownTheme, undefined, options).render(48);
+				setMarkdownCachingForTest(true);
+				assert.deepStrictEqual(rendered, fresh, `seed ${seed} step ${step}: ${JSON.stringify(text.slice(-40))}`);
+			}
+		}
+	});
+
 	it("random documents made of blocks in random order", () => {
 		const blocks = Object.values(DOCUMENTS)
 			.join("\n\n")
