@@ -384,6 +384,11 @@ export interface SanitizedTerminalText {
 	 */
 	readonly safeRaw: number;
 	readonly safeLength: number;
+	/**
+	 * When `text` is the text of the `previous` result given for it with more text after it: that text (empty when the
+	 * text is the same). A message streaming in is lexed from what was lexed for it before and what was added.
+	 */
+	readonly added: string | undefined;
 }
 
 /**
@@ -398,24 +403,35 @@ export function sanitizeTerminalTextFrom(text: string, previous?: SanitizedTermi
 	let start = 0;
 	let prefix = "";
 	let unchanged = true;
+	// (Whether the result is the previous text with more after it.)
+	let extendsPrevious = false;
 	if (previous !== undefined && text.length >= previous.raw.length && text.startsWith(previous.raw)) {
-		if (text.length === previous.raw.length) return previous;
+		if (text.length === previous.raw.length) return { ...previous, added: "" };
 		start = previous.safeRaw;
 		unchanged = previous.unchanged;
 		prefix =
 			previous.safeLength === previous.text.length ? previous.text : previous.text.slice(0, previous.safeLength);
+		extendsPrevious = prefix.length === previous.text.length;
 	}
 
 	TERMINAL_CONTROL_REGEX.lastIndex = start;
 	if (!TERMINAL_CONTROL_REGEX.test(text)) {
-		const sanitized = unchanged ? text : prefix + text.slice(start);
-		return { raw: text, text: sanitized, unchanged, safeRaw: text.length, safeLength: sanitized.length };
+		const tail = text.slice(start);
+		const sanitized = unchanged ? text : prefix + tail;
+		return {
+			raw: text,
+			text: sanitized,
+			unchanged,
+			safeRaw: text.length,
+			safeLength: sanitized.length,
+			added: extendsPrevious ? tail : undefined,
+		};
 	}
 
 	// As sanitizeTerminalText() replaces, from `start`, noting the first match that more text could make another: a lone
 	// ESC that begins an escape sequence not complete yet, or a carriage return at the end (it is a line break unless a
 	// line feed follows).
-	let sanitized = prefix;
+	let added = "";
 	let last = start;
 	let safeRaw = -1;
 	let safeLength = 0;
@@ -435,19 +451,27 @@ export function sanitizeTerminalTextFrom(text: string, previous?: SanitizedTermi
 			}
 			if (pending) {
 				safeRaw = at;
-				safeLength = sanitized.length + (at - last);
+				safeLength = prefix.length + added.length + (at - last);
 			}
 		}
-		sanitized += text.slice(last, at);
-		if (sequence === "\r") sanitized += "\n";
+		added += text.slice(last, at);
+		if (sequence === "\r") added += "\n";
 		last = at + sequence.length;
 	}
-	sanitized += text.slice(last);
+	added += text.slice(last);
+	const sanitized = prefix + added;
 	if (safeRaw < 0) {
 		safeRaw = text.length;
 		safeLength = sanitized.length;
 	}
-	return { raw: text, text: sanitized, unchanged: false, safeRaw, safeLength };
+	return {
+		raw: text,
+		text: sanitized,
+		unchanged: false,
+		safeRaw,
+		safeLength,
+		added: extendsPrevious ? added : undefined,
+	};
 }
 
 /**

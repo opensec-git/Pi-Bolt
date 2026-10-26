@@ -125,8 +125,11 @@ describe("sanitizeTerminalTextFrom", () => {
 				// Chunks of 0 to 12 code units: sequences, surrogate pairs and CR LF are split at any point.
 				end = Math.min(full.length, end + Math.floor(next() * 13));
 				const text = full.slice(0, end);
+				const before = previous;
 				previous = sanitizeTerminalTextFrom(text, previous);
 				assert.strictEqual(previous.raw, text);
+				// (`added`, when set, is what the text adds to the one before.)
+				if (previous.added !== undefined) assert.strictEqual((before?.text ?? "") + previous.added, previous.text);
 				assert.strictEqual(
 					previous.text,
 					sanitizeTerminalText(text),
@@ -150,8 +153,10 @@ describe("sanitizeTerminalTextFrom", () => {
 						: choice < 0.8
 							? last.slice(0, Math.floor(next() * last.length))
 							: randomText(next, Math.floor(next() * 30));
+				const before = previous;
 				previous = sanitizeTerminalTextFrom(text, previous);
 				assert.strictEqual(previous.text, sanitizeTerminalText(text), `seed ${seed}, ${JSON.stringify(text)}`);
+				if (previous.added !== undefined) assert.strictEqual((before?.text ?? "") + previous.added, previous.text);
 			}
 		}
 	});
@@ -161,7 +166,10 @@ describe("sanitizeTerminalTextFrom", () => {
 		const second = sanitizeTerminalTextFrom("plain text", first);
 		assert.strictEqual(second.text, "plain text");
 		assert.ok(second.unchanged);
-		assert.strictEqual(sanitizeTerminalTextFrom("plain text", second), second);
+		assert.strictEqual(second.added, "text");
+		const same = sanitizeTerminalTextFrom("plain text", second);
+		assert.strictEqual(same.text, "plain text");
+		assert.strictEqual(same.added, "");
 	});
 
 	it("goes through a sequence again once more text completes it", () => {
