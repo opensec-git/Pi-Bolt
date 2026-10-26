@@ -953,7 +953,9 @@ process.stdout.write(JSON.stringify(inputs));
 /**
  * The files each extension of `plan` was compiled from, as installed, by its name: the modules its entry reaches in the
  * bundler's graph (`inputs`, paths relative to `cwd`) that are in the generator's folder `src`, each mapped to the file it was
- * copied from (its own, or a dependency's). Pi's modules, which the build has from the kit, are not the extension's.
+ * copied from (its own, or a dependency's), with the package.json nearest each, within the folder it was copied from: its
+ * `imports`, `exports` and `main` choose the modules too. Pi's modules, which the build has from the kit, are not the
+ * extension's.
  */
 export function bundledFiles(
 	inputs: Record<string, string[]>,
@@ -967,6 +969,7 @@ export function bundledFiles(
 			imports.map((imported) => resolve(cwd, imported)),
 		]),
 	);
+	const bounds = [...plan.roots.map((root) => root.root), ...plan.dependencies.map((dependency) => dependency.from)];
 	const files = new Map<string, string[]>();
 	for (const plugin of plan.plugins) {
 		const start = resolve(src, plugin.importPath);
@@ -985,10 +988,24 @@ export function bundledFiles(
 			const original = originalOfCopy(copy, src, plan);
 			if (!original) continue;
 			originals.add(existsSync(original) ? realpathSync(original) : original);
+			const manifest = nearestManifest(original, bounds);
+			if (manifest) originals.add(realpathSync(manifest));
 		}
 		files.set(plugin.name, [...originals].sort());
 	}
 	return files;
+}
+
+/** The package.json nearest `file`, in its folder or one above it up to the folder of `bounds` it is in. */
+function nearestManifest(file: string, bounds: string[]): string | undefined {
+	const bound = bounds
+		.filter((folder) => !relative(folder, file).startsWith("..") && !isAbsolute(relative(folder, file)))
+		.sort((a, b) => b.length - a.length)[0];
+	if (!bound) return undefined;
+	for (let folder = dirname(file); ; folder = dirname(folder)) {
+		if (existsSync(join(folder, "package.json"))) return join(folder, "package.json");
+		if (resolve(folder) === resolve(bound) || dirname(folder) === folder) return undefined;
+	}
 }
 
 /**

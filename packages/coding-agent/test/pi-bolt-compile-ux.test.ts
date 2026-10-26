@@ -359,6 +359,8 @@ describe("an extension compiled in is fingerprinted by the files it was compiled
 		);
 		at(join(installed, "ext", "helper.ts"), "export const h = 1;\n", 1);
 		at(join(installed, "ext", "state.json"), "{}\n", 1);
+		// (Its package.json chooses modules too: an `imports` mapping changed is a change of its code.)
+		at(join(installed, "ext", "package.json"), '{"imports":{"#impl":"./helper.ts"}}\n', 1);
 		at(join(installed, "node_modules", "dep", "package.json"), '{"name":"dep","main":"index.js"}\n', 1);
 		at(join(installed, "node_modules", "dep", "index.js"), "export const d = 1;\n", 1);
 		// The copies, as the generator makes them.
@@ -394,7 +396,9 @@ describe("an extension compiled in is fingerprinted by the files it was compiled
 				[
 					real(join(installed, "ext", "helper.ts")),
 					real(join(installed, "ext", "index.ts")),
+					real(join(installed, "ext", "package.json")),
 					real(join(installed, "node_modules", "dep", "index.js")),
+					real(join(installed, "node_modules", "dep", "package.json")),
 				].sort(),
 			);
 		} finally {

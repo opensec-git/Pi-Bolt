@@ -118,7 +118,8 @@ without them, and the update says so.
 
 An extension compiled in stands in for its installed copy while that copy is unchanged. Pi finds, orders and turns extensions on
 and off as always, and uses the compiled one instead of loading the files. "Unchanged" is by the files it was compiled from: each
-module of the extension and of its dependencies that the bundler took in, by size and modification time. An extension changed
+module of the extension and of its dependencies that the bundler took in, and the `package.json` nearest each, by size and
+modification time. An extension changed
 since (a package updated, a module edited, a dependency patched) is loaded from its files, with a warning to run `pi-bolt
 compile` again; files it writes into its own folder (state, logs, caches) are not a change. One removed or turned off is not
 loaded.

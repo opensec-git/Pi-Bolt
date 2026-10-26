@@ -24,7 +24,8 @@ export interface CompiledExtensionSource {
 	scope: "file" | "folder" | "package";
 	root: string;
 	/**
-	 * The files the bundler compiled in for it, as installed: its own modules and its dependencies'. When the compile recorded
+	 * The files the bundler compiled in for it, as installed: its own modules and its dependencies', and the package.json
+	 * nearest each (its `imports`, `exports` and `main` choose modules). When the compile recorded
 	 * them, the fingerprint covers exactly these, whatever the scope: a file the extension writes into its folder (state, a
 	 * log, a cache) does not make it changed, and an edit to any module it was compiled from (one of an npm package's, npm
 	 * link, patch-package) does.
