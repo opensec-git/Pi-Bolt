@@ -1133,7 +1133,9 @@ async function searchInPieces(
 			if (buffer.subarray(kept, filled).indexOf(0) !== -1) return undefined; // (Binary.)
 			const end = bytesRead === 0;
 			// The lines this piece ends: up to its last line break; at the end of the file, the last line, if it has no break.
-			const upTo = end ? filled : buffer.lastIndexOf(NEWLINE, filled - 1) + 1;
+			// (Looked for in the piece only: what was kept has none, and a long line would be searched again for each piece.)
+			const lastBreak = end ? -1 : buffer.subarray(kept, filled).lastIndexOf(NEWLINE);
+			const upTo = end ? filled : lastBreak === -1 ? 0 : kept + lastBreak + 1;
 			if (!end && upTo === 0) {
 				kept = filled;
 				continue;
