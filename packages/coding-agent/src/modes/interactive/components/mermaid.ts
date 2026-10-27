@@ -1,10 +1,12 @@
-import { Marked, type Token } from "@earendil-works/pi-tui";
+import { Marked, startsWithText, type Token } from "@earendil-works/pi-tui";
 import { type MermaidArt, render, type Span } from "grok-mermaid";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import type { MermaidRenderingMode } from "../../../core/settings-manager.ts";
 import type { Theme } from "../theme/theme.ts";
 
 const markdownParser = new Marked();
+/** How many characters of a text a match of "mermaid" that goes on into text added after it can start in. */
+const MERMAID_TAIL = "mermaid".length - 1;
 
 interface MermaidTransformerOptions {
 	getMode: () => MermaidRenderingMode;
@@ -58,16 +60,25 @@ function themedLines(art: MermaidArt, theme: Theme): string[] {
 
 /** Create a transformer that replaces top-level Mermaid code blocks with Unicode terminal diagrams. */
 export function createMermaidMarkdownTransformer(options: MermaidTransformerOptions): MarkdownTransformer {
-	// The last text found not to name Mermaid. A message that streams in is that text with text added: only the added text,
-	// and the last characters before it that a match could start in, are searched.
-	let withoutMermaid: string | undefined;
+	// The last text found not to name Mermaid, and its last characters that a match could start in. A message that streams
+	// in is that text with text added: only those characters and the added text are searched. The text is compared with
+	// startsWithText(), and the added text taken from its end: a message streaming in is the text before with the added
+	// text joined to it, which the engine copies into one string when all of it is read (startsWith(), or a slice that
+	// crosses where the two meet), a copy of the whole message for each chunk.
+	let withoutMermaid: { text: string; tail: string } | undefined;
 	const namesMermaid = (markdown: string): boolean => {
 		const known = withoutMermaid;
-		const found =
-			known !== undefined && markdown.length >= known.length && markdown.startsWith(known)
-				? /mermaid/i.test(markdown.slice(Math.max(0, known.length - "mermaid".length + 1)))
-				: /mermaid/i.test(markdown);
-		withoutMermaid = found ? undefined : markdown;
+		let found: boolean;
+		let tail: string;
+		if (known !== undefined && startsWithText(markdown, known.text)) {
+			const searched = known.tail + markdown.slice(known.text.length);
+			found = /mermaid/i.test(searched);
+			tail = searched.slice(Math.max(0, searched.length - MERMAID_TAIL));
+		} else {
+			found = /mermaid/i.test(markdown);
+			tail = markdown.slice(Math.max(0, markdown.length - MERMAID_TAIL));
+		}
+		withoutMermaid = found ? undefined : { text: markdown, tail };
 		return found;
 	};
 	return (markdown, context) => {
