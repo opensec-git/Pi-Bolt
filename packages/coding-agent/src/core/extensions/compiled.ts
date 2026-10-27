@@ -7,8 +7,8 @@
  * since, or turned off, is not loaded at all.
  *
  * A compiled-in extension's module runs only when Pi loads it, as from its files: its factory imports it (the manifest's
- * `lazy`, scripts/gen-plugin-manifest.mjs). One that fails compiled in (its top-level code reads a file beside its module,
- * which in the build is the staged copy that is gone) is loaded from its files, as Pi loads it, with a warning; it then works,
+ * `lazy`, scripts/gen-plugin-manifest.mjs). One that fails compiled in (it reads the staged copy the build was made from,
+ * which is gone) is loaded from its files, as Pi loads it, with a warning; it then works,
  * or fails with Pi's own error. With nothing compiled in (every other build), nothing here is used.
  */
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";

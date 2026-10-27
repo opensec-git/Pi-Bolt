@@ -105,8 +105,8 @@ variables from outside itself, and stops the program when it is called if it doe
 
 **`pi-bolt compile` says an extension is "not compiled in".** It could not build that extension (a static `import` or
 `require()` that does not resolve: the line names it and the installed file), a function of it is too big for the compiler
-(below), or it fails in the new build as it starts (its top-level code reads a file beside its module, which in the build is a
-copy that is gone). The others are compiled in, and that one loads from its files as Pi loads it: it works there, or fails with
+(below), or it fails in the new build as it starts and not from its files (it reads the copy the build was made from, which is
+gone). The others are compiled in, and that one loads from its files as Pi loads it: it works there, or fails with
 Pi's own error. Nothing to do; to compile it in, install what it imports, or fix what it reads.
 
 **`pi-bolt compile` stops with "is bigger than maximumAOTCandidateBytecodeSize".** When `pi-bolt compile` can tell which

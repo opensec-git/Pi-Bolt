@@ -113,6 +113,11 @@ export interface CompilePackages {
 	passedOver: Array<{ path: string; reason: string }>;
 	/** Packages of Pi's `packages` list that piBolt.packages removes. */
 	removed: string[];
+	/**
+	 * The other extensions Pi loads from the agent directory: those of its extensions/ and of the `extensions` setting, less
+	 * those the setting turns off (gen-plugin-manifest.mjs --enabled).
+	 */
+	enabled: string[];
 }
 
 /**
@@ -171,7 +176,16 @@ export async function resolveCompilePackages(agentDir: string, cwd = process.cwd
 					: "file";
 		packages.push({ source, kind, root: packageRoot ?? dirname(entries[0]), entries });
 	}
-	return { packages, passedOver, removed };
+	const enabled = extensions
+		.filter(
+			(resource) =>
+				resource.enabled &&
+				resource.metadata.scope === "user" &&
+				resource.metadata.origin === "top-level" &&
+				(resource.metadata.source === "auto" || resource.metadata.source === "local"),
+		)
+		.map((resource) => resource.path);
+	return { packages, passedOver, removed, enabled };
 }
 
 /** The plan gen-plugin-manifest.mjs prints with --json. */
@@ -1047,8 +1061,8 @@ export function leaveUnresolvedImportsToRunTime(
 /*
  * Pi loads each extension on its own: one that does not load fails alone, with Pi's error, and the others load. A build of
  * them all stopped at the first one the bundler could not build (a static import of a package that is not installed, say),
- * and an extension whose top-level code threw in the build (it reads a file beside its module, which is the staged copy
- * that is gone) stopped every start of it. So each such extension is left out of the build instead, with a line that says
+ * and an extension whose top-level code threw in the build (it read the staged copy, which is gone) stopped every start of
+ * it. So each such extension is left out of the build instead, with a line that says
  * why, and loads from its files as Pi loads it: before the build, each the bundler reports an error in (BUNDLE_ERRORS); after
  * it, each whose module throws in the new executable (checkCompiledStart). They are found each time, not recorded.
  */
@@ -1396,16 +1410,22 @@ async function compile(options: CompileOptions): Promise<void> {
 		generatorArgs.push("--agent-dir", agentDir);
 		if (options.only?.length) generatorArgs.push("--only", options.only.join(","));
 		if (options.exclude?.length) generatorArgs.push("--exclude", options.exclude.join(","));
-		// The packages as Pi-Bolt loads them, not the `packages` setting the generator reads by itself.
+		// The packages as Pi-Bolt loads them, not the `packages` setting the generator reads by itself; and the other
+		// extensions, with those the `extensions` setting turns off left out, as Pi leaves them out.
+		const resolved = await resolveCompilePackages(agentDir);
 		const packages: CompilePackages = options.noPackages
-			? { packages: [], passedOver: [], removed: [] }
-			: await resolveCompilePackages(agentDir);
+			? { packages: [], passedOver: [], removed: [], enabled: resolved.enabled }
+			: resolved;
 		if (options.noPackages) generatorArgs.push("--no-packages");
 		else {
 			const list = join(work, "packages.json");
 			writeFileSync(list, JSON.stringify(packages.packages));
 			generatorArgs.push("--packages", list);
 		}
+		writeFileSync(join(work, "enabled.json"), JSON.stringify(packages.enabled));
+		generatorArgs.push("--enabled", join(work, "enabled.json"));
+		// (Without the JIT, a package's Bun build is not what Pi loads from its files: --no-jit in gen-plugin-manifest.mjs.)
+		if (!build.jit) generatorArgs.push("--no-jit");
 		const kinds = new Map(packages.packages.map((pkg) => [resolve(pkg.root), pkg.kind]));
 		const generatorEnv = { ...process.env };
 		delete generatorEnv.BUN_BE_BUN;
@@ -1474,8 +1494,8 @@ async function compile(options: CompileOptions): Promise<void> {
 				);
 				continue;
 			}
-			// (Without the copies the build was made from, which are gone once a compile ends: an extension that reads a file
-			// beside its module then fails here as it would at every start.)
+			// (Without the copies the build was made from, which are gone once a compile ends: an extension that reads one then
+			// fails here as it would at every start.)
 			const aside = `${staging}.built`;
 			renameSync(staging, aside);
 			let failed: ReturnType<typeof checkCompiledStart>;
