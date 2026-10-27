@@ -1,5 +1,6 @@
 /**
- * Covers gen-plugin-manifest.mjs, and in particular the discovery rules it repeats from Pi.
+ * Covers gen-plugin-manifest.mjs (packages/coding-agent/src/, run by scripts/gen-plugin-manifest.mjs), and in particular
+ * the discovery rules it repeats from Pi.
  *
  * Those rules are Pi's: packages/coding-agent/src/core/extensions/loader.ts, `discoverExtensionsInDir` and
  * `resolveExtensionEntries`. The generator cannot import them, because they are private to Pi and this script belongs to
@@ -29,12 +30,20 @@ import ignore from "ignore";
 import {
 	defaultAgentDir,
 	expandPackageEntry,
+	forBuildWithoutJit,
 	ignoreRulesOf,
-	pinImportMeta,
+	namesPlugin,
+	PI_MODULE_ALIASES,
 	planPlugins,
 	renderManifest,
+	rewriteCopy,
+	selectionProblem,
+	withoutBunCondition,
 	writePluginFolder,
-} from "./gen-plugin-manifest.mjs";
+} from "../packages/coding-agent/src/gen-plugin-manifest.mjs";
+
+/** The generator's module (scripts/gen-plugin-manifest.mjs is its command), for scripts that import it. */
+const GENERATOR_URL = new URL("../packages/coding-agent/src/gen-plugin-manifest.mjs", import.meta.url).href;
 
 const temporary = [];
 function scratch(prefix = "pibolt-plugins-") {
@@ -173,6 +182,111 @@ describe("where it looks", () => {
 		assert.deepEqual(names(planPlugins({ agentDir, cwd: project })), ["trusted-folder"]);
 	});
 
+	// Loader-parity review #8: where the generator's own discovery took what Pi does not load (package-manager.ts,
+	// collectAutoExtensionEntries and resolveLocalEntries).
+	it("passes over what Pi passes over in a folder: dot names, a link to nothing, ignored names (#8)", () => {
+		const agentDir = agent();
+		const extensions = join(agentDir, "extensions");
+		write(join(extensions, "kept.ts"));
+		write(join(extensions, ".hidden.ts"));
+		write(join(extensions, ".hidden-folder", "index.ts"));
+		// (An editor's lock file: a link to nowhere. Copied, it stopped the generator with ENOENT.)
+		symlinkSync(join(agentDir, "nowhere", "lock"), join(extensions, ".#kept.ts"));
+		symlinkSync(join(agentDir, "nowhere", "gone"), join(extensions, "gone.ts"));
+		write(join(extensions, "scratch.ts"));
+		write(join(extensions, "drafts", "index.ts"));
+		// (An ignored link to a file: PR #179 review.)
+		write(join(agentDir, "elsewhere", "linked.ts"));
+		symlinkSync(join(agentDir, "elsewhere", "linked.ts"), join(extensions, "ignored-link.ts"));
+		writeFileSync(join(extensions, ".gitignore"), "scratch.ts\ndrafts/\nignored-link.ts\n");
+
+		const plan = planPlugins({ agentDir });
+		assert.deepEqual(names(plan), ["kept"]);
+		writePluginFolder(plan, join(scratch(), "folder"));
+	});
+
+	it("takes only the folder's own index when the extensions folder has one, as Pi does (#8)", () => {
+		const agentDir = agent();
+		write(join(agentDir, "extensions", "index.ts"), 'import "./helper.ts";\nexport default () => {};\n');
+		write(join(agentDir, "extensions", "helper.ts"), "export const helper = 1;\n");
+
+		const plan = planPlugins({ agentDir });
+		assert.deepEqual(
+			plan.plugins.map((plugin) => plugin.entry),
+			[join(agentDir, "extensions", "index.ts")],
+		);
+	});
+
+	it("takes a relative path in the extensions setting from the agent directory, as Pi does (#8)", () => {
+		const agentDir = agent({ extensions: ["my-tools/configured.ts", "./more"] });
+		write(join(agentDir, "my-tools", "configured.ts"));
+		write(join(agentDir, "more", "one.ts"));
+		write(join(agentDir, "more", ".dot.ts"));
+
+		const cwd = process.cwd();
+		process.chdir(scratch());
+		try {
+			assert.deepEqual(names(planPlugins({ agentDir })), ["configured", "one"]);
+		} finally {
+			process.chdir(cwd);
+		}
+	});
+
+	it("passes over an extension the extensions setting turns off, which then cannot stop the build (#8)", () => {
+		const agentDir = agent({ extensions: ["-extensions/off.ts"] });
+		write(join(agentDir, "extensions", "on.ts"));
+		write(join(agentDir, "extensions", "off.ts"), 'import "not-installed";\nexport default () => {};\n');
+
+		const plan = planPlugins({ agentDir, enabled: [join(agentDir, "extensions", "on.ts")] });
+		assert.deepEqual(names(plan), ["on"]);
+		assert.deepEqual(plan.skipped, [
+			{ path: join(agentDir, "extensions", "off.ts"), reason: "turned off in the extensions setting" },
+		]);
+	});
+
+	it("copies a file in the extensions setting with what it imports, not its whole folder (#8)", (context) => {
+		const bun = spawnSync("bun", ["--version"], { encoding: "utf8" });
+		if (bun.status !== 0) return context.skip("no bun on PATH");
+		const home = scratch("pibolt-home-");
+		write(join(home, "ext.ts"), 'import { helper } from "./lib/helper.ts";\nexport default () => helper;\n');
+		write(join(home, "lib", "helper.ts"), 'export { data as helper } from "./data.json";\nexport * from "./uses-mapped.ts";\n');
+		write(join(home, "lib", "data.json"), '{ "data": 1 }\n');
+		write(join(home, "lib", "unrelated.ts"), "export const unrelated = 1;\n");
+		// (A name the folder's package.json maps: PR #179 review.)
+		write(join(home, "package.json"), JSON.stringify({ imports: { "#mapped": "./mapped.ts" } }));
+		write(join(home, "mapped.ts"), "export const mapped = 1;\n");
+		write(join(home, "lib", "uses-mapped.ts"), 'export { mapped } from "#mapped";\n');
+		write(join(home, "Downloads", "big.bin"), "x".repeat(1024));
+		const agentDir = agent({ extensions: [join(home, "ext.ts")] });
+
+		const out = join(scratch(), "folder");
+		const script = join(scratch(), "run.mjs");
+		write(
+			script,
+			[
+				`import { planPlugins, writePluginFolder } from ${JSON.stringify(GENERATOR_URL)};`,
+				`const plan = planPlugins({ agentDir: ${JSON.stringify(agentDir)} });`,
+				`writePluginFolder(plan, ${JSON.stringify(out)});`,
+				"console.log(plan.roots[0].stageDir);",
+			].join("\n"),
+		);
+		const generated = spawnSync("bun", [script], { encoding: "utf8" });
+		assert.equal(generated.status, 0, generated.stderr);
+		const staged = join(out, generated.stdout.trim());
+		const files = (dir, prefix = "") =>
+			readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+				entry.isDirectory() ? files(join(dir, entry.name), `${prefix}${entry.name}/`) : [`${prefix}${entry.name}`],
+			);
+		assert.deepEqual(files(staged).sort(), [
+			"ext.ts",
+			"lib/data.json",
+			"lib/helper.ts",
+			"lib/uses-mapped.ts",
+			"mapped.ts",
+			"package.json",
+		]);
+	});
+
 	it("keeps a project and a global extension of the same name apart", () => {
 		const agentDir = agent();
 		write(join(agentDir, "extensions", "preset", "index.ts"));
@@ -199,7 +313,7 @@ describe("packages installed with pi install", () => {
 		const manifest = writePluginFolder(plan, out);
 		assert.match(
 			readFileSync(manifest, "utf8"),
-			/await import\("\.\/package-injaneity-pi-computer-use\/extensions\/computer-use\.ts"\)/,
+			/\(\) => import\("\.\/package-injaneity-pi-computer-use\/extensions\/computer-use\.ts"\)/,
 		);
 		assert.equal(readFileSync(join(out, plan.plugins[0].importPath), "utf8"), FACTORY);
 	});
@@ -353,6 +467,46 @@ describe("packages installed with pi install", () => {
 		assert.deepEqual(planPlugins({ agentDir }).dependencies, []);
 	});
 
+	// Loader-parity review #7 (case b20): npm installs a peer beside the package that needs it, where Pi finds it. Pi's own
+	// are Pi's, by any name Pi gives them, even when npm installed an old copy too.
+	it("copies an installed peer that is not one of Pi's", () => {
+		const agentDir = agent({ packages: ["npm:peer-user"] });
+		const peers = { "peer-lib": "1", "@earendil-works/pi-tui": "*", "@sinclair/typebox": "*", "@mariozechner/pi-tui": "*" };
+		installPackage(agentDir, "peer-user", { pi: { extensions: ["./index.js"] }, peerDependencies: peers }, ["index.js"]);
+		for (const name of Object.keys(peers)) installPackage(agentDir, name, {}, ["index.js"]);
+		installPackage(agentDir, "peer-absent-user", { peerDependencies: { absent: "1" } }, ["index.js"]);
+
+		assert.deepEqual(
+			planPlugins({ agentDir }).dependencies.map((dependency) => dependency.name),
+			["peer-lib"],
+		);
+	});
+
+	// Loader-parity review #7 (case b11): @earendil-works/chord, pi-web-ui and the like are packages of their own, which an
+	// extension depends on as on any other; only those Pi gives extensions are Pi's.
+	it("copies a package of Pi's scope that Pi does not give extensions", () => {
+		const agentDir = agent({ packages: ["npm:scope-user"] });
+		installPackage(
+			agentDir,
+			"scope-user",
+			{ pi: { extensions: ["./index.js"] }, dependencies: { "@earendil-works/chord": "1", "@earendil-works/pi-tui": "1" } },
+			["index.js", "node_modules/@earendil-works/pi-extra/index.js", "node_modules/@earendil-works/pi-ai/index.js"],
+		);
+		installPackage(agentDir, "@earendil-works/chord", {}, ["index.js"]);
+		installPackage(agentDir, "@earendil-works/pi-tui", {}, ["index.js"]);
+
+		const plan = planPlugins({ agentDir });
+		assert.deepEqual(
+			plan.dependencies.map((dependency) => dependency.name),
+			["@earendil-works/chord"],
+		);
+		const out = join(scratch(), "folder");
+		writePluginFolder(plan, out);
+		const staged = join(out, "package-scope-user", "node_modules", "@earendil-works");
+		assert.deepEqual(readdirSync(staged), ["pi-extra"]);
+		assert.ok(readFileSync(join(out, "node_modules", "@earendil-works", "chord", "index.js"), "utf8"));
+	});
+
 	it("takes the files of a folder in pi.extensions, as Pi does, and not the folder", () => {
 		// pi-openrouter-session declares "./extensions", a folder holding one .ts file and no index.
 		const agentDir = agent({ packages: ["npm:pi-openrouter-session", "npm:two-files"] });
@@ -378,7 +532,7 @@ describe("packages installed with pi install", () => {
 
 		const out = join(scratch(), "folder");
 		const manifest = writePluginFolder(plan, out);
-		const imports = [...readFileSync(manifest, "utf8").matchAll(/await import\("\.\/(.+?)"\)/g)];
+		const imports = [...readFileSync(manifest, "utf8").matchAll(/\(\) => import\("\.\/(.+?)"\)/g)];
 		assert.equal(imports.length, 3);
 		for (const [, path] of imports) assert.ok(readFileSync(join(out, path), "utf8"));
 	});
@@ -814,6 +968,118 @@ describe("the dependencies of a local package, as the staged copy finds them", (
 	});
 });
 
+// Loader-parity review #7 (case b5): Pi finds a package from an extension's file as Node does, up through the folders above
+// it; the copy is elsewhere, and the build stopped at the import.
+describe("packages imported from above the extension's folder", () => {
+	it("copies a package the build finds only from the extension's own file, and what it depends on", (context) => {
+		const bun = spawnSync("bun", ["--version"], { encoding: "utf8" });
+		if (bun.status !== 0) return context.skip("no bun on PATH");
+		const agentDir = agent();
+		write(join(agentDir, "node_modules", "above-dep", "package.json"), JSON.stringify({ name: "above-dep", main: "index.js", dependencies: { "its-dep": "1" } }));
+		write(join(agentDir, "node_modules", "above-dep", "index.js"), 'module.exports = require("its-dep") + "+above";\n');
+		write(join(agentDir, "node_modules", "its-dep", "package.json"), JSON.stringify({ name: "its-dep", main: "index.js" }));
+		write(join(agentDir, "node_modules", "its-dep", "index.js"), 'module.exports = "its";\n');
+		write(join(agentDir, "node_modules", "@scope", "scoped", "package.json"), JSON.stringify({ name: "@scope/scoped", main: "index.js" }));
+		write(join(agentDir, "node_modules", "@scope", "scoped", "index.js"), 'module.exports = "scoped";\n');
+		write(join(agentDir, "node_modules", "unused", "index.js"), "module.exports = 0;\n");
+		write(
+			join(agentDir, "extensions", "uses-above.ts"),
+			'import above from "above-dep";\nimport scoped from "@scope/scoped/index.js";\nexport default () => `${above} ${scoped}`;\n',
+		);
+
+		const out = join(scratch(), "build");
+		const script = join(out, "run.mjs");
+		write(
+			script,
+			[
+				`import { copyDependenciesFound, planPlugins, writePluginFolder } from ${JSON.stringify(GENERATOR_URL)};`,
+				`const plan = planPlugins({ agentDir: ${JSON.stringify(agentDir)} });`,
+				`writePluginFolder(plan, ${JSON.stringify(join(out, "src"))});`,
+				`const copied = await copyDependenciesFound(plan, ${JSON.stringify(join(out, "src"))});`,
+				"console.log(JSON.stringify(copied.map((dependency) => dependency.name).sort()));",
+			].join("\n"),
+		);
+		const generated = spawnSync("bun", [script], { encoding: "utf8" });
+		assert.equal(generated.status, 0, generated.stderr);
+		assert.deepEqual(JSON.parse(generated.stdout), ["@scope/scoped", "above-dep", "its-dep"]);
+
+		writeFileSync(
+			join(out, "main.ts"),
+			'const { default: plugins } = await import("./src/plugins.ts");\nconsole.log(await plugins[0].factory());\n',
+		);
+		const built = spawnSync("bun", ["build", "--target=bun", "--format=esm", "--splitting", "./main.ts", "--outdir", "dist"], {
+			cwd: out,
+			encoding: "utf8",
+		});
+		assert.equal(built.status, 0, built.stderr);
+		const ran = spawnSync("bun", [join(out, "dist", "main.js")], { encoding: "utf8" });
+		assert.equal(ran.stdout.trim(), "its+above scoped", ran.stderr);
+	});
+});
+
+// Loader-parity review #11 (cases a18, b14): from its files, Pi gives a package's `node` export, and without the JIT refuses
+// a package that needs bun:ffi at its import, so that an extension falls back to its Node package.
+describe("the build without the JIT", () => {
+	it("takes what Pi loads there: the node condition, and a failing import for a package that needs bun:ffi", (context) => {
+		const bun = spawnSync("bun", ["--version"], { encoding: "utf8" });
+		if (bun.status !== 0) return context.skip("no bun on PATH");
+		const agentDir = agent();
+		const extension = join(agentDir, "extensions", "ffi-fallback");
+		const conditions = join(extension, "node_modules", "conditions");
+		write(
+			join(conditions, "package.json"),
+			JSON.stringify({ name: "conditions", exports: { ".": { bun: "./bun.js", node: "./node.js", default: "./node.js" } } }),
+		);
+		write(join(conditions, "bun.js"), 'export const via = "bun";\n');
+		write(join(conditions, "node.js"), 'export const via = "node";\n');
+		const ffi = join(extension, "node_modules", "@ff-labs", "fff-bun");
+		write(join(ffi, "package.json"), JSON.stringify({ name: "@ff-labs/fff-bun", type: "module", main: "index.js" }));
+		write(join(ffi, "index.js"), 'export const pid = () => "bun:ffi";\n');
+		write(join(extension, "node_modules", "fallback", "index.js"), 'module.exports = { pid: () => "node" };\n');
+		write(
+			join(extension, "index.ts"),
+			[
+				'import { via } from "conditions";',
+				"export default async () => {",
+				"	let mod;",
+				'	try { mod = await import("@ff-labs/fff-bun"); } catch { mod = await import("fallback"); }',
+				"	return [via, mod.pid()];",
+				"};",
+				"",
+			].join("\n"),
+		);
+
+		const run = (noJit) => {
+			const out = join(scratch(), "build");
+			writePluginFolder(planPlugins({ agentDir }), join(out, "src"));
+			if (noJit) forBuildWithoutJit(join(out, "src"));
+			writeFileSync(
+				join(out, "main.ts"),
+				'const { default: plugins } = await import("./src/plugins.ts");\nconsole.log(JSON.stringify(await plugins[0].factory()));\n',
+			);
+			const built = spawnSync("bun", ["build", "--target=bun", "--format=esm", "--splitting", "./main.ts", "--outdir", "dist"], {
+				cwd: out,
+				encoding: "utf8",
+			});
+			assert.equal(built.status, 0, built.stderr);
+			const ran = spawnSync("bun", [join(out, "dist", "main.js")], { encoding: "utf8" });
+			assert.equal(ran.status, 0, ran.stderr);
+			return JSON.parse(ran.stdout);
+		};
+		assert.deepEqual(run(false), ["bun", "bun:ffi"]);
+		assert.deepEqual(run(true), ["node", "node"]);
+		// (The installed package is as it was.)
+		assert.equal(JSON.parse(readFileSync(join(conditions, "package.json"), "utf8")).exports["."].bun, "./bun.js");
+	});
+
+	it("takes the bun condition out at any depth", () => {
+		assert.deepEqual(
+			withoutBunCondition({ ".": { bun: "./b.js", import: { bun: "./b.mjs", default: "./i.mjs" } }, "./x": ["./x.js"] }),
+			{ ".": { import: { default: "./i.mjs" } }, "./x": ["./x.js"] },
+		);
+	});
+});
+
 describe("what it leaves out", () => {
 	it("lists each extension --only or --exclude leaves out, and by which (#108)", () => {
 		const agentDir = agent();
@@ -823,6 +1089,43 @@ describe("what it leaves out", () => {
 		assert.deepEqual(excluded({ exclude: ["b"] }), [["b", "exclude"]]);
 		assert.deepEqual(excluded({ only: ["a", "b"], exclude: ["b"] }), [["b", "exclude"], ["c", "only"]]);
 		assert.deepEqual(excluded({}), []);
+	});
+
+	// #174: `--exclude "@mariozechner/pi-tui"` (a package the extension imports) and `--exclude @acme/pi-tools` (named
+	// acme-pi-tools here) left out nothing, without a word.
+	it("takes an extension by its name, a package by its name, source or folder, and either by its file or folder", () => {
+		const agentDir = agent({ extensions: [] });
+		write(join(agentDir, "extensions", "hello.ts"));
+		write(join(agentDir, "extensions", "word-tools", "index.ts"));
+		const tools = installPackage(agentDir, "@acme/pi-tools", { pi: { extensions: ["./a.ts", "./b.ts"] } }, ["a.ts", "b.ts"]);
+		const packages = [{ source: "npm:@acme/pi-tools@1.2.0", root: tools, entries: [join(tools, "a.ts"), join(tools, "b.ts")] }];
+		const plan = planPlugins({ agentDir, packages });
+		const named = (value) => plan.plugins.filter((plugin) => namesPlugin(value, plugin)).map((plugin) => plugin.name);
+		assert.deepEqual(named("acme-pi-tools-a"), ["acme-pi-tools-a"]);
+		for (const value of ["@acme/pi-tools", "npm:@acme/pi-tools@1.2.0", "npm:@acme/pi-tools", tools]) {
+			assert.deepEqual(named(value), ["acme-pi-tools-a", "acme-pi-tools-b"], value);
+		}
+		assert.deepEqual(named(join(tools, "b.ts")), ["acme-pi-tools-b"]);
+		assert.deepEqual(named(join(agentDir, "extensions", "hello.ts")), ["hello"]);
+		assert.deepEqual(named(join(agentDir, "extensions", "word-tools")), ["word-tools"]);
+		assert.deepEqual(named("@mariozechner/pi-tui"), []);
+		assert.deepEqual(
+			planPlugins({ agentDir, packages, exclude: ["@acme/pi-tools"] }).plugins.map((plugin) => plugin.name),
+			["hello", "word-tools"],
+		);
+	});
+
+	it("says what is wrong with --only and --exclude: a value that names nothing, one both name, nothing left", () => {
+		const agentDir = agent();
+		for (const name of ["a", "b"]) write(join(agentDir, "extensions", `${name}.ts`));
+		const problem = (options) => selectionProblem(planPlugins({ agentDir, ...options }), agentDir);
+		assert.equal(problem({ exclude: ["b"] }), undefined);
+		assert.match(problem({ exclude: ["@mariozechner/pi-tui"] }), /^no extension is named @mariozechner\/pi-tui\. The extensions here are a, b /);
+		assert.match(problem({ only: ["nope"] }), /^no extension is named nope\./);
+		assert.equal(problem({ only: ["a"], exclude: ["a"] }), "a: both in --only and in --exclude");
+		assert.equal(problem({ exclude: ["a", "b"] }), "all 2 extensions found are left out (--exclude)");
+		const empty = agent();
+		assert.equal(selectionProblem(planPlugins({ agentDir: empty }), empty), `no extensions found to compile in (in ${empty})`);
 	});
 });
 
@@ -865,7 +1168,7 @@ describe("the manifest and its folder", () => {
 		assert.match(text, /^import type \{ InlineExtension \}/m);
 		assert.match(
 			text,
-			/\{ name: "pdf-reader", builtin: true, replaceable: true, factory: \(await import\("\.\/global\/pdf-reader\/index\.ts"\)\)\.default \},/,
+			/^\t\{ name: "pdf-reader", builtin: true, replaceable: true, factory: lazy\(\(\) => import\("\.\/global\/pdf-reader\/index\.ts"\)\) \},$/m,
 		);
 		// A value import would evaluate Pi's whole public API at every launch; a static one would join the plugins' top-level
 		// code in one function (#129).
@@ -879,7 +1182,7 @@ describe("the manifest and its folder", () => {
 
 		const out = join(scratch(), "folder");
 		const manifest = writePluginFolder(planPlugins({ agentDir }), out);
-		const imports = [...readFileSync(manifest, "utf8").matchAll(/await import\("\.\/(.+?)"\)/g)];
+		const imports = [...readFileSync(manifest, "utf8").matchAll(/\(\) => import\("\.\/(.+?)"\)/g)];
 		assert.equal(imports.length, 2);
 		for (const [, path] of imports) assert.ok(readFileSync(join(out, path), "utf8"));
 	});
@@ -938,8 +1241,13 @@ describe("the manifest and its folder", () => {
 			].join("\n"),
 		);
 		writeFileSync(join(out, "start.ts"), "globalThis.ran = [];\n");
-		const report =
-			"console.log(JSON.stringify({ ran: globalThis.ran, plugins: plugins.map((p) => [p.name, p.factory.name, String(p.factory())]) }));\n";
+		// (As Pi's loader does: each factory called, and waited for, one after the other.)
+		const report = [
+			"const results = [];",
+			"for (const p of plugins) results.push([p.name, String(await p.factory())]);",
+			"console.log(JSON.stringify({ ran: globalThis.ran, plugins: results }));",
+			"",
+		].join("\n");
 		writeFileSync(join(out, "imported.ts"), `import "./start.ts";\nimport plugins from "./src/imported.ts";\n${report}`);
 		writeFileSync(
 			join(out, "loaded.ts"),
@@ -963,13 +1271,113 @@ describe("the manifest and its folder", () => {
 
 		assert.deepEqual(loaded.result, imported.result);
 		assert.deepEqual(loaded.result.ran, ["shared", "alpha", "beta", "beta helper", "beta after await", "gamma"]);
-		assert.deepEqual(loaded.result.plugins.at(-1), ["gamma", "gamma", "3"]);
+		assert.deepEqual(loaded.result.plugins.at(-1), ["gamma", "3"]);
 		// Imported, the extensions' top-level code is all in one file; loaded, each extension's is in a file of its own.
 		const fileOf = (files, name) => files.filter((text) => text.includes(`globalThis.ran.push("${name}")`));
 		assert.equal(fileOf(imported.files, "alpha")[0], fileOf(imported.files, "beta")[0]);
 		const own = ["alpha", "beta", "gamma"].map((name) => fileOf(loaded.files, name));
 		for (const files of own) assert.equal(files.length, 1);
 		assert.equal(new Set(own.flat()).size, 3);
+	});
+
+	// Loader-parity review #4 and #14: TypeScript's CommonJS output (`exports.__esModule` and `exports.default`), whose factory
+	// Pi's loader finds with jiti's `default` interop while the manifest took the module's exports object for it ("factory is
+	// not a function"); and a file name with a `"` or a `\`, which ended the manifest's string and stopped the build.
+	it("takes the factory as Pi's loader does, and any file name", (context) => {
+		const bun = spawnSync("bun", ["--version"], { encoding: "utf8" });
+		if (bun.status !== 0) return context.skip("no bun on PATH");
+		const agentDir = agent();
+		const extensions = join(agentDir, "extensions");
+		// (tsc's output for `export default function () {}` with `module: commonjs`.)
+		write(
+			join(extensions, "tsc-cjs.js"),
+			'"use strict";\nObject.defineProperty(exports, "__esModule", { value: true });\nexports.default = default_1;\nfunction default_1() { return "tsc-cjs"; }\n',
+		);
+		write(join(extensions, "plain-cjs.js"), 'module.exports = function () { return "plain-cjs"; };\n');
+		write(join(extensions, "esm.ts"), 'export default function () { return "esm"; }\n');
+		write(join(extensions, "no-factory.js"), "module.exports = { notAFactory: true };\n");
+		write(join(extensions, 'quoted "name".ts'), 'export default () => "quoted";\n');
+		write(join(extensions, "back\\slash.ts"), 'export default () => "backslash";\n');
+
+		const out = join(scratch(), "build");
+		const plan = planPlugins({ agentDir });
+		assert.deepEqual(plan.skipped, []);
+		writePluginFolder(plan, join(out, "src"));
+		writeFileSync(
+			join(out, "main.ts"),
+			'const { default: plugins } = await import("./src/plugins.ts");\nconst results = [];\nfor (const p of plugins) {\n\ttry { results.push([p.name, await p.factory()]); } catch { results.push([p.name, null]); }\n}\nconsole.log(JSON.stringify(results));\n',
+		);
+		const built = spawnSync("bun", ["build", "--target=bun", "--format=esm", "--splitting", "./main.ts", "--outdir", "dist"], {
+			cwd: out,
+			encoding: "utf8",
+		});
+		assert.equal(built.status, 0, built.stderr);
+		const ran = spawnSync("bun", [join(out, "dist", "main.js")], { encoding: "utf8" });
+		assert.equal(ran.status, 0, ran.stderr);
+		assert.deepEqual(Object.fromEntries(JSON.parse(ran.stdout)), {
+			"back-slash": "backslash",
+			esm: "esm",
+			"no-factory": null,
+			"plain-cjs": "plain-cjs",
+			"quoted-name": "quoted",
+			"tsc-cjs": "tsc-cjs",
+		});
+	});
+
+	// Every compiled-in extension's module ran before Pi started, turned off or not, and one that threw stopped every start of
+	// the build. Each module is imported when its factory is first called, as Pi loads it: one that throws fails then, alone.
+	it("runs an extension's module only when its factory is called; one that throws fails alone", (context) => {
+		const bun = spawnSync("bun", ["--version"], { encoding: "utf8" });
+		if (bun.status !== 0) return context.skip("no bun on PATH");
+		const agentDir = agent();
+		const ran = (name) => `globalThis.ran.push(${JSON.stringify(name)});\n`;
+		write(join(agentDir, "extensions", "alpha.ts"), `${ran("alpha")}export default () => "alpha";\n`);
+		write(
+			join(agentDir, "extensions", "broken.ts"),
+			`${ran("broken")}import { readFileSync } from "node:fs";\nreadFileSync("/pibolt-no-such-dir/package.json");\nexport default () => "broken";\n`,
+		);
+		write(join(agentDir, "extensions", "off.ts"), `${ran("off")}export default () => "off";\n`);
+		write(join(agentDir, "extensions", "gamma.ts"), `${ran("gamma")}export default (pi) => pi;\n`);
+
+		const out = join(scratch(), "build");
+		writePluginFolder(planPlugins({ agentDir }), join(out, "src"));
+		writeFileSync(
+			join(out, "loaded.ts"),
+			[
+				"globalThis.ran = [];",
+				'const { default: plugins } = await import("./src/plugins.ts");',
+				'const before = [...globalThis.ran];',
+				"const results = [];",
+				'for (const p of plugins.filter((p) => p.name !== "off")) {',
+				'\ttry { results.push([p.name, await p.factory("api")]); } catch (error) { results.push([p.name, error.code]); }',
+				"}",
+				"console.log(JSON.stringify({ before, ran: globalThis.ran, results, names: plugins.map((p) => [p.name, p.builtin, p.replaceable]) }));",
+				"",
+			].join("\n"),
+		);
+		const outdir = join(out, "dist");
+		const built = spawnSync("bun", ["build", "--target=bun", "--format=esm", "--splitting", "./loaded.ts", "--outdir", outdir], {
+			cwd: out,
+			encoding: "utf8",
+		});
+		assert.equal(built.status, 0, built.stderr);
+		const ranIt = spawnSync("bun", [join(outdir, "loaded.js")], { encoding: "utf8" });
+		assert.equal(ranIt.status, 0, ranIt.stderr);
+		assert.deepEqual(JSON.parse(ranIt.stdout), {
+			before: [],
+			ran: ["alpha", "broken", "gamma"],
+			results: [
+				["alpha", "alpha"],
+				["broken", "ENOENT"],
+				["gamma", "api"],
+			],
+			names: [
+				["alpha", true, true],
+				["broken", true, true],
+				["gamma", true, true],
+				["off", true, true],
+			],
+		});
 	});
 
 	it("replaces its own output, and refuses a folder holding anything else", () => {
@@ -996,7 +1404,7 @@ describe("import.meta in the copies", () => {
 			"const b = [import.meta.dir, import.meta.dirname, import.meta.filename, import.meta.path, import.meta.file];",
 		].join("\n");
 		assert.equal(
-			pinImportMeta(source, FILE),
+			rewriteCopy(source, FILE),
 			[
 				`const a = ${URL_OF};`,
 				'const b = ["/installed/ext/src", "/installed/ext/src", "/installed/ext/src/index.ts", "/installed/ext/src/index.ts", "index.ts"];',
@@ -1012,22 +1420,22 @@ describe("import.meta in the copies", () => {
 			"const s = \"import.meta.url\" + 'import.meta.url';",
 			"const r = /import.meta.url/g;",
 			"const t = `import.meta.url`;",
-			"const keep = [import.meta.main, import.meta.resolve, import.meta.urls, import.meta.url$, x.import];",
+			"const keep = [import.meta.main, import.meta.urls, import.meta.url$, x.import, x.__dirname, x.require(y)];",
 		].join("\n");
-		assert.equal(pinImportMeta(source, FILE), source);
+		assert.equal(rewriteCopy(source, FILE), source);
 	});
 
 	it("replaces inside a template literal's expressions, and tells a division from a regular expression", () => {
 		assert.equal(
-			pinImportMeta("`at ${import.meta.url} in ${ { f: import.meta.file }.f }`", FILE),
+			rewriteCopy("`at ${import.meta.url} in ${ { f: import.meta.file }.f }`", FILE),
 			`\`at \${${URL_OF}} in \${ { f: "index.ts" }.f }\``,
 		);
 		assert.equal(
-			pinImportMeta("const n = total / 2 / import.meta.url.length;", FILE),
+			rewriteCopy("const n = total / 2 / import.meta.url.length;", FILE),
 			`const n = total / 2 / ${URL_OF}.length;`,
 		);
 		assert.equal(
-			pinImportMeta("if (x) return /'/.test(y) ? import.meta.url : 'it\\'s';", FILE),
+			rewriteCopy("if (x) return /'/.test(y) ? import.meta.url : 'it\\'s';", FILE),
 			`if (x) return /'/.test(y) ? ${URL_OF} : 'it\\'s';`,
 		);
 	});
@@ -1040,14 +1448,14 @@ describe("import.meta in the copies", () => {
 			`for (;;) /"/.test(s) && import.meta.url;`,
 			`function f() {} /'/.test(s) && import.meta.url;`,
 		]) {
-			assert.equal(pinImportMeta(source, FILE), source.replace("import.meta.url", URL_OF), source);
+			assert.equal(rewriteCopy(source, FILE), source.replace("import.meta.url", URL_OF), source);
 		}
 		for (const source of [
 			`const n = f(x) / y; const s = '/'; const u = import.meta.url;`,
 			`const n = { a: 1 } / y; const s = '/'; const u = import.meta.url;`,
 			`const n = (() => {}) / y; const s = '/'; const u = import.meta.url;`,
 		]) {
-			assert.equal(pinImportMeta(source, FILE), source.replace("import.meta.url", URL_OF), source);
+			assert.equal(rewriteCopy(source, FILE), source.replace("import.meta.url", URL_OF), source);
 		}
 	});
 
@@ -1068,18 +1476,134 @@ describe("import.meta in the copies", () => {
 			["const id = <T,>(x: T) => x; const u = import.meta.url;", `const id = <T,>(x: T) => x; const u = ${url};`],
 			["const less = a < b && c > d; const u = import.meta.url;", `const less = a < b && c > d; const u = ${url};`],
 		];
-		for (const [source, expected] of cases) assert.equal(pinImportMeta(source, TSX), expected, source);
+		for (const [source, expected] of cases) assert.equal(rewriteCopy(source, TSX), expected, source);
 		// (A .ts file has no JSX: there `<number>value` is a type assertion.)
 		assert.equal(
-			pinImportMeta("const n = <number>value; const u = import.meta.url;", FILE),
+			rewriteCopy("const n = <number>value; const u = import.meta.url;", FILE),
 			`const n = <number>value; const u = ${URL_OF};`,
 		);
 	});
 
 	it("keeps line numbers, and writes any path as a valid string literal", () => {
-		assert.equal(pinImportMeta("f(import\n\t.meta\n\t.url);\ng();", FILE), `f(${URL_OF}\n\n);\ng();`);
+		assert.equal(rewriteCopy("f(import\n\t.meta\n\t.url);\ng();", FILE), `f(${URL_OF}\n\n);\ng();`);
 		const odd = '/home/o"brien/a\\b/ext.ts';
-		assert.equal(pinImportMeta("x = import.meta.filename;", odd), `x = ${JSON.stringify(odd)};`);
+		assert.equal(rewriteCopy("x = import.meta.filename;", odd), `x = ${JSON.stringify(odd)};`);
+	});
+
+	// Loader-parity review #5: the bundler resolves these per module, against the copy, which `pi-bolt compile` deletes, or
+	// leaves them to resolve from the executable's own file system (/$bunfs). Loaded from its files, a module finds them
+	// from where it is installed.
+	it("pins __dirname and __filename, and resolves require.resolve, import.meta.resolve, require(x) and import(x) from the installed file", () => {
+		const pinned = rewriteCopy(
+			[
+				'const data = join(__dirname, "data.txt"), self = __filename;',
+				"const o = { a: __dirname, b: 1, c: __filename };",
+				"const p = { __dirname: 1, __filename() {} };",
+				'const r = require.resolve("./data.txt");',
+				'const lit = require("./literal.cjs"), dyn = require(name);',
+				'const imported = [import("./literal.ts"), import(`./template-${x}.ts`), import(name), import(name, { with: { type: "json" } })];',
+				'const url = import.meta.resolve("./data.txt");',
+			].join("\n"),
+			FILE,
+		);
+		// (A path put into code is a string literal with its `/` escaped, as any `<`, `>` and line separator.)
+		const SRC = '"\\u002finstalled\\u002fext\\u002fsrc"';
+		const REQUIRE = 'process.getBuiltinModule("node:module").createRequire("\\u002finstalled\\u002fext\\u002fsrc\\u002findex.ts")';
+		const lines = pinned.split("\n");
+		assert.equal(lines[0], 'const data = join("/installed/ext/src", "data.txt"), self = "/installed/ext/src/index.ts";');
+		assert.equal(lines[1], 'const o = { a: "/installed/ext/src", b: 1, c: "/installed/ext/src/index.ts" };');
+		assert.equal(lines[2], "const p = { __dirname: 1, __filename() {} };");
+		assert.equal(lines[3], `const r = ${REQUIRE}.resolve("./data.txt");`);
+		assert.equal(lines[4], `const lit = require("./literal.cjs"), dyn = ${REQUIRE}(name);`);
+		assert.match(lines[5], /^const imported = \[import\("\.\/literal\.ts"\), import\(`\.\/template-\$\{x\}\.ts`\), \(\(s, o\) => import\(/);
+		assert.equal(lines[5].split(`Bun.resolveSync(s, ${SRC})`).length - 1, 2);
+		assert.ok(lines[6].startsWith(`const url = ((s) => { const p = Bun.resolveSync(s, ${SRC});`), lines[6]);
+		assert.equal(lines.length, 7);
+	});
+
+	it("leaves __dirname, __filename and require alone in a module that declares its own", () => {
+		for (const source of [
+			"const __dirname = dirname(fileURLToPath(import.meta.url));\nexport const d = __dirname;",
+			"var __filename = x;\nexport const f = __filename;",
+			"(function (exports, require, module, __filename, __dirname) { use(__dirname, __filename); })();",
+			'import { createRequire } from "node:module";\nconst require = createRequire(import.meta.url);\nrequire(name);',
+			"const f = ({ __dirname, __filename }) => [__dirname, __filename];",
+			"try { x(); } catch (__dirname) { use(__dirname); }\nconst __filename = 1;",
+			"class A { __dirname = 1; m() { return this.__dirname; } }\nlet __filename;",
+		]) {
+			const pinned = rewriteCopy(source, FILE);
+			for (const name of ["__dirname", "__filename"]) {
+				assert.equal(pinned.split(name).length, source.split(name).length, `${name} in ${source}`);
+			}
+			assert.doesNotMatch(pinned, /getBuiltinModule/);
+		}
+	});
+
+	it("finds data files, modules and packages from the installed file once the copy is gone (#5)", (context) => {
+		const bun = spawnSync("bun", ["--version"], { encoding: "utf8" });
+		if (bun.status !== 0) return context.skip("no bun on PATH");
+		const agentDir = agent();
+		const extension = join(agentDir, "extensions", "finds-files");
+		write(join(extension, "data.txt"), "data");
+		write(join(extension, "dyn.cjs"), 'module.exports = "dyn";\n');
+		write(join(extension, "dyn-esm.ts"), 'export default "dyn-esm";\n');
+		write(join(extension, "node_modules", "late-pkg", "package.json"), JSON.stringify({ name: "late-pkg", main: "index.js" }));
+		write(join(extension, "node_modules", "late-pkg", "index.js"), 'module.exports = "late";\n');
+		// (As node-gyp-build and bindings load a native addon: by a path from __dirname.)
+		write(
+			join(extension, "node_modules", "addon-like", "index.js"),
+			'const { join } = require("node:path");\nmodule.exports = require(join(__dirname, "build", "addon.cjs"));\n',
+		);
+		write(join(extension, "node_modules", "addon-like", "build", "addon.cjs"), 'module.exports = "addon";\n');
+		write(join(extension, "node_modules", "addon-like", "package.json"), JSON.stringify({ name: "addon-like", main: "index.js" }));
+		write(join(extension, "package.json"), JSON.stringify({ name: "finds-files", dependencies: { "addon-like": "1" } }));
+		write(
+			join(extension, "index.ts"),
+			[
+				'import { readFileSync } from "node:fs";',
+				'import { join } from "node:path";',
+				'import addon from "addon-like";',
+				"const name = (n: string) => n;",
+				"export default async () => ({",
+				'	data: readFileSync(join(__dirname, "data.txt"), "utf8"),',
+				"	file: __filename,",
+				'	resolved: require.resolve("./data.txt"),',
+				'	dyn: require(name("./dyn.cjs")),',
+				'	dynEsm: (await import(name("./dyn-esm.ts"))).default,',
+				'	pkg: (await import(name("late-pkg"))).default,',
+				'	url: import.meta.resolve("./data.txt"),',
+				"	addon,",
+				"});",
+				"",
+			].join("\n"),
+		);
+
+		const out = join(scratch(), "build");
+		writePluginFolder(planPlugins({ agentDir }), join(out, "src"));
+		writeFileSync(
+			join(out, "main.ts"),
+			'const { default: plugins } = await import("./src/plugins.ts");\nconsole.log(JSON.stringify(await plugins[0].factory()));\n',
+		);
+		const built = spawnSync("bun", ["build", "--target=bun", "--format=esm", "--splitting", "./main.ts", "--outdir", "dist"], {
+			cwd: out,
+			encoding: "utf8",
+		});
+		assert.equal(built.status, 0, built.stderr);
+		// (As after `pi-bolt compile`: the copies are gone.)
+		rmSync(join(out, "src"), { recursive: true, force: true });
+		const ran = spawnSync("bun", [join(out, "dist", "main.js")], { encoding: "utf8" });
+		assert.equal(ran.status, 0, ran.stderr);
+		const real = realpathSync(extension);
+		assert.deepEqual(JSON.parse(ran.stdout), {
+			data: "data",
+			file: join(extension, "index.ts"),
+			resolved: join(real, "data.txt"),
+			dyn: "dyn",
+			dynEsm: "dyn-esm",
+			pkg: "late",
+			url: pathToFileURL(join(real, "data.txt")).href,
+			addon: "addon",
+		});
 	});
 
 	it("pins the copies to the installed files, and leaves the installed files as they were", async () => {
@@ -1117,13 +1641,123 @@ describe("import.meta in the copies", () => {
 	});
 });
 
+// Issue #174: Pi's loader gives an extension its modules under the names they had before (@mariozechner/pi-*), and
+// @sinclair/typebox, and the pi-ai root's compat entry; the build resolved none of these as Pi does, and stopped.
+describe("Pi's other names for its modules in the copies", () => {
+	const FILE = "/installed/ext/index.ts";
+
+	it("are the names VIRTUAL_MODULES gives: each name Pi's loader has, the module the build resolves for it", () => {
+		const virtual = readFileSync(
+			new URL("../packages/coding-agent/src/core/extensions/virtual-modules.ts", import.meta.url),
+			"utf8",
+		);
+		// (Each module by the variable it is imported as: `import * as bundledPiTui from "@earendil-works/pi-tui";`. The
+		// coding agent's is its own index.)
+		const modules = new Map(
+			[...virtual.matchAll(/^import \* as (\w+) from "([^"]+)";$/gm)].map(([, name, from]) => [
+				name,
+				from === "../../index.ts" ? "@earendil-works/pi-coding-agent" : from,
+			]),
+		);
+		const named = [...virtual.matchAll(/^\t"?([^":\s]+)"?: (\w+),$/gm)].map(([, name, module]) => [name, modules.get(module)]);
+		assert.ok(named.length >= 20, `VIRTUAL_MODULES not found in virtual-modules.ts (${named.length} names)`);
+		for (const [name, module] of named) {
+			assert.equal(PI_MODULE_ALIASES[name] ?? name, module, name);
+		}
+		assert.deepEqual(
+			Object.keys(PI_MODULE_ALIASES).filter((name) => !named.some(([known]) => known === name)),
+			[],
+		);
+	});
+
+	it("are replaced where a module is imported by one: import, export, import(), require()", () => {
+		const source = [
+			'import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";',
+			"import { matchesKey } from '@mariozechner/pi-tui';",
+			'import "@mariozechner/pi-agent-core";',
+			'export * from "@sinclair/typebox/value";',
+			'const ai = await import( "@mariozechner/pi-ai" );',
+			'const compat = await import("@earendil-works/pi-ai", { with: {} });',
+			'const { Type } = require("@sinclair/typebox");',
+			'import oauth = require("@mariozechner/pi-ai/oauth");',
+		].join("\n");
+		assert.equal(
+			rewriteCopy(source, FILE),
+			[
+				'import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";',
+				'import { matchesKey } from "@earendil-works/pi-tui";',
+				'import "@earendil-works/pi-agent-core";',
+				'export * from "typebox/value";',
+				'const ai = await import( "@earendil-works/pi-ai/compat" );',
+				'const compat = await import("@earendil-works/pi-ai/compat", { with: {} });',
+				'const { Type } = require("typebox");',
+				'import oauth = require("@earendil-works/pi-ai/oauth");',
+			].join("\n"),
+		);
+	});
+
+	it("are left where nothing is imported by them, and other names are left", () => {
+		const source = [
+			'const name = "@mariozechner/pi-tui"; // import "@mariozechner/pi-tui"',
+			'/* from "@sinclair/typebox" */ log(`import("@mariozechner/pi-ai")`);',
+			'loader.require("@mariozechner/pi-tui"); f("@mariozechner/pi-tui"); require("@mariozechner/pi-tui" + suffix);',
+			'import { x } from "@mariozechner/pi-tui/dist/utils.js"; import { y } from "@mariozechner/clipboard";',
+			'import { z } from "@earendil-works/pi-ai/models"; import { w } from "constructor";',
+		].join("\n");
+		assert.equal(rewriteCopy(source, FILE), source);
+	});
+
+	it("are replaced in the copies of extensions and of their dependencies, and not in the installed files", () => {
+		const agentDir = agent({ packages: ["npm:old-names"] });
+		const OLD = 'import { matchesKey } from "@mariozechner/pi-tui";\nexport default () => matchesKey;\n';
+		write(join(agentDir, "extensions", "old.ts"), OLD);
+		installPackage(agentDir, "old-names", { pi: { extensions: ["./index.js"] }, dependencies: { helper: "1" } }, []);
+		write(join(agentDir, "npm", "node_modules", "old-names", "index.js"), "export default () => {};\n");
+		const helper = installPackage(agentDir, "helper", { type: "module" }, []);
+		write(join(helper, "index.js"), 'export { Type } from "@sinclair/typebox";\n');
+
+		const out = join(scratch(), "folder");
+		writePluginFolder(planPlugins({ agentDir }), out);
+
+		assert.equal(readFileSync(join(out, "global", "old.ts"), "utf8"), OLD.replace("@mariozechner", "@earendil-works"));
+		assert.equal(readFileSync(join(out, "node_modules", "helper", "index.js"), "utf8"), 'export { Type } from "typebox";\n');
+		assert.equal(readFileSync(join(agentDir, "extensions", "old.ts"), "utf8"), OLD);
+	});
+
+	it("are not hidden by an extension's own tsconfig.json or jsconfig.json, which are not copied", () => {
+		const agentDir = agent();
+		write(join(agentDir, "extensions", "typed", "index.ts"));
+		write(join(agentDir, "extensions", "typed", "tsconfig.json"), "{}\n");
+		write(join(agentDir, "extensions", "typed", "web", "jsconfig.json"), "{}\n");
+		const out = join(scratch(), "folder");
+		writePluginFolder(planPlugins({ agentDir }), out);
+		assert.deepEqual(readdirSync(join(out, "global", "typed")).sort(), ["index.ts", "web"]);
+		assert.deepEqual(readdirSync(join(out, "global", "typed", "web")), []);
+	});
+});
+
 describe("the command", () => {
-	it("runs when started through a link to it, as /var is to /private/var on macOS", () => {
-		const link = join(scratch(), "gen-plugin-manifest.mjs");
-		symlinkSync(fileURLToPath(new URL("./gen-plugin-manifest.mjs", import.meta.url)), link);
-		const result = spawnSync(process.execPath, [link, "--help"], { encoding: "utf8" });
-		assert.equal(result.status, 0, result.stderr);
-		assert.match(result.stdout, /^Usage: scripts\/gen-plugin-manifest\.mjs/);
+	it("stops at an --exclude that names no extension, and lists the extensions (#174)", () => {
+		const agentDir = agent();
+		write(join(agentDir, "extensions", "hello.ts"));
+		const generator = fileURLToPath(new URL("./gen-plugin-manifest.mjs", import.meta.url));
+		const result = spawnSync(
+			process.execPath,
+			[generator, "--out", join(scratch(), "out"), "--agent-dir", agentDir, "--exclude", "@mariozechner/pi-tui"],
+			{ encoding: "utf8" },
+		);
+		assert.equal(result.status, 1);
+		assert.match(result.stderr, /^error: no extension is named @mariozechner\/pi-tui\. The extensions here are hello /);
+	});
+
+	it("runs when started through a link to it, as /var is to /private/var on macOS: in a checkout and in a kit", () => {
+		for (const file of ["./gen-plugin-manifest.mjs", "../packages/coding-agent/src/gen-plugin-manifest.mjs"]) {
+			const link = join(scratch(), "gen-plugin-manifest.mjs");
+			symlinkSync(fileURLToPath(new URL(file, import.meta.url)), link);
+			const result = spawnSync(process.execPath, [link, "--help"], { encoding: "utf8" });
+			assert.equal(result.status, 0, result.stderr);
+			assert.match(result.stdout, /^Usage: scripts\/gen-plugin-manifest\.mjs/, file);
+		}
 	});
 });
 

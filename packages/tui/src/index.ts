@@ -210,6 +210,7 @@ export {
 	sanitizeTerminalText,
 	sanitizeTerminalTextFrom,
 	sliceByColumn,
+	startsWithText,
 	stripTerminalSequences,
 	truncateToWidth,
 	visibleWidth,

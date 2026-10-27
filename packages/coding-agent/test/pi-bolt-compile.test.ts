@@ -2,30 +2,40 @@ import { spawnSync } from "node:child_process";
 import { generateKeyPairSync, sign } from "node:crypto";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
 	type CompiledExtension,
 	compiledExtensionFor,
+	compiledExtensionsOf,
+	compiledStateLines,
 	extensionFingerprint,
 	setCompiledExtensions,
+	startsWithoutCompiledExtensions,
 } from "../src/core/extensions/compiled.ts";
+import { loadExtensions } from "../src/core/extensions/loader.ts";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
 import {
 	buildFailureReason,
+	bundleErrorReason,
 	bundlePieces,
+	bundlerErrorAdvice,
 	bytecodeSizeLimit,
 	candidateLines,
+	canRaiseLimit,
 	checkReleaseSums,
+	chooseExtensions,
 	extensionsOfModule,
+	extensionsThatDoNotBundle,
 	functionTooBig,
 	importAtRunTime,
 	jsStringLiteral,
 	leaveUnresolvedImportsToRunTime,
+	leftOutLine,
 	measuredSizes,
 	measurePieces,
 	originalOfCopy,
-	recordedExclusions,
 	resolveCompilePackages,
 } from "../src/pi-bolt-compile.ts";
 
@@ -63,8 +73,9 @@ describe("an extension compiled in stands in for its installed copy", () => {
 	test("while the file is unchanged, its compiled factory is used", () => {
 		const entry = join(dir, "word-count.ts");
 		writeFileSync(entry, "export default () => {};\n");
-		setCompiledExtensions([compiledIn({ entry, scope: "file", root: dir })]);
-		expect(compiledExtensionFor(entry)).toEqual({ factory });
+		const extension = compiledIn({ entry, scope: "file", root: dir });
+		setCompiledExtensions([extension]);
+		expect(compiledExtensionFor(entry)).toEqual({ factory, extension });
 	});
 
 	test("a changed file is loaded from its files again", () => {
@@ -88,7 +99,7 @@ describe("an extension compiled in stands in for its installed copy", () => {
 		const extension = compiledIn({ entry, scope: "folder", root });
 		setCompiledExtensions([extension]);
 		writeFileSync(join(root, "node_modules", "dep", "index.js"), "module.exports = 2;\n");
-		expect(compiledExtensionFor(entry)).toEqual({ factory });
+		expect(compiledExtensionFor(entry)).toEqual({ factory, extension });
 		writeFileSync(join(root, "helper.ts"), "export const greeting = 2;\n");
 		touch(join(root, "helper.ts"), 2_000_000);
 		expect(compiledExtensionFor(entry)).toEqual({ changed: extension });
@@ -103,7 +114,7 @@ describe("an extension compiled in stands in for its installed copy", () => {
 		writeFileSync(join(root, "package.json"), JSON.stringify({ version: "1.0.0" }));
 		const extension = compiledIn({ entry, scope: "package", root });
 		setCompiledExtensions([extension]);
-		expect(compiledExtensionFor(entry)).toEqual({ factory });
+		expect(compiledExtensionFor(entry)).toEqual({ factory, extension });
 		writeFileSync(join(root, "package.json"), JSON.stringify({ version: "1.0.1" }));
 		expect(compiledExtensionFor(entry)).toEqual({ changed: extension });
 	});
@@ -120,6 +131,160 @@ describe("an extension compiled in stands in for its installed copy", () => {
 
 	test("with nothing compiled in, nothing is looked up", () => {
 		expect(compiledExtensionFor(join(dir, "anything.ts"))).toBeUndefined();
+	});
+});
+
+// An extension whose top-level code threw in the build (it read a file beside its module: the staged copy, gone) stopped every
+// start, doctor and `update --rollback` included: the entry imported every compiled-in module before main(). Each module is
+// imported when Pi loads that extension now, and one that fails compiled in is loaded from its files.
+describe("a compiled-in extension runs only when Pi loads it, and one that fails is loaded from its files", () => {
+	test("each source gets the manifest's factory; none when the manifest was not imported", () => {
+		const source = (name: string) => ({
+			name,
+			entry: join(dir, `${name}.ts`),
+			scope: "file" as const,
+			root: dir,
+			fingerprint: "f",
+		});
+		const sources = { alpha: source("alpha"), gamma: source("gamma") };
+		expect(
+			compiledExtensionsOf(sources, {
+				default: [
+					{ name: "alpha", factory },
+					{ name: "gamma", factory },
+				],
+			}),
+		).toEqual([
+			{ ...sources.alpha, factory },
+			{ ...sources.gamma, factory },
+		]);
+		expect(compiledExtensionsOf(sources, undefined)).toEqual(Object.values(sources));
+	});
+
+	test("one that failed compiled in is loaded from its files from then on, unless it changed since", () => {
+		const entry = join(dir, "versioned.ts");
+		writeFileSync(entry, "export default () => {};\n");
+		touch(entry, 1_000_000);
+		const extension = compiledIn({ entry, scope: "file", root: dir });
+		setCompiledExtensions([extension]);
+		expect(compiledExtensionFor(entry)).toEqual({ factory, extension });
+		extension.failed = "ENOENT";
+		expect(compiledExtensionFor(entry)).toEqual({ failed: extension });
+		touch(entry, 2_000_000);
+		expect(compiledExtensionFor(entry)).toEqual({ changed: extension });
+	});
+
+	test("one without a factory (a command that loads no compiled-in extension) is not used compiled in", () => {
+		const entry = join(dir, "hello.ts");
+		writeFileSync(entry, "export default () => {};\n");
+		const { factory: _, ...extension } = compiledIn({ entry, scope: "file", root: dir });
+		setCompiledExtensions([extension]);
+		expect(compiledExtensionFor(entry)).toBeUndefined();
+	});
+
+	test("the loader: a compiled factory that throws falls back to the files, with a warning; failing there too is Pi's error", async () => {
+		const entry = join(dir, "versioned.ts");
+		writeFileSync(
+			entry,
+			'export default (pi) => { pi.registerCommand("ver", { description: "v", handler: async () => {} }); };\n',
+		);
+		const ran: string[] = [];
+		const throwing: ExtensionFactory = () => {
+			ran.push("compiled");
+			throw new Error(
+				"ENOENT: no such file or directory, open '/stage/package.json'\n    at /$bunfs/root/x.js:6:34",
+			);
+		};
+		const extension = { ...compiledIn({ entry, scope: "file", root: dir }), factory: throwing };
+		setCompiledExtensions([extension]);
+		const first = await loadExtensions([entry], dir);
+		expect(first.errors).toEqual([]);
+		expect(first.extensions.map((loaded) => [...loaded.commands.keys()])).toEqual([["ver"]]);
+		expect(first.warnings).toEqual([
+			{
+				path: entry,
+				warning:
+					"it failed compiled in (ENOENT: no such file or directory, open '/stage/package.json'), so it was loaded from its files: `pi-bolt compile` builds without it",
+			},
+		]);
+		expect(extension.failed).toBe("ENOENT: no such file or directory, open '/stage/package.json'");
+		// (From then on, as on /reload, from its files without running the compiled copy again.)
+		const second = await loadExtensions([entry], dir);
+		expect(second.errors).toEqual([]);
+		expect(ran).toEqual(["compiled"]);
+
+		// Failing from its files too: Pi's own error, as without compiling it in, and it is not marked as failing compiled in.
+		const broken = join(dir, "broken.ts");
+		writeFileSync(broken, 'throw new Error("b9: missing config");\n');
+		const other = { ...compiledIn({ entry: broken, scope: "file", root: dir }), factory: throwing };
+		setCompiledExtensions([other]);
+		const result = await loadExtensions([broken], dir);
+		expect(result.extensions).toEqual([]);
+		expect(result.errors[0]?.error).toContain("b9: missing config");
+		expect(result.warnings ?? []).toEqual([]);
+		expect(other.failed).toBeUndefined();
+	});
+
+	test("the loader: a compiled factory that works is used, and marked as loaded", async () => {
+		const entry = join(dir, "hello.ts");
+		writeFileSync(entry, 'throw new Error("not loaded from its files");\n');
+		const extension = { ...compiledIn({ entry, scope: "file", root: dir }), factory: () => {} };
+		setCompiledExtensions([extension]);
+		const result = await loadExtensions([entry], dir);
+		expect(result.errors).toEqual([]);
+		expect(result.extensions.length).toBe(1);
+		expect(extension.loaded).toBe(true);
+	});
+
+	test("doctor, compile and update --rollback start without the compiled-in extensions; everything else with them", () => {
+		for (const args of [
+			["doctor"],
+			["doctor", "--offline"],
+			["compile"],
+			["compile", "--off"],
+			["compile", "--status"],
+			["update", "--rollback"],
+		]) {
+			expect(startsWithoutCompiledExtensions(args), args.join(" ")).toBe(true);
+		}
+		for (const args of [
+			[],
+			["-p", "hello"],
+			["update"],
+			["update", "--self"],
+			["list"],
+			["--mode", "rpc"],
+			["--help"],
+		]) {
+			expect(startsWithoutCompiledExtensions(args), args.join(" ")).toBe(false);
+		}
+	});
+});
+
+// After the installer runs again, or a switch to or from the JIT build, compile.json records a compile the build no longer has.
+describe("pi-bolt compile --status and doctor say what is not used as compiled in", () => {
+	test("a build with none while compile.json records some, a changed one, a removed one", () => {
+		expect(compiledStateLines([], undefined)).toEqual([]);
+		expect(compiledStateLines([], { extensions: ["hello", "word-tools"] })).toEqual([
+			"compile.json records extensions compiled in (hello, word-tools), but this build has none: the installer, or a switch to or from the JIT build, replaced the build they were compiled into. Run `pi-bolt compile` to compile them in again.",
+		]);
+		const kept = join(dir, "kept.ts");
+		const changed = join(dir, "changed.ts");
+		const removed = join(dir, "removed.ts");
+		for (const file of [kept, changed, removed]) {
+			writeFileSync(file, "export default () => {};\n");
+			touch(file, 1_000_000);
+		}
+		const extensions = [kept, changed, removed].map((entry) => ({
+			...compiledIn({ entry, scope: "file", root: dir }),
+			name: entry.slice(dir.length + 1, -3),
+		}));
+		touch(changed, 2_000_000);
+		rmSync(removed);
+		expect(compiledStateLines(extensions, { extensions: ["kept", "changed", "removed"] })).toEqual([
+			"changed: changed since it was compiled in, so it loads from its files: run `pi-bolt compile` to compile it in again",
+			`removed: no longer installed (${removed}): not loaded`,
+		]);
 	});
 });
 
@@ -233,26 +398,96 @@ describe("pi-bolt compile takes the packages Pi-Bolt loads", () => {
 		expect(resolved.packages.map((pkg) => pkg.source)).toEqual(["npm:pi-codex-goal"]);
 		expect(resolved.removed).toEqual([]);
 	});
+
+	// Loader-parity review #8: the extensions besides packages, as Pi finds them, for gen-plugin-manifest.mjs --enabled.
+	test("gives the other extensions Pi loads: a relative path from the agent directory, less those turned off", async () => {
+		const agentDir = join(dir, "agent");
+		mkdirSync(join(agentDir, "extensions"), { recursive: true });
+		mkdirSync(join(agentDir, "my-tools"), { recursive: true });
+		writeFileSync(join(agentDir, "extensions", "on.ts"), "export default () => {};\n");
+		writeFileSync(join(agentDir, "extensions", "off.ts"), "export default () => {};\n");
+		writeFileSync(join(agentDir, "my-tools", "configured.ts"), "export default () => {};\n");
+		writeFileSync(
+			join(agentDir, "settings.json"),
+			JSON.stringify({ extensions: ["my-tools/configured.ts", "-extensions/off.ts"] }),
+		);
+
+		const resolved = await resolveCompilePackages(agentDir, dir);
+		expect([...resolved.enabled].sort()).toEqual(
+			[join(agentDir, "my-tools", "configured.ts"), join(agentDir, "extensions", "on.ts")].sort(),
+		);
+	});
 });
 
 describe("pi-bolt compile leaves out what compile.json records as excluded", () => {
 	const record = { exclude: ["pi-web-access"] };
+	const found = [
+		{ name: "pi-web-access", aliases: ["pi-web-access", "npm:pi-web-access@0.41.0", "npm:pi-web-access"] },
+		{ name: "acme-pi-tools", aliases: ["@acme/pi-tools", "/agent/npm/node_modules/@acme/pi-tools"] },
+		{ name: "word-count", aliases: ["/agent/extensions/word-count.ts"] },
+	];
+	const chosen = (
+		options: Parameters<typeof chooseExtensions>[1],
+		from: Parameters<typeof chooseExtensions>[2] = record,
+	) => {
+		const { only, exclude, recorded } = chooseExtensions(found, options, from);
+		return { only, exclude, recorded };
+	};
 
 	test("a compile that names no extensions takes the recorded exclusions, as an update does (#108)", () => {
-		expect(recordedExclusions({}, record)).toEqual(["pi-web-access"]);
-		expect(recordedExclusions({ noPackages: true }, record)).toEqual(["pi-web-access"]);
-		expect(recordedExclusions({ afterUpdate: true }, record)).toEqual(["pi-web-access"]);
+		for (const options of [{}, { noPackages: true }, { afterUpdate: true }]) {
+			expect(chosen(options)).toEqual({ exclude: ["pi-web-access"], recorded: ["pi-web-access"] });
+		}
 	});
 
-	test("--exclude, --only and --no-exclude choose instead", () => {
-		expect(recordedExclusions({ exclude: ["other"] }, record)).toBeUndefined();
-		expect(recordedExclusions({ only: ["pi-web-access"] }, record)).toBeUndefined();
-		expect(recordedExclusions({ noExclude: true }, record)).toBeUndefined();
+	test("--exclude adds to them, --include takes one back, --no-exclude and --only drop them (#174)", () => {
+		expect(chosen({ exclude: ["word-count"] })).toEqual({
+			exclude: ["pi-web-access", "word-count"],
+			recorded: ["pi-web-access"],
+		});
+		expect(chosen({ include: ["pi-web-access"] })).toEqual({ exclude: [], recorded: [] });
+		expect(chosen({ noExclude: true })).toEqual({ exclude: [], recorded: [] });
+		expect(chosen({ noExclude: true, exclude: ["word-count"] })).toEqual({ exclude: ["word-count"], recorded: [] });
+		expect(chosen({ only: ["pi-web-access"] })).toEqual({ only: ["pi-web-access"], exclude: [], recorded: [] });
+		// (Named by this command too: the command's.)
+		expect(chosen({ exclude: ["pi-web-access"] })).toEqual({ exclude: ["pi-web-access"], recorded: [] });
+	});
+
+	test("an extension is named by its name, its package's name or source, or its file; the plan's names are recorded (#174)", () => {
+		expect(
+			chosen({ exclude: ["@acme/pi-tools", "npm:pi-web-access", "/agent/extensions/word-count.ts"] }, {}),
+		).toEqual({
+			exclude: ["pi-web-access", "acme-pi-tools", "word-count"],
+			recorded: [],
+		});
+	});
+
+	test("a value that names no extension, and a recorded one no longer there, are told apart", () => {
+		const selection = chooseExtensions(
+			found,
+			{ exclude: ["@mariozechner/pi-tui"], include: ["nope"] },
+			{
+				exclude: ["gone", "word-count"],
+			},
+		);
+		expect(selection.unknown).toEqual(["@mariozechner/pi-tui", "nope"]);
+		expect(selection.stale).toEqual(["gone"]);
+		expect(selection.exclude).toEqual(["word-count"]);
+	});
+
+	test("an update's --only, compile.json's, leaves out a name no longer there; one given on the command line is an error", () => {
+		const update = chooseExtensions(
+			found,
+			{ afterUpdate: true, only: ["word-count", "gone"] },
+			{ only: ["word-count", "gone"] },
+		);
+		expect(update).toMatchObject({ only: ["word-count"], staleOnly: ["gone"], unknown: [] });
+		expect(chooseExtensions(found, { only: ["word-count", "gone"] }, undefined).unknown).toEqual(["gone"]);
 	});
 
 	test("with nothing recorded, nothing is left out", () => {
-		expect(recordedExclusions({}, undefined)).toBeUndefined();
-		expect(recordedExclusions({}, { only: ["a"] })).toBeUndefined();
+		expect(chooseExtensions(found, {}, undefined).exclude).toEqual([]);
+		expect(chosen({}, { only: ["a"] })).toEqual({ exclude: [], recorded: [] });
 	});
 });
 
@@ -263,6 +498,7 @@ describe("pi-bolt compile says what it does with each extension and package", ()
 		origin,
 		stageDir: origin,
 		importPath: `./${origin}/${name}.ts`,
+		aliases: [],
 	});
 	const plan = {
 		plugins: [plugin("pi-codex-goal", "package"), plugin("word-count", "global")],
@@ -278,7 +514,7 @@ describe("pi-bolt compile says what it does with each extension and package", ()
 	};
 
 	test("one line each: compiled, excluded and by what, or passed over and why (#108)", () => {
-		expect(candidateLines(plan, packages, true)).toEqual([
+		expect(candidateLines(plan, packages, ["pi-web-access"])).toEqual([
 			"pi-codex-goal (package): compiling",
 			"word-count (global): compiling",
 			"pi-web-access (package): excluded (compile.json)",
@@ -422,6 +658,50 @@ describe("pi-bolt compile says which extension a function too big to compile is 
 		}
 	});
 
+	// The runtime's bundler (Bun 1.4.3) prints a CommonJS module's wrapper as a function expression: it was not found, so a
+	// function too big to compile in one was not named (#13 of the loader-parity review).
+	test("a CommonJS wrapper printed as a function expression is a piece too", () => {
+		const printed = [
+			"// .pibolt-plugins/src/global/big-ext/node_modules/big-cjs/index.js",
+			"var require_big_cjs = __commonJS(function(exports, module) {",
+			"  var t = {};",
+			"  module.exports = t;",
+			"});",
+			"",
+		].join("\n");
+		const { pieces } = bundlePieces(printed, ".pibolt-plugins/src/");
+		expect(pieces.filter((piece) => piece.kind === "commonjs").map((piece) => [piece.module, piece.code])).toEqual([
+			[".pibolt-plugins/src/global/big-ext/node_modules/big-cjs/index.js", "  var t = {};\n  module.exports = t;"],
+		]);
+	});
+
+	// A prebundled package keeps its own minified wrappers (@cursor/sdk: `var Io = E(() => {`), and a module may hold a line
+	// that is `});` inside a template literal (typescript.js): the module's wrapper ends at the last one before the next module.
+	test("a minified wrapper is a function, and a wrapper ends at a `});` that a statement follows", () => {
+		const printed = [
+			"// .pibolt-plugins/src/node_modules/@cursor/sdk/dist/bundled/index.js",
+			"var Io = E(() => {",
+			"  init();",
+			"});",
+			"var require_typescript = __commonJS(function(exports, module) {",
+			"  var text = `",
+			"});",
+			"`;",
+			"  module.exports = text;",
+			"});",
+			"// .pibolt-plugins/src/global/next.ts",
+			"var next_default = 1;",
+			"",
+		].join("\n");
+		const { pieces } = bundlePieces(printed, ".pibolt-plugins/src/");
+		expect(
+			pieces.filter((piece) => piece.kind !== "top-level").map((piece) => [piece.kind, piece.name, piece.code]),
+		).toEqual([
+			["function", "Io", "  init();"],
+			["commonjs", undefined, "  var text = `\n});\n`;\n  module.exports = text;"],
+		]);
+	});
+
 	// #142: the manifest loads each extension with import(), and the build splits its code, so each extension's modules are a
 	// file of their own, not wrapped: each module's statements are its share of that file's top-level code.
 	test("a split build's file of the extensions: its imports and exports are nobody's code, and their names are variables", () => {
@@ -513,7 +793,7 @@ describe("pi-bolt compile says which extension a function too big to compile is 
 				{ name: "ban-sleep", origin: "global", stageDir: "global", importPath: "./global/ban-sleep.ts" },
 				{ name: "web", origin: "package", stageDir: "package-web", importPath: "./package-web/dist/index.js" },
 				{ name: "tools-a", origin: "configured", stageDir: "path-tools", importPath: "./path-tools/a/index.ts" },
-			].map((plugin) => ({ ...plugin, entry: "" })),
+			].map((plugin) => ({ ...plugin, entry: "", aliases: [] })),
 		};
 		const owner = (module: string) => extensionsOfModule(module, plan);
 		expect(owner(".pibolt-plugins/src/global/big/lib/table.ts")).toEqual(["big"]);
@@ -537,6 +817,18 @@ describe("pi-bolt compile says which extension a function too big to compile is 
 });
 
 // Issue #129: a raised limit was lost at the next `pi-bolt update`, which then installed the release without the extensions.
+// 3 of 56 published extensions have a function over the compiler's 262144 bytes (355 to 609 KB): with the limit raised they
+// built in about a minute at 2.7 GB. A compile raises it by itself up to 1 MB, on a machine with 8 GB.
+describe("pi-bolt compile raises the limit on the size of a function by itself, within bounds", () => {
+	test("up to 1 MB of bytecode, with 8 GB of memory", () => {
+		const gb = 2 ** 30;
+		expect(canRaiseLimit(609_173, 16 * gb)).toBe(true);
+		expect(canRaiseLimit(1 << 20, 8 * gb)).toBe(true);
+		expect(canRaiseLimit((1 << 20) + 1, 16 * gb)).toBe(false);
+		expect(canRaiseLimit(355_101, 7 * gb)).toBe(false);
+	});
+});
+
 describe("pi-bolt compile keeps a raised limit on the size of a function (#129)", () => {
 	test("the environment's limit, else the one compile.json records, else the compiler's own", () => {
 		const variable = "BUN_JSC_maximumAOTCandidateBytecodeSize";
@@ -645,6 +937,7 @@ describe("pi-bolt compile leaves an import() it cannot resolve to run time (#160
 					origin: "global",
 					stageDir: "global",
 					importPath: "./global/optional.ts",
+					aliases: [],
 				},
 			],
 			roots: [{ stageDir: "global", root: installed, origin: "global" }],
@@ -689,5 +982,243 @@ describe("pi-bolt compile leaves an import() it cannot resolve to run time (#160
 		} finally {
 			rmSync(work, { recursive: true, force: true });
 		}
+	});
+});
+
+// One extension the bundler cannot build stopped the build of all of them, with a path in a deleted folder. Pi loads each on its
+// own: the one that does not resolve fails alone. It is left out of the build now, and loads from its files.
+describe("pi-bolt compile leaves out an extension the bundler cannot build", () => {
+	test("its line names it, what does not resolve, and its installed file", () => {
+		expect(
+			leftOutLine({
+				name: "broken",
+				origin: "global",
+				reason: bundleErrorReason(
+					{
+						entry: "/stage/src/plugins.ts",
+						message: 'Could not resolve: "left-pad-not-installed-xyz". Maybe you need to "bun install"?',
+						specifier: "left-pad-not-installed-xyz",
+						file: "/stage/src/global/broken.ts",
+						line: 2,
+					},
+					"/agent/extensions/broken.ts",
+				),
+			}),
+		).toBe(
+			'broken (global): not compiled in: "left-pad-not-installed-xyz" does not resolve (/agent/extensions/broken.ts:2): it loads from its files',
+		);
+		expect(
+			bundleErrorReason(
+				{ entry: "/e", message: "Unexpected }", file: "/stage/src/global/syntax.ts", line: 4 },
+				"/agent/syntax.ts",
+			),
+		).toBe("Unexpected } (/agent/syntax.ts:4)");
+	});
+
+	test("with the bundler: each extension with a static import or require() that does not resolve, in its code or a dependency's", (context) => {
+		if (spawnSync("bun", ["--version"]).status !== 0) return context.skip();
+		const installed = join(dir, "installed");
+		const src = join(dir, "stage", "src");
+		const files: Record<string, string> = {
+			"global/good.ts": 'import { two } from "./shared/two.ts";\nexport default () => two;\n',
+			"global/shared/two.ts": "export const two = 2;\n",
+			"global/broken.ts": 'import leftPad from "pibolt-left-pad-missing";\nexport default () => leftPad;\n',
+			"global/needs/index.ts": 'const x = require("./gone.js");\nexport default () => x;\n',
+			// (A package whose dependency, copied beside the manifest, imports what is not there: found by building each alone.)
+			"package-uses-dep/index.ts": 'import { dep } from "pibolt-dep";\nexport default () => dep;\n',
+			"node_modules/pibolt-dep/package.json": JSON.stringify({
+				name: "pibolt-dep",
+				type: "module",
+				exports: "./index.js",
+			}),
+			"node_modules/pibolt-dep/index.js": 'export { dep } from "pibolt-dep-missing";\n',
+		};
+		for (const [file, text] of Object.entries(files)) {
+			mkdirSync(join(src, file, ".."), { recursive: true });
+			writeFileSync(join(src, file), text);
+		}
+		const plugins = [
+			{ name: "good", origin: "global", stageDir: "global", importPath: "./global/good.ts" },
+			{ name: "broken", origin: "global", stageDir: "global", importPath: "./global/broken.ts" },
+			{ name: "needs", origin: "global", stageDir: "global", importPath: "./global/needs/index.ts" },
+			{
+				name: "uses-dep",
+				origin: "package",
+				stageDir: "package-uses-dep",
+				importPath: "./package-uses-dep/index.ts",
+			},
+		].map((plugin) => ({ ...plugin, entry: join(installed, plugin.importPath), aliases: [] as string[] }));
+		const manifest = join(src, "plugins.ts");
+		writeFileSync(
+			manifest,
+			`${plugins.map((plugin) => `await import("${plugin.importPath}");`).join("\n")}\nexport default [];\n`,
+		);
+		const plan = {
+			manifest,
+			plugins,
+			roots: [
+				{ stageDir: "global", root: join(installed, "extensions"), origin: "global" },
+				{ stageDir: "package-uses-dep", root: join(installed, "uses-dep"), origin: "package" },
+			],
+			dependencies: [{ name: "pibolt-dep", from: join(installed, "node_modules", "pibolt-dep") }],
+		};
+		const work = mkdtempSync(join(tmpdir(), "pibolt-bundle-errors-"));
+		try {
+			expect(extensionsThatDoNotBundle("bun", plan, dir, work).map(leftOutLine)).toEqual([
+				`broken (global): not compiled in: "pibolt-left-pad-missing" does not resolve (${join(installed, "extensions", "broken.ts")}:1): it loads from its files`,
+				`needs (global): not compiled in: "./gone.js" does not resolve (${join(installed, "extensions", "needs", "index.ts")}:1): it loads from its files`,
+				`uses-dep (package): not compiled in: "pibolt-dep-missing" does not resolve (${join(installed, "node_modules", "pibolt-dep", "index.js")}:1): it loads from its files`,
+			]);
+			// (The rest builds: nothing is left out of a manifest of the good one alone.)
+			writeFileSync(manifest, 'await import("./global/good.ts");\nexport default [];\n');
+			expect(extensionsThatDoNotBundle("bun", plan, dir, work)).toEqual([]);
+			// An import of a name a module does not export: reported once every import resolves, so on a later pass.
+			writeFileSync(
+				join(src, "global", "noexport.ts"),
+				'import { three } from "./shared/two.ts";\nexport default () => three;\n',
+			);
+			const withNoExport = {
+				...plan,
+				plugins: [
+					...plan.plugins,
+					{
+						name: "noexport",
+						origin: "global",
+						stageDir: "global",
+						importPath: "./global/noexport.ts",
+						entry: join(installed, "noexport.ts"),
+						aliases: [],
+					},
+				],
+			};
+			writeFileSync(
+				manifest,
+				'await import("./global/good.ts");\nawait import("./global/noexport.ts");\nexport default [];\n',
+			);
+			expect(extensionsThatDoNotBundle("bun", withNoExport, dir, work).map((left) => left.name)).toEqual([
+				"noexport",
+			]);
+		} finally {
+			rmSync(work, { recursive: true, force: true });
+		}
+	});
+});
+
+// #174: pi-system-prompt imports "@mariozechner/pi-tui", a name Pi's loader gives its TUI module; the build could not resolve
+// it, said only the bundler's error, and `--exclude "@mariozechner/pi-tui"` (a package, not an extension) left out nothing.
+describe("pi-bolt compile and Pi's other names for its modules (#174)", () => {
+	const plan = {
+		plugins: [
+			{
+				name: "pi-system-prompt",
+				entry: "/agent/npm/node_modules/pi-system-prompt/extensions/system-prompt.ts",
+				origin: "package",
+				stageDir: "package-pi-system-prompt",
+				importPath: "./package-pi-system-prompt/extensions/system-prompt.ts",
+				aliases: ["pi-system-prompt", "npm:pi-system-prompt"],
+			},
+			{
+				name: "word-count",
+				entry: "/agent/extensions/word-count.ts",
+				origin: "global",
+				stageDir: "global",
+				importPath: "./global/word-count.ts",
+				aliases: ["/agent/extensions/word-count.ts"],
+			},
+		],
+		excluded: [{ name: "big-bundle", origin: "package", entry: "/x/b.js", by: "exclude" as const }],
+	};
+	const at = (file: string, line: number) =>
+		`    at /home/u/.pi-bolt/.compile-BTqjF3/kit/pi-bolt-kit-linux-x64/tree/packages/coding-agent/.pibolt-plugins/src/${file}:${line}:60`;
+	// What the compiler printed for the issue's pi-system-prompt.
+	const stopped = [
+		'6 | import { matchesKey, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";',
+		"                                                               ^",
+		'error: Could not resolve: "@mariozechner/pi-tui". Maybe you need to "bun install"?',
+		at("package-pi-system-prompt/extensions/system-prompt.ts", 6),
+		"",
+	].join("\n");
+
+	test("a build stopped in an extension names it, and the --exclude that leaves it out with those left out already", () => {
+		expect(bundlerErrorAdvice(stopped, plan, { exclude: ["big-bundle"] })).toEqual([
+			"That is in the extension pi-system-prompt (package-pi-system-prompt/extensions/system-prompt.ts:6). Leave it out with `pi-bolt compile --exclude big-bundle,pi-system-prompt`: it then loads from its files, as before it was compiled in.",
+		]);
+		const two = `${stopped}error: No matching export in "x.ts" for import "y"\n${at("global/word-count.ts", 2)}\n`;
+		expect(bundlerErrorAdvice(two, plan, {})).toEqual([
+			"Those are in the extensions pi-system-prompt, word-count (package-pi-system-prompt/extensions/system-prompt.ts:6, global/word-count.ts:2). Leave them out with `pi-bolt compile --exclude pi-system-prompt,word-count`: they then load from their files, as before they were compiled in.",
+		]);
+		// (With --only, the others of --only.)
+		expect(bundlerErrorAdvice(two, plan, { only: ["pi-system-prompt", "word-count", "notes"] })[0]).toContain(
+			"`pi-bolt compile --only notes`",
+		);
+	});
+
+	test("a build stopped in a dependency, or outside the extensions, says so or nothing", () => {
+		const dependency = `error: Could not resolve: "missing"\n${at("node_modules/helper/index.js", 3)}\n`;
+		expect(bundlerErrorAdvice(dependency, plan, {})).toEqual([
+			"That is in a package the extensions depend on (node_modules/helper/index.js:3). Leave out the extensions that use it with `pi-bolt compile --exclude <name>`, by the names listed above.",
+		]);
+		expect(bundlerErrorAdvice('error: Could not resolve: "./missing"\n    at plugins.ts:3:20\n', plan, {})).toEqual(
+			[],
+		);
+	});
+
+	test("with the bundler: the generator's copy of an extension that imports them builds, importing Pi's own names", (context) => {
+		if (spawnSync("bun", ["--version"]).status !== 0) return context.skip();
+		const agentDir = join(dir, "agent");
+		mkdirSync(join(agentDir, "extensions"), { recursive: true });
+		writeFileSync(join(agentDir, "settings.json"), "{}");
+		const extension = [
+			'import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";',
+			'import { matchesKey } from "@mariozechner/pi-tui";',
+			'import { getModel } from "@earendil-works/pi-ai";',
+			'import { Type } from "@sinclair/typebox";',
+			"export default async function (pi: ExtensionAPI) {",
+			'\tconst { models } = await import("@mariozechner/pi-ai/models");',
+			'\tconst core = require("@mariozechner/pi-agent-core");',
+			"\treturn [pi, matchesKey, getModel, Type, models, core];",
+			"}",
+			"",
+		].join("\n");
+		writeFileSync(join(agentDir, "extensions", "old-names.ts"), extension);
+		const generator = join(dirname(fileURLToPath(import.meta.url)), "../../../scripts/gen-plugin-manifest.mjs");
+		const generated = spawnSync(
+			process.execPath,
+			[generator, "--out", join(dir, "src"), "--agent-dir", agentDir, "--no-packages", "--json"],
+			{ encoding: "utf8" },
+		);
+		expect(generated.status, generated.stderr).toBe(0);
+		// (Pi's modules are outside this folder: the kit's tree has them, here they are left to whoever runs the bundle.)
+		const bundle = (entry: string) =>
+			spawnSync(
+				"bun",
+				[
+					"build",
+					"--target=bun",
+					"--format=esm",
+					"--external=@earendil-works/*",
+					"--external=typebox",
+					entry,
+					"--outdir",
+					join(dir, "out"),
+				],
+				{ encoding: "utf8" },
+			);
+		expect(bundle(join(agentDir, "extensions", "old-names.ts")).stderr).toContain(
+			'Could not resolve: "@mariozechner/pi-tui"',
+		);
+		const built = bundle(join(dir, "src", "global", "old-names.ts"));
+		expect(built.status, built.stderr).toBe(0);
+		const code = readFileSync(join(dir, "out", "old-names.js"), "utf8");
+		for (const name of [
+			"@earendil-works/pi-tui",
+			"@earendil-works/pi-ai/compat",
+			"typebox",
+			"@earendil-works/pi-ai/models",
+			"@earendil-works/pi-agent-core",
+		]) {
+			expect(code).toContain(`"${name}"`);
+		}
+		expect(code).not.toMatch(/@mariozechner|@sinclair|"@earendil-works\/pi-ai"/);
 	});
 });

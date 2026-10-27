@@ -413,6 +413,7 @@
 /[$%@](\\^\\w\\b|#\\w+(::\\w+)*|\\{\\w+\\}|\\w+(::\\w*)*)(?![A-Za-z])(?![@$%])|
 /[$%\\[]|
 /[$@]\\{|
+/[&<>"']
 /[(]|$|
 /[:={\\[(\\n;]|
 /[:={\\[\\n;]|
@@ -429,9 +430,9 @@
 /[A-Za-z0-9_$]+[ \u0009]*:|
 /[A-Za-z]
 /[A-Za-z_]\\w*(::\\w+)*(\\?|!)?|
+/[\\\\/+*?()|[\\]{}^$\\x00-\\x1f\\x7f\\uD800-\\uDFFF]
 /[\\n\\r\\u2028\\u2029]
 /[\\s/]+
-/[\\s\\-_./:]
 /[\\t\\v\\f\\r ](?:\\n|$)
 /[\\u0e33\\u0eb3]
 /[\\w\\d]|
@@ -610,6 +611,7 @@
 /\\bdo\\b|$|;|
 /\\bforeign\\b|
 /\\bimport\\b|
+/\\n$
 /\\n[ \\t]*$
 /\\n[ \\t]*\\n[ \\t]*$
 /\\n|
@@ -755,6 +757,7 @@
 /^oldText$
 /^path$
 /^timeout$
+/^v0\\.6\\.[0-2]|^v0\\.5\\.
 /^v?(0|[1-9]\\d{0,256})\\.(0|[1-9]\\d{0,256})\\.(0|[1-9]\\d{0,256})(?:-((?:\\d{0,256}[a-zA-Z-][a-zA-Z0-9-]{0,250}|0|[1-9]\\d{0,256})(?:\\.(?:\\d{0,256}[a-zA-Z-][a-zA-Z0-9-]{0,250}|0|[1-9]\\d{0,256}))*))?(?:\\+([a-zA-Z0-9-]{1,250}(?:\\.[a-zA-Z0-9-]{1,250})*))?$
 /^|
 /__halt_compiler.+?;|
@@ -797,6 +800,7 @@ g/(^|[^\\[])\\^
 g/<
 g/>
 g/[ \\t]+
+g/[.*+?^${}()|[\\]\\\\]
 g/[A-Z]
 g/[\\0-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f-\\x9f]
 g/[\\\\^$.*+?()[\\]{}|-]
@@ -804,7 +808,9 @@ g/[\\\\^$.*+?()[\\]{}|]
 g/[\\r\\n]+
 g/[\\u0080-\\uffff]
 g/[\\u00A0\\u2000-\\u200A\\u202F\\u205F\\u3000]
-g/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\uFFF9-\\uFFFB]
+g/[\\x00-\\x08\\x0B\\x0C\\x0E-\\x1F\\x7F-\\x9F\\uFFF9-\\uFFFB]
+g/[\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f-\\x9f]|\\r(?!\\n)
+g/[\\x00-\\x1f\\x7f-\\x9f]
 g/[a-z]
 g/\\[(?:[^\\[\\]`]|(?<a>`+)[^`]+\\k<a>(?!`))*?\\]\\((?:\\\\[\\s\\S]|[^\\\\\\(\\)]|\\((?:\\\\[\\s\\S]|[^\\\\\\(\\)])*\\))*\\)|(?<!`)()(?<b>`+)[^`]+\\k<b>(?!`)|<(?! )[^<>]*?>
 g/\\\\
@@ -992,6 +998,7 @@ gm/(@[\u00c0-\u02b8a-zA-Z_$][\u00c0-\u02b8a-zA-Z_$0-9]*)|(')|(")|((\\b([0-9](_*[
 gm/(@\\w+)|(\\B|\\b)
 gm/([A-Za-z$_][0-9A-Za-z$_]*(?=\\s*:))|(\\B|\\b)
 gm/([A-Za-z$_][0-9A-Za-z$_]*)|(\\(\\))|(\\()|(\\{)
+gm/([A-Za-z$_][0-9A-Za-z$_]*)|(\\b(?=constructor))|(\\()|([{;])
 gm/([A-Za-z$_][\\u00C0-\\u02B80-9A-Za-z$_]*)|(\\.(?=(\\bProtocol\\b|\\bType\\b|\\binit\\b|\\bself\\b)))|(\\.(associatedtype|async|await|as\\?|as!|as|break|case|catch|class|continue|convenience|default|defer|deinit|didSet|do|dynamic|else|enum|extension|fallthrough|fileprivate\\(set\\)|fileprivate|final|for|func|get|guard|if|import|indirect|infix|init\\?|init!|inout|internal\\(set\\)|internal|in|is|lazy|let|mutating|nonmutating|open\\(set\\)|open|operator|optional|override|postfix|precedencegroup|prefix|private\\(set\\)|private|protocol|public\\(set\\)|public|repeat|required|rethrows|return|set|some|static|struct|subscript|super|switch|throws|throw|try\\?|try!|try|typealias|unowned\\(safe\\)|unowned\\(unsafe\\)|unowned|var|weak|where|while|willSet))|((\\bas\\?\\B|\\bas!\\B|\\bfileprivate\\(set\\)\\B|\\binit\\?\\B|\\binit!\\B|\\binternal\\(set\\)\\B|\\bopen\\(set\\)\\B|\\bprivate\\(set\\)\\B|\\bpublic\\(set\\)\\B|\\btry\\?\\B|\\btry!\\B|\\bunowned\\(safe\\)\\B|\\bunowned\\(unsafe\\)\\B|\\bAny\\b|\\bSelf\\b|\\binit\\b|\\bself\\b))|(\\{)
 gm/([A-Za-z_]\\w*(::\\w+)*(\\?|!)?)|(<\\s*)|(#)|(^=begin)|(^__END__)|($|;)|(=)
 gm/([^0-9\\n\\t "'(),.`{}\\[\\]:;][^\\n\\t "'(),.`{}\\[\\]:;]+|[^0-9\\n\\t "'(),.`{}\\[\\]:;=])|([:={\\[(\\n;])
@@ -1161,6 +1168,7 @@ gu/^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)(?!~)[\\p{P}\\p{S}\\u1
 gu/^[^_*]*?__[^_*]*?\\*[^_*]*?(?=__)|[^*]+(?=[^*])|(?!\\*)(?!~)[\\p{P}\\p{S}](\\*+)(?=[\\s]|$)|(?:[^\\s\\p{P}\\p{S}]|~)(\\*+)(?!\\*)(?=(?!~)[\\s\\p{P}\\p{S}]|$)|(?!\\*)(?!~)[\\s\\p{P}\\p{S}](\\*+)(?=(?:[^\\s\\p{P}\\p{S}]|~))|[\\s](\\*+)(?!\\*)(?=(?!~)[\\p{P}\\p{S}])|(?!\\*)(?!~)[\\p{P}\\p{S}](\\*+)(?!\\*)(?=(?!~)[\\p{P}\\p{S}])|(?:[^\\s\\p{P}\\p{S}]|~)(\\*+)(?=(?:[^\\s\\p{P}\\p{S}]|~))
 gu/^[^~]+(?=[^~])|(?!~)[\\p{P}\\p{S}](~~?)(?=[\\s]|$)|[^\\s\\p{P}\\p{S}](~~?)(?!~)(?=[\\s\\p{P}\\p{S}]|$)|(?!~)[\\s\\p{P}\\p{S}](~~?)(?=[^\\s\\p{P}\\p{S}])|[\\s](~~?)(?!~)(?=[\\p{P}\\p{S}])|(?!~)[\\p{P}\\p{S}](~~?)(?!~)(?=[\\p{P}\\p{S}])|[^\\s\\p{P}\\p{S}](~~?)(?=[^\\s\\p{P}\\p{S}])
 gu/_
+i/-256(?:color)?$
 i/\\bgfs4\\b
 i/^ {0,1}<(?:[a-z].*>|!--)
 i/^ {0,2}<(?:[a-z].*>|!--)
@@ -1204,6 +1212,7 @@ im/\\s*\\{|$
 im/\\{
 im/\\}
 im/^"@
+isu/fix
 iu/^https?:\\/\\/
 m/"
 m/"""
@@ -1229,6 +1238,7 @@ m/:
 m/;
 m/=cut
 m/>
+m/[(]|$
 m/[:={\\[(\\n;]
 m/[:={\\[\\n;]
 m/[:\\{(]|$
@@ -1270,8 +1280,10 @@ u/[\\u1100-\\u11ff\\u20a9\\u2329-\\u232a\\u2630-\\u2637\\u268a-\\u268f\\u2e80-\\
 u/\\/$
 u/\\/+$
 u/\\/v1$
+u/\\p{Uppercase}
 u/^((?![*_])[\\s\\p{P}\\p{S}\\u1100-\\u11ff\\u20a9\\u2329-\\u232a\\u2630-\\u2637\\u268a-\\u268f\\u2e80-\\u2e99\\u2e9b-\\u2ef3\\u2f00-\\u2fd5\\u2ff0-\\u303e\\u3041-\\u3096\\u3099-\\u30ff\\u3105-\\u312f\\u3131-\\u318e\\u3190-\\u31e5\\u31ef-\\u321e\\u3220-\\u3247\\u3250-\\ua48c\\ua490-\\ua4c6\\ua960-\\ua97c\\uac00-\\ud7a3\\ud7b0-\\ud7c6\\ud7cb-\\ud7fb\\uf900-\\ufaff\\ufe10-\\ufe19\\ufe30-\\ufe52\\ufe54-\\ufe66\\ufe68-\\ufe6b\\uff01-\\uffbe\\uffc2-\\uffc7\\uffca-\\uffcf\\uffd2-\\uffd7\\uffda-\\uffdc\\uffe0-\\uffe6\\uffe8-\\uffee\\u{16fe0}-\\u{16fe4}\\u{16ff0}-\\u{16ff6}\\u{17000}-\\u{18cda}\\u{18cff}-\\u{18d20}\\u{18d80}-\\u{18df2}\\u{18e00}-\\u{19191}\\u{191a0}-\\u{191d2}\\u{1aff0}-\\u{1aff3}\\u{1aff5}-\\u{1affb}\\u{1affd}-\\u{1affe}\\u{1b000}-\\u{1b128}\\u{1b132}\\u{1b150}-\\u{1b152}\\u{1b155}\\u{1b164}-\\u{1b168}\\u{1b170}-\\u{1b2fb}\\u{1d300}-\\u{1d356}\\u{1d360}-\\u{1d376}\\u{1f1ae}\\u{1f200}\\u{1f202}\\u{1f210}-\\u{1f219}\\u{1f21b}-\\u{1f22e}\\u{1f230}-\\u{1f231}\\u{1f237}\\u{1f23b}\\u{1f240}-\\u{1f248}\\u{1f260}-\\u{1f265}\\u{1f7da}\\u{20000}-\\u{3fffd}])
 u/^((?![*_])[\\s\\p{P}\\p{S}])
+u/^(?![\\u{1F1E6}-\\u{1F1FF}])\\p{Emoji_Presentation}$
 u/^(?:\\*+(?:((?!\\*)(?!~)[\\p{P}\\p{S}])|([^\\s*]))?)|^_+(?:((?!_)(?!~)[\\p{P}\\p{S}])|([^\\s_]))?
 u/^.*$
 u/^[\\p{ID_Start}_$][\\p{ID_Continue}_$\\u200C\\u200D]*$

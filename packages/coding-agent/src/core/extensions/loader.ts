@@ -22,7 +22,8 @@ import { readPiManifest } from "../pi-manifest.ts";
 import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } from "../source-info.ts";
 import { time } from "../timings.ts";
 import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
-import { compiledExtensionFor } from "./compiled.ts";
+import { compiledExtensionFor, firstLineOf } from "./compiled.ts";
+import { PI_MODULE_NAMES, provideModulesToFiles } from "./compiled-modules.ts";
 import { extensionDisplayName, withJitHint } from "./jit-hint.ts";
 import type {
 	EntryRenderer,
@@ -687,11 +688,35 @@ async function loadExtension(
 ): Promise<{ extension: Extension | null; error: string | null; warning?: string }> {
 	const resolvedPath = resolvePath(extensionPath, cwd, { normalizeUnicodeSpaces: true });
 
+	// Pi-Bolt: an extension `pi-bolt compile` built in, while its files are as they were then (core/extensions/compiled.ts).
+	const compiled = PIBOLT ? compiledExtensionFor(resolvedPath) : undefined;
+	let failedCompiledIn: string | undefined;
+	if (compiled && "factory" in compiled) {
+		time(`${extensionPath} module import`, "extensions");
+		// (What it loads from disk as it runs gets Pi's modules, as from jiti: core/extensions/compiled-modules.ts.)
+		provideModulesToFiles(
+			PIBOLT?.jit ? PI_MODULE_NAMES : [...PI_MODULE_NAMES, ...JIT_ONLY_PACKAGES],
+			getVirtualModules,
+		);
+		try {
+			const extension = await initializeExtension(
+				compiled.factory,
+				extensionPath,
+				resolvedPath,
+				cwd,
+				eventBus,
+				runtime,
+			);
+			compiled.extension.loaded = true;
+			return { extension, error: null };
+		} catch (err) {
+			// Compiled in, its module or factory threw: it is loaded from its files, as Pi loads it, and works or fails there.
+			failedCompiledIn = firstLineOf(err);
+		}
+	}
+
 	try {
-		// Pi-Bolt: an extension `pi-bolt compile` built in, while its files are as they were then (core/extensions/compiled.ts).
-		const compiled = PIBOLT ? compiledExtensionFor(resolvedPath) : undefined;
-		const factory =
-			compiled && "factory" in compiled ? compiled.factory : await loadExtensionModule(resolvedPath, cacheToken);
+		const factory = await loadExtensionModule(resolvedPath, cacheToken);
 		time(`${extensionPath} module import`, "extensions");
 		if (!factory) {
 			return { extension: null, error: `Extension does not export a valid factory function: ${extensionPath}` };
@@ -701,6 +726,13 @@ async function loadExtension(
 
 		if (compiled && "changed" in compiled) {
 			const warning = `changed since it was compiled in, so it was loaded from its files: run \`pi-bolt compile\` to compile it in again`;
+			return { extension, error: null, warning };
+		}
+		if (failedCompiledIn !== undefined && compiled && "extension" in compiled)
+			compiled.extension.failed = failedCompiledIn;
+		const failed = compiled && "failed" in compiled ? compiled.failed.failed : failedCompiledIn;
+		if (failed !== undefined) {
+			const warning = `it failed compiled in (${failed}), so it was loaded from its files: \`pi-bolt compile\` builds without it`;
 			return { extension, error: null, warning };
 		}
 		return { extension, error: null };

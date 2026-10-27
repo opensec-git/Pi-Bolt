@@ -103,7 +103,14 @@ function that is not compiled cannot be relied on to run. The message names the 
 change that function. `BUN_JSC_allowAOTDeclinedFunctions=1` builds anyway: the function then runs from bytecode if it uses no
 variables from outside itself, and stops the program when it is called if it does.
 
-**`pi-bolt compile` stops with "is bigger than maximumAOTCandidateBytecodeSize".** One function of the program holds more than
+**`pi-bolt compile` says an extension is "not compiled in".** It could not build that extension (a static `import` or
+`require()` that does not resolve: the line names it and the installed file), a function of it is too big for the compiler
+(below), or it fails in the new build as it starts and not from its files (it reads the copy the build was made from, which is
+gone). The others are compiled in, and that one loads from its files as Pi loads it: it works there, or fails with
+Pi's own error. Nothing to do; to compile it in, install what it imports, or fix what it reads.
+
+**`pi-bolt compile` stops with "is bigger than maximumAOTCandidateBytecodeSize".** When `pi-bolt compile` can tell which
+extension the function is of, it leaves that one out (above) and goes on. Otherwise: one function of the program holds more than
 256 KB of bytecode. Each extension, with the modules only it imports, is a file of its own, compiled apart from Pi's code and
 from the other extensions, so the limit is one extension's. Below the compiler's line, `pi-bolt compile` says which it is:
 - `(a function)`: one very large function of an extension, or a CommonJS module (a package's prebuilt, bundled `dist/`). The
@@ -112,7 +119,7 @@ from the other extensions, so the limit is one extension's. Below the compiler's
   message names the extension.
 
 Leave that extension out with `pi-bolt compile --exclude <name>`, by the name `pi-bolt compile` prints for it: it still loads
-from its files at run time, and later compiles and `pi-bolt update` leave it out too (`--no-exclude` takes it back). Or compile
+from its files at run time, and later compiles and `pi-bolt update` leave it out too (`--include <name>` takes it back). Or compile
 it anyway with `BUN_JSC_maximumAOTCandidateBytecodeSize=<n> pi-bolt compile`, `<n>` being at least the size the message gives.
 compile.json keeps that limit: a later `pi-bolt compile` without the variable, and `pi-bolt update`, build with it too, and
 `BUN_JSC_maximumAOTCandidateBytecodeSize=262144 pi-bolt compile` takes it back. The compiler warns that a big function can take
@@ -127,9 +134,21 @@ extension on its own, `await` or not.
 **`pi-bolt compile` says an `import()` "does not resolve: left to run time".** The extension loads a package it does not
 declare with `import()`, usually for a feature that needs that package (#160). The build goes on, and when that code runs the
 `import()` finds the package from where the extension is installed, or fails as it does without Pi-Bolt. Nothing to do unless
-you want that feature: then install the package where the extension finds it. A static `import` of a package that is not
-there still stops the build with `Could not resolve`: install it, or leave the extension out with `pi-bolt compile --exclude
-<name>`.
+you want that feature: then install the package where the extension finds it. An extension with a static `import` of a package
+that is not there is left out of the build (above).
+
+**Every `pi-bolt` command stops with an extension's error (Pi-Bolt 1.0.4 and earlier, after `pi-bolt compile`).** Those builds
+ran every compiled-in extension's top-level code before Pi started, so one that threw stopped every command, `pi-bolt update
+--rollback` included. Put the build before back by hand: in the installation folder (`~/.pi-bolt`), replace the build folder
+(`pi-bolt-<platform>`) with `pi-bolt-<platform>.previous`, or run the installer again. Pi-Bolt 1.0.5 runs an extension's code only
+when Pi loads it.
+
+**`pi-bolt compile` stops with `Could not resolve` or another error of the bundler in an extension.** Below the bundler's
+error, `pi-bolt compile` names the extension it is in and gives the `pi-bolt compile --exclude <name>` that leaves it out: it
+then loads from its files, as it does without `pi-bolt compile`. `--exclude` takes the names `pi-bolt compile --list` gives,
+such as `pi-system-prompt` in `pi-system-prompt (package): compiling`, or the package's name or the extension's file, not a
+package the extension imports: one that names no extension stops the compile and lists the names there are. Pi-Bolt 1.0.4 and earlier also stopped at Pi's older names for its modules, such as
+`@mariozechner/pi-tui` (#174); later releases compile those in ([what it copies](PLUGINS.md#what-it-copies)).
 
 **A run-time plugin is slow.** On the default build, plugins loaded at run time are interpreted. Compile them in
 ([PLUGINS.md](PLUGINS.md)) or use the `linux-x64-jit` build.

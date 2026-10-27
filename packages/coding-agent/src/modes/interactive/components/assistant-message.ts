@@ -12,6 +12,7 @@ import {
 	reportRenderChange,
 	Spacer,
 	sanitizeTerminalText,
+	startsWithText,
 	Text,
 } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
@@ -33,6 +34,92 @@ export function mentionsAny(text: string, names: ReadonlySet<string>): boolean {
 		if (lower.includes(name)) return true;
 	}
 	return false;
+}
+
+/** A text or thinking block's text, trimmed (BlockText.trim()). */
+interface TrimmedText {
+	/** The text. */
+	raw: string;
+	/** raw.trim(). */
+	trimmed: string;
+	/** Whether `raw` has a character that is not white space: `trimmed` is not empty. */
+	visible: boolean;
+	/** The white space `raw` ends with after its last visible character, when it has one. */
+	pending: string;
+}
+
+/**
+ * A text or thinking block of a message streaming in, trimmed without reading all of it for each chunk. A provider adds each
+ * delta to the text (`text += delta`), and the engine keeps the result as the two strings joined until it is read; reading
+ * it (trim(), a regular expression) then copies all of it into one string, a copy of the whole reply for each chunk. Here
+ * each text the block is seen with (updateContent(), for each delta) is compared with the one seen before as a part of it
+ * (startsWithText(): the text before is that part, so this reads neither), and what it adds is kept. Trimming then reads
+ * the text added only: the result is the text trimmed before with what was added (and the white space before it) after
+ * it, the same strings joined, which the Markdown component it is given reads in the same way. The comparisons are real:
+ * a text that is not the one before with more after it is trimmed in full.
+ */
+class BlockText {
+	/** The text as it was seen last. */
+	raw: string;
+	/** The text as it was trimmed last (trim()). */
+	private trimmed?: TrimmedText;
+	/** What `raw` adds to `trimmed.raw`, when it is that text with more after it. */
+	private added?: string;
+
+	constructor(raw: string) {
+		this.raw = raw;
+	}
+
+	/** The block's text is now `raw`. */
+	follow(raw: string): void {
+		if (raw === this.raw) return;
+		const before = this.raw;
+		this.raw = raw;
+		if (this.added !== undefined && raw.length > before.length && startsWithText(raw, before)) {
+			this.added += raw.slice(before.length);
+		} else {
+			this.added = undefined;
+		}
+	}
+
+	/** raw.trim(), whether it is not empty, from what was trimmed last and what was added since (follow()). */
+	trim(): TrimmedText {
+		const previous = this.trimmed;
+		const raw = this.raw;
+		const added = this.added;
+		let result: TrimmedText;
+		if (previous === undefined || added === undefined) {
+			const trimmed = raw.trim();
+			const visible = trimmed.length > 0;
+			result = { raw, trimmed, visible, pending: visible ? raw.slice(raw.trimEnd().length) : "" };
+		} else if (added === "") {
+			result = previous;
+		} else if (!previous.visible) {
+			// (White space is what trim() removes, which is what /\s/ matches.)
+			const start = added.search(/\S/);
+			if (start < 0) {
+				result = { raw, trimmed: "", visible: false, pending: "" };
+			} else {
+				const rest = added.slice(start);
+				const trimmed = rest.trimEnd();
+				result = { raw, trimmed, visible: true, pending: rest.slice(trimmed.length) };
+			}
+		} else {
+			const visibleAdded = added.trimEnd();
+			result =
+				visibleAdded.length === 0
+					? { raw, trimmed: previous.trimmed, visible: true, pending: previous.pending + added }
+					: {
+							raw,
+							trimmed: previous.trimmed + (previous.pending + visibleAdded),
+							visible: true,
+							pending: added.slice(visibleAdded.length),
+						};
+		}
+		this.trimmed = result;
+		this.added = "";
+		return result;
+	}
 }
 
 /** A Markdown component of an assistant message, with what it was made from (AssistantMessageComponent.markdownFor()). */
@@ -83,6 +170,8 @@ export class AssistantMessageComponent extends Container {
 	 * when anything the components were made with may have changed (invalidate() and the setters).
 	 */
 	private built?: { key: string; theme: unknown };
+	/** The text and thinking blocks of the message, by index (BlockText). */
+	private blockTexts: Array<BlockText | undefined> = [];
 
 	constructor(
 		message?: AssistantMessage,
@@ -210,6 +299,7 @@ export class AssistantMessageComponent extends Container {
 	updateContent(message: AssistantMessage, isStreaming = this.isStreaming): void {
 		this.lastMessage = message;
 		this.isStreaming = isStreaming;
+		this.followTexts(message);
 		reportRenderChange(this);
 		// While a reply streams, every delta of it comes here, and the screen is drawn a few dozen times a second at most: the
 		// components are made when it is (render()), from the latest message, not for each delta (and its text trimmed, a
@@ -245,16 +335,40 @@ export class AssistantMessageComponent extends Container {
 		return component;
 	}
 
+	/** The texts of the text and thinking blocks of `message` (BlockText.follow(): for each delta, while a reply streams in). */
+	private followTexts(message: AssistantMessage): void {
+		const content = message.content;
+		const blockTexts = this.blockTexts;
+		blockTexts.length = content.length;
+		for (let i = 0; i < content.length; i++) {
+			const block = content[i];
+			const raw = block.type === "text" ? block.text : block.type === "thinking" ? block.thinking : undefined;
+			if (raw === undefined) {
+				blockTexts[i] = undefined;
+			} else {
+				const known = blockTexts[i];
+				if (known === undefined) blockTexts[i] = new BlockText(raw);
+				else known.follow(raw);
+			}
+		}
+	}
+
 	/**
 	 * What buildContent() adds to the content container for `message`, in order. While a reply streams in, a chunk usually
 	 * changes only the texts of its Markdown components: the same plan but for those texts (planKey()).
 	 */
 	private planContent(message: AssistantMessage): ContentPart[] {
 		const parts: ContentPart[] = [];
-		// (/\S/ finds what trim() leaves without copying the text: both take the same characters for white space.)
-		const hasVisibleContent = message.content.some(
-			(c) => (c.type === "text" && /\S/.test(c.text)) || (c.type === "thinking" && /\S/.test(c.thinking)),
-		);
+		const content = message.content;
+		// Each text and thinking block trimmed (BlockText).
+		this.followTexts(message);
+		const trimmedTexts: Array<TrimmedText | undefined> = [];
+		let hasVisibleContent = false;
+		for (let i = 0; i < content.length; i++) {
+			const trimmed = this.blockTexts[i]?.trim();
+			trimmedTexts.push(trimmed);
+			if (trimmed?.visible) hasVisibleContent = true;
+		}
 
 		if (hasVisibleContent) {
 			parts.push({ kind: "spacer" });
@@ -262,22 +376,22 @@ export class AssistantMessageComponent extends Container {
 
 		// Render content in order
 		let thinkingRunIndex = 0;
-		for (let i = 0; i < message.content.length; i++) {
-			const content = message.content[i];
-			if (content.type === "text" && content.text.trim()) {
+		for (let i = 0; i < content.length; i++) {
+			const block = content[i];
+			const trimmed = trimmedTexts[i];
+			if (block.type === "text" && trimmed?.visible) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				parts.push({ kind: "text", text: content.text.trim() });
-			} else if (content.type === "thinking") {
+				parts.push({ kind: "text", text: trimmed.trimmed });
+			} else if (block.type === "thinking") {
 				const thinkingBlocks: string[] = [];
-				for (; i < message.content.length; i++) {
-					const thinkingContent = message.content[i];
-					if (thinkingContent.type !== "thinking") {
+				for (; i < content.length; i++) {
+					if (content[i].type !== "thinking") {
 						break;
 					}
-					const thinking = thinkingContent.thinking.trim();
-					if (thinking) {
-						thinkingBlocks.push(thinking);
+					const thinking = trimmedTexts[i];
+					if (thinking?.visible) {
+						thinkingBlocks.push(thinking.trimmed);
 					}
 				}
 				i--;
@@ -288,13 +402,16 @@ export class AssistantMessageComponent extends Container {
 
 				// Add spacing only when another visible assistant content block follows.
 				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
-				const hasVisibleContentAfter = message.content
-					.slice(i + 1)
-					.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
+				let hasVisibleContentAfter = false;
+				for (let after = i + 1; after < content.length && !hasVisibleContentAfter; after++) {
+					hasVisibleContentAfter = trimmedTexts[after]?.visible === true;
+				}
 
 				const runIndex = thinkingRunIndex++;
 				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
-				parts.push({ kind: "thinking", runIndex, hidden, text: hidden ? "" : thinkingBlocks.join("\n\n") });
+				// (One block's text as it is: the same text as joined, and the strings it was trimmed to, see BlockText.)
+				const text = hidden ? "" : thinkingBlocks.length === 1 ? thinkingBlocks[0] : thinkingBlocks.join("\n\n");
+				parts.push({ kind: "thinking", runIndex, hidden, text });
 				if (hasVisibleContentAfter) {
 					parts.push({ kind: "spacer" });
 				}

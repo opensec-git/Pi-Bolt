@@ -77,8 +77,10 @@ with them (`scripts\train-heap.ps1 -Plugins plugins\opensec\plugins.ts`), then r
 
 ```bash
 pi-bolt compile                             # the extensions installed here
+pi-bolt compile --list                      # which those are, by name: nothing is downloaded or built
 pi-bolt compile --only pdf-reader,preset    # only these
-pi-bolt compile --exclude big-bundle        # all but these, on later compiles and updates too
+pi-bolt compile --exclude big-bundle        # all but these, and those excluded before, on later compiles and updates too
+pi-bolt compile --include big-bundle        # this one again, excluded before
 pi-bolt compile --no-exclude                # all, those excluded before too
 pi-bolt compile --status                    # what is compiled in
 pi-bolt compile --off                       # the release's executable again
@@ -104,9 +106,9 @@ compiling ahead of time) and how long the whole compile took.
 compiled in: what is compiled in is for every project, and Pi loads a project's extensions only in a trusted project. They load
 from their files as before. `pi-bolt compile` lists the ones of the folder it runs in, with that reason.
 
-**`--exclude`** leaves out the extensions it names (by the names `pi-bolt compile` prints), and compile.json records them: a
-later `pi-bolt compile` without `--only` or `--exclude`, and `pi-bolt update`, leave them out too. A compile with `--exclude`
-records its own list in place of the one before, and `--no-exclude` compiles them all in again.
+**`--exclude`** leaves out the extensions it names, and compile.json records them: later compiles without `--only`, and
+`pi-bolt update`, leave them out too. A later `--exclude` adds to the recorded ones, `--include` takes one back, and
+`--no-exclude` compiles them all in again (with `--exclude`, only those it names are left out).
 
 A compile works in a folder `.compile-*` beside the installation (beside the `--out` folder with `--out`), removed when it ends.
 One left by a compile that was killed is removed by the next one. A failed build leaves all the compiler printed in
@@ -119,10 +121,33 @@ without them, and the update says so.
 An extension compiled in stands in for its installed copy while that copy is unchanged. Pi finds, orders and turns extensions on
 and off as always, and uses the compiled one instead of loading the files. "Unchanged" is by the files it was compiled from: each
 module of the extension and of its dependencies that the bundler took in, and the `package.json` nearest each, by size and
-modification time. An extension changed
-since (a package updated, a module edited, a dependency patched) is loaded from its files, with a warning to run `pi-bolt
-compile` again; files it writes into its own folder (state, logs, caches) are not a change. One removed or turned off is not
-loaded.
+modification time. An extension changed since (a package updated, a module edited, a dependency patched) is loaded from its
+files, with a warning to run `pi-bolt compile` again; files it writes into its own folder (state, logs, caches) are not a
+change. One removed or turned off is not loaded.
+
+`--only`, `--exclude` and `--include` take each extension by the name `pi-bolt compile` lists for it, a package also by its
+name or source (`@acme/pi-tools`, which is listed as `acme-pi-tools`; `npm:pi-lens`) or its folder, and any extension by its
+file or folder. A name that matches no extension stops the compile, with the names there are, before anything is downloaded.
+
+A compiled-in extension's code runs when Pi loads that extension, as from its files: one turned off never runs, and one whose
+top-level code throws fails alone, with Pi's own error. One that fails compiled in but not from its files (it reads the staged
+copy, which a compile removes, in a way [what it copies](#what-it-copies) does not cover) is loaded from its files, with a warning. `pi-bolt
+doctor`, `pi-bolt compile` and `pi-bolt update --rollback` run no compiled-in extension's code at all, so they work whatever an
+extension does as it loads.
+
+Pi loads each extension on its own, and `pi-bolt compile` compiles in what it can: an extension it cannot build (a static
+`import` or `require()` that does not resolve, such as a package that is not installed), one whose function is too big for the
+compiler, and one that fails in the new build as it starts (it checks the build with `pi --help`, which loads every extension)
+are each left out, with a line that names it and says why, and load from their files. The rest are compiled in. These are found
+again at each compile, not recorded.
+
+`pi-bolt compile --status` and `pi-bolt doctor` say which extensions are compiled in, which changed since and load from their
+files, and when the build has none of the extensions compile.json records: the installer, run again, or a switch to or from the
+JIT build installs the release's executable. Run `pi-bolt compile` to compile them in again.
+
+One difference remains: a compiled-in extension's modules are loaded once per process. Pi loads an extension from its files
+again at `/reload`, with fresh module state; compiled in, `/reload` calls its factory again with the module state it had (a
+counter, a guard against registering twice, a timer started at the top level). Keep such state in the factory.
 
 It works in installations made with the installer, on Linux and macOS. On Windows, in Termux and with the npm package, build in
 a checkout of this repository ([below](#compile-in-the-plugins-you-already-have)). The [checklist](#compatibility-checklist)
@@ -145,8 +170,11 @@ On Windows: `scripts\build-pi.ps1 -PluginsFromInstalled`, with `-PluginsOnly`, `
 `-PluginsNoPackages`.
 
 It takes the agent directory's `extensions` folder, the paths in that directory's `extensions` setting, and the packages
-`pi install` installed. `--cwd DIR` adds a project's own `.pi/extensions`. A project's *settings* are not read, because Pi
-honours those only in a trusted project and a script cannot tell whether a project is trusted.
+`pi install` installed, as Pi finds them: a relative path in the setting is from the agent directory, and dot files, a link to
+nothing, `node_modules` and what the folder's `.gitignore`, `.ignore` and `.fdignore` leave out are passed over. `pi-bolt
+compile` also passes over what the setting turns off (`-path`, `!pattern`). `--cwd DIR` adds a project's own `.pi/extensions`.
+A project's *settings* are not read, because Pi honours those only in a trusted project and a script cannot tell whether a
+project is trusted.
 
 The generated manifest names every plugin, so each is a built-in extension that
 [step 3](#3-turning-a-compiled-in-plugin-off-and-run-time-copies) can turn off. Whatever it writes is an ordinary manifest:
@@ -155,31 +183,56 @@ read it, edit it, commit it, and build it with `--plugins`.
 ### What it copies
 
 The copy is of the whole `extensions` folder, not of each entry. An extension that imports a sibling which is not an
-extension itself, such as a `shared/` folder with no `index.ts`, therefore keeps working.
+extension itself, such as a `shared/` folder with no `index.ts`, therefore keeps working. A single file in the `extensions`
+setting is copied with the modules it imports, not with the rest of its folder.
 
 `pi install` hoists packages into one flat `node_modules`, so a package's dependencies are its siblings rather than inside
 it. The generator copies that dependency closure to a `node_modules` beside the manifest, which is the layout step 1
 expects. It copies only the dependencies of the packages being compiled in. An `optionalDependency` counts once it is
-installed, because the plugin then imports it like any other package.
+installed, because the plugin then imports it like any other package, and so does a `peerDependency` that is not Pi's. A
+package an extension imports without declaring it, such as one installed in the agent directory's `node_modules` above
+`extensions/`, is copied too when Pi finds it from the extension's file (with Bun, which `pi-bolt compile` runs it with).
 
-Pi's own packages are left out of every copy, so a plugin cannot carry a second Pi.
+Pi's own packages are left out of every copy, so a plugin cannot carry a second Pi: `typebox` and
+`@earendil-works/pi-coding-agent`, `pi-ai`, `pi-agent-core` and `pi-tui`. Other packages of the `@earendil-works` scope are
+dependencies like any other. So are an extension's `tsconfig.json` and `jsconfig.json`, which Pi's loader does not read
+either: the bundler takes the nearest one, and under the extension's own its imports of Pi's packages found a second copy of
+them, whose classes are not Pi's.
+
+Without the JIT (`pi-bolt compile` on a build without `-jit`), a package's `"bun"` export condition is not taken, so the
+bundler takes the `"node"` one, as Pi does loading the package from its files; and a package that works only through
+`bun:ffi` (`@ff-labs/fff-bun`) fails at its import, as there, so an extension falls back to its Node package.
+
+Pi's extension loader also gives an extension Pi's modules under other names: `@mariozechner/pi-tui`,
+`@mariozechner/pi-coding-agent`, `@mariozechner/pi-ai` and `@mariozechner/pi-agent-core` (with their subpaths `compat`,
+`models`, `oauth` and `providers/all`), the names Pi's packages had before they were `@earendil-works/`;
+`@sinclair/typebox` (and `/compile`, `/value`) for `typebox`; and for `@earendil-works/pi-ai` itself, its `compat` entry,
+which keeps the old global API (`getModel`, `complete`, `stream`). The bundler knows none of these, and stopped at
+`Could not resolve: "@mariozechner/pi-tui"` (#174) or `No matching export ... for import "getModel"`. In the copies, an import
+by one of these names (`import`, `export ... from`, `import()`, `require()`) imports the module by the name the build
+resolves to the same module, `@earendil-works/pi-tui`, `typebox` or `@earendil-works/pi-ai/compat`. A string that imports
+nothing keeps its text, and so does any other subpath of those packages.
 
 `pi-bolt compile` also handles an `import()` of a package the extension neither declares nor has installed, made only for
 something it does when that package is there (`@plannotator/pi-extension` loads the Claude Agent SDK and the OpenCode SDK
 this way). The bundler would stop the whole build at it (#160). Instead, in the copy, the `import()` resolves its string
 when it runs, from the installed file's folder, and prints a line saying so. It then fails as it does when Pi loads the
-extension from its files, inside the extension's own error handling, and finds the package if it is installed later. A
-static `import` or a `require()` that does not resolve still stops the build: the extension needs it. A build with
-`build-pi.sh --plugins-from-installed` does not do this.
+extension from its files, inside the extension's own error handling, and finds the package if it is installed later. An
+extension with a static `import` or a `require()` that does not resolve needs it: `pi-bolt compile` leaves it out of the build,
+and it loads (or fails) from its files. A build with `build-pi.sh --plugins-from-installed` does neither.
 
 In the copies, `import.meta.url` is the URL of the file it was copied from, and `import.meta.dir`, `dirname`, `filename`,
 `path` and `file` are that file's too. Bundling would otherwise make each one the executable's (`/$bunfs/root/...`). An
 extension that finds its `skills/`, `prompts/` or themes beside its own module, such as
 `join(dirname(fileURLToPath(import.meta.url)), "..", "skills")`, then finds them where it is installed, as it does when Pi loads
-it from its files. Only the copies are changed, and only in code: comments and strings keep their text. `pi-bolt compile` uses a
-compiled-in extension only while its installed copy is unchanged, so those files are always there. An executable built with
-`--plugins-from-installed` has no such check: keep its extensions installed. `__dirname` and `__filename` are not changed:
-the bundler makes them the path of the copy, which is removed after the build.
+it from its files. So are `__dirname` and `__filename` (a data file read with `join(__dirname, "data.json")`, a native addon
+loaded as node-gyp-build and bindings load one), `require.resolve()` and `import.meta.resolve()`, and a `require()` or
+`import()` of a path or name computed as it runs resolves from the installed file, where a module it loads from disk gets Pi's
+own packages as from its files. A module that declares `__dirname`, `__filename` or `require` itself keeps its own. Only the
+copies are changed, and only in code: comments and strings keep their text. `pi-bolt compile` uses a compiled-in extension only
+while its installed copy is unchanged, so those files are always there. An executable built with `--plugins-from-installed`
+has no such check: keep its extensions installed. An extension that
+still fails compiled in, and not from its files, is found when `pi-bolt compile` checks the new build, and left out.
 
 ### What it cannot do
 
@@ -193,8 +246,9 @@ A large module is the other limit. The compiler refuses a function of more than 
 splits its code (`--splitting`), and the generated manifest loads each plugin with `import()`, one after the other: each plugin,
 with the modules only it imports, is a file of its own, apart from Pi's code and from the other plugins. So the limit is one
 plugin's top-level code, or one function's: a bundled `dist/index.js`, or embedded data such as a tokeniser's rank table, can
-pass it, and many small plugins together do not. The plugins still run in the manifest's order, and one that waits at its top
-level (`await`) finishes before the next one starts. (Until Pi-Bolt 1.0.1 the manifest imported the plugins, and every plugin's
+pass it, and many small plugins together do not. Each plugin's module runs when Pi loads that plugin, as from its files, one
+after the other: one that waits at its top level (`await`) finishes before the next one starts. `pi-bolt compile` leaves a
+plugin with a function too big to compile out of the build, with a line naming it, and it loads from its files. (Until Pi-Bolt 1.0.1 the manifest imported the plugins, and every plugin's
 top-level code joined Pi's, about 200 KB of it, in one function: a few plugins together stopped the build, and leaving out any
 one of them did not help, #129. Pi-Bolt 1.0.2 required the manifest, which cannot load a plugin with an `await` at its top
 level, #142.) Leave a plugin with such a module out with `--plugins-exclude`, or raise the limit
@@ -286,7 +340,8 @@ scripts/build-pi.sh --plugins my-plugins/plugins.ts --profile profiles/my-plugin
 These are the rules for any code bundled into a single executable. Most plugins already follow them.
 
 **Import Pi from its packages, and do not bundle a copy.** Import Pi's API from `@earendil-works/pi-coding-agent`,
-`@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-tui` and `typebox`. List these as
+`@earendil-works/pi-ai`, `@earendil-works/pi-agent-core`, `@earendil-works/pi-tui` and `typebox` (`pi-bolt compile` and
+`gen-plugin-manifest.mjs` also take the older names Pi's loader takes: [what it copies](#what-it-copies)). List these as
 `peerDependencies` (as Pi's [package guide](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)
 requires), not as `dependencies`. The build resolves them to Pi's own modules and leaves out any copy found in the plugin's
 `node_modules`. A second copy would mean duplicate classes and registries.
@@ -460,4 +515,4 @@ python3 bench/ui_check.py --project . --build plugins=out/pi-bolt-plugins/pi
 | A tool or command "conflicts" at startup | The plugin is also loaded at run time. Remove the run-time copy ([step 3](#3-turning-a-compiled-in-plugin-off-and-run-time-copies)). |
 | `ENOENT` for a file next to the plugin's source | Embed the file with an `import ... with { type: "text" }` or `{ type: "file" }`. |
 | A plugin's hot path is slow on the JIT-off build | Check it against the [performance guide](#performance-guide). As a stopgap, build with `--jit on`. |
-| `instanceof` fails, or a registry is empty | A second copy of a Pi package. Move Pi packages to `peerDependencies`; the build excludes `node_modules/@earendil-works/pi-*` and `node_modules/typebox` from the plugin folder. |
+| `instanceof` fails, or a registry is empty | A second copy of a Pi package. Move Pi packages to `peerDependencies`; the build excludes Pi's own packages (`typebox`, `@earendil-works/pi-coding-agent`, `pi-ai`, `pi-agent-core`, `pi-tui`) from the plugin folder. |

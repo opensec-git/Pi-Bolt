@@ -147,6 +147,11 @@ describe("extension rows", () => {
 			2,
 			[
 				{ name: "npm:pi-todo", state: "loaded", detail: "loaded in 40 ms (CPU 35 ms)" },
+				{
+					name: "~/.pi/agent/extensions/hello.ts",
+					state: "compiled",
+					detail: "by pi-bolt compile (doctor does not load it)",
+				},
 				{ name: "npm:pi-ffi", state: "failed", detail: "Cannot find module", ffi: "index.ts imports it" },
 				{ name: "npm:pi-dlopen", state: "failed", detail: "bun:ffi requires the JIT. pi-dlopen needs ..." },
 				// #62: dlopen threw "bun:ffi requires the JIT", the extension caught it and loaded with its other backend.
@@ -164,6 +169,7 @@ describe("extension rows", () => {
 			["compiled in", "builtin:codemode, builtin:mcp, 2 compiled in with --plugins"],
 			["turned off", "builtin:llama.cpp"],
 			["run time", "npm:pi-todo: interpreted, loaded in 40 ms (CPU 35 ms)"],
+			["compiled in", "~/.pi/agent/extensions/hello.ts: by pi-bolt compile (doctor does not load it)"],
 			["failed", "npm:pi-ffi: Cannot find module; uses bun:ffi (index.ts imports it)"],
 			["failed", "npm:pi-dlopen: bun:ffi requires the JIT. pi-dlopen needs ..."],
 			[

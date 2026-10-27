@@ -19,6 +19,7 @@ import {
 	type SanitizedTerminalText,
 	sanitizeTerminalText,
 	sanitizeTerminalTextFrom,
+	startsWithText,
 	visibleWidth,
 	wrapTextWithAnsi,
 } from "../utils.ts";
@@ -532,7 +533,7 @@ function lexMarkdown(source: string, complete = false, extended?: ExtendedSource
 			entry.resumable &&
 			source.length > entry.source.length &&
 			(previous < 0 || entry.source.length > lexedMarkdown[previous].source.length) &&
-			(entry === known || source.startsWith(entry.source))
+			(entry === known || startsWithText(source, entry.source))
 		) {
 			previous = i;
 		}
@@ -593,18 +594,19 @@ interface GrownText {
  * was replaced in it the last time is kept, and only the text added since is gone through. When the text is that one with
  * text added, the result is the last result with the added text after it: `extended` says so (for lexMarkdown()), and
  * `remember` keeps what the result was lexed to. `grown`, when known, says which text that is, and what was added to it:
- * the text is then not compared with the ones kept.
+ * the text is then not compared with the ones kept. `tabs`, when known, says whether the text has a tab.
  */
 function replaceTabs(
 	text: string,
 	grown?: GrownText,
+	tabs?: boolean,
 ): {
 	text: string;
 	extended?: ExtendedSource;
 	remember: (lexed: LexedMarkdown | undefined) => void;
 } {
 	const none = () => {};
-	if (!text.includes("\t")) {
+	if (tabs === false || (tabs === undefined && !text.includes("\t"))) {
 		return { text, remember: none };
 	}
 	if (!markdownCaching) {
@@ -620,7 +622,7 @@ function replaceTabs(
 	}
 	for (let i = textsWithoutTabs.length - 1; i >= 0 && replaced === undefined; i--) {
 		const entry = textsWithoutTabs[i];
-		if (grownFrom >= 0 ? i === grownFrom : text.length >= entry.text.length && text.startsWith(entry.text)) {
+		if (grownFrom >= 0 ? i === grownFrom : startsWithText(text, entry.text)) {
 			if (text.length === entry.text.length) {
 				replaced = entry.replaced;
 			} else {
@@ -818,6 +820,12 @@ export class Markdown implements Component {
 	 * comparing it with the text before again: setText() did (sanitizeTerminalTextFrom()).
 	 */
 	private grown?: GrownText & { lexed?: LexedMarkdown };
+	/**
+	 * Whether the text (`text`, the text when this was found) has a character that is not white space, and a tab. setText()
+	 * finds it for a text that is the one before with text added from the text added: a message streaming in is not read
+	 * in full for each chunk (startsWithText()).
+	 */
+	private facts?: { text: string; visible: boolean; tabs: boolean };
 	private paddingX: number; // Left/right padding
 	private paddingY: number; // Top/bottom padding
 	private defaultTextStyle?: DefaultTextStyle;
@@ -874,6 +882,7 @@ export class Markdown implements Component {
 
 	setText(text: string): void {
 		// (A reply streaming in is set again for each chunk: only what was added is sanitised.)
+		const before = this.text;
 		this.sanitized = sanitizeTerminalTextFrom(text, this.sanitized);
 		this.text = this.sanitized.text;
 		const added = this.sanitized.added;
@@ -881,6 +890,16 @@ export class Markdown implements Component {
 			if (added === undefined) this.grown = undefined;
 			else this.grown.added += added;
 		}
+		// (`added` is what the text adds to the text before: the result for the previous text, which `before` is.)
+		const facts = this.facts;
+		this.facts =
+			facts !== undefined && added !== undefined && facts.text === before
+				? {
+						text: this.text,
+						visible: facts.visible || /\S/.test(added),
+						tabs: facts.tabs || added.includes("\t"),
+					}
+				: undefined;
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
@@ -1030,17 +1049,18 @@ export class Markdown implements Component {
 		// Calculate available width for content (subtract horizontal padding)
 		const contentWidth = Math.max(1, width - this.paddingX * 2);
 		const text = this.options.transform?.(this.text, contentWidth) ?? this.text;
+		// (Only for the text as it is: a transform, such as one an extension adds, may give another.)
+		const transformed = text !== this.text;
+		const facts = transformed ? undefined : this.textFacts();
 
 		// Don't render anything if there's no actual text
-		if (!text || !/\S/.test(text)) {
+		if (!text || !(facts?.visible ?? /\S/.test(text))) {
 			return undefined;
 		}
 
 		// Replace tabs with 3 spaces for consistent rendering
-		// (Only for the text as it is: a transform, such as one an extension adds, may give another.)
-		const transformed = text !== this.text;
 		const grown = !transformed && this.grown?.added ? this.grown : undefined;
-		const normalized = replaceTabs(text, grown);
+		const normalized = replaceTabs(text, grown, facts?.tabs);
 		const normalizedText = normalized.text;
 
 		// Parse markdown to HTML-like tokens
@@ -1064,6 +1084,17 @@ export class Markdown implements Component {
 			this.cachedTokens = new WeakRef({ source: normalizedText, tokens });
 		}
 		return { tokens, contentWidth };
+	}
+
+	/** Whether the text has a character that is not white space, and a tab (facts). */
+	private textFacts(): { text: string; visible: boolean; tabs: boolean } {
+		const text = this.text;
+		let facts = this.facts;
+		if (facts?.text !== text) {
+			facts = { text, visible: /\S/.test(text), tabs: text.includes("\t") };
+			this.facts = facts;
+		}
+		return facts;
 	}
 
 	/** The empty lines above and below the content. */

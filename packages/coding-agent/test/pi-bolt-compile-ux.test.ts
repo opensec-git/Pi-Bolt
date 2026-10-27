@@ -18,6 +18,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { extensionFingerprint } from "../src/core/extensions/compiled.ts";
 import {
 	bundledFiles,
+	compileLogPath,
 	download,
 	extensionFiles,
 	projectExtensionLines,
@@ -222,6 +223,12 @@ describe("pi-bolt compile cleans up after itself (#11)", () => {
 		removeOldLog(log, true);
 	});
 
+	test("with --out, the log is named after the output folder: two builds into one folder have their own", () => {
+		expect(compileLogPath("/install", undefined)).toBe("/install/compile.log");
+		expect(compileLogPath("/work", "/work/one")).toBe("/work/one.compile.log");
+		expect(compileLogPath("/work", "/work/two/")).toBe("/work/two.compile.log");
+	});
+
 	test("the installer's uninstall removes compile.log and the work folders too", () => {
 		const install = join(dir, "install");
 		mkdirSync(join(install, "pi-bolt-linux-x64"), { recursive: true });
@@ -308,6 +315,7 @@ describe("an extension compiled in is fingerprinted by the files it was compiled
 					origin: "global",
 					stageDir: "global",
 					importPath: "./global/a.ts",
+					aliases: [],
 				},
 				{
 					name: "pkg",
@@ -315,6 +323,7 @@ describe("an extension compiled in is fingerprinted by the files it was compiled
 					origin: "package",
 					stageDir: "package-pkg",
 					importPath: "./package-pkg/index.ts",
+					aliases: [],
 				},
 			],
 			roots: [
@@ -384,6 +393,7 @@ describe("an extension compiled in is fingerprinted by the files it was compiled
 					origin: "global",
 					stageDir: "global",
 					importPath: "./global/ext/index.ts",
+					aliases: [],
 				},
 			],
 			roots: [{ stageDir: "global", root: installed, origin: "global" }],
