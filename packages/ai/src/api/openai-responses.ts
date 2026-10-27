@@ -228,7 +228,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 			if (nextParams !== undefined) {
 				params = nextParams as ResponseCreateParamsStreaming;
 			}
-			cacheRequestBody(client, params.input, "input", options?.sessionId);
+			cacheRequestBody(client, params.input, "input", options?.sessionId, cache);
 			const requestOptions = {
 				...(options?.signal ? { signal: options.signal } : {}),
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),

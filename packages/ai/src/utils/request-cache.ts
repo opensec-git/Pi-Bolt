@@ -29,48 +29,39 @@
 
 /** A unit's conversion: the values it produced and what is needed to hand them out again. */
 interface Entry {
+	/** The unit's messages, in order (the array the converter passed; not changed afterwards). */
 	sources: readonly object[];
 	extra: unknown;
 	/** What the converter computed besides the values (a role, a flag); handed back with them. */
 	meta: unknown;
 	items: unknown[];
 	/** The UTF-8 JSON of each item; made by request-body.ts when it first sends the item. */
-	bytes: (Blob | undefined)[];
+	bytes: (Blob | undefined)[] | undefined;
 	/** The latest run that used the entry. */
 	lastUse: number;
 }
 
-interface Table {
-	units: Map<object, Entry>;
-	derived: Map<object, Entry>;
+/** A value derived from one message, only read to convert it. */
+interface Derived {
+	extra: unknown;
+	value: object;
 	lastUse: number;
 }
 
-/** For request-body.ts: the entry an item sent belongs to, and its index in it. */
-const itemEntries = new WeakMap<object, { entry: Entry; index: number }>();
+/**
+ * A table's values by their unit's first message. A number instead is the run that first converted the message: its
+ * conversions are kept from the next run on, so a message that is a new object on every request costs nothing.
+ */
+type Slots<T> = Map<object, T | number>;
 
-/** The run that first converted each message: conversions are kept from the next run on. */
-const firstSeen = new WeakMap<object, number>();
+interface Table {
+	units: Slots<Entry>;
+	derived: Slots<Derived>;
+	lastUse: number;
+}
 
 let runs = 0;
 const stats = { units: 0, derived: 0 };
-
-/**
- * The bytes of `item` (an item of a request's messages or input array) if a run handed it out: its JSON never changes,
- * so the bytes made the first time it was sent (by `make`) are sent again. Undefined for any other item.
- */
-export function cachedItemBytes(item: unknown, make: () => Blob): Blob | undefined {
-	if (typeof item !== "object" || item === null) return undefined;
-	const found = itemEntries.get(item);
-	if (!found) return undefined;
-	const { entry, index } = found;
-	let bytes = entry.bytes[index];
-	if (bytes === undefined) {
-		bytes = make();
-		entry.bytes[index] = bytes;
-	}
-	return bytes;
-}
 
 /** Whether a message may be reused: a reply still streaming changes in place. */
 function settled(message: object): boolean {
@@ -89,64 +80,119 @@ const SWEEP_EVERY = 16;
 /** Runs of the table since a value was last used, after which it is dropped. */
 const SWEEP_AGE = 64;
 
+/**
+ * For request-body.ts: the bytes of the values a run handed out, met in the order the run handed them out. An item of
+ * the request that is not the next value (a message the converter made outside a unit, a copy with a cache marker) is
+ * serialized as before.
+ */
+export class SentValues {
+	private readonly items: readonly unknown[];
+	private readonly entries: readonly Entry[];
+	private readonly indexes: readonly number[];
+	private next = 0;
+	private last: Entry | undefined;
+	private lastIndex = 0;
+
+	constructor(items: readonly unknown[], entries: readonly Entry[], indexes: readonly number[]) {
+		this.items = items;
+		this.entries = entries;
+		this.indexes = indexes;
+	}
+
+	/**
+	 * For the next item of the request: its bytes when it is a value the run handed out and was sent before, null
+	 * when it is one sent for the first time (then `keep` its bytes), undefined for any other item.
+	 */
+	bytes(item: unknown): Blob | null | undefined {
+		let at = this.next;
+		// One value skipped: a copy with a cache marker in its place.
+		if (at + 1 < this.items.length && this.items[at] !== item && this.items[at + 1] === item) at++;
+		if (at >= this.items.length || this.items[at] !== item) return undefined;
+		this.next = at + 1;
+		const entry = this.entries[at];
+		const index = this.indexes[at];
+		this.last = entry;
+		this.lastIndex = index;
+		return entry.bytes?.[index] ?? null;
+	}
+
+	/** The bytes of the item `bytes` returned null for. */
+	keep(bytes: Blob): void {
+		const entry = this.last;
+		if (entry === undefined) return;
+		entry.bytes ??= new Array<Blob | undefined>(entry.items.length);
+		entry.bytes[this.lastIndex] = bytes;
+		this.last = undefined;
+	}
+}
+
 /** One request's use of the cache: created before converting the request's messages. */
 export class RequestCacheRun {
 	readonly id: number;
 	private readonly table: Table;
+	/** The values handed out, in order, with their entries and indexes in them. */
+	private readonly handedItems: unknown[] = [];
+	private readonly handedEntries: Entry[] = [];
+	private readonly handedIndexes: number[] = [];
 
 	constructor(table: Table) {
 		this.id = ++runs;
 		this.table = table;
 	}
 
-	/** Whether the run may reuse or remember conversions of `sources` (each converted by an earlier run, settled). */
-	private cacheable(sources: readonly object[]): boolean {
-		let cacheable = sources.length > 0;
-		for (let i = 0; i < sources.length; i++) {
-			const source = sources[i];
-			const first = firstSeen.get(source);
-			if (first === undefined) {
-				firstSeen.set(source, this.id);
-				cacheable = false;
-			} else if (first === this.id || !settled(source)) {
-				cacheable = false;
-			}
+	/**
+	 * What `slots` holds for `source` when the run may use it: the value, or undefined (convert, and keep the result).
+	 * False when the run may not (the message is new to the table, or not settled): convert without keeping.
+	 */
+	private slot<T>(slots: Slots<T>, source: object): T | undefined | false {
+		const slot = slots.get(source);
+		if (slot === undefined) {
+			slots.set(source, this.id);
+			return false;
 		}
-		return cacheable;
+		if (slot === this.id || !settled(source)) return false;
+		return typeof slot === "number" ? undefined : slot;
+	}
+
+	private hand(entry: Entry): void {
+		for (let i = 0; i < entry.items.length; i++) {
+			this.handedItems.push(entry.items[i]);
+			this.handedEntries.push(entry);
+			this.handedIndexes.push(i);
+		}
 	}
 
 	/**
-	 * The values `sources` (one unit of the conversation, in order) converted to with `extra`, pushed onto `out`, and
-	 * the meta value that conversion returned. `convert` pushes the unit's values onto the array it is given and
-	 * returns the meta value; it runs when nothing can be reused, and what it pushes is kept for the next request.
-	 * The unit's values must be new objects (they may share parts with the messages) that are put into the request
-	 * as they are and that nothing changes afterwards.
+	 * The values `sources` (one unit of the conversation, in order; a new array the caller does not change) converted
+	 * to with `extra`, pushed onto `out`, and the meta value that conversion returned. `convert` pushes the unit's
+	 * values onto the array it is given and returns the meta value; it runs when nothing can be reused, and what it
+	 * pushes is kept for the next request. The unit's values must be new objects (they may share parts with the
+	 * messages) that are put into the request as they are and that nothing changes afterwards.
 	 */
 	unit<M>(sources: readonly object[], extra: unknown, out: unknown[], convert: (out: unknown[]) => M): M {
-		const map = this.table.units;
-		const cacheable = this.cacheable(sources);
-		if (cacheable) {
-			const entry = map.get(sources[0]);
-			if (entry !== undefined && entry.extra === extra && sameSources(entry.sources, sources)) {
-				entry.lastUse = this.id;
-				stats.units++;
-				for (let i = 0; i < entry.items.length; i++) out.push(entry.items[i]);
-				return entry.meta as M;
-			}
+		const units = this.table.units;
+		let entry = sources.length > 0 ? this.slot(units, sources[0]) : false;
+		for (let i = 1; entry !== false && i < sources.length; i++) {
+			if (!settled(sources[i])) entry = false;
+		}
+		if (entry && entry.extra === extra && sameSources(entry.sources, sources)) {
+			entry.lastUse = this.id;
+			stats.units++;
+			this.hand(entry);
+			for (let i = 0; i < entry.items.length; i++) out.push(entry.items[i]);
+			return entry.meta as M;
 		}
 		const items: unknown[] = [];
 		const meta = convert(items);
-		if (cacheable && items.every((item) => typeof item === "object" && item !== null && !itemEntries.has(item))) {
-			const entry: Entry = {
-				sources: sources.slice(),
-				extra,
-				meta,
-				items,
-				bytes: new Array<Blob | undefined>(items.length),
-				lastUse: this.id,
-			};
-			for (let i = 0; i < items.length; i++) itemEntries.set(items[i] as object, { entry, index: i });
-			map.set(sources[0], entry);
+		let keep = entry !== false;
+		for (let i = 0; keep && i < items.length; i++) {
+			const item = items[i];
+			if (typeof item !== "object" || item === null) keep = false;
+		}
+		if (keep) {
+			const kept: Entry = { sources, extra, meta, items, bytes: undefined, lastUse: this.id };
+			units.set(sources[0], kept);
+			this.hand(kept);
 		}
 		for (let i = 0; i < items.length; i++) out.push(items[i]);
 		return meta;
@@ -157,30 +203,31 @@ export class RequestCacheRun {
 	 * message): `make` returns it, and the same object is returned while the message and `extra` are the same.
 	 */
 	derive<T extends object>(source: object, extra: unknown, make: () => T): T {
-		const map = this.table.derived;
-		const cacheable = this.cacheable([source]);
-		if (cacheable) {
-			const entry = map.get(source);
-			if (entry !== undefined && entry.extra === extra) {
-				entry.lastUse = this.id;
-				stats.derived++;
-				return entry.items[0] as T;
-			}
+		const derived = this.table.derived;
+		const slot = this.slot(derived, source);
+		if (slot && slot.extra === extra) {
+			slot.lastUse = this.id;
+			stats.derived++;
+			return slot.value as T;
 		}
 		const value = make();
-		if (cacheable) {
-			map.set(source, { sources: [source], extra, meta: undefined, items: [value], bytes: [], lastUse: this.id });
-		}
+		if (slot !== false) derived.set(source, { extra, value, lastUse: this.id });
 		return value;
+	}
+
+	/** The values this run handed out, for request-body.ts; a new reader on every call. */
+	sentValues(): SentValues {
+		return new SentValues(this.handedItems, this.handedEntries, this.handedIndexes);
 	}
 
 	/** Call once the request's messages are converted. */
 	end(): void {
 		// Values no recent run of the table used (messages compacted away, a branch left) are dropped.
 		if (this.id % SWEEP_EVERY !== 0) return;
-		for (const map of [this.table.units, this.table.derived]) {
-			for (const [key, entry] of map) {
-				if (this.id - entry.lastUse > SWEEP_AGE) map.delete(key);
+		for (const slots of [this.table.units, this.table.derived] as Slots<{ lastUse: number }>[]) {
+			for (const [key, slot] of slots) {
+				const lastUse = typeof slot === "number" ? slot : slot.lastUse;
+				if (this.id - lastUse > SWEEP_AGE) slots.delete(key);
 			}
 		}
 	}

@@ -526,7 +526,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				params = { ...(nextParams as MessageCreateParamsStreaming), stream: true };
 			}
 			// A client passed in by the caller is not wrapped.
-			cacheRequestBody(options?.client ? undefined : client, params.messages, "messages", options?.sessionId);
+			cacheRequestBody(options?.client ? undefined : client, params.messages, "messages", options?.sessionId, cache);
 			const response = await retryProviderRequest(
 				() => client.beta.messages.create(params, requestOptions).asResponse(),
 				{

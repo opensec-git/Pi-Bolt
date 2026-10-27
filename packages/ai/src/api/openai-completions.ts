@@ -405,7 +405,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			if (nextParams !== undefined) {
 				params = nextParams as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming;
 			}
-			cacheRequestBody(client, params.messages, "messages", options?.sessionId);
+			cacheRequestBody(client, params.messages, "messages", options?.sessionId, cache);
 			const requestOptions = {
 				...(options?.signal ? { signal: options.signal } : {}),
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),

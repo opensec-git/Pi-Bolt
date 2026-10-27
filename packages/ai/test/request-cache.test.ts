@@ -651,3 +651,56 @@ describe("request cache: what a reused unit depends on besides its messages", ()
 		});
 	}
 });
+
+describe("request cache: a function response merged into an earlier content", () => {
+	it("leaves the earlier content as it was converted (google-generative-ai)", async () => {
+		const adapter = ADAPTERS.find((candidate) => candidate.name === "google-generative-ai")!;
+		const m = adapter.models[1];
+		const usage = {
+			input: 1,
+			output: 1,
+			cacheRead: 0,
+			cacheWrite: 0,
+			totalTokens: 2,
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+		};
+		const reply = (content: AssistantMessage["content"], stopReason: AssistantMessage["stopReason"]) =>
+			({
+				role: "assistant",
+				content,
+				api: m.api,
+				provider: m.provider,
+				model: m.id,
+				usage,
+				stopReason,
+				timestamp: 1,
+			}) as AssistantMessage;
+		const result = (id: string): ToolResultMessage => ({
+			role: "toolResult",
+			toolCallId: id,
+			toolName: "read",
+			content: [{ type: "text", text: `result ${id}` }],
+			isError: false,
+			timestamp: 2,
+		});
+		// A reply that converts to nothing between two tool results: the second is merged into the first's content.
+		const messages: Message[] = [
+			{ role: "user", content: "go", timestamp: 0 },
+			reply([{ type: "toolCall", id: "a", name: "read", arguments: { path: "a" } }], "toolUse"),
+			result("a"),
+			reply([{ type: "text", text: "  " }], "stop"),
+			result("b"),
+		];
+		for (let request = 0; request < 4; request++) {
+			const context = normalizeContext({ systemPrompt: "You are a test.", tools: TOOLS, messages });
+			const options = {
+				sessionId: "merge",
+				onPayload: undefined,
+				cacheRetention: "short" as const,
+				reasoning: undefined,
+			};
+			const { expected, actual } = await sendBoth(adapter, m, context, options, undefined);
+			expect(actual, `request ${request}`).toEqual(expected);
+		}
+	});
+});
