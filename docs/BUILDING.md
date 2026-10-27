@@ -152,9 +152,9 @@ A build without a profile works, with somewhat slower startup. `build-pi.sh` war
 ## Training profiles
 
 A profile ([`profiles/pi-1.1.0`](../profiles/pi-1.1.0)) has two files, recorded by running plain bytecode builds of Pi through
-two scripted interactive sessions (`scripts/lib/train_session.py`): one split as `build-pi.sh` builds it, one in a single file as
-`build-pi.ps1` does (a function is named by its text, which splitting changes where it reaches into another chunk). The first is a plain start and a few plain turns, and gives
-the order. The second is there for the regular expressions: an answer that uses every kind of Markdown and a code block in
+two scripted interactive sessions (`scripts/lib/train_session.py`): one in a single file as `build-pi.ps1` builds it, one split
+as `build-pi.sh` does (a function is named by its text, which splitting changes where it reaches into another chunk). The first
+session is a plain start and a few plain turns, and gives the order. The second is there for the regular expressions: an answer that uses every kind of Markdown and a code block in
 every language Pi highlights (`scripts/lib/training.md`), tool calls whose results the TUI renders, and the editor's
 completions. A regular expression that is not recorded is not compiled into the executable, and runs in the interpreter (ten
 times slower or more) on the default build: when Pi starts to highlight another language or to build new patterns, add what

@@ -30,10 +30,12 @@ mapfile -t ENTRIES < <(pi_entries "$AGENT" "$ENTRY")
 
 # A function is named by its text, and splitting changes the text of what reaches into another chunk: a profile recorded on one
 # kind of build names about a fifth of the functions the other kind runs first by names it does not have. So the sessions run on
-# both, built as the release builds them: split (scripts/build-pi.sh, macOS and Linux) and in one file (scripts/build-pi.ps1).
+# both, built as the release builds them: in one file (scripts/build-pi.ps1) and split (scripts/build-pi.sh, macOS and Linux).
+# The one-file order goes first: merged the other way round, Windows' `pi -p` measured 1-2 ms slower (macOS and Linux: the same
+# either way).
 BUILD_ARGS=(build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json
 	--target="bun-$PIBOLT_PLATFORM" --bytecode --format=esm --compile-exec-argv=--smol)
-for kind in split whole; do
+for kind in whole split; do
 	log "a bytecode build of Pi $VERSION to train with ($kind)"
 	mkdir -p "$TMP/$kind"
 	args=("${BUILD_ARGS[@]}")
@@ -52,8 +54,8 @@ if [ -f "$OUT/bytecode.order" ]; then
 	ORDERS+=("$TMP/strings.order")
 fi
 mkdir -p "$OUT"
-ORDERS+=("$TMP/split/bytecode.order" "$TMP/whole/bytecode.order")
-REGEXPS=("$TMP/split/regexps.txt" "$TMP/whole/regexps.txt")
+ORDERS+=("$TMP/whole/bytecode.order" "$TMP/split/bytecode.order")
+REGEXPS=("$TMP/whole/regexps.txt" "$TMP/split/regexps.txt")
 if [ -n "$WITH" ]; then
 	[ -f "$WITH/bytecode.order" ] && [ -f "$WITH/regexps.txt" ] || die "--with: $WITH is not a profile (bytecode.order, regexps.txt)"
 	ORDERS+=("$WITH/bytecode.order")
