@@ -1,0 +1,29 @@
+fs default = require: same
+fs default = require without node:: same
+fs default = getBuiltinModule: same
+fs default = import() default: same
+fs named = property: same
+fs namespace = named: same
+stream default = require: same
+Readable = stream.Readable: same
+Readable = require('stream').Readable: same
+EventEmitter = require('events'): same
+crypto = require: same
+tty = require: same
+util.promisify = require('util').promisify: same
+assert = require: same
+text Readable: 790 5943d82e "function Readable(options) {\n  if (!(thi"
+text Readable.prototype.pipe: 2676 afc00f2c "function(dest, pipeOpts) {\n  let src = t"
+text EventEmitter.prototype.emit: 1182 b0bda90b "function emit(type, ...args) {\n  if (typ"
+text util.inspect: 1641 8412d653 "function inspect(value, opts) {\n  let ct"
+text util.promisify: 1251 36ad65b4 "function promisify(original) {\n  validat"
+text assert.deepStrictEqual: 393 c29d6207 "function deepStrictEqual(actual, expecte"
+text tty.WriteStream: 480 45c516cb "function WriteStream(fd) {\n  if (!(this "
+text fs.promises.readFile: 180 44305e4e "async function(fileHandleOrFdOrPath, ..."
+error readFileSync of a missing file: Error ENOENT "ENOENT: no such file or directory, open '/nonexistent/w5'" at readFileSync
+error Readable.from(1): TypeError ERR_INVALID_ARG_TYPE "The \"iterable\" argument must be an instance of Iterable. Received type number (1)" at unknown
+error EventEmitter error event: Error - "boom" at <anonymous>
+error assert.strictEqual: AssertionError ERR_ASSERTION "Expected values to be strictly equal:" at this file
+error util.promisify(1): TypeError ERR_INVALID_ARG_TYPE "The \"original\" argument must be of type function. Received type number (1)" at unknown
+error createHash of an unknown algorithm: Error - "Digest method not supported" at Hash
+date header: ok

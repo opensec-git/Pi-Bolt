@@ -6,6 +6,9 @@
 #               waited (no FIN, no RST) is not what the next request is written to
 #   workdir     a compiled executable's embedded code resolves nothing in the directory it is started in, where a repository
 #               could supply a package or a native module for it to run; absolute paths and built-in modules still resolve
+#   builtins    in an executable built as Pi is (static heap, code compiled ahead of time), each built-in module is one object
+#               however it is reached, its functions' source text is the module's own, what they throw is unchanged, and a
+#               server's Date header is the time it answered; the same as from source
 # Usage: tests/runtime/run.sh        Environment: PIBOLT_BUN (the runtime; default $PIBOLT_WORK/runtime/bun);
 #   PIBOLT_RUNTIME_OLDER=1 skips workdir (CI, while the released runtime is an older engine)
 source "$(dirname "$0")/../../scripts/lib/common.sh"
@@ -35,6 +38,16 @@ check "workdir: embedded code resolves nothing in the working directory" \
 	"$(cd "$workdir/repo" && "$workdir/app" 2>&1)"
 rm -rf "$workdir"
 fi
+
+builtins=$(mktemp -d)
+"$BUN" build --compile --bytecode --format=esm --target="bun-$PIBOLT_PLATFORM" builtins.mjs --outfile "$builtins/bc" >/dev/null
+BUN_BYTECODE_ORDER_OUT="$builtins/order" "$builtins/bc" >/dev/null 2>&1
+env BUN_JSC_useJIT=0 BUN_STATIC_HEAP=1 BUN_AOT=1 BUN_AOT_JIT=0 BUN_JSC_omitBytecodeFromStaticHeap=1 BUN_JSC_useImmutableIntrinsics=1 \
+	"$BUN" build --compile --bytecode --format=esm --target="bun-$PIBOLT_PLATFORM" --bytecode-order="$builtins/order" builtins.mjs \
+	--outfile "$builtins/aot" >/dev/null 2>&1
+check "builtins: compiled ahead of time, from the static heap" "$(cat builtins.expected)" "$("$builtins/aot" 2>&1)"
+check "builtins: from source" "$(cat builtins.expected)" "$("$BUN" builtins.mjs 2>&1)"
+rm -rf "$builtins"
 
 port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
 servers=()
