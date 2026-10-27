@@ -22,6 +22,7 @@ import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { getServerRetryDelayMs, retryProviderRequest } from "../utils/provider-retry.ts";
 import { cacheRequestBody } from "../utils/request-body.ts";
+import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
 import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
@@ -184,6 +185,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 			timestamp: Date.now(),
 		};
 
+		let cache: RequestCacheRun | undefined;
 		try {
 			// Create OpenAI client
 			const apiKey = getClientApiKey(model.provider, options?.apiKey, options?.headers);
@@ -202,6 +204,17 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 				options?.fetch,
 				cacheSessionId,
 			);
+			cache = beginRequestCache("openai-responses", options?.sessionId, options?.onPayload, [
+				model.id,
+				model.provider,
+				model.api,
+				model.input,
+				model.reasoning,
+				model.compat,
+				compat,
+				grammarToolInputProperties,
+				configurationUpdateEffort !== undefined,
+			]);
 			let params = buildParams(
 				model,
 				normalizedContext,
@@ -209,6 +222,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 				compat,
 				grammarToolInputProperties,
 				configurationUpdateEffort,
+				cache,
 			);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -228,6 +242,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 					signal: options?.signal,
 				},
 			);
+			cache?.end();
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
@@ -252,6 +267,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
+			cache?.end();
 			for (const block of output.content) {
 				delete (block as { index?: number }).index;
 				// Streaming scratch buffers are only used during parsing; never persist them.
@@ -354,6 +370,7 @@ function buildParams(
 	compat: Required<OpenAIResponsesCompat>,
 	grammarToolInputProperties: ReadonlyMap<string, string>,
 	configurationUpdateEffort: string | undefined,
+	cache?: RequestCacheRun,
 ) {
 	const transcriptTools = resolveTranscriptTools(context.messages, getResponsesToolSupport(compat));
 	const messages = convertResponsesMessages(model, context, OPENAI_TOOL_CALL_PROVIDERS, {
@@ -366,6 +383,7 @@ function buildParams(
 			supportsOpenAIGrammarTools: compat.supportsOpenAIGrammarTools,
 		},
 		configurationUpdateEffort,
+		cache,
 	});
 
 	const cacheRetention = resolveCacheRetention(options?.cacheRetention, options?.env);

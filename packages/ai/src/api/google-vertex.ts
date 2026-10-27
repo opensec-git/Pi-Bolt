@@ -27,6 +27,7 @@ import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { providerHeadersToRecord } from "../utils/headers.ts";
 import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
 import { getProviderEnvValue } from "../utils/provider-env.ts";
+import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText } from "../utils/text.ts";
 import { collapseSystemMessages, getCurrentTools, getInitialSystemMessage } from "../utils/transcript.ts";
@@ -92,6 +93,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 			timestamp: Date.now(),
 		};
 
+		let cache: RequestCacheRun | undefined;
 		try {
 			if (options?.fetch && options.fetch !== globalThis.fetch) {
 				throw new Error("Custom fetch is not supported by the Google Vertex adapter");
@@ -108,12 +110,19 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 						options?.env,
 						options?.identity,
 					);
-			let params = buildParams(model, normalizedContext, options);
+			cache = beginRequestCache("google-vertex", options?.sessionId, options?.onPayload, [
+				model.id,
+				model.provider,
+				model.api,
+				model.input,
+			]);
+			let params = buildParams(model, normalizedContext, options, cache);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
 				params = nextParams as GenerateContentParameters;
 			}
 			const googleStream = await retryGoogleRequest(() => client.models.generateContentStream(params), options);
+			cache?.end();
 
 			stream.push({ type: "start", partial: output });
 			let currentBlock: TextContent | ThinkingContent | null = null;
@@ -301,6 +310,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
+			cache?.end();
 			// Remove internal index property used during streaming
 			for (const block of output.content) {
 				if ("index" in block) {
@@ -476,8 +486,9 @@ function buildParams(
 	model: Model<"google-vertex">,
 	context: TranscriptContext,
 	options: GoogleVertexOptions = {},
+	cache?: RequestCacheRun,
 ): GenerateContentParameters {
-	const contents = convertMessages(model, context);
+	const contents = convertMessages(model, context, cache);
 	const initialSystemMessage = getInitialSystemMessage(context.messages);
 	const currentTools = getCurrentTools(context.messages);
 

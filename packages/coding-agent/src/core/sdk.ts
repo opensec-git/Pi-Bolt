@@ -416,6 +416,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		convertToLlm: convertToLlmWithBlockImages,
 		streamFn: async (model, context, options) => {
 			const requestOptions = buildRequestOptions(options);
+			if (requestOptions.onPayload === transformProviderPayload) {
+				// The payload hook only while an extension handles before_provider_request, read when the request is
+				// built (a cache-warming replay builds it later). Without a hook the providers may reuse the request
+				// objects of unchanged messages between requests (pi-ai request-cache.ts); the hook alone returns the
+				// payload as it is.
+				Object.defineProperty(requestOptions, "onPayload", {
+					get: () =>
+						extensionRunnerRef.current?.hasHandlers("before_provider_request")
+							? transformProviderPayload
+							: undefined,
+					enumerable: true,
+					configurable: true,
+				});
+			}
 			// Compaction and summaries use their own routing ids; only session requests
 			// replace the cache entry, so warming restarts from them. Keep warming while
 			// the current transcript still extends the request's prefix. Agent state may

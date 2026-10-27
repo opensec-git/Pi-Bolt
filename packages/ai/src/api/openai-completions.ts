@@ -49,6 +49,7 @@ import {
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { getServerRetryDelayMs, retryProviderRequest } from "../utils/provider-retry.ts";
 import { cacheRequestBody } from "../utils/request-body.ts";
+import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
 import {
@@ -168,6 +169,8 @@ export interface OpenAICompletionsOptions extends StreamOptions {
 
 export interface ConvertCompletionsMessagesOptions {
 	grammarToolInputProperties?: ReadonlyMap<string, string>;
+	/** Reuse what unchanged messages converted to in the conversation's previous requests (request-cache.ts). */
+	cache?: RequestCacheRun;
 }
 
 interface OpenAICompatCacheControl {
@@ -360,6 +363,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			}
 		};
 
+		let cache: RequestCacheRun | undefined;
 		try {
 			const apiKey = getClientApiKey(model.provider, options?.apiKey, options?.headers);
 			const compat = getCompat(model);
@@ -379,6 +383,15 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				cacheSessionId,
 				compat,
 			);
+			cache = beginRequestCache("openai-completions", options?.sessionId, options?.onPayload, [
+				model.id,
+				model.provider,
+				model.api,
+				model.reasoning,
+				model.input,
+				compat,
+				grammarToolInputProperties,
+			]);
 			let params = buildParams(
 				model,
 				normalizedContext,
@@ -386,6 +399,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				compat,
 				cacheRetention,
 				grammarToolInputProperties,
+				cache,
 			);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
@@ -405,6 +419,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 					signal: options?.signal,
 				},
 			);
+			cache?.end();
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
@@ -739,6 +754,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
+			cache?.end();
 			for (const block of output.content) {
 				if (block.type === "thinking") {
 					applyStreamedReasoningDetails(block);
@@ -846,6 +862,7 @@ function buildParams(
 		getDeclaredTools(context.messages),
 		compat.supportsOpenAIGrammarTools,
 	),
+	cache?: RequestCacheRun,
 ) {
 	const transcriptTools = resolveTranscriptTools(
 		context.messages,
@@ -855,6 +872,7 @@ function buildParams(
 	);
 	const messages = convertMessages(model, context, compat, {
 		grammarToolInputProperties,
+		cache,
 	});
 	const cacheControl = getCompatCacheControl(compat, cacheRetention);
 
@@ -1154,7 +1172,13 @@ function addCacheControlToLastConversationMessage(
 	for (let i = messages.length - 1; i >= 0; i--) {
 		const message = messages[i];
 		if (message.role === "user" || message.role === "assistant" || message.role === "tool") {
-			if (addCacheControlToMessage(message, cacheControl)) {
+			// On a copy: the message may be reused by the next request (request-cache.ts), where it is not the last.
+			const copy = {
+				...message,
+				...(Array.isArray(message.content) ? { content: message.content.map((part) => ({ ...part })) } : {}),
+			} as ChatCompletionMessageParam;
+			if (addCacheControlToMessage(copy, cacheControl)) {
+				messages[i] = copy;
 				return;
 			}
 		}
@@ -1264,7 +1288,28 @@ export function convertMessages(
 		return id;
 	};
 
-	const transformedMessages = transformMessages(normalizedContext.messages, model, (id) => normalizeToolCallId(id));
+	const cache = options?.cache;
+	const sources: (Message | undefined)[] = [];
+	const transformedMessages = transformMessages(
+		normalizedContext.messages,
+		model,
+		(id) => normalizeToolCallId(id),
+		cache,
+		sources,
+	);
+	/**
+	 * Converts one unit of the conversation (a message, or a run of tool results) with `convert`, which pushes what it
+	 * converts to onto the array it is given and returns what the loop needs besides. With the cache, the values of an
+	 * unchanged unit are reused; `extra` is what the conversion reads besides the unit's messages and the cache context.
+	 */
+	const unit = <M>(
+		unitSources: (Message | undefined)[],
+		extra: unknown,
+		convert: (out: ChatCompletionMessageParam[]) => M,
+	): M => {
+		if (!cache || unitSources.includes(undefined)) return convert(params);
+		return cache.unit(unitSources as Message[], extra, params, convert as (out: unknown[]) => M);
+	};
 	const transcriptTools = resolveTranscriptTools(
 		normalizedContext.messages,
 		compat.supportsMidConvoSystemMessages === true && compat.supportsMidConvoToolAdditions === true
@@ -1302,12 +1347,14 @@ export function convertMessages(
 				params.push({ role: instructionRole, content: sanitizeSurrogates(text) });
 			}
 		} else if (msg.role === "user") {
-			if (typeof msg.content === "string") {
-				params.push({
-					role: "user",
-					content: sanitizeSurrogates(msg.content),
-				});
-			} else {
+			const converted = unit([sources[i]], undefined, (out) => {
+				if (typeof msg.content === "string") {
+					out.push({
+						role: "user",
+						content: sanitizeSurrogates(msg.content),
+					});
+					return true;
+				}
 				const content: ChatCompletionContentPart[] = msg.content
 					.filter((item) => item.type !== "text" || item.text.length > 0)
 					.map((item): ChatCompletionContentPart => {
@@ -1325,194 +1372,200 @@ export function convertMessages(
 							} satisfies ChatCompletionContentPartImage;
 						}
 					});
-				if (content.length === 0) continue;
-				params.push({
+				if (content.length === 0) return false;
+				out.push({
 					role: "user",
 					content,
 				});
-			}
+				return true;
+			});
+			if (!converted) continue;
 		} else if (msg.role === "assistant") {
-			// Some providers don't accept null content, use empty string instead
-			const assistantMsg: ChatCompletionAssistantMessageParamWithReasoning = {
-				role: "assistant",
-				content: compat.requiresAssistantAfterToolResult ? "" : null,
-			};
+			const converted = unit([sources[i]], undefined, (out) => {
+				// Some providers don't accept null content, use empty string instead
+				const assistantMsg: ChatCompletionAssistantMessageParamWithReasoning = {
+					role: "assistant",
+					content: compat.requiresAssistantAfterToolResult ? "" : null,
+				};
 
-			const assistantTextParts = msg.content
-				.filter(isTextContentBlock)
-				.filter((block) => block.text.trim().length > 0)
-				.map(
-					(block) =>
-						({
-							type: "text",
-							text: sanitizeSurrogates(block.text),
-						}) satisfies ChatCompletionContentPartText,
-				);
-			const assistantText = assistantTextParts.map((part) => part.text).join("");
+				const assistantTextParts = msg.content
+					.filter(isTextContentBlock)
+					.filter((block) => block.text.trim().length > 0)
+					.map(
+						(block) =>
+							({
+								type: "text",
+								text: sanitizeSurrogates(block.text),
+							}) satisfies ChatCompletionContentPartText,
+					);
+				const assistantText = assistantTextParts.map((part) => part.text).join("");
 
-			const thinkingBlocks = msg.content.filter(isThinkingContentBlock);
-			const toolCalls = msg.content.filter(isToolCallBlock);
-			const signedReasoningDetails = thinkingBlocks
-				.map((block) => parseOpenAIReasoningDetails(block.thinkingSignature))
-				.find((details) => details !== undefined);
-			const legacyReasoningDetails = toolCalls
-				.map((toolCall) => parseLegacyEncryptedReasoningDetail(toolCall.thoughtSignature))
-				.filter((detail): detail is OpenAIEncryptedReasoningDetail => detail !== undefined);
-			const preservedReasoningDetails =
-				signedReasoningDetails ?? (legacyReasoningDetails.length > 0 ? legacyReasoningDetails : undefined);
+				const thinkingBlocks = msg.content.filter(isThinkingContentBlock);
+				const toolCalls = msg.content.filter(isToolCallBlock);
+				const signedReasoningDetails = thinkingBlocks
+					.map((block) => parseOpenAIReasoningDetails(block.thinkingSignature))
+					.find((details) => details !== undefined);
+				const legacyReasoningDetails = toolCalls
+					.map((toolCall) => parseLegacyEncryptedReasoningDetail(toolCall.thoughtSignature))
+					.filter((detail): detail is OpenAIEncryptedReasoningDetail => detail !== undefined);
+				const preservedReasoningDetails =
+					signedReasoningDetails ?? (legacyReasoningDetails.length > 0 ? legacyReasoningDetails : undefined);
 
-			const nonEmptyThinkingBlocks = thinkingBlocks.filter((block) => block.thinking.trim().length > 0);
-			if (nonEmptyThinkingBlocks.length > 0) {
-				if (compat.requiresThinkingAsText) {
-					// Convert thinking blocks to plain text (no tags to avoid model mimicking them)
-					const thinkingText = nonEmptyThinkingBlocks
-						.map((block) => sanitizeSurrogates(block.thinking))
-						.join("\n\n");
-					assistantMsg.content = [{ type: "text", text: thinkingText }, ...assistantTextParts];
-				} else {
+				const nonEmptyThinkingBlocks = thinkingBlocks.filter((block) => block.thinking.trim().length > 0);
+				if (nonEmptyThinkingBlocks.length > 0) {
+					if (compat.requiresThinkingAsText) {
+						// Convert thinking blocks to plain text (no tags to avoid model mimicking them)
+						const thinkingText = nonEmptyThinkingBlocks
+							.map((block) => sanitizeSurrogates(block.thinking))
+							.join("\n\n");
+						assistantMsg.content = [{ type: "text", text: thinkingText }, ...assistantTextParts];
+					} else {
+						// Always send assistant content as a plain string (OpenAI Chat Completions
+						// API standard format). Sending as an array of {type:"text", text:"..."}
+						// objects is non-standard and causes some models (e.g. DeepSeek V3.2 via
+						// NVIDIA NIM) to mirror the content-block structure literally in their
+						// output, producing recursive nesting like [{'type':'text','text':'[{...}]'}].
+						if (assistantText.length > 0) {
+							assistantMsg.content = assistantText;
+						}
+
+						// reasoning_details is the structured alternative to a raw reasoning field.
+						if (!preservedReasoningDetails) {
+							// Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
+							let signature = nonEmptyThinkingBlocks[0].thinkingSignature;
+							if (model.provider === "opencode-go" && signature === "reasoning") {
+								signature = "reasoning_content";
+							}
+							if (signature && isOpenAICompletionsReasoningField(signature)) {
+								assistantMsg[signature] = nonEmptyThinkingBlocks.map((block) => block.thinking).join("\n");
+							}
+						}
+					}
+				} else if (assistantText.length > 0) {
 					// Always send assistant content as a plain string (OpenAI Chat Completions
 					// API standard format). Sending as an array of {type:"text", text:"..."}
 					// objects is non-standard and causes some models (e.g. DeepSeek V3.2 via
 					// NVIDIA NIM) to mirror the content-block structure literally in their
 					// output, producing recursive nesting like [{'type':'text','text':'[{...}]'}].
-					if (assistantText.length > 0) {
-						assistantMsg.content = assistantText;
-					}
-
-					// reasoning_details is the structured alternative to a raw reasoning field.
-					if (!preservedReasoningDetails) {
-						// Use the signature from the first thinking block if available (for llama.cpp server + gpt-oss)
-						let signature = nonEmptyThinkingBlocks[0].thinkingSignature;
-						if (model.provider === "opencode-go" && signature === "reasoning") {
-							signature = "reasoning_content";
-						}
-						if (signature && isOpenAICompletionsReasoningField(signature)) {
-							assistantMsg[signature] = nonEmptyThinkingBlocks.map((block) => block.thinking).join("\n");
-						}
-					}
+					assistantMsg.content = assistantText;
 				}
-			} else if (assistantText.length > 0) {
-				// Always send assistant content as a plain string (OpenAI Chat Completions
-				// API standard format). Sending as an array of {type:"text", text:"..."}
-				// objects is non-standard and causes some models (e.g. DeepSeek V3.2 via
-				// NVIDIA NIM) to mirror the content-block structure literally in their
-				// output, producing recursive nesting like [{'type':'text','text':'[{...}]'}].
-				assistantMsg.content = assistantText;
-			}
 
-			if (toolCalls.length > 0) {
-				assistantMsg.tool_calls = toolCalls.map((tc): ChatCompletionMessageToolCall => {
-					const customInputProperty = options?.grammarToolInputProperties?.get(tc.name);
-					if (customInputProperty !== undefined) {
+				if (toolCalls.length > 0) {
+					assistantMsg.tool_calls = toolCalls.map((tc): ChatCompletionMessageToolCall => {
+						const customInputProperty = options?.grammarToolInputProperties?.get(tc.name);
+						if (customInputProperty !== undefined) {
+							return {
+								id: tc.id,
+								type: "custom",
+								custom: {
+									name: tc.name,
+									input: sanitizeSurrogates(getGrammarToolInput(tc.name, tc.arguments, customInputProperty)),
+								},
+							};
+						}
 						return {
 							id: tc.id,
-							type: "custom",
-							custom: {
+							type: "function",
+							function: {
 								name: tc.name,
-								input: sanitizeSurrogates(getGrammarToolInput(tc.name, tc.arguments, customInputProperty)),
+								arguments: JSON.stringify(tc.arguments),
 							},
 						};
-					}
-					return {
-						id: tc.id,
-						type: "function",
-						function: {
-							name: tc.name,
-							arguments: JSON.stringify(tc.arguments),
-						},
-					};
-				});
-			}
-			if (preservedReasoningDetails) {
-				assistantMsg.reasoning_details = preservedReasoningDetails;
-			}
-			if (
-				compat.requiresReasoningContentOnAssistantMessages &&
-				model.reasoning &&
-				assistantMsg.reasoning_content === undefined
-			) {
-				assistantMsg.reasoning_content = "";
-			}
-			// Skip assistant messages that have no content and no tool calls.
-			// Some providers require "either content or tool_calls, but not none".
-			// Other providers also don't accept empty assistant messages.
-			// This handles aborted assistant responses that got no content.
-			const content = assistantMsg.content;
-			const hasContent =
-				content !== null &&
-				content !== undefined &&
-				(typeof content === "string" ? content.length > 0 : content.length > 0);
-			if (!hasContent && !assistantMsg.tool_calls) {
-				continue;
-			}
-			params.push(assistantMsg);
-		} else if (msg.role === "toolResult") {
-			const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
-			let j = i;
-
-			for (; j < transformedMessages.length && transformedMessages[j].role === "toolResult"; j++) {
-				const toolMsg = transformedMessages[j] as ToolResultMessage;
-
-				// Extract text and image content
-				const textResult = toolMsg.content
-					.filter(isTextContentBlock)
-					.map((block) => block.text)
-					.join("\n");
-				const hasImages = toolMsg.content.some((c) => c.type === "image");
-
-				// Always send tool result with text (or placeholder if only images)
-				const hasText = textResult.trim().length > 0;
-				const toolResultText = hasText ? textResult : hasImages ? "(see attached image)" : "(no tool output)";
-				// Some providers require the 'name' field in tool results
-				const toolResultMsg: ChatCompletionToolMessageParam = {
-					role: "tool",
-					content: sanitizeSurrogates(toolResultText),
-					tool_call_id: toolMsg.toolCallId,
-				};
-				if (compat.requiresToolResultName && toolMsg.toolName) {
-					(toolResultMsg as any).name = toolMsg.toolName;
+					});
 				}
-				params.push(toolResultMsg);
+				if (preservedReasoningDetails) {
+					assistantMsg.reasoning_details = preservedReasoningDetails;
+				}
+				if (
+					compat.requiresReasoningContentOnAssistantMessages &&
+					model.reasoning &&
+					assistantMsg.reasoning_content === undefined
+				) {
+					assistantMsg.reasoning_content = "";
+				}
+				// Skip assistant messages that have no content and no tool calls.
+				// Some providers require "either content or tool_calls, but not none".
+				// Other providers also don't accept empty assistant messages.
+				// This handles aborted assistant responses that got no content.
+				const content = assistantMsg.content;
+				const hasContent =
+					content !== null &&
+					content !== undefined &&
+					(typeof content === "string" ? content.length > 0 : content.length > 0);
+				if (!hasContent && !assistantMsg.tool_calls) {
+					return false;
+				}
+				out.push(assistantMsg);
+				return true;
+			});
+			if (!converted) continue;
+		} else if (msg.role === "toolResult") {
+			let j = i;
+			while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") j++;
+			const results = transformedMessages.slice(i, j) as ToolResultMessage[];
+			// A tool result's conversion also reads its (possibly renamed) tool call id.
+			const unitExtra = results.map((result) => result.toolCallId).join("\u0000");
+			lastRole = unit(sources.slice(i, j), unitExtra, (out) => {
+				const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
+				for (const toolMsg of results) {
+					// Extract text and image content
+					const textResult = toolMsg.content
+						.filter(isTextContentBlock)
+						.map((block) => block.text)
+						.join("\n");
+					const hasImages = toolMsg.content.some((c) => c.type === "image");
 
-				if (hasImages && model.input.includes("image")) {
-					for (const block of toolMsg.content) {
-						if (isImageContentBlock(block)) {
-							imageBlocks.push({
-								type: "image_url",
-								image_url: {
-									url: `data:${block.mimeType};base64,${block.data}`,
-								},
-							});
+					// Always send tool result with text (or placeholder if only images)
+					const hasText = textResult.trim().length > 0;
+					const toolResultText = hasText ? textResult : hasImages ? "(see attached image)" : "(no tool output)";
+					// Some providers require the 'name' field in tool results
+					const toolResultMsg: ChatCompletionToolMessageParam = {
+						role: "tool",
+						content: sanitizeSurrogates(toolResultText),
+						tool_call_id: toolMsg.toolCallId,
+					};
+					if (compat.requiresToolResultName && toolMsg.toolName) {
+						(toolResultMsg as any).name = toolMsg.toolName;
+					}
+					out.push(toolResultMsg);
+
+					if (hasImages && model.input.includes("image")) {
+						for (const block of toolMsg.content) {
+							if (isImageContentBlock(block)) {
+								imageBlocks.push({
+									type: "image_url",
+									image_url: {
+										url: `data:${block.mimeType};base64,${block.data}`,
+									},
+								});
+							}
 						}
 					}
 				}
-			}
 
-			i = j - 1;
+				if (imageBlocks.length > 0) {
+					if (compat.requiresAssistantAfterToolResult) {
+						out.push({
+							role: "assistant",
+							content: "I have processed the tool results.",
+						});
+					}
 
-			if (imageBlocks.length > 0) {
-				if (compat.requiresAssistantAfterToolResult) {
-					params.push({
-						role: "assistant",
-						content: "I have processed the tool results.",
+					out.push({
+						role: "user",
+						content: [
+							{
+								type: "text",
+								text: "Attached image(s) from tool result:",
+							},
+							...imageBlocks,
+						],
 					});
+					return "user";
 				}
-
-				params.push({
-					role: "user",
-					content: [
-						{
-							type: "text",
-							text: "Attached image(s) from tool result:",
-						},
-						...imageBlocks,
-					],
-				});
-				lastRole = "user";
-			} else {
-				lastRole = "toolResult";
-			}
-
+				return "toolResult";
+			});
+			i = j - 1;
 			continue;
 		}
 

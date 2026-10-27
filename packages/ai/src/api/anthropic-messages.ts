@@ -50,6 +50,7 @@ import {
 import { getProviderEnvValue } from "../utils/provider-env.ts";
 import { getServerRetryDelayMs, retryProviderRequest } from "../utils/provider-retry.ts";
 import { cacheRequestBody } from "../utils/request-body.ts";
+import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { iterateSseMessages } from "../utils/sse.ts";
 import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
@@ -461,6 +462,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			timestamp: Date.now(),
 		};
 
+		let cache: RequestCacheRun | undefined;
 		try {
 			let client: Anthropic;
 			let isOAuth: boolean;
@@ -505,7 +507,18 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
 				maxRetries: 0,
 			};
-			const built = buildParams(model, normalizedContext, isOAuth, options);
+			const compat = getAnthropicCompat(model);
+			cache = beginRequestCache("anthropic-messages", options?.sessionId, options?.onPayload, [
+				model.id,
+				model.provider,
+				model.api,
+				model.input,
+				model.reasoning,
+				isOAuth,
+				compat.allowEmptySignature,
+				model.compat?.supportsMidConvoEffort === true,
+			]);
+			const built = buildParams(model, normalizedContext, isOAuth, options, cache);
 			if (built.providerThinkingLevel) output.providerThinkingLevel = built.providerThinkingLevel;
 			let params = built.params;
 			const nextParams = await options?.onPayload?.(params, model);
@@ -522,6 +535,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 					signal: options?.signal,
 				},
 			);
+			cache?.end();
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
@@ -761,6 +775,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
+			cache?.end();
 			for (const block of output.content) {
 				delete (block as { index?: number }).index;
 				// partialJson is only a streaming scratch buffer; never persist it.
@@ -1007,6 +1022,7 @@ function buildParams(
 	context: TranscriptContext,
 	isOAuthToken: boolean,
 	options?: AnthropicOptions,
+	cache?: RequestCacheRun,
 ): {
 	params: MessageCreateParamsStreaming;
 	/** Effort of the final effort marker, recorded on the reply so later requests can replay it. */
@@ -1016,8 +1032,10 @@ function buildParams(
 	const compat = getAnthropicCompat(model);
 	const initialSystemMessage = getInitialSystemMessage(context.messages);
 	const initialSystemText = initialSystemMessage ? getSystemMessageText(initialSystemMessage) : "";
-	const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
+	const sources: (Message | undefined)[] = [];
+	const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId, cache, sources);
 	const conversationMessages = initialSystemMessage ? transformedMessages.slice(1) : transformedMessages;
+	const conversationSources = initialSystemMessage ? sources.slice(1) : sources;
 	// Native tool changes keep the request-level tool list fixed and define every later tool
 	// by value in a `tool_addition` block, which also expresses same-name redefinitions.
 	// Anthropic rejects a tool list where every tool is deferred, so there must be an initial
@@ -1044,6 +1062,8 @@ function buildParams(
 		compat.allowEmptySignature,
 		effortMessages ? model.provider : undefined,
 		nativeToolChanges ? convertToolDefinitions : undefined,
+		cache,
+		conversationSources,
 	);
 	const activeEffort = options?.effort ?? "high";
 	const betaFeatures = getBetaFeatures(model, context, isOAuthToken, nativeToolChanges, options);
@@ -1192,8 +1212,27 @@ function convertMessages(
 	managedProvider?: string,
 	/** Converts tool definitions for native `tool_addition` blocks; undefined when tool changes are not native. */
 	convertToolDefinitions?: (tools: Tool[]) => BetaTool[],
+	/** Reuse what unchanged messages converted to before (request-cache.ts); `sources` as transformMessages fills it. */
+	cache?: RequestCacheRun,
+	sources?: (Message | undefined)[],
 ): ConvertedAnthropicMessages {
 	const params: MessageParam[] = [];
+	/**
+	 * Converts one unit (a message, or a run of tool results) with `convert`, which pushes what it converts to and
+	 * returns what the loop needs besides; with the cache, the values of an unchanged unit are reused.
+	 */
+	const unit = <M>(
+		first: number,
+		end: number,
+		extra: unknown,
+		target: MessageParam[],
+		convert: (out: MessageParam[]) => M,
+	): M => {
+		if (!cache || !sources) return convert(target);
+		const unitSources = end - first === 1 ? [sources[first]] : sources.slice(first, end);
+		if (unitSources.length !== end - first || unitSources.includes(undefined)) return convert(target);
+		return cache.unit(unitSources as Message[], extra, target, convert as (out: unknown[]) => M);
+	};
 	const assistantLevels = new Map<number, AnthropicEffort>();
 	// Later system messages are held back and emitted directly before the next assistant
 	// message that is sent (or at the end of the transcript). Assistant messages that convert to
@@ -1234,14 +1273,16 @@ function convertMessages(
 			}
 			if (blocks.length > 0) pendingSystemMessages.push({ role: "system", content: blocks });
 		} else if (msg.role === "user") {
-			if (typeof msg.content === "string") {
-				if (msg.content.trim().length > 0) {
-					params.push({
-						role: "user",
-						content: sanitizeSurrogates(msg.content),
-					});
+			unit(i, i + 1, undefined, params, (out) => {
+				if (typeof msg.content === "string") {
+					if (msg.content.trim().length > 0) {
+						out.push({
+							role: "user",
+							content: sanitizeSurrogates(msg.content),
+						});
+					}
+					return;
 				}
-			} else {
 				const blocks: ContentBlockParam[] = msg.content.map((item) => {
 					if (item.type === "text") {
 						return {
@@ -1258,73 +1299,79 @@ function convertMessages(
 					}
 					return true;
 				});
-				if (filteredBlocks.length === 0) continue;
-				params.push({
+				if (filteredBlocks.length === 0) return;
+				out.push({
 					role: "user",
 					content: filteredBlocks,
 				});
-			}
+			});
 		} else if (msg.role === "assistant") {
-			const blocks: ContentBlockParam[] = [];
+			// Held system messages go before the assistant message, outside its unit.
+			const assistantParams: MessageParam[] = [];
+			unit(i, i + 1, undefined, assistantParams, (out) => {
+				const blocks: ContentBlockParam[] = [];
 
-			for (const block of msg.content) {
-				if (block.type === "text") {
-					if (block.text.trim().length === 0) continue;
-					blocks.push({
-						type: "text",
-						text: sanitizeSurrogates(block.text),
-					});
-				} else if (block.type === "thinking") {
-					// Redacted thinking: pass the opaque payload back as redacted_thinking
-					if (block.redacted) {
+				for (const block of msg.content) {
+					if (block.type === "text") {
+						if (block.text.trim().length === 0) continue;
 						blocks.push({
-							type: "redacted_thinking",
-							data: block.thinkingSignature!,
+							type: "text",
+							text: sanitizeSurrogates(block.text),
 						});
-						continue;
-					}
-					const thinkingSignature = block.thinkingSignature;
-					const hasThinkingSignature = !!thinkingSignature && thinkingSignature.trim().length > 0;
-					if (block.thinking.trim().length === 0 && !hasThinkingSignature) continue;
-					// If thinking signature is missing/empty (e.g., from aborted stream),
-					// convert to plain text for Anthropic. Some compatible providers emit
-					// and accept empty signatures, so let marked models preserve the block.
-					if (!hasThinkingSignature) {
-						blocks.push(
-							allowEmptySignature
-								? {
-										type: "thinking",
-										thinking: sanitizeSurrogates(block.thinking),
-										signature: "",
-									}
-								: {
-										type: "text",
-										text: sanitizeSurrogates(block.thinking),
-									},
-						);
-					} else {
+					} else if (block.type === "thinking") {
+						// Redacted thinking: pass the opaque payload back as redacted_thinking
+						if (block.redacted) {
+							blocks.push({
+								type: "redacted_thinking",
+								data: block.thinkingSignature!,
+							});
+							continue;
+						}
+						const thinkingSignature = block.thinkingSignature;
+						const hasThinkingSignature = !!thinkingSignature && thinkingSignature.trim().length > 0;
+						if (block.thinking.trim().length === 0 && !hasThinkingSignature) continue;
+						// If thinking signature is missing/empty (e.g., from aborted stream),
+						// convert to plain text for Anthropic. Some compatible providers emit
+						// and accept empty signatures, so let marked models preserve the block.
+						if (!hasThinkingSignature) {
+							blocks.push(
+								allowEmptySignature
+									? {
+											type: "thinking",
+											thinking: sanitizeSurrogates(block.thinking),
+											signature: "",
+										}
+									: {
+											type: "text",
+											text: sanitizeSurrogates(block.thinking),
+										},
+							);
+						} else {
+							blocks.push({
+								type: "thinking",
+								thinking: sanitizeSurrogates(block.thinking),
+								signature: thinkingSignature,
+							});
+						}
+					} else if (block.type === "toolCall") {
 						blocks.push({
-							type: "thinking",
-							thinking: sanitizeSurrogates(block.thinking),
-							signature: thinkingSignature,
+							type: "tool_use",
+							id: block.id,
+							name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
+							input: block.arguments ?? {},
 						});
 					}
-				} else if (block.type === "toolCall") {
-					blocks.push({
-						type: "tool_use",
-						id: block.id,
-						name: isOAuthToken ? toClaudeCodeName(block.name) : block.name,
-						input: block.arguments ?? {},
-					});
 				}
-			}
-			if (blocks.length === 0) continue;
+				if (blocks.length === 0) return;
+				out.push({
+					role: "assistant",
+					content: blocks,
+				});
+			});
+			if (assistantParams.length === 0) continue;
 			flushPendingSystemMessages();
 			const messageIndex = params.length;
-			params.push({
-				role: "assistant",
-				content: blocks,
-			});
+			params.push(...assistantParams);
 			if (
 				managedProvider !== undefined &&
 				msg.api === "anthropic-messages" &&
@@ -1335,34 +1382,37 @@ function convertMessages(
 			}
 		} else if (msg.role === "toolResult") {
 			// Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint.
-			const toolResults: ContentBlockParam[] = [];
-			// Anthropic rejects error tool results that contain anything but text, so their images follow
-			// all tool results of the turn, which must come first in the user message (#10794).
-			const errorImages: ContentBlockParam[] = [];
 			let j = i;
-			while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
-				const toolMsg = transformedMessages[j] as ToolResultMessage;
-				const split = splitErrorToolResultImages(toolMsg);
-				toolResults.push(convertToolResult(toolMsg, split?.content));
-				if (split) {
-					errorImages.push({ type: "text", text: split.caption }, ...split.images.map(convertImageBlock));
+			while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") j++;
+			const results = transformedMessages.slice(i, j) as ToolResultMessage[];
+			// A tool result's conversion also reads its (possibly renamed) tool call id.
+			unit(i, j, results.map((result) => result.toolCallId).join("\u0000"), params, (out) => {
+				const toolResults: ContentBlockParam[] = [];
+				// Anthropic rejects error tool results that contain anything but text, so their images follow
+				// all tool results of the turn, which must come first in the user message (#10794).
+				const errorImages: ContentBlockParam[] = [];
+				for (const toolMsg of results) {
+					const split = splitErrorToolResultImages(toolMsg);
+					toolResults.push(convertToolResult(toolMsg, split?.content));
+					if (split) {
+						errorImages.push({ type: "text", text: split.caption }, ...split.images.map(convertImageBlock));
+					}
 				}
-				j++;
-			}
+				out.push({
+					role: "user",
+					content: [...toolResults, ...errorImages],
+				});
+			});
 
 			// Skip the messages we've already processed.
 			i = j - 1;
-
-			params.push({
-				role: "user",
-				content: [...toolResults, ...errorImages],
-			});
 		}
 	}
 
 	flushPendingSystemMessages();
 
-	// Add cache_control to the last user or system message to cache conversation history
+	// Add cache_control to the last user or system message to cache conversation history. On a copy: the message may
+	// be reused by the next request (request-cache.ts), where it is not the last.
 	if (cacheControl && params.length > 0) {
 		const lastMessage = params[params.length - 1];
 		if (lastMessage.role === "user" || lastMessage.role === "system") {
@@ -1376,16 +1426,24 @@ function convertMessages(
 						lastBlock.type === "tool_addition" ||
 						lastBlock.type === "tool_removal")
 				) {
-					(lastBlock as any).cache_control = cacheControl;
+					const markedBlock = { ...lastBlock };
+					(markedBlock as any).cache_control = cacheControl;
+					params[params.length - 1] = {
+						...lastMessage,
+						content: [...lastMessage.content.slice(0, -1), markedBlock],
+					} as MessageParam;
 				}
 			} else if (typeof lastMessage.content === "string") {
-				lastMessage.content = [
-					{
-						type: "text",
-						text: lastMessage.content,
-						cache_control: cacheControl,
-					},
-				] as any;
+				params[params.length - 1] = {
+					...lastMessage,
+					content: [
+						{
+							type: "text",
+							text: lastMessage.content,
+							cache_control: cacheControl,
+						},
+					] as any,
+				};
 			}
 		}
 	}

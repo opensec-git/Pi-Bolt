@@ -19,6 +19,7 @@ import type {
 	Api,
 	AssistantMessage,
 	ImageContent,
+	Message,
 	Model,
 	StopReason,
 	StreamOptions,
@@ -34,6 +35,7 @@ import type {
 import type { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { parseStreamingJson, parseStreamingJsonWhileStreaming, parseToolCallArguments } from "../utils/json-parse.ts";
+import type { RequestCacheRun } from "../utils/request-cache.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { getSystemMessageText, renderSystemMessageUpdate } from "../utils/text.ts";
 import { resolveTranscript, resolveTranscriptTools, type TranscriptToolSupport } from "../utils/transcript.ts";
@@ -141,6 +143,12 @@ export interface ConvertResponsesMessagesOptions {
 	 * and to apply to the next reply.
 	 */
 	configurationUpdateEffort?: string;
+	/**
+	 * Reuse what unchanged messages converted to in the conversation's previous requests (request-cache.ts). Its
+	 * context must hold the model, the tool call providers and every option above except `configurationUpdateEffort`,
+	 * of which only whether it is set.
+	 */
+	cache?: RequestCacheRun;
 }
 
 export interface ConvertResponsesToolsOptions {
@@ -223,7 +231,24 @@ export function convertResponsesMessages<TApi extends Api>(
 		return `${normalizedCallId}|${normalizedItemId}`;
 	};
 
-	const transformedMessages = transformMessages(normalizedContext.messages, model, normalizeToolCallId);
+	const cache = options?.cache;
+	const sources: (Message | undefined)[] = [];
+	const transformedMessages = transformMessages(
+		normalizedContext.messages,
+		model,
+		normalizeToolCallId,
+		cache,
+		sources,
+	);
+	/**
+	 * Converts one message with `convert`, which pushes what it converts to and returns what the loop needs besides;
+	 * with the cache, the values of an unchanged message are reused. `extra` is what the conversion reads besides the
+	 * message and the cache context.
+	 */
+	const unit = <M>(source: Message | undefined, extra: unknown, convert: (out: ResponseInput) => M): M => {
+		if (!cache || source === undefined) return convert(messages);
+		return cache.unit([source], extra, messages, convert as (out: unknown[]) => M);
+	};
 	const toolSupport = getResponsesToolSupport(options ?? {});
 	const transcriptTools = resolveTranscriptTools(normalizedContext.messages, toolSupport);
 	let declaredAdditionalTools = false;
@@ -276,7 +301,8 @@ export function convertResponsesMessages<TApi extends Api>(
 	let msgIndex = 0;
 	let sourceIndex = 0;
 	let systemIndex = 0;
-	for (const msg of transformedMessages) {
+	for (let index = 0; index < transformedMessages.length; index++) {
+		const msg = transformedMessages[index];
 		const isLeadingSystemMessage = sourceIndex++ === 0 && msg.role === "system";
 		if (msg.role === "system") {
 			// transformMessages keeps system messages in order, so their position matches the transcript.
@@ -298,12 +324,14 @@ export function convertResponsesMessages<TApi extends Api>(
 				}
 			}
 		} else if (msg.role === "user") {
-			if (typeof msg.content === "string") {
-				messages.push({
-					role: "user",
-					content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }],
-				});
-			} else {
+			const converted = unit(sources[index], undefined, (out) => {
+				if (typeof msg.content === "string") {
+					out.push({
+						role: "user",
+						content: [{ type: "input_text", text: sanitizeSurrogates(msg.content) }],
+					});
+					return true;
+				}
 				const content: ResponseInputContent[] = msg.content.map((item): ResponseInputContent => {
 					if (item.type === "text") {
 						return {
@@ -317,113 +345,130 @@ export function convertResponsesMessages<TApi extends Api>(
 						image_url: `data:${item.mimeType};base64,${item.data}`,
 					} satisfies ResponseInputImage;
 				});
-				if (content.length === 0) continue;
-				messages.push({
+				if (content.length === 0) return false;
+				out.push({
 					role: "user",
 					content,
 				});
-			}
+				return true;
+			});
+			if (!converted) continue;
 		} else if (msg.role === "assistant") {
-			const output: ResponseInput = [];
-			const assistantMsg = msg as AssistantMessage;
-			const isSameProviderAndApi = assistantMsg.provider === model.provider && assistantMsg.api === model.api;
-			const isSameModel = isSameProviderAndApi && assistantMsg.model === model.id;
-			const isDifferentModel = isSameProviderAndApi && assistantMsg.model !== model.id;
-			let textBlockIndex = 0;
+			// Text items without an id of their own are named after the message's index.
+			const converted = unit(sources[index], msgIndex, (out) => {
+				const output: ResponseInput = [];
+				const assistantMsg = msg as AssistantMessage;
+				const isSameProviderAndApi = assistantMsg.provider === model.provider && assistantMsg.api === model.api;
+				const isSameModel = isSameProviderAndApi && assistantMsg.model === model.id;
+				const isDifferentModel = isSameProviderAndApi && assistantMsg.model !== model.id;
+				let textBlockIndex = 0;
 
-			for (const block of msg.content) {
-				if (block.type === "thinking") {
-					if (block.thinkingSignature) {
-						const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
-						output.push(reasoningItem);
-					}
-				} else if (block.type === "text") {
-					const textBlock = block as TextContent;
-					const parsedSignature = parseTextSignature(textBlock.textSignature);
-					const fallbackMessageId =
-						textBlockIndex === 0 ? `msg_pi_${msgIndex}` : `msg_pi_${msgIndex}_${textBlockIndex}`;
-					textBlockIndex++;
-					// OpenAI requires id to be max 64 characters
-					let msgId = parsedSignature?.id;
-					if (!msgId) {
-						msgId = fallbackMessageId;
-					} else if (msgId.length > 64) {
-						msgId = `msg_${shortHash(msgId)}`;
-					}
-					output.push({
-						type: "message",
-						role: "assistant",
-						content: [{ type: "output_text", text: sanitizeSurrogates(textBlock.text), annotations: [] }],
-						status: "completed",
-						id: msgId,
-						phase: parsedSignature?.phase,
-					} satisfies ResponseOutputMessage);
-				} else if (block.type === "toolCall") {
-					const toolCall = block as ToolCall;
-					const [callId, itemIdRaw] = toolCall.id.split("|");
-					const customInputProperty = options?.grammarToolInputProperties?.get(toolCall.name);
-					let itemId: string | undefined = itemIdRaw;
-
-					// For different-model messages, set id to undefined to avoid pairing validation.
-					// OpenAI tracks which item IDs were paired with rs_xxx reasoning items.
-					// By omitting the id, we avoid triggering that validation (like cross-provider does).
-					// Also drop ids that do not match the replayed item type: function_call ids must be fc_*
-					// and custom_tool_call ids must be ctc_*. Foreign tool call ids are normalized to fc_*, and
-					// a call can switch between the two types when grammar tool support differs.
-					const itemIdPrefix = customInputProperty === undefined ? "fc_" : "ctc_";
-					if (isDifferentModel || !itemId?.startsWith(itemIdPrefix)) {
-						itemId = undefined;
-					}
-
-					if (customInputProperty !== undefined) {
+				for (const block of msg.content) {
+					if (block.type === "thinking") {
+						if (block.thinkingSignature) {
+							const reasoningItem = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
+							output.push(reasoningItem);
+						}
+					} else if (block.type === "text") {
+						const textBlock = block as TextContent;
+						const parsedSignature = parseTextSignature(textBlock.textSignature);
+						const fallbackMessageId =
+							textBlockIndex === 0 ? `msg_pi_${msgIndex}` : `msg_pi_${msgIndex}_${textBlockIndex}`;
+						textBlockIndex++;
+						// OpenAI requires id to be max 64 characters
+						let msgId = parsedSignature?.id;
+						if (!msgId) {
+							msgId = fallbackMessageId;
+						} else if (msgId.length > 64) {
+							msgId = `msg_${shortHash(msgId)}`;
+						}
 						output.push({
-							type: "custom_tool_call",
-							id: itemId,
-							call_id: callId,
-							name: toolCall.name,
-							input: sanitizeSurrogates(
-								getGrammarToolInput(toolCall.name, toolCall.arguments, customInputProperty),
-							),
-							...(isSameModel && toolCall.namespace !== undefined ? { namespace: toolCall.namespace } : {}),
-						} satisfies ResponseOutputItem);
-					} else {
-						output.push({
-							type: "function_call",
-							id: itemId,
-							call_id: callId,
-							name: toolCall.name,
-							arguments: JSON.stringify(toolCall.arguments),
-							...(isSameModel && toolCall.namespace !== undefined ? { namespace: toolCall.namespace } : {}),
-						});
+							type: "message",
+							role: "assistant",
+							content: [{ type: "output_text", text: sanitizeSurrogates(textBlock.text), annotations: [] }],
+							status: "completed",
+							id: msgId,
+							phase: parsedSignature?.phase,
+						} satisfies ResponseOutputMessage);
+					} else if (block.type === "toolCall") {
+						const toolCall = block as ToolCall;
+						const [callId, itemIdRaw] = toolCall.id.split("|");
+						const customInputProperty = options?.grammarToolInputProperties?.get(toolCall.name);
+						let itemId: string | undefined = itemIdRaw;
+
+						// For different-model messages, set id to undefined to avoid pairing validation.
+						// OpenAI tracks which item IDs were paired with rs_xxx reasoning items.
+						// By omitting the id, we avoid triggering that validation (like cross-provider does).
+						// Also drop ids that do not match the replayed item type: function_call ids must be fc_*
+						// and custom_tool_call ids must be ctc_*. Foreign tool call ids are normalized to fc_*, and
+						// a call can switch between the two types when grammar tool support differs.
+						const itemIdPrefix = customInputProperty === undefined ? "fc_" : "ctc_";
+						if (isDifferentModel || !itemId?.startsWith(itemIdPrefix)) {
+							itemId = undefined;
+						}
+
+						if (customInputProperty !== undefined) {
+							output.push({
+								type: "custom_tool_call",
+								id: itemId,
+								call_id: callId,
+								name: toolCall.name,
+								input: sanitizeSurrogates(
+									getGrammarToolInput(toolCall.name, toolCall.arguments, customInputProperty),
+								),
+								...(isSameModel && toolCall.namespace !== undefined ? { namespace: toolCall.namespace } : {}),
+							} satisfies ResponseOutputItem);
+						} else {
+							output.push({
+								type: "function_call",
+								id: itemId,
+								call_id: callId,
+								name: toolCall.name,
+								arguments: JSON.stringify(toolCall.arguments),
+								...(isSameModel && toolCall.namespace !== undefined ? { namespace: toolCall.namespace } : {}),
+							});
+						}
 					}
 				}
-			}
-			if (output.length === 0) continue;
-			if (
-				options?.configurationUpdateEffort !== undefined &&
-				isSameModel &&
-				msg.providerThinkingLevel !== undefined
-			) {
-				pushConfigurationUpdate(msg.providerThinkingLevel);
-			}
-			messages.push(...output);
+				if (output.length === 0) return false;
+				if (
+					options?.configurationUpdateEffort !== undefined &&
+					isSameModel &&
+					msg.providerThinkingLevel !== undefined
+				) {
+					out.push({
+						type: "configuration_update",
+						reasoning: {
+							effort: msg.providerThinkingLevel as NonNullable<
+								ResponseConfigurationUpdateItemParam.Reasoning["effort"]
+							>,
+						},
+					} satisfies ResponseConfigurationUpdateItemParam);
+				}
+				out.push(...output);
+				return true;
+			});
+			if (!converted) continue;
 		} else if (msg.role === "toolResult") {
-			const [callId] = msg.toolCallId.split("|");
-			const output = convertToolResultOutput(model, msg.content);
+			// The conversion also reads the (possibly renamed) tool call id.
+			unit(sources[index], msg.toolCallId, (out) => {
+				const [callId] = msg.toolCallId.split("|");
+				const output = convertToolResultOutput(model, msg.content);
 
-			if (options?.grammarToolInputProperties?.has(msg.toolName)) {
-				messages.push({
-					type: "custom_tool_call_output",
-					call_id: callId,
-					output,
-				});
-			} else {
-				messages.push({
-					type: "function_call_output",
-					call_id: callId,
-					output,
-				});
-			}
+				if (options?.grammarToolInputProperties?.has(msg.toolName)) {
+					out.push({
+						type: "custom_tool_call_output",
+						call_id: callId,
+						output,
+					});
+				} else {
+					out.push({
+						type: "function_call_output",
+						call_id: callId,
+						output,
+					});
+				}
+			});
 		}
 		if (!isLeadingSystemMessage) msgIndex++;
 	}

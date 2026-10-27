@@ -32,9 +32,13 @@
  *
  * Conversations are told apart by a key (the session id); the last few keep their previous request's snapshots and
  * bytes, about one request's size each. A conversation not seen in the latest requests is dropped.
+ *
+ * An item that request-cache.ts handed out (a message converted for an earlier request and reused; nothing changes it)
+ * is sent as the bytes it was first sent as, without a comparison.
  */
 
 import { cachedArrayToJSON, cacheJsonSerialization } from "./json-body.ts";
+import { cachedItemBytes } from "./request-cache.ts";
 
 const { isRawJSON } = JSON as unknown as { isRawJSON?: (value: unknown) => boolean };
 
@@ -221,7 +225,16 @@ export function jsonBodyParts(
 	for (let i = 0; i < items.length; i++) {
 		const item = items[i];
 		const previous = state.snapshots[i];
-		if (previous !== undefined && previous !== UNCACHEABLE && matches(previous, item)) {
+		// A value request-cache.ts handed out: the bytes it was first sent as (by the comparison below, the first time).
+		const cached = cachedItemBytes(item, () =>
+			previous !== undefined && previous !== UNCACHEABLE && matches(previous, item)
+				? state.bytes[i]
+				: utf8(JSON.stringify(item) ?? "null"),
+		);
+		if (cached !== undefined) {
+			bytes[i] = cached;
+			snapshots[i] = UNCACHEABLE;
+		} else if (previous !== undefined && previous !== UNCACHEABLE && matches(previous, item)) {
 			snapshots[i] = previous;
 			bytes[i] = state.bytes[i];
 		} else {

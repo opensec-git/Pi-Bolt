@@ -8,6 +8,7 @@ import type {
 	ToolCall,
 	ToolResultMessage,
 } from "../types.ts";
+import type { RequestCacheRun } from "../utils/request-cache.ts";
 
 const NON_VISION_USER_IMAGE_PLACEHOLDER = "(image omitted: model does not support images)";
 const NON_VISION_TOOL_IMAGE_PLACEHOLDER = "(tool image omitted: model does not support images)";
@@ -59,119 +60,142 @@ function replaceImagesWithPlaceholder(content: (TextContent | ImageContent)[], p
 	return result;
 }
 
-function downgradeUnsupportedImages<TApi extends Api>(messages: Message[], model: Model<TApi>): Message[] {
-	if (model.input.includes("image")) {
-		return messages;
-	}
+/** What transformMessages makes of an assistant message: the copy, the tool call ids it renamed, its tool calls. */
+interface TransformedAssistant {
+	message: AssistantMessage;
+	renamedIds: [string, string][];
+	toolCalls: ToolCall[];
+}
 
-	return messages.map((msg) => {
-		if (msg.role === "user" && Array.isArray(msg.content)) {
+function transformAssistant<TApi extends Api>(
+	assistantMsg: AssistantMessage,
+	model: Model<TApi>,
+	normalizeToolCallId: ((id: string, model: Model<TApi>, source: AssistantMessage) => string) | undefined,
+): TransformedAssistant {
+	const renamedIds: [string, string][] = [];
+	const isSameModel =
+		assistantMsg.provider === model.provider && assistantMsg.api === model.api && assistantMsg.model === model.id;
+
+	const transformedContent = assistantMsg.content.flatMap((block) => {
+		if (block.type === "thinking") {
+			// Thinking from another model is dropped. Signatures and encrypted reasoning are
+			// only valid for the model that produced them, and sending readable thinking as
+			// plain text makes the new model treat it as part of the visible reply.
+			if (!isSameModel) return [];
+			// Keep redacted and signed blocks even if the thinking text is empty
+			// (OpenAI encrypted reasoning); they are needed for replay.
+			if (block.redacted || block.thinkingSignature) return block;
+			if (!block.thinking || block.thinking.trim() === "") return [];
+			return block;
+		}
+
+		if (block.type === "text") {
+			if (isSameModel) return block;
 			return {
-				...msg,
-				content: replaceImagesWithPlaceholder(msg.content, NON_VISION_USER_IMAGE_PLACEHOLDER),
+				type: "text" as const,
+				text: block.text,
 			};
 		}
 
-		if (msg.role === "toolResult") {
-			return {
-				...msg,
-				content: replaceImagesWithPlaceholder(msg.content, NON_VISION_TOOL_IMAGE_PLACEHOLDER),
-			};
+		if (block.type === "toolCall") {
+			const toolCall = block as ToolCall;
+			let normalizedToolCall: ToolCall = toolCall;
+
+			if (!isSameModel && toolCall.thoughtSignature) {
+				normalizedToolCall = { ...toolCall };
+				delete (normalizedToolCall as { thoughtSignature?: string }).thoughtSignature;
+			}
+
+			if (!isSameModel && normalizeToolCallId) {
+				const normalizedId = normalizeToolCallId(toolCall.id, model, assistantMsg);
+				if (normalizedId !== toolCall.id) {
+					renamedIds.push([toolCall.id, normalizedId]);
+					normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
+				}
+			}
+
+			return normalizedToolCall;
 		}
 
-		return msg;
+		return block;
 	});
+
+	const message: AssistantMessage = {
+		...assistantMsg,
+		content: transformedContent,
+	};
+	return {
+		message,
+		renamedIds,
+		toolCalls: transformedContent.filter((b) => b.type === "toolCall") as ToolCall[],
+	};
 }
 
 /**
  * Normalize tool call ID for cross-provider compatibility.
  * OpenAI Responses API generates IDs that are 450+ chars with special characters like `|`.
  * Anthropic APIs require IDs matching ^[a-zA-Z0-9_-]+$ (max 64 chars).
+ *
+ * With `cache` (a request's run of request-cache.ts, whose context holds the model and everything the normalizer
+ * reads), the copies made of a message are reused while the message is unchanged. `sources` is filled with the
+ * message of `messages` each returned message was made from, at the same index; undefined for a synthetic tool result.
  */
 export function transformMessages<TApi extends Api>(
 	messages: Message[],
 	model: Model<TApi>,
 	normalizeToolCallId?: (id: string, model: Model<TApi>, source: AssistantMessage) => string,
+	cache?: RequestCacheRun,
+	sources?: (Message | undefined)[],
 ): Message[] {
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
-	// Normalize null/undefined content from untyped callers (custom tools, hand-built
-	// histories, old session files) so downstream code can rely on the type contract.
-	const normalizedMessages = messages.map((msg) => (msg.content == null ? { ...msg, content: [] } : msg));
-	const imageAwareMessages = downgradeUnsupportedImages(normalizedMessages, model);
+	const vision = model.input.includes("image");
+	const derive = <T extends object>(source: object, extra: unknown, make: () => T): T =>
+		cache ? cache.derive(source, extra, make) : make();
+	/** The tool calls of each transformed assistant message, by index. */
+	const toolCallsAt: ToolCall[][] = [];
 
 	// First pass: transform messages (unsupported image downgrade, thinking blocks, tool call ID normalization)
-	const transformed = imageAwareMessages.map((msg) => {
-		// System and user messages pass through unchanged
-		if (msg.role === "system" || msg.role === "user") {
-			return msg;
+	const transformed = messages.map((source, index): Message => {
+		// Normalize null/undefined content from untyped callers (custom tools, hand-built
+		// histories, old session files) so downstream code can rely on the type contract.
+		const msg = source.content == null ? ({ ...source, content: [] } as Message) : source;
+
+		// System messages pass through unchanged
+		if (msg.role === "system") return msg;
+
+		if (msg.role === "user") {
+			if (vision || !Array.isArray(msg.content)) return msg;
+			return derive(source, "", () => ({
+				...msg,
+				content: replaceImagesWithPlaceholder(
+					msg.content as (TextContent | ImageContent)[],
+					NON_VISION_USER_IMAGE_PLACEHOLDER,
+				),
+			}));
 		}
 
 		// Handle toolResult messages - normalize toolCallId if we have a mapping
 		if (msg.role === "toolResult") {
 			const normalizedId = toolCallIdMap.get(msg.toolCallId);
-			if (normalizedId && normalizedId !== msg.toolCallId) {
-				return { ...msg, toolCallId: normalizedId };
-			}
-			return msg;
+			const renamed = !!normalizedId && normalizedId !== msg.toolCallId;
+			if (vision && !renamed) return msg;
+			return derive(source, renamed ? normalizedId : "", () => {
+				const imageAware = vision
+					? msg
+					: { ...msg, content: replaceImagesWithPlaceholder(msg.content, NON_VISION_TOOL_IMAGE_PLACEHOLDER) };
+				return renamed ? { ...imageAware, toolCallId: normalizedId as string } : imageAware;
+			});
 		}
 
 		// Assistant messages need transformation check
 		if (msg.role === "assistant") {
-			const assistantMsg = msg as AssistantMessage;
-			const isSameModel =
-				assistantMsg.provider === model.provider &&
-				assistantMsg.api === model.api &&
-				assistantMsg.model === model.id;
-
-			const transformedContent = assistantMsg.content.flatMap((block) => {
-				if (block.type === "thinking") {
-					// Thinking from another model is dropped. Signatures and encrypted reasoning are
-					// only valid for the model that produced them, and sending readable thinking as
-					// plain text makes the new model treat it as part of the visible reply.
-					if (!isSameModel) return [];
-					// Keep redacted and signed blocks even if the thinking text is empty
-					// (OpenAI encrypted reasoning); they are needed for replay.
-					if (block.redacted || block.thinkingSignature) return block;
-					if (!block.thinking || block.thinking.trim() === "") return [];
-					return block;
-				}
-
-				if (block.type === "text") {
-					if (isSameModel) return block;
-					return {
-						type: "text" as const,
-						text: block.text,
-					};
-				}
-
-				if (block.type === "toolCall") {
-					const toolCall = block as ToolCall;
-					let normalizedToolCall: ToolCall = toolCall;
-
-					if (!isSameModel && toolCall.thoughtSignature) {
-						normalizedToolCall = { ...toolCall };
-						delete (normalizedToolCall as { thoughtSignature?: string }).thoughtSignature;
-					}
-
-					if (!isSameModel && normalizeToolCallId) {
-						const normalizedId = normalizeToolCallId(toolCall.id, model, assistantMsg);
-						if (normalizedId !== toolCall.id) {
-							toolCallIdMap.set(toolCall.id, normalizedId);
-							normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
-						}
-					}
-
-					return normalizedToolCall;
-				}
-
-				return block;
-			});
-
-			return {
-				...assistantMsg,
-				content: transformedContent,
-			};
+			const result = derive(source, "", () =>
+				transformAssistant(msg as AssistantMessage, model, normalizeToolCallId),
+			);
+			for (const [id, normalizedId] of result.renamedIds) toolCallIdMap.set(id, normalizedId);
+			toolCallsAt[index] = result.toolCalls;
+			return result.message;
 		}
 		return msg;
 	});
@@ -179,35 +203,45 @@ export function transformMessages<TApi extends Api>(
 	// Second pass: insert synthetic empty tool results for orphaned tool calls
 	// This preserves thinking signatures and satisfies API requirements
 	const result: Message[] = [];
+	const push = (msg: Message, source: Message | undefined): void => {
+		result.push(msg);
+		sources?.push(source);
+	};
 	let pendingToolCalls: ToolCall[] = [];
 	let existingToolResultIds = new Set<string>();
 	// System messages are transparent to tool-call accounting: one that lands between a tool
 	// call and its results is held back and emitted after the results (synthetic ones
 	// included), so it never causes a duplicate result for a call that is answered later.
 	const heldSystemMessages: Message[] = [];
+	const heldSources: Message[] = [];
 	const closePendingToolCalls = () => {
 		if (pendingToolCalls.length > 0) {
 			for (const tc of pendingToolCalls) {
 				if (!existingToolResultIds.has(tc.id)) {
-					result.push({
-						role: "toolResult",
-						toolCallId: tc.id,
-						toolName: tc.name,
-						content: [{ type: "text", text: "No result provided" }],
-						isError: true,
-						timestamp: Date.now(),
-					} as ToolResultMessage);
+					push(
+						{
+							role: "toolResult",
+							toolCallId: tc.id,
+							toolName: tc.name,
+							content: [{ type: "text", text: "No result provided" }],
+							isError: true,
+							timestamp: Date.now(),
+						} as ToolResultMessage,
+						undefined,
+					);
 				}
 			}
 			pendingToolCalls = [];
 			existingToolResultIds = new Set();
 		}
-		result.push(...heldSystemMessages);
+		for (let i = 0; i < heldSystemMessages.length; i++) push(heldSystemMessages[i], heldSources[i]);
 		heldSystemMessages.length = 0;
+		heldSources.length = 0;
 	};
 
 	for (let i = 0; i < transformed.length; i++) {
 		const msg = transformed[i];
+		const source = messages[i];
 
 		if (msg.role === "assistant") {
 			// If we have pending orphaned tool calls from a previous assistant, insert synthetic results now
@@ -224,28 +258,29 @@ export function transformMessages<TApi extends Api>(
 			}
 
 			// Track tool calls from this assistant message
-			const toolCalls = assistantMsg.content.filter((b) => b.type === "toolCall") as ToolCall[];
+			const toolCalls = toolCallsAt[i] ?? [];
 			if (toolCalls.length > 0) {
 				pendingToolCalls = toolCalls;
 				existingToolResultIds = new Set();
 			}
 
-			result.push(msg);
+			push(msg, source);
 		} else if (msg.role === "toolResult") {
 			existingToolResultIds.add(msg.toolCallId);
-			result.push(msg);
+			push(msg, source);
 		} else if (msg.role === "system") {
 			if (pendingToolCalls.length > 0) {
 				heldSystemMessages.push(msg);
+				heldSources.push(source);
 			} else {
-				result.push(msg);
+				push(msg, source);
 			}
 		} else if (msg.role === "user") {
 			// A new user turn interrupts tool flow - insert synthetic results for orphaned calls
 			closePendingToolCalls();
-			result.push(msg);
+			push(msg, source);
 		} else {
-			result.push(msg);
+			push(msg, source);
 		}
 	}
 
