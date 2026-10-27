@@ -110,7 +110,7 @@ records its own list in place of the one before, and `--no-exclude` compiles the
 
 A compile works in a folder `.compile-*` beside the installation (beside the `--out` folder with `--out`), removed when it ends.
 One left by a compile that was killed is removed by the next one. A failed build leaves all the compiler printed in
-`compile.log` there; the next successful compile removes it.
+`compile.log` there (`<folder>.compile.log` beside an `--out` folder); the next successful compile removes it.
 
 The new executable takes the place of the installed one, and the one it replaces is kept: `pi-bolt update --rollback` puts it
 back. `pi-bolt update` compiles the same extensions into each release it installs; when that fails, the release is installed

@@ -244,6 +244,8 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
         r = compile_("--only", "required-ext", "--out", str(tmp / "required"))
         check("a static import of a package that is not installed still stops the build (#160)",
               r.returncode != 0 and 'Could not resolve: "pibolt-missing-sdk-160"' in r.stderr, r.stderr[-800:])
+        check("--out keeps the failed build's log beside it, named after it",
+              (tmp / "required.compile.log").exists() and not (tmp / "compile.log").exists(), r.stderr[-400:])
         required.unlink()
 
 print("compile:", "all passed" if failures == 0 else f"{failures} failed")

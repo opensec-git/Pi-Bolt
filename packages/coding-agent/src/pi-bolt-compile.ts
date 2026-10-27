@@ -226,7 +226,7 @@ Options:
   --status           Show what is compiled in
   --kit FILE         Build with this compile kit instead of the release's (an archive or an unpacked folder)
   --runtime FILE     Build with this runtime instead of the release's (an archive, a folder, or the bun executable)
-  --out DIR          Build into DIR and install nothing (its work folder, and compile.log when it fails, go beside DIR)
+  --out DIR          Build into DIR and install nothing (its work folder, and DIR.compile.log when it fails, go beside DIR)
 
 Environment:
   BUN_JSC_maximumAOTCandidateBytecodeSize=N
@@ -1443,6 +1443,8 @@ async function compile(options: CompileOptions): Promise<void> {
 	const where = options.out ? undefined : installation();
 	const platform = platformName();
 	const workParent = where?.installDir ?? dirname(resolve(options.out!));
+	// (Beside --out, named after it: two builds into one folder each have their own.)
+	const log = join(workParent, options.out ? `${basename(resolve(options.out))}.compile.log` : "compile.log");
 	mkdirSync(workParent, { recursive: true });
 	for (const path of removeStaleWorkFolders(workParent, where !== undefined)) {
 		process.stderr.write(chalk.dim(`removed what a compile that was killed left: ${path}\n`));
@@ -1514,20 +1516,10 @@ async function compile(options: CompileOptions): Promise<void> {
 
 		const buildDir = where?.buildDir ?? dirname(process.execPath);
 		const stage = join(work, basename(buildDir));
-		await buildExecutable(
-			kit,
-			kitDir,
-			bun,
-			plan,
-			stage,
-			buildDir,
-			join(workParent, "compile.log"),
-			kinds,
-			options.maximumBytecodeSize,
-		);
+		await buildExecutable(kit, kitDir, bun, plan, stage, buildDir, log, kinds, options.maximumBytecodeSize);
 
 		const names = plan.plugins.map((plugin) => plugin.name);
-		removeOldLog(join(workParent, "compile.log"), where !== undefined);
+		removeOldLog(log, where !== undefined);
 		const took = `${Math.round((Date.now() - started) / 1000)} s`;
 		if (options.out) {
 			rmSync(options.out, { recursive: true, force: true });
