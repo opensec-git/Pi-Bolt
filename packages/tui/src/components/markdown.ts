@@ -262,14 +262,22 @@ function trimPartialClosingFences(tokens: readonly Token[]): void {
 	token.text = token.text.slice(0, -lastLine.length).replace(/\n$/, "");
 }
 
-const markdownParser = new Marked();
-markdownParser.setOptions({
-	tokenizer: new StrictStrikethroughTokenizer(),
-});
-markdownParser.use({
-	tokenizer: { emStrong: markedCjkFriendly().tokenizer?.emStrong },
-	extensions: [...LATEX_MARKDOWN_EXTENSIONS],
-});
+let markdownParser: Marked | undefined;
+
+/** Pi's Markdown parser, set up on the first lex: a start that renders no Markdown (`pi -p`) does not build it. */
+function getMarkdownParser(): Marked {
+	if (!markdownParser) {
+		markdownParser = new Marked();
+		markdownParser.setOptions({
+			tokenizer: new StrictStrikethroughTokenizer(),
+		});
+		markdownParser.use({
+			tokenizer: { emStrong: markedCjkFriendly().tokenizer?.emStrong },
+			extensions: [...LATEX_MARKDOWN_EXTENSIONS],
+		});
+	}
+	return markdownParser;
+}
 
 /** What inlineTokens() made of a text, and the lexer's state after it. */
 interface LexedInline {
@@ -362,8 +370,8 @@ let memos = true;
 /** marked's lexer() for Pi's Markdown: InlineMemoLexer, or marked's own lexer with the memos off. */
 function lexTokens(source: string): Token[] {
 	return memos && markdownCaching
-		? new InlineMemoLexer(markdownParser.defaults).lex(source)
-		: markdownParser.lexer(source);
+		? new InlineMemoLexer(getMarkdownParser().defaults).lex(source)
+		: getMarkdownParser().lexer(source);
 }
 
 interface LexedMarkdown {
@@ -542,7 +550,7 @@ function lexMarkdown(source: string, complete = false, extended?: ExtendedSource
 	lastLexed = undefined;
 	lastEnd = undefined;
 	if (!markdownCaching) {
-		const tokens = markdownParser.lexer(source);
+		const tokens = getMarkdownParser().lexer(source);
 		trimPartialClosingFences(tokens);
 		return tokens;
 	}

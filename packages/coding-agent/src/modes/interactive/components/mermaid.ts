@@ -4,7 +4,8 @@ import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import type { MermaidRenderingMode } from "../../../core/settings-manager.ts";
 import type { Theme } from "../theme/theme.ts";
 
-const markdownParser = new Marked();
+// Made for the first text that names Mermaid: most sessions show none.
+let markdownParser: Marked | undefined;
 
 interface MermaidTransformerOptions {
 	getMode: () => MermaidRenderingMode;
@@ -85,6 +86,7 @@ export function createMermaidMarkdownTransformer(options: MermaidTransformerOpti
 			return markdown;
 		}
 
+		markdownParser ??= new Marked();
 		return markdownParser
 			.lexer(markdown)
 			.map((token) => {
