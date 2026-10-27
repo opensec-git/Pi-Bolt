@@ -17240,3 +17240,221 @@ index cde86da88e..08db3789e4 100644
 -- 
 2.54.0 (Apple Git-157)
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Tue, 27 Oct 2026 20:36:45 +0530
+Subject: [PATCH] GC timer: no allocation-paced full collection after a burst
+ where idle full collections come; a tick collects 1 MB or more
+
+In an executable compiled ahead of time with idle full collections (BUN_IDLE_GC_SECONDS, on by default), a burst of work
+was collected three times once the program went quiet. Pi after an answer (M5, BUN_JSC_logGC): the next 5 s tick's eden
+collection of 1-2 KB, JSC's FullGCActivityCallback full collection ~3 s after the last allocation (which, started while
+the JS thread was parked, waited ~3 s for it and then swept), and the idle full collection at 10 s of quiet, which found
+the heap as the previous full collection left it.
+
+- JSC's allocation-paced full-collection timer is taken away in such an executable (BUN_GC_JSC_FULL_TIMER=1 keeps it): the
+  idle full collection at 10 s of quiet does its job. A full collection still comes when the heap outgrows what JSC
+  allows it, the eden timer and allocation-paced eden collections are unchanged.
+- A tick of the idle timer collects only when at least BUN_GC_TICK_MIN_KB (default 1024) was allocated since the last
+  collection, and a parked timer wakes again only for that much; less goes at the next collection or the idle one.
+
+- A tick that saw the heap grow and parks (nothing, or less than the minimum, allocated since the last collection) is armed
+  for the first idle full collection: before, nothing woke it for one until the program allocated again, so after about
+  half of Pi's answers (those whose garbage a collection during the answer had taken) no idle collection came, and JSC's
+  full-collection timer did that job. Growth is measured from tick to tick also when a tick does not collect.
+
+The JSC timer and the tick minimum are not on Windows (its timer and event loop differ), nor where idle full collections are
+off.
+---
+ src/jsc/GarbageCollectionController.rs | 72 ++++++++++++++++++++++++--
+ src/jsc/VM.rs                          |  6 +++
+ src/jsc/bindings/bindings.cpp          | 11 ++++
+ 3 files changed, 85 insertions(+), 4 deletions(-)
+
+diff --git a/src/jsc/GarbageCollectionController.rs b/src/jsc/GarbageCollectionController.rs
+index 393a056056..be814008b9 100644
+--- a/src/jsc/GarbageCollectionController.rs
++++ b/src/jsc/GarbageCollectionController.rs
+@@ -31,6 +31,10 @@ pub struct GarbageCollectionController {
+     parked: Cell<bool>,
+     /// What the timer was last armed for (ms): the quiet that its fire stands for.
+     armed_ms: Cell<i32>,
++    /// A tick collects only when at least this much was allocated since the last collection (0: anything).
++    tick_min_bytes: Cell<usize>,
++    /// JSC's allocation-paced full-collection timer is to go when the timer is first armed (the JSC VM exists by then).
++    drop_full_timer: Cell<bool>,
+ }
+ 
+ bun_event_loop::impl_timer_owner!(
+@@ -52,6 +56,8 @@ impl Default for GarbageCollectionController {
+             idle_release_pending: Cell::new(false),
+             parked: Cell::new(false),
+             armed_ms: Cell::new(0),
++            tick_min_bytes: Cell::new(0),
++            drop_full_timer: Cell::new(false),
+         }
+     }
+ }
+@@ -133,6 +139,24 @@ impl GarbageCollectionController {
+             *slot = sum;
+         }
+         self.idle_gc_at_ms.set(at);
++
++        // An executable compiled ahead of time, with idle full collections (Pi-Bolt): those collect what a burst of work
++        // left once the program has been quiet for the first entry, so JSC's own allocation-paced full-collection timer,
++        // which ran a full collection a few seconds after every burst (Pi after an answer: one full collection, its
++        // sweeping, then the idle one with the same result), goes (`BUN_GC_JSC_FULL_TIMER=1` keeps it). A full collection
++        // still comes when the heap outgrows what JSC allows it (allocation-paced, unchanged). And a tick collects only
++        // when at least `BUN_GC_TICK_MIN_KB` (default 1024) was allocated since the last collection: Pi at its prompt woke
++        // for an eden collection of 1-2 KB. What is left below that goes at the next collection or the idle one.
++        #[cfg(not(windows))]
++        {
++            unsafe extern "C" {
++                safe fn Bun__AOTImage__isMapped() -> bool;
++            }
++            if at[0] != 0 && Bun__AOTImage__isMapped() {
++                self.drop_full_timer.set(!env_flag(c"BUN_GC_JSC_FULL_TIMER"));
++                self.tick_min_bytes.set(env_kb(c"BUN_GC_TICK_MIN_KB", 1024).saturating_mul(1024));
++            }
++        }
+     }
+ 
+     /// Decides whether this tick's collection should be a full one. After the first `BUN_IDLE_GC_SECONDS` entry
+@@ -191,7 +215,13 @@ impl GarbageCollectionController {
+             return;
+         }
+         if self.gc_repeating_timer.get().state == TimerState::PENDING {
+-            self.arm_self(VirtualMachine::get_mut_ptr(), self.repeat_interval());
++            let vm = VirtualMachine::get_mut_ptr();
++            // SAFETY: JS thread; the per-thread VM is live while its event loop runs.
++            let vm_ref = unsafe { &*vm };
++            if !vm_ref.jsc_vm.is_null() && self.drop_full_timer.replace(false) {
++                vm_ref.jsc_vm().drop_full_activity_timer();
++            }
++            self.arm_self(vm, self.repeat_interval());
+         } else if self.parked.get() {
+             self.unpark_if_allocated();
+         }
+@@ -201,7 +231,7 @@ impl GarbageCollectionController {
+     fn unpark_if_allocated(&self) {
+         let vm = VirtualMachine::get_mut_ptr();
+         // SAFETY: JS thread; the per-thread VM is live while its event loop runs.
+-        if unsafe { &*vm }.jsc_vm().bytes_allocated_since_last_collection() == 0 {
++        if unsafe { &*vm }.jsc_vm().bytes_allocated_since_last_collection() <= self.tick_min_bytes.get() {
+             return;
+         }
+         self.parked.set(false);
+@@ -274,9 +304,12 @@ impl GarbageCollectionController {
+         let (full, idle_gc_due_in) = this.idle_tick(vm_ref, grew, armed);
+         // Nothing allocated since the last collection ended: another would find nothing new. A program waiting for input
+         // was woken every 5-30 s for one (Pi at its prompt: 0.3-0.9 ms of CPU each, a third to half of its idle CPU).
+-        let allocated = vm_ref.jsc_vm().bytes_allocated_since_last_collection() != 0;
++        let allocated = vm_ref.jsc_vm().bytes_allocated_since_last_collection() > this.tick_min_bytes.get();
+         if full || allocated {
+             this.perform_gc(full);
++        } else {
++            // (Growth is measured from tick to tick: a tick that leaves less than the minimum is measured from too.)
++            this.gc_last_heap_size.set(vm_ref.jsc_vm().block_bytes_allocated());
+         }
+         // Growth is activity; a shrinking heap is a collection (possibly the one requested above) doing its job. Where the
+         // event loop cannot let an idle collection finish while parked (Windows: Bun__JSC_onBeforeWait), it proceeds at
+@@ -302,7 +335,16 @@ impl GarbageCollectionController {
+         // thread at a safepoint, which a thread parked with heap access does not reach, finishes at these ticks.
+         if !full && !allocated && !vm_ref.jsc_vm().collection_unfinished() {
+             this.parked.set(true);
+-            if let Some(ms) = idle_gc_due_in {
++            // A tick that saw the heap grow restarted the quiet at 0 and has no idle collection due yet; parked without one,
++            // nothing would wake the timer for it until the program allocates again (an answer whose garbage a collection
++            // during it already took was then never followed by an idle full collection). Due after the first entry of
++            // quiet, as if the ticks had kept counting.
++            let first_due = || match this.idle_gc_at_ms.get()[0] {
++                0 => None,
++                _ if !grew || vm_ref.is_inspector_enabled() => None,
++                due => Some(due),
++            };
++            if let Some(ms) = idle_gc_due_in.or_else(first_due) {
+                 this.arm_self(vm, ms.max(1000).min(i32::MAX as u32) as i32);
+             }
+             return;
+@@ -340,6 +382,28 @@ fn default_fast_interval_ms() -> u64 {
+     1000
+ }
+ 
++/// Whether the environment variable is set to a value starting with 1 (read once, at start-up).
++#[cfg(not(windows))]
++fn env_flag(name: &core::ffi::CStr) -> bool {
++    // SAFETY: a NUL-terminated name; read once at start-up on the JS thread.
++    let value = unsafe { libc::getenv(name.as_ptr()) };
++    // SAFETY: getenv returns a NUL-terminated string that lives until the environment changes.
++    !value.is_null() && unsafe { core::ffi::CStr::from_ptr(value) }.to_bytes().first() == Some(&b'1')
++}
++
++/// The environment variable as a number of KB, or `default` when it is not set (read once, at start-up).
++#[cfg(not(windows))]
++fn env_kb(name: &core::ffi::CStr, default: usize) -> usize {
++    // SAFETY: as in env_flag.
++    let value = unsafe { libc::getenv(name.as_ptr()) };
++    if value.is_null() {
++        return default;
++    }
++    // SAFETY: as in env_flag.
++    let bytes = unsafe { core::ffi::CStr::from_ptr(value) }.to_bytes();
++    bun_core::fmt::parse_int::<usize>(bun_core::strings::trim(bytes, b" "), 10).unwrap_or(0).min(1 << 20)
++}
++
+ /// Quiet fast ticks before the timer drops to its slow interval: about half a minute, whatever the fast interval.
+ fn quiet_ticks_until_slow(fast_interval_ms: i32) -> u8 {
+     (30_000 / fast_interval_ms.max(1000)).clamp(1, 30) as u8
+diff --git a/src/jsc/VM.rs b/src/jsc/VM.rs
+index b79536509b..a919ecebef 100644
+--- a/src/jsc/VM.rs
++++ b/src/jsc/VM.rs
+@@ -30,6 +30,7 @@ unsafe extern "C" {
+     safe fn JSC__VM__heapSize(vm: &VM) -> usize;
+     safe fn JSC__VM__collectAsync(vm: &VM, full: bool);
+     safe fn JSC__VM__collectAsyncIdle(vm: &VM);
++    safe fn JSC__VM__dropFullActivityTimer(vm: &VM);
+     safe fn JSC__VM__shrinkFootprintNow(vm: &VM) -> bool;
+     safe fn JSC__VM__setStartupJITDeferralScale(vm: &VM, scale: f64);
+     safe fn JSC__VM__executionForbidden(vm: &VM) -> bool;
+@@ -109,6 +110,11 @@ impl VM {
+         JSC__VM__collectAsyncIdle(self)
+     }
+ 
++    /// Take JSC's allocation-paced full-collection timer away (the embedder collects when the program goes quiet instead).
++    pub(crate) fn drop_full_activity_timer(&self) {
++        JSC__VM__dropFullActivityTimer(self)
++    }
++
+     /// Let go of what JSC gets back cheaply, of functions that have no linked code any more (an idle collection has found
+     /// them not running): unlinked bytecode it can decode again from a bytecode cache, the parser's caches. Nothing that
+     /// would have to be parsed again. The caller's next full collection frees it. `false`: nothing was done, because JS
+diff --git a/src/jsc/bindings/bindings.cpp b/src/jsc/bindings/bindings.cpp
+index 08db3789e4..bcfe41a8e0 100644
+--- a/src/jsc/bindings/bindings.cpp
++++ b/src/jsc/bindings/bindings.cpp
+@@ -42,6 +42,7 @@
+ #include "JavaScriptCore/ExceptionHelpers.h"
+ #include "JavaScriptCore/ExceptionScope.h"
+ #include "JavaScriptCore/FunctionConstructor.h"
++#include "JavaScriptCore/GCActivityCallback.h"
+ #include "JavaScriptCore/HeapSnapshotBuilder.h"
+ #include "JavaScriptCore/Identifier.h"
+ #include "JavaScriptCore/IteratorOperations.h"
+@@ -3182,6 +3183,16 @@ void JSC__VM__collectAsyncIdle(JSC::VM* vm)
+     vm->heap.collectAsync(request);
+ }
+ 
++// GarbageCollectionController: JSC's allocation-paced full-collection timer goes; the embedder's idle full collections do its
++// job. Cancelled first: a scheduled timer is held by the run-loop timer manager until it fires.
++void JSC__VM__dropFullActivityTimer(JSC::VM* vm)
++{
++    JSC::JSLockHolder lock(*vm);
++    if (auto* callback = vm->heap.fullActivityCallback())
++        callback->cancel();
++    vm->heap.setFullActivityCallback(nullptr);
++}
++
+ // What the program has allocated since the last collection ended (GarbageCollectionController: 0 = a collection now would
+ // find nothing new).
+ size_t JSC__VM__bytesAllocatedSinceLastCollection(JSC::VM* vm)
