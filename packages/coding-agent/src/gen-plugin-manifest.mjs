@@ -1229,6 +1229,14 @@ const FACTORY_OF = [
 	"}",
 ];
 
+/** `text` as a string literal in generated code: JSON's, with the characters that can end a script or a line as escapes. */
+function codeLiteral(text) {
+	return JSON.stringify(text).replace(
+		/[<>\u2028\u2029]/g,
+		(char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`,
+	);
+}
+
 export function renderManifest(plan) {
 	const lines = [
 		"/**",
@@ -1270,7 +1278,7 @@ export function renderManifest(plan) {
 	// (Each string as a literal: a file name may hold a `"` or a `\`, which would end or change it.)
 	for (const plugin of plan.plugins) {
 		lines.push(
-			`\t{ name: ${JSON.stringify(plugin.name)}, builtin: true, replaceable: true, factory: lazy(() => import(${JSON.stringify(plugin.importPath)})) },`,
+			`\t{ name: ${codeLiteral(plugin.name)}, builtin: true, replaceable: true, factory: lazy(() => import(${codeLiteral(plugin.importPath)})) },`,
 		);
 	}
 	lines.push("];", "", "export default plugins;");
