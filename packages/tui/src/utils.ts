@@ -975,11 +975,13 @@ function* graphemeSegments(text: string): Generator<string> {
 }
 
 /**
- * Split text into words while keeping ANSI codes attached.
+ * Split text into words while keeping ANSI codes attached. `widths`, if given, gets each token's visible width where it is
+ * known without measuring it again (printable ASCII and ANSI codes only: one column a character), and -1 elsewhere.
  */
-function splitIntoTokensWithAnsi(text: string): string[] {
+function splitIntoTokensWithAnsi(text: string, widths?: number[]): string[] {
 	const tokens: string[] = [];
 	let current = "";
+	let currentWidth = 0;
 	let pendingAnsi = ""; // ANSI codes waiting to be attached to next visible content
 	let currentKind: "space" | "word" | null = null;
 	let i = 0;
@@ -989,11 +991,13 @@ function splitIntoTokensWithAnsi(text: string): string[] {
 			return;
 		}
 		tokens.push(current);
+		widths?.push(currentWidth);
 		current = "";
+		currentWidth = 0;
 		currentKind = null;
 	};
 
-	const addSegment = (segment: string, segmentIsSpace: boolean): void => {
+	const addSegment = (segment: string, segmentIsSpace: boolean, segmentWidth: number): void => {
 		// Codes between a word and the space after it (usually the word's closing style) end that word.
 		// Attached to the space instead, they make it a non-whitespace token, so a line wrapped there
 		// started with the space. The codes stay in the same place in the output.
@@ -1020,6 +1024,7 @@ function splitIntoTokensWithAnsi(text: string): string[] {
 
 		currentKind = segmentKind;
 		current += segment;
+		currentWidth = currentWidth < 0 || segmentWidth < 0 ? -1 : currentWidth + segmentWidth;
 	};
 
 	while (i < text.length) {
@@ -1048,7 +1053,11 @@ function splitIntoTokensWithAnsi(text: string): string[] {
 				const isSpace = chunk.charCodeAt(start) === 0x20;
 				let runEnd = start + 1;
 				while (runEnd < chunk.length && (chunk.charCodeAt(runEnd) === 0x20) === isSpace) runEnd++;
-				addSegment(start === 0 && runEnd === chunk.length ? chunk : chunk.slice(start, runEnd), isSpace);
+				addSegment(
+					start === 0 && runEnd === chunk.length ? chunk : chunk.slice(start, runEnd),
+					isSpace,
+					runEnd - start,
+				);
 				start = runEnd;
 			}
 		} else {
@@ -1059,9 +1068,10 @@ function splitIntoTokensWithAnsi(text: string): string[] {
 					const token = pendingAnsi + segment;
 					pendingAnsi = "";
 					tokens.push(token);
+					widths?.push(-1);
 					continue;
 				}
-				addSegment(segment, segmentIsSpace);
+				addSegment(segment, segmentIsSpace, -1);
 			}
 		}
 
@@ -1081,14 +1091,15 @@ function splitIntoTokensWithAnsi(text: string): string[] {
 
 	if (current) {
 		tokens.push(current);
+		widths?.push(currentWidth);
 	}
 
 	return tokens;
 }
 
-/** For tests: the tokens wrapTextWithAnsi() wraps a line at. */
-export function splitIntoTokensWithAnsiForTest(text: string): string[] {
-	return splitIntoTokensWithAnsi(text);
+/** For tests: the tokens wrapTextWithAnsi() wraps a line at, and the widths it knows of them. */
+export function splitIntoTokensWithAnsiForTest(text: string, widths?: number[]): string[] {
+	return splitIntoTokensWithAnsi(text, widths);
 }
 
 /**
@@ -1154,13 +1165,16 @@ function wrapSingleLine(line: string, width: number): string[] {
 
 	const wrapped: string[] = [];
 	const tracker = new AnsiCodeTracker();
-	const tokens = splitIntoTokensWithAnsi(line);
+	const widths: number[] = [];
+	const tokens = splitIntoTokensWithAnsi(line, widths);
 
 	let currentLine = "";
 	let currentVisibleLength = 0;
 
-	for (const token of tokens) {
-		const tokenVisibleLength = visibleWidth(token);
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index]!;
+		const knownWidth = widths[index]!;
+		const tokenVisibleLength = knownWidth >= 0 ? knownWidth : visibleWidth(token);
 		const isWhitespace = token.trim() === "";
 
 		// Token itself is too long - break it character by character

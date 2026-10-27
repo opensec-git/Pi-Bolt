@@ -1,6 +1,12 @@
 import assert from "node:assert";
 import { describe, it } from "node:test";
-import { cjkBreakRegex, extractAnsiCode, splitIntoTokensWithAnsiForTest, wrapTextWithAnsi } from "../src/utils.ts";
+import {
+	cjkBreakRegex,
+	extractAnsiCode,
+	splitIntoTokensWithAnsiForTest,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "../src/utils.ts";
 
 // Printable ASCII is split into runs of spaces and of other characters at once. The tokens must be those of going through
 // it one character at a time, as before (this copy).
@@ -117,12 +123,24 @@ function mulberry32(seed: number): () => number {
 describe("splitIntoTokensWithAnsi on runs of ASCII", () => {
 	it("gives the tokens of going one character at a time", () => {
 		const random = mulberry32(1027);
+		const known = { all: 0, unknown: 0 };
 		for (let n = 0; n < 20000; n++) {
 			let text = "";
 			const length = Math.floor(random() * 24);
 			for (let k = 0; k < length; k++) text += PIECES[Math.floor(random() * PIECES.length)];
-			assert.deepStrictEqual(splitIntoTokensWithAnsiForTest(text), tokensOneByOne(text), JSON.stringify(text));
+			const widths: number[] = [];
+			const tokens = splitIntoTokensWithAnsiForTest(text, widths);
+			assert.deepStrictEqual(tokens, tokensOneByOne(text), JSON.stringify(text));
+			// The widths it knows are those visibleWidth() measures.
+			assert.strictEqual(widths.length, tokens.length);
+			for (let k = 0; k < tokens.length; k++) {
+				if (widths[k] !== -1) assert.strictEqual(widths[k], visibleWidth(tokens[k]!), JSON.stringify(tokens[k]));
+				else known.unknown++;
+			}
+			known.all += tokens.length;
 		}
+		// (Many tokens are of ASCII text, whose widths are known.)
+		assert.ok(known.all - known.unknown > 5000, JSON.stringify(known));
 	});
 
 	it("wraps styled paragraphs as before", () => {
