@@ -219,7 +219,7 @@ class World {
 	}
 }
 
-const shown = (tui: TuiMainScreen) => (tui as unknown as { previousLines: string[] }).previousLines;
+const shown = (tui: TuiMainScreen) => tui.shownLinesForTest();
 
 /**
  * What a terminal shows of `lines` drawn at once on a new screen: the last rows of them. An oracle that does not go through
