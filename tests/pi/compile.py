@@ -3,10 +3,14 @@ the extensions installed here are compiled in and used in place of their files, 
 modules from import.meta.url as they do loaded from their files (#53); one changed since is loaded from its files with a warning; one removed since is not loaded; the build it replaced is kept, and `pi-bolt update --rollback` swaps the two
 (and back); `pi-bolt update --channel beta` is kept for the installation; and `--out` builds without installing. An import()
 of a package that is not installed is left to run time, where it fails inside the extension as loaded from its files (#160);
-and an extension finds files, modules and Pi's packages from where it is installed, as loaded from its files (loader parity).
-An extension with a static import that does not resolve, or one that fails compiled in only, is left out of the build with a
-line saying why, and loads from its files; one whose top-level code throws at a start fails alone, with Pi's error, and doctor,
-`compile --status` and `update --rollback` still work. Uses the bench fake model.
+and an extension finds files, modules and Pi's packages from where it is installed, as loaded from its files (loader parity). An
+extension that imports Pi's modules by the other names Pi's loader gives them (@mariozechner/pi-*, @sinclair/typebox, the pi-ai
+root's compat entry) compiles in and gets Pi's modules; an --exclude that names no extension stops before the build; --list
+lists without building; --exclude takes a file too and adds to compile.json's, and --include takes one back (#174); a
+tsconfig.json beside an extension does not give it second copies of Pi's modules. An extension with a static import that does
+not resolve, one that fails compiled in only, or one with a function too big for the compiler is left out of the build with a
+line naming it as --exclude does, and loads from its files; one whose top-level code throws at a start fails alone, with Pi's
+error, and doctor, `compile --status` and `update --rollback` still work. Uses the bench fake model.
   python3 tests/pi/compile.py PI KIT RUNTIME     (KIT: pi-bolt-kit-<platform>.tar.gz or its folder; RUNTIME: the runtime's bun)
 """
 import json
@@ -110,6 +114,23 @@ import { getAgentDir } from "@earendil-works/pi-coding-agent";
 export const found = [typeof Type.Object, typeof getAgentDir];
 """
 
+# #174: Pi's modules by the other names Pi's loader gives them, as pi-system-prompt imports "@mariozechner/pi-tui".
+# Its folder has a tsconfig.json of its own, which Pi's loader does not read: compiled in, it gave the extension a second copy
+# of pi-tui, whose Editor is not the one Pi's CustomEditor extends.
+OLD_NAMES = """import { writeFileSync } from "node:fs";
+import { CustomEditor } from "@mariozechner/pi-coding-agent";
+import { Editor, visibleWidth } from "@mariozechner/pi-tui";
+import { getModel } from "@earendil-works/pi-ai";
+import { Type } from "@sinclair/typebox";
+export default async function () {
+	const how = new Error().stack.split("\\n")[1].includes("/$bunfs/") ? "compiled" : "files";
+	const { Container } = await import("@mariozechner/pi-tui");
+	const same = Object.getPrototypeOf(CustomEditor) === Editor;
+	const got = [visibleWidth("abc"), typeof getModel, typeof Type.Object, typeof Container, same].join(",");
+	writeFileSync(`${process.env.PIBOLT_PROBE}/old-names-ext`, `${how} ${got}`);
+}
+"""
+
 version = subprocess.run([pi, "--version"], capture_output=True, text=True, check=True).stdout
 platform, variant = re.search(r"Pi-Bolt [^,]+, (\w+)-(\S+), JIT", version).groups()
 with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
@@ -134,6 +155,8 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
     (parity / "data.txt").write_text("data")
     (parity / "dyn.cjs").write_text('module.exports = "dyn";\n')
     (parity / "disk.ts").write_text(DISK)
+    (agent / "extensions" / "old-names-ext.ts").write_text(OLD_NAMES)
+    (agent / "extensions" / "tsconfig.json").write_text("{}\n")
     (folder / "src").mkdir()
     (folder / "src" / "resources.ts").write_text(RESOURCES)
     (folder / "src" / "skills" / "probe-skill").mkdir(parents=True)
@@ -159,7 +182,7 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
             r = subprocess.run([str(build / "pi"), "-p", "--model", "fake/fake-model", "hello"], env=env,
                                capture_output=True, text=True, stdin=subprocess.DEVNULL, cwd=tmp)
             loaded = {name: tuple((probe / name).read_text().split(" ", 1)) if (probe / name).exists() else (None, None)
-                      for name in ("file-ext", "folder-ext", "optional-ext", "parity-ext")}
+                      for name in ("file-ext", "folder-ext", "optional-ext", "parity-ext", "old-names-ext")}
             loaded["tsc-cjs"] = ((probe / "tsc-cjs").read_text(), None) if (probe / "tsc-cjs").exists() else (None, None)
             return r, loaded
 
@@ -180,6 +203,8 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
               f"{loaded} {r.stderr[-300:]}")
         check("before: an import() of a package that is not installed fails inside the extension (#160)",
               loaded["optional-ext"] == ("files", "caught"), str(loaded))
+        check("before: Pi's modules by their other names, loaded from its files (#174)",
+              loaded["old-names-ext"] == ("files", "3,function,function,function,true"), str(loaded))
         from_files = {name: loaded[name][1] for name in ("file-ext", "folder-ext")}
         parity_from_files = loaded["parity-ext"]
         check("before: the loader-parity probes load from their files",
@@ -200,8 +225,8 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
         print(f"     (compile took {took:.1f} s)")
         record = json.loads((install / "compile.json").read_text()) if (install / "compile.json").exists() else {}
         check("compile.json keeps the extensions for the next update",
-              sorted(record.get("extensions", [])) == ["file-ext", "folder-ext", "optional-ext", "parity-ext", "tsc-cjs"],
-              str(record))
+              sorted(record.get("extensions", []))
+              == ["file-ext", "folder-ext", "old-names-ext", "optional-ext", "parity-ext", "tsc-cjs"], str(record))
         check("the build it replaced is kept as .previous", (install / f"{build.name}.previous" / "pi").exists())
         about = (build / "pi-bolt.txt").read_text()
         check("pi-bolt.txt says what is compiled in", "Extensions compiled in" in about and "file-ext" in about, about)
@@ -220,6 +245,8 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
               loaded["tsc-cjs"][0] == "compiled", str(loaded))
         check("compiled in, paths, require() and modules loaded from disk are as from its files (loader parity #5, #6)",
               loaded["parity-ext"] == ("compiled", parity_from_files[1]), f"{loaded['parity-ext']} vs {parity_from_files}")
+        check("compiled in, Pi's modules by their other names are Pi's modules, as loaded from its files (#174)",
+              loaded["old-names-ext"] == ("compiled", "3,function,function,function,true"), str(loaded))
         resources = commands()
         check("compiled in, the skill and prompt beside the module are still loaded (#53)",
               resources == ["probe-prompt", "skill:probe-skill"], str(resources))
@@ -356,6 +383,32 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
             check("a function under 1 MB over the limit, with less than 8 GB: its extension is left out",
                   r.returncode == 0 and "mid-ext (global): not compiled in: a function of it is too big" in r.stderr,
                   r.stdout[-300:] + r.stderr[-1500:])
+        for added in (required, agent / "extensions" / "compiled-only.ts", agent / "extensions" / "env-throw.ts"):
+            added.unlink()
+        shutil.rmtree(big)
+        shutil.rmtree(mid)
+
+        # (#174) An --exclude of a package an extension imports, not of an extension, leaves out nothing: it stops at once.
+        r = compile_("--exclude", "@mariozechner/pi-tui", "--out", str(tmp / "unknown"))
+        check("an --exclude that names no extension stops before the build, and lists the extensions (#174)",
+              r.returncode != 0 and "no extension is named @mariozechner/pi-tui. The extensions here are" in r.stderr
+              and "compiling Pi" not in r.stderr, r.stderr[-800:])
+
+        # (#174) --list: the extensions and their names, and nothing built; a later --exclude adds to compile.json's, and
+        # --include takes one back.
+        r = compile_("--list")
+        check("--list lists the extensions and stops", r.returncode == 0 and "old-names-ext (global): compiling" in r.stderr
+              and "compiling Pi" not in r.stderr, r.stdout + r.stderr[-800:])
+        r = compile_("--exclude", str(agent / "extensions" / "optional-ext.ts"))
+        record = json.loads((install / "compile.json").read_text())
+        check("--exclude takes an extension by its file, and compile.json records its name",
+              r.returncode == 0 and record.get("exclude") == ["optional-ext"], f"{record} {r.stderr[-800:]}")
+        r = compile_("--exclude", "old-names-ext", "--list")
+        check("a later --exclude adds to what compile.json records",
+              "optional-ext (global): excluded (compile.json)" in r.stderr
+              and "old-names-ext (global): excluded (--exclude)" in r.stderr, r.stderr[-800:])
+        r = compile_("--include", "optional-ext", "--list")
+        check("--include compiles one of them in again", "optional-ext (global): compiling" in r.stderr, r.stderr[-800:])
 
 print("compile:", "all passed" if failures == 0 else f"{failures} failed")
 sys.exit(1 if failures else 0)

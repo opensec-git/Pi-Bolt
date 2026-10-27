@@ -9,7 +9,7 @@
  *                            node_modules files they import, with every package.json and tsconfig on the way to them, and the
  *                            workspace links that make @earendil-works/pi-* resolve to Pi's packages
  *   profile/                 the training profile the build used
- *   gen-plugin-manifest.mjs  the manifest generator (scripts/gen-plugin-manifest.mjs)
+ *   gen-plugin-manifest.mjs  the manifest generator (packages/coding-agent/src/gen-plugin-manifest.mjs)
  *
  * Which files: those the bundler took for Pi's entry points (its metafile), and those it takes for every module a plugin may
  * import from Pi (the "exports" of @earendil-works/pi-coding-agent, pi-ai, pi-agent-core, pi-tui and typebox). A build in the
@@ -40,7 +40,7 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-/** The packages Pi provides to extensions (scripts/gen-plugin-manifest.mjs, isPiPackage): a plugin imports these from Pi. */
+/** The packages Pi provides to extensions (packages/coding-agent/src/gen-plugin-manifest.mjs, isPiPackage): a plugin imports these from Pi. */
 const PROVIDED = [
 	"@earendil-works/pi-coding-agent",
 	"@earendil-works/pi-ai",
@@ -250,7 +250,7 @@ const profile = resolve(options.profile);
 const profileDir = join(out, "profile");
 mkdirSync(profileDir, { recursive: true });
 if (existsSync(profile)) cpSync(profile, profileDir, { recursive: true });
-cpSync(join(HERE, "gen-plugin-manifest.mjs"), join(out, "gen-plugin-manifest.mjs"));
+cpSync(join(HERE, "..", "packages", "coding-agent", "src", "gen-plugin-manifest.mjs"), join(out, "gen-plugin-manifest.mjs"));
 
 // The compile command, with the profile's paths as @KIT@/profile/... (where `pi-bolt compile` unpacks the kit).
 const kitPath = (value) => value.split(profile).join("@KIT@/profile");
