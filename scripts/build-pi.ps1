@@ -122,9 +122,10 @@ function Stage-Plugins($manifest) {
 		''
 		'// Loaded with import(), as pi-bolt-compile.ts''s ENTRY explains: imported with this module, the plugins'' top-level code'
 		'// would join Pi''s in one function, which the compiler refuses past 256 KB of bytecode (#129); required, a plugin with an'
-		'// `await` at its top level would stop the bundler (#142). Not split, the bundler gives each module of each plugin a'
-		'// function of its own. They run in the order the manifest imports them, at the same point of the start, except that'
-		'// a plugin that waits at its top level runs after the plugins beside it that do not.'
+		'// `await` at its top level would stop the bundler (#142). Split (--splitting), the manifest and the modules only it'
+		'// imports are a file of their own. They still run in the order the manifest imports them, at the same point of the start.'
+		'// (Not split, as with -Stable: each module is a function of its own, and a plugin that waits at its top level runs after'
+		'// the plugins beside it that do not.)'
 		"const { default: plugins } = await import(`"./src/$(Split-Path $manifest -Leaf)`");"
 		''
 		'// A named plugin is a built-in extension (`builtin:<name>`): it can be turned off (`-builtin:<name>` in the `extensions` setting,'
@@ -299,7 +300,10 @@ function Build-Pi($runtime, $outfile, $log) {
 	$ErrorActionPreference = 'Continue'
 	# Extensions resolve their own packages as on Node, through their package.json files; Pi's own code resolves nothing in the
 	# working directory (scripts/build-pi.sh, tests/runtime: workdir).
-	& $runtime @CommonArgs '--compile-autoload-package-json' @OrderArgs --define "PIBOLT_BUILD=\`"$build\`"" '--compile-exec-argv=--smol' @Entries --outfile $outfile *> $log
+	# --splitting, as scripts/build-pi.sh: what Pi imports with import() (the rest of Pi after `pi --version`, the interactive
+	# mode, the providers' APIs) is a chunk of its own, loaded when it is imported, so a start creates only the functions it loads
+	# (windows-2025: `pi --version` 17 -> 13 ms CPU and a fifth fewer page faults, `pi -p` 71 -> 66 ms).
+	& $runtime @CommonArgs '--compile-autoload-package-json' '--splitting' @OrderArgs --define "PIBOLT_BUILD=\`"$build\`"" '--compile-exec-argv=--smol' @Entries --outfile $outfile *> $log
 	$status = $LASTEXITCODE
 	$ErrorActionPreference = 'Stop'
 	# (The writer's notes and warnings about the prebuilt heap are shown wherever they are in the log: a release build's log keeps

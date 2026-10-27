@@ -152,7 +152,7 @@ A build without a profile works, with somewhat slower startup. `build-pi.sh` war
 ## Training profiles
 
 A profile ([`profiles/pi-1.1.0`](../profiles/pi-1.1.0)) has two files, recorded by running two plain bytecode builds of Pi (one
-in a single file as `build-pi.ps1` builds it, one split as `build-pi.sh` does: a function is named by its text, which splitting
+in a single file, one split as `build-pi.sh` and `build-pi.ps1` do: a function is named by its text, which splitting
 changes where it reaches into another chunk) through two scripted interactive sessions (`scripts/lib/train_session.py`). The
 first is a plain start and a few plain turns, and gives the order. The second is there for the regular expressions: an answer
 that uses every kind of Markdown and a code block in
