@@ -993,6 +993,35 @@ function splitIntoTokensWithAnsi(text: string): string[] {
 		currentKind = null;
 	};
 
+	const addSegment = (segment: string, segmentIsSpace: boolean): void => {
+		// Codes between a word and the space after it (usually the word's closing style) end that word.
+		// Attached to the space instead, they make it a non-whitespace token, so a line wrapped there
+		// started with the space. The codes stay in the same place in the output.
+		if (pendingAnsi && segmentIsSpace && currentKind !== "space") {
+			if (current) {
+				current += pendingAnsi;
+				pendingAnsi = "";
+			} else if (tokens.length > 0) {
+				tokens[tokens.length - 1] += pendingAnsi;
+				pendingAnsi = "";
+			}
+		}
+
+		const segmentKind = segmentIsSpace ? "space" : "word";
+		if (current && currentKind !== segmentKind) {
+			flushCurrent();
+		}
+
+		// Attach any pending ANSI codes to this visible character
+		if (pendingAnsi) {
+			current += pendingAnsi;
+			pendingAnsi = "";
+		}
+
+		currentKind = segmentKind;
+		current += segment;
+	};
+
 	while (i < text.length) {
 		const ansiResult = extractAnsiCode(text, i);
 		if (ansiResult) {
@@ -1011,43 +1040,29 @@ function splitIntoTokensWithAnsi(text: string): string[] {
 
 		const chunk = text.slice(i, end);
 		// Printable ASCII characters are single graphemes, so skip the segmenter for them.
-		const ascii = isPrintableAscii(chunk);
-		for (const segment of ascii ? chunk : graphemeSegments(chunk)) {
-			const segmentIsSpace = segment === " ";
-			if (!ascii && !segmentIsSpace && cjkBreakRegex.test(segment)) {
-				flushCurrent();
-				const token = pendingAnsi + segment;
-				pendingAnsi = "";
-				tokens.push(token);
-				continue;
+		if (isPrintableAscii(chunk)) {
+			// A run of spaces, or of other characters, goes where its characters would one by one: the first one decides,
+			// and the others only add to the same token.
+			let start = 0;
+			while (start < chunk.length) {
+				const isSpace = chunk.charCodeAt(start) === 0x20;
+				let runEnd = start + 1;
+				while (runEnd < chunk.length && (chunk.charCodeAt(runEnd) === 0x20) === isSpace) runEnd++;
+				addSegment(start === 0 && runEnd === chunk.length ? chunk : chunk.slice(start, runEnd), isSpace);
+				start = runEnd;
 			}
-
-			// Codes between a word and the space after it (usually the word's closing style) end that word.
-			// Attached to the space instead, they make it a non-whitespace token, so a line wrapped there
-			// started with the space. The codes stay in the same place in the output.
-			if (pendingAnsi && segmentIsSpace && currentKind !== "space") {
-				if (current) {
-					current += pendingAnsi;
+		} else {
+			for (const segment of graphemeSegments(chunk)) {
+				const segmentIsSpace = segment === " ";
+				if (!segmentIsSpace && cjkBreakRegex.test(segment)) {
+					flushCurrent();
+					const token = pendingAnsi + segment;
 					pendingAnsi = "";
-				} else if (tokens.length > 0) {
-					tokens[tokens.length - 1] += pendingAnsi;
-					pendingAnsi = "";
+					tokens.push(token);
+					continue;
 				}
+				addSegment(segment, segmentIsSpace);
 			}
-
-			const segmentKind = segmentIsSpace ? "space" : "word";
-			if (current && currentKind !== segmentKind) {
-				flushCurrent();
-			}
-
-			// Attach any pending ANSI codes to this visible character
-			if (pendingAnsi) {
-				current += pendingAnsi;
-				pendingAnsi = "";
-			}
-
-			currentKind = segmentKind;
-			current += segment;
 		}
 
 		i = end;
@@ -1069,6 +1084,11 @@ function splitIntoTokensWithAnsi(text: string): string[] {
 	}
 
 	return tokens;
+}
+
+/** For tests: the tokens wrapTextWithAnsi() wraps a line at. */
+export function splitIntoTokensWithAnsiForTest(text: string): string[] {
+	return splitIntoTokensWithAnsi(text);
 }
 
 /**

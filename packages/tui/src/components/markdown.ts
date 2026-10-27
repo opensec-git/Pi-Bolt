@@ -48,7 +48,40 @@ function endsBackground(params: string): boolean {
 }
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
 
+/** A line that can end a setext heading: what follows the line break in marked's lheading rule, `\n {0,3}(=+|-+) *(?:\n+|$)`. */
+const SETEXT_UNDERLINE = / {0,3}(?:=+|-+) *(?:\n|$)/y;
+/** A line of whitespace ended by a line break: where marked's lheading rule stops looking (`\n(?!\s*?\n|...)`). */
+const BLANK_LINE = /[^\S\n]*\n/y;
+/** Lines looked at for an underline before leaving the answer to marked's own rule. */
+const SETEXT_LOOKAHEAD_LINES = 64;
+let setextGuard = true;
+
+/**
+ * Whether marked's lheading rule can match at the start of `src`. Its regular expression reads the text a character at a
+ * time up to the first blank line, and marked tries it at the start of every block that is not a list, a fence, a heading
+ * or a table: on a long transcript, about a tenth of the time Pi takes to lay it out. The rule needs a line of `=` or `-`
+ * (up to 3 spaces before, spaces after) after one of the line breaks it reads, and it reads none past a line break that
+ * begins a blank line. With no such line before that, it cannot match. The answer is the regular expression's when an
+ * underline is found or the text goes on for more lines without a blank one.
+ */
+function mayStartSetextHeading(src: string): boolean {
+	let lineBreak = src.indexOf("\n");
+	for (let lines = 0; lineBreak !== -1; lines++) {
+		if (lines === SETEXT_LOOKAHEAD_LINES) return true;
+		SETEXT_UNDERLINE.lastIndex = lineBreak + 1;
+		if (SETEXT_UNDERLINE.test(src)) return true;
+		BLANK_LINE.lastIndex = lineBreak + 1;
+		if (BLANK_LINE.test(src)) return false;
+		lineBreak = src.indexOf("\n", lineBreak + 1);
+	}
+	return false;
+}
+
 class StrictStrikethroughTokenizer extends Tokenizer {
+	override lheading(src: string): Tokens.Heading | undefined {
+		return !setextGuard || mayStartSetextHeading(src) ? super.lheading(src) : undefined;
+	}
+
 	override del(src: string): Tokens.Del | undefined {
 		const match = STRICT_STRIKETHROUGH_REGEX.exec(src);
 		if (!match) {
@@ -731,6 +764,11 @@ export function setMarkdownFastPathsForTest(enabled: boolean): void {
  */
 export function setMarkdownMemosForTest(enabled: boolean): void {
 	memos = enabled;
+}
+
+/** For tests: with this off, marked's lheading rule runs at the start of every block it is tried at (mayStartSetextHeading()). */
+export function setSetextGuardForTest(enabled: boolean): void {
+	setextGuard = enabled;
 }
 
 /** For tests: lexes as render() does. */
