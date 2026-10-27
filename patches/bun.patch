@@ -17240,3 +17240,38 @@ index cde86da88e..08db3789e4 100644
 -- 
 2.54.0 (Apple Git-157)
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Tue, 27 Oct 2026 21:25:10 +0530
+Subject: [PATCH] bun_perf (macOS): no os_log at start unless tracing was asked
+ for
+
+is_enabled_once() made the Instruments log (os_log_create) at the first
+trace() of every process, before it knew whether tracing is on. os_log_create
+asks logd for the log's configuration and waits for the answer: 1.2-1.5 M
+instructions and 1.6-4.2 ms of wall time on an M5, at every start (the
+resolver's first trace(), while the entry module loads). The log is now made
+only when BUN_INSTRUMENTS or DYLD_ROOT_PATH asks for tracing; trace() returns
+Disabled otherwise, as before.
+---
+ src/perf/lib.rs | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/src/perf/lib.rs b/src/perf/lib.rs
+index 03e41f6957..357d727f64 100644
+--- a/src/perf/lib.rs
++++ b/src/perf/lib.rs
+@@ -78,7 +78,9 @@ fn is_enabled_once() {
+     #[cfg(target_os = "macos")]
+     {
+         is_enabled_on_mac_os_once();
+-        if Darwin::get().is_none() {
++        // Only when tracing was asked for: os_log_create() asks logd for the log's configuration and waits for the answer
++        // (1.5-4 ms of wall time and about 1 M instructions on an M5), which every start paid at its first trace().
++        if IS_ENABLED.load(Ordering::SeqCst) && Darwin::get().is_none() {
+             IS_ENABLED.store(false, Ordering::SeqCst);
+         }
+     }
+-- 
+2.54.0 (Apple Git-157)
+
