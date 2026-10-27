@@ -809,8 +809,15 @@ const CALL_OF_EXPRESSION_AT = /\s*\((?=\s*[^\s"'`)])/y;
 /** Pi's names for its own modules, which Pi gives an extension whatever it has installed (VIRTUAL_MODULES). */
 const PI_MODULE = "/^(?:typebox|@sinclair\\/typebox|@(?:earendil-works|mariozechner)\\/pi-(?:agent-core|ai|coding-agent|tui))(?:\\/|$)/";
 
+/**
+ * `text` as a JavaScript string literal for code that is made here, with the characters that can end a script or a line
+ * written as escapes (as pi-bolt-compile.ts's jsStringLiteral).
+ */
+const codeString = (text) =>
+	JSON.stringify(text).replace(/[<>/\u2028\u2029]/g, (char) => `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`);
+
 /** Code for `require` as in the module at `file`: createRequire for that file. */
-const requireFrom = (file) => `process.getBuiltinModule("node:module").createRequire(${JSON.stringify(file)})`;
+const requireFrom = (file) => `process.getBuiltinModule("node:module").createRequire(${codeString(file)})`;
 
 /**
  * Code for a function that resolves an import()'s specifier as from the module at `file`: a path, or a package installed
@@ -818,11 +825,11 @@ const requireFrom = (file) => `process.getBuiltinModule("node:module").createReq
  * those as it did).
  */
 const resolveFrom = (file) =>
-	`((s) => { if (typeof s !== "string" || ${PI_MODULE}.test(s) || /^[a-z][a-z0-9+.-]*:/i.test(s)) return s; try { return Bun.resolveSync(s, ${JSON.stringify(dirname(file))}); } catch { return s; } })`;
+	`((s) => { if (typeof s !== "string" || ${PI_MODULE}.test(s) || /^[a-z][a-z0-9+.-]*:/i.test(s)) return s; try { return Bun.resolveSync(s, ${codeString(dirname(file))}); } catch { return s; } })`;
 
 /** Code for `import.meta.resolve` of the module at `file`: the URL of what a specifier resolves to from there. */
 const metaResolveFrom = (file) =>
-	`((s) => { const p = Bun.resolveSync(s, ${JSON.stringify(dirname(file))}); return p.startsWith("/") ? Bun.pathToFileURL(p).href : p; })`;
+	`((s) => { const p = Bun.resolveSync(s, ${codeString(dirname(file))}); return p.startsWith("/") ? Bun.pathToFileURL(p).href : p; })`;
 
 /** Words after which a `/` begins a regular expression rather than dividing, and a `{` an object rather than a block. */
 const BEFORE_EXPRESSION = new Set(

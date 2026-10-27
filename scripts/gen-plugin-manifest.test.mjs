@@ -1445,7 +1445,9 @@ describe("import.meta in the copies", () => {
 			].join("\n"),
 			FILE,
 		);
-		const REQUIRE = 'process.getBuiltinModule("node:module").createRequire("/installed/ext/src/index.ts")';
+		// (A path put into code is a string literal with its `/` escaped, as any `<`, `>` and line separator.)
+		const SRC = '"\\u002finstalled\\u002fext\\u002fsrc"';
+		const REQUIRE = 'process.getBuiltinModule("node:module").createRequire("\\u002finstalled\\u002fext\\u002fsrc\\u002findex.ts")';
 		const lines = pinned.split("\n");
 		assert.equal(lines[0], 'const data = join("/installed/ext/src", "data.txt"), self = "/installed/ext/src/index.ts";');
 		assert.equal(lines[1], 'const o = { a: "/installed/ext/src", b: 1, c: "/installed/ext/src/index.ts" };');
@@ -1453,8 +1455,8 @@ describe("import.meta in the copies", () => {
 		assert.equal(lines[3], `const r = ${REQUIRE}.resolve("./data.txt");`);
 		assert.equal(lines[4], `const lit = require("./literal.cjs"), dyn = ${REQUIRE}(name);`);
 		assert.match(lines[5], /^const imported = \[import\("\.\/literal\.ts"\), import\(`\.\/template-\$\{x\}\.ts`\), \(\(s, o\) => import\(/);
-		assert.equal(lines[5].match(/Bun\.resolveSync\(s, "\/installed\/ext\/src"\)/g)?.length, 2);
-		assert.match(lines[6], /^const url = \(\(s\) => \{ const p = Bun\.resolveSync\(s, "\/installed\/ext\/src"\);/);
+		assert.equal(lines[5].split(`Bun.resolveSync(s, ${SRC})`).length - 1, 2);
+		assert.ok(lines[6].startsWith(`const url = ((s) => { const p = Bun.resolveSync(s, ${SRC});`), lines[6]);
 		assert.equal(lines.length, 7);
 	});
 
