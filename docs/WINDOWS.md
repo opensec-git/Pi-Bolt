@@ -183,7 +183,9 @@ Stock Bun 1.4.2 for Windows is linked with `/DYNAMICBASE`, `/HIGHENTROPYVA` and 
     duplicate definitions across ThinLTO modules in COFF; Bun needs only the libraries.
 
   What CFG costs in memory: the loader keeps a bitmap of valid targets, about 1.4 MB resident for Pi. With the JIT on, JSC's
-  1 GB executable reservation is all valid targets, which costs 16 MB of bitmap pages; Pi runs with the JIT off.
+  executable reservation is all valid targets: at JSC's 1 GB, 16 MB of bitmap pages written at every start. A program compiled
+  ahead of time reserves 128 MB instead (2 MB of bitmap; `BUN_JSC_jitMemoryReservationSize` overrides): the -jit build's
+  `--version` 28 -> 20 ms CPU and 38 -> 24 MB working set. The default build runs with the JIT off and reserves none.
 - **DLLs from System32.** The executable is linked with `/DEPENDENTLOADFLAG:0x800` (its imports from System32 only), and the
   DLLs it delay-loads (USERENV for the home folder, dbghelp for a crash report, CRYPT32, IPHLPAPI, ...) go through a delay-load
   hook (`__pfnDliNotifyHook2`, `c-bindings.cpp`) that loads them with `LOAD_LIBRARY_SEARCH_SYSTEM32`: a DLL of the same name

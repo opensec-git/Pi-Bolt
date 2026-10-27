@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Merges order files (BUN_BYTECODE_ORDER_OUT) recorded by the same training sessions on differently built executables of one
-Pi: in one file (scripts/build-pi.ps1) and split (scripts/build-pi.sh, --splitting). A function's name is a hash of its text,
+Pi: in one file and split (scripts/build-pi.sh and scripts/build-pi.ps1, --splitting). A function's name is a hash of its text,
 and the texts differ where the code reaches into another chunk, so some functions have one name in each. A build finds the
 names it has and ignores the rest; so that each build finds its functions in the order its own recording has them, a name
 only a later file has goes right after the name before it in that file that the merged order already has.

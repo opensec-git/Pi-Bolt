@@ -260,6 +260,11 @@ jobs:
             tar -C .work/unpacked -xf "$archive"
             dir=.work/unpacked/$(basename "$archive" .tar.xz)
             "$dir/pi" --version | tee /dev/stderr | grep -q "Pi-Bolt $VERSION"
+            # macOS: the libSystem beside pi-bin (scripts/lib/darwin_libsystem.py) is only for speed, so build-pi.sh goes on
+            # without it; a release without it starts with ~15 M more instructions (1.0.3-1.0.5 shipped so).
+            if [ "${{ matrix.platform }}" = darwin-arm64 ] && [ ! -f "$dir/libsystem/libSystem.B.dylib" ]; then
+              echo "::error::$dir has no libsystem/ (see 'libsystem:' in the build's output)"; exit 1
+            fi
             tests/pi/run.sh "$PWD/$dir/pi"
           done
           # macOS: every executable and library still runs on macOS 13, whatever macOS and Xcode built it.

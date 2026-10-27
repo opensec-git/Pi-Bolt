@@ -30,9 +30,9 @@ mapfile -t ENTRIES < <(pi_entries "$AGENT" "$ENTRY")
 
 # A function is named by its text, and splitting changes the text of what reaches into another chunk: a profile recorded on one
 # kind of build names about a fifth of the functions the other kind runs first by names it does not have. So the sessions run on
-# both, built as the release builds them: in one file (scripts/build-pi.ps1) and split (scripts/build-pi.sh, macOS and Linux).
-# The one-file order goes first: merged the other way round, Windows' `pi -p` measured 1-2 ms slower (macOS and Linux: the same
-# either way).
+# both: in one file (as scripts/build-pi.ps1 built Windows until Pi-Bolt 1.0.5) and split (scripts/build-pi.sh and
+# scripts/build-pi.ps1). The one-file order goes first: merged the other way round, the one-file Windows build's `pi -p`
+# measured 1-2 ms slower (macOS and Linux: the same either way).
 BUILD_ARGS=(build --compile --no-compile-autoload-bunfig --no-compile-autoload-dotenv --compile-autoload-package-json
 	--target="bun-$PIBOLT_PLATFORM" --bytecode --format=esm --compile-exec-argv=--smol)
 for kind in whole split; do
