@@ -9,7 +9,8 @@ import sys
 
 
 def read(path):
-    lines = open(path, encoding="ascii").read().splitlines()
+    with open(path, encoding="ascii") as file:
+        lines = file.read().splitlines()
     if not lines or lines[0] != "v2":
         sys.exit(f"{path}: not an order file of this format (v2)")
     kinds = {}
