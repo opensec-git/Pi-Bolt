@@ -225,8 +225,22 @@ type OpenAIReasoningTextDetail = OpenAIReasoningDetailBase & {
 
 type OpenAIReasoningDetail = OpenAIReasoningSummaryDetail | OpenAIEncryptedReasoningDetail | OpenAIReasoningTextDetail;
 
+/**
+ * Whether the JSON value in `text` can begin with `bracket`: its first character after JSON whitespace. Most thinking
+ * signatures are not JSON at all but the name of the field the thinking streamed in ("reasoning_content"): JSON.parse()
+ * throws on them, and the signature of every thinking block of the conversation is read on every request.
+ */
+function jsonValueStartsWith(text: string, bracket: "[" | "{"): boolean {
+	for (let i = 0; i < text.length; i++) {
+		const code = text.charCodeAt(i);
+		if (code !== 0x20 && code !== 0x09 && code !== 0x0a && code !== 0x0d) return text[i] === bracket;
+	}
+	return false;
+}
+
 function parseOpenAIReasoningDetails(signature: string | undefined): OpenAIReasoningDetail[] | undefined {
-	if (!signature) return undefined;
+	// (Only an array is taken.)
+	if (!signature || !jsonValueStartsWith(signature, "[")) return undefined;
 	try {
 		const parsed = JSON.parse(signature) as unknown;
 		return Array.isArray(parsed) && parsed.length > 0 && parsed.every(isOpenAIReasoningDetail) ? parsed : undefined;
@@ -238,7 +252,8 @@ function parseOpenAIReasoningDetails(signature: string | undefined): OpenAIReaso
 function parseLegacyEncryptedReasoningDetail(
 	signature: string | undefined,
 ): OpenAIEncryptedReasoningDetail | undefined {
-	if (!signature) return undefined;
+	// (Only an object is taken.)
+	if (!signature || !jsonValueStartsWith(signature, "{")) return undefined;
 	try {
 		const parsed = JSON.parse(signature) as unknown;
 		return isOpenAIReasoningDetail(parsed) &&
