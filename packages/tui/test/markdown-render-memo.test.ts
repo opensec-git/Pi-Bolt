@@ -8,6 +8,7 @@ import {
 	setMarkdownCachingForTest,
 	setMarkdownMemosForTest,
 } from "../src/components/markdown.ts";
+import { renderLiveLines } from "../src/tui.ts";
 import { wrapTextWithAnsi } from "../src/utils.ts";
 import { defaultMarkdownTheme } from "./test-themes.ts";
 
@@ -246,4 +247,42 @@ describe("Markdown wrap and inline memos", () => {
 			assert.strictEqual(withBreak.length, single.length + 1);
 		}
 	});
+});
+
+describe("Markdown memos of components rendered long ago", () => {
+	// Of a long transcript, only the components that rendered last keep what makes rendering their text again faster (the
+	// lines they wrapped; a complete text's tokens); the others render again, at any width, the lines they rendered.
+	const memos = (markdown: Markdown) => {
+		const fields = markdown as unknown as { wraps?: unknown; live: { tokens?: unknown }; grown?: unknown };
+		return {
+			wraps: fields.wraps !== undefined,
+			tokens: fields.live.tokens !== undefined || fields.grown !== undefined,
+		};
+	};
+	const fresh = (text: string, complete: boolean, width: number, theme: MarkdownTheme) =>
+		new Markdown(text, 1, 0, theme, undefined, { complete }).render(width);
+
+	for (let seed = 1; seed <= 6; seed++) {
+		it(`renders what a new component renders after its memos are dropped (seed ${seed})`, () => {
+			const next = random(seed * 104729);
+			const theme = seed % 2 === 0 ? highlightingTheme : defaultMarkdownTheme;
+			const texts = Array.from({ length: 60 }, () => randomDocument(next));
+			const components = texts.map(
+				(text, i) => new Markdown(text, 1, 0, theme, undefined, { complete: i % 5 !== 0 }),
+			);
+			for (const component of components) renderLiveLines(component, 80);
+			// (The first ones rendered dropped theirs; a text that is not complete keeps its tokens.)
+			for (let i = 0; i < 20; i++) {
+				assert.strictEqual(memos(components[i]!).wraps, false, `component ${i}`);
+				assert.strictEqual(memos(components[i]!).tokens, i % 5 === 0, `component ${i}`);
+			}
+			assert.strictEqual(memos(components[components.length - 1]!).tokens, true);
+			for (const width of [80, 47, 80, 120]) {
+				for (let i = 0; i < components.length; i++) {
+					const lines = renderLiveLines(components[i]!, width)!.lines;
+					assert.deepStrictEqual(lines, fresh(texts[i]!, i % 5 !== 0, width, theme), `component ${i} at ${width}`);
+				}
+			}
+		});
+	}
 });
