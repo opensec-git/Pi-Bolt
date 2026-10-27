@@ -23,6 +23,7 @@ import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } fr
 import { time } from "../timings.ts";
 import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 import { compiledExtensionFor } from "./compiled.ts";
+import { PI_MODULE_NAMES, provideModulesToFiles } from "./compiled-modules.ts";
 import { extensionDisplayName, withJitHint } from "./jit-hint.ts";
 import type {
 	EntryRenderer,
@@ -690,6 +691,13 @@ async function loadExtension(
 	try {
 		// Pi-Bolt: an extension `pi-bolt compile` built in, while its files are as they were then (core/extensions/compiled.ts).
 		const compiled = PIBOLT ? compiledExtensionFor(resolvedPath) : undefined;
+		// (What it loads from disk as it runs gets Pi's modules, as from jiti: core/extensions/compiled-modules.ts.)
+		if (compiled && "factory" in compiled) {
+			provideModulesToFiles(
+				PIBOLT?.jit ? PI_MODULE_NAMES : [...PI_MODULE_NAMES, ...JIT_ONLY_PACKAGES],
+				getVirtualModules,
+			);
+		}
 		const factory =
 			compiled && "factory" in compiled ? compiled.factory : await loadExtensionModule(resolvedPath, cacheToken);
 		time(`${extensionPath} module import`, "extensions");

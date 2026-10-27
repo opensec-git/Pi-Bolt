@@ -8,6 +8,8 @@ export interface PlannedPlugin {
 	origin: string;
 	stageDir: string;
 	importPath: string;
+	/** An entry imported under another name: its copy, beside it. */
+	entryCopy?: { from: string; to: string };
 	/** The other names --only and --exclude take for it (namesPlugin). */
 	aliases: string[];
 }
@@ -22,7 +24,7 @@ export interface ExcludedPlugin {
 
 export interface PluginPlan {
 	plugins: PlannedPlugin[];
-	roots: Array<{ stageDir: string; root: string; origin: string }>;
+	roots: Array<{ stageDir: string; root: string; origin: string; files?: string[] }>;
 	/** The packages copied into the node_modules beside the manifest, and the folder each was copied from. */
 	dependencies: Array<{ name: string; from: string }>;
 	skipped: Array<{ path: string; reason: string }>;
@@ -42,11 +44,13 @@ export interface PlanOptions {
 	exclude?: string[];
 	noPackages?: boolean;
 	packages?: Array<{ source: string; root: string; entries: string[] }>;
+	/** The extensions Pi loads (paths): any other found is turned off. */
+	enabled?: string[];
 }
 
 export const PI_MODULE_ALIASES: Record<string, string>;
 export function resolveExtensionEntries(dir: string): string[] | undefined;
-export function discoverExtensionsInDir(dir: string): string[];
+export function collectAutoExtensionEntries(dir: string): string[];
 export function ignoreRulesOf(dir: string): (name: string, folder: boolean) => boolean;
 export function expandPackageEntry(entry: string): string[];
 export function planPlugins(options: PlanOptions): PluginPlan;
@@ -55,5 +59,8 @@ export function selectionProblem(plan: PluginPlan, agentDir: string): string | u
 export function rewriteCopy(source: string, file: string): string;
 export function renderManifest(plan: Pick<PluginPlan, "plugins" | "roots">): string;
 export function writePluginFolder(plan: PluginPlan, out: string): string;
+export function copyDependenciesFound(plan: PluginPlan, out: string): Promise<Array<{ name: string; from: string }>>;
+export function withoutBunCondition(value: unknown): unknown;
+export function forBuildWithoutJit(dir: string): void;
 export function defaultAgentDir(env?: Record<string, string | undefined>): string;
-export function main(argv: string[]): void;
+export function main(argv: string[]): Promise<void>;

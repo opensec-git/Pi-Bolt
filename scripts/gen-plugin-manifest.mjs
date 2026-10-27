@@ -5,4 +5,4 @@
  */
 import { main } from "../packages/coding-agent/src/gen-plugin-manifest.mjs";
 
-main(process.argv.slice(2));
+await main(process.argv.slice(2));
