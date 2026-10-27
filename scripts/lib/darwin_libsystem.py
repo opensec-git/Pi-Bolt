@@ -32,16 +32,17 @@ def run(*args, **kwargs):
 
 
 def dependents(path):
-    """pi-bin's linked libraries and rpaths, from dyld_info -dependents."""
-    libraries, rpaths, section = [], [], None
-    for line in run("xcrun", "dyld_info", "-dependents", str(path)).splitlines()[1:]:
+    """pi-bin's linked libraries and rpaths, from its load commands (otool -l). Not from dyld_info -dependents: Xcode 16's
+    (GitHub's macOS 15 runners) lists no rpaths, so libsystem/ was never made there."""
+    libraries, rpaths, command = [], [], None
+    for line in run("otool", "-l", str(path)).splitlines():
         line = line.strip()
-        if line.startswith("-linked_dylibs"):
-            section = libraries
-        elif line.startswith("-rpaths"):
-            section = rpaths
-        elif section is not None and line and not line.startswith("attributes"):
-            section.append(line.split()[-1])
+        if line.startswith("cmd "):
+            command = line.split()[1]
+        elif command in ("LC_LOAD_DYLIB", "LC_LOAD_WEAK_DYLIB", "LC_REEXPORT_DYLIB") and line.startswith("name "):
+            libraries.append(line[len("name "):].rsplit(" (offset ", 1)[0])
+        elif command == "LC_RPATH" and line.startswith("path "):
+            rpaths.append(line[len("path "):].rsplit(" (offset ", 1)[0])
     return libraries, rpaths
 
 
@@ -64,7 +65,8 @@ def build(target):
 
 def check(executable, target):
     """Every libSystem import of `executable` binds to the same address with `target` as without it."""
-    imports = [line.split()[1] for line in run("xcrun", "dyld_info", "-imports", str(executable)).splitlines()
+    # (The name is the word before "(from libSystem)": Xcode 16's dyld_info prints no index before it.)
+    imports = [line.split()[-3] for line in run("xcrun", "dyld_info", "-imports", str(executable)).splitlines()
                if line.strip().endswith("(from libSystem)")]
     if len(imports) < 100:
         raise RuntimeError(f"only {len(imports)} imports from libSystem: not the runtime this was made for")
