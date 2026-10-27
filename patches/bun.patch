@@ -9004,7 +9004,7 @@ index 9de807ad..7999522c 100644
          Bun__ensureICUDefaultLocale();
          JSC::Config::enableRestrictedOptions();
          // JSC options come from BUN_JSC_* (applied in the callback below), not JSC_*.
-@@ -363,6 +386,19 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -363,6 +386,28 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
                  JSC::Options::thresholdForFTLOptimizeAfterWarmUp() = 1000000;
              }
  
@@ -9021,10 +9021,19 @@ index 9de807ad..7999522c 100644
 +            if (Bun__AOTImage__isMapped() && JSC::Options::numberOfGCMarkers() > 2)
 +                JSC::Options::numberOfGCMarkers() = 2;
 +
++#if OS(WINDOWS)
++            // With the JIT on, Windows makes all of JSC's executable reservation (1 GB on x86-64) valid call targets for Control
++            // Flow Guard: 16 MB of its bitmap, written at the start of every process. A program compiled ahead of time makes little
++            // code at run time; 128 MB, as on ARM64 without jump islands, is 2 MB of bitmap. BUN_JSC_jitMemoryReservationSize,
++            // below, overrides.
++            if (Bun__AOTImage__isMapped() && !JSC::Options::jitMemoryReservationSize())
++                JSC::Options::jitMemoryReservationSize() = 128 * 1024 * 1024;
++#endif
++
              if (envc > 0) [[likely]] {
                  auto envc_copy = envc;
                  while (envc_copy--) {
-@@ -378,8 +414,49 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
+@@ -378,8 +423,49 @@ extern "C" void JSCInitialize(const char* envp[], size_t envc, void (*onCrash)(c
                      }
                  }
              }
