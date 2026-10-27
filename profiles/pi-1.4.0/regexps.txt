@@ -998,6 +998,7 @@ gm/(@[\u00c0-\u02b8a-zA-Z_$][\u00c0-\u02b8a-zA-Z_$0-9]*)|(')|(")|((\\b([0-9](_*[
 gm/(@\\w+)|(\\B|\\b)
 gm/([A-Za-z$_][0-9A-Za-z$_]*(?=\\s*:))|(\\B|\\b)
 gm/([A-Za-z$_][0-9A-Za-z$_]*)|(\\(\\))|(\\()|(\\{)
+gm/([A-Za-z$_][0-9A-Za-z$_]*)|(\\b(?=constructor))|(\\()|([{;])
 gm/([A-Za-z$_][\\u00C0-\\u02B80-9A-Za-z$_]*)|(\\.(?=(\\bProtocol\\b|\\bType\\b|\\binit\\b|\\bself\\b)))|(\\.(associatedtype|async|await|as\\?|as!|as|break|case|catch|class|continue|convenience|default|defer|deinit|didSet|do|dynamic|else|enum|extension|fallthrough|fileprivate\\(set\\)|fileprivate|final|for|func|get|guard|if|import|indirect|infix|init\\?|init!|inout|internal\\(set\\)|internal|in|is|lazy|let|mutating|nonmutating|open\\(set\\)|open|operator|optional|override|postfix|precedencegroup|prefix|private\\(set\\)|private|protocol|public\\(set\\)|public|repeat|required|rethrows|return|set|some|static|struct|subscript|super|switch|throws|throw|try\\?|try!|try|typealias|unowned\\(safe\\)|unowned\\(unsafe\\)|unowned|var|weak|where|while|willSet))|((\\bas\\?\\B|\\bas!\\B|\\bfileprivate\\(set\\)\\B|\\binit\\?\\B|\\binit!\\B|\\binternal\\(set\\)\\B|\\bopen\\(set\\)\\B|\\bprivate\\(set\\)\\B|\\bpublic\\(set\\)\\B|\\btry\\?\\B|\\btry!\\B|\\bunowned\\(safe\\)\\B|\\bunowned\\(unsafe\\)\\B|\\bAny\\b|\\bSelf\\b|\\binit\\b|\\bself\\b))|(\\{)
 gm/([A-Za-z_]\\w*(::\\w+)*(\\?|!)?)|(<\\s*)|(#)|(^=begin)|(^__END__)|($|;)|(=)
 gm/([^0-9\\n\\t "'(),.`{}\\[\\]:;][^\\n\\t "'(),.`{}\\[\\]:;]+|[^0-9\\n\\t "'(),.`{}\\[\\]:;=])|([:={\\[(\\n;])
@@ -1237,6 +1238,7 @@ m/:
 m/;
 m/=cut
 m/>
+m/[(]|$
 m/[:={\\[(\\n;]
 m/[:={\\[\\n;]
 m/[:\\{(]|$
