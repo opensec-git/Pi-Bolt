@@ -583,7 +583,7 @@ describe("request cache: cached and uncached request bodies are byte-identical",
 			if (process.env.W3_DEBUG)
 				console.log(adapter.name, requests, after.units - before.units, after.derived - before.derived);
 			expect(requests).toBe(SEEDS * REQUESTS);
-			expect(after.units - before.units).toBeGreaterThan(requests * 5);
+			expect(after.units - before.units).toBeGreaterThan(requests * 3);
 		}, 120_000);
 	}
 });

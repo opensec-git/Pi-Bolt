@@ -23,8 +23,8 @@
  *   latest messages. The SDKs do not change the payload.
  *
  * A message's conversion is kept from the second request that converts it at the same place on, so messages that are
- * new objects on every request cost nothing (request-body.ts then reuses their bytes as before). Values no recent
- * request used (messages compacted away, a branch left) are dropped.
+ * new objects on every request cost nothing (request-body.ts then reuses their bytes as before). Only what the latest
+ * request used is kept (messages compacted away or on a branch left are dropped).
  */
 
 /** A unit's conversion: the values it produced and what is needed to hand them out again. */
@@ -37,32 +37,30 @@ interface Entry {
 	items: unknown[];
 	/** The UTF-8 JSON of each item; made by request-body.ts when it first sends the item. */
 	bytes: (Blob | undefined)[] | undefined;
-	/** The latest run that used the entry. */
-	lastUse: number;
 }
 
 /** A value derived from one message, only read to convert it. */
 interface Derived {
 	extra: unknown;
 	value: object;
-	lastUse: number;
 }
 
 /**
- * The messages a run converted, in the order it asked for them. A message's conversion is kept when the previous run
- * of the table converted the same message at the same place, so a message that is a new object on every request (an
- * extension's `context` handler copies them) costs nothing, and the first request of a conversation keeps nothing.
+ * What one kind of request (units or derived values) asked for, in order: the message at each place and what was
+ * kept for it. A run looks at the same place in the previous run: a value is reused when that place had the same
+ * message, and a new conversion is kept only then. So the first request of a conversation keeps nothing, a message
+ * that is a new object on every request (an extension's `context` handler copies them) costs nothing, and what the
+ * latest request did not use (messages compacted away, a branch left) is dropped with the previous run's lists.
+ * Messages that moved (after compaction, on a branch switch) convert again once.
  */
-interface Layer {
-	previous: readonly object[];
+interface Order<T> {
+	sources: object[];
+	values: (T | undefined)[];
 }
 
 interface Table {
-	/** Values by their unit's first message. */
-	units: Map<object, Entry>;
-	derived: Map<object, Derived>;
-	unitOrder: Layer;
-	derivedOrder: Layer;
+	units: Order<Entry>;
+	derived: Order<Derived>;
 	lastUse: number;
 }
 
@@ -81,10 +79,6 @@ function sameSources(a: readonly object[], b: readonly object[]): boolean {
 	}
 	return true;
 }
-
-const SWEEP_EVERY = 16;
-/** Runs of the table since a value was last used, after which it is dropped. */
-const SWEEP_AGE = 64;
 
 /**
  * For request-body.ts: the bytes of the values a run handed out, met in the order the run handed them out. An item of
@@ -147,22 +141,21 @@ export class RequestCacheRun {
 		this.table = table;
 	}
 
-	/** The messages this run asked for, per layer, in order. */
-	private readonly unitOrder: object[] = [];
-	private readonly derivedOrder: object[] = [];
+	/** What this run asked for, in order; the table's lists for the next run once it ends. */
+	private readonly units: Order<Entry> = { sources: [], values: [] };
+	private readonly derived: Order<Derived> = { sources: [], values: [] };
 
 	/**
-	 * What `values` holds for `source` when the run may use it: the value, or undefined (convert, and keep the result).
-	 * False when the run may not (the message is not settled, or new to the table and not where the previous run had
-	 * it): convert without keeping.
+	 * For the next place of `order`: what the previous run kept there for `source`, or undefined (convert, and keep
+	 * the result). False when nothing may be kept (the message is not settled, or the previous run had another one
+	 * there): convert without keeping.
 	 */
-	private slot<T>(values: Map<object, T>, layer: Layer, order: object[], source: object): T | undefined | false {
-		const position = order.length;
-		order.push(source);
-		if (!settled(source)) return false;
-		const value = values.get(source);
-		if (value !== undefined) return value;
-		return layer.previous[position] === source ? undefined : false;
+	private slot<T>(previous: Order<T>, order: Order<T>, source: object): T | undefined | false {
+		const position = order.sources.length;
+		order.sources.push(source);
+		order.values.push(undefined);
+		if (previous.sources[position] !== source || !settled(source)) return false;
+		return previous.values[position];
 	}
 
 	private hand(entry: Entry): void {
@@ -181,16 +174,18 @@ export class RequestCacheRun {
 	 * messages) that are put into the request as they are and that nothing changes afterwards.
 	 */
 	unit<M>(sources: readonly object[], extra: unknown, out: unknown[], convert: (out: unknown[]) => M): M {
-		const units = this.table.units;
-		let entry = sources.length > 0 ? this.slot(units, this.table.unitOrder, this.unitOrder, sources[0]) : false;
+		if (sources.length === 0) return convert(out);
+		const order = this.units;
+		const position = order.sources.length;
+		let entry = this.slot(this.table.units, order, sources[0]);
 		for (let i = 1; entry !== false && i < sources.length; i++) {
 			if (!settled(sources[i])) entry = false;
 		}
 		// Nothing to keep: converted straight into the request.
 		if (entry === false) return convert(out);
-		if (entry && entry.extra === extra && sameSources(entry.sources, sources)) {
-			entry.lastUse = this.id;
+		if (entry !== undefined && entry.extra === extra && sameSources(entry.sources, sources)) {
 			stats.units++;
+			order.values[position] = entry;
 			this.hand(entry);
 			for (let i = 0; i < entry.items.length; i++) out.push(entry.items[i]);
 			return entry.meta as M;
@@ -203,8 +198,8 @@ export class RequestCacheRun {
 			if (typeof item !== "object" || item === null) keep = false;
 		}
 		if (keep) {
-			const kept: Entry = { sources, extra, meta, items, bytes: undefined, lastUse: this.id };
-			units.set(sources[0], kept);
+			const kept: Entry = { sources, extra, meta, items, bytes: undefined };
+			order.values[position] = kept;
 			this.hand(kept);
 		}
 		for (let i = 0; i < items.length; i++) out.push(items[i]);
@@ -216,15 +211,16 @@ export class RequestCacheRun {
 	 * message): `make` returns it, and the same object is returned while the message and `extra` are the same.
 	 */
 	derive<T extends object>(source: object, extra: unknown, make: () => T): T {
-		const derived = this.table.derived;
-		const slot = this.slot(derived, this.table.derivedOrder, this.derivedOrder, source);
+		const order = this.derived;
+		const position = order.sources.length;
+		const slot = this.slot(this.table.derived, order, source);
 		if (slot && slot.extra === extra) {
-			slot.lastUse = this.id;
 			stats.derived++;
+			order.values[position] = slot;
 			return slot.value as T;
 		}
 		const value = make();
-		if (slot !== false) derived.set(source, { extra, value, lastUse: this.id });
+		if (slot !== false) order.values[position] = { extra, value };
 		return value;
 	}
 
@@ -233,19 +229,12 @@ export class RequestCacheRun {
 		return new SentValues(this.handedItems, this.handedEntries, this.handedIndexes);
 	}
 
-	/** Call once the request's messages are converted (also when it failed). */
+	/** Call once the request's messages are converted (also when it failed): its lists are the next run's. */
 	end(): void {
 		if (this.ended) return;
 		this.ended = true;
-		this.table.unitOrder.previous = this.unitOrder;
-		this.table.derivedOrder.previous = this.derivedOrder;
-		// Values no recent run of the table used (messages compacted away, a branch left) are dropped.
-		if (this.id % SWEEP_EVERY !== 0) return;
-		for (const values of [this.table.units, this.table.derived] as Map<object, { lastUse: number }>[]) {
-			for (const [key, value] of values) {
-				if (this.id - value.lastUse > SWEEP_AGE) values.delete(key);
-			}
-		}
+		this.table.units = this.units;
+		this.table.derived = this.derived;
 	}
 }
 
@@ -285,13 +274,7 @@ export function beginRequestCache(
 	if (table) {
 		tables.delete(key);
 	} else {
-		table = {
-			units: new Map(),
-			derived: new Map(),
-			unitOrder: { previous: [] },
-			derivedOrder: { previous: [] },
-			lastUse: 0,
-		};
+		table = { units: { sources: [], values: [] }, derived: { sources: [], values: [] }, lastUse: 0 };
 		if (tables.size >= MAX_TABLES) {
 			const oldest = tables.keys().next().value;
 			if (oldest !== undefined) tables.delete(oldest);
