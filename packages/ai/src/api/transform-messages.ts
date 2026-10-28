@@ -60,10 +60,15 @@ function replaceImagesWithPlaceholder(content: (TextContent | ImageContent)[], p
 	return result;
 }
 
+/** The tool call ids of a run of tool results, as one value to compare (a unit's extra in request-cache.ts). */
+export function toolCallIds(results: readonly ToolResultMessage[]): string {
+	return results.length === 1 ? results[0].toolCallId : results.map((result) => result.toolCallId).join("\u0000");
+}
+
 /** What transformMessages makes of an assistant message: the copy, the tool call ids it renamed, its tool calls. */
 interface TransformedAssistant {
 	message: AssistantMessage;
-	renamedIds: [string, string][];
+	renamedIds: [string, string][] | undefined;
 	toolCalls: ToolCall[];
 }
 
@@ -72,7 +77,7 @@ function transformAssistant<TApi extends Api>(
 	model: Model<TApi>,
 	normalizeToolCallId: ((id: string, model: Model<TApi>, source: AssistantMessage) => string) | undefined,
 ): TransformedAssistant {
-	const renamedIds: [string, string][] = [];
+	let renamedIds: [string, string][] | undefined;
 	const isSameModel =
 		assistantMsg.provider === model.provider && assistantMsg.api === model.api && assistantMsg.model === model.id;
 
@@ -109,6 +114,7 @@ function transformAssistant<TApi extends Api>(
 			if (!isSameModel && normalizeToolCallId) {
 				const normalizedId = normalizeToolCallId(toolCall.id, model, assistantMsg);
 				if (normalizedId !== toolCall.id) {
+					renamedIds ??= [];
 					renamedIds.push([toolCall.id, normalizedId]);
 					normalizedToolCall = { ...normalizedToolCall, id: normalizedId };
 				}
@@ -150,8 +156,6 @@ export function transformMessages<TApi extends Api>(
 	// Build a map of original tool call IDs to normalized IDs
 	const toolCallIdMap = new Map<string, string>();
 	const vision = model.input.includes("image");
-	const derive = <T extends object>(source: object, extra: unknown, make: () => T): T =>
-		cache ? cache.derive(source, extra, make) : make();
 	/** The tool calls of each transformed assistant message, by index. */
 	const toolCallsAt: ToolCall[][] = [];
 
@@ -166,13 +170,12 @@ export function transformMessages<TApi extends Api>(
 
 		if (msg.role === "user") {
 			if (vision || !Array.isArray(msg.content)) return msg;
-			return derive(source, "", () => ({
+			const content = msg.content as (TextContent | ImageContent)[];
+			const make = () => ({
 				...msg,
-				content: replaceImagesWithPlaceholder(
-					msg.content as (TextContent | ImageContent)[],
-					NON_VISION_USER_IMAGE_PLACEHOLDER,
-				),
-			}));
+				content: replaceImagesWithPlaceholder(content, NON_VISION_USER_IMAGE_PLACEHOLDER),
+			});
+			return cache ? cache.derive(source, "", make) : make();
 		}
 
 		// Handle toolResult messages - normalize toolCallId if we have a mapping
@@ -180,20 +183,21 @@ export function transformMessages<TApi extends Api>(
 			const normalizedId = toolCallIdMap.get(msg.toolCallId);
 			const renamed = !!normalizedId && normalizedId !== msg.toolCallId;
 			if (vision && !renamed) return msg;
-			return derive(source, renamed ? normalizedId : "", () => {
+			const make = () => {
 				const imageAware = vision
 					? msg
 					: { ...msg, content: replaceImagesWithPlaceholder(msg.content, NON_VISION_TOOL_IMAGE_PLACEHOLDER) };
 				return renamed ? { ...imageAware, toolCallId: normalizedId as string } : imageAware;
-			});
+			};
+			return cache ? cache.derive(source, renamed ? normalizedId : "", make) : make();
 		}
 
 		// Assistant messages need transformation check
 		if (msg.role === "assistant") {
-			const result = derive(source, "", () =>
-				transformAssistant(msg as AssistantMessage, model, normalizeToolCallId),
-			);
-			for (const [id, normalizedId] of result.renamedIds) toolCallIdMap.set(id, normalizedId);
+			const result = cache
+				? cache.derive(source, "", () => transformAssistant(msg as AssistantMessage, model, normalizeToolCallId))
+				: transformAssistant(msg as AssistantMessage, model, normalizeToolCallId);
+			if (result.renamedIds) for (const [id, normalizedId] of result.renamedIds) toolCallIdMap.set(id, normalizedId);
 			toolCallsAt[index] = result.toolCalls;
 			return result.message;
 		}

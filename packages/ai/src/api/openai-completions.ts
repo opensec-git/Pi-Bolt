@@ -77,7 +77,7 @@ import {
 	resolveSamplingParams,
 	thinkingBudgetForLevel,
 } from "./simple-options.ts";
-import { transformMessages } from "./transform-messages.ts";
+import { toolCallIds, transformMessages } from "./transform-messages.ts";
 
 /**
  * Check if conversation messages contain tool calls or tool results.
@@ -1295,7 +1295,7 @@ export function convertMessages(
 		model,
 		(id) => normalizeToolCallId(id),
 		cache,
-		sources,
+		cache ? sources : undefined,
 	);
 	/**
 	 * Converts one unit of the conversation (a message, or a run of tool results) with `convert`, which pushes what it
@@ -1307,7 +1307,7 @@ export function convertMessages(
 		extra: unknown,
 		convert: (out: ChatCompletionMessageParam[]) => M,
 	): M => {
-		if (!cache || unitSources.includes(undefined)) return convert(params);
+		if (!cache || unitSources.length === 0 || unitSources.includes(undefined)) return convert(params);
 		return cache.unit(unitSources as Message[], extra, params, convert as (out: unknown[]) => M);
 	};
 	const transcriptTools = resolveTranscriptTools(
@@ -1347,7 +1347,7 @@ export function convertMessages(
 				params.push({ role: instructionRole, content: sanitizeSurrogates(text) });
 			}
 		} else if (msg.role === "user") {
-			const converted = unit([sources[i]], undefined, (out) => {
+			const converted = unit(cache ? [sources[i]] : [], undefined, (out) => {
 				if (typeof msg.content === "string") {
 					out.push({
 						role: "user",
@@ -1381,7 +1381,7 @@ export function convertMessages(
 			});
 			if (!converted) continue;
 		} else if (msg.role === "assistant") {
-			const converted = unit([sources[i]], undefined, (out) => {
+			const converted = unit(cache ? [sources[i]] : [], undefined, (out) => {
 				// Some providers don't accept null content, use empty string instead
 				const assistantMsg: ChatCompletionAssistantMessageParamWithReasoning = {
 					role: "assistant",
@@ -1504,8 +1504,8 @@ export function convertMessages(
 			while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") j++;
 			const results = transformedMessages.slice(i, j) as ToolResultMessage[];
 			// A tool result's conversion also reads its (possibly renamed) tool call id.
-			const unitExtra = results.map((result) => result.toolCallId).join("\u0000");
-			lastRole = unit(sources.slice(i, j), unitExtra, (out) => {
+			const unitExtra = cache ? toolCallIds(results) : undefined;
+			lastRole = unit(cache ? sources.slice(i, j) : [], unitExtra, (out) => {
 				const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
 				for (const toolMsg of results) {
 					// Extract text and image content

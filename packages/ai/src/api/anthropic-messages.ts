@@ -68,7 +68,7 @@ import {
 } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { adjustMaxTokensForThinking, buildBaseOptions, clampMaxTokensToContext } from "./simple-options.ts";
-import { splitErrorToolResultImages, transformMessages } from "./transform-messages.ts";
+import { splitErrorToolResultImages, toolCallIds, transformMessages } from "./transform-messages.ts";
 
 /**
  * Resolve cache retention preference.
@@ -1032,10 +1032,10 @@ function buildParams(
 	const compat = getAnthropicCompat(model);
 	const initialSystemMessage = getInitialSystemMessage(context.messages);
 	const initialSystemText = initialSystemMessage ? getSystemMessageText(initialSystemMessage) : "";
-	const sources: (Message | undefined)[] = [];
+	const sources: (Message | undefined)[] | undefined = cache ? [] : undefined;
 	const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId, cache, sources);
 	const conversationMessages = initialSystemMessage ? transformedMessages.slice(1) : transformedMessages;
-	const conversationSources = initialSystemMessage ? sources.slice(1) : sources;
+	const conversationSources = initialSystemMessage ? sources?.slice(1) : sources;
 	// Native tool changes keep the request-level tool list fixed and define every later tool
 	// by value in a `tool_addition` block, which also expresses same-name redefinitions.
 	// Anthropic rejects a tool list where every tool is deferred, so there must be an initial
@@ -1307,7 +1307,9 @@ function convertMessages(
 			});
 		} else if (msg.role === "assistant") {
 			// Held system messages go before the assistant message, outside its unit.
-			const assistantParams: MessageParam[] = [];
+			const held = pendingSystemMessages.length > 0;
+			const assistantParams: MessageParam[] = held ? [] : params;
+			const before = assistantParams.length;
 			unit(i, i + 1, undefined, assistantParams, (out) => {
 				const blocks: ContentBlockParam[] = [];
 
@@ -1368,10 +1370,12 @@ function convertMessages(
 					content: blocks,
 				});
 			});
-			if (assistantParams.length === 0) continue;
-			flushPendingSystemMessages();
-			const messageIndex = params.length;
-			params.push(...assistantParams);
+			if (assistantParams.length === before) continue;
+			const messageIndex = held ? params.length + pendingSystemMessages.length : before;
+			if (held) {
+				flushPendingSystemMessages();
+				params.push(...assistantParams);
+			}
 			if (
 				managedProvider !== undefined &&
 				msg.api === "anthropic-messages" &&
@@ -1386,7 +1390,7 @@ function convertMessages(
 			while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") j++;
 			const results = transformedMessages.slice(i, j) as ToolResultMessage[];
 			// A tool result's conversion also reads its (possibly renamed) tool call id.
-			unit(i, j, results.map((result) => result.toolCallId).join("\u0000"), params, (out) => {
+			unit(i, j, cache ? toolCallIds(results) : undefined, params, (out) => {
 				const toolResults: ContentBlockParam[] = [];
 				// Anthropic rejects error tool results that contain anything but text, so their images follow
 				// all tool results of the turn, which must come first in the user message (#10794).

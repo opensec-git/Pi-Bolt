@@ -238,7 +238,7 @@ export function convertResponsesMessages<TApi extends Api>(
 		model,
 		normalizeToolCallId,
 		cache,
-		sources,
+		cache ? sources : undefined,
 	);
 	/**
 	 * Converts one message with `convert`, which pushes what it converts to and returns what the loop needs besides;

@@ -30,7 +30,7 @@ import type { RequestCacheRun } from "../utils/request-cache.ts";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.ts";
 import { collapseSystemMessages, withoutInitialSystemMessage } from "../utils/transcript.ts";
 import { getJsonSchemaToolParameters, resolveJsonSchemaStrictSampling } from "./constrained-sampling.ts";
-import { transformMessages } from "./transform-messages.ts";
+import { toolCallIds, transformMessages } from "./transform-messages.ts";
 
 type GoogleApiType = "google-generative-ai" | "google-vertex";
 
@@ -212,7 +212,13 @@ export function convertMessages<T extends GoogleApiType>(
 	};
 
 	const sources: (Message | undefined)[] = [];
-	const transformedMessages = transformMessages(conversation, model, normalizeToolCallId, cache, sources);
+	const transformedMessages = transformMessages(
+		conversation,
+		model,
+		normalizeToolCallId,
+		cache,
+		cache ? sources : undefined,
+	);
 
 	const convertUser = (msg: UserMessage, contents: Content[]): void => {
 		if (typeof msg.content === "string") {
@@ -362,8 +368,12 @@ export function convertMessages<T extends GoogleApiType>(
 	 * messages and the cache context.
 	 */
 	const unit = (first: number, end: number, extra: unknown, convert: (out: Content[]) => void): void => {
-		const unitSources = sources.slice(first, end);
-		if (!cache || unitSources.includes(undefined)) {
+		if (!cache) {
+			convert(contents);
+			return;
+		}
+		const unitSources = end - first === 1 ? [sources[first]] : sources.slice(first, end);
+		if (unitSources.includes(undefined)) {
 			convert(contents);
 			return;
 		}
@@ -392,7 +402,7 @@ export function convertMessages<T extends GoogleApiType>(
 				convertResults(contents);
 			} else {
 				// A tool result's conversion also reads its (possibly renamed) tool call id.
-				unit(index, end, results.map((result) => result.toolCallId).join("\u0000"), convertResults);
+				unit(index, end, cache ? toolCallIds(results) : undefined, convertResults);
 			}
 			index = end - 1;
 		}

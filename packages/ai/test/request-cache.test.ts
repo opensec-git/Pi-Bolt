@@ -372,6 +372,8 @@ class Conversation {
 	/** One step of the conversation before a request. */
 	step(): void {
 		const rng = this.rng;
+		// A reply streaming in may be sent again while it streams (a cache-warming replay), then completes.
+		if (this.pending && chance(rng, 0.5)) return;
 		if (this.pending) {
 			// The streamed reply completes: changed in place, as the agent loop's partial message is.
 			const reply = this.pending as unknown as Record<string, unknown>;
