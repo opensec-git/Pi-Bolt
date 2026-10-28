@@ -264,13 +264,15 @@ function isLegacyKeybindingName(key: string): key is keyof typeof KEYBINDING_NAM
 	return key in KEYBINDING_NAME_MIGRATIONS;
 }
 
-const validateKeybindingValue = Compile(KeybindingValueSchema);
+// Compiled on first use: Compile() generates the checker as source code, and only a keybindings.json needs it.
+let keybindingValueValidator: ReturnType<typeof Compile<typeof KeybindingValueSchema>> | undefined;
 
 function toKeybindingsConfig(value: Record<string, unknown>): KeybindingsConfig {
 	const config: KeybindingsConfig = {};
 	for (const [key, binding] of Object.entries(value)) {
 		if (key === "$schema") continue;
-		if (validateKeybindingValue.Check(binding)) config[key] = binding;
+		keybindingValueValidator ??= Compile(KeybindingValueSchema);
+		if (keybindingValueValidator.Check(binding)) config[key] = binding;
 	}
 	return config;
 }

@@ -1,13 +1,15 @@
 import { eastAsianWidth } from "get-east-asian-width";
 
-// segmenters (shared instance)
-const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-const wordSegmenter = new Intl.Segmenter(undefined, { granularity: "word" });
+// Segmenters (shared instances), made on first use: the first Intl.Segmenter of a process sets up ICU's segmentation
+// data, about half a millisecond, which a start that measures no text (`pi -p`) does not need.
+let graphemeSegmenter: Intl.Segmenter | undefined;
+let wordSegmenter: Intl.Segmenter | undefined;
 
 /**
  * Get the shared grapheme segmenter instance.
  */
 export function getGraphemeSegmenter(): Intl.Segmenter {
+	graphemeSegmenter ??= new Intl.Segmenter(undefined, { granularity: "grapheme" });
 	return graphemeSegmenter;
 }
 
@@ -15,6 +17,7 @@ export function getGraphemeSegmenter(): Intl.Segmenter {
  * Get the shared word segmenter instance.
  */
 export function getWordSegmenter(): Intl.Segmenter {
+	wordSegmenter ??= new Intl.Segmenter(undefined, { granularity: "word" });
 	return wordSegmenter;
 }
 
@@ -92,7 +95,7 @@ function truncateFragmentToWidth(text: string, maxWidth: number): { text: string
 	if (!hasAnsi && !hasTabs) {
 		let result = "";
 		let width = 0;
-		for (const { segment } of graphemeSegmenter.segment(text)) {
+		for (const { segment } of getGraphemeSegmenter().segment(text)) {
 			const w = graphemeWidth(segment);
 			if (width + w > maxWidth) {
 				break;
@@ -139,7 +142,7 @@ function truncateFragmentToWidth(text: string, maxWidth: number): { text: string
 			end++;
 		}
 
-		for (const { segment } of graphemeSegmenter.segment(text.slice(i, end))) {
+		for (const { segment } of getGraphemeSegmenter().segment(text.slice(i, end))) {
 			const w = graphemeWidth(segment);
 			if (width + w > maxWidth) {
 				return { text: result, width };
@@ -304,7 +307,7 @@ export function visibleWidth(str: string): number {
 
 	// Calculate width
 	let width = 0;
-	for (const { segment } of graphemeSegmenter.segment(clean)) {
+	for (const { segment } of getGraphemeSegmenter().segment(clean)) {
 		width += graphemeWidth(segment);
 	}
 
@@ -512,7 +515,7 @@ export function getGraphemeCellRange(line: string, column: number): GraphemeCell
 		}
 		let textEnd = i;
 		while (textEnd < line.length && !extractAnsiCode(line, textEnd)) textEnd++;
-		for (const { segment } of graphemeSegmenter.segment(line.slice(i, textEnd))) {
+		for (const { segment } of getGraphemeSegmenter().segment(line.slice(i, textEnd))) {
 			const width = graphemeWidth(segment);
 			if (width > 0 && column >= currentCol && column < currentCol + width) {
 				return { start: currentCol, end: currentCol + width };
@@ -539,7 +542,7 @@ export function getOsc8LinkAtColumn(line: string, column: number): string | unde
 		}
 		let textEnd = i;
 		while (textEnd < line.length && !extractAnsiCode(line, textEnd)) textEnd++;
-		for (const { segment } of graphemeSegmenter.segment(line.slice(i, textEnd))) {
+		for (const { segment } of getGraphemeSegmenter().segment(line.slice(i, textEnd))) {
 			const width = segment === "\t" ? 3 : graphemeWidth(segment);
 			if (column >= currentCol && column < currentCol + width) return activeUrl;
 			currentCol += width;
@@ -971,7 +974,7 @@ export function getActiveBackgroundAnsi(text: string): string {
 }
 
 function* graphemeSegments(text: string): Generator<string> {
-	for (const { segment } of graphemeSegmenter.segment(text)) yield segment;
+	for (const { segment } of getGraphemeSegmenter().segment(text)) yield segment;
 }
 
 /**
@@ -1278,7 +1281,7 @@ function breakLongWord(word: string, width: number, tracker: AnsiCodeTracker): s
 			}
 			// Segment this non-ANSI portion into graphemes
 			const textPortion = word.slice(i, end);
-			for (const seg of graphemeSegmenter.segment(textPortion)) {
+			for (const seg of getGraphemeSegmenter().segment(textPortion)) {
 				segments.push({ type: "grapheme", value: seg.segment });
 			}
 			i = end;
@@ -1454,7 +1457,7 @@ export function truncateToWidth(
 	const hasTabs = text.includes("\t");
 
 	if (!hasAnsi && !hasTabs) {
-		for (const { segment } of graphemeSegmenter.segment(text)) {
+		for (const { segment } of getGraphemeSegmenter().segment(text)) {
 			const width = graphemeWidth(segment);
 			if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
 				result += segment;
@@ -1509,7 +1512,7 @@ export function truncateToWidth(
 				end++;
 			}
 
-			for (const { segment } of graphemeSegmenter.segment(text.slice(i, end))) {
+			for (const { segment } of getGraphemeSegmenter().segment(text.slice(i, end))) {
 				const width = graphemeWidth(segment);
 				if (keepContiguousPrefix && keptWidth + width <= targetWidth) {
 					if (pendingAnsi) {
@@ -1582,7 +1585,7 @@ export function sliceWithWidth(
 		let textEnd = i;
 		while (textEnd < line.length && !extractAnsiCode(line, textEnd)) textEnd++;
 
-		for (const { segment } of graphemeSegmenter.segment(line.slice(i, textEnd))) {
+		for (const { segment } of getGraphemeSegmenter().segment(line.slice(i, textEnd))) {
 			const w = graphemeWidth(segment);
 			const inRange = currentCol >= startCol && currentCol < endCol;
 			const fits = !strict || currentCol + w <= endCol;
@@ -1655,7 +1658,7 @@ export function extractSegments(
 		let textEnd = i;
 		while (textEnd < line.length && !extractAnsiCode(line, textEnd)) textEnd++;
 
-		for (const { segment } of graphemeSegmenter.segment(line.slice(i, textEnd))) {
+		for (const { segment } of getGraphemeSegmenter().segment(line.slice(i, textEnd))) {
 			const w = graphemeWidth(segment);
 
 			if (currentCol < beforeEnd && currentCol + w <= beforeEnd) {

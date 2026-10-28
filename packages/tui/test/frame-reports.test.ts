@@ -421,7 +421,7 @@ describe("frames from reported changes", () => {
 			fresh.addChild(copy);
 			fresh.start();
 			fresh.renderNow();
-			const shown = (screen: TuiMainScreen) => (screen as unknown as { previousLines: string[] }).previousLines;
+			const shown = (screen: TuiMainScreen) => screen.shownLinesForTest();
 			assert.deepStrictEqual(shown(tui), shown(fresh));
 			tui.stop();
 			fresh.stop();
@@ -468,7 +468,7 @@ describe("frames from reported changes", () => {
 				referenceTui.renderNow();
 				const label = `seed ${seed} step ${step}: ${log.slice(-12).join(" ")}`;
 				// (The lines written, cursor markers included, and what the terminal shows.)
-				const shown = (tui: TuiMainScreen) => (tui as unknown as { previousLines: string[] }).previousLines;
+				const shown = (tui: TuiMainScreen) => tui.shownLinesForTest();
 				assert.deepStrictEqual(shown(liveTui), shown(referenceTui), label);
 				assert.deepStrictEqual(
 					await liveTerminal.flushAndGetViewport(),

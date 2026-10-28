@@ -94,7 +94,6 @@ const COPY_ERROR_FLASH_DURATION_MS = 5000;
 // so it uses iTerm2's default "characters considered part of a word" set:
 // https://github.com/gnachman/iTerm2/blob/7f4ff739721f95d0b93003d8701c4523a7edf261/sources/Settings/iTermPreferences.m#L743
 const TERMINAL_WORD_SELECTION_JOINERS = new Set(["/", "-", "+", "\\", "~", "_", "."]);
-const wordSegmenter = getWordSegmenter();
 
 interface CachedKittyImage {
 	transmissionGeneration: number;
@@ -1210,7 +1209,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const line = stripTerminalSequences(this.getSelectionSourceLine(point));
 		const segments: Array<{ start: number; end: number; selectable: boolean; joiner: boolean }> = [];
 		let start = 0;
-		for (const segment of wordSegmenter.segment(line)) {
+		for (const segment of getWordSegmenter().segment(line)) {
 			const end = start + visibleWidth(segment.segment);
 			const joiner = TERMINAL_WORD_SELECTION_JOINERS.has(segment.segment);
 			segments.push({ start, end, selectable: segment.isWordLike === true || joiner, joiner });

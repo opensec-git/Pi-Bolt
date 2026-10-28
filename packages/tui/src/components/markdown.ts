@@ -262,14 +262,22 @@ function trimPartialClosingFences(tokens: readonly Token[]): void {
 	token.text = token.text.slice(0, -lastLine.length).replace(/\n$/, "");
 }
 
-const markdownParser = new Marked();
-markdownParser.setOptions({
-	tokenizer: new StrictStrikethroughTokenizer(),
-});
-markdownParser.use({
-	tokenizer: { emStrong: markedCjkFriendly().tokenizer?.emStrong },
-	extensions: [...LATEX_MARKDOWN_EXTENSIONS],
-});
+let markdownParser: Marked | undefined;
+
+/** Pi's Markdown parser, set up on the first lex: a start that renders no Markdown (`pi -p`) does not build it. */
+function getMarkdownParser(): Marked {
+	if (!markdownParser) {
+		markdownParser = new Marked();
+		markdownParser.setOptions({
+			tokenizer: new StrictStrikethroughTokenizer(),
+		});
+		markdownParser.use({
+			tokenizer: { emStrong: markedCjkFriendly().tokenizer?.emStrong },
+			extensions: [...LATEX_MARKDOWN_EXTENSIONS],
+		});
+	}
+	return markdownParser;
+}
 
 /** What inlineTokens() made of a text, and the lexer's state after it. */
 interface LexedInline {
@@ -362,8 +370,8 @@ let memos = true;
 /** marked's lexer() for Pi's Markdown: InlineMemoLexer, or marked's own lexer with the memos off. */
 function lexTokens(source: string): Token[] {
 	return memos && markdownCaching
-		? new InlineMemoLexer(markdownParser.defaults).lex(source)
-		: markdownParser.lexer(source);
+		? new InlineMemoLexer(getMarkdownParser().defaults).lex(source)
+		: getMarkdownParser().lexer(source);
 }
 
 interface LexedMarkdown {
@@ -542,7 +550,7 @@ function lexMarkdown(source: string, complete = false, extended?: ExtendedSource
 	lastLexed = undefined;
 	lastEnd = undefined;
 	if (!markdownCaching) {
-		const tokens = markdownParser.lexer(source);
+		const tokens = getMarkdownParser().lexer(source);
 		trimPartialClosingFences(tokens);
 		return tokens;
 	}
@@ -733,6 +741,15 @@ interface RenderedBlock {
 
 const renderedBlocks = new WeakMap<Token, RenderedBlock>();
 
+/**
+ * The Markdown components that rendered blocks last, the most recent last: only these keep what speeds up rendering their
+ * text again (Markdown.dropMemos()). A reply that streams in renders again for each chunk and stays among them; a message of
+ * a long transcript is rendered once when the transcript is laid out, and would otherwise keep its wrapped lines and its
+ * tokens (several times the size of its text) for as long as the session is open.
+ */
+const memoHolders: Markdown[] = [];
+const MEMO_HOLDERS_KEPT = 16;
+
 /** What the top-level tokens of a source were rendered to: the lines of all the blocks, and where each block ends. */
 interface RenderedTokens {
 	settings: RenderSettings;
@@ -884,8 +901,8 @@ export class Markdown implements Component {
 	 * far. While a reply streams in, the block it ends with is rendered again for each chunk, and all its lines but the
 	 * last few are the lines it had the time before.
 	 */
-	private wraps = new Map<number, Map<string, readonly string[]>>();
-	private nextWraps = new Map<number, Map<string, readonly string[]>>();
+	private wraps?: Map<number, Map<string, readonly string[]>>;
+	private nextWraps?: Map<number, Map<string, readonly string[]>>;
 	/**
 	 * What renderLive() holds: the lines, the text and width they are for, the tokens and settings their blocks were
 	 * rendered from and where each block's lines end (not counting the padding), and whether the lines are the empty line
@@ -982,12 +999,13 @@ export class Markdown implements Component {
 		if (!markdownCaching || !memos) {
 			return wrapTextWithAnsi(line, width);
 		}
+		this.nextWraps ??= new Map();
 		let next = this.nextWraps.get(width);
 		if (next === undefined) {
 			next = new Map();
 			this.nextWraps.set(width, next);
 		}
-		const wrapped = next.get(line) ?? this.wraps.get(width)?.get(line) ?? wrapTextWithAnsi(line, width);
+		const wrapped = next.get(line) ?? this.wraps?.get(width)?.get(line) ?? wrapTextWithAnsi(line, width);
 		next.set(line, wrapped);
 		return wrapped;
 	}
@@ -1149,11 +1167,36 @@ export class Markdown implements Component {
 		return emptyLines;
 	}
 
-	/** Keeps the lines wrapped by this render, if it rendered any blocks (wrapLine()). */
+	/**
+	 * Keeps the lines wrapped by this render, if it rendered any blocks (wrapLine()), and makes this the most recent of the
+	 * components that keep their memos (memoHolders): the one rendered longest ago drops its own.
+	 */
 	private keepWraps(): void {
-		if (this.nextWraps.size > 0) {
+		if (this.nextWraps !== undefined && this.nextWraps.size > 0) {
 			this.wraps = this.nextWraps;
-			this.nextWraps = new Map();
+			this.nextWraps = undefined;
+		}
+		const holders = memoHolders;
+		if (holders[holders.length - 1] === this) return;
+		const index = holders.lastIndexOf(this);
+		if (index !== -1) holders.splice(index, 1);
+		holders.push(this);
+		if (holders.length > MEMO_HOLDERS_KEPT) holders.shift()!.dropMemos();
+	}
+
+	/**
+	 * Drops what only makes rendering the text again faster, keeping the lines: the lines wrapped by the last render (by line,
+	 * so the same lines come out of wrapping them again), and for a complete text its tokens, which a render that needs them
+	 * lexes again (cachedTokens holds them weakly until then). A complete text is lexed in full each time (lexMarkdown()), to
+	 * the same tokens; a text that is not complete may have been lexed from a shorter one's tokens, which lexing it in full can
+	 * split differently, so it keeps them.
+	 */
+	private dropMemos(): void {
+		this.wraps = undefined;
+		if (this.options.complete === true) {
+			this.live.tokens = undefined;
+			this.live.settings = undefined;
+			this.grown = undefined;
 		}
 	}
 
