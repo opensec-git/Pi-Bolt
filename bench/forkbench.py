@@ -215,14 +215,28 @@ def sc_session(prog, a):
             safe = "--" + re.sub(r"[/\\:]", "-", re.sub(r"^[/\\]", "", folder)) + "--"
             d = Path(prog.p["session_dir"].format(**ctx, safe=safe))
             write_session(d / "2026-01-01T00-00-00-000Z_t.jsonl", real, a.entries)
+        # The last tool call of the history: on screen once the history is.
+        last = [json.loads(line) for line in (d / "2026-01-01T00-00-00-000Z_t.jsonl").read_text().splitlines()][-2]
+        needle = last["message"]["content"][-1]["arguments"]["command"].split(" ", 1)[1]
+        t0 = time.perf_counter()
         tty, tree, ok, tti = tui(prog, env, ctx, cwd, a.cpus, prog.p["continue"])
         r = {"ok": ok, "tti_ms": tti}
         if ok:
-            tty.settle(2.0, time.perf_counter() + 60)
+            # Loaded: the first half second in which the whole tree used under 3% of a core (some programs draw the
+            # editor before they have read the history, and read it without writing anything).
+            c, deadline = tree.snapshot()["cpu_ms"], time.perf_counter() + 120
+            while time.perf_counter() < deadline:
+                quiet_from = time.perf_counter()
+                end = quiet_from + 0.5
+                while time.perf_counter() < end:
+                    tty.pump(0.05)
+                c1 = tree.snapshot()["cpu_ms"]
+                if c1 - c < 15:
+                    break
+                c = c1
             s = tree.snapshot()
-            r.update(own_mb=s["own_mb"], rss_mb=s["rss_mb"], cpu_ms=s["cpu_ms"], procs=s["procs"])
-            # How much the TUI drew: a program that drew none of the history did less work.
-            r["shown_kb"] = round(len(tty.buf) / 1024)
+            r.update(loaded_ms=(quiet_from - t0) * 1e3, own_mb=s["own_mb"], rss_mb=s["rss_mb"], cpu_ms=s["cpu_ms"],
+                     procs=s["procs"], shown=bool(re.search(r"\b" + re.escape(needle) + r"\b", tty.screen_text())), shown_kb=round(len(tty.buf) / 1024))
         else:
             r["screen"] = tty.screen_text()[-400:]
         kill(tty, tree)
@@ -233,7 +247,7 @@ SCENARIOS = {"version": sc_version, "headless": sc_headless, "ready": sc_ready, 
              "session": sc_session}
 KEYS = {"version": ["wall_ms", "cpu_ms", "own_mb", "rss_mb", "instr_m"], "headless": ["wall_ms", "cpu_ms", "own_mb", "rss_mb", "instr_m"],
         "ready": ["tti_ms", "cpu_ms", "own_mb", "rss_mb", "instr_m"], "stream": ["wall_s", "cpu_s", "peak_own_mb", "own_end_mb", "instr_m"],
-        "idle": ["cpu_ms_per_s", "own_mb"], "session": ["tti_ms", "own_mb", "rss_mb", "cpu_ms", "shown_kb"]}
+        "idle": ["cpu_ms_per_s", "own_mb"], "session": ["tti_ms", "loaded_ms", "own_mb", "rss_mb", "cpu_ms", "shown_kb"]}
 
 
 def main():
