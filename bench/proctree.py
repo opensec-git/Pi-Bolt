@@ -2,7 +2,7 @@
 counted with them): a thread samples the tree every 5 ms. Per process it keeps the last CPU time seen (so a child that exits
 keeps what it used up to its last sample) and the memory; the tree's memory is the sum over the processes alive at a sample.
 
-Linux: CPU from each thread's schedstat, own memory = RssAnon, rss = VmRSS; the peak is the largest sum seen.
+Linux: CPU from each thread's schedstat (exited threads at their last sample), own memory = RssAnon, rss = VmRSS; the peak is the largest sum seen.
 macOS: CPU, instructions and cycles from proc_pid_rusage; own = physical footprint; the peak is the sum of each process's
 lifetime maximum footprint (an upper bound when processes peak at different times)."""
 
@@ -62,11 +62,12 @@ def sample(pid):
                 r["rss_mb"] = int(line.split()[1]) / 1024
         if "own_mb" not in r:
             return None  # a zombie
-        ns = 0
+        # Per thread: a thread that exits leaves the listing, so the sampler keeps each thread's last reading.
+        threads = {}
         for tid in os.listdir(f"/proc/{pid}/task"):
             with contextlib.suppress(OSError):
-                ns += int(open(f"/proc/{pid}/task/{tid}/schedstat").read().split()[0])
-        r["cpu_ms"] = ns / 1e6
+                threads[tid] = int(open(f"/proc/{pid}/task/{tid}/schedstat").read().split()[0]) / 1e6
+        r["threads"] = threads
     except OSError:
         return None
     return r
@@ -93,6 +94,9 @@ class TreeSampler:
                 prev = self.last.get(p)
                 if prev and "maxfp_mb" in prev:
                     s["maxfp_mb"] = max(s["maxfp_mb"], prev["maxfp_mb"])
+                if "threads" in s:
+                    s["threads"] = {**(prev or {}).get("threads", {}), **s["threads"]}
+                    s["cpu_ms"] = sum(s["threads"].values())
                 self.last[p] = s
             if MACOS:
                 self.peak_own_mb = sum(s["maxfp_mb"] for s in self.last.values())
