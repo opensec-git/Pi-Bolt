@@ -1,0 +1,76 @@
+name: bench-forks
+
+# Pi-Bolt 1.0.6 as released against stock Pi 1.4.0 and Pi's ports and forks that aim at speed (pi_agent_rust, PiG, oh-my-pi,
+# rpi) and OpenCode, on GitHub's Linux x86-64 runner, pinned to one CPU. bench/forks-fetch.sh fetches and checks every
+# program (two copies each: the second is the noise floor); bench/forkbench.py runs them interleaved with an adapter per
+# program (bench/forks-profiles.json). One job per group of scenarios, each on its own runner. Scratch branch: delete after.
+on:
+  push:
+    branches: ["bench/forks-*"]
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    name: ${{ matrix.group }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: start
+            args: --scenarios version,headless,ready --rounds 21 --warmup 3
+          - group: session
+            args: --scenarios session --rounds 7 --warmup 1 --entries 4000
+          - group: stream
+            args: --scenarios stream --rounds 5 --warmup 1 --size 60000
+          - group: idle
+            args: --scenarios idle --rounds 3 --warmup 1 --idle 60
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 26.12.1
+      - name: Fetch and check the programs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq minisign xz-utils >/dev/null
+          bash bench/forks-fetch.sh
+      - name: Environment
+        run: |
+          {
+            echo "runner: ubuntu-24.04 ($(uname -srm)), $(nproc) CPUs, pinned to CPU 1"
+            grep -m1 'model name' /proc/cpuinfo; echo "THP: $(cat /sys/kernel/mm/transparent_hugepage/enabled)"
+            echo "python: $(python3 --version), node: $(node --version)"
+            for b in bolt pig pirust omp rpi opencode; do
+              exe=$(find out/$b -maxdepth 2 -type f \( -name pi -o -name pig -o -name omp -o -name rpi -o -name opencode \) | head -1)
+              echo "$b: $exe: $(HOME=$(mktemp -d) "$exe" --version </dev/null 2>&1 | head -1)"
+            done
+            echo "stockpi: $(node out/stockpi/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js --version)"
+          } | tee -a results/environment.txt
+      - name: Bench
+        env:
+          ARGS: ${{ matrix.args }}
+          GROUP: ${{ matrix.group }}
+        run: |
+          B=()
+          for n in bolt pig pirust omp rpi opencode; do
+            for c in "" 2; do
+              exe=$(find "$PWD/out/$n$c" -maxdepth 2 -type f \( -name pi -o -name pig -o -name omp -o -name rpi -o -name opencode \) | head -1)
+              B+=(--build "$n$c@$n=$exe")
+            done
+          done
+          for c in "" 2; do B+=(--build "stockpi$c@stockpi=node $PWD/out/stockpi$c/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"); done
+          python3 bench/forkbench.py --profiles bench/forks-profiles.json --cpus 1 $ARGS "${B[@]}" --out "results/$GROUP.jsonl" 2>"results/$GROUP.log" | tee "results/$GROUP.txt"
+          { echo '```'; cat results/environment.txt "results/$GROUP.txt"; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: forks-${{ matrix.group }}
+          path: results/
+          retention-days: 30

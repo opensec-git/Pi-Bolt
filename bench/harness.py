@@ -371,6 +371,13 @@ class Tty:
             os.write(self.fd, b"\x1b[?62;22c")
         if b"\x1b]11;?" in data:
             os.write(self.fd, b"\x1b]11;rgb:0000/0000/0000\x1b\\")
+        # (Forks bench: the other queries a current terminal answers, so that no program waits out a timeout for them.
+        # XTGETTCAP: "not known", as xterm without direct colour; DECRQM: synchronized output (2026) and the other modes
+        # asked for "recognized, reset", as Ghostty, kitty, WezTerm, iTerm2 and tmux 3.4 answer 2026.)
+        for cap in re.findall(rb"\x1bP\+q([0-9A-Fa-f;]+)\x1b\\", data):
+            os.write(self.fd, b"\x1bP0+r" + cap + b"\x1b\\")
+        for mode in re.findall(rb"\x1b\[\?(\d+)\$p", data):
+            os.write(self.fd, b"\x1b[?" + mode + b";2$y")
         return True
 
     def send(self, data: bytes):

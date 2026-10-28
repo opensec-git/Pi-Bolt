@@ -1,0 +1,73 @@
+{
+ "stockpi": {},
+ "bolt": {},
+ "pig": {},
+ "pirust": {
+  "ready": "Type a message"
+ },
+ "omp": {
+  "files": {
+   "{agent}/config.yml": "setupVersion: 2\nlastChangelogVersion: 9999.0.0\ntheme:\n  dark: dark\nstartup:\n  setupWizard: false\n  checkUpdate: false\n"
+  },
+  "env": {
+   "PI_NO_TITLE": "1"
+  }
+ },
+ "rpi": {
+  "env": {
+   "RPI_CODING_AGENT_DIR": "{agent}",
+   "RPI_OFFLINE": "1"
+  },
+  "session_dir": null,
+  "skip": [
+   "session"
+  ]
+ },
+ "opencode": {
+  "model": [
+   "-m",
+   "fake/fake-model"
+  ],
+  "headless": [
+   "run",
+   "--standalone",
+   "--auto",
+   "@model",
+   "{prompt}"
+  ],
+  "tui": [
+   "--standalone",
+   "--auto"
+  ],
+  "env": {
+   "OPENCODE_DISABLE_AUTOUPDATE": "1"
+  },
+  "files": {
+   ".config/opencode/opencode.json": {
+    "provider": {
+     "fake": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Fake",
+      "options": {
+       "baseURL": "http://127.0.0.1:{port}/v1",
+       "apiKey": "fake"
+      },
+      "models": {
+       "fake-model": {
+        "name": "fake-model",
+        "limit": {
+         "context": 200000,
+         "output": 8192
+        }
+       }
+      }
+     }
+    },
+    "model": "fake/fake-model",
+    "autoupdate": false,
+    "share": "disabled"
+   }
+  },
+  "session_dir": null
+ }
+}
