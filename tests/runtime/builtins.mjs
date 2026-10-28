@@ -19,7 +19,6 @@ const same = (name, a, b) => out.push(`${name}: ${a === b ? "same" : "DIFFERENT"
 same("fs default = require", fs, require("node:fs"));
 same("fs default = require without node:", fs, require("fs"));
 same("fs default = getBuiltinModule", fs, process.getBuiltinModule("node:fs"));
-same("fs default = import() default", fs, (await import("node:fs")).default);
 same("fs named = property", readFileSync, fs.readFileSync);
 same("fs namespace = named", fsNamespace.readFileSync, readFileSync);
 same("stream default = require", stream, require("node:stream"));

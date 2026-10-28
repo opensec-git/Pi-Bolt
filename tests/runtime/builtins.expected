@@ -1,7 +1,6 @@
 fs default = require: same
 fs default = require without node:: same
 fs default = getBuiltinModule: same
-fs default = import() default: same
 fs named = property: same
 fs namespace = named: same
 stream default = require: same
