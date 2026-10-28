@@ -18,8 +18,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - group: session
-            args: --scenarios session --rounds 7 --warmup 1 --entries 4000
+          - group: work
+            args: --scenarios work --rounds 1 --warmup 0
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:

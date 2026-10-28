@@ -11,6 +11,7 @@ Usage: fake_model.py PORT [--pace-ms N] [--log-sizes FILE]
 """
 
 import json
+import os
 import socket
 import sys
 import time
@@ -57,6 +58,10 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if os.environ.get("FAKE_MODEL_DUMP"):
+            # (Forks bench: every request as sent, to compare the work programs ask of the model.)
+            with open(os.path.join(os.environ["FAKE_MODEL_DUMP"], f"{time.time_ns()}.json"), "wb") as f:
+                f.write(body)
         if LOG:
             with open(LOG, "a") as f:
                 f.write(f"{len(body)}\n")

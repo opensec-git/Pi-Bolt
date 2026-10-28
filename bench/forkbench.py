@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+import shutil
 import tempfile
 import threading
 import time
@@ -243,11 +244,38 @@ def sc_session(prog, a):
         return r
 
 
+def sc_work(prog, a):
+    """What a `-p` prompt asks of the model: requests, tools offered, system prompt, and whether the four `read` results
+    hold the files' contents (each fixture's longest line)."""
+    dump = Path(tempfile.mkdtemp(prefix="forkbench-dump-"))
+    os.environ["FAKE_MODEL_DUMP"] = str(dump)
+    try:
+        with fake_model() as port, pi_home(port) as home, workdir() as cwd:
+            env, ctx = prog.setup(home, port, cwd)
+            out, r = run_plain([*prog.build.argv, *prog.expand(prog.p["headless"], ctx)], env, cwd, a.cpus)
+            r["ok"] = r["ok"] and DONE.encode() in out
+            firsts = [max((cwd / "fixture" / f).read_text().splitlines(), key=len).strip()
+                      for f in sorted(os.listdir(cwd / "fixture"))]
+    finally:
+        del os.environ["FAKE_MODEL_DUMP"]
+    reqs = [json.loads(p.read_bytes()) for p in sorted(dump.iterdir())]
+    shutil.rmtree(dump, ignore_errors=True)
+    last = reqs[-1] if reqs else {}
+    msgs = last.get("messages", [])
+    system = " ".join(m["content"] if isinstance(m.get("content"), str) else json.dumps(m.get("content"))
+                      for m in msgs if m.get("role") in ("system", "developer"))
+    results = json.dumps([m for m in msgs if m.get("role") == "tool"])
+    r.update(requests=len(reqs), tools=sorted(t.get("function", {}).get("name", "?") for t in last.get("tools", [])),
+             system_chars=len(system), last_request_kb=round(len(json.dumps(last)) / 1024, 1),
+             files_read=sum(1 for f in firsts if json.dumps(f)[1:-1][:40] in results))
+    return r
+
+
 SCENARIOS = {"version": sc_version, "headless": sc_headless, "ready": sc_ready, "stream": sc_stream, "idle": sc_idle,
-             "session": sc_session}
+             "session": sc_session, "work": sc_work}
 KEYS = {"version": ["wall_ms", "cpu_ms", "own_mb", "rss_mb", "instr_m"], "headless": ["wall_ms", "cpu_ms", "own_mb", "rss_mb", "instr_m"],
         "ready": ["tti_ms", "cpu_ms", "own_mb", "rss_mb", "instr_m"], "stream": ["wall_s", "cpu_s", "peak_own_mb", "own_end_mb", "instr_m"],
-        "idle": ["cpu_ms_per_s", "own_mb"], "session": ["tti_ms", "loaded_ms", "own_mb", "rss_mb", "cpu_ms", "shown_kb"]}
+        "idle": ["cpu_ms_per_s", "own_mb"], "work": ["requests", "system_chars", "last_request_kb", "files_read"], "session": ["tti_ms", "loaded_ms", "own_mb", "rss_mb", "cpu_ms", "shown_kb"]}
 
 
 def main():
