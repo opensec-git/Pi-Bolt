@@ -204,7 +204,7 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 				options?.fetch,
 				cacheSessionId,
 			);
-			cache = beginRequestCache("openai-responses", options?.sessionId, options?.onPayload, [
+			cache = beginRequestCache("openai-responses", options, [
 				model.id,
 				model.provider,
 				model.api,

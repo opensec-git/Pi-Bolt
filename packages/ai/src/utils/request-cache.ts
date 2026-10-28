@@ -9,10 +9,11 @@
  * converted to before; request-body.ts sends those objects as the bytes they were sent as before, without comparing.
  *
  * Why a reused value is what converting again would give:
- * - Messages are not changed once they are in a conversation that was sent. Pi's messages are written to the session
- *   file when they are added and only ever replaced by new objects (compaction, branches, edits, an extension's
- *   `context` handler), never changed in place. A unit's messages must be the same objects as before. The one message
- *   that does change in place, a reply while it streams (stop reason "pending"), is never reused.
+ * - Messages are not changed once they are in a conversation that was sent: the caller says so (`immutableMessages`;
+ *   off by default). The coding agent does for its sessions, whose messages are written to the session file when they
+ *   are added and only ever replaced by new objects (compaction, branches, edits, an extension's `context` handler),
+ *   and only while no extension other than Pi's own is loaded. A unit's messages must be the same objects as before.
+ *   The one message that does change in place, a reply while it streams (stop reason "pending"), is never reused.
  * - Everything else the conversion of a unit reads is the same: the run's context (model, compatibility settings, the
  *   options that affect conversion) and the unit's `extra` (what depends on its place in the conversation: an index,
  *   a remapped tool call id). What depends on a message's position among all of them (cache markers on the latest
@@ -26,6 +27,8 @@
  * new objects on every request cost nothing (request-body.ts then reuses their bytes as before). Only what the latest
  * request used is kept (messages compacted away or on a branch left are dropped).
  */
+
+import type { StreamOptions } from "../types.ts";
 
 /** A unit's conversion: the values it produced and what is needed to hand them out again. */
 interface Entry {
@@ -246,19 +249,27 @@ const tables = new Map<string, Table>();
 let disabled = false;
 
 /**
- * Starts a request's use of the cache. `converter` names the conversion, `conversation` the session (undefined: no
- * caching), `context` everything besides the messages that the conversion reads; values are shared only between runs
- * with the same converter, conversation and JSON of the context (Maps and Sets as their entries). Undefined, and the
- * caller converts everything, when the request has a payload hook (`onPayload` given: it could change values in
- * place), when the context cannot be serialized, or when the cache is disabled.
+ * Starts a request's use of the cache. `converter` names the conversion, `context` everything besides the messages
+ * that the conversion reads; values are shared only between runs with the same converter, session and JSON of the
+ * context (Maps and Sets as their entries). Undefined, and the caller converts everything, unless the caller said its
+ * messages are never changed in place (`immutableMessages`) and gave a session id; also with a payload hook
+ * (`onPayload`, which could change values in place), when the context cannot be serialized, or when the cache is
+ * disabled.
  */
 export function beginRequestCache(
 	converter: string,
-	conversation: string | undefined,
-	onPayload: unknown,
+	options: Pick<StreamOptions, "sessionId" | "onPayload" | "immutableMessages"> | undefined,
 	context: readonly unknown[],
 ): RequestCacheRun | undefined {
-	if (disabled || conversation === undefined || onPayload !== undefined) return undefined;
+	const conversation = options?.sessionId;
+	if (
+		disabled ||
+		options?.immutableMessages !== true ||
+		conversation === undefined ||
+		options.onPayload !== undefined
+	) {
+		return undefined;
+	}
 	let key: string;
 	try {
 		key = `${converter}\u0000${conversation}\u0000${JSON.stringify(context, (_key, value: unknown) =>

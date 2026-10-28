@@ -94,12 +94,7 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 				throw new Error(`No API key for provider: ${model.provider}`);
 			}
 			const client = createClient(model, apiKey, options?.headers, options?.identity);
-			cache = beginRequestCache("google-generative-ai", options?.sessionId, options?.onPayload, [
-				model.id,
-				model.provider,
-				model.api,
-				model.input,
-			]);
+			cache = beginRequestCache("google-generative-ai", options, [model.id, model.provider, model.api, model.input]);
 			let params = buildParams(model, normalizedContext, options, cache);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {

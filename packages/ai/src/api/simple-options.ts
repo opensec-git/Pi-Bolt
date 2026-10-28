@@ -69,6 +69,7 @@ export function buildBaseOptions(
 		transport: options?.transport,
 		cacheRetention: options?.cacheRetention,
 		sessionId: options?.sessionId,
+		immutableMessages: options?.immutableMessages,
 		headers: options?.headers,
 		identity: options?.identity,
 		onPayload: options?.onPayload,

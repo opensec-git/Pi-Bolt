@@ -256,6 +256,13 @@ export interface StreamOptions extends ProviderRequestOptions<Model<Api>> {
 	 */
 	sessionId?: string;
 	/**
+	 * The caller never changes a message object in place once a request with it was sent: it makes a new object
+	 * instead. With `sessionId` set and no `onPayload`, providers then reuse what an unchanged message converted to
+	 * in the session's previous request (request-cache.ts). Off by default: a message changed in place would be sent
+	 * as it was converted before.
+	 */
+	immutableMessages?: boolean;
+	/**
 	 * WebSocket connect timeout in milliseconds for providers that support
 	 * WebSocket transports. This covers the connection/open handshake only;
 	 * stream idleness after connection uses timeoutMs.

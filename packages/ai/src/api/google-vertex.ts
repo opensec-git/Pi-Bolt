@@ -110,12 +110,7 @@ export const stream: StreamFunction<"google-vertex", GoogleVertexOptions> = (
 						options?.env,
 						options?.identity,
 					);
-			cache = beginRequestCache("google-vertex", options?.sessionId, options?.onPayload, [
-				model.id,
-				model.provider,
-				model.api,
-				model.input,
-			]);
+			cache = beginRequestCache("google-vertex", options, [model.id, model.provider, model.api, model.input]);
 			let params = buildParams(model, normalizedContext, options, cache);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {

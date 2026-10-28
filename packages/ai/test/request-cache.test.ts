@@ -47,7 +47,7 @@ const TEXTS = [
 	"",
 	"   ",
 	"plain text",
-	"unicode é ü 漢字 → 😀",
+	"unicode é ü 漢字 → \u{1F600}",
 	"lone surrogate \ud800 here",
 	'quotes " and \\ backslashes \n newlines',
 	"x".repeat(1500),
@@ -126,6 +126,8 @@ const common = (o: SendOptions) => ({
 	apiKey: "k",
 	maxRetries: 0,
 	sessionId: o.sessionId,
+	// The conversation's messages are never changed in place (only replaced by edited copies): the cache may be used.
+	immutableMessages: true,
 	fetch: o.fetch,
 	onPayload: o.onPayload,
 	cacheRetention: o.cacheRetention,
@@ -704,5 +706,50 @@ describe("request cache: a function response merged into an earlier content", ()
 			const { expected, actual } = await sendBoth(adapter, m, context, options, undefined);
 			expect(actual, `request ${request}`).toEqual(expected);
 		}
+	});
+});
+
+describe("request cache: off unless the caller says its messages are never changed in place", () => {
+	it("sends a message edited in place as edited (openai-completions, no immutableMessages)", async () => {
+		const m = ADAPTERS[0].models[0] as Model<"openai-completions">;
+		const question: Message = { role: "user", content: "original", timestamp: 0 };
+		const send = async (immutableMessages: boolean | undefined): Promise<string> => {
+			const bodies: string[] = [];
+			const context = normalizeContext({ systemPrompt: "You are a test.", messages: [question] });
+			await streamCompletions(m, context, {
+				apiKey: "k",
+				maxRetries: 0,
+				sessionId: `edited-${immutableMessages}`,
+				immutableMessages,
+				fetch: recordingFetch(bodies),
+			}).result();
+			return bodies[0];
+		};
+		// Enough requests for the cache to keep and reuse the message's conversion, had it been on.
+		for (let request = 0; request < 3; request++) expect(await send(undefined)).toContain('"content":"original"');
+		const before = requestCacheStats().units;
+		(question as { content: string }).content = "edited";
+		const body = await send(undefined);
+		expect(body).toContain('"content":"edited"');
+		expect(body).not.toContain("original");
+		expect(requestCacheStats().units).toBe(before);
+	});
+
+	it("reuses conversions only for a caller that opts in", async () => {
+		const m = ADAPTERS[0].models[0] as Model<"openai-completions">;
+		const question: Message = { role: "user", content: "kept", timestamp: 0 };
+		const before = requestCacheStats().units;
+		for (let request = 0; request < 3; request++) {
+			const bodies: string[] = [];
+			await streamCompletions(m, normalizeContext({ messages: [question] }), {
+				apiKey: "k",
+				maxRetries: 0,
+				sessionId: "opted-in",
+				immutableMessages: true,
+				fetch: recordingFetch(bodies),
+			}).result();
+			expect(bodies[0]).toContain('"content":"kept"');
+		}
+		expect(requestCacheStats().units).toBeGreaterThan(before);
 	});
 });

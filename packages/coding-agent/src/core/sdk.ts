@@ -24,6 +24,7 @@ import {
 	isToolModifier,
 	SettingsManager,
 } from "./settings-manager.ts";
+import { BUILTIN_PATH_PREFIX } from "./source-info.ts";
 import { time } from "./timings.ts";
 import {
 	createBashTool,
@@ -426,6 +427,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 						extensionRunnerRef.current?.hasHandlers("before_provider_request")
 							? transformProviderPayload
 							: undefined,
+					enumerable: true,
+					configurable: true,
+				});
+				// The session's messages are never changed in place: entries are only appended, and compaction,
+				// branches, edits and `context` handlers make new objects. An extension that is not Pi's own could still
+				// change a message it was handed (events, ctx.sessionManager), so the providers may reuse conversions
+				// only while none is loaded. Read when the request is built, like the hook.
+				Object.defineProperty(requestOptions, "immutableMessages", {
+					get: () =>
+						extensionRunnerRef.current
+							?.getExtensionPaths()
+							.every((path) => path.startsWith(BUILTIN_PATH_PREFIX)) ?? true,
 					enumerable: true,
 					configurable: true,
 				});

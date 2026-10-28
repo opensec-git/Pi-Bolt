@@ -383,7 +383,7 @@ export const stream: StreamFunction<"openai-completions", OpenAICompletionsOptio
 				cacheSessionId,
 				compat,
 			);
-			cache = beginRequestCache("openai-completions", options?.sessionId, options?.onPayload, [
+			cache = beginRequestCache("openai-completions", options, [
 				model.id,
 				model.provider,
 				model.api,

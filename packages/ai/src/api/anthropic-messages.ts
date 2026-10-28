@@ -508,7 +508,7 @@ export const stream: StreamFunction<"anthropic-messages", AnthropicOptions> = (
 				maxRetries: 0,
 			};
 			const compat = getAnthropicCompat(model);
-			cache = beginRequestCache("anthropic-messages", options?.sessionId, options?.onPayload, [
+			cache = beginRequestCache("anthropic-messages", options, [
 				model.id,
 				model.provider,
 				model.api,
