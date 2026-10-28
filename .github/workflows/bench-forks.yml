@@ -18,14 +18,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - group: ready
-            args: --scenarios ready --rounds 21 --warmup 3
-          - group: session
-            args: --scenarios session --rounds 7 --warmup 1 --entries 4000
-          - group: stream
-            args: --scenarios stream --rounds 5 --warmup 1 --size 60000
-          - group: idle
-            args: --scenarios idle --rounds 3 --warmup 1 --idle 60
+          - group: interactive
+            args: --scenarios interactive --rounds 7 --warmup 1
+          - group: typing
+            args: --scenarios typing --rounds 5 --warmup 1
+          - group: longsession
+            args: --scenarios longsession --rounds 2 --warmup 0 --prompts 40
+          - group: resumed
+            args: --scenarios resumed --rounds 5 --warmup 1
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:

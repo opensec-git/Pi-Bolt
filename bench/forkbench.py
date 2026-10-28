@@ -21,6 +21,7 @@ import contextlib
 import json
 import os
 import re
+import statistics
 import subprocess
 import sys
 import shutil
@@ -31,7 +32,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import harness
-from harness import (DONE, MACOS, PROMPT, Tty, done, fake_model, maxrss_mb, median, parse_builds, peak_footprint_mb, pi_env,
+from harness import (ANSI, DONE, MACOS, PROMPT, Tty, done, fake_model, maxrss_mb, median, parse_builds, peak_footprint_mb, pi_env,
                      pi_home, pinned, workdir)
 from long_transcript import write_session
 from proctree import TreeSampler, kill_tree
@@ -271,11 +272,187 @@ def sc_work(prog, a):
     return r
 
 
+# Keys typed while an answer streams: each one a letter not typed before and in no answer (Latin Extended, U+0100 on), so that its echo is
+# that character showing up, whether a program redraws the whole editor line or only the cell that changed.
+KEYS_TYPED = [chr(c) for c in range(0x100, 0x250) if chr(c).isalpha()]
+
+
+def echo_while(tty, start, needle, typed_every, deadline):
+    """Pumps until `needle` is on screen after `start`, typing a key every `typed_every` seconds; returns the times (ms) until
+    each key showed, or None if `needle` never came."""
+    latencies, next_key, scan = [], time.perf_counter() + 1.0, start
+    while time.perf_counter() < deadline:
+        tty.pump(0.005)
+        if needle in ANSI.sub(b"", tty.buf[scan:]):
+            return latencies
+        scan = max(start, len(tty.buf) - 8192)
+        if time.perf_counter() >= next_key and len(latencies) < len(KEYS_TYPED):
+            key = KEYS_TYPED[len(latencies)].encode()
+            sent, mark = time.perf_counter(), len(tty.buf)
+            tty.send(key)
+            while time.perf_counter() < sent + 5 and key not in tty.buf[mark:]:
+                tty.pump(0.002)
+            latencies.append(1000 * (time.perf_counter() - sent))
+            next_key = sent + typed_every
+    return None
+
+
+def pct(values, q):
+    values = sorted(values)
+    return values[min(len(values) - 1, int(len(values) * q))] if values else None
+
+
+def sc_interactive(prog, a):
+    """Day to day: the TUI, 5 prompts (each 4 reads and an answer) one after another."""
+    with fake_model() as port, pi_home(port) as home, workdir() as cwd:
+        env, ctx = prog.setup(home, port, cwd)
+        tty, tree, ok, tti = tui(prog, env, ctx, cwd, a.cpus, prog.p["tui"])
+        r = {"ok": False, "tti_ms": tti}
+        if ok:
+            tty.settle(0.05, time.perf_counter() + 10)
+            turns, t_all = 0.0, time.perf_counter()
+            for n in range(1, 6):
+                start, t = len(tty.buf), time.perf_counter()
+                tty.send(PROMPT.encode() + prog.p["submit"].encode())
+                if not tty.wait_for(done(n), start, time.perf_counter() + 300):
+                    break
+                turns += (time.perf_counter() - t) * 1e3
+                tty.settle(0.03, time.perf_counter() + 10)
+            else:
+                s1 = tree.snapshot()
+                r.update(ok=True, turns_ms=turns, cpu_ms=s1["cpu_ms"], peak_own_mb=s1["peak_own_mb"], own_mb=s1["own_mb"])
+                if MACOS:
+                    r["instr_m"] = s1["instr_m"]
+        if not r["ok"]:
+            r["screen"] = tty.screen_text()[-400:]
+        kill(tty, tree)
+        return r
+
+
+def sc_typing(prog, a):
+    """Day to day: a 20,000-character answer streams while the user types a key every 0.25 s: how long each takes to show."""
+    with fake_model(pace_ms=20, script="fake_model_stress.py") as port, pi_home(port) as home, workdir() as cwd:
+        env, ctx = prog.setup(home, port, cwd)
+        tty, tree, ok, tti = tui(prog, env, ctx, cwd, a.cpus, prog.p["tui"], cols=160, rows=48)
+        r = {"ok": False}
+        if ok:
+            tty.settle(0.5, time.perf_counter() + 5)
+            start, s0 = len(tty.buf), tree.snapshot()
+            tty.send(f"SCENARIO md:20000 CWD {cwd}".encode() + prog.p["submit"].encode())
+            lat = echo_while(tty, start, b"Done: md, answer 1.", 0.25, time.perf_counter() + 600)
+            if lat:
+                s1 = tree.snapshot()
+                r.update(ok=True, echo_ms=statistics.median(lat), echo_p95_ms=pct(lat, 0.95), echo_max_ms=max(lat),
+                         keys=len(lat), cpu_s=(s1["cpu_ms"] - s0["cpu_ms"]) / 1e3)
+                if MACOS:
+                    r["instr_m"] = s1["instr_m"] - s0["instr_m"]
+        if not r["ok"]:
+            r["screen"] = tty.screen_text()[-400:]
+        kill(tty, tree)
+        return r
+
+
+def sc_longsession(prog, a):
+    """Heavy use: one process, --prompts prompts (each 4 reads and an answer; the conversation grows by the four files each
+    time): CPU and time per prompt over the last 5, memory at the end, and the size of the last request (a program that
+    compacts sends less)."""
+    sizes = tempfile.NamedTemporaryFile(prefix="forkbench-sizes-", delete=False).name
+    with fake_model(log_sizes=sizes) as port, pi_home(port) as home, workdir() as cwd:
+        env, ctx = prog.setup(home, port, cwd)
+        tty, tree, ok, tti = tui(prog, env, ctx, cwd, a.cpus, prog.p["tui"])
+        r = {"ok": False}
+        if ok:
+            tty.settle(0.1, time.perf_counter() + 10)
+            marks = []
+            for n in range(1, a.prompts + 1):
+                start, t = len(tty.buf), time.perf_counter()
+                tty.send(PROMPT.encode() + prog.p["submit"].encode())
+                if not tty.wait_for(done(n), start, time.perf_counter() + 600):
+                    r["stopped_at"] = n
+                    break
+                tty.settle(0.03, time.perf_counter() + 10)
+                marks.append((time.perf_counter() - t, tree.snapshot()))
+            else:
+                last = marks[-6:]
+                s1 = last[-1][1]
+                r.update(ok=True, ms_per_prompt=statistics.median(m[0] for m in last[1:]) * 1e3,
+                         cpu_ms_per_prompt=(s1["cpu_ms"] - last[0][1]["cpu_ms"]) / 5, own_mb=s1["own_mb"],
+                         peak_own_mb=s1["peak_own_mb"], cpu_s_total=s1["cpu_ms"] / 1e3)
+                if MACOS:
+                    r["instr_m_per_prompt"] = (s1["instr_m"] - last[0][1]["instr_m"]) / 5
+        with contextlib.suppress(OSError, ValueError):
+            r["last_request_kb"] = round(int(open(sizes).read().split()[-1]) / 1024)
+        if not r["ok"]:
+            r["screen"] = tty.screen_text()[-400:]
+        kill(tty, tree)
+    os.unlink(sizes)
+    return r
+
+
+def sc_resumed(prog, a):
+    """Heavy use: continue a 2,292-entry Pi session (a day of work) and stream a 6,000-character answer while typing:
+    CPU of the answer and how long keys take to show."""
+    if not prog.p.get("session_dir"):
+        return None
+    with fake_model(pace_ms=20, script="fake_model_stress.py") as port, pi_home(port) as home, workdir() as cwd:
+        env, ctx = prog.setup(home, port, cwd)
+        big_context(home)
+        real = str(Path(cwd).resolve())
+        for folder in {str(cwd), real}:
+            safe = "--" + re.sub(r"[/\\:]", "-", re.sub(r"^[/\\]", "", folder)) + "--"
+            write_session(Path(prog.p["session_dir"].format(**ctx, safe=safe)) / "2026-01-01T00-00-00-000Z_t.jsonl", real, 2292)
+        tty, tree, ok, tti = tui(prog, env, ctx, cwd, a.cpus, prog.p["continue"], cols=160, rows=48)
+        r = {"ok": False}
+        if ok:
+            quiet(tty, tree)
+            start, s0 = len(tty.buf), tree.snapshot()
+            tty.send(f"SCENARIO md:6000 CWD {cwd}".encode() + prog.p["submit"].encode())
+            lat = echo_while(tty, start, b"Done: md, answer", 0.25, time.perf_counter() + 600)
+            if lat is not None:
+                s1 = tree.snapshot()
+                r.update(ok=True, cpu_s=(s1["cpu_ms"] - s0["cpu_ms"]) / 1e3, echo_ms=statistics.median(lat) if lat else None,
+                         echo_p95_ms=pct(lat, 0.95), keys=len(lat), own_mb=s1["own_mb"])
+                if MACOS:
+                    r["instr_m"] = s1["instr_m"] - s0["instr_m"]
+        if not r["ok"]:
+            r["screen"] = tty.screen_text()[-400:]
+        kill(tty, tree)
+        return r
+
+
+def big_context(home):
+    """A context window the long history fits in (no compaction), in Pi's models.json and OMP's models.yml."""
+    models = json.loads((home / "models.json").read_text())
+    for provider in models["providers"].values():
+        for model in provider["models"]:
+            model["contextWindow"] = 100_000_000
+    (home / "models.json").write_text(json.dumps(models))
+    (home / "models.yml").write_text(json.dumps(models))
+
+
+def quiet(tty, tree, limit=120):
+    """Until the whole tree used under 3% of a core for half a second (the history read): returns when that began."""
+    c, deadline = tree.snapshot()["cpu_ms"], time.perf_counter() + limit
+    while time.perf_counter() < deadline:
+        quiet_from = time.perf_counter()
+        while time.perf_counter() < quiet_from + 0.5:
+            tty.pump(0.05)
+        c1 = tree.snapshot()["cpu_ms"]
+        if c1 - c < 15:
+            break
+        c = c1
+    return quiet_from
+
+
 SCENARIOS = {"version": sc_version, "headless": sc_headless, "ready": sc_ready, "stream": sc_stream, "idle": sc_idle,
-             "session": sc_session, "work": sc_work}
+             "session": sc_session, "work": sc_work, "interactive": sc_interactive,
+             "typing": sc_typing, "longsession": sc_longsession, "resumed": sc_resumed}
 KEYS = {"version": ["wall_ms", "cpu_ms", "own_mb", "rss_mb", "instr_m"], "headless": ["wall_ms", "cpu_ms", "own_mb", "rss_mb", "instr_m"],
         "ready": ["tti_ms", "cpu_ms", "own_mb", "rss_mb", "instr_m"], "stream": ["wall_s", "cpu_s", "peak_own_mb", "own_end_mb", "instr_m"],
-        "idle": ["cpu_ms_per_s", "own_mb"], "work": ["requests", "system_chars", "last_request_kb", "files_read"], "session": ["tti_ms", "loaded_ms", "own_mb", "rss_mb", "cpu_ms", "shown_kb"]}
+        "idle": ["cpu_ms_per_s", "own_mb"], "work": ["requests", "system_chars", "last_request_kb", "files_read"],
+        "interactive": ["tti_ms", "turns_ms", "cpu_ms", "peak_own_mb", "instr_m"], "typing": ["echo_ms", "echo_p95_ms", "echo_max_ms", "cpu_s", "instr_m"],
+        "longsession": ["ms_per_prompt", "cpu_ms_per_prompt", "own_mb", "peak_own_mb", "last_request_kb", "instr_m_per_prompt"],
+        "resumed": ["cpu_s", "echo_ms", "echo_p95_ms", "own_mb", "instr_m"], "session": ["tti_ms", "loaded_ms", "own_mb", "rss_mb", "cpu_ms", "shown_kb"]}
 
 
 def main():
@@ -289,6 +466,7 @@ def main():
     ap.add_argument("--idle", type=float, default=30)
     ap.add_argument("--entries", type=int, default=4000)
     ap.add_argument("--cpus")
+    ap.add_argument("--prompts", type=int, default=40)
     ap.add_argument("--skip", action="append", default=[], help="scenario:build to leave out (n/a)")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
