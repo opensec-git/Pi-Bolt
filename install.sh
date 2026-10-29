@@ -129,6 +129,7 @@ main() {
 
 	if [ "$LAUNCHER" = 1 ]; then
 		install_release
+		rm -f "$INSTALL/.pi-bolt-installer"
 		return 0
 	fi
 
@@ -145,6 +146,7 @@ main() {
 	esac
 
 	install_release
+	if [ "${SIGNED:-}" = 1 ]; then printf 'signed\n' >"$INSTALL/.pi-bolt-installer"; else rm -f "$INSTALL/.pi-bolt-installer"; fi
 	# The channel this installation's updates take (Pi-Bolt reads <install>/channel; stable, the default, is no file).
 	case "${PIBOLT_CHANNEL:-}" in
 	beta) printf 'beta\n' >"$INSTALL/channel" ;;
@@ -851,7 +853,7 @@ uninstall() {
 		[ -d "$dir" ] && rm -rf "$dir"
 	done
 	# (And what `pi-bolt compile` keeps or leaves here: compile.log from a failed build, and the work folder of one killed.)
-	rm -rf "$INSTALL/cache" "$INSTALL/compile.json" "$INSTALL/compile.log" "$INSTALL/channel" "$INSTALL"/.compile-*
+	rm -rf "$INSTALL/cache" "$INSTALL/compile.json" "$INSTALL/compile.log" "$INSTALL/channel" "$INSTALL/.pi-bolt-installer" "$INSTALL"/.compile-*
 	target=$(readlink "$BIN_DIR/pi-bolt" 2>/dev/null || true)
 	case "$target" in
 	"$INSTALL"/*) rm -f "$BIN_DIR/pi-bolt" ;;

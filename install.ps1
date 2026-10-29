@@ -564,6 +564,7 @@ function Install-PiBoltRelease($state) {
 			}
 		}
 		Install-PiBoltFiles (Join-Path $unpacked $name) $state.Dir
+		$state.Signed = $signed
 		Clear-PiBoltProgress
 		$size = (Get-Item -LiteralPath $file).Length
 		Write-Host ("  $green" + 'ok' + "$reset install complete $dim($($state.Platform)-$($state.Variant), $(Format-MB $size) MB from $from$(if ($signed) { ', signature verified' }))$reset")
@@ -901,6 +902,7 @@ function Install-PiBolt {
 
 	if ($launcher) {
 		Install-PiBoltRelease $state
+		Remove-Item -LiteralPath (Join-Path $install '.pi-bolt-installer') -Force -ErrorAction SilentlyContinue
 		return
 	}
 	$action = Select-PiBoltAction $state
@@ -911,7 +913,7 @@ function Install-PiBolt {
 			Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
 			if (Test-Path -LiteralPath $dir.FullName) { Write-Host "  ${dim}$($dir.FullName) is in use (is Pi-Bolt running?): close it, then remove the folder$reset" }
 		}
-		foreach ($item in 'cache', 'compile.json', 'channel') {
+		foreach ($item in 'cache', 'compile.json', 'channel', '.pi-bolt-installer') {
 			Remove-Item -LiteralPath (Join-Path $install $item) -Recurse -Force -ErrorAction SilentlyContinue
 		}
 		if ((Test-Path -LiteralPath $install) -and -not (Get-ChildItem -LiteralPath $install -Force)) { Remove-Item -LiteralPath $install -Force }
@@ -919,6 +921,9 @@ function Install-PiBolt {
 		return
 	}
 	Install-PiBoltRelease $state
+	$marker = Join-Path $install '.pi-bolt-installer'
+	if ($state.Signed) { Set-Content -LiteralPath $marker -Value 'signed' -Encoding ascii }
+	else { Remove-Item -LiteralPath $marker -Force -ErrorAction SilentlyContinue }
 	# The channel this installation's updates take (Pi-Bolt reads <install>\channel; stable, the default, is no file).
 	if ($channel -eq 'beta') { Set-Content -LiteralPath (Join-Path $install 'channel') -Value 'beta' -Encoding ascii }
 	elseif ($channel -eq 'stable') { Remove-Item -LiteralPath (Join-Path $install 'channel') -Force -ErrorAction SilentlyContinue }

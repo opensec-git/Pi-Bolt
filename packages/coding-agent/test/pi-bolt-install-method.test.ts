@@ -1,10 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
 	piBoltInstallDir,
+	installedByPiBoltInstaller,
+	PIBOLT_INSTALLER_MARKER,
 	piBoltInstallerProcess,
 	piBoltInstallMethod,
 	piBoltUpdateEnvironment,
@@ -43,6 +45,22 @@ describe("piBoltInstallMethod", () => {
 		expect(piBoltInstallMethod()).toBe("installer");
 		setExecPath("C:\\Users\\me\\.pi-bolt\\pi-bolt-win32-x64\\pi-bolt.exe");
 		expect(piBoltInstallMethod()).toBe("installer");
+	});
+});
+
+describe("installer ownership marker", () => {
+	it("does not treat an extracted native archive as installer-managed", () => {
+		const installDir = mkdtempSync(join(tmpdir(), "pi-bolt-manual-"));
+		try {
+			const variant = join(installDir, "pi-bolt-linux-x64");
+			mkdirSync(variant);
+			writeFileSync(join(variant, "pi"), "archive executable");
+			expect(installedByPiBoltInstaller(installDir)).toBe(false);
+			writeFileSync(join(installDir, PIBOLT_INSTALLER_MARKER), "signed\n");
+			expect(installedByPiBoltInstaller(installDir)).toBe(true);
+		} finally {
+			rmSync(installDir, { recursive: true, force: true });
+		}
 	});
 });
 

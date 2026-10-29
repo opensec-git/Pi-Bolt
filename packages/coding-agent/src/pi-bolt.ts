@@ -6,9 +6,9 @@
  * was built for, scripts/runtime-stamp.sh, when known). In every other build it is undefined and nothing here changes what Pi
  * does.
  */
-import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
 declare const PIBOLT_BUILD: string | undefined;
 
@@ -287,27 +287,16 @@ export function piBoltInstallDir(): string | undefined {
 }
 
 /** Whether the installer owns this installation directory rather than an archive unpacked by hand. */
+export const PIBOLT_INSTALLER_MARKER = ".pi-bolt-installer";
+
+/** Whether a successful signed installer run claimed this installation directory. */
 export function installedByPiBoltInstaller(installDir: string | undefined = piBoltInstallDir()): boolean {
 	if (!installDir) return false;
-	const folder = dirname(realPathOf(process.execPath));
-	const defaults = [join(homedir(), ".pi-bolt"), process.env.PIBOLT_INSTALL].filter((dir): dir is string => !!dir);
-	if (defaults.some((dir) => realPathOf(dir) === realPathOf(installDir))) return true;
-	const names = process.platform === "win32" ? ["pi-bolt.exe", "pi-bolt.cmd", "pi-bolt.ps1", "pi-bolt"] : ["pi-bolt"];
-	return (process.env.PATH ?? process.env.Path ?? "").split(delimiter).some((dir) =>
-		dir !== "" && names.some((name) => {
-			const path = join(dir, name);
-			try {
-				if (!statSync(path).isFile()) return false;
-			} catch {
-				return false;
-			}
-			const shimTarget = process.platform === "win32" && !/\.exe$/i.test(path)
-				? join(dirname(path), "node_modules", "pi-bolt", "bin", "pi-bolt.exe")
-				: undefined;
-			const real = shimTarget && existsSync(shimTarget) ? realPathOf(shimTarget) : realPathOf(path);
-			return dirname(real) === folder;
-		}),
-	);
+	try {
+		return readFileSync(join(installDir, PIBOLT_INSTALLER_MARKER), "utf8").trim() === "signed";
+	} catch {
+		return false;
+	}
 }
 
 /**
