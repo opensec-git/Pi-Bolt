@@ -1,4 +1,4 @@
-import { PIBOLT, piBoltInstallDir, piBoltInstallMethod } from "./pi-bolt.ts";
+import { PIBOLT, installedByPiBoltInstaller, piBoltInstallDir, piBoltInstallMethod } from "./pi-bolt.ts";
 import { spawnProcess } from "./utils/child-process.ts";
 
 export interface PiBoltAutoUpdateResult {
@@ -8,9 +8,9 @@ export interface PiBoltAutoUpdateResult {
 
 /** Whether startup should apply a verified release automatically for this installation. */
 export function shouldAutoUpdatePiBolt(): boolean {
-	if (!PIBOLT || !piBoltInstallDir() || piBoltInstallMethod() !== "installer") return false;
+	if (!PIBOLT || piBoltInstallMethod() !== "installer" || !installedByPiBoltInstaller()) return false;
 	const setting = process.env.PIBOLT_AUTO_UPDATE?.trim().toLowerCase();
-	return setting !== "0" && setting !== "false" && setting !== "no" && setting !== "off";
+	return setting !== "0";
 }
 
 /** Runs the native executable's existing signed self-update flow, without requiring Node.js or a package manager. */

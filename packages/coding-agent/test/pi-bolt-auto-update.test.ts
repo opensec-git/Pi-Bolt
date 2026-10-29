@@ -5,13 +5,13 @@ import type * as PiBolt from "../src/pi-bolt.ts";
 import { autoUpdatePiBolt, shouldAutoUpdatePiBolt } from "../src/pi-bolt-auto-update.ts";
 import type * as ChildProcessUtils from "../src/utils/child-process.ts";
 
-const mocks = vi.hoisted(() => ({ spawnProcess: vi.fn(), installDir: vi.fn(), installMethod: vi.fn() }));
+const mocks = vi.hoisted(() => ({ spawnProcess: vi.fn(), installMethod: vi.fn(), installed: vi.fn() }));
 
 vi.mock("../src/pi-bolt.ts", async (importOriginal) => ({
 	...(await importOriginal<typeof PiBolt>()),
 	PIBOLT: { version: "1.0.2", variant: "arm64", jit: false },
-	piBoltInstallDir: mocks.installDir,
 	piBoltInstallMethod: mocks.installMethod,
+	installedByPiBoltInstaller: mocks.installed,
 }));
 
 vi.mock("../src/utils/child-process.ts", async (importOriginal) => ({
@@ -27,8 +27,8 @@ function fakeChild(): EventEmitter & { stdout: PassThrough; stderr: PassThrough 
 }
 
 beforeEach(() => {
-	mocks.installDir.mockReturnValue("/tmp/.pi-bolt");
 	mocks.installMethod.mockReturnValue("installer");
+	mocks.installed.mockReturnValue(true);
 	mocks.spawnProcess.mockReset();
 	vi.stubEnv("PIBOLT_AUTO_UPDATE", "");
 });
@@ -43,13 +43,13 @@ describe("Pi-Bolt automatic updates", () => {
 		expect(shouldAutoUpdatePiBolt()).toBe(true);
 	});
 
-	it.each(["0", "false", "no", "off"])("can be disabled with PIBOLT_AUTO_UPDATE=%s", (value) => {
-		vi.stubEnv("PIBOLT_AUTO_UPDATE", value);
+	it("can be disabled with PIBOLT_AUTO_UPDATE=0", () => {
+		vi.stubEnv("PIBOLT_AUTO_UPDATE", "0");
 		expect(shouldAutoUpdatePiBolt()).toBe(false);
 	});
 
 	it("does not self-update an executable outside an installer-managed directory", () => {
-		mocks.installDir.mockReturnValue(undefined);
+		mocks.installed.mockReturnValue(false);
 		expect(shouldAutoUpdatePiBolt()).toBe(false);
 	});
 
