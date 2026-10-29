@@ -102,10 +102,18 @@ Then, in your project:
 
 ```bash
 pi-bolt                         # start
-pi-bolt update                  # install the latest release
+pi-bolt update                  # install the latest release now
 pi-bolt update --rollback       # put back the build it replaced
 pi-bolt update --channel beta   # take pre-releases too
 ```
+
+The native installer is the recommended one-command install: it downloads a standalone executable and needs no Node.js or Bun,
+regardless of which Node.js version is installed (or whether Node.js is installed at all). For installations made with this
+installer, Pi-Bolt checks the selected release channel (stable by default) at startup and automatically installs signed
+updates in the background. The running session keeps using its current version; the update takes effect the next time Pi-Bolt starts. Set
+`PIBOLT_AUTO_UPDATE=0` to turn automatic updates off. Homebrew, Scoop, mise and npm installs remain managed by their respective
+package managers. Existing native installations need one manual installer run to enable automatic updates; run the installer
+command above once and its signed install will record installer ownership.
 
 New to Pi? Run `/login` to connect a provider. Your Pi configuration in `~/.pi/agent` is used as is. Pi-Bolt installs next to Pi as `pi-bolt`, so both can stay installed;
 running the installer again updates, reinstalls or uninstalls it.

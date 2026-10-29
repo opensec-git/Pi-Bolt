@@ -70,7 +70,7 @@ install_again() {
 }
 
 out=$(install good)
-if installed && grep -q "signature verified" <<<"$out"; then pass "the release installs, signature verified"; else
+if installed && grep -q "signature verified" <<<"$out" && [ "$(cat "$WORK/home/inst/.pi-bolt-installer" 2>/dev/null || true)" = signed ]; then pass "the release installs, signature verified, and is installer-managed"; else
 	fail "the release installs, signature verified"; printf '%s\n' "$out"; fi
 
 out=$(install nosig)
@@ -97,7 +97,7 @@ for value in 1 "$(printf '%064d' 0)"; do
 		fail "a release from before signing, PIBOLT_UNVERIFIED=${value:0:8}...: not installed"; printf '%s\n' "$out"; fi
 done
 out=$(install unsigned PIBOLT_VERSION=bolt-v0.5.99 PIBOLT_UNVERIFIED="$sums_sha")
-if installed && grep -q "WARNING:" <<<"$out"; then pass "a release from before signing, PIBOLT_UNVERIFIED=<its SHA-256>: installed, with a warning"; else
+if installed && grep -q "WARNING:" <<<"$out" && [ ! -e "$WORK/home/inst/.pi-bolt-installer" ]; then pass "an unsigned release installs without installer ownership"; else
 	fail "a release from before signing, PIBOLT_UNVERIFIED=<its SHA-256>: installed, with a warning"; printf '%s\n' "$out"; fi
 
 # (GitHub out of reach through a proxy that is not there; the mirror is on this machine, which the proxy is not used for.)
@@ -123,7 +123,7 @@ if [ ! -e "$inst/$NAME.previous" ]; then pass "a first install keeps no previous
 printf 'an older build\n' >>"$inst/$NAME/pi-bolt.txt"
 out=$(install_again good)
 if installed && grep -q "an older build" "$inst/$NAME.previous/pi-bolt.txt" 2>/dev/null &&
-	! grep -q "an older build" "$inst/$NAME/pi-bolt.txt"; then pass "an update keeps the build it replaces as .previous"; else
+	! grep -q "an older build" "$inst/$NAME/pi-bolt.txt" && [ "$(cat "$inst/.pi-bolt-installer" 2>/dev/null || true)" = signed ]; then pass "a signed update keeps installer ownership"; else
 	fail "an update keeps the build it replaces as .previous"; printf '%s\n' "$out"; fi
 out=$(install_again good)
 if grep -q "an older build" "$inst/$NAME.previous/pi-bolt.txt" 2>/dev/null; then
@@ -139,4 +139,7 @@ if [ ! -e "$inst/channel" ]; then pass "PIBOLT_CHANNEL=stable takes it away"; el
 out=$(install_again good PIBOLT_CHANNEL=nightly)
 if grep -q "PIBOLT_CHANNEL must be stable or beta" <<<"$out"; then pass "another channel is refused"; else
 	fail "another channel is refused"; printf '%s\n' "$out"; fi
+out=$(install_again unsigned PIBOLT_VERSION=bolt-v0.5.99 PIBOLT_UNVERIFIED="$sums_sha")
+if installed && [ ! -e "$inst/.pi-bolt-installer" ]; then pass "an unsigned upgrade clears installer ownership"; else
+	fail "an unsigned upgrade clears installer ownership"; printf '%s\n' "$out"; fi
 exit $status

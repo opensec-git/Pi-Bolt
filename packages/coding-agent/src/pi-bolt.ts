@@ -286,6 +286,19 @@ export function piBoltInstallDir(): string | undefined {
 	return /^pi-bolt-(linux|darwin|win32)-/i.test(basename(variantDir)) ? dirname(variantDir) : undefined;
 }
 
+/** Whether the installer owns this installation directory rather than an archive unpacked by hand. */
+export const PIBOLT_INSTALLER_MARKER = ".pi-bolt-installer";
+
+/** Whether a successful signed installer run claimed this installation directory. */
+export function installedByPiBoltInstaller(installDir: string | undefined = piBoltInstallDir()): boolean {
+	if (!installDir) return false;
+	try {
+		return readFileSync(join(installDir, PIBOLT_INSTALLER_MARKER), "utf8").trim() === "signed";
+	} catch {
+		return false;
+	}
+}
+
 /**
  * The installers' variables an update passes on from the user's environment: which releases updates take, where the npm
  * registry is (what comes from it is checked against the signed checksums), how many connections, where `pi-bolt` is linked,

@@ -32,6 +32,7 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../core/tr
 import { isHerdrPiIntegration } from "../extensions/herdr/integration-file.ts";
 import { herdrFromEnvironment } from "../extensions/herdr/transport.ts";
 import {
+	installedByPiBoltInstaller,
 	PIBOLT,
 	PIBOLT_RELEASE_KEY,
 	PIBOLT_RELEASES_URL,
@@ -126,18 +127,8 @@ function selfInfo(): SelfInfo {
 	let method: SelfInfo["method"];
 	if (installMethod !== "installer") method = installMethod;
 	else if (installDir === undefined) method = "not installed";
-	else method = installedByInstaller(installDir, folder) ? "installer" : "manual";
+	else method = installedByPiBoltInstaller(installDir) ? "installer" : "manual";
 	return { executable, command: launcher ?? executable, folder, method, installDir };
-}
-
-/**
- * Whether the installer put this installation where it is: its own folder (~/.pi-bolt, or PIBOLT_INSTALL), or a `pi-bolt`
- * on PATH that leads to it. Anything else is an archive unpacked by hand.
- */
-function installedByInstaller(installDir: string, folder: string): boolean {
-	const defaults = [join(homedir(), ".pi-bolt"), process.env.PIBOLT_INSTALL].filter((dir): dir is string => !!dir);
-	if (defaults.some((dir) => realpathOr(dir) === realpathOr(installDir))) return true;
-	return piBoltOnPath().some((entry) => dirname(entry.real) === folder);
 }
 
 function realpathOr(path: string): string {

@@ -78,7 +78,7 @@ function Test-Installed { Test-Path -LiteralPath $exe }
 
 try {
 	$out = Invoke-Installer good
-	if ((Test-Installed) -and $out -match 'signature verified') { Write-Pass 'the release installs, signature verified' }
+	if ((Test-Installed) -and $out -match 'signature verified' -and (Get-Content -LiteralPath (Join-Path $inst '.pi-bolt-installer') -Raw).Trim() -eq 'signed') { Write-Pass 'the release installs, signature verified, and is installer-managed' }
 	else { Write-Fail 'the release installs, signature verified' $out }
 
 	$out = Invoke-Installer nosig
@@ -91,7 +91,7 @@ try {
 	else { Write-Fail 'no signature, PIBOLT_ALLOW_UNSIGNED=1: not installed' $out }
 	$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $nosig 'SHA256SUMS')).Hash.ToLowerInvariant()
 	$out = Invoke-Installer nosig @{ PIBOLT_ALLOW_UNSIGNED = $hash }
-	if ((Test-Installed) -and $out -match 'WARNING:') { Write-Pass 'no signature, PIBOLT_ALLOW_UNSIGNED=<its SHA-256>: installed, with a warning' }
+	if ((Test-Installed) -and $out -match 'WARNING:' -and -not (Test-Path -LiteralPath (Join-Path $inst '.pi-bolt-installer'))) { Write-Pass 'an unsigned release installs without installer ownership' }
 	else { Write-Fail 'no signature, PIBOLT_ALLOW_UNSIGNED=<its SHA-256>: installed, with a warning' $out }
 	$out = Invoke-Installer tampered @{ PIBOLT_ALLOW_UNSIGNED = $hash }
 	if (-not (Test-Installed) -and $out -match 'signature does not verify') { Write-Pass 'a signature that does not verify stops it, PIBOLT_ALLOW_UNSIGNED or not' }
@@ -109,7 +109,7 @@ try {
 	$out = Invoke-Installer good -Again
 	if ((Test-Installed) -and (Select-String -LiteralPath (Join-Path $previous 'pi-bolt.txt') -Pattern 'an older build' -Quiet -ErrorAction SilentlyContinue) -and
 		-not (Select-String -LiteralPath (Join-Path $inst "$name\pi-bolt.txt") -Pattern 'an older build' -Quiet) -and
-		(Test-Path -LiteralPath (Join-Path $previous 'pi-bolt.exe'))) { Write-Pass 'an update keeps the build it replaces as .previous' }
+		(Test-Path -LiteralPath (Join-Path $previous 'pi-bolt.exe')) -and (Get-Content -LiteralPath (Join-Path $inst '.pi-bolt-installer') -Raw).Trim() -eq 'signed') { Write-Pass 'a signed update keeps installer ownership' }
 	else { Write-Fail 'an update keeps the build it replaces as .previous' $out }
 	$out = Invoke-Installer good -Again
 	if (Select-String -LiteralPath (Join-Path $previous 'pi-bolt.txt') -Pattern 'an older build' -Quiet -ErrorAction SilentlyContinue) {
@@ -124,6 +124,10 @@ try {
 	if (-not (Test-Path -LiteralPath $channel)) { Write-Pass 'PIBOLT_CHANNEL=stable takes it away' } else { Write-Fail 'PIBOLT_CHANNEL=stable takes it away' $out }
 	$out = Invoke-Installer good @{ PIBOLT_CHANNEL = 'nightly' } -Again
 	if ($out -match 'PIBOLT_CHANNEL must be stable or beta') { Write-Pass 'another channel is refused' } else { Write-Fail 'another channel is refused' $out }
+	$out = Invoke-Installer good -Again
+	$out = Invoke-Installer nosig @{ PIBOLT_ALLOW_UNSIGNED = $hash } -Again
+	if ((Test-Installed) -and -not (Test-Path -LiteralPath (Join-Path $inst '.pi-bolt-installer'))) { Write-Pass 'an unsigned upgrade clears installer ownership' }
+	else { Write-Fail 'an unsigned upgrade clears installer ownership' $out }
 } finally {
 	if ($server -and -not $server.HasExited) { Stop-Process -Id $server.Id -Force -ErrorAction SilentlyContinue }
 	Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
