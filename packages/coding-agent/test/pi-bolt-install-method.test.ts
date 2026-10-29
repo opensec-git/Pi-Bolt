@@ -4,9 +4,9 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-	piBoltInstallDir,
 	installedByPiBoltInstaller,
 	PIBOLT_INSTALLER_MARKER,
+	piBoltInstallDir,
 	piBoltInstallerProcess,
 	piBoltInstallMethod,
 	piBoltUpdateEnvironment,

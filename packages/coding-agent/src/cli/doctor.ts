@@ -32,12 +32,12 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../core/tr
 import { isHerdrPiIntegration } from "../extensions/herdr/integration-file.ts";
 import { herdrFromEnvironment } from "../extensions/herdr/transport.ts";
 import {
+	installedByPiBoltInstaller,
 	PIBOLT,
 	PIBOLT_RELEASE_KEY,
 	PIBOLT_RELEASES_URL,
 	type PiBoltPackageManagerId,
 	piBoltInstallDir,
-	installedByPiBoltInstaller,
 	piBoltInstallMethod,
 	piBoltJitSwitchCommand,
 	piBoltPackageManager,

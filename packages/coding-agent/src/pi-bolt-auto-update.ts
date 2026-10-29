@@ -1,4 +1,4 @@
-import { PIBOLT, installedByPiBoltInstaller, piBoltInstallMethod } from "./pi-bolt.ts";
+import { installedByPiBoltInstaller, PIBOLT, piBoltInstallMethod } from "./pi-bolt.ts";
 import { spawnProcess } from "./utils/child-process.ts";
 
 export interface PiBoltAutoUpdateResult {
