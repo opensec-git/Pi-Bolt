@@ -128,6 +128,7 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
 import { addMcpServerConfig, loadMcpConfig } from "../../extensions/mcp/config.ts";
 import { PIBOLT, PIBOLT_RELEASES_URL, piBoltUpdateCommand } from "../../pi-bolt.ts";
+import { autoUpdatePiBolt, shouldAutoUpdatePiBolt } from "../../pi-bolt-auto-update.ts";
 import {
 	getChangelogPath,
 	getNewEntries,
@@ -1236,10 +1237,27 @@ export class InteractiveMode {
 				.finally(() => clearTimeout(timeout));
 		}
 
-		// Start version check asynchronously
-		checkForNewPiVersion(this.version).then((newRelease) => {
-			if (newRelease) {
+		// Start version check asynchronously; direct native installs apply signed Pi-Bolt updates automatically.
+		checkForNewPiVersion(this.version).then(async (newRelease) => {
+			if (!newRelease) return;
+			if (!shouldAutoUpdatePiBolt()) {
 				this.showNewVersionNotification(newRelease);
+				return;
+			}
+
+			this.showStatus(`Automatically updating Pi-Bolt to ${newRelease.version}…`);
+			try {
+				const result = await autoUpdatePiBolt();
+				if (result.updated) {
+					this.showStatus(`Pi-Bolt ${newRelease.version} installed. Restart Pi-Bolt to use the updated version.`);
+				} else {
+					this.showWarning(
+						`Automatic Pi-Bolt update failed. Run \`${piBoltUpdateCommand()}\` to retry.${result.output ? ` ${result.output}` : ""}`,
+					);
+				}
+			} catch (error) {
+				const detail = error instanceof Error ? error.message : String(error);
+				this.showWarning(`Automatic Pi-Bolt update failed (${detail}). Run \`${piBoltUpdateCommand()}\` to retry.`);
 			}
 		});
 
@@ -4437,13 +4455,19 @@ export class InteractiveMode {
 		this.isShuttingDown = true;
 		try {
 			this.unregisterSignalHandlers();
-		} catch {}
+		} catch {
+			// Continue crash reporting even if signal cleanup fails.
+		}
 		try {
 			killTrackedDetachedChildren();
-		} catch {}
+		} catch {
+			// Continue crash reporting even if child cleanup fails.
+		}
 		try {
 			this.ui.stop();
-		} catch {}
+		} catch {
+			// Continue crash reporting even if terminal restoration fails.
+		}
 		console.error(`${PRODUCT_NAME} exiting due to uncaughtException:`);
 		console.error(error);
 		const extensionHint = this.getCrashExtensionHint(error);
