@@ -1,0 +1,198 @@
+name: bench-stock-bun
+
+# Pi-Bolt 1.0.7 as released (the bolt-v1.0.7 archives, signature and sums checked; CAND_COMMIT is the tag's commit) against Pi 1.4.0 as released on npm (@earendil-works/pi-coding-agent, dist/bundle/cli.js),
+# run by stock Bun 1.4.4, by Node 22 and by Node 24, on GitHub's Linux x86-64 and ARM64 (one CPU each) and Windows runners.
+# The tools are bench/ of the candidate's tree. macOS is measured on an Apple M5 instead.
+on:
+  push:
+    branches: ["bench/stock-bun-*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  PI_VERSION: "1.4.0"
+  BUN_VERSION: "1.4.4"
+  CAND_COMMIT: 6c9d19ef3f46ecc06d141c112adfc1c1fbb6069f
+
+jobs:
+  unix:
+    name: Bench on ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux x86-64, runner: ubuntu-24.04, plat: linux-x64, node: linux-x64, cpus: "1" }
+          - { name: Linux ARM64, runner: ubuntu-24.04-arm, plat: linux-arm64, node: linux-arm64, cpus: "1" }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.CAND_COMMIT }}
+          path: cand-src
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAT: ${{ matrix.plat }}
+          NODE_PLAT: ${{ matrix.node }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y -qq tmux xz-utils >/dev/null
+          sha() { sha256sum "$@"; }
+          mkdir -p results .work
+          # cand: the bolt-v1.0.7 release archive, checked against its signed SHA256SUMS.
+          d=.work/dl
+          gh release download bolt-v1.0.7 --repo "$GITHUB_REPOSITORY" --pattern "pi-bolt-$PLAT.tar.xz" --pattern SHA256SUMS --pattern SHA256SUMS.sig --dir $d
+          openssl pkeyutl -verify -pubin -inkey keys/release.pub -rawin -in $d/SHA256SUMS -sigfile $d/SHA256SUMS.sig
+          [ "$(head -n 1 $d/SHA256SUMS)" = "# pi-bolt 1.0.7" ]
+          (cd $d && grep -E " pi-bolt-$PLAT\.tar\.xz\$" SHA256SUMS | sha -c -)
+          mkdir -p out/cand && tar -C out/cand --strip-components=1 -xJf "$d/pi-bolt-$PLAT.tar.xz"
+          npm install --prefix .work/vanilla --ignore-scripts --no-audit --no-fund "@earendil-works/pi-coding-agent@$PI_VERSION" >/dev/null
+          for v in 22 24; do
+            base="https://nodejs.org/dist/latest-v$v.x"
+            file=$(curl -fsSL "$base/SHASUMS256.txt" | awk -v f="$NODE_PLAT.tar.xz" '$2 ~ f"$" {print $2}')
+            curl -fsSL -o ".work/$file" "$base/$file"
+            (cd .work && curl -fsSL "$base/SHASUMS256.txt" | grep " $file\$" | sha -c -)
+            mkdir -p ".work/node$v" && tar -C ".work/node$v" --strip-components=1 -xJf ".work/$file"
+          done
+          VAN=.work/vanilla/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js
+          {
+            echo "runner: ${{ matrix.runner }} ($(uname -srm)), $(nproc) CPUs"
+            grep -m1 'model name' /proc/cpuinfo || lscpu | grep -m1 'Model name'
+            echo "pi-bolt: the bolt-v1.0.7 release archive pi-bolt-$PLAT.tar.xz (signature and sums verified): $(out/cand/pi --version </dev/null)"
+            echo "bun: Pi $(bun $VAN --version </dev/null) as released on npm, run by stock Bun $(bun --version)"
+            for v in 22 24; do echo "node$v: Pi $(.work/node$v/bin/node $VAN --version </dev/null) as released on npm, on Node $(.work/node$v/bin/node --version)"; done
+            echo "tools: bench/ of $CAND_COMMIT; python: $(python3 --version), tmux: $(tmux -V)"
+          } | tee results/environment.txt
+      - name: Suites
+        env:
+          CPUS: ${{ matrix.cpus }}
+        run: |
+          VAN=".work/vanilla/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js"
+          B=(--build pi-bolt=out/cand/pi --build "bun=$(command -v bun) $VAN" --build "node22=.work/node22/bin/node $VAN" --build "node24=.work/node24/bin/node $VAN")
+          C=(); [ -n "$CPUS" ] && C=(--cpus "$CPUS")
+          T=cand-src/bench
+          run() { name=$1; shift; echo "## $name" | tee -a results/all.txt; "$@" 2>&1 | grep -vE 'round [0-9]+/' | tee -a results/all.txt || echo "$name failed" | tee -a results/all.txt; }
+          run benchmark python3 $T/benchmark.py --runs 21 --warmup 3 --scenarios startup,headless,interactive "${C[@]}" "${B[@]}" --baseline node24
+          run long_answer python3 $T/long_answer.py --sizes 60000 "${C[@]}" "${B[@]}"
+          run long_session python3 $T/long_session.py --prompts 40 --every 20 "${C[@]}" "${B[@]}"
+          run large_write python3 $T/large_write.py --sizes 200,400 "${C[@]}" "${B[@]}"
+          run tmux_load python3 $T/tmux_load.py "${C[@]}" "${B[@]}"
+          { echo '```'; cat results/environment.txt results/all.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: bench-${{ matrix.plat }}
+          path: results/
+          retention-days: 30
+
+  windows:
+    name: Bench on Windows x64
+    runs-on: windows-2025
+    timeout-minutes: 300
+    defaults:
+      run:
+        shell: powershell
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.CAND_COMMIT }}
+          path: cand-src
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force results, .work | Out-Null
+          # (The build scripts run Python 3 as `py -3`.)
+          if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
+            $shim = Join-Path $env:RUNNER_TEMP 'py-shim'
+            New-Item -ItemType Directory -Force $shim | Out-Null
+            Set-Content -Encoding ascii (Join-Path $shim 'py.cmd') "@if `"%~1`"==`"-3`" (python %2 %3 %4 %5 %6 %7 %8 %9) else (python %*)"
+            $env:PATH = "$shim;$env:PATH"
+            Add-Content -Encoding utf8 $env:GITHUB_PATH $shim
+          }
+          # cand: the bolt-v1.0.7 release archive, checked against its signed SHA256SUMS.
+          $d = '.work\dl'
+          gh release download bolt-v1.0.7 --repo $env:GITHUB_REPOSITORY --pattern pi-bolt-win32-x64.zip --pattern SHA256SUMS --pattern SHA256SUMS.sig --dir $d --clobber
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & 'C:\Program Files\Git\usr\bin\openssl.exe' pkeyutl -verify -pubin -inkey keys\release.pub -rawin -in "$d\SHA256SUMS" -sigfile "$d\SHA256SUMS.sig"
+          if ($LASTEXITCODE -ne 0) { throw "bolt-v1.0.7's signature does not verify" }
+          if ((Get-Content "$d\SHA256SUMS")[0] -ne '# pi-bolt 1.0.7') { throw "not 1.0.7's checksums" }
+          $sum = (Get-FileHash "$d\pi-bolt-win32-x64.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ((Get-Content -LiteralPath "$d\SHA256SUMS") -notcontains "$sum  pi-bolt-win32-x64.zip") { throw "the archive is not the one SHA256SUMS lists" }
+          Expand-Archive "$d\pi-bolt-win32-x64.zip" -DestinationPath .work\x-cand -Force
+          $exe = Get-ChildItem -Recurse .work\x-cand -Filter pi-bolt.exe | Select-Object -First 1
+          Move-Item $exe.Directory.FullName .work\cand
+          npm install --prefix .work\vanilla --ignore-scripts --no-audit --no-fund "@earendil-works/pi-coding-agent@$env:PI_VERSION" | Out-Null
+          $env_lines = @()
+          foreach ($v in 22, 24) {
+            $base = "https://nodejs.org/dist/latest-v$v.x"
+            $sums = (Invoke-WebRequest -UseBasicParsing "$base/SHASUMS256.txt").Content -split "`n"
+            $line = $sums | Where-Object { $_ -match 'win-x64\.zip$' } | Select-Object -First 1
+            $hash, $file = $line -split '\s+'
+            Invoke-WebRequest -UseBasicParsing "$base/$file" -OutFile ".work\$file"
+            if ((Get-FileHash ".work\$file" -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash) { throw "$file does not match SHASUMS256" }
+            Expand-Archive ".work\$file" -DestinationPath ".work\node-x$v" -Force
+            Move-Item (Get-ChildItem ".work\node-x$v" | Select-Object -First 1).FullName ".work\node$v"
+          }
+          $van = ".work\vanilla\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js"
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $env_lines += "runner: windows-2025, $($cpu.Name.Trim()), $($cpu.NumberOfCores) cores, $($cpu.NumberOfLogicalProcessors) threads"
+          $env_lines += "pi-bolt: the bolt-v1.0.7 release archive pi-bolt-win32-x64.zip (signature and sums verified): $(& .work\cand\pi-bolt.exe --version | Select-Object -First 1)"
+          $env_lines += "bun: Pi $(& bun $van --version | Select-Object -First 1) as released on npm, run by stock Bun $(bun --version)"
+          foreach ($v in 22, 24) { $env_lines += "node${v}: Pi $(& .work\node$v\node.exe $van --version | Select-Object -First 1) as released on npm, on Node $(& .work\node$v\node.exe --version)" }
+          $env_lines += "tools: bench\ of $($env:CAND_COMMIT); $(python --version)"
+          $env_lines | Tee-Object -Variable shown
+          [IO.File]::WriteAllLines("$PWD\results\environment.txt", [string[]]$env_lines)
+      - name: Suites
+        run: |
+          $env:PYTHONUTF8 = '1'
+          $ErrorActionPreference = 'Continue'
+          $VAN = "$PWD\.work\vanilla\node_modules\@earendil-works\pi-coding-agent\dist\bundle\cli.js"
+          $BUN = (Get-Command bun).Source
+          $B = @('--build', "pi-bolt=$PWD\.work\cand\pi-bolt.exe", '--build', "bun=$BUN $VAN",
+                 '--build', "node22=$PWD\.work\node22\node.exe $VAN", '--build', "node24=$PWD\.work\node24\node.exe $VAN")
+          function Run($name, $file, [string[]]$cmd) {
+            "## $name" | Add-Content -Encoding utf8 results\all.txt
+            $out = & python @cmd 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -notmatch 'round [0-9]+/' }
+            if ($LASTEXITCODE -ne 0) { $out += "$name failed (exit $LASTEXITCODE)" }
+            $out
+            [IO.File]::WriteAllLines("$PWD\results\$file", [string[]]@($out))
+            $out | Add-Content -Encoding utf8 results\all.txt
+          }
+          Run benchmark benchmark.txt (@('cand-src\bench\benchmark.py', '--runs', '21', '--warmup', '3', '--scenarios', 'startup,headless,interactive', '--baseline', 'node24') + $B)
+          Run long_answer long_answer.txt (@('cand-src\bench\long_answer.py', '--sizes', '60000') + $B)
+          Run long_session long_session.txt (@('cand-src\bench\long_session.py', '--prompts', '40', '--every', '20') + $B)
+          Run large_write large_write.txt (@('cand-src\bench\large_write.py', '--sizes', '200,400') + $B)
+          $summary = @('```') + (Get-Content results\environment.txt) + (Get-Content results\all.txt | Where-Object { $_ -notmatch '^\{' }) + @('```')
+          $summary | Add-Content -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: bench-win32-x64
+          path: results
+          retention-days: 30
