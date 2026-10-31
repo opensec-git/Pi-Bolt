@@ -584,7 +584,27 @@ const reportingRenders = new WeakSet<object>();
 const unreportedSubtrees = new WeakSet<Component>();
 
 /** The components that render each component's lines into theirs, told of its changes (reportRenderChange()). */
-const renderOwners = new WeakMap<Component, Component | Component[]>();
+const renderOwners = new WeakMap<Component, WeakRef<Component> | WeakRef<Component>[]>();
+
+function liveRenderOwners(child: Component): WeakRef<Component> | WeakRef<Component>[] | undefined {
+	const owners = renderOwners.get(child);
+	if (owners === undefined) return undefined;
+	if (!Array.isArray(owners)) {
+		if (owners.deref() !== undefined) return owners;
+		renderOwners.delete(child);
+		return undefined;
+	}
+	let count = 0;
+	for (const ref of owners) {
+		if (ref.deref() !== undefined) owners[count++] = ref;
+	}
+	owners.length = count;
+	if (count > 1) return owners;
+	const remaining = owners[0];
+	if (remaining === undefined) renderOwners.delete(child);
+	else renderOwners.set(child, remaining);
+	return remaining;
+}
 
 /** The Container method that takes a child's report (Container[CHILD_CHANGED]). */
 const CHILD_CHANGED = Symbol("pi-tui.childChanged");
@@ -637,21 +657,21 @@ export function setSubtreeReportsChanges(component: Component, reports: boolean)
 
 /** Records that `owner` renders `child`'s lines into its own: `owner` is told of `child`'s reported changes. */
 export function setRenderOwner(child: Component, owner: Component): void {
-	const owners = renderOwners.get(child);
-	if (owners === owner) return;
-	if (owners === undefined) renderOwners.set(child, owner);
+	const owners = liveRenderOwners(child);
+	if (owners === undefined) renderOwners.set(child, new WeakRef(owner));
 	else if (Array.isArray(owners)) {
-		if (!owners.includes(owner)) owners.push(owner);
-	} else renderOwners.set(child, [owners, owner]);
+		if (!owners.some((ref) => ref.deref() === owner)) owners.push(new WeakRef(owner));
+	} else if (owners.deref() !== owner) renderOwners.set(child, [owners, new WeakRef(owner)]);
 }
 
 function dropRenderOwner(child: Component, owner: Component): void {
-	const owners = renderOwners.get(child);
-	if (owners === owner) renderOwners.delete(child);
-	else if (Array.isArray(owners)) {
-		const index = owners.indexOf(owner);
+	const owners = liveRenderOwners(child);
+	if (owners === undefined) return;
+	if (Array.isArray(owners)) {
+		const index = owners.findIndex((ref) => ref.deref() === owner);
 		if (index !== -1) owners.splice(index, 1);
-	}
+		liveRenderOwners(child);
+	} else if (owners.deref() === owner) renderOwners.delete(child);
 }
 
 /** renderSharedLines() for `owner`, which renders `child`'s lines into its own: `owner` is told of `child`'s changes. */
@@ -665,11 +685,17 @@ export function renderChildLines(owner: Component, child: Component, width: numb
  * render it again at their next render.
  */
 export function reportRenderChange(component: Component): void {
-	const owners = renderOwners.get(component);
+	const owners = liveRenderOwners(component);
 	if (owners === undefined) return;
 	if (Array.isArray(owners)) {
-		for (const owner of owners.slice()) notifyOwner(owner, component);
-	} else notifyOwner(owners, component);
+		for (const ref of owners.slice()) {
+			const owner = ref.deref();
+			if (owner !== undefined) notifyOwner(owner, component);
+		}
+	} else {
+		const owner = owners.deref();
+		if (owner !== undefined) notifyOwner(owner, component);
+	}
 }
 
 function notifyOwner(owner: Component, child: Component): void {

@@ -918,6 +918,12 @@ class CachedComponent implements Component {
 }
 ```
 
+#### Render ownership
+
+Change-reporting components notify the parents that rendered them, so an unchanged subtree can reuse its cached lines. These subscriptions hold parents through weak references. A cached child can therefore be shared or mounted in a new parent without keeping discarded parents and their rendered output alive.
+
+The component tree or application must retain parents that are still in use. Explicit removal alone cannot manage subscription lifetime: a parent may be discarded without clearing its children. Dead subscriptions are pruned during registration, notification, and removal; no teardown call is required for collection.
+
 ## Example
 
 See `test/chat-simple.ts` for a complete chat interface example with:
