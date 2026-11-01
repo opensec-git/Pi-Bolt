@@ -297,4 +297,50 @@ describe("EventStream.forwardTo and lazyStream", () => {
 		expect(deltas(events)).toEqual(["a", "done"]);
 		expect(await outer.result()).toBe(answer);
 	});
+
+	// A provider extension can return the API's stream in a Proxy whose iterator changes the events, for example to map
+	// tool names it renamed on the wire back. The Proxy passes `instanceof EventStream`, but its events must come from
+	// its own iterator, not from the inner stream's forwardTo().
+	it("iterates an event stream wrapped in a Proxy that changes its events", async () => {
+		const inner = new AssistantMessageEventStream();
+		const upper = (event: AssistantMessageEvent): AssistantMessageEvent =>
+			event.type === "text_delta" ? { ...event, delta: event.delta.toUpperCase() } : event;
+		const wrapped = new Proxy(inner, {
+			get(target, key) {
+				if (key === Symbol.asyncIterator) {
+					return async function* () {
+						for await (const event of target) yield upper(event);
+					};
+				}
+				const value = Reflect.get(target, key, target);
+				return typeof value === "function" ? value.bind(target) : value;
+			},
+		});
+		const outer = lazyStream(model, async () => wrapped);
+		const answer = message(Date.now());
+		inner.push(text("a"));
+		inner.push(text("b"));
+		inner.push({ type: "done", reason: "stop", message: answer });
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of outer) events.push(event);
+		expect(deltas(events)).toEqual(["A", "B", "done"]);
+		expect(await outer.result()).toBe(answer);
+	});
+
+	it("still forwards a plain event stream with forwardTo()", async () => {
+		const inner = new AssistantMessageEventStream();
+		let forwarded = 0;
+		const forwardTo = inner.forwardTo.bind(inner);
+		inner.forwardTo = (sink) => {
+			forwarded++;
+			forwardTo(sink);
+		};
+		const outer = lazyStream(model, async () => inner);
+		inner.push(text("a"));
+		inner.push({ type: "done", reason: "stop", message: message(Date.now()) });
+		const events: AssistantMessageEvent[] = [];
+		for await (const event of outer) events.push(event);
+		expect(deltas(events)).toEqual(["a", "done"]);
+		expect(forwarded).toBe(1);
+	});
 });
