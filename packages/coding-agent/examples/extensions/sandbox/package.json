@@ -14,7 +14,7 @@
 		]
 	},
 	"dependencies": {
-		"@anthropic-ai/sandbox-runtime": "0.0.26"
+		"@anthropic-ai/sandbox-runtime": "0.0.81"
 	},
 	"overrides": {
 		"shell-quote": "^1.9.0"

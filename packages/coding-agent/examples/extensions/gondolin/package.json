@@ -14,9 +14,9 @@
 		]
 	},
 	"dependencies": {
-		"@earendil-works/gondolin": "0.12.0"
+		"@earendil-works/gondolin": "0.14.0"
 	},
 	"overrides": {
-		"undici": "^6.28.1"
+		"undici": "6.29.1"
 	}
 }
