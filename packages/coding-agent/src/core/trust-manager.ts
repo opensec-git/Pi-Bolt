@@ -38,6 +38,15 @@ const TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES = [
 	"APPEND_SYSTEM.md",
 ] as const;
 
+/** Context/instruction files whose presence means a directory's content reaches the model. */
+const TRUST_REQUIRING_CONTEXT_FILES = [
+	"AGENTS.md",
+	"AGENTS.MD",
+	"AGENTS.override.md",
+	"CLAUDE.md",
+	"CLAUDE.MD",
+] as const;
+
 function normalizeCwd(cwd: string): string {
 	return canonicalizePath(resolvePath(cwd));
 }
@@ -203,6 +212,20 @@ export function hasTrustRequiringProjectResources(cwd: string): boolean {
 	const configDir = join(currentDir, CONFIG_DIR_NAME);
 	if (TRUST_REQUIRING_PROJECT_CONFIG_RESOURCES.some((entry) => existsSync(join(configDir, entry)))) {
 		return true;
+	}
+
+	// Instruction files reach the model via the system prompt's project_context
+	// section (loadProjectContextFiles walks cwd to root). A bare repo with only
+	// an AGENTS.md must trigger the trust prompt like any other project resource.
+	// Ancestors count too: opening a subdir still loads parent AGENTS.md files.
+	let contextDir = canonicalizePath(resolvePath(cwd));
+	while (true) {
+		if (TRUST_REQUIRING_CONTEXT_FILES.some((entry) => existsSync(join(contextDir, entry)))) {
+			return true;
+		}
+		const parentDir = dirname(contextDir);
+		if (parentDir === contextDir) break;
+		contextDir = parentDir;
 	}
 
 	while (true) {

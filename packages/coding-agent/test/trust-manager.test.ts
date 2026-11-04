@@ -71,6 +71,21 @@ describe("ProjectTrustStore", () => {
 			rmSync(join(cwd, ".pi"), { recursive: true, force: true });
 			mkdirSync(join(cwd, ".agents", "skills"), { recursive: true });
 			expect(hasTrustRequiringProjectResources(cwd)).toBe(true);
+
+			rmSync(join(cwd, ".agents"), { recursive: true, force: true });
+			// Bare repo with only an AGENTS.md: its content reaches the model via
+			// project_context, so it must trigger the trust prompt.
+			writeFileSync(join(cwd, "AGENTS.md"), "# test");
+			expect(hasTrustRequiringProjectResources(cwd)).toBe(true);
+			rmSync(join(cwd, "AGENTS.md"), { force: true });
+			expect(hasTrustRequiringProjectResources(cwd)).toBe(false);
+
+			// Ancestor context files load too: opening a subdir of a repo with an
+			// AGENTS.md at the root must trigger the trust prompt.
+			writeFileSync(join(cwd, "AGENTS.md"), "# test");
+			const subdir = join(cwd, "sub", "dir");
+			mkdirSync(subdir, { recursive: true });
+			expect(hasTrustRequiringProjectResources(subdir)).toBe(true);
 		} finally {
 			if (originalHome === undefined) {
 				delete process.env.HOME;
