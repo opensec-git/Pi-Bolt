@@ -11,6 +11,7 @@ const childProcessMocks = vi.hoisted(() => ({
 vi.mock("node:child_process", () => childProcessMocks);
 
 import { shareSession } from "../src/modes/interactive/session-share.ts";
+import { serializeSessionBranch } from "../src/core/session-export.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
@@ -152,5 +153,24 @@ describe("shareSession", () => {
 		expect(errors).toEqual(["Radius authentication is not configured. Run '/login radius' first."]);
 		expect(childProcessMocks.spawnSync).not.toHaveBeenCalled();
 		expect(childProcessMocks.spawn).not.toHaveBeenCalled();
+	});
+
+	it("redacts secrets from serialized session branches", () => {
+		const sessionManager = {
+			getSessionId: () => "test",
+			getCwd: () => "/tmp",
+			getBranch: () => [
+				{
+					id: "1",
+					type: "message",
+					apiKey: "sk-secret-value",
+					content: "https://user:pass@proxy.example.com:8080/",
+				},
+			],
+		} as never;
+		const jsonl = serializeSessionBranch(sessionManager);
+		expect(jsonl).not.toContain("sk-secret-value");
+		expect(jsonl).not.toContain("user:pass@");
+		expect(jsonl).toContain("<redacted>");
 	});
 });

@@ -2,10 +2,19 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { resolvePath } from "../utils/paths.ts";
 import { CURRENT_SESSION_VERSION, type SessionHeader, type SessionManager } from "./session-manager.ts";
+import { redactJsonValue } from "./bug-report.ts";
 
 type TrailingEntries = (parentId: string | null, timestamp: string) => readonly object[];
 
-/** Serialize the current branch and optional export-only entries as JSONL. */
+/**
+ * Serialize the current branch and optional export-only entries as JSONL.
+ *
+ * Entries pass through the bug-report redactor (sensitive keys replaced,
+ * credentials in URLs stripped) so shares and exports do not leak pasted
+ * API keys or tokens from tool output. Secret-*looking* bare strings are
+ * left alone: the redactor keys on field names and URLs, and broadening it
+ * would corrupt legitimate transcript content.
+ */
 export function serializeSessionBranch(
 	sessionManager: SessionManager,
 	createTrailingEntries?: TrailingEntries,
@@ -25,7 +34,8 @@ export function serializeSessionBranch(
 		parentId = entry.id;
 	}
 	entries.push(...(createTrailingEntries?.(parentId, timestamp) ?? []));
-	return `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+	const redacted = entries.map((entry) => redactJsonValue(entry));
+	return `${redacted.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
 }
 
 /** Write the current session branch and optional export-only entries as JSONL. */
