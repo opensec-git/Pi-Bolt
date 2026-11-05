@@ -108,7 +108,15 @@ describe.skipIf(process.platform === "win32")("DefaultPackageManager in a compil
 
 		expect(runCommandSpy).toHaveBeenCalledWith(
 			"npm",
-			["install", "@scope/pkg", "--prefix", realpathSync(join(agentDir, "npm")), "--legacy-peer-deps"],
+			[
+				"install",
+				"@scope/pkg",
+				"--prefix",
+				realpathSync(join(agentDir, "npm")),
+				"--legacy-peer-deps",
+				"--no-audit",
+				"--no-fund",
+			],
 			undefined,
 		);
 	});

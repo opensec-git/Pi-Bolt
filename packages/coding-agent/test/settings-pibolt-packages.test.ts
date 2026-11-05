@@ -596,6 +596,8 @@ describe("Pi-Bolt additive package inheritance", () => {
 				"--prefix",
 				join(agentDir, "npm"),
 				"--legacy-peer-deps",
+				"--no-audit",
+				"--no-fund",
 			],
 			undefined,
 		);

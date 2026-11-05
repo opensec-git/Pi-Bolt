@@ -281,6 +281,6 @@ describe("the terminal title", () => {
 		} finally {
 			process.stdout.write = write;
 		}
-		assert.deepStrictEqual(written, ["\x1b]0;π - name]52;c;ZWNobyBwd25lZA== - repo\x07"]);
+		assert.deepStrictEqual(written, ["\x1b]0;π - name ]52;c;ZWNobyBwd25lZA==  - repo\x07"]);
 	});
 });

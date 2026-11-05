@@ -3,11 +3,13 @@
 import type { Context, JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { registerStorageConformance } from "@earendil-works/pi-durable/testing";
-import { IDBKeyRange as FakeIDBKeyRange, IDBFactory } from "fake-indexeddb";
-import { describe, expect, it } from "vitest";
+import { IDBKeyRange as FakeIDBKeyRange, IDBObjectStore as FakeIDBObjectStore, IDBFactory } from "fake-indexeddb";
+import { describe, expect, it, vi } from "vitest";
 import { idFromNumber } from "../src/ids.ts";
 import { IndexedDbStorage } from "../src/storage/indexeddb.ts";
+import { commitWrites } from "../src/testing/commit-writes.ts";
 import type {
+	CommitResult,
 	ConversationId,
 	DocumentCreate,
 	DocumentId,
@@ -39,10 +41,14 @@ class ReopeningStorage implements Storage {
 		this.indexedDB = indexedDB;
 	}
 
-	async commit(writes: readonly StorageWrite[], commitContext: Context): Promise<Seq> {
-		if (this.closed) return this.current.commit(writes, commitContext);
+	async commit(
+		batches: readonly (readonly StorageWrite[])[],
+		receive: (index: number, seq: Seq) => void,
+		commitContext: Context,
+	): Promise<CommitResult> {
+		if (this.closed) return this.current.commit(batches, receive, commitContext);
 		try {
-			return await this.current.commit(writes, commitContext);
+			return await this.current.commit(batches, receive, commitContext);
 		} finally {
 			await this.current.close(context);
 			this.current = await IndexedDbStorage.open(this.name, { indexedDB: this.indexedDB });
@@ -132,7 +138,7 @@ function pendingTask(id: TaskId<JsonValue>, conversationId = ROOT_CONVERSATION_I
 }
 
 async function createRoot(storage: Storage): Promise<void> {
-	await storage.commit([{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context);
+	await commitWrites(storage, [{ type: "conversation", value: { id: ROOT_CONVERSATION_ID } }], context);
 }
 
 it("persists minted IDs across reopen", async () => {
@@ -161,14 +167,16 @@ it("rolls back table writes when a later document copy fails", async () => {
 			history: "rewindable",
 			fork: "asOf",
 		} satisfies DocumentCreate;
-		await storage.commit(
+		await commitWrites(
+			storage,
 			[{ type: "document.create", record: source, content: { kind: "base", version: 1, value: { count: 1 } } }],
 			context,
 		);
 		const taskId = await storage.mintId<TaskId<JsonValue>>();
 		const copyId = await storage.mintId<DocumentId>();
 		await expect(
-			storage.commit(
+			commitWrites(
+				storage,
 				[
 					{ type: "task", value: pendingTask(taskId) },
 					{
@@ -194,7 +202,8 @@ it("scans entries and head markers through fork ancestry", async () => {
 		await createRoot(storage);
 		const rootFirst = await storage.mintId<EntryId>();
 		const rootMarker = await storage.mintId<EntryId>();
-		await storage.commit(
+		await commitWrites(
+			storage,
 			[
 				{ type: "entry", value: { id: rootFirst, conversationId: ROOT_CONVERSATION_ID, kind: "first" } },
 				{
@@ -210,7 +219,8 @@ it("scans entries and head markers through fork ancestry", async () => {
 			context,
 		);
 		const childId = await storage.mintId<ConversationId>();
-		await storage.commit(
+		await commitWrites(
+			storage,
 			[
 				{
 					type: "conversation",
@@ -220,7 +230,8 @@ it("scans entries and head markers through fork ancestry", async () => {
 			context,
 		);
 		const childEntry = await storage.mintId<EntryId>();
-		await storage.commit(
+		await commitWrites(
+			storage,
 			[{ type: "entry", value: { id: childEntry, conversationId: childId, kind: "child" } }],
 			context,
 		);
@@ -271,7 +282,7 @@ it("keeps one readwrite transaction active through many mixed writes", async () 
 				},
 			);
 		}
-		await storage.commit(writes, context);
+		await commitWrites(storage, writes, context);
 		expect((await storage.entry(lastEntryId!, context))?.entry.data).toEqual({ index: 39 });
 		expect(await storage.task(lastTaskId!, context)).toEqual(pendingTask(lastTaskId!));
 		expect((await storage.submission(lastSubmissionId!, context))?.requestId).toBe("bulk-39");
@@ -279,4 +290,172 @@ it("keeps one readwrite transaction active through many mixed writes", async () 
 	} finally {
 		await storage.close(context);
 	}
+});
+
+describe("commit", () => {
+	/** An entry of the root conversation. */
+	const entryWrite = (id: EntryId): StorageWrite => ({
+		type: "entry",
+		value: { id, conversationId: ROOT_CONVERSATION_ID, kind: "batch" },
+	});
+	const sourceRecord = (id: DocumentId, conversationId: ConversationId = ROOT_CONVERSATION_ID): DocumentCreate => ({
+		id,
+		kind: "source",
+		scope: { kind: "conversation", conversationId },
+		history: "rewindable",
+		fork: "asOf",
+	});
+
+	/** Opens a storage with its root conversation, runs `test` on it, closes it. */
+	async function withStorage(name: string, test: (storage: IndexedDbStorage) => Promise<void>): Promise<void> {
+		const storage = await IndexedDbStorage.open(name, { indexedDB: new IDBFactory() });
+		try {
+			await createRoot(storage);
+			await test(storage);
+		} finally {
+			await storage.close(context);
+		}
+	}
+
+	it("stores the batches before a refused one, and the storage goes on", () =>
+		withStorage("batch-prefix", async (storage) => {
+			const first = await storage.mintId<EntryId>();
+			const after = await storage.mintId<EntryId>();
+			const receipts: [number, Seq][] = [];
+			const result = await storage.commit(
+				[[entryWrite(first)], [entryWrite(first)], [entryWrite(after)]],
+				(index, seq) => receipts.push([index, seq]),
+				context,
+			);
+			expect(result.stored).toBe(1);
+			expect(String(result.refused)).toBe(`Error: ID ${first} already belongs to entry`);
+			expect(receipts.map(([index]) => index)).toEqual([0]);
+			expect((await storage.entry(first, context))?.commitSeq).toBe(receipts[0]![1]);
+			expect(await storage.entry(after, context)).toBeUndefined();
+			// The prefix advanced the metadata: the next commit takes the next seq.
+			const next = await commitWrites(storage, [entryWrite(after)], context);
+			expect(next).toBe(receipts[0]![1] + 1);
+		}));
+
+	it("resolves a copy against the state an earlier batch of the call left", () =>
+		withStorage("batch-copy", async (storage) => {
+			const sourceId = await storage.mintId<DocumentId>();
+			const childId = await storage.mintId<ConversationId>();
+			const copyId = await storage.mintId<DocumentId>();
+			const result = await storage.commit(
+				[
+					[
+						{
+							type: "document.create",
+							record: sourceRecord(sourceId),
+							content: { kind: "base", version: 1, value: { count: 1 } },
+						},
+					],
+					[
+						{
+							type: "document.change",
+							id: sourceId,
+							content: { kind: "delta", version: 1, ops: [["s", ["count"], 2]] },
+						},
+					],
+					[
+						{ type: "conversation", value: { id: childId } },
+						{
+							type: "document.copy",
+							record: sourceRecord(copyId, childId),
+							source: { id: sourceId, at: "current" },
+						},
+					],
+				],
+				() => {},
+				context,
+			);
+			expect(result).toEqual({ stored: 3 });
+			expect((await storage.document(copyId, "current", context))?.value).toEqual({ count: 2 });
+		}));
+
+	it("refuses a batch whose copy fails before it writes anything, keeping the batches before it", () =>
+		withStorage("batch-copy-refused", async (storage) => {
+			const sourceId = await storage.mintId<DocumentId>();
+			await commitWrites(
+				storage,
+				[
+					{
+						type: "document.create",
+						record: sourceRecord(sourceId),
+						content: { kind: "base", version: 1, value: { count: 1 } },
+					},
+				],
+				context,
+			);
+			const first = await storage.mintId<EntryId>();
+			const taskId = await storage.mintId<TaskId<JsonValue>>();
+			const copyId = await storage.mintId<DocumentId>();
+			const result = await storage.commit(
+				[
+					[entryWrite(first)],
+					// The task comes before the copy: the refusal must leave it unwritten.
+					[
+						{ type: "task", value: pendingTask(taskId) },
+						{
+							type: "document.copy",
+							record: { ...sourceRecord(copyId), kind: "mismatch" },
+							source: { id: sourceId, at: "current" },
+						},
+					],
+				],
+				() => {},
+				context,
+			);
+			expect(result.stored).toBe(1);
+			expect(String(result.refused)).toContain(`Document copy ${copyId} was rejected`);
+			expect(await storage.entry(first, context)).toBeDefined();
+			expect(await storage.task(taskId, context)).toBeUndefined();
+			expect(await storage.document(copyId, "current", context)).toBeUndefined();
+		}));
+
+	it("rejects with nothing stored when IndexedDB fails during a batch's checks", () =>
+		withStorage("batch-check-failure", async (storage) => {
+			const first = await storage.mintId<EntryId>();
+			const second = await storage.mintId<EntryId>();
+			const get = FakeIDBObjectStore.prototype.get;
+			const failure = new DOMException("disk gone", "UnknownError");
+			const spy = vi.spyOn(FakeIDBObjectStore.prototype, "get").mockImplementation(function (
+				this: InstanceType<typeof FakeIDBObjectStore>,
+				key: Parameters<typeof get>[0],
+			) {
+				if (this.name === "record_ids" && key === second) throw failure;
+				return get.call(this, key);
+			});
+			const receipts: number[] = [];
+			try {
+				await expect(
+					storage.commit([[entryWrite(first)], [entryWrite(second)]], (index) => receipts.push(index), context),
+				).rejects.toBe(failure);
+			} finally {
+				spy.mockRestore();
+			}
+			expect(receipts).toEqual([]);
+			expect(await storage.entry(first, context)).toBeUndefined();
+			await commitWrites(storage, [entryWrite(first)], context);
+			expect(await storage.entry(first, context)).toBeDefined();
+		}));
+
+	it("rejects with nothing stored when IndexedDB fails during a batch's writes", () =>
+		withStorage("batch-write-failure", async (storage) => {
+			const first = await storage.mintId<EntryId>();
+			const second = await storage.mintId<EntryId>();
+			// A function cannot be stored: the put throws IndexedDB's `DataCloneError`.
+			const unstorable = {
+				type: "entry",
+				value: { id: second, conversationId: ROOT_CONVERSATION_ID, kind: "batch", data: { f: () => {} } },
+			} as unknown as StorageWrite;
+			const receipts: number[] = [];
+			await expect(
+				storage.commit([[entryWrite(first)], [unstorable]], (index) => receipts.push(index), context),
+			).rejects.toMatchObject({ name: "DataCloneError" });
+			expect(receipts).toEqual([]);
+			expect(await storage.entry(first, context)).toBeUndefined();
+			expect(await storage.entry(second, context)).toBeUndefined();
+		}));
 });

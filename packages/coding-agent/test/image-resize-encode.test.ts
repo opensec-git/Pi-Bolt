@@ -24,10 +24,10 @@ describe("encodeWithinLimits", () => {
 	// maxBytes counts base64: n bytes encode to ceil(n / 3) * 4 characters.
 	const opts = resolveImageResizeOptions({ maxWidth: 100, maxHeight: 100, maxBytes: 4000 });
 
-	it("encodes no JPEG when the PNG fits", async () => {
+	it("encodes the PNG and one JPEG, and keeps the PNG when it is the smaller", async () => {
 		const log: string[] = [];
 		const result = await encodeWithinLimits(400, 200, opts, fakeFrames({ png: 2000, jpeg: {} }, log));
-		expect(log).toEqual(["resize 100x50", "png", "free"]);
+		expect(log).toEqual(["resize 100x50", "png", "jpeg 80", "free"]);
 		expect(result).toMatchObject({ mimeType: "image/png", width: 100, height: 50, wasResized: true });
 	});
 

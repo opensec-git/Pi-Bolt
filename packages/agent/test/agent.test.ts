@@ -7,7 +7,7 @@ import {
 	toToolDeclaration,
 	type UserMessage,
 } from "@earendil-works/pi-ai/compat";
-import { Type } from "typebox";
+import { num, obj, str } from "@earendil-works/pi-schema";
 import { describe, expect, it } from "vitest";
 import {
 	Agent,
@@ -49,7 +49,7 @@ function createTool(name: string): AgentTool {
 		name,
 		label: name,
 		description: `${name} tool`,
-		parameters: Type.Object({}),
+		parameters: obj({}),
 		execute: async () => ({ content: [{ type: "text", text: name }], details: {} }),
 	};
 }
@@ -146,7 +146,7 @@ describe("Agent", () => {
 			name: "echo",
 			label: "Echo",
 			description: "Echo input",
-			parameters: Type.Object({}),
+			parameters: obj({}),
 			execute: async () => ({ content: [{ type: "text", text: "echo" }], details: {} }),
 		};
 		const agent = new Agent({
@@ -200,7 +200,7 @@ describe("Agent", () => {
 		expect(update).toEqual({
 			role: "system",
 			content: "",
-			toolsAdded: [{ name: "second", description: "second tool", parameters: Type.Object({}) }],
+			toolsAdded: [{ name: "second", description: "second tool", parameters: obj({}) }],
 			toolsRemoved: [{ name: "first" }],
 			timestamp: expect.any(Number),
 		});
@@ -242,22 +242,22 @@ describe("Agent", () => {
 		tool.description = "changed in place";
 		await agent.prompt("description");
 		record();
-		tool.parameters = Type.Object({});
+		tool.parameters = obj({});
 		await agent.prompt("equal parameters in a new object");
 		record();
-		tool.parameters = Type.Object({ value: Type.String() });
+		tool.parameters = obj({ value: str() });
 		await agent.prompt("different parameters");
 		record();
-		(tool.parameters as { properties: Record<string, unknown> }).properties.extra = Type.Number();
+		(tool.parameters as { properties: Record<string, unknown> }).properties.extra = num();
 		await agent.prompt("parameters changed in place");
 		record();
 
-		const initial = '+echo:echo tool:{"type":"object","properties":{}} -';
-		const described = '+echo:changed in place:{"type":"object","properties":{}} -echo';
+		const initial = '+echo:echo tool:{"type":"object","properties":{},"additionalProperties":false} -';
+		const described = '+echo:changed in place:{"type":"object","properties":{},"additionalProperties":false} -echo';
 		const reshaped =
-			'+echo:changed in place:{"type":"object","required":["value"],"properties":{"value":{"type":"string"}}} -echo';
+			'+echo:changed in place:{"type":"object","properties":{"value":{"type":"string"}},"required":["value"],"additionalProperties":false} -echo';
 		const extended =
-			'+echo:changed in place:{"type":"object","required":["value"],"properties":{"value":{"type":"string"},"extra":{"type":"number"}}} -echo';
+			'+echo:changed in place:{"type":"object","properties":{"value":{"type":"string"},"extra":{"type":"number"}},"required":["value"],"additionalProperties":false} -echo';
 		expect(declarations).toEqual([
 			initial,
 			initial,
@@ -273,7 +273,7 @@ describe("Agent", () => {
 			name: "echo",
 			label: "Echo",
 			description: "Echo input",
-			parameters: Type.Object({}),
+			parameters: obj({}),
 			execute: async () => ({ content: [{ type: "text", text: "echo" }], details: {} }),
 		};
 		const agent = new Agent({
@@ -298,7 +298,7 @@ describe("Agent", () => {
 			role: "system",
 			content: "",
 			sections: { skills: "<skills>x</skills>" },
-			toolsAdded: [{ name: "echo", description: "Echo input", parameters: Type.Object({}) }],
+			toolsAdded: [{ name: "echo", description: "Echo input", parameters: obj({}) }],
 			timestamp: 1,
 		});
 	});
@@ -343,7 +343,7 @@ describe("Agent", () => {
 			name: "echo",
 			label: "Echo",
 			description: "Echo input",
-			parameters: Type.Object({}),
+			parameters: obj({}),
 			execute: async () => ({ content: [{ type: "text", text: "echo" }], details: {} }),
 		};
 		const agent = new Agent({
@@ -644,7 +644,7 @@ describe("Agent", () => {
 	});
 
 	it("should ignore tool updates after the tool execution settles", async () => {
-		const toolSchema = Type.Object({});
+		const toolSchema = obj({});
 		let delayedUpdate: AgentToolUpdateCallback<{ status: string }> | undefined;
 		const events: AgentEvent[] = [];
 		const unhandledRejections: unknown[] = [];
@@ -709,7 +709,7 @@ describe("Agent", () => {
 	});
 
 	it("should ignore a settled parallel tool update while another tool is still running", async () => {
-		const toolSchema = Type.Object({});
+		const toolSchema = obj({});
 		const slowStarted = createDeferred();
 		const settledToolEnded = createDeferred();
 		const releaseSlow = createDeferred();
@@ -1031,7 +1031,7 @@ describe("Agent", () => {
 	});
 
 	it("keeps legacy prepareNextTurn signal callback behavior", async () => {
-		const schema = Type.Object({});
+		const schema = obj({});
 		const tool: AgentTool<typeof schema> = {
 			name: "noop",
 			label: "Noop",
@@ -1072,7 +1072,7 @@ describe("Agent", () => {
 	});
 
 	it("forwards finishTurn through AgentOptions with the active abort signal", async () => {
-		const schema = Type.Object({});
+		const schema = obj({});
 		const tool: AgentTool<typeof schema> = {
 			name: "noop",
 			label: "Noop",

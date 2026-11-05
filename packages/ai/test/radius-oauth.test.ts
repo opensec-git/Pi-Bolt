@@ -113,7 +113,7 @@ describe("Radius OAuth", () => {
 
 			const oauth = createRadiusOAuth({ name: "Radius", gateway: GATEWAY });
 			await expect(oauth.login(interaction("device-code", events)), verificationUri).rejects.toThrow(
-				"invalid verification_uri",
+				"Untrusted verification_uri",
 			);
 			expect(events).toEqual([]);
 		}
@@ -185,7 +185,7 @@ describe("Radius OAuth", () => {
 		const events: AuthEvent[] = [];
 
 		const oauth = createRadiusOAuth({ name: "Radius", gateway: GATEWAY });
-		await expect(oauth.login(interaction("device-code", events))).rejects.toThrow("invalid verification_uri");
+		await expect(oauth.login(interaction("device-code", events))).rejects.toThrow("Untrusted verification_uri");
 		expect(events).toEqual([]);
 	});
 

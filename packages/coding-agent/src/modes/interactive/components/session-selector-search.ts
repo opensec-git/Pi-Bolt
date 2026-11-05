@@ -32,26 +32,31 @@ const TIER_TEXT = 1; // query text appears in the session id, messages, or cwd
 const TIER_FUZZY = 2; // query characters appear scattered in the session name or cwd
 const TIER_WEIGHT = 1_000_000;
 
-interface MessageSearchText {
+interface LowercaseCache {
+	source: string;
 	lower: string;
 	normalized?: string;
 }
 
 /**
- * The lowercased message text of each session, made once. The text of a session is all of its messages: lowercasing
- * it and normalizing it again for every session on every key typed in the search box goes over all the text of every
- * session each time.
+ * Lowercased message text per session. allMessagesText holds every user/assistant message and
+ * can be megabytes, so lowercase it once instead of on every keystroke.
  */
-const messageSearchTexts = new WeakMap<SessionInfo, MessageSearchText>();
+const messageTextCache = new WeakMap<SessionInfo, LowercaseCache>();
 
-function getMessageSearchText(session: SessionInfo): MessageSearchText {
-	let entry = messageSearchTexts.get(session);
-	if (!entry) {
-		// (On Bun, lowercasing text that has no capital letters in it gives the same string, without a copy.)
-		entry = { lower: session.allMessagesText.toLowerCase() };
-		messageSearchTexts.set(session, entry);
+function getMessageText(session: SessionInfo): LowercaseCache {
+	let cached = messageTextCache.get(session);
+	if (!cached || cached.source !== session.allMessagesText) {
+		cached = { source: session.allMessagesText, lower: session.allMessagesText.toLowerCase() };
+		messageTextCache.set(session, cached);
 	}
-	return entry;
+	return cached;
+}
+
+function getNormalizedMessageText(session: SessionInfo): string {
+	const cached = getMessageText(session);
+	cached.normalized ??= cached.lower.replace(/\s+/g, " ").trim();
+	return cached.normalized;
 }
 
 function tierScore(tier: number, score = 0): number {
@@ -63,7 +68,7 @@ function matchLiteralToken(session: SessionInfo, value: string): number | undefi
 	const name = session.name?.toLowerCase() ?? "";
 	if (name.includes(value)) return tierScore(TIER_NAME, fuzzyMatch(value, name).score);
 	if (session.id.toLowerCase().includes(value)) return tierScore(TIER_TEXT);
-	if (getMessageSearchText(session).lower.includes(value)) return tierScore(TIER_TEXT);
+	if (getMessageText(session).lower.includes(value)) return tierScore(TIER_TEXT);
 	if (session.cwd.toLowerCase().includes(value)) return tierScore(TIER_TEXT);
 	return undefined;
 }
@@ -72,20 +77,19 @@ function matchFuzzyToken(session: SessionInfo, value: string): number | undefine
 	const literal = matchLiteralToken(session, value.toLowerCase());
 	if (literal !== undefined) return literal;
 
-	const name = fuzzyMatch(value, session.name ?? "");
-	const cwd = fuzzyMatch(value, session.cwd);
-	if (name.matches && (!cwd.matches || name.score <= cwd.score)) return tierScore(TIER_FUZZY, name.score);
-	if (cwd.matches) return tierScore(TIER_FUZZY, cwd.score);
-	return undefined;
+	let best: number | undefined;
+	for (const field of [session.name ?? "", session.cwd]) {
+		const m = fuzzyMatch(value, field);
+		if (m.matches && (best === undefined || m.score < best)) best = m.score;
+	}
+	return best === undefined ? undefined : tierScore(TIER_FUZZY, best);
 }
 
 function matchPhraseToken(session: SessionInfo, phrase: string): number | undefined {
 	const name = normalizeWhitespaceLower(session.name ?? "");
 	if (name.includes(phrase)) return tierScore(TIER_NAME, fuzzyMatch(phrase, name).score);
 	if (session.id.toLowerCase().includes(phrase)) return tierScore(TIER_TEXT);
-	const messages = getMessageSearchText(session);
-	messages.normalized ??= messages.lower.replace(/\s+/g, " ").trim();
-	if (messages.normalized.includes(phrase)) return tierScore(TIER_TEXT);
+	if (getNormalizedMessageText(session).includes(phrase)) return tierScore(TIER_TEXT);
 	if (normalizeWhitespaceLower(session.cwd).includes(phrase)) return tierScore(TIER_TEXT);
 	return undefined;
 }

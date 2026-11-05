@@ -3,28 +3,21 @@ import {
 	Container,
 	type Focusable,
 	getKeybindings,
+	hyperlink,
 	Input,
-	isWebLink,
+	replaceControlCharacters,
 	Spacer,
 	sanitizeTerminalText,
 	Text,
+	TruncatedText,
 	type TUI,
 } from "@earendil-works/pi-tui";
+import { copyToClipboard } from "../../../utils/clipboard.ts";
 import { openBrowser } from "../../../utils/open-browser.ts";
 import { theme } from "../theme/theme.ts";
 import { AuthUrlComponent } from "./auth-url.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { keyHint } from "./keybinding-hints.ts";
-
-/**
- * `text` as a clickable terminal hyperlink to `url` when that is a web link; otherwise `text` alone. The URL comes from the
- * provider's server: another scheme (file:, an app's handler) could run a program when clicked, and escape sequences in it
- * would act on the terminal.
- */
-function webLink(text: string, url: string): string {
-	const shown = sanitizeTerminalText(text);
-	return isWebLink(url) && url === sanitizeTerminalText(url) ? `\x1b]8;;${url}\x07${shown}\x1b]8;;\x07` : shown;
-}
 
 /**
  * The `http:` or `https:` URL `value` names, normalized, or undefined. The shared launcher also opens files and custom
@@ -35,6 +28,20 @@ function webUrl(value: string): string | undefined {
 	if (!URL.canParse(value)) return undefined;
 	const url = new URL(value);
 	return url.protocol === "https:" || url.protocol === "http:" ? url.href : undefined;
+}
+
+/**
+ * `value` normalized as a web URL, else with control characters replaced: an untrusted string printed as is could end a
+ * hyperlink early or send its own escape sequences to the terminal.
+ */
+function displayUrl(value: string): string {
+	return webUrl(value) ?? replaceControlCharacters(value);
+}
+
+/** `text` as a terminal hyperlink to `url` when that is a web URL, else plain `text`. */
+function webLink(text: string, url: string): string {
+	const target = webUrl(url);
+	return target === undefined ? text : hyperlink(text, target);
 }
 
 /**
@@ -49,6 +56,8 @@ export class LoginDialogComponent extends Container implements Focusable {
 	private abortController = new AbortController();
 	private inputResolver?: (value: string) => void;
 	private inputRejecter?: (error: Error) => void;
+	private deviceCodeAction?: { info: OAuthDeviceCodeInfo; hint: Container };
+	private deviceCodeHint?: Container;
 	private onComplete: (success: boolean, message?: string) => void;
 
 	// Focusable implementation - propagate to input for IME cursor positioning
@@ -114,7 +123,16 @@ export class LoginDialogComponent extends Container implements Focusable {
 		);
 	}
 
+	private clearDeviceCodeAction(): void {
+		if (this.deviceCodeHint) {
+			this.contentContainer.removeChild(this.deviceCodeHint);
+		}
+		this.deviceCodeHint = undefined;
+		this.deviceCodeAction = undefined;
+	}
+
 	private cancel(): void {
+		this.clearDeviceCodeAction();
 		this.abortController.abort();
 		if (this.inputRejecter) {
 			this.inputRejecter(new Error("Login cancelled"));
@@ -128,10 +146,11 @@ export class LoginDialogComponent extends Container implements Focusable {
 	 * Called by onAuth callback - show URL and optional instructions
 	 */
 	showAuth(url: string, instructions?: string): void {
+		this.clearDeviceCodeAction();
 		this.contentContainer.clear();
 		this.contentContainer.addChild(new Spacer(1));
 		const target = webUrl(url);
-		this.authUrl = new AuthUrlComponent(this.tui, target ?? sanitizeTerminalText(url));
+		this.authUrl = new AuthUrlComponent(this.tui, target ?? replaceControlCharacters(url));
 		this.contentContainer.addChild(this.authUrl);
 
 		if (instructions) {
@@ -148,26 +167,69 @@ export class LoginDialogComponent extends Container implements Focusable {
 	 */
 	showDeviceCode(info: OAuthDeviceCodeInfo): void {
 		this.authUrl = undefined;
+		info = {
+			...info,
+			openBrowserOnConfirm: info.openBrowserOnConfirm ?? true,
+			copyCodeOnConfirm: info.copyCodeOnConfirm ?? true,
+		};
+		this.clearDeviceCodeAction();
 		this.contentContainer.clear();
 		this.contentContainer.addChild(new Spacer(1));
-		const linkedUrl = webLink(info.verificationUri, info.verificationUri);
-		this.contentContainer.addChild(new Text(theme.fg("accent", linkedUrl), 1, 0));
+		const shownUrl = displayUrl(info.verificationUri);
+		this.contentContainer.addChild(new Text(theme.fg("accent", webLink(shownUrl, shownUrl)), 1, 0));
 
 		const clickHint = process.platform === "darwin" ? "Cmd+click to open" : "Ctrl+click to open";
-		const hyperlink = webLink(clickHint, info.verificationUri);
-		this.contentContainer.addChild(new Text(theme.fg("dim", hyperlink), 1, 0));
+		this.contentContainer.addChild(new Text(theme.fg("dim", webLink(clickHint, info.verificationUri)), 1, 0));
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(
 			new Text(theme.fg("warning", `Enter code: ${sanitizeTerminalText(info.userCode)}`), 1, 0),
 		);
 
+		if (!this.signal.aborted && (info.openBrowserOnConfirm || info.copyCodeOnConfirm)) {
+			const actionLabel = info.openBrowserOnConfirm
+				? info.copyCodeOnConfirm
+					? "to open browser and copy code"
+					: "to open browser"
+				: "to copy code";
+			// Reuse this single row for progress/result text, including in narrow terminals.
+			const hint = new Container();
+			hint.addChild(new TruncatedText(`(${keyHint("tui.select.confirm", actionLabel)})`, 1, 0));
+			this.contentContainer.addChild(hint);
+			this.deviceCodeHint = hint;
+			this.deviceCodeAction = { info, hint };
+		}
 		this.tui.requestRender();
+	}
+
+	private setDeviceCodeStatus(hint: Container, message: string): void {
+		if (this.signal.aborted || !this.focused || !this.contentContainer.children.includes(hint)) return;
+		hint.children = [new TruncatedText(theme.fg("dim", message), 1, 0)];
+		this.tui.requestRender();
+	}
+
+	private activateDeviceCode(info: OAuthDeviceCodeInfo, hint: Container): void {
+		this.setDeviceCodeStatus(hint, info.copyCodeOnConfirm ? "Copying code..." : "Browser open requested");
+		if (info.copyCodeOnConfirm) {
+			// Do not delay polling or browser opening while clipboard tools are running.
+			void copyToClipboard(info.userCode)
+				.then(() => this.setDeviceCodeStatus(hint, "Code copied to clipboard"))
+				.catch(() => this.setDeviceCodeStatus(hint, "Copy code manually"));
+		}
+		if (info.openBrowserOnConfirm) {
+			try {
+				const target = webUrl(info.verificationUri);
+				if (target !== undefined) openBrowser(target);
+			} catch {
+				// Launcher failures must not interrupt login.
+			}
+		}
 	}
 
 	/**
 	 * Show input for manual code/URL entry (for callback server providers)
 	 */
 	showManualInput(prompt: string): Promise<string> {
+		this.clearDeviceCodeAction();
 		this.input.setValue("");
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("dim", prompt), 1, 0));
@@ -186,6 +248,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 	 * Note: Does NOT clear content, appends to existing (preserves URL from showAuth)
 	 */
 	showPrompt(message: string, placeholder?: string): Promise<string> {
+		this.clearDeviceCodeAction();
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("text", message), 1, 0));
 		if (placeholder) {
@@ -212,6 +275,7 @@ export class LoginDialogComponent extends Container implements Focusable {
 	/** Show informational text before another login step. */
 	showDetails(lines: string[]): void {
 		this.authUrl = undefined;
+		this.clearDeviceCodeAction();
 		this.contentContainer.clear();
 		this.contentContainer.addChild(new Spacer(1));
 		for (const line of lines) {
@@ -225,8 +289,9 @@ export class LoginDialogComponent extends Container implements Focusable {
 		this.contentContainer.addChild(new Spacer(1));
 		this.contentContainer.addChild(new Text(theme.fg("text", message), 1, 0));
 		for (const link of links) {
-			const text = link.label ? `${link.label}: ${link.url}` : link.url;
-			this.contentContainer.addChild(new Text(theme.fg("accent", webLink(text, link.url)), 1, 0));
+			const url = displayUrl(link.url);
+			const text = link.label ? `${link.label}: ${url}` : url;
+			this.contentContainer.addChild(new Text(theme.fg("accent", webLink(text, url)), 1, 0));
 		}
 		if (showCloseHint) {
 			this.contentContainer.addChild(new Spacer(1));
@@ -262,6 +327,21 @@ export class LoginDialogComponent extends Container implements Focusable {
 		}
 		if (this.authUrl && kb.matches(data, "app.message.copy")) {
 			void this.authUrl.copy();
+			return;
+		}
+
+		if (
+			this.deviceCodeAction &&
+			!this.inputResolver &&
+			!this.signal.aborted &&
+			this.focused &&
+			kb.matches(data, "tui.select.confirm")
+		) {
+			const action = this.deviceCodeAction;
+			// Consume once so a repeated Enter cannot launch multiple browsers or clipboard writes.
+			this.deviceCodeAction = undefined;
+			this.activateDeviceCode(action.info, action.hint);
+			this.tui.requestRender();
 			return;
 		}
 

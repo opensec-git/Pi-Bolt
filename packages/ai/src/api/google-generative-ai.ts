@@ -291,12 +291,6 @@ export const stream: StreamFunction<"google-generative-ai", GoogleOptions> = (
 			stream.end();
 		} catch (error) {
 			cache?.end();
-			// Remove internal index property used during streaming
-			for (const block of output.content) {
-				if ("index" in block) {
-					delete (block as { index?: number }).index;
-				}
-			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatProviderError(normalizeProviderError(error));
 			stream.push({ type: "error", reason: output.stopReason, error: output });

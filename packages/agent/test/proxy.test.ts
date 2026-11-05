@@ -116,7 +116,60 @@ describe("streamProxy", () => {
 		expect(result.errorMessage).toContain("Connection closed by proxy server");
 	});
 
-	// Streamed arguments are parsed only as they grow; a message that ends without toolcall_end keeps all of them.
+	// #9265
+	it("shows growing partial arguments without keeping the raw text on the block, in linear time", async () => {
+		const content = 'line "quoted" \\ end\n'.repeat(20_000);
+		const text = JSON.stringify({ path: "a.ts", content });
+		const proxyEvents: ProxyAssistantMessageEvent[] = [
+			{ type: "start" },
+			{ type: "toolcall_start", contentIndex: 0, id: "call_1", toolName: "write" },
+		];
+		for (let index = 0; index < text.length; index += 32) {
+			proxyEvents.push({ type: "toolcall_delta", contentIndex: 0, delta: text.slice(index, index + 32) });
+		}
+		proxyEvents.push(
+			{
+				type: "toolcall_end",
+				contentIndex: 0,
+				toolCall: { type: "toolCall", id: "call_1", name: "write", arguments: { path: "a.ts", content } },
+			},
+			{ type: "done", reason: "toolUse", usage },
+		);
+		const body = proxyEvents.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("");
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () => new Response(body, { status: 200 })),
+		);
+
+		const started = performance.now();
+		const stream = streamProxy(model, normalizeContext({ systemPrompt: "", messages: [] }), {
+			authToken: "test-token",
+			proxyUrl: "https://proxy.example.com",
+		});
+		let shown = 0;
+		let deltas = 0;
+		for await (const event of stream) {
+			if (event.type !== "toolcall_delta") continue;
+			const block = event.partial.content[0];
+			expect(Object.keys(block!).sort()).toEqual(["arguments", "id", "name", "type"]);
+			const partial = block?.type === "toolCall" ? block.arguments.content : undefined;
+			if (typeof partial !== "string") continue;
+			// Comparing the whole text on every delta would make this test itself quadratic.
+			if (deltas++ % 500 === 0) expect(content.startsWith(partial)).toBe(true);
+			expect(partial.length).toBeGreaterThanOrEqual(shown);
+			shown = partial.length;
+		}
+		const result = await stream.result();
+
+		expect(shown).toBeGreaterThan(content.length - 64);
+		expect(result.content).toEqual([
+			{ type: "toolCall", id: "call_1", name: "write", arguments: { path: "a.ts", content } },
+		]);
+		// Re-parsing the accumulated 520 KB of arguments on each of its 16,000 deltas took minutes.
+		expect(performance.now() - started).toBeLessThan(10_000);
+	});
+
+	// A message that ends without toolcall_end keeps all of the streamed arguments.
 	for (const end of ["error event", "end of stream"] as const) {
 		it(`keeps all streamed tool-call arguments when the stream ends with an ${end}`, async () => {
 			const content = "a".repeat(4000);

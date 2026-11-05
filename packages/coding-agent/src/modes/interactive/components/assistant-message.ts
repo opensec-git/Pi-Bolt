@@ -152,6 +152,8 @@ export class AssistantMessageComponent extends Container {
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
 	private isStreaming = false;
+	private messageId?: string;
+	private timestamp?: string;
 	private contentIsStale = false;
 	private thinkingVisibilityOverrides = new Map<number, boolean>();
 	/** The children's lines with the prompt markers added, and the lines they were added to. */
@@ -180,6 +182,8 @@ export class AssistantMessageComponent extends Container {
 		hiddenThinkingLabel = "Thinking...",
 		outputPad = 1,
 		markdownTransformers: readonly MarkdownTransformer[] = [],
+		messageId?: string,
+		timestamp?: string,
 	) {
 		super();
 
@@ -188,6 +192,8 @@ export class AssistantMessageComponent extends Container {
 		this.hiddenThinkingLabel = hiddenThinkingLabel;
 		this.outputPad = outputPad;
 		this.markdownTransformers = markdownTransformers;
+		this.messageId = messageId;
+		this.timestamp = timestamp;
 
 		// Container for text/thinking content
 		this.contentContainer = new Container();
@@ -363,16 +369,21 @@ export class AssistantMessageComponent extends Container {
 		// Each text and thinking block trimmed (BlockText).
 		this.followTexts(message);
 		const trimmedTexts: Array<TrimmedText | undefined> = [];
-		let hasVisibleContent = false;
 		for (let i = 0; i < content.length; i++) {
-			const trimmed = this.blockTexts[i]?.trim();
-			trimmedTexts.push(trimmed);
-			if (trimmed?.visible) hasVisibleContent = true;
+			trimmedTexts.push(this.blockTexts[i]?.trim());
 		}
 
-		if (hasVisibleContent) {
-			parts.push({ kind: "spacer" });
-		}
+		// Spacers are added lazily, right before the next visible content block. This puts a blank
+		// line before the first visible block and after each visible thinking run that is followed
+		// by more visible content, while hidden thinking runs without a label contribute nothing.
+		let needsSpacer = true;
+		const addVisiblePart = (part: ContentPart) => {
+			if (needsSpacer) {
+				parts.push({ kind: "spacer" });
+				needsSpacer = false;
+			}
+			parts.push(part);
+		};
 
 		// Render content in order
 		let thinkingRunIndex = 0;
@@ -382,7 +393,7 @@ export class AssistantMessageComponent extends Container {
 			if (block.type === "text" && trimmed?.visible) {
 				// Assistant text messages with no background - trim the text
 				// Set paddingY=0 to avoid extra spacing before tool executions
-				parts.push({ kind: "text", text: trimmed.trimmed });
+				addVisiblePart({ kind: "text", text: trimmed.trimmed });
 			} else if (block.type === "thinking") {
 				const thinkingBlocks: string[] = [];
 				for (; i < content.length; i++) {
@@ -400,21 +411,18 @@ export class AssistantMessageComponent extends Container {
 					continue;
 				}
 
-				// Add spacing only when another visible assistant content block follows.
-				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
-				let hasVisibleContentAfter = false;
-				for (let after = i + 1; after < content.length && !hasVisibleContentAfter; after++) {
-					hasVisibleContentAfter = trimmedTexts[after]?.visible === true;
-				}
-
 				const runIndex = thinkingRunIndex++;
 				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
+				// A hidden run with an empty label renders nothing, including no spacing.
+				if (hidden && !this.hiddenThinkingLabel.trim()) {
+					continue;
+				}
 				// (One block's text as it is: the same text as joined, and the strings it was trimmed to, see BlockText.)
 				const text = hidden ? "" : thinkingBlocks.length === 1 ? thinkingBlocks[0] : thinkingBlocks.join("\n\n");
-				parts.push({ kind: "thinking", runIndex, hidden, text });
-				if (hasVisibleContentAfter) {
-					parts.push({ kind: "spacer" });
-				}
+				addVisiblePart({ kind: "thinking", runIndex, hidden, text });
+				// Add spacing only when another visible assistant content block follows.
+				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
+				needsSpacer = true;
 			}
 		}
 
@@ -496,7 +504,13 @@ export class AssistantMessageComponent extends Container {
 						previousBlocks,
 						() =>
 							new Markdown(text, this.outputPad, 0, this.markdownTheme, undefined, {
-								transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
+								transform: createMarkdownTransform(
+									"assistant",
+									() => this.isStreaming,
+									this.markdownTransformers,
+									this.messageId,
+									this.timestamp,
+								),
 								complete: !this.isStreaming,
 							}),
 					),
@@ -522,8 +536,10 @@ export class AssistantMessageComponent extends Container {
 									{
 										transform: createMarkdownTransform(
 											"assistant-thinking",
-											this.isStreaming,
+											() => this.isStreaming,
 											this.markdownTransformers,
+											this.messageId,
+											this.timestamp,
 										),
 										complete: !this.isStreaming,
 									},

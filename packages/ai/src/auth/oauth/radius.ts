@@ -212,16 +212,15 @@ async function requestDeviceAuthorization(gateway: string, signal: AbortSignal):
 	if (!data.device_code || !data.user_code || !data.verification_uri || !data.expires_in) {
 		throw new Error("Radius OAuth device authorization response is missing required fields");
 	}
-	// The verification URI is shown as a link the user opens: only a web URL, never a local file or another scheme.
-	const verificationUri = URL.canParse(data.verification_uri) ? new URL(data.verification_uri) : undefined;
-	if (verificationUri?.protocol !== "https:" && verificationUri?.protocol !== "http:") {
-		throw new Error("Radius OAuth device authorization response has an invalid verification_uri");
+	const verificationUri = trustedHttpUrl(data.verification_uri);
+	if (!verificationUri) {
+		throw new Error("Untrusted verification_uri in Radius OAuth device authorization response");
 	}
 
 	return {
 		device_code: data.device_code,
 		user_code: data.user_code,
-		verification_uri: verificationUri.href,
+		verification_uri: verificationUri,
 		expires_in: data.expires_in,
 		interval: data.interval,
 	};

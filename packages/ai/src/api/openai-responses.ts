@@ -268,12 +268,6 @@ export const stream: StreamFunction<"openai-responses", OpenAIResponsesOptions> 
 			stream.end();
 		} catch (error) {
 			cache?.end();
-			for (const block of output.content) {
-				delete (block as { index?: number }).index;
-				// Streaming scratch buffers are only used during parsing; never persist them.
-				delete (block as { partialJson?: string }).partialJson;
-				delete (block as { customInput?: unknown }).customInput;
-			}
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			const errorMessage = formatProviderError(
 				normalizeProviderError(error),

@@ -101,10 +101,10 @@ export interface ResizedFrame {
 }
 
 /**
- * Resize to fit `maxWidth`/`maxHeight`, then find the first encoding under `maxBytes`: PNG, then JPEG
- * at each quality step, then the same at 75% of the size, down to 1x1. Encodings are produced one at
- * a time and the first that fits wins, so later candidates are not encoded at all.
- * Returns null when nothing fits.
+ * Resize to fit `maxWidth`/`maxHeight`, then find the first encoding under `maxBytes`: the smaller of PNG and
+ * JPEG at the configured quality, then the other, then JPEG at each lower quality step, then the same at 75% of
+ * the size, down to 1x1. The lower quality steps are encoded one at a time and the first that fits wins, so later
+ * candidates are not encoded at all. Returns null when nothing fits.
  */
 export async function encodeWithinLimits(
 	originalWidth: number,
@@ -141,11 +141,22 @@ export async function encodeWithinLimits(
 	while (true) {
 		const frame = resizeTo(currentWidth, currentHeight);
 		try {
-			const png = result(await frame.png(), "image/png");
-			if (png) return png;
-			for (const quality of qualitySteps) {
-				const jpeg = result(await frame.jpeg(quality), "image/jpeg");
-				if (jpeg) return jpeg;
+			const [firstQuality, ...lowerQualities] = qualitySteps;
+			const png = await frame.png();
+			const jpeg = await frame.jpeg(firstQuality);
+			const preferred = [
+				{ bytes: png, mimeType: "image/png" },
+				{ bytes: jpeg, mimeType: "image/jpeg" },
+			];
+			// Prefer the smaller of PNG and JPEG at the configured quality; lower JPEG quality only if neither fits.
+			if (base64Size(jpeg.byteLength) < base64Size(png.byteLength)) preferred.reverse();
+			for (const { bytes, mimeType } of preferred) {
+				const fits = result(bytes, mimeType);
+				if (fits) return fits;
+			}
+			for (const quality of lowerQualities) {
+				const lower = result(await frame.jpeg(quality), "image/jpeg");
+				if (lower) return lower;
 			}
 		} finally {
 			frame.free();

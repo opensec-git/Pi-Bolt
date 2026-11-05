@@ -719,8 +719,9 @@ export function selectionProblem(plan, agentDir) {
 
 /*
  * Pi's extension loader hands an extension its own modules under more names than the packages have: the names Pi's packages
- * had before they were @earendil-works' (@mariozechner/pi-*), @sinclair/typebox for typebox, and the root of pi-ai for its
- * compat entry, which keeps the old global API (packages/coding-agent/src/core/extensions/virtual-modules.ts, VIRTUAL_MODULES,
+ * had before they were @earendil-works' (@mariozechner/pi-*), @sinclair/typebox for typebox, and the root of pi-ai and its
+ * compat entry for the coding agent's view of it: the compat entry, which keeps the old global API, plus TypeBox's `Type`
+ * (packages/coding-agent/src/core/extensions/pi-ai-extension-view.ts; virtual-modules.ts, VIRTUAL_MODULES,
  * and loader.ts, getAliases). An extension that imports `matchesKey` from "@mariozechner/pi-tui" or `getModel` from
  * "@earendil-works/pi-ai" works loaded from its files. The build resolves names as Node does instead: it finds no
  * @mariozechner/pi-tui and stops (#174), and gives the pi-ai root's own entry, which has no `getModel`.
@@ -732,10 +733,11 @@ export function selectionProblem(plan, agentDir) {
 
 /** Each name Pi's loader resolves to a module of another name, and that name (VIRTUAL_MODULES). */
 export const PI_MODULE_ALIASES = {
-	"@earendil-works/pi-ai": "@earendil-works/pi-ai/compat",
+	"@earendil-works/pi-ai": "@earendil-works/pi-coding-agent/pi-ai-extension-view",
+	"@earendil-works/pi-ai/compat": "@earendil-works/pi-coding-agent/pi-ai-extension-view",
 	"@mariozechner/pi-agent-core": "@earendil-works/pi-agent-core",
-	"@mariozechner/pi-ai": "@earendil-works/pi-ai/compat",
-	"@mariozechner/pi-ai/compat": "@earendil-works/pi-ai/compat",
+	"@mariozechner/pi-ai": "@earendil-works/pi-coding-agent/pi-ai-extension-view",
+	"@mariozechner/pi-ai/compat": "@earendil-works/pi-coding-agent/pi-ai-extension-view",
 	"@mariozechner/pi-ai/models": "@earendil-works/pi-ai/models",
 	"@mariozechner/pi-ai/oauth": "@earendil-works/pi-ai/oauth",
 	"@mariozechner/pi-ai/providers/all": "@earendil-works/pi-ai/providers/all",

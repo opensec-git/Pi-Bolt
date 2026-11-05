@@ -25,7 +25,7 @@ import { formatToolCallWithArgs, getTextOutput as getRenderedTextOutput } from "
 import { renderersMayHighlight } from "../../../core/tools/renderers/highlighting.ts";
 import { ensurePngTranscoder } from "../../../utils/image-convert.ts";
 import { liveTheme, theme } from "../theme/theme.ts";
-import { keyHint } from "./keybinding-hints.ts";
+import { keyHint, keyText } from "./keybinding-hints.ts";
 
 const FALLBACK_PREVIEW_LINES = 10;
 
@@ -65,6 +65,8 @@ export class ToolExecutionComponent extends Container {
 	private cwd: string;
 	private executionStarted = false;
 	private argsComplete = false;
+	/** `updateArgs()` ran since the last display update; the next render applies it. */
+	private argsPending = false;
 	private result?: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 		isError: boolean;
@@ -149,6 +151,8 @@ export class ToolExecutionComponent extends Container {
 			isError: this.result?.isError ?? false,
 			durationMs: this.isPartial ? undefined : this.result?.durationMs,
 			outputPad: this.outputPad,
+			keyText,
+			keyHint,
 		};
 	}
 
@@ -180,15 +184,20 @@ export class ToolExecutionComponent extends Container {
 		});
 	}
 
-	/** Returns whether `args` are new arguments, which may change what this draws. */
+	/**
+	 * Show new partial arguments. Applied at the next render, so a call streaming many argument deltas between two
+	 * frames runs its renderer once per frame, not once per delta (#9265). Returns whether `args` are new arguments,
+	 * which may change what this draws.
+	 */
 	updateArgs(args: any): boolean {
 		// Every message_update hands every tool call of the message its arguments again, and the providers parse
-		// streamed arguments only when they have grown by an eighth (parseStreamingJsonWhileStreaming), keeping the
-		// same object in between: the same object is the same arguments, and drawing them again is wasted work that
-		// grows with their size (the write and edit renderers go over the whole file content).
+		// streamed arguments again only when that is cheap enough (StreamingJsonParser.snapshot()), keeping the same
+		// object in between: the same object is the same arguments, and nothing on the screen changes.
 		if (args === this.args) return false;
 		this.args = args;
-		this.updateDisplay();
+		this.argsPending = true;
+		reportRenderChange(this);
+		this.ui.requestRender();
 		return true;
 	}
 
@@ -250,6 +259,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override renderShared(width: number): string[] {
+		if (this.argsPending) this.updateDisplay();
 		if (this.hideComponent) {
 			this.noteRendered();
 			return this.emptyLines;
@@ -305,6 +315,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private updateDisplay(): void {
+		this.argsPending = false;
 		const bgFn = this.isPartial
 			? (text: string) => theme.bg("toolPendingBg", text)
 			: this.result?.isError
