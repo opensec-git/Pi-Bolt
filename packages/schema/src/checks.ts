@@ -6,7 +6,8 @@ import type { Check } from "./types.ts";
 export const ALWAYS: Check = () => true;
 export const NEVER: Check = () => false;
 const IS_STRING: Check = (v) => typeof v === "string";
-const IS_NUMBER: Check = (v) => typeof v === "number";
+// (Finite only, as TypeBox checked: JSON has no Infinity or NaN; 1e400 parses to Infinity.)
+const IS_NUMBER: Check = (v) => Number.isFinite(v);
 const IS_INTEGER: Check = (v) => Number.isInteger(v);
 const IS_BOOLEAN: Check = (v) => typeof v === "boolean";
 const IS_NULL: Check = (v) => v === null;
@@ -46,7 +47,7 @@ function leafOk(code: number, x: unknown): boolean {
 		case 1:
 			return typeof x === "string";
 		case 2:
-			return typeof x === "number";
+			return Number.isFinite(x);
 		case 3:
 			return Number.isInteger(x);
 		case 4:

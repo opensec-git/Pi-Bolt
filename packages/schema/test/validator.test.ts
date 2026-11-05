@@ -321,3 +321,20 @@ describe("TypeBox's extra formats", () => {
 		expect(fragment.check("/a")).toBe(false);
 	});
 });
+
+describe("numbers", () => {
+	it("are finite, at the top and inside objects and arrays (JSON.parse gives Infinity for 1e400)", () => {
+		for (const schema of [
+			{ type: "number" },
+			{ type: "object", properties: { v: { type: "number" } } },
+			{ type: "array", items: { type: "number" } },
+		]) {
+			const validator = compile(schema);
+			const wrap = (v: number) => (schema.type === "object" ? { v } : schema.type === "array" ? [v] : v);
+			expect(validator.check(wrap(1.5))).toBe(true);
+			for (const v of [JSON.parse("1e400"), -Infinity, Number.NaN]) {
+				expect(validator.check(wrap(v)), `${JSON.stringify(schema)} ${v}`).toBe(false);
+			}
+		}
+	});
+});
