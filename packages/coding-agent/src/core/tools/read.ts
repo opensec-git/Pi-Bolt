@@ -1,4 +1,3 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Model, ModelImageResizeOptions, TextContent } from "@earendil-works/pi-ai";
 import { isUtf8 } from "buffer";
 import { constants } from "fs";
@@ -16,7 +15,7 @@ import { detachSharedString } from "../../utils/text.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { resolveReadPathAsync } from "./path-utils.ts";
 import { readRenderers } from "./renderers/read.ts";
-import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -438,6 +437,6 @@ export function createReadToolDefinition(
 	};
 }
 
-export function createReadTool(cwd: string, options?: ReadToolOptions): AgentTool<typeof readSchema> {
+export function createReadTool(cwd: string, options?: ReadToolOptions): TypeBoxAgentTool<typeof readSchema> {
 	return wrapToolDefinition(createReadToolDefinition(cwd, options));
 }

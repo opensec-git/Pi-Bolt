@@ -1,5 +1,4 @@
 import { stat } from "node:fs/promises";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { spawn } from "child_process";
 import path from "path";
 import { type Static, Type } from "typebox";
@@ -10,7 +9,7 @@ import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { nativeFind } from "./native-search.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
 import { findRenderers } from "./renderers/find.ts";
-import { wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead, truncationDetails } from "./truncate.ts";
 
 /** Relativize a find result against the search root and normalize it to posix separators. */
@@ -457,6 +456,6 @@ export function createFindToolDefinition(
 	};
 }
 
-export function createFindTool(cwd: string, options?: FindToolOptions): AgentTool<typeof findSchema> {
+export function createFindTool(cwd: string, options?: FindToolOptions): TypeBoxAgentTool<typeof findSchema> {
 	return wrapToolDefinition(createFindToolDefinition(cwd, options));
 }

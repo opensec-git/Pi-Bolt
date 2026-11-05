@@ -2,15 +2,16 @@
  * the same schema as plain JSON Schema, is generated from (scripts/generate-model-config-schema.ts). Building it costs a few
  * milliseconds, which a start does not pay: it is used only by the generator and the test that the two agree. */
 
-import { ProviderCompatSchema } from "@earendil-works/pi-ai/providers/compat-schema";
+import { Type } from "typebox";
 import {
 	ModelCostSchema,
 	ModelInputLimitsSchema,
 	ModelInputModalitySchema,
 	ModelPromptCacheSchema,
+	PartialModelCostSchema,
+	ProviderCompatSchema,
 	ThinkingLevelMapSchema,
-} from "@earendil-works/pi-ai/providers/model-schema";
-import { Type } from "typebox";
+} from "./pi-ai-schemas.ts";
 
 export function buildModelsConfigSchemas() {
 	const SamplingParamsSchema = Type.Record(Type.String(), Type.Unknown());
@@ -71,7 +72,7 @@ export function buildModelsConfigSchemas() {
 		thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
 		input: Type.Optional(Type.Array(ModelInputModalitySchema)),
 		inputLimits: Type.Optional(ModelInputLimitsSchema),
-		cost: Type.Optional(Type.Partial(ModelCostSchema)),
+		cost: Type.Optional(PartialModelCostSchema),
 		promptCache: Type.Optional(ModelPromptCacheSchema),
 		contextWindow: Type.Optional(
 			Type.Number({ exclusiveMinimum: 0, description: ModelFieldDescriptions.contextWindow }),

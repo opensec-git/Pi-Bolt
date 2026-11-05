@@ -26,7 +26,7 @@ import chalk from "chalk";
 import { getCustomThemesDir, getThemesDir } from "../../../config.ts";
 import type { SourceInfo } from "../../../core/source-info.ts";
 import { closeWatcher, watchWithErrorHandler } from "../../../utils/fs-watch.ts";
-import { highlight, supportsLanguage } from "../../../utils/syntax-highlight.ts";
+import { getHighlightLanguageCount, highlight, supportsLanguage } from "../../../utils/syntax-highlight.ts";
 import { stripBom } from "../../../utils/text.ts";
 import { generateSystemThemeColors, SYSTEM_THEME_NAME, terminalAppearance } from "./system-theme.ts";
 import {
@@ -977,6 +977,7 @@ const HIGHLIGHTED_CODE_MAX_LENGTH = 512 * 1024;
 const highlightedCode = new Map<string, string[]>();
 let highlightedCodeLength = 0;
 let highlightedCodeTheme: Theme | undefined;
+let highlightedCodeLanguageCount = 0;
 let lastHighlightedKey: string | undefined;
 
 function rememberHighlightedCode(key: string, lines: string[]): void {
@@ -1011,8 +1012,11 @@ function rememberHighlightedCode(key: string, lines: string[]): void {
 function highlightedLines(code: string, lang: string): string[] {
 	// (The theme in use, whichever instance of this module set it.)
 	const themeInUse = (globalThis as Record<symbol, Theme>)[THEME_KEY];
-	if (highlightedCodeTheme !== themeInUse) {
+	// (Grammars loaded since can highlight code embedded in another language differently.)
+	const languageCount = getHighlightLanguageCount();
+	if (highlightedCodeTheme !== themeInUse || highlightedCodeLanguageCount !== languageCount) {
 		highlightedCodeTheme = themeInUse;
+		highlightedCodeLanguageCount = languageCount;
 		highlightedCode.clear();
 		highlightedCodeLength = 0;
 		lastHighlightedKey = undefined;
@@ -1048,7 +1052,42 @@ export function highlightCode(code: string, lang?: string): string[] {
 	try {
 		return highlightedLines(code, validLang);
 	} catch {
-		return code.split("\n");
+		return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
+	}
+}
+
+/**
+ * Highlights code for one owner, such as a tool row, and reuses the last result while the code, the language, the
+ * theme and the registered grammars stay the same. Each owner keeps its own highlighter, so cached results live as long
+ * as the code they show instead of in a process-wide cache.
+ */
+export class CodeHighlighter {
+	private last?: {
+		code: string;
+		lang: string | undefined;
+		theme: Theme | undefined;
+		languageCount: number;
+		lines: readonly string[];
+	};
+
+	/** Like {@link highlightCode}. The result is shared with later calls, so callers must not modify it. */
+	highlight(code: string, lang: string | undefined): readonly string[] {
+		// Renderers cannot tell a theme change from any other redraw, so the highlighter checks what its result depends on.
+		const currentTheme = getThemeInstance();
+		const languageCount = getHighlightLanguageCount();
+		const last = this.last;
+		if (
+			last?.code === code &&
+			last.lang === lang &&
+			last.theme === currentTheme &&
+			last.languageCount === languageCount
+		) {
+			return last.lines;
+		}
+		const lines = highlightCode(code, lang);
+		// (The count after highlighting: highlighting can load the grammar it needs.)
+		this.last = { code, lang, theme: currentTheme, languageCount: getHighlightLanguageCount(), lines };
+		return lines;
 	}
 }
 
@@ -1156,21 +1195,7 @@ export function getMarkdownTheme(): MarkdownTheme {
 		italic: (text: string) => theme.italic(text),
 		underline: (text: string) => theme.underline(text),
 		strikethrough: (text: string) => theme.strikethrough(text),
-		highlightCode: (code: string, lang?: string): string[] => {
-			// Validate language before highlighting to avoid stderr spam from cli-highlight
-			const validLang = lang && supportsLanguage(lang) ? lang : undefined;
-			// Skip highlighting when no valid language is specified. cli-highlight's
-			// auto-detection is unreliable and can misidentify prose as AppleScript,
-			// LiveCodeServer, etc., coloring random English words as keywords.
-			if (!validLang) {
-				return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
-			}
-			try {
-				return highlightedLines(code, validLang);
-			} catch {
-				return code.split("\n").map((line) => theme.fg("mdCodeBlock", line));
-			}
-		},
+		highlightCode,
 	};
 }
 

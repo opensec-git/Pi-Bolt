@@ -1729,7 +1729,11 @@ describe("Pi's other names for its modules in the copies", () => {
 		const modules = new Map(
 			[...virtual.matchAll(/^import \* as (\w+) from "([^"]+)";$/gm)].map(([, name, from]) => [
 				name,
-				from === "../../index.ts" ? "@earendil-works/pi-coding-agent" : from,
+				from === "../../index.ts"
+					? "@earendil-works/pi-coding-agent"
+					: from === "./pi-ai-extension-view.ts"
+						? "@earendil-works/pi-coding-agent/pi-ai-extension-view"
+						: from,
 			]),
 		);
 		const named = [...virtual.matchAll(/^\t"?([^":\s]+)"?: (\w+),$/gm)].map(([, name, module]) => [name, modules.get(module)]);
@@ -1761,8 +1765,8 @@ describe("Pi's other names for its modules in the copies", () => {
 				'import { matchesKey } from "@earendil-works/pi-tui";',
 				'import "@earendil-works/pi-agent-core";',
 				'export * from "typebox/value";',
-				'const ai = await import( "@earendil-works/pi-ai/compat" );',
-				'const compat = await import("@earendil-works/pi-ai/compat", { with: {} });',
+				'const ai = await import( "@earendil-works/pi-coding-agent/pi-ai-extension-view" );',
+				'const compat = await import("@earendil-works/pi-coding-agent/pi-ai-extension-view", { with: {} });',
 				'const { Type } = require("typebox");',
 				'import oauth = require("@earendil-works/pi-ai/oauth");',
 			].join("\n"),

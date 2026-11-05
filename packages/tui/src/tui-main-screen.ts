@@ -5,6 +5,9 @@ import { deleteKittyImage, isImageLine } from "./terminal-image.ts";
 import { type LiveLines, renderLiveLines, renderSharedLines, type TUI, TuiBase, type TuiStopOptions } from "./tui.ts";
 import { visibleWidth } from "./utils.ts";
 
+/** OSC 133 prompt markers at the start of a rendered line. Fullscreen uses them for prompt navigation. */
+const OSC133_ZONE_PREFIX = /^(?:\x1b\]133;[ABC](?:\x07|\x1b\\))+/;
+
 const KITTY_SEQUENCE_PREFIX = "\x1b_G";
 const MAX_RENDER_WRITE_CHARS = 1024 * 1024;
 
@@ -230,7 +233,8 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			if (i < previous.length && line === previous[i]) {
 				resolved[i] = previousResolved[i]!;
 			} else {
-				single[0] = line;
+				// Drop OSC 133 markers: the terminal reads 133;A as a new shell prompt, which ends program status (OSC 7501)
+				single[0] = line.replace(OSC133_ZONE_PREFIX, "");
 				resolved[i] = this.resolveFakeCursors(single)[0]!;
 			}
 		}
@@ -344,7 +348,8 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			if (k < rootTail.length && line === rootTail[k]) {
 				resolved.push(resolvedTail[k]!);
 			} else {
-				single[0] = line;
+				// (OSC 133 markers dropped as resolveFrameFakeCursors() drops them.)
+				single[0] = line.replace(OSC133_ZONE_PREFIX, "");
 				resolved.push(this.resolveFakeCursors(single)[0]!);
 			}
 		}

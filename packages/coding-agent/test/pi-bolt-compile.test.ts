@@ -1212,7 +1212,7 @@ describe("pi-bolt compile and Pi's other names for its modules (#174)", () => {
 		const code = readFileSync(join(dir, "out", "old-names.js"), "utf8");
 		for (const name of [
 			"@earendil-works/pi-tui",
-			"@earendil-works/pi-ai/compat",
+			"@earendil-works/pi-coding-agent/pi-ai-extension-view",
 			"typebox",
 			"@earendil-works/pi-ai/models",
 			"@earendil-works/pi-agent-core",

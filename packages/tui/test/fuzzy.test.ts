@@ -54,7 +54,7 @@ describe("fuzzyMatch", () => {
 		assert.ok(atBoundary.score < notAtBoundary.score);
 	});
 
-	// earendil-works/pi#11220, #10552: greedy alignment took o, p, u from "openrouter", so the real "opus" scored worst
+	// #11220: greedy alignment took o, p, u from "openrouter", so the real "opus" scored worst
 	it("scores a contiguous occurrence instead of an earlier scattered alignment", () => {
 		const opus = fuzzyMatch("opus", "openrouter openrouter/anthropic/claude-opus-4.1");
 		const sonnet = fuzzyMatch("opus", "openrouter openrouter/anthropic/claude-sonnet-4.5");
@@ -120,7 +120,7 @@ describe("fuzzyFilter", () => {
 		assert.ok(result.map((r) => r.name).includes("foobar"));
 	});
 
-	// earendil-works/pi#11220, #10552: "radius radius/gpt" contains a, s, t, r, a in order, so every radius model matched there
+	// #11220: "radius radius/gpt" contains a, s, t, r, a in order, so every radius model matched there
 	it("ranks a model containing the query above models matching a shared provider prefix", () => {
 		const items = [
 			"radius radius/gpt-5.4 radius gpt-5.4 GPT 5.4",

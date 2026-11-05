@@ -172,9 +172,12 @@ function buildSection(self: SelfInfo, report: DoctorReport): DoctorSection {
 	rows.push(["Pi-Bolt", build ? `${build.version} (Pi ${VERSION})` : `not a Pi-Bolt build (Pi ${VERSION})`]);
 	rows.push(["build", `${process.platform}-${build?.variant ?? arch()}, JIT ${build?.jit ? "on" : "off"}`]);
 	const revision = (globalThis as { Bun?: { revision?: string } }).Bun?.revision;
+	// Pi-Bolt's engine is Bun 1.4.3 with 1.4.4's TLS fix (oven-sh/bun#46300: blocked keys, NSS 3.131.1 roots) in its patch
+	// series, so a check of the version number alone reads it as unpatched (#228).
+	const backports = build && process.versions.bun === "1.4.3" ? " with oven-sh/bun#46300 (TLS)" : "";
 	rows.push([
 		"engine",
-		`Bun ${process.versions.bun ?? "-"}${revision ? ` (${revision.slice(0, 12)})` : ""}, runtime stamp ${build?.runtimeStamp ?? "not recorded"}`,
+		`Bun ${process.versions.bun ?? "-"}${revision ? ` (${revision.slice(0, 12)})` : ""}${backports}, runtime stamp ${build?.runtimeStamp ?? "not recorded"}`,
 	]);
 	// `BUN_STATIC_HEAP_VERBOSE=1 pi-bolt --version` (docs/TROUBLESHOOTING.md): the executable says whether its compiled code
 	// is used.

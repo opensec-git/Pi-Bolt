@@ -3,6 +3,7 @@ import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import type { EntryRenderer } from "../../../core/extensions/types.ts";
 import type { CustomEntry } from "../../../core/session-manager.ts";
 import { liveTheme, theme } from "../theme/theme.ts";
+import { keyHint, keyText } from "./keybinding-hints.ts";
 
 /**
  * Component that renders a custom session entry from extensions.
@@ -51,7 +52,7 @@ export class CustomEntryComponent extends Container {
 		let component: Component | undefined;
 		try {
 			// (liveTheme: the extension's component may keep it, and a theme may change.)
-			component = this.renderer(this.entry, { expanded: this._expanded }, liveTheme);
+			component = this.renderer(this.entry, { expanded: this._expanded, keyText, keyHint }, liveTheme);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const box = new Box(this.outputPad, 1, (text) => theme.bg("customMessageBg", text));

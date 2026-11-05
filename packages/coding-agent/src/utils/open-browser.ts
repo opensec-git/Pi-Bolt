@@ -89,9 +89,13 @@ export function openBrowser(target: string): void {
 	// spawn reports launcher failures (for example, missing xdg-open) via an
 	// error event. Browser launch is best-effort: callers still present the target
 	// to the user, so keep the launcher failure from becoming a process crash.
+	// On WSL, xdg-open launches explorer.exe, which fails when the cwd's
+	// \\wsl.localhost\... path exceeds MAX_PATH (earendil-works/pi#11592). The
+	// target is a URL or an absolute path, so no launcher needs pi's cwd.
 	spawn(launch.file, launch.args, {
 		stdio: "ignore",
 		detached: true,
+		cwd: "/",
 		...(launch.verbatim && { windowsVerbatimArguments: true }),
 	})
 		.on("error", () => {})

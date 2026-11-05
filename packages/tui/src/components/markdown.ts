@@ -14,6 +14,7 @@ import {
 } from "../tui.ts";
 import {
 	applyBackgroundToLine,
+	cjkPunctuationRegex,
 	flattenLines,
 	isWebLink,
 	type SanitizedTerminalText,
@@ -77,9 +78,19 @@ function mayStartSetextHeading(src: string): boolean {
 	return false;
 }
 
-class StrictStrikethroughTokenizer extends Tokenizer {
+class MarkdownTokenizer extends Tokenizer {
 	override lheading(src: string): Tokens.Heading | undefined {
 		return !setextGuard || mayStartSetextHeading(src) ? super.lheading(src) : undefined;
+	}
+
+	override url(src: string): Tokens.Link | undefined {
+		const token = super.url(src);
+		if (!token) return undefined;
+
+		// Bare URLs stop at CJK punctuation; explicit links and angle autolinks
+		// use separate tokenizers and can still contain these characters.
+		const punctuationIndex = token.raw.search(cjkPunctuationRegex);
+		return punctuationIndex < 0 ? token : super.url(token.raw.slice(0, punctuationIndex));
 	}
 
 	override del(src: string): Tokens.Del | undefined {
@@ -269,7 +280,7 @@ function getMarkdownParser(): Marked {
 	if (!markdownParser) {
 		markdownParser = new Marked();
 		markdownParser.setOptions({
-			tokenizer: new StrictStrikethroughTokenizer(),
+			tokenizer: new MarkdownTokenizer(),
 		});
 		markdownParser.use({
 			tokenizer: { emStrong: markedCjkFriendly().tokenizer?.emStrong },
@@ -737,6 +748,11 @@ interface RenderedBlock {
 	settings: RenderSettings;
 	nextTokenType: string | undefined;
 	lines: string[];
+	/**
+	 * Highlighted lines of the block's code, by language and source (Markdown.highlightCode()): they survive a resize or new
+	 * spacing, until invalidate(). Held weakly, like the tokens.
+	 */
+	highlightedCode?: WeakRef<Map<string, string[]>>;
 }
 
 const renderedBlocks = new WeakMap<Token, RenderedBlock>();
@@ -831,6 +847,7 @@ export interface MarkdownTheme {
 	italic: (text: string) => string;
 	strikethrough: (text: string) => string;
 	underline: (text: string) => string;
+	/** Highlighted lines of a code block. A Markdown component reuses the result for the same code until invalidate(). */
 	highlightCode?: (code: string, lang?: string) => string[];
 	/** Prefix applied to each rendered code block line (default: "  ") */
 	codeBlockIndent?: string;
@@ -917,6 +934,19 @@ export class Markdown implements Component {
 		ends: number[];
 		substituted: boolean;
 	} = { array: new LiveLineArray(), ends: [], substituted: false };
+	/**
+	 * Highlighted code of the blocks the last render that highlighted any looked up or highlighted, and of this render so
+	 * far (highlightCode()): a block lexed again to a new token (the last blocks of a reply streaming in, or all of a text
+	 * lexed in full) takes the code it has in common with the one before from there. Held weakly, like the tokens.
+	 */
+	private highlightedCode?: WeakRef<Map<string, string[]>>;
+	private nextHighlightedCode?: Map<string, string[]>;
+	/**
+	 * Highlighted code of the block being rendered, and that of what was rendered for its token before: only set while
+	 * renderBlock() runs.
+	 */
+	private blockHighlightedCode?: Map<string, string[]>;
+	private knownHighlightedCode?: Map<string, string[]>;
 
 	constructor(
 		text: string,
@@ -965,8 +995,12 @@ export class Markdown implements Component {
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
-		// What the theme's functions give may have changed: nothing rendered with them is good any more.
+		// What the theme's functions give may have changed: nothing rendered with them is good any more, and that includes
+		// the default style's prefix and the highlighted code (RenderedBlock.highlightedCode is checked by generation).
 		invalidateRenderedMarkdown();
+		this.defaultStylePrefix = undefined;
+		this.highlightedCode = undefined;
+		this.nextHighlightedCode = undefined;
 		reportRenderChange(this);
 	}
 
@@ -1024,6 +1058,15 @@ export class Markdown implements Component {
 		if (known && known.nextTokenType === nextTokenType && sameSettings(known.settings, settings)) {
 			return known.lines;
 		}
+		// (The highlighted code of the block as it was rendered before, unless the theme was changed since: invalidate().)
+		this.knownHighlightedCode =
+			known !== undefined &&
+			known.settings.generation === settings.generation &&
+			known.settings.theme === settings.theme
+				? known.highlightedCode?.deref()
+				: undefined;
+		const highlightedCode = new Map<string, string[]>();
+		this.blockHighlightedCode = markdownCaching ? highlightedCode : undefined;
 
 		const width = settings.width;
 		const leftMargin = " ".repeat(this.paddingX);
@@ -1055,11 +1098,38 @@ export class Markdown implements Component {
 				}
 			}
 		}
+		this.blockHighlightedCode = undefined;
+		this.knownHighlightedCode = undefined;
 		flattenLines(lines);
 		if (markdownCaching) {
-			renderedBlocks.set(token, { settings, nextTokenType, lines });
+			renderedBlocks.set(token, {
+				settings,
+				nextTokenType,
+				lines,
+				...(highlightedCode.size > 0 ? { highlightedCode: new WeakRef(highlightedCode) } : {}),
+			});
 		}
 		return lines;
+	}
+
+	/**
+	 * theme.highlightCode(code, lang), reusing what it gave before for the same code until invalidate(): from the block's
+	 * last rendering (a resize, or new spacing), or from the last render that highlighted code (a block lexed again).
+	 */
+	private highlightCode(highlight: (code: string, lang?: string) => string[], code: string, lang?: string): string[] {
+		const block = this.blockHighlightedCode;
+		if (block === undefined) return highlight.call(this.theme, code, lang);
+		const key = `${lang ?? ""}\0${code}`;
+		let highlighted =
+			block.get(key) ??
+			this.knownHighlightedCode?.get(key) ??
+			this.nextHighlightedCode?.get(key) ??
+			this.highlightedCode?.deref()?.get(key);
+		if (highlighted === undefined) highlighted = highlight.call(this.theme, code, lang);
+		block.set(key, highlighted);
+		this.nextHighlightedCode ??= new Map();
+		this.nextHighlightedCode.set(key, highlighted);
+		return highlighted;
 	}
 
 	/**
@@ -1176,6 +1246,10 @@ export class Markdown implements Component {
 			this.wraps = this.nextWraps;
 			this.nextWraps = undefined;
 		}
+		if (this.nextHighlightedCode !== undefined) {
+			this.highlightedCode = new WeakRef(this.nextHighlightedCode);
+			this.nextHighlightedCode = undefined;
+		}
 		const holders = memoHolders;
 		if (holders[holders.length - 1] === this) return;
 		const index = holders.lastIndexOf(this);
@@ -1193,6 +1267,7 @@ export class Markdown implements Component {
 	 */
 	private dropMemos(): void {
 		this.wraps = undefined;
+		this.highlightedCode = undefined;
 		if (this.options.complete === true) {
 			this.live.tokens = undefined;
 			this.live.settings = undefined;
@@ -1473,10 +1548,14 @@ export class Markdown implements Component {
 
 			case "latexBlock": {
 				const latexToken = token as LatexToken;
-				const rendered =
+				let rendered =
 					!latexToken.pending && this.options.renderLatex !== false
-						? (renderLatex(latexToken.text, { display: true }) ?? latexToken.raw.trim())
-						: latexToken.raw.trim();
+						? renderLatex(latexToken.text, { display: true })
+						: undefined;
+				// A 2D layout cannot be wrapped row by row; fall back to the raw source when it does not fit.
+				if (rendered === undefined || rendered.split("\n").some((line) => visibleWidth(line) > width)) {
+					rendered = latexToken.raw.trim();
+				}
 				for (const line of rendered.split("\n")) {
 					lines.push(this.applyDefaultStyle(line));
 				}
@@ -1489,7 +1568,7 @@ export class Markdown implements Component {
 			case "code": {
 				const indent = this.theme.codeBlockIndent ?? "  ";
 				const codeLines: string[] = this.theme.highlightCode
-					? this.theme.highlightCode(token.text, token.lang)
+					? this.highlightCode(this.theme.highlightCode, token.text, token.lang)
 					: token.text.split("\n").map((codeLine: string) => this.theme.codeBlock(codeLine));
 				const shade = this.theme.codeBlockBg;
 				if (shade) {

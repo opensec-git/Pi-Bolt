@@ -41,7 +41,9 @@ async function forwardStream(
 	observeResult: (result: AssistantMessage | undefined) => void,
 ): Promise<void> {
 	let result: AssistantMessage | undefined;
-	if (source instanceof EventStream) {
+	// The fast path only for a stream that iterates as an EventStream does. A wrapper that passes `instanceof` but
+	// changes the events on the way, such as a Proxy whose iterator maps tool names back, must be iterated.
+	if (source instanceof EventStream && source[Symbol.asyncIterator] === EventStream.prototype[Symbol.asyncIterator]) {
 		// Pushed through as they come. The result is there once the source is done, as when its iteration ends.
 		source.forwardTo((event) => {
 			target.push(event);
