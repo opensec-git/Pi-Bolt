@@ -199,6 +199,7 @@ export function createHerdrExtension(
 						sessionReported = true;
 						continue;
 					}
+					if (!queued) break;
 					const { report, request } = queued;
 					queued = undefined;
 					const sent = await send(transport, request);
