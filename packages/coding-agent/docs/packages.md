@@ -43,6 +43,8 @@ npm sources are installed with `npm`, or with the command in the `npmCommand` se
 
 Versioned npm specifications are pinned. Git tags and commits are also pinned; package updates reconcile the checkout but do not move a configured ref.
 
+The Pi npm directory (`~/.pi/agent/npm`, or `.pi/npm` for project packages) is a package-manager project. Every install, update, and removal reifies it from its `package.json`, so a package placed there without being saved, for example with `npm install --no-save`, is removed together with its dependencies. Pi lists the removed packages after the command. To keep another package in that directory, save it as a dependency, for example `npm install --prefix ~/.pi/agent/npm --save <package>`.
+
 Relative local paths resolve from the settings file that contains them. A file path loads one extension. A directory follows normal package discovery rules.
 
 ## Create a package

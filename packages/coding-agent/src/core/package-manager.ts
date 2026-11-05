@@ -2,6 +2,7 @@ import type { ChildProcess, ChildProcessByStdio } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	chmodSync,
+	type Dirent,
 	existsSync,
 	globSync,
 	mkdirSync,
@@ -192,6 +193,13 @@ type LocalSource = {
 type ParsedSource = NpmSource | GitSource | LocalSource;
 
 type InstalledSourceScope = Exclude<SourceScope, "temporary">;
+
+/** Top-level packages in an npm install root that no dependency saved in the root package.json reaches. */
+type UnsavedNpmPackages = {
+	names: string[];
+	/** Unsaved packages that no other unsaved package depends on, such as a package installed with `--no-save`. */
+	roots: string[];
+};
 
 interface ConfiguredUpdateSource {
 	source: string;
@@ -1389,7 +1397,7 @@ export class DefaultPackageManager implements PackageManager {
 		const specs = sources.map((entry) => (entry.parsed.version ? entry.parsed.spec : `${entry.parsed.name}@latest`));
 
 		await this.withProgress("update", sourceLabel, message, async () => {
-			await this.installNpmBatch(specs, scope);
+			await this.installNpmBatch(specs, scope, sourceLabel);
 		});
 
 		this.reportUnchangedNpmUpdates(sources, scope);
@@ -1418,10 +1426,10 @@ export class DefaultPackageManager implements PackageManager {
 		}
 	}
 
-	private async installNpmBatch(specs: string[], scope: InstalledSourceScope): Promise<void> {
+	private async installNpmBatch(specs: string[], scope: InstalledSourceScope, sourceLabel: string): Promise<void> {
 		const installRoot = this.getNpmInstallRoot(scope, false);
 		this.ensureNpmProject(installRoot);
-		await this.runNpmCommand(this.getNpmInstallArgs(specs, installRoot));
+		await this.runNpmCommandInRoot(installRoot, this.getNpmInstallArgs(specs, installRoot), "update", sourceLabel);
 	}
 
 	async checkForAvailableUpdates(): Promise<PackageUpdate[]> {
@@ -2152,7 +2160,121 @@ export class DefaultPackageManager implements PackageManager {
 	private async installNpm(source: NpmSource, scope: SourceScope, temporary: boolean): Promise<void> {
 		const installRoot = this.getNpmInstallRoot(scope, temporary);
 		this.ensureNpmProject(installRoot);
-		await this.runNpmCommand(this.getNpmInstallArgs([source.spec], installRoot));
+		const args = this.getNpmInstallArgs([source.spec], installRoot);
+		if (temporary) {
+			await this.runNpmCommand(args);
+			return;
+		}
+		await this.runNpmCommandInRoot(installRoot, args, "install", `npm:${source.spec}`);
+	}
+
+	/**
+	 * Run an install or uninstall in a managed npm root and report what it pruned. npm, pnpm, and bun reify the
+	 * whole root, so packages that are not saved in its package.json (for example installed with
+	 * `npm install --no-save`) are removed along with their dependencies, and the package manager's summary line
+	 * is easy to miss.
+	 */
+	private async runNpmCommandInRoot(
+		installRoot: string,
+		args: string[],
+		action: ProgressEvent["action"],
+		source: string,
+	): Promise<void> {
+		const unsaved = this.getUnsavedNpmPackages(installRoot);
+		await this.runNpmCommand(args);
+		if (unsaved.names.length === 0) {
+			return;
+		}
+		const nodeModulesDir = join(installRoot, "node_modules");
+		const removed = unsaved.names.filter((name) => !existsSync(join(nodeModulesDir, name)));
+		if (removed.length === 0) {
+			return;
+		}
+		const removedRoots = unsaved.roots.filter((name) => removed.includes(name));
+		const listed = removedRoots.length > 0 ? removedRoots : removed;
+		this.emitProgress({
+			type: "progress",
+			action,
+			source,
+			message: `${this.getPackageManagerName()} removed ${removed.length} ${removed.length === 1 ? "package" : "packages"} not saved in ${join(installRoot, "package.json")}: ${listed.join(", ")}. Save packages kept in this folder as dependencies in that package.json so installs and updates keep them.`,
+		});
+	}
+
+	private getUnsavedNpmPackages(installRoot: string): UnsavedNpmPackages {
+		const nodeModulesDir = join(installRoot, "node_modules");
+		const saved = this.readNpmManifestDependencies(join(installRoot, "package.json"), true);
+		if (!saved || !existsSync(nodeModulesDir)) {
+			return { names: [], roots: [] };
+		}
+
+		// Dependency names of every installed copy of each package, top-level and nested.
+		const dependencies = new Map<string, Set<string>>();
+		const collect = (dir: string): void => {
+			for (const entry of this.listNodeModulesPackages(dir)) {
+				const deps = this.readNpmManifestDependencies(join(dir, entry.name, "package.json"), false) ?? [];
+				const known = dependencies.get(entry.name) ?? new Set<string>();
+				for (const dep of deps) known.add(dep);
+				dependencies.set(entry.name, known);
+				// Symlinked packages (pnpm, local links) resolve their dependencies outside this tree.
+				if (!entry.symlink) collect(join(dir, entry.name, "node_modules"));
+			}
+		};
+		collect(nodeModulesDir);
+
+		const reachable = new Set<string>();
+		const pending = [...saved];
+		for (let name = pending.pop(); name !== undefined; name = pending.pop()) {
+			if (reachable.has(name)) continue;
+			reachable.add(name);
+			pending.push(...(dependencies.get(name) ?? []));
+		}
+
+		const names = this.listNodeModulesPackages(nodeModulesDir)
+			.map((entry) => entry.name)
+			.filter((name) => !reachable.has(name))
+			.sort();
+		const required = new Set(names.flatMap((name) => [...(dependencies.get(name) ?? [])]));
+		return { names, roots: names.filter((name) => !required.has(name)) };
+	}
+
+	private listNodeModulesPackages(nodeModulesDir: string): Array<{ name: string; symlink: boolean }> {
+		const packages: Array<{ name: string; symlink: boolean }> = [];
+		const read = (dir: string, scope: string | undefined): void => {
+			let entries: Dirent[];
+			try {
+				entries = readdirSync(dir, { withFileTypes: true });
+			} catch {
+				return;
+			}
+			for (const entry of entries) {
+				// Skip .bin, .package-lock.json, and package manager stores such as .pnpm.
+				if (entry.name.startsWith(".")) continue;
+				const symlink = entry.isSymbolicLink();
+				if (!symlink && !entry.isDirectory()) continue;
+				if (!scope && entry.name.startsWith("@")) {
+					read(join(dir, entry.name), entry.name);
+					continue;
+				}
+				packages.push({ name: scope ? `${scope}/${entry.name}` : entry.name, symlink });
+			}
+		};
+		read(nodeModulesDir, undefined);
+		return packages;
+	}
+
+	private readNpmManifestDependencies(packageJsonPath: string, includeDevDependencies: boolean): string[] | undefined {
+		const fields = includeDevDependencies
+			? ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]
+			: ["dependencies", "optionalDependencies", "peerDependencies"];
+		try {
+			const pkg = JSON.parse(stripBom(readFileSync(packageJsonPath, "utf-8"))) as Record<string, unknown>;
+			return fields.flatMap((field) => {
+				const deps = pkg[field];
+				return deps && typeof deps === "object" ? Object.keys(deps) : [];
+			});
+		} catch {
+			return undefined;
+		}
 	}
 
 	private async uninstallNpm(source: NpmSource, scope: SourceScope): Promise<void> {
@@ -2165,14 +2287,19 @@ export class DefaultPackageManager implements PackageManager {
 		const packageManagerName = this.getPackageManagerName();
 		if (packageManagerName === "bun") {
 			// bun reinstalls the remaining packages on uninstall, peers included unless told otherwise.
-			await this.runNpmCommand(["uninstall", source.name, "--cwd", installRoot, "--omit=peer"]);
+			await this.runNpmCommandInRoot(
+				installRoot,
+				["uninstall", source.name, "--cwd", installRoot, "--omit=peer"],
+				"remove",
+				`npm:${source.name}`,
+			);
 			return;
 		}
 		const args = ["uninstall", source.name, "--prefix", installRoot];
 		if (packageManagerName !== "pnpm") {
 			args.push("--legacy-peer-deps", "--no-audit", "--no-fund");
 		}
-		await this.runNpmCommand(args);
+		await this.runNpmCommandInRoot(installRoot, args, "remove", `npm:${source.name}`);
 	}
 
 	private async installGit(source: GitSource, scope: SourceScope): Promise<void> {

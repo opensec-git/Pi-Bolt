@@ -2901,6 +2901,73 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			expect(warnings[0].message).toContain("1.0.1");
 		});
 
+		// opensec-git/Pi-Bolt#223
+		it("should report packages npm prunes from the npm root because they were not saved", async () => {
+			const npmRoot = join(agentDir, "npm");
+			const nodeModules = join(npmRoot, "node_modules");
+			const writePackage = (name: string, version: string, dependencies: Record<string, string> = {}) => {
+				mkdirSync(join(nodeModules, name), { recursive: true });
+				writeFileSync(join(nodeModules, name, "package.json"), JSON.stringify({ name, version, dependencies }));
+			};
+			mkdirSync(npmRoot, { recursive: true });
+			writeFileSync(
+				join(npmRoot, "package.json"),
+				JSON.stringify({ name: "pi-extensions", private: true, dependencies: { "saved-pkg": "^1.0.0" } }),
+			);
+			writePackage("saved-pkg", "1.0.0", { "hoisted-dep": "^1.0.0" });
+			writePackage("hoisted-dep", "1.0.0");
+			// Installed with `npm install --no-save`, so npm treats it and its dependencies as extraneous.
+			writePackage("@scope/unsaved-pkg", "1.0.0", { "unsaved-dep": "^1.0.0" });
+			writePackage("unsaved-dep", "1.0.0");
+			settingsManager.setPackages(["npm:saved-pkg"]);
+
+			vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.0.1"');
+			vi.spyOn(packageManager as any, "runCommand").mockImplementation(async () => {
+				// Simulate npm reifying the root: the update drops hoisted-dep and prunes the unsaved tree.
+				writePackage("saved-pkg", "1.0.1");
+				rmSync(join(nodeModules, "hoisted-dep"), { recursive: true });
+				rmSync(join(nodeModules, "@scope"), { recursive: true });
+				rmSync(join(nodeModules, "unsaved-dep"), { recursive: true });
+			});
+
+			const events: ProgressEvent[] = [];
+			packageManager.setProgressCallback((event) => events.push(event));
+
+			await packageManager.update();
+
+			const warnings = events.filter((event) => event.type === "progress");
+			expect(warnings).toHaveLength(1);
+			expect(warnings[0].source).toBe("npm:saved-pkg");
+			expect(warnings[0].message).toContain("removed 2 packages not saved in");
+			expect(warnings[0].message).toContain("@scope/unsaved-pkg");
+			expect(warnings[0].message).not.toContain("unsaved-dep");
+			expect(warnings[0].message).not.toContain("hoisted-dep");
+		});
+
+		it("should not report pruned packages when nothing unsaved was removed", async () => {
+			const npmRoot = join(agentDir, "npm");
+			const savedPath = join(npmRoot, "node_modules", "saved-pkg");
+			mkdirSync(savedPath, { recursive: true });
+			writeFileSync(
+				join(npmRoot, "package.json"),
+				JSON.stringify({ name: "pi-extensions", private: true, dependencies: { "saved-pkg": "^1.0.0" } }),
+			);
+			writeFileSync(join(savedPath, "package.json"), JSON.stringify({ name: "saved-pkg", version: "1.0.0" }));
+			settingsManager.setPackages(["npm:saved-pkg"]);
+
+			vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.0.1"');
+			vi.spyOn(packageManager as any, "runCommand").mockImplementation(async () => {
+				writeFileSync(join(savedPath, "package.json"), JSON.stringify({ name: "saved-pkg", version: "1.0.1" }));
+			});
+
+			const events: ProgressEvent[] = [];
+			packageManager.setProgressCallback((event) => events.push(event));
+
+			await packageManager.update();
+
+			expect(events.filter((event) => event.type === "progress")).toHaveLength(0);
+		});
+
 		it("should suggest npm source prefixes for update lookups", async () => {
 			settingsManager.setProjectPackages(["npm:example"]);
 
