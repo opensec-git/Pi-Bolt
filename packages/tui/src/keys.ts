@@ -29,6 +29,7 @@ let _kittyProtocolActive = false;
  * Called by ProcessTerminal after detecting protocol support.
  */
 export function setKittyProtocolActive(active: boolean): void {
+	if (active !== _kittyProtocolActive) typedInputMatches.clear();
 	_kittyProtocolActive = active;
 }
 
@@ -945,6 +946,34 @@ function parseKeyIdUncached(keyId: string): ParsedKeyId | null {
  * @param keyId - Key identifier (e.g., "ctrl+c", "escape", Key.ctrl("c"))
  */
 export function matchesKey(data: string, keyId: KeyId): boolean {
+	// Typed text (no ESC: no Kitty, modifyOtherKeys or legacy escape sequence) matches by comparing characters only, so the
+	// result depends on the input, the key ID and the Kitty flag alone, and parsing it writes no state. A key press is
+	// matched against every keybinding: the results for the few distinct characters typed are remembered. (Raw 0x08 is
+	// also read against the environment: Windows Terminal sends it for ctrl+backspace.)
+	if (data.length > MAX_TYPED_INPUT_LENGTH || data === "\x08" || data.includes("\x1b")) {
+		return matchesKeyUncached(data, keyId);
+	}
+	let byKey = typedInputMatches.get(data);
+	if (byKey === undefined) {
+		if (typedInputMatches.size >= MAX_TYPED_INPUTS) typedInputMatches.clear();
+		byKey = new Map();
+		typedInputMatches.set(data, byKey);
+	}
+	let matched = byKey.get(keyId);
+	if (matched === undefined) {
+		matched = matchesKeyUncached(data, keyId);
+		byKey.set(keyId, matched);
+	}
+	return matched;
+}
+
+/** The results of matchesKey for typed text, by input and then key ID (cleared when the Kitty flag changes). */
+const typedInputMatches = new Map<string, Map<string, boolean>>();
+const MAX_TYPED_INPUTS = 256;
+// (A character, a surrogate pair, or a few of them pasted without bracketed paste.)
+const MAX_TYPED_INPUT_LENGTH = 4;
+
+function matchesKeyUncached(data: string, keyId: KeyId): boolean {
 	const parsed = parseKeyId(keyId);
 	if (!parsed) return false;
 
