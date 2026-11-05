@@ -9,8 +9,10 @@ scales with the session, not with startup.
 
 Two modes:
 
-  --agent-dir DIR   copy DIR into each run's Pi home (settings.json, models.json and auth.json
-                    are still replaced with the fake model, so nothing real is contacted).
+  --agent-dir DIR   copy DIR's extensions and settings into each run's Pi home
+                    (settings.json is copied with providers removed; models.json
+                    and auth.json are still replaced with the fake model, so
+                    nothing real is contacted).
                     This is the "what do my extensions cost" mode.
   (default)         no extensions, the same throwaway home every other tool uses. Use it as the
                     baseline column, or to confirm the tool itself costs nothing.
@@ -26,6 +28,8 @@ size is included because an extension that rewrites the system prompt every turn
 whether or not the model reads them, and that cost does not show up in wall time at all.
 """
 
+from __future__ import annotations
+
 import argparse
 import contextlib
 import json
@@ -36,29 +40,42 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from harness import (  # noqa: E402
     MODEL_ARGS, PROMPT, Tty, cpu_ms, done, fake_model, memory_mb, parse_builds, pi_env, pinned, workdir,
 )
 
-# Copied from an agent directory into the run's home. Only what an extension can read: the
-# extension tree itself plus the config it consults. Credentials are deliberately excluded and
-# replaced below, so a real provider is never contacted and no secret enters a run.
-COPY = ("extensions", "AGENTS.md", "orchestrator.json", "chain.json")
-SKIP = ("node_modules", ".pi", "*.bak*", "sessions", "logs", "memory")
+# Copied from an agent directory into the run's home: the extension tree itself plus the
+# agent doc they consult. settings.json is handled separately below (copied with providers
+# stripped so `pi install` packages load but no real provider is reachable). Credentials are
+# deliberately excluded and replaced below, so a real provider is never contacted and no
+# secret enters a run.
+COPY = ("extensions", "AGENTS.md")
+SKIP = (".pi", "*.bak*", "sessions", "logs", "memory")
 
 
 @contextlib.contextmanager
-def extension_home(port: int, agent_dir: Optional[Path]):
+def extension_home(port: int, agent_dir: Path | None):
     """A Pi home that is the throwaway default, or that default plus the given extensions."""
     home = Path(tempfile.mkdtemp(prefix="pibolt-ext-"))
     models = [{"id": "fake-model", "contextWindow": 200000, "maxTokens": 8192}]
     (home / "models.json").write_text(json.dumps({"providers": {
         "fake": {"baseUrl": f"http://127.0.0.1:{port}/v1", "api": "openai-completions", "apiKey": "fake", "models": models},
     }}, indent=2))
-    (home / "settings.json").write_text(json.dumps({"lastChangelogVersion": "9999.0.0", "theme": "dark"}))
+    # settings.json carries `packages` (pi install), so copy it with providers stripped:
+    # runs load the same packages but can only reach the fake model.
+    settings_src = agent_dir / "settings.json" if agent_dir else None
+    if settings_src and settings_src.exists():
+        try:
+            settings = json.loads(settings_src.read_text())
+        except json.JSONDecodeError:
+            settings = {}
+        settings.pop("providers", None)
+        settings.setdefault("lastChangelogVersion", "9999.0.0")
+        (home / "settings.json").write_text(json.dumps(settings, indent=2))
+    else:
+        (home / "settings.json").write_text(json.dumps({"lastChangelogVersion": "9999.0.0", "theme": "dark"}))
     (home / "auth.json").write_text("{}")
     if agent_dir:
         for name in COPY:
