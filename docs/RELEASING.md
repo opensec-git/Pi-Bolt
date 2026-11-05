@@ -30,7 +30,7 @@ release key is a secret of the `release` environment, used only by `publish` run
 ## A release, step by step
 
 1. Write the release notes in `docs/releases/X.Y.Z.md`; they become the GitHub release's text.
-2. `scripts/bump-version.sh` (the last number goes up by one, 0.7.0 to 0.7.1; `--version X.Y.Z` sets another), commit, and push
+2. `scripts/bump-version.sh` (the last number goes up by one, from 0 to 9, then the middle one: 1.0.8 to 1.0.9, 1.0.9 to 1.1.0; `--version X.Y.Z` sets another), commit, and push
    to `pi-bolt` (or merge a pull request).
 3. When `ci` passes, `tag` tags the commit `bolt-vX.Y.Z` and runs `release`, which builds and tests for about an hour and leaves
    a draft; `publish` then signs it and publishes it. `tag` leaves a version without its release notes untagged.
@@ -296,7 +296,7 @@ By hand:
 1. Merge the tag into `pi-bolt` (`git fetch https://github.com/earendil-works/pi.git tag vX.Y.Z && git merge vX.Y.Z`). Where
    Pi-Bolt changed the same code, keep both: Pi-Bolt's changes are its commits on top of the previous Pi tag
    (`git log vX.Y.Z..pi-bolt -- packages/`).
-2. `scripts/bump-version.sh --pi X.Y.Z` (the last number goes up by one, as for any release), `scripts/prepare-pi.sh --refresh-models`
+2. `scripts/bump-version.sh --pi X.Y.Z` (the version goes up as for any release), `scripts/prepare-pi.sh --refresh-models`
    (the model catalog of the new Pi, `packages/ai/src/providers/data`), then `scripts/train-profile.sh` **on Linux**, and commit
    `profiles/pi-X.Y.Z` and the catalog. A profile recorded on Linux serves every platform (recorded on macOS first with
    `--out DIR` and merged in on Linux with `--with DIR`, it also places what only macOS runs). On Windows, `scripts\train-heap.ps1`
