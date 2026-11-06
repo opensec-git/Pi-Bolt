@@ -13,18 +13,18 @@
  * Only the interactive session reports: print, JSON and RPC runs, and subagents (sessions without a UI), would otherwise
  * take over the pane of the session that started them.
  *
- * With `pi-bolt --herdr-shim`, Pi-Bolt reports as Herdr's official Pi integration (`source=herdr:pi`, `agent=pi`)
+ * With `pi-bolt --herdr-pi`, Pi-Bolt reports as Herdr's official Pi integration (`source=herdr:pi`, `agent=pi`)
  * instead, so Herdr records `agent_session` for `herdr agent list`. Restoring is the same either way: Herdr runs the resume
- * command a report carries before its own plan, and the reported command still starts `pi-bolt`, with `--herdr-shim`. Herdr
+ * command a report carries before its own plan, and the reported command still starts `pi-bolt`, with `--herdr-pi`. Herdr
  * only accepts that pair from a pane whose foreground process is named `pi` (its process table is fixed), so the flag
- * re-execs Pi-Bolt with `pi` as its command name (shim.ts); a display-only metadata report keeps the sidebar showing `Pi-Bolt`
+ * re-execs Pi-Bolt with `pi` as its command name (pi-name.ts); a display-only metadata report keeps the sidebar showing `Pi-Bolt`
  * rather than `pi`.
  */
 
 import { isAbsolute } from "node:path";
 import { COMMAND_NAME, PRODUCT_NAME } from "../../config.ts";
 import type { ExtensionContext, ExtensionFactory } from "../../core/extensions/types.ts";
-import { isHerdrShim } from "./shim.ts";
+import { isHerdrPi } from "./pi-name.ts";
 import { type HerdrRequest, type HerdrTransport, herdrFromEnvironment } from "./transport.ts";
 
 const SOURCE = "pi-bolt";
@@ -57,15 +57,15 @@ async function send(transport: HerdrTransport, request: () => HerdrRequest | und
 }
 
 /**
- * The command Herdr runs to reopen this session after a server restart: `pi-bolt --session <file>`, or with `--herdr-shim`
- * in shim mode so the restored process keeps reporting as the official Pi integration. Herdr refuses a report whose
- * command has an apostrophe or a control character in it or is over 8 KiB, so such a session gets no command (its state
- * still reaches Herdr).
+ * The command Herdr runs to reopen this session after a server restart: `pi-bolt --session <file>`, or with `--herdr-pi`
+ * in front when reporting as Herdr's Pi integration, so the restored process reports the same way. Herdr refuses a report
+ * whose command has an apostrophe or a control character in it or is over 8 KiB, so such a session gets no command (its
+ * state still reaches Herdr).
  */
-export function resumeArgv(sessionFile: string | undefined, shim = false): string[] | undefined {
+export function resumeArgv(sessionFile: string | undefined, piIntegration = false): string[] | undefined {
 	if (!sessionFile || !isAbsolute(sessionFile)) return undefined;
-	const argv = shim
-		? [COMMAND_NAME, "--herdr-shim", "--session", sessionFile]
+	const argv = piIntegration
+		? [COMMAND_NAME, "--herdr-pi", "--session", sessionFile]
 		: [COMMAND_NAME, "--session", sessionFile];
 	if (argv.some((arg) => arg.includes("'") || hasControlCharacter(arg))) return undefined;
 	if (argv.reduce((bytes, arg) => bytes + Buffer.byteLength(arg), 0) > 8192) return undefined;
@@ -89,9 +89,9 @@ export function createHerdrExtension(
 		const herdr = herdrFromEnvironment(env, platform);
 		if (!herdr) return;
 		const { transport, paneId } = herdr;
-		const shim = isHerdrShim(env);
-		const source = shim ? PI_SOURCE : SOURCE;
-		const agent = shim ? PI_AGENT : AGENT;
+		const piIntegration = isHerdrPi(env);
+		const source = piIntegration ? PI_SOURCE : SOURCE;
+		const agent = piIntegration ? PI_AGENT : AGENT;
 
 		// Herdr ignores a report whose number is not above the last one from this source, across restarts of Pi-Bolt too.
 		let seq = Date.now() * 1000;
@@ -147,7 +147,7 @@ export function createHerdrExtension(
 					? { agent_session_id: sessionId }
 					: undefined;
 			if (!sessionRef) return undefined;
-			const argv = resumeArgv(sessionFile, shim);
+			const argv = resumeArgv(sessionFile, piIntegration);
 			return {
 				method: "pane.report_agent_session",
 				params: {
@@ -162,7 +162,7 @@ export function createHerdrExtension(
 			};
 		}
 		function queueSession(sessionStartSource?: string) {
-			if (!shim) return;
+			if (!piIntegration) return;
 			// Nothing to report (an in-memory session) is not something to retry on every state change.
 			if (!sessionFile && !sessionId) {
 				queuedSession = undefined;
@@ -204,7 +204,7 @@ export function createHerdrExtension(
 					queued = undefined;
 					const sent = await send(transport, request);
 					// The guards on the display name need the state report to have made `pi` the pane's agent first.
-					if (sent && shim && !metadataSent) metadataSent = await send(transport, metadataRequest);
+					if (sent && piIntegration && !metadataSent) metadataSent = await send(transport, metadataRequest);
 					if (!sent && !queued && last === report) last = undefined;
 				}
 			} finally {
@@ -216,7 +216,7 @@ export function createHerdrExtension(
 			if (!reporting) return;
 			const next = { ...desiredState(), sessionFile };
 			const sessionChanged = last?.sessionFile !== next.sessionFile;
-			const needsSession = shim && !sessionReported;
+			const needsSession = piIntegration && !sessionReported;
 			if (
 				!force &&
 				!needsSession &&
@@ -228,8 +228,8 @@ export function createHerdrExtension(
 				return;
 			}
 			last = next;
-			if (shim && (force || sessionChanged || !sessionReported)) queueSession(sessionStartSource);
-			const argv = resumeArgv(sessionFile, shim);
+			if (piIntegration && (force || sessionChanged || !sessionReported)) queueSession(sessionStartSource);
+			const argv = resumeArgv(sessionFile, piIntegration);
 			const params = {
 				pane_id: paneId,
 				source,

@@ -284,12 +284,12 @@ saves the last two for a server restart. A `pi-bolt` pane reports its state and 
 restart reopens the conversation, but Herdr stores the session only for the agents it ships, so `herdr agent list` and
 `herdr pane get` show none.
 
-`pi-bolt --herdr-shim` reports as Herdr's own Pi integration (`source=herdr:pi`, `agent=pi`), which is one of them, so the
+`pi-bolt --herdr-pi` reports as Herdr's own Pi integration (`source=herdr:pi`, `agent=pi`), which is one of them, so the
 session is stored. Restoring does not depend on the flag: Herdr runs the resume command Pi-Bolt reports either way, and that
-command carries `--herdr-shim`, so on Linux and macOS a restored session reports the same way. Herdr identifies an agent by
+command carries `--herdr-pi`, so on Linux and macOS a restored session reports the same way. Herdr identifies an agent by
 the command name of the foreground process, so the flag re-execs an interactive Pi-Bolt with `pi` as that name, and
 a display-only metadata report keeps the sidebar naming `Pi-Bolt`. Windows has no `exec`: start Pi-Bolt through a file named
-`pi.exe`, a hardlink or a copy, and pass `--herdr-shim`; a process named otherwise gets a startup warning and reports as
+`pi.exe`, a hardlink or a copy, and pass `--herdr-pi`; a process named otherwise gets a startup warning and reports as
 `pi-bolt`. The resume command starts `pi-bolt` either way, so on Windows a restored pane reports as `pi-bolt` again and only
 the run started as `pi.exe` stores the session.
 

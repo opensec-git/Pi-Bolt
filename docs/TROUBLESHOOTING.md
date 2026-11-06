@@ -165,7 +165,7 @@ Pi (`pi`), which must be installed.
 **`herdr agent list` shows the Pi-Bolt pane without a session.** Herdr stores an agent's session (`agent_session`) only for
 the integrations it ships, and Pi-Bolt is not one of them. The pane's state and its resume command are stored anyway, so the
 sidebar and a Herdr restart work; what is missing is the session, which automation reading `herdr agent list` or
-`herdr pane get` does not find. Start Pi-Bolt in the pane with `pi-bolt --herdr-shim`, which reports as Herdr's own Pi
+`herdr pane get` does not find. Start Pi-Bolt in the pane with `pi-bolt --herdr-pi`, which reports as Herdr's own Pi
 integration so the session is stored ([README](../README.md#herdr)). The flag needs the running process to be named `pi`: on
 Linux and macOS Pi-Bolt re-executes itself with `pi` as its command name, and on Windows the process has to start from a
 file named `pi.exe`, a hardlink or a copy. When that did not happen, a startup warning says so and Pi-Bolt reports as

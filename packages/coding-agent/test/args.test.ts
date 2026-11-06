@@ -428,10 +428,10 @@ describe("parseArgs", () => {
 		});
 	});
 
-	describe("--herdr-shim flag", () => {
-		test("parses --herdr-shim as a known flag, not an extension flag", () => {
-			const result = parseArgs(["--herdr-shim"]);
-			expect(result.herdrShim).toBe(true);
+	describe("--herdr-pi flag", () => {
+		test("parses --herdr-pi as a known flag, not an extension flag", () => {
+			const result = parseArgs(["--herdr-pi"]);
+			expect(result.herdrPi).toBe(true);
 			expect(result.unknownFlags.size).toBe(0);
 		});
 	});

@@ -95,7 +95,7 @@ async function startedInHerdr(
 		mode?: string;
 		sessionFile?: string;
 		answer?: (request: Request) => Record<string, unknown> | Promise<Record<string, unknown>>;
-		shim?: boolean;
+		piIntegration?: boolean;
 	} = {},
 ) {
 	const herdr = await fakeHerdr(options.answer);
@@ -103,7 +103,7 @@ async function startedInHerdr(
 		HERDR_ENV: "1",
 		HERDR_SOCKET_PATH: herdr.socketPath,
 		HERDR_PANE_ID: "w1:p2",
-		...(options.shim ? { PIBOLT_HERDR_SHIM: "1" } : {}),
+		...(options.piIntegration ? { PIBOLT_HERDR_PI: "1" } : {}),
 	};
 	const fake = fakePi();
 	let idle = true;
@@ -236,8 +236,8 @@ describe("Herdr extension", () => {
 		expect(run.herdr.requests).toEqual([]);
 	});
 
-	test("shim mode reports as the official Pi integration and keeps the Pi-Bolt name", async () => {
-		const run = await startedInHerdr({ shim: true });
+	test("--herdr-pi reports as the official Pi integration and keeps the Pi-Bolt name", async () => {
+		const run = await startedInHerdr({ piIntegration: true });
 		await until(() => run.herdr.requests.length === 3);
 		expect(run.herdr.requests[0].params).toMatchObject({
 			pane_id: "w1:p2",
@@ -245,7 +245,7 @@ describe("Herdr extension", () => {
 			agent: "pi",
 			agent_session_path: "/work/s.jsonl",
 			session_start_source: "startup",
-			resume_argv: [COMMAND_NAME, "--herdr-shim", "--session", "/work/s.jsonl"],
+			resume_argv: [COMMAND_NAME, "--herdr-pi", "--session", "/work/s.jsonl"],
 		});
 		expect(run.herdr.requests[1].params).toMatchObject({
 			pane_id: "w1:p2",
@@ -253,7 +253,7 @@ describe("Herdr extension", () => {
 			agent: "pi",
 			state: "idle",
 			agent_session_path: "/work/s.jsonl",
-			resume_argv: [COMMAND_NAME, "--herdr-shim", "--session", "/work/s.jsonl"],
+			resume_argv: [COMMAND_NAME, "--herdr-pi", "--session", "/work/s.jsonl"],
 		});
 		expect(run.herdr.requests[2]).toMatchObject({
 			method: "pane.report_metadata",
@@ -267,8 +267,8 @@ describe("Herdr extension", () => {
 		});
 	});
 
-	test("shim mode releases the official Pi agent", async () => {
-		const run = await startedInHerdr({ shim: true });
+	test("--herdr-pi releases the official Pi agent", async () => {
+		const run = await startedInHerdr({ piIntegration: true });
 		await until(() => run.herdr.requests.length === 3);
 		await run.fire("session_shutdown", { type: "session_shutdown", reason: "quit" });
 		await until(() => run.herdr.requests.length === 4);
@@ -365,7 +365,7 @@ describe("Herdr extension", () => {
 		expect(resumeArgv("/home/me/s.jsonl")).toEqual([COMMAND_NAME, "--session", "/home/me/s.jsonl"]);
 		expect(resumeArgv("/home/me/s.jsonl", true)).toEqual([
 			COMMAND_NAME,
-			"--herdr-shim",
+			"--herdr-pi",
 			"--session",
 			"/home/me/s.jsonl",
 		]);
@@ -495,7 +495,7 @@ describe("Herdr executable (Windows)", () => {
 					seq: 9,
 					agent_session_path: "/work/s.jsonl",
 					session_start_source: "startup",
-					resume_argv: ["pi-bolt", "--herdr-shim", "--session", "/work/s.jsonl"],
+					resume_argv: ["pi-bolt", "--herdr-pi", "--session", "/work/s.jsonl"],
 				},
 			}),
 		).toEqual([
@@ -514,7 +514,7 @@ describe("Herdr executable (Windows)", () => {
 			"startup",
 			"--",
 			"pi-bolt",
-			"--herdr-shim",
+			"--herdr-pi",
 			"--session",
 			"/work/s.jsonl",
 		]);

@@ -65,7 +65,7 @@ import { printTimings, resetTimings, time } from "./core/timings.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "./core/trust-manager.ts";
 import { loadAcpMode } from "./extensions/acp/mode.lazy.ts";
 import { quietOtherHerdrReporters } from "./extensions/herdr/index.ts";
-import { HERDR_SHIM_ENV, reExecAsPi, shouldReExecAsPi } from "./extensions/herdr/shim.ts";
+import { HERDR_PI_ENV, reExecAsPi, shouldReExecAsPi } from "./extensions/herdr/pi-name.ts";
 import { builtInExtensions } from "./extensions/index.ts";
 import { loadMcpCommand } from "./extensions/mcp/cli.lazy.ts";
 import { loadMcpMode } from "./extensions/mcp-server/mode.lazy.ts";
@@ -715,22 +715,22 @@ export async function main(args: string[], options?: MainOptions) {
 	}
 
 	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
-	// `pi-bolt --herdr-shim` reports as Herdr's official Pi integration, which needs the process to be named `pi`.
+	// `pi-bolt --herdr-pi` reports as Herdr's official Pi integration, which needs the process to be named `pi`.
 	// Re-exec with `pi` as argv[0] before the TUI (and its session) starts; the flag stays in args so the restored command
-	// re-enters shim mode. Outside Herdr there is nothing to report to, and no reason to change the name.
-	if (PIBOLT && parsed.herdrShim && process.env.HERDR_ENV === "1") {
+	// re-enters Pi-integration mode. Outside Herdr there is nothing to report to, and no reason to change the name.
+	if (PIBOLT && parsed.herdrPi && process.env.HERDR_ENV === "1") {
 		// Herdr on Windows reads the command line rather than argv[0]: only a process started as pi.exe is seen
 		// as its Pi integration. Keep the ordinary pi-bolt reports when that is not the case.
 		if (process.platform === "win32" && basename(process.argv0).toLowerCase() !== "pi.exe") {
 			console.error(
-				chalk.yellow("Warning: --herdr-shim needs a pi.exe process on Windows; reporting as pi-bolt instead"),
+				chalk.yellow("Warning: --herdr-pi needs a pi.exe process on Windows; reporting as pi-bolt instead"),
 			);
 		} else {
-			process.env[HERDR_SHIM_ENV] = "1";
+			process.env[HERDR_PI_ENV] = "1";
 			if (appMode === "interactive" && shouldReExecAsPi()) {
 				if (!reExecAsPi(args)) {
-					delete process.env[HERDR_SHIM_ENV];
-					console.error(chalk.yellow("Warning: could not start --herdr-shim; reporting as pi-bolt"));
+					delete process.env[HERDR_PI_ENV];
+					console.error(chalk.yellow("Warning: could not start --herdr-pi; reporting as pi-bolt"));
 				}
 			}
 		}
