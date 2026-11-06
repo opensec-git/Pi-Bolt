@@ -35,11 +35,12 @@ PACKAGE_SKIP = ["examples/extensions/doom-overlay/doom/build"]
 
 def read_env(path):
     env = {}
-    for line in open(path):
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, v = line.split("=", 1)
-            env[k] = v
+    with open(path) as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                k, v = line.split("=", 1)
+                env[k] = v
     return env
 
 
@@ -197,7 +198,8 @@ def write_licenses():
     ]
     if not ENGINE_ONLY:
         lines += [f"curl {V['CURL_VERSION']}", f"git {V['GIT_VERSION']}", ""]
-        lines += open("/stage/userland/licenses/debian-packages.txt").read().splitlines()
+        with open("/stage/userland/licenses/debian-packages.txt") as f:
+            lines += f.read().splitlines()
     with open(f"{lic}/VERSIONS.txt", "w") as f:
         f.write("\n".join(lines) + "\n")
 

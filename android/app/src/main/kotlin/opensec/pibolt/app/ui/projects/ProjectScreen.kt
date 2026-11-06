@@ -269,8 +269,10 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
                         )
                     }
                 }
+                // The engine's own session file: a new session or a fork is not the file the session was opened with.
+                val liveFile = liveHere?.controller?.sessionFile ?: liveHere?.sessionFile
                 items(list, key = { it.file }, contentType = { "session" }) { s ->
-                    val isLive = liveHere != null && (liveHere.sessionFile == s.file || (liveHere.sessionFile == null && s == list.first()))
+                    val isLive = liveHere != null && (if (liveFile != null) liveFile == s.file else s == list.first())
                     SessionRow(
                         s,
                         live = if (isLive) liveHere?.controller else null,
