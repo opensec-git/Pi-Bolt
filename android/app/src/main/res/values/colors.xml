@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="splash_bg">#FBFAF7</color>
+    <!-- Graphite canvas: the window behind the first frame (the app is dark only). -->
+    <color name="splash_bg">#0B0C0E</color>
 </resources>

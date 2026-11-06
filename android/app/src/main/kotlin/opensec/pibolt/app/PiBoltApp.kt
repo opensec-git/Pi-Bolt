@@ -12,6 +12,7 @@ import okhttp3.OkHttpClient
 import opensec.pibolt.app.data.DeviceIdentity
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.data.HostStore
+import opensec.pibolt.app.data.SettingsStore
 import opensec.pibolt.app.session.Notifications
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.protocol.PairingPayload
@@ -21,6 +22,8 @@ class PiBoltApp : Application() {
     lateinit var hosts: HostStore
         private set
     lateinit var identity: DeviceIdentity
+        private set
+    lateinit var settings: SettingsStore
         private set
     val http: OkHttpClient by lazy { RemoteBackend.defaultClient() }
 
@@ -43,6 +46,7 @@ class PiBoltApp : Application() {
     override fun onCreate() {
         super.onCreate()
         hosts = HostStore(this)
+        settings = SettingsStore(this)
         identity = DeviceIdentity(this)
         Notifications.createChannels(this)
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
