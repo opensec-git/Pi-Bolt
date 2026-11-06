@@ -150,11 +150,60 @@ alpha). No overshoot except sheet drag release.
 
 ## Screens
 
-**Computers (home).** Large title "Pi-Bolt" with the mark, then paired computers as 72dp cards (surface1, line,
-radius 12): status dot, name (body/600), second line "LAN · tunnel · v1.1.1 · last seen 5 min ago" in meta ink3,
-overflow menu (Forget, with a confirmation). The live computer shows a Quad in its state. Bottom: "Scan QR code"
-(accent, primary) and "Paste link" (surface2, secondary), both 52dp. Empty state: animated mark, "Control Pi-Bolt
-from your phone", three numbered steps (run `/remote-control`, scan, done). Top-right: Settings.
+**Home.** Pi-Bolt runs on the phone, so Home is projects first and remote control second. Large title "Pi-Bolt"
+with the mark, then:
+- Engine banner (only when it has something to say): Preparing (Quad Connect 20dp ink2, "Setting up Pi-Bolt", the
+  step in meta ink3), Failed (dangerSoft fill, danger @ 40% line, error glyph, message, Retry in accent), Unavailable
+  (surface1, phone-off glyph, the reason, Details). 64dp min, radius 12. Tapping it opens the details sheet: what
+  happened, the raw detail in a mono well (surface1, radius 12, Copy), Close and Retry when a retry may help.
+- "Connect a model" card when no provider has a key and the first-run sheet was already closed (key glyph, Add key).
+- "On this phone": project cards, 72dp like host cards (surface1, line, radius 12): a 40dp tile (surface2, radius 10,
+  folder glyph ink2; the live session's Quad 20dp with an 8dp status pip, success or warning, while one is open), the
+  title (bodyStrong; a 13dp pin glyph when pinned), then the last session's name or first prompt (meta ink3, ellipsized)
+  and " · 3 min ago" that never truncates. Overflow and long press: Pin to top, Rename, Delete (danger). Order: pinned,
+  then most recently active, then title.
+- No projects: a surface1 card (radius 18) with the mark, "Code on this phone", one line on what a project is, New
+  project (primary) and Clone from git (secondary).
+- "Computers · N" header (metaStrong ink3, "Remote control" meta and a chevron that turns 180° in a graphicsLayer):
+  folded by default once projects exist, open when there are none, when the engine is unavailable or a computer
+  session is live. Open: host cards as before, a one-line hint, Scan QR code and Paste link (secondary, side by side).
+- Bottom: "New project" (accent, primary, full width) on a canvas fade. Nothing below the title is placed until the
+  folders were read (a few ms, off the main thread), so the computers section never jumps.
+
+**New project sheet.** Title, one line, a segmented "Empty folder | Clone from git". Clone shows the repository URL
+(monoSmall, URI keyboard, no autocorrect) with "Pi runs git clone in the new folder"; the URL names the folder until
+the name is edited. Name field, then `projects/<name>` (monoMeta ink3) or the error in danger. Cancel and Create/Clone.
+Creating opens a new session in the folder; for a clone the first prompt asks Pi to `git clone <url> .` and is sent as
+soon as the session can take it. URLs with shell syntax are refused; names may not contain slashes, start with a dot
+or collide (case-insensitive) with another project.
+
+**Rename and delete.** Rename changes the title shown in the app only ("The folder stays projects/x"): Pi files its
+sessions by path, so the folder never moves. Delete is a confirmation sheet that counts what goes ("with 312 files and
+4 saved sessions"), then removes the folder and those session files.
+
+**Project.** Shared bounds from the project card (title as a shared element, like host card to session). Back,
+overflow (Pin, Rename, Delete), the title in display, the folder chip (`projects/x`, monoMeta ink2 on surface1, radius
+8) and, inside a git repository, the branch from `.git/HEAD` (branch glyph + monoMeta ink3). New session (primary,
+full width), then a segmented "Sessions · N | Files".
+- Sessions: 64dp cards (surface1, line, radius 12): chat glyph ink3 (the live session: its Quad, lineStrong border,
+  "Open" first in the meta line), the session name or first prompt (body ink1), "24 messages · 2 h ago" (meta ink3).
+  Tap resumes; the live one resumes without reopening.
+- Files: one folder at a time. An "up" row (back glyph + the relative path, monoSmall ink2) when inside a folder;
+  52dp rows: folder or file glyph, the name in monoSmall (dot files ink3), size or "N items" (meta ink3) at the end.
+  Folders first, then files, by name. Tapping a file opens the full-screen viewer (first 512 KB; binary files say so).
+  Back goes up a folder before it leaves the screen.
+
+**Provider sheet (first run and Add provider).** Opens by itself once, 450 ms after the first frame of Home, when no
+provider has a key. Eyebrow "Welcome to Pi-Bolt" (first run only), "Connect a model", one line saying the key stays on
+the phone. Search field, then 60dp provider rows (28dp initial badge surface3 radius 7, name body, note meta ink3,
+"✓ Added" for configured ones); "Later" (first run). Picking one slides to the key step (standard, enter easing):
+back, badge, provider name (title), what happens to the key, the key field (mono, obscured, Password keyboard, no
+autocorrect; Paste when empty, Show/Hide when filled), a lock line "Stored on this device only" (or the error in
+danger), "Get a key at console.anthropic.com" (accent, opens the browser), Cancel and Save key. The key lives only in
+the sheet's memory (never saved instance state), is cleared after saving and never logged.
+
+**Settings > Model providers** comes first: configured providers (badge, name, "Key stored on this phone", a delete
+action that asks first and says the key is not revoked at the provider) and Add provider.
 
 **Pair confirmation.** A sheet (not an AlertDialog) for links opened from outside the app: host name, addresses,
 "Only continue if you just ran /remote-control on this computer", a warning line if it ends the current session,
@@ -240,6 +289,11 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   SectionLabel headings, nothing sends by itself. Recent prompts persist per computer (20 at most) in
   `recent-prompts.json`.
 - Connection banner under the top bar: Quad Connect + "Reconnecting in 3s" countdown + Retry; slides down/up.
+- On this phone (a project's session): the title is the project's name and the subtitle drops the folder (session
+  name and context only); back reads "Project". Overflow: New session, Rename session, Session info (no Disconnect or
+  Forget computer). The banner reads "Starting Pi-Bolt…" (Quad Connect) and "Engine stopped" with Restart (danger
+  soft, power glyph). Long press on a user message adds "Fork from here": Pi forks the session at that message and
+  its text comes back to the composer to edit and send. Recent prompts are kept per project.
 - Sheets (ModalBottomSheet, predictive back): model picker (search, current first, 60dp rows with provider initial),
   thinking level (52dp option rows with a description), Pi's dialogs (Quad Wait eyebrow "Pi is asking", title,
   message in a command well when it looks like a command (surface1, radius 12, the cwd in mono meta ink3 with Copy,
@@ -261,3 +315,19 @@ startup so the first frame has the right theme).
 
 Its hex values, Geist fonts, 4x4 pixel grid, 80 ms cadence, bolt pattern and lime colour. Hover actions become
 long-press sheets; long output goes to full-screen viewers, never nested scroll boxes.
+
+## Smoothness
+
+- No disk or JSON work on the main thread at startup or on navigation: hosts, recent prompts, project metadata and
+  the engine's session index load on background threads (`data/BackgroundFile`), project folders and sessions on
+  `Dispatchers.IO`. The one exception is settings.json (a few hundred bytes), read before the first frame so it has
+  the right theme instead of flashing the default one.
+- Lists use stable keys and a contentType per row kind. Transcript rows, markdown blocks and tool data are
+  `@Immutable`, so with strong skipping a finished row is compared by value and skipped; only the block being written
+  recomposes per streamed frame. Markdown re-parses only the tail block; closed code blocks are highlighted once and
+  cached by content. A message over 20,000 characters that needs a full parse (a restored session) is parsed on
+  `Dispatchers.Default` and shows its first lines as plain text meanwhile.
+- Cards that show a live session read only the two or three values they display through `derivedStateOf`, so a
+  streamed frame does not recompose Home.
+- Nothing animates while idle: spinners only while busy, the mark's entrance once per launch. Rotations, scales and
+  press feedback run in `graphicsLayer`; size changes are limited to expand/collapse and sheets.

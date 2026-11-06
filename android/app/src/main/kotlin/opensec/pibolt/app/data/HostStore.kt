@@ -14,7 +14,6 @@ import opensec.pibolt.protocol.ProtocolJson
 import opensec.pibolt.protocol.arr
 import opensec.pibolt.protocol.long
 import opensec.pibolt.protocol.str
-import java.io.File
 
 /** A computer this phone paired with. [id] is the host's public key (base64url). */
 data class Host(
@@ -57,16 +56,23 @@ data class Host(
     }
 }
 
-/** Paired computers, in a small JSON file, most recently used first. */
+/**
+ * Paired computers, in a small JSON file, most recently used first. The file is read on a background thread:
+ * [hosts] is empty for the first few ms after launch; lookups and changes wait for that read.
+ */
 class HostStore(context: Context) {
-    private val file = File(context.filesDir, "hosts.json")
-    private val _hosts = MutableStateFlow(load())
+    private val _hosts = MutableStateFlow<List<Host>>(emptyList())
     val hosts: StateFlow<List<Host>> = _hosts.asStateFlow()
+    private val file = BackgroundFile(context, "hosts.json") { text -> _hosts.value = parse(text) }
 
-    fun get(id: String): Host? = _hosts.value.firstOrNull { it.id == id }
+    fun get(id: String): Host? {
+        file.awaitLoaded()
+        return _hosts.value.firstOrNull { it.id == id }
+    }
 
     @Synchronized
     fun upsert(host: Host) {
+        file.awaitLoaded()
         val others = _hosts.value.filterNot { it.id == host.id }
         save((listOf(host) + others).sortedByDescending { it.lastConnectedAt })
     }
@@ -79,22 +85,17 @@ class HostStore(context: Context) {
 
     @Synchronized
     fun remove(id: String) {
+        file.awaitLoaded()
         save(_hosts.value.filterNot { it.id == id })
     }
 
     private fun save(hosts: List<Host>) {
         _hosts.value = hosts
-        val text = JsonArray(hosts.map { it.toJson() }).toString()
-        val tmp = File(file.parentFile, file.name + ".tmp")
-        tmp.writeText(text)
-        if (!tmp.renameTo(file)) {
-            file.writeText(text)
-            tmp.delete()
-        }
+        file.write(JsonArray(hosts.map { it.toJson() }).toString())
     }
 
-    private fun load(): List<Host> = runCatching {
-        if (!file.exists()) return emptyList()
-        (ProtocolJson.parseToJsonElement(file.readText()) as JsonArray).mapNotNull { (it as? JsonObject)?.let(Host::fromJson) }
+    private fun parse(text: String?): List<Host> = runCatching {
+        text ?: return emptyList()
+        (ProtocolJson.parseToJsonElement(text) as JsonArray).mapNotNull { (it as? JsonObject)?.let(Host::fromJson) }
     }.getOrDefault(emptyList())
 }
