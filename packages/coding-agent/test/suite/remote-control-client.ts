@@ -28,11 +28,24 @@ export interface TestClient {
 
 let nextId = 0;
 
-/** Connects with a pairing URI; resolves after the handshake, rejects with the close code when refused. */
+/**
+ * Connects with a pairing URI; resolves once `remote_hello` arrives (right after the handshake with `ready: false`),
+ * rejects with the close code when refused.
+ */
 export function connectTestClient(
 	pairingUri: string,
 	clientKeyPair: KeyPair,
-	options: { pair?: boolean; device?: string; endpointIndex?: number; secret?: string; rawHello?: string } = {},
+	options: {
+		pair?: boolean;
+		device?: string;
+		endpointIndex?: number;
+		secret?: string;
+		rawHello?: string;
+		/** false: skip `remote_ready` after the handshake (the host then never treats the client as connected). */
+		ready?: boolean;
+		/** Gets handshake message 1 as sent, for replay tests. */
+		onMessage1?: (frame: Buffer) => void;
+	} = {},
 ): Promise<TestClient> {
 	const payload = decodePairingUri(pairingUri);
 	const endpoint = payload.e[options.endpointIndex ?? 0];
@@ -60,7 +73,9 @@ export function connectTestClient(
 				app: "test",
 				...(options.pair === false ? {} : { pair: options.secret ?? payload.s }),
 			};
-			socket.send(initiator.writeMessage1(Buffer.from(options.rawHello ?? JSON.stringify(hello), "utf8")));
+			const message1 = initiator.writeMessage1(Buffer.from(options.rawHello ?? JSON.stringify(hello), "utf8"));
+			options.onMessage1?.(Buffer.from(message1));
+			socket.send(message1);
 		});
 		socket.on("message", (data: Buffer) => {
 			if (!keys) {
@@ -95,7 +110,12 @@ export function connectTestClient(
 					closed,
 					close: () => socket.close(),
 				};
-				resolve(client);
+				// Like the app: connected once the host answers remote_ready with remote_hello.
+				if (options.ready === false) resolve(client);
+				else {
+					client.send({ type: "remote_ready" });
+					client.waitFor((message) => message.type === "remote_hello").then(() => resolve(client), reject);
+				}
 				return;
 			}
 			const result = assembler.push(keys.receive, data);

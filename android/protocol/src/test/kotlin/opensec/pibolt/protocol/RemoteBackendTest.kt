@@ -56,6 +56,7 @@ private class TestHost(
     private var send: CipherState? = null
     private var receive: CipherState? = null
     private val reassembler = Reassembler()
+    private var ready = false
 
     override fun onOpen(webSocket: WebSocket, response: Response) {
         noise = IkHandshake.responder(key, NOISE_PROLOGUE)
@@ -89,11 +90,20 @@ private class TestHost(
             val ciphers = n.split()
             send = ciphers.send
             receive = ciphers.receive
-            sendJson(webSocket, """{"type":"remote_hello","protocol":1,"host":{"name":"testhost","version":"1.1.1","cwd":"/w"},"state":{"thinkingLevel":"low","isStreaming":false},"messages":[],"dialogs":[],"commands":[],"big":"${"x".repeat(100_000)}"}""")
             return
         }
         val message = reassembler.accept(receive!!.decrypt(bytes.toByteArray())) ?: return
         val command = ProtocolJson.parseToJsonElement(String(message)) as JsonObject
+        // Key confirmation (docs/remote-control.md): remote_hello only after the client's remote_ready.
+        if (!ready) {
+            if (command.type != "remote_ready") {
+                webSocket.close(4400, null)
+                return
+            }
+            ready = true
+            sendJson(webSocket, """{"type":"remote_hello","protocol":1,"host":{"name":"testhost","version":"1.1.1","cwd":"/w"},"state":{"thinkingLevel":"low","isStreaming":false},"messages":[],"dialogs":[],"commands":[],"big":"${"x".repeat(100_000)}"}""")
+            return
+        }
         commands += command
         val id = command.str("id")
         when (command.type) {

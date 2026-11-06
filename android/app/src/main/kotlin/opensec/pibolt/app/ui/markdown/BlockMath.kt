@@ -176,6 +176,8 @@ object CodeFold {
 
 /** Unified diffs in markdown (```diff blocks): rows with line numbers taken from the `@@` headers. */
 object UnifiedDiff {
+    /** Larger hunk numbers (or ones that overflow Int) are shown without line numbers. */
+    private const val MAX_LINE_NUMBER = 100_000_000
     private val hunk = Regex("""^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@.*""")
     private val meta = listOf("diff ", "index ", "new file mode", "deleted file mode", "similarity index", "rename from", "rename to", "old mode", "new mode", "Binary files")
 
@@ -201,10 +203,21 @@ object UnifiedDiff {
             val h = hunk.matchEntire(line)
             when {
                 h != null -> {
-                    oldNo = h.groupValues[1].toInt()
-                    remOld = h.groupValues[2].ifEmpty { "1" }.toInt()
-                    newNo = h.groupValues[3].toInt()
-                    remNew = h.groupValues[4].ifEmpty { "1" }.toInt()
+                    // Model output: a header can carry any digits. One that is out of range keeps the lines but drops
+                    // the numbers.
+                    val numbers = listOf(h.groupValues[1], h.groupValues[2].ifEmpty { "1" }, h.groupValues[3], h.groupValues[4].ifEmpty { "1" })
+                        .map { it.toIntOrNull()?.takeIf { n -> n <= MAX_LINE_NUMBER } }
+                    if (numbers.all { it != null }) {
+                        oldNo = numbers[0]!!
+                        remOld = numbers[1]!!
+                        newNo = numbers[2]!!
+                        remNew = numbers[3]!!
+                    } else {
+                        oldNo = 0
+                        newNo = 0
+                        remOld = 0
+                        remNew = 0
+                    }
                     inHunk = remOld > 0 || remNew > 0
                     out += DiffLine(DiffKind.Hunk, "", line)
                 }

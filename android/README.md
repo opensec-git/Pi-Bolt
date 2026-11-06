@@ -49,7 +49,8 @@ ANDROID_KEYSTORE_PATH=$PWD/pibolt-release.keystore ANDROID_KEYSTORE_PASSWORD=...
 ANDROID_KEY_ALIAS=pibolt ANDROID_KEY_PASSWORD=... ./gradlew :app:assembleRelease
 ```
 
-For CI (`.github/workflows/android.yml`, on `android-vX.Y.Z` tags) add four repository secrets:
+For CI (`.github/workflows/android.yml`, on `android-vX.Y.Z` tags) add four secrets to the `release` environment (the
+same environment the npm release uses; it can require approval):
 
 | Secret | Value |
 |---|---|
@@ -58,6 +59,7 @@ For CI (`.github/workflows/android.yml`, on `android-vX.Y.Z` tags) add four repo
 | `ANDROID_KEY_ALIAS` | `pibolt` |
 | `ANDROID_KEY_PASSWORD` | the key password |
 
-The workflow builds the signed APK, runs `apksigner verify --print-certs`, and publishes `pi-bolt-android-X.Y.Z.apk`
+The workflow releases only tags on pi-bolt commits. Gradle builds the unsigned APK without the secrets; a separate
+step signs it with `apksigner`, then `apksigner verify --print-certs` checks it, and the workflow publishes `pi-bolt-android-X.Y.Z.apk`
 with its SHA-256 as a GitHub release of its own (title "Pi-Bolt Android X.Y.Z", signing certificate digest in the notes).
 That release is never marked latest, so Pi-Bolt's installers and release checks are unaffected.

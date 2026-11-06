@@ -81,16 +81,21 @@ The fragment (`#...`) is never sent anywhere; the app parses it locally.
      secret (the device is then stored and the secret consumed). Otherwise it closes with code 4403 and sends nothing.
    - Frame 2, host to client: handshake message 2 (`e, ee, se`). Payload JSON:
      `{ "host": "macbook", "version": "1.1.1", "paired": true }` (`paired` is true when this connection paired the device).
+   - Frame 3, client to host: the first transport message (step 3), `{ "type": "remote_ready" }`. It proves the
+     client holds the session keys: anyone who recorded frame 1 can send it again, but cannot read frame 2. Until it
+     arrives the host sends nothing more, runs no command, does not list the client as connected, and stores a newly
+     paired device only now. Without it within 3 seconds of frame 2 the host closes with 4408; any other first
+     message closes with 4400.
 3. Transport: each later binary frame is one Noise transport message (AES-256-GCM, nonce = per-direction counter
    starting at 0, as in the Noise spec). The plaintext is `flag || data`: flag `0x00` marks the last chunk of a
    message, `0x01` a chunk with more to follow. Chunks carry at most 65000 data bytes. The concatenated data of a
    message is one UTF-8 JSON object.
-4. Close codes: 4400 malformed handshake or decryption failure, 4403 not authorized, 4408 no handshake message within 3 seconds of connecting (counts as a failed handshake), 4429 too many failed handshakes from this address; an address may have at most 3 connections in their handshake at once, 1001 host stopping.
+4. Close codes: 4400 malformed handshake or decryption failure, 4403 not authorized, 4408 no handshake message within 3 seconds of connecting, or no `remote_ready` within 3 seconds of frame 2 (both count as failed handshakes), 4429 too many failed handshakes from this address; an address may have at most 3 connections in their handshake at once, 1001 host stopping.
 5. Keepalive: the host sends WebSocket pings every 20 seconds and drops a client that misses two; clients may ping too.
 
 ### Messages
 
-After the handshake the host sends `remote_hello`, then the session's event stream.
+After the client's `remote_ready` the host sends `remote_hello`, then the session's event stream.
 
 Host to client:
 
@@ -102,7 +107,7 @@ Host to client:
 | `extension_ui_request` | A dialog (`select`, `confirm`, `input`, `editor`) or `notify`, as in [RPC Extension UI](rpc-extension-ui.md). The same dialog is open in the terminal; whichever side answers first wins. |
 | `extension_ui_dismissed` | `{ id }`: the dialog was answered in the terminal, timed out or was cancelled; the client closes it. |
 
-Client to host: RPC commands with an `id` for correlation, and `extension_ui_response`. Accepted commands: `prompt`,
+Client to host: `remote_ready` once, first; then RPC commands with an `id` for correlation, and `extension_ui_response`. Accepted commands: `prompt`,
 `steer`, `follow_up`, `abort`, `clear_queue`, `get_state`, `get_messages`, `get_available_models`, `set_model`,
 `cycle_model`, `get_available_thinking_levels`, `set_thinking_level`, `cycle_thinking_level`, `compact`, `abort_retry`,
 `get_session_stats`, `get_commands`, `get_last_assistant_text`, `set_session_name`. Any other type gets
