@@ -30,7 +30,7 @@ describe("remote control", () => {
 		return dir;
 	}
 
-	async function setup(options: { tools?: AgentTool[]; pairingTtlMs?: number } = {}) {
+	async function setup(options: { tools?: AgentTool[]; pairingTtlMs?: number; firstFrameTimeoutMs?: number } = {}) {
 		const harness: Harness = await createHarness({ tools: options.tools });
 		cleanups.push(() => harness.cleanup());
 		const store = new RemoteControlStore(tempDir());
@@ -41,6 +41,7 @@ describe("remote control", () => {
 			version: "9.9.9",
 			bindAddress: "127.0.0.1",
 			pairingTtlMs: options.pairingTtlMs,
+			firstFrameTimeoutMs: options.firstFrameTimeoutMs,
 		});
 		const port = await server.start();
 		cleanups.push(() => server.stop());
@@ -104,6 +105,32 @@ describe("remote control", () => {
 		const { store, uri } = await setup();
 		track(await connectTestClient(uri(), generateKeyPair(), { device: "\u001b[31mEvil\u0007 phone" }));
 		expect(store.devices()[0]?.name).toBe("[31mEvil phone");
+	});
+
+	function openIdle(endpoint: string): Promise<WebSocket> {
+		const socket = new WebSocket(endpoint, "pibolt-rc.1");
+		cleanups.push(() => socket.terminate());
+		return new Promise((resolve, reject) => {
+			socket.on("open", () => resolve(socket));
+			socket.on("error", reject);
+		});
+	}
+
+	it("closes a socket that sends no handshake within the first-frame deadline", async () => {
+		const { endpoint } = await setup({ firstFrameTimeoutMs: 150 });
+		const idle = await openIdle(endpoint);
+		const code = await new Promise<number>((resolve) => idle.on("close", resolve));
+		expect(code).toBe(CloseCode.HandshakeTimeout);
+	});
+
+	it("caps pending handshakes per address, so idle sockets cannot lock a phone out for long", async () => {
+		const { endpoint, uri } = await setup({ firstFrameTimeoutMs: 300 });
+		const idle = await Promise.all([openIdle(endpoint), openIdle(endpoint), openIdle(endpoint)]);
+		// A fourth socket from the same address is refused while three are pending.
+		await expect(openIdle(endpoint)).rejects.toThrow();
+		await Promise.all(idle.map((socket) => new Promise((resolve) => socket.on("close", resolve))));
+		// Once they time out, a phone gets through again.
+		await expect(connectTestClient(uri(), generateKeyPair())).resolves.toBeDefined();
 	});
 
 	it("refuses an address after repeated failed handshakes", async () => {

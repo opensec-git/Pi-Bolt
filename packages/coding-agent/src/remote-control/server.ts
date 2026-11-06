@@ -31,14 +31,22 @@ import {
 } from "./protocol.ts";
 import { type PairedDevice, type RemoteControlStore, toBase64Url } from "./store.ts";
 
-const HANDSHAKE_TIMEOUT_MS = 10_000;
+/**
+ * Time from the upgrade to the client's first frame (handshake message 1, which a client sends as soon as the socket
+ * opens). An idle socket is closed and counts as a failed handshake for its address.
+ */
+const FIRST_FRAME_TIMEOUT_MS = 3_000;
 const PING_INTERVAL_MS = 20_000;
 const FAILURE_WINDOW_MS = 10 * 60_000;
 const MAX_FAILURES_PER_WINDOW = 10;
 const DEFAULT_PAIRING_TTL_MS = 10 * 60_000;
 const MAX_DEVICE_NAME_LENGTH = 80;
-/** Connections still in their handshake; more are refused until some finish or time out. */
-const MAX_PENDING_HANDSHAKES = 16;
+/**
+ * Connections still in their handshake, per address and in total; more are refused until some finish or time out.
+ * The per-address cap keeps one peer from filling the table with idle sockets and locking the phone out.
+ */
+const MAX_PENDING_PER_ADDRESS = 3;
+const MAX_PENDING_HANDSHAKES = 64;
 
 /** Commands a phone may send. Everything else changes what the terminal shows and stays with the terminal. */
 const REMOTE_COMMANDS = new Set<RpcCommand["type"]>([
@@ -93,6 +101,8 @@ export interface RemoteControlServerOptions {
 	/** Bind address; default all interfaces. */
 	bindAddress?: string;
 	pairingTtlMs?: number;
+	/** Deadline for a client's first frame; default 3 s (tests shorten it). */
+	firstFrameTimeoutMs?: number;
 	onEvent?: (event: RemoteControlEvent) => void;
 }
 
@@ -131,7 +141,10 @@ class RemoteConnection {
 		this.socket = socket;
 		this.address = address;
 		this.server = server;
-		this.handshakeTimer = setTimeout(() => this.close(CloseCode.HandshakeTimeout), HANDSHAKE_TIMEOUT_MS);
+		this.handshakeTimer = setTimeout(() => {
+			server.recordFailure(address, "no handshake");
+			this.close(CloseCode.HandshakeTimeout);
+		}, server.firstFrameTimeoutMs);
 		socket.on("message", (data, isBinary) => this.onMessage(data, isBinary));
 		socket.on("pong", () => {
 			this.alive = true;
@@ -250,6 +263,7 @@ export class RemoteControlServer {
 	readonly hostKeyPair: KeyPair;
 	readonly hostName: string;
 	readonly version: string;
+	readonly firstFrameTimeoutMs: number;
 	private readonly options: RemoteControlServerOptions;
 	private httpServer: Server | undefined;
 	private wss: WebSocketServer | undefined;
@@ -267,6 +281,7 @@ export class RemoteControlServer {
 		this.hostKeyPair = options.store.hostKeyPair();
 		this.hostName = options.hostName;
 		this.version = options.version;
+		this.firstFrameTimeoutMs = options.firstFrameTimeoutMs ?? FIRST_FRAME_TIMEOUT_MS;
 	}
 
 	get port(): number {
@@ -298,8 +313,14 @@ export class RemoteControlServer {
 		httpServer.on("upgrade", (request: IncomingMessage, socket: Duplex, head: Buffer) => {
 			const address = this.clientAddress(request);
 			const path = (request.url ?? "").split("?")[0];
-			const pending = [...this.connections].filter((connection) => !connection.isOpen).length;
-			if (path !== WEBSOCKET_PATH || this.tooManyFailures(address) || pending >= MAX_PENDING_HANDSHAKES) {
+			const pending = [...this.connections].filter((connection) => !connection.isOpen);
+			const pendingHere = pending.filter((connection) => connection.address === address).length;
+			if (
+				path !== WEBSOCKET_PATH ||
+				this.tooManyFailures(address) ||
+				pendingHere >= MAX_PENDING_PER_ADDRESS ||
+				pending.length >= MAX_PENDING_HANDSHAKES
+			) {
 				socket.destroy();
 				return;
 			}

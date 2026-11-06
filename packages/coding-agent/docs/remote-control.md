@@ -85,8 +85,7 @@ The fragment (`#...`) is never sent anywhere; the app parses it locally.
    starting at 0, as in the Noise spec). The plaintext is `flag || data`: flag `0x00` marks the last chunk of a
    message, `0x01` a chunk with more to follow. Chunks carry at most 65000 data bytes. The concatenated data of a
    message is one UTF-8 JSON object.
-4. Close codes: 4400 malformed handshake or decryption failure, 4403 not authorized, 4408 handshake not completed
-   within 10 seconds, 4429 too many failed handshakes from this address, 1001 host stopping.
+4. Close codes: 4400 malformed handshake or decryption failure, 4403 not authorized, 4408 no handshake message within 3 seconds of connecting (counts as a failed handshake), 4429 too many failed handshakes from this address; an address may have at most 3 connections in their handshake at once, 1001 host stopping.
 5. Keepalive: the host sends WebSocket pings every 20 seconds and drops a client that misses two; clients may ping too.
 
 ### Messages
