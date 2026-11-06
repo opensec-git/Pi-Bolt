@@ -33,6 +33,25 @@ Get the link with `/remote-control copy`. Options: `--steer` or `--follow-up` (w
 `message_update` lines), `--state DIR` (device key and paired hosts, default `~/.pibolt-rc-cli`). Without a prompt it
 prints events until the connection ends.
 
+## Startup and frame performance
+
+The release APK ships a baseline profile and a startup profile (`app/src/release/generated/baselineProfiles/`):
+ART compiles the code of the first minutes at install, and the startup classes sit first in the dex. Regenerate them
+after UI changes, on an API 33+ emulator or device (one at a time; set `ANDROID_SERIAL` if several are attached):
+
+```bash
+./gradlew :app:generateReleaseBaselineProfile
+```
+
+Measure cold start and scroll frames, without and with the profile:
+
+```bash
+./gradlew :baselineprofile:connectedBenchmarkReleaseAndroidTest -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR
+```
+
+Results land in `baselineprofile/build/outputs/connected_android_test_additional_output/`. Emulator numbers are for
+comparing builds; take absolute numbers on a phone.
+
 ## Sign a release
 
 Without signing variables, `assembleRelease` makes `app-release-unsigned.apk`. To sign, make a keystore once and keep it

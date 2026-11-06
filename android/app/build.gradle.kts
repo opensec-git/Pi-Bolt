@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.baselineprofile)
 }
 
 // Optional release signing for local builds, from the environment only. Without these four variables the release APK
@@ -105,6 +106,9 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.extended)
+    // Installs the baseline and startup profiles (src/release/generated/baselineProfiles) on sideloaded installs too.
+    implementation(libs.androidx.profileinstaller)
+    baselineProfile(project(":baselineprofile"))
     debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)
