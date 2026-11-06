@@ -1,0 +1,130 @@
+name: android
+
+# The Android app (android/): protocol and app unit tests, lint, debug and release builds. A pull request uploads the debug
+# APK as an artifact. An `android-vX.Y.Z` tag builds the release APK signed with the keystore from the ANDROID_KEYSTORE_B64
+# secret, checks the signature and publishes it as a GitHub release of its own. That release is never marked latest, so
+# the Pi-Bolt installers (which read the latest release) and its release-files.txt check never see it. GitHub-hosted
+# runners only.
+on:
+  push:
+    branches: [pi-bolt]
+    tags: ["android-v*"]
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  pull_request:
+    paths:
+      - "android/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    working-directory: android
+
+jobs:
+  build:
+    name: Test, lint and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            android/gradle/libs.versions.toml
+            android/gradle/wrapper/gradle-wrapper.properties
+            android/**/*.gradle.kts
+      - name: Tests, lint, debug build
+        run: ./gradlew :protocol:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+      - name: Release build (unsigned)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        run: ./gradlew :app:assembleRelease
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          name: pi-bolt-android-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ failure() }}
+        with:
+          name: android-reports
+          path: |
+            android/app/build/reports/
+            android/protocol/build/reports/
+          retention-days: 7
+
+  release:
+    name: Signed release APK
+    needs: build
+    if: ${{ startsWith(github.ref, 'refs/tags/android-v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+          cache-dependency-path: |
+            android/gradle/libs.versions.toml
+            android/gradle/wrapper/gradle-wrapper.properties
+            android/**/*.gradle.kts
+      - name: Build the signed release
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          PIBOLT_APP_VERSION: ${{ github.ref_name }}
+        run: |
+          [ -n "$KEYSTORE_B64" ] || { echo "::error::the ANDROID_KEYSTORE_B64 secret is not set"; exit 1; }
+          export ANDROID_KEYSTORE_PATH="$RUNNER_TEMP/release.keystore"
+          trap 'rm -f "$ANDROID_KEYSTORE_PATH"' EXIT
+          (umask 077 && printenv KEYSTORE_B64 | base64 -d > "$ANDROID_KEYSTORE_PATH")
+          ./gradlew :app:assembleRelease
+      - name: Check the signature
+        run: |
+          apk=app/build/outputs/apk/release/app-release.apk
+          [ -f "$apk" ] || { echo "::error::no signed APK (is the release still unsigned?)"; ls app/build/outputs/apk/release; exit 1; }
+          apksigner="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -n 1)/apksigner"
+          "$apksigner" verify --verbose --print-certs "$apk"
+          version="${GITHUB_REF_NAME#android-v}"
+          cp "$apk" "$RUNNER_TEMP/pi-bolt-android-$version.apk"
+          (cd "$RUNNER_TEMP" && sha256sum "pi-bolt-android-$version.apk" > "pi-bolt-android-$version.apk.sha256")
+          "$apksigner" verify --print-certs "$apk" | grep -i "SHA-256 digest" > "$RUNNER_TEMP/signing-cert.txt"
+      - name: Publish the app release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#android-v}"
+          {
+            echo "Pi-Bolt Android app $version: remote control for Pi-Bolt (/remote-control)."
+            echo
+            echo "Signing certificate:"
+            echo '```'
+            cat "$RUNNER_TEMP/signing-cert.txt"
+            echo '```'
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false \
+            --title "Pi-Bolt Android $version" --notes-file "$RUNNER_TEMP/notes.md" \
+            "$RUNNER_TEMP/pi-bolt-android-$version.apk" "$RUNNER_TEMP/pi-bolt-android-$version.apk.sha256"
