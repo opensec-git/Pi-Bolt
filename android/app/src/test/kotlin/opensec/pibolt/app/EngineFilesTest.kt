@@ -45,7 +45,7 @@ class EngineFilesTest {
         { "version": 1, "engine": "1.1.1", "glibc": "2.44", "prefix": "/data/data/in.opensec.pibolt/files/usr",
           "links": [ { "path": "lib/libc.so.6", "target": "libc_so_6.so" }, { "path": "lib/ld-linux-aarch64.so.1", "target": "libld.so" } ],
           "files": [ { "path": "etc/ssl/certs/ca-certificates.crt", "asset": "engine/files/ca-certificates.crt" } ],
-          "package": [ "package.json", "theme/dark.json" ], "env": { "SHELL": "/system/bin/sh", "LD_PRELOAD": "no.so" },
+          "package": [ "package.json", "theme/dark.json", "examples/.gitignore" ], "env": { "SHELL": "/system/bin/sh", "LD_PRELOAD": "no.so" },
           "packFingerprint": "abc123" }
     """.trimIndent()
 
@@ -64,7 +64,7 @@ class EngineFilesTest {
         assertEquals("1.1.1", m.engine)
         assertEquals(EngineManifest.Link("lib/libc.so.6", "libc_so_6.so"), m.links.first())
         assertEquals("abc123", m.packFingerprint)
-        assertEquals(listOf("package.json", "theme/dark.json"), m.packageFiles)
+        assertEquals(listOf("package.json", "theme/dark.json", "examples/.gitignore"), m.packageFiles)
         assertEquals(mapOf("SHELL" to "/system/bin/sh"), m.env)
         assertFailsWith<IllegalArgumentException> { EngineManifest.parse(manifestJson.replace("lib/libc.so.6", "../escape")) }
         assertFailsWith<IllegalArgumentException> { EngineManifest.parse(manifestJson.replace("libc_so_6.so", "/abs/libc.so")) }

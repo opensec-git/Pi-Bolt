@@ -9,7 +9,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -31,6 +34,8 @@ import java.io.File
  * adb shell am start -n ... --es project demo --ez fresh true
  * adb shell am start -n ... --es prompt "hello"
  * adb shell am start -n ... --es bash "git status"
+ * adb shell am start -n ... --ez close true       (end the live session)
+ * adb shell am start -n ... --ez trim true        (stop the spare engine)
  * adb shell am start -n ... --ez status true      (logcat -s PiBoltEngine)
  * ```
  */
@@ -43,8 +48,10 @@ class EngineDebugActivity : ComponentActivity() {
         if (savedInstanceState == null) handle(intent)
         setContent {
             val settings by app.settings.settings.collectAsStateWithLifecycle()
+            val live by app.session.collectAsStateWithLifecycle()
             PiBoltTheme(settings) {
-                SessionScreen(app, onBack = { finish() }, onForgotten = { finish() })
+                // Stays open without a session, so measurements do not send the app to the background.
+                if (live == null) Box(Modifier.fillMaxSize()) else SessionScreen(app, onBack = {}, onForgotten = {})
             }
         }
     }
@@ -56,7 +63,7 @@ class EngineDebugActivity : ComponentActivity() {
 
     private fun handle(intent: Intent) {
         val engine = app.engine
-        engine.prepare()
+        if (!intent.getBooleanExtra("noprepare", false)) engine.prepare()
         intent.getStringExtra("project")?.let { name ->
             engine.open(File(engine.projectsDir, name), intent.getStringExtra("session"), intent.getBooleanExtra("fresh", false))
         }
@@ -79,6 +86,8 @@ class EngineDebugActivity : ComponentActivity() {
                 Log.i(LocalEngine.TAG, "debug bash (${SystemClock.elapsedRealtime() - started} ms): ${response?.success} ${response?.dataObject ?: response?.error}")
             }
         }
+        if (intent.getBooleanExtra("close", false)) app.closeSession()
+        if (intent.getBooleanExtra("trim", false)) (engine as? LocalEngine)?.trimMemory("debug")
         if (intent.getBooleanExtra("status", false)) {
             app.appScope.launch(Dispatchers.IO) {
                 val live = app.session.value

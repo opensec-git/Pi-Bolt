@@ -8,6 +8,7 @@ import opensec.pibolt.protocol.int
 import opensec.pibolt.protocol.obj
 import opensec.pibolt.protocol.str
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.InputStream
 import java.nio.file.FileVisitResult
@@ -91,7 +92,11 @@ interface AssetSource {
 class EnginePaths(
     /** `/data/data/<applicationId>/files/usr`, as compiled into glibc and the engine's PT_INTERP. */
     val prefix: File,
-    /** This user's app data dir (`ApplicationInfo.dataDir`). */
+    /**
+     * The app data dir as the kernel names it: `/data/data/<applicationId>` (CONTRACT.md `DATA`). Pi records its working
+     * directory with getcwd(), which gives this form, not `ApplicationInfo.dataDir`'s `/data/user/0/...` (a link to
+     * it); session directories are named after it, so every path handed to the engine uses this form.
+     */
     val dataDir: File,
     val nativeLibDir: File,
 ) {
@@ -113,7 +118,10 @@ class EnginePaths(
     companion object {
         /** Deliberately user 0's literal path: it is compiled into glibc and PT_INTERP (multi-user is checked apart). */
         @Suppress("SdCardPath")
-        fun prefixFor(applicationId: String) = File("/data/data/$applicationId/files/usr")
+        fun prefixFor(applicationId: String) = File("${dataFor(applicationId)}/files/usr")
+
+        @Suppress("SdCardPath")
+        fun dataFor(applicationId: String) = File("/data/data/$applicationId")
     }
 }
 
@@ -152,7 +160,15 @@ class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSour
         paths.packageDir.deleteRecursively()
         val listed = manifest.packageFiles
         if (listed != null) {
-            for (file in listed) assets.open("$PACKAGE_ASSETS/$file").use { copyAtomically(it, File(paths.packageDir, file)) }
+            for (file in listed) {
+                // The APK build drops dot files (an example's .gitignore): nothing the engine reads.
+                val input = try {
+                    assets.open("$PACKAGE_ASSETS/$file")
+                } catch (e: FileNotFoundException) {
+                    continue
+                }
+                input.use { copyAtomically(it, File(paths.packageDir, file)) }
+            }
         } else {
             copyTree(PACKAGE_ASSETS, paths.packageDir)
         }

@@ -42,6 +42,7 @@ import java.time.format.DateTimeFormatter
 import java.util.TimeZone
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The engine on this phone (android/engine/CONTRACT.md): sets up the prefix, runs `libpibolt.so --mode rpc` processes
@@ -60,7 +61,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val paths = EnginePaths(
         prefix = EnginePaths.prefixFor(app.packageName),
-        dataDir = File(app.applicationInfo.dataDir),
+        dataDir = EnginePaths.dataFor(app.packageName),
         nativeLibDir = File(app.applicationInfo.nativeLibraryDir),
     )
     private val index = SessionIndex(paths.agentDir)
@@ -100,6 +101,9 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     @Volatile
     private var inBackground = false
 
+    /** Opens still connecting: no spare starts meanwhile, so it does not compete with them for the CPU. */
+    private val opening = AtomicInteger()
+
     /** The last open: milliseconds from [open] to the first snapshot, and whether a warm engine served it. */
     @Volatile
     var lastOpen: OpenTiming? = null
@@ -118,7 +122,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
 
     override fun open(project: File, sessionFile: String?, fresh: Boolean): SessionController {
         val started = SystemClock.elapsedRealtime()
-        val dir = project.absoluteFile
+        val dir = engineForm(project)
         val target = when {
             sessionFile != null -> SessionTarget.Resume(sessionFile)
             fresh -> SessionTarget.Fresh
@@ -138,6 +142,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         val backend = taken?.also { it.assign(config, target) } ?: newBackend(config, target)
         val controller = SessionController.local(app, dir, backend, ::release)
         app.replaceSession(controller)
+        opening.incrementAndGet()
         scope.launch {
             prefs.edit { putString(KEY_LAST_PROJECT, dir.path) }
             val end = withTimeoutOrNull(OPEN_TIMEOUT_MS) {
@@ -149,6 +154,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
                 Log.i(TAG, "open ${timing.project}: ready in ${timing.readyMs} ms (${if (timing.warm) "warm" else "cold"}, engine start ${timing.engineStartMs} ms, pid ${backend.pid})")
             }
             // The next open is warm too; started only now so it does not compete with this one.
+            opening.decrementAndGet()
             ensureSpare()
             deleteUnusedEmptySessions()
         }
@@ -156,12 +162,19 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     }
 
     /** Saved sessions with at least one message, newest first. Blocking file I/O: call off the main thread. */
-    override fun sessions(project: File): List<SessionSummary> = index.list(project).filter { it.messageCount > 0 }
+    override fun sessions(project: File): List<SessionSummary> = index.list(engineForm(project)).filter { it.messageCount > 0 }
+
+    /** [file] with `ApplicationInfo.dataDir` (`/data/user/0/<id>`) written as the engine sees it (`/data/data/<id>`). */
+    private fun engineForm(file: File): File {
+        val path = file.absolutePath
+        val userForm = app.applicationInfo.dataDir
+        return if (path == userForm || path.startsWith("$userForm/")) File(paths.dataDir.path + path.removePrefix(userForm)) else File(path)
+    }
 
     /** Stop the spare engine (memory pressure, or long in the background). */
-    fun trimMemory() {
+    fun trimMemory(reason: String) {
         val idle = synchronized(this) { spare.also { spare = null } } ?: return
-        Log.i(TAG, "stopping the spare engine")
+        Log.i(TAG, "stopping the spare engine ($reason)")
         forget(idle)
         idle.close()
     }
@@ -172,7 +185,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         backgroundJob?.cancel()
         backgroundJob = scope.launch {
             delay(BACKGROUND_IDLE_MS)
-            trimMemory()
+            trimMemory("idle in the background")
         }
     }
 
@@ -228,7 +241,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
             sdk = Build.VERSION.SDK_INT,
             manifest = loaded.getOrNull(),
             engineShipped = paths.engine.isFile,
-            dataDirReal = runCatching { paths.dataDir.canonicalPath }.getOrDefault(paths.dataDir.path),
+            dataDirReal = File(app.applicationInfo.dataDir).let { runCatching { it.canonicalPath }.getOrDefault(it.path) },
             prefixDataReal = runCatching { paths.prefix.parentFile!!.parentFile!!.canonicalPath }.getOrNull(),
         )
         if (reason != null) {
@@ -256,7 +269,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
 
     /** Start the spare engine unless there is one (or the app is in the background). */
     private suspend fun ensureSpare() {
-        if (inBackground || ensureSetup() == null) return
+        if (inBackground || opening.get() > 0 || ensureSetup() == null) return
         val home = prefs.getString(KEY_LAST_PROJECT, null)?.let(::File)?.takeIf { it.isDirectory } ?: paths.projects
         val backend = synchronized(this) {
             if (spare != null) return

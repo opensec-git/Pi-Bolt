@@ -144,12 +144,7 @@ class PiBoltApp : Application() {
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         // The idle warm engine is the first thing to give back when the system runs short.
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) localEngine.trimMemory()
-    }
-
-    override fun onLowMemory() {
-        super.onLowMemory()
-        localEngine.trimMemory()
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) localEngine.trimMemory("trim level $level")
     }
 
     /** Make [controller] the live session, stopping the previous one. */
