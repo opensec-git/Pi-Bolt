@@ -48,7 +48,10 @@ class LocalBackendTest {
         tempFiles.forEach { it.delete() }
     }
 
-    private fun fakeLauncher(env: Map<String, String> = emptyMap()) = EngineLauncher { target ->
+    private val launchDirs = CopyOnWriteArrayList<String>()
+
+    private fun fakeLauncher(env: Map<String, String> = emptyMap()) = EngineLauncher { target, cwd ->
+        launchDirs += cwd
         val java = File(System.getProperty("java.home"), "bin/java").path
         val command = listOf(java, "-cp", System.getProperty("java.class.path"), "opensec.pibolt.protocol.FakeEngineKt") + target.cliArgs()
         launches += target.cliArgs()
@@ -59,8 +62,9 @@ class LocalBackendTest {
         target: SessionTarget = SessionTarget.Continue,
         env: Map<String, String> = emptyMap(),
         launcher: EngineLauncher = fakeLauncher(env),
-        newest: () -> String? = { null },
-    ) = LocalBackend(LocalConfig(name = "demo", version = "1.1.1", cwd = "/projects/demo", helloTimeoutMs = 20_000), target, launcher, newest)
+        newest: (String) -> String? = { null },
+        fresh: (String) -> String? = { null },
+    ) = LocalBackend(LocalConfig(name = "demo", version = "1.1.1", cwd = "/projects/demo", helloTimeoutMs = 20_000), target, launcher, newest, fresh)
         .also { backends += it }
 
     /** Collects [LocalBackend.incoming] into a channel the test reads from. */
@@ -202,7 +206,7 @@ class LocalBackendTest {
 
     @Test
     fun aLauncherErrorFailsTheConnect() = runBlocking {
-        val b = backend(launcher = { throw IllegalStateException("no engine in this build") })
+        val b = backend(launcher = { _, _ -> throw IllegalStateException("no engine in this build") })
         assertFalse(b.connect())
         val end = b.state.value as ConnectionState.Disconnected
         assertEquals(DisconnectReason.EngineFailed, end.reason)
@@ -230,6 +234,41 @@ class LocalBackendTest {
         val inbox = records(b)
         assertTrue(b.connect())
         assertEquals("/fake/newer.jsonl", inbox.next("remote_hello").obj("state")?.str("sessionFile"))
+    }
+
+    @Test
+    fun aSpareEngineMovesToAnotherProject() = runBlocking {
+        // A saved session of the other project: switch to it.
+        val saved = continuedFile()
+        saved.writeText("{\"type\":\"session\",\"version\":3,\"id\":\"s1\",\"timestamp\":\"t\",\"cwd\":\"/projects/other\"}\n")
+        val b = backend(target = SessionTarget.Fresh, newest = { cwd -> saved.path.takeIf { cwd == "/projects/other" } })
+        assertTrue(b.warmUp())
+        b.assign(b.config.copy(name = "other", cwd = "/projects/other"), SessionTarget.Continue)
+        val inbox = records(b)
+        assertTrue(b.connect())
+        val hello = inbox.next("remote_hello")
+        assertEquals("other", hello.obj("host")?.str("name"))
+        assertEquals("/projects/other", hello.obj("host")?.str("cwd"))
+        assertEquals(saved.path, hello.obj("state")?.str("sessionFile"))
+        assertEquals(listOf("/projects/demo"), launchDirs.toList())
+    }
+
+    @Test
+    fun aSpareEngineStartsANewSessionInAnotherProjectThroughAnEmptySessionFile() = runBlocking {
+        val created = continuedFile()
+        created.writeText("{\"type\":\"session\",\"version\":3,\"id\":\"n1\",\"timestamp\":\"t\",\"cwd\":\"/projects/third\"}\n")
+        val b = backend(target = SessionTarget.Fresh, fresh = { cwd -> created.path.takeIf { cwd == "/projects/third" } })
+        assertTrue(b.warmUp())
+        b.assign(b.config.copy(name = "third", cwd = "/projects/third"), SessionTarget.Fresh)
+        val inbox = records(b)
+        assertTrue(b.connect())
+        assertEquals(created.path, inbox.next("remote_hello").obj("state")?.str("sessionFile"))
+        // In its own project a new session is a plain new_session.
+        b.park()
+        b.assign(b.config, SessionTarget.Fresh)
+        assertTrue(b.connect())
+        assertEquals("/fake/new-2.jsonl", inbox.next("remote_hello").obj("state")?.str("sessionFile"))
+        assertEquals(1, launches.size)
     }
 
     @Test

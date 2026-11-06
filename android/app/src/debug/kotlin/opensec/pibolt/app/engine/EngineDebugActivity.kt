@@ -3,6 +3,7 @@ package opensec.pibolt.app.engine
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.os.SystemClock
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -11,11 +12,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.ui.session.SessionScreen
 import opensec.pibolt.app.ui.theme.PiBoltTheme
 import opensec.pibolt.protocol.rpc.StreamingBehavior
+import opensec.pibolt.protocol.session.AssistantTextItem
 import java.io.File
 
 /**
@@ -56,11 +60,23 @@ class EngineDebugActivity : ComponentActivity() {
         intent.getStringExtra("project")?.let { name ->
             engine.open(File(engine.projectsDir, name), intent.getStringExtra("session"), intent.getBooleanExtra("fresh", false))
         }
-        intent.getStringExtra("prompt")?.let { app.session.value?.send(it, StreamingBehavior.FollowUp) }
+        intent.getStringExtra("prompt")?.let { text ->
+            val controller = app.session.value ?: return@let
+            val started = SystemClock.elapsedRealtime()
+            controller.send(text, StreamingBehavior.FollowUp)
+            // Time to first token as the screen sees it: the first published state with streamed assistant text.
+            app.appScope.launch(Dispatchers.Default) {
+                withTimeoutOrNull(120_000) { controller.state.first { s -> s.streaming.any { it is AssistantTextItem && it.text.isNotEmpty() } } }
+                    ?.let { Log.i(LocalEngine.TAG, "debug prompt: first token on screen after ${SystemClock.elapsedRealtime() - started} ms") }
+                withTimeoutOrNull(300_000) { controller.state.first { s -> !s.isRunning && s.items.lastOrNull() is AssistantTextItem } }
+                    ?.let { Log.i(LocalEngine.TAG, "debug prompt: settled after ${SystemClock.elapsedRealtime() - started} ms") }
+            }
+        }
         intent.getStringExtra("bash")?.let { command ->
             app.appScope.launch {
+                val started = SystemClock.elapsedRealtime()
                 val response = app.session.value?.runBash(command)
-                Log.i(LocalEngine.TAG, "debug bash: ${response?.success} ${response?.dataObject ?: response?.error}")
+                Log.i(LocalEngine.TAG, "debug bash (${SystemClock.elapsedRealtime() - started} ms): ${response?.success} ${response?.dataObject ?: response?.error}")
             }
         }
         if (intent.getBooleanExtra("status", false)) {

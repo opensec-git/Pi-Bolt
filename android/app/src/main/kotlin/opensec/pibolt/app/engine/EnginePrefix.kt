@@ -99,6 +99,9 @@ class EnginePaths(
     val projects = File(home, "projects")
     val agentDir = File(home, ".pi/agent")
     val tmp = File(prefix, "tmp")
+
+    /** XDG_CACHE_HOME: the app's cache dir, which the system may clear when storage runs low. */
+    val cache = File(dataDir, "cache/xdg")
     val etc = File(prefix, "etc")
     val bin = File(prefix, "bin")
 

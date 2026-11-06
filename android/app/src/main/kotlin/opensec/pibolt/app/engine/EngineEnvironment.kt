@@ -13,7 +13,12 @@ fun engineEnvironment(paths: EnginePaths, base: Map<String, String>, timeZone: S
     env.remove("LD_LIBRARY_PATH")
     env.remove("LD_PRELOAD")
     env["HOME"] = paths.home.path
+    // Everything on internal storage (never /sdcard: FUSE there is several times slower for many small files).
     env["TMPDIR"] = paths.tmp.path
+    env["XDG_CACHE_HOME"] = paths.cache.path
+    env["XDG_CONFIG_HOME"] = File(paths.home, ".config").path
+    env["XDG_DATA_HOME"] = File(paths.home, ".local/share").path
+    env["XDG_STATE_HOME"] = File(paths.home, ".local/state").path
     env["TZ"] = timeZone
     env["LANG"] = "C.UTF-8"
     env["PATH"] = "$prefix/bin:/system/bin"

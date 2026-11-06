@@ -300,20 +300,46 @@ class SessionController private constructor(
     private suspend fun reduceLoop() {
         var s = _state.value
         var lastPublish = 0L
+        val batch = ArrayList<Input>()
         while (scope.isActive) {
-            s = apply(s, inputs.receive())
-            while (true) s = apply(s, inputs.tryReceive().getOrNull() ?: break)
+            batch += inputs.receive()
+            while (true) batch += inputs.tryReceive().getOrNull() ?: break
             // Publish at most once per frame: a burst of deltas becomes one recomposition.
             val wait = FRAME_MS - (SystemClock.uptimeMillis() - lastPublish)
             if (wait > 0) {
                 delay(wait)
-                while (true) s = apply(s, inputs.tryReceive().getOrNull() ?: break)
+                while (true) batch += inputs.tryReceive().getOrNull() ?: break
             }
+            s = applyBatch(s, batch)
+            batch.clear()
             val previous = _state.value
             _state.value = s
             lastPublish = SystemClock.uptimeMillis()
             afterPublish(previous, s)
         }
+    }
+
+    /** Apply a frame's inputs, with consecutive token deltas of one block merged into one event first. */
+    private fun applyBatch(state: SessionState, batch: List<Input>): SessionState {
+        var s = state
+        var pending: JsonObject? = null
+        for (input in batch) {
+            if (input is Input.Event) {
+                val merged = pending?.let { SessionReducer.mergeDeltas(it, input.json) }
+                if (merged != null) {
+                    pending = merged
+                    continue
+                }
+                pending?.let { s = apply(s, Input.Event(it)) }
+                pending = input.json
+                continue
+            }
+            pending?.let { s = apply(s, Input.Event(it)) }
+            pending = null
+            s = apply(s, input)
+        }
+        pending?.let { s = apply(s, Input.Event(it)) }
+        return s
     }
 
     private fun apply(state: SessionState, input: Input): SessionState = when (input) {

@@ -69,13 +69,15 @@ class PiBoltApp : Application() {
         identity = DeviceIdentity(this)
         Notifications.createChannels(this)
         localEngine.prefetch()
+        // Ready the engine (prefix check, spare process) before any screen asks for it. All of it runs on Dispatchers.IO.
+        localEngine.prepare()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) {
-                startedActivities++
+                if (startedActivities++ == 0) localEngine.onForeground()
             }
 
             override fun onActivityStopped(activity: Activity) {
-                startedActivities--
+                if (--startedActivities == 0) localEngine.onBackground()
             }
 
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit

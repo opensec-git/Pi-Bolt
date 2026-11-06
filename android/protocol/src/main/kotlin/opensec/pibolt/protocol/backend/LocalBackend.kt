@@ -74,9 +74,22 @@ data class LocalConfig(
     val crashWindowMs: Long = 60_000,
 )
 
-/** Starts an engine process for a target. Runs on [Dispatchers.IO] and may block; throws when it cannot start. */
+/** Starts an engine process for a target in [cwd]. Runs on [Dispatchers.IO] and may block; throws when it cannot start. */
 fun interface EngineLauncher {
-    suspend fun launch(target: SessionTarget): Process
+    suspend fun launch(target: SessionTarget, cwd: String): Process
+}
+
+/**
+ * Stops what an engine leaves running. Pi starts tool commands detached (their own process group and session), so
+ * killing the engine alone leaves `bash`, `git` or `rg` running; the platform counts each against its limit on child
+ * processes of apps.
+ */
+interface ProcessKiller {
+    /** Kill [pid] and every process that descends from it, now. */
+    fun killTree(pid: Long)
+
+    /** Kill processes of this app that lost their parent (an engine that ended) and were adopted by init. */
+    fun reapOrphans()
 }
 
 class EngineStartException(message: String, cause: Throwable? = null) : Exception(message, cause)
@@ -114,13 +127,24 @@ class StderrTail(private val maxLines: Int) {
  * Command ids are prefixed per consumer, so a late answer to a previous consumer never completes a new one's request.
  */
 class LocalBackend(
-    val config: LocalConfig,
+    config: LocalConfig,
     target: SessionTarget,
     private val launcher: EngineLauncher,
-    /** The newest saved session file for [LocalConfig.cwd] (blocking I/O is fine); lets a warm engine catch up. */
-    private val newestSession: () -> String? = { null },
+    /** The newest saved session file of a project (blocking I/O is fine): "continue" on a warm engine. */
+    private val newestSession: (cwd: String) -> String? = { null },
+    /**
+     * A new, empty session file for a project (just Pi's header line, with that cwd): how a warm engine running
+     * elsewhere starts a new session in another project, since `new_session` keeps the engine's current directory.
+     */
+    private val freshSessionFile: (cwd: String) -> String? = { null },
+    private val killer: ProcessKiller? = null,
     private val onStderr: (String) -> Unit = {},
 ) : SessionBackend {
+    /** The project and names this backend reports; [assign] moves a warm engine to another project. */
+    @Volatile
+    var config: LocalConfig = config
+        private set
+
     private val _state = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     override val state: StateFlow<ConnectionState> = _state.asStateFlow()
 
@@ -133,6 +157,12 @@ class LocalBackend(
     /** What the next [connect] opens. Set it before connecting a warm or parked engine. */
     @Volatile
     var target: SessionTarget = target
+
+    /** Before [connect]ing a warm or parked engine: the project ([LocalConfig.cwd]) and session it should open. */
+    fun assign(config: LocalConfig, target: SessionTarget) {
+        this.config = config
+        this.target = target
+    }
 
     @Volatile
     private var engine: Engine? = null
@@ -203,7 +233,7 @@ class LocalBackend(
         if (!e.delivered || !e.alive) return false
         val id = message.str("id")
         val outgoing = if (id != null && message.type != "extension_ui_response") {
-            if (message.type in SWITCHES) e.switches.add(id)
+            if (message.type in SWITCHES) e.switches[id] = message.str("sessionPath").orEmpty()
             JsonObject(message + ("id" to JsonPrimitive("L$lease.$id")))
         } else {
             message
@@ -236,8 +266,9 @@ class LocalBackend(
 
     private suspend fun startEngine(t: SessionTarget): Engine {
         val started = System.nanoTime()
+        val cwd = config.cwd
         val process = try {
-            launcher.launch(t)
+            launcher.launch(t, cwd)
         } catch (e: CancellationException) {
             throw e
         } catch (e: EngineStartException) {
@@ -246,6 +277,7 @@ class LocalBackend(
             throw EngineStartException("The engine could not start: ${e.message ?: e.javaClass.simpleName}", e)
         }
         val e = Engine(process)
+        e.cwd = cwd
         engine = e
         e.begin()
         val hello = withTimeoutOrNull(config.helloTimeoutMs) { e.buildHello() }
@@ -264,32 +296,45 @@ class LocalBackend(
         return e
     }
 
-    /** Move a started engine to [target] if needed and publish its snapshot to a new consumer. */
+    /**
+     * Move a started engine to [target] in [LocalConfig.cwd] if needed, and publish its snapshot to a new consumer. A
+     * warm engine may run anywhere: a saved session opens with `switch_session` (Pi then works in that session's
+     * directory), a new one with `new_session` when the engine is already in the project, else by switching to a new
+     * empty session file of the project.
+     */
     private suspend fun activate(e: Engine) {
         val wanted = target
+        val cwd = config.cwd
         var hello = e.held
-        val reuse = e.warm
-        when (wanted) {
-            SessionTarget.Continue -> if (reuse) {
-                val newest = newestSession()
-                if (newest != null && newest != e.sessionFile) {
-                    e.switchTo("switch_session") { put("sessionPath", newest) }
-                    hello = null
-                }
-            }
-            is SessionTarget.Resume -> if (wanted.sessionFile != e.sessionFile) {
-                e.switchTo("switch_session") { put("sessionPath", wanted.sessionFile) }
-                hello = null
-            }
-            SessionTarget.Fresh -> if (e.messageCount > 0) {
+        suspend fun open(file: String) {
+            e.switchTo("switch_session") { put("sessionPath", file) }
+            e.cwd = headerCwd(file) ?: cwd
+            hello = null
+        }
+        suspend fun fresh() {
+            if (e.cwd == cwd) {
+                if (e.messageCount == 0) return
                 e.switchTo("new_session")
                 hello = null
+            } else {
+                open(freshSessionFile(cwd) ?: throw EngineStartException("Could not create a session in $cwd"))
             }
         }
-        if (hello == null) hello = e.buildHello() ?: throw EngineStartException("The engine stopped")
+        when (wanted) {
+            SessionTarget.Continue -> if (e.warm) {
+                val newest = newestSession(cwd)
+                when {
+                    newest == null -> fresh()
+                    newest != e.sessionFile -> open(newest)
+                }
+            }
+            is SessionTarget.Resume -> if (wanted.sessionFile != e.sessionFile) open(wanted.sessionFile)
+            SessionTarget.Fresh -> fresh()
+        }
+        val snapshot = hello ?: e.buildHello() ?: throw EngineStartException("The engine stopped")
         e.held = null
         lease++
-        e.deliver(hello, dropUnread = true)
+        e.deliver(snapshot, dropUnread = true)
         target = SessionTarget.Continue
     }
 
@@ -315,7 +360,13 @@ class LocalBackend(
     private inner class Engine(val process: Process) {
         private val writes = LinkedBlockingQueue<ByteArray>()
         private val internal = ConcurrentHashMap<String, CompletableDeferred<JsonObject?>>()
-        val switches: MutableSet<String> = ConcurrentHashMap.newKeySet()
+        /** Session-switching commands of the consumer by id, with the path for `switch_session`. */
+        val switches = ConcurrentHashMap<String, String>()
+
+        /** The directory Pi works in for the current session (a switch to another project's session changes it). */
+        @Volatile
+        var cwd: String = ""
+
         private val ids = AtomicLong()
         private val lock = Any()
 
@@ -356,7 +407,7 @@ class LocalBackend(
 
         val alive: Boolean get() = !exit.isCompleted && !stopping
 
-        val pid: Long? = runCatching { process.javaClass.getMethod("pid").invoke(process) as Long }.getOrNull()
+        val pid: Long? = processId(process)
 
         fun begin() {
             reader = thread("out") { readStdout() }
@@ -368,6 +419,8 @@ class LocalBackend(
                 reader?.join(500)
                 errors?.join(200)
                 exitCode = code
+                // Tool commands it started outlive it otherwise.
+                killer?.let { runCatching { it.reapOrphans() } }
                 internal.values.forEach { it.complete(null) }
                 internal.clear()
                 exit.complete(code)
@@ -491,7 +544,9 @@ class LocalBackend(
                 message = JsonObject(message + ("id" to JsonPrimitive(original)))
                 if (message.type == "response" && message.bool("success") == true) {
                     if (message.str("command") == "get_state") noteState(message.obj("data"))
-                    switched = switches.remove(original) && message.obj("data")?.bool("cancelled") != true
+                    val path = switches.remove(original)
+                    switched = path != null && message.obj("data")?.bool("cancelled") != true
+                    if (switched && !path.isNullOrEmpty()) headerCwd(path)?.let { cwd = it }
                 } else {
                     switches.remove(original)
                 }
@@ -566,16 +621,19 @@ class LocalBackend(
             }
         }
 
-        /** Ask the engine to stop (closing stdin makes Pi shut down in order), then kill it if it does not. */
+        /**
+         * Ask the engine to stop (closing stdin makes Pi shut down in order), then kill it and everything it started.
+         * Session entries are on disk as they happen, so the grace period is short.
+         */
         fun terminate() {
             if (stopping && exit.isCompleted) return
             stopping = true
             writes.put(CLOSE_STDIN)
             thread("stop") {
-                if (!process.waitFor(STOP_GRACE_MS, TimeUnit.MILLISECONDS)) {
-                    process.destroy()
-                    if (!process.waitFor(KILL_GRACE_MS, TimeUnit.MILLISECONDS)) process.destroyForcibly()
-                }
+                if (process.waitFor(STOP_GRACE_MS, TimeUnit.MILLISECONDS)) return@thread
+                val id = pid
+                if (killer != null && id != null) runCatching { killer.killTree(id) }
+                if (!process.waitFor(KILL_GRACE_MS, TimeUnit.MILLISECONDS)) process.destroyForcibly()
             }
         }
 
@@ -589,9 +647,21 @@ class LocalBackend(
     companion object {
         private val CLOSE_STDIN = ByteArray(0)
         private val SWITCHES = setOf("new_session", "switch_session", "fork", "clone")
+
+        /** The `cwd` in a session file's header line, or null. */
+        fun headerCwd(file: String): String? = runCatching {
+            File(file).bufferedReader(Charsets.UTF_8).use { it.readLine() }
+                ?.let { ProtocolJson.parseToJsonElement(it) as? JsonObject }
+                ?.takeIf { it.type == "session" }
+                ?.str("cwd")
+        }.getOrNull()
+
+        private fun processId(process: Process): Long? =
+            runCatching { process.javaClass.getMethod("pid").invoke(process) as Long }.getOrNull()
+                ?: runCatching { process.javaClass.getDeclaredField("pid").apply { isAccessible = true }.getInt(process).toLong() }.getOrNull()
         private val DIALOG_METHODS = setOf("select", "confirm", "input", "editor")
         private val KEEP_WHILE_HOLDING = setOf("response", "extension_ui_request", "extension_ui_dismissed")
-        private const val STOP_GRACE_MS = 1_500L
+        private const val STOP_GRACE_MS = 500L
         private const val KILL_GRACE_MS = 1_000L
 
         /** A process exit status as people read it (128 + n is death by signal n). */
