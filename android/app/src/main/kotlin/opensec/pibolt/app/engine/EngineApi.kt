@@ -62,6 +62,9 @@ interface ProviderAuth {
     /** Provider ids that have a stored credential (API key or OAuth). */
     val configured: StateFlow<Set<String>>
 
+    /** True once [configured] reflects auth.json (it starts empty before the first read). */
+    val loaded: StateFlow<Boolean>
+
     fun setApiKey(provider: String, key: String)
 
     fun remove(provider: String)

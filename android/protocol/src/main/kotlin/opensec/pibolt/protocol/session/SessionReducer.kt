@@ -91,6 +91,24 @@ object SessionReducer {
         return state
     }
 
+    /**
+     * Two consecutive `message_update` deltas of the same block as one (text, thinking or tool-call arguments), or null
+     * when they cannot merge. Applying the merged event equals applying both; a frame's worth of tokens then costs one
+     * string append and one state copy instead of one per token.
+     */
+    fun mergeDeltas(first: JsonObject, second: JsonObject): JsonObject? {
+        if (first.type != "message_update" || second.type != "message_update") return null
+        val a = first.obj("assistantMessageEvent") ?: return null
+        val b = second.obj("assistantMessageEvent") ?: return null
+        val kind = a.type
+        if (kind != b.type || kind !in MERGEABLE_DELTAS || a.int("contentIndex") != b.int("contentIndex")) return null
+        val text = (a.str("delta") ?: return null) + (b.str("delta") ?: return null)
+        // The later event's usage is the newer one.
+        return JsonObject(second + ("assistantMessageEvent" to JsonObject(b + ("delta" to JsonPrimitive(text)))))
+    }
+
+    private val MERGEABLE_DELTAS = setOf("text_delta", "thinking_delta", "toolcall_delta")
+
     fun commandsFrom(data: JsonObject?): List<SlashCommand> = data?.arr("commands").orEmpty().mapNotNull { (it as? JsonObject)?.let(::commandFrom) }
 
     // Messages

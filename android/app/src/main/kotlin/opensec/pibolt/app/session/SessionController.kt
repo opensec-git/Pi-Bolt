@@ -19,25 +19,32 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonObjectBuilder
+import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.protocol.Base64Url
 import opensec.pibolt.protocol.backend.ConnectionState
 import opensec.pibolt.protocol.backend.DisconnectReason
+import opensec.pibolt.protocol.backend.LocalBackend
 import opensec.pibolt.protocol.backend.RemoteBackend
 import opensec.pibolt.protocol.backend.RemoteConfig
+import opensec.pibolt.protocol.backend.SessionBackend
 import opensec.pibolt.protocol.rpc.ImageAttachment
 import opensec.pibolt.protocol.rpc.ModelInfo
 import opensec.pibolt.protocol.rpc.RpcClient
+import opensec.pibolt.protocol.rpc.RpcResponse
 import opensec.pibolt.protocol.rpc.StreamingBehavior
 import opensec.pibolt.protocol.rpc.clearedQueue
 import opensec.pibolt.protocol.rpc.thinkingLevels
 import opensec.pibolt.protocol.session.AssistantTextItem
 import opensec.pibolt.protocol.session.SessionReducer
 import opensec.pibolt.protocol.session.SessionState
+import opensec.pibolt.protocol.arr
 import opensec.pibolt.protocol.bool
 import opensec.pibolt.protocol.str
 import opensec.pibolt.protocol.type
+import java.io.File
 
 sealed interface SessionEffect {
     data class Notify(val message: String, val kind: String) : SessionEffect
@@ -60,28 +67,64 @@ sealed interface LinkState {
     data class Failed(val reason: DisconnectReason, val message: String) : LinkState
 }
 
+/** A user message a session can be forked from (`get_fork_messages`). */
+data class ForkPoint(val entryId: String, val text: String)
+
 /**
- * One live session with one computer: connection with automatic reconnect, the reduced [SessionState] (published at
- * most once per frame), commands, and side effects for the UI.
+ * One live session: with a computer over remote control, or with the engine on this phone. Connection with automatic
+ * reconnect (for a local session: respawn into the same session), the reduced [SessionState] (published at most once
+ * per frame), commands, and side effects for the UI.
  */
-class SessionController(
+class SessionController private constructor(
     private val app: PiBoltApp,
     val hostId: String,
     hostName: String,
-    endpoints: List<String>,
-    /** Present while pairing: sent in the first handshake only. */
-    private val pairSecret: ByteArray?,
-    /** A known host scanned again: tried only if the host refuses this phone without it. */
-    private val fallbackSecret: ByteArray? = null,
+    private val origin: Origin,
 ) {
+    /** A session with a paired computer. */
+    constructor(
+        app: PiBoltApp,
+        hostId: String,
+        hostName: String,
+        endpoints: List<String>,
+        /** Present while pairing: sent in the first handshake only. */
+        pairSecret: ByteArray?,
+        /** A known host scanned again: tried only if the host refuses this phone without it. */
+        fallbackSecret: ByteArray? = null,
+    ) : this(app, hostId, hostName, Origin.Remote(endpoints, pairSecret, fallbackSecret))
+
+    private sealed interface Origin {
+        class Remote(val endpoints: List<String>, val pairSecret: ByteArray?, val fallbackSecret: ByteArray?) : Origin
+
+        /** [release] gets the backend back when the session stops, and whether the engine was idle then. */
+        class Local(val project: File, val backend: LocalBackend, val release: (LocalBackend, Boolean) -> Unit) : Origin
+    }
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    val pairing: Boolean = pairSecret != null
+    val pairing: Boolean = origin is Origin.Remote && origin.pairSecret != null
+
+    /** Runs on the engine on this phone; every RPC command is available (remote control allows a subset). */
+    val isLocal: Boolean = origin is Origin.Local
+
+    /** The project directory of a local session. */
+    val project: File? = (origin as? Origin.Local)?.project
+
+    /** The session file the local engine has open, from its last state. */
+    val sessionFile: String? get() = (origin as? Origin.Local)?.backend?.sessionFile
+
+    /** The engine's recent stderr for a local session (for the error sheet), else null. */
+    fun engineLog(): String? = (origin as? Origin.Local)?.backend?.stderr?.text()
+
+    private val fallbackSecret: ByteArray? = (origin as? Origin.Remote)?.fallbackSecret
 
     private val _hostName = MutableStateFlow(hostName)
     val hostName: StateFlow<String> = _hostName.asStateFlow()
 
-    private var backend = newBackend(endpoints, pairSecret)
+    private var backend: SessionBackend = when (origin) {
+        is Origin.Remote -> newBackend(origin.endpoints, origin.pairSecret)
+        is Origin.Local -> origin.backend
+    }
     private var rpc = RpcClient(backend, scope)
 
     private val _state = MutableStateFlow(SessionState())
@@ -121,10 +164,22 @@ class SessionController(
     }
 
     fun stop() {
+        if (stopped) return
         stopped = true
-        backend.close()
-        rpc.stop()
-        scope.cancel()
+        when (origin) {
+            is Origin.Remote -> {
+                backend.close()
+                rpc.stop()
+                scope.cancel()
+            }
+            is Origin.Local -> {
+                // An idle engine can serve the next open of this project (the engine decides); stop reading it first.
+                val idle = _state.value.let { !it.isRunning && !it.isCompacting && it.dialogs.isEmpty() } && _link.value is LinkState.Connected
+                rpc.stop()
+                scope.cancel()
+                origin.release(origin.backend, idle)
+            }
+        }
     }
 
     fun retryNow() {
@@ -190,14 +245,24 @@ class SessionController(
     }
 
     private fun swapBackend(secret: ByteArray) {
-        val endpoints = backend.config.endpoints
+        val endpoints = (backend as RemoteBackend).config.endpoints
         rpc.stop()
         backend = newBackend(endpoints, secret)
         rpc = RpcClient(backend, scope)
         pumpEvents()
     }
 
-    private fun explain(end: ConnectionState.Disconnected): String = when (end.reason) {
+    private fun explain(end: ConnectionState.Disconnected): String = if (isLocal) {
+        when (end.reason) {
+            DisconnectReason.EngineFailed -> end.detail ?: "The engine could not start."
+            DisconnectReason.Closed -> "Stopped."
+            else -> end.detail ?: "The engine stopped."
+        }
+    } else {
+        explainRemote(end)
+    }
+
+    private fun explainRemote(end: ConnectionState.Disconnected): String = when (end.reason) {
         DisconnectReason.Unauthorized -> if (pairing || usedFallback) {
             "The computer refused this pairing code. It is used once and expires after 10 minutes: run /remote-control for a new one."
         } else {
@@ -210,19 +275,21 @@ class SessionController(
         DisconnectReason.HandshakeTimeout -> "The computer took too long to answer."
         DisconnectReason.Lost -> "The connection dropped."
         DisconnectReason.Closed -> "Disconnected."
+        DisconnectReason.EngineFailed -> end.detail ?: "The engine could not start."
     }
 
     private fun onConnected(connected: ConnectionState.Connected?) {
         connected ?: return
         _link.value = LinkState.Connected(connected.endpoint)
+        val remote = backend as? RemoteBackend ?: return
         val name = connected.host.name.ifBlank { _hostName.value }
         _hostName.value = name
         val now = System.currentTimeMillis()
         val existing = app.hosts.get(hostId)
         app.hosts.upsert(
-            (existing ?: Host(id = hostId, name = name, endpoints = backend.config.endpoints, pairedAt = now)).copy(
+            (existing ?: Host(id = hostId, name = name, endpoints = remote.config.endpoints, pairedAt = now)).copy(
                 name = name,
-                endpoints = backend.config.endpoints,
+                endpoints = remote.config.endpoints,
                 version = connected.host.version.ifBlank { existing?.version.orEmpty() },
                 lastConnectedAt = now,
             ),
@@ -234,20 +301,46 @@ class SessionController(
     private suspend fun reduceLoop() {
         var s = _state.value
         var lastPublish = 0L
+        val batch = ArrayList<Input>()
         while (scope.isActive) {
-            s = apply(s, inputs.receive())
-            while (true) s = apply(s, inputs.tryReceive().getOrNull() ?: break)
+            batch += inputs.receive()
+            while (true) batch += inputs.tryReceive().getOrNull() ?: break
             // Publish at most once per frame: a burst of deltas becomes one recomposition.
             val wait = FRAME_MS - (SystemClock.uptimeMillis() - lastPublish)
             if (wait > 0) {
                 delay(wait)
-                while (true) s = apply(s, inputs.tryReceive().getOrNull() ?: break)
+                while (true) batch += inputs.tryReceive().getOrNull() ?: break
             }
+            s = applyBatch(s, batch)
+            batch.clear()
             val previous = _state.value
             _state.value = s
             lastPublish = SystemClock.uptimeMillis()
             afterPublish(previous, s)
         }
+    }
+
+    /** Apply a frame's inputs, with consecutive token deltas of one block merged into one event first. */
+    private fun applyBatch(state: SessionState, batch: List<Input>): SessionState {
+        var s = state
+        var pending: JsonObject? = null
+        for (input in batch) {
+            if (input is Input.Event) {
+                val merged = pending?.let { SessionReducer.mergeDeltas(it, input.json) }
+                if (merged != null) {
+                    pending = merged
+                    continue
+                }
+                pending?.let { s = apply(s, Input.Event(it)) }
+                pending = input.json
+                continue
+            }
+            pending?.let { s = apply(s, Input.Event(it)) }
+            pending = null
+            s = apply(s, input)
+        }
+        pending?.let { s = apply(s, Input.Event(it)) }
+        return s
     }
 
     /**
@@ -286,7 +379,7 @@ class SessionController(
             }
             "remote_hello" -> {
                 val host = (event["host"] as? JsonObject)
-                app.hosts.update(hostId) { it.copy(cwd = host?.str("cwd") ?: it.cwd, version = host?.str("version") ?: it.version) }
+                if (!isLocal) app.hosts.update(hostId) { it.copy(cwd = host?.str("cwd") ?: it.cwd, version = host?.str("version") ?: it.version) }
                 _models.value = emptyList()
                 _thinkingLevels.value = emptyList()
             }
@@ -405,6 +498,67 @@ class SessionController(
         }
     }
 
+    // Sessions and shell. A local engine runs all of these; remote control answers "Not available over remote control".
+    // A session switch replaces the conversation through a new `remote_hello`, as on a computer.
+
+    fun newSession() = sessionCommand("Could not start a new session") { rpc.newSession() }
+
+    /** Open a saved session ([opensec.pibolt.app.engine.EngineApi.sessions]) in this engine. */
+    fun switchSession(sessionFile: String) = sessionCommand("Could not open that session") { rpc.switchSession(sessionFile) }
+
+    /** Duplicate the current session (same history, new file). */
+    fun cloneSession() = sessionCommand("Could not clone the session") { rpc.clone() }
+
+    /**
+     * Fork from the user message [entryId] (from [forkPoints]) into a new session holding the conversation before it.
+     * The engine then sends the new session's snapshot, which replaces the transcript. Returns the message's text for
+     * the composer.
+     */
+    suspend fun fork(entryId: String): Result<String> {
+        val response = rpc.fork(entryId)
+        if (!response.success) return Result.failure(IllegalStateException(response.error ?: "Fork failed"))
+        val data = response.dataObject
+        if ((data?.get("cancelled") as? JsonPrimitive)?.content == "true") return Result.failure(IllegalStateException("An extension cancelled the fork"))
+        return Result.success(data?.str("text").orEmpty())
+    }
+
+    /** [fork] from the [occurrence]-th user message (counting from 0) whose text is [text], as the transcript shows it. */
+    suspend fun forkFrom(text: String, occurrence: Int): Result<String> {
+        val point = forkPoints().filter { it.text.trim() == text.trim() }.getOrNull(occurrence)
+            ?: return Result.failure(IllegalStateException("That message can't be forked"))
+        return fork(point.entryId).map { it.ifEmpty { point.text } }
+    }
+
+    suspend fun forkPoints(): List<ForkPoint> {
+        val response = rpc.getForkMessages()
+        return response.dataObject?.arr("messages").orEmpty().mapNotNull { item ->
+            val o = item as? JsonObject ?: return@mapNotNull null
+            ForkPoint(o.str("entryId") ?: return@mapNotNull null, o.str("text").orEmpty())
+        }
+    }
+
+    /** Run [command] in the project's shell; its output becomes context for the next prompt unless [excludeFromContext]. */
+    suspend fun runBash(command: String, excludeFromContext: Boolean = false): RpcResponse = rpc.bash(command, excludeFromContext)
+
+    fun abortBash() {
+        scope.launch { rpc.abortBash() }
+    }
+
+    /** Any other RPC command (packages/coding-agent/docs/rpc-commands.md). */
+    suspend fun request(type: String, timeoutMs: Long = 30_000, fields: JsonObjectBuilder.() -> Unit = {}): RpcResponse =
+        rpc.request(type, timeoutMs, fields)
+
+    private fun sessionCommand(failure: String, run: suspend () -> RpcResponse) {
+        scope.launch {
+            val response = run()
+            when {
+                !response.success -> _effects.tryEmit(SessionEffect.Error(response.error ?: failure))
+                (response.dataObject?.get("cancelled") as? JsonPrimitive)?.content == "true" ->
+                    _effects.tryEmit(SessionEffect.Notify("Cancelled by an extension", "info"))
+            }
+        }
+    }
+
     fun answer(id: String, value: String) = answered(id, rpc.respondValue(id, value))
 
     fun confirm(id: String, confirmed: Boolean) = answered(id, rpc.respondConfirm(id, confirmed))
@@ -416,7 +570,14 @@ class SessionController(
         else _effects.tryEmit(SessionEffect.Error("Not connected"))
     }
 
-    private companion object {
-        const val FRAME_MS = 16L
+    companion object {
+        private const val FRAME_MS = 16L
+
+        /** A session with the engine on this phone, in [project]. [release] takes the backend back when it stops. */
+        fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit) =
+            SessionController(app, localId(project), project.name, Origin.Local(project, backend, release))
+
+        /** [hostId] of a local session: per project, so drafts and recent prompts stay with it. */
+        fun localId(project: File): String = "local:${project.absolutePath}"
     }
 }

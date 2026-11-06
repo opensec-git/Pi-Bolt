@@ -44,7 +44,6 @@ import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -69,9 +68,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import opensec.pibolt.app.BuildConfig
 import opensec.pibolt.app.PiBoltApp
-import opensec.pibolt.app.ui.dev.DevSheet
 import opensec.pibolt.app.R
 import opensec.pibolt.app.data.AccentId
 import opensec.pibolt.app.data.AppSettings
@@ -267,11 +264,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
             }
 
             Section("About") {
-                // Debug builds: tapping Version five times opens the developer sheet (fake engine scenarios).
-                var taps by remember { mutableIntStateOf(0) }
-                var dev by remember { mutableStateOf(false) }
-                InfoLine("Version", app.appVersion, onClick = if (BuildConfig.DEBUG) ({ if (++taps >= 5) { taps = 0; dev = true } }) else null)
-                if (dev) DevSheet(app, onDismiss = { dev = false })
+                InfoLine("Version", app.appVersion)
                 InfoLine("This phone", app.deviceName)
                 // Licence texts are read off the main thread.
                 NavLine("Inter licence (OFL 1.1)") { scope.launch { licence = ViewerContent("Inter", "SIL Open Font License 1.1", readRaw(context, R.raw.license_inter), wrap = true) } }

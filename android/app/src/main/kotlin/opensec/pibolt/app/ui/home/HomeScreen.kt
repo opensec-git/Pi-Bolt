@@ -72,7 +72,6 @@ import opensec.pibolt.app.ui.components.StatusBarScrim
 import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.show
-import opensec.pibolt.app.ui.dev.engine
 import opensec.pibolt.app.ui.hosts.HostCard
 import opensec.pibolt.app.ui.hosts.PasteSheet
 import opensec.pibolt.app.ui.projects.LocalSessions
@@ -117,6 +116,7 @@ fun HomeScreen(
 
     val status by engine.status.collectAsStateWithLifecycle()
     val configured by engine.auth.configured.collectAsStateWithLifecycle()
+    val authLoaded by engine.auth.loaded.collectAsStateWithLifecycle()
     val meta by store.state.collectAsStateWithLifecycle()
     val metaLoaded by store.loaded.collectAsStateWithLifecycle()
     val hosts by app.hosts.hosts.collectAsStateWithLifecycle()
@@ -150,8 +150,8 @@ fun HomeScreen(
     var onboarding by remember { mutableStateOf(false) }
 
     // First run with no provider: a calm sheet after the first frame, once. Afterwards Home shows a quiet card.
-    LaunchedEffect(metaLoaded, meta.providerPromptSeen, configured.isEmpty(), unavailable) {
-        if (metaLoaded && !meta.providerPromptSeen && configured.isEmpty() && !unavailable) {
+    LaunchedEffect(metaLoaded, authLoaded, meta.providerPromptSeen, configured.isEmpty(), unavailable) {
+        if (metaLoaded && authLoaded && !meta.providerPromptSeen && configured.isEmpty() && !unavailable) {
             delay(450)
             onboarding = true
         }
@@ -187,7 +187,7 @@ fun HomeScreen(
                     EngineBanner(status, onRetry = engine::prepare, onDetails = { details = true }, modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp))
                 }
             }
-            if (!unavailable && metaLoaded && meta.providerPromptSeen && configured.isEmpty()) {
+            if (!unavailable && metaLoaded && authLoaded && meta.providerPromptSeen && configured.isEmpty()) {
                 item(key = "provider", contentType = "provider") {
                     ProviderNudge(onAdd = { addProvider = true }, modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp))
                 }
