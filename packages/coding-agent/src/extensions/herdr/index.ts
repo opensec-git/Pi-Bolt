@@ -17,7 +17,7 @@
  * instead, so Herdr records `agent_session` for `herdr agent list`. Restoring is the same either way: Herdr runs the resume
  * command a report carries before its own plan, and the reported command still starts `pi-bolt`, with `--herdr-shim`. Herdr
  * only accepts that pair from a pane whose foreground process is named `pi` (its process table is fixed), so the flag
- * re-execs Pi-Bolt through a `pi` symlink (shim.ts); a display-only metadata report keeps the sidebar showing `Pi-Bolt`
+ * re-execs Pi-Bolt with `pi` as its command name (shim.ts); a display-only metadata report keeps the sidebar showing `Pi-Bolt`
  * rather than `pi`.
  */
 
