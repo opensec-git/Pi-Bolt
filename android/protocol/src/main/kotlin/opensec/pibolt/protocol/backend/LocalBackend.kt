@@ -421,9 +421,10 @@ class LocalBackend(
                 exitCode = code
                 // Tool commands it started outlive it otherwise.
                 killer?.let { runCatching { it.reapOrphans() } }
+                // Exit first: a request made after this sees it and returns at once instead of waiting forever.
+                exit.complete(code)
                 internal.values.forEach { it.complete(null) }
                 internal.clear()
-                exit.complete(code)
                 onExit(this, code)
             }
         }
@@ -461,6 +462,11 @@ class LocalBackend(
             warm = false
         }
 
+        /**
+         * The engine's answer, or null when it stopped or did not answer within [REQUEST_TIMEOUT_MS] (an extension
+         * dialog held during a session switch, say): callers hold connectMutex, so an unanswered request must not
+         * block every later connect.
+         */
         suspend fun request(type: String, fields: JsonObjectBuilder.() -> Unit = {}): JsonObject? {
             val id = "i${ids.incrementAndGet()}-$type"
             val waiter = CompletableDeferred<JsonObject?>()
@@ -469,12 +475,12 @@ class LocalBackend(
                 internal.remove(id)
                 return null
             }
-            return waiter.await()
+            return withTimeoutOrNull(REQUEST_TIMEOUT_MS) { waiter.await() }.also { if (it == null) internal.remove(id) }
         }
 
         /** Run a session-switching command for the engine's own purposes (not a consumer's). */
         suspend fun switchTo(type: String, fields: JsonObjectBuilder.() -> Unit = {}) {
-            val response = request(type, fields) ?: throw EngineStartException("The engine stopped")
+            val response = request(type, fields) ?: throw EngineStartException("The engine stopped or did not answer")
             if (response.bool("success") != true) {
                 throw EngineStartException(response.str("error") ?: "The engine could not open that session")
             }
@@ -574,7 +580,18 @@ class LocalBackend(
         }
 
         private fun readStdout() {
-            val lines = JsonLines(onOversized = { stderr.add("[app] skipped an RPC record of $it bytes") }, onRecord = ::route)
+            val lines = JsonLines(
+                maxRecord = MAX_RECORD_BYTES,
+                onOversized = { stderr.add("[app] skipped an RPC record of $it bytes") },
+                onRecord = { record ->
+                    // A record that parses into more than the heap holds is dropped, not allowed to end the app.
+                    try {
+                        route(record)
+                    } catch (e: OutOfMemoryError) {
+                        stderr.add("[app] dropped an RPC record of ${record.length} characters: out of memory")
+                    }
+                },
+            )
             val buffer = ByteArray(64 * 1024)
             try {
                 process.inputStream.use { input ->
@@ -661,6 +678,10 @@ class LocalBackend(
                 ?: runCatching { process.javaClass.getDeclaredField("pid").apply { isAccessible = true }.getInt(process).toLong() }.getOrNull()
         private val DIALOG_METHODS = setOf("select", "confirm", "input", "editor")
         private val KEEP_WHILE_HOLDING = setOf("response", "extension_ui_request", "extension_ui_dismissed")
+        private const val REQUEST_TIMEOUT_MS = 30_000L
+
+        /** RPC records over this are skipped: parsing one holds the bytes, a string and a JSON tree at once. */
+        private const val MAX_RECORD_BYTES = 32 * 1024 * 1024
         private const val STOP_GRACE_MS = 500L
         private const val KILL_GRACE_MS = 1_000L
 

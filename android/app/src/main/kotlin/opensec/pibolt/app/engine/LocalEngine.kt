@@ -23,6 +23,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.data.SafeFiles
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.protocol.backend.ConnectionState
 import opensec.pibolt.protocol.backend.DisconnectReason
@@ -169,7 +170,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         val form = engineForm(project)
         val dirs = linkedSetOf(index.sessionDir(form.absolutePath), index.sessionDir(project.absolutePath))
         runCatching { project.canonicalPath }.getOrNull()?.let { dirs += index.sessionDir(engineForm(File(it)).absolutePath) }
-        for (dir in dirs) dir.deleteRecursively()
+        for (dir in dirs) SafeFiles.deleteTree(dir)
     }
 
     /** [file] with `ApplicationInfo.dataDir` (`/data/user/0/<id>`) written as the engine sees it (`/data/data/<id>`). */

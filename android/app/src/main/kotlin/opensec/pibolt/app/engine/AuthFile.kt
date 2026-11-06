@@ -55,7 +55,8 @@ class AuthFile(private val agentDir: File, private val scope: CoroutineScope) : 
         scope.launch {
             mutex.withLock {
                 val next = modify { it + (provider to buildJsonObject { put("type", "api_key"); put("key", trimmed) }) }
-                if (next != null) _configured.value = next.keys
+                // Not written (lock busy, file unreadable): show what is really on disk, so the key does not look saved.
+                _configured.value = next?.keys ?: read().keys
             }
         }
     }
@@ -65,7 +66,7 @@ class AuthFile(private val agentDir: File, private val scope: CoroutineScope) : 
         scope.launch {
             mutex.withLock {
                 val next = modify { it - provider }
-                if (next != null) _configured.value = next.keys
+                _configured.value = next?.keys ?: read().keys
             }
         }
     }

@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.data.ProjectStore
+import opensec.pibolt.app.data.SafeFiles
 import opensec.pibolt.app.engine.EngineApi
 import opensec.pibolt.app.engine.SessionSummary
 import opensec.pibolt.app.session.SessionController
@@ -14,7 +15,7 @@ import java.io.File
 /** Project folders on this phone. Every call touches the disk, so every call runs on [Dispatchers.IO]. */
 class Projects(private val engine: EngineApi, private val store: ProjectStore) {
     suspend fun list(): List<ProjectEntry> = withContext(Dispatchers.IO) {
-        val dirs = engine.projectsDir.listFiles { f -> f.isDirectory && !f.name.startsWith(".") }.orEmpty()
+        val dirs = engine.projectsDir.listFiles { f -> SafeFiles.isRealDirectory(f) && !f.name.startsWith(".") }.orEmpty()
         val meta = store.state.value.projects
         ProjectRules.order(
             dirs.map { dir ->
@@ -25,7 +26,7 @@ class Projects(private val engine: EngineApi, private val store: ProjectStore) {
     }
 
     suspend fun names(): List<String> = withContext(Dispatchers.IO) {
-        engine.projectsDir.listFiles { f -> f.isDirectory }.orEmpty().map { it.name }
+        engine.projectsDir.listFiles().orEmpty().map { it.name }
     }
 
     suspend fun sessions(project: File): List<SessionSummary> = withContext(Dispatchers.IO) {
@@ -47,14 +48,14 @@ class Projects(private val engine: EngineApi, private val store: ProjectStore) {
         val dir = File(engine.projectsDir, name)
         // Sessions first: their folder is found from the project's real path, which needs the project to exist.
         runCatching { engine.deleteSessions(dir) }
-        if (dir.exists() && !dir.deleteRecursively()) return@withContext Result.failure(IllegalStateException("Some files could not be deleted"))
+        if (!SafeFiles.deleteTree(dir)) return@withContext Result.failure(IllegalStateException("Some files could not be deleted"))
         store.forget(name)
         Result.success(Unit)
     }
 
     /** Files in the folder (not counting `.git`), for the delete confirmation. Stops counting at [cap]. */
     suspend fun fileCount(name: String, cap: Int = 10_000): Int = withContext(Dispatchers.IO) {
-        File(engine.projectsDir, name).walkTopDown().onEnter { it.name != ".git" }.filter { it.isFile }.take(cap).count()
+        SafeFiles.countFiles(File(engine.projectsDir, name), cap, skipDir = ".git")
     }
 }
 
