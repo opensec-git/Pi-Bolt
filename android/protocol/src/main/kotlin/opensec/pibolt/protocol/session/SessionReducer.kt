@@ -35,7 +35,7 @@ object SessionReducer {
         "tool_execution_update" -> toolUpdate(state, event)
         "tool_execution_end" -> toolEnd(state, event)
         "queue_update" -> state.copy(queue = QueueState(event.strings("steering"), event.strings("followUp")))
-        "compaction_start" -> state.copy(isCompacting = true)
+        "compaction_start" -> state.copy(isCompacting = true, compactionReason = event.str("reason"))
         "compaction_end" -> compactionEnd(state, event)
         "auto_retry_start" -> state.copy(
             retry = RetryInfo(
@@ -54,6 +54,7 @@ object SessionReducer {
         "extension_ui_request" -> extensionRequest(state, event)
         "extension_ui_dismissed" -> event.str("id")?.let { id -> state.copy(dialogs = state.dialogs.filterNot { it.id == id }) } ?: state
         "extension_error" -> state.notice(NoticeKind.Error, "Extension error", event.str("error") ?: "")
+        "bash_execution_update" -> shellOutput(state, event.str("delta").orEmpty())
         else -> state
     }
 
@@ -340,7 +341,7 @@ object SessionReducer {
     }
 
     private fun settle(state: SessionState): SessionState {
-        var s = state.copy(isRunning = false, retry = null, isCompacting = false, todos = hideFinished(state.todos))
+        var s = state.copy(isRunning = false, retry = null, isCompacting = false, compactionReason = null, todos = hideFinished(state.todos))
         if (s.stream != null) {
             // A stream without message_end (aborted mid-flight): keep what arrived.
             val blocks = s.stream.blocks.filterNotNull().map {
@@ -359,6 +360,25 @@ object SessionReducer {
         if (state.items.none { it is ToolItem && it.isActive }) return state
         return state.copy(items = state.items.map { if (it is ToolItem && it.isActive) it.copy(status = ToolStatus.Cancelled) else it })
     }
+
+    // The user's shell (`!command`)
+
+    /** Key prefix of a shell command the user ran from the app; its output streams in as `bash_execution_update`. */
+    const val SHELL_PREFIX = "shell:"
+
+    /** Output of the running user shell command: appended to the newest running `shell:` step. */
+    private fun shellOutput(state: SessionState, delta: String): SessionState {
+        if (delta.isEmpty()) return state
+        val index = state.items.indexOfLast { it is ToolItem && it.key.startsWith(SHELL_PREFIX) && it.status == ToolStatus.Running }
+        if (index < 0) return state
+        val items = state.items.toMutableList()
+        val item = items[index] as ToolItem
+        items[index] = item.copy(output = (item.output + delta).takeLast(MAX_SHELL_OUTPUT))
+        return state.copy(items = items)
+    }
+
+    /** Characters of streamed shell output kept while it runs (the final result replaces it). */
+    private const val MAX_SHELL_OUTPUT = 64_000
 
     // Todos
 
@@ -410,7 +430,7 @@ object SessionReducer {
     // Compaction
 
     private fun compactionEnd(state: SessionState, event: JsonObject): SessionState {
-        val s = state.copy(isCompacting = false)
+        val s = state.copy(isCompacting = false, compactionReason = null)
         val result = event.obj("result")
         val key = "m${s.seq}"
         val next = s.copy(seq = s.seq + 1)
@@ -493,7 +513,7 @@ object SessionReducer {
 
     private fun commandFrom(json: JsonObject): SlashCommand? {
         val name = json.str("name") ?: return null
-        return SlashCommand(name, json.str("description"), json.str("source") ?: "")
+        return SlashCommand(name, json.str("description"), json.str("source") ?: "", json.str("argumentHint")?.takeIf { it.isNotBlank() })
     }
 
     // Helpers
