@@ -32,9 +32,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import opensec.pibolt.app.ui.markdown.UnifiedDiff
+import opensec.pibolt.app.ui.markdown.highlighted
 import opensec.pibolt.app.ui.session.DiffKind
 import opensec.pibolt.app.ui.session.DiffLine
 import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.PiColors
 
 private val BAR = 3.dp
 private val SIGN = 14.dp
@@ -52,11 +54,12 @@ fun DiffLines(
     wrap: Boolean = false,
     fade: Color = Pi.colors.surface1,
     scroll: ScrollState = rememberScrollState(),
+    language: String = "",
 ) {
     val numWidth = remember(lines) { lines.maxOfOrNull { it.number.length } ?: 0 }
     val words = remember(lines) { UnifiedDiff.wordRanges(lines) }
     if (wrap) {
-        Column(modifier.fillMaxWidth()) { lines.forEachIndexed { i, line -> DiffRow(line, numWidth, words[i], wrap = true) } }
+        Column(modifier.fillMaxWidth()) { lines.forEachIndexed { i, line -> DiffRow(line, numWidth, words[i], wrap = true, language = language) } }
         return
     }
     BoxWithConstraints(modifier.fillMaxWidth()) {
@@ -67,13 +70,16 @@ fun DiffLines(
                 .horizontalScroll(scroll)
                 .width(IntrinsicSize.Max)
                 .widthIn(min = min),
-        ) { lines.forEachIndexed { i, line -> DiffRow(line, numWidth, words[i], wrap = false) } }
+        ) { lines.forEachIndexed { i, line -> DiffRow(line, numWidth, words[i], wrap = false, language = language) } }
     }
 }
 
-/** One diff row; [word] is the changed range inside [DiffLine.text] for paired lines. */
+/**
+ * One diff row; [word] is the changed range inside [DiffLine.text] for paired lines. With a [language] (from the
+ * diff's file name) the row's code keeps its syntax colours over the add/delete background.
+ */
 @Composable
-fun DiffRow(line: DiffLine, numWidth: Int, word: IntRange?, wrap: Boolean) {
+fun DiffRow(line: DiffLine, numWidth: Int, word: IntRange?, wrap: Boolean, language: String = "") {
     val colors = Pi.colors
     val type = Pi.type
     val style = type.monoSmall
@@ -101,7 +107,9 @@ fun DiffRow(line: DiffLine, numWidth: Int, word: IntRange?, wrap: Boolean) {
             val del = line.kind == DiffKind.Del
             val bg = if (add) colors.diffAddBg else if (del) colors.diffDelBg else Color.Transparent
             val fg = if (add) colors.diffAddFg else if (del) colors.diffDelFg else colors.ink2
-            val text = remember(line, word, colors) { rowText(line.text, word, if (add) colors.diffAddWord else colors.diffDelWord) }
+            val text = remember(line, word, colors, language) {
+                rowText(line.text, word, if (add) colors.diffAddWord else colors.diffDelWord, if (language.isEmpty()) null else colors, language)
+            }
             val bar = if (add) colors.success.copy(alpha = 0.6f) else colors.danger.copy(alpha = 0.7f)
             Row(
                 Modifier
@@ -139,10 +147,11 @@ fun DiffRow(line: DiffLine, numWidth: Int, word: IntRange?, wrap: Boolean) {
     }
 }
 
-private fun rowText(text: String, word: IntRange?, wordBg: Color): AnnotatedString {
-    if (word == null || word.isEmpty() || word.last >= text.length) return AnnotatedString(text)
+private fun rowText(text: String, word: IntRange?, wordBg: Color, syntax: PiColors?, language: String): AnnotatedString {
+    val base = if (syntax != null) highlighted(text, language, syntax) else AnnotatedString(text)
+    if (word == null || word.isEmpty() || word.last >= text.length) return base
     return buildAnnotatedString {
-        append(text)
+        append(base)
         addStyle(SpanStyle(background = wordBg), word.first, word.last + 1)
     }
 }

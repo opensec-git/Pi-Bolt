@@ -79,11 +79,12 @@ fun MdTable(table: MdBlock.Table, modifier: Modifier = Modifier) {
     if (memo.key != key || table.rows.size < memo.measuredRows) {
         memo.key = key
         memo.measuredRows = 0
-        memo.widths = IntArray(columns) { c -> measurer.measure(header[c], headStyle, softWrap = false, maxLines = 1).size.width + pad }
+        // +2px: the measured width is rounded, and a cell one pixel short wraps its last letter.
+        memo.widths = IntArray(columns) { c -> measurer.measure(header[c], headStyle, softWrap = false, maxLines = 1).size.width + pad + 2 }
     }
     for (r in memo.measuredRows until body.size) {
         for (c in 0 until columns) {
-            val w = measurer.measure(body[r][c], cellStyle, softWrap = false, maxLines = 1).size.width + pad
+            val w = measurer.measure(body[r][c], cellStyle, softWrap = false, maxLines = 1).size.width + pad + 2
             if (w > memo.widths[c]) memo.widths[c] = w
         }
     }

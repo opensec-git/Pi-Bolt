@@ -36,6 +36,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.WrapText
 import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.FormatListNumbered
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material3.Icon
@@ -72,12 +73,16 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import opensec.pibolt.app.ui.markdown.CodeFold
 import opensec.pibolt.app.ui.markdown.CodeInfo
+import opensec.pibolt.app.ui.markdown.Highlighter
+import opensec.pibolt.app.ui.markdown.Languages
 import opensec.pibolt.app.ui.markdown.UnifiedDiff
-import opensec.pibolt.app.ui.markdown.highlighted
+import opensec.pibolt.app.ui.markdown.applyTokens
 import opensec.pibolt.app.ui.markdown.highlightedCached
+import opensec.pibolt.app.ui.markdown.rememberHighlighted
 import opensec.pibolt.app.ui.session.DiffLine
 import opensec.pibolt.app.ui.session.diffStats
 import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.PiColors
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Tnum
@@ -98,9 +103,10 @@ fun CodeBlock(
     language: String,
     info: String,
     closed: Boolean,
-    onOpen: (code: String, title: String) -> Unit,
+    onOpen: ((code: String, title: String) -> Unit)?,
     modifier: Modifier = Modifier,
     lineNumbers: Boolean = true,
+    title: String? = null,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -112,16 +118,27 @@ fun CodeBlock(
     val stable = remember(stableEnd, closed) { code.substring(0, stableEnd) }
     val diff = remember(stable, meta) { meta.diff || meta.language.isEmpty() && UnifiedDiff.looksLikeDiff(stable) }
     val rows = remember(stable, closed, diff) { if (diff) UnifiedDiff.parse(if (closed) stable else stable.removeSuffix("\n")) else null }
-    val label = remember(stable, meta, diff) { if (diff) UnifiedDiff.path(stable) ?: meta.filename ?: "diff" else meta.label }
     val lines = remember(stable, rows) { rows?.size ?: CodeFold.lineCount(stable) }
+    // Untagged code: the language from its first lines (settles after a few lines while streaming).
+    val detected = remember(meta.language, diff, closed, minOf(lines, 6)) { if (meta.language.isEmpty() && !diff) Languages.detect(stable) else "" }
+    val lang = meta.language.ifEmpty { detected }
+    val label = remember(stable, meta, diff, detected, title) {
+        when {
+            title != null -> title
+            diff -> UnifiedDiff.path(stable) ?: meta.filename ?: "diff"
+            detected.isNotEmpty() -> CodeInfo.displayLanguage(detected)
+            else -> meta.label
+        }
+    }
     var expanded by rememberSaveable { mutableStateOf(false) }
     var wrap by rememberSaveable { mutableStateOf(false) }
+    var numbersOn by rememberSaveable { mutableStateOf(lineNumbers) }
     val mode = CodeFold.mode(lines, closed, expanded)
     val footer = CodeFold.footer(lines, closed, expanded)
     val scroll = rememberScrollState()
     val header = remember { BringIntoViewRequester() }
     val scope = rememberCoroutineScope()
-    val open = { onOpen(code, meta.viewerTitle) }
+    val open = { onOpen?.invoke(code, if (meta.viewerTitle.isEmpty() && detected.isNotEmpty()) detected else meta.viewerTitle) ?: Unit }
     val shape = RoundedCornerShape(Radius.md)
     Column(
         modifier
@@ -140,7 +157,9 @@ fun CodeBlock(
             wrap = wrap,
             // maxValue is Int.MAX_VALUE until the body is measured.
             showWrap = closed && (wrap || scroll.maxValue in 1 until Int.MAX_VALUE),
-            showOpen = closed && (mode == CodeFold.Mode.Head || lines >= CodeFold.OPEN_FROM),
+            showOpen = onOpen != null && closed && (mode == CodeFold.Mode.Head || lines >= CodeFold.OPEN_FROM),
+            numbers = if (rows == null && lineNumbers && closed && lines >= CodeFold.NUMBERS_FROM) numbersOn else null,
+            onNumbers = { numbersOn = !numbersOn },
             onWrap = { wrap = !wrap },
             onOpen = open,
             copy = { code },
@@ -171,17 +190,18 @@ fun CodeBlock(
                     fade.padding(vertical = 6.dp),
                     wrap = wrap && closed,
                     scroll = if (tail) tailScroll else scroll,
+                    language = remember(label) { CodeInfo.languageOfFile(label).orEmpty() },
                 )
             } else {
                 CodeBody(
                     code = code,
                     stable = stable,
-                    language = meta.language,
+                    language = lang,
                     mode = shownMode,
                     lines = lines,
                     closed = closed,
                     wrap = wrap && closed,
-                    numbers = lineNumbers && lines >= CodeFold.NUMBERS_FROM,
+                    numbers = lineNumbers && numbersOn && lines >= CodeFold.NUMBERS_FROM,
                     scroll = if (tail) tailScroll else scroll,
                     modifier = fade,
                 )
@@ -201,7 +221,7 @@ fun CodeBlock(
                     .pressable(
                         onClick = {
                             when (footer.action) {
-                                CodeFold.Action.Open -> open()
+                                CodeFold.Action.Open -> if (onOpen != null) open() else expanded = !expanded
                                 CodeFold.Action.Expand -> expanded = true
                                 CodeFold.Action.Collapse -> {
                                     expanded = false
@@ -243,6 +263,8 @@ private fun CodeHeader(
     wrap: Boolean,
     showWrap: Boolean,
     showOpen: Boolean,
+    numbers: Boolean?,
+    onNumbers: () -> Unit,
     onWrap: () -> Unit,
     onOpen: () -> Unit,
     copy: () -> String,
@@ -299,6 +321,14 @@ private fun CodeHeader(
                         }
                         Spacer(Modifier.width(4.dp))
                     }
+                    if (numbers != null) {
+                        HeaderIcon(
+                            Icons.Rounded.FormatListNumbered,
+                            if (numbers) "Hide line numbers" else "Show line numbers",
+                            tint = if (numbers) colors.ink2 else colors.ink3,
+                            onClick = onNumbers,
+                        )
+                    }
                     if (showWrap) {
                         HeaderIcon(
                             Icons.AutoMirrored.Rounded.WrapText,
@@ -349,10 +379,15 @@ private fun CodeBody(
     val text: AnnotatedString
     val first: Int
     val count: Int
+    // While streaming, complete lines are tokenised once each, resuming from the previous line's state.
+    val stream = remember(language) { StreamHolder(language) }
     when (mode) {
         CodeFold.Mode.Full -> {
-            // Lines still arriving change with every newline, so only closed blocks use the shared cache.
-            val done = remember(stable, language, colors, closed) { if (closed) highlightedCached(stable, language, colors) else highlighted(stable, language, colors) }
+            val done = if (closed) {
+                rememberHighlighted(stable, language, colors)
+            } else {
+                remember(stable.length, language, colors) { stream.window(stable, 0, colors) }
+            }
             text = if (closed || stable.length == code.length) done else done + AnnotatedString(code.substring(stable.length))
             first = 1
             count = lines
@@ -365,8 +400,7 @@ private fun CodeBody(
         }
         CodeFold.Mode.Tail -> {
             val from = CodeFold.tailStart(code, CodeFold.FOLDED).coerceAtMost(stable.length)
-            // Recent windows change with every line, so they skip the shared cache.
-            val done = remember(from, stable.length, language, colors) { highlighted(stable.substring(from), language, colors) }
+            val done = remember(from, stable.length, language, colors) { stream.window(stable, from, colors) }
             text = if (stable.length == code.length) done else done + AnnotatedString(code.substring(stable.length))
             var n = 1
             for (i in from until code.length) if (code[i] == '\n') n++
@@ -450,6 +484,22 @@ private fun CodeText(text: AnnotatedString, style: TextStyle, streaming: Boolean
             drawRoundRect(colors.ink3, Offset(x, cy - h / 2f), Size(6.dp.toPx(), h), CornerRadius(1.5.dp.toPx()), alpha = pulse?.value ?: 0.7f)
         },
     )
+}
+
+/** A [Highlighter.Stream] for a block that grows; starts over if the text stops being an extension of what it saw. */
+private class StreamHolder(private val language: String) {
+    private var stream = Highlighter.Stream(language)
+    private var tail = ""
+
+    /** [stable] (complete lines) from [from] on, highlighted with the streamed tokens. */
+    fun window(stable: String, from: Int, colors: PiColors): AnnotatedString {
+        // A cheap check that the text still extends what was tokenised: its length and the last characters seen.
+        val n = stream.length
+        if (stable.length < n || !stable.regionMatches(n - tail.length, tail, 0, tail.length)) stream = Highlighter.Stream(language)
+        val tokens = stream.update(stable)
+        tail = stable.takeLast(32)
+        return applyTokens(stable.substring(from), tokens, colors, from)
+    }
 }
 
 private fun lineStarts(text: String): IntArray {
