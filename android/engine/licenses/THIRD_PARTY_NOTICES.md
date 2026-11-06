@@ -2,7 +2,8 @@
 
 The app runs Pi-Bolt on the phone with the programs and libraries below, shipped inside the APK as separate files
 (lib*.so in the app's native library directory). Exact versions: `VERSIONS.txt`. Full licence texts: `texts/`.
-Per-package copyright files: `userland/` (Debian packages) and `pi-bolt/` (the engine itself).
+Per-package copyright files: `userland/` (Debian packages), `pi-bolt/` (the engine itself) and `extensions/` (the
+bundled Pi extensions).
 
 ## Corresponding source
 
@@ -34,6 +35,8 @@ https://github.com/opensec-git/Pi-Bolt/issues.
 | ripgrep | `rg` | MIT or Unlicense |
 | fd | `fd` | MIT or Apache-2.0 |
 | Mozilla CA certificate list (Debian ca-certificates) | trusted root certificates | MPL-2.0 |
+| OpenSec Subagents for Pi (opensec-pi-subagents, from npm) | the engine's `subagent` tool; based on tintinweb/pi-subagents | Apache-2.0 (`extensions/opensec-pi-subagents/LICENSE`, `NOTICE`) |
+| OpenSec Todo for Pi (opensec-pi-todo, from npm) | the engine's `todo` tool; based on juicesharp/rpiv-todo | Apache-2.0 (`extensions/opensec-pi-todo/LICENSE`, `NOTICE`) |
 
 ## glibc is modified
 
@@ -54,7 +57,7 @@ symbols are stripped. git and curl are built from the unmodified release tarball
 - `texts/GPL-2`: GNU General Public License 2 (busybox, git)
 - `texts/GPL-3`: GNU General Public License 3 (bash; libgcc_s, with the GCC Runtime Library Exception in
   `userland/gcc-14-base.copyright`)
-- `texts/Apache-2.0`: Apache License 2.0 (OpenSSL, fd)
+- `texts/Apache-2.0`: Apache License 2.0 (OpenSSL, fd, the bundled extensions)
 - `texts/MPL-2.0`: Mozilla Public License 2.0 (CA certificates)
 - `userland/curl.COPYING`, `userland/git.COPYING` and the Debian copyright files: the remaining licences (MIT, BSD,
   zlib, X11, Unlicense) with their copyright notices

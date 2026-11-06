@@ -40,6 +40,7 @@ The engine must be exec'd itself (never as an argument of the loader: its static
   "links": [ { "path": "lib/libc.so.6", "target": "libc_so_6.so" }, { "path": "bin/bash", "target": "libbash_exe.so" } ],
   "files": [ { "path": "etc/ssl/certs/ca-certificates.crt", "asset": "engine/files/etc/ssl/certs/ca-certificates.crt" } ],
   "package": [ "package.json", "theme/dark.json", "..." ],
+  "extensions": [ { "name": "opensec-pi-todo", "version": "2.13.1", "files": [ "package.json", "dist-bun/index.js", "..." ] } ],
   "env": { "PATH": "/data/data/in.opensec.pibolt/files/usr/bin:/system/bin", "SHELL": "...", "...": "..." },
   "packFingerprint": "<sha256 of every shipped file and the manifest>" }
 ```
@@ -47,14 +48,17 @@ The engine must be exec'd itself (never as an argument of the loader: its static
 `links[].target` is a file name in nativeLibraryDir; `files[]` are copied from APK assets (non-executable data: CA
 bundle, terminfo, git templates and mergetools, the git shell libraries that are sourced rather than exec'd).
 `package[]` lists every file under assets `engine/package/` (relative paths), so the app copies PI_PACKAGE_DIR without
-a recursive `AssetManager.list`. `env` holds the variables of step 3 below with PREFIX expanded (same values; the app
+a recursive `AssetManager.list`. `extensions[]` are the Pi extensions the pack bundles (the repo's `extensions.txt` pins, npm
+integrity checked), each unpacked under assets `engine/extensions/<name>/` with every file listed. `env` holds the variables of step 3 below with PREFIX expanded (same values; the app
 may apply it as is). `assets/engine/licenses/` holds THIRD_PARTY_NOTICES.md and the licence texts for the About screen
 (not copied anywhere).
 
 ## Runtime setup (app, at each engine start; cheap when unchanged)
 
 1. If `PREFIX/.pack` differs from `packFingerprint` (first run, app update, nativeLibraryDir moved): recreate the
-   symlink farm and copy `files[]`, then write the fingerprint. Otherwise skip.
+   symlink farm and copy `files[]` and `extensions[]` (to `PREFIX/share/pi-extensions/<name>`), add those extension
+   directories to `packages` in `HOME/.pi/agent/settings.json` (merged under Pi's lock: other settings and packages
+   stay, no duplicates, paths of extensions no longer bundled are dropped), then write the fingerprint. Otherwise skip.
 2. Always: write `PREFIX/etc/resolv.conf` from the active network's DNS servers (rewrite on network change), plus
    `etc/hosts` (`127.0.0.1 localhost`, `::1 localhost`).
 3. Spawn `nativeLibraryDir/libpibolt.so --mode rpc` in the project directory with env:

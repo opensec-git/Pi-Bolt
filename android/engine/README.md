@@ -22,6 +22,7 @@ Needs Docker on an arm64 host (an Apple Silicon Mac or GitHub's ubuntu-24.04-arm
 | Path | What |
 |---|---|
 | `versions.env` | pins: engine release + sha256, glibc + Termux commit, curl, git |
+| `../../extensions.txt` | pins of the bundled Pi extensions (opensec-pi-subagents, opensec-pi-todo): npm version + integrity |
 | `userland/packages.txt`, `userland/debs.lock` | Debian packages and their pinned versions + sha256 (`scripts/lock-debs.sh` refreshes) |
 | `userland/busybox-skip.txt` | busybox applets that get no link |
 | `docker/Dockerfile` | the builder (Debian trixie) |

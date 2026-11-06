@@ -7,8 +7,11 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.JsonObject
+import opensec.pibolt.protocol.ProtocolJson
 import opensec.pibolt.app.engine.AssetSource
 import opensec.pibolt.app.engine.AuthFile
+import opensec.pibolt.app.engine.BundledExtensions
 import opensec.pibolt.app.engine.EngineManifest
 import opensec.pibolt.app.engine.EnginePaths
 import opensec.pibolt.app.engine.EnginePrefix
@@ -226,5 +229,74 @@ class EngineFilesTest {
         lock.mkdir()
         assertNull(auth.modify { it })
         lock.delete()
+    }
+
+    @Test
+    fun bundledExtensionsMergeIntoPisPackages() {
+        val root = "/usr/share/pi-extensions"
+        val todo = "$root/opensec-pi-todo"
+        val agents = "$root/opensec-pi-subagents"
+        fun json(text: String) = ProtocolJson.parseToJsonElement(text) as JsonObject
+
+        // No packages yet: both added, other settings kept.
+        assertEquals(
+            json("""{"theme":"dark","packages":["$todo","$agents"]}"""),
+            BundledExtensions.merge(json("""{"theme":"dark"}"""), listOf(todo, agents), root),
+        )
+        // The user's packages stay; a duplicate and an older pack's extension go; the user's filtered entry is kept.
+        assertEquals(
+            json("""{"packages":["npm:foo@1",{"source":"$todo","extensions":["x"]},"./local","$agents"]}"""),
+            BundledExtensions.merge(
+                json("""{"packages":["npm:foo@1",{"source":"$todo","extensions":["x"]},"$root/opensec-pi-old","./local","$todo/"]}"""),
+                listOf(todo, agents),
+                root,
+            ),
+        )
+        // Already registered, or packages Pi would reject: the file is left alone.
+        assertNull(BundledExtensions.merge(json("""{"packages":["$todo","$agents"]}"""), listOf(todo, agents), root))
+        assertNull(BundledExtensions.merge(json("""{"packages":"npm:foo"}"""), listOf(todo), root))
+        assertNull(BundledExtensions.merge(json("""{}"""), emptyList(), root))
+        // A pack without extensions drops the old ones.
+        assertEquals(json("""{"packages":["npm:foo"]}"""), BundledExtensions.merge(json("""{"packages":["npm:foo","$todo"]}"""), emptyList(), root))
+    }
+
+    @Test
+    fun prefixSetupCopiesAndRegistersBundledExtensions() {
+        val p = paths()
+        val m = EngineManifest.parse(
+            manifestJson.replace(
+                "\"env\":",
+                "\"extensions\": [ { \"name\": \"opensec-pi-todo\", \"version\": \"2.13.1\", \"files\": [ \"package.json\", \"dist-bun/index.js\" ] } ], \"env\":",
+            ),
+        )
+        assertEquals(listOf(EngineManifest.Extension("opensec-pi-todo", "2.13.1", listOf("package.json", "dist-bun/index.js"))), m.extensions)
+        val assets = MapAssets(
+            mapOf(
+                "engine/files/ca-certificates.crt" to "CERTS",
+                "engine/extensions/opensec-pi-todo/package.json" to "{\"name\":\"opensec-pi-todo\"}",
+                "engine/extensions/opensec-pi-todo/dist-bun/index.js" to "export default () => {}",
+            ),
+        )
+        p.agentDir.mkdirs()
+        val settings = File(p.agentDir, "settings.json")
+        val stale = File(p.extensionsDir, "opensec-pi-old").path
+        settings.writeText("""{"defaultProvider":"fake","packages":["npm:foo@1","$stale"]}""")
+        File(p.extensionsDir, "opensec-pi-old/index.js").apply { parentFile.mkdirs(); writeText("old") }
+
+        assertTrue(EnginePrefix(p, assets).ensure(m))
+        val todo = File(p.extensionsDir, "opensec-pi-todo")
+        assertEquals("export default () => {}", File(todo, "dist-bun/index.js").readText())
+        assertFalse(File(p.extensionsDir, "opensec-pi-old").exists())
+        assertEquals(
+            "{\n  \"defaultProvider\": \"fake\",\n  \"packages\": [\n    \"npm:foo@1\",\n    \"${todo.path}\"\n  ]\n}",
+            settings.readText(),
+        )
+        assertFalse(File(p.agentDir, "settings.json.lock").exists())
+        assertTrue(p.agentDir.listFiles()!!.none { it.name.endsWith(".tmp") })
+
+        // An unreadable settings.json is left as it is.
+        settings.writeText("{ not json")
+        assertFalse(BundledExtensions.register(p.agentDir, listOf(todo.path), p.extensionsDir.path))
+        assertEquals("{ not json", settings.readText())
     }
 }

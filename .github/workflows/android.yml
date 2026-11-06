@@ -13,10 +13,12 @@ on:
     tags: ["android-v*"]
     paths:
       - "android/**"
+      - "extensions.txt"
       - ".github/workflows/android.yml"
   pull_request:
     paths:
       - "android/**"
+      - "extensions.txt"
       - ".github/workflows/android.yml"
   workflow_dispatch:
 
@@ -43,7 +45,7 @@ jobs:
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: android/engine/.work/dl
-          key: engine-dl-${{ hashFiles('android/engine/versions.env', 'android/engine/userland/debs.lock') }}
+          key: engine-dl-${{ hashFiles('android/engine/versions.env', 'android/engine/userland/debs.lock', 'extensions.txt') }}
           restore-keys: engine-dl-
       - name: Build the pack
         run: engine/build-pack.sh

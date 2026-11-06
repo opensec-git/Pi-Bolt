@@ -23,9 +23,10 @@ hash_of() { cat "$@" | { sha256sum 2>/dev/null || shasum -a 256; } | cut -c1-64;
 echo "== builder image"
 docker build -q --platform linux/arm64 -t "$IMAGE" "$HERE/docker" >/dev/null
 
-run() { # command...: run in the builder with /engine, /dl, /stage, /out mounted
+run() { # command...: run in the builder with /engine, /extensions.txt (the extension pins), /dl, /stage, /out mounted
 	docker run --rm --platform linux/arm64 \
-		-v "$HERE:/engine:ro" -v "$WORK/dl:/dl" -v "$WORK/stage:/stage" -v "$OUT:/out" \
+		-v "$HERE:/engine:ro" -v "$HERE/../../extensions.txt:/extensions.txt:ro" \
+		-v "$WORK/dl:/dl" -v "$WORK/stage:/stage" -v "$OUT:/out" \
 		"$IMAGE" "$@"
 }
 
