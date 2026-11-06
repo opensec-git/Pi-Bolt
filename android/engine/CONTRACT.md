@@ -26,6 +26,10 @@ Android only executes or maps executable code from nativeLibraryDir, and only ex
 | `libld.so` | `PREFIX/lib/ld-linux-aarch64.so.1` | glibc loader |
 | `lib<soname with . and - as _>.so`, e.g. `libc_so_6.so` | `PREFIX/lib/libc.so.6` | glibc and every shared library a shipped tool needs |
 | `lib<tool>_exe.so`, e.g. `libbash_exe.so` | `PREFIX/bin/bash` (and aliases) | userland executables, PT_INTERP set to the loader path above |
+| `lib<tool>_exe.so`, e.g. `libgit_submodule_exe.so` | `PREFIX/libexec/git-core/git-submodule` | executable scripts too (exec needs nativeLibraryDir); shebang `PREFIX/bin/sh` |
+
+Names: every character other than `[A-Za-z0-9_]` becomes `_` (`git-sh-i18n--envsubst` -> `libgit_sh_i18n__envsubst_exe.so`).
+Identical files (hard links, `git-remote-https` -> `git-remote-http`) ship once; the aliases are extra links.
 
 The engine must be exec'd itself (never as an argument of the loader: its static heap maps `/proc/self/exe`).
 
@@ -34,11 +38,18 @@ The engine must be exec'd itself (never as an argument of the loader: its static
 ```json
 { "version": 1, "engine": "1.1.1", "glibc": "2.44", "prefix": "/data/data/in.opensec.pibolt/files/usr",
   "links": [ { "path": "lib/libc.so.6", "target": "libc_so_6.so" }, { "path": "bin/bash", "target": "libbash_exe.so" } ],
-  "files": [ { "path": "etc/ssl/certs/ca-certificates.crt", "asset": "engine/files/ca-certificates.crt" } ],
-  "packFingerprint": "<sha256 of the pack>" }
+  "files": [ { "path": "etc/ssl/certs/ca-certificates.crt", "asset": "engine/files/etc/ssl/certs/ca-certificates.crt" } ],
+  "package": [ "package.json", "theme/dark.json", "..." ],
+  "env": { "PATH": "/data/data/in.opensec.pibolt/files/usr/bin:/system/bin", "SHELL": "...", "...": "..." },
+  "packFingerprint": "<sha256 of every shipped file and the manifest>" }
 ```
 
-`links[].target` is a file name in nativeLibraryDir; `files[]` are copied from APK assets (non-executable data).
+`links[].target` is a file name in nativeLibraryDir; `files[]` are copied from APK assets (non-executable data: CA
+bundle, terminfo, git templates and mergetools, the git shell libraries that are sourced rather than exec'd).
+`package[]` lists every file under assets `engine/package/` (relative paths), so the app copies PI_PACKAGE_DIR without
+a recursive `AssetManager.list`. `env` holds the variables of step 3 below with PREFIX expanded (same values; the app
+may apply it as is). `assets/engine/licenses/` holds THIRD_PARTY_NOTICES.md and the licence texts for the About screen
+(not copied anywhere).
 
 ## Runtime setup (app, at each engine start; cheap when unchanged)
 
@@ -49,21 +60,28 @@ The engine must be exec'd itself (never as an argument of the loader: its static
 3. Spawn `nativeLibraryDir/libpibolt.so --mode rpc` in the project directory with env:
    `HOME`, `TMPDIR`, `TZ` (`TimeZone.getDefault().id`), `LANG=C.UTF-8`, `PATH=PREFIX/bin:/system/bin`,
    `SHELL=PREFIX/bin/bash`, `PI_PACKAGE_DIR` = a dir holding the engine's side files (theme/, export-html/,
-   assets/, package.json) copied from APK assets `engine/package/`, `GIT_EXEC_PATH=PREFIX/libexec/git-core`,
-   `GIT_TEMPLATE_DIR=PREFIX/share/git-core/templates`, `SSL_CERT_FILE=PREFIX/etc/ssl/certs/ca-certificates.crt`,
-   `TERMINFO=PREFIX/share/terminfo`. No `LD_LIBRARY_PATH`, no `LD_PRELOAD`.
+   assets/, package.json, README.md, docs/, examples/, photon_rs_bg.wasm) copied from APK assets `engine/package/`,
+   `GIT_EXEC_PATH=PREFIX/libexec/git-core`, `GIT_TEMPLATE_DIR=PREFIX/share/git-core/templates`,
+   `SSL_CERT_FILE=PREFIX/etc/ssl/certs/ca-certificates.crt`, `TERMINFO=PREFIX/share/terminfo`. No `LD_LIBRARY_PATH`,
+   no `LD_PRELOAD`. (git and curl also have these PREFIX paths compiled in, so they work without the variables.)
 4. stdin/stdout carry RPC JSON lines exactly like `pi-bolt --mode rpc` (packages/coding-agent/docs/rpc.md);
    stderr goes to the app log.
 
 ## Userland pack (first set)
 
-bash, busybox (coreutils, grep, sed, awk, find, xargs, tar, gzip, unzip, diff, less... as `bin/<applet>` links),
-git (+ `libexec/git-core` helpers, https via libcurl/OpenSSL), ripgrep (`rg`), fd (`fd`), CA certificates.
+bash (also `bin/sh`, the shell glibc's system()/popen() and git use), busybox (coreutils, grep, sed, awk, find,
+xargs, tar, gzip, unzip, diff, less, vi... as `bin/<applet>` links; root-only applets skipped, see
+`userland/busybox-skip.txt`), git (+ `libexec/git-core` helpers, https via libcurl/OpenSSL), curl, ripgrep (`rg`),
+fd (`fd`, `fdfind`), CA certificates (Mozilla, via Debian), terminfo (xterm-256color, xterm, screen, tmux, vt100,
+linux, dumb...). bash, busybox, rg, fd and the shared libraries are Debian trixie arm64 binaries pinned in
+`userland/debs.lock`; git and curl are built from release tarballs for PREFIX.
 Later packs (optional downloads are impossible to execute, so they ship in the APK or a split): python3, node,
 openssh, make/clang.
 
 ## Build (reproducible, not committed binaries)
 
 `android/engine/build-pack.sh` (Docker, linux/arm64; CI on GitHub's ubuntu-24.04-arm runner) produces
-`android/engine/out/{jniLibs/arm64-v8a, assets/engine}`, gitignored. Gradle adds those dirs when present. The glibc
-source, our patches and the build script are published with each release (LGPL-2.1).
+`android/engine/out/{jniLibs/arm64-v8a, assets/engine}`, gitignored. Gradle adds those dirs when present.
+`scripts/verify-pack.sh` runs the result the way the app does (Alpine arm64 container: no glibc, no /bin/bash, real
+PREFIX). `scripts/source-bundle.sh` writes `out/pi-bolt-android-engine-sources.tar` (glibc + Termux patches + our
+scripts, git, curl, Debian sources of bash and busybox), published with each app release (LGPL-2.1/GPL).

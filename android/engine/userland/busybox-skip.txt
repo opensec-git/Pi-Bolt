@@ -1,0 +1,11 @@
+# busybox applets that get no bin/ link: shells (bin/sh is bash), and system administration applets that need
+# root or hardware access an Android app does not have (Android's own /system/bin versions stay reachable via PATH).
+sh ash hush bash
+acpid adjtimex arp arping blkdiscard blkid blockdev brctl chpst chroot chrt chvt conspy crond crontab deallocvt
+depmod devmem dhcprelay dnsd dumpkmap fbset fdisk findfs freeramdisk fsck fsck.minix fstrim getty halt hdparm
+hwclock ifconfig ifdown ifenslave ifup init insmod ip ipaddr iplink ipneigh iproute iprule iptunnel klogd
+linux32 linux64 loadfont loadkmap logread login losetup lsmod lsscsi mdev mkdosfs mke2fs mkfs.ext2 mkfs.minix
+mkfs.vfat mknod mkswap modinfo modprobe mount nameif nbd-client nologin openvt pivot_root ping ping6 poweroff
+rdate readahead reboot rmmod route runlevel setconsole setfont setkeycodes setlogcons setpriv start-stop-daemon
+su sulogin svc svok swapoff swapon switch_root sysctl syslogd traceroute traceroute6 tunctl udhcpc udhcpc6 udhcpd
+umount uevent vconfig watchdog zcip
