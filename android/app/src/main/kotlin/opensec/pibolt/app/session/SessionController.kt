@@ -151,6 +151,13 @@ class SessionController private constructor(
     private val inputs = Channel<Input>(Channel.UNLIMITED)
     private val retrySignal = Channel<Unit>(Channel.CONFLATED)
 
+    /** On this phone, subagents' session files are readable: their messages stream into [SessionState.subagents]. */
+    private val subagentTail: SubagentTail? =
+        if (origin is Origin.Local) SubagentTail(state, { sessionFile }) { inputs.trySend(Input.Event(it)) } else null
+
+    /** True when a subagent's own messages can be shown (a session on this phone); remote control sends only progress. */
+    val readsSubagentFiles: Boolean get() = subagentTail != null
+
     @Volatile
     var stopped = false
         private set
@@ -161,6 +168,12 @@ class SessionController private constructor(
         scope.launch { reduceLoop() }
         scope.launch { connectLoop() }
         pumpEvents()
+        subagentTail?.start(scope)
+    }
+
+    /** Keep reading subagent [key]'s session file while its detail screen is open, also after it finished. */
+    fun watchSubagent(key: String, on: Boolean) {
+        subagentTail?.watch(key, on)
     }
 
     fun stop() {

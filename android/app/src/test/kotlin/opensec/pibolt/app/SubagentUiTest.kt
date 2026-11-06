@@ -1,0 +1,268 @@
+package opensec.pibolt.app
+
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.serialization.json.JsonObject
+import opensec.pibolt.app.engine.SessionIndex
+import opensec.pibolt.app.session.SubagentTail
+import opensec.pibolt.app.ui.session.FoldRow
+import opensec.pibolt.app.ui.session.MdCache
+import opensec.pibolt.app.ui.session.SubagentNoticeRow
+import opensec.pibolt.app.ui.session.SubagentRow
+import opensec.pibolt.app.ui.session.SubagentStackRow
+import opensec.pibolt.app.ui.session.ToolRow
+import opensec.pibolt.app.ui.session.TranscriptModel
+import opensec.pibolt.app.ui.session.subagent.SubagentFormat
+import opensec.pibolt.protocol.arr
+import opensec.pibolt.protocol.bool
+import opensec.pibolt.protocol.session.AssistantTextItem
+import opensec.pibolt.protocol.session.ChatItem
+import opensec.pibolt.protocol.session.NoticeItem
+import opensec.pibolt.protocol.session.SessionReducer
+import opensec.pibolt.protocol.session.SessionState
+import opensec.pibolt.protocol.session.Subagent
+import opensec.pibolt.protocol.session.SubagentNoticeItem
+import opensec.pibolt.protocol.session.SubagentStatus
+import opensec.pibolt.protocol.session.SubagentTranscript
+import opensec.pibolt.protocol.session.ToolItem
+import opensec.pibolt.protocol.session.ToolStatus
+import opensec.pibolt.protocol.session.UserItem
+import opensec.pibolt.protocol.str
+import java.io.File
+import java.nio.file.Files
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNull
+import kotlin.test.assertTrue
+
+/** Subagent cards in the transcript, their texts, and reading a subagent's session file. */
+class SubagentUiTest {
+    private fun agent(id: String, status: ToolStatus = ToolStatus.Running) = ToolItem("tool:$id", id, "Agent", null, status = status)
+
+    private fun run(key: String, status: SubagentStatus = SubagentStatus.Running, background: Boolean = false, agentId: String? = null) =
+        Subagent(key = key, type = "Explore", description = "Task $key", status = status, background = background, agentId = agentId)
+
+    @Test
+    fun agentCallsBecomeCardsAndParallelOnesAStack() {
+        val items: List<ChatItem> = listOf(
+            UserItem("u", "go"),
+            agent("a1"),
+            AssistantTextItem("m1.1", "", streaming = false),
+            agent("a2"),
+            agent("a3"),
+            AssistantTextItem("m2.0", "Waiting.", streaming = false),
+            agent("a4"),
+            ToolItem("tool:b", "b", "bash", null, status = ToolStatus.Done),
+        )
+        val runs = listOf("a1", "a2", "a3", "a4").associateWith { run(it) }
+        val rows = TranscriptModel.rows(items, liveTurn = true, expanded = emptySet(), durations = emptyMap(), md = MdCache(), subagents = runs)
+        val stack = rows.filterIsInstance<SubagentStackRow>().single()
+        assertEquals(listOf("a1", "a2", "a3"), stack.runs.map { it.key })
+        assertEquals("agents:tool:a1", stack.key)
+        assertEquals(false, stack.expanded)
+        assertEquals("a4", rows.filterIsInstance<SubagentRow>().single().run.key)
+        assertEquals(1, rows.count { it is ToolRow })
+        assertTrue(TranscriptModel.keysUnique(rows))
+        // Inside a subagent's own transcript, calls stay tool rows.
+        val plain = TranscriptModel.rows(items, liveTurn = true, expanded = emptySet(), durations = emptyMap(), md = MdCache(), agentCards = false)
+        assertTrue(plain.none { it is SubagentRow || it is SubagentStackRow })
+    }
+
+    @Test
+    fun aFinishedTurnFoldsItsStepsButKeepsAgentCards() {
+        val items: List<ChatItem> = listOf(
+            UserItem("u", "go"),
+            agent("fg", ToolStatus.Done),
+            agent("bg", ToolStatus.Done),
+            AssistantTextItem("m1", "Started.", streaming = false),
+            SubagentNoticeItem("n1", listOf("bg-1"), "<task-notification>", listOf("bg")),
+        )
+        val runs = mapOf(
+            "fg" to run("fg", SubagentStatus.Done),
+            "bg" to run("bg", SubagentStatus.Done, background = true, agentId = "bg-1").copy(transcript = SubagentTranscript("/x")),
+        )
+        val rows = TranscriptModel.rows(items, liveTurn = false, expanded = emptySet(), durations = emptyMap(), md = MdCache(), subagents = runs)
+        assertTrue(rows.any { it is FoldRow })
+        val cards = rows.filterIsInstance<SubagentRow>()
+        assertEquals(listOf("agents:tool:fg"), rows.filterIsInstance<SubagentStackRow>().map { it.key })
+        assertTrue(cards.isEmpty())
+        val stacked = rows.filterIsInstance<SubagentStackRow>().single().runs
+        assertEquals(listOf("fg", "bg"), stacked.map { it.key })
+        // Rows carry runs without their transcript, so a frame that only grows a transcript compares cheaply.
+        assertNull(stacked[1].transcript)
+        val notice = rows.filterIsInstance<SubagentNoticeRow>().single()
+        assertEquals(listOf("bg"), notice.runs.map { it.key })
+    }
+
+    @Test
+    fun cardTexts() {
+        val running = run("a").copy(activity = "reading 3 files…", toolUses = 4, tokens = "12.3k", turns = 2)
+        assertEquals("Reading 3 files…", SubagentFormat.activityLine(running))
+        assertEquals("4 tools · 12.3k tokens · turn 2", SubagentFormat.metrics(running))
+        assertEquals("No tools yet", SubagentFormat.metrics(run("b")))
+        assertEquals("1 tool · turn 3/10", SubagentFormat.metrics(run("c").copy(toolUses = 1, turns = 3, maxTurns = 10)))
+        assertEquals("Starting…", SubagentFormat.activityLine(run("d", SubagentStatus.Queued)))
+        assertEquals("Queued in the background", SubagentFormat.activityLine(run("d", SubagentStatus.Queued, background = true)))
+        assertEquals("Auth lives in src/auth.", SubagentFormat.activityLine(run("e", SubagentStatus.Done).copy(result = "## Auth lives in src/auth.\n\nMore")))
+        assertEquals("Failed: boom", SubagentFormat.activityLine(run("f", SubagentStatus.Failed).copy(error = "boom\ntrace")))
+        assertEquals("9.1s", SubagentFormat.finalDuration(run("g", SubagentStatus.Done).copy(durationMs = 9100)))
+        assertNull(SubagentFormat.finalDuration(run("h").copy(durationMs = 9100)))
+        assertEquals("Explore finished", SubagentFormat.endedTitle(run("i", SubagentStatus.Done)))
+        assertEquals("E", SubagentFormat.initial("explore"))
+        assertEquals("General-purpose", SubagentFormat.typeLabel("general-purpose"))
+        assertEquals(SubagentFormat.tintIndex("Explore"), SubagentFormat.tintIndex("explore"))
+    }
+
+    @Test
+    fun answerPreviewReadsAsOneParagraph() {
+        assertEquals(
+            "Build audit: All 8 groups pass. • No pins missing • Lockfile in sync",
+            SubagentFormat.answerPreview("## Build audit\n\nAll **8** groups pass.\n\n- No pins missing\n1. Lockfile in sync\n```\ncode\n```"),
+        )
+        assertTrue(SubagentFormat.sameLine("Now", "Now I search"))
+        assertTrue(!SubagentFormat.sameLine("Now I search", "Running ls…"))
+        assertEquals("4 tools · 5 turns", SubagentFormat.metrics(run("a", SubagentStatus.Done).copy(toolUses = 4, turns = 5)))
+    }
+
+    @Test
+    fun subagentSessionsAreNotProjectSessions() {
+        val agentDir = Files.createTempDirectory("agent").toFile()
+        val project = Files.createTempDirectory("project").toFile()
+        val index = SessionIndex(agentDir)
+        val dir = index.sessionDir(project.absolutePath).apply { mkdirs() }
+        val parent = File(dir, "1_parent.jsonl").apply {
+            writeText(line("""{"type":"session","id":"parent"}""") + line("""{"type":"message","message":{"role":"user","content":"hi"}}"""))
+        }
+        File(dir, "2_child.jsonl").writeText(
+            line("""{"type":"session","id":"child","parentSession":"${parent.path}"}""") +
+                line("""{"type":"session_info","name":"Explore#1669f14e"}""") +
+                line("""{"type":"message","message":{"role":"user","content":"sub"}}"""),
+        )
+        // A fork names its parent too, but not with an agent's name: it stays.
+        File(dir, "3_fork.jsonl").writeText(
+            line("""{"type":"session","id":"fork","parentSession":"${parent.path}"}""") + line("""{"type":"message","message":{"role":"user","content":"hi"}}"""),
+        )
+        assertEquals(setOf("parent", "fork"), index.list(project).map { it.id }.toSet())
+        agentDir.deleteRecursively()
+        project.deleteRecursively()
+    }
+
+    @Test
+    fun stackTitles() {
+        assertEquals("3 agents running", SubagentFormat.stackTitle(List(3) { run("r$it") }))
+        assertEquals("1 of 3 agents running", SubagentFormat.stackTitle(listOf(run("a"), run("b", SubagentStatus.Done), run("c", SubagentStatus.Done))))
+        assertEquals("2 agents done", SubagentFormat.stackTitle(listOf(run("a", SubagentStatus.Done), run("b", SubagentStatus.Done))))
+        assertEquals("2 agents · 1 failed", SubagentFormat.stackTitle(listOf(run("a", SubagentStatus.Failed), run("b", SubagentStatus.Done))))
+    }
+
+    @Test
+    fun howTheDetailScreenReachesAnAgent() {
+        assertEquals(SubagentFormat.Reach.StopOnly, SubagentFormat.reach(run("a")))
+        assertEquals(SubagentFormat.Reach.Steer, SubagentFormat.reach(run("b", background = true, agentId = "id1")))
+        assertEquals(SubagentFormat.Reach.Resume, SubagentFormat.reach(run("c", SubagentStatus.Done, agentId = "id2")))
+        assertEquals(SubagentFormat.Reach.None, SubagentFormat.reach(run("d", SubagentStatus.Done)))
+        val steer = SubagentFormat.steerPrompt(run("b", background = true, agentId = "id1"), "  look at tests  ")
+        assertTrue(steer.startsWith("Use steer_subagent to send this message to the running agent id1 (Explore: Task b)"))
+        assertTrue(steer.endsWith("\n\nlook at tests"))
+        assertTrue(SubagentFormat.resumePrompt(run("c", agentId = "id2"), "more").contains("resume"))
+    }
+
+    @Test
+    fun withoutItsFileTheDetailShowsPromptAndAnswer() {
+        val done = run("a", SubagentStatus.Done).copy(prompt = "Find it", result = "Found.")
+        val items = SubagentFormat.detailItems(done)
+        assertEquals("Find it", (items[0] as UserItem).text)
+        assertEquals("Found.", (items[1] as AssistantTextItem).text)
+        val failed = run("b", SubagentStatus.Failed).copy(prompt = "x", error = "boom")
+        assertTrue(SubagentFormat.detailItems(failed).last() is NoticeItem)
+        assertEquals(1, SubagentFormat.detailItems(run("c").copy(prompt = "x", result = "partial")).size)
+    }
+
+    // Session files
+
+    private fun line(json: String) = json + "\n"
+
+    @Test
+    fun readsTheSubagentsSessionFileAsItGrows() {
+        val dir = Files.createTempDirectory("subagents").toFile()
+        val parent = File(dir, "2026-01-01_parent.jsonl").apply { writeText(line("""{"type":"session","id":"parent"}""")) }
+        // Another session of the project, and another parent's subagent with the same prompt: neither is ours.
+        File(dir, "2026-01-01_other.jsonl").writeText(line("""{"type":"session","id":"o"}"""))
+        File(dir, "2026-01-01_foreign.jsonl").writeText(
+            line("""{"type":"session","id":"f","parentSession":"/elsewhere.jsonl"}""") + line("""{"type":"message","message":{"role":"user","content":"Scan slowly"}}"""),
+        )
+        val child = File(dir, "2026-01-02_child.jsonl")
+        child.writeText(
+            line("""{"type":"session","id":"c","parentSession":"${parent.path}"}""") +
+                line("""{"type":"session_info","name":"Explore#bgabcdef"}""") +
+                line("""{"type":"message","message":{"role":"user","content":"Scan slowly","timestamp":5}}"""),
+        )
+        val state = MutableStateFlow(SessionState(subagents = mapOf("k" to Subagent(key = "k", prompt = "Scan slowly", status = SubagentStatus.Running))))
+        val events = ArrayList<JsonObject>()
+        val tail = SubagentTail(state, { parent.path }) { e ->
+            events += e
+            state.value = SessionReducer.reduce(state.value, e)
+        }
+        assertTrue(tail.pass())
+        assertEquals(1, events.size)
+        assertEquals(child.path, events[0].str("file"))
+        assertEquals(true, events[0].bool("reset"))
+        assertEquals(1, events[0].arr("messages")!!.size)
+        // A line still being written is not read until it ends.
+        child.appendText(line("""{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Half"}]}}""") + """{"type":"message","mess""")
+        tail.pass()
+        assertEquals(2, events.size)
+        assertEquals(1, events[1].arr("messages")!!.size)
+        assertEquals(false, events[1].bool("reset"))
+        child.appendText("""age":{"role":"assistant","content":[{"type":"text","text":"Done."}]}}""" + "\n")
+        tail.pass()
+        assertEquals(3, events.size)
+        val items = state.value.subagents.getValue("k").transcript!!.items
+        assertEquals(listOf("Scan slowly", "Half", "Done."), items.map { (it as? UserItem)?.text ?: (it as AssistantTextItem).text })
+        // Nothing new: no event.
+        tail.pass()
+        assertEquals(3, events.size)
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun aKnownAgentIdPicksItsFileByName() {
+        val dir = Files.createTempDirectory("subagents").toFile()
+        val parent = File(dir, "p.jsonl").apply { writeText(line("""{"type":"session","id":"p"}""")) }
+        fun child(name: String, agent: String) = File(dir, "$name.jsonl").apply {
+            writeText(
+                line("""{"type":"session","id":"$name","parentSession":"${parent.path}"}""") +
+                    line("""{"type":"session_info","name":"Explore#$agent"}""") +
+                    line("""{"type":"message","message":{"role":"user","content":"same prompt"}}"""),
+            )
+        }
+        child("one", "11111111")
+        val two = child("two", "22222222")
+        val state = MutableStateFlow(
+            SessionState(subagents = mapOf("k" to Subagent(key = "k", agentId = "22222222-3333-4", prompt = "same prompt", status = SubagentStatus.Running, background = true))),
+        )
+        val events = ArrayList<JsonObject>()
+        SubagentTail(state, { parent.path }) { events += it }.pass()
+        assertEquals(two.path, events.single().str("file"))
+        dir.deleteRecursively()
+    }
+
+    @Test
+    fun finishedRunsAreReadOnlyWhenWatched() {
+        val dir = Files.createTempDirectory("subagents").toFile()
+        val parent = File(dir, "p.jsonl").apply { writeText(line("""{"type":"session","id":"p"}""")) }
+        File(dir, "c.jsonl").writeText(
+            line("""{"type":"session","id":"c","parentSession":"${parent.path}"}""") +
+                line("""{"type":"session_info","name":"Plan#abcdefgh"}""") +
+                line("""{"type":"message","message":{"role":"user","content":"plan"}}"""),
+        )
+        val state = MutableStateFlow(SessionState(subagents = mapOf("k" to Subagent(key = "k", agentId = "abcdefgh-1", status = SubagentStatus.Done))))
+        val events = ArrayList<JsonObject>()
+        val tail = SubagentTail(state, { parent.path }) { events += it }
+        assertEquals(false, tail.pass())
+        assertTrue(events.isEmpty())
+        tail.watch("k", true)
+        assertTrue(tail.pass())
+        assertEquals(1, events.size)
+        dir.deleteRecursively()
+    }
+}
