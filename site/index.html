@@ -323,7 +323,7 @@
           <code id="cmd">curl -fsSL https://pi-bolt.opensec.in/install.sh | sh</code>
           <button class="copy" type="button" data-copy="cmd" aria-label="Copy the install command">Copy</button>
         </div>
-        <a class="apk" href="android" hidden><span><b>Download the Android app</b><small class="apk-meta">APK · remote control for Pi-Bolt</small></span><i aria-hidden="true">↓</i></a>
+        <a class="apk" href="android" hidden><span><b>Download the Android app</b><small class="apk-meta">APK · Pi-Bolt on your phone</small></span><i aria-hidden="true">↓</i></a>
       </div>
       <div class="hero-links">
         <a class="btn primary" href="docs/quickstart.html"><span>Get started</span><i aria-hidden="true">→</i></a>
@@ -495,7 +495,7 @@
         <code id="cmd2">curl -fsSL https://pi-bolt.opensec.in/install.sh | sh</code>
         <button class="copy" type="button" data-copy="cmd2" aria-label="Copy the install command">Copy</button>
       </div>
-      <a class="apk" href="android" hidden><span><b>Download the Android app</b><small class="apk-meta">APK · remote control for Pi-Bolt</small></span><i aria-hidden="true">↓</i></a>
+      <a class="apk" href="android" hidden><span><b>Download the Android app</b><small class="apk-meta">APK · Pi-Bolt on your phone</small></span><i aria-hidden="true">↓</i></a>
     </div>
     <div class="row">
       <a class="btn primary" href="https://github.com/opensec-git/Pi-Bolt"><span>Star it on GitHub</span><i aria-hidden="true">↗</i></a>
@@ -581,7 +581,7 @@
       .then(function (release) {
         if (!release || !/^https:\/\/github\.com\/opensec-git\/Pi-Bolt\/releases\/download\//.test(release.apk)) return;
         var mb = release.size ? " · " + (release.size / 1048576).toFixed(1) + " MB" : "";
-        document.querySelectorAll(".apk-meta").forEach(function (m) { m.textContent = "APK " + release.version + mb + " · remote control for Pi-Bolt"; });
+        document.querySelectorAll(".apk-meta").forEach(function (m) { m.textContent = "APK " + release.version + mb + " · Pi-Bolt on your phone"; });
         if (isAndroid) document.querySelectorAll("a.apk").forEach(function (a) { a.href = release.apk; a.setAttribute("download", ""); });
       })
       .catch(function () {});
