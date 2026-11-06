@@ -4,7 +4,8 @@ name: android
 # protocol and app unit tests, lint, debug and release builds with the pack inside. A pull request uploads the debug
 # APK as an artifact. An `android-vX.Y.Z` tag on a pi-bolt commit builds the unsigned release APK, signs it with apksigner
 # and the keystore from the ANDROID_KEYSTORE_B64 secret (environment `release`), checks the signature and publishes it
-# as a GitHub release of its own. That release is never marked latest, so
+# as a GitHub release of its own, then points pi-bolt.opensec.in/android at it (android.json on gh-pages). That release is
+# never marked latest, so
 # the Pi-Bolt installers (which read the latest release) and its release-files.txt check never see it. GitHub-hosted
 # runners only.
 on:
@@ -124,6 +125,8 @@ jobs:
     environment: release
     permissions:
       contents: write
+      # android.json goes to gh-pages through the contents API; a Pages build has to be requested explicitly.
+      pages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -206,3 +209,9 @@ jobs:
             --title "Pi-Bolt Android $version" --notes-file "$RUNNER_TEMP/notes.md" \
             "$RUNNER_TEMP/pi-bolt-android-$version.apk" "$RUNNER_TEMP/pi-bolt-android-$version.apk.sha256" \
             "$RUNNER_TEMP/engine-sources/pi-bolt-android-engine-sources.tar"
+      # pi-bolt.opensec.in/android and the home page's Android tab read android.json on gh-pages to offer the newest APK.
+      - name: Point the site's Android download at this release
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/publish-android-download.sh "${GITHUB_REF_NAME#android-v}"
