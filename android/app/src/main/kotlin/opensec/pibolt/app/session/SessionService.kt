@@ -31,8 +31,9 @@ import opensec.pibolt.app.R
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Keeps the process (and so the connection) alive while the agent runs or a dialog waits, when the app is in the
- * background. Stops itself once the session is idle.
+ * Keeps the process (and so the connection, or the local engine process) alive while the agent runs or a dialog waits,
+ * when the app is in the background. Stops itself once the session is idle. Without it a backgrounded app is cached and
+ * frozen, and the engine with it.
  */
 class SessionService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -43,11 +44,19 @@ class SessionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val app = application as PiBoltApp
         val started = runCatching {
+            val live = app.session.value
+            // A local run is work on this phone (the engine process lives as long as this service keeps the app up);
+            // a remote one relays messages from a computer.
+            val type = when {
+                Build.VERSION.SDK_INT < 34 -> 0
+                live?.isLocal == true -> ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                else -> ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
+            }
             ServiceCompat.startForeground(
                 this,
                 Notifications.ONGOING_ID,
-                Notifications.ongoing(this, app.session.value?.hostName?.value ?: getString(R.string.app_name), "Connected"),
-                if (Build.VERSION.SDK_INT >= 34) ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING else 0,
+                Notifications.ongoing(this, live?.hostName?.value ?: getString(R.string.app_name), if (live?.isLocal == true) "Running" else "Connected"),
+                type,
             )
         }.isSuccess
         if (!started) {
@@ -64,8 +73,9 @@ class SessionService : Service() {
                     stop()
                     return@collect
                 }
+                val local = app.session.value?.isLocal == true
                 val text = when {
-                    link !is LinkState.Connected -> "Reconnecting…"
+                    link !is LinkState.Connected -> if (local) "Restarting the engine…" else "Reconnecting…"
                     s.dialogs.isNotEmpty() -> "Waiting for your answer"
                     s.isCompacting -> "Compacting context"
                     else -> "Working"
