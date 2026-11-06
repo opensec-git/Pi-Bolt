@@ -1,6 +1,9 @@
 package opensec.pibolt.app.ui.markdown
 
+import androidx.compose.runtime.Immutable
+
 /** Block-level markdown, enough for model output: headings, paragraphs, lists, quotes, code fences, tables, rules. */
+@Immutable
 sealed interface MdBlock {
     data class Heading(val level: Int, val text: String) : MdBlock
 
@@ -19,12 +22,14 @@ sealed interface MdBlock {
     data object Rule : MdBlock
 
     /** [align] holds one entry per column from the separator row (`:--`, `:-:`, `--:`). */
+    @Immutable
     data class Table(val header: List<String>, val rows: List<List<String>>, val align: List<TableAlign> = emptyList()) : MdBlock
 }
 
 enum class TableAlign { None, Start, Center, End }
 
 /** Parsed text: [starts] holds the character offset where each block begins, so a longer text re-parses only the tail. */
+@Immutable
 class MdDoc internal constructor(val text: String, val blocks: List<MdBlock>, internal val starts: IntArray)
 
 object Markdown {
@@ -40,6 +45,12 @@ object Markdown {
      * Parse [text]. When [previous] is a parse of a prefix of [text] (a streaming message that grew), every block but
      * the last is reused and parsing restarts where that last block began.
      */
+    /** Shown while a large text is parsed off the main thread: its first lines as plain paragraphs. */
+    fun placeholder(text: String): MdDoc {
+        val head = text.take(4_000).substringBeforeLast('\n')
+        return MdDoc(text, listOf(MdBlock.Paragraph(head)), intArrayOf(0))
+    }
+
     fun parse(text: String, previous: MdDoc? = null): MdDoc {
         if (previous != null && previous.text == text) return previous
         if (previous != null && previous.blocks.isNotEmpty() && text.startsWith(previous.text)) {
@@ -188,10 +199,12 @@ object Markdown {
 }
 
 /** Inline markdown: bold, italic, strikethrough, inline code, links. */
+@Immutable
 data class InlineSpan(val start: Int, val end: Int, val kind: Kind, val url: String? = null) {
     enum class Kind { Bold, Italic, Strike, Code, Link }
 }
 
+@Immutable
 data class InlineText(val text: String, val spans: List<InlineSpan>)
 
 object Inline {
