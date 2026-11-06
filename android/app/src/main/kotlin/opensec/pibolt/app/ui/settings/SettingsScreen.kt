@@ -3,6 +3,7 @@ package opensec.pibolt.app.ui.settings
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
+import android.text.format.DateUtils
 import androidx.annotation.RawRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
@@ -65,6 +66,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -84,6 +86,9 @@ import opensec.pibolt.app.data.ThemeId
 import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.components.DangerButton
 import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.PrimaryButton
+import opensec.pibolt.app.ui.components.QuadMode
+import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.SectionLabel
 import opensec.pibolt.app.ui.components.Segmented
@@ -96,6 +101,10 @@ import opensec.pibolt.app.ui.theme.PiColors
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.PiType
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.update.ProgressLine
+import opensec.pibolt.app.ui.update.updateStatus
+import opensec.pibolt.app.update.UpdateJob
+import opensec.pibolt.app.update.UpdateRules
 
 /** Preferences, applied live (no activity restart) and saved in settings.json. */
 @Composable
@@ -276,6 +285,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
             Section("About") {
                 InfoLine("Version", app.appVersion)
                 InfoLine("This phone", app.deviceName)
+                UpdateBlock(app, settings.autoUpdateCheck) { on -> update { it.copy(autoUpdateCheck = on) } }
                 // Licence texts are read off the main thread.
                 NavLine("Inter licence (OFL 1.1)") { scope.launch { licence = ViewerContent("Inter", "SIL Open Font License 1.1", readRaw(context, R.raw.license_inter), wrap = true) } }
                 NavLine("JetBrains Mono licence (OFL 1.1)") { scope.launch { licence = ViewerContent("JetBrains Mono", "SIL Open Font License 1.1", readRaw(context, R.raw.license_jetbrains_mono), wrap = true) } }
@@ -435,6 +445,42 @@ private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChang
             ),
         )
     }
+}
+
+/** About → updates: the last check's result or the running update, its one action, and the automatic check toggle. */
+@Composable
+private fun UpdateBlock(app: PiBoltApp, autoCheck: Boolean, onAutoCheck: (Boolean) -> Unit) {
+    val colors = Pi.colors
+    val updates = app.updates
+    val state by updates.state.collectAsStateWithLifecycle()
+    val (title, detail) = updateStatus(state)
+    val job = state.job
+    val failed = job is UpdateJob.Failed || (state.checkError != null && !state.checking && job == UpdateJob.Idle)
+    val checked = state.lastCheckAt.takeIf { it > 0 && job == UpdateJob.Idle && !state.checking }
+        ?.let { at ->
+            val now = System.currentTimeMillis()
+            if (now - at < DateUtils.MINUTE_IN_MILLIS) "Checked just now" else "Checked " + DateUtils.getRelativeTimeSpanString(at, now, DateUtils.MINUTE_IN_MILLIS)
+        }
+    Spacer(Modifier.height(4.dp))
+    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f).padding(end = 12.dp)) {
+            Text(title, style = Pi.type.bodyStrong, color = if (failed) colors.danger else colors.ink1)
+            (detail ?: checked)?.let { Text(it, style = Pi.type.meta.copy(fontFeatureSettings = "tnum"), color = colors.ink3) }
+        }
+        if (state.checking || job is UpdateJob.Verifying || job is UpdateJob.Installing) QuadSpinner(QuadMode.Think, size = 16.dp, color = colors.ink2)
+    }
+    if (job is UpdateJob.Downloading) ProgressLine(job.bytes.toFloat() / job.total.coerceAtLeast(1), Modifier.padding(vertical = 6.dp))
+    Spacer(Modifier.height(8.dp))
+    val available = (state.decision as? UpdateRules.Decision.Available)?.info
+    when {
+        job is UpdateJob.Downloading -> SecondaryButton("Cancel download", onClick = updates::cancelDownload, modifier = Modifier.fillMaxWidth())
+        job is UpdateJob.Ready -> PrimaryButton("Install ${job.info.version}", onClick = updates::requestInstall, modifier = Modifier.fillMaxWidth())
+        job is UpdateJob.Verifying || job is UpdateJob.Installing -> Unit
+        available != null -> PrimaryButton("Update to ${available.version}", onClick = { updates.requestUpdate(available) }, modifier = Modifier.fillMaxWidth())
+        else -> SecondaryButton("Check for updates", onClick = updates::checkNow, enabled = !state.checking, modifier = Modifier.fillMaxWidth())
+    }
+    Spacer(Modifier.height(8.dp))
+    ToggleRow("Check for updates automatically", "Once a day when the app opens: a plain request, no identifiers", autoCheck, onAutoCheck)
 }
 
 @Composable

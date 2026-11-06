@@ -87,6 +87,9 @@ import opensec.pibolt.app.ui.providers.ProviderSheet
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.update.UpdateCard
+import opensec.pibolt.app.update.UpdateJob
+import opensec.pibolt.app.update.UpdateRules
 
 /**
  * Home: projects on this phone first (Pi-Bolt runs here), then the computers this phone controls, folded away by
@@ -122,6 +125,8 @@ fun HomeScreen(
     val hosts by app.hosts.hosts.collectAsStateWithLifecycle()
     val remote by app.session.collectAsStateWithLifecycle()
     val local by LocalSessions.current.collectAsStateWithLifecycle()
+    val update by app.updates.state.collectAsStateWithLifecycle()
+    val showUpdate = update.job != UpdateJob.Idle || (update.decision as? UpdateRules.Decision.Available)?.snoozed == false
     val unavailable = status is EngineStatus.Unavailable
 
     var reload by remember { mutableIntStateOf(0) }
@@ -156,6 +161,13 @@ fun HomeScreen(
             onboarding = true
         }
     }
+    // First launch after an update: say so once. The snackbar runs in Home's scope: consuming the flag changes this
+    // effect's key, which would cancel it.
+    LaunchedEffect(update.justUpdated) {
+        val version = update.justUpdated ?: return@LaunchedEffect
+        scope.launch { snackbar.show("Updated to $version", SnackKind.Success) }
+        app.updates.consumeJustUpdated()
+    }
     LaunchedEffect(externalError) {
         externalError ?: return@LaunchedEffect
         snackbar.show(externalError, SnackKind.Error)
@@ -185,6 +197,11 @@ fun HomeScreen(
             if (status.needsBanner()) {
                 item(key = "engine", contentType = "engine") {
                     EngineBanner(status, onRetry = engine::prepare, onDetails = { details = true }, modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp))
+                }
+            }
+            if (showUpdate) {
+                item(key = "update", contentType = "update") {
+                    UpdateCard(app, modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp))
                 }
             }
             if (!unavailable && metaLoaded && authLoaded && meta.providerPromptSeen && configured.isEmpty()) {
@@ -258,7 +275,7 @@ fun HomeScreen(
                 .fillMaxWidth()
                 .background(Brush.verticalGradient(0f to colors.canvas.copy(alpha = 0f), 0.3f to colors.canvas)),
         ) {
-            PiSnackHost(snackbar)
+            PiSnackHost(snackbar, if (hasBottomBar) Modifier else Modifier.navigationBarsPadding())
             if (hasBottomBar) {
                 PrimaryButton(
                     "New project",

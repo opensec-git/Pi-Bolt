@@ -33,6 +33,24 @@ Get the link with `/remote-control copy`. Options: `--steer` or `--follow-up` (w
 `message_update` lines), `--state DIR` (device key and paired hosts, default `~/.pibolt-rc-cli`). Without a prompt it
 prints events until the connection ends.
 
+## Updates
+
+The app checks https://pi-bolt.opensec.in/android.json (or GitHub's newest `android-v*` release when the site is down)
+once a day and from Settings > About, downloads the APK from the GitHub release, checks its SHA-256, signing
+certificate (android.json's `certSha256` and the installed app's own), package name and versionCode, and installs it
+with Android's package installer through a FileProvider (`app/src/main/kotlin/opensec/pibolt/app/update/`). Release builds accept only that URL and APKs
+under `https://github.com/opensec-git/Pi-Bolt/releases/download/`.
+
+To test against a local server, build a debug APK with both overrides (debug builds only):
+
+```sh
+PIBOLT_APP_VERSION=0.2.1 PIBOLT_UPDATE_MANIFEST_URL=http://10.0.2.2:8765/android.json \
+PIBOLT_UPDATE_APK_PREFIX=http://10.0.2.2:8765/apk/ ./gradlew :app:assembleDebug
+```
+
+Serve a newer debug APK (`PIBOLT_APP_VERSION=0.2.9`) under `apk/` with an android.json whose `certSha256` is the debug
+key's (`apksigner verify --print-certs`). The server must answer Range requests for the resume path.
+
 ## Startup and frame performance
 
 The release APK ships a baseline profile and a startup profile (`app/src/release/generated/baselineProfiles/`):

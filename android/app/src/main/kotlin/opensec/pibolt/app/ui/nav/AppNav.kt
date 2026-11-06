@@ -67,6 +67,7 @@ import opensec.pibolt.app.ui.settings.SettingsScreen
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.update.UpdateSheets
 import opensec.pibolt.protocol.PairingPayload
 
 object Routes {
@@ -250,6 +251,8 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
         }
         SubagentOverlay(app, subagents)
     }
+
+    UpdateSheets(app)
 }
 
 /**

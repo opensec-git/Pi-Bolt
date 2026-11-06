@@ -14,6 +14,7 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import opensec.pibolt.app.ui.nav.AppNav
 import opensec.pibolt.app.ui.theme.PiBoltTheme
+import opensec.pibolt.app.update.UpdateNotifications
 import opensec.pibolt.protocol.PairingPayload
 
 class MainActivity : ComponentActivity() {
@@ -30,12 +31,22 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
         if (savedInstanceState == null) pendingLink = linkFrom(intent)
         val app = application as PiBoltApp
+        if (savedInstanceState == null) {
+            UpdateNotifications.clearResult(this)
+            app.updates.onLaunch(autoCheck = app.settings.settings.value.autoUpdateCheck)
+        }
         setContent {
             val settings by app.settings.settings.collectAsStateWithLifecycle()
             PiBoltTheme(settings) {
                 AppNav(app, pendingLink) { pendingLink = null }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Back from Android's installer without an update (cancelled or failed): offer Install again.
+        (application as PiBoltApp).updates.onResume()
     }
 
     override fun onNewIntent(intent: Intent) {

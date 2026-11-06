@@ -10,6 +10,9 @@
          for a local run (the agent works on the phone itself). -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- In-app updates: the APK downloads in a dataSync foreground service; Android's installer installs it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
@@ -53,15 +56,21 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Runs the user's coding agent on the device while it works on a prompt in the background" />
         </service>
-        <!-- Session exports (Markdown, JSONL, HTML) and images shared from a session: cache/exports only. -->
+        <service
+            android:name=".update.UpdateService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- One FileProvider for both uses (a class can be declared once): session exports and shared images under
+             cache/exports, and the verified update APK under cache/updates, read by Android's package installer. -->
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.exports"
+            android:authorities="${applicationId}.exports;${applicationId}.updates"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data
                 android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/export_paths" />
+                android:resource="@xml/file_provider_paths" />
         </provider>
     </application>
 </manifest>
