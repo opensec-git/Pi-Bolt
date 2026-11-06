@@ -7,3 +7,6 @@ local.properties
 captures/
 .idea/
 *.iml
+# On-device engine pack: build output and download cache (android/engine/build-pack.sh). Never committed.
+/engine/out
+/engine/.work
