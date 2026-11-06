@@ -22,6 +22,7 @@ class SettingsCodecTest {
             thinkingExpanded = true,
             toolPreviewLines = 24,
             notificationsAsked = true,
+            autoUpdateCheck = false,
         )
         assertEquals(s, SettingsCodec.decode(SettingsCodec.encode(s)))
     }

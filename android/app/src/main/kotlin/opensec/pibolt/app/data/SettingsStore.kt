@@ -46,6 +46,8 @@ data class AppSettings(
     val toolPreviewLines: Int = 12,
     /** The notification permission was asked once; it is not asked again (Settings links to the system page). */
     val notificationsAsked: Boolean = false,
+    /** Look for a new version of the app on launch, at most once a day. */
+    val autoUpdateCheck: Boolean = true,
 ) {
     companion object {
         val TOOL_PREVIEW_CHOICES = listOf(6, 12, 24)
@@ -67,6 +69,7 @@ object SettingsCodec {
         put("thinkingExpanded", s.thinkingExpanded)
         put("toolPreviewLines", s.toolPreviewLines)
         put("notificationsAsked", s.notificationsAsked)
+        put("autoUpdateCheck", s.autoUpdateCheck)
     }.toString()
 
     fun decode(text: String?): AppSettings {
@@ -82,6 +85,7 @@ object SettingsCodec {
             thinkingExpanded = json.bool("thinkingExpanded") ?: d.thinkingExpanded,
             toolPreviewLines = json.int("toolPreviewLines")?.takeIf { it in AppSettings.TOOL_PREVIEW_CHOICES } ?: d.toolPreviewLines,
             notificationsAsked = json.bool("notificationsAsked") ?: d.notificationsAsked,
+            autoUpdateCheck = json.bool("autoUpdateCheck") ?: d.autoUpdateCheck,
         )
     }
 

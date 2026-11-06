@@ -22,6 +22,8 @@ import opensec.pibolt.app.engine.EngineApi
 import opensec.pibolt.app.engine.LocalEngine
 import opensec.pibolt.app.session.Notifications
 import opensec.pibolt.app.session.SessionController
+import opensec.pibolt.app.update.UpdateManager
+import opensec.pibolt.app.update.UpdateNotifications
 import opensec.pibolt.protocol.Base64Url
 import opensec.pibolt.protocol.PairingPayload
 import opensec.pibolt.protocol.backend.RemoteBackend
@@ -34,6 +36,8 @@ class PiBoltApp : Application() {
     lateinit var settings: SettingsStore
         private set
     lateinit var recents: RecentPrompts
+        private set
+    lateinit var updates: UpdateManager
         private set
     val http: OkHttpClient by lazy { RemoteBackend.defaultClient() }
 
@@ -67,7 +71,9 @@ class PiBoltApp : Application() {
         settings = SettingsStore(this)
         recents = RecentPrompts(this)
         identity = DeviceIdentity(this)
+        updates = UpdateManager(this)
         Notifications.createChannels(this)
+        UpdateNotifications.createChannel(this)
         localEngine.prefetch()
         // Ready the engine (prefix check, spare process) before any screen asks for it. All of it runs on Dispatchers.IO.
         localEngine.prepare()

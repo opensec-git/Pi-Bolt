@@ -18,6 +18,13 @@ val appVersionCode: Int = appVersion.split(".").map { it.takeWhile(Char::isDigit
     .let { (it.getOrElse(0) { 0 } * 10000) + (it.getOrElse(1) { 0 } * 100) + it.getOrElse(2) { 0 } }
     .coerceAtLeast(1)
 
+// Debug builds only: point the in-app update at a test server (android/README.md, "Updates"). Release builds always use
+// pi-bolt.opensec.in/android.json and GitHub release downloads; these fields are empty there.
+val updateManifestOverride: String = providers.environmentVariable("PIBOLT_UPDATE_MANIFEST_URL").orNull.orEmpty()
+val updateApkPrefixOverride: String = providers.environmentVariable("PIBOLT_UPDATE_APK_PREFIX").orNull.orEmpty()
+
+fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
+
 // The on-device engine pack (android/engine/build-pack.sh, CONTRACT.md): jniLibs/arm64-v8a and assets/engine. Added when
 // built; without it the APK has no engine (remote control still works).
 val enginePack = rootDir.resolve("engine/out")
@@ -32,6 +39,8 @@ android {
         targetSdk = 36
         versionCode = appVersionCode
         versionName = appVersion
+        buildConfigField("String", "UPDATE_MANIFEST_OVERRIDE", "\"\"")
+        buildConfigField("String", "UPDATE_APK_PREFIX_OVERRIDE", "\"\"")
         // The engine and its userland are linux-arm64 only.
         ndk {
             abiFilters += "arm64-v8a"
@@ -62,6 +71,10 @@ android {
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = if (canSign) signingConfigs.getByName("release") else null
+        }
+        debug {
+            buildConfigField("String", "UPDATE_MANIFEST_OVERRIDE", quoted(updateManifestOverride))
+            buildConfigField("String", "UPDATE_APK_PREFIX_OVERRIDE", quoted(updateApkPrefixOverride))
         }
         // No applicationIdSuffix for debug: the engine's glibc has the data path /data/data/in.opensec.pibolt compiled in.
     }
