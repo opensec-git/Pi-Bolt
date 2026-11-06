@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.baselineprofile)
 }
 
 // Optional release signing for local builds, from the environment only. Without these four variables the release APK
@@ -17,6 +18,10 @@ val appVersionCode: Int = appVersion.split(".").map { it.takeWhile(Char::isDigit
     .let { (it.getOrElse(0) { 0 } * 10000) + (it.getOrElse(1) { 0 } * 100) + it.getOrElse(2) { 0 } }
     .coerceAtLeast(1)
 
+// The on-device engine pack (android/engine/build-pack.sh, CONTRACT.md): jniLibs/arm64-v8a and assets/engine. Added when
+// built; without it the APK has no engine (remote control still works).
+val enginePack = rootDir.resolve("engine/out")
+
 android {
     namespace = "opensec.pibolt.app"
     compileSdk = 36
@@ -27,6 +32,17 @@ android {
         targetSdk = 36
         versionCode = appVersionCode
         versionName = appVersion
+        // The engine and its userland are linux-arm64 only.
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
+    }
+
+    sourceSets {
+        getByName("main") {
+            if (enginePack.resolve("jniLibs").isDirectory) jniLibs.srcDir(enginePack.resolve("jniLibs"))
+            if (enginePack.resolve("assets").isDirectory) assets.srcDir(enginePack.resolve("assets"))
+        }
     }
 
     signingConfigs {
@@ -47,9 +63,7 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = if (canSign) signingConfigs.getByName("release") else null
         }
-        debug {
-            applicationIdSuffix = ".debug"
-        }
+        // No applicationIdSuffix for debug: the engine's glibc has the data path /data/data/in.opensec.pibolt compiled in.
     }
 
     compileOptions {
@@ -63,6 +77,12 @@ android {
     }
 
     packaging {
+        jniLibs {
+            // Android only executes files from nativeLibraryDir, which needs the libraries extracted at install.
+            useLegacyPackaging = true
+            // Never strip: the engine reads its embedded code from its own file, and the pack is stripped already.
+            keepDebugSymbols += "**/*.so"
+        }
         resources {
             excludes += setOf(
                 "META-INF/versions/9/OSGI-INF/MANIFEST.MF",
@@ -105,6 +125,9 @@ dependencies {
     implementation(libs.compose.foundation)
     implementation(libs.compose.material3)
     implementation(libs.compose.material.icons.extended)
+    // Installs the baseline and startup profiles (src/release/generated/baselineProfiles) on sideloaded installs too.
+    implementation(libs.androidx.profileinstaller)
+    baselineProfile(project(":baselineprofile"))
     debugImplementation(libs.compose.ui.tooling)
 
     testImplementation(libs.junit)

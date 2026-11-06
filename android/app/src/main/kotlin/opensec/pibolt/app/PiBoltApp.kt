@@ -2,6 +2,7 @@ package opensec.pibolt.app
 
 import android.app.Activity
 import android.app.Application
+import android.content.ComponentCallbacks2
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -17,6 +18,8 @@ import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.data.HostStore
 import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.data.SettingsStore
+import opensec.pibolt.app.engine.EngineApi
+import opensec.pibolt.app.engine.LocalEngine
 import opensec.pibolt.app.session.Notifications
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.protocol.Base64Url
@@ -33,6 +36,11 @@ class PiBoltApp : Application() {
     lateinit var recents: RecentPrompts
         private set
     val http: OkHttpClient by lazy { RemoteBackend.defaultClient() }
+
+    private val localEngine: LocalEngine by lazy { LocalEngine(this) }
+
+    /** The engine on this phone: projects, local sessions, provider keys. */
+    val engine: EngineApi get() = localEngine
 
     /** Work that outlives any screen, on the main thread (UI-side bookkeeping such as turn durations). */
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -60,13 +68,16 @@ class PiBoltApp : Application() {
         recents = RecentPrompts(this)
         identity = DeviceIdentity(this)
         Notifications.createChannels(this)
+        localEngine.prefetch()
+        // Ready the engine (prefix check, spare process) before any screen asks for it. All of it runs on Dispatchers.IO.
+        localEngine.prepare()
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) {
-                startedActivities++
+                if (startedActivities++ == 0) localEngine.onForeground()
             }
 
             override fun onActivityStopped(activity: Activity) {
-                startedActivities--
+                if (--startedActivities == 0) localEngine.onBackground()
             }
 
             override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
@@ -129,6 +140,15 @@ class PiBoltApp : Application() {
         for (host in hosts.hosts.value) hosts.remove(host.id)
         return deviceKeyId()
     }
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        // The idle warm engine is the first thing to give back when the system runs short.
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) localEngine.trimMemory("trim level $level")
+    }
+
+    /** Make [controller] the live session, stopping the previous one. */
+    internal fun replaceSession(controller: SessionController): SessionController = replace(controller)
 
     private fun replace(controller: SessionController): SessionController {
         _session.value?.stop()

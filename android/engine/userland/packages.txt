@@ -1,0 +1,21 @@
+# Debian trixie arm64 packages for the userland. role: bin (tools), lib (shared libraries, shipped when some
+# shipped ELF needs them), dev (headers to build curl/git against the same library versions), data.
+# After editing, refresh the pins: android/engine/scripts/lock-debs.sh (writes debs.lock).
+bash bin
+busybox bin
+ripgrep bin
+fd-find bin
+libtinfo6 lib
+libgcc-s1 lib
+libpcre2-8-0 lib
+libssl3t64 lib
+zlib1g lib
+libzstd1 lib
+libnghttp2-14 lib
+gcc-14-base data
+libssl-dev dev
+zlib1g-dev dev
+libnghttp2-dev dev
+ca-certificates data
+ncurses-base data
+ncurses-term data

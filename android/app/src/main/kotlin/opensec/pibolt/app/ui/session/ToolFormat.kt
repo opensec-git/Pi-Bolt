@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.session
 
+import androidx.compose.runtime.Immutable
 import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.protocol.session.SlashCommand
 import opensec.pibolt.protocol.session.ToolItem
@@ -10,6 +11,8 @@ import java.util.Locale
 
 /** What kind of step a tool is; picks the expanded card. */
 enum class ToolKind { Bash, Read, Write, Edit, Search, List, Other }
+
+@Immutable
 
 data class ToolLabel(val kind: ToolKind, val verb: String, val detail: String)
 
@@ -50,6 +53,7 @@ fun isSubagentTool(name: String): Boolean = name.lowercase() in setOf("task", "a
 const val MAX_SHOWN = 120_000
 
 /** Text under a tool row. [isDiff] means [text] is the tool's `details.diff`. */
+@Immutable
 data class ToolBody(val text: String, val isDiff: Boolean)
 
 /**
@@ -191,6 +195,8 @@ fun looksLikeCommand(text: String): Boolean {
 
 enum class DiffKind { Add, Del, Context, Skip, Hunk }
 
+@Immutable
+
 data class DiffLine(val kind: DiffKind, val number: String, val text: String)
 
 /** Pi's edit diff (`+12 text`, `-12 text`, ` 12 text`, `   ...`) and plain unified diffs. */
@@ -231,6 +237,8 @@ fun parseDiff(diff: String): List<DiffLine> {
     }
     return out
 }
+
+@Immutable
 
 data class DiffStats(val added: Int, val removed: Int)
 
@@ -273,6 +281,7 @@ fun collapseContext(lines: List<DiffLine>, keep: Int = 3): List<DiffLine> {
 // Turn summaries
 
 /** One file a turn changed: lines added and removed, and the diff to open. */
+@Immutable
 data class FileChange(val path: String, val added: Int, val removed: Int, val diff: String)
 
 /** The change a finished edit or write made, or null for other tools, failed steps and edits without a diff. */

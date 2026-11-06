@@ -46,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +65,9 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.R
 import opensec.pibolt.app.data.AccentId
@@ -95,6 +99,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
     val type = Pi.type
     val context = LocalContext.current
     var licence by remember { mutableStateOf<ViewerContent?>(null) }
+    val scope = rememberCoroutineScope()
     fun update(change: (AppSettings) -> AppSettings) = app.settings.update(change)
 
     Box(Modifier.fillMaxSize().background(colors.canvas)) {
@@ -110,6 +115,10 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
                 IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack, tint = colors.ink1)
             }
             Text("Settings", style = type.display.copy(fontSize = type.display.fontSize * 1.15f), color = colors.ink1, modifier = Modifier.padding(start = 20.dp, top = 4.dp, bottom = 12.dp))
+
+            Section("Model providers") {
+                ProvidersSection(app)
+            }
 
             Section("Appearance") {
                 Label("Theme")
@@ -257,8 +266,9 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
             Section("About") {
                 InfoLine("Version", app.appVersion)
                 InfoLine("This phone", app.deviceName)
-                NavLine("Inter licence (OFL 1.1)") { licence = ViewerContent("Inter", "SIL Open Font License 1.1", readRaw(context, R.raw.license_inter), wrap = true) }
-                NavLine("JetBrains Mono licence (OFL 1.1)") { licence = ViewerContent("JetBrains Mono", "SIL Open Font License 1.1", readRaw(context, R.raw.license_jetbrains_mono), wrap = true) }
+                // Licence texts are read off the main thread.
+                NavLine("Inter licence (OFL 1.1)") { scope.launch { licence = ViewerContent("Inter", "SIL Open Font License 1.1", readRaw(context, R.raw.license_inter), wrap = true) } }
+                NavLine("JetBrains Mono licence (OFL 1.1)") { scope.launch { licence = ViewerContent("JetBrains Mono", "SIL Open Font License 1.1", readRaw(context, R.raw.license_jetbrains_mono), wrap = true) } }
             }
         }
 
@@ -283,7 +293,9 @@ private fun textSizeLabel(step: Int) = when (step) {
     else -> "Larger"
 }
 
-private fun readRaw(context: Context, @RawRes id: Int): String = context.resources.openRawResource(id).bufferedReader().use { it.readText() }
+private suspend fun readRaw(context: Context, @RawRes id: Int): String = withContext(Dispatchers.IO) {
+    context.resources.openRawResource(id).bufferedReader().use { it.readText() }
+}
 
 private fun openNotificationSettings(context: Context) {
     val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
@@ -416,8 +428,9 @@ private fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChang
 }
 
 @Composable
-private fun InfoLine(label: String, value: String) {
-    Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+private fun InfoLine(label: String, value: String, onClick: (() -> Unit)? = null) {
+    val tap = if (onClick != null) Modifier.pressable(onClick, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, role = null) else Modifier
+    Row(Modifier.fillMaxWidth().height(44.dp).then(tap), verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = Pi.type.body, color = Pi.colors.ink2, modifier = Modifier.width(110.dp))
         Text(value, style = Pi.type.body, color = Pi.colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }

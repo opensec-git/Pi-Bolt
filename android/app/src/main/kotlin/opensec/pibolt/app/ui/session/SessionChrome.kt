@@ -31,7 +31,10 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DeleteOutline
+import androidx.compose.material.icons.rounded.DriveFileRenameOutline
+import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LinkOff
@@ -86,11 +89,15 @@ fun linkColor(link: LinkState?, colors: PiColors): Color = when (link) {
     null -> colors.ink4
 }
 
-/** Top bar: back, computer name with the folder and model beneath (tap: session info), the Quad, overflow. */
+/**
+ * Top bar: back, computer (or, on this phone, project) name with the folder and context beneath (tap: session info),
+ * the Quad, overflow. On-device sessions offer New session and Rename instead of Disconnect and Forget computer.
+ */
 @Composable
 fun SessionTopBar(
     hostId: String,
     hostName: String,
+    local: Boolean,
     subtitle: String,
     link: LinkState,
     mode: QuadMode,
@@ -100,6 +107,8 @@ fun SessionTopBar(
     onInfo: () -> Unit,
     onDisconnect: () -> Unit,
     onForget: () -> Unit,
+    onNewSession: () -> Unit,
+    onRename: () -> Unit,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -112,7 +121,7 @@ fun SessionTopBar(
             .padding(start = 4.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Computers", onClick = onBack, tint = colors.ink1)
+        IconAction(Icons.AutoMirrored.Rounded.ArrowBack, if (local) "Project" else "Computers", onClick = onBack, tint = colors.ink1)
         Column(
             Modifier
                 .weight(1f)
@@ -161,17 +170,32 @@ fun SessionTopBar(
                 shadowElevation = 8.dp,
                 border = BorderStroke(1.dp, colors.lineStrong),
             ) {
-                MenuRow("Session info", Icons.Rounded.Info, colors.ink1) {
-                    menu = false
-                    onInfo()
-                }
-                MenuRow("Disconnect", Icons.Rounded.LinkOff, colors.ink1) {
-                    menu = false
-                    onDisconnect()
-                }
-                MenuRow("Forget computer", Icons.Rounded.DeleteOutline, colors.danger) {
-                    menu = false
-                    onForget()
+                if (local) {
+                    MenuRow("New session", Icons.Rounded.Add, colors.ink1) {
+                        menu = false
+                        onNewSession()
+                    }
+                    MenuRow("Rename session", Icons.Rounded.DriveFileRenameOutline, colors.ink1) {
+                        menu = false
+                        onRename()
+                    }
+                    MenuRow("Session info", Icons.Rounded.Info, colors.ink1) {
+                        menu = false
+                        onInfo()
+                    }
+                } else {
+                    MenuRow("Session info", Icons.Rounded.Info, colors.ink1) {
+                        menu = false
+                        onInfo()
+                    }
+                    MenuRow("Disconnect", Icons.Rounded.LinkOff, colors.ink1) {
+                        menu = false
+                        onDisconnect()
+                    }
+                    MenuRow("Forget computer", Icons.Rounded.DeleteOutline, colors.danger) {
+                        menu = false
+                        onForget()
+                    }
                 }
             }
         }
@@ -189,9 +213,13 @@ private fun MenuRow(text: String, icon: ImageVector, color: Color, onClick: () -
     )
 }
 
-/** Under the top bar while not connected: Quad Connect, what is happening (with a live countdown), Retry. */
+/**
+ * Under the top bar while not connected: Quad Connect, what is happening (with a live countdown), Retry. For an
+ * on-device session ([local]) the "connection" is the engine process: "Starting Pi-Bolt…", then "Engine stopped" with
+ * Restart.
+ */
 @Composable
-fun ConnectionBanner(link: LinkState, pairing: Boolean, onRetry: () -> Unit) {
+fun ConnectionBanner(link: LinkState, pairing: Boolean, local: Boolean, onRetry: () -> Unit) {
     val colors = Pi.colors
     val type = Pi.type
     AnimatedVisibility(
@@ -199,7 +227,7 @@ fun ConnectionBanner(link: LinkState, pairing: Boolean, onRetry: () -> Unit) {
         enter = expandVertically(PiMotion.enter(PiMotion.STANDARD)) + fadeIn(PiMotion.enter(PiMotion.QUICK)),
         exit = shrinkVertically(PiMotion.leave(PiMotion.STANDARD)) + fadeOut(PiMotion.leave(PiMotion.QUICK)),
     ) {
-        val failed = link is LinkState.Failed
+        val failed = link is LinkState.Failed || (local && link is LinkState.Retrying)
         Column {
             Row(
                 Modifier
@@ -210,19 +238,22 @@ fun ConnectionBanner(link: LinkState, pairing: Boolean, onRetry: () -> Unit) {
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (failed) {
-                    Icon(Icons.Rounded.ErrorOutline, contentDescription = null, tint = colors.danger, modifier = Modifier.size(18.dp))
+                    Icon(if (local) Icons.Rounded.PowerSettingsNew else Icons.Rounded.ErrorOutline, contentDescription = null, tint = colors.danger, modifier = Modifier.size(18.dp))
                 } else {
                     QuadSpinner(QuadMode.Connect, size = 16.dp, color = colors.warning)
                 }
                 Spacer(Modifier.width(12.dp))
-                val text = when (link) {
-                    is LinkState.Connected -> ""
-                    LinkState.Connecting -> if (pairing) "Pairing…" else "Connecting…"
-                    is LinkState.Retrying -> retryText(link)
-                    is LinkState.Failed -> link.message
+                val text = when {
+                    link is LinkState.Connected -> ""
+                    local && link is LinkState.Connecting -> "Starting Pi-Bolt…"
+                    local -> "Engine stopped"
+                    link is LinkState.Connecting -> if (pairing) "Pairing…" else "Connecting…"
+                    link is LinkState.Retrying -> retryText(link)
+                    link is LinkState.Failed -> link.message
+                    else -> ""
                 }
                 Text(text, style = type.body, color = if (failed) colors.ink1 else colors.ink2, modifier = Modifier.weight(1f))
-                if (link is LinkState.Retrying || failed) TextAction("Retry", onClick = onRetry, color = colors.accent)
+                if (link is LinkState.Retrying || failed) TextAction(if (local) "Restart" else "Retry", onClick = onRetry, color = colors.accent)
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
         }
@@ -245,21 +276,25 @@ private fun retryText(link: LinkState.Retrying): String {
 
 /** Before the session snapshot arrives. */
 @Composable
-fun LoadingState(hostName: String, link: LinkState, onRetry: () -> Unit) {
+fun LoadingState(hostName: String, link: LinkState, local: Boolean, onRetry: () -> Unit) {
     val colors = Pi.colors
     val failed = link is LinkState.Failed
     Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
         QuadSpinner(QuadMode.Connect, size = 44.dp, color = if (failed) colors.warning else colors.ink2, animate = !failed)
         Spacer(Modifier.height(20.dp))
         Text(
-            if (failed) "Could not open the session" else "Opening the session on $hostName",
+            when {
+                failed -> "Could not open the session"
+                local -> "Starting Pi-Bolt in $hostName"
+                else -> "Opening the session on $hostName"
+            },
             style = Pi.type.body,
             color = colors.ink2,
             textAlign = TextAlign.Center,
         )
         if (failed) {
             Spacer(Modifier.height(20.dp))
-            SecondaryButton("Retry", onClick = onRetry)
+            SecondaryButton(if (local) "Restart" else "Retry", onClick = onRetry)
         }
     }
 }

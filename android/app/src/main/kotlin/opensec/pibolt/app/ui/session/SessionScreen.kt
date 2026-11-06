@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import androidx.compose.material.icons.automirrored.rounded.Notes
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Edit
@@ -56,6 +57,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.data.ProjectStore
+import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
@@ -73,10 +76,31 @@ import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.protocol.rpc.StreamingBehavior
 import opensec.pibolt.protocol.session.AssistantTextItem
+import opensec.pibolt.protocol.session.UserItem
 import opensec.pibolt.protocol.session.SessionState
 
+/**
+ * A session running on this phone (the on-device engine): shown under its project's [title], with the engine's own
+ * actions instead of the remote ones (no Disconnect or Forget computer).
+ */
+class LocalUi(
+    /** The project's folder name. */
+    val project: String,
+    val title: String,
+    val onNewSession: () -> Unit,
+    /** Restart the engine and reconnect. */
+    val onRestart: () -> Unit,
+    /** A prompt queued when the session was created ("Clone from git"); returned once. */
+    val takeFirstPrompt: () -> String?,
+)
+
+/** The remote session ([local] null) or the on-device one in project [local]. */
 @Composable
-fun SessionScreen(app: PiBoltApp, onBack: () -> Unit, onForgotten: () -> Unit) {
+fun SessionScreen(app: PiBoltApp, onBack: () -> Unit, onForgotten: () -> Unit, local: String? = null) {
+    if (local != null) {
+        LocalSessionScreen(app, local, onBack)
+        return
+    }
     val controller by app.session.collectAsStateWithLifecycle()
     val c = controller
     if (c == null) {
@@ -95,7 +119,43 @@ fun SessionScreen(app: PiBoltApp, onBack: () -> Unit, onForgotten: () -> Unit) {
             app.forget(c.hostId)
             onForgotten()
         },
+        local = null,
     )
+}
+
+@Composable
+private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Unit) {
+    val current by LocalSessions.current.collectAsStateWithLifecycle()
+    val live = current?.takeIf { it.project.name == project }
+    if (live == null) {
+        LaunchedEffect(Unit) { onBack() }
+        return
+    }
+    val store = remember { ProjectStore.get(app) }
+    val meta by store.state.collectAsStateWithLifecycle()
+    val title = meta.projects[project]?.title ?: project
+    val scope = rememberCoroutineScope()
+    val engine = app.engine
+    // A new session replaces the controller: everything below starts fresh for it.
+    key(live.controller) {
+        SessionContent(
+            app = app,
+            controller = live.controller,
+            onBack = onBack,
+            onDisconnect = onBack,
+            onForget = onBack,
+            local = LocalUi(
+                project = project,
+                title = title,
+                onNewSession = { scope.launch { LocalSessions.open(engine, store, live.project, fresh = true) } },
+                onRestart = {
+                    engine.prepare()
+                    live.controller.retryNow()
+                },
+                takeFirstPrompt = { live.firstPrompt.also { live.firstPrompt = null } },
+            ),
+        )
+    }
 }
 
 private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget }
@@ -105,7 +165,7 @@ private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget 
  * streamed frame recomposes only the transcript's live rows and whatever value actually changed.
  */
 @Composable
-private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack: () -> Unit, onDisconnect: () -> Unit, onForget: () -> Unit) {
+private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack: () -> Unit, onDisconnect: () -> Unit, onForget: () -> Unit, local: LocalUi?) {
     val state: State<SessionState> = controller.state.collectAsStateWithLifecycle()
     val linkState = controller.link.collectAsStateWithLifecycle()
     val hostName by controller.hostName.collectAsStateWithLifecycle()
@@ -130,6 +190,9 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     var lastSent by remember { mutableStateOf<Pair<String, List<ComposerImage>>?>(null) }
     val focus = remember { FocusRequester() }
     val recentAll by app.recents.prompts.collectAsStateWithLifecycle()
+    // Recent prompts are per computer, or per project for on-device sessions.
+    val recentKey = local?.let { "project:" + it.project } ?: controller.hostId
+    val title = local?.title ?: hostName
 
     LaunchedEffect(memory, controller) { memory.attach(controller.state, app.appScope) }
     LaunchedEffect(controller) {
@@ -210,8 +273,9 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         derivedStateOf {
             val s = state.value
             val parts = buildList {
-                // Folder and context only: the model and thinking level live in the composer chips.
-                (s.sessionName ?: s.host?.cwd?.takeIf { it.isNotBlank() }?.let(::baseName))?.let(::add)
+                // Folder and context only: the model and thinking level live in the composer chips. On this phone the
+                // title already is the project folder, so only a session name is added.
+                (if (local != null) s.sessionName else s.sessionName ?: s.host?.cwd?.takeIf { it.isNotBlank() }?.let(::baseName))?.let(::add)
                 s.lastUsage?.let { u -> contextPercent(u.totalTokens, s.model?.contextWindow)?.let { add("$it% context") } }
             }
             parts.joinToString(" · ")
@@ -232,12 +296,38 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         val running = state.value.isRunning
         controller.send(text, mode, attached.mapNotNull { it.image })
         memory.sent(text, state.value, running, attached.mapNotNull { it.thumb })
-        if (text.isNotBlank()) app.recents.record(controller.hostId, text)
+        if (text.isNotBlank()) app.recents.record(recentKey, text)
         lastSent = text to attached
         maybeAskNotifications()
     }
 
     fun noImages(): String = "${modelLabel ?: "This model"} can't read images"
+
+    // "Clone from git" queues the clone prompt: it goes out once the new session can take it.
+    if (local != null) {
+        LaunchedEffect(enabled) {
+            if (enabled) local.takeFirstPrompt()?.let { send(it) }
+        }
+    }
+
+    /**
+     * Forks the session from a user message ([text], its [occurrence]-th copy in the transcript); the text comes back
+     * to the composer to edit and send.
+     */
+    fun fork(text: String, occurrence: Int) {
+        scope.launch {
+            controller.forkFrom(text, occurrence)
+                .onSuccess {
+                    draft = it
+                    haptics.confirm()
+                    snackbar.show("Forked into a new session. Edit the message and send.", SnackKind.Success)
+                }
+                .onFailure {
+                    haptics.reject()
+                    snackbar.show(it.message ?: "Fork failed", SnackKind.Error)
+                }
+        }
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(ImageSizing.MAX_IMAGES)) { uris ->
         val room = ImageSizing.slotsLeft(images.size)
@@ -293,7 +383,8 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         Column(Modifier.fillMaxSize().imePadding()) {
             SessionTopBar(
                 hostId = controller.hostId,
-                hostName = hostName,
+                hostName = title,
+                local = local != null,
                 subtitle = subtitle,
                 link = linkState.value,
                 mode = quadMode,
@@ -304,11 +395,13 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 onInfo = { sheet = Sheet.Info },
                 onDisconnect = onDisconnect,
                 onForget = { sheet = Sheet.Forget },
+                onNewSession = { local?.onNewSession?.invoke() },
+                onRename = { sheet = Sheet.Rename },
             )
-            ConnectionBanner(linkState.value, controller.pairing, onRetry = controller::retryNow)
+            ConnectionBanner(linkState.value, controller.pairing, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
             Box(Modifier.weight(1f)) {
                 if (!hello) {
-                    LoadingState(hostName, linkState.value, onRetry = controller::retryNow)
+                    LoadingState(title, linkState.value, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
                 } else {
                     Transcript(
                         state = state,
@@ -329,7 +422,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                         EmptySession(
                             cwd = cwd,
                             commands = commands,
-                            recent = recentAll[controller.hostId].orEmpty().take(RecentPrompts.SHOWN),
+                            recent = recentAll[recentKey].orEmpty().take(RecentPrompts.SHOWN),
                             onCommand = { fill("/${it.name} ") },
                             onRecent = { fill(it) },
                         )
@@ -501,10 +594,18 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
 
     actionsFor?.let { row ->
         val actions = when (row) {
-            is UserRow -> listOf(
+            is UserRow -> listOfNotNull(
                 SheetAction("Copy", Icons.Rounded.ContentCopy) { copy(row.item.text) },
                 SheetAction("Edit in composer", Icons.Rounded.Edit) { draft = row.item.text },
                 SheetAction("Select text", Icons.Rounded.TextFields) { viewer = ViewerContent("Message", null, row.item.text, selectable = true) },
+                // On-device sessions only: Pi forks from a user message on the active branch.
+                local?.let {
+                    SheetAction("Fork from here", Icons.AutoMirrored.Rounded.CallSplit) {
+                        val users = state.value.items.filterIsInstance<UserItem>()
+                        val at = users.indexOfFirst { it.key == row.item.key }
+                        if (at >= 0) fork(row.item.text, users.take(at).count { it.text == row.item.text })
+                    }
+                },
             )
             is TextRow -> {
                 val text = { (state.value.allItems.firstOrNull { it.key == row.itemKey } as? AssistantTextItem)?.text.orEmpty() }

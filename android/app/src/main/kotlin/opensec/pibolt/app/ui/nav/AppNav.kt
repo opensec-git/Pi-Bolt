@@ -40,7 +40,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import android.net.Uri
 import androidx.navigation.NavBackStackEntry
+import androidx.navigation.NavType
+import androidx.navigation.navArgument
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -51,7 +54,8 @@ import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.rememberSheetCloser
-import opensec.pibolt.app.ui.hosts.HostsScreen
+import opensec.pibolt.app.ui.home.HomeScreen
+import opensec.pibolt.app.ui.projects.ProjectScreen
 import opensec.pibolt.app.ui.scan.ScanScreen
 import opensec.pibolt.app.ui.session.SessionScreen
 import opensec.pibolt.app.ui.settings.SettingsScreen
@@ -61,10 +65,16 @@ import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.protocol.PairingPayload
 
 object Routes {
-    const val HOSTS = "hosts"
+    const val HOME = "home"
+    const val PROJECT = "project/{name}"
+    const val LOCAL_SESSION = "local/{name}"
     const val SCAN = "scan"
     const val SESSION = "session"
     const val SETTINGS = "settings"
+
+    fun project(name: String) = "project/" + Uri.encode(name)
+
+    fun localSession(name: String) = "local/" + Uri.encode(name)
 }
 
 private typealias Enter = AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition
@@ -89,7 +99,7 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
         }
         app.pair(payload)
         nav.navigate(Routes.SESSION) {
-            popUpTo(Routes.HOSTS)
+            popUpTo(Routes.HOME)
             launchSingleTop = true
         }
         return null
@@ -127,8 +137,8 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
     val enter: Enter = {
         if (reduced) {
             fadeIn(tween(120))
-        } else if (initialState.destination.route == Routes.HOSTS && targetState.destination.route == Routes.SESSION) {
-            // The host card's shared bounds carry the motion.
+        } else if (initialState.destination.route == Routes.HOME && targetState.destination.route in setOf(Routes.SESSION, Routes.PROJECT)) {
+            // The host or project card's shared bounds carry the motion.
             fadeIn(PiMotion.enter(PiMotion.SHEET))
         } else {
             slideInHorizontally(PiMotion.enter(PiMotion.SHEET)) { shift } + fadeIn(PiMotion.enter(PiMotion.SHEET))
@@ -157,27 +167,51 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
         CompositionLocalProvider(LocalSharedScope provides this) {
             NavHost(
                 nav,
-                startDestination = Routes.HOSTS,
+                startDestination = Routes.HOME,
                 modifier = Modifier.background(Pi.colors.canvas),
                 enterTransition = enter,
                 exitTransition = exit,
                 popEnterTransition = popEnter,
                 popExitTransition = popExit,
             ) {
-                composable(Routes.HOSTS) {
+                composable(Routes.HOME) {
                     CompositionLocalProvider(LocalNavScope provides this) {
-                        HostsScreen(
+                        HomeScreen(
                             app = app,
                             externalError = linkError,
                             onErrorShown = { linkError = null },
-                            onOpen = { host ->
+                            onOpenProject = { nav.navigate(Routes.project(it.name)) { launchSingleTop = true } },
+                            onOpenLocalSession = { nav.navigate(Routes.localSession(it)) { launchSingleTop = true } },
+                            onOpenHost = { host ->
                                 app.open(host)
                                 nav.navigate(Routes.SESSION) { launchSingleTop = true }
                             },
+                            onResumeHost = { nav.navigate(Routes.SESSION) { launchSingleTop = true } },
                             onScan = { nav.navigate(Routes.SCAN) { launchSingleTop = true } },
                             onSettings = { nav.navigate(Routes.SETTINGS) { launchSingleTop = true } },
                             onPairingText = { usePairing(it) },
-                            onResume = { nav.navigate(Routes.SESSION) { launchSingleTop = true } },
+                        )
+                    }
+                }
+                composable(Routes.PROJECT, arguments = listOf(navArgument("name") { type = NavType.StringType })) { entry ->
+                    val name = entry.arguments?.getString("name").orEmpty()
+                    CompositionLocalProvider(LocalNavScope provides this) {
+                        ProjectScreen(
+                            app = app,
+                            name = name,
+                            onBack = { nav.popBackStack(Routes.HOME, inclusive = false) },
+                            onOpenSession = { nav.navigate(Routes.localSession(name)) { launchSingleTop = true } },
+                        )
+                    }
+                }
+                composable(Routes.LOCAL_SESSION, arguments = listOf(navArgument("name") { type = NavType.StringType })) { entry ->
+                    val name = entry.arguments?.getString("name").orEmpty()
+                    CompositionLocalProvider(LocalNavScope provides this) {
+                        SessionScreen(
+                            app = app,
+                            onBack = { if (!nav.popBackStack()) nav.navigate(Routes.HOME) },
+                            onForgotten = { nav.popBackStack(Routes.HOME, inclusive = false) },
+                            local = name,
                         )
                     }
                 }
@@ -193,8 +227,8 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
                     CompositionLocalProvider(LocalNavScope provides this) {
                         SessionScreen(
                             app = app,
-                            onBack = { nav.popBackStack(Routes.HOSTS, inclusive = false) },
-                            onForgotten = { nav.popBackStack(Routes.HOSTS, inclusive = false) },
+                            onBack = { nav.popBackStack(Routes.HOME, inclusive = false) },
+                            onForgotten = { nav.popBackStack(Routes.HOME, inclusive = false) },
                         )
                     }
                 }
