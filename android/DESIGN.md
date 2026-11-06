@@ -35,9 +35,13 @@ the working hairline. Never status.
 Brand `#FFD84D` (voltage yellow): only on the app mark (launcher, splash, empty state).
 
 Status (all themes): success `#5FD39A`, warning `#E8B04B` (needs you, steer), danger `#F2706B`; soft fills @ 14%.
-Diff: add bg success @ 11% / fg `#9BE6BF`, delete bg danger @ 11% / fg `#F7A9A5`, 3dp gutter bar @ 60%.
-Syntax: keywords ink1 SemiBold, strings `#9ED3C6`, numbers `#E5A97E`, types `#C9B8F0`, params ink2, comments ink3
-italic, punctuation ink2.
+Diff: add bg success @ 11% / fg `#9BE6BF`, delete bg danger @ 11% / fg `#F7A9A5`; changed words in paired lines
+success / danger @ 22%. Add and delete never differ by hue alone: a `+` / `−` sign column, a solid 3dp gutter bar
+(success @ 60%) for additions and a hatched one (2dp stripes every 4dp, danger @ 70%) for deletions. Context rows
+ink2, line numbers ink3, hunk rows monoMeta ink3 on surface2.
+Syntax: base ink1, keywords ink1 SemiBold, calls ink1 Medium, strings `#9ED3C6`, numbers `#E5A97E`, types
+`#C9B8F0` (capitalised names and built-ins such as `string`), comments ink3 italic, punctuation and operators ink2,
+the shell `$` prompt success SemiBold, JSON keys ink1. Plain-text fences (`text`, `markdown`, `log`) stay plain.
 
 Every text token passes WCAG AA (4.5:1) on canvas and surface2 in all seven themes; ink4 is decorative only.
 
@@ -58,7 +62,8 @@ Inter (UI, prose) and JetBrains Mono (code, paths, terminal), both OFL, bundled 
 | label | 14 / 20 | 500 | tool verbs, buttons, chips |
 | meta | 12.5 / 17 | 400 | timestamps, subtitles, section heads (500) |
 | micro | 11 / 14 | 500 | badges, exit codes |
-| mono | 13.5 / 20 | 400 | code blocks, diffs, terminal |
+| mono | 13.5 / 20 | 400 | terminal, viewer text |
+| monoSmall | 12.5 / 18 | 400 | diffs, tool cards; code blocks use 12.5 / 19 |
 | thinking | 14.5 / 22 | 400 ink3 | reasoning text |
 
 System font scale is respected; the transcript is capped at 1.3x, and the Text size setting (-1 … +2 steps) applies
@@ -166,7 +171,29 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
     argument (mono ink3, middle ellipsis for paths), right meta (+n success, −n danger, duration tnum). Tap expands
     a card: bash (`$` glyph, command, exit badge, last 12 lines, "Show N more" → full-screen viewer with copy and
     wrap toggle), edit/diff (gutter bars, unchanged runs collapsed), read (path, line range, preview).
-  - code blocks: surface1, radius 12, header 36dp (language, Copy), horizontal scroll, folded beyond 30 lines.
+  - code blocks: surface1, radius 12, 1dp line. Header 40dp: code glyph 14dp ink3, then the filename (monoSmall
+    ink1, middle ellipsis) from the fence info string (`ts title="src/a.ts"`, `ts:src/a.ts`, `src/a.ts`) or the
+    language (monoMeta ink3; shell aliases show as `shell`, none as `code`); right side Wrap (only when a line
+    overflows or wrap is on), Open (folded or 40+ lines) and the shared Copy button (check + "Copied", 1500 ms).
+    Code Mono 12.5/19, 10dp vertical padding; line numbers from 3 lines on, Mono 11.5 ink3 right-aligned, then a 1dp
+    line rule and 10dp to the code. No wrap by default: one horizontal scroll with 20dp edge fades into surface1.
+    Over 20 lines the block folds to 14 with a 40dp bottom fade and a 44dp footer ("Show all 84 lines" + chevron)
+    that expands in place up to 150 lines ("Show less" scrolls the header back into view) and opens the viewer
+    beyond ("Open all 1,240 lines"). Streaming: the header shows Quad Write 12dp + a ticking line count, the code
+    end pulses like prose, and a block past 20 lines shows its last 14 lines at a fixed height under a 32dp top
+    fade; on close it crossfades (quick) to the folded start at the same height. Only complete lines are
+    highlighted (once per new line); closed blocks are cached by content. ```diff / ```patch (and untagged text that
+    is mostly a unified diff) render as diff rows with numbers from the `@@` headers, the path from `+++ b/…` and
+    `+n −n` in the header.
+  - tables: a grid, not rows of loose cells. Column width = widest single-line cell + 24dp, clamped 64…240dp; spare
+    width is spread in proportion so the table spans the card, wider tables scroll with edge fades. While streaming,
+    widths only grow. Radius 12, 1dp line border, header surface1 metaStrong ink2, 1dp lineStrong under it; body
+    Inter 14/20 ink1, cells 12×9dp, 1dp line between rows, no column lines, zebra ink1 @ 3% from 8 rows. `:--`,
+    `:--:`, `--:` are honoured; all-numeric columns align to the end with tnum. ✓ / yes success, ✗ / no danger,
+    a lone dash ink3.
+  - inline code: Mono 0.88em ink1 on a surface3 chip (radius 4, line box inset 14%), one chip per line segment
+    when it wraps. A narrow no-break space pads each side inside the chip so it never touches neighbours; code of
+    24+ characters without spaces may break after `/ . _ -`.
   - after a turn: "Worked for 12s · 6 steps" fold collapses its steps; the final answer stays visible.
   - live status line: Quad 16dp + shimmer label + elapsed timer.
   - errors and notices: radius 12 outline in danger/warning @ 40%, text buttons.

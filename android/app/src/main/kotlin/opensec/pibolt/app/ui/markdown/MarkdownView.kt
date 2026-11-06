@@ -1,6 +1,5 @@
 package opensec.pibolt.app.ui.markdown
 
-import android.content.ClipData
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -8,10 +7,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -20,11 +16,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.ContentCopy
-import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -32,20 +24,16 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameMillis
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.ClipEntry
-import androidx.compose.ui.platform.LocalClipboard
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -58,9 +46,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
-import kotlinx.coroutines.launch
-import opensec.pibolt.app.ui.components.IconAction
-import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.components.CodeBlock
+import opensec.pibolt.app.ui.components.MdTable
 import opensec.pibolt.app.ui.theme.Mono
 import opensec.pibolt.app.ui.theme.MonoFeatures
 import opensec.pibolt.app.ui.theme.Pi
@@ -70,13 +57,10 @@ import opensec.pibolt.app.ui.theme.Tnum
 
 private const val CODE_TAG = "code"
 
-/** Code blocks longer than this fold to [CODE_FOLDED_LINES] with a "Show all" bar. */
-const val CODE_FOLD_AT = 30
-const val CODE_FOLDED_LINES = 16
-
 /**
  * One markdown block. [streaming] marks the block still being written: newly revealed text fades in and a small block
- * pulses at its end. [onOpenCode] opens a long code block in the full-screen viewer.
+ * pulses at its end. [onOpenCode] opens a long code block in the full-screen viewer with a title the viewer resolves
+ * back to its language ([CodeInfo.viewerTitle]).
  */
 @Composable
 fun MdBlockView(block: MdBlock, streaming: Boolean, onOpenCode: (code: String, language: String) -> Unit, modifier: Modifier = Modifier) {
@@ -92,7 +76,7 @@ fun MdBlockView(block: MdBlock, streaming: Boolean, onOpenCode: (code: String, l
             MdText(block.text, style.copy(color = colors.ink1), streaming, modifier)
         }
         is MdBlock.Paragraph -> MdText(block.text, type.prose.copy(color = colors.ink1), streaming, modifier)
-        is MdBlock.Code -> CodeBlock(block.code, block.language, closed = block.closed || !streaming, onOpen = onOpenCode, modifier = modifier)
+        is MdBlock.Code -> CodeBlock(block.code, block.language, block.info, closed = block.closed || !streaming, onOpen = onOpenCode, modifier = modifier)
         is MdBlock.ListItem -> Row(modifier.padding(start = (block.depth * 18).dp)) {
             val marker = when {
                 block.checked == true -> "☑"
@@ -125,17 +109,21 @@ fun MdBlockView(block: MdBlock, streaming: Boolean, onOpenCode: (code: String, l
                 .height(1.dp)
                 .background(colors.line),
         )
-        is MdBlock.Table -> TableBlock(block, modifier)
+        is MdBlock.Table -> MdTable(block, modifier)
     }
 }
 
-/** Prose with inline styles. Inline code gets a rounded surface3 background drawn behind its glyphs. */
+/**
+ * Prose with inline styles. Inline code gets a rounded surface3 chip drawn behind its glyphs (one per line segment,
+ * computed once per layout).
+ */
 @Composable
 private fun MdText(text: String, style: TextStyle, streaming: Boolean, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val annotated = remember(text, colors) { inlineAnnotated(text, colors, colors.accent) }
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
-    val codeRanges = remember(annotated) { annotated.getStringAnnotations(CODE_TAG, 0, annotated.length).map { it.start until it.end } }
+    var chips by remember { mutableStateOf(NO_CHIPS) }
+    val codeRanges = remember(annotated) { codeRanges(annotated) }
     val reveal = rememberReveal(annotated.length, streaming)
     val pulse = if (streaming && !Pi.reduceMotion) {
         rememberInfiniteTransition(label = "caret").animateFloat(0.3f, 1f, infiniteRepeatable(tween(450, easing = LinearEasing), RepeatMode.Reverse), label = "caret")
@@ -145,35 +133,12 @@ private fun MdText(text: String, style: TextStyle, streaming: Boolean, modifier:
     Text(
         annotated,
         style = style,
-        onTextLayout = { layout = it },
+        onTextLayout = {
+            layout = it
+            chips = if (codeRanges.isEmpty()) NO_CHIPS else chipRects(it, codeRanges)
+        },
         modifier = modifier
-            .drawBehind {
-                val l = layout ?: return@drawBehind
-                if (codeRanges.isEmpty() || l.layoutInput.text.length != annotated.length) return@drawBehind
-                val padX = 3.dp.toPx()
-                val radius = Radius.xs.toPx()
-                for (range in codeRanges) {
-                    if (range.isEmpty()) continue
-                    var start = range.first
-                    while (start <= range.last) {
-                        val line = l.getLineForOffset(start)
-                        val lineEnd = minOf(range.last, l.getLineEnd(line, visibleEnd = true) - 1)
-                        if (lineEnd < start) break
-                        val left = l.getHorizontalPosition(start, usePrimaryDirection = true)
-                        val right = l.getBoundingBox(lineEnd).right
-                        val top = l.getLineTop(line)
-                        val bottom = l.getLineBottom(line)
-                        val inset = (bottom - top) * 0.14f
-                        drawRoundRect(
-                            colors.surface3,
-                            topLeft = Offset(left - padX, top + inset),
-                            size = Size(right - left + padX * 2, bottom - top - inset * 2),
-                            cornerRadius = CornerRadius(radius),
-                        )
-                        start = lineEnd + 1
-                    }
-                }
-            }
+            .drawBehind { drawChips(chips, colors.surface3, Radius.xs.toPx()) }
             .drawWithContent {
                 drawContent()
                 val l = layout ?: return@drawWithContent
@@ -256,18 +221,15 @@ private fun rememberReveal(length: Int, streaming: Boolean): Reveal {
 }
 
 fun inlineAnnotated(text: String, colors: PiColors, linkColor: Color): AnnotatedString {
-    val parsed = Inline.parse(text)
+    val display = InlineDisplay.build(Inline.parse(text))
     return buildAnnotatedString {
-        append(parsed.text)
-        for (span in parsed.spans) {
+        append(display.text)
+        for (span in display.spans) {
             when (span.kind) {
                 InlineSpan.Kind.Bold -> addStyle(SpanStyle(fontWeight = FontWeight.SemiBold), span.start, span.end)
                 InlineSpan.Kind.Italic -> addStyle(SpanStyle(fontStyle = FontStyle.Italic), span.start, span.end)
                 InlineSpan.Kind.Strike -> addStyle(SpanStyle(textDecoration = TextDecoration.LineThrough), span.start, span.end)
-                InlineSpan.Kind.Code -> {
-                    addStyle(SpanStyle(fontFamily = Mono, fontSize = 0.88.em, fontFeatureSettings = MonoFeatures, color = colors.ink1), span.start, span.end)
-                    addStringAnnotation(CODE_TAG, "", span.start, span.end)
-                }
+                InlineSpan.Kind.Code -> addStyle(SpanStyle(fontFamily = Mono, fontSize = 0.88.em, fontFeatureSettings = MonoFeatures, color = colors.ink1), span.start, span.end)
                 InlineSpan.Kind.Link -> {
                     val url = span.url.orEmpty()
                     if (url.startsWith("http://") || url.startsWith("https://")) {
@@ -282,138 +244,118 @@ fun inlineAnnotated(text: String, colors: PiColors, linkColor: Color): Annotated
                 }
             }
         }
+        // The pads take the code size (in the prose font) so the chip edges sit evenly around the code.
+        for (chip in display.chips) {
+            addStyle(SpanStyle(fontSize = 0.88.em), chip.first, chip.first + 1)
+            addStyle(SpanStyle(fontSize = 0.88.em), chip.last, chip.last + 1)
+            addStringAnnotation(CODE_TAG, "", chip.first, chip.last + 1)
+        }
     }
 }
 
-/** Syntax colours: keywords ink1 SemiBold, strings, numbers, calls in the type colour, comments ink3 italic. */
-fun highlighted(code: String, language: String, colors: PiColors): AnnotatedString = buildAnnotatedString {
-    append(code)
-    for (token in Highlighter.tokenize(code, language)) {
-        val style = when (token.kind) {
-            Highlighter.Kind.Keyword -> SpanStyle(color = colors.ink1, fontWeight = FontWeight.SemiBold)
-            Highlighter.Kind.String -> SpanStyle(color = colors.synString)
-            Highlighter.Kind.Comment -> SpanStyle(color = colors.ink3, fontStyle = FontStyle.Italic)
-            Highlighter.Kind.Number -> SpanStyle(color = colors.synNumber)
-            Highlighter.Kind.Function -> SpanStyle(color = colors.synType)
+/** Ranges of inline code chips (code plus its pads) in text built by [inlineAnnotated]. */
+fun codeRanges(text: AnnotatedString): List<IntRange> = text.getStringAnnotations(CODE_TAG, 0, text.length).map { it.start until it.end }
+
+private val NO_CHIPS = FloatArray(0)
+
+private fun isChipGap(c: Char) = c == ' ' || c == '\n' || c == '\t' || c == InlineDisplay.BREAK
+
+/**
+ * Chip rectangles (left, top, right, bottom per chip segment) for [ranges] in a laid-out text: one per line a span
+ * covers, trimmed of the spaces where it wraps, inset 14% of the line box top and bottom.
+ */
+private fun chipRects(l: TextLayoutResult, ranges: List<IntRange>): FloatArray {
+    val text = l.layoutInput.text
+    var out = FloatArray(ranges.size * 4)
+    var n = 0
+    for (range in ranges) {
+        val endEx = minOf(range.last + 1, text.length)
+        var start = range.first
+        while (start < endEx) {
+            while (start < endEx && isChipGap(text[start])) start++
+            if (start >= endEx) break
+            val line = l.getLineForOffset(start)
+            val lineEnd = l.getLineEnd(line)
+            var segEnd = minOf(endEx, lineEnd)
+            while (segEnd > start && isChipGap(text[segEnd - 1])) segEnd--
+            if (segEnd > start) {
+                val top = l.getLineTop(line)
+                val bottom = l.getLineBottom(line)
+                val inset = (bottom - top) * 0.14f
+                if (n + 4 > out.size) out = out.copyOf(out.size * 2)
+                out[n] = l.getBoundingBox(start).left
+                out[n + 1] = top + inset
+                out[n + 2] = l.getBoundingBox(segEnd - 1).right
+                out[n + 3] = bottom - inset
+                n += 4
+            }
+            if (lineEnd <= start) break
+            start = lineEnd
         }
-        addStyle(style, token.start, token.end)
     }
+    return if (n == out.size) out else out.copyOf(n)
+}
+
+private fun DrawScope.drawChips(rects: FloatArray, color: Color, radius: Float) {
+    var i = 0
+    while (i + 3 < rects.size) {
+        drawRoundRect(color, Offset(rects[i], rects[i + 1]), Size(rects[i + 2] - rects[i], rects[i + 3] - rects[i + 1]), CornerRadius(radius))
+        i += 4
+    }
+}
+
+/** Text with inline markdown already applied by [inlineAnnotated]: inline code gets its chips (table cells). */
+@Composable
+fun ChipText(text: AnnotatedString, style: TextStyle, modifier: Modifier = Modifier) {
+    val colors = Pi.colors
+    val ranges = remember(text) { codeRanges(text) }
+    var chips by remember { mutableStateOf(NO_CHIPS) }
+    Text(
+        text,
+        style = style,
+        onTextLayout = { chips = if (ranges.isEmpty()) NO_CHIPS else chipRects(it, ranges) },
+        modifier = modifier.drawBehind { drawChips(chips, colors.surface3, Radius.xs.toPx()) },
+    )
 }
 
 /**
- * Highlight for a code block that may still be streaming: complete lines are highlighted once per new line (not per
- * chunk); the line being written stays plain until it ends.
+ * Syntax colours (DESIGN.md): keywords ink1 SemiBold, calls ink1 Medium, types synType, strings, numbers, punctuation
+ * ink2, comments ink3 italic, the shell prompt in success.
  */
-@Composable
-private fun rememberHighlight(code: String, language: String, closed: Boolean, colors: PiColors): AnnotatedString {
-    val cut = if (closed) code.length else code.lastIndexOf('\n') + 1
-    val prefix = remember(cut, closed, language, colors) { highlighted(code.substring(0, cut), language, colors) }
-    return if (cut == code.length) prefix else prefix + AnnotatedString(code.substring(cut))
-}
-
-/** Fenced code: surface1, radius 12, 36dp header (language, open, copy), horizontal scroll, folded past 30 lines. */
-@Composable
-fun CodeBlock(code: String, language: String, closed: Boolean, onOpen: (String, String) -> Unit, modifier: Modifier = Modifier) {
-    val colors = Pi.colors
-    val type = Pi.type
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
-    val haptics = Pi.haptics
-    val lines = remember(code) { code.count { it == '\n' } + 1 }
-    val folded = lines > CODE_FOLD_AT
-    val shown = if (folded) remember(code) { headLines(code, CODE_FOLDED_LINES) } else code
-    val text = rememberHighlight(shown, language, closed || folded, colors)
-    val shape = RoundedCornerShape(Radius.md)
-    Column(
-        modifier
-            .fillMaxWidth()
-            .clip(shape)
-            .background(colors.surface1)
-            .border(1.dp, colors.line, shape),
-    ) {
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .height(36.dp)
-                .padding(start = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                language.ifBlank { "code" },
-                style = type.monoMeta.copy(color = colors.ink3),
-                modifier = Modifier.weight(1f),
-            )
-            if (folded) IconAction(Icons.Rounded.OpenInFull, "Open code", onClick = { onOpen(code, language) }, size = 16.dp, tint = colors.ink3)
-            IconAction(Icons.Rounded.ContentCopy, "Copy code", onClick = {
-                haptics.confirm()
-                scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", code))) }
-            }, size = 16.dp, tint = colors.ink3)
-        }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
-        Text(
-            text,
-            style = type.mono.copy(color = colors.ink1),
-            softWrap = false,
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-        )
-        if (folded) {
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(44.dp)
-                    .pressable({ onOpen(code, language) }, shape = RoundedCornerShape(0.dp), pressedScale = 1f)
-                    .background(colors.surface2),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("Show all $lines lines", style = type.label, color = colors.ink2)
+fun highlighted(code: String, language: String, colors: PiColors): AnnotatedString {
+    val tokens = Highlighter.tokenize(code, language)
+    if (tokens.isEmpty()) return AnnotatedString(code)
+    return buildAnnotatedString {
+        append(code)
+        for (token in tokens) {
+            val style = when (token.kind) {
+                Highlighter.Kind.Keyword -> SpanStyle(color = colors.ink1, fontWeight = FontWeight.SemiBold)
+                Highlighter.Kind.String -> SpanStyle(color = colors.synString)
+                Highlighter.Kind.Comment -> SpanStyle(color = colors.ink3, fontStyle = FontStyle.Italic)
+                Highlighter.Kind.Number -> SpanStyle(color = colors.synNumber)
+                Highlighter.Kind.Function -> SpanStyle(color = colors.ink1, fontWeight = FontWeight.Medium)
+                Highlighter.Kind.Type -> SpanStyle(color = colors.synType)
+                Highlighter.Kind.Punctuation -> SpanStyle(color = colors.ink2)
+                Highlighter.Kind.Prompt -> SpanStyle(color = colors.success, fontWeight = FontWeight.SemiBold)
             }
+            addStyle(style, token.start, token.end)
         }
     }
 }
 
-private fun headLines(text: String, n: Int): String {
-    var i = 0
-    repeat(n) {
-        val nl = text.indexOf('\n', i)
-        if (nl < 0) return text
-        i = nl + 1
-    }
-    return text.substring(0, i).trimEnd('\n')
+private data class HighlightKey(val code: String, val language: String, val colors: PiColors)
+
+/** Recently highlighted texts, so blocks scrolled back into view (or re-opened in the viewer) are not re-tokenised. */
+private val highlightCache = object : LinkedHashMap<HighlightKey, AnnotatedString>(64, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<HighlightKey, AnnotatedString>?): Boolean = size > 64
 }
 
-@Composable
-private fun TableBlock(table: MdBlock.Table, modifier: Modifier) {
-    val colors = Pi.colors
-    val type = Pi.type
-    val columns = maxOf(table.header.size, table.rows.maxOfOrNull { it.size } ?: 0)
-    val shape = RoundedCornerShape(Radius.md)
-    Box(
-        modifier
-            .clip(shape)
-            .border(1.dp, colors.line, shape)
-            .horizontalScroll(rememberScrollState()),
-    ) {
-        Column(Modifier.width(IntrinsicSize.Max)) {
-            val rows = listOf(table.header) + table.rows
-            rows.forEachIndexed { r, row ->
-                Row(Modifier.fillMaxWidth().background(if (r == 0) colors.surface1 else Color.Transparent)) {
-                    for (c in 0 until columns) {
-                        val cell = row.getOrElse(c) { "" }
-                        val styled = remember(cell, colors) { inlineAnnotated(cell, colors, colors.accent) }
-                        Text(
-                            styled,
-                            style = (if (r == 0) type.label.copy(fontWeight = FontWeight.SemiBold) else type.body).copy(color = colors.ink1),
-                            modifier = Modifier
-                                .widthIn(min = 80.dp, max = 260.dp)
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                        )
-                    }
-                }
-                if (r < rows.lastIndex) Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
-            }
-        }
-    }
+/** [highlighted], cached by content, language and palette. */
+fun highlightedCached(code: String, language: String, colors: PiColors): AnnotatedString {
+    if (code.isEmpty()) return AnnotatedString("")
+    val key = HighlightKey(code, language, colors)
+    synchronized(highlightCache) { highlightCache[key]?.let { return it } }
+    val value = highlighted(code, language, colors)
+    synchronized(highlightCache) { highlightCache[key] = value }
+    return value
 }

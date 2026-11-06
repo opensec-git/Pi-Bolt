@@ -1,6 +1,5 @@
 package opensec.pibolt.app.ui.session
 
-import android.content.ClipData
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.foundation.background
@@ -26,28 +25,30 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.WrapText
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.ClipEntry
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.launch
+import opensec.pibolt.app.ui.components.CopyButton
+import opensec.pibolt.app.ui.components.DiffRow
 import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.markdown.CodeFold
+import opensec.pibolt.app.ui.markdown.CodeInfo
+import opensec.pibolt.app.ui.markdown.UnifiedDiff
+import opensec.pibolt.app.ui.markdown.highlightedCached
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
 
@@ -55,15 +56,25 @@ private const val MAX_LINE = 2_000
 
 /**
  * Full-screen output, diff or text viewer: lines are lazy (long output never lays out at once), wrap is a toggle,
- * copy takes the whole text. Predictive back previews the close.
+ * copy takes the whole text. Code opened from a markdown block (its title is a language or file name, see
+ * [CodeInfo.viewerLanguage]) keeps its syntax colours; a `diff` title renders diff rows. Predictive back previews the
+ * close.
  */
 @Composable
 fun Viewer(content: ViewerContent, onClose: () -> Unit) {
     val colors = Pi.colors
     val type = Pi.type
-    val clipboard = LocalClipboard.current
-    val scope = rememberCoroutineScope()
-    val haptics = Pi.haptics
+    val language = remember(content) { if (content.diff || content.selectable) null else CodeInfo.viewerLanguage(content.title) }
+    val diffRows = remember(content, language) {
+        when {
+            content.diff -> parseDiff(content.text)
+            language == "diff" -> UnifiedDiff.parse(content.text.trimEnd('\n'))
+            else -> null
+        }
+    }
+    val subtitle = remember(content, language, diffRows) {
+        content.subtitle?.takeIf { it.isNotBlank() } ?: if (language != null && diffRows == null) linesLabel(content.text) else null
+    }
     var wrap by rememberSaveable { mutableStateOf(content.wrap) }
     var progress by remember { mutableFloatStateOf(0f) }
     var fromLeft by remember { mutableStateOf(true) }
@@ -99,17 +110,14 @@ fun Viewer(content: ViewerContent, onClose: () -> Unit) {
             IconAction(Icons.Rounded.Close, "Close", onClick = onClose, tint = colors.ink1)
             Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
                 Text(content.title, style = type.subhead, color = colors.ink1, maxLines = 1)
-                content.subtitle?.takeIf { it.isNotBlank() }?.let {
+                subtitle?.let {
                     Text(it, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
                 }
             }
             if (!content.selectable) {
                 IconAction(Icons.AutoMirrored.Rounded.WrapText, if (wrap) "Do not wrap lines" else "Wrap lines", onClick = { wrap = !wrap }, tint = if (wrap) colors.accent else colors.ink2)
             }
-            IconAction(Icons.Rounded.ContentCopy, "Copy all", onClick = {
-                haptics.confirm()
-                scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(content.title, content.text))) }
-            })
+            CopyButton({ content.text }, label = false, clipLabel = content.title, description = "Copy all")
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
         when {
@@ -125,35 +133,38 @@ fun Viewer(content: ViewerContent, onClose: () -> Unit) {
                         .navigationBarsPadding(),
                 )
             }
-            content.diff -> {
-                val lines = remember(content.text) { parseDiff(content.text) }
-                val numWidth = remember(lines) { lines.maxOfOrNull { it.number.length }?.coerceAtLeast(1) ?: 1 }
+            diffRows != null -> {
+                val numWidth = remember(diffRows) { diffRows.maxOfOrNull { it.number.length } ?: 0 }
+                val words = remember(diffRows) { UnifiedDiff.wordRanges(diffRows) }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 8.dp)) {
-                    itemsIndexed(lines, contentType = { _, l -> l.kind }) { _, line -> DiffLineRow(line, numWidth, wrap = true) }
+                    itemsIndexed(diffRows, contentType = { _, l -> l.kind }) { i, line -> DiffRow(line, numWidth, words[i], wrap = true) }
                     item { Spacer(Modifier.navigationBarsPadding()) }
                 }
             }
-            else -> TextLines(content.text, wrap, Modifier.weight(1f))
+            else -> TextLines(content.text, wrap, language, Modifier.weight(1f))
         }
     }
 }
 
 @Composable
-private fun TextLines(text: String, wrap: Boolean, modifier: Modifier) {
+private fun TextLines(text: String, wrap: Boolean, language: String?, modifier: Modifier) {
     val colors = Pi.colors
     val style = Pi.type.monoSmall
-    val lines = remember(text) { text.trimEnd('\n').lines().map { if (it.length > MAX_LINE) it.take(MAX_LINE) + " …" else it } }
-    val numWidth = lines.size.toString().length
+    // Line ranges without trailing blank lines, so the last numbered line has content.
+    val ranges = remember(text) { lineRanges(text) }
+    val coloured = remember(text, language, colors) { language?.let { highlightedCached(text, it, colors) } }
+    val numWidth = ranges.size.toString().length
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
     val charWidth = remember(style) { measurer.measure("0", style).size.width }
-    val longest = remember(lines) { lines.maxOfOrNull { it.length } ?: 0 }
+    val longest = remember(ranges) { ranges.maxOfOrNull { minOf(it.last - it.first + 1, MAX_LINE + 2) } ?: 0 }
     val contentWidth = with(density) { (charWidth * (longest + numWidth + 2)).toDp() + 48.dp }
     val list = @Composable { m: Modifier ->
         LazyColumn(m, contentPadding = PaddingValues(top = 10.dp, bottom = 24.dp)) {
-            itemsIndexed(lines) { i, line ->
+            itemsIndexed(ranges) { i, range ->
+                val line = remember(range, coloured) { lineText(text, coloured, range) }
                 Row(Modifier.padding(horizontal = 14.dp)) {
-                    Text((i + 1).toString().padStart(numWidth), style = style, color = colors.ink4)
+                    Text((i + 1).toString().padStart(numWidth), style = style, color = colors.ink3)
                     Spacer(Modifier.width(12.dp))
                     Text(line, style = style, color = colors.ink1, softWrap = wrap)
                 }
@@ -168,4 +179,32 @@ private fun TextLines(text: String, wrap: Boolean, modifier: Modifier) {
             list(Modifier.width(contentWidth).fillMaxSize())
         }
     }
+}
+
+/** `[start, end)` of each line as an IntRange (end exclusive as `last + 1`), trailing blank lines dropped. */
+private fun lineRanges(text: String): List<IntRange> {
+    val out = ArrayList<IntRange>()
+    var start = 0
+    while (true) {
+        val nl = text.indexOf('\n', start)
+        val end = if (nl < 0) text.length else nl
+        out += start until end
+        if (nl < 0) break
+        start = nl + 1
+    }
+    while (out.size > 1 && text.substring(out.last().first, out.last().last + 1).isBlank()) out.removeAt(out.lastIndex)
+    return out
+}
+
+private fun lineText(text: String, coloured: AnnotatedString?, range: IntRange): AnnotatedString {
+    val end = range.last + 1
+    val cut = minOf(end, range.first + MAX_LINE)
+    var line = coloured?.subSequence(range.first, cut) ?: AnnotatedString(text.substring(range.first, cut).removeSuffix("\r"))
+    if (cut < end) line += AnnotatedString(" …")
+    return line
+}
+
+private fun linesLabel(text: String): String {
+    val n = lineRanges(text).size
+    return "${CodeFold.count(n)} ${if (n == 1) "line" else "lines"}"
 }

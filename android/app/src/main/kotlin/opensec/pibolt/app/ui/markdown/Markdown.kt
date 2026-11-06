@@ -6,8 +6,11 @@ sealed interface MdBlock {
 
     data class Paragraph(val text: String) : MdBlock
 
-    /** [closed] is false while a streaming fence has not been closed yet. */
-    data class Code(val language: String, val code: String, val closed: Boolean) : MdBlock
+    /**
+     * [closed] is false while a streaming fence has not been closed yet. [info] is the rest of the fence's info string
+     * after the language tag (for example `title="src/a.ts"`).
+     */
+    data class Code(val language: String, val code: String, val closed: Boolean, val info: String = "") : MdBlock
 
     data class ListItem(val ordered: Boolean, val marker: String, val depth: Int, val text: String, val checked: Boolean?) : MdBlock
 
@@ -15,15 +18,18 @@ sealed interface MdBlock {
 
     data object Rule : MdBlock
 
-    data class Table(val header: List<String>, val rows: List<List<String>>) : MdBlock
+    /** [align] holds one entry per column from the separator row (`:--`, `:-:`, `--:`). */
+    data class Table(val header: List<String>, val rows: List<List<String>>, val align: List<TableAlign> = emptyList()) : MdBlock
 }
+
+enum class TableAlign { None, Start, Center, End }
 
 /** Parsed text: [starts] holds the character offset where each block begins, so a longer text re-parses only the tail. */
 class MdDoc internal constructor(val text: String, val blocks: List<MdBlock>, internal val starts: IntArray)
 
 object Markdown {
     private val heading = Regex("^ {0,3}(#{1,6})\\s+(.*?)\\s*#*\\s*$")
-    private val fence = Regex("^ {0,3}(```+|~~~+)\\s*([^`\\s]*).*$")
+    private val fence = Regex("^ {0,3}(```+|~~~+)\\s*([^`\\s]*)(.*)$")
     private val rule = Regex("^ {0,3}((\\*\\s*){3,}|(-\\s*){3,}|(_\\s*){3,})$")
     private val listItem = Regex("^(\\s*)([-*+]|\\d{1,9}[.)])\\s+(.*)$")
     private val task = Regex("^\\[([ xX])]\\s+(.*)$")
@@ -95,7 +101,7 @@ object Markdown {
                     body.append(l)
                     i++
                 }
-                add(MdBlock.Code(m.groupValues[2], body.toString(), closed), start)
+                add(MdBlock.Code(m.groupValues[2], body.toString(), closed, m.groupValues[3].trim()), start)
                 return@let
             } ?: run {
                 heading.matchEntire(line)?.let { m ->
@@ -121,13 +127,14 @@ object Markdown {
                 }
                 if (line.trimStart().startsWith("|") && i + 1 < lines.size && tableSeparator.matches(lines[i + 1])) {
                     val header = cells(line)
+                    val align = cells(lines[i + 1]).map { alignOf(it) }
                     i += 2
                     val rows = ArrayList<List<String>>()
                     while (i < lines.size && lines[i].trimStart().startsWith("|")) {
                         rows += cells(lines[i])
                         i++
                     }
-                    add(MdBlock.Table(header, rows), start)
+                    add(MdBlock.Table(header, rows, align), start)
                     return@run
                 }
                 listItem.matchEntire(line)?.let { m ->
@@ -167,6 +174,13 @@ object Markdown {
             }
         }
         return blocks to starts
+    }
+
+    private fun alignOf(marker: String): TableAlign = when {
+        marker.startsWith(":") && marker.endsWith(":") && marker.length > 1 -> TableAlign.Center
+        marker.endsWith(":") -> TableAlign.End
+        marker.startsWith(":") -> TableAlign.Start
+        else -> TableAlign.None
     }
 
     private fun cells(line: String): List<String> =

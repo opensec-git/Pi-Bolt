@@ -38,6 +38,9 @@ data class PiColors(
     val diffAddFg: Color = Color(0xFF9BE6BF),
     val diffDelBg: Color = Danger.copy(alpha = 0.11f),
     val diffDelFg: Color = Color(0xFFF7A9A5),
+    /** The changed words inside a paired delete/add line. */
+    val diffAddWord: Color = Success.copy(alpha = 0.22f),
+    val diffDelWord: Color = Danger.copy(alpha = 0.22f),
     val synString: Color = Color(0xFF9ED3C6),
     val synNumber: Color = Color(0xFFE5A97E),
     val synType: Color = Color(0xFFC9B8F0),
