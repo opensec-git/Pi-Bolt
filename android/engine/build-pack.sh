@@ -29,6 +29,10 @@ run() { # command...: run in the builder with /engine, /dl, /stage, /out mounted
 		"$IMAGE" "$@"
 }
 
+# On Linux the container writes as root; hand its output back to this user, so the stage keys can be written and later
+# steps (verify-pack.sh, Gradle, the CI artifact upload) own what they read. Docker Desktop maps ownership already.
+own() { run chown -R "$(id -u):$(id -g)" /stage /out /dl; }
+
 stage() { # name script [inputs...]: run a stage unless its inputs are unchanged
 	local name=$1 script=$2
 	shift 2
@@ -41,6 +45,7 @@ stage() { # name script [inputs...]: run a stage unless its inputs are unchanged
 	echo "== $name"
 	local t0=$SECONDS
 	run bash "/engine/$script"
+	own
 	echo "$key" >"$WORK/stage/$name/.key"
 	echo "== $name: $((SECONDS - t0))s"
 }
@@ -55,4 +60,5 @@ if [ "$ENGINE_ONLY" = true ]; then
 else
 	run python3 -I /engine/scripts/assemble.py
 fi
+own
 du -sh "$OUT/jniLibs/arm64-v8a" "$OUT/assets/engine"
