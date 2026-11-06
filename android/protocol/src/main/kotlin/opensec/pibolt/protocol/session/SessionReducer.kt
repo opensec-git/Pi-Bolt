@@ -24,8 +24,9 @@ object SessionReducer {
     private const val MAX_CONTENT_BLOCKS = 1024
 
     fun reduce(state: SessionState, event: JsonObject): SessionState = when (event.type) {
-        "remote_hello" -> fromHello(event)
-        "agent_start" -> state.copy(isRunning = true)
+        "remote_hello" -> keepTodos(state, fromHello(event))
+        // A new run: the completed rows of the previous one leave the todo panel.
+        "agent_start" -> state.copy(isRunning = true, todos = hideCompleted(state.todos))
         "agent_settled" -> settle(state)
         "message_start" -> messageStart(state, event)
         "message_update" -> messageUpdate(state, event)
@@ -78,12 +79,14 @@ object SessionReducer {
         state = applyRpcState(state, hello.obj("state"))
         for (message in hello.arr("messages").orEmpty()) {
             val m = message as? JsonObject ?: continue
+            // Each prompt in the history started a run, which hid the completed todos of the run before.
+            if (m.str("role") == "user") state = state.copy(todos = hideCompleted(state.todos))
             state = commitMessage(state, m, key = null)
         }
         hello.obj("streamingMessage")?.let { streaming ->
             if (streaming.str("role") == "assistant") state = startStream(state, streaming)
         }
-        if (!state.isRunning) state = closeDanglingTools(state)
+        if (!state.isRunning) state = closeDanglingTools(state).let { it.copy(todos = hideFinished(it.todos)) }
         state = state.copy(
             dialogs = hello.arr("dialogs").orEmpty().mapNotNull { (it as? JsonObject)?.let(::dialogFrom) },
             commands = hello.arr("commands").orEmpty().mapNotNull { (it as? JsonObject)?.let(::commandFrom) },
@@ -223,7 +226,8 @@ object SessionReducer {
                 val (text, images) = contentText(message["content"])
                 val result = if (images > 0) listOf(text, "[${images} image${if (images > 1) "s" else ""}]").filter { it.isNotBlank() }.joinToString("\n") else text
                 val isError = message.bool("isError") ?: false
-                updateTool(s, id, message.str("toolName")) {
+                val withTodos = if (message.str("toolName") == TODO_TOOL && !isError) s.copy(todos = applyTodo(s.todos, message.obj("details"))) else s
+                updateTool(withTodos, id, message.str("toolName")) {
                     it.copy(
                         status = if (isError) ToolStatus.Error else ToolStatus.Done,
                         result = result,
@@ -290,8 +294,10 @@ object SessionReducer {
     private fun toolUpdate(state: SessionState, event: JsonObject): SessionState {
         val id = event.str("toolCallId") ?: return state
         val (text, _) = contentText(event.obj("partialResult")?.get("content"))
+        // The partial details too: a subagent reports what it is doing there.
+        val details = event.obj("partialResult")?.obj("details")
         return updateTool(state, id, event.str("toolName")) {
-            it.copy(status = ToolStatus.Running, output = text)
+            it.copy(status = ToolStatus.Running, output = text, details = details ?: it.details)
         }
     }
 
@@ -300,7 +306,9 @@ object SessionReducer {
         val result = event.obj("result")
         val (text, _) = contentText(result?.get("content"))
         val isError = event.bool("isError") ?: false
-        return updateTool(state, id, event.str("toolName")) {
+        val name = event.str("toolName") ?: (state.allItems.lastOrNull { it is ToolItem && it.toolCallId == id } as? ToolItem)?.name
+        val withTodos = if (name == TODO_TOOL && !isError) state.copy(todos = applyTodo(state.todos, result?.obj("details"))) else state
+        return updateTool(withTodos, id, event.str("toolName")) {
             it.copy(
                 status = if (isError) ToolStatus.Error else ToolStatus.Done,
                 result = text,
@@ -332,7 +340,7 @@ object SessionReducer {
     }
 
     private fun settle(state: SessionState): SessionState {
-        var s = state.copy(isRunning = false, retry = null, isCompacting = false)
+        var s = state.copy(isRunning = false, retry = null, isCompacting = false, todos = hideFinished(state.todos))
         if (s.stream != null) {
             // A stream without message_end (aborted mid-flight): keep what arrived.
             val blocks = s.stream.blocks.filterNotNull().map {
@@ -350,6 +358,53 @@ object SessionReducer {
     private fun closeDanglingTools(state: SessionState): SessionState {
         if (state.items.none { it is ToolItem && it.isActive }) return state
         return state.copy(items = state.items.map { if (it is ToolItem && it.isActive) it.copy(status = ToolStatus.Cancelled) else it })
+    }
+
+    // Todos
+
+    /** The todo extension's tool (opensec-pi-todo, rpiv-todo). Its result's `details.tasks` is the whole list after the call. */
+    const val TODO_TOOL = "todo"
+
+    /** The list from a `todo` result's details; ids completed and already hidden stay hidden. */
+    private fun applyTodo(todos: TodoState, details: JsonObject?): TodoState {
+        val list = details?.arr("tasks") ?: return todos
+        val tasks = list.mapNotNull { (it as? JsonObject)?.let(::todoTask) }
+        val nextId = details.int("nextId") ?: todos.nextId
+        // A cleared list numbers its tasks from 1 again: the hidden ids meant other tasks.
+        val hidden = if (nextId < todos.nextId) emptySet() else todos.hidden
+        val completed = tasks.filter { it.status == TodoStatus.Completed }.mapTo(HashSet()) { it.id }
+        val next = TodoState(tasks, hidden.intersect(completed), nextId)
+        return if (next == todos) todos else next
+    }
+
+    /** One task, or null for a deleted or malformed one. */
+    private fun todoTask(json: JsonObject): TodoTask? {
+        val id = json.int("id") ?: return null
+        val status = when (json.str("status")) {
+            "pending" -> TodoStatus.Pending
+            "in_progress" -> TodoStatus.InProgress
+            "completed" -> TodoStatus.Completed
+            else -> return null
+        }
+        return TodoTask(id, json.str("subject").orEmpty(), status, json.str("activeForm")?.takeIf { it.isNotBlank() })
+    }
+
+    private fun hideCompleted(todos: TodoState): TodoState {
+        val completed = todos.tasks.filter { it.status == TodoStatus.Completed }.map { it.id }
+        return if (todos.hidden.containsAll(completed)) todos else todos.copy(hidden = todos.hidden + completed)
+    }
+
+    /** A run that ends with every task done closes the panel. */
+    private fun hideFinished(todos: TodoState): TodoState =
+        if (todos.tasks.isNotEmpty() && todos.tasks.all { it.status == TodoStatus.Completed }) hideCompleted(todos) else todos
+
+    /**
+     * A snapshot of the session it already shows (a reconnect) without any todo result, as after a compaction dropped
+     * them from the messages, keeps the list it had.
+     */
+    private fun keepTodos(before: SessionState, after: SessionState): SessionState {
+        if (after.todos != TodoState() || before.todos == TodoState() || after.sessionId == null || after.sessionId != before.sessionId) return after
+        return after.copy(todos = if (after.isRunning) before.todos else hideFinished(before.todos))
     }
 
     // Compaction

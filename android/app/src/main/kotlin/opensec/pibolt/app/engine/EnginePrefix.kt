@@ -32,12 +32,17 @@ data class EngineManifest(
     val packageFiles: List<String>? = null,
     /** Environment the pack wants on top of the app's defaults (PREFIX already expanded). */
     val env: Map<String, String> = emptyMap(),
+    /** Pi extensions the pack bundles, each with every file under assets `engine/extensions/<name>/` (relative). */
+    val extensions: List<Extension> = emptyList(),
 ) {
     /** `PREFIX/<path>` is a symlink to `nativeLibraryDir/<target>`. */
     data class Link(val path: String, val target: String)
 
     /** `PREFIX/<path>` is a copy of the APK asset [asset]. */
     data class Asset(val path: String, val asset: String)
+
+    /** A bundled Pi extension: assets `engine/extensions/<name>/<files>`. */
+    data class Extension(val name: String, val version: String, val files: List<String>)
 
     companion object {
         fun parse(text: String): EngineManifest {
@@ -62,6 +67,14 @@ data class EngineManifest(
                     // The loader must find glibc by its compiled-in prefix only.
                     if (k.startsWith("LD_")) null else (v as? JsonPrimitive)?.takeIf { it.isString }?.let { k to it.content }
                 }.toMap(),
+                extensions = json.arr("extensions").orEmpty().map { item ->
+                    val o = item as JsonObject
+                    Extension(
+                        name = safeName(o.need("name")),
+                        version = o.need("version"),
+                        files = o.arr("files").orEmpty().map { safeRelative((it as JsonPrimitive).content) },
+                    )
+                },
             )
         }
 
@@ -112,6 +125,9 @@ class EnginePaths(
 
     /** PI_PACKAGE_DIR: theme/, export-html/, assets/, package.json from APK assets `engine/package/`. */
     val packageDir = File(prefix, "share/pi-bolt")
+
+    /** The pack's bundled Pi extensions, one directory each, registered as packages in Pi's settings.json. */
+    val extensionsDir = File(prefix, "share/pi-extensions")
     val engine = File(nativeLibDir, "libpibolt.so")
     val stamp = File(prefix, ".pack")
 
@@ -172,6 +188,15 @@ class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSour
         } else {
             copyTree(PACKAGE_ASSETS, paths.packageDir)
         }
+        paths.extensionsDir.deleteRecursively()
+        for (extension in manifest.extensions) {
+            val dir = File(paths.extensionsDir, extension.name)
+            for (file in extension.files) {
+                assets.open("$EXTENSIONS_ASSETS/${extension.name}/$file").use { copyAtomically(it, File(dir, file)) }
+            }
+        }
+        // Not fatal: without the entries Pi just runs without the extensions (the next pack update tries again).
+        BundledExtensions.register(paths.agentDir, manifest.extensions.map { File(paths.extensionsDir, it.name).path }, paths.extensionsDir.path)
     }
 
     /** Every symlink under the prefix (not tmp/): the links of a previous pack, which may point at a moved directory. */
@@ -214,6 +239,7 @@ class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSour
     companion object {
         const val MANIFEST_ASSET = "engine/manifest.json"
         const val PACKAGE_ASSETS = "engine/package"
+        const val EXTENSIONS_ASSETS = "engine/extensions"
         const val SYSTEM_SH = "/system/bin/sh"
 
         fun writeAtomically(to: File, text: String) {

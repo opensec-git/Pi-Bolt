@@ -286,6 +286,8 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     val thinkingLevel by remember { derivedStateOf { state.value.thinkingLevel } }
     val commands by remember { derivedStateOf { state.value.commands } }
     val queue by remember { derivedStateOf { state.value.queue } }
+    // Changes only when a todo result or a run boundary changes the list.
+    val todos by remember { derivedStateOf { state.value.todos } }
     val firstDialog by remember { derivedStateOf { state.value.dialogs.firstOrNull() } }
     val empty by remember { derivedStateOf { state.value.hello && state.value.items.isEmpty() && state.value.streaming.isEmpty() && !state.value.isRunning && memory.pending.value == null } }
 
@@ -431,6 +433,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 PiSnackHost(snackbar, Modifier.align(Alignment.BottomCenter))
             }
             StatusExtras(extras)
+            TodoPanel(todos, running)
             val hiddenId = memory.hiddenDialog.value
             PendingDialogStrip(firstDialog?.takeIf { it.id == hiddenId }?.title?.ifBlank { "Answer needed" }) { memory.hiddenDialog.value = null }
             QueueStrip(queue, onEdit = controller::clearQueue)

@@ -2,6 +2,10 @@ package opensec.pibolt.app.ui.session
 
 import androidx.compose.runtime.Immutable
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonObject
+import opensec.pibolt.protocol.arr
+import opensec.pibolt.protocol.int
+import opensec.pibolt.protocol.session.SessionReducer.TODO_TOOL
 import opensec.pibolt.protocol.session.SlashCommand
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
@@ -10,13 +14,13 @@ import opensec.pibolt.protocol.toDisplayString
 import java.util.Locale
 
 /** What kind of step a tool is; picks the expanded card. */
-enum class ToolKind { Bash, Read, Write, Edit, Search, List, Other }
+enum class ToolKind { Bash, Read, Write, Edit, Search, List, Todo, Other }
 
 @Immutable
 
 data class ToolLabel(val kind: ToolKind, val verb: String, val detail: String)
 
-private val partialField = Regex("\"(command|path|file_path|pattern|query|url)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)")
+private val partialField = Regex("\"(command|path|file_path|pattern|query|url|description|prompt|subagent_type|subject|agent_id|message|action|status)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)")
 
 fun toolLabel(item: ToolItem): ToolLabel {
     val args = item.args
@@ -40,6 +44,19 @@ fun toolLabel(item: ToolItem): ToolLabel {
         "grep" -> ToolLabel(ToolKind.Search, "Search", listOfNotNull(arg("pattern"), arg("path")?.let { "in $it" }).joinToString(" "))
         "find", "glob" -> ToolLabel(ToolKind.Search, "Find", listOfNotNull(arg("pattern"), arg("path")?.let { "in $it" }).joinToString(" "))
         "ls" -> ToolLabel(ToolKind.List, "List", arg("path") ?: ".")
+        // The subagents extension (opensec-pi-subagents): the agent type, then its task.
+        "agent" -> when {
+            args?.str("resume") != null -> ToolLabel(ToolKind.Other, "Resume agent", firstLine(arg("prompt")).ifBlank { args.str("resume").orEmpty() })
+            else -> ToolLabel(
+                ToolKind.Other,
+                arg("subagent_type")?.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() } ?: "Agent",
+                firstLine(arg("description")?.takeIf { it.isNotBlank() } ?: arg("prompt")),
+            )
+        }
+        "get_subagent_result" -> ToolLabel(ToolKind.Other, "Agent result", arg("agent_id").orEmpty())
+        "steer_subagent" -> ToolLabel(ToolKind.Other, "Steer agent", listOfNotNull(arg("agent_id"), arg("message")?.let(::firstLine)).joinToString(": "))
+        "subagentworkflow" -> ToolLabel(ToolKind.Other, "Workflow", workflowName(item))
+        TODO_TOOL -> ToolLabel(ToolKind.Todo, "Todo", todoSummary(item) { arg(it) })
         else -> {
             val first = args?.entries?.firstOrNull { (it.value as? JsonPrimitive)?.isString == true }?.let { (it.value as JsonPrimitive).content }
             ToolLabel(ToolKind.Other, name, (first ?: arg("command", "path", "pattern", "query", "url")).orEmpty().lineSequence().firstOrNull().orEmpty())
@@ -48,7 +65,83 @@ fun toolLabel(item: ToolItem): ToolLabel {
 }
 
 /** Tools that run another agent: the Quad shows Agent while they run. */
-fun isSubagentTool(name: String): Boolean = name.lowercase() in setOf("task", "agent", "subagent", "subagents")
+fun isSubagentTool(name: String): Boolean = name.lowercase() in setOf("task", "agent", "subagent", "subagents", "subagentworkflow")
+
+private fun firstLine(text: String?): String = text.orEmpty().trim().lineSequence().firstOrNull().orEmpty()
+
+private val workflowMetaName = Regex("""name\s*:\s*["'`]([^"'`\n]+)["'`]""")
+
+/** A workflow's name: from its script's `meta`, its file or the saved workflow it runs. */
+private fun workflowName(item: ToolItem): String {
+    val args = item.args
+    args?.str("script")?.let { script -> workflowMetaName.find(script.substringAfter("meta", ""))?.let { return it.groupValues[1] } }
+    args?.str("scriptPath")?.let { return baseName(it) }
+    return args?.str("name")?.takeIf { it.isNotBlank() } ?: "workflow"
+}
+
+/**
+ * What a running subagent is doing, from its partial result: "reading 3 files… · 4 tool uses · turn 2". Null for
+ * other tools and before the first update.
+ */
+fun subagentProgress(item: ToolItem): String? {
+    if (item.status != ToolStatus.Running || !isSubagentTool(item.name)) return null
+    val d = item.details ?: return null
+    if (d.str("status") != "running") return null
+    val tools = d.int("toolUses") ?: 0
+    val turns = d.int("turnCount") ?: 0
+    return listOfNotNull(
+        d.str("activity")?.let(::firstLine)?.takeIf { it.isNotBlank() },
+        tools.takeIf { it > 0 }?.let { if (it == 1) "1 tool use" else "$it tool uses" },
+        turns.takeIf { it > 1 }?.let { "turn $it" },
+    ).joinToString(" · ").ifBlank { null }
+}
+
+private val agentIdLine = Regex("""(?m)^Agent ID: .*$""")
+
+/** The stats headline a foreground run puts first; the row already shows the duration. Stops and aborts keep theirs. */
+private val completedHeadline = Regex("""(?m)^Agent completed in .*$""")
+
+/**
+ * A finished subagent call's text: its answer without the stats headline and the resume hint, or that it went to the
+ * background. Null for other tools.
+ */
+fun subagentResult(item: ToolItem): String? {
+    if (!isSubagentTool(item.name) || item.isActive) return null
+    val d = item.details
+    if (d?.str("status") == "background") {
+        return "Running in background" + (d.str("agentId")?.let { " · $it" } ?: "")
+    }
+    return item.result?.replace(agentIdLine, "")?.replace(completedHeadline, "")?.trim()
+}
+
+/**
+ * A `todo` call in one line: "Added: Write tests", "Done: Write tests", "Cleared the list". [arg] reads an argument,
+ * also from a call still being written.
+ */
+fun todoSummary(item: ToolItem, arg: (String) -> String? = { item.args?.str(it) }): String {
+    val id = item.args?.int("id")
+    val subject = arg("subject")?.takeIf { it.isNotBlank() } ?: id?.let { todoSubject(item, it) ?: "#$it" }
+    fun say(verb: String) = if (subject != null) "$verb: ${firstLine(subject)}" else verb
+    return when (val action = arg("action")) {
+        "create" -> say("Added")
+        "update" -> when (arg("status")) {
+            "completed" -> say("Done")
+            "in_progress" -> say("Started")
+            "pending" -> say("Reopened")
+            "deleted" -> say("Removed")
+            else -> say("Updated")
+        }
+        "delete" -> say("Removed")
+        "get" -> say("Viewed")
+        "list" -> "Listed tasks"
+        "clear" -> "Cleared the list"
+        else -> action.orEmpty()
+    }
+}
+
+/** The subject of task [id] from the list in the call's result. */
+private fun todoSubject(item: ToolItem, id: Int): String? =
+    item.details?.arr("tasks")?.firstNotNullOfOrNull { t -> (t as? JsonObject)?.takeIf { it.int("id") == id }?.str("subject") }
 
 const val MAX_SHOWN = 120_000
 
@@ -64,7 +157,7 @@ data class ToolBody(val text: String, val isDiff: Boolean)
 fun toolBody(item: ToolItem, full: Boolean, previewLines: Int): ToolBody? {
     val diff = item.details?.str("diff")
     return when {
-        item.status == ToolStatus.Running -> item.output.takeIf { it.isNotBlank() }?.let { ToolBody(tail(it, if (full) 2000 else previewLines), false) }
+        item.status == ToolStatus.Running -> (subagentProgress(item) ?: item.output).takeIf { it.isNotBlank() }?.let { ToolBody(tail(it, if (full) 2000 else previewLines), false) }
         item.status == ToolStatus.Streaming || item.status == ToolStatus.Pending ->
             if (full) ToolBody(item.args?.toDisplayString() ?: item.argsText, false) else null
         diff != null && !item.isError -> ToolBody(if (full) diff.take(MAX_SHOWN) else diff, true)
@@ -79,6 +172,7 @@ fun toolBody(item: ToolItem, full: Boolean, previewLines: Int): ToolBody? {
                 full -> ToolBody(argsText + result.take(MAX_SHOWN) + if (result.length > MAX_SHOWN) "\n… ${result.length - MAX_SHOWN} more characters" else "", false)
                 result.isBlank() -> null
                 item.name == "read" || item.name == "write" -> ToolBody(head(result, previewLines), false)
+                isSubagentTool(item.name) -> ToolBody(head(subagentResult(item) ?: result, previewLines), false)
                 else -> ToolBody(tail(result, previewLines), false)
             }
         }
@@ -310,10 +404,13 @@ fun mergeChanges(changes: List<FileChange>): List<FileChange> {
     return byPath.values.toList()
 }
 
-/** Read-only steps that a run of three or more folds into one row. Failed or running steps stay on their own. */
+/**
+ * Read-only steps (and todo list updates, which the panel shows) that a run of three or more folds into one row.
+ * Failed or running steps stay on their own.
+ */
 fun isGroupable(item: ToolItem): Boolean =
     item.status == ToolStatus.Done && when (toolLabel(item).kind) {
-        ToolKind.Read, ToolKind.Search, ToolKind.List -> true
+        ToolKind.Read, ToolKind.Search, ToolKind.List, ToolKind.Todo -> true
         else -> false
     }
 
@@ -322,11 +419,13 @@ fun groupSummary(tools: List<ToolItem>): String {
     var reads = 0
     var searches = 0
     var lists = 0
+    var todos = 0
     for (t in tools) {
         when (toolLabel(t).kind) {
             ToolKind.Read -> reads++
             ToolKind.Search -> searches++
             ToolKind.List -> lists++
+            ToolKind.Todo -> todos++
             else -> Unit
         }
     }
@@ -334,6 +433,7 @@ fun groupSummary(tools: List<ToolItem>): String {
         if (reads > 0) add(if (reads == 1) "read 1 file" else "read $reads files")
         if (searches > 0) add(if (searches == 1) "ran 1 search" else "ran $searches searches")
         if (lists > 0) add(if (lists == 1) "listed 1 folder" else "listed $lists folders")
+        if (todos > 0) add(if (todos == 1) "updated todos" else "updated todos $todos times")
     }
     return parts.joinToString(", ").replaceFirstChar { it.uppercase() }
 }
@@ -344,6 +444,7 @@ fun groupDetail(tools: List<ToolItem>): String = tools.mapNotNull { t ->
     when (toolLabel(t).kind) {
         ToolKind.Read, ToolKind.List -> (args?.str("path") ?: args?.str("file_path"))?.let(::baseName)
         ToolKind.Search -> args?.str("pattern")
+        ToolKind.Todo -> todoSummary(t).substringAfter(": ", "").ifBlank { null }
         else -> null
     }
 }.distinct().joinToString(", ")

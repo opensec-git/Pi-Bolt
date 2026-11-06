@@ -174,7 +174,10 @@ class SessionController private constructor(
             }
             is Origin.Local -> {
                 // An idle engine can serve the next open of this project (the engine decides); stop reading it first.
-                val idle = _state.value.let { !it.isRunning && !it.isCompacting && it.dialogs.isEmpty() } && _link.value is LinkState.Connected
+                // Not idle while the subagents extension runs background agents (its "subagents" status): a parked
+                // engine would keep them running unseen, and their completion would start a new turn of a closed session.
+                val idle = _state.value.let { !it.isRunning && !it.isCompacting && it.dialogs.isEmpty() && SUBAGENTS_STATUS !in it.statuses } &&
+                    _link.value is LinkState.Connected
                 rpc.stop()
                 scope.cancel()
                 origin.release(origin.backend, idle)
@@ -571,6 +574,8 @@ class SessionController private constructor(
     }
 
     companion object {
+        /** Status key of the bundled subagents extension, set while background agents run or wait. */
+        private const val SUBAGENTS_STATUS = "subagents"
         private const val FRAME_MS = 16L
 
         /** A session with the engine on this phone, in [project]. [release] takes the backend back when it stops. */

@@ -8,6 +8,7 @@ Writes /out/jniLibs/arm64-v8a (every ELF and executable script, named lib*.so) a
   python3 -I assemble.py [--engine-only]
 """
 
+import base64
 import hashlib
 import json
 import os
@@ -25,6 +26,11 @@ ASSETS = f"{OUT}/assets/engine"
 GLIBC_LIB = "/stage/glibc/lib"
 USERLAND = "/stage/userland/root"
 LICENSES_SRC = "/engine/licenses"
+EXTENSION_PINS = "/extensions.txt"  # the repo's extensions.txt (name, version, npm integrity), mounted by build-pack.sh
+
+# OpenSec's extensions bundled with the engine (Bun builds without runtime dependencies), at the versions extensions.txt
+# pins. Not opensec-pi-fff.
+BUNDLED_EXTENSIONS = ["opensec-pi-subagents", "opensec-pi-todo"]
 
 # Engine side files PI_PACKAGE_DIR must hold (theme/, export-html/, assets/, package.json per the contract), plus the
 # docs the system prompt points the model at and photon's wasm. Not shipped: CHANGELOG.md (interactive "what's new"
@@ -162,6 +168,71 @@ def copy_package(src_root):
     return sorted(listed)
 
 
+# ---- extensions --------------------------------------------------------------------------------------------------
+
+def read_extension_pins():
+    pins = {}
+    with open(EXTENSION_PINS) as f:
+        for line in f:
+            parts = line.split()
+            if parts and not parts[0].startswith("#"):
+                name, version, integrity = parts
+                pins[name] = (version, integrity)
+    return pins
+
+
+def npm_integrity(path):
+    h = hashlib.sha512()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return "sha512-" + base64.b64encode(h.digest()).decode()
+
+
+def copy_extensions():
+    """Each bundled extension's npm tarball, checked against its pinned integrity, unpacked to assets
+    engine/extensions/<name>/. Returns the manifest entries (every file listed, like `package`)."""
+    pins = read_extension_pins()
+    entries = []
+    for name in BUNDLED_EXTENSIONS:
+        if name not in pins:
+            sys.exit(f"extensions.txt does not pin {name}")
+        version, want = pins[name]
+        dst = f"/dl/{name}-{version}.tgz"
+        if not (os.path.exists(dst) and npm_integrity(dst) == want):
+            run("curl", "-fsSL", "--retry", "3", "-o", dst + ".part", f"https://registry.npmjs.org/{name}/-/{name}-{version}.tgz")
+            os.replace(dst + ".part", dst)
+        got = npm_integrity(dst)
+        if got != want:
+            sys.exit(f"{name}@{version} integrity {got} != pinned {want}")
+        root = f"/tmp/ext/{name}"
+        shutil.rmtree(root, ignore_errors=True)
+        with tarfile.open(dst) as t:
+            t.extractall(root, filter="data")
+        src = f"{root}/package"
+        with open(f"{src}/package.json") as f:
+            meta = json.load(f)
+        if meta.get("name") != name or meta.get("version") != version:
+            sys.exit(f"{dst} holds {meta.get('name')}@{meta.get('version')}")
+        if meta.get("dependencies"):
+            sys.exit(f"{name} has runtime dependencies, which the pack does not install: {meta['dependencies']}")
+        listed = []
+        for dirpath, dirnames, filenames in os.walk(src):
+            dirnames.sort()
+            for fn in sorted(filenames):
+                rel = os.path.relpath(os.path.join(dirpath, fn), src)
+                listed.append(rel)
+                os.makedirs(os.path.dirname(f"{ASSETS}/extensions/{name}/{rel}"), exist_ok=True)
+                shutil.copyfile(f"{src}/{rel}", f"{ASSETS}/extensions/{name}/{rel}")
+        lic = f"{ASSETS}/licenses/extensions/{name}"
+        os.makedirs(lic)
+        for fn in ["LICENSE", "NOTICE"]:
+            if os.path.isfile(f"{src}/{fn}"):
+                shutil.copyfile(f"{src}/{fn}", f"{lic}/{fn}")
+        entries.append({"name": name, "version": version, "integrity": want, "files": sorted(listed)})
+    return entries
+
+
 # ---- userland tree -----------------------------------------------------------------------------------------------
 
 def is_script(path):
@@ -178,7 +249,7 @@ def walk_userland():
             yield os.path.relpath(p, USERLAND), p
 
 
-def write_licenses():
+def write_licenses(extensions):
     lic = f"{ASSETS}/licenses"
     for fn in sorted(os.listdir(LICENSES_SRC)):
         if os.path.isfile(f"{LICENSES_SRC}/{fn}"):
@@ -196,6 +267,7 @@ def write_licenses():
         f"Pi-Bolt engine {V['ENGINE_VERSION']} ({V['ENGINE_URL']}, sha256 {V['ENGINE_SHA256']})",
         f"glibc {V['GLIBC_VERSION']} + termux-pacman/glibc-packages {V['TERMUX_GLIBC_COMMIT']}",
     ]
+    lines += [f"{e['name']} {e['version']} (npm, {e['integrity']})" for e in extensions]
     if not ENGINE_ONLY:
         lines += [f"curl {V['CURL_VERSION']}", f"git {V['GIT_VERSION']}", ""]
         with open("/stage/userland/licenses/debian-packages.txt") as f:
@@ -304,7 +376,8 @@ def main():
     for name in os.listdir(JNI):
         os.chmod(f"{JNI}/{name}", 0o755)
 
-    write_licenses()
+    extensions = copy_extensions()
+    write_licenses(extensions)
 
     env = {
         "PATH": f"{PREFIX}/bin:/system/bin",
@@ -330,6 +403,7 @@ def main():
         "links": [{"path": p, "target": links[p]} for p in sorted(links)],
         "files": [{"path": p, "asset": files[p]} for p in sorted(files)],
         "package": package,
+        "extensions": [{"name": e["name"], "version": e["version"], "files": e["files"]} for e in extensions],
         "env": env,
     }
     # Fingerprint: every shipped file's content plus the manifest itself.
@@ -348,7 +422,7 @@ def main():
 
     total = sum(os.path.getsize(f"{JNI}/{n}") for n in os.listdir(JNI))
     print(f"jniLibs: {len(os.listdir(JNI))} files, {total / 1e6:.1f} MB; links {len(links)}, files {len(files)}, "
-          f"package {len(package)}")
+          f"package {len(package)}, extensions {', '.join(e['name'] + '@' + e['version'] for e in extensions)}")
     print(f"packFingerprint {manifest['packFingerprint']}")
 
 
