@@ -259,6 +259,12 @@ class RemoteBackend(
                     fail(webSocket, 4400, DisconnectReason.Malformed, "Bad handshake reply: ${e.message}")
                     return
                 }
+                // Key confirmation: the host sends remote_hello and accepts commands only after this first transport
+                // message, so a replayed handshake message 1 gets nothing.
+                if (!send(READY_MESSAGE)) {
+                    fail(webSocket, 4400, DisconnectReason.Lost, "Could not confirm the handshake")
+                    return
+                }
                 handshake.complete(AttemptResult.Ok(hello))
                 return
             }
@@ -313,6 +319,7 @@ class RemoteBackend(
     companion object {
         private const val MAX_HANDSHAKE_REPLY = 4096
         private const val MAX_NOISE_MESSAGE = 65535
+        private val READY_MESSAGE = """{"type":"remote_ready"}""".toByteArray(Charsets.UTF_8)
 
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)

@@ -1,6 +1,10 @@
 package opensec.pibolt.app.ui.markdown
 
+import androidx.compose.runtime.Immutable
+import java.util.Arrays
+
 /** Block-level markdown, enough for model output: headings, paragraphs, lists, quotes, code fences, tables, rules. */
+@Immutable
 sealed interface MdBlock {
     data class Heading(val level: Int, val text: String) : MdBlock
 
@@ -19,12 +23,14 @@ sealed interface MdBlock {
     data object Rule : MdBlock
 
     /** [align] holds one entry per column from the separator row (`:--`, `:-:`, `--:`). */
+    @Immutable
     data class Table(val header: List<String>, val rows: List<List<String>>, val align: List<TableAlign> = emptyList()) : MdBlock
 }
 
 enum class TableAlign { None, Start, Center, End }
 
 /** Parsed text: [starts] holds the character offset where each block begins, so a longer text re-parses only the tail. */
+@Immutable
 class MdDoc internal constructor(val text: String, val blocks: List<MdBlock>, internal val starts: IntArray)
 
 object Markdown {
@@ -40,6 +46,12 @@ object Markdown {
      * Parse [text]. When [previous] is a parse of a prefix of [text] (a streaming message that grew), every block but
      * the last is reused and parsing restarts where that last block began.
      */
+    /** Shown while a large text is parsed off the main thread: its first lines as plain paragraphs. */
+    fun placeholder(text: String): MdDoc {
+        val head = text.take(4_000).substringBeforeLast('\n')
+        return MdDoc(text, listOf(MdBlock.Paragraph(head)), intArrayOf(0))
+    }
+
     fun parse(text: String, previous: MdDoc? = null): MdDoc {
         if (previous != null && previous.text == text) return previous
         if (previous != null && previous.blocks.isNotEmpty() && text.startsWith(previous.text)) {
@@ -188,10 +200,12 @@ object Markdown {
 }
 
 /** Inline markdown: bold, italic, strikethrough, inline code, links. */
+@Immutable
 data class InlineSpan(val start: Int, val end: Int, val kind: Kind, val url: String? = null) {
     enum class Kind { Bold, Italic, Strike, Code, Link }
 }
 
+@Immutable
 data class InlineText(val text: String, val spans: List<InlineSpan>)
 
 object Inline {
@@ -204,6 +218,7 @@ object Inline {
     }
 
     private fun parseInto(s: String, out: StringBuilder, spans: MutableList<InlineSpan>) {
+        val closers = Closers(s)
         var i = 0
         while (i < s.length) {
             val c = s[i]
@@ -216,7 +231,7 @@ object Inline {
                     var ticks = 1
                     while (i + ticks < s.length && s[i + ticks] == '`') ticks++
                     val marker = "`".repeat(ticks)
-                    val close = s.indexOf(marker, i + ticks)
+                    val close = closers.indexOf(marker, i + ticks)
                     if (close < 0) {
                         out.append(marker)
                         i += ticks
@@ -230,7 +245,7 @@ object Inline {
                 }
                 (c == '*' || c == '_') && i + 1 < s.length && s[i + 1] == c -> {
                     val marker = "$c$c"
-                    val close = s.indexOf(marker, i + 2)
+                    val close = closers.indexOf(marker, i + 2)
                     if (close > i + 2 && !s[i + 2].isWhitespace()) {
                         val start = out.length
                         parseInto(s.substring(i + 2, close), out, spans)
@@ -242,7 +257,7 @@ object Inline {
                     }
                 }
                 (c == '*' || c == '_') -> {
-                    val close = findSingle(s, c, i + 1)
+                    val close = closers.single(c, i + 1)
                     val wordInside = c == '_' && i > 0 && s[i - 1].isLetterOrDigit()
                     if (close > i + 1 && !s[i + 1].isWhitespace() && !wordInside) {
                         val start = out.length
@@ -255,7 +270,7 @@ object Inline {
                     }
                 }
                 c == '~' && i + 1 < s.length && s[i + 1] == '~' -> {
-                    val close = s.indexOf("~~", i + 2)
+                    val close = closers.indexOf("~~", i + 2)
                     if (close > i + 2) {
                         val start = out.length
                         parseInto(s.substring(i + 2, close), out, spans)
@@ -267,9 +282,9 @@ object Inline {
                     }
                 }
                 c == '[' -> {
-                    val closeText = s.indexOf(']', i + 1)
+                    val closeText = closers.indexOf("]", i + 1)
                     if (closeText > i && closeText + 1 < s.length && s[closeText + 1] == '(') {
-                        val closeUrl = s.indexOf(')', closeText + 2)
+                        val closeUrl = closers.indexOf(")", closeText + 2)
                         if (closeUrl > 0) {
                             val url = s.substring(closeText + 2, closeUrl).trim().substringBefore(' ')
                             val start = out.length
@@ -290,16 +305,50 @@ object Inline {
         }
     }
 
-    private fun findSingle(s: String, c: Char, from: Int): Int {
-        var j = from
-        while (j < s.length) {
-            if (s[j] == c && (j + 1 >= s.length || s[j + 1] != c) && !s[j - 1].isWhitespace()) return j
-            if (s[j] == c && j + 1 < s.length && s[j + 1] == c) {
-                j += 2
-                continue
+    /**
+     * Closing-marker searches over one string in linear total time. The parser asks for the next marker after each
+     * opener; a plain indexOf per opener is quadratic on hostile text (thousands of `*` or `[` that never close).
+     * [indexOf] reuses the previous answer while it still lies ahead, and [single] looks closers up in a list built in
+     * one pass.
+     */
+    private class Closers(private val s: String) {
+        private val lastFrom = HashMap<String, Int>()
+        private val lastFound = HashMap<String, Int>()
+        private val singles = HashMap<Char, IntArray>()
+
+        /** Same answer as `s.indexOf(marker, from)`. */
+        fun indexOf(marker: String, from: Int): Int {
+            val previousFrom = lastFrom[marker]
+            val previous = lastFound[marker]
+            // indexOf(marker, previousFrom) == previous: nothing in [previousFrom, previous), so nothing in [from, previous).
+            if (previousFrom != null && previous != null && from >= previousFrom && (previous < 0 || previous >= from)) {
+                return previous
             }
-            j++
+            val found = s.indexOf(marker, from)
+            lastFrom[marker] = from
+            lastFound[marker] = found
+            return found
         }
-        return -1
+
+        /** The first single [c] at or after [from] that can close emphasis: not doubled, not after whitespace. */
+        fun single(c: Char, from: Int): Int {
+            val list = singles.getOrPut(c) { singleClosers(c) }
+            val at = Arrays.binarySearch(list, from).let { if (it >= 0) it else -it - 1 }
+            return if (at < list.size) list[at] else -1
+        }
+
+        private fun singleClosers(c: Char): IntArray {
+            val found = ArrayList<Int>()
+            var j = 1
+            while (j < s.length) {
+                if (s[j] == c && j + 1 < s.length && s[j + 1] == c) {
+                    j += 2
+                    continue
+                }
+                if (s[j] == c && !s[j - 1].isWhitespace()) found += j
+                j++
+            }
+            return found.toIntArray()
+        }
     }
 }

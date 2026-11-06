@@ -1,6 +1,7 @@
 package opensec.pibolt.app.session
 
 import android.os.SystemClock
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -342,13 +343,22 @@ class SessionController private constructor(
         return s
     }
 
-    private fun apply(state: SessionState, input: Input): SessionState = when (input) {
-        is Input.Mutate -> input.change(state)
-        is Input.Event -> {
-            val event = input.json
-            sideEffects(state, event)
-            SessionReducer.reduce(state, event)
+    /**
+     * One input, never fatal: an event the reducer cannot apply (a host sending nonsense) is dropped, keeping the
+     * state. An exception here would end reduceLoop's coroutine and the app with it.
+     */
+    private fun apply(state: SessionState, input: Input): SessionState = try {
+        when (input) {
+            is Input.Mutate -> input.change(state)
+            is Input.Event -> {
+                val event = input.json
+                sideEffects(state, event)
+                SessionReducer.reduce(state, event)
+            }
         }
+    } catch (e: RuntimeException) {
+        Log.w("PiBolt", "dropped an event the session could not apply", e)
+        state
     }
 
     private fun sideEffects(before: SessionState, event: JsonObject) {
@@ -499,11 +509,24 @@ class SessionController private constructor(
     /** Duplicate the current session (same history, new file). */
     fun cloneSession() = sessionCommand("Could not clone the session") { rpc.clone() }
 
-    /** Continue from before [entryId] in a new session; that message's text goes back into the composer. */
-    fun fork(entryId: String) = sessionCommand("Could not fork") {
-        rpc.fork(entryId).also { response ->
-            if (response.success) response.dataObject?.str("text")?.takeIf { it.isNotEmpty() }?.let { _effects.tryEmit(SessionEffect.EditorText(it)) }
-        }
+    /**
+     * Fork from the user message [entryId] (from [forkPoints]) into a new session holding the conversation before it.
+     * The engine then sends the new session's snapshot, which replaces the transcript. Returns the message's text for
+     * the composer.
+     */
+    suspend fun fork(entryId: String): Result<String> {
+        val response = rpc.fork(entryId)
+        if (!response.success) return Result.failure(IllegalStateException(response.error ?: "Fork failed"))
+        val data = response.dataObject
+        if ((data?.get("cancelled") as? JsonPrimitive)?.content == "true") return Result.failure(IllegalStateException("An extension cancelled the fork"))
+        return Result.success(data?.str("text").orEmpty())
+    }
+
+    /** [fork] from the [occurrence]-th user message (counting from 0) whose text is [text], as the transcript shows it. */
+    suspend fun forkFrom(text: String, occurrence: Int): Result<String> {
+        val point = forkPoints().filter { it.text.trim() == text.trim() }.getOrNull(occurrence)
+            ?: return Result.failure(IllegalStateException("That message can't be forked"))
+        return fork(point.entryId).map { it.ifEmpty { point.text } }
     }
 
     suspend fun forkPoints(): List<ForkPoint> {

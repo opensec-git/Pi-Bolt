@@ -24,6 +24,10 @@ object SharedKeys {
     fun name(hostId: String) = "host-name-$hostId"
 
     fun dot(hostId: String) = "host-dot-$hostId"
+
+    fun project(name: String) = "project-card-$name"
+
+    fun projectName(name: String) = "project-name-$name"
 }
 
 /** Identical content shared between the host card and the session top bar (name, status). */

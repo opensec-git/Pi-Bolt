@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.session
 
+import androidx.compose.runtime.Immutable
 import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -61,6 +62,7 @@ import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.session.ToolStatus
 
 /** Live status for the transcript's bottom line. */
+@Immutable
 data class LiveStatus(val visible: Boolean, val mode: QuadMode, val text: StatusText)
 
 /**
@@ -81,7 +83,8 @@ fun Transcript(
     onStatusOnScreen: (Boolean) -> Unit = {},
 ) {
     val settings = Pi.settings
-    val md = remember { MdCache() }
+    val parseScope = rememberCoroutineScope()
+    val md = remember { MdCache(parseScope) }
     var settledTick by remember { mutableIntStateOf(0) }
     // The finished turn keeps its row animations for a moment so its steps fold away smoothly.
     LaunchedEffect(memory.settledAt.longValue) {
@@ -92,6 +95,7 @@ fun Transcript(
     val rows by remember {
         derivedStateOf {
             val s = state.value
+            md.version.intValue
             val liveTurn = s.isRunning || s.streaming.isNotEmpty()
             val recent = settledTick >= 0 && memory.settledAt.longValue > 0 && SystemClock.uptimeMillis() - memory.settledAt.longValue < 1200
             val open = memory.openFolds.filterValues { it }.keys

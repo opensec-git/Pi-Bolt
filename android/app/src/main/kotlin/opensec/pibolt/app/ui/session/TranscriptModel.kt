@@ -1,5 +1,11 @@
 package opensec.pibolt.app.ui.session
 
+import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.mutableIntStateOf
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.markdown.Markdown
 import opensec.pibolt.app.ui.markdown.MdBlock
@@ -22,20 +28,24 @@ sealed interface TRow {
  * A row's place on the step rail of an opened fold or tool group: a 1dp line through the step glyphs that ties the
  * steps to their header. [stagger] and [index] time the short stagger when the fold or group opens.
  */
+@Immutable
 data class Rail(val first: Boolean, val last: Boolean, val stagger: String, val index: Int)
 
 /** A user message. [alias] is the key of the "Sending" row it replaced, so the list keeps that row in place. */
+@Immutable
 data class UserRow(val item: UserItem, override val live: Boolean, val alias: String? = null) : TRow {
     override val key: String get() = alias ?: item.key
 }
 
 /** A prompt sent from this phone that the host has not echoed yet ("Sending"). */
+@Immutable
 data class PendingUserRow(val pending: PendingSend) : TRow {
     override val key: String get() = pending.rowKey
     override val live: Boolean get() = true
 }
 
 /** One markdown block of an assistant message. [tail] is the block still being written. */
+@Immutable
 data class TextRow(
     val itemKey: String,
     val index: Int,
@@ -48,15 +58,20 @@ data class TextRow(
     override val key: String get() = "$itemKey#$index"
 }
 
+@Immutable
+
 data class ThinkingRow(val item: ThinkingItem, override val live: Boolean, val rail: Rail? = null) : TRow {
     override val key: String get() = item.key
 }
+
+@Immutable
 
 data class ToolRow(val item: ToolItem, override val live: Boolean, val rail: Rail? = null) : TRow {
     override val key: String get() = item.key
 }
 
 /** Three or more consecutive finished read-only steps as one row ("Read 3 files"); [expanded] shows them all. */
+@Immutable
 data class ToolGroupRow(
     override val key: String,
     val tools: List<ToolItem>,
@@ -64,6 +79,8 @@ data class ToolGroupRow(
     override val live: Boolean,
     val rail: Rail? = null,
 ) : TRow
+
+@Immutable
 
 data class NoticeRow(val item: NoticeItem, override val live: Boolean) : TRow {
     override val key: String get() = item.key
@@ -74,6 +91,7 @@ data class NoticeRow(val item: NoticeItem, override val live: Boolean) : TRow {
  * [endedInFailure] is true only when the turn's last step failed (a failed test run that a later step fixed does not
  * make the turn a failure). [files] are the files the turn edited or wrote.
  */
+@Immutable
 data class FoldRow(
     val turnKey: String,
     val steps: Int,
@@ -91,12 +109,14 @@ data class FoldRow(
  * Copy, Ask again and More under the last finished reply. [reply] is the answer's text (the prose after the turn's
  * last step); [prompt] is the user's text to send again, null when it cannot be resent as text (images, no prompt).
  */
+@Immutable
 data class ActionsRow(val turnKey: String, val reply: String, val prompt: String?) : TRow {
     override val key: String get() = "actions:$turnKey"
     override val live: Boolean get() = false
 }
 
 /** Space between turns. */
+@Immutable
 data class GapRow(val turnKey: String) : TRow {
     override val key: String get() = "gap:$turnKey"
     override val live: Boolean get() = false
@@ -106,6 +126,7 @@ data class GapRow(val turnKey: String) : TRow {
  * An idle prompt sent from this phone and not yet echoed by the host. [lastUserKey] is the newest user message at send
  * time; [at] the uptime of the send.
  */
+@Immutable
 data class PendingSend(val id: Long, val text: String, val lastUserKey: String?, val at: Long, val images: Int = 0) {
     /** The row key; the echoed user message takes it over (see [UserRow.alias]). */
     val rowKey: String get() = "pending:$id"
@@ -137,18 +158,44 @@ data class PendingSend(val id: Long, val text: String, val lastUserKey: String?,
 }
 
 /** What the status line says: a label that shimmers, and for a running tool its argument in mono. */
+@Immutable
 data class StatusText(val label: String, val detail: String = "", val path: Boolean = false, val more: Int = 0)
 
 /**
  * Incremental markdown parses per assistant message (a growing message re-parses only its last block), and the
  * file change of each finished edit (parsed once per tool item, not on every streamed frame).
  */
-class MdCache {
+class MdCache(
+    /** When set, a large message that needs a full parse is parsed here (off the main thread) instead of inline. */
+    private val background: CoroutineScope? = null,
+) {
     private val docs = HashMap<String, MdDoc>()
     private val changes = HashMap<String, Pair<ToolItem, FileChange?>>()
+    private val parsing = HashMap<String, String>()
+
+    /** Bumped when a background parse lands; readers (the transcript's derived rows) recompute then. */
+    val version = mutableIntStateOf(0)
 
     fun parse(item: AssistantTextItem): MdDoc {
-        val doc = Markdown.parse(item.text, docs[item.key])
+        val previous = docs[item.key]
+        val incremental = previous != null && (previous.text == item.text || item.text.startsWith(previous.text))
+        if (background != null && !incremental && item.text.length > LARGE) {
+            // A restored or replaced long message: parse it on Default and show a plain first screen meanwhile.
+            if (parsing[item.key] != item.text) {
+                parsing[item.key] = item.text
+                val text = item.text
+                background.launch {
+                    val doc = withContext(Dispatchers.Default) { Markdown.parse(text) }
+                    if (parsing[item.key] == text) {
+                        parsing.remove(item.key)
+                        docs[item.key] = doc
+                        version.intValue++
+                    }
+                }
+            }
+            return previous ?: Markdown.placeholder(item.text)
+        }
+        val doc = Markdown.parse(item.text, previous)
         docs[item.key] = doc
         return doc
     }
@@ -163,6 +210,11 @@ class MdCache {
     fun retain(keys: Set<String>) {
         docs.keys.retainAll(keys)
         changes.keys.retainAll(keys)
+    }
+
+    companion object {
+        /** Messages longer than this (characters) are fully parsed off the main thread. */
+        const val LARGE = 20_000
     }
 }
 

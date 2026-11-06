@@ -34,9 +34,17 @@ class AuthFile(private val agentDir: File, private val scope: CoroutineScope) : 
     private val _configured = MutableStateFlow<Set<String>>(emptySet())
     override val configured: StateFlow<Set<String>> = _configured.asStateFlow()
 
+    private val _loaded = MutableStateFlow(false)
+    override val loaded: StateFlow<Boolean> = _loaded.asStateFlow()
+
     /** Re-read the file (Pi may have changed it). */
     fun refresh() {
-        scope.launch { mutex.withLock { _configured.value = read().keys } }
+        scope.launch {
+            mutex.withLock {
+                _configured.value = read().keys
+                _loaded.value = true
+            }
+        }
     }
 
     override fun setApiKey(provider: String, key: String) {

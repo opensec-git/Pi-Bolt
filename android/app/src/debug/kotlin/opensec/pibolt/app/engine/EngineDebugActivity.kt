@@ -73,9 +73,10 @@ class EngineDebugActivity : ComponentActivity() {
             controller.send(text, StreamingBehavior.FollowUp)
             // Time to first token as the screen sees it: the first published state with streamed assistant text.
             app.appScope.launch(Dispatchers.Default) {
+                val running = withTimeoutOrNull(120_000) { controller.state.first { it.isRunning } }?.let { SystemClock.elapsedRealtime() - started }
                 withTimeoutOrNull(120_000) { controller.state.first { s -> s.streaming.any { it is AssistantTextItem && it.text.isNotEmpty() } } }
-                    ?.let { Log.i(LocalEngine.TAG, "debug prompt: first token on screen after ${SystemClock.elapsedRealtime() - started} ms") }
-                withTimeoutOrNull(300_000) { controller.state.first { s -> !s.isRunning && s.items.lastOrNull() is AssistantTextItem } }
+                    ?.let { Log.i(LocalEngine.TAG, "debug prompt: running after $running ms, first token on screen after ${SystemClock.elapsedRealtime() - started} ms") }
+                withTimeoutOrNull(300_000) { controller.state.first { s -> !s.isRunning } }
                     ?.let { Log.i(LocalEngine.TAG, "debug prompt: settled after ${SystemClock.elapsedRealtime() - started} ms") }
             }
         }

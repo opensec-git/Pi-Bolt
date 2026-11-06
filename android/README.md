@@ -33,6 +33,25 @@ Get the link with `/remote-control copy`. Options: `--steer` or `--follow-up` (w
 `message_update` lines), `--state DIR` (device key and paired hosts, default `~/.pibolt-rc-cli`). Without a prompt it
 prints events until the connection ends.
 
+## Startup and frame performance
+
+The release APK ships a baseline profile and a startup profile (`app/src/release/generated/baselineProfiles/`):
+ART compiles the code of the first minutes at install, and the startup classes sit first in the dex. Regenerate them
+after UI changes, on an API 33+ emulator or device (one at a time; set `ANDROID_SERIAL` if several are attached):
+
+```bash
+./gradlew :app:generateReleaseBaselineProfile
+```
+
+Measure cold start and scroll frames, without and with the profile:
+
+```bash
+./gradlew :baselineprofile:connectedBenchmarkReleaseAndroidTest -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.suppressErrors=EMULATOR
+```
+
+Results land in `baselineprofile/build/outputs/connected_android_test_additional_output/`. Emulator numbers are for
+comparing builds; take absolute numbers on a phone.
+
 ## Sign a release
 
 Without signing variables, `assembleRelease` makes `app-release-unsigned.apk`. To sign, make a keystore once and keep it
@@ -49,7 +68,8 @@ ANDROID_KEYSTORE_PATH=$PWD/pibolt-release.keystore ANDROID_KEYSTORE_PASSWORD=...
 ANDROID_KEY_ALIAS=pibolt ANDROID_KEY_PASSWORD=... ./gradlew :app:assembleRelease
 ```
 
-For CI (`.github/workflows/android.yml`, on `android-vX.Y.Z` tags) add four repository secrets:
+For CI (`.github/workflows/android.yml`, on `android-vX.Y.Z` tags) add four secrets to the `release` environment (the
+same environment the npm release uses; it can require approval):
 
 | Secret | Value |
 |---|---|
@@ -58,6 +78,7 @@ For CI (`.github/workflows/android.yml`, on `android-vX.Y.Z` tags) add four repo
 | `ANDROID_KEY_ALIAS` | `pibolt` |
 | `ANDROID_KEY_PASSWORD` | the key password |
 
-The workflow builds the signed APK, runs `apksigner verify --print-certs`, and publishes `pi-bolt-android-X.Y.Z.apk`
+The workflow releases only tags on pi-bolt commits. Gradle builds the unsigned APK without the secrets; a separate
+step signs it with `apksigner`, then `apksigner verify --print-certs` checks it, and the workflow publishes `pi-bolt-android-X.Y.Z.apk`
 with its SHA-256 as a GitHub release of its own (title "Pi-Bolt Android X.Y.Z", signing certificate digest in the notes).
 That release is never marked latest, so Pi-Bolt's installers and release checks are unaffected.

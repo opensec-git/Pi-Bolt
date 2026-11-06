@@ -113,9 +113,10 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
 
     override fun prepare() {
         if (prepareJob?.isActive == true) return
+        // Credentials first: Home decides on the first-run key sheet from them, and they need no prefix.
+        auth.refresh()
         prepareJob = scope.launch {
             if (ensureSetup() == null) return@launch
-            auth.refresh()
             ensureSpare()
         }
     }

@@ -294,4 +294,15 @@ class BlockMathTest {
         assertTrue(Highlighter.tokenize("# Title", "markdown").isEmpty())
         assertFalse(Highlighter.tokenize("if (x) return", "").isEmpty())
     }
+
+    @Test
+    fun hunkNumbersOutOfRangeDoNotThrow() {
+        // PR #243 review: digits past Int made toInt() throw while rendering model output.
+        val rows = UnifiedDiff.parse("@@ -99999999999999999999,2 +1,2 @@\n-old\n+new\n keep")
+        assertEquals(listOf(DiffKind.Hunk, DiffKind.Del, DiffKind.Add, DiffKind.Context), rows.map { it.kind })
+        assertTrue(rows.all { it.number.isEmpty() })
+        val huge = UnifiedDiff.parse("@@ -1,2147483647 +1,999999999 @@\n keep")
+        assertEquals("", huge[1].number)
+    }
+
 }

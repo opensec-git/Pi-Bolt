@@ -33,7 +33,8 @@ import { type PairedDevice, type RemoteControlStore, toBase64Url } from "./store
 
 /**
  * Time from the upgrade to the client's first frame (handshake message 1, which a client sends as soon as the socket
- * opens). An idle socket is closed and counts as a failed handshake for its address.
+ * opens), and again from handshake message 2 to the client's `remote_ready`. An idle socket is closed and counts as a
+ * failed handshake for its address.
  */
 const FIRST_FRAME_TIMEOUT_MS = 3_000;
 const PING_INTERVAL_MS = 20_000;
@@ -41,6 +42,11 @@ const FAILURE_WINDOW_MS = 10 * 60_000;
 const MAX_FAILURES_PER_WINDOW = 10;
 const DEFAULT_PAIRING_TTL_MS = 10 * 60_000;
 const MAX_DEVICE_NAME_LENGTH = 80;
+/**
+ * `remote_hello` stays under this many bytes of JSON, well inside the 32 MiB message limit clients enforce: a longer
+ * session sends only its newest messages (`omittedMessages` counts the rest).
+ */
+const HELLO_BUDGET_BYTES = 24 * 1024 * 1024;
 /**
  * Connections still in their handshake, per address and in total; more are refused until some finish or time out.
  * The per-address cap keeps one peer from filling the table with idle sockets and locking the phone out.
@@ -101,7 +107,9 @@ export interface RemoteControlServerOptions {
 	/** Bind address; default all interfaces. */
 	bindAddress?: string;
 	pairingTtlMs?: number;
-	/** Deadline for a client's first frame; default 3 s (tests shorten it). */
+	/** Size cap of `remote_hello` in bytes of JSON; default 24 MiB (tests shrink it). */
+	helloBudgetBytes?: number;
+	/** Deadline for a client's first frame and for its `remote_ready`; default 3 s (tests shorten it). */
 	firstFrameTimeoutMs?: number;
 	onEvent?: (event: RemoteControlEvent) => void;
 }
@@ -130,9 +138,12 @@ class RemoteConnection {
 	readonly connectedAt = new Date();
 	private keys: TransportKeys | undefined;
 	private readonly assembler = new MessageAssembler();
-	private readonly handshakeTimer: ReturnType<typeof setTimeout>;
+	private handshakeTimer: ReturnType<typeof setTimeout>;
 	private alive = true;
+	/** Set once the client proved it holds the session keys (`remote_ready`). */
 	device: PairedDevice | undefined;
+	/** The client after handshake message 1, until it confirms. */
+	private candidate: { publicKey: Buffer; name: string; paired: boolean } | undefined;
 	readonly socket: WebSocket;
 	readonly address: string;
 	private readonly server: RemoteControlServer;
@@ -156,8 +167,19 @@ class RemoteConnection {
 		socket.on("error", () => {});
 	}
 
+	/** Confirmed and still connected: only such connections get messages and run commands. */
 	get isOpen(): boolean {
-		return !this.revoked && this.keys !== undefined && this.socket.readyState === this.socket.OPEN;
+		return (
+			!this.revoked &&
+			this.device !== undefined &&
+			this.keys !== undefined &&
+			this.socket.readyState === this.socket.OPEN
+		);
+	}
+
+	/** The client's static key (base64url) once handshake message 1 was accepted. */
+	get publicKey(): string | undefined {
+		return this.device?.publicKey ?? (this.candidate ? toBase64Url(this.candidate.publicKey) : undefined);
 	}
 
 	/** Set by [revoke]: nothing more from this connection runs, even before its socket is gone. */
@@ -220,10 +242,42 @@ class RemoteConnection {
 		try {
 			result = this.assembler.push(this.keys.receive, frame);
 		} catch {
+			if (!this.device) this.server.recordFailure(this.address, "bad key confirmation");
 			this.close(CloseCode.BadMessage);
 			return;
 		}
-		if (result.complete) void this.server.handleClientMessage(this, result.message);
+		if (!result.complete) return;
+		if (this.device) void this.server.handleClientMessage(this, result.message);
+		else this.confirm(result.message);
+	}
+
+	/**
+	 * The first transport message must be `remote_ready`. Handshake message 1 can be replayed by anyone who recorded it
+	 * (IK authenticates the initiator only once it uses the session keys), so the client counts as connected, gets
+	 * `remote_hello` and runs commands only after this proof.
+	 */
+	private confirm(message: unknown): void {
+		if (this.revoked) return;
+		const candidate = this.candidate;
+		if (
+			!candidate ||
+			typeof message !== "object" ||
+			message === null ||
+			(message as { type?: unknown }).type !== "remote_ready"
+		) {
+			this.server.recordFailure(this.address, "bad key confirmation");
+			this.close(CloseCode.BadMessage);
+			return;
+		}
+		// Revoked while confirming.
+		if (!candidate.paired && !this.server.store.findDevice(candidate.publicKey)) {
+			this.close(CloseCode.NotAuthorized);
+			return;
+		}
+		clearTimeout(this.handshakeTimer);
+		this.device = this.server.store.upsertDevice(candidate.publicKey, candidate.name);
+		this.candidate = undefined;
+		this.server.connectionOpened(this, candidate.paired);
 	}
 
 	private handshake(frame: Buffer): void {
@@ -254,7 +308,7 @@ class RemoteConnection {
 			this.close(CloseCode.NotAuthorized);
 			return;
 		}
-		this.device = this.server.store.upsertDevice(remoteStaticKey, name);
+		this.candidate = { publicKey: remoteStaticKey, name, paired: authorization === "paired" };
 		const reply = Buffer.from(
 			JSON.stringify({
 				host: this.server.hostName,
@@ -265,9 +319,12 @@ class RemoteConnection {
 		);
 		const { message, keys } = responder.writeMessage2(reply);
 		clearTimeout(this.handshakeTimer);
+		this.handshakeTimer = setTimeout(() => {
+			this.server.recordFailure(this.address, "no key confirmation");
+			this.close(CloseCode.HandshakeTimeout);
+		}, this.server.firstFrameTimeoutMs);
 		this.socket.send(message, { binary: true });
 		this.keys = keys;
-		this.server.connectionOpened(this, authorization === "paired");
 	}
 }
 
@@ -416,7 +473,7 @@ export class RemoteControlServer {
 	revoke(publicKey: string): boolean {
 		const removed = this.store.removeDevice(publicKey);
 		for (const connection of this.connections) {
-			if (connection.device?.publicKey === publicKey) connection.revoke();
+			if (connection.publicKey === publicKey) connection.revoke();
 		}
 		return removed;
 	}
@@ -523,16 +580,30 @@ export class RemoteControlServer {
 	private hello(): object {
 		const session = this.options.getSession();
 		const streamingMessage = session.isStreaming ? session.agent.state.streamingMessage : undefined;
-		return {
+		const hello = {
 			type: "remote_hello",
 			protocol: PROTOCOL_VERSION,
 			host: { name: this.hostName, version: this.version, cwd: session.sessionManager.getCwd() },
 			state: this.sessionState(session),
-			messages: session.messages,
+			messages: [] as unknown[],
 			...(streamingMessage ? { streamingMessage } : {}),
 			dialogs: [...this.dialogs.values()].map((dialog) => dialog.request),
 			commands: this.commands(session),
+			omittedMessages: 0,
 		};
+		// Newest messages first, while they fit; a client would refuse the whole snapshot otherwise.
+		let budget = (this.options.helloBudgetBytes ?? HELLO_BUDGET_BYTES) - Buffer.byteLength(JSON.stringify(hello));
+		const messages = session.messages;
+		let first = messages.length;
+		while (first > 0) {
+			const size = Buffer.byteLength(JSON.stringify(messages[first - 1])) + 1;
+			if (size > budget) break;
+			budget -= size;
+			first--;
+		}
+		hello.messages = first === 0 ? messages : messages.slice(first);
+		hello.omittedMessages = first;
+		return hello;
 	}
 
 	/**
