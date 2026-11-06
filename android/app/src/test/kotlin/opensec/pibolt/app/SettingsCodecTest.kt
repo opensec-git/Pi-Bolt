@@ -45,4 +45,11 @@ class SettingsCodecTest {
         assertEquals(true, s.haptics)
         assertEquals(AppSettings.TEXT_SIZE_MIN, SettingsCodec.decode("""{"textSize":-5}""").textSize)
     }
+
+    @Test
+    fun theRemovedTideThemeFallsBackToGraphite() {
+        assertEquals(ThemeId.Graphite, SettingsCodec.decode("""{"theme":"Tide"}""").theme)
+        assertEquals(ThemeId.GitHub, SettingsCodec.decode("""{"theme":"GitHub"}""").theme)
+        assertEquals(AccentId.Theme, AppSettings().accent)
+    }
 }

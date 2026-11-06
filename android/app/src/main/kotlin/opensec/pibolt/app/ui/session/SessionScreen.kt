@@ -116,7 +116,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     var actionsFor by remember { mutableStateOf<TRow?>(null) }
     var statusOnScreen by remember { mutableStateOf(false) }
 
-    LaunchedEffect(memory) { controller.state.collect { memory.observe(it) } }
+    LaunchedEffect(memory, controller) { memory.attach(controller.state, app.appScope) }
     LaunchedEffect(controller) {
         controller.effects.collect { effect ->
             when (effect) {

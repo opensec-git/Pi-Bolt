@@ -10,23 +10,26 @@ One `PiColors` set per theme, provided through `LocalPiColors` and mapped onto M
 (`surfaceTint = Transparent`, tonal elevation 0) so stock components match. Elevation = a surface step plus a 1dp
 line; no shadows.
 
-| Role | Graphite (default) | Void (AMOLED) | Ember (warm) | Tide (cool) |
-|---|---|---|---|---|
-| canvas | `#0B0C0E` | `#000000` | `#15130F` | `#0C1118` |
-| surface1 (cards, composer) | `#121417` | `#08090A` | `#1C1A16` | `#121923` |
-| surface2 (bubbles, sheets) | `#191C20` | `#101113` | `#24211C` | `#18212D` |
-| surface3 (pressed, menus) | `#21252A` | `#17191C` | `#2C2822` | `#202A38` |
-| ink1 (text) | `#E8EAED` | `#E8EAED` | `#EFE9DD` | `#E4E9F0` |
-| ink2 (secondary) | `#A3A8B0` | `#A3A8B0` | `#B9B1A3` | `#A2ADBC` |
-| ink3 (meta, lowest text) | `#7D838C` | `#7D838C` | `#8E877B` | `#7B8594` |
-| ink4 (rules, never text) | `#4C5158` | `#4C5158` | `#5A554D` | `#4A5361` |
-| line / lineStrong | ink1 @ 9% / 16% | ink1 @ 11% / 19% | ink1 @ 10% / 17% | ink1 @ 9% / 16% |
-| scrim | black @ 56% | black @ 70% | black @ 56% | black @ 56% |
+| Role | Graphite (default) | Void (AMOLED) | Ember (warm) | Claude | Codex | Vercel | GitHub |
+|---|---|---|---|---|---|---|---|
+| canvas | `#0B0C0E` | `#000000` | `#15130F` | `#1F1E1D` | `#0D0D0D` | `#000000` | `#0D1117` |
+| surface1 (cards, composer) | `#121417` | `#08090A` | `#1C1A16` | `#262624` | `#171717` | `#0A0A0A` | `#151B23` |
+| surface2 (bubbles, sheets) | `#191C20` | `#101113` | `#24211C` | `#30302E` | `#212121` | `#111111` | `#1C2128` |
+| surface3 (pressed, menus) | `#21252A` | `#17191C` | `#2C2822` | `#3A3936` | `#2A2A2A` | `#1A1A1A` | `#262C36` |
+| ink1 (text) | `#E8EAED` | `#E8EAED` | `#EFE9DD` | `#F5F4EE` | `#ECECEC` | `#EDEDED` | `#F0F6FC` |
+| ink2 (secondary) | `#A3A8B0` | `#A3A8B0` | `#B9B1A3` | `#C3C0B6` | `#B4B4B4` | `#A1A1A1` | `#B7BDC8` |
+| ink3 (meta, lowest text) | `#7D838C` | `#7D838C` | `#8E877B` | `#9C9A92` | `#8F8F8F` | `#8F8F8F` | `#9198A1` |
+| ink4 (rules, never text) | `#4C5158` | `#4C5158` | `#5A554D` | `#5E5D59` | `#545454` | `#454545` | `#3D444D` |
+| line / lineStrong | ink1 @ 9% / 16% | ink1 @ 11% / 19% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 12% / 20% | ink1 @ 10% / 18% |
+| scrim | black @ 56% | black @ 70% | black @ 56% | black @ 60% | black @ 60% | black @ 70% | black @ 60% |
+
+Claude, Codex, Vercel and GitHub are palettes in the spirit of those products' dark modes, not their assets.
 
 Overlays: press = ink1 @ 7%, selected = ink1 @ 11%, focus line = ink1 @ 40%.
 
-Accent (independent of theme): **Ink** (default; accent = ink1, onAccent = canvas), **Iris** `#A99CFF` / `#120F2A`,
-**Glacier** `#7CC4F0` / `#06202E`. Accent marks the primary button, send button, focus ring, selection, links and
+Accent (independent of theme): **Theme** (default: the theme's own accent, Claude coral `#D97757` / `#1F1E1D`,
+GitHub blue `#4493F8` / `#0D1117`, ink1 / canvas for the others), **Ink** (accent = ink1, onAccent = canvas),
+**Iris** `#A99CFF` / `#120F2A`, **Glacier** `#7CC4F0` / `#06202E`. Accent marks the primary button, send button, focus ring, selection, links and
 the working hairline. Never status.
 
 Brand `#FFD84D` (voltage yellow): only on the app mark (launcher, splash, empty state).
@@ -36,7 +39,7 @@ Diff: add bg success @ 11% / fg `#9BE6BF`, delete bg danger @ 11% / fg `#F7A9A5`
 Syntax: keywords ink1 SemiBold, strings `#9ED3C6`, numbers `#E5A97E`, types `#C9B8F0`, params ink2, comments ink3
 italic, punctuation ink2.
 
-Every text token passes WCAG AA (4.5:1) on canvas and surface2 in all four themes; ink4 is decorative only.
+Every text token passes WCAG AA (4.5:1) on canvas and surface2 in all seven themes; ink4 is decorative only.
 
 ## Type
 
@@ -180,7 +183,7 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
 - Snackbars for notify: surface3, radius 12, line, above the composer, kind-coloured icon.
 
 **Settings.**
-- Appearance: theme tiles (four swatches drawn with each theme's canvas, surface and ink lines; selected = 1.5dp accent
+- Appearance: theme tiles (seven swatches, four a row, drawn with each theme's canvas, surface and ink lines; selected = 1.5dp accent
   ring), accent circles, text size slider with a live prose preview, density (Comfortable / Compact).
 - Motion and feedback: Reduce motion (Follow system / On), Haptics.
 - Session: show thinking expanded, tool output preview lines (6 / 12 / 24).

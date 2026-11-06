@@ -53,9 +53,21 @@ data class PiColors(
                 ThemeId.Graphite -> base(0xFF0B0C0E, 0xFF121417, 0xFF191C20, 0xFF21252A, 0xFFE8EAED, 0xFFA3A8B0, 0xFF7D838C, 0xFF4C5158, 0.09f, 0.16f, 0.56f)
                 ThemeId.Void -> base(0xFF000000, 0xFF08090A, 0xFF101113, 0xFF17191C, 0xFFE8EAED, 0xFFA3A8B0, 0xFF7D838C, 0xFF4C5158, 0.11f, 0.19f, 0.70f)
                 ThemeId.Ember -> base(0xFF15130F, 0xFF1C1A16, 0xFF24211C, 0xFF2C2822, 0xFFEFE9DD, 0xFFB9B1A3, 0xFF8E877B, 0xFF5A554D, 0.10f, 0.17f, 0.56f)
-                ThemeId.Tide -> base(0xFF0C1118, 0xFF121923, 0xFF18212D, 0xFF202A38, 0xFFE4E9F0, 0xFFA2ADBC, 0xFF7B8594, 0xFF4A5361, 0.09f, 0.16f, 0.56f)
+                // Warm charcoal with cream ink.
+                ThemeId.Claude -> base(0xFF1F1E1D, 0xFF262624, 0xFF30302E, 0xFF3A3936, 0xFFF5F4EE, 0xFFC3C0B6, 0xFF9C9A92, 0xFF5E5D59, 0.10f, 0.17f, 0.60f)
+                // Neutral near-black, no tint.
+                ThemeId.Codex -> base(0xFF0D0D0D, 0xFF171717, 0xFF212121, 0xFF2A2A2A, 0xFFECECEC, 0xFFB4B4B4, 0xFF8F8F8F, 0xFF545454, 0.10f, 0.17f, 0.60f)
+                // Pure black; borders do the separating.
+                ThemeId.Vercel -> base(0xFF000000, 0xFF0A0A0A, 0xFF111111, 0xFF1A1A1A, 0xFFEDEDED, 0xFFA1A1A1, 0xFF8F8F8F, 0xFF454545, 0.12f, 0.20f, 0.70f)
+                // GitHub's dark canvas and borders.
+                ThemeId.GitHub -> base(0xFF0D1117, 0xFF151B23, 0xFF1C2128, 0xFF262C36, 0xFFF0F6FC, 0xFFB7BDC8, 0xFF9198A1, 0xFF3D444D, 0.10f, 0.18f, 0.60f)
             }
             return when (accent) {
+                AccentId.Theme -> when (theme) {
+                    ThemeId.Claude -> base.copy(accent = Color(0xFFD97757), onAccent = Color(0xFF1F1E1D))
+                    ThemeId.GitHub -> base.copy(accent = Color(0xFF4493F8), onAccent = Color(0xFF0D1117))
+                    else -> base.copy(accent = base.ink1, onAccent = base.canvas)
+                }
                 AccentId.Ink -> base.copy(accent = base.ink1, onAccent = base.canvas)
                 AccentId.Iris -> base.copy(accent = Color(0xFFA99CFF), onAccent = Color(0xFF120F2A))
                 AccentId.Glacier -> base.copy(accent = Color(0xFF7CC4F0), onAccent = Color(0xFF06202E))

@@ -229,8 +229,9 @@ fun FoldRowView(row: FoldRow, onToggle: () -> Unit, modifier: Modifier = Modifie
     }
     StepHeader(onClick = onToggle, modifier = modifier.padding(top = 6.dp), slot = { Chevron(row.expanded) }) {
         Text(text, style = Pi.type.label, color = colors.ink3, maxLines = 1)
-        if (row.failed) {
-            Text(" · failed", style = Pi.type.label, color = colors.danger, maxLines = 1)
+        when {
+            row.endedInFailure -> Text(" · failed", style = Pi.type.label, color = colors.danger, maxLines = 1)
+            row.failedSteps > 0 -> Text(" · ${row.failedSteps} failed", style = Pi.type.label, color = colors.ink3, maxLines = 1)
         }
     }
 }

@@ -5,6 +5,9 @@ import android.app.Application
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +30,9 @@ class PiBoltApp : Application() {
     lateinit var settings: SettingsStore
         private set
     val http: OkHttpClient by lazy { RemoteBackend.defaultClient() }
+
+    /** Work that outlives any screen, on the main thread (UI-side bookkeeping such as turn durations). */
+    val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val _session = MutableStateFlow<SessionController?>(null)
 

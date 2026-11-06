@@ -44,12 +44,30 @@ class TranscriptModelTest {
     }
 
     @Test
-    fun foldFallsBackToToolTimeWhenTheTurnWasNotMeasured() {
+    fun anUnwatchedTurnShowsNoDurationRatherThanToolTime() {
+        // Tool run times leave out the model's time: 5 s of tools in a turn that took far longer.
         val timed = turn.map { if (it is ToolItem) it.copy(durationMs = 5_000) else it }
         val fold = TranscriptModel.rows(timed, liveTurn = false, expanded = emptySet(), durations = emptyMap(), md = MdCache())[1] as FoldRow
-        assertEquals(5_000L, fold.durationMs)
-        val unknown = TranscriptModel.rows(turn, liveTurn = false, expanded = emptySet(), durations = emptyMap(), md = MdCache())[1] as FoldRow
-        assertEquals(null, unknown.durationMs)
+        assertEquals(null, fold.durationMs)
+    }
+
+    @Test
+    fun aFailedStepThatALaterStepFixedDoesNotFailTheTurn() {
+        val failedThenFixed = listOf(
+            UserItem("u", "run the tests and fix them"),
+            ToolItem("tool:t1", "t1", "bash", null, status = ToolStatus.Error),
+            ToolItem("tool:e", "e", "edit", null, status = ToolStatus.Done),
+            ToolItem("tool:t2", "t2", "bash", null, status = ToolStatus.Done),
+            AssistantTextItem("a", "Tests pass.", streaming = false),
+        )
+        val fold = TranscriptModel.rows(failedThenFixed, liveTurn = false, expanded = emptySet(), durations = emptyMap(), md = MdCache())[1] as FoldRow
+        assertEquals(1, fold.failedSteps)
+        assertFalse(fold.endedInFailure)
+
+        val endsFailing = failedThenFixed.map { if (it.key == "tool:t2") (it as ToolItem).copy(status = ToolStatus.Error) else it }
+        val failing = TranscriptModel.rows(endsFailing, liveTurn = false, expanded = emptySet(), durations = emptyMap(), md = MdCache())[1] as FoldRow
+        assertEquals(2, failing.failedSteps)
+        assertTrue(failing.endedInFailure)
     }
 
     @Test

@@ -4,6 +4,10 @@ import android.os.SystemClock
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.UserItem
@@ -12,7 +16,7 @@ import opensec.pibolt.protocol.session.UserItem
  * UI memory of one session that outlives the screen: turn and thinking durations measured on this phone, which
  * folds and cards the user opened, and which rows were already shown (only new rows of the live turn animate).
  */
-class SessionMemory {
+class SessionMemory(private val sessionId: String?) {
     /** Uptime when the current run started, or 0 when idle. */
     val runStart = mutableLongStateOf(0L)
 
@@ -42,6 +46,23 @@ class SessionMemory {
     var primed = false
 
     private var wasRunning = false
+
+    private var attached: StateFlow<SessionState>? = null
+    private var attachJob: Job? = null
+
+    /**
+     * Follows [states] in [scope] (the app's, not the screen's), so a run's duration is recorded even when the session
+     * screen leaves during it (back to the computer list, activity recreated). Attaching to the same flow again is a
+     * no-op; states of another Pi session on the same connection are ignored.
+     */
+    fun attach(states: StateFlow<SessionState>, scope: CoroutineScope) {
+        if (attached === states && attachJob?.isActive == true) return
+        attachJob?.cancel()
+        attached = states
+        attachJob = scope.launch {
+            states.collect { if (it.sessionId == sessionId) observe(it) }
+        }
+    }
 
     /** Record timings from a newly published state. Cheap: looks at flags and the short streaming list only. */
     fun observe(state: SessionState) {
@@ -84,6 +105,6 @@ class SessionMemory {
         }
 
         fun of(hostId: String, sessionId: String?): SessionMemory =
-            synchronized(all) { all.getOrPut("$hostId/${sessionId.orEmpty()}") { SessionMemory() } }
+            synchronized(all) { all.getOrPut("$hostId/${sessionId.orEmpty()}") { SessionMemory(sessionId) } }
     }
 }

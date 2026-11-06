@@ -38,8 +38,19 @@ data class NoticeRow(val item: NoticeItem, override val live: Boolean) : TRow {
     override val key: String get() = item.key
 }
 
-/** "Worked for 12s · 6 steps": the folded work of a finished turn. */
-data class FoldRow(val turnKey: String, val steps: Int, val durationMs: Long?, val expanded: Boolean, val failed: Boolean) : TRow {
+/**
+ * "Worked for 12s · 6 steps": the folded work of a finished turn. [failedSteps] counts tool steps that failed;
+ * [endedInFailure] is true only when the turn's last step failed (a failed test run that a later step fixed does not
+ * make the turn a failure).
+ */
+data class FoldRow(
+    val turnKey: String,
+    val steps: Int,
+    val durationMs: Long?,
+    val expanded: Boolean,
+    val failedSteps: Int,
+    val endedInFailure: Boolean,
+) : TRow {
     override val key: String get() = "fold:$turnKey"
     override val live: Boolean get() = false
 }
@@ -99,20 +110,24 @@ object TranscriptModel {
             }
             var lastStep = -1
             var steps = 0
-            var failed = false
+            var failedSteps = 0
+            var lastToolFailed = false
             for (i in bodyStart until end) {
                 val it = items[i]
                 if (it is ToolItem || it is ThinkingItem) {
                     lastStep = i
                     steps++
-                    if (it is ToolItem && it.status == ToolStatus.Error) failed = true
+                }
+                if (it is ToolItem) {
+                    lastToolFailed = it.status == ToolStatus.Error
+                    if (lastToolFailed) failedSteps++
                 }
             }
             val foldable = !live && steps > 0
             val open = !foldable || turnKey in expanded
-            // Measured on this phone when it watched the turn; otherwise the time its tools ran, when they report it.
-            val toolTime = (bodyStart until end).sumOf { (items[it] as? ToolItem)?.durationMs ?: 0L }
-            if (foldable) out += FoldRow(turnKey, steps, durations[turnKey] ?: toolTime.takeIf { it > 0 }, open, failed)
+            // Only a duration this phone measured while watching the turn. Summing the tools' own run times would
+            // leave out the model's time and read far too short ("1s" for a 10 s turn), so an unwatched turn shows none.
+            if (foldable) out += FoldRow(turnKey, steps, durations[turnKey], open, failedSteps, lastToolFailed)
             for (i in bodyStart until end) {
                 val item = items[i]
                 val isStep = i <= lastStep && item !is NoticeItem

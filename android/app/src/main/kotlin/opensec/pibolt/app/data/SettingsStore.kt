@@ -14,9 +14,19 @@ import opensec.pibolt.protocol.str
 import java.io.File
 import java.util.concurrent.Executors
 
-enum class ThemeId(val label: String) { Graphite("Graphite"), Void("Void"), Ember("Ember"), Tide("Tide") }
+/** Dark themes. Claude, Codex, Vercel and GitHub are palettes in the spirit of those products' dark modes. */
+enum class ThemeId(val label: String) {
+    Graphite("Graphite"),
+    Void("Void"),
+    Ember("Ember"),
+    Claude("Claude"),
+    Codex("Codex"),
+    Vercel("Vercel"),
+    GitHub("GitHub"),
+}
 
-enum class AccentId(val label: String) { Ink("Ink"), Iris("Iris"), Glacier("Glacier") }
+/** [Theme] uses the theme's own accent (Claude's coral, GitHub's blue, ink for the others). */
+enum class AccentId(val label: String) { Theme("Theme"), Ink("Ink"), Iris("Iris"), Glacier("Glacier") }
 
 enum class Density(val label: String) { Comfortable("Comfortable"), Compact("Compact") }
 
@@ -25,7 +35,7 @@ enum class ReduceMotion(val label: String) { FollowSystem("Follow system"), On("
 /** App preferences. Every field has a default, so an old or damaged file still loads. */
 data class AppSettings(
     val theme: ThemeId = ThemeId.Graphite,
-    val accent: AccentId = AccentId.Ink,
+    val accent: AccentId = AccentId.Theme,
     /** Transcript text size in steps on top of the system font scale: -1 … +2. */
     val textSize: Int = 0,
     val density: Density = Density.Comfortable,

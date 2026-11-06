@@ -113,9 +113,15 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
 
             Section("Appearance") {
                 Label("Theme")
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    for (theme in ThemeId.entries) {
-                        ThemeTile(theme, settings.accent, selected = settings.theme == theme, onClick = { update { it.copy(theme = theme) } }, modifier = Modifier.weight(1f))
+                // Four tiles a row; an incomplete last row keeps the tile width.
+                Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                    for (row in ThemeId.entries.chunked(THEME_TILES_PER_ROW)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            for (theme in row) {
+                                ThemeTile(theme, settings.accent, selected = settings.theme == theme, onClick = { update { it.copy(theme = theme) } }, modifier = Modifier.weight(1f))
+                            }
+                            repeat(THEME_TILES_PER_ROW - row.size) { Spacer(Modifier.weight(1f)) }
+                        }
                     }
                 }
                 Spacer(Modifier.height(20.dp))
@@ -267,6 +273,8 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
         }
     }
 }
+
+private const val THEME_TILES_PER_ROW = 4
 
 private fun textSizeLabel(step: Int) = when (step) {
     -1 -> "Small"
