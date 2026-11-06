@@ -1,12 +1,17 @@
 package opensec.pibolt.protocol
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.take
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.JsonObject
@@ -195,6 +200,45 @@ class RemoteBackendTest {
         val backend = RemoteBackend(config(KeyPair.generate(), secret, listOf(endpoint())).copy(lanTimeoutMs = 1_500))
         assertFalse(backend.connect())
         assertIs<ConnectionState.Disconnected>(backend.state.value)
+    }
+
+    /** A host that accepts the WebSocket and never answers the handshake. */
+    private class SilentHost : WebSocketListener() {
+        val closed = CompletableDeferred<Unit>()
+
+        override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            webSocket.close(1000, null)
+            closed.complete(Unit)
+        }
+
+        override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+            closed.complete(Unit)
+        }
+    }
+
+    @Test
+    fun cancellingAPendingConnectClosesItsSocket(): Unit = runBlocking {
+        val host = SilentHost()
+        server.enqueue(MockResponse.Builder().webSocketUpgrade(host).build())
+        val backend = RemoteBackend(config(KeyPair.generate(), secret, listOf(endpoint())).copy(lanTimeoutMs = 60_000))
+        val job = scope.launch { backend.connect() }
+        delay(500)
+        job.cancelAndJoin()
+        withTimeout(5_000) { host.closed.await() }
+        assertNull(backend.lastEndpoint)
+    }
+
+    @Test
+    fun closeWhileConnectingAbandonsTheHandshake(): Unit = runBlocking {
+        val host = SilentHost()
+        server.enqueue(MockResponse.Builder().webSocketUpgrade(host).build())
+        val backend = RemoteBackend(config(KeyPair.generate(), secret, listOf(endpoint())).copy(lanTimeoutMs = 60_000))
+        val connecting = scope.async { backend.connect() }
+        delay(500)
+        backend.close()
+        assertFalse(withTimeout(5_000) { connecting.await() })
+        withTimeout(5_000) { host.closed.await() }
+        assertEquals(DisconnectReason.Closed, (backend.state.value as ConnectionState.Disconnected).reason)
     }
 
     @Test

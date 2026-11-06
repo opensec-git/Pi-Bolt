@@ -181,7 +181,13 @@ class RemoteConnection {
 		}
 		const frame = Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data as ArrayBuffer);
 		if (!this.keys) {
-			this.handshake(frame);
+			// Nothing a client sends may throw out of the socket's handler: the terminal treats an uncaught exception
+			// as fatal.
+			try {
+				this.handshake(frame);
+			} catch {
+				this.close(CloseCode.BadMessage);
+			}
 			return;
 		}
 		let result: ReturnType<MessageAssembler["push"]>;
@@ -201,7 +207,9 @@ class RemoteConnection {
 		try {
 			const read = responder.readMessage1(frame);
 			remoteStaticKey = read.remoteStaticKey;
-			hello = JSON.parse(read.payload.toString("utf8")) as typeof hello;
+			const parsed: unknown = JSON.parse(read.payload.toString("utf8"));
+			if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("Bad hello");
+			hello = parsed as typeof hello;
 		} catch {
 			this.server.recordFailure(this.address, "malformed handshake");
 			this.close(CloseCode.BadMessage);

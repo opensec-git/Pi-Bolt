@@ -130,6 +130,16 @@ describe("remote control", () => {
 		).rejects.toThrow();
 	});
 
+	it("refuses a Noise handshake whose payload is not a JSON object, and keeps serving", async () => {
+		const { uri } = await setup();
+		for (const rawHello of ["null", "[]", "42", "not json"]) {
+			await expect(connectTestClient(uri(), generateKeyPair(), { rawHello })).rejects.toThrow(
+				`closed ${CloseCode.BadMessage}`,
+			);
+		}
+		await expect(connectTestClient(uri(), generateKeyPair())).resolves.toBeDefined();
+	});
+
 	it("closes on a handshake that is not Noise", async () => {
 		const { endpoint } = await setup();
 		const socket = new WebSocket(endpoint, "pibolt-rc.1");

@@ -32,7 +32,7 @@ let nextId = 0;
 export function connectTestClient(
 	pairingUri: string,
 	clientKeyPair: KeyPair,
-	options: { pair?: boolean; device?: string; endpointIndex?: number; secret?: string } = {},
+	options: { pair?: boolean; device?: string; endpointIndex?: number; secret?: string; rawHello?: string } = {},
 ): Promise<TestClient> {
 	const payload = decodePairingUri(pairingUri);
 	const endpoint = payload.e[options.endpointIndex ?? 0];
@@ -60,7 +60,7 @@ export function connectTestClient(
 				app: "test",
 				...(options.pair === false ? {} : { pair: options.secret ?? payload.s }),
 			};
-			socket.send(initiator.writeMessage1(Buffer.from(JSON.stringify(hello), "utf8")));
+			socket.send(initiator.writeMessage1(Buffer.from(options.rawHello ?? JSON.stringify(hello), "utf8")));
 		});
 		socket.on("message", (data: Buffer) => {
 			if (!keys) {

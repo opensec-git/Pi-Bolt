@@ -83,6 +83,14 @@ class RemoteBackend(
     @Volatile
     private var live: Connection? = null
 
+    /** The connection whose handshake is in progress; [close] abandons it. */
+    @Volatile
+    private var pending: Connection? = null
+
+    /** Bumped by [close], so a connect that was under way when the backend closed gives up. */
+    @Volatile
+    private var generation = 0
+
     @Volatile
     private var attempt = 0
 
@@ -94,35 +102,43 @@ class RemoteBackend(
     override suspend fun connect(): Boolean = connectMutex.withLock {
         if (live?.isOpen == true) return true
         val cfg = config
+        val startGeneration = generation
         attempt++
         var lastFailure: ConnectionState.Disconnected = ConnectionState.Disconnected(DisconnectReason.Unreachable, "No address to try")
         for (endpoint in cfg.endpoints) {
             _state.value = ConnectionState.Connecting(endpoint, attempt)
             val connection = Connection(endpoint, cfg)
-            val result = withTimeoutOrNull(cfg.timeoutFor(endpoint)) { connection.handshake.await() }
-            when (result) {
-                null -> {
-                    connection.abandon()
-                    lastFailure = ConnectionState.Disconnected(DisconnectReason.Unreachable, "$endpoint did not answer")
-                }
-                is AttemptResult.Ok -> {
-                    live = connection
-                    if (!connection.isOpen) {
-                        live = null
-                        lastFailure = ConnectionState.Disconnected(DisconnectReason.Lost, "$endpoint closed right after the handshake")
-                        continue
+            pending = connection
+            // A socket that does not become the live connection is closed on every path: timeout, refusal,
+            // close() while connecting, and cancellation of the caller (which skips the timeout branch).
+            var adopted = false
+            try {
+                val result = withTimeoutOrNull(cfg.timeoutFor(endpoint)) { connection.handshake.await() }
+                if (generation != startGeneration) return false
+                when (result) {
+                    null -> lastFailure = ConnectionState.Disconnected(DisconnectReason.Unreachable, "$endpoint did not answer")
+                    is AttemptResult.Ok -> {
+                        if (!connection.isOpen) {
+                            lastFailure = ConnectionState.Disconnected(DisconnectReason.Lost, "$endpoint closed right after the handshake")
+                            continue
+                        }
+                        live = connection
+                        adopted = true
+                        lastEndpoint = endpoint
+                        if (cfg.pairSecret != null) config = cfg.copy(pairSecret = null)
+                        if (result.hello.paired) onPaired(result.hello)
+                        _state.value = ConnectionState.Connected(endpoint, result.hello)
+                        return true
                     }
-                    lastEndpoint = endpoint
-                    if (cfg.pairSecret != null) config = cfg.copy(pairSecret = null)
-                    if (result.hello.paired) onPaired(result.hello)
-                    _state.value = ConnectionState.Connected(endpoint, result.hello)
-                    return true
+                    is AttemptResult.Failed -> {
+                        lastFailure = ConnectionState.Disconnected(result.reason, result.detail)
+                        // Every endpoint reaches the same host: an authorization or protocol refusal will not change.
+                        if (!result.reason.retryable) break
+                    }
                 }
-                is AttemptResult.Failed -> {
-                    lastFailure = ConnectionState.Disconnected(result.reason, result.detail)
-                    // Every endpoint reaches the same host: an authorization or protocol refusal will not change.
-                    if (!result.reason.retryable) break
-                }
+            } finally {
+                if (pending === connection) pending = null
+                if (!adopted) connection.abandon()
             }
         }
         _state.value = lastFailure
@@ -135,6 +151,9 @@ class RemoteBackend(
     }
 
     override fun close() {
+        generation++
+        pending?.abandon()
+        pending = null
         val connection = live
         live = null
         connection?.closeByClient()
