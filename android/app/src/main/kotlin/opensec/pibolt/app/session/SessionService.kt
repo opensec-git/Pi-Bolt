@@ -114,11 +114,17 @@ object Notifications {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_SESSION, context.getString(R.string.channel_session), NotificationManager.IMPORTANCE_LOW)
-                .apply { description = context.getString(R.string.channel_session_desc) },
+                .apply {
+                    description = context.getString(R.string.channel_session_desc)
+                    lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+                },
         )
         manager.createNotificationChannel(
             NotificationChannel(CHANNEL_ALERTS, context.getString(R.string.channel_alerts), NotificationManager.IMPORTANCE_HIGH)
-                .apply { description = context.getString(R.string.channel_alerts_desc) },
+                .apply {
+                    description = context.getString(R.string.channel_alerts_desc)
+                    lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+                },
         )
     }
 
@@ -140,6 +146,7 @@ object Notifications {
             .setCategory(NotificationCompat.CATEGORY_PROGRESS)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(openApp(context))
+            .privateOnLockScreen(context, "Pi is working")
             .build()
 
     fun settled(context: Context, host: String, lastText: String, aborted: Boolean) {
@@ -155,6 +162,7 @@ object Notifications {
                 .setStyle(NotificationCompat.BigTextStyle().bigText(lastText.take(1000).ifBlank { text }))
                 .setAutoCancel(true)
                 .setContentIntent(openApp(context))
+                .privateOnLockScreen(context, if (aborted) "Pi stopped" else "Pi finished")
                 .build(),
         )
     }
@@ -170,6 +178,22 @@ object Notifications {
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setAutoCancel(true)
                 .setContentIntent(openApp(context))
+                .privateOnLockScreen(context, "Pi needs an answer")
+                .build(),
+        )
+    }
+
+    /**
+     * Agent output, dialog titles and host names stay off the lock screen: a locked phone shows only [publicTitle],
+     * whatever the user's "sensitive notifications" setting.
+     */
+    private fun NotificationCompat.Builder.privateOnLockScreen(context: Context, publicTitle: String) = apply {
+        setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+        setPublicVersion(
+            NotificationCompat.Builder(context, CHANNEL_ALERTS)
+                .setSmallIcon(R.drawable.ic_stat_bolt)
+                .setContentTitle(publicTitle)
+                .setContentText("Unlock to see it")
                 .build(),
         )
     }

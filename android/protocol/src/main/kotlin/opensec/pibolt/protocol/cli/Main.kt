@@ -134,7 +134,11 @@ private fun usage(): Nothing {
 private fun loadIdentity(file: File): KeyPair {
     if (file.exists()) return KeyPair.fromPrivate(Base64Url.decode(file.readText()))
     val pair = KeyPair.generate()
+    // Created 0600 before the key is written, so no umask-dependent window; plain write where POSIX modes do not exist.
+    val created = runCatching {
+        Files.createFile(file.toPath(), PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------")))
+    }.isSuccess
+    if (!created && file.exists()) throw IllegalStateException("$file appeared while creating it")
     file.writeText(Base64Url.encode(pair.privateKey))
-    runCatching { Files.setPosixFilePermissions(file.toPath(), PosixFilePermissions.fromString("rw-------")) }
     return pair
 }
