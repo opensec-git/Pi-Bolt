@@ -165,6 +165,39 @@ class RpcClient(private val backend: SessionBackend, scope: CoroutineScope) {
         customInstructions?.takeIf { it.isNotBlank() }?.let { put("customInstructions", it) }
     }
 
+    // Sessions and shell (a local engine accepts these; remote control refuses them)
+
+    /** `data.cancelled` is true when an extension cancelled it. A `remote_hello` with the new session follows. */
+    suspend fun newSession(parentSession: String? = null) = request("new_session", timeoutMs = 60_000) {
+        parentSession?.let { put("parentSession", it) }
+    }
+
+    suspend fun switchSession(sessionPath: String) = request("switch_session", timeoutMs = 60_000) { put("sessionPath", sessionPath) }
+
+    /** Fork from a user message ([getForkMessages] lists them); `data.text` is that message, for the composer. */
+    suspend fun fork(entryId: String) = request("fork", timeoutMs = 60_000) { put("entryId", entryId) }
+
+    suspend fun clone() = request("clone", timeoutMs = 60_000)
+
+    suspend fun getForkMessages() = request("get_fork_messages")
+
+    suspend fun getSessionStats() = request("get_session_stats")
+
+    suspend fun exportHtml(outputPath: String? = null) = request("export_html", timeoutMs = 120_000) {
+        outputPath?.let { put("outputPath", it) }
+    }
+
+    /**
+     * Run a shell command in the project (output also streams as `bash_execution_update`). Waits until it finishes or the
+     * engine stops; [abortBash] cancels it.
+     */
+    suspend fun bash(command: String, excludeFromContext: Boolean = false) = request("bash", timeoutMs = Long.MAX_VALUE) {
+        put("command", command)
+        if (excludeFromContext) put("excludeFromContext", true)
+    }
+
+    suspend fun abortBash() = request("abort_bash")
+
     // Extension UI
 
     fun respondValue(id: String, value: String): Boolean =

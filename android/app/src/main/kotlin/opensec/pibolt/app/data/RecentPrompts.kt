@@ -8,19 +8,19 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.protocol.ProtocolJson
-import java.io.File
 
 /**
- * Prompts sent from this phone, per computer, most recent first, in a small JSON file (`{ hostId: [prompt, …] }`).
- * The app's files are excluded from backup.
+ * Prompts sent from this phone, per computer, most recent first, in a small JSON file (`{ hostId: [prompt, …] }`),
+ * read on a background thread. The app's files are excluded from backup.
  */
 class RecentPrompts(context: Context) {
-    private val file = File(context.filesDir, "recent-prompts.json")
-    private val _prompts = MutableStateFlow(load())
+    private val _prompts = MutableStateFlow<Map<String, List<String>>>(emptyMap())
     val prompts: StateFlow<Map<String, List<String>>> = _prompts.asStateFlow()
+    private val file = BackgroundFile(context, "recent-prompts.json") { text -> _prompts.value = parse(text) }
 
     @Synchronized
     fun record(hostId: String, prompt: String) {
+        file.awaitLoaded()
         val current = _prompts.value[hostId].orEmpty()
         val next = add(current, prompt)
         if (next != current) save(_prompts.value + (hostId to next))
@@ -28,23 +28,18 @@ class RecentPrompts(context: Context) {
 
     @Synchronized
     fun forget(hostId: String) {
+        file.awaitLoaded()
         if (hostId in _prompts.value) save(_prompts.value - hostId)
     }
 
     private fun save(all: Map<String, List<String>>) {
         _prompts.value = all
-        val text = JsonObject(all.mapValues { (_, list) -> JsonArray(list.map(::JsonPrimitive)) }).toString()
-        val tmp = File(file.parentFile, file.name + ".tmp")
-        tmp.writeText(text)
-        if (!tmp.renameTo(file)) {
-            file.writeText(text)
-            tmp.delete()
-        }
+        file.write(JsonObject(all.mapValues { (_, list) -> JsonArray(list.map(::JsonPrimitive)) }).toString())
     }
 
-    private fun load(): Map<String, List<String>> = runCatching {
-        if (!file.exists()) return emptyMap()
-        (ProtocolJson.parseToJsonElement(file.readText()) as JsonObject).mapValues { (_, value) ->
+    private fun parse(text: String?): Map<String, List<String>> = runCatching {
+        text ?: return emptyMap()
+        (ProtocolJson.parseToJsonElement(text) as JsonObject).mapValues { (_, value) ->
             (value as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }.orEmpty().take(CAP)
         }
     }.getOrDefault(emptyMap())

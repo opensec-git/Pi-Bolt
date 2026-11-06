@@ -6,7 +6,7 @@ import kotlinx.serialization.json.JsonObject
 
 /**
  * Where a Pi session lives. The UI depends only on this and the RPC layer, so a session on a computer (over remote
- * control, [RemoteBackend]) and one running on the phone itself (stdio RPC, phase 2) look the same.
+ * control, [RemoteBackend]) and one running on the phone itself (stdio RPC, [LocalBackend]) look the same.
  */
 interface SessionBackend {
     val state: StateFlow<ConnectionState>
@@ -53,6 +53,9 @@ enum class DisconnectReason {
 
     /** 4429: too many failed handshakes from this address. */
     RateLimited,
+
+    /** The on-device engine could not start, did not answer, or keeps stopping. The detail says why. */
+    EngineFailed,
     ;
 
     /** Worth retrying automatically. */

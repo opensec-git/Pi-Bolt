@@ -27,4 +27,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "pibolt-android"
-include(":protocol", ":app")
+include(":protocol", ":app", ":baselineprofile")
