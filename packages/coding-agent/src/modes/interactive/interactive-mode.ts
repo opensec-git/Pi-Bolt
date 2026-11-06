@@ -127,6 +127,8 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
 import { addMcpServerConfig, loadMcpConfig } from "../../extensions/mcp/config.ts";
 import { PIBOLT, PIBOLT_RELEASES_URL, piBoltUpdateCommand } from "../../pi-bolt.ts";
+import type { RemoteControlController } from "../../remote-control/controller.ts";
+import { loadRemoteControl } from "../../remote-control/remote-control.lazy.ts";
 import {
 	getChangelogPath,
 	getNewEntries,
@@ -503,6 +505,8 @@ export class InteractiveMode {
 	private onInputCallback?: (text: string) => void;
 	private pendingUserInputs: string[] = [];
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
+	/** Set by the first /remote-control. */
+	private remoteControl: RemoteControlController | undefined = undefined;
 	private activeWorkingIndicatorEmbedded = false;
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
@@ -2296,6 +2300,7 @@ export class InteractiveMode {
 		if (!options.renderBeforeBind) {
 			this.subscribeToAgent();
 		}
+		this.remoteControl?.sessionChanged();
 
 		await this.updateAvailableProviderCount();
 		this.updateEditorBorderColor();
@@ -2819,9 +2824,33 @@ export class InteractiveMode {
 
 	private createExtensionUIContext(): ExtensionUIContext {
 		return {
-			select: (title, options, opts) => this.showExtensionSelector(title, options, opts),
-			confirm: (title, message, opts) => this.showExtensionConfirm(title, message, opts),
-			input: (title, placeholder, opts) => this.showExtensionInput(title, placeholder, opts),
+			select: (title, options, opts) =>
+				this.remoteControl
+					? this.remoteControl.raceDialog(
+							{ method: "select", title, options, timeout: opts?.timeout },
+							opts,
+							(response) => ("value" in response ? response.value : undefined),
+							(localOpts) => this.showExtensionSelector(title, options, localOpts),
+						)
+					: this.showExtensionSelector(title, options, opts),
+			confirm: (title, message, opts) =>
+				this.remoteControl
+					? this.remoteControl.raceDialog(
+							{ method: "confirm", title, message, timeout: opts?.timeout },
+							opts,
+							(response) => "confirmed" in response && response.confirmed,
+							(localOpts) => this.showExtensionConfirm(title, message, localOpts),
+						)
+					: this.showExtensionConfirm(title, message, opts),
+			input: (title, placeholder, opts) =>
+				this.remoteControl
+					? this.remoteControl.raceDialog(
+							{ method: "input", title, placeholder, timeout: opts?.timeout },
+							opts,
+							(response) => ("value" in response ? response.value : undefined),
+							(localOpts) => this.showExtensionInput(title, placeholder, localOpts),
+						)
+					: this.showExtensionInput(title, placeholder, opts),
 			notify: (message, type) => this.showExtensionNotify(message, type),
 			onTerminalInput: (handler) => this.addExtensionTerminalInputListener(handler),
 			setStatus: (key, text) => this.setExtensionStatus(key, text),
@@ -2842,7 +2871,15 @@ export class InteractiveMode {
 			pasteToEditor: (text) => this.editor.handleInput(`\x1b[200~${text}\x1b[201~`),
 			setEditorText: (text) => this.editor.setText(text),
 			getEditorText: () => this.editor.getExpandedText?.() ?? this.editor.getText(),
-			editor: (title, prefill) => this.showExtensionEditor(title, prefill),
+			editor: (title, prefill) =>
+				this.remoteControl
+					? this.remoteControl.raceDialog(
+							{ method: "editor", title, prefill },
+							undefined,
+							(response) => ("value" in response ? response.value : undefined),
+							(localOpts) => this.showExtensionEditor(title, prefill, localOpts.signal),
+						)
+					: this.showExtensionEditor(title, prefill),
 			addAutocompleteProvider: (factory) => {
 				this.autocompleteProviderWrappers.push(factory);
 				this.setupAutocompleteProvider();
@@ -2996,12 +3033,19 @@ export class InteractiveMode {
 	/**
 	 * Show a multi-line editor for extensions (with Ctrl+G support).
 	 */
-	private showExtensionEditor(title: string, prefill?: string): Promise<string | undefined> {
+	private showExtensionEditor(title: string, prefill?: string, signal?: AbortSignal): Promise<string | undefined> {
 		return new Promise((resolve) => {
+			if (signal?.aborted) {
+				resolve(undefined);
+				return;
+			}
 			const finish = (value: string | undefined) => {
+				signal?.removeEventListener("abort", onAbort);
 				this.removeExtensionDialog(editor);
 				resolve(value);
 			};
+			const onAbort = () => finish(undefined);
+			signal?.addEventListener("abort", onAbort, { once: true });
 			const editor = new ExtensionEditorComponent(
 				this.ui,
 				this.keybindings,
@@ -3105,6 +3149,7 @@ export class InteractiveMode {
 	 * Show a notification for extensions.
 	 */
 	private showExtensionNotify(message: string, type?: "info" | "warning" | "error"): void {
+		this.remoteControl?.notify(message, type);
 		if (type === "error") {
 			this.showError(message);
 		} else if (type === "warning") {
@@ -3391,6 +3436,11 @@ export class InteractiveMode {
 			if (text === "/share") {
 				await this.handleShareCommand();
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/remote-control" || text.startsWith("/remote-control ")) {
+				this.editor.setText("");
+				await this.handleRemoteControlCommand(text.slice("/remote-control".length));
 				return;
 			}
 			if (text === "/bug" || text.startsWith("/bug ")) {
@@ -4507,6 +4557,7 @@ export class InteractiveMode {
 			// terminal. If the terminal is gone, the restore writes below emit EIO,
 			// which the stdout/stderr error handler turns into emergencyTerminalExit;
 			// the render loop is already idle, so this cannot hot-spin (see #4144).
+			await this.remoteControl?.stop();
 			await this.runtimeHost.dispose();
 			this.themeController.disableAutoSync();
 			await this.ui.terminal.drainInput(1000);
@@ -4523,6 +4574,7 @@ export class InteractiveMode {
 		await this.ui.terminal.drainInput(1000);
 
 		this.stop();
+		await this.remoteControl?.stop();
 		await this.runtimeHost.dispose();
 
 		const resumeCommand = formatResumeCommand(this.sessionManager);
@@ -6886,6 +6938,32 @@ export class InteractiveMode {
 			}
 			await this.handleFatalRuntimeError("Failed to import session", error);
 		}
+	}
+
+	private async handleRemoteControlCommand(args: string): Promise<void> {
+		if (!this.remoteControl) {
+			const { RemoteControlController } = await loadRemoteControl();
+			this.remoteControl = new RemoteControlController({
+				getSession: () => this.session,
+				settingsManager: this.settingsManager,
+				agentDir: getAgentDir(),
+				version: PIBOLT?.version ?? VERSION,
+				showStatus: (message) => this.showStatus(message),
+				showWarning: (message) => this.showWarning(message),
+				showError: (message) => this.showError(message),
+				showLines: (lines) => {
+					this.chatContainer.addChild(new Spacer(1));
+					this.chatContainer.addChild(new Text(lines.join("\n"), 1, 0));
+					this.ui.requestRender();
+				},
+				setStatus: (text) => this.setExtensionStatus("remote-control", text),
+				select: (title, options) => this.showExtensionSelector(title, options),
+				copyToClipboard: (text) => copyToClipboard(text),
+				columns: () => this.ui.terminal.columns,
+				rows: () => this.ui.terminal.rows,
+			});
+		}
+		await this.remoteControl.handleCommand(args);
 	}
 
 	private async handleShareCommand(): Promise<void> {

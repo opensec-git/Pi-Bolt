@@ -268,6 +268,34 @@ export const SettingsSchema = Type.Object(
 				default: SETTINGS_DEFAULTS.sessionShareDestination,
 			}),
 		),
+		remoteControl: Type.Optional(
+			Type.Object(
+				{
+					port: Type.Optional(
+						Type.Integer({
+							minimum: 0,
+							maximum: 65535,
+							description:
+								"Port of the /remote-control listener. 0 picks a free port each time; a fixed port lets paired phones reconnect on the LAN without a new QR code.",
+						}),
+					),
+					tunnel: Type.Optional(
+						Type.Union([
+							Type.Literal("quick"),
+							Type.Object(
+								{
+									name: Type.String({ description: "Named Cloudflare tunnel (cloudflared tunnel create)." }),
+									hostname: Type.String({ description: "Public hostname routed to the tunnel." }),
+								},
+								{ additionalProperties: false },
+							),
+						]),
+					),
+					cloudflared: Type.Optional(Type.String({ description: "Path to the cloudflared executable." })),
+				},
+				{ additionalProperties: false, description: "Settings of /remote-control (Pi-Bolt Android app)." },
+			),
+		),
 		steeringMode: Type.Optional(
 			Type.Union([Type.Literal("all"), Type.Literal("one-at-a-time")], {
 				default: SETTINGS_DEFAULTS.steeringMode,
@@ -544,6 +572,7 @@ export type DefaultProjectTrust = NonNullable<SettingsInput["defaultProjectTrust
 export type QuietStartup = NonNullable<SettingsInput["quietStartup"]>;
 export type TransportSetting = NonNullable<SettingsInput["transport"]>;
 export type SessionShareDestination = NonNullable<SettingsInput["sessionShareDestination"]>;
+export type RemoteControlSettings = NonNullable<SettingsInput["remoteControl"]>;
 export type PackageSource = Static<typeof PackageSourceSchema>;
 export type FullscreenExitOutput = NonNullable<SettingsInput["fullscreenExitOutput"]>;
 export type TuiMode = NonNullable<SettingsInput["tuiMode"]>;

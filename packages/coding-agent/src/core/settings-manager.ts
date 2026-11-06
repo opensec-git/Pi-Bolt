@@ -21,6 +21,7 @@ import type {
 	MermaidRenderingMode,
 	PackageSource,
 	QuietStartup,
+	RemoteControlSettings,
 	SessionShareDestination,
 	Settings,
 	ThinkingBudgetsSettings,
@@ -1044,6 +1045,11 @@ export class SettingsManager {
 		return destination === "gist" || destination === "radius"
 			? destination
 			: SETTINGS_DEFAULTS.sessionShareDestination;
+	}
+
+	getRemoteControlSettings(): RemoteControlSettings {
+		const value = this.settings.remoteControl;
+		return value && typeof value === "object" ? value : {};
 	}
 
 	setSessionShareDestination(destination: SessionShareDestination): void {
