@@ -14,7 +14,8 @@ import java.io.File
 
 /**
  * The on-device engine's own settings that a phone user would change (docs/settings.md): how queued messages are
- * delivered, automatic compaction and retry, and the startup thinking level. They live in the engine's
+ * delivered, automatic compaction and retry (and how often), the startup model and thinking level, skill commands and
+ * image blocking. They live in the engine's
  * `agent/settings.json`, as in the terminal, so every new engine starts with them; a running session also gets them
  * over RPC (which saves them the same way).
  */
@@ -26,9 +27,16 @@ data class AgentDefaults(
     val defaultThinking: String = "medium",
     /** `provider/model` the engine starts with (Pi saves the last model picked), or null when unset. */
     val defaultModel: String? = null,
+    /** `retry.maxRetries`: agent-level retries for an overloaded or rate-limited provider. */
+    val maxRetries: Int = 3,
+    /** `enableSkillCommands`: skills appear as `/skill:name` commands. */
+    val skillCommands: Boolean = true,
+    /** `images.blockImages`: never send images to a model. */
+    val blockImages: Boolean = false,
 ) {
     companion object {
         val THINKING_LEVELS = listOf("off", "minimal", "low", "medium", "high", "xhigh")
+        val RETRY_CHOICES = listOf(1, 3, 5, 10)
 
         fun from(json: JsonObject?): AgentDefaults {
             val d = AgentDefaults()
@@ -42,6 +50,9 @@ data class AgentDefaults(
                 autoRetry = json.obj("retry")?.bool("enabled") ?: d.autoRetry,
                 defaultThinking = json.str("defaultThinkingLevel")?.takeIf { it in THINKING_LEVELS || it == "max" } ?: d.defaultThinking,
                 defaultModel = if (provider != null && model != null) "$provider/$model" else model,
+                maxRetries = (json.obj("retry")?.get("maxRetries") as? JsonPrimitive)?.content?.toIntOrNull()?.takeIf { it >= 0 } ?: d.maxRetries,
+                skillCommands = json.bool("enableSkillCommands") ?: d.skillCommands,
+                blockImages = json.obj("images")?.bool("blockImages") ?: d.blockImages,
             )
         }
 
@@ -52,12 +63,25 @@ data class AgentDefaults(
             out["followUpMode"] = JsonPrimitive(defaults.followUpMode.wire)
             out["defaultThinkingLevel"] = JsonPrimitive(defaults.defaultThinking)
             out["compaction"] = nested(json?.obj("compaction"), "enabled", defaults.autoCompaction)
-            out["retry"] = nested(json?.obj("retry"), "enabled", defaults.autoRetry)
+            out["retry"] = nested(nested(json?.obj("retry"), "enabled", JsonPrimitive(defaults.autoRetry)), "maxRetries", JsonPrimitive(defaults.maxRetries))
+            out["enableSkillCommands"] = JsonPrimitive(defaults.skillCommands)
+            out["images"] = nested(json?.obj("images"), "blockImages", JsonPrimitive(defaults.blockImages))
+            // `provider/model` is split at the first slash: model ids may contain slashes (`openrouter/anthropic/claude`).
+            // Written only when it changed here, so a default Pi saved in another form is left as it is.
+            defaults.defaultModel?.takeIf { it != from(json).defaultModel }?.let { full ->
+                val slash = full.indexOf('/')
+                if (slash > 0 && slash < full.length - 1) {
+                    out["defaultProvider"] = JsonPrimitive(full.substring(0, slash))
+                    out["defaultModel"] = JsonPrimitive(full.substring(slash + 1))
+                }
+            }
             return JsonObject(out)
         }
 
-        private fun nested(existing: JsonObject?, key: String, value: Boolean): JsonObject =
-            JsonObject(LinkedHashMap<String, JsonElement>(existing ?: emptyMap()).apply { put(key, JsonPrimitive(value)) })
+        private fun nested(existing: JsonObject?, key: String, value: Boolean): JsonObject = nested(existing, key, JsonPrimitive(value))
+
+        private fun nested(existing: JsonObject?, key: String, value: JsonPrimitive): JsonObject =
+            JsonObject(LinkedHashMap<String, JsonElement>(existing ?: emptyMap()).apply { put(key, value) })
     }
 }
 
