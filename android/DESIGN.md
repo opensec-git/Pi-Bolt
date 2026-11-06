@@ -340,6 +340,58 @@ history and from live `tool_execution_end`).
 Changes apply live, without recreating the activity, and persist in a small JSON file (read synchronously at
 startup so the first frame has the right theme).
 
+## Diagrams
+
+```` ```mermaid ```` fences render as diagrams (`ui/diagram/MermaidBlock`), offline. Flowcharts, sequence, class,
+state, ER, gantt, pie and mind maps are checked; the other Mermaid types work the same way.
+- Card: surface1, radius 12, 1dp line. Header 40dp: diagram glyph 14dp ink3, the type (monoMeta ink3), full screen
+  and Copy (the source). The diagram fits the column, at most 480dp tall, centred, 12dp inset; tap opens it full
+  screen.
+- Streaming: each change to the source waits 300 ms for the next (a fence known to be closed draws at once), so a
+  diagram appears when the model pauses or the fence closes, never per token. Until then a 160dp skeleton (Quad Write
+  20dp ink3, "Drawing diagram"), or the previous drawing with a Quad Write 12dp in the header. An error in a fence
+  that is still open is not shown.
+- Error: the source as a normal code block, then "Diagram could not be drawn: <Mermaid's first error line>" (meta
+  ink3, a 14dp danger error glyph).
+- Theme: Mermaid's base theme from the palette: nodes surface3 with a solid border (ink1 @ 26% over surface3), text
+  ink1, edges ink2, clusters surface2, notes warning @ 16%. Charts use a fixed categorical set (types, strings,
+  numbers, glacier, success, warning, iris, rose, danger, diff fgs, ink2), full strength for pie slices and dimmed to
+  42% over surface2 where text sits on them. Every theme is dark; `darkMode` follows the canvas luminance.
+- Full screen (a dialog on canvas): pinch zoom 1x (fit) to 8x around the fingers, pan, double-tap to 2.5x or back,
+  Fit, Share as PNG (FileProvider, cache/diagrams/ only) and Save as PNG (the system file picker, no permission). It
+  shows the inline bitmap at once and swaps in one drawn at twice the screen density.
+- TalkBack: "Diagram: Flowchart, Start" (type and first node label), click label "Open full screen".
+
+**Rendering.** Mermaid 12.2.0 (MIT, `dist/mermaid.min.js` from npm) is fetched by the `fetchMermaid` Gradle task and
+must match npm's sha512 integrity pinned in `app/build.gradle.kts`; it is packaged in `assets/diagram/` and never
+committed. Licence: Settings > About > Mermaid licence (`res/raw/license_mermaid.txt`, with the projects it bundles).
+
+One offscreen WebView, created on first use, never attached to a window, renders one diagram at a time. Mermaid draws
+the SVG, the page rasterises it on a canvas (Inter embedded as a data URL, since an SVG drawn as an image cannot see
+the page's fonts) and returns a PNG, which becomes a hardware bitmap shown with a plain `Image`. Bitmaps are cached by
+SHA-256 of source, theme and render size (LRU, 1/8 of the heap up to 48 MB; failures in a small map), and a render
+whose block scrolled away still finishes into the cache. So scrolling never hosts live WebViews: a diagram row is a
+bitmap like any image, and nothing is drawn for rows flung past within 300 ms. Live WebViews per diagram would be
+simpler but cost a renderer view each, re-layout on every scroll and cannot be skipped by Compose.
+
+**Why a WebView, and how it is locked down.** Mermaid is JavaScript that needs a DOM to measure text; no native
+renderer exists. The app has no other WebView, and this one is kept minimal:
+- JavaScript is on only for the renderer page, `https://appassets.androidplatform.net/diagram/index.html`, served
+  from the APK by `WebViewAssetLoader`. Its path handler serves exactly four files (the page, `render.js`,
+  `mermaid.min.js`, Inter); everything else is answered 403 in `shouldInterceptRequest` (and logged as "Blocked
+  request"), before the network stack. `blockNetworkLoads` and `blockNetworkImage` are on as well, and the page's CSP
+  is `default-src 'none'` with only `'self'` scripts.
+- No file access, no content access, no file-URL access, no DOM storage, no windows, no geolocation, no Safe
+  Browsing lookups, no cache; every navigation is refused; the view is not focusable and hidden from accessibility.
+- Mermaid runs with `securityLevel: "strict"` (DOMPurify, no click handlers or scripts in diagrams) and
+  `htmlLabels: false` (SVG text, no `foreignObject`).
+- The source reaches the page only as a JSON string literal (`JsonText.quote`, which also escapes `<`, U+2028/2029
+  and lone surrogates) in `piRender(id, "<json>", {theme}, {size})`; it is never concatenated into code.
+- The only JavaScript interface is `PiBoltDiagram.result(id, width, height, type, label, png, error)`, typed. It
+  ignores ids the app is not waiting for and caps the PNG (64 MB of base64, 24 M pixels).
+- A dead renderer process (`onRenderProcessGone`) drops the WebView and fails its requests; the app keeps running and
+  the next diagram starts a new one.
+
 ## Not carried over from the desktop app
 
 Its hex values, Geist fonts, 4x4 pixel grid, 80 ms cadence, bolt pattern and lime colour. Hover actions become
