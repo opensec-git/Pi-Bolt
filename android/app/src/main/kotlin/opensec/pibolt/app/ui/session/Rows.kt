@@ -1,18 +1,23 @@
 package opensec.pibolt.app.ui.session
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -25,12 +30,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Compress
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.StopCircle
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -39,19 +50,28 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import android.os.SystemClock
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import opensec.pibolt.app.ui.components.CopyButton
+import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.ShimmerText
@@ -67,6 +87,7 @@ import opensec.pibolt.protocol.session.NoticeItem
 import opensec.pibolt.protocol.session.NoticeKind
 import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.UserItem
+import kotlin.math.min
 
 /** New rows of the live turn rise into place once; history and rows seen before never animate. */
 @Composable
@@ -85,8 +106,12 @@ fun Modifier.riseIn(key: String, live: Boolean, memory: SessionMemory, distance:
 
 // User
 
+/**
+ * A user message: right-aligned surface2 bubble. Images sent from this phone show as 56dp thumbnails above the text;
+ * images without a local copy (sent from elsewhere, or before this session) read as a compact "2 images" chip.
+ */
 @Composable
-fun UserBubble(item: UserItem, onLongPress: () -> Unit, modifier: Modifier = Modifier) {
+fun UserBubble(item: UserItem, onLongPress: () -> Unit, modifier: Modifier = Modifier, thumbs: List<ImageBitmap>? = null) {
     val colors = Pi.colors
     val shape = RoundedCornerShape(topStart = Radius.lg, topEnd = Radius.lg, bottomStart = Radius.lg, bottomEnd = 6.dp)
     BoxWithConstraints(modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
@@ -95,14 +120,64 @@ fun UserBubble(item: UserItem, onLongPress: () -> Unit, modifier: Modifier = Mod
                 .widthIn(max = maxWidth * 0.84f)
                 .pressable({}, shape = shape, pressedScale = 0.98f, onLongClick = onLongPress, role = null)
                 .background(colors.surface2, shape)
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = if (thumbs.isNullOrEmpty()) 16.dp else 12.dp, vertical = 12.dp),
+            horizontalAlignment = Alignment.End,
         ) {
-            Text(item.text, style = Pi.type.prose, color = colors.ink1)
-            if (item.imageCount > 0) {
-                Spacer(Modifier.height(4.dp))
-                Text(if (item.imageCount == 1) "1 image" else "${item.imageCount} images", style = Pi.type.meta, color = colors.ink3)
+            if (!thumbs.isNullOrEmpty()) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    for (thumb in thumbs) ImageThumb(thumb, Modifier.size(56.dp))
+                }
+                if (item.text.isNotBlank()) Spacer(Modifier.height(8.dp))
+            } else if (item.imageCount > 0) {
+                ImagesChip(item.imageCount)
+                if (item.text.isNotBlank()) Spacer(Modifier.height(8.dp))
+            }
+            if (item.text.isNotBlank()) {
+                Text(
+                    item.text,
+                    style = Pi.type.prose,
+                    color = colors.ink1,
+                    modifier = Modifier.padding(horizontal = if (thumbs.isNullOrEmpty()) 0.dp else 4.dp).align(Alignment.Start),
+                )
             }
         }
+    }
+}
+
+/** A rounded image thumbnail (radius 8, 1dp line), cropped to fill. */
+@Composable
+fun ImageThumb(thumb: ImageBitmap, modifier: Modifier = Modifier) {
+    val shape = RoundedCornerShape(Radius.sm)
+    Image(
+        thumb,
+        contentDescription = "Image",
+        contentScale = ContentScale.Crop,
+        modifier = modifier.clip(shape).border(1.dp, Pi.colors.line, shape),
+    )
+}
+
+/** "2 images" for images this phone has no copy of. */
+@Composable
+private fun ImagesChip(count: Int) {
+    val colors = Pi.colors
+    Row(
+        Modifier
+            .background(colors.surface3, RoundedCornerShape(Radius.xs))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Rounded.Image, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(14.dp))
+        Spacer(Modifier.width(6.dp))
+        Text(if (count == 1) "1 image" else "$count images", style = Pi.type.meta, color = colors.ink2)
+    }
+}
+
+/** A prompt on its way to the host: the bubble at 60% with "Sending" under it, until the host echoes it. */
+@Composable
+fun PendingBubble(text: String, modifier: Modifier = Modifier, thumbs: List<ImageBitmap>? = null, imageCount: Int = 0) {
+    Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
+        UserBubble(UserItem("pending", text, imageCount), onLongPress = {}, modifier = Modifier.graphicsLayer { alpha = 0.6f }, thumbs = thumbs)
+        Text("Sending", style = Pi.type.meta, color = Pi.colors.ink3, modifier = Modifier.padding(top = 4.dp, end = 4.dp))
     }
 }
 
@@ -124,6 +199,8 @@ fun TextRowView(row: TextRow, previous: MdBlock?, onOpenCode: (String, String) -
         onOpenCode = onOpenCode,
         modifier = modifier
             .padding(top = gap)
+            // Prose between the steps of an opened fold lines up with the step text, right of the rail.
+            .padding(start = if (row.rail != null) 32.dp else 0.dp)
             .pressable({}, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, onLongClick = onLongPress, role = null),
     )
 }
@@ -160,21 +237,77 @@ fun ThinkingRowView(item: ThinkingItem, live: Boolean, expanded: Boolean, durati
             enter = expandVertically(PiMotion.inPlace()) + fadeIn(PiMotion.inPlace(PiMotion.QUICK)),
             exit = shrinkVertically(PiMotion.leave(PiMotion.STANDARD)) + fadeOut(PiMotion.leave(PiMotion.QUICK)),
         ) {
-            val text = if (expanded) item.text.trim() else tail(item.text, 5)
-            val fade = !expanded && streaming
+            val preview = !expanded && streaming
             Row(Modifier.padding(start = 9.dp, top = 2.dp, bottom = 6.dp).height(IntrinsicSize.Min)) {
                 Box(Modifier.width(1.dp).fillMaxHeight().background(colors.lineStrong))
-                Text(
-                    text,
-                    style = type.thinking,
-                    color = colors.ink3,
-                    modifier = Modifier
-                        .padding(start = 22.dp)
-                        .then(if (fade) Modifier.topFade(colors.canvas) else Modifier),
-                )
+                if (preview) {
+                    ReasoningPreview(item.text, Modifier.padding(start = 22.dp))
+                } else {
+                    Text(
+                        if (expanded) item.text.trim() else tail(item.text, 5),
+                        style = type.thinking,
+                        color = colors.ink3,
+                        modifier = Modifier.padding(start = 22.dp),
+                    )
+                }
             }
         }
     }
+}
+
+/** Lines of live reasoning shown at once. */
+private const val PREVIEW_LINES = 5
+
+/**
+ * Live reasoning as a 5-line window pinned to the newest text. New lines glide up (the window scrolls to the bottom
+ * over 120 ms) instead of the text jumping a line at a time. Only a tail of the text is laid out: the start moves in
+ * large steps (see [previewStart]), each a moment where the pinned bottom looks the same before and after.
+ */
+@Composable
+private fun ReasoningPreview(text: String, modifier: Modifier = Modifier) {
+    val colors = Pi.colors
+    val type = Pi.type
+    val reduced = Pi.reduceMotion
+    val anchor = remember { IntArray(1) }
+    anchor[0] = previewStart(text, anchor[0])
+    val shown = text.substring(anchor[0]).trimEnd()
+    val scroll = rememberScrollState()
+    val lineHeight = with(LocalDensity.current) { type.thinking.lineHeight.toDp() }
+    LaunchedEffect(scroll) {
+        var first = true
+        snapshotFlow { scroll.maxValue }.collectLatest { bottom ->
+            if (first || reduced) scroll.scrollTo(bottom) else scroll.animateScrollTo(bottom, PiMotion.inPlace(120))
+            first = false
+        }
+    }
+    Box(
+        modifier
+            .heightIn(max = lineHeight * PREVIEW_LINES)
+            .topFade(colors.canvas)
+            .verticalScroll(scroll, enabled = false),
+    ) {
+        Text(shown, style = type.thinking, color = colors.ink3)
+    }
+}
+
+/**
+ * Where the live reasoning window starts: [current] until more than 60 lines follow it, then 30 lines from the end.
+ * The window so moves rarely and never backwards.
+ */
+fun previewStart(text: String, current: Int): Int {
+    val from = current.coerceIn(0, text.length)
+    var count = 0
+    var keep = from
+    var i = text.length
+    while (i > 0) {
+        val nl = text.lastIndexOf('\n', i - 1)
+        if (nl < from) break
+        count++
+        if (count == 30) keep = nl + 1
+        if (count > 60) return keep
+        i = nl
+    }
+    return from
 }
 
 private fun Modifier.topFade(color: Color): Modifier = drawWithContent {
@@ -220,26 +353,187 @@ fun StepHeader(
 // Fold
 
 @Composable
-fun FoldRowView(row: FoldRow, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+fun FoldRowView(row: FoldRow, onToggle: () -> Unit, onOpenFile: (FileChange) -> Unit, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val text = buildString {
         append(if (row.durationMs != null) "Worked for ${formatWorked(row.durationMs)}" else "Worked")
         append(" · ")
         append(if (row.steps == 1) "1 step" else "${row.steps} steps")
     }
-    StepHeader(onClick = onToggle, modifier = modifier.padding(top = 6.dp), slot = { Chevron(row.expanded) }) {
-        Text(text, style = Pi.type.label, color = colors.ink3, maxLines = 1)
-        when {
-            row.endedInFailure -> Text(" · failed", style = Pi.type.label, color = colors.danger, maxLines = 1)
-            row.failedSteps > 0 -> Text(" · ${row.failedSteps} failed", style = Pi.type.label, color = colors.ink3, maxLines = 1)
+    Column(modifier.fillMaxWidth().padding(top = 6.dp)) {
+        StepHeader(onClick = onToggle, slot = { Chevron(row.expanded) }) {
+            Text(text, style = Pi.type.label, color = colors.ink3, maxLines = 1)
+            when {
+                row.endedInFailure -> Text(" · failed", style = Pi.type.label, color = colors.danger, maxLines = 1)
+                row.failedSteps > 0 -> Text(" · ${row.failedSteps} failed", style = Pi.type.label, color = colors.ink3, maxLines = 1)
+            }
         }
+        if (row.files.isNotEmpty()) FileChips(row.files, onOpenFile, onMore = onToggle)
+    }
+}
+
+/** At most this many file chips under a fold; the rest read "+k more". */
+private const val MAX_FILE_CHIPS = 3
+
+/** The files a turn changed, as chips under its fold: name, +added, −removed; tap opens the diff. */
+@Composable
+private fun FileChips(files: List<FileChange>, onOpen: (FileChange) -> Unit, onMore: () -> Unit) {
+    val colors = Pi.colors
+    val type = Pi.type
+    val shape = RoundedCornerShape(Radius.sm)
+    val num = type.meta.copy(fontFeatureSettings = Tnum)
+    FlowRow(
+        Modifier.fillMaxWidth().padding(start = 32.dp, bottom = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        for (file in files.take(MAX_FILE_CHIPS)) {
+            Row(
+                Modifier
+                    .height(28.dp)
+                    .pressable({ onOpen(file) }, shape = shape, label = "Open diff of ${baseName(file.path)}")
+                    .background(colors.surface1, shape)
+                    .border(1.dp, colors.line, shape)
+                    .padding(horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(baseName(file.path), style = type.monoMeta, color = colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.widthIn(max = 168.dp))
+                if (file.added > 0) {
+                    Spacer(Modifier.width(6.dp))
+                    Text("+${file.added}", style = num, color = colors.success)
+                }
+                if (file.removed > 0) {
+                    Spacer(Modifier.width(4.dp))
+                    Text("−${file.removed}", style = num, color = colors.danger)
+                }
+            }
+        }
+        val rest = files.size - MAX_FILE_CHIPS
+        if (rest > 0) {
+            Box(Modifier.height(28.dp).pressable(onMore, shape = shape).padding(horizontal = 6.dp), contentAlignment = Alignment.Center) {
+                Text("+$rest more", style = type.meta, color = colors.ink3)
+            }
+        }
+    }
+}
+
+// Grouped read-only steps
+
+/** "Read 3 files, ran 1 search": a run of finished read-only steps as one row; tap lists them. */
+@Composable
+fun ToolGroupRowView(row: ToolGroupRow, onToggle: () -> Unit, modifier: Modifier = Modifier) {
+    val colors = Pi.colors
+    val type = Pi.type
+    val summary = remember(row.tools) { groupSummary(row.tools) }
+    val detail = remember(row.tools) { groupDetail(row.tools) }
+    val total = remember(row.tools) { row.tools.takeIf { tools -> tools.all { it.durationMs != null } }?.sumOf { it.durationMs ?: 0L } }
+    StepHeader(onClick = onToggle, modifier = modifier, slot = {
+        Icon(Icons.Rounded.Check, contentDescription = "Done", tint = colors.ink3, modifier = Modifier.size(16.dp))
+    }) {
+        Text(summary, style = type.label, color = colors.ink2, maxLines = 1)
+        Spacer(Modifier.width(8.dp))
+        val detailAlpha by animateFloatAsState(if (row.expanded) 0f else 1f, PiMotion.inPlace(PiMotion.QUICK), label = "detail")
+        Text(detail, style = type.monoSmall, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).graphicsLayer { alpha = detailAlpha })
+        Spacer(Modifier.width(8.dp))
+        total?.let { Text(formatDuration(it), style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3) }
+        Spacer(Modifier.width(4.dp))
+        Chevron(row.expanded)
+    }
+}
+
+// Step rail
+
+/** Where a step glyph's centre sits in a step row: the row's top gap plus half the 40dp header. */
+fun stepGlyphY(stepGap: Dp): Dp = stepGap + 20.dp
+
+/**
+ * The rail of an opened fold or group: a 1dp line at the slot's centre (x = 10dp) behind the rows, broken 4dp above
+ * and below each step glyph, starting under the header and ending at the last step's glyph. [glyphY] is null for
+ * prose rows, which the rail passes straight by.
+ */
+fun Modifier.stepRail(rail: Rail, color: Color, glyphY: Dp?): Modifier = drawBehind {
+    val x = 10.dp.toPx()
+    val stroke = 1.dp.toPx()
+    fun line(from: Float, to: Float) {
+        if (to > from) drawLine(color, Offset(x, from), Offset(x, to), strokeWidth = stroke)
+    }
+    if (glyphY == null) {
+        line(0f, size.height)
+    } else {
+        val y = glyphY.toPx()
+        val gap = 12.dp.toPx() // half the 16dp glyph plus 4dp
+        line(0f, y - gap)
+        if (!rail.last) line(y + gap, size.height)
+    }
+}
+
+/**
+ * Rows of a fold or group the user just opened fade in and rise 4dp, 40 ms apart (at most 4 steps of delay). Rows
+ * shown any other way (history, scrolling back) appear at once.
+ */
+@Composable
+fun Modifier.staggerIn(key: String, rail: Rail?, memory: SessionMemory): Modifier {
+    if (rail == null || Pi.reduceMotion) return this
+    val animate = remember(key) { memory.openedAt[rail.stagger]?.let { SystemClock.uptimeMillis() - it < 600 } == true }
+    if (!animate) return this
+    val progress = remember(key) { Animatable(0f) }
+    LaunchedEffect(key) {
+        progress.animateTo(1f, tween(PiMotion.STANDARD, min(rail.index, 4) * 40, PiMotion.InPlace))
+    }
+    val rise = with(LocalDensity.current) { 4.dp.toPx() }
+    return graphicsLayer {
+        alpha = progress.value
+        translationY = (1f - progress.value) * rise
+    }
+}
+
+// Reply actions
+
+/**
+ * Under the last finished reply: Copy (the answer), Ask again (sends the same prompt as a new turn: Pi has no
+ * regenerate) and More (the long-press sheet). Fades in once when the turn settles; history shows it as is.
+ */
+@Composable
+fun ReplyActions(row: ActionsRow, memory: SessionMemory, onAskAgain: (String) -> Unit, onMore: () -> Unit, modifier: Modifier = Modifier) {
+    val colors = Pi.colors
+    val reduced = Pi.reduceMotion
+    val animate = remember(row.key) { !reduced && memory.primed && memory.seen.add(row.key) && memory.settledAt.longValue > 0 && SystemClock.uptimeMillis() - memory.settledAt.longValue < 3000 }
+    memory.seen.add(row.key)
+    val alpha = remember(row.key) { Animatable(if (animate) 0f else 1f) }
+    if (animate) LaunchedEffect(row.key) { alpha.animateTo(1f, PiMotion.enter(PiMotion.STANDARD, delay = 150)) }
+    Row(
+        modifier
+            .fillMaxWidth()
+            .height(40.dp)
+            // Each action's padding starts it 10dp in; pull the row back so the first icon lines up with the prose.
+            .offset(x = (-10).dp)
+            .graphicsLayer { this.alpha = alpha.value },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        CopyButton(text = { row.reply }, clipLabel = "Reply", description = "Copy reply")
+        val prompt = row.prompt
+        if (prompt != null) {
+            val shape = RoundedCornerShape(Radius.sm)
+            Row(
+                Modifier
+                    .heightIn(min = 48.dp)
+                    .pressable({ onAskAgain(prompt) }, shape = shape, label = "Send this prompt again")
+                    .padding(horizontal = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Rounded.Replay, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text("Ask again", style = Pi.type.meta, color = colors.ink2)
+            }
+        }
+        IconAction(Icons.Rounded.MoreHoriz, "More actions", onClick = onMore, size = 18.dp)
     }
 }
 
 // Notices
 
 @Composable
-fun NoticeRowView(item: NoticeItem, expanded: Boolean, onToggle: () -> Unit, onCopy: (String) -> Unit, modifier: Modifier = Modifier) {
+fun NoticeRowView(item: NoticeItem, expanded: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val type = Pi.type
     if (item.kind == NoticeKind.Aborted && item.text.isBlank()) {
@@ -286,7 +580,7 @@ fun NoticeRowView(item: NoticeItem, expanded: Boolean, onToggle: () -> Unit, onC
                     overflow = TextOverflow.Ellipsis,
                 )
                 Row(Modifier.fillMaxWidth().padding(start = 16.dp), horizontalArrangement = Arrangement.Start) {
-                    TextAction("Copy", onClick = { onCopy(item.text) }, color = colors.ink2)
+                    CopyButton(text = { item.text }, clipLabel = item.title, description = "Copy message")
                     if (alwaysOpen && item.text.length > 400) TextAction(if (expanded) "Less" else "Details", onClick = onToggle, color = colors.ink2)
                 }
             }
@@ -297,12 +591,14 @@ fun NoticeRowView(item: NoticeItem, expanded: Boolean, onToggle: () -> Unit, onC
 // Live status line
 
 /**
- * Quad + shimmer label + elapsed time, at the bottom of the transcript while the agent works. Its 32dp height stays
+ * Quad + shimmer label + elapsed time, at the bottom of the transcript while the agent works. A running tool is
+ * named: the verb shimmers and its command or path follows in mono ("Run  npm test"). Its 32dp height stays
  * reserved when idle so the list never jumps.
  */
 @Composable
-fun StatusLine(visible: Boolean, mode: QuadMode, label: String, startedAt: Long, modifier: Modifier = Modifier) {
+fun StatusLine(visible: Boolean, mode: QuadMode, text: StatusText, startedAt: Long, modifier: Modifier = Modifier) {
     val colors = Pi.colors
+    val type = Pi.type
     val alpha by animateFloatAsState(if (visible) 1f else 0f, if (visible) PiMotion.enter(PiMotion.STANDARD) else PiMotion.leave(PiMotion.QUICK), label = "status")
     Row(
         modifier
@@ -316,9 +612,30 @@ fun StatusLine(visible: Boolean, mode: QuadMode, label: String, startedAt: Long,
                 QuadSpinner(mode, size = 16.dp, color = if (mode == QuadMode.Wait) colors.warning else colors.ink1, animate = visible)
             }
             Spacer(Modifier.width(12.dp))
-            ShimmerText(label, Pi.type.label, active = visible, modifier = Modifier.weight(1f, fill = false))
+            Crossfade(
+                targetState = text,
+                animationSpec = if (Pi.reduceMotion) tween(0) else PiMotion.inPlace(PiMotion.QUICK),
+                modifier = Modifier.weight(1f, fill = false),
+                label = "statusText",
+            ) { t ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    ShimmerText(t.label, type.label, active = visible)
+                    if (t.detail.isNotEmpty()) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            t.detail,
+                            style = type.monoSmall,
+                            color = colors.ink3,
+                            maxLines = 1,
+                            overflow = if (t.path) TextOverflow.MiddleEllipsis else TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                    }
+                    if (t.more > 0) Text("  +${t.more}", style = type.label.copy(fontFeatureSettings = Tnum), color = colors.ink3, maxLines = 1)
+                }
+            }
             if (startedAt > 0) {
-                Text("  ·  ", style = Pi.type.label, color = colors.ink4)
+                Text("  ·  ", style = type.label, color = colors.ink4)
                 Elapsed(startedAt)
             }
         }
@@ -334,4 +651,21 @@ private fun Elapsed(startedAt: Long) {
         }
     }
     Text(formatElapsed(now - startedAt), style = Pi.type.label.copy(fontFeatureSettings = Tnum), color = Pi.colors.ink3)
+}
+
+/**
+ * How long a running step has run ("4s", "1m 3s"), from when this phone first saw it running. Hidden for the first
+ * second; ticks once a second, aligned to the start, and recomposes only itself.
+ */
+@Composable
+fun StepElapsed(since: Long, modifier: Modifier = Modifier) {
+    val now by produceState(SystemClock.uptimeMillis(), since) {
+        while (true) {
+            value = SystemClock.uptimeMillis()
+            delay(1000 - (value - since) % 1000)
+        }
+    }
+    formatStepElapsed(now - since)?.let {
+        Text(it, style = Pi.type.meta.copy(fontFeatureSettings = Tnum), color = Pi.colors.ink3, maxLines = 1, modifier = modifier)
+    }
 }

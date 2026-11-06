@@ -39,18 +39,28 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.OpenInFull
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
+import opensec.pibolt.app.ui.components.DiffLines
+import opensec.pibolt.app.ui.components.CopyButton
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.StepSlot
 import opensec.pibolt.app.ui.components.StepState
@@ -88,6 +98,7 @@ fun ToolRowView(
     onOpen: (ViewerContent) -> Unit,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
+    runningSince: Long? = null,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -126,8 +137,12 @@ fun ToolRowView(
                 }
                 Spacer(Modifier.width(8.dp))
             }
-            item.durationMs?.takeIf { !item.isActive }?.let {
-                Text(formatDuration(it), style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3)
+            if (item.status == ToolStatus.Running && runningSince != null) {
+                StepElapsed(runningSince)
+            } else {
+                item.durationMs?.takeIf { !item.isActive }?.let {
+                    Text(formatDuration(it), style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3)
+                }
             }
             Spacer(Modifier.width(4.dp))
             Chevron(expanded)
@@ -179,37 +194,49 @@ private fun Modifier.topSweep(color: Color): Modifier {
 }
 
 @Composable
-private fun CardHeader(content: @Composable RowScope.() -> Unit) {
+private fun CardHeader(end: Dp = 14.dp, content: @Composable RowScope.() -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
             .height(44.dp)
-            .padding(horizontal = 14.dp),
+            .padding(start = 14.dp, end = end),
         verticalAlignment = Alignment.CenterVertically,
         content = content,
     )
     Box(Modifier.fillMaxWidth().height(1.dp).background(Pi.colors.line))
 }
 
+/** The card's footer: "Show N more lines" (or "View full output"), with an optional action at its start. */
 @Composable
-private fun MoreRow(hidden: Int, onClick: () -> Unit) {
+private fun MoreRow(hidden: Int, leading: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
     val colors = Pi.colors
     Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .height(44.dp)
-            .pressable(onClick, shape = RoundedCornerShape(0.dp), pressedScale = 1f),
-        contentAlignment = Alignment.Center,
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(Icons.Rounded.OpenInFull, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(14.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(if (hidden > 0) "Show $hidden more ${if (hidden == 1) "line" else "lines"}" else "View full output", style = Pi.type.label, color = colors.ink2)
+    Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+        if (leading != null) {
+            Spacer(Modifier.width(4.dp))
+            leading()
+        }
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .pressable(onClick, shape = RoundedCornerShape(0.dp), pressedScale = 1f),
+            contentAlignment = if (leading != null) Alignment.CenterEnd else Alignment.Center,
+        ) {
+            Row(Modifier.padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Rounded.OpenInFull, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(14.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(if (hidden > 0) "Show $hidden more ${if (hidden == 1) "line" else "lines"}" else "View full output", style = Pi.type.label, color = colors.ink2)
+            }
         }
     }
 }
 
+/**
+ * A bash step: `$` and the command (with Copy), the exit badge, then the output. While it runs, the output's last
+ * lines show at a fixed height with a top fade and a terminal cursor blinks after the last glyph (the card's only
+ * live signal); done, the footer copies the output or opens it in full.
+ */
 @Composable
 private fun BashCard(item: ToolItem, label: ToolLabel, previewLines: Int, onOpen: (ViewerContent) -> Unit) {
     val colors = Pi.colors
@@ -218,8 +245,9 @@ private fun BashCard(item: ToolItem, label: ToolLabel, previewLines: Int, onOpen
     val preview = remember(item.status, item.output, item.result, previewLines) { toolBody(item, full = false, previewLines = previewLines) }
     val total = remember(item.status, item.output, item.result) { lineCount(if (item.status == ToolStatus.Running) item.output else item.result ?: item.output) }
     val exit = exitCodeOf(item)
-    CardFrame(running = item.status == ToolStatus.Running) {
-        CardHeader {
+    val running = item.status == ToolStatus.Running
+    CardFrame(running = false) {
+        CardHeader(end = 2.dp) {
             Text("$", style = type.mono.copy(fontWeight = FontWeight.SemiBold), color = if (item.isError) colors.danger else colors.success)
             Spacer(Modifier.width(10.dp))
             Text(command.lineSequence().firstOrNull().orEmpty(), style = type.monoSmall, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
@@ -238,39 +266,105 @@ private fun BashCard(item: ToolItem, label: ToolLabel, previewLines: Int, onOpen
                 Spacer(Modifier.width(8.dp))
                 Text("failed", style = type.micro, color = colors.danger, modifier = Modifier.background(colors.dangerSoft, CircleShape).padding(horizontal = 8.dp, vertical = 3.dp))
             }
+            CopyButton(text = { command }, label = false, clipLabel = "Command", description = "Copy command")
         }
         val body = preview?.text
         if (body.isNullOrBlank()) {
-            Text(
-                if (item.isActive) "Waiting for output…" else "No output",
-                style = type.meta,
-                color = colors.ink3,
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
-            )
+            if (running) {
+                TerminalBody("", colors.ink2, cursor = true, fadeTop = false)
+            } else {
+                Text(
+                    if (item.isActive) "Waiting for output…" else "No output",
+                    style = type.meta,
+                    color = colors.ink3,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                )
+            }
         } else {
-            MonoBody(body, if (item.isError) colors.danger.copy(alpha = 0.9f) else colors.ink2)
             val hidden = total - lineCount(body)
-            if (hidden > 0 || item.status != ToolStatus.Running) {
-                MoreRow(hidden.coerceAtLeast(0)) {
-                    onOpen(ViewerContent("Output", command, toolBody(item, full = true, previewLines = previewLines)?.text.orEmpty()))
-                }
+            TerminalBody(body, if (item.isError) colors.danger.copy(alpha = 0.9f) else colors.ink2, cursor = running, fadeTop = running && hidden > 0)
+            if (!running) {
+                val output = item.result ?: item.output
+                MoreRow(
+                    hidden.coerceAtLeast(0),
+                    onClick = { onOpen(ViewerContent("Output", command, toolBody(item, full = true, previewLines = previewLines)?.text.orEmpty())) },
+                    leading = { CopyButton(text = { output }, clipLabel = "Output", description = "Copy output") },
+                )
+            } else if (hidden > 0) {
+                MoreRow(hidden, onClick = { onOpen(ViewerContent("Output", command, toolBody(item, full = true, previewLines = previewLines)?.text.orEmpty())) })
             }
         }
     }
 }
 
+/** Terminal cursor cell: one monoSmall character (12.5sp on an 18sp line). */
+private val CURSOR_W = 7.dp
+private val CURSOR_H = 14.dp
+
+/**
+ * Output in mono, scrolling sideways (also the plain body of other cards). With [cursor], a 7x14dp ink2 block sits after the last glyph and blinks hard
+ * (500 ms on, 500 ms off, no fade); under reduce motion it stays on at 60%. The blink only invalidates drawing.
+ * [fadeTop] fades the first lines into the card while a live tail scrolls through.
+ */
 @Composable
-private fun MonoBody(text: String, color: Color) {
-    Text(
-        text,
-        style = Pi.type.monoSmall,
-        color = color,
-        softWrap = false,
-        modifier = Modifier
+private fun TerminalBody(text: String, color: Color, cursor: Boolean, fadeTop: Boolean) {
+    val colors = Pi.colors
+    val reduced = Pi.reduceMotion
+    val layout = remember { arrayOfNulls<TextLayoutResult>(1) }
+    val on = remember { mutableStateOf(true) }
+    if (cursor && !reduced) {
+        LaunchedEffect(Unit) {
+            while (true) {
+                delay(500)
+                on.value = !on.value
+            }
+        }
+    }
+    val ink = colors.ink2
+    val surface = colors.surface1
+    Box(
+        Modifier
             .fillMaxWidth()
-            .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-    )
+            .then(if (fadeTop) Modifier.cardTopFade(surface) else Modifier)
+            .then(if (cursor && text.isEmpty()) Modifier.semantics { contentDescription = "Waiting for output" } else Modifier),
+    ) {
+        Text(
+            text,
+            style = Pi.type.monoSmall,
+            color = color,
+            softWrap = false,
+            onTextLayout = { layout[0] = it },
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(start = 14.dp, end = if (cursor) 14.dp + CURSOR_W else 14.dp, top = 12.dp, bottom = 12.dp)
+                .then(
+                    if (!cursor) {
+                        Modifier
+                    } else {
+                        Modifier.drawWithContent {
+                            drawContent()
+                            val l = layout[0] ?: return@drawWithContent
+                            val alpha = if (reduced) 0.6f else if (on.value) 1f else 0f
+                            if (alpha == 0f) return@drawWithContent
+                            val line = (l.lineCount - 1).coerceAtLeast(0)
+                            val x = if (text.isEmpty()) 0f else l.getLineRight(line) + 2.dp.toPx()
+                            val top = l.getLineTop(line)
+                            val h = CURSOR_H.toPx()
+                            val y = top + ((l.getLineBottom(line) - top) - h) / 2
+                            drawRect(ink, topLeft = Offset(x, y), size = Size(CURSOR_W.toPx(), h), alpha = alpha)
+                        }
+                    },
+                ),
+        )
+    }
+}
+
+/** A 24dp fade from the card's surface at the top edge of a live tail. */
+private fun Modifier.cardTopFade(color: Color): Modifier = drawWithContent {
+    drawContent()
+    val h = 24.dp.toPx().coerceAtMost(size.height / 2)
+    drawRect(Brush.verticalGradient(0f to color, 1f to Color.Transparent, startY = 0f, endY = h), size = Size(size.width, h))
 }
 
 @Composable
@@ -300,7 +394,7 @@ private fun OutputCard(item: ToolItem, label: ToolLabel, previewLines: Int, onOp
             NumberedBody(text, startLine = startLineOf(item))
             MoreRow((total - lineCount(text)).coerceAtLeast(0)) { onOpen(ViewerContent(label.verb, label.detail, full?.text.orEmpty())) }
         } else {
-            MonoBody(text, if (item.isError) colors.danger.copy(alpha = 0.9f) else colors.ink2)
+            TerminalBody(text, if (item.isError) colors.danger.copy(alpha = 0.9f) else colors.ink2, cursor = false, fadeTop = false)
             MoreRow((total - lineCount(text)).coerceAtLeast(0)) { onOpen(ViewerContent(label.verb, label.detail, full?.text.orEmpty())) }
         }
     }
@@ -356,7 +450,7 @@ private fun DiffCard(item: ToolItem, label: ToolLabel, lines: List<DiffLine>, pr
                 Text("−${stats.removed}", style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.danger)
             }
         }
-        DiffRows(shown, Modifier.padding(vertical = 6.dp))
+        DiffLines(shown, Modifier.padding(vertical = 6.dp))
         val hidden = collapsed.size - shown.size
         MoreRow(hidden) {
             onOpen(ViewerContent("Diff", label.detail, item.details?.str("diff").orEmpty(), diff = true))
@@ -364,60 +458,3 @@ private fun DiffCard(item: ToolItem, label: ToolLabel, lines: List<DiffLine>, pr
     }
 }
 
-/** Diff rows: tinted add/remove lines with a 3dp gutter bar, line numbers in ink4, skipped runs as one row. */
-@Composable
-fun DiffRows(lines: List<DiffLine>, modifier: Modifier = Modifier, wrap: Boolean = false) {
-    val numWidth = remember(lines) { lines.maxOfOrNull { it.number.length }?.coerceAtLeast(1) ?: 1 }
-    if (wrap) {
-        Column(modifier.fillMaxWidth()) { for (line in lines) DiffLineRow(line, numWidth, wrap = true) }
-        return
-    }
-    // One horizontal scroll for the whole diff; rows stretch to the widest line (or the card width).
-    BoxWithConstraints(modifier.fillMaxWidth()) {
-        val min = maxWidth
-        Column(
-            Modifier
-                .horizontalScroll(rememberScrollState())
-                .width(IntrinsicSize.Max)
-                .widthIn(min = min),
-        ) { for (line in lines) DiffLineRow(line, numWidth, wrap = false) }
-    }
-}
-
-@Composable
-fun DiffLineRow(line: DiffLine, numWidth: Int, wrap: Boolean) {
-    val colors = Pi.colors
-    val type = Pi.type
-    when (line.kind) {
-        DiffKind.Skip -> Text(
-            if (line.number.isNotEmpty()) "···  ${line.number} unchanged lines" else "···",
-            style = type.meta,
-            color = colors.ink3,
-            modifier = Modifier.padding(start = 17.dp, top = 4.dp, bottom = 4.dp),
-        )
-        DiffKind.Hunk -> Text(line.text, style = type.monoSmall, color = colors.ink3, maxLines = 1, softWrap = false, modifier = Modifier.padding(start = 17.dp, top = 2.dp, bottom = 2.dp))
-        else -> {
-            val (bg, fg, bar) = when (line.kind) {
-                DiffKind.Add -> Triple(colors.diffAddBg, colors.diffAddFg, colors.success.copy(alpha = 0.6f))
-                DiffKind.Del -> Triple(colors.diffDelBg, colors.diffDelFg, colors.danger.copy(alpha = 0.6f))
-                else -> Triple(Color.Transparent, colors.ink2, Color.Transparent)
-            }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(bg)
-                    .height(IntrinsicSize.Min),
-            ) {
-                Box(Modifier.width(3.dp).fillMaxHeight().background(bar))
-                Text(line.number.padStart(numWidth), style = type.monoSmall, color = colors.ink4, modifier = Modifier.padding(start = 10.dp, end = 10.dp))
-                Text(
-                    line.text,
-                    style = type.monoSmall,
-                    color = fg,
-                    softWrap = wrap,
-                    modifier = (if (wrap) Modifier.weight(1f) else Modifier).padding(end = 12.dp),
-                )
-            }
-        }
-    }
-}

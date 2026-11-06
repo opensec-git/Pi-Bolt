@@ -2,10 +2,12 @@ package opensec.pibolt.app.ui.session
 
 import android.Manifest
 import android.content.ClipData
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -26,6 +28,7 @@ import androidx.compose.material.icons.automirrored.rounded.Notes
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.OpenInFull
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
@@ -34,6 +37,8 @@ import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -41,20 +46,24 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.session.SessionEffect
 import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.components.PiSnackHost
 import opensec.pibolt.app.ui.components.QuadMath
+import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.SharedKeys
 import opensec.pibolt.app.ui.components.SnackKind
 import opensec.pibolt.app.ui.components.sharedHostBounds
@@ -115,6 +124,12 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     var viewer by remember { mutableStateOf<ViewerContent?>(null) }
     var actionsFor by remember { mutableStateOf<TRow?>(null) }
     var statusOnScreen by remember { mutableStateOf(false) }
+    val images = remember(controller.hostId) { mutableStateListOf<ComposerImage>() }
+    var nextImageId by remember { mutableLongStateOf(1L) }
+    // The text and images of the last send, given back to the composer if it fails.
+    var lastSent by remember { mutableStateOf<Pair<String, List<ComposerImage>>?>(null) }
+    val focus = remember { FocusRequester() }
+    val recentAll by app.recents.prompts.collectAsStateWithLifecycle()
 
     LaunchedEffect(memory, controller) { memory.attach(controller.state, app.appScope) }
     LaunchedEffect(controller) {
@@ -125,7 +140,12 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                     haptics.reject()
                     scope.launch { snackbar.show(effect.message, SnackKind.Error) }
                 }
-                is SessionEffect.EditorText -> draft = effect.text
+                is SessionEffect.EditorText -> {
+                    draft = effect.text
+                    // A send that failed comes back to the composer: its "Sending" bubble goes, its images return.
+                    if (memory.pending.value?.text == effect.text) memory.pending.value = null
+                    lastSent?.takeIf { it.first == effect.text && images.isEmpty() }?.let { images.addAll(it.second) }
+                }
             }
         }
     }
@@ -138,6 +158,11 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+    }
+
+    fun share(text: String) {
+        val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
+        context.startActivity(Intent.createChooser(send, null))
     }
 
     fun copy(text: String) {
@@ -168,9 +193,18 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     val status = remember {
         derivedStateOf {
             val s = state.value
-            val m = quadMode
-            LiveStatus(visible = s.isRunning || s.isCompacting, mode = m, label = m.label)
+            val sending = memory.pending.value != null && !s.isRunning
+            val m = if (sending) QuadMode.Think else quadMode
+            val activity = TranscriptModel.activity(s.items, s.streaming)
+            LiveStatus(visible = s.isRunning || s.isCompacting || sending, mode = m, text = TranscriptModel.statusText(m, activity, sending))
         }
+    }
+    // A send the host never answers (no echo, no run) stops showing "Sending" after a while.
+    val pending = memory.pending.value
+    LaunchedEffect(pending) {
+        if (pending == null) return@LaunchedEffect
+        delay(PendingSend.TIMEOUT_MS)
+        if (memory.pending.value === pending && !state.value.isRunning) memory.pending.value = null
     }
     val subtitle by remember {
         derivedStateOf {
@@ -189,7 +223,56 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     val commands by remember { derivedStateOf { state.value.commands } }
     val queue by remember { derivedStateOf { state.value.queue } }
     val firstDialog by remember { derivedStateOf { state.value.dialogs.firstOrNull() } }
-    val empty by remember { derivedStateOf { state.value.hello && state.value.items.isEmpty() && state.value.streaming.isEmpty() && !state.value.isRunning } }
+    val empty by remember { derivedStateOf { state.value.hello && state.value.items.isEmpty() && state.value.streaming.isEmpty() && !state.value.isRunning && memory.pending.value == null } }
+
+    val modelReadsImages by remember { derivedStateOf { state.value.model?.acceptsImages } }
+
+    /** Sends [text] as typed (a prompt when idle, else per [mode]) with [attached] images and shows it at once. */
+    fun send(text: String, attached: List<ComposerImage> = emptyList()) {
+        val running = state.value.isRunning
+        controller.send(text, mode, attached.mapNotNull { it.image })
+        memory.sent(text, state.value, running, attached.mapNotNull { it.thumb })
+        if (text.isNotBlank()) app.recents.record(controller.hostId, text)
+        lastSent = text to attached
+        maybeAskNotifications()
+    }
+
+    fun noImages(): String = "${modelLabel ?: "This model"} can't read images"
+
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(ImageSizing.MAX_IMAGES)) { uris ->
+        val room = ImageSizing.slotsLeft(images.size)
+        if (uris.size > room) scope.launch { snackbar.show("Up to ${ImageSizing.MAX_IMAGES} images per message") }
+        for (uri in uris.take(room)) {
+            val id = nextImageId++
+            images += ComposerImage(id)
+            scope.launch {
+                when (val result = encodeImage(context.contentResolver, uri)) {
+                    is Encoded.Ok -> {
+                        val i = images.indexOfFirst { it.id == id }
+                        if (i >= 0) images[i] = ComposerImage(id, result.image, result.thumb)
+                    }
+                    is Encoded.Failed -> {
+                        images.removeAll { it.id == id }
+                        snackbar.show(result.message, SnackKind.Error)
+                    }
+                }
+            }
+        }
+    }
+
+    fun attach() {
+        when {
+            modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
+            ImageSizing.slotsLeft(images.size) == 0 -> scope.launch { snackbar.show("Up to ${ImageSizing.MAX_IMAGES} images per message") }
+            else -> picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }
+    }
+
+    /** Puts [text] in the composer and focuses it (never sends). */
+    fun fill(text: String) {
+        draft = text
+        focus.requestFocus()
+    }
     val extras by remember {
         derivedStateOf {
             val s = state.value
@@ -233,13 +316,24 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                         status = status,
                         onOpen = { viewer = it },
                         onActions = {
-                            haptics.longPress()
+                            if (it !is ActionsRow) haptics.longPress()
                             actionsFor = it
                         },
-                        onCopy = ::copy,
+                        onAskAgain = {
+                            haptics.send()
+                            send(it)
+                        },
                         onStatusOnScreen = { statusOnScreen = it },
                     )
-                    if (empty) EmptySession(cwd, commands.size)
+                    if (empty) {
+                        EmptySession(
+                            cwd = cwd,
+                            commands = commands,
+                            recent = recentAll[controller.hostId].orEmpty().take(RecentPrompts.SHOWN),
+                            onCommand = { fill("/${it.name} ") },
+                            onRecent = { fill(it) },
+                        )
+                    }
                 }
                 PiSnackHost(snackbar, Modifier.align(Alignment.BottomCenter))
             }
@@ -259,12 +353,22 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 commands = commands,
                 onSend = {
                     val text = draft.trim()
-                    if (text.isNotEmpty()) {
-                        controller.send(text, mode)
-                        draft = ""
-                        maybeAskNotifications()
+                    when {
+                        text.isEmpty() && images.isEmpty() -> Unit
+                        images.any { !it.ready } -> Unit
+                        images.isNotEmpty() && modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
+                        else -> {
+                            send(text, images.toList())
+                            draft = ""
+                            images.clear()
+                        }
                     }
                 },
+                images = images,
+                attachAllowed = modelReadsImages != false,
+                onAttach = ::attach,
+                onRemoveImage = { id -> images.removeAll { it.id == id } },
+                focusRequester = focus,
                 onStop = controller::abort,
                 onModel = {
                     controller.loadModels()
@@ -301,6 +405,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                     onConfirm = { controller.confirm(dialog.id, it) },
                     onCancel = { controller.cancelDialog(dialog.id) },
                     onHide = { memory.hiddenDialog.value = dialog.id },
+                    cwd = cwd,
                 )
             }
         }
@@ -409,6 +514,11 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                     SheetAction("View as Markdown", Icons.AutoMirrored.Rounded.Notes) { viewer = ViewerContent("Markdown", null, text()) },
                 )
             }
+            is ActionsRow -> listOf(
+                SheetAction("Select text", Icons.Rounded.TextFields) { viewer = ViewerContent("Reply", null, row.reply, selectable = true) },
+                SheetAction("View as Markdown", Icons.AutoMirrored.Rounded.Notes) { viewer = ViewerContent("Markdown", null, row.reply) },
+                SheetAction("Share", Icons.Rounded.Share) { share(row.reply) },
+            )
             is ToolRow -> {
                 val item = row.item
                 val label = toolLabel(item)

@@ -177,21 +177,20 @@ class RpcClient(private val backend: SessionBackend, scope: CoroutineScope) {
         backend.send(buildJsonObject { put("type", "extension_ui_response"); put("id", id); put("cancelled", true) })
 
     private fun JsonObjectBuilder.putImages(images: List<ImageAttachment>) {
-        if (images.isEmpty()) return
-        put(
-            "images",
-            JsonArray(
-                images.map {
-                    buildJsonObject {
-                        put("type", "image")
-                        put("data", it.base64)
-                        put("mimeType", it.mimeType)
-                    }
-                },
-            ),
-        )
+        if (images.isNotEmpty()) put("images", imagesJson(images))
     }
 }
+
+/** Pi's `ImageContent[]` for `prompt`, `steer` and `follow_up`: `{ type: "image", data: <base64>, mimeType }`. */
+fun imagesJson(images: List<ImageAttachment>): JsonArray = JsonArray(
+    images.map {
+        buildJsonObject {
+            put("type", "image")
+            put("data", it.base64)
+            put("mimeType", it.mimeType)
+        }
+    },
+)
 
 /** A model from `get_available_models`, `set_model` or the session state. */
 data class ModelInfo(
@@ -200,8 +199,13 @@ data class ModelInfo(
     val provider: String,
     val reasoning: Boolean,
     val contextWindow: Long?,
+    /** Input modalities (`["text", "image"]`), null when the host did not say. */
+    val input: List<String>? = null,
 ) {
     val label: String get() = name.ifBlank { id }
+
+    /** Whether the model reads images; null when unknown (an older host that sends no `input`). */
+    val acceptsImages: Boolean? get() = input?.contains("image")
 
     companion object {
         fun from(json: JsonObject?): ModelInfo? {
@@ -213,6 +217,7 @@ data class ModelInfo(
                 provider = json.str("provider") ?: "",
                 reasoning = json.bool("reasoning") ?: false,
                 contextWindow = (json["contextWindow"] as? JsonPrimitive)?.content?.toLongOrNull(),
+                input = json.arr("input")?.mapNotNull { (it as? JsonPrimitive)?.content },
             )
         }
 

@@ -129,10 +129,16 @@ alpha). No overshoot except sheet drag release.
 - Live turn only: the user bubble rises 10dp and fades in; new steps rise 6dp. History and restored sessions never
   animate. Streaming text is updated at most once per frame and newly revealed text fades in over 120 ms; a 6x12dp
   ink3 block pulses at the end of the live paragraph (900 ms) instead of a caret.
-- Auto-scroll sticks to the bottom only while the user is there; otherwise a "New" pill (surface3, 36dp) appears.
-  The live status line keeps its 32dp height while hidden so the list does not jump.
-- Labels such as "Thinking", "Running", "Writing" shimmer (ink2→ink1→ink2, 64dp band, 180dp/s); static under reduce
-  motion.
+- Auto-scroll sticks to the bottom only while the user is there; otherwise a 40dp round scroll button (surface3, 1dp
+  lineStrong, arrow 20dp ink1, 48dp touch) appears at the end edge, 16dp in from the side and bottom, out of the
+  reading column. Enter: rise 16dp, scale 0.95→1, fade, quick; exit 0.7x. Unseen content adds an 8dp accent dot at
+  its top-end that pulses twice (scale 1↔1.3, 300 ms each way). Every send jumps to the bottom. The live status line
+  keeps its 32dp height while hidden so the list does not jump.
+- Labels such as "Thinking", "Running", "Writing" shimmer: ink2 base, a band of ink1 through 9 eased alpha stops per
+  side (0, .04, .17, .33, .5, .67, .83, .96, 1), band max(96dp, 0.6 × label width), a constant 200dp/s with a 100 ms
+  pause between sweeps; static under reduce motion.
+- A fold or tool group the user opens shows its rows with a 40 ms stagger (fade + 4dp rise, standard, in place, at
+  most 4 steps of delay); closing is instant.
 - Tool cards expand with `animateContentSize` (standard, in-place easing), body fades (quick), chevron rotates 90°.
 - Press: no ripple; ink overlay in `tap`, cards and chips scale 0.97, the send button 0.92. Long press opens a
   context sheet.
@@ -163,14 +169,27 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
 - Subtitle under the name: model · thinking level · context %, tap → Session info sheet (model, thinking, context
   ring, tokens, cost, compaction button).
 - Transcript (LazyColumn, stable keys and contentType per block; only the last block changes while streaming):
-  - user: right, max 84% width, surface2, radius 18/6, padding 12x16, prose.
+  - user: right, max 84% width, surface2, radius 18/6, padding 12x16, prose. Images sent from this phone show as
+    56dp thumbnails above the text (kept in memory for the session); images without a local copy read as a compact
+    "2 images" chip (surface3, radius 4, image glyph, meta ink2).
   - assistant: full width on canvas, prose, no bubble; paragraphs 12dp apart; ink3 list markers.
+  - user, sending: an idle prompt shows at once as its bubble at 60% with "Sending" (meta ink3) under it, and the
+    status line shows Quad Think + "Sending". The host's echo takes over the row in place (no second rise); a failed
+    send removes it and returns the text to the composer. Slash commands are not shown early.
   - thinking: row "Thinking" (Quad Think 12dp + shimmer) live, "Thought for 8s" after; collapsed by default; body
-    thinking style with a 1dp rail; live body shows the last 5 lines with a top fade.
+    thinking style with a 1dp rail; live body is a 5-line window pinned to the newest text that glides up (120 ms,
+    in place) as lines arrive, with a 24dp top fade.
   - tool row: 20dp slot (Run/Write spinner → result glyph), verb (label ink2: Run, Read, Edit, Write, Search),
-    argument (mono ink3, middle ellipsis for paths), right meta (+n success, −n danger, duration tnum). Tap expands
-    a card: bash (`$` glyph, command, exit badge, last 12 lines, "Show N more" → full-screen viewer with copy and
-    wrap toggle), edit/diff (gutter bars, unchanged runs collapsed), read (path, line range, preview).
+    argument (mono ink3, middle ellipsis for paths), right meta (+n success, −n danger, duration tnum; while running,
+    the elapsed time from 1 s: "4s", "1m 3s", ticking once a second). Tap expands a card: bash (`$` glyph, command,
+    Copy, exit badge, last 12 lines, footer Copy output + "Show N more" → full-screen viewer with copy and wrap
+    toggle), edit/diff (gutter bars, unchanged runs collapsed), read (path, line range, preview).
+  - running bash card: the output's live tail with a 24dp top fade and a terminal cursor after the last glyph (7x14dp
+    ink2 block, hard blink 500 ms on / 500 ms off, solid at 60% under reduce motion; alone on the first line before
+    any output). It is the card's only live signal: no top sweep (other running cards keep the 2dp sweep).
+  - three or more consecutive finished Read/Search/Find/List steps fold into one step row: check glyph, "Read 3
+    files, ran 1 search" (label ink2), the base names (mono ink3), summed duration, chevron; tap lists them. Run,
+    Edit and Write are never grouped.
   - code blocks: surface1, radius 12, 1dp line. Header 40dp: code glyph 14dp ink3, then the filename (monoSmall
     ink1, middle ellipsis) from the fence info string (`ts title="src/a.ts"`, `ts:src/a.ts`, `src/a.ts`) or the
     language (monoMeta ink3; shell aliases show as `shell`, none as `code`); right side Wrap (only when a line
@@ -194,18 +213,37 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   - inline code: Mono 0.88em ink1 on a surface3 chip (radius 4, line box inset 14%), one chip per line segment
     when it wraps. A narrow no-break space pads each side inside the chip so it never touches neighbours; code of
     24+ characters without spaces may break after `/ . _ -`.
-  - after a turn: "Worked for 12s · 6 steps" fold collapses its steps; the final answer stays visible.
-  - live status line: Quad 16dp + shimmer label + elapsed timer.
+  - after a turn: "Worked for 12s · 6 steps" fold collapses its steps; the final answer stays visible. Under it,
+    chips for the files the turn edited or wrote (28dp, radius 8, surface1 + 1dp line, name in mono meta ink1, +n
+    success, −n danger, tnum; at most 3, then "+k more"); a chip opens that file's diff. An opened fold draws a 1dp
+    line rail at the slot centre through its steps (broken 4dp around each glyph, ending at the last one) and indents
+    the prose between steps to the step text.
+  - under the last finished reply: Copy (check + "Copied"), Ask again (sends the same prompt as a new turn; Pi has
+    no regenerate; hidden for prompts with images) and More (Select text, View as Markdown, Share), 40dp tall,
+    aligned with the prose. Fades in 150 ms after the turn settles; never animates in history.
+  - live status line: Quad 16dp + shimmer label + elapsed timer. A running tool is named: the verb shimmers and its
+    command or path follows in mono small ink3 ("Run  npm test"; a subagent reads "Agent working" + its task;
+    parallel tools add "+n"); text changes crossfade (quick).
   - errors and notices: radius 12 outline in danger/warning @ 40%, text buttons.
 - Queue strip above the composer: 44dp rows with a 2dp bar (warning = steer, ink4 = follow-up), swipe to remove.
-- Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–8 lines; bar: model chip,
-  thinking chip, send (40dp accent circle). While the agent works: send becomes Stop (surface3 circle, rounded square
+- Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–8 lines; bar: attach (+,
+  48dp; ink4 and a "<model> can't read images" snackbar when the model's `input` lacks "image"), model chip, thinking
+  chip, send (40dp accent circle). Attached images (Photo Picker, images only, at most 4) sit in a tray above the
+  text: 56dp thumbnails, radius 8, 1dp line, a Quad Write while each encodes, a 20dp ✕ (scrim, lineStrong ring, 48dp
+  touch) at the top-end corner. Encoding runs off the main thread: long edge at most 2000 px, JPEG 85 (PNG only when
+  transparent and under 1.5 MB), refused over Pi's 4.5 MiB base64 limit. Send works with images and no text. While the agent works: send becomes Stop (surface3 circle, rounded square
   glyph) when the field is empty, and a "Steer | Follow-up" segmented control appears while typing. Slash
   suggestions above the field. IME insets animate with the keyboard.
+- Empty session: the mark, "New session" and the folder tag, then "Commands" (the host's slash commands, mono name
+  + description in meta ink3, the first 6 then "Show all N commands"; tap puts "/name " in the composer and focuses
+  it) and "Recent" (the last 5 distinct prompts this phone sent to this computer; tap fills the composer). 48dp rows,
+  SectionLabel headings, nothing sends by itself. Recent prompts persist per computer (20 at most) in
+  `recent-prompts.json`.
 - Connection banner under the top bar: Quad Connect + "Reconnecting in 3s" countdown + Retry; slides down/up.
 - Sheets (ModalBottomSheet, predictive back): model picker (search, current first, 60dp rows with provider initial),
   thinking level (52dp option rows with a description), Pi's dialogs (Quad Wait eyebrow "Pi is asking", title,
-  message in a mono block when it looks like a command, options as 52dp rows, primary button; swipe or scrim tap
+  message in a command well when it looks like a command (surface1, radius 12, the cwd in mono meta ink3 with Copy,
+  then `$` in success and the command in mono), options as 52dp rows, primary button; swipe or scrim tap
   does not answer: an explicit Cancel does; countdown chip when the dialog has a timeout; haptic on appear).
 - Snackbars for notify: surface3, radius 12, line, above the composer, kind-coloured icon.
 
