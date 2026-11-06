@@ -63,3 +63,6 @@ The workflow releases only tags on pi-bolt commits. Gradle builds the unsigned A
 step signs it with `apksigner`, then `apksigner verify --print-certs` checks it, and the workflow publishes `pi-bolt-android-X.Y.Z.apk`
 with its SHA-256 as a GitHub release of its own (title "Pi-Bolt Android X.Y.Z", signing certificate digest in the notes).
 That release is never marked latest, so Pi-Bolt's installers and release checks are unaffected.
+It then points https://pi-bolt.opensec.in/android at the new APK (`scripts/publish-android-download.sh`, which writes
+`android.json` on gh-pages): that page and the home page's Android tab read it, and on an Android phone the page starts
+the download by itself. To point the site at another release by hand: `scripts/publish-android-download.sh X.Y.Z`.

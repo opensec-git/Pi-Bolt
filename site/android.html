@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#050505">
+<title>Pi-Bolt for Android</title>
+<meta name="description" content="Download the Pi-Bolt Android app: drive the Pi-Bolt session on your computer from your phone, end to end encrypted.">
+<meta property="og:title" content="Pi-Bolt for Android">
+<meta property="og:description" content="Drive the Pi-Bolt session on your computer from your phone: live output, prompts, steering and dialogs, end to end encrypted.">
+<meta property="og:url" content="https://pi-bolt.opensec.in/android">
+<meta property="og:image" content="https://pi-bolt.opensec.in/video-poster.jpg">
+<link rel="icon" href="logo.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="preload" href="departure-mono.woff2" as="font" type="font/woff2" crossorigin>
+<style>
+  /* Departure Mono by Helena Zhang, SIL Open Font License 1.1 (departure-mono-LICENSE.txt). */
+  @font-face { font-family: "Departure Mono"; src: url("departure-mono.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+  /* The home page's design (index.html): canvas, hairlines, lime accent, Space Grotesk, IBM Plex Mono and a pixel face. */
+  :root {
+    color-scheme: dark;
+    --canvas: #050505; --surface: #080808; --surface-2: #0c0d0c;
+    --line: rgba(222, 235, 224, 0.15); --line-soft: rgba(222, 235, 224, 0.08);
+    --text: #f1f3ef; --soft: #b7bcb8; --muted: #858d86; --dim: #5f665f;
+    --accent: #bafc6b; --accent-deep: #a3ea4f; --on-accent: #10150d;
+    --sans: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --pixel: "Departure Mono", "IBM Plex Mono", ui-monospace, monospace;
+    --frame: 1240px;
+    accent-color: var(--accent);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; background: var(--canvas); }
+  body { margin: 0; background: var(--canvas); color: var(--text); font: 400 1rem/1.6 var(--sans); overflow-x: hidden; }
+  ::selection { background: rgba(186, 252, 107, 0.28); color: #fff; }
+  a { color: var(--accent); text-underline-offset: 0.18em; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+  code { font-family: var(--mono); }
+  .frame { position: relative; max-width: var(--frame); margin: 0 auto; border-left: 1px solid var(--line-soft); border-right: 1px solid var(--line-soft); }
+  .rule { position: relative; height: 0; border-top: 1px solid var(--line); }
+  .rule::before, .rule::after { content: "+"; position: absolute; top: -0.78em; font: 300 15px/1 var(--mono); color: var(--muted); }
+  .rule::before { left: -0.34em; }
+  .rule::after { right: -0.34em; }
+  .micro { font: 400 11px/1.4 var(--mono); letter-spacing: 0.09em; text-transform: uppercase; color: var(--muted); }
+  .micro.accent { color: var(--accent); }
+  .bracket::before { content: "[ "; color: var(--dim); }
+  .bracket::after { content: " ]"; color: var(--dim); }
+
+  header.site { position: sticky; top: 0; z-index: 40; background: rgba(6, 6, 6, 0.88); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid rgba(255, 255, 255, 0.12); }
+  header.site .in { max-width: var(--frame); margin: 0 auto; height: 72px; padding: 0 32px; display: flex; align-items: center; gap: 28px; }
+  .brand { display: flex; flex: none; white-space: nowrap; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-weight: 600; font-size: 1.22rem; letter-spacing: -0.035em; }
+  .brand img { width: 30px; height: 30px; }
+  .brand b { font-weight: 600; color: var(--accent); }
+  .actions { display: flex; align-items: center; gap: 12px; margin-left: auto; }
+
+  .btn { display: inline-flex; align-items: stretch; border-radius: 3px; text-decoration: none; font: 500 13px/1 var(--sans); letter-spacing: -0.015em; border: 1px solid transparent; transition: background .18s, border-color .18s, color .18s; }
+  .btn > span { display: inline-flex; align-items: center; padding: 12px 16px; }
+  .btn > i { display: inline-flex; align-items: center; justify-content: center; width: 40px; font-style: normal; border-left: 1px solid rgba(16, 21, 13, 0.2); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+  .btn.primary:hover { background: var(--accent-deep); border-color: var(--accent-deep); }
+  .btn.ghost { border-color: var(--line); color: var(--text); }
+  .btn.ghost > i { border-left-color: var(--line); }
+  .btn.ghost:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.small > span { padding: 9px 13px; }
+  .btn.small > i { width: 34px; }
+  .btn.big { font-size: 15px; }
+  .btn.big > span { padding: 16px 22px; }
+  .btn.big > i { width: 50px; }
+  .link { color: var(--text); text-decoration: none; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; }
+  .link:hover { color: var(--accent); }
+
+  .hero { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 56px; align-items: center; padding: 88px 48px 80px; }
+  h1 { margin: 22px 0 22px; font-size: clamp(2.4rem, 5vw, 4rem); line-height: 1.02; letter-spacing: -0.065em; font-weight: 500; }
+  h1 .pix { font-family: var(--pixel); font-weight: 400; color: var(--accent); letter-spacing: -0.02em; font-size: 0.9em; }
+  .lede { margin: 0 0 30px; color: var(--soft); font-size: 15px; line-height: 1.65; max-width: 34em; }
+  .get { display: flex; flex-wrap: wrap; align-items: center; gap: 18px 22px; }
+  .meta { margin-top: 14px; font: 400 12px/1.5 var(--mono); color: var(--muted); }
+  .status { margin-top: 18px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surface); font-size: 14px; color: var(--soft); }
+  .status[hidden] { display: none; }
+
+  .panel { position: relative; border: 1px solid var(--line); background: rgba(8, 8, 8, 0.8); padding: 26px; }
+  .panel .corner { position: absolute; width: 12px; height: 12px; border-color: var(--accent); border-style: solid; pointer-events: none; }
+  .panel .tl { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+  .panel .tr { top: -1px; right: -1px; border-width: 1px 1px 0 0; }
+  .panel .bl { bottom: -1px; left: -1px; border-width: 0 0 1px 1px; }
+  .panel .br { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+  .qr { display: grid; grid-template-columns: 168px minmax(0, 1fr); gap: 22px; align-items: center; }
+  .qr svg { width: 168px; height: 168px; display: block; border-radius: 2px; }
+  .qr p { margin: 8px 0 0; color: var(--soft); font-size: 14px; }
+  .qr code { color: var(--text); font-size: 12px; word-break: break-all; }
+
+  section { padding: 72px 48px; }
+  h2 { margin: 14px 0 28px; font-size: clamp(1.8rem, 3.4vw, 2.6rem); line-height: 1.08; letter-spacing: -0.05em; font-weight: 500; }
+  h2 .muted { color: var(--muted); }
+  .steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--line); }
+  .steps li { padding: 22px 22px 6px 0; }
+  .steps li + li { padding-left: 22px; border-left: 1px solid var(--line-soft); }
+  .steps b { display: block; font: 400 22px/1 var(--pixel); color: var(--accent); margin-bottom: 14px; }
+  .steps h3 { margin: 0 0 8px; font-size: 16px; font-weight: 500; letter-spacing: -0.02em; }
+  .steps p { margin: 0; color: var(--soft); font-size: 14px; }
+  .steps code { font-size: 12.5px; color: var(--text); }
+
+  .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0; border-top: 1px solid var(--line); }
+  .facts > div { padding: 20px 22px 18px 0; }
+  .facts > div:nth-child(even) { padding-left: 22px; border-left: 1px solid var(--line-soft); }
+  .facts > div:nth-child(n+3) { border-top: 1px solid var(--line-soft); }
+  .facts .v { margin-top: 8px; font: 400 13px/1.5 var(--mono); color: var(--text); word-break: break-all; }
+  .facts p { margin: 8px 0 0; color: var(--soft); font-size: 14px; }
+
+  footer { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 22px 48px; font-size: 13px; color: var(--muted); }
+  footer a { color: var(--soft); text-decoration: none; }
+  footer a:hover { color: var(--accent); }
+
+  /* On a phone the QR code is for someone else: the download comes first. */
+  .on-android .qr-panel { display: none; }
+
+  @media (max-width: 1000px) {
+    .hero { grid-template-columns: minmax(0, 1fr); padding: 64px 32px 64px; gap: 40px; }
+    section, footer { padding-left: 32px; padding-right: 32px; }
+    .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .steps li:nth-child(3) { padding-left: 0; border-left: 0; }
+    .steps li:nth-child(n+3) { border-top: 1px solid var(--line-soft); }
+  }
+  @media (max-width: 640px) {
+    header.site .in { padding: 0 16px; height: 64px; }
+    .actions .ghost { display: none; }
+    .hero { padding: 44px 16px 52px; }
+    section, footer { padding-left: 16px; padding-right: 16px; }
+    section { padding-top: 56px; padding-bottom: 56px; }
+    .steps, .facts { grid-template-columns: minmax(0, 1fr); }
+    .steps li, .steps li + li, .facts > div, .facts > div:nth-child(even) { padding-left: 0; border-left: 0; }
+    .steps li + li, .facts > div + div { border-top: 1px solid var(--line-soft); }
+    .qr { grid-template-columns: minmax(0, 1fr); justify-items: start; }
+    .btn.big { width: 100%; }
+    .btn.big > span { flex: 1; justify-content: center; }
+  }
+</style>
+</head>
+<body>
+<header class="site">
+  <div class="in">
+    <a class="brand" href="./"><img src="logo.svg" alt=""><span>Pi-<b>Bolt</b></span></a>
+    <div class="actions">
+      <a class="btn ghost small" href="https://github.com/opensec-git/Pi-Bolt"><span>GitHub</span><i aria-hidden="true">↗</i></a>
+      <a class="btn primary small" href="./#install"><span>Install</span><i aria-hidden="true">→</i></a>
+    </div>
+  </div>
+</header>
+
+<main class="frame">
+  <div class="hero">
+    <div>
+      <span class="micro accent bracket" id="badge">Pi-Bolt for Android · 0.1.0</span>
+      <h1>Your session,<br>in your <span class="pix">pocket.</span></h1>
+      <p class="lede">The Pi-Bolt app drives the Pi-Bolt session on your computer from your phone: watch answers and tool output
+        stream, send prompts, steer or stop a turn, switch model and answer Pi's dialogs. Paired by QR code and end to end
+        encrypted, on your Wi-Fi or from anywhere through a Cloudflare tunnel.</p>
+      <div class="get">
+        <a class="btn primary big" id="download" href="https://github.com/opensec-git/Pi-Bolt/releases/download/android-v0.1.0/pi-bolt-android-0.1.0.apk" download><span>Download the APK</span><i aria-hidden="true">↓</i></a>
+        <a class="link" href="#install">How to install <span aria-hidden="true">→</span></a>
+      </div>
+      <div class="meta" id="meta">Version 0.1.0 · 4.4 MB · Android 8.0 or later</div>
+      <p class="status" id="status" role="status" hidden></p>
+    </div>
+
+    <div class="panel qr-panel">
+      <span class="corner tl"></span><span class="corner tr"></span><span class="corner bl"></span><span class="corner br"></span>
+      <div class="qr">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 33 33" shape-rendering="crispEdges" role="img" aria-label="QR code for https://pi-bolt.opensec.in/android"><rect width="33" height="33" fill="#fff"/><path d="M2 2h1v1h-1zM3 2h1v1h-1zM4 2h1v1h-1zM5 2h1v1h-1zM6 2h1v1h-1zM7 2h1v1h-1zM8 2h1v1h-1zM11 2h1v1h-1zM12 2h1v1h-1zM13 2h1v1h-1zM14 2h1v1h-1zM15 2h1v1h-1zM16 2h1v1h-1zM17 2h1v1h-1zM20 2h1v1h-1zM21 2h1v1h-1zM22 2h1v1h-1zM24 2h1v1h-1zM25 2h1v1h-1zM26 2h1v1h-1zM27 2h1v1h-1zM28 2h1v1h-1zM29 2h1v1h-1zM30 2h1v1h-1zM2 3h1v1h-1zM8 3h1v1h-1zM15 3h1v1h-1zM16 3h1v1h-1zM17 3h1v1h-1zM18 3h1v1h-1zM19 3h1v1h-1zM20 3h1v1h-1zM22 3h1v1h-1zM24 3h1v1h-1zM30 3h1v1h-1zM2 4h1v1h-1zM4 4h1v1h-1zM5 4h1v1h-1zM6 4h1v1h-1zM8 4h1v1h-1zM10 4h1v1h-1zM12 4h1v1h-1zM13 4h1v1h-1zM14 4h1v1h-1zM15 4h1v1h-1zM17 4h1v1h-1zM22 4h1v1h-1zM24 4h1v1h-1zM26 4h1v1h-1zM27 4h1v1h-1zM28 4h1v1h-1zM30 4h1v1h-1zM2 5h1v1h-1zM4 5h1v1h-1zM5 5h1v1h-1zM6 5h1v1h-1zM8 5h1v1h-1zM10 5h1v1h-1zM12 5h1v1h-1zM13 5h1v1h-1zM16 5h1v1h-1zM17 5h1v1h-1zM19 5h1v1h-1zM20 5h1v1h-1zM24 5h1v1h-1zM26 5h1v1h-1zM27 5h1v1h-1zM28 5h1v1h-1zM30 5h1v1h-1zM2 6h1v1h-1zM4 6h1v1h-1zM5 6h1v1h-1zM6 6h1v1h-1zM8 6h1v1h-1zM10 6h1v1h-1zM11 6h1v1h-1zM12 6h1v1h-1zM14 6h1v1h-1zM17 6h1v1h-1zM18 6h1v1h-1zM19 6h1v1h-1zM20 6h1v1h-1zM21 6h1v1h-1zM22 6h1v1h-1zM24 6h1v1h-1zM26 6h1v1h-1zM27 6h1v1h-1zM28 6h1v1h-1zM30 6h1v1h-1zM2 7h1v1h-1zM8 7h1v1h-1zM10 7h1v1h-1zM11 7h1v1h-1zM12 7h1v1h-1zM13 7h1v1h-1zM14 7h1v1h-1zM19 7h1v1h-1zM22 7h1v1h-1zM24 7h1v1h-1zM30 7h1v1h-1zM2 8h1v1h-1zM3 8h1v1h-1zM4 8h1v1h-1zM5 8h1v1h-1zM6 8h1v1h-1zM7 8h1v1h-1zM8 8h1v1h-1zM10 8h1v1h-1zM12 8h1v1h-1zM14 8h1v1h-1zM16 8h1v1h-1zM18 8h1v1h-1zM20 8h1v1h-1zM22 8h1v1h-1zM24 8h1v1h-1zM25 8h1v1h-1zM26 8h1v1h-1zM27 8h1v1h-1zM28 8h1v1h-1zM29 8h1v1h-1zM30 8h1v1h-1zM10 9h1v1h-1zM11 9h1v1h-1zM12 9h1v1h-1zM13 9h1v1h-1zM14 9h1v1h-1zM16 9h1v1h-1zM18 9h1v1h-1zM20 9h1v1h-1zM21 9h1v1h-1zM2 10h1v1h-1zM4 10h1v1h-1zM5 10h1v1h-1zM6 10h1v1h-1zM7 10h1v1h-1zM8 10h1v1h-1zM13 10h1v1h-1zM19 10h1v1h-1zM22 10h1v1h-1zM24 10h1v1h-1zM25 10h1v1h-1zM26 10h1v1h-1zM27 10h1v1h-1zM28 10h1v1h-1zM6 11h1v1h-1zM13 11h1v1h-1zM15 11h1v1h-1zM16 11h1v1h-1zM17 11h1v1h-1zM19 11h1v1h-1zM20 11h1v1h-1zM21 11h1v1h-1zM22 11h1v1h-1zM23 11h1v1h-1zM24 11h1v1h-1zM25 11h1v1h-1zM26 11h1v1h-1zM30 11h1v1h-1zM2 12h1v1h-1zM3 12h1v1h-1zM5 12h1v1h-1zM7 12h1v1h-1zM8 12h1v1h-1zM9 12h1v1h-1zM10 12h1v1h-1zM12 12h1v1h-1zM14 12h1v1h-1zM15 12h1v1h-1zM16 12h1v1h-1zM17 12h1v1h-1zM20 12h1v1h-1zM24 12h1v1h-1zM3 13h1v1h-1zM4 13h1v1h-1zM7 13h1v1h-1zM10 13h1v1h-1zM11 13h1v1h-1zM12 13h1v1h-1zM13 13h1v1h-1zM14 13h1v1h-1zM15 13h1v1h-1zM17 13h1v1h-1zM18 13h1v1h-1zM21 13h1v1h-1zM22 13h1v1h-1zM24 13h1v1h-1zM26 13h1v1h-1zM27 13h1v1h-1zM29 13h1v1h-1zM4 14h1v1h-1zM6 14h1v1h-1zM8 14h1v1h-1zM9 14h1v1h-1zM11 14h1v1h-1zM13 14h1v1h-1zM16 14h1v1h-1zM17 14h1v1h-1zM19 14h1v1h-1zM21 14h1v1h-1zM27 14h1v1h-1zM28 14h1v1h-1zM6 15h1v1h-1zM7 15h1v1h-1zM12 15h1v1h-1zM13 15h1v1h-1zM14 15h1v1h-1zM18 15h1v1h-1zM19 15h1v1h-1zM20 15h1v1h-1zM21 15h1v1h-1zM22 15h1v1h-1zM23 15h1v1h-1zM24 15h1v1h-1zM25 15h1v1h-1zM26 15h1v1h-1zM30 15h1v1h-1zM3 16h1v1h-1zM4 16h1v1h-1zM5 16h1v1h-1zM8 16h1v1h-1zM9 16h1v1h-1zM11 16h1v1h-1zM13 16h1v1h-1zM14 16h1v1h-1zM17 16h1v1h-1zM18 16h1v1h-1zM19 16h1v1h-1zM22 16h1v1h-1zM24 16h1v1h-1zM25 16h1v1h-1zM26 16h1v1h-1zM27 16h1v1h-1zM28 16h1v1h-1zM3 17h1v1h-1zM5 17h1v1h-1zM9 17h1v1h-1zM11 17h1v1h-1zM16 17h1v1h-1zM17 17h1v1h-1zM20 17h1v1h-1zM22 17h1v1h-1zM23 17h1v1h-1zM25 17h1v1h-1zM29 17h1v1h-1zM3 18h1v1h-1zM6 18h1v1h-1zM8 18h1v1h-1zM12 18h1v1h-1zM13 18h1v1h-1zM19 18h1v1h-1zM20 18h1v1h-1zM27 18h1v1h-1zM28 18h1v1h-1zM2 19h1v1h-1zM6 19h1v1h-1zM7 19h1v1h-1zM9 19h1v1h-1zM10 19h1v1h-1zM12 19h1v1h-1zM13 19h1v1h-1zM15 19h1v1h-1zM16 19h1v1h-1zM18 19h1v1h-1zM19 19h1v1h-1zM20 19h1v1h-1zM21 19h1v1h-1zM22 19h1v1h-1zM24 19h1v1h-1zM26 19h1v1h-1zM28 19h1v1h-1zM30 19h1v1h-1zM2 20h1v1h-1zM5 20h1v1h-1zM8 20h1v1h-1zM9 20h1v1h-1zM11 20h1v1h-1zM12 20h1v1h-1zM13 20h1v1h-1zM15 20h1v1h-1zM16 20h1v1h-1zM17 20h1v1h-1zM18 20h1v1h-1zM19 20h1v1h-1zM25 20h1v1h-1zM26 20h1v1h-1zM28 20h1v1h-1zM2 21h1v1h-1zM4 21h1v1h-1zM5 21h1v1h-1zM6 21h1v1h-1zM9 21h1v1h-1zM10 21h1v1h-1zM11 21h1v1h-1zM12 21h1v1h-1zM14 21h1v1h-1zM15 21h1v1h-1zM18 21h1v1h-1zM23 21h1v1h-1zM29 21h1v1h-1zM2 22h1v1h-1zM5 22h1v1h-1zM7 22h1v1h-1zM8 22h1v1h-1zM9 22h1v1h-1zM10 22h1v1h-1zM11 22h1v1h-1zM12 22h1v1h-1zM13 22h1v1h-1zM14 22h1v1h-1zM16 22h1v1h-1zM19 22h1v1h-1zM22 22h1v1h-1zM23 22h1v1h-1zM24 22h1v1h-1zM25 22h1v1h-1zM26 22h1v1h-1zM28 22h1v1h-1zM29 22h1v1h-1zM30 22h1v1h-1zM10 23h1v1h-1zM13 23h1v1h-1zM18 23h1v1h-1zM20 23h1v1h-1zM21 23h1v1h-1zM22 23h1v1h-1zM26 23h1v1h-1zM27 23h1v1h-1zM28 23h1v1h-1zM29 23h1v1h-1zM30 23h1v1h-1zM2 24h1v1h-1zM3 24h1v1h-1zM4 24h1v1h-1zM5 24h1v1h-1zM6 24h1v1h-1zM7 24h1v1h-1zM8 24h1v1h-1zM11 24h1v1h-1zM12 24h1v1h-1zM13 24h1v1h-1zM17 24h1v1h-1zM20 24h1v1h-1zM21 24h1v1h-1zM22 24h1v1h-1zM24 24h1v1h-1zM26 24h1v1h-1zM27 24h1v1h-1zM28 24h1v1h-1zM2 25h1v1h-1zM8 25h1v1h-1zM10 25h1v1h-1zM16 25h1v1h-1zM21 25h1v1h-1zM22 25h1v1h-1zM26 25h1v1h-1zM29 25h1v1h-1zM30 25h1v1h-1zM2 26h1v1h-1zM4 26h1v1h-1zM5 26h1v1h-1zM6 26h1v1h-1zM8 26h1v1h-1zM10 26h1v1h-1zM11 26h1v1h-1zM17 26h1v1h-1zM18 26h1v1h-1zM19 26h1v1h-1zM22 26h1v1h-1zM23 26h1v1h-1zM24 26h1v1h-1zM25 26h1v1h-1zM26 26h1v1h-1zM28 26h1v1h-1zM29 26h1v1h-1zM2 27h1v1h-1zM4 27h1v1h-1zM5 27h1v1h-1zM6 27h1v1h-1zM8 27h1v1h-1zM10 27h1v1h-1zM11 27h1v1h-1zM16 27h1v1h-1zM18 27h1v1h-1zM19 27h1v1h-1zM20 27h1v1h-1zM21 27h1v1h-1zM22 27h1v1h-1zM23 27h1v1h-1zM27 27h1v1h-1zM28 27h1v1h-1zM29 27h1v1h-1zM30 27h1v1h-1zM2 28h1v1h-1zM4 28h1v1h-1zM5 28h1v1h-1zM6 28h1v1h-1zM8 28h1v1h-1zM10 28h1v1h-1zM14 28h1v1h-1zM15 28h1v1h-1zM16 28h1v1h-1zM17 28h1v1h-1zM19 28h1v1h-1zM21 28h1v1h-1zM22 28h1v1h-1zM23 28h1v1h-1zM24 28h1v1h-1zM25 28h1v1h-1zM26 28h1v1h-1zM27 28h1v1h-1zM28 28h1v1h-1zM29 28h1v1h-1zM2 29h1v1h-1zM8 29h1v1h-1zM12 29h1v1h-1zM14 29h1v1h-1zM17 29h1v1h-1zM18 29h1v1h-1zM20 29h1v1h-1zM22 29h1v1h-1zM24 29h1v1h-1zM26 29h1v1h-1zM27 29h1v1h-1zM29 29h1v1h-1zM2 30h1v1h-1zM3 30h1v1h-1zM4 30h1v1h-1zM5 30h1v1h-1zM6 30h1v1h-1zM7 30h1v1h-1zM8 30h1v1h-1zM10 30h1v1h-1zM11 30h1v1h-1zM12 30h1v1h-1zM13 30h1v1h-1zM14 30h1v1h-1zM16 30h1v1h-1zM17 30h1v1h-1zM19 30h1v1h-1zM21 30h1v1h-1zM23 30h1v1h-1zM24 30h1v1h-1zM26 30h1v1h-1zM27 30h1v1h-1zM28 30h1v1h-1z" fill="#050505"/></svg>
+        <div>
+          <span class="micro">On your computer?</span>
+          <p>Scan this with your phone's camera to open this page there; the download starts on its own.</p>
+          <p><code>pi-bolt.opensec.in/android</code></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rule"></div>
+  <section id="install" aria-labelledby="install-title">
+    <span class="micro accent">Install</span>
+    <h2 id="install-title">Four steps.<br><span class="muted">About a minute.</span></h2>
+    <ol class="steps">
+      <li><b>01</b><h3>Download</h3><p>Tap <em>Download the APK</em> on your phone. Android may warn that the file can harm your device: it is an app from outside the Play Store, so tap <em>Download anyway</em>.</p></li>
+      <li><b>02</b><h3>Install</h3><p>Open the file. The first time, Android asks to allow installs from your browser: allow it, go back, and tap <em>Install</em>.</p></li>
+      <li><b>03</b><h3>Start remote control</h3><p>In Pi-Bolt on your computer, run <code>/remote-control</code> (add <code>tunnel</code> to reach it from anywhere). It shows a QR code.</p></li>
+      <li><b>04</b><h3>Pair</h3><p>In the app, tap <em>Scan</em> and point it at the QR code. The phone is paired; later it reconnects on its own.</p></li>
+    </ol>
+  </section>
+
+  <div class="rule"></div>
+  <section aria-labelledby="facts-title">
+    <span class="micro accent">Check what you install</span>
+    <h2 id="facts-title">Signed and checksummed.<br><span class="muted">Built in the open.</span></h2>
+    <div class="facts">
+      <div><span class="micro">APK SHA-256</span><div class="v" id="sha">738a2bc0c1a9a741e2ac38c2d1f8ad2fadde96e673fea2777bf7901940c1abee</div></div>
+      <div><span class="micro">Signing certificate SHA-256</span><div class="v" id="cert">f752464c8b6d5906d7fd467346b89316518e3ddfe77843f66b1fa673818a2c90</div>
+        <p>Every update is signed with this certificate; Android refuses an update signed with any other.</p></div>
+      <div><span class="micro">Needs</span><p>Android 8.0 or later on the phone, and on the computer a Pi-Bolt with the <code>/remote-control</code> command.</p></div>
+      <div><span class="micro">Built by</span><p>GitHub Actions from the <a href="https://github.com/opensec-git/Pi-Bolt/tree/pi-bolt/android">android/</a> sources, release <a id="release" href="https://github.com/opensec-git/Pi-Bolt/releases/tag/android-v0.1.0">android-v0.1.0</a>. Protocol and security: <a href="https://github.com/opensec-git/Pi-Bolt/blob/pi-bolt/packages/coding-agent/docs/remote-control.md">remote control</a>.</p></div>
+    </div>
+  </section>
+
+  <div class="rule"></div>
+  <footer>
+    <span>© 2026 OpenSec · MIT licensed</span>
+    <a href="./">Pi-Bolt home ↗</a>
+  </footer>
+</main>
+
+<script>
+  // The newest release comes from android.json, which the Android release workflow writes next to this page; the values
+  // in the HTML are the fallback.
+  var isAndroid = /Android/i.test(navigator.userAgent) || (navigator.userAgentData && navigator.userAgentData.platform === "Android");
+  if (isAndroid) document.documentElement.classList.add("on-android");
+
+  function apply(release) {
+    var mb = release.size ? " · " + (release.size / 1048576).toFixed(1) + " MB" : "";
+    document.getElementById("download").href = release.apk;
+    document.getElementById("badge").textContent = "Pi-Bolt for Android · " + release.version;
+    document.getElementById("meta").textContent = "Version " + release.version + mb + " · Android 8.0 or later";
+    document.getElementById("sha").textContent = release.sha256;
+    document.getElementById("cert").textContent = release.certSha256;
+    var link = document.getElementById("release");
+    link.href = release.page;
+    link.textContent = "android-v" + release.version;
+  }
+
+  // On a phone this page is the download link: start it once, without looping on reload or back.
+  function autoDownload() {
+    if (!isAndroid) return;
+    try {
+      if (sessionStorage.getItem("pibolt-apk-started")) return;
+      sessionStorage.setItem("pibolt-apk-started", "1");
+    } catch (e) {}
+    var status = document.getElementById("status");
+    status.textContent = "Your download is starting. If it does not, tap Download the APK. Then open the file to install it.";
+    status.hidden = false;
+    setTimeout(function () { location.href = document.getElementById("download").href; }, 700);
+  }
+
+  var done = false;
+  function go() { if (!done) { done = true; autoDownload(); } }
+  // Wait briefly for android.json so a phone gets the newest version, never longer than a second.
+  setTimeout(go, 1000);
+  fetch("android.json", { cache: "no-cache" })
+    .then(function (response) { return response.ok ? response.json() : null; })
+    .then(function (release) {
+      if (release && /^https:\/\/github\.com\/opensec-git\/Pi-Bolt\/releases\/download\//.test(release.apk)) apply(release);
+    })
+    .catch(function () {})
+    .then(go);
+</script>
+</body>
+</html>
