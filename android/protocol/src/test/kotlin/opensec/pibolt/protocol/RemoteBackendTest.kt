@@ -242,6 +242,24 @@ class RemoteBackendTest {
     }
 
     @Test
+    fun anOversizedFrameBeforeTheHandshakeIsRefused(): Unit = runBlocking {
+        val flooder = object : WebSocketListener() {
+            override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                webSocket.send(ByteArray(200_000).toByteString())
+            }
+
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                webSocket.close(1000, null)
+            }
+        }
+        server.enqueue(MockResponse.Builder().webSocketUpgrade(flooder).build())
+        val backend = RemoteBackend(config(KeyPair.generate(), secret, listOf(endpoint())))
+        assertFalse(backend.connect())
+        val state = assertIs<ConnectionState.Disconnected>(backend.state.value)
+        assertEquals(DisconnectReason.Malformed, state.reason)
+    }
+
+    @Test
     fun subprotocolHeaderIsSent(): Unit = runBlocking {
         val host = TestHost(hostKey, secret, paired)
         server.enqueue(MockResponse.Builder().webSocketUpgrade(host).build())

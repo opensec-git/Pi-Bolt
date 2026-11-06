@@ -229,6 +229,13 @@ class RemoteBackend(
         }
 
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+            // Size checks before any work: handshake message 2 is a key, a tag and a small JSON payload; a transport
+            // frame is at most one Noise message (65535 bytes). An endpoint that is not the host cannot make us buffer more.
+            val limit = if (receiveCipher == null) MAX_HANDSHAKE_REPLY else MAX_NOISE_MESSAGE
+            if (bytes.size > limit) {
+                fail(webSocket, 4400, DisconnectReason.Malformed, "Frame too large")
+                return
+            }
             val data = bytes.toByteArray()
             if (receiveCipher == null) {
                 val hello = try {
@@ -298,6 +305,9 @@ class RemoteBackend(
     }
 
     companion object {
+        private const val MAX_HANDSHAKE_REPLY = 4096
+        private const val MAX_NOISE_MESSAGE = 65535
+
         fun defaultClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(0, TimeUnit.MILLISECONDS)

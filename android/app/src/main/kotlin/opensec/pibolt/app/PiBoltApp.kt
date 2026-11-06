@@ -76,8 +76,10 @@ class PiBoltApp : Application() {
         val known = hosts.get(payload.hostKeyId)
         val secretUsable = !payload.isExpired()
         val controller = if (known != null) {
-            hosts.upsert(known.copy(name = payload.hostName, endpoints = payload.endpoints))
-            SessionController(this, known.id, payload.hostName, payload.endpoints, pairSecret = null, fallbackSecret = payload.secret.takeIf { secretUsable })
+            // Nothing in the stored host changes until the handshake proves the host key: SessionController stores the
+            // endpoint and name that worked on connect. The link's addresses are tried first, then the known ones.
+            val endpoints = (payload.endpoints + known.endpoints).distinct()
+            SessionController(this, known.id, known.name, endpoints, pairSecret = null, fallbackSecret = payload.secret.takeIf { secretUsable })
         } else {
             SessionController(this, payload.hostKeyId, payload.hostName, payload.endpoints, pairSecret = payload.secret)
         }

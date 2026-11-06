@@ -38,7 +38,7 @@ object Framing {
 class FramingException(message: String) : Exception(message)
 
 /** Reassembles decrypted chunks into whole messages. Not thread safe: feed it from one receive loop. */
-class Reassembler(private val maxMessageBytes: Int = 64 * 1024 * 1024) {
+class Reassembler(private val maxMessageBytes: Int = 32 * 1024 * 1024) {
     private val buffer = ByteArrayOutputStream()
 
     /** Feed one decrypted chunk; returns the complete message when this chunk was the last one. */

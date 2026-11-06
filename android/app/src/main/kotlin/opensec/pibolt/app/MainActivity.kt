@@ -5,7 +5,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,6 +59,9 @@ object Routes {
 private fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
     val nav = rememberNavController()
     var linkError by remember { mutableStateOf<String?>(null) }
+    // A link from outside the app (a browser, a chat) pairs only after the user confirms it in the app.
+    var linkToConfirm by remember { mutableStateOf<PairingPayload?>(null) }
+    val liveSession by app.session.collectAsState()
 
     fun usePairing(text: String): String? {
         val payload = try {
@@ -76,7 +83,40 @@ private fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit
     LaunchedEffect(pendingLink) {
         val link = pendingLink ?: return@LaunchedEffect
         consumeLink()
-        linkError = usePairing(link)
+        linkToConfirm = try {
+            PairingPayload.parse(link)
+        } catch (e: Exception) {
+            linkError = e.message ?: "Not a Pi-Bolt pairing code"
+            null
+        }
+    }
+
+    linkToConfirm?.let { payload ->
+        val known = app.hosts.get(payload.hostKeyId) != null
+        val live = liveSession?.takeIf { !it.stopped }
+        AlertDialog(
+            onDismissRequest = { linkToConfirm = null },
+            title = { Text(if (known) "Connect to ${payload.hostName}?" else "Pair with ${payload.hostName}?") },
+            text = {
+                Text(
+                    buildString {
+                        append("A link opened Pi-Bolt to ")
+                        append(if (known) "connect to a paired computer" else "pair this phone with a computer")
+                        append(". Only continue if you just ran /remote-control on it.\n\n")
+                        append(payload.endpoints.joinToString("\n"))
+                        if (live != null) append("\n\nThis ends the current session.")
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val text = payload.encode()
+                    linkToConfirm = null
+                    linkError = usePairing(text)
+                }) { Text(if (known) "Connect" else "Pair") }
+            },
+            dismissButton = { TextButton(onClick = { linkToConfirm = null }) { Text("Cancel") } },
+        )
     }
 
     NavHost(nav, startDestination = Routes.HOSTS) {
