@@ -20,6 +20,9 @@ import opensec.pibolt.protocol.type
  * See docs/json.md (event stream) and docs/remote-control.md (`remote_hello`).
  */
 object SessionReducer {
+    /** More content blocks than any real message has; a larger contentIndex from the wire is ignored. */
+    private const val MAX_CONTENT_BLOCKS = 1024
+
     fun reduce(state: SessionState, event: JsonObject): SessionState = when (event.type) {
         "remote_hello" -> fromHello(event)
         "agent_start" -> state.copy(isRunning = true)
@@ -110,7 +113,8 @@ object SessionReducer {
         if (s.stream == null) s = startStream(s, JsonObject(emptyMap()))
         val stream = s.stream!!
         val usage = event.obj("usage")?.let(::usageFrom) ?: s.lastUsage
-        val index = delta.int("contentIndex") ?: return s.copy(lastUsage = usage)
+        // From the wire: a negative or absurd index is ignored rather than throwing or padding the list until OOM.
+        val index = delta.int("contentIndex")?.takeIf { it in 0 until MAX_CONTENT_BLOCKS } ?: return s.copy(lastUsage = usage)
         val blocks = stream.blocks.toMutableList()
         while (blocks.size <= index) blocks.add(null)
         val current = blocks[index]

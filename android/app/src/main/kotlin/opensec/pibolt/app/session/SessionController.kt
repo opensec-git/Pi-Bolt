@@ -1,6 +1,7 @@
 package opensec.pibolt.app.session
 
 import android.os.SystemClock
+import android.util.Log
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -249,13 +250,22 @@ class SessionController(
         }
     }
 
-    private fun apply(state: SessionState, input: Input): SessionState = when (input) {
-        is Input.Mutate -> input.change(state)
-        is Input.Event -> {
-            val event = input.json
-            sideEffects(state, event)
-            SessionReducer.reduce(state, event)
+    /**
+     * One input, never fatal: an event the reducer cannot apply (a host sending nonsense) is dropped, keeping the
+     * state. An exception here would end reduceLoop's coroutine and the app with it.
+     */
+    private fun apply(state: SessionState, input: Input): SessionState = try {
+        when (input) {
+            is Input.Mutate -> input.change(state)
+            is Input.Event -> {
+                val event = input.json
+                sideEffects(state, event)
+                SessionReducer.reduce(state, event)
+            }
         }
+    } catch (e: RuntimeException) {
+        Log.w("PiBolt", "dropped an event the session could not apply", e)
+        state
     }
 
     private fun sideEffects(before: SessionState, event: JsonObject) {
