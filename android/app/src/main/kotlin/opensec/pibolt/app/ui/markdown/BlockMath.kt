@@ -32,13 +32,22 @@ data class CodeInfo(val language: String, val filename: String?, val label: Stri
             "gradle" to "groovy", "groovy" to "groovy", "lua" to "lua", "dart" to "dart", "scala" to "scala",
             "ex" to "elixir", "exs" to "elixir", "hs" to "haskell", "vue" to "vue", "svelte" to "svelte",
             "proto" to "proto", "graphql" to "graphql", "gql" to "graphql", "zig" to "zig", "nix" to "nix",
+            "psm1" to "powershell", "mk" to "makefile", "cfg" to "ini", "conf" to "ini", "properties" to "ini",
+            "less" to "css", "sass" to "scss", "mdx" to "markdown", "xaml" to "xml", "svg" to "xml", "plist" to "xml",
+            "pyi" to "python", "rake" to "ruby", "jsonl" to "json", "json5" to "json", "kt.kts" to "kotlin",
         )
 
-        private val fileNames = mapOf("dockerfile" to "dockerfile", "makefile" to "makefile", "gemfile" to "ruby", "rakefile" to "ruby")
+        private val fileNames = mapOf(
+            "dockerfile" to "dockerfile", "containerfile" to "dockerfile", "makefile" to "makefile", "gnumakefile" to "makefile",
+            "gemfile" to "ruby", "rakefile" to "ruby", ".bashrc" to "shell", ".zshrc" to "shell", ".profile" to "shell",
+            ".env" to "shell", ".gitconfig" to "ini", ".editorconfig" to "ini",
+        )
 
         /** Tags the viewer accepts as a language title (besides file names). */
-        private val knownTags: Set<String> = extensions.keys + extensions.values + fileNames.values + shellAliases +
-            setOf("kotlin", "typescript", "javascript", "python", "ruby", "rust", "golang", "yaml", "objc", "r", "perl")
+        private val knownTags: Set<String> by lazy {
+            extensions.keys + extensions.values + fileNames.values + shellAliases + Languages.aliases +
+                setOf("kotlin", "typescript", "javascript", "python", "ruby", "rust", "golang", "yaml", "objc", "r", "perl") - plainLanguages
+        }
 
         /** No highlighting for these, and the viewer keeps them as plain text. */
         private val plainLanguages = setOf("markdown", "md", "text", "txt", "plain", "plaintext", "log", "output")

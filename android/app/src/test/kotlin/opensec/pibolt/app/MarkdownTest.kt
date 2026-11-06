@@ -109,7 +109,7 @@ class MarkdownTest {
         assertEquals(Highlighter.Kind.Function, kindAt("f"))
         assertEquals(Highlighter.Kind.Number, kindAt("1"))
         val shell = Highlighter.tokenize("ls # list", "bash")
-        assertEquals(Highlighter.Kind.Comment, shell.single().kind)
+        assertEquals(listOf(Highlighter.Kind.Function, Highlighter.Kind.Comment), shell.map { it.kind })
     }
 
     @Test

@@ -39,11 +39,30 @@ Diff: add bg success @ 11% / fg `#9BE6BF`, delete bg danger @ 11% / fg `#F7A9A5`
 success / danger @ 22%. Add and delete never differ by hue alone: a `+` / `−` sign column, a solid 3dp gutter bar
 (success @ 60%) for additions and a hatched one (2dp stripes every 4dp, danger @ 70%) for deletions. Context rows
 ink2, line numbers ink3, hunk rows monoMeta ink3 on surface2.
-Syntax: base ink1, keywords ink1 SemiBold, calls ink1 Medium, strings `#9ED3C6`, numbers `#E5A97E`, types
-`#C9B8F0` (capitalised names and built-ins such as `string`), comments ink3 italic, punctuation and operators ink2,
-the shell `$` prompt success SemiBold, JSON keys ink1. Plain-text fences (`text`, `markdown`, `log`) stay plain.
+Syntax: one palette per theme (`SyntaxColors`): keyword, type (capitalised names and built-ins such as `string`),
+function (calls and declarations), string, number, constant (`true`, `null`, ALL_CAPS), operator, attribute
+(annotations, decorators, object and YAML keys, HTML attributes), tag, regex, escape (escapes and `${…}`), variable
+(`$x`, `@x`), comments italic; punctuation ink2, base text ink1, the shell `$` prompt success SemiBold, diff lines in
+the diff colours. Graphite, Void and Codex share the cool "Pi" palette (violet keywords, yellow types, blue calls,
+green strings, orange numbers); Ember is warm and earthy, Claude coral / sand / sage, Vercel pink / purple / blue /
+green, GitHub uses its dark "prettylights" roles. Only `text`, `log` and `output` fences stay plain.
 
-Every text token passes WCAG AA (4.5:1) on canvas and surface2 in all seven themes; ink4 is decorative only.
+| Role | Pi | Ember | Claude | Vercel | GitHub |
+|---|---|---|---|---|---|
+| keyword | `#C9A0F5` | `#F28E7E` | `#E8956F` | `#FF6B98` | `#FF7B72` |
+| type | `#E8C67E` | `#F2C46A` | `#E3C590` | `#C49BFF` | `#FFA657` |
+| function | `#7FB6F5` | `#9CC78B` | `#9DBAE8` | `#6CB4FF` | `#D2A8FF` |
+| string | `#A3D58E` | `#C8CC6E` | `#B6CF8F` | `#6CD58B` | `#A5D6FF` |
+| number / constant | `#E9A77C` | `#D99BB8` | `#D9A3D9` | `#F5B562` / `#6CB4FF` | `#79C0FF` |
+| operator | `#86CBDD` | `#F0A35C` | ink2 | ink2 | `#FF7B72` |
+| attribute | `#E9A77C` | `#8DB8A8` | `#E3C590` | `#C49BFF` | `#79C0FF` |
+| tag | `#F08E9A` | `#F28E7E` | `#E8956F` | `#6CD58B` | `#7EE787` |
+| regex / escape | `#86CBDD` | `#9CC78B` / `#F0A35C` | `#8FCBC0` | `#F5B562` | `#7EE787` |
+| variable | `#F08E9A` | `#8DB8A8` | `#9DBAE8` | `#FF9F6B` | `#FFA657` |
+| comment | `#858B94` | ink3 | ink3 | ink3 | ink3 |
+
+Every text token passes WCAG AA (4.5:1) on canvas and surface2 in all seven themes (syntax colours on surface1 too,
+`SyntaxColorsTest`); ink4 is decorative only.
 
 ## Type
 
@@ -246,18 +265,42 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   - `todo` steps read as one line: "Todo  Added: Write tests", "Done: …", "Started: …", "Cleared the list".
   - code blocks: surface1, radius 12, 1dp line. Header 40dp: code glyph 14dp ink3, then the filename (monoSmall
     ink1, middle ellipsis) from the fence info string (`ts title="src/a.ts"`, `ts:src/a.ts`, `src/a.ts`) or the
-    language (monoMeta ink3; shell aliases show as `shell`, none as `code`); right side Wrap (only when a line
-    overflows or wrap is on), Open (folded or 40+ lines) and the shared Copy button (check + "Copied", 1500 ms).
-    Code Mono 12.5/19, 10dp vertical padding; line numbers from 3 lines on, Mono 11.5 ink3 right-aligned, then a 1dp
-    line rule and 10dp to the code. No wrap by default: one horizontal scroll with 20dp edge fades into surface1.
+    language (monoMeta ink3; shell aliases show as `shell`; untagged code shows the language detected from its first
+    lines, else `code`); right side line numbers (toggle, 3+ lines), Wrap (only when a line overflows or wrap is
+    on), Open (folded or 40+ lines) and the shared Copy button (check + "Copied", 1500 ms). Code Mono 12.5/19, 10dp
+    vertical padding; line numbers from 3 lines on, Mono 11.5 ink3 right-aligned, then a 1dp line rule and 10dp to
+    the code. No wrap by default: one horizontal scroll with 20dp edge fades into surface1.
     Over 20 lines the block folds to 14 with a 40dp bottom fade and a 44dp footer ("Show all 84 lines" + chevron)
     that expands in place up to 150 lines ("Show less" scrolls the header back into view) and opens the viewer
     beyond ("Open all 1,240 lines"). Streaming: the header shows Quad Write 12dp + a ticking line count, the code
     end pulses like prose, and a block past 20 lines shows its last 14 lines at a fixed height under a 32dp top
     fade; on close it crossfades (quick) to the folded start at the same height. Only complete lines are
-    highlighted (once per new line); closed blocks are cached by content. ```diff / ```patch (and untagged text that
-    is mostly a unified diff) render as diff rows with numbers from the `@@` headers, the path from `+++ b/…` and
-    `+n −n` in the header.
+    highlighted, each once: the tokenizer resumes from the previous line's state (open comments, strings,
+    heredocs). Closed blocks are cached by content; blocks over 12,000 characters are highlighted on
+    `Dispatchers.Default` and show plain meanwhile. ```diff / ```patch (and untagged text that is mostly a unified
+    diff) render as diff rows with numbers from the `@@` headers, the path from `+++ b/…` (which also gives the rows
+    their syntax colours) and `+n −n` in the header. ```mermaid fences go to `ui/diagram/MermaidBlock`.
+  - markdown: CommonMark + GFM as models write it. Lists nest by indentation (a 26dp step per level, at most 8),
+    ordered lists renumber from their start (`1. 1. 1.` reads 1, 2, 3), continuation paragraphs and code fences
+    indent with their item, task items draw a 16dp box (ink3 outline; done: success outline, 18% fill and a tick).
+    Bullets • ◦ ▪ by depth. Headings: h1 headline, h2 subhead, h3 prose SemiBold, h4 body SemiBold, h5 label
+    SemiBold, h6 label SemiBold ink2; setext underlines count. Quotes: a 2dp lineStrong rail and their own blocks
+    in ink2 (nested quotes, lists, code), at most 6 deep; GitHub alerts (`> [!NOTE]`, TIP, IMPORTANT, WARNING,
+    CAUTION) colour the rail and add a 16dp icon + title (function colour, success, keyword colour, warning,
+    danger). Footnote references are accent superscripts; definitions are rows with the label in accent meta and
+    the text in body ink2. Autolinks (`<…>`, bare `https://`, `www.`), entities and every backslash escape work;
+    `<br>`, `<sub>`, `<sup>`, `<kbd>` (as inline code), `<b>`, `<i>`, `<u>`, `<s>`, `<mark>` render, wrapper tags
+    (`<details>`, `<div>`) are dropped and comments hidden. Soft line breaks stay line breaks (as on GitHub).
+  - images: never fetched by themselves. A card (surface1, radius 12, 1dp line, 56dp row: image glyph ink3, the alt
+    text body ink1, the address monoMeta ink3 middle-ellipsized, "Tap to load" meta ink3, an Open-in-browser
+    action); tapping loads it (12 MB at most, long edge 2048 px) above the row, max 360dp tall. Inline images show
+    their alt text in ink2 italic with the card under the paragraph.
+  - math: `$…$`, `\(…\)`, `$$…$$`, `\[…\]`, `\begin{align}…` and ```math render natively (no WebView): serif
+    italic variables, TeX atom spacing, fractions on the math axis, big operators with limits in display style,
+    radicals, growing delimiters, accents, `\mathbb` / `\mathcal` / `\mathfrak` alphabets, matrices, `cases` and
+    `aligned`. Display math centres in the column and scrolls sideways when wider. TeX that does not parse (or
+    display math still streaming) shows as its source: inline in Mono ink2, blocks in a surface1 box with a
+    "TeX" micro label. Currency (`$5 and $10`) stays text.
   - tables: a grid, not rows of loose cells. Column width = widest single-line cell + 24dp, clamped 64…240dp; spare
     width is spread in proportion so the table spans the card, wider tables scroll with edge fades. While streaming,
     widths only grow. Radius 12, 1dp line border, header surface1 metaStrong ink2, 1dp lineStrong under it; body
