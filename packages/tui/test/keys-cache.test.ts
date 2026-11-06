@@ -61,4 +61,22 @@ describe("parsed key cache", () => {
 		}
 		assert.strictEqual(matchesKey("\x1b\r", "alt+enter"), true);
 	});
+
+	it("remembers typed input per key, and matches it again when the Kitty flag changes", () => {
+		for (let round = 0; round < 3; round++) {
+			assert.strictEqual(matchesKey("a", "a"), true);
+			assert.strictEqual(matchesKey("A", "shift+a"), true);
+			assert.strictEqual(matchesKey("a", "shift+a"), false);
+			assert.strictEqual(matchesKey("\x01", "ctrl+a"), true);
+		}
+		// Legacy ctrl+space is NUL only without the Kitty protocol: typed input that depends on the flag.
+		assert.strictEqual(matchesKey("\x00", "ctrl+space"), true);
+		setKittyProtocolActive(true);
+		try {
+			assert.strictEqual(matchesKey("\x00", "ctrl+space"), false);
+		} finally {
+			setKittyProtocolActive(false);
+		}
+		assert.strictEqual(matchesKey("\x00", "ctrl+space"), true);
+	});
 });
