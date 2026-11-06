@@ -47,13 +47,17 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import java.util.Locale
+import opensec.pibolt.app.ui.components.CopyButton
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiTextField
 import opensec.pibolt.app.ui.components.PrimaryButton
@@ -239,6 +243,7 @@ fun DialogSheet(
     onConfirm: (Boolean) -> Unit,
     onCancel: () -> Unit,
     onHide: () -> Unit,
+    cwd: String? = null,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -258,19 +263,7 @@ fun DialogSheet(
             dialog.message?.takeIf { it.isNotBlank() }?.let { message ->
                 Spacer(Modifier.height(10.dp))
                 if (looksLikeCommand(message)) {
-                    val shape = RoundedCornerShape(Radius.md)
-                    Text(
-                        message,
-                        style = type.monoSmall,
-                        color = colors.ink1,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = 220.dp)
-                            .background(colors.surface1, shape)
-                            .border(1.dp, colors.line, shape)
-                            .verticalScroll(rememberScrollState())
-                            .padding(12.dp),
-                    )
+                    CommandWell(message, cwd)
                 } else {
                     Text(message, style = type.body, color = colors.ink2, modifier = Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState()))
                 }
@@ -533,5 +526,55 @@ fun ActionsSheet(title: String?, actions: List<SheetAction>, onDismiss: () -> Un
             }
         }
         Spacer(Modifier.height(4.dp))
+    }
+}
+
+/**
+ * A command Pi asks about, in a well (surface1 inside the sheet's surface2, radius md, 1dp line): the working folder
+ * in mono meta above it with Copy at the end, then the command with a `$` prompt in success (paths get no prompt).
+ */
+@Composable
+private fun CommandWell(message: String, cwd: String?) {
+    val colors = Pi.colors
+    val type = Pi.type
+    val shape = RoundedCornerShape(Radius.md)
+    val text = message.trim()
+    val (prompt, command) = when {
+        text.startsWith("$ ") -> true to text.removePrefix("$ ")
+        text.startsWith("/") || text.startsWith("~/") || text.startsWith("./") || text.startsWith("`") -> false to text
+        else -> true to text
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(colors.surface1, shape)
+            .border(1.dp, colors.line, shape),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                cwd?.takeIf { it.isNotBlank() }?.let(::shortPath).orEmpty(),
+                style = type.monoMeta,
+                color = colors.ink3,
+                maxLines = 1,
+                overflow = TextOverflow.StartEllipsis,
+                modifier = Modifier.weight(1f),
+            )
+            CopyButton(text = { command }, label = false, clipLabel = "Command", description = "Copy command")
+        }
+        Text(
+            buildAnnotatedString {
+                if (prompt) {
+                    withStyle(SpanStyle(color = colors.success, fontWeight = FontWeight.SemiBold)) { append("$ ") }
+                }
+                append(command)
+            },
+            style = type.monoSmall,
+            color = colors.ink1,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 200.dp)
+                .verticalScroll(rememberScrollState())
+                .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+        )
     }
 }

@@ -1,5 +1,9 @@
 package opensec.pibolt.app.ui.session
 
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import opensec.pibolt.app.ui.components.SectionLabel
+import opensec.pibolt.protocol.session.SlashCommand
 import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -11,6 +15,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -44,6 +49,7 @@ import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -258,12 +264,34 @@ fun LoadingState(hostName: String, link: LinkState, onRetry: () -> Unit) {
     }
 }
 
-/** No messages yet. */
+/**
+ * No messages yet: the mark, "New session" and the folder, then two quiet lists to start from. "Commands" are the
+ * host's slash commands (tap puts "/name " in the composer); "Recent" are prompts this phone sent to this computer
+ * (tap fills the composer). Nothing here sends by itself.
+ */
 @Composable
-fun EmptySession(cwd: String?, commandCount: Int) {
+fun EmptySession(
+    cwd: String?,
+    commands: List<SlashCommand>,
+    recent: List<String>,
+    onCommand: (SlashCommand) -> Unit,
+    onRecent: (String) -> Unit,
+) {
     val colors = Pi.colors
     val type = Pi.type
-    Column(Modifier.fillMaxSize().padding(horizontal = 32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+    val lists = commands.isNotEmpty() || recent.isNotEmpty()
+    var allCommands by rememberSaveable { mutableStateOf(false) }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .heightIn(min = maxHeight)
+            .padding(horizontal = 16.dp),
+        verticalArrangement = if (lists) Arrangement.Top else Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        if (lists) Spacer(Modifier.height(40.dp))
         BrandMark(size = 40.dp, playKey = "session")
         Spacer(Modifier.height(20.dp))
         Text("New session", style = type.display, color = colors.ink1)
@@ -279,11 +307,58 @@ fun EmptySession(cwd: String?, commandCount: Int) {
                 modifier = Modifier.background(colors.surface1, shape).border(1.dp, colors.line, shape).padding(horizontal = 10.dp, vertical = 5.dp),
             )
         }
-        if (commandCount > 0) {
-            Spacer(Modifier.height(14.dp))
-            Text("Type / for $commandCount commands", style = type.meta, color = colors.ink3)
+        if (commands.isNotEmpty()) {
+            StartSection("Commands")
+            val shown = if (allCommands) commands else commands.take(COMMANDS_SHOWN)
+            for (command in shown) {
+                StartRow("/${command.name}", command.description?.takeIf { it.isNotBlank() } ?: command.source, mono = true) { onCommand(command) }
+            }
+            if (shown.size < commands.size) {
+                StartRow("Show all ${commands.size} commands", null, mono = false, muted = true) { allCommands = true }
+            }
         }
-        Spacer(Modifier.height(48.dp))
+        if (recent.isNotEmpty()) {
+            StartSection("Recent")
+            for (prompt in recent) StartRow(prompt.lineSequence().first(), null, mono = false) { onRecent(prompt) }
+        }
+        Spacer(Modifier.height(if (lists) 24.dp else 48.dp))
+    }
+    }
+}
+
+/** Commands listed before "Show all". */
+private const val COMMANDS_SHOWN = 6
+
+@Composable
+private fun StartSection(title: String) {
+    SectionLabel(title, Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 4.dp))
+}
+
+/** A 48dp row: label in body ink1 (mono for commands), the description in meta ink3 on the same line. */
+@Composable
+private fun StartRow(label: String, description: String?, mono: Boolean, muted: Boolean = false, onClick: () -> Unit) {
+    val colors = Pi.colors
+    val type = Pi.type
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .pressable(onClick, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f)
+            .padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            label,
+            style = if (mono) type.monoSmall else type.body,
+            color = if (muted) colors.ink2 else colors.ink1,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = description.isNullOrBlank()),
+        )
+        if (!description.isNullOrBlank()) {
+            Spacer(Modifier.width(12.dp))
+            Text(description, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        }
     }
 }
 

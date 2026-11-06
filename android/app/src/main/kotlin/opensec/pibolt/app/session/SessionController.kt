@@ -25,6 +25,7 @@ import opensec.pibolt.protocol.backend.ConnectionState
 import opensec.pibolt.protocol.backend.DisconnectReason
 import opensec.pibolt.protocol.backend.RemoteBackend
 import opensec.pibolt.protocol.backend.RemoteConfig
+import opensec.pibolt.protocol.rpc.ImageAttachment
 import opensec.pibolt.protocol.rpc.ModelInfo
 import opensec.pibolt.protocol.rpc.RpcClient
 import opensec.pibolt.protocol.rpc.StreamingBehavior
@@ -300,11 +301,11 @@ class SessionController(
     // Commands
 
     /** Send a prompt. While the agent runs, [behavior] says whether it steers or waits as a follow-up. */
-    fun send(text: String, behavior: StreamingBehavior) {
+    fun send(text: String, behavior: StreamingBehavior, images: List<ImageAttachment> = emptyList()) {
         val running = _state.value.isRunning
         scope.launch {
             // An extension command answers only when it finishes, after its dialogs: nothing waits on this.
-            val response = rpc.prompt(text, streamingBehavior = if (running) behavior else null)
+            val response = rpc.prompt(text, images, streamingBehavior = if (running) behavior else null)
             if (!response.success && !stopped) {
                 _effects.tryEmit(SessionEffect.EditorText(text))
                 _effects.tryEmit(SessionEffect.Error(response.error ?: "Not sent"))

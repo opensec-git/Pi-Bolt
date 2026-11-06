@@ -1,15 +1,19 @@
 package opensec.pibolt.app.ui.session
 
 import android.os.SystemClock
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.graphics.ImageBitmap
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.session.ThinkingItem
+import opensec.pibolt.protocol.session.ToolItem
+import opensec.pibolt.protocol.session.ToolStatus
 import opensec.pibolt.protocol.session.UserItem
 
 /**
@@ -32,6 +36,34 @@ class SessionMemory(private val sessionId: String?) {
 
     /** Tool cards: true open, false closed; absent = automatic (open while running in the live turn). */
     val toolCards = mutableStateMapOf<String, Boolean>()
+
+    /** Tool groups ("Read 3 files") the user opened. */
+    val openGroups = mutableStateMapOf<String, Boolean>()
+
+    /** Uptime when a fold or group was opened by the user: its rows stagger in once, shortly after. */
+    val openedAt = HashMap<String, Long>()
+
+    /** Uptime when each tool was first seen running on this phone, for its elapsed time. */
+    val toolStart = HashMap<String, Long>()
+
+    /** The prompt sent from this phone that the host has not echoed yet. */
+    val pending = mutableStateOf<PendingSend?>(null)
+
+    /** Echoed user messages and the "Sending" rows they replaced (message key to row key). */
+    val aliases = mutableStateMapOf<String, String>()
+
+    /**
+     * Thumbnails of images sent from this phone, by row key: the pending row's key, which its echo takes over, or the
+     * user message's key for a steer or follow-up. Kept in memory for the session only.
+     */
+    val localImages = mutableStateMapOf<String, List<ImageBitmap>>()
+
+    /** Images of steers and follow-ups not yet echoed: matched to their user message by text. */
+    private val unclaimed = ArrayList<Pair<String, List<ImageBitmap>>>()
+    private var lastUserSeen: String? = null
+
+    /** Bumped on every send from this phone: the transcript jumps to the bottom. */
+    val sends = mutableIntStateOf(0)
 
     /** Thinking blocks the user toggled away from the default. */
     val thinkingToggled = mutableStateMapOf<String, Boolean>()
@@ -77,6 +109,16 @@ class SessionMemory(private val sessionId: String?) {
             settledAt.longValue = now
         }
         wasRunning = running
+        pending.value?.let { p ->
+            val last = PendingSend.lastUserKey(state.items)
+            if (PendingSend.resolved(p, last, settledAt.longValue, running, now)) {
+                // The echo takes over the "Sending" row's place in the list instead of animating in again.
+                if (last != null && last != p.lastUserKey) aliases[last] = p.rowKey
+                pending.value = null
+            }
+        }
+        if (running) noteRunningTools(state, now)
+        if (unclaimed.isNotEmpty()) claimImages(state)
         for (item in state.streaming) {
             if (item is ThinkingItem) {
                 if (item.streaming) {
@@ -87,6 +129,47 @@ class SessionMemory(private val sessionId: String?) {
             }
         }
     }
+
+    /** Running tools sit at the end of the live turn: look back a little way, not through the whole history. */
+    private fun noteRunningTools(state: SessionState, now: Long) {
+        val items = state.items
+        var looked = 0
+        for (i in items.indices.reversed()) {
+            val item = items[i]
+            if (item is UserItem || ++looked > 64) break
+            if (item is ToolItem && item.status == ToolStatus.Running) toolStart.getOrPut(item.key) { now }
+        }
+    }
+
+    /**
+     * Records a send from this phone and asks the transcript to jump down. An idle prompt shows at once as "Sending";
+     * the [thumbs] of its images stay with that row (and its echo).
+     */
+    fun sent(text: String, state: SessionState, running: Boolean, thumbs: List<ImageBitmap> = emptyList()) {
+        sends.intValue++
+        if (PendingSend.eligible(text, running, thumbs.size)) {
+            val p = PendingSend(nextPendingId++, text, PendingSend.lastUserKey(state.items), SystemClock.uptimeMillis(), thumbs.size)
+            if (thumbs.isNotEmpty()) localImages[p.rowKey] = thumbs
+            pending.value = p
+        } else if (thumbs.isNotEmpty()) {
+            lastUserSeen = PendingSend.lastUserKey(state.items)
+            unclaimed += text.trim() to thumbs
+            if (unclaimed.size > 8) unclaimed.removeAt(0)
+        }
+    }
+
+    /** A new user message with images and the text of an unclaimed send takes that send's thumbnails. */
+    private fun claimImages(state: SessionState) {
+        val last = PendingSend.lastUserKey(state.items)
+        if (last == lastUserSeen) return
+        lastUserSeen = last
+        val item = state.items.lastOrNull { it is UserItem && it.key == last } as? UserItem ?: return
+        if (item.imageCount == 0) return
+        val i = unclaimed.indexOfFirst { it.first == item.text.trim() }
+        if (i >= 0) localImages[item.key] = unclaimed.removeAt(i).second
+    }
+
+    private var nextPendingId = 1L
 
     private fun lastTurnKey(state: SessionState): String? {
         val items = state.items

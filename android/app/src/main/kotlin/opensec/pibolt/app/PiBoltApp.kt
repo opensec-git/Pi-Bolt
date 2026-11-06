@@ -15,6 +15,7 @@ import okhttp3.OkHttpClient
 import opensec.pibolt.app.data.DeviceIdentity
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.data.HostStore
+import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.data.SettingsStore
 import opensec.pibolt.app.session.Notifications
 import opensec.pibolt.app.session.SessionController
@@ -28,6 +29,8 @@ class PiBoltApp : Application() {
     lateinit var identity: DeviceIdentity
         private set
     lateinit var settings: SettingsStore
+        private set
+    lateinit var recents: RecentPrompts
         private set
     val http: OkHttpClient by lazy { RemoteBackend.defaultClient() }
 
@@ -54,6 +57,7 @@ class PiBoltApp : Application() {
         super.onCreate()
         hosts = HostStore(this)
         settings = SettingsStore(this)
+        recents = RecentPrompts(this)
         identity = DeviceIdentity(this)
         Notifications.createChannels(this)
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
@@ -106,6 +110,7 @@ class PiBoltApp : Application() {
     fun forget(hostId: String) {
         if (_session.value?.hostId == hostId) closeSession()
         hosts.remove(hostId)
+        recents.forget(hostId)
     }
 
     /**

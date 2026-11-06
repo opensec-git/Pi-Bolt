@@ -130,6 +130,20 @@ fun formatElapsed(ms: Long): String {
     return if (h > 0) String.format(Locale.ROOT, "%d:%02d:%02d", h, m, sec) else String.format(Locale.ROOT, "%d:%02d", m, sec)
 }
 
+/**
+ * Elapsed time on a running step, ticking once a second: nothing under 1 s (fast steps stay quiet), then "4s",
+ * "1m 3s", "1h 2m".
+ */
+fun formatStepElapsed(ms: Long): String? {
+    if (ms < 1000) return null
+    val s = ms / 1000
+    return when {
+        s < 60 -> "${s}s"
+        s < 3600 -> "${s / 60}m ${s % 60}s"
+        else -> "${s / 3600}h ${(s % 3600) / 60}m"
+    }
+}
+
 /** "Worked for 12s", "Worked for 2m 5s". */
 fun formatWorked(ms: Long): String {
     val s = (ms / 1000).coerceAtLeast(1)
@@ -255,3 +269,72 @@ fun collapseContext(lines: List<DiffLine>, keep: Int = 3): List<DiffLine> {
     }
     return out
 }
+
+// Turn summaries
+
+/** One file a turn changed: lines added and removed, and the diff to open. */
+data class FileChange(val path: String, val added: Int, val removed: Int, val diff: String)
+
+/** The change a finished edit or write made, or null for other tools, failed steps and edits without a diff. */
+fun fileChange(item: ToolItem): FileChange? {
+    if (item.status != ToolStatus.Done) return null
+    val name = item.name.lowercase()
+    if (name !in setOf("edit", "multiedit", "write")) return null
+    val path = item.args?.str("path") ?: item.args?.str("file_path") ?: return null
+    val diff = item.details?.str("diff")
+    if (diff != null) {
+        val stats = diffStats(parseDiff(diff))
+        return FileChange(path, stats.added, stats.removed, diff)
+    }
+    if (name != "write") return null
+    val content = item.args?.str("content") ?: return null
+    return FileChange(path, lineCount(content), 0, content.trimEnd('\n').lineSequence().joinToString("\n") { "+$it" })
+}
+
+/** Changes per path in first-touched order; several edits of one file add up and their diffs follow each other. */
+fun mergeChanges(changes: List<FileChange>): List<FileChange> {
+    val byPath = LinkedHashMap<String, FileChange>()
+    for (c in changes) {
+        val old = byPath[c.path]
+        byPath[c.path] = if (old == null) c else FileChange(c.path, old.added + c.added, old.removed + c.removed, old.diff + "\n" + c.diff)
+    }
+    return byPath.values.toList()
+}
+
+/** Read-only steps that a run of three or more folds into one row. Failed or running steps stay on their own. */
+fun isGroupable(item: ToolItem): Boolean =
+    item.status == ToolStatus.Done && when (toolLabel(item).kind) {
+        ToolKind.Read, ToolKind.Search, ToolKind.List -> true
+        else -> false
+    }
+
+/** "Read 3 files, ran 1 search": what a group of read-only steps did. */
+fun groupSummary(tools: List<ToolItem>): String {
+    var reads = 0
+    var searches = 0
+    var lists = 0
+    for (t in tools) {
+        when (toolLabel(t).kind) {
+            ToolKind.Read -> reads++
+            ToolKind.Search -> searches++
+            ToolKind.List -> lists++
+            else -> Unit
+        }
+    }
+    val parts = buildList {
+        if (reads > 0) add(if (reads == 1) "read 1 file" else "read $reads files")
+        if (searches > 0) add(if (searches == 1) "ran 1 search" else "ran $searches searches")
+        if (lists > 0) add(if (lists == 1) "listed 1 folder" else "listed $lists folders")
+    }
+    return parts.joinToString(", ").replaceFirstChar { it.uppercase() }
+}
+
+/** The files and patterns a group touched, for its one-line detail: base names, each once. */
+fun groupDetail(tools: List<ToolItem>): String = tools.mapNotNull { t ->
+    val args = t.args
+    when (toolLabel(t).kind) {
+        ToolKind.Read, ToolKind.List -> (args?.str("path") ?: args?.str("file_path"))?.let(::baseName)
+        ToolKind.Search -> args?.str("pattern")
+        else -> null
+    }
+}.distinct().joinToString(", ")

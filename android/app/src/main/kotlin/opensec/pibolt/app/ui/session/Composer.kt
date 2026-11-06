@@ -55,6 +55,23 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.QuadMode
+import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.Chip
 import opensec.pibolt.app.ui.components.Segmented
 import opensec.pibolt.app.ui.components.pressable
@@ -67,9 +84,12 @@ import opensec.pibolt.protocol.session.SlashCommand
 private enum class SendMode { Send, Stop }
 
 /**
- * The composer: surface1, radius 18, 1dp line that becomes the focus line, 1–8 lines of text, then a bar with the
- * model and thinking chips and the send button. While the agent works the send button turns into Stop when the field
- * is empty, and a Steer | Follow-up control appears while typing.
+ * The composer: surface1, radius 18, 1dp line that becomes the focus line, a tray of attached images, 1–8 lines of
+ * text, then a bar with attach, the model and thinking chips and the send button. While the agent works the send
+ * button turns into Stop when the field is empty, and a Steer | Follow-up control appears while typing.
+ *
+ * [attachAllowed] false greys the attach button (the model cannot read images); a tap still calls [onAttach] so the
+ * screen can say why.
  */
 @Composable
 fun Composer(
@@ -87,11 +107,22 @@ fun Composer(
     onModel: () -> Unit,
     onThinking: () -> Unit,
     modifier: Modifier = Modifier,
+    images: List<ComposerImage> = emptyList(),
+    attachAllowed: Boolean = true,
+    onAttach: () -> Unit = {},
+    onRemoveImage: (Long) -> Unit = {},
+    focusRequester: FocusRequester = remember { FocusRequester() },
 ) {
     val colors = Pi.colors
     val type = Pi.type
     val reduced = Pi.reduceMotion
     val suggestions = remember(text, commands) { slashSuggestions(text, commands) }
+    val hasContent = text.isNotBlank() || images.isNotEmpty()
+    val encoding = images.any { !it.ready }
+    // The field keeps its own selection; text set from outside (a command, a recent prompt, a failed send) puts the
+    // cursor at its end.
+    var field by remember { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
+    val value = if (field.text == text) field else TextFieldValue(text, TextRange(text.length))
     Column(modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
         AnimatedVisibility(
             visible = suggestions.isNotEmpty(),
@@ -124,7 +155,7 @@ fun Composer(
             }
         }
         AnimatedVisibility(
-            visible = running && text.isNotBlank(),
+            visible = running && hasContent,
             enter = expandVertically(PiMotion.enter(PiMotion.STANDARD)) + fadeIn(PiMotion.enter(PiMotion.QUICK)),
             exit = shrinkVertically(PiMotion.leave(PiMotion.STANDARD)) + fadeOut(PiMotion.leave(PiMotion.QUICK)),
         ) {
@@ -148,16 +179,20 @@ fun Composer(
                 .workingHairline(running && !reduced, colors.accent)
                 .animateContentSize(PiMotion.inPlace(PiMotion.QUICK)),
         ) {
+            if (images.isNotEmpty()) ImageTray(images, onRemoveImage)
             BasicTextField(
-                value = text,
-                onValueChange = onText,
+                value = value,
+                onValueChange = {
+                    field = it
+                    if (it.text != text) onText(it.text)
+                },
                 enabled = enabled,
                 textStyle = type.prose.copy(color = colors.ink1, lineHeight = type.body.lineHeight * 1.05f),
                 cursorBrush = SolidColor(colors.accent),
                 maxLines = 8,
                 interactionSource = interaction,
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
                 decorationBox = { inner ->
                     Box(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp)) {
                         if (text.isEmpty()) {
@@ -181,25 +216,92 @@ fun Composer(
                 Modifier
                     .fillMaxWidth()
                     .height(52.dp)
-                    .padding(start = 8.dp, end = 6.dp),
+                    .padding(start = 2.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Chip(onClick = onModel, enabled = enabled) {
-                    Text(modelLabel ?: "Model", style = type.label, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 150.dp))
-                    Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
+                IconAction(
+                    Icons.Rounded.Add,
+                    description = if (attachAllowed) "Attach images" else "Attach images (not available for this model)",
+                    onClick = onAttach,
+                    enabled = enabled,
+                    tint = if (attachAllowed) colors.ink2 else colors.ink4,
+                    size = 22.dp,
+                )
+                // The chips share what the attach and send buttons leave; the model name gives way first.
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                    Chip(onClick = onModel, enabled = enabled, modifier = Modifier.weight(1f, fill = false)) {
+                        Text(modelLabel ?: "Model", style = type.label, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).widthIn(max = 150.dp))
+                        Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
+                    }
+                    Spacer(Modifier.width(2.dp))
+                    Chip(onClick = onThinking, enabled = enabled) {
+                        Text(thinkingChipLabel(thinkingLevel), style = type.label, color = colors.ink2, maxLines = 1)
+                        Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
+                    }
                 }
-                Spacer(Modifier.width(2.dp))
-                Chip(onClick = onThinking, enabled = enabled) {
-                    Text(thinkingChipLabel(thinkingLevel), style = type.label, color = colors.ink2, maxLines = 1)
-                    Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
-                }
-                Spacer(Modifier.weight(1f))
                 SendButton(
-                    mode = if (running && text.isBlank()) SendMode.Stop else SendMode.Send,
-                    enabled = enabled && (text.isNotBlank() || running),
+                    mode = if (running && !hasContent) SendMode.Stop else SendMode.Send,
+                    enabled = enabled && if (hasContent) !encoding else running,
                     onSend = onSend,
                     onStop = onStop,
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Attached images above the text: 56dp rounded thumbnails, a Quad while each encodes, and a remove ✕ at the top-end
+ * corner (20dp visual, 48dp to touch, overlapping the thumbnail).
+ */
+@Composable
+private fun ImageTray(images: List<ComposerImage>, onRemove: (Long) -> Unit) {
+    val colors = Pi.colors
+    val shape = RoundedCornerShape(Radius.sm)
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(start = 12.dp, end = 12.dp, top = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        for (image in images) {
+            key(image.id) {
+                Box(Modifier.size(64.dp)) {
+                    Box(
+                        Modifier
+                            .align(Alignment.BottomStart)
+                            .size(56.dp)
+                            .clip(shape)
+                            .background(colors.surface2)
+                            .border(1.dp, colors.line, shape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        val thumb = image.thumb
+                        if (thumb != null) {
+                            ImageThumb(thumb, Modifier.fillMaxSize())
+                        } else {
+                            QuadSpinner(QuadMode.Write, size = 16.dp, color = colors.ink2)
+                        }
+                    }
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .size(48.dp)
+                            .pressable({ onRemove(image.id) }, shape = CircleShape, pressedScale = 0.92f, label = "Remove image"),
+                        contentAlignment = Alignment.TopEnd,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(20.dp)
+                                .background(colors.scrim, CircleShape)
+                                .border(1.dp, colors.lineStrong, CircleShape),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(Icons.Rounded.Close, contentDescription = null, tint = colors.ink1, modifier = Modifier.size(14.dp))
+                        }
+                    }
+                }
             }
         }
     }
