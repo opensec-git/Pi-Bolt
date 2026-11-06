@@ -110,6 +110,15 @@
   .install code.ps::before { content: "PS> "; }
   .copy { flex: none; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--soft); font: 400 11px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; padding: 0 16px; cursor: pointer; min-width: 84px; }
   .copy:hover { color: var(--accent); }
+  /* Higher specificity than the display rules below, so hidden always wins. */
+  .install .cmd[hidden], .install .apk[hidden] { display: none; }
+  .install .apk { display: flex; align-items: stretch; color: var(--text); text-decoration: none; }
+  .install .apk span { flex: 1; min-width: 0; padding: 13px 16px; display: flex; flex-direction: column; gap: 3px; }
+  .install .apk b { font: 500 14px/1.3 var(--sans); letter-spacing: -0.015em; }
+  .install .apk small { font: 400 11px/1.4 var(--mono); color: var(--muted); }
+  .install .apk i { flex: none; display: flex; align-items: center; justify-content: center; min-width: 84px; font-style: normal; background: var(--accent); color: var(--on-accent); font-size: 16px; }
+  .install .apk:hover b { color: var(--accent); }
+  .install .apk:hover i { background: var(--accent-deep); }
   .hero-links { display: flex; flex-wrap: wrap; align-items: center; gap: 22px; margin-top: 28px; }
 
   /* The startup race, in a panel with opensec.in's corner marks. */
@@ -263,6 +272,10 @@
     section { padding-top: 72px; padding-bottom: 72px; }
     .metrics { grid-template-columns: minmax(0, 1fr); }
     .plat-tabs { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+    .install .tabs { display: grid; grid-template-columns: 1.4fr 1fr 1fr; }
+    .install .tabs button { padding: 10px 8px; line-height: 1.3; }
+    .install .tabs button:last-child { border-right: 0; }
+    .install .apk i { min-width: 60px; }
     .foot-top { grid-template-columns: minmax(0, 1fr); }
     .foot-top > div + div { border-left: 0; border-top: 1px solid var(--line-soft); }
     .foot-bottom { padding: 18px 16px; }
@@ -305,11 +318,13 @@
         <div class="tabs" role="tablist" aria-label="Your system">
           <button type="button" role="tab" aria-selected="true" data-os="sh">Linux · macOS · Termux</button>
           <button type="button" role="tab" aria-selected="false" data-os="ps">Windows</button>
+          <button type="button" role="tab" aria-selected="false" data-os="apk">Android app</button>
         </div>
         <div class="cmd">
           <code id="cmd">curl -fsSL https://pi-bolt.opensec.in/install.sh | sh</code>
           <button class="copy" type="button" data-copy="cmd" aria-label="Copy the install command">Copy</button>
         </div>
+        <a class="apk" href="android" hidden><span><b>Download the Android app</b><small class="apk-meta">APK · Pi-Bolt on your phone</small></span><i aria-hidden="true">↓</i></a>
       </div>
       <div class="hero-links">
         <a class="btn primary" href="docs/quickstart.html"><span>Get started</span><i aria-hidden="true">→</i></a>
@@ -475,11 +490,13 @@
       <div class="tabs" role="tablist" aria-label="Your system">
         <button type="button" role="tab" aria-selected="true" data-os="sh">Linux · macOS · Termux</button>
         <button type="button" role="tab" aria-selected="false" data-os="ps">Windows</button>
+        <button type="button" role="tab" aria-selected="false" data-os="apk">Android app</button>
       </div>
       <div class="cmd">
         <code id="cmd2">curl -fsSL https://pi-bolt.opensec.in/install.sh | sh</code>
         <button class="copy" type="button" data-copy="cmd2" aria-label="Copy the install command">Copy</button>
       </div>
+      <a class="apk" href="android" hidden><span><b>Download the Android app</b><small class="apk-meta">APK · Pi-Bolt on your phone</small></span><i aria-hidden="true">↓</i></a>
     </div>
     <div class="row">
       <a class="btn primary" href="https://github.com/opensec-git/Pi-Bolt"><span>Star it on GitHub</span><i aria-hidden="true">↗</i></a>
@@ -499,6 +516,7 @@
         <ul>
           <li><a href="docs/quickstart.html">Getting started</a></li>
           <li><a href="docs/installation.html">Installation</a></li>
+          <li><a href="android">Android app</a></li>
           <li><a href="https://github.com/opensec-git/Pi-Bolt/releases/latest">Latest release</a></li>
           <li><a href="https://www.npmjs.com/package/pi-bolt">npm package</a></li>
         </ul>
@@ -543,13 +561,36 @@
     var code = box.querySelector("code");
     box.querySelectorAll("[data-os]").forEach(function (tab) {
       tab.addEventListener("click", function () {
+        var apk = tab.dataset.os === "apk";
         box.querySelectorAll("[data-os]").forEach(function (t) { t.setAttribute("aria-selected", String(t === tab)); });
+        box.querySelector(".cmd").hidden = apk;
+        box.querySelector(".apk").hidden = !apk;
+        if (apk) return;
         code.textContent = commands[tab.dataset.os];
         code.classList.toggle("ps", tab.dataset.os === "ps");
       });
     });
   });
   if (/Windows/.test(navigator.userAgent)) document.querySelectorAll('[data-os="ps"]').forEach(function (t) { t.click(); });
+
+  // Android: the app comes first, and its button downloads the APK itself (android.json, written by the Android release
+  // workflow, names the newest one). Elsewhere the button opens the app's page, with a QR code for the phone.
+  (function () {
+    var isAndroid = /Android/i.test(navigator.userAgent) || (navigator.userAgentData && navigator.userAgentData.platform === "Android");
+    fetch("android.json", { cache: "no-cache" })
+      .then(function (response) { return response.ok ? response.json() : null; })
+      .then(function (release) {
+        if (!release || !/^https:\/\/github\.com\/opensec-git\/Pi-Bolt\/releases\/download\//.test(release.apk)) return;
+        var mb = release.size ? " · " + (release.size / 1048576).toFixed(1) + " MB" : "";
+        document.querySelectorAll(".apk-meta").forEach(function (m) { m.textContent = "APK " + release.version + mb + " · Pi-Bolt on your phone"; });
+        if (isAndroid) document.querySelectorAll("a.apk").forEach(function (a) { a.href = release.apk; a.setAttribute("download", ""); });
+      })
+      .catch(function () {});
+    if (!isAndroid) return;
+    document.querySelectorAll('[data-os="apk"]').forEach(function (t) { t.click(); });
+    var install = document.querySelector('header .btn.primary[href="#install"]');
+    if (install) install.querySelector("span").textContent = "Get the app";
+  })();
 
   // Copy buttons.
   document.querySelectorAll("[data-copy]").forEach(function (button) {
