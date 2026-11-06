@@ -100,7 +100,8 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     val state: State<SessionState> = controller.state.collectAsStateWithLifecycle()
     val linkState = controller.link.collectAsStateWithLifecycle()
     val hostName by controller.hostName.collectAsStateWithLifecycle()
-    val memory = remember(controller) { SessionMemory.of(controller) }
+    val sessionId by remember { derivedStateOf { state.value.sessionId } }
+    val memory = remember(controller.hostId, sessionId) { SessionMemory.of(controller.hostId, sessionId) }
     val colors = Pi.colors
     val haptics = Pi.haptics
     val settings = Pi.settings
@@ -113,8 +114,9 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     var sheet by remember { mutableStateOf(Sheet.None) }
     var viewer by remember { mutableStateOf<ViewerContent?>(null) }
     var actionsFor by remember { mutableStateOf<TRow?>(null) }
+    var statusOnScreen by remember { mutableStateOf(false) }
 
-    LaunchedEffect(controller) { controller.state.collect { memory.observe(it) } }
+    LaunchedEffect(memory) { controller.state.collect { memory.observe(it) } }
     LaunchedEffect(controller) {
         controller.effects.collect { effect ->
             when (effect) {
@@ -174,10 +176,9 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         derivedStateOf {
             val s = state.value
             val parts = buildList {
+                // Folder and context only: the model and thinking level live in the composer chips.
                 (s.sessionName ?: s.host?.cwd?.takeIf { it.isNotBlank() }?.let(::baseName))?.let(::add)
-                s.model?.label?.let(::add)
-                s.thinkingLevel?.takeIf { it.isNotBlank() }?.let { add(thinkingChipLabel(it).lowercase().replace("thinking off", "no thinking")) }
-                s.lastUsage?.let { u -> contextPercent(u.totalTokens, s.model?.contextWindow)?.let { add("$it%") } }
+                s.lastUsage?.let { u -> contextPercent(u.totalTokens, s.model?.contextWindow)?.let { add("$it% context") } }
             }
             parts.joinToString(" · ")
         }
@@ -214,6 +215,8 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 link = linkState.value,
                 mode = quadMode,
                 busy = busy,
+                // One spinner at a time: the top bar animates only while the live status line is off screen.
+                spin = busy && !(status.value.visible && statusOnScreen),
                 onBack = onBack,
                 onInfo = { sheet = Sheet.Info },
                 onDisconnect = onDisconnect,
@@ -234,6 +237,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                             actionsFor = it
                         },
                         onCopy = ::copy,
+                        onStatusOnScreen = { statusOnScreen = it },
                     )
                     if (empty) EmptySession(cwd, commands.size)
                 }

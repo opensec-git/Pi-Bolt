@@ -138,7 +138,7 @@ fun Composer(
 
         val interaction = remember { MutableInteractionSource() }
         val focused by interaction.collectIsFocusedAsState()
-        val border by animateColorAsState(if (focused) colors.lineFocus else colors.lineStrong, PiMotion.effects(), label = "composer")
+        val border by animateColorAsState(if (focused) colors.lineFocus else colors.line, PiMotion.effects(), label = "composer")
         val shape = RoundedCornerShape(Radius.lg)
         Column(
             Modifier
@@ -181,16 +181,16 @@ fun Composer(
                 Modifier
                     .fillMaxWidth()
                     .height(52.dp)
-                    .padding(start = 10.dp, end = 6.dp),
+                    .padding(start = 8.dp, end = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Chip(onClick = onModel, enabled = enabled) {
-                    Text(modelLabel ?: "Model", style = type.label, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 150.dp))
+                    Text(modelLabel ?: "Model", style = type.label, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 150.dp))
                     Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
                 }
-                Spacer(Modifier.width(8.dp))
+                Spacer(Modifier.width(2.dp))
                 Chip(onClick = onThinking, enabled = enabled) {
-                    Text(thinkingChipLabel(thinkingLevel), style = type.label, color = colors.ink1, maxLines = 1)
+                    Text(thinkingChipLabel(thinkingLevel), style = type.label, color = colors.ink2, maxLines = 1)
                     Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
                 }
                 Spacer(Modifier.weight(1f))

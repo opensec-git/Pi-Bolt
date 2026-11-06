@@ -44,6 +44,15 @@ class TranscriptModelTest {
     }
 
     @Test
+    fun foldFallsBackToToolTimeWhenTheTurnWasNotMeasured() {
+        val timed = turn.map { if (it is ToolItem) it.copy(durationMs = 5_000) else it }
+        val fold = TranscriptModel.rows(timed, liveTurn = false, expanded = emptySet(), durations = emptyMap(), md = MdCache())[1] as FoldRow
+        assertEquals(5_000L, fold.durationMs)
+        val unknown = TranscriptModel.rows(turn, liveTurn = false, expanded = emptySet(), durations = emptyMap(), md = MdCache())[1] as FoldRow
+        assertEquals(null, unknown.durationMs)
+    }
+
+    @Test
     fun liveOrOpenedTurnsShowEverything() {
         val live = TranscriptModel.rows(turn, liveTurn = true, expanded = emptySet(), durations = emptyMap(), md = MdCache())
         assertFalse(live.any { it is FoldRow })

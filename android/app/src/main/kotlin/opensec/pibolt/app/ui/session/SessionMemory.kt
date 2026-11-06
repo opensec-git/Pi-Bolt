@@ -4,11 +4,9 @@ import android.os.SystemClock
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
-import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.UserItem
-import java.util.WeakHashMap
 
 /**
  * UI memory of one session that outlives the screen: turn and thinking durations measured on this phone, which
@@ -79,8 +77,13 @@ class SessionMemory {
     }
 
     companion object {
-        private val all = WeakHashMap<SessionController, SessionMemory>()
+        // Keyed by computer and Pi session, so a reconnect (a new controller) keeps the measured durations while a
+        // different session on the same computer starts clean. The few most recent sessions are kept.
+        private val all = object : LinkedHashMap<String, SessionMemory>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, SessionMemory>?): Boolean = size > 8
+        }
 
-        fun of(controller: SessionController): SessionMemory = synchronized(all) { all.getOrPut(controller) { SessionMemory() } }
+        fun of(hostId: String, sessionId: String?): SessionMemory =
+            synchronized(all) { all.getOrPut("$hostId/${sessionId.orEmpty()}") { SessionMemory() } }
     }
 }

@@ -31,6 +31,12 @@ import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.rememberSwipeToDismissBoxState
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.runtime.key
+import androidx.compose.ui.draw.clip
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -83,6 +89,7 @@ fun SessionTopBar(
     link: LinkState,
     mode: QuadMode,
     busy: Boolean,
+    spin: Boolean,
     onBack: () -> Unit,
     onInfo: () -> Unit,
     onDisconnect: () -> Unit,
@@ -134,7 +141,7 @@ fun SessionTopBar(
                     busy -> colors.ink1
                     else -> colors.ink3
                 },
-                animate = busy,
+                animate = spin,
             )
         }
         Box {
@@ -257,7 +264,7 @@ fun EmptySession(cwd: String?, commandCount: Int) {
     val colors = Pi.colors
     val type = Pi.type
     Column(Modifier.fillMaxSize().padding(horizontal = 32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-        BrandMark(size = 40.dp)
+        BrandMark(size = 40.dp, playKey = "session")
         Spacer(Modifier.height(20.dp))
         Text("New session", style = type.display, color = colors.ink1)
         if (!cwd.isNullOrBlank()) {
@@ -326,7 +333,12 @@ fun PendingDialogStrip(title: String?, onOpen: () -> Unit) {
     }
 }
 
-/** Queued prompts: a 2dp bar (warning = steer, ink4 = follow-up). "Edit" moves them all back into the composer. */
+/**
+ * Queued prompts: a 2dp bar (warning = steer, ink4 = follow-up). One queued prompt is a single 44dp row whose ✕ (or a
+ * swipe) takes it back into the composer; two or more get a "Queued · N" header whose Edit does that for all of them.
+ * The protocol clears the queue as a whole, so removing is always "back to the composer".
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QueueStrip(queue: QueueState, onEdit: () -> Unit) {
     val colors = Pi.colors
@@ -337,28 +349,52 @@ fun QueueStrip(queue: QueueState, onEdit: () -> Unit) {
         exit = shrinkVertically(PiMotion.leave(PiMotion.STANDARD)) + fadeOut(),
     ) {
         val shape = RoundedCornerShape(Radius.md)
+        val entries = queue.steering.map { true to it } + queue.followUp.map { false to it }
         Column(
             Modifier
                 .padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
                 .fillMaxWidth()
+                .clip(shape)
                 .background(colors.surface1, shape)
-                .border(1.dp, colors.line, shape)
-                .padding(vertical = 4.dp),
+                .border(1.dp, colors.line, shape),
         ) {
-            Row(Modifier.fillMaxWidth().padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("Queued · ${queue.size}", style = type.metaStrong, color = colors.ink3, modifier = Modifier.weight(1f))
-                TextAction("Edit", onClick = onEdit, color = colors.ink1)
-            }
-            val entries = queue.steering.map { true to it } + queue.followUp.map { false to it }
-            for ((steer, text) in entries.take(4)) {
-                Row(Modifier.fillMaxWidth().height(44.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.width(2.dp).height(24.dp).background(if (steer) colors.warning else colors.ink4, RoundedCornerShape(1.dp)))
-                    Spacer(Modifier.width(12.dp))
-                    Text(if (steer) "Steer" else "Follow-up", style = type.micro, color = if (steer) colors.warning else colors.ink3, modifier = Modifier.width(64.dp))
-                    Text(text.replace('\n', ' '), style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (entries.size == 1) {
+                val (steer, text) = entries[0]
+                val swipe = rememberSwipeToDismissBoxState()
+                key(text) {
+                    SwipeToDismissBox(
+                        state = swipe,
+                        backgroundContent = {
+                            Box(Modifier.fillMaxSize().background(colors.surface3).padding(horizontal = 16.dp), contentAlignment = Alignment.CenterEnd) {
+                                Text("Back to composer", style = type.meta, color = colors.ink2)
+                            }
+                        },
+                        onDismiss = { onEdit() },
+                    ) {
+                        QueueRow(steer, text, Modifier.background(colors.surface1), onRemove = onEdit)
+                    }
                 }
+            } else {
+                Row(Modifier.fillMaxWidth().height(36.dp).padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Queued · ${queue.size}", style = type.metaStrong, color = colors.ink3, modifier = Modifier.weight(1f))
+                    TextAction("Edit", onClick = onEdit, color = colors.ink1)
+                }
+                for ((steer, text) in entries.take(4)) QueueRow(steer, text, Modifier, onRemove = null)
+                if (entries.size > 4) Text("+${entries.size - 4} more", style = type.meta, color = colors.ink3, modifier = Modifier.padding(start = 28.dp, bottom = 6.dp))
             }
-            if (entries.size > 4) Text("+${entries.size - 4} more", style = type.meta, color = colors.ink3, modifier = Modifier.padding(start = 28.dp, bottom = 6.dp))
         }
+    }
+}
+
+@Composable
+private fun QueueRow(steer: Boolean, text: String, modifier: Modifier, onRemove: (() -> Unit)?) {
+    val colors = Pi.colors
+    val type = Pi.type
+    Row(modifier.fillMaxWidth().height(44.dp).padding(start = 14.dp, end = if (onRemove != null) 0.dp else 14.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.width(2.dp).height(22.dp).background(if (steer) colors.warning else colors.ink4, RoundedCornerShape(1.dp)))
+        Spacer(Modifier.width(12.dp))
+        Text(if (steer) "Steer" else "Follow-up", style = type.micro, color = if (steer) colors.warning else colors.ink3, modifier = Modifier.width(62.dp))
+        Text(text.replace('\n', ' '), style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        if (onRemove != null) IconAction(Icons.Rounded.Close, "Remove from queue and edit", onClick = onRemove, size = 18.dp, tint = colors.ink3)
     }
 }

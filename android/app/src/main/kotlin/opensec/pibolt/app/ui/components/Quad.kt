@@ -82,15 +82,14 @@ fun QuadSpinner(
 
 /** The Pi-Bolt mark, built from Quad cells in brand yellow. Plays its entrance once when [play] is true. */
 @Composable
-fun BrandMark(modifier: Modifier = Modifier, size: Dp = 44.dp, play: Boolean = true) {
+fun BrandMark(modifier: Modifier = Modifier, size: Dp = 44.dp, play: Boolean = true, playKey: String = "mark") {
     val color = Pi.colors.brand
     val reduced = Pi.reduceMotion
-    val elapsed = remember { mutableLongStateOf(if (play && !reduced) 0L else QuadMath.MARK_DURATION_MS) }
-    LaunchedEffect(play, reduced) {
-        if (!play || reduced) {
-            elapsed.longValue = QuadMath.MARK_DURATION_MS
-            return@LaunchedEffect
-        }
+    // The entrance plays once per launch for each place the mark appears, not on every recomposition or revisit.
+    val animate = remember { play && !reduced && MarkEntrance.claim(playKey) }
+    val elapsed = remember { mutableLongStateOf(if (animate) 0L else QuadMath.MARK_DURATION_MS) }
+    LaunchedEffect(animate) {
+        if (!animate) return@LaunchedEffect
         delay(120)
         val start = withFrameMillis { it }
         while (elapsed.longValue < QuadMath.MARK_DURATION_MS) {
@@ -106,6 +105,13 @@ fun BrandMark(modifier: Modifier = Modifier, size: Dp = 44.dp, play: Boolean = t
                 drawQuad(color, snap = false) { i -> QuadMath.mark(i, t) }
             },
     )
+}
+
+/** Which brand-mark entrances already played in this process. */
+private object MarkEntrance {
+    private val played = HashSet<String>()
+
+    fun claim(key: String): Boolean = synchronized(played) { played.add(key) }
 }
 
 private inline fun DrawScope.drawQuad(color: Color, snap: Boolean, cell: (Int) -> QuadCell) {

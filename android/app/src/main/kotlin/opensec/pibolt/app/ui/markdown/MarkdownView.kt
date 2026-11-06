@@ -191,13 +191,25 @@ private fun MdText(text: String, style: TextStyle, streaming: Boolean, modifier:
                     }
                 }
                 if (streaming && annotated.isNotEmpty()) {
-                    val cursor = l.getCursorRect(annotated.length)
+                    // Right after the last visible glyph: text still covered by the reveal and trailing spaces do
+                    // not count, so the block never floats away from the words.
+                    var end = if (reveal.active && reveal.length in 1 until annotated.length) reveal.length else annotated.length
+                    if (reveal.active) {
+                        for (segment in reveal.segments) {
+                            // Words still mostly hidden by their fade do not count either.
+                            if (1f - ((now - segment.at) / 120f).coerceIn(0f, 1f) > 0.5f) end = minOf(end, segment.start)
+                        }
+                    }
+                    while (end > 0 && annotated[end - 1].isWhitespace()) end--
+                    if (end == 0) return@drawWithContent
+                    val line = l.getLineForOffset(end - 1)
+                    val x = l.getHorizontalPosition(end, usePrimaryDirection = true).coerceAtMost(l.getLineRight(line))
                     val h = 12.dp.toPx()
                     val w = 6.dp.toPx()
-                    val cy = (cursor.top + cursor.bottom) / 2f
+                    val cy = (l.getLineTop(line) + l.getLineBottom(line)) / 2f
                     drawRoundRect(
                         colors.ink3,
-                        topLeft = Offset(cursor.left + 3.dp.toPx(), cy - h / 2f),
+                        topLeft = Offset(x + 3.dp.toPx(), cy - h / 2f),
                         size = Size(w, h),
                         cornerRadius = CornerRadius(1.5.dp.toPx()),
                         alpha = pulse?.value ?: 0.7f,

@@ -33,7 +33,11 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.OpenInFull
+import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -61,7 +65,7 @@ import opensec.pibolt.protocol.str
 import kotlinx.serialization.json.JsonPrimitive
 
 /** What the full-screen viewer shows. */
-data class ViewerContent(val title: String, val subtitle: String?, val text: String, val diff: Boolean = false, val selectable: Boolean = false)
+data class ViewerContent(val title: String, val subtitle: String?, val text: String, val diff: Boolean = false, val selectable: Boolean = false, val wrap: Boolean = diff)
 
 private fun stepState(item: ToolItem) = when (item.status) {
     ToolStatus.Streaming, ToolStatus.Pending, ToolStatus.Running -> StepState.Active
@@ -198,7 +202,11 @@ private fun MoreRow(hidden: Int, onClick: () -> Unit) {
             .pressable(onClick, shape = RoundedCornerShape(0.dp), pressedScale = 1f),
         contentAlignment = Alignment.Center,
     ) {
-        Text(if (hidden > 0) "Show $hidden more ${if (hidden == 1) "line" else "lines"}" else "Open full output", style = Pi.type.label, color = colors.ink2)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.OpenInFull, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(14.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(if (hidden > 0) "Show $hidden more ${if (hidden == 1) "line" else "lines"}" else "View full output", style = Pi.type.label, color = colors.ink2)
+        }
     }
 }
 

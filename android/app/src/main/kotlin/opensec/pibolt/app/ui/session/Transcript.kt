@@ -79,6 +79,7 @@ fun Transcript(
     onActions: (TRow) -> Unit,
     onCopy: (String) -> Unit,
     modifier: Modifier = Modifier,
+    onStatusOnScreen: (Boolean) -> Unit = {},
 ) {
     val settings = Pi.settings
     val md = remember { MdCache() }
@@ -121,6 +122,9 @@ fun Transcript(
             if (lastKey != null && key != lastKey && !atBottom) unseen = true
             lastKey = key
         }
+    }
+    LaunchedEffect(list) {
+        snapshotFlow { list.layoutInfo.visibleItemsInfo.any { it.key == "status" } }.collect { onStatusOnScreen(it) }
     }
     val reduced = Pi.reduceMotion
     /**

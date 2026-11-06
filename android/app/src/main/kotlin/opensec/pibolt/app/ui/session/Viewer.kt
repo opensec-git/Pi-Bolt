@@ -64,7 +64,7 @@ fun Viewer(content: ViewerContent, onClose: () -> Unit) {
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val haptics = Pi.haptics
-    var wrap by rememberSaveable { mutableStateOf(content.diff) }
+    var wrap by rememberSaveable { mutableStateOf(content.wrap) }
     var progress by remember { mutableFloatStateOf(0f) }
     var fromLeft by remember { mutableStateOf(true) }
 

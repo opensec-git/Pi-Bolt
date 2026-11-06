@@ -110,7 +110,9 @@ object TranscriptModel {
             }
             val foldable = !live && steps > 0
             val open = !foldable || turnKey in expanded
-            if (foldable) out += FoldRow(turnKey, steps, durations[turnKey], open, failed)
+            // Measured on this phone when it watched the turn; otherwise the time its tools ran, when they report it.
+            val toolTime = (bodyStart until end).sumOf { (items[it] as? ToolItem)?.durationMs ?: 0L }
+            if (foldable) out += FoldRow(turnKey, steps, durations[turnKey] ?: toolTime.takeIf { it > 0 }, open, failed)
             for (i in bodyStart until end) {
                 val item = items[i]
                 val isStep = i <= lastStep && item !is NoticeItem

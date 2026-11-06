@@ -149,6 +149,14 @@ fun HostsScreen(
                         modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 5.dp),
                     )
                 }
+                item(key = "hint") {
+                    Text(
+                        "Run /\u2060remote-control on another computer to add it.",
+                        style = type.meta,
+                        color = colors.ink3,
+                        modifier = Modifier.animateItem().padding(horizontal = 20.dp, vertical = 14.dp),
+                    )
+                }
             }
         }
 
@@ -204,7 +212,7 @@ private fun EmptyHome() {
     val colors = Pi.colors
     val type = Pi.type
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp)) {
-        BrandMark(size = 44.dp)
+        BrandMark(size = 44.dp, playKey = "home")
         Spacer(Modifier.height(24.dp))
         Text("Control Pi-Bolt from your phone", style = type.display, color = colors.ink1)
         Spacer(Modifier.height(8.dp))

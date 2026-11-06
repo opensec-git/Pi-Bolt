@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import java.util.Locale
 import opensec.pibolt.app.ui.components.PiSheet
@@ -467,10 +468,10 @@ private fun ContextRing(percent: Int) {
         Canvas(Modifier.size(40.dp)) {
             val stroke = 3.dp.toPx()
             val inset = stroke / 2
-            drawArc(colors.surface3, 0f, 360f, false, topLeft = Offset(inset, inset), size = Size(size.width - stroke, size.height - stroke), style = Stroke(stroke))
+            drawArc(colors.lineStrong, 0f, 360f, false, topLeft = Offset(inset, inset), size = Size(size.width - stroke, size.height - stroke), style = Stroke(stroke))
             drawArc(color, -90f, 360f * sweep, false, topLeft = Offset(inset, inset), size = Size(size.width - stroke, size.height - stroke), style = Stroke(stroke, cap = StrokeCap.Round))
         }
-        Text("$percent", style = Pi.type.micro.copy(fontFeatureSettings = Tnum, fontWeight = FontWeight.SemiBold), color = colors.ink1)
+        Text("$percent%", style = Pi.type.micro.copy(fontFeatureSettings = Tnum, fontWeight = FontWeight.SemiBold, fontSize = 10.sp), color = colors.ink1)
     }
 }
 

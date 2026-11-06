@@ -39,8 +39,6 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -59,7 +57,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -74,6 +74,7 @@ import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.SectionLabel
 import opensec.pibolt.app.ui.components.Segmented
+import opensec.pibolt.app.ui.components.SegmentedSlots
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.session.Viewer
 import opensec.pibolt.app.ui.session.ViewerContent
@@ -124,21 +125,25 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
                 Spacer(Modifier.height(20.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Label("Text size", Modifier.weight(1f))
-                    Text(textSizeLabel(settings.textSize), style = type.meta, color = colors.ink3)
+                    Text(textSizeLabel(settings.textSize), style = type.meta, color = colors.ink3, modifier = Modifier.padding(bottom = 10.dp))
                 }
-                Slider(
-                    value = settings.textSize.toFloat(),
-                    onValueChange = { v -> update { it.copy(textSize = Math.round(v).coerceIn(AppSettings.TEXT_SIZE_MIN, AppSettings.TEXT_SIZE_MAX)) } },
-                    valueRange = AppSettings.TEXT_SIZE_MIN.toFloat()..AppSettings.TEXT_SIZE_MAX.toFloat(),
-                    steps = AppSettings.TEXT_SIZE_MAX - AppSettings.TEXT_SIZE_MIN - 1,
-                    colors = SliderDefaults.colors(
-                        thumbColor = colors.accent,
-                        activeTrackColor = colors.accent,
-                        inactiveTrackColor = colors.surface3,
-                        activeTickColor = colors.onAccent.copy(alpha = 0.6f),
-                        inactiveTickColor = colors.ink4,
-                    ),
-                )
+                // Growing "A" glyphs, one per step: reads as a text size control at a glance.
+                val steps = (AppSettings.TEXT_SIZE_MIN..AppSettings.TEXT_SIZE_MAX).toList()
+                SegmentedSlots(
+                    options = steps,
+                    selected = settings.textSize,
+                    onSelect = { step -> update { it.copy(textSize = step) } },
+                    labels = steps.map(::textSizeLabel),
+                    height = 48.dp,
+                    modifier = Modifier.fillMaxWidth(),
+                ) { i, on ->
+                    Text(
+                        "A",
+                        style = type.label.copy(fontSize = 13.sp * (1f + 0.2f * i), fontWeight = FontWeight.SemiBold),
+                        color = if (on) colors.ink1 else colors.ink3,
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
                 val preview = type.prose.let { p -> p.copy(fontSize = p.fontSize * PiType.factorFor(settings.textSize), lineHeight = p.lineHeight * PiType.factorFor(settings.textSize)) }
                 Text(
                     "Pi reads the failing test, fixes the parser and runs the suite again.",
@@ -208,8 +213,8 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
             Section("About") {
                 InfoLine("Version", app.appVersion)
                 InfoLine("This phone", app.deviceName)
-                NavLine("Inter licence (OFL 1.1)") { licence = ViewerContent("Inter", "SIL Open Font License 1.1", readRaw(context, R.raw.license_inter)) }
-                NavLine("JetBrains Mono licence (OFL 1.1)") { licence = ViewerContent("JetBrains Mono", "SIL Open Font License 1.1", readRaw(context, R.raw.license_jetbrains_mono)) }
+                NavLine("Inter licence (OFL 1.1)") { licence = ViewerContent("Inter", "SIL Open Font License 1.1", readRaw(context, R.raw.license_inter), wrap = true) }
+                NavLine("JetBrains Mono licence (OFL 1.1)") { licence = ViewerContent("JetBrains Mono", "SIL Open Font License 1.1", readRaw(context, R.raw.license_jetbrains_mono), wrap = true) }
             }
         }
 
@@ -220,7 +225,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
         ) {
             val shown = remember { mutableStateOf(licence) }
             licence?.let { shown.value = it }
-            shown.value?.let { Viewer(it.copy(diff = false), onClose = { licence = null }) }
+            shown.value?.let { Viewer(it, onClose = { licence = null }) }
         }
     }
 }

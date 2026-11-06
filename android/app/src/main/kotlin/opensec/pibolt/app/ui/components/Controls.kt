@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -189,18 +190,27 @@ fun IconAction(icon: ImageVector, description: String, onClick: () -> Unit, modi
 fun Chip(onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, content: @Composable RowScope.() -> Unit) {
     val colors = Pi.colors
     val shape = RoundedCornerShape(Radius.sm)
-    Row(
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val fill by animateColorAsState(if (pressed) colors.surface3 else colors.surface3.copy(alpha = 0f), tween(PiMotion.TAP), label = "chip")
+    // A quiet text chip: 32dp visual, 48dp touch target, no border; pressed fills with surface3.
+    Box(
         modifier
-            .height(32.dp)
+            .heightIn(min = 48.dp)
             .graphicsLayer { alpha = if (enabled) 1f else 0.5f }
-            .pressable(onClick, shape = shape, enabled = enabled)
-            .background(colors.surface2, shape)
-            .border(1.dp, colors.line, shape)
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        content = content,
-    )
+            .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Row(
+            Modifier
+                .height(32.dp)
+                .background(fill, shape)
+                .padding(start = 8.dp, end = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
+            content = content,
+        )
+    }
 }
 
 /** Small status dot whose colour changes without overshoot. */
@@ -218,8 +228,25 @@ fun StatusDot(color: Color, modifier: Modifier = Modifier, size: Dp = 8.dp) {
 @Composable
 fun <T> Segmented(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> Unit, modifier: Modifier = Modifier, height: Dp = 36.dp) {
     val colors = Pi.colors
+    SegmentedSlots(options.map { it.first }, selected, onSelect, modifier, height, labels = options.map { it.second }) { i, on ->
+        Text(options[i].second, style = Pi.type.label, color = if (on) colors.ink1 else colors.ink3, maxLines = 1)
+    }
+}
+
+/** [Segmented] with custom content per option; [labels] are the accessibility names. */
+@Composable
+fun <T> SegmentedSlots(
+    options: List<T>,
+    selected: T,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier,
+    height: Dp = 36.dp,
+    labels: List<String>,
+    content: @Composable (index: Int, selected: Boolean) -> Unit,
+) {
+    val colors = Pi.colors
     val haptics = Pi.haptics
-    val index = options.indexOfFirst { it.first == selected }.coerceAtLeast(0)
+    val index = options.indexOfFirst { it == selected }.coerceAtLeast(0)
     val shape = RoundedCornerShape(Radius.sm + 2.dp)
     BoxWithConstraints(
         modifier
@@ -238,7 +265,7 @@ fun <T> Segmented(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> 
                 .background(colors.surface3, RoundedCornerShape(Radius.sm)),
         )
         Row(Modifier.fillMaxWidth().fillMaxHeight()) {
-            options.forEachIndexed { i, (value, label) ->
+            options.forEachIndexed { i, value ->
                 Box(
                     Modifier
                         .weight(1f)
@@ -246,10 +273,10 @@ fun <T> Segmented(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> 
                         .pressable({
                             if (value != selected) haptics.tick()
                             onSelect(value)
-                        }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, role = Role.Tab),
+                        }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, role = Role.Tab, label = labels.getOrNull(i)),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(label, style = Pi.type.label, color = if (i == index) colors.ink1 else colors.ink3, maxLines = 1)
+                    content(i, i == index)
                 }
             }
         }

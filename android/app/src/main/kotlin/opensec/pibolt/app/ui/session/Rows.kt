@@ -316,8 +316,10 @@ fun StatusLine(visible: Boolean, mode: QuadMode, label: String, startedAt: Long,
             }
             Spacer(Modifier.width(12.dp))
             ShimmerText(label, Pi.type.label, active = visible, modifier = Modifier.weight(1f, fill = false))
-            Spacer(Modifier.weight(1f))
-            if (startedAt > 0) Elapsed(startedAt)
+            if (startedAt > 0) {
+                Text("  ·  ", style = Pi.type.label, color = colors.ink4)
+                Elapsed(startedAt)
+            }
         }
     }
 }
@@ -330,5 +332,5 @@ private fun Elapsed(startedAt: Long) {
             delay(1000 - (value - startedAt) % 1000)
         }
     }
-    Text(formatElapsed(now - startedAt), style = Pi.type.meta.copy(fontFeatureSettings = Tnum), color = Pi.colors.ink3)
+    Text(formatElapsed(now - startedAt), style = Pi.type.label.copy(fontFeatureSettings = Tnum), color = Pi.colors.ink3)
 }
