@@ -147,6 +147,22 @@ fun ToolRowView(
             Spacer(Modifier.width(4.dp))
             Chevron(expanded)
         }
+        // A subagent reads on one more line: what it is doing while it runs, the start of its answer when done.
+        if (!expanded && isSubagentTool(item.name)) {
+            val line = remember(item.status, item.details, item.result) {
+                (subagentProgress(item) ?: subagentResult(item))?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()
+            }
+            if (line != null) {
+                Text(
+                    line,
+                    style = type.meta,
+                    color = if (item.isError) colors.danger else colors.ink3,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(start = 32.dp, end = 8.dp, bottom = 4.dp),
+                )
+            }
+        }
         AnimatedVisibility(
             visible = expanded,
             enter = expandVertically(PiMotion.inPlace(), expandFrom = Alignment.Top) + fadeIn(PiMotion.inPlace(PiMotion.QUICK)),

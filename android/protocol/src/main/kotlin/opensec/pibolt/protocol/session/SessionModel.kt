@@ -90,6 +90,8 @@ data class SessionState(
     val widgets: Map<String, List<String>> = emptyMap(),
     val retry: RetryInfo? = null,
     val lastUsage: Usage? = null,
+    /** The todo extension's list, built from its `todo` tool results. */
+    val todos: TodoState = TodoState(),
     val stream: StreamingMessage? = null,
     val seq: Long = 0,
 ) {
@@ -98,3 +100,18 @@ data class SessionState(
 
 /** The assistant message being streamed: its key and its blocks by content index. */
 data class StreamingMessage(val key: String, val blocks: List<ChatItem?>)
+
+enum class TodoStatus { Pending, InProgress, Completed }
+
+/** One task of the todo extension's list. [activeForm] is the label shown while it is in progress. */
+data class TodoTask(val id: Int, val subject: String, val status: TodoStatus, val activeForm: String? = null)
+
+/**
+ * The todo list as the panel shows it: the latest `todo` tool result's [tasks] (deleted ones dropped) minus the
+ * completed tasks in [hidden]. Completed tasks are hidden when the next prompt starts, and all of them once a run ends
+ * with every task done, so a finished list closes the panel.
+ */
+data class TodoState(val tasks: List<TodoTask> = emptyList(), val hidden: Set<Int> = emptySet(), val nextId: Int = 1) {
+    /** The rows the panel shows, in list order. Empty: no panel. */
+    val visible: List<TodoTask> = if (hidden.isEmpty()) tasks else tasks.filterNot { it.status == TodoStatus.Completed && it.id in hidden }
+}

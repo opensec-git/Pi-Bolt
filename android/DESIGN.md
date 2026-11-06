@@ -236,9 +236,14 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   - running bash card: the output's live tail with a 24dp top fade and a terminal cursor after the last glyph (7x14dp
     ink2 block, hard blink 500 ms on / 500 ms off, solid at 60% under reduce motion; alone on the first line before
     any output). It is the card's only live signal: no top sweep (other running cards keep the 2dp sweep).
-  - three or more consecutive finished Read/Search/Find/List steps fold into one step row: check glyph, "Read 3
-    files, ran 1 search" (label ink2), the base names (mono ink3), summed duration, chevron; tap lists them. Run,
-    Edit and Write are never grouped.
+  - three or more consecutive finished Read/Search/Find/List steps (and `todo` calls) fold into one step row: check
+    glyph, "Read 3 files, ran 1 search" or "Updated todos 7 times" (label ink2), the base names or task subjects (mono
+    ink3), summed duration, chevron; tap lists them. Run, Edit and Write are never grouped.
+  - subagent steps (opensec-pi-subagents): `Agent` reads as its type and task ("Explore  Find the parser code"),
+    `steer_subagent`, `get_subagent_result` and `SubagentWorkflow` as "Steer agent", "Agent result", "Workflow" + the
+    workflow's name. Under the row, one meta ink3 line: what the agent is doing while it runs ("reading 3 files… · 4
+    tool uses"), the start of its answer when done (without the "Agent completed in" headline and the resume hint).
+  - `todo` steps read as one line: "Todo  Added: Write tests", "Done: …", "Started: …", "Cleared the list".
   - code blocks: surface1, radius 12, 1dp line. Header 40dp: code glyph 14dp ink3, then the filename (monoSmall
     ink1, middle ellipsis) from the fence info string (`ts title="src/a.ts"`, `ts:src/a.ts`, `src/a.ts`) or the
     language (monoMeta ink3; shell aliases show as `shell`, none as `code`); right side Wrap (only when a line
@@ -274,6 +279,7 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
     command or path follows in mono small ink3 ("Run  npm test"; a subagent reads "Agent working" + its task;
     parallel tools add "+n"); text changes crossfade (quick).
   - errors and notices: radius 12 outline in danger/warning @ 40%, text buttons.
+- Todo panel above the queue strip (see Todo panel below).
 - Queue strip above the composer: 44dp rows with a 2dp bar (warning = steer, ink4 = follow-up), swipe to remove.
 - Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–8 lines; bar: attach (+,
   48dp; ink4 and a "<model> can't read images" snackbar when the model's `input` lacks "image"), model chip, thinking
@@ -300,6 +306,29 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   then `$` in success and the command in mono), options as 52dp rows, primary button; swipe or scrim tap
   does not answer: an explicit Cancel does; countdown chip when the dialog has a timeout; haptic on appear).
 - Snackbars for notify: surface3, radius 12, line, above the composer, kind-coloured icon.
+
+**Todo panel.** The todo extension (opensec-pi-todo) draws its panel in the TUI only, so the app builds it from the
+`todo` tool's results: each result's `details.tasks` is the whole list after the call (`SessionState.todos`, from
+history and from live `tool_execution_end`).
+- Card above the composer: surface1, radius 12, 1dp line, 12dp side inset. Heading 48dp (the tap target): a 14dp
+  progress ring (ink4 track, success arc of done/total, settle), "Todos" (label ink1), "2/5" (meta ink3, tnum),
+  a chevron (ink3) that turns in a graphicsLayer. Tapping collapses the card to the heading, which then names the
+  current task (meta ink2).
+- Rows 32dp: 20dp glyph slot, 12dp gap, body text. Pending: 12dp ring ink3, text ink2. In progress: Quad Think 12dp
+  ink1 and the task's activeForm ("Writing tests") while the agent runs; idle, a half-filled ring ink2 and the
+  subject; text ink1. Completed: check success, text ink3 with strikethrough. Glyph swaps crossfade (quick, scale
+  0.7→1), text colour changes in place; none of it under reduce motion.
+- At most 6 rows: past that the last line is "+3 more (2 completed, 1 pending)" (meta ink3), completed rows going
+  first, as in the TUI.
+- Lifetime as in the TUI: deleted tasks never show; completed rows stay until the next prompt starts a run, then
+  leave; a run that ends with every task done closes the card. Resuming a session replays the same rules over the
+  history, so a finished list does not come back. A reconnect to the same session whose messages lost the todo calls
+  (compaction) keeps the list it had.
+- The card enters and leaves with expandVertically + fade (standard); rows added or removed resize it with
+  animateContentSize (in place). It reads only `todos` and `isRunning` through `derivedStateOf`, so streamed frames
+  never recompose it.
+- TalkBack: the heading is one node, "Todos, 2 of 5 done" (collapsed: ". Now: <task>"), with Expanded/Collapsed
+  state and an Expand/Collapse click label; each row is "Done: …", "In progress: …" or "To do: …".
 
 **Settings.**
 - Appearance: theme tiles (seven swatches, four a row, drawn with each theme's canvas, surface and ink lines; selected = 1.5dp accent
