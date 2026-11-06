@@ -22,6 +22,15 @@ import kotlinx.coroutines.withContext
 import opensec.pibolt.app.engine.SessionSummary
 import opensec.pibolt.app.session.ForkPoint
 import opensec.pibolt.app.ui.session.features.Builtin
+import opensec.pibolt.app.ui.session.features2.F2Sheet
+import opensec.pibolt.app.ui.session.features2.Features2
+import opensec.pibolt.app.ui.session.features2.Features2Host
+import opensec.pibolt.app.ui.session.features2.Features2Sheets
+import opensec.pibolt.app.ui.session.features2.RetryControls
+import opensec.pibolt.app.ui.session.features2.rememberFeatures2
+import opensec.pibolt.app.ui.session.features2.rememberImportPicker
+import opensec.pibolt.app.ui.session.features2.rememberScopedModels
+import opensec.pibolt.app.ui.session.features2.run
 import opensec.pibolt.app.ui.session.features.BuiltinCall
 import opensec.pibolt.app.ui.session.features.CommandPalette
 import opensec.pibolt.app.ui.session.features.Drafts
@@ -215,6 +224,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     var draft by rememberSaveable(controller.hostId) { mutableStateOf("") }
     var mode by rememberSaveable { mutableStateOf(StreamingBehavior.Steer) }
     var sheet by remember { mutableStateOf(Sheet.None) }
+    val f2 = rememberFeatures2()
     var viewer by remember { mutableStateOf<ViewerContent?>(null) }
     var actionsFor by remember { mutableStateOf<TRow?>(null) }
     var statusOnScreen by remember { mutableStateOf(false) }
@@ -230,6 +240,21 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     val isLocal = local != null
     val drafts = remember { Drafts(app) }
     val files = remember(controller) { ProjectFileIndex(controller.project) }
+    val f2Host = remember(controller) {
+        Features2Host(
+            app = app,
+            controller = controller,
+            isLocal = isLocal,
+            insert = {
+                draft = it
+                focus.requestFocus()
+            },
+            message = { m -> scope.launch { snackbar.show(m) } },
+            view = { viewer = it },
+            openSession = { controller.switchSession(it.file) },
+        )
+    }
+    val pickImport = rememberImportPicker(f2Host)
     var modelQuery by remember { mutableStateOf("") }
     var stats by remember { mutableStateOf<SessionStats?>(null) }
     var statsLoading by remember { mutableStateOf(false) }
@@ -456,10 +481,9 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     }
 
     fun openResume() {
-        val project = controller.project ?: return
-        savedSessions = null
-        sheet = Sheet.Resume
-        scope.launch { savedSessions = withContext(Dispatchers.IO) { runCatching { app.engine.sessions(project) }.getOrDefault(emptyList()) } }
+        if (controller.project == null) return
+        // Sort, filter, search inside messages, rename and delete (features2).
+        f2.sheet = F2Sheet.Sessions
     }
 
     fun openFork() {
@@ -476,6 +500,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
 
     /** Runs one of the app's own commands (typed and sent, or picked from the palette). */
     fun runBuiltin(call: BuiltinCall) {
+        if (Features2.handles(call.builtin) && f2.run(call.builtin, call.args, f2Host, scope, pickImport)) return
         when (call.builtin) {
             Builtin.New -> local?.onNewSession?.invoke()
             Builtin.Resume -> openResume()
@@ -503,6 +528,8 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                     if (shell.command.isNotBlank()) app.recents.record(recentKey, "!" + call.args)
                 }
             }
+            Builtin.Share -> sheet = Sheet.Export
+            else -> Unit
         }
     }
 
@@ -592,7 +619,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         derivedStateOf {
             val s = state.value
             buildList {
-                s.retry?.let { add("Retrying ${it.attempt}/${it.maxAttempts}" + (it.error?.let { e -> ": $e" } ?: "") to true) }
+                // A retry shows as RetryControls (features2), with Stop.
                 addAll(s.statuses.values.map { it to false })
                 s.widgets.values.forEach { lines -> addAll(lines.map { it to false }) }
             }
@@ -683,6 +710,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 }
                 PiSnackHost(snackbar, Modifier.align(Alignment.BottomCenter))
             }
+            RetryControls(state, controller)
             StatusExtras(extras)
             TodoPanel(todos, running)
             val hiddenId = memory.hiddenDialog.value
@@ -785,7 +813,8 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         Sheet.Model -> {
             val models by controller.models.collectAsStateWithLifecycle()
             val current by remember { derivedStateOf { state.value.model } }
-            ModelSheet(models, current, onPick = {
+            val shown = if (isLocal) rememberScopedModels(f2, app.engine.agentDir, models, current) else models
+            ModelSheet(shown, current, onPick = {
                 controller.setModel(it)
                 sheet = Sheet.None
             }, onDismiss = { sheet = Sheet.None }, initialQuery = modelQuery)
@@ -888,6 +917,8 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
             onDismiss = { sheet = Sheet.None },
         )
     }
+
+    Features2Sheets(f2, f2Host, state)
 
     actionsFor?.let { row ->
         val actions = when (row) {

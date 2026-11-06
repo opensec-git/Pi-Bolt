@@ -51,6 +51,8 @@ import opensec.pibolt.app.ui.session.features.ShellCommand
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.buildJsonObject
 
 sealed interface SessionEffect {
     data class Notify(val message: String, val kind: String) : SessionEffect
@@ -641,6 +643,34 @@ class SessionController private constructor(
             rpc.request("set_auto_compaction") { put("enabled", defaults.autoCompaction) }
             rpc.request("set_auto_retry") { put("enabled", defaults.autoRetry) }
         }
+    }
+
+    /**
+     * Reads the session again (state, messages, commands) and replaces the transcript with it, as a session switch does:
+     * for changes RPC does not announce, such as moving the leaf of the session tree. Open dialogs are kept.
+     */
+    suspend fun resync(): Boolean {
+        val state = rpc.getState()
+        val messages = rpc.getMessages()
+        val commands = rpc.getCommands()
+        if (!state.success || !messages.success) return false
+        val host = _state.value.host
+        val hello = buildJsonObject {
+            put("type", "remote_hello")
+            put("protocol", 1)
+            put("host", buildJsonObject {
+                put("name", host?.name.orEmpty())
+                put("version", host?.version.orEmpty())
+                put("cwd", host?.cwd.orEmpty())
+            })
+            put("state", state.dataObject ?: JsonObject(emptyMap()))
+            put("messages", messages.dataObject?.arr("messages") ?: JsonArray(emptyList()))
+            put("commands", commands.dataObject?.arr("commands") ?: JsonArray(emptyList()))
+        }
+        val dialogs = _state.value.dialogs
+        inputs.send(Input.Event(hello))
+        if (dialogs.isNotEmpty()) mutate { it.copy(dialogs = dialogs) }
+        return true
     }
 
     /** Any other RPC command (packages/coding-agent/docs/rpc-commands.md). */

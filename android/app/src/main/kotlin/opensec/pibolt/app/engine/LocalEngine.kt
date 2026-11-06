@@ -20,6 +20,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
+import opensec.pibolt.app.ui.session.features2.AppExtension
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import opensec.pibolt.app.PiBoltApp
@@ -175,6 +179,24 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         for (dir in dirs) SafeFiles.deleteTree(dir)
     }
 
+    override suspend fun cli(args: List<String>, cwd: File?, timeoutMs: Long): CliResult = withContext(Dispatchers.IO) {
+        val m = ensureSetup() ?: return@withContext CliResult(-1, "", unavailable ?: "The engine is not available")
+        val dir = cwd?.let(::engineForm) ?: paths.home
+        val process = runCatching {
+            ProcessBuilder(listOf(paths.engine.path) + args).directory(dir).apply {
+                val env = environment()
+                val wanted = engineEnvironment(paths, env.toMap(), TimeZone.getDefault().id, m.env) + ("NO_COLOR" to "1")
+                env.clear()
+                env.putAll(wanted)
+            }.redirectInput(ProcessBuilder.Redirect.from(File("/dev/null"))).start()
+        }.getOrElse { return@withContext CliResult(-1, "", it.message ?: "Could not start the engine") }
+        val out = async { process.inputStream.bufferedReader().readText() }
+        val err = async { process.errorStream.bufferedReader().readText() }
+        val finished = runInterruptible { process.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS) }
+        if (!finished) process.destroyForcibly()
+        CliResult(if (finished) process.exitValue() else -1, out.await(), err.await().ifBlank { if (finished) "" else "Timed out" })
+    }
+
     /** [file] with `ApplicationInfo.dataDir` (`/data/user/0/<id>`) written as the engine sees it (`/data/data/<id>`). */
     private fun engineForm(file: File): File {
         val path = file.absolutePath
@@ -267,6 +289,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         try {
             val full = EnginePrefix(paths, AndroidAssets(app.assets)).ensure(m)
             dns.start()
+            AppExtension.install(paths.agentDir)
             Log.i(TAG, "prepare: prefix ${if (full) "installed" else "up to date"}, ${SystemClock.elapsedRealtime() - started} ms (engine ${m.engine}, glibc ${m.glibc})")
         } catch (e: Exception) {
             Log.e(TAG, "prefix setup failed", e)

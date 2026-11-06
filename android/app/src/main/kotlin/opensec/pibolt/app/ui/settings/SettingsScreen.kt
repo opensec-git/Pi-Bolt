@@ -96,6 +96,7 @@ import opensec.pibolt.app.ui.components.SegmentedSlots
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.session.Viewer
 import opensec.pibolt.app.ui.session.ViewerContent
+import opensec.pibolt.app.ui.session.features2.AgentLinks
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiColors
 import opensec.pibolt.app.ui.theme.PiMotion
@@ -571,6 +572,9 @@ private fun AgentSection(app: PiBoltApp) {
     ToggleRow("Auto-retry", "Retry when the provider is overloaded or rate-limited", current.autoRetry) { on -> update { it.copy(autoRetry = on) } }
     InfoLine("Default model", current.defaultModel ?: "Automatic")
     Text("The model you pick in a session becomes the default, as in the terminal.", style = type.meta, color = colors.ink3)
+    Spacer(Modifier.height(8.dp))
+    val context = LocalContext.current
+    AgentLinks(app) { android.widget.Toast.makeText(context, it, android.widget.Toast.LENGTH_SHORT).show() }
 }
 
 private fun thinkingShort(level: String): String = when (level) {

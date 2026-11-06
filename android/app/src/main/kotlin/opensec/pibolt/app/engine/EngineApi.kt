@@ -34,6 +34,17 @@ interface EngineApi {
 
     /** Provider credentials in Pi's auth.json. */
     val auth: ProviderAuth
+
+    /**
+     * Runs the engine as Pi's command line (`pi list`, `pi install …`, `pi mcp list --json`) in [cwd] (HOME when
+     * null) and returns its exit code and output. Not available where the engine is not.
+     */
+    suspend fun cli(args: List<String>, cwd: File? = null, timeoutMs: Long = 180_000): CliResult = CliResult(-1, "", "The engine is not available on this phone")
+}
+
+/** A finished `pi` command: [code] is its exit status (-1 when it did not run or timed out). */
+data class CliResult(val code: Int, val stdout: String, val stderr: String) {
+    val ok: Boolean get() = code == 0
 }
 
 sealed interface EngineStatus {
