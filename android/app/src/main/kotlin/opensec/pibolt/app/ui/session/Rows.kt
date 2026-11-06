@@ -111,7 +111,7 @@ fun Modifier.riseIn(key: String, live: Boolean, memory: SessionMemory, distance:
  * images without a local copy (sent from elsewhere, or before this session) read as a compact "2 images" chip.
  */
 @Composable
-fun UserBubble(item: UserItem, onLongPress: () -> Unit, modifier: Modifier = Modifier, thumbs: List<ImageBitmap>? = null) {
+fun UserBubble(item: UserItem, onLongPress: () -> Unit, modifier: Modifier = Modifier, thumbs: List<ImageBitmap>? = null, onImage: ((Int) -> Unit)? = null) {
     val colors = Pi.colors
     val shape = RoundedCornerShape(topStart = Radius.lg, topEnd = Radius.lg, bottomStart = Radius.lg, bottomEnd = 6.dp)
     BoxWithConstraints(modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
@@ -125,7 +125,10 @@ fun UserBubble(item: UserItem, onLongPress: () -> Unit, modifier: Modifier = Mod
         ) {
             if (!thumbs.isNullOrEmpty()) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    for (thumb in thumbs) ImageThumb(thumb, Modifier.size(56.dp))
+                    thumbs.forEachIndexed { i, thumb ->
+                        val open = onImage?.let { Modifier.pressable({ it(i) }, shape = RoundedCornerShape(Radius.sm), label = "Open image ${i + 1}") } ?: Modifier
+                        ImageThumb(thumb, Modifier.size(56.dp).then(open))
+                    }
                 }
                 if (item.text.isNotBlank()) Spacer(Modifier.height(8.dp))
             } else if (item.imageCount > 0) {

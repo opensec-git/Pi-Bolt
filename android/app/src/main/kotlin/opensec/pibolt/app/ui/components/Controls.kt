@@ -7,7 +7,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
@@ -185,9 +184,17 @@ fun IconAction(icon: ImageVector, description: String, onClick: () -> Unit, modi
     }
 }
 
-/** Composer and filter chip: 32dp, radius 8, surface2. */
+/** Composer and filter chip: 32dp, radius 8, surface2. [onLongClick] (with [longClickLabel] for TalkBack) is optional. */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun Chip(onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, content: @Composable RowScope.() -> Unit) {
+fun Chip(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onLongClick: (() -> Unit)? = null,
+    longClickLabel: String? = null,
+    content: @Composable RowScope.() -> Unit,
+) {
     val colors = Pi.colors
     val shape = RoundedCornerShape(Radius.sm)
     val interaction = remember { MutableInteractionSource() }
@@ -198,7 +205,15 @@ fun Chip(onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = 
         modifier
             .heightIn(min = 48.dp)
             .graphicsLayer { alpha = if (enabled) 1f else 0.5f }
-            .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick),
+            .combinedClickable(
+                interactionSource = interaction,
+                indication = null,
+                enabled = enabled,
+                role = Role.Button,
+                onLongClickLabel = longClickLabel,
+                onLongClick = onLongClick,
+                onClick = onClick,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         Row(

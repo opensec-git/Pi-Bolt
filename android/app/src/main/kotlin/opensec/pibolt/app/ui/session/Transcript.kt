@@ -50,6 +50,10 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
+import opensec.pibolt.app.ui.session.features.SearchJump
+import opensec.pibolt.app.ui.session.features.TranscriptSearch
 import kotlinx.coroutines.launch
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.pressable
@@ -81,6 +85,8 @@ fun Transcript(
     onAskAgain: (String) -> Unit,
     modifier: Modifier = Modifier,
     onStatusOnScreen: (Boolean) -> Unit = {},
+    jump: SearchJump? = null,
+    onImage: (String, Int) -> Unit = { _, _ -> },
 ) {
     val settings = Pi.settings
     val parseScope = rememberCoroutineScope()
@@ -141,6 +147,15 @@ fun Transcript(
             last = n
         }
     }
+    LaunchedEffect(jump) {
+        val hit = jump?.hit ?: return@LaunchedEffect
+        // A hit in a folded turn or a closed group opens it first; then the row is brought into view.
+        if (TranscriptSearch.rowIndex(rows, hit).let { it < 0 || rows[it] is FoldRow }) memory.openFolds[hit.turnKey] = true
+        (rows.getOrNull(TranscriptSearch.rowIndex(rows, hit)) as? ToolGroupRow)?.takeIf { !it.expanded }?.let { memory.openGroups[it.key] = true }
+        val index = withTimeoutOrNull(1_000) { snapshotFlow { TranscriptSearch.rowIndex(rows, hit) }.first { it >= 0 && rows[it] !is FoldRow } }
+            ?: TranscriptSearch.rowIndex(rows, hit)
+        if (index >= 0) list.animateScrollToItem(TranscriptSearch.listIndex(rows.size, index), scrollOffset = -list.layoutInfo.viewportSize.height / 3)
+    }
     val reduced = Pi.reduceMotion
     /**
      * The list is anchored at the bottom, so a row opened above the reader's position would grow upward and slide
@@ -190,7 +205,7 @@ fun Transcript(
                     val index = n - 1 - i
                     val row = rows[index]
                     val previous = rows.getOrNull(index - 1)
-                    RowView(row, previous, memory, settings.toolPreviewLines, settings.thinkingExpanded, onOpen, onActions, onAskAgain, reduced) {
+                    RowView(row, previous, memory, settings.toolPreviewLines, settings.thinkingExpanded, onOpen, onActions, onAskAgain, reduced, onImage) {
                         keepInPlace(if (unique) row.key else "row$i")
                     }
                 }
@@ -310,6 +325,7 @@ private fun LazyItemScope.RowView(
     onActions: (TRow) -> Unit,
     onAskAgain: (String) -> Unit,
     reduced: Boolean,
+    onImage: (String, Int) -> Unit,
     keep: () -> Unit,
 ) {
     val animate = row.live && !reduced
@@ -344,6 +360,7 @@ private fun LazyItemScope.RowView(
             onLongPress = { onActions(row) },
             modifier = base.padding(top = 4.dp, bottom = 6.dp).riseIn(row.key, row.live, memory, 10.dp),
             thumbs = memory.localImages[row.key],
+            onImage = { onImage(row.key, it) },
         )
         is PendingUserRow -> PendingBubble(
             row.pending.text,

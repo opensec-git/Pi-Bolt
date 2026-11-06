@@ -6,7 +6,6 @@ import kotlinx.serialization.json.JsonObject
 import opensec.pibolt.protocol.arr
 import opensec.pibolt.protocol.int
 import opensec.pibolt.protocol.session.SessionReducer.TODO_TOOL
-import opensec.pibolt.protocol.session.SlashCommand
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
 import opensec.pibolt.protocol.str
@@ -254,12 +253,6 @@ fun shortPath(path: String): String {
 }
 
 fun baseName(path: String): String = path.trimEnd('/').substringAfterLast('/').ifBlank { path }
-
-fun slashSuggestions(text: String, commands: List<SlashCommand>): List<SlashCommand> {
-    if (!text.startsWith("/") || text.contains(' ') || text.contains('\n')) return emptyList()
-    val query = text.drop(1).lowercase()
-    return commands.filter { it.name.lowercase().startsWith(query) }.take(5)
-}
 
 /** Context use in percent, when the model's window is known. */
 fun contextPercent(totalTokens: Long, window: Long?): Int? =

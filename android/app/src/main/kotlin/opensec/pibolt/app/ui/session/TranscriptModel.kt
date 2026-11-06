@@ -13,6 +13,7 @@ import opensec.pibolt.app.ui.markdown.MdDoc
 import opensec.pibolt.protocol.session.AssistantTextItem
 import opensec.pibolt.protocol.session.ChatItem
 import opensec.pibolt.protocol.session.NoticeItem
+import opensec.pibolt.protocol.session.SessionReducer
 import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
@@ -265,11 +266,12 @@ object TranscriptModel {
             var lastToolFailed = false
             for (i in bodyStart until end) {
                 val it = items[i]
-                if (it is ToolItem || it is ThinkingItem) {
+                // A command the user ran (`!ls`) is not the agent's work: it stays visible after the answer.
+                if ((it is ToolItem && !isUserShell(it)) || it is ThinkingItem) {
                     lastStep = i
                     steps++
                 }
-                if (it is ToolItem) {
+                if (it is ToolItem && !isUserShell(it)) {
                     lastToolFailed = it.status == ToolStatus.Error
                     if (lastToolFailed) failedSteps++
                 }
@@ -416,6 +418,9 @@ object TranscriptModel {
             is NoticeItem -> out += NoticeRow(item, live)
         }
     }
+
+    /** A shell command the user ran from the app (`!ls`), live or from the session history (`bashExecution`). */
+    fun isUserShell(item: ToolItem): Boolean = item.key.startsWith(SessionReducer.SHELL_PREFIX) || item.key.endsWith(".bash")
 
     /** LazyColumn needs unique keys: true when every row key is distinct. */
     fun keysUnique(rows: List<TRow>): Boolean {

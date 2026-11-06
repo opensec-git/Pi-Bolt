@@ -79,7 +79,22 @@ import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.protocol.rpc.StreamingBehavior
-import opensec.pibolt.protocol.session.SlashCommand
+import opensec.pibolt.app.ui.session.features.CommandList
+import opensec.pibolt.app.ui.session.features.CommandPalette
+import opensec.pibolt.app.ui.session.features.ComposerHint
+import opensec.pibolt.app.ui.session.features.FileMentions
+import opensec.pibolt.app.ui.session.features.MentionList
+import opensec.pibolt.app.ui.session.features.PaletteEntry
+import opensec.pibolt.app.ui.session.features.ProjectFileIndex
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 
 private enum class SendMode { Send, Stop }
 
@@ -101,7 +116,8 @@ fun Composer(
     onMode: (StreamingBehavior) -> Unit,
     modelLabel: String?,
     thinkingLevel: String?,
-    commands: List<SlashCommand>,
+    palette: List<PaletteEntry>,
+    onPick: (PaletteEntry) -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit,
     onModel: () -> Unit,
@@ -111,48 +127,58 @@ fun Composer(
     attachAllowed: Boolean = true,
     onAttach: () -> Unit = {},
     onRemoveImage: (Long) -> Unit = {},
+    onOpenImage: (Int) -> Unit = {},
     focusRequester: FocusRequester = remember { FocusRequester() },
+    files: ProjectFileIndex? = null,
+    shell: Boolean = false,
+    onCycleModel: () -> Unit = {},
+    onCycleThinking: () -> Unit = {},
 ) {
     val colors = Pi.colors
     val type = Pi.type
     val reduced = Pi.reduceMotion
-    val suggestions = remember(text, commands) { slashSuggestions(text, commands) }
+    val haptics = Pi.haptics
     val hasContent = text.isNotBlank() || images.isNotEmpty()
     val encoding = images.any { !it.ready }
     // The field keeps its own selection; text set from outside (a command, a recent prompt, a failed send) puts the
     // cursor at its end.
     var field by remember { mutableStateOf(TextFieldValue(text, TextRange(text.length))) }
     val value = if (field.text == text) field else TextFieldValue(text, TextRange(text.length))
+    val commands = remember(text, palette) { CommandPalette.filter(text, palette) }
+    val usage = remember(text, palette) { CommandPalette.hintFor(text, palette) }
+    // `@` mentions: the token at the cursor, then the project's files for it (read on first use).
+    val mention = remember(value.text, value.selection) {
+        if (files?.available == true && value.selection.collapsed) FileMentions.tokenAt(value.text, value.selection.start) else null
+    }
+    if (mention != null && files != null) LaunchedEffect(files) { files.load() }
+    val allFiles = files?.files?.value
+    val mentionPaths = remember(mention?.query, allFiles) { allFiles?.let { list -> mention?.let { FileMentions.rank(it.query, list) } } }
+    val shellMode = shell && text.startsWith("!")
     Column(modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
         AnimatedVisibility(
-            visible = suggestions.isNotEmpty(),
+            visible = commands.isNotEmpty() || mention != null,
             enter = expandVertically(PiMotion.enter(PiMotion.STANDARD)) + fadeIn(PiMotion.enter(PiMotion.QUICK)),
             exit = shrinkVertically(PiMotion.leave(PiMotion.STANDARD)) + fadeOut(PiMotion.leave(PiMotion.QUICK)),
         ) {
-            val shape = RoundedCornerShape(Radius.md)
-            Column(
-                Modifier
-                    .padding(bottom = 8.dp)
-                    .fillMaxWidth()
-                    .background(colors.surface2, shape)
-                    .border(1.dp, colors.line, shape)
-                    .padding(vertical = 4.dp),
-            ) {
-                for (command in suggestions) {
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(44.dp)
-                            .pressable({ onText("/${command.name} ") }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f)
-                            .padding(horizontal = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text("/${command.name}", style = type.monoSmall, color = colors.ink1, maxLines = 1)
-                        Spacer(Modifier.width(12.dp))
-                        Text(command.description.orEmpty(), style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                }
+            when {
+                mention != null -> MentionList(mentionPaths, mention.query, onPick = { path ->
+                    haptics.tick()
+                    val (next, cursor) = FileMentions.insert(value.text, mention, path)
+                    field = TextFieldValue(next, TextRange(cursor))
+                    onText(next)
+                })
+                commands.isNotEmpty() -> CommandList(commands, onPick = {
+                    haptics.tick()
+                    onPick(it)
+                })
             }
+        }
+        when {
+            shellMode -> ComposerHint(
+                if (text.startsWith("!!")) "Shell: runs in the project; the output stays out of Pi's context" else "Shell: runs in the project; the output goes to Pi with your next message",
+                mono = false,
+            )
+            usage != null && commands.isEmpty() -> ComposerHint("${usage.label} ${usage.hint}", mono = true)
         }
         AnimatedVisibility(
             visible = running && hasContent,
@@ -179,7 +205,7 @@ fun Composer(
                 .workingHairline(running && !reduced, colors.accent)
                 .animateContentSize(PiMotion.inPlace(PiMotion.QUICK)),
         ) {
-            if (images.isNotEmpty()) ImageTray(images, onRemoveImage)
+            if (images.isNotEmpty()) ImageTray(images, onRemoveImage, onOpenImage)
             BasicTextField(
                 value = value,
                 onValueChange = {
@@ -189,16 +215,32 @@ fun Composer(
                 enabled = enabled,
                 textStyle = type.prose.copy(color = colors.ink1, lineHeight = type.body.lineHeight * 1.05f),
                 cursorBrush = SolidColor(colors.accent),
-                maxLines = 8,
+                maxLines = MAX_LINES,
                 interactionSource = interaction,
                 keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences),
-                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .focusRequester(focusRequester)
+                    .onPreviewKeyEvent { e ->
+                        // Hardware keyboards, as in the terminal: Ctrl+Enter sends, Esc stops, Ctrl+P next model,
+                        // Shift+Tab next thinking level.
+                        if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                        when (ComposerKeys.action(e.key, ctrl = e.isCtrlPressed || e.isMetaPressed, shift = e.isShiftPressed, running = running, hasContent = hasContent)) {
+                            ComposerKeys.Action.Send -> if (enabled && !encoding) onSend()
+                            ComposerKeys.Action.Stop -> onStop()
+                            ComposerKeys.Action.CycleModel -> if (enabled) onCycleModel()
+                            ComposerKeys.Action.CycleThinking -> if (enabled) onCycleThinking()
+                            null -> return@onPreviewKeyEvent false
+                        }
+                        true
+                    },
                 decorationBox = { inner ->
                     Box(Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 6.dp)) {
                         if (text.isEmpty()) {
                             Text(
                                 when {
                                     !enabled -> "Not connected"
+                                    shellMode -> "Shell command…"
                                     running && mode == StreamingBehavior.Steer -> "Steer Pi…"
                                     running -> "Queue a follow-up…"
                                     else -> "Message Pi…"
@@ -229,12 +271,12 @@ fun Composer(
                 )
                 // The chips share what the attach and send buttons leave; the model name gives way first.
                 Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                    Chip(onClick = onModel, enabled = enabled, modifier = Modifier.weight(1f, fill = false)) {
+                    Chip(onClick = onModel, enabled = enabled, onLongClick = onCycleModel, longClickLabel = "Next model", modifier = Modifier.weight(1f, fill = false)) {
                         Text(modelLabel ?: "Model", style = type.label, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).widthIn(max = 150.dp))
                         Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
                     }
                     Spacer(Modifier.width(2.dp))
-                    Chip(onClick = onThinking, enabled = enabled) {
+                    Chip(onClick = onThinking, enabled = enabled, onLongClick = onCycleThinking, longClickLabel = "Next thinking level") {
                         Text(thinkingChipLabel(thinkingLevel), style = type.label, color = colors.ink2, maxLines = 1)
                         Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
                     }
@@ -255,7 +297,7 @@ fun Composer(
  * corner (20dp visual, 48dp to touch, overlapping the thumbnail).
  */
 @Composable
-private fun ImageTray(images: List<ComposerImage>, onRemove: (Long) -> Unit) {
+private fun ImageTray(images: List<ComposerImage>, onRemove: (Long) -> Unit, onOpen: (Int) -> Unit) {
     val colors = Pi.colors
     val shape = RoundedCornerShape(Radius.sm)
     Row(
@@ -265,7 +307,7 @@ private fun ImageTray(images: List<ComposerImage>, onRemove: (Long) -> Unit) {
             .padding(start = 12.dp, end = 12.dp, top = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        for (image in images) {
+        images.forEachIndexed { index, image ->
             key(image.id) {
                 Box(Modifier.size(64.dp)) {
                     Box(
@@ -273,6 +315,7 @@ private fun ImageTray(images: List<ComposerImage>, onRemove: (Long) -> Unit) {
                             .align(Alignment.BottomStart)
                             .size(56.dp)
                             .clip(shape)
+                            .pressable({ if (image.ready) onOpen(index) }, shape = shape, label = "Open image ${index + 1}")
                             .background(colors.surface2)
                             .border(1.dp, colors.line, shape),
                         contentAlignment = Alignment.Center,
@@ -304,6 +347,22 @@ private fun ImageTray(images: List<ComposerImage>, onRemove: (Long) -> Unit) {
                 }
             }
         }
+    }
+}
+
+/** Lines the composer grows to before it scrolls. */
+const val MAX_LINES = 6
+
+/** Hardware-keyboard shortcuts of the composer. */
+object ComposerKeys {
+    enum class Action { Send, Stop, CycleModel, CycleThinking }
+
+    fun action(key: Key, ctrl: Boolean, shift: Boolean, running: Boolean, hasContent: Boolean): Action? = when {
+        (key == Key.Enter || key == Key.NumPadEnter) && ctrl -> Action.Send
+        key == Key.Escape && running && !hasContent -> Action.Stop
+        key == Key.P && ctrl && !shift -> Action.CycleModel
+        key == Key.Tab && shift -> Action.CycleThinking
+        else -> null
     }
 }
 
