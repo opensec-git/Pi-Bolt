@@ -281,31 +281,86 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   - errors and notices: radius 12 outline in danger/warning @ 40%, text buttons.
 - Todo panel above the queue strip (see Todo panel below).
 - Queue strip above the composer: 44dp rows with a 2dp bar (warning = steer, ink4 = follow-up), swipe to remove.
-- Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–8 lines; bar: attach (+,
+- Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–6 lines; bar: attach (+,
   48dp; ink4 and a "<model> can't read images" snackbar when the model's `input` lacks "image"), model chip, thinking
   chip, send (40dp accent circle). Attached images (Photo Picker, images only, at most 4) sit in a tray above the
   text: 56dp thumbnails, radius 8, 1dp line, a Quad Write while each encodes, a 20dp ✕ (scrim, lineStrong ring, 48dp
   touch) at the top-end corner. Encoding runs off the main thread: long edge at most 2000 px, JPEG 85 (PNG only when
   transparent and under 1.5 MB), refused over Pi's 4.5 MiB base64 limit. Send works with images and no text. While the agent works: send becomes Stop (surface3 circle, rounded square
-  glyph) when the field is empty, and a "Steer | Follow-up" segmented control appears while typing. Slash
-  suggestions above the field. IME insets animate with the keyboard.
+  glyph) when the field is empty, and a "Steer | Follow-up" segmented control appears while typing. The palette and
+  `@` mentions open above the field (see Command palette below). A thumbnail in the tray opens the image viewer. The
+  model and thinking chips cycle on long press (click label "Next model", "Next thinking level", a tick and a
+  snackbar naming the new value). IME insets animate with the keyboard. The draft is kept per session (computer or
+  project, and Pi session) across restarts.
 - Empty session: the mark, "New session" and the folder tag, then "Commands" (the host's slash commands, mono name
   + description in meta ink3, the first 6 then "Show all N commands"; tap puts "/name " in the composer and focuses
   it) and "Recent" (the last 5 distinct prompts this phone sent to this computer; tap fills the composer). 48dp rows,
   SectionLabel headings, nothing sends by itself. Recent prompts persist per computer (20 at most) in
   `recent-prompts.json`.
 - Connection banner under the top bar: Quad Connect + "Reconnecting in 3s" countdown + Retry; slides down/up.
+- Top bar: a Search action (48dp) sits before the Quad. Overflow on a computer: Session and usage, Export or share,
+  Disconnect, Forget computer.
 - On this phone (a project's session): the title is the project's name and the subtitle drops the folder (session
-  name and context only); back reads "Project". Overflow: New session, Rename session, Session info (no Disconnect or
-  Forget computer). The banner reads "Starting Pi-Bolt…" (Quad Connect) and "Engine stopped" with Restart (danger
+  name and context only); back reads "Project". Overflow: New session, Resume a session, Fork from a message,
+  Duplicate session, Rename session, Session and usage, Export or share (no Disconnect or Forget computer). The banner reads "Starting Pi-Bolt…" (Quad Connect) and "Engine stopped" with Restart (danger
   soft, power glyph). Long press on a user message adds "Fork from here": Pi forks the session at that message and
   its text comes back to the composer to edit and send. Recent prompts are kept per project.
-- Sheets (ModalBottomSheet, predictive back): model picker (search, current first, 60dp rows with provider initial),
+- Sheets (ModalBottomSheet, predictive back): model picker (search, "Current" then one group per provider under a
+  meta-strong heading, 60dp rows with provider initial; `/model text` opens it filtered),
   thinking level (52dp option rows with a description), Pi's dialogs (Quad Wait eyebrow "Pi is asking", title,
   message in a command well when it looks like a command (surface1, radius 12, the cwd in mono meta ink3 with Copy,
   then `$` in success and the command in mono), options as 52dp rows, primary button; swipe or scrim tap
   does not answer: an explicit Cancel does; countdown chip when the dialog has a timeout; haptic on appear).
 - Snackbars for notify: surface3, radius 12, line, above the composer, kind-coloured icon.
+
+**Command palette.** Typing `/` opens a panel above the composer (surface2, radius 12, 1dp line, at most 264dp,
+scrolls): 48dp rows with the command in mono small ink1, its argument hint in mono meta ink3, the description in meta
+ink3 under it and a source badge at the end (micro, surface3, radius 4: `app`, `extension`, `prompt`, `skill`).
+Matching is fuzzy (prefix, then word starts, then scattered letters), by name and then by description; a space closes
+the panel and a usage line takes its place (`/compact [instructions]`, mono meta ink3). The app's own commands are
+the terminal built-ins that make sense on a phone: `/new`, `/resume`, `/fork`, `/clone` and `!` (on this phone only),
+`/compact`, `/name`, `/session`, `/model`, `/thinking`, `/copy`, `/export`, `/search`. They run in the app (a sheet or
+an RPC command), never reach the host, and a host command of the same name wins. Picking one that takes no argument
+runs it at once; others fill `/name ` and wait. Picks tick (haptic).
+- `@` (at the start or after a space) lists the project's files and folders the same way (file glyph, the name in
+  mono small, its folder in mono meta ink3, start-ellipsised); the file name counts more than its folders. Picking
+  puts `@path ` in the prompt (quoted when it has spaces). The list is read once per screen off the main thread,
+  breadth first, skipping `.git`, `node_modules` and build folders, at most 20 000 entries. On this phone only.
+- `!command` runs in the project's shell without the model; `!!command` keeps the output out of Pi's context. A
+  quiet line above the field says which. The run shows at once as a Run step (its output streams in) and stays
+  visible after the answer instead of folding with the agent's steps.
+- Hardware keyboards: Ctrl+Enter sends, Esc stops a run (empty field), Ctrl+P next model, Shift+Tab next thinking
+  level. Enter adds a line, as Android keyboards expect.
+
+**Session sheet.** Opened from the title or "Session and usage": the context card (label, "30.0% of 200k" in meta
+tnum, a 6dp bar on surface3, ink2, warning over 70%, danger over 90%, animated in place; then the terminal footer's
+line `↑50k ↓10k R40k W5.0k $0.450` in mono meta ink3), a totals card (input, output, cost; cache read, cache write,
+cache hit; prompts, replies, tool calls; values in body-strong tnum over meta labels), Model and Thinking rows (tap
+to pick, a "Next" text action to cycle), folder and version, then Compact, Rename and Export. Totals come from
+`get_session_stats` when the sheet opens; until then the bar uses the last reply's usage.
+
+**Search.** The search action (or `/search text`) swaps the top bar for a search bar: back, the field (focused),
+"3 of 12" (meta tnum, polite live region; "No match" in warning), previous and next (48dp). The line of the current
+hit shows under it (meta ink2, two lines). Every message, reasoning block, tool call and output is searched; a hit in
+a folded turn opens the fold, one in a "Read 3 files" group opens the group, then the row scrolls to a third of the
+screen. Hits start at the newest. Back closes.
+
+**Message actions.** Long press on a user message: Copy, Send again, Edit and resend (on this phone: forks before
+the message and returns its text), Edit in composer, Select text, Share. On a reply block: Copy (plain text, without
+Markdown), Copy as Markdown, Regenerate (on this phone: forks before the prompt and sends it again), Select text, View
+as Markdown, Share. More under the last reply offers the same.
+
+**Export.** "Export or share" (or `/export`): Share as Markdown (a `.md` file through the share sheet), Copy as
+Markdown, and on this phone Share session file (the JSONL) and Share as HTML (`export_html`). Files are written to
+`cache/exports` and shared through a FileProvider.
+
+**Image viewer.** A tap on an image in a user message or the composer tray opens it full screen on black: swipe
+between images, pinch or double-tap (2.5x) to zoom up to 6x, drag to pan a zoomed image (kept on screen), Back or ✕
+to close. Save puts a PNG in Pictures/Pi-Bolt (Android 10+); Share sends it. The full image is kept for the six most
+recent messages; older ones open their thumbnail.
+
+**Compaction.** The status line names why it runs: "Compacting" (manual), "Auto-compacting" (threshold) or
+"Context full, compacting" (overflow); its summary stays as an expandable notice.
 
 **Todo panel.** The todo extension (opensec-pi-todo) draws its panel in the TUI only, so the app builds it from the
 `todo` tool's results: each result's `details.tasks` is the whole list after the call (`SessionState.todos`, from
@@ -335,6 +390,10 @@ history and from live `tool_execution_end`).
   ring), accent circles, text size slider with a live prose preview, density (Comfortable / Compact).
 - Motion and feedback: Reduce motion (Follow system / On), Haptics.
 - Session: show thinking expanded, tool output preview lines (6 / 12 / 24).
+- Pi on this phone: steering and follow-up delivery (One at a time / All at once), the thinking level new sessions
+  start with (six segments), Auto-compact and Auto-retry toggles, and the default model (the last one picked, as in
+  the terminal). They are the engine's own settings (`agent/settings.json`, other keys kept) and reach the open
+  on-device session at once over RPC.
 - Notifications: permission state with a button to the system settings.
 - About: app version, device name, licences (Inter, JetBrains Mono: OFL).
 Changes apply live, without recreating the activity, and persist in a small JSON file (read synchronously at

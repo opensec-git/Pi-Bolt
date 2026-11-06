@@ -74,6 +74,8 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
 
     override val projectsDir: File get() = paths.projects
 
+    override val agentDir: File get() = paths.agentDir
+
     override val auth: AuthFile = AuthFile(paths.agentDir, scope)
 
     private val setupMutex = Mutex()

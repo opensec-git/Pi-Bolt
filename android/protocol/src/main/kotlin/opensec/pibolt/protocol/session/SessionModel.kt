@@ -42,7 +42,8 @@ data class NoticeItem(override val key: String, val kind: NoticeKind, val title:
 
 data class HostInfo(val name: String, val version: String, val cwd: String)
 
-data class SlashCommand(val name: String, val description: String?, val source: String)
+/** A command from `get_commands`. [argumentHint] is shown while typing its arguments (hosts that send one). */
+data class SlashCommand(val name: String, val description: String?, val source: String, val argumentHint: String? = null)
 
 enum class DialogKind { Select, Confirm, Input, Editor }
 
@@ -79,6 +80,8 @@ data class SessionState(
     val streaming: List<ChatItem> = emptyList(),
     val isRunning: Boolean = false,
     val isCompacting: Boolean = false,
+    /** Why the running compaction started: `manual`, `threshold` (context nearly full) or `overflow`; null when none runs. */
+    val compactionReason: String? = null,
     val model: ModelInfo? = null,
     val thinkingLevel: String? = null,
     val sessionName: String? = null,

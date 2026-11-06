@@ -7,6 +7,40 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.SystemClock
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
+import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.EditNote
+import androidx.compose.material.icons.rounded.Html
+import androidx.compose.material.icons.rounded.Replay
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.withContext
+import opensec.pibolt.app.engine.SessionSummary
+import opensec.pibolt.app.session.ForkPoint
+import opensec.pibolt.app.ui.session.features.Builtin
+import opensec.pibolt.app.ui.session.features.BuiltinCall
+import opensec.pibolt.app.ui.session.features.CommandPalette
+import opensec.pibolt.app.ui.session.features.Drafts
+import opensec.pibolt.app.ui.session.features.ForkSheet
+import opensec.pibolt.app.ui.session.features.ImageViewer
+import opensec.pibolt.app.ui.session.features.MessageText
+import opensec.pibolt.app.ui.session.features.ProjectFileIndex
+import opensec.pibolt.app.ui.session.features.ResumeSheet
+import opensec.pibolt.app.ui.session.features.SearchBar
+import opensec.pibolt.app.ui.session.features.SearchHit
+import opensec.pibolt.app.ui.session.features.SearchJump
+import opensec.pibolt.app.ui.session.features.SessionFacts
+import opensec.pibolt.app.ui.session.features.SessionMarkdown
+import opensec.pibolt.app.ui.session.features.SessionStats
+import opensec.pibolt.app.ui.session.features.SessionStatsSheet
+import opensec.pibolt.app.ui.session.features.ShareFiles
+import opensec.pibolt.app.ui.session.features.ShellCommand
+import opensec.pibolt.app.ui.session.features.TranscriptSearch
+import opensec.pibolt.app.ui.session.features.ViewerImages
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -158,7 +192,7 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
     }
 }
 
-private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget }
+private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget, Export, Resume, Fork }
 
 /**
  * The session screen. It never reads the whole [SessionState] itself: each part derives the few values it shows, so a
@@ -193,6 +227,52 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     // Recent prompts are per computer, or per project for on-device sessions.
     val recentKey = local?.let { "project:" + it.project } ?: controller.hostId
     val title = local?.title ?: hostName
+    val isLocal = local != null
+    val drafts = remember { Drafts(app) }
+    val files = remember(controller) { ProjectFileIndex(controller.project) }
+    var modelQuery by remember { mutableStateOf("") }
+    var stats by remember { mutableStateOf<SessionStats?>(null) }
+    var statsLoading by remember { mutableStateOf(false) }
+    var forkPoints by remember { mutableStateOf<List<ForkPoint>?>(null) }
+    var savedSessions by remember { mutableStateOf<List<SessionSummary>?>(null) }
+    var imageViewer by remember { mutableStateOf<ViewerImages?>(null) }
+    // Search in the transcript: the query, its hits (oldest first) and the hit shown.
+    var searching by rememberSaveable { mutableStateOf(false) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var hits by remember { mutableStateOf<List<SearchHit>>(emptyList()) }
+    var hitIndex by remember { mutableIntStateOf(-1) }
+    var jump by remember { mutableStateOf<SearchJump?>(null) }
+    var jumpSeq by remember { mutableIntStateOf(0) }
+
+    // The draft is kept per session across restarts: restored when the composer is empty, saved as it changes.
+    val draftKey = Drafts.key(controller.hostId, sessionId)
+    LaunchedEffect(draftKey) {
+        if (sessionId != null && draft.isEmpty()) draft = drafts.get(draftKey)
+        snapshotFlow { draft }.drop(1).collectLatest {
+            delay(400)
+            if (sessionId != null) drafts.put(draftKey, it)
+        }
+    }
+    LaunchedEffect(searching, query) {
+        if (!searching || query.isBlank()) {
+            hits = emptyList()
+            hitIndex = -1
+            return@LaunchedEffect
+        }
+        delay(150)
+        val items = state.value.allItems
+        val found = withContext(Dispatchers.Default) { TranscriptSearch.search(items, query) }
+        hits = found
+        // The reader is at the bottom: start from the newest hit.
+        hitIndex = found.lastIndex
+        found.lastOrNull()?.let { jump = SearchJump(it, ++jumpSeq) }
+    }
+    fun step(by: Int) {
+        if (hits.isEmpty()) return
+        hitIndex = Math.floorMod(hitIndex + by, hits.size)
+        jump = SearchJump(hits[hitIndex], ++jumpSeq)
+        haptics.tick()
+    }
 
     LaunchedEffect(memory, controller) { memory.attach(controller.state, app.appScope) }
     LaunchedEffect(controller) {
@@ -259,7 +339,8 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
             val sending = memory.pending.value != null && !s.isRunning
             val m = if (sending) QuadMode.Think else quadMode
             val activity = TranscriptModel.activity(s.items, s.streaming)
-            LiveStatus(visible = s.isRunning || s.isCompacting || sending, mode = m, text = TranscriptModel.statusText(m, activity, sending))
+            val text = if (s.isCompacting && m == QuadMode.Compact) StatusText(compactionLabel(s.compactionReason)) else TranscriptModel.statusText(m, activity, sending)
+            LiveStatus(visible = s.isRunning || s.isCompacting || sending, mode = m, text = text)
         }
     }
     // A send the host never answers (no echo, no run) stops showing "Sending" after a while.
@@ -285,6 +366,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     val cwd by remember { derivedStateOf { state.value.host?.cwd } }
     val thinkingLevel by remember { derivedStateOf { state.value.thinkingLevel } }
     val commands by remember { derivedStateOf { state.value.commands } }
+    val palette by remember(local != null) { derivedStateOf { CommandPalette.entries(state.value.commands, local != null) } }
     val queue by remember { derivedStateOf { state.value.queue } }
     // Changes only when a todo result or a run boundary changes the list.
     val todos by remember { derivedStateOf { state.value.todos } }
@@ -297,7 +379,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     fun send(text: String, attached: List<ComposerImage> = emptyList()) {
         val running = state.value.isRunning
         controller.send(text, mode, attached.mapNotNull { it.image })
-        memory.sent(text, state.value, running, attached.mapNotNull { it.thumb })
+        memory.sent(text, state.value, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image })
         if (text.isNotBlank()) app.recents.record(recentKey, text)
         lastSent = text to attached
         maybeAskNotifications()
@@ -327,6 +409,147 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 .onFailure {
                     haptics.reject()
                     snackbar.show(it.message ?: "Fork failed", SnackKind.Error)
+                }
+        }
+    }
+
+    fun openStats() {
+        sheet = Sheet.Info
+        statsLoading = true
+        scope.launch {
+            controller.sessionStats().onSuccess { stats = it }
+            statsLoading = false
+        }
+    }
+
+    fun openModels(search: String = "") {
+        modelQuery = search
+        controller.loadModels()
+        sheet = Sheet.Model
+    }
+
+    fun openThinking() {
+        controller.loadThinkingLevels()
+        sheet = Sheet.Thinking
+    }
+
+    fun cycleModel() {
+        scope.launch {
+            controller.cycleModel()
+                .onSuccess { label ->
+                    haptics.tick()
+                    snackbar.show(label?.let { "Model: $it" } ?: "No other model to switch to")
+                }
+                .onFailure { snackbar.show(it.message ?: "Could not switch model", SnackKind.Error) }
+        }
+    }
+
+    fun cycleThinking() {
+        scope.launch {
+            controller.cycleThinking()
+                .onSuccess { level ->
+                    haptics.tick()
+                    snackbar.show(level?.let { "Thinking: ${thinkingChipLabel(it)}" } ?: "This model does not reason")
+                }
+                .onFailure { snackbar.show(it.message ?: "Could not change thinking level", SnackKind.Error) }
+        }
+    }
+
+    fun openResume() {
+        val project = controller.project ?: return
+        savedSessions = null
+        sheet = Sheet.Resume
+        scope.launch { savedSessions = withContext(Dispatchers.IO) { runCatching { app.engine.sessions(project) }.getOrDefault(emptyList()) } }
+    }
+
+    fun openFork() {
+        forkPoints = null
+        sheet = Sheet.Fork
+        scope.launch { forkPoints = controller.forkPoints() }
+    }
+
+    fun lastReply(): String? {
+        val items = state.value.items
+        val lastUser = items.indexOfLast { it is UserItem }
+        return items.drop(lastUser + 1).filterIsInstance<AssistantTextItem>().map { it.text.trim() }.filter { it.isNotEmpty() }.joinToString("\n\n").ifEmpty { null }
+    }
+
+    /** Runs one of the app's own commands (typed and sent, or picked from the palette). */
+    fun runBuiltin(call: BuiltinCall) {
+        when (call.builtin) {
+            Builtin.New -> local?.onNewSession?.invoke()
+            Builtin.Resume -> openResume()
+            Builtin.Fork -> openFork()
+            Builtin.Clone -> controller.cloneSession()
+            Builtin.Compact -> if (call.args.isBlank()) sheet = Sheet.Compact else controller.compact(call.args)
+            Builtin.Name -> if (call.args.isBlank()) sheet = Sheet.Rename else controller.rename(call.args)
+            Builtin.Session -> openStats()
+            Builtin.Model -> openModels(call.args)
+            Builtin.Thinking -> if (call.args.isBlank()) openThinking() else controller.setThinkingLevel(call.args.lowercase())
+            Builtin.Copy -> lastReply()?.let(::copy) ?: scope.launch { snackbar.show("No reply to copy yet") }
+            Builtin.Export -> sheet = Sheet.Export
+            Builtin.Search -> {
+                query = call.args
+                searching = true
+            }
+            Builtin.Shell -> {
+                val shell = ShellCommand.parse(call.args)
+                if (shell == null) {
+                    scope.launch { snackbar.show("Type a command after !") }
+                } else {
+                    haptics.send()
+                    controller.runShell(shell)
+                    memory.sends.intValue++
+                    if (shell.command.isNotBlank()) app.recents.record(recentKey, "!" + call.args)
+                }
+            }
+        }
+    }
+
+    fun exportMarkdown(share: Boolean) {
+        val s = state.value
+        val name = s.sessionName ?: title
+        val markdown = SessionMarkdown.render(s.items, name, s.model?.let { "${it.provider}/${it.id}" })
+        if (!share) {
+            copy(markdown)
+            return
+        }
+        scope.launch {
+            val file = ShareFiles.write(context, SessionMarkdown.fileName(name, "md"), markdown)
+            ShareFiles.share(context, file, "text/markdown", name)
+        }
+    }
+
+    fun exportJsonl() {
+        val path = controller.sessionFile ?: return
+        scope.launch {
+            runCatching { ShareFiles.copy(context, java.io.File(path), SessionMarkdown.fileName(state.value.sessionName ?: title, "jsonl")) }
+                .onSuccess { ShareFiles.share(context, it, "application/x-ndjson") }
+                .onFailure { snackbar.show("Could not read the session file", SnackKind.Error) }
+        }
+    }
+
+    fun exportHtml() {
+        val file = java.io.File(ShareFiles.exportsDir(context), SessionMarkdown.fileName(state.value.sessionName ?: title, "html"))
+        scope.launch {
+            snackbar.show("Exporting…")
+            controller.exportHtml(file.absolutePath)
+                .onSuccess { ShareFiles.share(context, java.io.File(it), "text/html") }
+                .onFailure { snackbar.show(it.message ?: "Export failed", SnackKind.Error) }
+        }
+    }
+
+    /** Regenerates the answer to [user] (its [occurrence]-th copy): forks before it and sends it again. */
+    fun regenerate(user: UserItem, occurrence: Int) {
+        scope.launch {
+            controller.forkFrom(user.text, occurrence)
+                .onSuccess {
+                    draft = ""
+                    send(it.ifEmpty { user.text })
+                }
+                .onFailure {
+                    haptics.reject()
+                    snackbar.show(it.message ?: "Could not regenerate", SnackKind.Error)
                 }
         }
     }
@@ -383,7 +606,25 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
             .background(colors.canvas),
     ) {
         Column(Modifier.fillMaxSize().imePadding()) {
-            SessionTopBar(
+            if (searching) {
+                SearchBar(
+                    query = query,
+                    onQuery = { query = it },
+                    hits = hits.size,
+                    current = hitIndex.coerceAtLeast(0),
+                    snippet = hits.getOrNull(hitIndex)?.snippet,
+                    onPrevious = { step(-1) },
+                    onNext = { step(1) },
+                    onClose = {
+                        searching = false
+                        query = ""
+                    },
+                )
+                BackHandler {
+                    searching = false
+                    query = ""
+                }
+            } else SessionTopBar(
                 hostId = controller.hostId,
                 hostName = title,
                 local = local != null,
@@ -394,11 +635,16 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 // One spinner at a time: the top bar animates only while the live status line is off screen.
                 spin = busy && !(status.value.visible && statusOnScreen),
                 onBack = onBack,
-                onInfo = { sheet = Sheet.Info },
+                onInfo = ::openStats,
                 onDisconnect = onDisconnect,
                 onForget = { sheet = Sheet.Forget },
                 onNewSession = { local?.onNewSession?.invoke() },
                 onRename = { sheet = Sheet.Rename },
+                onSearch = { searching = true },
+                onExport = { sheet = Sheet.Export },
+                onResume = ::openResume,
+                onFork = ::openFork,
+                onClone = controller::cloneSession,
             )
             ConnectionBanner(linkState.value, controller.pairing, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
             Box(Modifier.weight(1f)) {
@@ -419,6 +665,11 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                             send(it)
                         },
                         onStatusOnScreen = { statusOnScreen = it },
+                        jump = jump,
+                        onImage = { key, index ->
+                            val thumbs = memory.localImages[key].orEmpty()
+                            if (thumbs.isNotEmpty()) imageViewer = ViewerImages(memory.localFull[key].orEmpty(), thumbs, index)
+                        },
                     )
                     if (empty) {
                         EmptySession(
@@ -446,10 +697,33 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 onMode = { mode = it },
                 modelLabel = modelLabel,
                 thinkingLevel = thinkingLevel,
-                commands = commands,
+                palette = palette,
+                onPick = { entry ->
+                    val builtin = entry.builtin
+                    if (builtin != null && entry.hint == null) {
+                        draft = ""
+                        runBuiltin(BuiltinCall(builtin, ""))
+                    } else {
+                        fill(entry.insert)
+                    }
+                },
+                files = files.takeIf { isLocal },
+                shell = isLocal,
+                onCycleModel = ::cycleModel,
+                onCycleThinking = ::cycleThinking,
+                onOpenImage = { index ->
+                    val ready = images.filter { it.ready }
+                    val thumbs = ready.mapNotNull { it.thumb }
+                    if (thumbs.isNotEmpty()) imageViewer = ViewerImages(ready.map { it.image }, thumbs, index.coerceIn(0, thumbs.lastIndex))
+                },
                 onSend = {
                     val text = draft.trim()
+                    val call = if (images.isEmpty()) CommandPalette.parse(text, commands, isLocal) else null
                     when {
+                        call != null -> {
+                            draft = ""
+                            runBuiltin(call)
+                        }
                         text.isEmpty() && images.isEmpty() -> Unit
                         images.any { !it.ready } -> Unit
                         images.isNotEmpty() && modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
@@ -466,14 +740,8 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 onRemoveImage = { id -> images.removeAll { it.id == id } },
                 focusRequester = focus,
                 onStop = controller::abort,
-                onModel = {
-                    controller.loadModels()
-                    sheet = Sheet.Model
-                },
-                onThinking = {
-                    controller.loadThinkingLevels()
-                    sheet = Sheet.Thinking
-                },
+                onModel = { openModels() },
+                onThinking = ::openThinking,
             )
             Spacer(Modifier.navigationBarsPadding().padding(bottom = 8.dp).height(0.dp))
         }
@@ -486,6 +754,11 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
             val content = remember { mutableStateOf(viewer) }
             viewer?.let { content.value = it }
             content.value?.let { Viewer(it, onClose = { viewer = null }) }
+        }
+        AnimatedVisibility(visible = imageViewer != null, enter = fadeIn(PiMotion.enter(PiMotion.SHEET)), exit = fadeOut(PiMotion.leave(PiMotion.SHEET))) {
+            val shown = remember { mutableStateOf(imageViewer) }
+            imageViewer?.let { shown.value = it }
+            shown.value?.let { ImageViewer(it, onClose = { imageViewer = null }, onMessage = { m -> scope.launch { snackbar.show(m) } }) }
         }
     }
 
@@ -515,7 +788,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
             ModelSheet(models, current, onPick = {
                 controller.setModel(it)
                 sheet = Sheet.None
-            }, onDismiss = { sheet = Sheet.None })
+            }, onDismiss = { sheet = Sheet.None }, initialQuery = modelQuery)
         }
         Sheet.Thinking -> {
             val levels by controller.thinkingLevels.collectAsStateWithLifecycle()
@@ -531,34 +804,55 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                     SessionFacts(
                         model = s.model,
                         thinkingLevel = s.thinkingLevel,
-                        totalTokens = s.lastUsage?.totalTokens,
-                        input = s.lastUsage?.input,
-                        output = s.lastUsage?.output,
-                        cacheRead = s.lastUsage?.cacheRead,
-                        cost = s.lastUsage?.cost,
+                        sessionName = s.sessionName,
                         cwd = s.host?.cwd,
                         version = s.host?.version,
-                        sessionName = s.sessionName,
                         compacting = s.isCompacting,
                         connected = linkState.value is LinkState.Connected,
+                        lastTotalTokens = s.lastUsage?.totalTokens,
                     )
                 }
             }
-            SessionInfoSheet(
+            SessionStatsSheet(
                 facts,
-                onModel = {
-                    controller.loadModels()
-                    sheet = Sheet.Model
-                },
-                onThinking = {
-                    controller.loadThinkingLevels()
-                    sheet = Sheet.Thinking
-                },
+                stats,
+                statsLoading,
+                onModel = { openModels() },
+                onThinking = ::openThinking,
+                onCycleModel = ::cycleModel,
+                onCycleThinking = ::cycleThinking,
                 onCompact = { sheet = Sheet.Compact },
                 onRename = { sheet = Sheet.Rename },
+                onExport = { sheet = Sheet.Export },
                 onDismiss = { sheet = Sheet.None },
             )
         }
+        Sheet.Export -> ActionsSheet(
+            title = "Export or share this session",
+            actions = listOfNotNull(
+                SheetAction("Share as Markdown", Icons.Rounded.Share) { exportMarkdown(share = true) },
+                SheetAction("Copy as Markdown", Icons.Rounded.ContentCopy) { exportMarkdown(share = false) },
+                controller.sessionFile?.let { SheetAction("Share session file (JSONL)", Icons.AutoMirrored.Rounded.InsertDriveFile) { exportJsonl() } },
+                SheetAction("Share as HTML", Icons.Rounded.Html) { exportHtml() }.takeIf { isLocal },
+            ),
+            onDismiss = { sheet = Sheet.None },
+        )
+        Sheet.Resume -> ResumeSheet(savedSessions, controller.sessionFile, onPick = {
+            controller.switchSession(it.file)
+            sheet = Sheet.None
+        }, onDismiss = { sheet = Sheet.None })
+        Sheet.Fork -> ForkSheet(forkPoints, onPick = { point ->
+            sheet = Sheet.None
+            scope.launch {
+                controller.fork(point.entryId)
+                    .onSuccess {
+                        draft = it.ifEmpty { point.text }
+                        haptics.confirm()
+                        snackbar.show("Forked into a new session. Edit the message and send.", SnackKind.Success)
+                    }
+                    .onFailure { snackbar.show(it.message ?: "Fork failed", SnackKind.Error) }
+            }
+        }, onDismiss = { sheet = Sheet.None })
         Sheet.Rename -> TextPromptSheet(
             title = "Rename session",
             message = null,
@@ -597,32 +891,47 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
 
     actionsFor?.let { row ->
         val actions = when (row) {
-            is UserRow -> listOfNotNull(
-                SheetAction("Copy", Icons.Rounded.ContentCopy) { copy(row.item.text) },
-                SheetAction("Edit in composer", Icons.Rounded.Edit) { draft = row.item.text },
-                SheetAction("Select text", Icons.Rounded.TextFields) { viewer = ViewerContent("Message", null, row.item.text, selectable = true) },
-                // On-device sessions only: Pi forks from a user message on the active branch.
-                local?.let {
-                    SheetAction("Fork from here", Icons.AutoMirrored.Rounded.CallSplit) {
-                        val users = state.value.items.filterIsInstance<UserItem>()
-                        val at = users.indexOfFirst { it.key == row.item.key }
-                        if (at >= 0) fork(row.item.text, users.take(at).count { it.text == row.item.text })
-                    }
-                },
-            )
-            is TextRow -> {
-                val text = { (state.value.allItems.firstOrNull { it.key == row.itemKey } as? AssistantTextItem)?.text.orEmpty() }
-                listOf(
-                    SheetAction("Copy", Icons.Rounded.ContentCopy) { copy(text()) },
-                    SheetAction("Select text", Icons.Rounded.TextFields) { viewer = ViewerContent("Reply", null, text(), selectable = true) },
-                    SheetAction("View as Markdown", Icons.AutoMirrored.Rounded.Notes) { viewer = ViewerContent("Markdown", null, text()) },
+            is UserRow -> {
+                val users = state.value.items.filterIsInstance<UserItem>()
+                val at = users.indexOfFirst { it.key == row.item.key }
+                val occurrence = if (at >= 0) users.take(at).count { it.text == row.item.text } else -1
+                listOfNotNull(
+                    SheetAction("Copy", Icons.Rounded.ContentCopy) { copy(row.item.text) },
+                    SheetAction("Send again", Icons.Rounded.Replay) {
+                        haptics.send()
+                        send(row.item.text)
+                    }.takeIf { row.item.text.isNotBlank() && row.item.imageCount == 0 },
+                    // On-device sessions only: Pi forks from a user message on the active branch.
+                    SheetAction("Edit and resend", Icons.Rounded.Edit) { fork(row.item.text, occurrence) }.takeIf { isLocal && occurrence >= 0 },
+                    SheetAction("Edit in composer", Icons.Rounded.EditNote) { fill(row.item.text) },
+                    SheetAction("Select text", Icons.Rounded.TextFields) { viewer = ViewerContent("Message", null, row.item.text, selectable = true) },
+                    SheetAction("Share", Icons.Rounded.Share) { share(row.item.text) },
                 )
             }
-            is ActionsRow -> listOf(
-                SheetAction("Select text", Icons.Rounded.TextFields) { viewer = ViewerContent("Reply", null, row.reply, selectable = true) },
-                SheetAction("View as Markdown", Icons.AutoMirrored.Rounded.Notes) { viewer = ViewerContent("Markdown", null, row.reply) },
-                SheetAction("Share", Icons.Rounded.Share) { share(row.reply) },
-            )
+            is TextRow -> {
+                val text = { (state.value.allItems.firstOrNull { it.key == row.itemKey } as? AssistantTextItem)?.text.orEmpty() }
+                val prompt = MessageText.promptOf(state.value.items, row.itemKey)
+                listOfNotNull(
+                    SheetAction("Copy", Icons.Rounded.ContentCopy) { copy(MessageText.plain(text())) },
+                    SheetAction("Copy as Markdown", Icons.Rounded.Code) { copy(text()) },
+                    SheetAction("Regenerate", Icons.Rounded.Replay) { prompt?.let { (u, n) -> regenerate(u, n) } }.takeIf { isLocal && prompt != null && !running },
+                    SheetAction("Select text", Icons.Rounded.TextFields) { viewer = ViewerContent("Reply", null, text(), selectable = true) },
+                    SheetAction("View as Markdown", Icons.AutoMirrored.Rounded.Notes) { viewer = ViewerContent("Markdown", null, text()) },
+                    SheetAction("Share", Icons.Rounded.Share) { share(text()) },
+                )
+            }
+            is ActionsRow -> {
+                val prompt = state.value.items.firstOrNull { it.key == row.turnKey } as? UserItem
+                val occurrence = prompt?.let { p -> state.value.items.filterIsInstance<UserItem>().takeWhile { it.key != p.key }.count { it.text == p.text } }
+                listOfNotNull(
+                    SheetAction("Copy as plain text", Icons.Rounded.ContentCopy) { copy(MessageText.plain(row.reply)) },
+                    SheetAction("Copy as Markdown", Icons.Rounded.Code) { copy(row.reply) },
+                    SheetAction("Regenerate", Icons.Rounded.Replay) { if (prompt != null && occurrence != null) regenerate(prompt, occurrence) }.takeIf { isLocal && prompt != null && occurrence != null && !running },
+                    SheetAction("Select text", Icons.Rounded.TextFields) { viewer = ViewerContent("Reply", null, row.reply, selectable = true) },
+                    SheetAction("View as Markdown", Icons.AutoMirrored.Rounded.Notes) { viewer = ViewerContent("Markdown", null, row.reply) },
+                    SheetAction("Share", Icons.Rounded.Share) { share(row.reply) },
+                )
+            }
             is ToolRow -> {
                 val item = row.item
                 val label = toolLabel(item)
@@ -642,4 +951,11 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
             ActionsSheet(title = null, actions = actions, onDismiss = { actionsFor = null })
         }
     }
+}
+
+/** The status line while compacting: why it runs, as the terminal says it. */
+fun compactionLabel(reason: String?): String = when (reason) {
+    "threshold" -> "Auto-compacting"
+    "overflow" -> "Context full, compacting"
+    else -> "Compacting"
 }

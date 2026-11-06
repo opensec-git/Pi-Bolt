@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import opensec.pibolt.protocol.rpc.ImageAttachment
 import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.ToolItem
@@ -58,8 +59,16 @@ class SessionMemory(private val sessionId: String?) {
      */
     val localImages = mutableStateMapOf<String, List<ImageBitmap>>()
 
+    /**
+     * The full images behind [localImages] for the image viewer, by the same row keys. Only the most recent
+     * [FULL_KEPT] messages keep theirs (they are large); older ones open their thumbnails.
+     */
+    val localFull = object : LinkedHashMap<String, List<ImageAttachment>>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<ImageAttachment>>?): Boolean = size > FULL_KEPT
+    }
+
     /** Images of steers and follow-ups not yet echoed: matched to their user message by text. */
-    private val unclaimed = ArrayList<Pair<String, List<ImageBitmap>>>()
+    private val unclaimed = ArrayList<Triple<String, List<ImageBitmap>, List<ImageAttachment>>>()
     private var lastUserSeen: String? = null
 
     /** Bumped on every send from this phone: the transcript jumps to the bottom. */
@@ -145,15 +154,16 @@ class SessionMemory(private val sessionId: String?) {
      * Records a send from this phone and asks the transcript to jump down. An idle prompt shows at once as "Sending";
      * the [thumbs] of its images stay with that row (and its echo).
      */
-    fun sent(text: String, state: SessionState, running: Boolean, thumbs: List<ImageBitmap> = emptyList()) {
+    fun sent(text: String, state: SessionState, running: Boolean, thumbs: List<ImageBitmap> = emptyList(), full: List<ImageAttachment> = emptyList()) {
         sends.intValue++
         if (PendingSend.eligible(text, running, thumbs.size)) {
             val p = PendingSend(nextPendingId++, text, PendingSend.lastUserKey(state.items), SystemClock.uptimeMillis(), thumbs.size)
             if (thumbs.isNotEmpty()) localImages[p.rowKey] = thumbs
+            if (full.isNotEmpty()) localFull[p.rowKey] = full
             pending.value = p
         } else if (thumbs.isNotEmpty()) {
             lastUserSeen = PendingSend.lastUserKey(state.items)
-            unclaimed += text.trim() to thumbs
+            unclaimed += Triple(text.trim(), thumbs, full)
             if (unclaimed.size > 8) unclaimed.removeAt(0)
         }
     }
@@ -166,7 +176,11 @@ class SessionMemory(private val sessionId: String?) {
         val item = state.items.lastOrNull { it is UserItem && it.key == last } as? UserItem ?: return
         if (item.imageCount == 0) return
         val i = unclaimed.indexOfFirst { it.first == item.text.trim() }
-        if (i >= 0) localImages[item.key] = unclaimed.removeAt(i).second
+        if (i >= 0) {
+            val (_, thumbs, full) = unclaimed.removeAt(i)
+            localImages[item.key] = thumbs
+            if (full.isNotEmpty()) localFull[item.key] = full
+        }
     }
 
     private var nextPendingId = 1L
@@ -181,6 +195,8 @@ class SessionMemory(private val sessionId: String?) {
     }
 
     companion object {
+        const val FULL_KEPT = 6
+
         // Keyed by computer and Pi session, so a reconnect (a new controller) keeps the measured durations while a
         // different session on the same computer starts clean. The few most recent sessions are kept.
         private val all = object : LinkedHashMap<String, SessionMemory>(16, 0.75f, true) {

@@ -45,6 +45,12 @@ import opensec.pibolt.protocol.bool
 import opensec.pibolt.protocol.str
 import opensec.pibolt.protocol.type
 import java.io.File
+import opensec.pibolt.app.data.AgentDefaults
+import opensec.pibolt.app.ui.session.features.SessionStats
+import opensec.pibolt.app.ui.session.features.ShellCommand
+import opensec.pibolt.protocol.session.ToolItem
+import opensec.pibolt.protocol.session.ToolStatus
+import kotlinx.serialization.json.put
 
 sealed interface SessionEffect {
     data class Notify(val message: String, val kind: String) : SessionEffect
@@ -545,6 +551,83 @@ class SessionController private constructor(
 
     fun abortBash() {
         scope.launch { rpc.abortBash() }
+    }
+
+    // Model and thinking cycling, stats, export, the shell and engine settings.
+
+    /** Next model (`cycle_model`, the terminal's Ctrl+P). Returns its label, or null when there is no other model. */
+    suspend fun cycleModel(): Result<String?> {
+        val response = rpc.request("cycle_model")
+        if (!response.success) return Result.failure(IllegalStateException(response.error ?: "Could not switch model"))
+        val data = response.dataObject ?: return Result.success(null)
+        val model = ModelInfo.from(data["model"] as? JsonObject)
+        val level = data.str("thinkingLevel")
+        mutate { it.copy(model = model ?: it.model, thinkingLevel = level ?: it.thinkingLevel) }
+        _thinkingLevels.value = emptyList()
+        return Result.success(model?.label)
+    }
+
+    /** Next thinking level (`cycle_thinking_level`, Shift+Tab). Null when the model does not reason. */
+    suspend fun cycleThinking(): Result<String?> {
+        val response = rpc.request("cycle_thinking_level")
+        if (!response.success) return Result.failure(IllegalStateException(response.error ?: "Could not change thinking level"))
+        val level = response.dataObject?.str("level") ?: return Result.success(null)
+        mutate { it.copy(thinkingLevel = level) }
+        return Result.success(level)
+    }
+
+    /** The whole session's tokens, cost and context use (`get_session_stats`). */
+    suspend fun sessionStats(): Result<SessionStats> {
+        val response = rpc.getSessionStats()
+        val stats = SessionStats.from(response.dataObject)
+        return if (response.success && stats != null) Result.success(stats) else Result.failure(IllegalStateException(response.error ?: "No statistics"))
+    }
+
+    /** `export_html` to [path] (on this phone's engine). Returns the written file's path. */
+    suspend fun exportHtml(path: String): Result<String> {
+        val response = rpc.exportHtml(path)
+        val written = response.dataObject?.str("path")
+        return if (response.success && written != null) Result.success(written) else Result.failure(IllegalStateException(response.error ?: "Export failed"))
+    }
+
+    /**
+     * Runs [shell] in the project like the terminal's `!` (`!!` keeps the output out of the model's context). The run
+     * shows at once as a step; its output streams in (`bash_execution_update`) and the result replaces it.
+     */
+    fun runShell(shell: ShellCommand) {
+        val key = SessionReducer.SHELL_PREFIX + System.currentTimeMillis()
+        val args = JsonObject(mapOf("command" to JsonPrimitive(shell.command)))
+        mutate { it.copy(items = it.items + ToolItem(key, key, "bash", args, status = ToolStatus.Running)) }
+        scope.launch {
+            val response = rpc.bash(shell.command, shell.excludeFromContext)
+            val data = response.dataObject
+            val exit = data?.let { (it["exitCode"] as? JsonPrimitive)?.content?.toIntOrNull() }
+            val cancelled = data?.bool("cancelled") == true
+            val output = data?.str("output").orEmpty().trimEnd()
+            val status = when {
+                !response.success -> ToolStatus.Error
+                cancelled -> ToolStatus.Cancelled
+                exit != null && exit != 0 -> ToolStatus.Error
+                else -> ToolStatus.Done
+            }
+            val result = buildString {
+                append(if (response.success) output else response.error ?: "The command did not run")
+                if (exit != null && exit != 0) append("\n\nCommand exited with code ").append(exit)
+                if (data?.bool("truncated") == true) data.str("fullOutputPath")?.let { append("\n\n(output truncated; full output in ").append(it).append(')') }
+            }
+            mutate { s -> s.copy(items = s.items.map { if (it is ToolItem && it.key == key) it.copy(status = status, result = result) else it }) }
+        }
+    }
+
+    /** Applies the engine settings to this session at once (on-device only: remote control refuses them). */
+    fun applyAgentDefaults(defaults: AgentDefaults) {
+        if (!isLocal) return
+        scope.launch {
+            rpc.request("set_steering_mode") { put("mode", defaults.steeringMode.wire) }
+            rpc.request("set_follow_up_mode") { put("mode", defaults.followUpMode.wire) }
+            rpc.request("set_auto_compaction") { put("enabled", defaults.autoCompaction) }
+            rpc.request("set_auto_retry") { put("enabled", defaults.autoRetry) }
+        }
     }
 
     /** Any other RPC command (packages/coding-agent/docs/rpc-commands.md). */
