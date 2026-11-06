@@ -220,4 +220,19 @@ class SessionReducerTest {
         assertEquals(ToolStatus.Pending, (s.items.last() as ToolItem).status)
         assertEquals("Half done", (s.streaming.single() as AssistantTextItem).text)
     }
+
+    @Test
+    fun outOfRangeContentIndexIsIgnored() {
+        // PR #243 review note: -1 threw IndexOutOfBounds; a huge index padded the block list until OOM.
+        val state = run(
+            SessionReducer.reduce(SessionState(), SessionReducer.parse(hello)),
+            """{"type":"message_start","message":{"role":"assistant","content":[]}}""",
+            """{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":-1,"delta":"x"}}""",
+            """{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":2000000000,"delta":"x"}}""",
+            """{"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":0}}""",
+            """{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"ok"}}""",
+        )
+        assertEquals(listOf("ok"), state.streaming.filterIsInstance<AssistantTextItem>().map { it.text })
+    }
+
 }

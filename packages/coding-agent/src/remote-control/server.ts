@@ -43,6 +43,11 @@ const MAX_FAILURES_PER_WINDOW = 10;
 const DEFAULT_PAIRING_TTL_MS = 10 * 60_000;
 const MAX_DEVICE_NAME_LENGTH = 80;
 /**
+ * `remote_hello` stays under this many bytes of JSON, well inside the 32 MiB message limit clients enforce: a longer
+ * session sends only its newest messages (`omittedMessages` counts the rest).
+ */
+const HELLO_BUDGET_BYTES = 24 * 1024 * 1024;
+/**
  * Connections still in their handshake, per address and in total; more are refused until some finish or time out.
  * The per-address cap keeps one peer from filling the table with idle sockets and locking the phone out.
  */
@@ -102,6 +107,8 @@ export interface RemoteControlServerOptions {
 	/** Bind address; default all interfaces. */
 	bindAddress?: string;
 	pairingTtlMs?: number;
+	/** Size cap of `remote_hello` in bytes of JSON; default 24 MiB (tests shrink it). */
+	helloBudgetBytes?: number;
 	/** Deadline for a client's first frame and for its `remote_ready`; default 3 s (tests shorten it). */
 	firstFrameTimeoutMs?: number;
 	onEvent?: (event: RemoteControlEvent) => void;
@@ -573,16 +580,30 @@ export class RemoteControlServer {
 	private hello(): object {
 		const session = this.options.getSession();
 		const streamingMessage = session.isStreaming ? session.agent.state.streamingMessage : undefined;
-		return {
+		const hello = {
 			type: "remote_hello",
 			protocol: PROTOCOL_VERSION,
 			host: { name: this.hostName, version: this.version, cwd: session.sessionManager.getCwd() },
 			state: this.sessionState(session),
-			messages: session.messages,
+			messages: [] as unknown[],
 			...(streamingMessage ? { streamingMessage } : {}),
 			dialogs: [...this.dialogs.values()].map((dialog) => dialog.request),
 			commands: this.commands(session),
+			omittedMessages: 0,
 		};
+		// Newest messages first, while they fit; a client would refuse the whole snapshot otherwise.
+		let budget = (this.options.helloBudgetBytes ?? HELLO_BUDGET_BYTES) - Buffer.byteLength(JSON.stringify(hello));
+		const messages = session.messages;
+		let first = messages.length;
+		while (first > 0) {
+			const size = Buffer.byteLength(JSON.stringify(messages[first - 1])) + 1;
+			if (size > budget) break;
+			budget -= size;
+			first--;
+		}
+		hello.messages = first === 0 ? messages : messages.slice(first);
+		hello.omittedMessages = first;
+		return hello;
 	}
 
 	/**

@@ -30,7 +30,14 @@ describe("remote control", () => {
 		return dir;
 	}
 
-	async function setup(options: { tools?: AgentTool[]; pairingTtlMs?: number; firstFrameTimeoutMs?: number } = {}) {
+	async function setup(
+		options: {
+			tools?: AgentTool[];
+			pairingTtlMs?: number;
+			firstFrameTimeoutMs?: number;
+			helloBudgetBytes?: number;
+		} = {},
+	) {
 		const harness: Harness = await createHarness({ tools: options.tools });
 		cleanups.push(() => harness.cleanup());
 		const store = new RemoteControlStore(tempDir());
@@ -42,6 +49,7 @@ describe("remote control", () => {
 			bindAddress: "127.0.0.1",
 			pairingTtlMs: options.pairingTtlMs,
 			firstFrameTimeoutMs: options.firstFrameTimeoutMs,
+			helloBudgetBytes: options.helloBudgetBytes,
 		});
 		const port = await server.start();
 		cleanups.push(() => server.stop());
@@ -235,6 +243,24 @@ describe("remote control", () => {
 
 		const messages = await phone.request({ type: "get_messages" });
 		expect(((messages.data as { messages: unknown[] }).messages ?? []).length).toBeGreaterThanOrEqual(2);
+	});
+
+	it("keeps remote_hello under its size budget by sending only the newest messages", async () => {
+		const { harness, uri } = await setup({ helloBudgetBytes: 40_000 });
+		const big = "x".repeat(10_000);
+		for (let turn = 0; turn < 6; turn++) {
+			harness.setResponses([fauxAssistantMessage(`${big} reply ${turn}`)]);
+			await harness.session.prompt(`question ${turn}`);
+		}
+		const phone = track(await connectTestClient(uri(), generateKeyPair()));
+		const hello = await phone.waitFor((message) => message.type === "remote_hello");
+		const messages = hello.messages as Array<{ role: string }>;
+		expect(hello.omittedMessages).toBe(harness.session.messages.length - messages.length);
+		expect(hello.omittedMessages).toBeGreaterThan(0);
+		expect(messages.length).toBeGreaterThan(0);
+		// The newest ones: the last message sent is the session's last.
+		expect(messages.at(-1)).toEqual(harness.session.messages.at(-1));
+		expect(Buffer.byteLength(JSON.stringify(hello))).toBeLessThanOrEqual(40_000);
 	});
 
 	it("sends terminal-side prompts to the phone too", async () => {

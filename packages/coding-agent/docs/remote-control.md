@@ -101,7 +101,7 @@ Host to client:
 
 | `type` | Meaning |
 |---|---|
-| `remote_hello` | `{ protocol: 1, host: { name, version, cwd }, state: RpcSessionState, messages: AgentMessage[], streamingMessage?: AgentMessage, dialogs: extension_ui_request[], commands: RpcSlashCommand[] }`. Sent on connect and again whenever the TUI switches to another session (`/new`, `/resume`, `/fork`): the client replaces everything it shows. |
+| `remote_hello` | `{ protocol: 1, host: { name, version, cwd }, state: RpcSessionState, messages: AgentMessage[], streamingMessage?: AgentMessage, dialogs: extension_ui_request[], commands: RpcSlashCommand[], omittedMessages: number }`. It stays under 24 MiB: a longer session sends only its newest messages, and `omittedMessages` counts the older ones left out. Sent on connect and again whenever the TUI switches to another session (`/new`, `/resume`, `/fork`): the client replaces everything it shows. |
 | session events | Exactly the RPC/JSON event stream ([JSON Event Stream](json.md)): `agent_start`, `message_start`, `message_update` (deltas), `message_end`, `tool_execution_start/update/end`, `queue_update`, `compaction_start/end`, `auto_retry_start/end`, `agent_end`, `agent_settled`, ... Clients ignore types they do not know. |
 | `response` | Answer to a client command, as in [RPC Commands](rpc-commands.md). |
 | `extension_ui_request` | A dialog (`select`, `confirm`, `input`, `editor`) or `notify`, as in [RPC Extension UI](rpc-extension-ui.md). The same dialog is open in the terminal; whichever side answers first wins. |
