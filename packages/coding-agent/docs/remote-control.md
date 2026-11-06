@@ -10,8 +10,9 @@ Nothing of this loads until the command runs. Without `/remote-control`, Pi beha
 
 | Command | What it does |
 |---|---|
-| `/remote-control` | Start the server on the local network and show a pairing QR code. While running: show a new QR code. |
-| `/remote-control tunnel` | Also start a Cloudflare quick tunnel, so the phone can connect from anywhere. Needs `cloudflared`. |
+| `/remote-control` | Start the server and show a pairing QR code with the local network address and, when `cloudflared` is installed, a Cloudflare tunnel address, so the phone connects from anywhere. Without `cloudflared` it offers to install it (Homebrew on macOS, winget on Windows) and otherwise works on the local network. While running: show a new QR code. |
+| `/remote-control lan` | Local network only: no tunnel (stops a running one). |
+| `/remote-control tunnel` | Require the tunnel: an error if it cannot start. |
 | `/remote-control copy` | Copy the pairing link, for the app's "Paste pairing link" (a phone without a camera, an emulator). It pairs one phone within 10 minutes; paste it only into the app. |
 | `/remote-control stop` | Stop the server and the tunnel, and disconnect every phone. |
 | `/remote-control devices` | List paired phones and revoke one. |
@@ -19,18 +20,24 @@ Nothing of this loads until the command runs. Without `/remote-control`, Pi beha
 Scan the QR code with the app (or the phone's camera). The first scan pairs the phone; later scans of any QR code from the
 same computer reconnect without pairing again. The footer shows `remote` with the number of connected phones.
 
+The phone tries the addresses in order: the local network, then a Tailscale address (`100.x`, labelled `tailscale`, when
+Tailscale runs on this computer and the phone is in the same tailnet), then the tunnel. A quick tunnel's address changes
+each time it starts, so a phone away from home needs the new QR code after a restart; a named tunnel keeps its hostname.
+
 ### Settings
 
 | Setting | Default | Meaning |
 |---|---|---|
 | `remoteControl.port` | `0` (random) | Port for the local listener. A fixed port lets paired phones reconnect on the LAN without a new QR code. |
-| `remoteControl.tunnel` | `"quick"` | `"quick"` for a random `*.trycloudflare.com` address, or `{ "name": "<tunnel>", "hostname": "<host>" }` for a named tunnel you configured with `cloudflared tunnel create` and a DNS route. |
+| `remoteControl.tunnel` | `"quick"` | `"quick"` for a random `*.trycloudflare.com` address, `{ "name": "<tunnel>", "hostname": "<host>" }` for a named tunnel you configured with `cloudflared tunnel create` and a DNS route, or `"off"` for the local network only unless you run `/remote-control tunnel`. |
 | `remoteControl.cloudflared` | `"cloudflared"` | Path to the `cloudflared` executable. |
+| `remoteControl.askCloudflared` | `true` | Offer to install `cloudflared` when it is missing; "Don't ask again" sets it to `false`. |
 
 ### Install cloudflared
 
 macOS `brew install cloudflared`; Debian/Ubuntu: Cloudflare's apt repository; Windows `winget install --id Cloudflare.cloudflared`.
-Pi-Bolt never downloads it.
+`/remote-control` offers to run the macOS or Windows command for you the first time, and only runs it after you choose
+"Install it now"; Pi-Bolt never downloads it itself.
 
 ## Security
 

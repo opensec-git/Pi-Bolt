@@ -13,7 +13,14 @@ import { WEBSOCKET_PATH } from "./protocol.ts";
 import { renderQrLines } from "./qr.ts";
 import { type RemoteControlEvent, RemoteControlServer, type RemoteDialogRequest } from "./server.ts";
 import { RemoteControlStore } from "./store.ts";
-import { startTunnel, type Tunnel } from "./tunnel.ts";
+import {
+	cloudflaredInstallCommand,
+	cloudflaredInstallHint,
+	installCloudflared,
+	startTunnel,
+	type Tunnel,
+	TunnelError,
+} from "./tunnel.ts";
 
 /** What the interactive mode gives remote control. */
 export interface RemoteControlHost {
@@ -37,7 +44,21 @@ export interface RemoteControlHost {
 	bindAddress?: string;
 }
 
-const USAGE = "Usage: /remote-control [tunnel|copy|stop|devices]";
+/** Tunnel and installer starters; tests replace them so no real cloudflared runs. */
+export interface RemoteControlDeps {
+	startTunnel: typeof startTunnel;
+	installCloudflared: typeof installCloudflared;
+	platform: NodeJS.Platform;
+}
+
+const USAGE = "Usage: /remote-control [lan|tunnel|copy|stop|devices]";
+
+/**
+ * How `/remote-control` reaches the phone. "auto" (the default): the LAN, plus a Cloudflare tunnel when the
+ * `remoteControl.tunnel` setting is not "off"; a missing cloudflared is offered for install and otherwise skipped.
+ * "tunnel": the tunnel is required. "lan": the local network only.
+ */
+type Reach = "auto" | "tunnel" | "lan";
 
 function isPrivateIPv4(address: string): boolean {
 	const [a, b] = address.split(".").map(Number);
@@ -69,19 +90,32 @@ function localTime(iso: string): string {
 	return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/** "internet" for the tunnel, "tailscale" for a Tailscale (CGNAT) address, else "local", padded to one width. */
+function endpointLabel(endpoint: string): string {
+	if (endpoint.startsWith("wss:")) return "internet ";
+	const host = new URL(endpoint).hostname;
+	return isCgnatIPv4(host) ? "tailscale" : "local    ";
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 export function hostDisplayName(): string {
 	return hostname().replace(/\.local$/, "") || "computer";
 }
 
 export class RemoteControlController {
 	private readonly host: RemoteControlHost;
+	private readonly deps: RemoteControlDeps;
 	private server: RemoteControlServer | undefined;
 	private tunnel: Tunnel | undefined;
 	private readonly store: RemoteControlStore;
 	private lastPairingUri: string | undefined;
 
-	constructor(host: RemoteControlHost) {
+	constructor(host: RemoteControlHost, deps: Partial<RemoteControlDeps> = {}) {
 		this.host = host;
+		this.deps = { startTunnel, installCloudflared, platform: process.platform, ...deps };
 		this.store = new RemoteControlStore(host.agentDir);
 	}
 
@@ -97,8 +131,9 @@ export class RemoteControlController {
 	async handleCommand(args: string): Promise<void> {
 		const action = args.trim();
 		try {
-			if (action === "") await this.start(false);
-			else if (action === "tunnel") await this.start(true);
+			if (action === "") await this.start("auto");
+			else if (action === "tunnel") await this.start("tunnel");
+			else if (action === "lan") await this.start("lan");
 			else if (action === "copy") await this.copyPairingLink();
 			else if (action === "stop") await this.stop(true);
 			else if (action === "devices") await this.manageDevices();
@@ -108,7 +143,7 @@ export class RemoteControlController {
 		}
 	}
 
-	private async start(withTunnel: boolean): Promise<void> {
+	private async start(reach: Reach): Promise<void> {
 		const settings = this.host.settingsManager.getRemoteControlSettings();
 		if (!this.server) {
 			this.server = new RemoteControlServer({
@@ -134,18 +169,92 @@ export class RemoteControlController {
 				);
 			}
 		}
-		if (withTunnel && !this.tunnel) {
+		if (reach === "lan" && this.tunnel) {
+			this.tunnel.stop();
+			this.tunnel = undefined;
+		}
+		const wantTunnel = reach === "tunnel" || (reach === "auto" && settings.tunnel !== "off");
+		if (wantTunnel && !this.tunnel) await this.openTunnel(reach === "tunnel");
+		this.updateStatus();
+		this.showPairingCode();
+	}
+
+	/**
+	 * Starts the tunnel. [required]: failures are errors (`/remote-control tunnel`); otherwise the LAN still works and a
+	 * failure is a warning, and a missing cloudflared is offered for install once (until "Don't ask again").
+	 */
+	private async openTunnel(required: boolean): Promise<void> {
+		const server = this.server;
+		if (!server) return;
+		const settings = this.host.settingsManager.getRemoteControlSettings();
+		const begin = async () => {
 			this.host.showStatus("Starting Cloudflare tunnel...");
-			this.tunnel = await startTunnel(this.server.port, WEBSOCKET_PATH, settings, {
+			this.tunnel = await this.deps.startTunnel(server.port, WEBSOCKET_PATH, settings, {
 				onExit: (message) => {
 					this.tunnel = undefined;
 					this.host.showWarning(`Remote control tunnel stopped. ${message}`);
 					this.updateStatus();
 				},
 			});
+		};
+		try {
+			await begin();
+			return;
+		} catch (error) {
+			const missing = error instanceof TunnelError && error.missing;
+			if (required && !missing) throw error;
+			if (!missing) {
+				this.host.showWarning(`Remote control works on this network only: ${errorMessage(error)}`);
+				return;
+			}
+			if (!(await this.offerCloudflared(required))) {
+				if (required) throw error;
+				return;
+			}
 		}
-		this.updateStatus();
-		this.showPairingCode();
+		try {
+			await begin();
+		} catch (error) {
+			if (required) throw error;
+			this.host.showWarning(`Remote control works on this network only: ${errorMessage(error)}`);
+		}
+	}
+
+	/** Asks to install cloudflared; true once it is installed. */
+	private async offerCloudflared(required: boolean): Promise<boolean> {
+		const settings = this.host.settingsManager.getRemoteControlSettings();
+		if (!required && settings.askCloudflared === false) return false;
+		const install = cloudflaredInstallCommand(this.deps.platform);
+		const installLabel = install ? `Install it now (${[install.command, ...install.args].join(" ")})` : undefined;
+		const lanLabel = required ? "Not now" : "LAN only for now";
+		const neverLabel = "Don't ask again (LAN only; /remote-control tunnel still works)";
+		const options = [...(installLabel ? [installLabel] : []), lanLabel, ...(required ? [] : [neverLabel])];
+		if (!install) {
+			this.host.showLines([
+				"Remote control from anywhere needs cloudflared, which runs a Cloudflare tunnel to this computer.",
+				cloudflaredInstallHint(this.deps.platform),
+			]);
+		}
+		const choice = await this.host.select(
+			"Use remote control from anywhere? It needs cloudflared (a Cloudflare tunnel).",
+			options,
+		);
+		if (choice === neverLabel) {
+			this.host.settingsManager.setRemoteControlAskCloudflared(false);
+			return false;
+		}
+		if (!installLabel || choice !== installLabel) return false;
+		this.host.showStatus(`Installing cloudflared with ${install?.command}...`);
+		const failure = await this.deps.installCloudflared(
+			(line) => this.host.showStatus(`cloudflared: ${line.slice(0, 120)}`),
+			{ platform: this.deps.platform },
+		);
+		if (failure) {
+			this.host.showWarning(`cloudflared was not installed: ${failure}`);
+			return false;
+		}
+		this.host.showStatus("cloudflared installed");
+		return true;
 	}
 
 	private showPairingCode(): void {
@@ -167,13 +276,12 @@ export class RemoteControlController {
 			text.push(...lines);
 		}
 		text.push("");
-		for (const endpoint of endpoints)
-			text.push(`  ${endpoint.startsWith("wss:") ? "internet" : "local   "}  ${endpoint}`);
+		for (const endpoint of endpoints) text.push(`  ${endpointLabel(endpoint)}  ${endpoint}`);
 		text.push(
 			"",
 			"The code pairs one phone and expires in 10 minutes; paired phones reconnect without pairing again.",
 			this.tunnel
-				? "No camera? /remote-control copy copies the link. /remote-control stop ends remote control."
+				? "Local only: /remote-control lan. No camera: /remote-control copy. End: /remote-control stop."
 				: "Away from this network: /remote-control tunnel. No camera: /remote-control copy. End: /remote-control stop.",
 		);
 		this.host.showLines(text);
