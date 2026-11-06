@@ -1,0 +1,8 @@
+{
+  "version": "0.2.0",
+  "apk": "https://github.com/opensec-git/Pi-Bolt/releases/download/android-v0.2.0/pi-bolt-android-0.2.0.apk",
+  "page": "https://github.com/opensec-git/Pi-Bolt/releases/tag/android-v0.2.0",
+  "size": 114066985,
+  "sha256": "616cbf7634fe7066592b408b09ab45e4b73f6f68ce3be649642f7d8d3a8132a7",
+  "certSha256": "f752464c8b6d5906d7fd467346b89316518e3ddfe77843f66b1fa673818a2c90"
+}
