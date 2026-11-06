@@ -512,6 +512,27 @@ describe("remote control", () => {
 			expect(asked).toBe(0);
 		});
 
+		it("stops a tunnel that finishes starting after /remote-control lan", async () => {
+			let finish: (() => void) | undefined;
+			const stopped: string[] = [];
+			const slowStart = () =>
+				new Promise<{ endpoint: string; stop: () => void }>((resolve) => {
+					finish = () =>
+						resolve({ endpoint: "wss://late.trycloudflare.com/rc", stop: () => stopped.push("late") });
+				});
+			const { controller } = await controllerSetup({ deps: { startTunnel: slowStart }, command: "lan" });
+			// The default command starts the tunnel; `lan` runs before it finishes (the editor does not await commands).
+			const pending = controller.handleCommand("");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await controller.handleCommand("lan");
+			finish?.();
+			await pending;
+			expect(stopped).toEqual(["late"]);
+			expect(decodePairingUri(controller.pairingUri ?? "").e.every((endpoint) => endpoint.startsWith("ws://"))).toBe(
+				true,
+			);
+		});
+
 		it("keeps the LAN when the tunnel fails, but fails /remote-control tunnel", async () => {
 			const broken = async () => {
 				throw new TunnelError("cloudflared exited with code 1");

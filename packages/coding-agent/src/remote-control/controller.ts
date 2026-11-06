@@ -110,6 +110,8 @@ export class RemoteControlController {
 	private readonly deps: RemoteControlDeps;
 	private server: RemoteControlServer | undefined;
 	private tunnel: Tunnel | undefined;
+	/** Bumped by `lan` and `stop`: a tunnel that finishes starting after that is stopped, not used. */
+	private tunnelGeneration = 0;
 	private readonly store: RemoteControlStore;
 	private lastPairingUri: string | undefined;
 
@@ -169,8 +171,9 @@ export class RemoteControlController {
 				);
 			}
 		}
-		if (reach === "lan" && this.tunnel) {
-			this.tunnel.stop();
+		if (reach === "lan") {
+			this.tunnelGeneration++;
+			this.tunnel?.stop();
 			this.tunnel = undefined;
 		}
 		const wantTunnel = reach === "tunnel" || (reach === "auto" && settings.tunnel !== "off");
@@ -187,15 +190,23 @@ export class RemoteControlController {
 		const server = this.server;
 		if (!server) return;
 		const settings = this.host.settingsManager.getRemoteControlSettings();
+		const generation = this.tunnelGeneration;
 		const begin = async () => {
 			this.host.showStatus("Starting Cloudflare tunnel...");
-			this.tunnel = await this.deps.startTunnel(server.port, WEBSOCKET_PATH, settings, {
+			const tunnel = await this.deps.startTunnel(server.port, WEBSOCKET_PATH, settings, {
 				onExit: (message) => {
+					if (this.tunnel !== tunnel) return;
 					this.tunnel = undefined;
 					this.host.showWarning(`Remote control tunnel stopped. ${message}`);
 					this.updateStatus();
 				},
 			});
+			// `lan` or `stop` ran while it was starting (the editor does not wait for a command): drop it.
+			if (generation !== this.tunnelGeneration || this.server !== server) {
+				tunnel.stop();
+				return;
+			}
+			this.tunnel = tunnel;
 		};
 		try {
 			await begin();
@@ -300,6 +311,7 @@ export class RemoteControlController {
 	}
 
 	async stop(announce = false): Promise<void> {
+		this.tunnelGeneration++;
 		this.tunnel?.stop();
 		this.tunnel = undefined;
 		const server = this.server;
