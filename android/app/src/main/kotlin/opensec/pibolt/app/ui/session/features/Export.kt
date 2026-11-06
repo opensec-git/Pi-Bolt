@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.protocol.session.AssistantTextItem
 import opensec.pibolt.protocol.session.ChatItem
 import opensec.pibolt.protocol.session.NoticeItem
+import opensec.pibolt.protocol.session.SubagentNoticeItem
 import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
@@ -61,6 +62,10 @@ object SessionMarkdown {
                         append('\n').append(fence).append("text\n").append(cut).append('\n').append(fence).append('\n')
                     }
                     lastRole = "pi"
+                }
+                is SubagentNoticeItem -> {
+                    append("\n> ").append(item.text.trim()).append('\n')
+                    lastRole = null
                 }
                 is NoticeItem -> {
                     append("\n> **").append(item.title).append("**")

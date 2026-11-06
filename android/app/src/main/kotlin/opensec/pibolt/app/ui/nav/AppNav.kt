@@ -13,9 +13,11 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -58,6 +60,9 @@ import opensec.pibolt.app.ui.home.HomeScreen
 import opensec.pibolt.app.ui.projects.ProjectScreen
 import opensec.pibolt.app.ui.scan.ScanScreen
 import opensec.pibolt.app.ui.session.SessionScreen
+import opensec.pibolt.app.ui.session.subagent.LocalSubagentNav
+import opensec.pibolt.app.ui.session.subagent.SubagentNav
+import opensec.pibolt.app.ui.session.subagent.SubagentOverlay
 import opensec.pibolt.app.ui.settings.SettingsScreen
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
@@ -163,82 +168,87 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
         }
     }
 
-    SharedTransitionLayout {
-        CompositionLocalProvider(LocalSharedScope provides this) {
-            NavHost(
-                nav,
-                startDestination = Routes.HOME,
-                modifier = Modifier.background(Pi.colors.canvas),
-                enterTransition = enter,
-                exitTransition = exit,
-                popEnterTransition = popEnter,
-                popExitTransition = popExit,
-            ) {
-                composable(Routes.HOME) {
-                    CompositionLocalProvider(LocalNavScope provides this) {
-                        HomeScreen(
-                            app = app,
-                            externalError = linkError,
-                            onErrorShown = { linkError = null },
-                            onOpenProject = { nav.navigate(Routes.project(it.name)) { launchSingleTop = true } },
-                            onOpenLocalSession = { nav.navigate(Routes.localSession(it)) { launchSingleTop = true } },
-                            onOpenHost = { host ->
-                                app.open(host)
-                                nav.navigate(Routes.SESSION) { launchSingleTop = true }
-                            },
-                            onResumeHost = { nav.navigate(Routes.SESSION) { launchSingleTop = true } },
-                            onScan = { nav.navigate(Routes.SCAN) { launchSingleTop = true } },
-                            onSettings = { nav.navigate(Routes.SETTINGS) { launchSingleTop = true } },
-                            onPairingText = { usePairing(it) },
-                        )
+    // A subagent's transcript opens over the session screen (which stays as it was) from its card in the transcript.
+    val subagents = remember { SubagentNav() }
+    Box(Modifier.fillMaxSize()) {
+        SharedTransitionLayout {
+            CompositionLocalProvider(LocalSharedScope provides this, LocalSubagentNav provides subagents) {
+                NavHost(
+                    nav,
+                    startDestination = Routes.HOME,
+                    modifier = Modifier.background(Pi.colors.canvas),
+                    enterTransition = enter,
+                    exitTransition = exit,
+                    popEnterTransition = popEnter,
+                    popExitTransition = popExit,
+                ) {
+                    composable(Routes.HOME) {
+                        CompositionLocalProvider(LocalNavScope provides this) {
+                            HomeScreen(
+                                app = app,
+                                externalError = linkError,
+                                onErrorShown = { linkError = null },
+                                onOpenProject = { nav.navigate(Routes.project(it.name)) { launchSingleTop = true } },
+                                onOpenLocalSession = { nav.navigate(Routes.localSession(it)) { launchSingleTop = true } },
+                                onOpenHost = { host ->
+                                    app.open(host)
+                                    nav.navigate(Routes.SESSION) { launchSingleTop = true }
+                                },
+                                onResumeHost = { nav.navigate(Routes.SESSION) { launchSingleTop = true } },
+                                onScan = { nav.navigate(Routes.SCAN) { launchSingleTop = true } },
+                                onSettings = { nav.navigate(Routes.SETTINGS) { launchSingleTop = true } },
+                                onPairingText = { usePairing(it) },
+                            )
+                        }
                     }
-                }
-                composable(Routes.PROJECT, arguments = listOf(navArgument("name") { type = NavType.StringType })) { entry ->
-                    val name = entry.arguments?.getString("name").orEmpty()
-                    CompositionLocalProvider(LocalNavScope provides this) {
-                        ProjectScreen(
-                            app = app,
-                            name = name,
-                            onBack = { nav.popBackStack(Routes.HOME, inclusive = false) },
-                            onOpenSession = { nav.navigate(Routes.localSession(name)) { launchSingleTop = true } },
-                        )
+                    composable(Routes.PROJECT, arguments = listOf(navArgument("name") { type = NavType.StringType })) { entry ->
+                        val name = entry.arguments?.getString("name").orEmpty()
+                        CompositionLocalProvider(LocalNavScope provides this) {
+                            ProjectScreen(
+                                app = app,
+                                name = name,
+                                onBack = { nav.popBackStack(Routes.HOME, inclusive = false) },
+                                onOpenSession = { nav.navigate(Routes.localSession(name)) { launchSingleTop = true } },
+                            )
+                        }
                     }
-                }
-                composable(Routes.LOCAL_SESSION, arguments = listOf(navArgument("name") { type = NavType.StringType })) { entry ->
-                    val name = entry.arguments?.getString("name").orEmpty()
-                    CompositionLocalProvider(LocalNavScope provides this) {
-                        SessionScreen(
-                            app = app,
-                            onBack = { if (!nav.popBackStack()) nav.navigate(Routes.HOME) },
-                            onForgotten = { nav.popBackStack(Routes.HOME, inclusive = false) },
-                            local = name,
-                        )
+                    composable(Routes.LOCAL_SESSION, arguments = listOf(navArgument("name") { type = NavType.StringType })) { entry ->
+                        val name = entry.arguments?.getString("name").orEmpty()
+                        CompositionLocalProvider(LocalNavScope provides this) {
+                            SessionScreen(
+                                app = app,
+                                onBack = { if (!nav.popBackStack()) nav.navigate(Routes.HOME) },
+                                onForgotten = { nav.popBackStack(Routes.HOME, inclusive = false) },
+                                local = name,
+                            )
+                        }
                     }
-                }
-                composable(Routes.SCAN) {
-                    CompositionLocalProvider(LocalNavScope provides this) {
-                        ScanScreen(
-                            onBack = { nav.popBackStack() },
-                            onCode = { usePairing(it) },
-                        )
+                    composable(Routes.SCAN) {
+                        CompositionLocalProvider(LocalNavScope provides this) {
+                            ScanScreen(
+                                onBack = { nav.popBackStack() },
+                                onCode = { usePairing(it) },
+                            )
+                        }
                     }
-                }
-                composable(Routes.SESSION) {
-                    CompositionLocalProvider(LocalNavScope provides this) {
-                        SessionScreen(
-                            app = app,
-                            onBack = { nav.popBackStack(Routes.HOME, inclusive = false) },
-                            onForgotten = { nav.popBackStack(Routes.HOME, inclusive = false) },
-                        )
+                    composable(Routes.SESSION) {
+                        CompositionLocalProvider(LocalNavScope provides this) {
+                            SessionScreen(
+                                app = app,
+                                onBack = { nav.popBackStack(Routes.HOME, inclusive = false) },
+                                onForgotten = { nav.popBackStack(Routes.HOME, inclusive = false) },
+                            )
+                        }
                     }
-                }
-                composable(Routes.SETTINGS) {
-                    CompositionLocalProvider(LocalNavScope provides this) {
-                        SettingsScreen(app = app, onBack = { nav.popBackStack() })
+                    composable(Routes.SETTINGS) {
+                        CompositionLocalProvider(LocalNavScope provides this) {
+                            SettingsScreen(app = app, onBack = { nav.popBackStack() })
+                        }
                     }
                 }
             }
         }
+        SubagentOverlay(app, subagents)
     }
 }
 

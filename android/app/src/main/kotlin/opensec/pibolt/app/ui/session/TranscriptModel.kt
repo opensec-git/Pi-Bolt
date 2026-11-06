@@ -14,6 +14,10 @@ import opensec.pibolt.protocol.session.AssistantTextItem
 import opensec.pibolt.protocol.session.ChatItem
 import opensec.pibolt.protocol.session.NoticeItem
 import opensec.pibolt.protocol.session.SessionReducer
+import opensec.pibolt.protocol.session.Subagent
+import opensec.pibolt.protocol.session.SubagentNoticeItem
+import opensec.pibolt.protocol.session.SubagentReducer
+import opensec.pibolt.protocol.session.SubagentStatus
 import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
@@ -84,6 +88,23 @@ data class ToolGroupRow(
 @Immutable
 
 data class NoticeRow(val item: NoticeItem, override val live: Boolean) : TRow {
+    override val key: String get() = item.key
+}
+
+/**
+ * A subagent's card: an `Agent` call and its run ([Subagent], without its transcript so rows compare cheaply). [run]
+ * is a stand-in built from the call while the model still writes it.
+ */
+@Immutable
+data class SubagentRow(override val key: String, val run: Subagent, override val live: Boolean) : TRow
+
+/** Consecutive `Agent` calls (parallel agents) as one stack: "3 agents running"; [expanded] shows each card. */
+@Immutable
+data class SubagentStackRow(override val key: String, val runs: List<Subagent>, val expanded: Boolean, override val live: Boolean) : TRow
+
+/** Background subagents ended: a line for each run the notification names ([runs] holds those still known). */
+@Immutable
+data class SubagentNoticeRow(val item: SubagentNoticeItem, val runs: List<Subagent>, override val live: Boolean) : TRow {
     override val key: String get() = item.key
 }
 
@@ -241,7 +262,11 @@ object TranscriptModel {
         openGroups: Set<String> = emptySet(),
         pending: PendingSend? = null,
         aliases: Map<String, String> = emptyMap(),
+        subagents: Map<String, Subagent> = emptyMap(),
+        /** False: `Agent` calls stay plain tool rows (inside a subagent's own transcript). */
+        agentCards: Boolean = true,
     ): List<TRow> {
+        val agents = Agents(subagents, agentCards, openGroups)
         val out = ArrayList<TRow>(items.size + 8)
         // Turn boundaries: each user message starts one; anything before the first belongs to a turn of its own.
         val starts = ArrayList<Int>()
@@ -285,13 +310,19 @@ object TranscriptModel {
                 out += FoldRow(turnKey, steps, durations[turnKey], open, failedSteps, lastToolFailed, files)
             }
             if (open) {
-                out += TurnBody(md, live, turnKey, foldOpen = foldable, openGroups).build(items, bodyStart, end, lastStep)
+                out += TurnBody(md, live, turnKey, foldOpen = foldable, openGroups, agents).build(items, bodyStart, end, lastStep)
             } else {
-                // Folded: only notices and the answer.
-                for (i in bodyStart until end) {
+                // Folded: only notices, the answer and agent cards (a unit of work of its own, and background ones
+                // outlive the turn that started them).
+                var i = bodyStart
+                while (i < end) {
                     val item = items[i]
-                    if (i <= lastStep && item !is NoticeItem) continue
-                    addItem(out, item, live, md)
+                    if (item is ToolItem && agents.card(item)) {
+                        i = agents.emit(out, items, i, end, live) { agents.card(it) }
+                        continue
+                    }
+                    if (i > lastStep || item is NoticeItem || item is SubagentNoticeItem) addItem(out, item, live, md, agents)
+                    i++
                 }
             }
             if (isLast && !live && pending == null) {
@@ -316,6 +347,7 @@ object TranscriptModel {
         val turnKey: String,
         val foldOpen: Boolean,
         val openGroups: Set<String>,
+        val agents: Agents,
     ) {
         private val rows = ArrayList<TRow>()
 
@@ -344,6 +376,16 @@ object TranscriptModel {
             while (i < end) {
                 val item = items[i]
                 val inFold = i <= lastStep && item !is NoticeItem
+                if (item is ToolItem && agents.card(item)) {
+                    // Cards sit apart from the fold's rail: the line breaks around them.
+                    val before = rows.size
+                    i = agents.emit(rows, items, i, end, live) { agents.card(it) }
+                    repeat(rows.size - before) {
+                        segments += null
+                        staggers += null
+                    }
+                    continue
+                }
                 if (item is ToolItem && isGroupable(item)) {
                     val run = ArrayList<ToolItem>()
                     var j = i
@@ -371,10 +413,11 @@ object TranscriptModel {
                 val segment = if (inFold) foldSegment else null
                 val stagger = if (inFold) foldStagger else null
                 val before = rows.size
-                addItem(rows, item, live, md)
+                addItem(rows, item, live, md, agents)
                 for (k in before until rows.size) {
-                    segments += if (rows[k] is NoticeRow) null else segment
-                    staggers += if (rows[k] is NoticeRow) null else stagger?.let(::nextIndex)
+                    val apart = rows[k] is NoticeRow || rows[k] is SubagentNoticeRow || rows[k] is SubagentRow
+                    segments += if (apart) null else segment
+                    staggers += if (apart) null else stagger?.let(::nextIndex)
                 }
                 i++
             }
@@ -402,7 +445,53 @@ object TranscriptModel {
         else -> row
     }
 
-    private fun addItem(out: MutableList<TRow>, item: ChatItem, live: Boolean, md: MdCache) {
+    /** How `Agent` calls show: as cards ([SubagentRow], [SubagentStackRow]) built from their runs. */
+    private class Agents(val runs: Map<String, Subagent>, val enabled: Boolean, val openGroups: Set<String>) {
+        fun card(item: ToolItem): Boolean = enabled && SubagentReducer.isAgentCall(item.name)
+
+        /** The run of [item] without its transcript; a stand-in from the call while it is still written. */
+        fun run(item: ToolItem): Subagent {
+            val run = runs[item.toolCallId] ?: return standIn(item)
+            return if (run.transcript == null) run else run.copy(transcript = null)
+        }
+
+        /**
+         * Rows for the `Agent` calls from [from] on that pass [take] (blank text between them is skipped): a card, or a
+         * stack for two or more. Returns the index after them.
+         */
+        fun emit(out: MutableList<TRow>, items: List<ChatItem>, from: Int, end: Int, live: Boolean, take: (ToolItem) -> Boolean): Int {
+            val calls = ArrayList<ToolItem>()
+            var j = from
+            while (j < end) {
+                val next = items[j]
+                if (next is ToolItem && take(next)) {
+                    calls += next
+                } else if (!(next is AssistantTextItem && next.text.isBlank())) {
+                    break
+                }
+                j++
+            }
+            if (calls.size == 1) {
+                out += SubagentRow(calls[0].key, run(calls[0]), live)
+            } else {
+                val key = "agents:${calls[0].key}"
+                out += SubagentStackRow(key, calls.map(::run), key in openGroups, live)
+            }
+            return j
+        }
+
+        private fun standIn(item: ToolItem): Subagent {
+            val label = toolLabel(item)
+            return Subagent(
+                key = item.toolCallId,
+                type = label.verb,
+                description = label.detail,
+                status = if (item.status == ToolStatus.Error) SubagentStatus.Failed else SubagentStatus.Queued,
+            )
+        }
+    }
+
+    private fun addItem(out: MutableList<TRow>, item: ChatItem, live: Boolean, md: MdCache, agents: Agents? = null) {
         when (item) {
             is UserItem -> out += UserRow(item, live)
             is AssistantTextItem -> {
@@ -414,8 +503,9 @@ object TranscriptModel {
                 }
             }
             is ThinkingItem -> out += ThinkingRow(item, live)
-            is ToolItem -> out += ToolRow(item, live)
+            is ToolItem -> out += if (agents != null && agents.card(item)) SubagentRow(item.key, agents.run(item), live) else ToolRow(item, live)
             is NoticeItem -> out += NoticeRow(item, live)
+            is SubagentNoticeItem -> out += SubagentNoticeRow(item, item.runKeys.mapNotNull { key -> agents?.runs?.get(key)?.let { if (it.transcript == null) it else it.copy(transcript = null) } }, live)
         }
     }
 

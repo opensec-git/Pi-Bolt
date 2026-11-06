@@ -239,10 +239,9 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   - three or more consecutive finished Read/Search/Find/List steps (and `todo` calls) fold into one step row: check
     glyph, "Read 3 files, ran 1 search" or "Updated todos 7 times" (label ink2), the base names or task subjects (mono
     ink3), summed duration, chevron; tap lists them. Run, Edit and Write are never grouped.
-  - subagent steps (opensec-pi-subagents): `Agent` reads as its type and task ("Explore  Find the parser code"),
-    `steer_subagent`, `get_subagent_result` and `SubagentWorkflow` as "Steer agent", "Agent result", "Workflow" + the
-    workflow's name. Under the row, one meta ink3 line: what the agent is doing while it runs ("reading 3 files… · 4
-    tool uses"), the start of its answer when done (without the "Agent completed in" headline and the resume hint).
+  - subagent calls (opensec-pi-subagents): each `Agent` call is a card, parallel calls a stack (see Subagents below).
+    `steer_subagent`, `get_subagent_result` and `SubagentWorkflow` stay step rows: "Steer agent", "Agent result",
+    "Workflow" + the workflow's name.
   - `todo` steps read as one line: "Todo  Added: Write tests", "Done: …", "Started: …", "Cleared the list".
   - code blocks: surface1, radius 12, 1dp line. Header 40dp: code glyph 14dp ink3, then the filename (monoSmall
     ink1, middle ellipsis) from the fence info string (`ts title="src/a.ts"`, `ts:src/a.ts`, `src/a.ts`) or the
@@ -384,6 +383,63 @@ history and from live `tool_execution_end`).
   never recompose it.
 - TalkBack: the heading is one node, "Todos, 2 of 5 done" (collapsed: ". Now: <task>"), with Expanded/Collapsed
   state and an Expand/Collapse click label; each row is "Done: …", "In progress: …" or "To do: …".
+
+**Subagents.** The subagents extension (opensec-pi-subagents) runs each agent in its own in-process Pi session. Its
+TUI widget is a component, so over RPC it arrives empty; the app builds `SessionState.subagents` (by `Agent` call id)
+from what does arrive:
+- the call's arguments (type, task, prompt, `run_in_background`);
+- a foreground run's partial results, about 12 a second: `details` has the activity line, tool uses, turns, tokens
+  and run time (kept in whole seconds so the state changes about once a second);
+- the final result (the answer; for a background start, the agent id);
+- `subagent-notification` messages when background runs end (status, metrics, a preview of the answer; a group
+  names several runs), `subagents-interrupted`, and `get_subagent_result` results (the full answer);
+- on this phone only, the agent's session file (`sessions/--<cwd>--/…jsonl`, one line per finished message, its
+  header naming the parent session and its name "<type>#<agent id prefix>"). `SubagentTail` matches a run to its file
+  by that id, or by its prompt before the id is known, and reads new complete lines every 400 ms while it runs (once
+  more when it ends, and while its screen is open), on `Dispatchers.IO`, as `subagent_transcript` events.
+Subagent session files (a `parentSession` header and that name) are not listed or resumed as project sessions.
+Remote control gets the events only: progress of foreground runs, the start and end of background runs, never their
+messages. Pi has no RPC to read or steer a subagent: steering and resuming go through a prompt to Pi.
+
+- Card (surface1, radius 12, 1dp line; lineStrong while active): 32dp avatar (the type's initial in its tint on the
+  tint @ 16%, radius 30%; tints glacier `#7CC4F0` Explore, iris `#A99CFF` Plan, mint `#9ED3C6` general-purpose, peach
+  `#E5A97E` and lilac `#C9B8F0` hashed for others: never a status colour), the type (label ink1), a "background · id"
+  pill (micro, surface3) for background runs, the task (meta ink2), the run time (meta ink3 tnum, ticking once a
+  second while it runs, the final time after). Then the activity line: a 20dp-high slot under the avatar with Quad
+  Agent 12dp in the tint (still Quad Think ink3 while queued; check success, cross danger, stop ink3 after, swapped
+  with a 160 ms scale 0.7→1 in the live turn) and the activity (meta ink3, one line) that crossfades (quick, 4dp rise)
+  at most every 450 ms, so a streaming reply does not flicker. Then the metrics ("4 tools · 12.3k tokens · turn 2",
+  meta ink3 tnum). While it runs a 2dp band in the tint sweeps the top edge (1400 ms) and every line keeps one line,
+  so the card never changes height. Done, the activity gives way to the answer's first lines as one paragraph (headings end
+  with a colon, list items keep a bullet; up to 3 lines, ink2; the error in danger); a finished run counts "5 turns" and the card grows to them with the settle spring (`animateContentSize`). Tap opens the agent; press
+  scale 0.98.
+- Stack: two or more consecutive `Agent` calls (one message's parallel calls). Closed: one card with a 48dp header
+  (up to 3 avatars, 22dp, overlapping by 8dp with a 2dp ring; "3 agents running", "1 of 3 agents running", "3 agents
+  done", "3 agents · 1 failed"; the longest run time; chevron) over one 40dp line per agent (glyph, type, crossfading
+  activity or task, time; tap opens it). Open (header tap): the header, then each agent's card 8dp apart; the switch
+  resizes with the settle spring. The open state lives with the tool groups'.
+- A finished turn folds its steps but not its agent cards: each is a unit of work of its own, and background runs
+  outlive the turn.
+  A background run's end shows where the notification lands: a step line "Explore finished" + task + time, tapping
+  opens the agent.
+- Detail screen (over the whole app; the session screen stays composed below, so its scroll position, draft and
+  images are as they were): enters like a screen (24dp slide + fade, sheet), predictive back scales it to 0.9. Top bar:
+  back, 28dp avatar, type (subhead) and task (meta ink3), Copy answer once there is one. A 36dp strip: glyph, state,
+  run time, metrics; the model, "background" and the agent id under it (monoMeta ink3). The transcript is the main one's
+  rows (user bubble for its prompt, thinking, tool rows and cards, prose, notices) built by `TranscriptModel` with every
+  turn open by default and `Agent` calls as plain rows. Reversed list with a 32dp live line at index 0 (Quad Agent 16dp
+  in the tint, the activity in shimmer, the run time; kept while done so nothing jumps); it follows the newest row only
+  while the reader is at the bottom, else the 40dp jump button with the unseen dot. Each agent keeps its list position
+  and toggles for the app's life. Over remote control (or when its file was not saved) it shows the prompt and the
+  answer with one info line saying why.
+- Reaching the agent (bottom bar, 1dp line above): a running background agent takes a message ("Message this agent",
+  sent to Pi as a prompt that asks it to call `steer_subagent`); a finished agent with an id can be continued ("Continue
+  this agent": Pi resumes it with `Agent` `resume`); a running foreground agent cannot be messaged (Pi is inside its
+  call: a message would reach Pi only after it returns), so the bar says so and offers Stop (surface3 pill; a first tap
+  arms "Stop turn?" in danger for 3 s, the second aborts Pi's turn, which stops the agent). A green line confirms a send
+  for 3.5 s.
+- TalkBack: a card is one node ("Explore agent, Find the parser code, running, Reading 3 files…") with the click label
+  "Open agent".
 
 **Settings.**
 - Appearance: theme tiles (seven swatches, four a row, drawn with each theme's canvas, surface and ink lines; selected = 1.5dp accent

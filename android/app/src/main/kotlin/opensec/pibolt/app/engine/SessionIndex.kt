@@ -80,6 +80,8 @@ class SessionIndex(private val agentDir: File) {
             }
         }
         val h = header ?: return null
+        // A subagent's own session (opensec-pi-subagents): part of its parent's run, not a session to list or resume.
+        if (h.str("parentSession") != null && name?.let(SUBAGENT_NAME::matches) == true) return null
         return SessionSummary(
             file = file.path,
             id = h.str("id") ?: file.nameWithoutExtension.substringAfter('_'),
@@ -94,6 +96,9 @@ class SessionIndex(private val agentDir: File) {
         const val HEAD = "{\"type\":\""
         const val ROLE = "\"message\":{\"role\":\""
         const val PREVIEW_CHARS = 160
+
+        /** The name the subagents extension gives an agent's session: "<type>#<first 8 characters of its id>". */
+        val SUBAGENT_NAME = Regex("""^\S+#[0-9a-f]{8}$""")
 
         /** Calls [onLine] with each LF-terminated line (CR stripped) as bytes of a reused buffer, until it returns false. */
         fun forEachLine(input: java.io.InputStream, onLine: (ByteArray, Int) -> Boolean) {

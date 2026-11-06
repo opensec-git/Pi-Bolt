@@ -58,6 +58,9 @@ import kotlinx.coroutines.launch
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.markdown.MdBlock
+import opensec.pibolt.app.ui.session.subagent.SubagentCard
+import opensec.pibolt.app.ui.session.subagent.SubagentNoticeRowView
+import opensec.pibolt.app.ui.session.subagent.SubagentStack
 import opensec.pibolt.app.ui.theme.LocalPiType
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
@@ -106,7 +109,7 @@ fun Transcript(
             val recent = settledTick >= 0 && memory.settledAt.longValue > 0 && SystemClock.uptimeMillis() - memory.settledAt.longValue < 1200
             val open = memory.openFolds.filterValues { it }.keys
             val groups = memory.openGroups.filterValues { it }.keys
-            TranscriptModel.rows(s.allItems, liveTurn, open, memory.turnDurations, md, groups, memory.pending.value, memory.aliases).let { list ->
+            TranscriptModel.rows(s.allItems, liveTurn, open, memory.turnDurations, md, groups, memory.pending.value, memory.aliases, s.subagents).let { list ->
                 if (!recent || liveTurn) list else markLastTurnLive(list)
             }
         }
@@ -260,6 +263,9 @@ private fun markLastTurnLive(rows: List<TRow>): List<TRow> {
                 is ThinkingRow -> r.copy(live = true)
                 is NoticeRow -> r.copy(live = true)
                 is ToolGroupRow -> r.copy(live = true)
+                is SubagentRow -> r.copy(live = true)
+                is SubagentStackRow -> r.copy(live = true)
+                is SubagentNoticeRow -> r.copy(live = true)
                 else -> r
             }
         }
@@ -446,5 +452,15 @@ private fun LazyItemScope.RowView(
             modifier = base,
         )
         is ActionsRow -> ReplyActions(row, memory, onAskAgain = onAskAgain, onMore = { onActions(row) }, modifier = base)
+        is SubagentRow -> SubagentCard(row, modifier = base.padding(top = Pi.dims.stepGap + 2.dp, bottom = 2.dp).riseIn(row.key, row.live, memory, 6.dp))
+        is SubagentStackRow -> SubagentStack(
+            row,
+            onToggle = {
+                memory.openGroups[row.key] = !row.expanded
+                keep()
+            },
+            modifier = base.padding(top = Pi.dims.stepGap + 2.dp, bottom = 2.dp).riseIn(row.key, row.live, memory, 6.dp),
+        )
+        is SubagentNoticeRow -> SubagentNoticeRowView(row, modifier = base.riseIn(row.key, row.live, memory, 6.dp))
     }
 }
