@@ -194,9 +194,17 @@ type ParsedSource = NpmSource | GitSource | LocalSource;
 
 type InstalledSourceScope = Exclude<SourceScope, "temporary">;
 
+/** One installed copy of a package in an npm install root. */
+type InstalledNpmCopy = {
+	name: string;
+	path: string;
+	topLevel: boolean;
+	dependencies: string[];
+};
+
 /** Top-level packages in an npm install root that no dependency saved in the root package.json reaches. */
 type UnsavedNpmPackages = {
-	names: string[];
+	packages: InstalledNpmCopy[];
 	/** Unsaved packages that no other unsaved package depends on, such as a package installed with `--no-save`. */
 	roots: string[];
 };
@@ -2182,11 +2190,10 @@ export class DefaultPackageManager implements PackageManager {
 	): Promise<void> {
 		const unsaved = this.getUnsavedNpmPackages(installRoot);
 		await this.runNpmCommand(args);
-		if (unsaved.names.length === 0) {
+		if (unsaved.packages.length === 0) {
 			return;
 		}
-		const nodeModulesDir = join(installRoot, "node_modules");
-		const removed = unsaved.names.filter((name) => !existsSync(join(nodeModulesDir, name)));
+		const removed = unsaved.packages.filter(({ path }) => !existsSync(path)).map(({ name }) => name);
 		if (removed.length === 0) {
 			return;
 		}
@@ -2204,37 +2211,50 @@ export class DefaultPackageManager implements PackageManager {
 		const nodeModulesDir = join(installRoot, "node_modules");
 		const saved = this.readNpmManifestDependencies(join(installRoot, "package.json"), true);
 		if (!saved || !existsSync(nodeModulesDir)) {
-			return { names: [], roots: [] };
+			return { packages: [], roots: [] };
 		}
 
-		// Dependency names of every installed copy of each package, top-level and nested.
-		const dependencies = new Map<string, Set<string>>();
-		const collect = (dir: string): void => {
+		// Every installed copy by path, top-level and nested, since one package can be installed at several versions.
+		const copies = new Map<string, InstalledNpmCopy>();
+		const collect = (dir: string, topLevel: boolean): void => {
 			for (const entry of this.listNodeModulesPackages(dir)) {
-				const deps = this.readNpmManifestDependencies(join(dir, entry.name, "package.json"), false) ?? [];
-				const known = dependencies.get(entry.name) ?? new Set<string>();
-				for (const dep of deps) known.add(dep);
-				dependencies.set(entry.name, known);
+				const path = join(dir, entry.name);
+				const dependencies = this.readNpmManifestDependencies(join(path, "package.json"), false) ?? [];
+				copies.set(path, { name: entry.name, path, topLevel, dependencies });
 				// Symlinked packages (pnpm, local links) resolve their dependencies outside this tree.
-				if (!entry.symlink) collect(join(dir, entry.name, "node_modules"));
+				if (!entry.symlink) collect(join(path, "node_modules"), false);
 			}
 		};
-		collect(nodeModulesDir);
+		collect(nodeModulesDir, true);
+
+		// Resolve a dependency like Node does: the nearest node_modules folder from the dependent up to the root.
+		const resolve = (fromDir: string, name: string): string | undefined => {
+			for (let dir = fromDir; ; dir = dirname(dir)) {
+				if (basename(dir) !== "node_modules") {
+					const candidate = join(dir, "node_modules", name);
+					if (copies.has(candidate)) return candidate;
+				}
+				if (dir === installRoot || dirname(dir) === dir) return undefined;
+			}
+		};
+		const resolveAll = (fromDir: string, names: string[]): string[] =>
+			names.flatMap((name) => resolve(fromDir, name) ?? []);
 
 		const reachable = new Set<string>();
-		const pending = [...saved];
-		for (let name = pending.pop(); name !== undefined; name = pending.pop()) {
-			if (reachable.has(name)) continue;
-			reachable.add(name);
-			pending.push(...(dependencies.get(name) ?? []));
+		const pending = resolveAll(installRoot, saved);
+		for (let path = pending.pop(); path !== undefined; path = pending.pop()) {
+			if (reachable.has(path)) continue;
+			reachable.add(path);
+			pending.push(...resolveAll(path, copies.get(path)?.dependencies ?? []));
 		}
 
-		const names = this.listNodeModulesPackages(nodeModulesDir)
-			.map((entry) => entry.name)
-			.filter((name) => !reachable.has(name))
-			.sort();
-		const required = new Set(names.flatMap((name) => [...(dependencies.get(name) ?? [])]));
-		return { names, roots: names.filter((name) => !required.has(name)) };
+		const unreachable = [...copies.values()].filter((copy) => !reachable.has(copy.path));
+		const required = new Set(unreachable.flatMap((copy) => resolveAll(copy.path, copy.dependencies)));
+		const packages = unreachable.filter((copy) => copy.topLevel).sort((a, b) => a.name.localeCompare(b.name));
+		return {
+			packages,
+			roots: packages.filter((copy) => !required.has(copy.path)).map((copy) => copy.name),
+		};
 	}
 
 	private listNodeModulesPackages(nodeModulesDir: string): Array<{ name: string; symlink: boolean }> {
@@ -2262,10 +2282,15 @@ export class DefaultPackageManager implements PackageManager {
 		return packages;
 	}
 
+	/**
+	 * Read the dependency names a package manager installs for a manifest. Peer dependencies are left out: managed installs
+	 * disable peer resolution (npm's --legacy-peer-deps, bun's --omit=peer, pnpm's auto-install-peers=false), so a
+	 * peer does not keep a package in the tree.
+	 */
 	private readNpmManifestDependencies(packageJsonPath: string, includeDevDependencies: boolean): string[] | undefined {
 		const fields = includeDevDependencies
-			? ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"]
-			: ["dependencies", "optionalDependencies", "peerDependencies"];
+			? ["dependencies", "devDependencies", "optionalDependencies"]
+			: ["dependencies", "optionalDependencies"];
 		try {
 			const pkg = JSON.parse(stripBom(readFileSync(packageJsonPath, "utf-8"))) as Record<string, unknown>;
 			return fields.flatMap((field) => {

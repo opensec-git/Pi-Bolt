@@ -2944,6 +2944,87 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			expect(warnings[0].message).not.toContain("hoisted-dep");
 		});
 
+		// opensec-git/Pi-Bolt#223
+		it("should report a pruned unsaved package that a saved package only declares as a peer", async () => {
+			const npmRoot = join(agentDir, "npm");
+			const nodeModules = join(npmRoot, "node_modules");
+			mkdirSync(join(nodeModules, "saved-pkg"), { recursive: true });
+			mkdirSync(join(nodeModules, "peer-pkg"), { recursive: true });
+			writeFileSync(
+				join(npmRoot, "package.json"),
+				JSON.stringify({ name: "pi-extensions", private: true, dependencies: { "saved-pkg": "^1.0.0" } }),
+			);
+			writeFileSync(
+				join(nodeModules, "saved-pkg", "package.json"),
+				JSON.stringify({ name: "saved-pkg", version: "1.0.0", peerDependencies: { "peer-pkg": "*" } }),
+			);
+			writeFileSync(
+				join(nodeModules, "peer-pkg", "package.json"),
+				JSON.stringify({ name: "peer-pkg", version: "1.0.0" }),
+			);
+			settingsManager.setPackages(["npm:saved-pkg"]);
+
+			vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.0.1"');
+			vi.spyOn(packageManager as any, "runCommand").mockImplementation(async () => {
+				// --legacy-peer-deps ignores peerDependencies, so the peer is extraneous and pruned.
+				writeFileSync(
+					join(nodeModules, "saved-pkg", "package.json"),
+					JSON.stringify({ name: "saved-pkg", version: "1.0.1", peerDependencies: { "peer-pkg": "*" } }),
+				);
+				rmSync(join(nodeModules, "peer-pkg"), { recursive: true });
+			});
+
+			const events: ProgressEvent[] = [];
+			packageManager.setProgressCallback((event) => events.push(event));
+
+			await packageManager.update();
+
+			const warnings = events.filter((event) => event.type === "progress");
+			expect(warnings).toHaveLength(1);
+			expect(warnings[0].message).toContain("removed 1 package not saved in");
+			expect(warnings[0].message).toContain(": peer-pkg.");
+		});
+
+		// opensec-git/Pi-Bolt#223
+		it("should resolve dependencies per installed copy when reporting pruned packages", async () => {
+			const npmRoot = join(agentDir, "npm");
+			const nodeModules = join(npmRoot, "node_modules");
+			const writeManifest = (dir: string, name: string, version: string, dependencies: Record<string, string>) => {
+				mkdirSync(dir, { recursive: true });
+				writeFileSync(join(dir, "package.json"), JSON.stringify({ name, version, dependencies }));
+			};
+			mkdirSync(npmRoot, { recursive: true });
+			writeFileSync(
+				join(npmRoot, "package.json"),
+				JSON.stringify({ name: "pi-extensions", private: true, dependencies: { "saved-pkg": "^1.0.0" } }),
+			);
+			// saved-pkg -> nested x@1. The unsaved top-level x@2 -> y is not reachable from saved-pkg.
+			writeManifest(join(nodeModules, "saved-pkg"), "saved-pkg", "1.0.0", { x: "^1.0.0" });
+			writeManifest(join(nodeModules, "saved-pkg", "node_modules", "x"), "x", "1.0.0", {});
+			writeManifest(join(nodeModules, "x"), "x", "2.0.0", { y: "^1.0.0" });
+			writeManifest(join(nodeModules, "y"), "y", "1.0.0", {});
+			settingsManager.setPackages(["npm:saved-pkg"]);
+
+			vi.spyOn(packageManager as any, "runCommandCapture").mockResolvedValue('"1.0.1"');
+			vi.spyOn(packageManager as any, "runCommand").mockImplementation(async () => {
+				// npm prunes x@2 and y, and hoists saved-pkg's x@1 to the top level.
+				writeManifest(join(nodeModules, "saved-pkg"), "saved-pkg", "1.0.1", { x: "^1.0.0" });
+				rmSync(join(nodeModules, "saved-pkg", "node_modules"), { recursive: true });
+				writeManifest(join(nodeModules, "x"), "x", "1.0.0", {});
+				rmSync(join(nodeModules, "y"), { recursive: true });
+			});
+
+			const events: ProgressEvent[] = [];
+			packageManager.setProgressCallback((event) => events.push(event));
+
+			await packageManager.update();
+
+			const warnings = events.filter((event) => event.type === "progress");
+			expect(warnings).toHaveLength(1);
+			expect(warnings[0].message).toContain("removed 1 package not saved in");
+			expect(warnings[0].message).toContain(": y.");
+		});
+
 		it("should not report pruned packages when nothing unsaved was removed", async () => {
 			const npmRoot = join(agentDir, "npm");
 			const savedPath = join(npmRoot, "node_modules", "saved-pkg");
