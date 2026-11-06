@@ -44,5 +44,6 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun linkFrom(intent: Intent?): String? =
-        intent?.takeIf { it.action == Intent.ACTION_VIEW }?.dataString?.takeIf { PairingPayload.looksLikePairing(it) }
+        intent?.takeIf { it.action == Intent.ACTION_VIEW }?.dataString
+            ?.takeIf { it.length <= PairingPayload.MAX_LINK_CHARS && PairingPayload.looksLikePairing(it) }
 }

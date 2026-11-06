@@ -157,7 +157,20 @@ class RemoteConnection {
 	}
 
 	get isOpen(): boolean {
-		return this.keys !== undefined && this.socket.readyState === this.socket.OPEN;
+		return !this.revoked && this.keys !== undefined && this.socket.readyState === this.socket.OPEN;
+	}
+
+	/** Set by [revoke]: nothing more from this connection runs, even before its socket is gone. */
+	revoked = false;
+
+	/**
+	 * The device was revoked: stop handling its messages now, tell it why (4403), and drop the socket after a second
+	 * if the peer does not finish the close handshake.
+	 */
+	revoke(): void {
+		this.revoked = true;
+		this.close(CloseCode.NotAuthorized);
+		setTimeout(() => this.socket.terminate(), 1_000).unref?.();
 	}
 
 	info(): RemoteClientInfo | undefined {
@@ -403,7 +416,7 @@ export class RemoteControlServer {
 	revoke(publicKey: string): boolean {
 		const removed = this.store.removeDevice(publicKey);
 		for (const connection of this.connections) {
-			if (connection.device?.publicKey === publicKey) connection.close(CloseCode.NotAuthorized);
+			if (connection.device?.publicKey === publicKey) connection.revoke();
 		}
 		return removed;
 	}
@@ -550,6 +563,12 @@ export class RemoteControlServer {
 	}
 
 	async handleClientMessage(connection: RemoteConnection, message: unknown): Promise<void> {
+		// A revoked device (here, or by another Pi on this machine editing devices.json) runs nothing more.
+		const device = connection.device;
+		if (!connection.isOpen || !device || !this.store.findDevice(Buffer.from(device.publicKey, "base64url"))) {
+			if (connection.device && !connection.revoked) connection.revoke();
+			return;
+		}
 		if (typeof message !== "object" || message === null || typeof (message as { type?: unknown }).type !== "string") {
 			return;
 		}

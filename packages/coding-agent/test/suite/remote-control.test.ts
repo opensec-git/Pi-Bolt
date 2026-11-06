@@ -303,6 +303,17 @@ describe("remote control", () => {
 		await expect(connectTestClient(uri(), key, { pair: false })).rejects.toThrow(`closed ${CloseCode.NotAuthorized}`);
 	});
 
+	it("runs nothing from a phone revoked elsewhere, even before its socket closes", async () => {
+		const { harness, store, uri } = await setup();
+		const phone = track(await connectTestClient(uri(), generateKeyPair()));
+		await phone.waitFor((message) => message.type === "remote_hello");
+		// Another Pi on this machine revokes the phone: only the devices file changes.
+		store.removeDevice(store.devices()[0].publicKey);
+		phone.send({ type: "set_session_name", name: "should not happen", id: "x" });
+		expect(await phone.closed).toBe(CloseCode.NotAuthorized);
+		expect(harness.session.sessionName).not.toBe("should not happen");
+	});
+
 	it("sends a new snapshot when the terminal switches session", async () => {
 		const { harness, server, uri } = await setup();
 		const phone = track(await connectTestClient(uri(), generateKeyPair()));

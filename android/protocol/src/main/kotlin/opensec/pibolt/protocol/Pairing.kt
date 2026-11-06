@@ -6,6 +6,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import java.net.URI
 import java.util.Base64
 
 const val PROTOCOL_VERSION = 1
@@ -64,7 +65,30 @@ data class PairingPayload(
         /** True when [text] looks like a pairing link (from a QR code, a deep link or pasted text). */
         fun looksLikePairing(text: String): Boolean = text.trim().startsWith(PAIR_PREFIX, ignoreCase = true)
 
+        /** A real pairing link is a few hundred characters; anything longer is refused before decoding. */
+        const val MAX_LINK_CHARS = 4096
+
+        /** Endpoints kept from a pairing code: LAN addresses plus a tunnel fit comfortably. */
+        const val MAX_ENDPOINTS = 8
+        private const val MAX_ENDPOINT_CHARS = 256
+        private const val MAX_HOST_NAME_CHARS = 80
+
+        /**
+         * A usable endpoint: `ws://` or `wss://` with a host and no user info, at most [MAX_ENDPOINT_CHARS] characters.
+         * Anything else in a pairing code (which any app or web page can hand us through a deep link) is dropped.
+         */
+        fun isValidEndpoint(endpoint: String): Boolean {
+            if (endpoint.length > MAX_ENDPOINT_CHARS) return false
+            val uri = try {
+                URI(endpoint)
+            } catch (_: Exception) {
+                return false
+            }
+            return (uri.scheme == "ws" || uri.scheme == "wss") && !uri.host.isNullOrBlank() && uri.userInfo == null
+        }
+
         fun parse(text: String): PairingPayload {
+            if (text.length > MAX_LINK_CHARS) throw PairingParseException("Pairing code is too long")
             val trimmed = text.trim()
             if (!trimmed.startsWith(PAIR_PREFIX, ignoreCase = true)) throw PairingParseException("Not a Pi-Bolt pairing code")
             val encoded = trimmed.substring(PAIR_PREFIX.length)
@@ -77,13 +101,19 @@ data class PairingPayload(
             if (version != PROTOCOL_VERSION) throw PairingParseException("Pairing code version $version is not supported; update the app")
             val key = json.str("k")?.let { decodeKey(it, "host key") } ?: throw PairingParseException("Pairing code has no host key")
             val secret = json.str("s")?.let { decodeKey(it, "secret") } ?: throw PairingParseException("Pairing code has no secret")
-            val endpoints = (json["e"] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
-                ?.filter { it.startsWith("ws://") || it.startsWith("wss://") }
+            val endpoints = (json["e"] as? JsonArray)?.asSequence()
+                ?.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+                ?.filter(::isValidEndpoint)
+                ?.distinct()
+                ?.take(MAX_ENDPOINTS)
+                ?.toList()
                 .orEmpty()
             if (endpoints.isEmpty()) throw PairingParseException("Pairing code has no address")
             return PairingPayload(
                 version = version,
-                hostName = json.str("n")?.takeIf { it.isNotBlank() } ?: "Computer",
+                // Shown in the app: no control characters, bounded length.
+                hostName = json.str("n")?.filterNot { it.isISOControl() }?.trim()?.take(MAX_HOST_NAME_CHARS)
+                    ?.takeIf { it.isNotBlank() } ?: "Computer",
                 hostKey = key,
                 secret = secret,
                 endpoints = endpoints,

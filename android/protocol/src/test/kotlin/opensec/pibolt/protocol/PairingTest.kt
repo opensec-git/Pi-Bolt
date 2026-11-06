@@ -43,4 +43,17 @@ class PairingTest {
         assertFailsWith<PairingParseException> { PairingPayload.parse(code("""{"v":1,"k":"AAAA","s":"$s","e":["ws://a/rc"],"x":1}""")) }
         assertFailsWith<PairingParseException> { PairingPayload.parse(code("""{"v":1,"k":"$k","s":"$s","e":[],"x":1}""")) }
     }
+
+    @Test
+    fun pairingCodesAreBoundedAndValidated() {
+        val good = PairingPayload(1, "host\u001b[31m", ByteArray(32) { 1 }, ByteArray(32) { 2 }, emptyList(), 0)
+        val endpoints = listOf("ws://192.168.1.2:47800/rc", "http://evil/rc", "ws://user:pw@h/rc", "wss://a.trycloudflare.com/rc", "ws:///rc", "ws://" + "x".repeat(300)) +
+            (1..20).map { "ws://10.0.0.$it:1/rc" }
+        val parsed = PairingPayload.parse(good.copy(endpoints = endpoints).encode())
+        assertEquals(PairingPayload.MAX_ENDPOINTS, parsed.endpoints.size)
+        assertEquals(listOf("ws://192.168.1.2:47800/rc", "wss://a.trycloudflare.com/rc"), parsed.endpoints.take(2))
+        assertEquals("host[31m", parsed.hostName)
+        assertFailsWith<PairingParseException> { PairingPayload.parse(PAIR_PREFIX + "A".repeat(PairingPayload.MAX_LINK_CHARS)) }
+        assertFailsWith<PairingParseException> { PairingPayload.parse(good.copy(endpoints = listOf("http://x/rc")).encode()) }
+    }
 }

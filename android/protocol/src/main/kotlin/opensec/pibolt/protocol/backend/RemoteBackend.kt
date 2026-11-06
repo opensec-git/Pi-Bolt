@@ -107,7 +107,13 @@ class RemoteBackend(
         var lastFailure: ConnectionState.Disconnected = ConnectionState.Disconnected(DisconnectReason.Unreachable, "No address to try")
         for (endpoint in cfg.endpoints) {
             _state.value = ConnectionState.Connecting(endpoint, attempt)
-            val connection = Connection(endpoint, cfg)
+            // A stored or pasted address OkHttp cannot parse is unreachable, not a crash.
+            val connection = try {
+                Connection(endpoint, cfg)
+            } catch (e: IllegalArgumentException) {
+                lastFailure = ConnectionState.Disconnected(DisconnectReason.Unreachable, "$endpoint is not a valid address")
+                continue
+            }
             pending = connection
             // A socket that does not become the live connection is closed on every path: timeout, refusal,
             // close() while connecting, and cancellation of the caller (which skips the timeout branch).
