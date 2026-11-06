@@ -103,7 +103,8 @@ describe("remote control", () => {
 
 	it("strips control characters from the device name it shows", async () => {
 		const { store, uri } = await setup();
-		track(await connectTestClient(uri(), generateKeyPair(), { device: "\u001b[31mEvil\u0007 phone" }));
+		const phone = track(await connectTestClient(uri(), generateKeyPair(), { device: "\u001b[31mEvil\u0007 phone" }));
+		await phone.waitFor((message) => message.type === "remote_hello");
 		expect(store.devices()[0]?.name).toBe("[31mEvil phone");
 	});
 
@@ -121,6 +122,43 @@ describe("remote control", () => {
 		const idle = await openIdle(endpoint);
 		const code = await new Promise<number>((resolve) => idle.on("close", resolve));
 		expect(code).toBe(CloseCode.HandshakeTimeout);
+	});
+
+	it("treats a replayed handshake message 1 as nothing: no hello, no events, closed at the deadline", async () => {
+		const { server, endpoint, uri } = await setup({ firstFrameTimeoutMs: 300 });
+		let recorded: Buffer | undefined;
+		const phone = track(
+			await connectTestClient(uri(), generateKeyPair(), {
+				onMessage1: (frame) => {
+					recorded = frame;
+				},
+			}),
+		);
+		await phone.waitFor((message) => message.type === "remote_hello");
+		phone.close();
+		await phone.closed;
+
+		// Someone who recorded the phone's first frame sends it again: the host answers with message 2, which only the
+		// phone can read, and waits for remote_ready under the session keys.
+		const replay = await openIdle(endpoint);
+		const frames: Buffer[] = [];
+		replay.on("message", (data: Buffer) => frames.push(data));
+		replay.send(recorded as Buffer);
+		const closed = new Promise<number>((resolve) => replay.on("close", resolve));
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		expect(server.clients()).toEqual([]);
+		server.notify("for connected phones only");
+		expect(await closed).toBe(CloseCode.HandshakeTimeout);
+		expect(frames).toHaveLength(1);
+	});
+
+	it("closes a client whose first transport message is not remote_ready", async () => {
+		const { server, uri } = await setup();
+		const phone = await connectTestClient(uri(), generateKeyPair(), { ready: false });
+		phone.send({ type: "get_state", id: "x" });
+		expect(await phone.closed).toBe(CloseCode.BadMessage);
+		expect(phone.received).toEqual([]);
+		expect(server.clients()).toEqual([]);
 	});
 
 	it("caps pending handshakes per address, so idle sockets cannot lock a phone out for long", async () => {

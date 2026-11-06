@@ -111,4 +111,29 @@ class MarkdownTest {
         val shell = Highlighter.tokenize("ls # list", "bash")
         assertEquals(Highlighter.Kind.Comment, shell.single().kind)
     }
+
+    @Test
+    fun hostileInlineTextParsesInLinearTime() {
+        // PR #243 review: openers that never close made each one scan to the end (quadratic).
+        val unit = 100_000
+        for (opener in listOf("*a ", "_a ", "**a ", "__a ", "~~a ", "[a ", "`a ", "[a](b ")) {
+            val text = opener.repeat(unit / opener.length)
+            val started = System.nanoTime()
+            val parsed = Inline.parse(text)
+            val ms = (System.nanoTime() - started) / 1_000_000
+            assertTrue(parsed.text.isNotEmpty(), opener)
+            assertTrue(ms < 1500, "$opener took $ms ms")
+        }
+    }
+
+    @Test
+    fun emphasisStillMatchesItsFirstCloser() {
+        val parsed = Inline.parse("*a* b *c **d** e* f_g_h [x](u) [y] (z)")
+        assertEquals("a b c d e f_g_h x [y] (z)", parsed.text)
+        assertEquals(
+            listOf(InlineSpan.Kind.Italic, InlineSpan.Kind.Bold, InlineSpan.Kind.Italic, InlineSpan.Kind.Link),
+            parsed.spans.map { it.kind },
+        )
+    }
+
 }

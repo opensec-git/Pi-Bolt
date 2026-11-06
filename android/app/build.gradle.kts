@@ -3,8 +3,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
-// Release signing comes only from the environment (CI decodes the keystore from a secret). Without these four
-// variables the release APK is built unsigned. Never commit a keystore.
+// Optional release signing for local builds, from the environment only. Without these four variables the release APK
+// is built unsigned; CI always builds it unsigned and signs it with apksigner. Never commit a keystore.
 val keystorePath: String? = providers.environmentVariable("ANDROID_KEYSTORE_PATH").orNull
 val keystorePassword: String? = providers.environmentVariable("ANDROID_KEYSTORE_PASSWORD").orNull
 val keyAlias: String? = providers.environmentVariable("ANDROID_KEY_ALIAS").orNull
