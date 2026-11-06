@@ -61,4 +61,6 @@ if sha:
 json.dump(request, sys.stdout)
 PY
 gh api -X PUT "repos/$REPO/contents/android.json" --input "$WORK/request.json" --jq .commit.sha >/dev/null
+# A commit made with a workflow's GITHUB_TOKEN does not start a Pages build by itself: request one.
+gh api -X POST "repos/$REPO/pages/builds" --jq .status >/dev/null 2>&1 || warn "could not request a GitHub Pages build; the site updates with the next one"
 log "pi-bolt.opensec.in/android now offers Android app $VERSION"

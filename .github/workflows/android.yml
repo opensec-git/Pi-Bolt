@@ -123,6 +123,8 @@ jobs:
     environment: release
     permissions:
       contents: write
+      # android.json goes to gh-pages through the contents API; a Pages build has to be requested explicitly.
+      pages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

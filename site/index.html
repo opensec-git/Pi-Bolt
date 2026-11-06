@@ -110,7 +110,8 @@
   .install code.ps::before { content: "PS> "; }
   .copy { flex: none; border: 0; border-left: 1px solid var(--line); background: transparent; color: var(--soft); font: 400 11px var(--mono); letter-spacing: 0.08em; text-transform: uppercase; padding: 0 16px; cursor: pointer; min-width: 84px; }
   .copy:hover { color: var(--accent); }
-  .install [hidden] { display: none; }
+  /* Higher specificity than the display rules below, so hidden always wins. */
+  .install .cmd[hidden], .install .apk[hidden] { display: none; }
   .install .apk { display: flex; align-items: stretch; color: var(--text); text-decoration: none; }
   .install .apk span { flex: 1; min-width: 0; padding: 13px 16px; display: flex; flex-direction: column; gap: 3px; }
   .install .apk b { font: 500 14px/1.3 var(--sans); letter-spacing: -0.015em; }
