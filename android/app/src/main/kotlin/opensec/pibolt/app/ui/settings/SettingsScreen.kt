@@ -52,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
@@ -70,6 +71,8 @@ import opensec.pibolt.app.data.AppSettings
 import opensec.pibolt.app.data.Density
 import opensec.pibolt.app.data.ReduceMotion
 import opensec.pibolt.app.data.ThemeId
+import opensec.pibolt.app.ui.components.ConfirmSheet
+import opensec.pibolt.app.ui.components.DangerButton
 import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.SectionLabel
@@ -208,6 +211,41 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
                 }
                 Spacer(Modifier.height(12.dp))
                 SecondaryButton("Open system settings", onClick = { openNotificationSettings(context) }, modifier = Modifier.fillMaxWidth())
+            }
+
+            Section("Security") {
+                var keyId by remember { mutableStateOf(app.deviceKeyId()) }
+                var oldKeyId by remember { mutableStateOf<String?>(null) }
+                var confirmReset by remember { mutableStateOf(false) }
+                // Key ids are shown in mono only: in the UI font "l" and "I" look alike.
+                KeyLine("Device key", keyId, colors.ink1)
+                oldKeyId?.let { KeyLine("Old key", it, colors.ink3) }
+                Text(
+                    if (oldKeyId != null) {
+                        "New key created. Pair again with /remote-control on each computer, then revoke the old key there with /remote-control devices."
+                    } else {
+                        "Computers list this phone by this key in /remote-control devices. Resetting makes a new key: every computer has to pair again."
+                    },
+                    style = type.meta,
+                    color = if (oldKeyId != null) colors.success else colors.ink3,
+                    modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
+                )
+                DangerButton("Reset device key", onClick = { confirmReset = true }, modifier = Modifier.fillMaxWidth())
+                if (confirmReset) {
+                    ConfirmSheet(
+                        title = "Reset this phone's key?",
+                        message = "Every paired computer will refuse this phone, so they are removed here and the current session ends. " +
+                            "Pair each computer again with a new QR code, then revoke the old key on it with /remote-control devices. " +
+                            "Settings keeps showing the old key until then.",
+                        confirmLabel = "Reset key",
+                        onConfirm = {
+                            confirmReset = false
+                            oldKeyId = keyId
+                            keyId = app.resetDeviceKey()
+                        },
+                        onDismiss = { confirmReset = false },
+                    )
+                }
             }
 
             Section("About") {
@@ -374,6 +412,14 @@ private fun InfoLine(label: String, value: String) {
     Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
         Text(label, style = Pi.type.body, color = Pi.colors.ink2, modifier = Modifier.width(110.dp))
         Text(value, style = Pi.type.body, color = Pi.colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+@Composable
+private fun KeyLine(label: String, id: String, color: Color) {
+    Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, style = Pi.type.body, color = Pi.colors.ink2, modifier = Modifier.width(110.dp))
+        Text("[$id]", style = Pi.type.mono, color = color)
     }
 }
 

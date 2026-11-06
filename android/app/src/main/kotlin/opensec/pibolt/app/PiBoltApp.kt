@@ -15,6 +15,7 @@ import opensec.pibolt.app.data.HostStore
 import opensec.pibolt.app.data.SettingsStore
 import opensec.pibolt.app.session.Notifications
 import opensec.pibolt.app.session.SessionController
+import opensec.pibolt.protocol.Base64Url
 import opensec.pibolt.protocol.PairingPayload
 import opensec.pibolt.protocol.backend.RemoteBackend
 
@@ -99,6 +100,23 @@ class PiBoltApp : Application() {
     fun forget(hostId: String) {
         if (_session.value?.hostId == hostId) closeSession()
         hosts.remove(hostId)
+    }
+
+    /**
+     * This phone's key as the computers list it (`/remote-control devices` shows the first 8 characters of the base64url
+     * public key), so the user can tell which entry to revoke.
+     */
+    fun deviceKeyId(): String = Base64Url.encode(identity.keyPair().publicKey).take(8)
+
+    /**
+     * A new device key. No paired computer knows it, so the live session ends and every computer is forgotten on this
+     * phone: each one has to be paired again with a new QR code. Returns the new key's id.
+     */
+    fun resetDeviceKey(): String {
+        closeSession()
+        identity.reset()
+        for (host in hosts.hosts.value) hosts.remove(host.id)
+        return deviceKeyId()
     }
 
     private fun replace(controller: SessionController): SessionController {
