@@ -47,7 +47,7 @@ if [[ "$DRY_RUN" == "--dry-run" ]]; then
 fi
 # The current file's blob, if any: the API replaces a file only when told which version it replaces.
 SHA="$(gh api "repos/$REPO/contents/android.json?ref=gh-pages" --jq .sha 2>/dev/null || true)"
-if [[ -n "$SHA" ]] && [[ "$(gh api "repos/$REPO/contents/android.json?ref=gh-pages" --jq .content | base64 --decode)" == "$(cat "$WORK/android.json")" ]]; then
+if [[ -n "$SHA" ]] && [[ "$(gh api "repos/$REPO/contents/android.json?ref=gh-pages" --jq .content 2>/dev/null | base64 --decode 2>/dev/null)" == "$(cat "$WORK/android.json")" ]]; then
 	log "gh-pages already offers Android app $VERSION"
 	exit 0
 fi
