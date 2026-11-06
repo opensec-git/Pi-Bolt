@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Notification icon: the logo's silhouette (status bar icons are single-colour). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="800"
+    android:viewportHeight="800">
+    <path android:fillColor="#FFFFFFFF" android:pathData="M540,100L220,460L390,460Z M540,100L390,460L430,320Z M430,320L390,460L300,700Z M430,320L300,700L600,320Z" />
+</vector>

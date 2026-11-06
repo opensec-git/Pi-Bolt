@@ -70,6 +70,10 @@
             {
               "title": "Run Pi on Android",
               "path": "termux.md"
+            },
+            {
+              "title": "Control Pi from your phone",
+              "path": "remote-control.md"
             }
           ]
         },

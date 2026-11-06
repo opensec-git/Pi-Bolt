@@ -77,6 +77,49 @@
       "description": "Destination used by /share. \"auto\" uses Radius when authenticated and otherwise creates a GitHub gist.",
       "default": "auto"
     },
+    "remoteControl": {
+      "type": "object",
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Port of the /remote-control listener. 0 picks a free port each time; a fixed port lets paired phones reconnect on the LAN without a new QR code."
+        },
+        "tunnel": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "quick"
+            },
+            {
+              "type": "object",
+              "required": [
+                "name",
+                "hostname"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Named Cloudflare tunnel (cloudflared tunnel create)."
+                },
+                "hostname": {
+                  "type": "string",
+                  "description": "Public hostname routed to the tunnel."
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
+        },
+        "cloudflared": {
+          "type": "string",
+          "description": "Path to the cloudflared executable."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Settings of /remote-control (Pi-Bolt Android app)."
+    },
     "steeringMode": {
       "anyOf": [
         {
