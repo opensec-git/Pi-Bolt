@@ -353,7 +353,9 @@ private fun StartRow(label: String, description: String?, mono: Boolean, muted: 
             color = if (muted) colors.ink2 else colors.ink1,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = description.isNullOrBlank()),
+            // With a description the label takes only its own width (capped) and the description the rest; equal
+            // weights cut short descriptions at half the row.
+            modifier = if (description.isNullOrBlank()) Modifier.weight(1f) else Modifier.widthIn(max = 160.dp),
         )
         if (!description.isNullOrBlank()) {
             Spacer(Modifier.width(12.dp))

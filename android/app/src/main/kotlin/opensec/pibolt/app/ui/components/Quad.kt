@@ -1,6 +1,12 @@
 package opensec.pibolt.app.ui.components
 
 import androidx.compose.animation.AnimatedContent
+import opensec.pibolt.app.R
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.foundation.Image
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -80,29 +86,35 @@ fun QuadSpinner(
     )
 }
 
-/** The Pi-Bolt mark, built from Quad cells in brand yellow. Plays its entrance once when [play] is true. */
+/**
+ * The Pi-Bolt logo (docs/images/logo.svg as res/drawable/ic_pibolt_logo), fitted into a [size] square. When [play] is
+ * true it enters once per launch for each place it appears: fade in while scaling 0.82 to 1 and settling from 6dp
+ * below (sheet duration, enter easing). Reduce motion shows it at rest.
+ */
 @Composable
 fun BrandMark(modifier: Modifier = Modifier, size: Dp = 44.dp, play: Boolean = true, playKey: String = "mark") {
-    val color = Pi.colors.brand
     val reduced = Pi.reduceMotion
     // The entrance plays once per launch for each place the mark appears, not on every recomposition or revisit.
     val animate = remember { play && !reduced && MarkEntrance.claim(playKey) }
-    val elapsed = remember { mutableLongStateOf(if (animate) 0L else QuadMath.MARK_DURATION_MS) }
+    val progress = remember { Animatable(if (animate) 0f else 1f) }
     LaunchedEffect(animate) {
         if (!animate) return@LaunchedEffect
-        delay(120)
-        val start = withFrameMillis { it }
-        while (elapsed.longValue < QuadMath.MARK_DURATION_MS) {
-            elapsed.longValue = withFrameMillis { it } - start
-        }
+        delay(80)
+        progress.animateTo(1f, PiMotion.enter(PiMotion.SHEET))
     }
-    Spacer(
-        modifier
+    Image(
+        painter = painterResource(R.drawable.ic_pibolt_logo),
+        contentDescription = "Pi-Bolt",
+        contentScale = ContentScale.Fit,
+        modifier = modifier
             .size(size)
-            .semantics { contentDescription = "Pi-Bolt" }
-            .drawBehind {
-                val t = elapsed.longValue
-                drawQuad(color, snap = false) { i -> QuadMath.mark(i, t) }
+            .graphicsLayer {
+                val p = progress.value
+                alpha = p
+                val scale = 0.82f + 0.18f * p
+                scaleX = scale
+                scaleY = scale
+                translationY = (1f - p) * 6.dp.toPx()
             },
     )
 }
