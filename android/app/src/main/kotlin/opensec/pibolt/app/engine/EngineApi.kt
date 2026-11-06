@@ -14,6 +14,9 @@ interface EngineApi {
     /** Where projects live (`HOME/projects`). */
     val projectsDir: File
 
+    /** Pi's agent directory (`HOME/.pi/agent`): settings.json, auth.json, sessions. */
+    val agentDir: File
+
     /** Sets up the prefix if needed and starts a warm engine in the background. Safe to call often. */
     fun prepare()
 
