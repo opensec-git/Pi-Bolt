@@ -968,6 +968,10 @@ export async function main(args: string[], options?: MainOptions) {
 	};
 	time("createRuntime");
 	if (acp) {
+		// ACP hands extensions a UI context whose `theme` is the shared live theme, and the terminal modes only
+		// set it later, after their own startup. Without this the first extension to draw in ACP throws
+		// "Theme not initialized" instead of rendering, which upstream pi-acp does not do.
+		initTheme(startupSettingsManager.getTheme());
 		// The editor chooses each session's directory, so ACP creates its runtimes itself, one per session.
 		await acp.runAcpMode({ createRuntime, agentDir, sessionDir: explicitSessionDir, offline: offlineMode });
 		return;
