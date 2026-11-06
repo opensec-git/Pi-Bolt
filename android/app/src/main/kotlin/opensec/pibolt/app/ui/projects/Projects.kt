@@ -45,9 +45,9 @@ class Projects(private val engine: EngineApi, private val store: ProjectStore) {
     /** Deletes the folder with everything in it, and the project's saved sessions. */
     suspend fun delete(name: String): Result<Unit> = withContext(Dispatchers.IO) {
         val dir = File(engine.projectsDir, name)
-        val sessionFiles = runCatching { engine.sessions(dir) }.getOrDefault(emptyList()).map { File(it.file) }
+        // Sessions first: their folder is found from the project's real path, which needs the project to exist.
+        runCatching { engine.deleteSessions(dir) }
         if (dir.exists() && !dir.deleteRecursively()) return@withContext Result.failure(IllegalStateException("Some files could not be deleted"))
-        for (f in sessionFiles) if (f.isFile) f.delete()
         store.forget(name)
         Result.success(Unit)
     }

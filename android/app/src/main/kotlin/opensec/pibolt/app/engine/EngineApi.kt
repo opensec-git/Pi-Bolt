@@ -26,6 +26,9 @@ interface EngineApi {
     /** Saved Pi sessions for [project], newest first (read from the agent dir; no engine needed). */
     fun sessions(project: File): List<SessionSummary>
 
+    /** Deletes every saved session of [project], including empty ones [sessions] does not list, and their folder. */
+    fun deleteSessions(project: File)
+
     /** Provider credentials in Pi's auth.json. */
     val auth: ProviderAuth
 }

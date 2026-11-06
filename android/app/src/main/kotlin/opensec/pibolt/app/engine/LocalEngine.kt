@@ -165,6 +165,13 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     /** Saved sessions with at least one message, newest first. Blocking file I/O: call off the main thread. */
     override fun sessions(project: File): List<SessionSummary> = index.list(engineForm(project)).filter { it.messageCount > 0 }
 
+    override fun deleteSessions(project: File) {
+        val form = engineForm(project)
+        val dirs = linkedSetOf(index.sessionDir(form.absolutePath), index.sessionDir(project.absolutePath))
+        runCatching { project.canonicalPath }.getOrNull()?.let { dirs += index.sessionDir(engineForm(File(it)).absolutePath) }
+        for (dir in dirs) dir.deleteRecursively()
+    }
+
     /** [file] with `ApplicationInfo.dataDir` (`/data/user/0/<id>`) written as the engine sees it (`/data/data/<id>`). */
     private fun engineForm(file: File): File {
         val path = file.absolutePath
