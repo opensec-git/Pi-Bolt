@@ -1,7 +1,7 @@
 /**
  * `/remote-control` in the interactive mode: starts and stops the server and the tunnel, shows the pairing QR code,
  * keeps the footer status, and shows the terminal's dialogs on phones too (first answer wins).
- * Loaded through remote-control.lazy.ts the first time the command runs.
+ * Importing it does no work: the server, the tunnel and the QR code start only inside the command handler.
  */
 
 import { hostname, networkInterfaces } from "node:os";

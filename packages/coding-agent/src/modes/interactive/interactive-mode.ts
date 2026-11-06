@@ -127,8 +127,7 @@ import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core
 import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
 import { addMcpServerConfig, loadMcpConfig } from "../../extensions/mcp/config.ts";
 import { PIBOLT, PIBOLT_RELEASES_URL, piBoltUpdateCommand } from "../../pi-bolt.ts";
-import type { RemoteControlController } from "../../remote-control/controller.ts";
-import { loadRemoteControl } from "../../remote-control/remote-control.lazy.ts";
+import { RemoteControlController } from "../../remote-control/controller.ts";
 import {
 	getChangelogPath,
 	getNewEntries,
@@ -6942,7 +6941,6 @@ export class InteractiveMode {
 
 	private async handleRemoteControlCommand(args: string): Promise<void> {
 		if (!this.remoteControl) {
-			const { RemoteControlController } = await loadRemoteControl();
 			this.remoteControl = new RemoteControlController({
 				getSession: () => this.session,
 				settingsManager: this.settingsManager,

@@ -4,7 +4,7 @@
 the live session (messages, thinking, tool calls and their output as they stream) and can send prompts, steer, queue
 follow-ups, abort, switch model or thinking level, and answer the dialogs Pi raises.
 
-Nothing of this loads until the command runs. Without `/remote-control`, Pi behaves exactly as before.
+Nothing starts until the command runs: no listener, no tunnel, no key files. Without `/remote-control`, Pi behaves exactly as before.
 
 ## Use
 
