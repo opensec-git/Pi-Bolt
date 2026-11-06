@@ -1,18 +1,23 @@
 package opensec.pibolt.app.ui.projects
 
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,72 +26,216 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import opensec.pibolt.app.data.SafeFiles
 import opensec.pibolt.app.ui.components.pressable
-import opensec.pibolt.app.ui.session.ViewerContent
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
 import java.io.File
-import java.util.Locale
+import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.attribute.BasicFileAttributes
+import java.util.Locale
 
-/** One directory entry: one stat (type and size together), taken off the main thread. */
+/** One directory entry: one stat (type, size and time together), taken off the main thread. */
 @Immutable
-data class FileEntry(val name: String, val dir: Boolean, val size: Long)
+data class FileEntry(val name: String, val dir: Boolean, val size: Long, val modified: Long = 0) {
+    /** A dot file: listed, but dimmed. */
+    val dot: Boolean get() = name.startsWith(".")
+
+    /** Version-control and OS internals, listed only with "Show hidden files". */
+    val hidden: Boolean get() = name in HIDDEN
+
+    private companion object {
+        val HIDDEN = setOf(".git", ".hg", ".svn", ".DS_Store")
+    }
+}
+
+/** Order of the Files tab. Folders always come first. */
+enum class FileSort(val label: String) { Name("Name"), Modified("Last changed"), Size("Size") }
+
+/** A file opened in the viewer. */
+@Immutable
+sealed interface FileDoc {
+    /** Text read up to [next] (null when the whole file is in [text]). */
+    data class Text(val text: String, val next: Long?, val size: Long) : FileDoc {
+        val complete: Boolean get() = next == null
+    }
+
+    data class Image(val bitmap: ImageBitmap, val width: Int, val height: Int, val size: Long) : FileDoc
+
+    data class Binary(val size: Long) : FileDoc
+
+    data class Unreadable(val reason: String) : FileDoc
+}
 
 /**
  * The project's files, one directory at a time. Listing and stat run on [Dispatchers.IO] (10k entries is one pass of
- * `readAttributes`); a directory's item count is read only when its row is on screen; file contents load only when
- * opened, capped at [MAX_VIEW] bytes. Git status needs the engine's git and is not computed here; the branch comes
- * from `.git/HEAD` when the header asks for it.
+ * `readAttributes`); a directory's item count is read only when its row is on screen; file contents load a page at a
+ * time ([PAGE] bytes, cut at a line end) when opened. Git status needs the engine's git (a process per call) and is
+ * not computed here; the branch comes from `.git/HEAD` when the header asks for it.
  */
 object ProjectFiles {
-    const val MAX_VIEW = 512 * 1024
+    /** Bytes of text read per page; "Load more" reads the next one. */
+    const val PAGE = 256 * 1024
+
+    /** Files up to this size can be edited (they load whole). */
+    const val MAX_EDIT = 1024 * 1024
+
+    /** Images larger than this many pixels on a side are decoded downsampled. */
+    private const val MAX_IMAGE_SIDE = 2048
 
     suspend fun list(dir: File): List<FileEntry> = withContext(Dispatchers.IO) {
         val names = dir.list() ?: return@withContext emptyList()
         order(
             names.map { name ->
                 val attrs = runCatching { Files.readAttributes(File(dir, name).toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS) }.getOrNull()
-                FileEntry(name, attrs?.isDirectory == true, attrs?.size() ?: 0)
+                FileEntry(name, attrs?.isDirectory == true, attrs?.size() ?: 0, attrs?.lastModifiedTime()?.toMillis() ?: 0)
             },
         )
     }
 
-    /** Folders first, then files; each by name, case-insensitive. */
-    fun order(entries: List<FileEntry>): List<FileEntry> = entries.sortedWith(compareByDescending<FileEntry> { it.dir }.thenBy { it.name.lowercase() }.thenBy { it.name })
+    /** Folders first, then files by [sort] (name ascending; newest or largest first), ties by name. */
+    fun order(entries: List<FileEntry>, sort: FileSort = FileSort.Name): List<FileEntry> {
+        val byName = compareBy<FileEntry> { it.name.lowercase() }.thenBy { it.name }
+        val inner = when (sort) {
+            FileSort.Name -> byName
+            FileSort.Modified -> compareByDescending<FileEntry> { it.modified }.then(byName)
+            FileSort.Size -> compareByDescending<FileEntry> { if (it.dir) 0 else it.size }.then(byName)
+        }
+        return entries.sortedWith(compareByDescending<FileEntry> { it.dir }.then(inner))
+    }
+
+    /** `.git` and other internals ([FileEntry.hidden]) are left out unless [showHidden]; other dot files stay. */
+    fun visible(entries: List<FileEntry>, showHidden: Boolean): List<FileEntry> = if (showHidden) entries else entries.filterNot { it.hidden }
+
+    /** Breadcrumbs for [path] ("" is the root): the root label first, then each folder with its path. */
+    fun crumbs(root: String, path: String): List<Pair<String, String>> {
+        val out = mutableListOf(root to "")
+        if (path.isEmpty()) return out
+        var acc = ""
+        for (part in path.split('/').filter { it.isNotEmpty() }) {
+            acc = if (acc.isEmpty()) part else "$acc/$part"
+            out += part to acc
+        }
+        return out
+    }
 
     suspend fun count(dir: File): Int = withContext(Dispatchers.IO) { dir.list()?.size ?: 0 }
 
-    /** The file for the viewer: text (capped), or a short note for binary or unreadable files. */
-    suspend fun view(file: File, relative: String): ViewerContent = withContext(Dispatchers.IO) {
+    /** Opens [file] for the viewer: the first text page, a decoded image, or a binary note. */
+    suspend fun open(file: File): FileDoc = withContext(Dispatchers.IO) {
+        if (!file.isFile) return@withContext FileDoc.Unreadable("This file no longer exists.")
         val size = file.length()
-        val bytes = runCatching { file.inputStream().use { it.readNBytesCompat(MAX_VIEW) } }.getOrNull()
-        val text = when {
-            bytes == null -> "This file can't be read."
-            bytes.take(8_000).any { it == 0.toByte() } -> "Binary file, ${size(size)}."
-            size > MAX_VIEW -> String(bytes, Charsets.UTF_8) + "\n\n… the first ${size(MAX_VIEW.toLong())} of ${size(size)}"
-            else -> String(bytes, Charsets.UTF_8)
+        when (FileTypes.kind(file.name)) {
+            FileKind.Binary -> FileDoc.Binary(size)
+            FileKind.Image -> decodeImage(file, size) ?: FileDoc.Binary(size)
+            else -> {
+                val head = runCatching { file.inputStream().use { input -> ByteArray(FileTypes.SNIFF).let { b -> b to input.read(b).coerceAtLeast(0) } } }.getOrNull()
+                    ?: return@withContext FileDoc.Unreadable("This file can't be read.")
+                if (FileTypes.looksBinary(head.first, head.second)) FileDoc.Binary(size) else readPage(file, 0, size)
+            }
         }
-        ViewerContent(file.name, relative, text)
     }
 
-    private fun java.io.InputStream.readNBytesCompat(n: Int): ByteArray {
-        val out = java.io.ByteArrayOutputStream()
-        val buf = ByteArray(16 * 1024)
-        var left = n
-        while (left > 0) {
-            val r = read(buf, 0, minOf(buf.size, left))
-            if (r < 0) break
-            out.write(buf, 0, r)
-            left -= r
+    /** The next page of [doc] appended to it. */
+    suspend fun more(file: File, doc: FileDoc.Text): FileDoc.Text = withContext(Dispatchers.IO) {
+        val from = doc.next ?: return@withContext doc
+        val page = readPage(file, from, file.length())
+        if (page is FileDoc.Text) page.copy(text = doc.text + page.text) else doc.copy(next = null)
+    }
+
+    private fun readPage(file: File, from: Long, size: Long): FileDoc = runCatching {
+        RandomAccessFile(file, "r").use { raf ->
+            raf.seek(from)
+            val want = minOf(PAGE.toLong(), size - from).toInt().coerceAtLeast(0)
+            val buf = ByteArray(want)
+            var read = 0
+            while (read < want) {
+                val r = raf.read(buf, read, want - read)
+                if (r < 0) break
+                read += r
+            }
+            val end = from + read
+            // Cut a partial page at its last line end so a multi-byte character or a line is never split.
+            val cut = if (end < size) pageCut(buf, read) else read
+            FileDoc.Text(String(buf, 0, cut, Charsets.UTF_8), if (from + cut < size) from + cut else null, size)
         }
-        return out.toByteArray()
+    }.getOrElse { FileDoc.Unreadable("This file can't be read.") }
+
+    /** Bytes of a partial page to keep: up to and including its last `\n`, or all of it when it has none. */
+    fun pageCut(buf: ByteArray, length: Int): Int {
+        for (i in length - 1 downTo 0) if (buf[i] == '\n'.code.toByte()) return i + 1
+        // One very long line: cut before a UTF-8 continuation byte run.
+        var i = length
+        while (i > 0 && (buf[i - 1].toInt() and 0xC0) == 0x80) i--
+        return if (i > 0 && (buf[i - 1].toInt() and 0x80) != 0) i - 1 else length
+    }
+
+    private fun decodeImage(file: File, size: Long): FileDoc.Image? = runCatching {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.path, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sample > MAX_IMAGE_SIDE) sample *= 2
+        val bitmap = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return@runCatching null
+        FileDoc.Image(bitmap.asImageBitmap(), bounds.outWidth, bounds.outHeight, size)
+    }.getOrNull()
+
+    /** Writes [text] to [file] through a temporary file and a rename, so a failed save never leaves half a file. */
+    suspend fun write(file: File, text: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val tmp = File(file.parentFile, ".${file.name}.pibolt-tmp")
+            tmp.writeText(text)
+            if (!tmp.renameTo(file)) {
+                tmp.delete()
+                file.writeText(text)
+            }
+        }
+    }
+
+    /** Why [name] cannot be a new entry next to [existing], or null. Dot files are allowed here. */
+    fun nameError(name: String, existing: Collection<String>): String? {
+        val n = name.trim()
+        return when {
+            n.isEmpty() -> "Give it a name"
+            n.length > 255 -> "At most 255 characters"
+            n == "." || n == ".." -> "Not a usable name"
+            n.any { it == '/' || it == '\\' || it == '\u0000' || it.isISOControl() } -> "No slashes or control characters"
+            existing.any { it == n } -> "Something with this name exists here"
+            else -> null
+        }
+    }
+
+    suspend fun create(dir: File, name: String, folder: Boolean): Result<File> = withContext(Dispatchers.IO) {
+        val n = name.trim()
+        nameError(n, dir.list()?.toList().orEmpty())?.let { return@withContext Result.failure(IllegalArgumentException(it)) }
+        val target = File(dir, n)
+        val ok = runCatching { if (folder) target.mkdirs() else { dir.mkdirs(); target.createNewFile() } }.getOrDefault(false)
+        if (ok) Result.success(target) else Result.failure(IllegalStateException(if (folder) "Could not create the folder" else "Could not create the file"))
+    }
+
+    suspend fun rename(file: File, name: String): Result<File> = withContext(Dispatchers.IO) {
+        val n = name.trim()
+        if (n == file.name) return@withContext Result.success(file)
+        val parent = file.parentFile ?: return@withContext Result.failure(IllegalStateException("Can't rename this"))
+        nameError(n, parent.list()?.toList().orEmpty())?.let { return@withContext Result.failure(IllegalArgumentException(it)) }
+        val target = File(parent, n)
+        if (file.renameTo(target)) Result.success(target) else Result.failure(IllegalStateException("Could not rename"))
+    }
+
+    /** Deletes a file, or a folder with everything in it (links are removed, never followed). */
+    suspend fun delete(file: File): Result<Unit> = withContext(Dispatchers.IO) {
+        val ok = if (SafeFiles.isRealDirectory(file)) SafeFiles.deleteTree(file) else file.delete()
+        if (ok) Result.success(Unit) else Result.failure(IllegalStateException("Some files could not be deleted"))
     }
 
     /** The checked-out branch from `.git/HEAD`, or a short commit id when detached; null outside a repository. */
@@ -104,23 +253,35 @@ object ProjectFiles {
     }
 }
 
-/** 52dp row: folder or file glyph, the name, and its size (files) or item count (folders, read when shown). */
+/**
+ * 52dp row: a glyph for the type (folder, code, document, image, other), the name, its size (files) or item count
+ * (folders, read when shown), and a chevron for folders. Long press opens the file actions.
+ */
 @Composable
-fun FileRow(entry: FileEntry, parent: File, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun FileRow(entry: FileEntry, parent: File, onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val type = Pi.type
     val count by produceState<Int?>(null, entry, parent) { if (entry.dir) value = ProjectFiles.count(File(parent, entry.name)) }
+    val kind = if (entry.dir) null else FileTypes.kind(entry.name)
+    val meta = if (entry.dir) count?.let { if (it == 1) "1 item" else "$it items" }.orEmpty() else ProjectFiles.size(entry.size)
     Row(
         modifier
             .fillMaxWidth()
             .height(52.dp)
-            .pressable(onClick, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f)
+            .pressable(onClick, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, onLongClick = onLongClick, label = if (entry.dir) "Open folder" else "Open file")
+            .semantics { contentDescription = (if (entry.dir) "Folder ${entry.name}" else "${entry.name}, ${FileTypes.label(entry.name)}") + if (meta.isNotEmpty()) ", $meta" else "" }
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
             Icon(
-                if (entry.dir) Icons.Rounded.Folder else Icons.AutoMirrored.Rounded.InsertDriveFile,
+                when (kind) {
+                    null -> Icons.Rounded.Folder
+                    FileKind.Code -> Icons.Rounded.Code
+                    FileKind.Markdown, FileKind.Text -> Icons.Rounded.Description
+                    FileKind.Image -> Icons.Rounded.Image
+                    FileKind.Binary -> Icons.AutoMirrored.Rounded.InsertDriveFile
+                },
                 contentDescription = null,
                 tint = if (entry.dir) colors.ink2 else colors.ink3,
                 modifier = Modifier.size(18.dp),
@@ -128,10 +289,13 @@ fun FileRow(entry: FileEntry, parent: File, onClick: () -> Unit, modifier: Modif
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(entry.name, style = type.monoSmall, color = if (entry.name.startsWith(".")) colors.ink3 else colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
+            Text(entry.name, style = type.monoSmall, color = if (entry.dot) colors.ink3 else colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
         }
         Spacer(Modifier.width(12.dp))
-        val meta = if (entry.dir) count?.let { if (it == 1) "1 item" else "$it items" }.orEmpty() else ProjectFiles.size(entry.size)
         Text(meta, style = type.meta, color = colors.ink3, maxLines = 1)
+        if (entry.dir) {
+            Spacer(Modifier.width(4.dp))
+            Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.ink4, modifier = Modifier.size(18.dp))
+        }
     }
 }

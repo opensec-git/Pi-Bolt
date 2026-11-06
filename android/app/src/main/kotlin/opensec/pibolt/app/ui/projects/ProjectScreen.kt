@@ -49,8 +49,10 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import opensec.pibolt.app.ui.components.Segmented
-import opensec.pibolt.app.ui.session.Viewer
-import opensec.pibolt.app.ui.session.ViewerContent
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import opensec.pibolt.app.ui.theme.PiMotion
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -88,6 +90,7 @@ import java.io.File
  * One project: its saved sessions (newest first), "New session", tap to resume. The live session, if it belongs
  * here, is marked and resumes without reopening. Opens with shared bounds from the project card on Home.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSession: () -> Unit) {
     val engine = app.engine
@@ -113,10 +116,15 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
     var showFiles by rememberSaveable { mutableStateOf(false) }
     // Folder shown in Files, relative to the project ("" is its root).
     var path by rememberSaveable { mutableStateOf("") }
-    var viewer by remember { mutableStateOf<ViewerContent?>(null) }
+    // The file open in the viewer, relative to the project.
+    var openFile by rememberSaveable { mutableStateOf<String?>(null) }
+    var sort by rememberSaveable { mutableStateOf(FileSort.Name) }
+    var showHidden by rememberSaveable { mutableStateOf(false) }
+    var fileAction by remember { mutableStateOf<FileAction?>(null) }
     val branch by produceState<String?>(null, dir) { value = ProjectFiles.branch(dir) }
     val folder = remember(dir, path) { if (path.isEmpty()) dir else File(dir, path) }
     val files by produceState<List<FileEntry>?>(null, folder, showFiles, reload) { if (showFiles) value = ProjectFiles.list(folder) }
+    val shownFiles = remember(files, sort, showHidden) { files?.let { ProjectFiles.visible(ProjectFiles.order(it, sort), showHidden) } }
     var opening by remember { mutableStateOf(false) }
     val unavailable = status is EngineStatus.Unavailable
     val now = remember(sessions) { System.currentTimeMillis() }
@@ -221,24 +229,20 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
                 )
             }
             if (showFiles) {
-                if (path.isNotEmpty()) {
-                    item(key = "up", contentType = "up") {
-                        Row(
-                            Modifier
-                                .padding(horizontal = 16.dp)
-                                .fillMaxWidth()
-                                .height(48.dp)
-                                .pressable({ path = path.substringBeforeLast('/', "") }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "Up one folder")
-                                .padding(horizontal = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(14.dp))
-                            Text(path, style = type.monoSmall, color = colors.ink2, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
-                        }
-                    }
+                stickyHeader(key = "files-bar", contentType = "files-bar") {
+                    FilesBar(
+                        root = title,
+                        path = path,
+                        sort = sort,
+                        showHidden = showHidden,
+                        onPath = { path = it },
+                        onSort = { sort = it },
+                        onHidden = { showHidden = it },
+                        onCreate = { fileAction = FileAction.Create(it) },
+                        modifier = Modifier.background(colors.canvas).padding(horizontal = 4.dp),
+                    )
                 }
-                val entries = files
+                val entries = shownFiles
                 if (entries != null && entries.isEmpty()) {
                     item(key = "files-empty", contentType = "empty") {
                         Text("This folder is empty.", style = type.body, color = colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
@@ -248,12 +252,8 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
                     items(entries, key = { "f:" + it.name }, contentType = { "file" }) { entry ->
                         FileRow(entry, folder, onClick = {
                             val rel = if (path.isEmpty()) entry.name else path + "/" + entry.name
-                            if (entry.dir) {
-                                path = rel
-                            } else {
-                                scope.launch { viewer = ProjectFiles.view(File(dir, rel), rel) }
-                            }
-                        }, modifier = Modifier.padding(horizontal = 16.dp))
+                            if (entry.dir) path = rel else openFile = rel
+                        }, onLongClick = { fileAction = FileAction.Menu(entry) }, modifier = Modifier.animateItem().padding(horizontal = 16.dp))
                     }
                 }
             }
@@ -261,12 +261,19 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
             if (list != null && !showFiles) {
                 if (list.isEmpty()) {
                     item(key = "empty", contentType = "empty") {
-                        Text(
-                            "No sessions yet. Start one and ask Pi to look around, set the project up, or clone a repository.",
-                            style = type.body,
-                            color = colors.ink3,
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                        )
+                        val shape = RoundedCornerShape(Radius.md)
+                        Column(
+                            Modifier
+                                .padding(horizontal = 16.dp, vertical = 4.dp)
+                                .fillMaxWidth()
+                                .background(colors.surface1, shape)
+                                .border(1.dp, colors.line, shape)
+                                .padding(16.dp),
+                        ) {
+                            Text("No sessions yet", style = type.bodyStrong, color = colors.ink1)
+                            Spacer(Modifier.height(4.dp))
+                            Text("Start one and ask Pi to look around, set the project up, or clone a repository.", style = type.body, color = colors.ink2)
+                        }
                     }
                 }
                 // The engine's own session file: a new session or a fork is not the file the session was opened with.
@@ -276,6 +283,7 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
                     SessionRow(
                         s,
                         live = if (isLive) liveHere?.controller else null,
+                        unread = !isLive && ProjectRules.unread(s, meta.seen[s.file]),
                         now = now,
                         enabled = !unavailable,
                         onClick = { if (isLive) onOpenSession() else open(s.file, fresh = false) },
@@ -288,17 +296,28 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
         PiSnackHost(snackbar, Modifier.align(Alignment.BottomCenter))
 
         AnimatedVisibility(
-            visible = viewer != null,
+            visible = openFile != null,
             enter = fadeIn(PiMotion.enter(PiMotion.SHEET)) + slideInVertically(PiMotion.enter(PiMotion.SHEET)) { it / 10 },
             exit = fadeOut(PiMotion.leave(PiMotion.SHEET)) + scaleOut(PiMotion.leave(PiMotion.SHEET), targetScale = 0.94f),
         ) {
-            val shown = remember { mutableStateOf(viewer) }
-            viewer?.let { shown.value = it }
-            shown.value?.let { Viewer(it, onClose = { viewer = null }) }
+            val shown = remember { mutableStateOf(openFile) }
+            openFile?.let { shown.value = it }
+            shown.value?.let { rel -> FileViewer(dir, rel, onClose = { openFile = null }, onChanged = { reload++ }) }
         }
     }
     // Back inside Files goes up a folder first.
-    BackHandler(enabled = showFiles && path.isNotEmpty() && viewer == null) { path = path.substringBeforeLast('/', "") }
+    BackHandler(enabled = showFiles && path.isNotEmpty() && openFile == null) { path = path.substringBeforeLast('/', "") }
+
+    FileActionSheets(
+        action = fileAction,
+        folder = folder,
+        onAction = { fileAction = it },
+        onDone = {
+            fileAction = null
+            reload++
+        },
+        onError = { scope.launch { snackbar.show(it, SnackKind.Error) } },
+    )
 
     ProjectActionSheets(
         action = action,
@@ -313,7 +332,7 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
 
 /** 64dp row: chat glyph (or the live Quad), the session's name or first prompt, "24 messages · 2 h ago". */
 @Composable
-private fun SessionRow(s: SessionSummary, live: SessionController?, now: Long, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun SessionRow(s: SessionSummary, live: SessionController?, unread: Boolean, now: Long, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val type = Pi.type
     val shape = RoundedCornerShape(Radius.md)
@@ -328,15 +347,15 @@ private fun SessionRow(s: SessionSummary, live: SessionController?, now: Long, e
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
-            if (live != null) {
-                LiveMark(live)
-            } else {
-                Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(18.dp))
+            when {
+                live != null -> LiveMark(live)
+                unread -> Box(Modifier.size(8.dp).background(colors.accent, CircleShape).semantics { contentDescription = "New activity" })
+                else -> Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(18.dp))
             }
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
-            Text(ProjectRules.sessionTitle(s), style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(ProjectRules.sessionTitle(s), style = if (unread) type.bodyStrong else type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Spacer(Modifier.height(2.dp))
             val parts = buildList {
                 if (live != null) add("Open")
