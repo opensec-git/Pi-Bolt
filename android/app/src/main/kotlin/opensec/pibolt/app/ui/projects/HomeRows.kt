@@ -3,10 +3,12 @@ package opensec.pibolt.app.ui.projects
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -129,6 +131,28 @@ fun GroupRow(
         Box(Modifier.size(20.dp), contentAlignment = Alignment.Center, content = lead)
         Spacer(Modifier.width(Space.md))
         title()
+    }
+}
+
+/**
+ * A Home section head, as the references' "Workspaces": the title in rowMeta ink3 (a heading) on the 20dp gutter, an
+ * optional count after it, and an optional [end] (a chevron that folds the section). 44dp tall.
+ */
+@Composable
+fun HomeHead(title: String, modifier: Modifier = Modifier, count: Int? = null, end: (@Composable RowScope.() -> Unit)? = null) {
+    val colors = Pi.colors
+    val type = Pi.type
+    Row(
+        modifier.fillMaxWidth().heightIn(min = 44.dp).padding(start = Space.page, end = if (end != null) Space.page - Space.xs else Space.page),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(title, style = type.rowMeta, color = colors.ink3, maxLines = 1, modifier = Modifier.semantics { heading() })
+        if (count != null) {
+            Spacer(Modifier.width(Space.sm))
+            Text(count.toString(), style = type.rowMeta.copy(fontFeatureSettings = Tnum), color = colors.ink3, maxLines = 1)
+        }
+        Spacer(Modifier.weight(1f))
+        end?.invoke(this)
     }
 }
 

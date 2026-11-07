@@ -106,6 +106,10 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
+import kotlinx.coroutines.flow.first
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -137,7 +141,6 @@ import opensec.pibolt.app.ui.projects.editor.AskPi
 import opensec.pibolt.app.ui.projects.editor.EditorTabs
 import opensec.pibolt.app.ui.projects.editor.viewerPlace
 import opensec.pibolt.app.ui.session.voice.VoiceButton
-import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.session.SessionEffect
@@ -807,6 +810,22 @@ private fun SessionContent(
         draft = text
         focus.requestFocus()
     }
+    // The empty session's content, and the composer's entrance as its last step: when a new session first shows its
+    // welcome, the composer fades in and rises after the welcome's elements (PiMotion.stagger). Once per screen.
+    val reduceMotion = Pi.reduceMotion
+    val welcomeStarters = if (isLocal) traits?.let { StarterPrompts.pick(it) }.orEmpty() else StarterPrompts.pick(null)
+    val welcomeRecent = recentAll[recentKey].orEmpty().take(Welcome.RECENT)
+    val welcomeCommands = { fill("/") }.takeIf { palette.isNotEmpty() }
+    val composerIn = remember { Animatable(1f) }
+    val welcomeStep by rememberUpdatedState(Welcome.composerStep(welcomeStarters.size, welcomeRecent.isNotEmpty(), welcomeCommands != null))
+    LaunchedEffect(Unit) {
+        if (reduceMotion) return@LaunchedEffect
+        snapshotFlow { empty }.first { it }
+        val step = welcomeStep
+        composerIn.snapTo(0f)
+        composerIn.animateTo(1f, PiMotion.enter(PiMotion.SHEET, PiMotion.stagger(step)))
+    }
+
     val extras by remember {
         derivedStateOf {
             val s = state.value
@@ -951,12 +970,13 @@ private fun SessionContent(
                     if (empty) {
                         EmptySession(
                             title = if (isLocal) title else cwd?.takeIf { it.isNotBlank() }?.let(::baseName) ?: title,
-                            branch = branch,
-                            starters = if (isLocal) traits?.let { StarterPrompts.pick(it) }.orEmpty() else StarterPrompts.pick(null),
-                            recent = recentAll[recentKey].orEmpty().take(RecentPrompts.SHOWN),
+                            subtitle = if (isLocal) branch else hostName,
+                            starters = welcomeStarters,
+                            recent = welcomeRecent,
                             onStarter = { fill(it.prompt) },
                             onRecent = { fill(it) },
-                            onCommands = { fill("/") }.takeIf { palette.isNotEmpty() },
+                            onCommands = welcomeCommands,
+                            play = !reduceMotion,
                         )
                     }
                 }
@@ -1047,6 +1067,11 @@ private fun SessionContent(
                             }
                         },
                         onPasteImage = ::pasteImage,
+                        modifier = Modifier.graphicsLayer {
+                            val p = composerIn.value
+                            alpha = p
+                            translationY = (1f - p) * 8.dp.toPx()
+                        },
                     )
                 }
             }
