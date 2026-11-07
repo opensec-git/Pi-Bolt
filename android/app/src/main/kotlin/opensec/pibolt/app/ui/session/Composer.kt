@@ -90,7 +90,6 @@ import opensec.pibolt.app.ui.components.Chip
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.providers.Brand
 import opensec.pibolt.app.ui.providers.LogoMark
-import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
