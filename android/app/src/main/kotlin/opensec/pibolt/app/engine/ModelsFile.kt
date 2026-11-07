@@ -52,7 +52,7 @@ object ModelsFile {
         val body = text?.removePrefix(BOM)?.trim().orEmpty()
         if (body.isEmpty()) return JsonObject(emptyMap())
         val element = runCatching { ProtocolJson.parseToJsonElement(body) }.getOrNull()
-        return element as? JsonObject ?: throw DamagedFile("models.json could not be read, so it was left as it is. Fix or remove it, then try again.")
+        return element as? JsonObject ?: throw DamagedFile("models.json could not be read. Fix or remove it, then try again.")
     }
 
     /**

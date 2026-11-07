@@ -1,7 +1,8 @@
 package opensec.pibolt.app.ui.projects
 
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -10,7 +11,6 @@ import androidx.compose.material.icons.outlined.PushPin
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
-import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Terminal
@@ -22,12 +22,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
@@ -35,6 +35,8 @@ import opensec.pibolt.app.engine.SessionSummary
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.ui.components.QuadMath
+import opensec.pibolt.app.ui.components.QuadMode
+import opensec.pibolt.app.ui.components.InsetRow
 import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.SharedKeys
 import opensec.pibolt.app.ui.components.pressable
@@ -43,6 +45,7 @@ import opensec.pibolt.app.ui.components.sharedHostBounds
 import opensec.pibolt.app.ui.components.sharedHostElement
 import opensec.pibolt.app.ui.session.TranscriptModel
 import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.Space
 
 /** What a project's menu can do. */
 sealed interface ProjectAction {
@@ -52,58 +55,50 @@ sealed interface ProjectAction {
 }
 
 /**
- * A project on Home, one row of the "Projects" group ([GroupRow]): the folder glyph (the live session's Quad while one
- * is open), the title (a 13dp pin when pinned) and the short time of its last activity, or "open". TalkBack reads the
- * full line ("3 sessions · 2 h ago"). Long press opens Pin, Rename and Delete (no overflow button on every row).
+ * A project on Home, one [InsetRow] of "Projects": the live session's Quad while one is open, else a still ink4 Quad
+ * (the app's dot-matrix bullet, never a folder glyph or a letter tile); the title; "3 sessions · 2 h ago" (or "Open"
+ * with a session open) under it; a 14dp pin when pinned; the chevron. Long press (and a TalkBack action) opens Pin,
+ * Rename and Delete.
  */
 @Composable
 fun ProjectCard(
     entry: ProjectEntry,
-    pos: GroupPos,
     live: SessionController?,
     now: Long,
     onClick: () -> Unit,
     onPin: (Boolean) -> Unit,
     onAction: (ProjectAction) -> Unit,
     modifier: Modifier = Modifier,
+    divider: Boolean = true,
 ) {
     val colors = Pi.colors
-    val type = Pi.type
     var menu by remember { mutableStateOf(false) }
-    val spoken = listOfNotNull(entry.title, "pinned".takeIf { entry.meta.pinned }, "session open".takeIf { live != null }, ProjectRules.projectMeta(entry, now)).joinToString(", ")
     Box(modifier) {
-        GroupRow(
-            pos = pos,
-            interaction = Modifier
+        InsetRow(
+            title = entry.title,
+            meta = if (live != null) "Open · " + ProjectRules.projectMetaParts(entry, now).first else ProjectRules.projectMeta(entry, now),
+            onClick = onClick,
+            onLongClick = { menu = true },
+            label = "Open project",
+            divider = divider,
+            chevron = true,
+            modifier = Modifier
                 .sharedHostBounds(SharedKeys.project(entry.name), card = true)
-                .pressable(onClick, shape = groupShape(pos), pressedScale = 1f, onLongClick = { menu = true }, label = "Open project")
-                .semantics(mergeDescendants = true) {
-                    contentDescription = spoken
-                    customActions = listOf(CustomAccessibilityAction("Project actions") { menu = true; true })
-                },
-            lead = {
-                if (live != null) SessionMark(live) else Icon(Icons.Rounded.Folder, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(18.dp))
+                .semantics { customActions = listOf(CustomAccessibilityAction("Project actions") { menu = true; true }) },
+            titleModifier = Modifier.sharedHostElement(SharedKeys.projectName(entry.name)),
+            leading = { if (live != null) SessionMark(live) else RestMark() },
+            trailing = {
+                if (entry.meta.pinned) Icon(Icons.Rounded.PushPin, contentDescription = "Pinned", tint = colors.ink3, modifier = Modifier.size(14.dp))
             },
-        ) {
-            Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    entry.title,
-                    style = type.body,
-                    color = colors.ink1,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false).sharedHostElement(SharedKeys.projectName(entry.name)),
-                )
-                if (entry.meta.pinned) {
-                    Spacer(Modifier.width(6.dp))
-                    Icon(Icons.Rounded.PushPin, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(13.dp))
-                }
-            }
-            val at = maxOf(entry.lastActive, entry.meta.lastOpenedAt)
-            RowMeta(if (live != null) "open" else if (at > 0) ProjectRules.agoShort(at, now) else "new", color = if (live != null) colors.ink2 else colors.ink3)
-        }
+        )
         ProjectMenu(menu, entry.meta.pinned, onDismiss = { menu = false }, onPin = onPin, onRename = { onAction(ProjectAction.Rename(entry)) }, onDelete = { onAction(ProjectAction.Delete(entry)) })
     }
+}
+
+/** A row's Quad at rest: one still frame in ink4, the bullet of Home's lists. Decoration only. */
+@Composable
+fun RestMark(size: Dp = 16.dp) {
+    Box(Modifier.clearAndSetSemantics { }) { QuadSpinner(QuadMode.Think, size = size, color = Pi.colors.ink4, animate = false) }
 }
 
 /** The live session's Quad in its settled mode: animated while Pi works, warning while it waits for an answer. */
@@ -124,49 +119,25 @@ fun SessionMark(live: SessionController, size: Dp = 16.dp) {
 }
 
 /**
- * A row of Home's "Continue" group (desktop "Recent"): the state slot (the live Quad, an accent dot for new
- * activity, else a quiet ink4 dot), the session title (ink2 when nothing is new, as on the desktop sidebar), the project
- * dimmed after it (it gives way first), and the short time.
+ * A session of Home's "Recents" ([InsetRow]): the live Quad while it is open (on the soft current highlight), else the
+ * still bullet; the session's name or first prompt; "calc-parser · 3h" under it; an accent dot when something new
+ * happened there.
  */
 @Composable
-fun ContinueRow(entry: ProjectEntry, session: SessionSummary, pos: GroupPos, live: SessionController?, unread: Boolean, now: Long, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val colors = Pi.colors
-    val type = Pi.type
+fun ContinueRow(entry: ProjectEntry, session: SessionSummary, live: SessionController?, unread: Boolean, now: Long, onClick: () -> Unit, modifier: Modifier = Modifier, divider: Boolean = true) {
     val title = ProjectRules.sessionTitle(session)
-    val state = when {
-        live != null -> "open"
-        unread -> "new activity"
-        else -> null
-    }
-    val spoken = listOfNotNull(title, entry.title, ProjectRules.ago(maxOf(session.updatedAt, 0), now), state).joinToString(", ")
-    GroupRow(
-        pos = pos,
+    val ago = ProjectRules.agoShort(maxOf(session.updatedAt, 0), now)
+    InsetRow(
+        title = title,
+        meta = if (live != null) "Open · ${entry.title}" else "${entry.title} · $ago",
+        onClick = onClick,
+        label = "Resume session",
+        unread = unread,
+        current = live != null,
+        divider = divider,
         modifier = modifier,
-        interaction = Modifier
-            .pressable(onClick, shape = groupShape(pos), pressedScale = 1f, label = "Resume session")
-            .semantics(mergeDescendants = true) { contentDescription = spoken },
-        lead = {
-            when {
-                live != null -> SessionMark(live)
-                unread -> StateDot(colors.accent)
-                else -> StateDot(null)
-            }
-        },
-    ) {
-        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                title,
-                style = if (unread) type.bodyStrong else type.body,
-                color = if (unread || live != null) colors.ink1 else colors.ink2,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-            Spacer(Modifier.width(8.dp))
-            Text(entry.title, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(0.45f, fill = false))
-        }
-        RowMeta(ProjectRules.agoShort(maxOf(session.updatedAt, 0), now), color = if (unread) colors.ink2 else colors.ink3)
-    }
+        leading = { if (live != null) SessionMark(live) else RestMark() },
+    )
 }
 
 @Composable

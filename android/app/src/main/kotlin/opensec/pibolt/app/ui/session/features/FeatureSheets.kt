@@ -123,7 +123,7 @@ fun SessionStatsSheet(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         QuadSpinner(QuadMode.Think, size = 12.dp, color = colors.ink3)
                         Spacer(Modifier.width(8.dp))
-                        Text("Reading statistics", style = type.meta, color = colors.ink3)
+                        Text("Loading…", style = type.meta, color = colors.ink3)
                     }
                 }
             }
@@ -170,7 +170,7 @@ private fun plural(n: Long, one: String, many: String = one + "s") = "$n ${if (n
 
 @Composable
 private fun Card(content: @Composable () -> Unit) {
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(Radius.tile)
     Column(
         Modifier
             .fillMaxWidth()
@@ -204,7 +204,7 @@ fun ContextBar(fraction: Float?) {
 @Composable
 private fun Stat(label: String, value: String, modifier: Modifier = Modifier) {
     Column(modifier.semantics(mergeDescendants = true) {}) {
-        Text(value, style = Pi.type.bodyStrong.copy(fontFeatureSettings = Tnum), color = Pi.colors.ink1, maxLines = 1)
+        Text(value, style = Pi.type.rowTitle.copy(fontFeatureSettings = Tnum), color = Pi.colors.ink1, maxLines = 1)
         Text(label, style = Pi.type.meta, color = Pi.colors.ink3, maxLines = 1)
     }
 }
@@ -221,13 +221,13 @@ private fun PickRow(label: String, value: String, enabled: Boolean, onClick: () 
                 .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(label, style = Pi.type.body, color = colors.ink2, modifier = Modifier.width(88.dp))
+            Text(label, style = Pi.type.rowMeta, color = colors.ink3, modifier = Modifier.width(88.dp))
             if (brand != null) {
                 LogoMark(brand, size = IconSize.sm)
                 Spacer(Modifier.width(Space.sm))
             }
-            Text(value, style = Pi.type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.ink4, modifier = Modifier.size(20.dp))
+            Text(value, style = Pi.type.rowTitle, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(20.dp))
         }
         TextAction("Next", onClick = onNext, color = colors.accent, enabled = enabled, modifier = Modifier.semantics { contentDescription = nextLabel })
     }
@@ -236,8 +236,8 @@ private fun PickRow(label: String, value: String, enabled: Boolean, onClick: () 
 @Composable
 private fun InfoLine(label: String, value: String, mono: Boolean = false) {
     Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = Pi.type.body, color = Pi.colors.ink2, modifier = Modifier.width(88.dp))
-        Text(value, style = if (mono) Pi.type.monoSmall else Pi.type.body, color = Pi.colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(label, style = Pi.type.rowMeta, color = Pi.colors.ink3, modifier = Modifier.width(88.dp))
+        Text(value, style = if (mono) Pi.type.monoSmall else Pi.type.rowMeta, color = Pi.colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
@@ -251,8 +251,8 @@ fun ResumeSheet(sessions: List<SessionSummary>?, current: String?, onPick: (Sess
     PiSheet(onDismiss = onDismiss, state = state) {
         SheetHeader("Resume a session")
         when {
-            sessions == null -> Loading("Reading sessions")
-            sessions.isEmpty() -> F2Empty("No saved sessions in this project yet.", Icons.AutoMirrored.Rounded.Chat)
+            sessions == null -> Loading("Loading sessions")
+            sessions.isEmpty() -> F2Empty("No saved sessions yet", Icons.AutoMirrored.Rounded.Chat)
             else -> LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
                 items(sessions, key = { it.file }) { s ->
                     val open = s.file == current
@@ -275,10 +275,10 @@ fun ForkSheet(points: List<ForkPoint>?, onPick: (ForkPoint) -> Unit, onDismiss: 
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Fork from a message", subtitle = "A new session starts before the message you pick; its text comes back to the composer.")
+        SheetHeader("Fork from a message", subtitle = "Starts a new session before the message you pick")
         when {
-            points == null -> Loading("Reading messages")
-            points.isEmpty() -> F2Empty("No message to fork from yet. Send a prompt first, then fork from it.", Icons.AutoMirrored.Rounded.CallSplit)
+            points == null -> Loading("Loading messages")
+            points.isEmpty() -> F2Empty("No messages to fork from yet", Icons.AutoMirrored.Rounded.CallSplit)
             else -> LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
                 // Newest first: forks usually go back a step or two.
                 items(points.asReversed(), key = { it.entryId }) { p ->
@@ -297,14 +297,14 @@ private fun ListRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title
             .fillMaxWidth()
             .heightIn(min = 56.dp)
             .pressable(onClick, shape = RoundedCornerShape(0.dp), enabled = enabled, pressedScale = 1f)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
+            .padding(horizontal = 20.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(18.dp))
+        Icon(icon, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(20.dp))
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, style = Pi.type.body, color = if (enabled) colors.ink1 else colors.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (!meta.isNullOrBlank()) Text(meta, style = Pi.type.meta, color = colors.ink3, maxLines = 1)
+            Text(title, style = Pi.type.rowTitle, color = if (enabled) colors.ink1 else colors.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (!meta.isNullOrBlank()) Text(meta, style = Pi.type.rowMeta, color = colors.ink3, maxLines = 1)
         }
     }
 }

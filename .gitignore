@@ -61,6 +61,8 @@ packages/agent/docs/extensions/pi-server-artifact/index.md
 # Benchmark and test output (the published results in bench/results/ are kept)
 *.jsonl
 !bench/results/**/*.jsonl
+# Recorded engine RPC events the Android unit tests replay
+!android/app/src/test/resources/fixtures/**/*.jsonl
 /results/
 tmux-*.out
 *.order.tmp

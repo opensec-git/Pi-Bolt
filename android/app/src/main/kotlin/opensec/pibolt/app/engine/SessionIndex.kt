@@ -29,6 +29,11 @@ class SessionIndex(private val agentDir: File) {
     fun list(project: File): List<SessionSummary> {
         val dirs = linkedSetOf(sessionDir(project.absolutePath))
         runCatching { project.canonicalPath }.getOrNull()?.let { dirs += sessionDir(it) }
+        return listIn(dirs)
+    }
+
+    /** The sessions saved directly in [dirs] (a `--session-dir`, such as the chats' [ChatSpace.sessionDir]), newest first. */
+    fun listIn(dirs: Collection<File>): List<SessionSummary> {
         val files = dirs.flatMap { dir -> dir.listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }.orEmpty().toList() }
         return files.mapNotNull(::summary).distinctBy { it.file }.sortedByDescending { it.updatedAt }
     }
@@ -61,8 +66,9 @@ class SessionIndex(private val agentDir: File) {
                 }
                 when (typeOf(line, length)) {
                     "message" -> {
-                        messages++
-                        if (preview == null && roleOf(line, length) == "user") {
+                        val role = roleOf(line, length)
+                        if (role != "system") messages++
+                        if (preview == null && role == "user") {
                             preview = parse(line, length)?.obj("message")?.let(::textOf)?.let(::shorten)?.takeIf { it.isNotEmpty() }
                         }
                     }
@@ -71,7 +77,7 @@ class SessionIndex(private val agentDir: File) {
                         // Not in Pi's usual layout: parse it to be sure.
                         val entry = parse(line, length)
                         when (entry?.str("type")) {
-                            "message" -> messages++
+                            "message" -> if (entry.obj("message")?.str("role") != "system") messages++
                             "session_info" -> name = entry.str("name")?.trim()?.takeIf(String::isNotEmpty)
                         }
                     }

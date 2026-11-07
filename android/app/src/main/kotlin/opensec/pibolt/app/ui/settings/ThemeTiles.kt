@@ -12,6 +12,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.ui.semantics.heading
+import opensec.pibolt.app.ui.components.PiSheet
+import opensec.pibolt.app.ui.components.SheetHeader
+import opensec.pibolt.app.ui.theme.Space
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -190,5 +198,28 @@ fun AccentDot(accent: AccentId, theme: ThemeId, selected: Boolean, onClick: () -
         }
         Spacer(Modifier.height(6.dp))
         Text(accent.label, style = Pi.type.meta, color = if (selected) current.ink1 else current.ink2, maxLines = 1, modifier = Modifier.clearAndSetSemantics {})
+    }
+}
+
+/**
+ * Appearance > Theme and Accent: one sheet with the theme tiles and the accent circles; a pick applies at once and
+ * the sheet stays open, so the next one can be compared.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ThemeSheet(theme: ThemeId, accent: AccentId, onTheme: (ThemeId) -> Unit, onAccent: (AccentId) -> Unit, onDismiss: () -> Unit) {
+    PiSheet(onDismiss = onDismiss) {
+        SheetHeader("Theme")
+        Column(Modifier.fillMaxWidth().heightIn(max = 640.dp).verticalScroll(rememberScrollState()).padding(horizontal = Space.page)) {
+            Spacer(Modifier.height(Space.sm))
+            ThemeGrid(theme, accent, onSelect = onTheme)
+            Spacer(Modifier.height(Space.xxl))
+            Text("Accent", style = Pi.type.rowMeta, color = Pi.colors.ink3, modifier = Modifier.semantics { heading() })
+            Spacer(Modifier.height(Space.md))
+            Row(horizontalArrangement = Arrangement.spacedBy(Space.lg)) {
+                for (a in AccentId.entries) AccentDot(a, theme, selected = accent == a, onClick = { onAccent(a) })
+            }
+            Spacer(Modifier.height(Space.lg))
+        }
     }
 }

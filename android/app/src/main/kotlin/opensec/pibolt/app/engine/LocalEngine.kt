@@ -51,6 +51,8 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.TimeZone
 import java.util.UUID
+import java.util.WeakHashMap
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -100,6 +102,14 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
 
     /** Idle engines for the next opens. */
     private val idle = IdlePool<LocalBackend>(maxParked = 1) { it.sessionFile }
+
+    /**
+     * The last chat's engine, parked for the next chat open. Kept apart from [idle]: a chat engine runs with the chats'
+     * tools only (no shell, no files) and must never serve a project, nor a project's engine a chat.
+     */
+    private val chatIdle = IdlePool<LocalBackend>(maxParked = 1) { it.sessionFile }
+
+    override val chatDir: File get() = ChatSpace.dir(paths.home)
     private val watchers = HashMap<LocalBackend, Job>()
 
     /** Empty session files made to start a session in another project, deleted again if never used. */
@@ -137,11 +147,14 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     override fun open(project: File, sessionFile: String?, fresh: Boolean): SessionController {
         val started = SystemClock.elapsedRealtime()
         val dir = engineForm(project)
+        // The chats' directory is no project: its engines run with the chats' tools only.
+        if (isChat(dir.path)) return openChat(sessionFile.takeUnless { fresh })
         val target = when {
             sessionFile != null -> SessionTarget.Resume(sessionFile)
             fresh -> SessionTarget.Fresh
             else -> SessionTarget.Continue
         }
+        retireStale(dir)
         val live = liveIn(dir)
         if (live != null && (target == SessionTarget.Continue || (target is SessionTarget.Resume && target.sessionFile == live.sessionFile))) {
             app.focus(live)
@@ -166,7 +179,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         // for this: Pi ends its turn in order).
         val taken = (if (live == null || live.isIdle) idle.take(want, exactOnly = live != null) else null)?.let { t ->
             // Secrets are in an engine's environment from its start: one from another project is not moved here.
-            if (SecretStore.get(app).engineFits(t.engine.engineCwd, dir)) return@let t
+            if (SecretStore.get(app).engineFits(t.engine.engineCwd, dir) && !stale(t.engine)) return@let t
             forget(t.engine)
             t.engine.close()
             null
@@ -207,6 +220,65 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         return controller
     }
 
+    override fun openChat(sessionFile: String?): SessionController {
+        val started = SystemClock.elapsedRealtime()
+        val dir = chatDir
+        val target = sessionFile?.let { SessionTarget.Resume(it) } ?: SessionTarget.Fresh
+        val want = when (target) {
+            is SessionTarget.Resume -> IdlePool.Want.Session(target.sessionFile)
+            else -> IdlePool.Want.New(dir.path)
+        }
+        retireStale(dir)
+        val live = liveIn(dir)
+        if (live != null) {
+            val same = target is SessionTarget.Resume && target.sessionFile == live.sessionFile
+            // A new chat while the live one is still empty: it already is one.
+            val alreadyNew = target == SessionTarget.Fresh && live.isIdle && live.state.value.let { it.hello && it.items.isEmpty() }
+            if (same || alreadyNew) {
+                app.focus(live)
+                return live
+            }
+        } else {
+            when (val room = LivePolicy.roomFor(liveRules())) {
+                LivePolicy.Room.Free -> Unit
+                is LivePolicy.Room.Stop -> localSessions().firstOrNull { it.project?.path == room.key }?.stop()
+                is LivePolicy.Room.Full -> throw IllegalStateException(room.message)
+            }
+        }
+        // As for a project: an idle live chat gives way to a parked engine that already has the wanted chat; otherwise
+        // the live engine moves over RPC.
+        val taken = (if (live == null || live.isIdle) chatIdle.take(want, exactOnly = live != null) else null)?.let { t ->
+            if (!stale(t.engine)) return@let t
+            forget(t.engine)
+            t.engine.close()
+            null
+        }
+        if (live != null && taken == null) {
+            when (target) {
+                is SessionTarget.Resume -> live.switchSession(target.sessionFile)
+                else -> live.newSession()
+            }
+            app.focus(live)
+            return live
+        }
+        val config = configFor(dir).copy(name = ChatSpace.NAME)
+        val backend = taken?.engine?.also { it.assign(config, target) } ?: newBackend(config, target)
+        val controller = SessionController.local(app, dir, backend, ::release, checkpoints = null, chat = true)
+        app.addLocalSession(controller, replacing = live)
+        opening.incrementAndGet()
+        scope.launch {
+            val end = withTimeoutOrNull(OPEN_TIMEOUT_MS) {
+                backend.state.first { it is ConnectionState.Connected || it is ConnectionState.Disconnected }
+            }
+            if (end is ConnectionState.Connected) {
+                Log.i(TAG, "open chat: ready in ${SystemClock.elapsedRealtime() - started} ms (${if (taken == null) "cold" else "warm"}, pid ${backend.pid})")
+            }
+            opening.decrementAndGet()
+            ensureSpare()
+        }
+        return controller
+    }
+
     /** The engine's git (`PREFIX/bin/git`) once the prefix is set up; null where the engine cannot run. */
     suspend fun gitBinary(): File? = ensureSetup()?.let { File(paths.bin, "git").takeIf(File::exists) }
 
@@ -233,7 +305,15 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     override fun clearRuntimeStorage(kind: RuntimeStorage.Kind): Boolean = RuntimeStore.clear(paths, kind)
 
     /** Saved sessions with at least one message, newest first. Blocking file I/O: call off the main thread. */
-    override fun sessions(project: File): List<SessionSummary> = index.list(engineForm(project)).filter { it.messageCount > 0 }
+    override fun sessions(project: File): List<SessionSummary> {
+        val form = engineForm(project)
+        if (isChat(form.path)) return chats()
+        return index.list(form).filter { it.messageCount > 0 }
+    }
+
+    override fun chats(): List<SessionSummary> = index.listIn(listOf(ChatSpace.sessionDir(paths.agentDir))).filter { it.messageCount > 0 }
+
+    private fun isChat(cwd: String): Boolean = ChatSpace.isChat(cwd, paths.home)
 
     override fun deleteSessions(project: File) {
         val form = engineForm(project)
@@ -284,9 +364,22 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
      * new credentials, secrets or settings.
      */
     fun stopIdleEngines(reason: String) {
-        val stopped = idle.drain()
+        val stopped = idle.drain() + chatIdle.drain()
         stopped.forEach(::stopIdle)
         if (stopped.isNotEmpty()) Log.i(TAG, "stopping ${stopped.size} idle engines ($reason)")
+    }
+
+    /**
+     * A setting that engines read at their start changed ("Web search": their tool flags, ChatSpace): the idle engines
+     * stop, and so does every live on-device session that is not running a turn ([LivePolicy.restartsForSettings]),
+     * so the next open, or New chat in an open chat, starts an engine with the new flags. A session in the middle of a
+     * turn keeps its engine until it ends.
+     */
+    fun restartForSettings(reason: String) {
+        stopIdleEngines(reason)
+        val stopped = localSessions().filter { LivePolicy.restartsForSettings(it.state.value) }
+        for (session in stopped) session.stop(keepEngine = false)
+        Log.i(TAG, "stopped ${stopped.size} live sessions not in a turn ($reason)")
     }
 
     private fun stopIdle(backend: LocalBackend) {
@@ -413,7 +506,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     /** Start the spare engine unless there is one (or the app is in the background). */
     private suspend fun ensureSpare() {
         if (inBackground || opening.get() > 0 || ensureSetup() == null) return
-        val home = prefs.getString(KEY_LAST_PROJECT, null)?.let(::File)?.takeIf { it.isDirectory } ?: paths.projects
+        val home = prefs.getString(KEY_LAST_PROJECT, null)?.let(::File)?.takeIf { it.isDirectory && !isChat(it.path) } ?: paths.projects
         if (idle.hasFresh()) return
         val backend = newBackend(configFor(home), SessionTarget.Fresh)
         if (!idle.addFresh(backend, home.path)) {
@@ -434,9 +527,12 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
      * one); a busy one is stopped.
      */
     private fun release(backend: LocalBackend, wasIdle: Boolean) {
-        if (wasIdle && backend.isAlive && manifest != null) {
+        // An engine started with other settings ("Web search" changed during its turn) is not parked: it would serve a
+        // later open with the old tools.
+        if (wasIdle && backend.isAlive && manifest != null && !stale(backend)) {
             backend.park()
-            for (old in idle.park(backend, backend.engineCwd ?: backend.config.cwd)) {
+            val pool = if (isChat(backend.config.cwd)) chatIdle else idle
+            for (old in pool.park(backend, backend.engineCwd ?: backend.config.cwd)) {
                 forget(old)
                 old.close()
             }
@@ -454,27 +550,51 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     private fun configFor(project: File) = LocalConfig(name = project.name, version = manifest?.engine.orEmpty(), cwd = project.path)
 
     private fun newBackend(config: LocalConfig, target: SessionTarget): LocalBackend {
+        val webSearch = app.settings.settings.value.webSearch
         val backend = LocalBackend(
             config = config,
             target = target,
-            launcher = launcher,
+            // The flags read at start ("Web search") are fixed per engine, relaunches included; [launchedWith] keeps them.
+            launcher = EngineLauncher { t, cwd -> launch(t, cwd, webSearch) },
             newestSession = { cwd -> sessions(File(cwd)).firstOrNull()?.file },
             freshSessionFile = ::emptySession,
             killer = reaper,
             onStderr = { Log.i(ENGINE_TAG, it) },
         )
+        launchedWith[backend] = webSearch
         watch(backend)
         return backend
     }
 
-    private val launcher = EngineLauncher { target, cwd ->
+    /** The "Web search" setting each engine started with (its tool flags, ChatSpace). */
+    private val launchedWith: MutableMap<LocalBackend, Boolean> = Collections.synchronizedMap(WeakHashMap())
+
+    /** [backend] started with another "Web search" than the current one: it is replaced instead of reused or parked. */
+    private fun stale(backend: LocalBackend): Boolean = LivePolicy.staleEngine(launchedWith[backend], app.settings.settings.value.webSearch)
+
+    /**
+     * The live session in [dir] stops when its engine is stale and it is not in a turn, so this open starts or takes a
+     * current engine (a turn in progress keeps its engine; the next open after it ends replaces it).
+     */
+    private fun retireStale(dir: File) {
+        val live = liveIn(dir) ?: return
+        val backend = live.localBackend ?: return
+        if (stale(backend) && LivePolicy.restartsForSettings(live.state.value)) {
+            Log.i(TAG, "replacing the engine of ${dir.name}: started with other settings")
+            live.stop(keepEngine = false)
+        }
+    }
+
+    private suspend fun launch(target: SessionTarget, cwd: String, webSearch: Boolean): java.lang.Process {
         val m = ensureSetup() ?: throw EngineStartException(unavailable ?: (_status.value as? EngineStatus.Failed)?.message ?: "The engine is not available")
         val project = File(cwd)
         project.mkdirs()
         if (!project.isDirectory) throw EngineStartException("Cannot create the project folder $cwd")
-        val command = listOf(paths.engine.path, "--mode", "rpc") + target.cliArgs()
-        Log.i(TAG, "starting engine ${m.engine} in ${project.name} ${target.cliArgs().joinToString(" ")}")
-        ProcessBuilder(command).directory(project).apply {
+        // In the chats' directory: the chats' tools, session folder and prompt; the web tools only while [webSearch] (the
+        // setting when this engine was made, [launchedWith]) is on (ChatSpace).
+        val command = listOf(paths.engine.path) + ChatSpace.engineArgs(target, cwd, paths.home, paths.agentDir, webSearch)
+        Log.i(TAG, "starting engine ${m.engine} in ${project.name} ${target.cliArgs().joinToString(" ")}${if (isChat(cwd)) " (chat)" else ""}")
+        return ProcessBuilder(command).directory(project).apply {
             val env = environment()
             val wanted = engineEnvironment(paths, env.toMap(), TimeZone.getDefault().id, m.env, app.github.gitEnvironment())
             env.clear()
@@ -488,7 +608,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
      * another directory can `switch_session` to it and work in [cwd].
      */
     private fun emptySession(cwd: String): String? = runCatching {
-        val dir = index.sessionDir(cwd).apply { mkdirs() }
+        val dir = (if (isChat(cwd)) ChatSpace.sessionDir(paths.agentDir) else index.sessionDir(cwd)).apply { mkdirs() }
         val id = UUID.randomUUID().toString()
         val timestamp = ISO_MILLIS.format(Instant.now())
         val file = File(dir, "${timestamp.replace(':', '-').replace('.', '-')}_$id.jsonl")
@@ -508,7 +628,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     /** Empty session files this engine made that no engine has open and that never got a message. */
     private fun deleteUnusedEmptySessions() {
         val inUse = buildSet {
-            for (backend in idle.engines()) backend.sessionFile?.let(::add)
+            for (backend in idle.engines() + chatIdle.engines()) backend.sessionFile?.let(::add)
             for (session in app.sessions.value) session.sessionFile?.let(::add)
         }
         for (path in emptySessions.toList()) {

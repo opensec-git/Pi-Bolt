@@ -359,19 +359,15 @@ fun ProjectScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                 )
                                 if (unavailable) {
-                                    Text("Pi-Bolt can't run on this phone, so sessions here can't be opened.", style = type.rowMeta, color = colors.ink3, modifier = Modifier.padding(top = Space.sm))
+                                    Text("Sessions can't run on this phone", style = type.rowMeta, color = colors.ink3, modifier = Modifier.padding(top = Space.sm))
                                 }
                             }
                         }
                         val list = sessions
                         when {
-                            list == null -> item(key = "loading", contentType = "loading") { LoadingRow("Reading sessions…") }
+                            list == null -> item(key = "loading", contentType = "loading") { LoadingRow("Loading sessions…") }
                             list.isEmpty() -> item(key = "empty", contentType = "empty") {
-                                EmptyCard(
-                                    Icons.AutoMirrored.Rounded.Chat,
-                                    "No sessions yet",
-                                    "Start one and ask Pi to look around, set the project up, or explain the code.",
-                                )
+                                EmptyCard(Icons.AutoMirrored.Rounded.Chat, "No sessions yet")
                             }
                             else -> {
                                 item(key = "label", contentType = "label") { InsetSectionHead("Sessions", count = list.size) }
@@ -387,7 +383,7 @@ fun ProjectScreen(
                                         where = branch,
                                         onClick = {
                                             when {
-                                                unavailable -> scope.launch { snackbar.show("Pi-Bolt can't run on this phone", SnackKind.Warning) }
+                                                unavailable -> scope.launch { snackbar.show("Sessions can't run on this phone", SnackKind.Warning) }
                                                 isLive -> onOpenSession()
                                                 else -> open(s.file, fresh = false)
                                             }
@@ -417,16 +413,16 @@ fun ProjectScreen(
                         }
                         val entries = shownFiles
                         when {
-                            entries == null -> item(key = "files-loading", contentType = "loading") { LoadingRow("Reading the folder…") }
+                            entries == null -> item(key = "files-loading", contentType = "loading") { LoadingRow("Loading files…") }
                             entries.isEmpty() -> item(key = "files-empty", contentType = "empty") {
                                 val hidden = files.orEmpty().size
                                 EmptyCard(
                                     Icons.Rounded.Folder,
                                     if (path.isEmpty()) "No files yet" else "This folder is empty",
                                     when {
-                                        hidden > 0 -> if (hidden == 1) "1 hidden file. Show hidden files from the sort menu." else "$hidden hidden files. Show hidden files from the sort menu."
-                                        path.isEmpty() -> "Ask Pi to set the project up, or add files yourself."
-                                        else -> "Add a file or import one from the phone."
+                                        hidden == 1 -> "1 hidden file"
+                                        hidden > 1 -> "$hidden hidden files"
+                                        else -> null
                                     },
                                 ) {
                                     Row(horizontalArrangement = Arrangement.spacedBy(Space.md)) {
@@ -598,7 +594,7 @@ private fun ProjectHeader(title: String, name: String, pinned: Boolean, branch: 
  * circle, the title (rowTitle ink1), one line on what to do (rowMeta ink2) and, when given, the actions under it.
  */
 @Composable
-internal fun EmptyCard(icon: ImageVector, title: String, text: String, actions: (@Composable () -> Unit)? = null) {
+internal fun EmptyCard(icon: ImageVector, title: String, text: String? = null, actions: (@Composable () -> Unit)? = null) {
     val colors = Pi.colors
     val type = Pi.type
     Column(
@@ -611,8 +607,10 @@ internal fun EmptyCard(icon: ImageVector, title: String, text: String, actions: 
         }
         Spacer(Modifier.height(Space.lg))
         Text(title, style = type.rowTitle, color = colors.ink1, modifier = Modifier.semantics { heading() })
-        Spacer(Modifier.height(Space.xs))
-        Text(text, style = type.rowMeta, color = colors.ink2)
+        if (text != null) {
+            Spacer(Modifier.height(Space.xs))
+            Text(text, style = type.rowMeta, color = colors.ink2)
+        }
         if (actions != null) {
             Spacer(Modifier.height(Space.lg))
             actions()

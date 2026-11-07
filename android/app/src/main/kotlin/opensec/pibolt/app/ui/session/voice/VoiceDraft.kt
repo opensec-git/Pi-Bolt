@@ -48,3 +48,18 @@ object VoiceErrors {
         else -> "Speech recognition stopped"
     }
 }
+
+/** The microphone level for the voice surface's waveform (pure, unit-tested). */
+object VoiceLevel {
+    /** Quieter than this (`onRmsChanged` dB) is silence. */
+    const val FLOOR_DB = -2f
+
+    /** Louder than this is full scale: speech close to the phone peaks around 8 to 10 dB. */
+    const val CEILING_DB = 10f
+
+    /** `SpeechRecognizer`'s RMS dB as 0..1, linear between [FLOOR_DB] and [CEILING_DB]. */
+    fun normalize(rmsdB: Float): Float {
+        if (rmsdB.isNaN()) return 0f
+        return ((rmsdB - FLOOR_DB) / (CEILING_DB - FLOOR_DB)).coerceIn(0f, 1f)
+    }
+}

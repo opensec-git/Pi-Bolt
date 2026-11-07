@@ -113,7 +113,7 @@ fun Modifier.pressable(
 
 /**
  * Button heights. [Large] (48dp) is the default: sheet and screen actions. [Small] (36dp visual) sits inside rows and
- * cards ("Clear", "Retry"); its touch target is still 48dp. As on the desktop app, buttons are radius-sm rectangles.
+ * cards ("Clear", "Retry"); its touch target is still 48dp. In the redesign buttons are capsules ([Radius.pill]).
  */
 enum class ButtonSize(val height: Dp, val padding: Dp, val icon: Dp) {
     Large(48.dp, 16.dp, IconSize.md),
@@ -152,7 +152,7 @@ fun DangerButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifie
 }
 
 /**
- * Every button: a radius-sm rectangle of [size]'s height (a small one keeps a 48dp touch target), the label in label
+ * Every button: a capsule ([Radius.pill]) of [size]'s height (a small one keeps a 48dp touch target), the label in label
  * weight, optional leading icon 6dp before it. A label too long for one line wraps to two, centred, instead of being
  * cut (font scale 1.3 on a 360dp phone). Press: ink overlay and 0.97 scale. Disabled: content and line at 40% (the
  * primary button switches to surface3 and ink3 instead, so a disabled one never reads as the accent action).
@@ -170,7 +170,7 @@ private fun ButtonBase(
     size: ButtonSize,
     dim: Boolean = true,
 ) {
-    val shape = RoundedCornerShape(Radius.sm)
+    val shape = RoundedCornerShape(Radius.pill)
     val tint = if (enabled || !dim) content else content.copy(alpha = content.alpha * 0.4f)
     Row(
         modifier
@@ -230,7 +230,7 @@ fun TextAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier,
     Box(
         modifier
             .heightIn(min = 40.dp)
-            .pressable(onClick, shape = RoundedCornerShape(Radius.sm), enabled = enabled)
+            .pressable(onClick, shape = RoundedCornerShape(Radius.pill), enabled = enabled)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -397,7 +397,7 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier, icon: ImageVector?
     }
 }
 
-/** Text field: surface1, radius sm, 1dp lineStrong that turns into the focus line. */
+/** Text field: surface1, radius md, 1dp lineStrong that turns into the focus line. */
 @Composable
 fun PiTextField(
     value: String,
@@ -426,7 +426,7 @@ fun PiTextField(
         PiMotion.effects(),
         label = "field",
     )
-    val shape = RoundedCornerShape(Radius.sm)
+    val shape = RoundedCornerShape(Radius.md)
     BasicTextField(
         value = value,
         onValueChange = onValueChange,

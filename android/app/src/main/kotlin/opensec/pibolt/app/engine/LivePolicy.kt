@@ -1,5 +1,7 @@
 package opensec.pibolt.app.engine
 
+import opensec.pibolt.protocol.session.SessionState
+
 /**
  * The rules for several on-device sessions at once ([LocalEngine]): at most [MAX_LIVE] live sessions (each with its own
  * engine process; the parked and spare engines of [IdlePool] come on top), and which ones give way. A busy session (a
@@ -28,7 +30,7 @@ object LivePolicy {
         if (live.size < max) return Room.Free
         val idle = live.filterNot { it.busy }.sortedWith(compareBy<Live> { it.onScreen }.thenBy { it.lastUsed })
         return idle.firstOrNull()?.let { Room.Stop(it.key) }
-            ?: Room.Full("$max sessions are working. Stop one, or wait until one finishes, to open another.")
+            ?: Room.Full("$max sessions are working. Stop one or wait for one to finish.")
     }
 
     /**
@@ -40,4 +42,18 @@ object LivePolicy {
 
     /** An idle live session unused this long gives its engine back on a moderate trim. */
     const val STALE_MS = 10 * 60_000L
+
+    /**
+     * Whether a live session restarts when a setting its engine read at start changes ("Web search"): every session not
+     * in a turn (or a compaction). Not [opensec.pibolt.app.session.SessionController.isIdle]: a lasting extension
+     * status, an open dialog or a reconnecting link does not keep the old tools (an extension command's dialog is
+     * cancelled with the engine).
+     */
+    fun restartsForSettings(state: SessionState): Boolean = !state.isRunning && !state.isCompacting
+
+    /**
+     * An engine is stale when the setting it read at start ("Web search", [launchedWith]) differs from [current]: it is
+     * then replaced, not reused, parked or handed a new session. An engine not known here (none recorded) is not.
+     */
+    fun staleEngine(launchedWith: Boolean?, current: Boolean): Boolean = launchedWith != null && launchedWith != current
 }

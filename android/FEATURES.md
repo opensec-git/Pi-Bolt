@@ -187,6 +187,8 @@ before a turn with a conversation fork, and redo of any restore. On this phone o
 | Status line and widgets | `setStatus`, `setWidget` | done: lines above the composer | both | P1 |
 | Put text in the editor | `set_editor_text` | done | both | P1 |
 | Bundled extensions (todo, subagents) | packages | done | device | P1 |
+| Web search (bundled pi-web-access: `web_search`, `fetch_content`, `get_search_content`, `source_check`) | package | done (0.5.4): chats and projects, Settings > Agent > Web search (on; off leaves the tools out); a Sources pill per run of web steps with site favicons | device | P1 |
+| Structured questions (bundled rpiv-ask-user-question: `ask_user_question`) | package (TUI questionnaire) | done (0.5.4): one native question card ("1 of 3", radio or checkboxes, Type something, Back / Next / Submit) answering the extension's RPC dialogs; dismiss declines | device | P1 |
 | Install / manage packages | `pi install`, settings | done: `/packages`, Settings: bundled todo and subagents, npm/git install, switch off, remove, each package's commands and tools; built-in extensions on/off | device | P2 |
 | MCP servers | `/mcp` | done: `/mcp-servers`, Settings: state and tools per server (`pi mcp list`), add by URL or command, remove | device | P2 |
 | Reload resources | `/reload` | done: `/reload` restarts the engine in the same session (also re-reads trust, packages, MCP) | device | P2 |
@@ -238,7 +240,7 @@ before a turn with a conversation fork, and redo of any restore. On this phone o
 | Reconnect after drops | — | done | remote | P0 |
 | Several computers, forget, revoke | `/remote-control devices` | done | remote | P1 |
 | Background notifications (done, needs answer) | — | done: tapping one opens that exact session; also "background agent finished" | both | P0 |
-| Keep running in the background | — | done: foreground service while a turn runs | device | P0 |
+| Keep running in the background | — | done: foreground service while a turn, a compaction, background agents or a `!` command runs; a partial wake lock while local work runs (2 h cap without progress); Stop and Open on its notification; answers and replies from notifications; Run in background setup (battery optimization, OEM autostart) | device | P0 |
 | Several sessions at once | several terminals | done: up to three on this phone (one per project, each with its own engine) plus remote control; Running on Home, a switcher in the session bar; at the cap an idle session makes room, a busy one is never stopped | device | P1 |
 | Projects (create, clone, rename, pin, delete) | — | done | device | P0 |
 | Browse project files | — | done: Files tab and viewer | device | P1 |

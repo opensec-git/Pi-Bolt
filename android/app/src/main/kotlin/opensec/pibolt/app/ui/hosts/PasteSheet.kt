@@ -22,15 +22,12 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import opensec.pibolt.app.ui.components.ButtonRow
 import opensec.pibolt.app.ui.components.FieldHint
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiTextField
 import opensec.pibolt.app.ui.components.PrimaryButton
-import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.TextAction
-import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.protocol.PairingPayload
 
@@ -45,7 +42,6 @@ fun PasteSheet(onDismiss: () -> Unit, onSubmit: (String) -> String?) {
     val colors = Pi.colors
     val haptics = Pi.haptics
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val close = rememberSheetCloser(state)
     var text by remember { mutableStateOf(clipboardPairingLink(context) ?: "") }
     var error by remember { mutableStateOf<String?>(null) }
     fun submit() {
@@ -54,7 +50,7 @@ fun PasteSheet(onDismiss: () -> Unit, onSubmit: (String) -> String?) {
         if (e != null) haptics.reject() else haptics.confirm()
     }
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Paste pairing link", subtitle = "Run /\u2060remote-control copy on the computer, then paste the pibolt://pair link here.")
+        SheetHeader("Paste a link", subtitle = "Run /\u2060remote-control copy on the computer.")
         PiTextField(
             value = text,
             onValueChange = {
@@ -77,10 +73,7 @@ fun PasteSheet(onDismiss: () -> Unit, onSubmit: (String) -> String?) {
             }
         }, color = colors.ink2, modifier = Modifier.padding(start = 8.dp))
         Spacer(Modifier.height(8.dp))
-        ButtonRow(Modifier.padding(horizontal = 20.dp)) {
-            SecondaryButton("Cancel", onClick = { close(onDismiss) })
-            PrimaryButton("Connect", onClick = ::submit, enabled = text.isNotBlank())
-        }
+        PrimaryButton("Connect", onClick = ::submit, enabled = text.isNotBlank(), modifier = Modifier.fillMaxWidth().padding(horizontal = 20.dp))
     }
 }
 

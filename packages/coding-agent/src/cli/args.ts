@@ -317,6 +317,7 @@ ${chalk.bold("Commands:")}
   ${COMMAND_NAME} config [-l]               Open TUI to enable/disable package resources (Tab switches scope)
   ${COMMAND_NAME} auth <command>            Print credentials or check provider readiness
   ${COMMAND_NAME} mcp <command>             Manage MCP servers
+  ${COMMAND_NAME} service <command>         Remote control for paired phones at login: install/uninstall/status/pair/logs
 ${PIBOLT ? `  ${COMMAND_NAME} doctor                    Print a report of this installation, to paste into an issue\n  ${COMMAND_NAME} compile [options]         Compile the installed extensions into ${PRODUCT_NAME}\n` : ""}  ${COMMAND_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth/mcp
 
 ${chalk.bold("Options:")}

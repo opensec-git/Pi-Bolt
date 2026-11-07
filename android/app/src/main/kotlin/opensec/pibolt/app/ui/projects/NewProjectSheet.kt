@@ -104,8 +104,6 @@ fun NewProjectSheet(
     PiSheet(onDismiss = onDismiss, state = state) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
             Text("New project", style = type.title, color = colors.ink1)
-            Spacer(Modifier.height(4.dp))
-            Text("A folder on this phone where Pi reads, edits and runs things.", style = type.body, color = colors.ink2)
         }
         Segmented(
             options = listOf(false to "Empty folder", true to "Clone from git"),
@@ -145,8 +143,8 @@ fun NewProjectSheet(
                     when {
                         showUrlError -> "Use an https://, ssh:// or git@host:path URL"
                         busy && progress != null -> progress
-                        signedIn -> "Cloned on this phone with your GitHub account"
-                        else -> "Cloned on this phone. Private GitHub repositories need GitHub sign-in in Settings."
+                        signedIn -> "Uses your GitHub account"
+                        else -> "Private repositories need GitHub sign-in in Settings"
                     },
                     showUrlError,
                 )

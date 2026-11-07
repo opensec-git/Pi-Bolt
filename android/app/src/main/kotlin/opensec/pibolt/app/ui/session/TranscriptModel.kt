@@ -25,6 +25,8 @@ import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
 import opensec.pibolt.protocol.session.UserItem
+import opensec.pibolt.app.ui.session.web.WebSources
+import opensec.pibolt.app.ui.session.web.WebTools
 
 /**
  * One lazy-list row of the transcript. Keys are stable for the life of the row. Every row is an immutable data class, so
@@ -50,6 +52,8 @@ sealed interface TRow {
         is SubagentRow -> 10
         is SubagentStackRow -> 11
         is SubagentNoticeRow -> 12
+        is TurnMetaRow -> 13
+        is SourcesRow -> 14
     }
 }
 
@@ -83,6 +87,8 @@ data class TextRow(
     val tail: Boolean,
     override val live: Boolean,
     val rail: Rail? = null,
+    /** The reply starts with this heading: it reads as the turn's bold title. */
+    val title: Boolean = false,
 ) : TRow {
     override val key: String get() = "$itemKey#$index"
 }
@@ -104,6 +110,21 @@ data class ToolRow(val item: ToolItem, override val live: Boolean, val rail: Rai
 data class ToolGroupRow(
     override val key: String,
     val tools: List<ToolItem>,
+    val expanded: Boolean,
+    override val live: Boolean,
+    val rail: Rail? = null,
+) : TRow
+
+/**
+ * Consecutive web steps (pi-web-access's `web_search`, `source_check`, `fetch_content`) as one Sources pill: their
+ * [tools] and what they found ([sources], computed once per change of the tools). [expanded] lists the sources. A
+ * folded turn shows one for all its web steps after the answer.
+ */
+@Immutable
+data class SourcesRow(
+    override val key: String,
+    val tools: List<ToolItem>,
+    val sources: WebSources,
     val expanded: Boolean,
     override val live: Boolean,
     val rail: Rail? = null,
@@ -149,8 +170,23 @@ data class FoldRow(
     val endedInFailure: Boolean,
     val files: List<FileChange> = emptyList(),
     val summary: String = "",
+    /** The agent's tool calls among [steps] ("Used 4 tools"). */
+    val tools: Int = 0,
 ) : TRow {
     override val key: String get() = "fold:$turnKey"
+    override val live: Boolean get() = false
+}
+
+/** How a finished turn ended, for its meta line. */
+enum class TurnEnd { Finished, Failed, Stopped }
+
+/**
+ * The quiet line that starts a finished turn's reply: "Finished 1m 12s" ([durationMs] only when this phone watched the
+ * turn), "Stopped" after an abort, "Failed" after an error. The live turn has the status line instead.
+ */
+@Immutable
+data class TurnMetaRow(val turnKey: String, val durationMs: Long?, val end: TurnEnd) : TRow {
+    override val key: String get() = "meta:$turnKey"
     override val live: Boolean get() = false
 }
 
@@ -270,6 +306,16 @@ class MdCache(
         return value
     }
 
+    private val webSources = HashMap<String, Pair<List<ToolItem>, WebSources>>()
+
+    /** The sources of a run of web steps, parsed again only when one of its tools changed. */
+    fun sources(key: String, tools: List<ToolItem>): WebSources {
+        webSources[key]?.let { (old, value) -> if (old == tools) return value }
+        val value = WebTools.of(tools)
+        webSources[key] = tools to value
+        return value
+    }
+
     fun retain(keys: Set<String>) {
         docs.keys.retainAll(keys)
         changes.keys.retainAll(keys)
@@ -329,31 +375,40 @@ object TranscriptModel {
             }
             var lastStep = -1
             var steps = 0
+            var tools = 0
             var failedSteps = 0
-            var endedInFailure = false
+            var errored = false
+            var aborted = false
             for (i in bodyStart until end) {
                 val it = items[i]
                 // A command the user ran (`!ls`) is not the agent's work: it stays visible after the answer.
                 if ((it is ToolItem && !isUserShell(it)) || it is ThinkingItem) {
                     lastStep = i
                     steps++
+                    if (it is ToolItem) tools++
                 }
                 if (it is ToolItem && !isUserShell(it) && isFailedStep(it)) failedSteps++
-                if (it is NoticeItem && (it.kind == NoticeKind.Error || it.kind == NoticeKind.Aborted)) endedInFailure = true
+                if (it is NoticeItem && it.kind == NoticeKind.Error) errored = true
+                if (it is NoticeItem && it.kind == NoticeKind.Aborted) aborted = true
             }
+            val endedInFailure = errored || aborted
+            if (!live && first is UserItem && bodyStart < end) {
+                out += TurnMetaRow(turnKey, durations[turnKey], if (errored) TurnEnd.Failed else if (aborted) TurnEnd.Stopped else TurnEnd.Finished)
+            }
+            val turnRowsFrom = out.size
             val foldable = !live && steps > 0
             val open = !foldable || turnKey in expanded
             // Only a duration this phone measured while watching the turn. Summing the tools' own run times would
             // leave out the model's time and read far too short ("1s" for a 10 s turn), so an unwatched turn shows none.
             if (foldable) {
                 val (files, summary) = md.fold(turnKey, items.subList(bodyStart, end))
-                out += FoldRow(turnKey, steps, durations[turnKey], open, failedSteps, endedInFailure, files, summary)
+                out += FoldRow(turnKey, steps, durations[turnKey], open, failedSteps, endedInFailure, files, summary, tools)
             }
             if (open) {
                 out += TurnBody(md, live, turnKey, foldOpen = foldable, openGroups, agents).build(items, bodyStart, end, lastStep)
             } else {
                 // Folded: only notices, the answer and agent cards (a unit of work of its own, and background ones
-                // outlive the turn that started them).
+                // outlive the turn that started them), then the turn's web sources as one pill.
                 var i = bodyStart
                 while (i < end) {
                     val item = items[i]
@@ -364,7 +419,13 @@ object TranscriptModel {
                     if (i > lastStep || item is NoticeItem || item is SubagentNoticeItem) addItem(out, item, live, md, agents)
                     i++
                 }
+                val web = items.subList(bodyStart, end).filterIsInstance<ToolItem>().filter(WebTools::isSourceTool)
+                if (web.isNotEmpty()) {
+                    val key = "sources:$turnKey"
+                    out += SourcesRow(key, web, md.sources(key, web), key in openGroups, live)
+                }
             }
+            markTitle(out, turnRowsFrom)
             if (isLast && !live && pending == null) {
                 val reply = (lastStep + 1 until end).mapNotNull { (items[it] as? AssistantTextItem)?.text?.trim()?.takeIf(String::isNotEmpty) }
                 if (reply.isNotEmpty()) {
@@ -431,6 +492,25 @@ object TranscriptModel {
                     i++
                     continue
                 }
+                if (item is ToolItem && WebTools.isSourceTool(item)) {
+                    // Consecutive web steps (blank text between them skipped): one Sources pill.
+                    val run = ArrayList<ToolItem>()
+                    var j = i
+                    while (j < end) {
+                        val next = items[j]
+                        if (next is ToolItem && WebTools.isSourceTool(next)) {
+                            run += next
+                        } else if (!(next is AssistantTextItem && next.text.isBlank())) {
+                            break
+                        }
+                        j++
+                    }
+                    val key = "sources:${run[0].key}"
+                    val inRun = i <= lastStep
+                    emit(SourcesRow(key, run, md.sources(key, run), key in openGroups, live), if (inRun) foldSegment else null, if (inRun) foldStagger else null)
+                    i = j
+                    continue
+                }
                 if (item is ToolItem && isGroupable(item)) {
                     val run = ArrayList<ToolItem>()
                     var j = i
@@ -482,6 +562,19 @@ object TranscriptModel {
         }
     }
 
+    /**
+     * The reply's title: when the first prose of the reply (the first text row off the step rail, from [from] on) is a
+     * heading at the start of its message, it reads as the turn's bold title.
+     */
+    private fun markTitle(out: MutableList<TRow>, from: Int) {
+        for (k in from until out.size) {
+            val row = out[k] as? TextRow ?: continue
+            if (row.rail != null) continue
+            if (row.index == 0 && row.block is MdBlock.Heading) out[k] = row.copy(title = true)
+            return
+        }
+    }
+
     /** A step after [from] (up to [end]) finished without error. */
     private fun laterSuccess(items: List<ChatItem>, from: Int, end: Int): Boolean =
         (from + 1 until end).any { (items[it] as? ToolItem)?.status == ToolStatus.Done }
@@ -491,6 +584,7 @@ object TranscriptModel {
         is ThinkingRow -> row.copy(rail = rail)
         is ToolRow -> row.copy(rail = rail)
         is ToolGroupRow -> row.copy(rail = rail)
+        is SourcesRow -> row.copy(rail = rail)
         else -> row
     }
 

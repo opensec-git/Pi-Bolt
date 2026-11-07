@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.session
 
+import androidx.compose.ui.graphics.vector.ImageVector
 import java.io.File
 
 /**
@@ -49,8 +50,27 @@ class PromptHistory(private var entries: List<String>) {
     }
 }
 
-/** A suggestion on the empty session: [label] on the chip, [prompt] put in the composer (never sent by itself). */
-data class StarterPrompt(val label: String, val prompt: String)
+/**
+ * A suggestion on the empty session: [label] on the row, [prompt] put in the composer (never sent by itself), and an
+ * optional [icon] before the label (a chat's topics).
+ */
+data class StarterPrompt(val label: String, val prompt: String, val icon: ImageVector? = null)
+
+/**
+ * The empty session's order of entrance (assistant-ui's Welcome): the title is step 0, its line step 1, each
+ * suggestion one step, then the recent prompts as one step and the commands line as one; the composer comes last.
+ */
+object Welcome {
+    /** Recent prompts shown on the empty session; the rest stay in the composer's Prompt history. */
+    const val RECENT = 3
+
+    /** The step of the first suggestion. */
+    const val FIRST_SUGGESTION = 2
+
+    /** The composer's step: after every element the empty session shows. */
+    fun composerStep(suggestions: Int, recent: Boolean, commands: Boolean): Int =
+        FIRST_SUGGESTION + suggestions + (if (recent) 1 else 0) + (if (commands) 1 else 0)
+}
 
 /** What the project folder says about itself, read once on IO for the empty session's suggestions. */
 data class ProjectTraits(val empty: Boolean, val git: Boolean, val tests: Boolean)

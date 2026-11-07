@@ -113,13 +113,13 @@ object ErrorText {
 
     /** One sentence on what to do next. */
     fun advice(e: ProviderError, local: Boolean): String = when (e.kind) {
-        ErrorClass.ContextOverflow -> "The conversation no longer fits in the model's context. Compact it, or switch to a model with a larger window."
-        ErrorClass.Auth -> if (local) "The API key is missing, wrong or revoked. Update it, or switch to another model." else "The API key on the computer is missing, wrong or revoked. Fix it there, or switch model."
-        ErrorClass.Billing -> "The account is out of credit or hit its spending limit. Check billing with the provider, or switch model."
-        ErrorClass.RateLimit -> "Too many requests in a short time. Wait a moment, then retry."
-        ErrorClass.Overloaded -> "The provider could not answer just now. Retry, or switch to another model."
+        ErrorClass.ContextOverflow -> "Compact the conversation, or switch to a model with a larger context."
+        ErrorClass.Auth -> if (local) "The API key is missing, wrong or revoked. Update it, or switch model." else "The API key on the computer is missing, wrong or revoked. Fix it there, or switch model."
+        ErrorClass.Billing -> "The account is out of credit or at its spending limit. Check billing, or switch model."
+        ErrorClass.RateLimit -> "Wait a moment, then retry."
+        ErrorClass.Overloaded -> "Retry, or switch model."
         ErrorClass.Network -> if (local) "Check this phone's connection, then retry." else "Check the computer's connection, then retry."
-        ErrorClass.Other -> "Retry, or switch to another model."
+        ErrorClass.Other -> "Retry, or switch model."
     }
 
     /** "503 · The server is overloaded." The provider's own words, with the HTTP status when there is one. */

@@ -1063,6 +1063,15 @@ export class SettingsManager {
 		this.save();
 	}
 
+	/** The background service's tunnel (`pi-bolt service install --no-tunnel` sets "off"). */
+	setRemoteControlServiceTunnel(tunnel: NonNullable<RemoteControlSettings["tunnel"]>): void {
+		const current = this.globalSettings.remoteControl;
+		const remoteControl = current && typeof current === "object" ? current : {};
+		this.globalSettings.remoteControl = { ...remoteControl, service: { ...remoteControl.service, tunnel } };
+		this.markModified("remoteControl", "service");
+		this.save();
+	}
+
 	setSessionShareDestination(destination: SessionShareDestination): void {
 		this.globalSettings.sessionShareDestination = destination;
 		this.markModified("sessionShareDestination");

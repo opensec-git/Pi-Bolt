@@ -84,6 +84,23 @@ object ProjectRules {
             .sortedWith(compareByDescending<ProjectEntry> { it.name == liveProject }.thenByDescending { it.lastSession?.updatedAt ?: 0 }.thenBy { it.title.lowercase() })
             .take(limit)
 
+    /**
+     * The Home pill starts a chat rather than a session in a project when there is no project, or when a chat changed
+     * last ([lastChatAt]: the newest chat's write) after any project was worked in ([lastProjectAt]: the newest
+     * [ProjectEntry.lastActive]). The user's pick in the chip wins over this default.
+     */
+    fun pillDefaultsToChat(noProjects: Boolean, lastChatAt: Long?, lastProjectAt: Long?): Boolean =
+        noProjects || (lastChatAt != null && lastChatAt > (lastProjectAt ?: 0L))
+
+    /**
+     * The focus card's title for a session: its name, else the first line of its latest prompt, else [fallback] (the
+     * project). Blank values count as missing.
+     */
+    fun focusTitle(name: String?, lastPrompt: String?, fallback: String): String =
+        name?.trim()?.takeIf { it.isNotEmpty() }
+            ?: lastPrompt?.lineSequence()?.map { it.trim() }?.firstOrNull { it.isNotEmpty() }
+            ?: fallback
+
     /** Two letters for a project tile: initials of the first two words ("calc-parser" -> "CP"), else its first two letters. */
     fun monogram(title: String): String {
         val words = title.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }

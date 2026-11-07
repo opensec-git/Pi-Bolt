@@ -403,4 +403,27 @@ class MarkdownGfmTest {
             assertTrue(ms < 1500, "$opener took $ms ms")
         }
     }
+
+    @Test
+    fun aListOfAnotherKindRightAfterAListStartsANewList() {
+        // Bullets, then numbered steps, then tasks, as a model writes them in one reply.
+        val items = blocks(
+            """
+            - a
+              - a1
+                - a2
+            1. b
+               1. b1
+            2. c
+            - [x] d
+            - [ ] e
+            """,
+        ).only<MdBlock.ListItem>()
+        assertEquals(listOf("a", "a1", "a2", "b", "b1", "c", "d", "e"), items.map { it.text })
+        // a starts the bullets, b the numbered list, d the task list. Nested items, a return from nesting (c) and a
+        // second task do not.
+        assertEquals(listOf(true, false, false, true, false, false, true, false), items.map { it.startsList })
+        // An item that goes on after a paragraph inside its list is no new list.
+        assertEquals(listOf(true, false), blocks("1. a\n\n   more\n2. b").only<MdBlock.ListItem>().map { it.startsList })
+    }
 }

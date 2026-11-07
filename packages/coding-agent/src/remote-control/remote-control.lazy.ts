@@ -1,2 +1,5 @@
-/** Loads remote control (server, Noise, QR code) only when `/remote-control` runs (see controller.ts). */
-export const loadRemoteControl = () => import("./controller.ts");
+/**
+ * Loads remote control (server, Noise, QR code, the background service) only when `/remote-control` or `pi-bolt service`
+ * runs (see entry.ts).
+ */
+export const loadRemoteControl = () => import("./entry.ts");

@@ -102,7 +102,7 @@ const val INLINE_MAX_LINES = 400
 
 private fun stepState(item: ToolItem) = when {
     item.isActive -> StepState.Active
-    isUnavailable(item) -> StepState.Skipped
+    isUnavailable(item) || isDeclinedAsk(item) -> StepState.Skipped
     item.status == ToolStatus.Done || isEmptyResult(item) -> StepState.Done
     item.status == ToolStatus.Error -> StepState.Failed
     else -> StepState.Skipped

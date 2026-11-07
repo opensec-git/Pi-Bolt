@@ -21,6 +21,7 @@ import type {
 import { IkResponder, type KeyPair, type TransportKeys } from "./noise.ts";
 import {
 	CloseCode,
+	ENDPOINTS_MESSAGE,
 	encodePairingUri,
 	encryptMessage,
 	MessageAssembler,
@@ -97,9 +98,25 @@ export type RemoteControlEvent =
 	| { type: "client_disconnected"; client: RemoteClientInfo }
 	| { type: "handshake_rejected"; address: string; reason: string };
 
+/** Commands only the background service runs (`list_projects`, `new_session`, ...), past the RPC commands above. */
+export interface RemoteServiceCommands {
+	readonly types: ReadonlySet<string>;
+	/** Resolves with the response's data; a throw is a failed response with its message. */
+	run(command: { type: string; [key: string]: unknown }): Promise<object>;
+}
+
 export interface RemoteControlServerOptions {
 	store: RemoteControlStore;
-	getSession: () => AgentSession;
+	/** The session phones see; undefined while the background service has none open. */
+	getSession: () => AgentSession | undefined;
+	/**
+	 * Opens a session when a phone connects and there is none (the background service). It calls [sessionChanged] once
+	 * the session is open, which sends `remote_hello`.
+	 */
+	openSession?: () => Promise<void>;
+	serviceCommands?: RemoteServiceCommands;
+	/** More fields of `remote_hello.host` (the service adds `service: true`). */
+	hostInfo?: Record<string, unknown>;
 	hostName: string;
 	version: string;
 	/** 0 (default) picks a free port. */
@@ -277,7 +294,7 @@ class RemoteConnection {
 		clearTimeout(this.handshakeTimer);
 		this.device = this.server.store.upsertDevice(candidate.publicKey, candidate.name);
 		this.candidate = undefined;
-		this.server.connectionOpened(this, candidate.paired);
+		void this.server.connectionOpened(this, candidate.paired);
 	}
 
 	private handshake(frame: Buffer): void {
@@ -344,6 +361,7 @@ export class RemoteControlServer {
 	private unsubscribe: (() => void) | undefined;
 	private pingTimer: ReturnType<typeof setInterval> | undefined;
 	private boundPort = 0;
+	private endpointList: string[] = [];
 
 	constructor(options: RemoteControlServerOptions) {
 		this.options = options;
@@ -418,13 +436,14 @@ export class RemoteControlServer {
 		return this.boundPort;
 	}
 
-	async stop(): Promise<void> {
+	/** Disconnects every phone with `closeCode` (1001: remote control stops) and closes the listener. */
+	async stop(closeCode: number = CloseCode.GoingAway): Promise<void> {
 		this.unsubscribe?.();
 		this.unsubscribe = undefined;
 		if (this.pingTimer) clearInterval(this.pingTimer);
 		for (const dialog of this.dialogs.values()) dialog.resolve(undefined);
 		this.dialogs.clear();
-		for (const connection of this.connections) connection.close(CloseCode.GoingAway);
+		for (const connection of this.connections) connection.close(closeCode);
 		this.connections.clear();
 		this.wss?.close();
 		const httpServer = this.httpServer;
@@ -478,6 +497,14 @@ export class RemoteControlServer {
 		return removed;
 	}
 
+	/** Disconnects phones no longer in the pairing store (revoked by another process, such as a terminal's Pi). */
+	dropRevoked(): void {
+		for (const connection of this.connections) {
+			const key = connection.device?.publicKey;
+			if (key && !connection.revoked && !this.store.findDevice(Buffer.from(key, "base64url"))) connection.revoke();
+		}
+	}
+
 	recordFailure(address: string, reason: string): void {
 		const now = Date.now();
 		const recent = (this.failures.get(address) ?? []).filter((time) => now - time < FAILURE_WINDOW_MS);
@@ -503,10 +530,40 @@ export class RemoteControlServer {
 		return address;
 	}
 
-	connectionOpened(connection: RemoteConnection, paired: boolean): void {
-		connection.send(this.hello());
+	async connectionOpened(connection: RemoteConnection, paired: boolean): Promise<void> {
+		const session = this.options.getSession();
+		if (session) connection.send(this.hello(session));
 		const client = connection.info();
 		if (client) this.options.onEvent?.({ type: "client_connected", client, paired });
+		if (!session && this.options.openSession) {
+			try {
+				await this.options.openSession();
+			} catch (error) {
+				connection.send({
+					type: "extension_ui_request",
+					id: randomUUID(),
+					method: "notify",
+					message: `No session could be opened: ${asError(error)}`,
+					notifyType: "error",
+				});
+			}
+		}
+		if (this.endpointList.length > 0) connection.send(this.endpointsMessage());
+	}
+
+	/**
+	 * The addresses phones should use from now on, in preference order. Connected phones get them now when they changed,
+	 * and every phone gets them when it connects (`remote_endpoints`).
+	 */
+	setEndpoints(endpoints: string[]): void {
+		if (endpoints.length === this.endpointList.length && endpoints.every((e, i) => e === this.endpointList[i]))
+			return;
+		this.endpointList = [...endpoints];
+		if (endpoints.length > 0) this.broadcast(this.endpointsMessage());
+	}
+
+	private endpointsMessage(): object {
+		return { type: ENDPOINTS_MESSAGE, endpoints: this.endpointList };
 	}
 
 	connectionClosed(connection: RemoteConnection): void {
@@ -521,14 +578,16 @@ export class RemoteControlServer {
 
 	private subscribe(): void {
 		this.unsubscribe?.();
-		this.unsubscribe = this.options.getSession().subscribe((event) => this.broadcast(toJsonEvent(event)));
+		this.unsubscribe = this.options.getSession()?.subscribe((event) => this.broadcast(toJsonEvent(event)));
 	}
 
 	/** Call after the terminal switched to another session: phones get the new session's snapshot. */
 	sessionChanged(): void {
 		if (!this.running) return;
 		this.subscribe();
-		for (const connection of this.connections) if (connection.isOpen) connection.send(this.hello());
+		const session = this.options.getSession();
+		if (!session) return;
+		for (const connection of this.connections) if (connection.isOpen) connection.send(this.hello(session));
 	}
 
 	private sessionState(session: AgentSession): RpcSessionState {
@@ -577,13 +636,17 @@ export class RemoteControlServer {
 		];
 	}
 
-	private hello(): object {
-		const session = this.options.getSession();
+	private hello(session: AgentSession): object {
 		const streamingMessage = session.isStreaming ? session.agent.state.streamingMessage : undefined;
 		const hello = {
 			type: "remote_hello",
 			protocol: PROTOCOL_VERSION,
-			host: { name: this.hostName, version: this.version, cwd: session.sessionManager.getCwd() },
+			host: {
+				name: this.hostName,
+				version: this.version,
+				cwd: session.sessionManager.getCwd(),
+				...this.options.hostInfo,
+			},
 			state: this.sessionState(session),
 			messages: [] as unknown[],
 			...(streamingMessage ? { streamingMessage } : {}),
@@ -656,6 +719,16 @@ export class RemoteControlServer {
 			return;
 		}
 		const id = typeof typed.id === "string" ? typed.id : undefined;
+		const service = this.options.serviceCommands;
+		if (service?.types.has(typed.type)) {
+			try {
+				const data = await service.run(message as { type: string });
+				connection.send({ id, type: "response", command: typed.type, success: true, data });
+			} catch (error) {
+				connection.send({ id, type: "response", command: typed.type, success: false, error: asError(error) });
+			}
+			return;
+		}
 		if (!REMOTE_COMMANDS.has(typed.type as RpcCommand["type"])) {
 			connection.send({
 				id,
@@ -680,6 +753,9 @@ export class RemoteControlServer {
 	): Promise<RpcResponse | undefined> {
 		const session = this.options.getSession();
 		const id = command.id;
+		if (!session) {
+			return { id, type: "response", command: command.type, success: false, error: "No session is open yet" };
+		}
 		const ok = (data?: object | null): RpcResponse =>
 			(data === undefined
 				? { id, type: "response", command: command.type, success: true }

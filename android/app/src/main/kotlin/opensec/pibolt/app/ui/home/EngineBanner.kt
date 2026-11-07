@@ -102,11 +102,11 @@ fun EngineDetailsSheet(status: EngineStatus, onRetry: () -> Unit, onDismiss: () 
     val close = rememberSheetCloser(state)
     PiSheet(onDismiss = onDismiss, state = state) {
         val (title, message, detail) = when (status) {
-            is EngineStatus.Failed -> Triple(status.message, "Pi-Bolt runs its engine on this phone. It did not start, so on-device projects are paused. Computers you control still work.", status.detail)
-            is EngineStatus.Unavailable -> Triple("Pi-Bolt can't run on this phone", status.reason + " You can still control Pi-Bolt on a computer from here.", null)
+            is EngineStatus.Failed -> Triple(status.message, "The engine didn't start. Computers you control still work.", status.detail)
+            is EngineStatus.Unavailable -> Triple("Pi-Bolt can't run on this phone", status.reason, null)
             is EngineStatus.Preparing -> Triple("Setting up Pi-Bolt", status.step, null)
             is EngineStatus.Ready -> Triple("Pi-Bolt is running", "Engine ${status.engineVersion}", null)
-            EngineStatus.Idle -> Triple("Pi-Bolt has not started", "It starts when you open a project.", null)
+            EngineStatus.Idle -> Triple("Pi-Bolt has not started", "", null)
         }
         SheetHeader(title, subtitle = message)
         if (!detail.isNullOrBlank()) {

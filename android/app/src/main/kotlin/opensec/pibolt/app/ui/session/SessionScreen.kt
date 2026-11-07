@@ -43,13 +43,19 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import opensec.pibolt.app.engine.SessionSummary
 import opensec.pibolt.app.session.ForkPoint
+import opensec.pibolt.app.ui.session.ask.AskQuestions
+import opensec.pibolt.app.ui.session.ask.QuestionSheet
 import opensec.pibolt.app.ui.session.features.Builtin
 import opensec.pibolt.app.ui.session.review.LocalTurnReview
 import opensec.pibolt.app.ui.session.review.TurnReviewOverlay
 import opensec.pibolt.app.ui.session.review.rememberTurnReview
 import opensec.pibolt.app.ui.session.features2.F2Sheet
+import opensec.pibolt.protocol.str
+import opensec.pibolt.app.ui.session.features2.AppExtension
+import opensec.pibolt.app.ui.session.tree.SessionTree
 import opensec.pibolt.app.ui.session.features2.Features2
 import opensec.pibolt.app.ui.session.features2.Features2Host
 import opensec.pibolt.app.ui.session.features2.Features2Sheets
@@ -106,6 +112,10 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
+import kotlinx.coroutines.flow.first
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -136,7 +146,9 @@ import opensec.pibolt.app.ui.projects.FileViewer
 import opensec.pibolt.app.ui.projects.editor.AskPi
 import opensec.pibolt.app.ui.projects.editor.EditorTabs
 import opensec.pibolt.app.ui.projects.editor.viewerPlace
-import opensec.pibolt.app.ui.session.voice.VoiceButton
+import opensec.pibolt.app.ui.session.voice.VoiceRationale
+import opensec.pibolt.app.ui.session.voice.rememberVoiceInput
+import opensec.pibolt.app.ui.session.review.SessionChangesPill
 import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
@@ -151,7 +163,9 @@ import opensec.pibolt.app.ui.components.sharedHostBounds
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.components.snackKindOf
 import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.theme.PiMotion
+import opensec.pibolt.protocol.rpc.ModelInfo
 import opensec.pibolt.protocol.rpc.StreamingBehavior
 import opensec.pibolt.protocol.session.AssistantTextItem
 import opensec.pibolt.protocol.session.UserItem
@@ -174,7 +188,22 @@ class LocalUi(
     val onPreview: (Int) -> Unit = {},
     /** Text and images waiting for the composer ("Ask Pi" in the editor, shares from other apps). */
     val composerDrop: MutableStateFlow<LocalSessions.ComposerDrop?>? = null,
+    /** A plain chat (ui/chats): no project, no tools, so none of the project-only parts ([SessionParts.CHAT]). */
+    val chat: Boolean = false,
+    /** The empty session's own greeting and suggestions (a chat's), instead of the project's. */
+    val welcome: WelcomeContent? = null,
+    /** A chat's top bar: the Chats list. */
+    val onChats: (() -> Unit)? = null,
+    /** A chat's top bar: delete this chat (after a confirmation) and leave. */
+    val onDelete: (() -> Unit)? = null,
+    /** The user picked a model in the model sheet (a chat remembers it for the next new chat). */
+    val onModelPicked: (ModelInfo) -> Unit = {},
+    /** The user picked a thinking level. */
+    val onThinkingPicked: (String) -> Unit = {},
 )
+
+/** A welcome of its own: [title] over [question] (both largeTitle, ink1 and ink3), then [starters]. */
+class WelcomeContent(val title: String, val question: String, val starters: List<StarterPrompt>)
 
 /**
  * The remote session ([local] null) or the on-device one in project [local]. [onOpenSession] shows another live
@@ -257,7 +286,7 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
     }
 }
 
-private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget, Export, Resume, Fork, Attach, History, Key }
+private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget, Export, Resume, Fork, Attach, History, Key, DeleteChat }
 
 /**
  * The session screen. It never reads the whole [SessionState] itself: each part derives the few values it shows, so a
@@ -265,7 +294,7 @@ private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget,
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SessionContent(
+internal fun SessionContent(
     app: PiBoltApp,
     controller: SessionController,
     onBack: () -> Unit,
@@ -291,6 +320,8 @@ private fun SessionContent(
     var draft by rememberSaveable(controller.hostId) { mutableStateOf("") }
     var mode by rememberSaveable { mutableStateOf(StreamingBehavior.Steer) }
     var sheet by remember { mutableStateOf(Sheet.None) }
+    var remoteSessions by remember { mutableStateOf(false) }
+    val service by remember { derivedStateOf { state.value.host?.service == true } }
     val f2 = rememberFeatures2()
     var viewer by remember { mutableStateOf<ViewerContent?>(null) }
     // A file on this phone tapped in a tool card opens in the full file viewer (tabs kept while the screen lives).
@@ -308,6 +339,10 @@ private fun SessionContent(
     val recentKey = local?.let { "project:" + it.project } ?: controller.hostId
     val title = local?.title ?: hostName
     val isLocal = local != null
+    val chat = local?.chat == true
+    val parts = SessionParts.of(isLocal, chat)
+    // What this screen calls itself in its sheets and messages.
+    val noun = if (chat) "chat" else "session"
     val drafts = remember { Drafts(app) }
     val files = remember(controller) { ProjectFileIndex(controller.project) }
     val f2Host = remember(controller) {
@@ -392,7 +427,7 @@ private fun SessionContent(
                 is SessionEffect.EditorText -> {
                     draft = effect.text
                     // A send that failed comes back to the composer: its "Sending" bubble goes, its images return.
-                    if (memory.pending.value?.text == effect.text) memory.pending.value = null
+                    SessionMemory.of(controller.hostId, controller.state.value.sessionId).pending.let { p -> if (p.value?.text == effect.text) p.value = null }
                     lastSent?.takeIf { it.first == effect.text && images.isEmpty() }?.let { images.addAll(it.second) }
                 }
             }
@@ -413,6 +448,11 @@ private fun SessionContent(
         val send = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text)
         context.startActivity(Intent.createChooser(send, null))
     }
+
+    // Dictation (the pill's mic and voice surface). [dictated]: the draft holds dictated words, so the message it
+    // becomes carries the waveform badge.
+    var dictated by remember { mutableStateOf(false) }
+    val voice = rememberVoiceInput(draft, onDraft = { draft = it }, onMessage = { m -> scope.launch { snackbar.show(m) } }, onHeard = { dictated = true })
 
     fun copy(text: String) {
         scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Pi-Bolt", text))) }
@@ -440,7 +480,8 @@ private fun SessionContent(
         }
     }
     val busy by remember { derivedStateOf { state.value.isRunning || state.value.isCompacting || state.value.dialogs.isNotEmpty() || linkState.value !is LinkState.Connected } }
-    val status = remember {
+    // Keyed on the session's memory: after a fork or a resume the status follows the new session's pending send.
+    val status = remember(memory) {
         derivedStateOf {
             val s = state.value
             val sending = memory.pending.value != null && !s.isRunning
@@ -470,7 +511,7 @@ private fun SessionContent(
             val s = state.value
             // The session name, or for a computer its folder. The model and thinking level live in the composer chip,
             // the context in the top bar's meter. On this phone the title already is the project folder.
-            (if (local != null) s.sessionName else s.sessionName ?: s.host?.cwd?.takeIf { it.isNotBlank() }?.let(::baseName)).orEmpty()
+            (if (!parts.subtitle) null else if (local != null) s.sessionName else s.sessionName ?: s.host?.cwd?.takeIf { it.isNotBlank() }?.let(::baseName)).orEmpty()
         }
     }
     // Context use: hidden until a turn reports usage, and kept through a turn that reports none (a failed request
@@ -489,12 +530,12 @@ private fun SessionContent(
     // The composer's thinking chip is left out for a model that does not reason.
     val reasons by remember { derivedStateOf { state.value.model?.reasoning != false } }
     val commands by remember { derivedStateOf { state.value.commands } }
-    val palette by remember(local != null) { derivedStateOf { CommandPalette.entries(state.value.commands, local != null) } }
+    val palette by remember(local != null, chat) { derivedStateOf { CommandPalette.entries(state.value.commands, local != null, chat) } }
     val queue by remember { derivedStateOf { state.value.queue } }
     // Changes only when a todo result or a run boundary changes the list.
     val todos by remember { derivedStateOf { state.value.todos } }
     val firstDialog by remember { derivedStateOf { state.value.dialogs.firstOrNull() } }
-    val empty by remember { derivedStateOf { state.value.hello && state.value.items.isEmpty() && state.value.streaming.isEmpty() && !state.value.isRunning && memory.pending.value == null } }
+    val empty by remember(memory) { derivedStateOf { state.value.hello && state.value.items.isEmpty() && state.value.streaming.isEmpty() && !state.value.isRunning && memory.pending.value == null } }
 
     val modelReadsImages by remember { derivedStateOf { state.value.model?.acceptsImages } }
     val modelProvider by remember { derivedStateOf { state.value.model?.provider } }
@@ -502,7 +543,7 @@ private fun SessionContent(
     val focusManager = LocalFocusManager.current
     // The project's traits for the empty session's suggestions (on-device sessions; read once, on IO).
     val traits by produceState<ProjectTraits?>(null, controller.project) {
-        value = controller.project?.let { dir -> withContext(Dispatchers.IO) { runCatching { StarterPrompts.traits(dir) }.getOrNull() } }
+        value = controller.project?.takeIf { parts.projectStarters }?.let { dir -> withContext(Dispatchers.IO) { runCatching { StarterPrompts.traits(dir) }.getOrNull() } }
     }
     val branch by produceState<String?>(null, controller.project) {
         value = controller.project?.let { dir ->
@@ -511,10 +552,14 @@ private fun SessionContent(
     }
 
     /** Sends [text] as typed (a prompt when idle, else per [mode]) with [attached] images and shows it at once. */
-    fun send(text: String, attached: List<ComposerImage> = emptyList(), behavior: StreamingBehavior = mode) {
-        val running = state.value.isRunning
+    fun send(text: String, attached: List<ComposerImage> = emptyList(), behavior: StreamingBehavior = mode, fromDraft: Boolean = false) {
+        // The controller's state, not this composition's: right after a fork (Regenerate) the controller already holds the
+        // new session, and the send belongs in that session's memory, or its "Sending" row would never resolve.
+        val now = controller.state.value
+        val running = now.isRunning
         controller.send(text, behavior, attached.mapNotNull { it.image })
-        memory.sent(text, state.value, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image })
+        SessionMemory.of(controller.hostId, now.sessionId).sent(text, now, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image }, dictated = fromDraft && dictated)
+        if (fromDraft) dictated = false
         if (text.isNotBlank()) app.recents.record(recentKey, text)
         lastSent = text to attached
         maybeAskNotifications()
@@ -538,17 +583,49 @@ private fun SessionContent(
     }
 
     /**
+     * A chat keeps one conversation, as ChatGPT's does: Regenerate and Edit and resend move the chat back to before the
+     * [occurrence]-th user message [text] in the same file (Pi's session tree, `navigateTree`; the old answer stays a
+     * branch, reachable from /tree), instead of forking into a new chat that would crowd the Chats list. Returns the
+     * message's text.
+     *
+     * The target is found on the active branch (`get_entries`, [SessionTree.rewindTarget]), counting copies of [text]
+     * back from the newest as the transcript shows them: `get_fork_messages` also lists the prompts of branches an
+     * earlier regenerate left, so counting there picked an older copy.
+     */
+    suspend fun rewind(text: String, occurrence: Int): Result<String> {
+        val shown = state.value.items.filterIsInstance<UserItem>().count { it.text.trim() == text.trim() }
+        val fromEnd = shown - 1 - occurrence
+        val entries = controller.request("get_entries", timeoutMs = 60_000)
+        val id = SessionTree.rewindTarget(entries.dataObject?.takeIf { entries.success }, text, fromEnd).takeIf { fromEnd >= 0 }
+            ?: return Result.failure(IllegalStateException("That message can't be edited"))
+        return AppExtension.run(controller, File(context.cacheDir, "pibolt-app"), "goto", id).map { r ->
+            controller.resync()
+            r.str("editorText")?.takeIf { it.isNotBlank() } ?: text
+        }
+    }
+
+    /**
      * Forks the session from a user message ([text], its [occurrence]-th copy in the transcript); the text comes back
-     * to the composer to edit and send.
+     * to the composer to edit and send. A chat rewinds in place instead ([rewind]), and forks only when that fails.
      */
     fun fork(text: String, occurrence: Int) {
         val from = draftOwner
         scope.launch {
+            if (chat) {
+                val rewound = rewind(text, occurrence).getOrNull()
+                if (rewound != null) {
+                    draft = rewound
+                    focus.requestFocus()
+                    haptics.confirm()
+                    snackbar.show("Edit your message, then send.", SnackKind.Success)
+                    return@launch
+                }
+            }
             controller.forkFrom(text, occurrence)
                 .onSuccess {
                     forkedDraft(from, it)
                     haptics.confirm()
-                    snackbar.show("Forked into a new session. Edit the message and send.", SnackKind.Success)
+                    snackbar.show("Forked into a new $noun. Edit the message and send.", SnackKind.Success)
                 }
                 .onFailure {
                     haptics.reject()
@@ -694,9 +771,17 @@ private fun SessionContent(
      * is offered only for prompts without images.
      */
     fun regenerate(user: UserItem, occurrence: Int) {
+        val before = controller.state.value.sessionId
         scope.launch {
+            if (chat && rewind(user.text, occurrence).isSuccess) {
+                send(user.text)
+                return@launch
+            }
             controller.forkFrom(user.text, occurrence)
                 .onSuccess {
+                    // The prompt goes to the fork: wait for its session before sending (the reply and its snapshot come
+                    // in either order).
+                    withTimeoutOrNull(FORK_SWITCH_MS) { controller.state.first { s -> s.sessionId != before } }
                     send(it.ifEmpty { user.text })
                 }
                 .onFailure {
@@ -807,6 +892,23 @@ private fun SessionContent(
         draft = text
         focus.requestFocus()
     }
+    // The empty session's content, and the composer's entrance as its last step: when a new session first shows its
+    // welcome, the composer fades in and rises after the welcome's elements (PiMotion.stagger). Once per screen.
+    val reduceMotion = Pi.reduceMotion
+    val welcome = local?.welcome
+    val welcomeStarters = welcome?.starters ?: if (isLocal) traits?.let { StarterPrompts.pick(it) }.orEmpty() else StarterPrompts.pick(null)
+    val welcomeRecent = recentAll[recentKey].orEmpty().take(Welcome.RECENT)
+    val welcomeCommands = { fill("/") }.takeIf { palette.isNotEmpty() }
+    val composerIn = remember { Animatable(1f) }
+    val welcomeStep by rememberUpdatedState(Welcome.composerStep(welcomeStarters.size, welcomeRecent.isNotEmpty(), welcomeCommands != null))
+    LaunchedEffect(Unit) {
+        if (reduceMotion) return@LaunchedEffect
+        snapshotFlow { empty }.first { it }
+        val step = welcomeStep
+        composerIn.snapTo(0f)
+        composerIn.animateTo(1f, PiMotion.enter(PiMotion.SHEET, PiMotion.stagger(step)))
+    }
+
     val extras by remember {
         derivedStateOf {
             val s = state.value
@@ -824,7 +926,7 @@ private fun SessionContent(
      */
     fun submit(behavior: StreamingBehavior) {
         val text = draft.trim()
-        val call = if (images.isEmpty()) CommandPalette.parse(text, commands, isLocal) else null
+        val call = if (images.isEmpty()) CommandPalette.parse(text, commands, isLocal, chat) else null
         when {
             call != null -> {
                 draft = ""
@@ -835,7 +937,7 @@ private fun SessionContent(
             images.isNotEmpty() && modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
             else -> {
                 val startsRun = !state.value.isRunning
-                send(text, images.toList(), behavior)
+                send(text, images.toList(), behavior, fromDraft = true)
                 draft = ""
                 images.clear()
                 if (startsRun) {
@@ -907,11 +1009,15 @@ private fun SessionContent(
                 onResume = ::openResume,
                 onFork = ::openFork,
                 onClone = controller::cloneSession,
+                onProjects = { remoteSessions = true }.takeIf { local == null && service },
                 contextPercent = contextPct,
                 // One spinner at a time: the top bar's Quad steps aside while the live status line is on screen.
                 quadVisible = !(status.value.visible && statusOnScreen),
                 status = status.value.text.let { t -> listOf(t.label.ifBlank { status.value.mode.label }, t.detail).filter { it.isNotBlank() }.joinToString(" ") },
                 switcher = { SessionSwitcher(controller, projectMeta, onOpen = onOpenSession) },
+                chat = chat,
+                onChats = local?.onChats,
+                onDelete = local?.onDelete?.let { { sheet = Sheet.DeleteChat } },
             )
             // Before the first snapshot the loading state already says "Starting…" with its own spinner: the banner
             // would say it twice. It still shows a stopped engine or a lost link (with Restart / Retry).
@@ -920,9 +1026,9 @@ private fun SessionContent(
             }
             Box(Modifier.weight(1f)) {
                 if (!hello) {
-                    LoadingState(title, linkState.value, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
+                    LoadingState(title, linkState.value, local = local != null, onRetry = local?.onRestart ?: controller::retryNow, chat = chat)
                 } else {
-                    CompositionLocalProvider(LocalTurnReview provides review) {
+                    CompositionLocalProvider(LocalTurnReview provides review, LocalPlainChat provides chat) {
                         Transcript(
                             state = state,
                             memory = memory,
@@ -932,9 +1038,12 @@ private fun SessionContent(
                                 if (it !is ActionsRow) haptics.longPress()
                                 actionsFor = it
                             },
-                            onAskAgain = {
+                            onAskAgain = { prompt ->
                                 haptics.send()
-                                send(it)
+                                // A chat regenerates the last answer in place; elsewhere the prompt goes again as a new turn.
+                                val users = state.value.items.filterIsInstance<UserItem>()
+                                val last = users.lastOrNull()?.takeIf { chat && !running && it.text == prompt }
+                                if (last != null) regenerate(last, users.dropLast(1).count { it.text == prompt }) else send(prompt)
                             },
                             onStatusOnScreen = { statusOnScreen = it },
                             jump = jump,
@@ -950,13 +1059,15 @@ private fun SessionContent(
                     }
                     if (empty) {
                         EmptySession(
-                            title = if (isLocal) title else cwd?.takeIf { it.isNotBlank() }?.let(::baseName) ?: title,
-                            branch = branch,
-                            starters = if (isLocal) traits?.let { StarterPrompts.pick(it) }.orEmpty() else StarterPrompts.pick(null),
-                            recent = recentAll[recentKey].orEmpty().take(RecentPrompts.SHOWN),
+                            title = welcome?.title ?: if (isLocal) title else cwd?.takeIf { it.isNotBlank() }?.let(::baseName) ?: title,
+                            subtitle = if (isLocal) branch else hostName,
+                            question = welcome?.question,
+                            starters = welcomeStarters,
+                            recent = welcomeRecent,
                             onStarter = { fill(it.prompt) },
                             onRecent = { fill(it) },
-                            onCommands = { fill("/") }.takeIf { palette.isNotEmpty() },
+                            onCommands = welcomeCommands,
+                            play = !reduceMotion,
                         )
                     }
                 }
@@ -989,13 +1100,16 @@ private fun SessionContent(
                     } else {
                         StatusExtras(extras)
                         TodoPanel(todos, running, autoCollapse = !running || windowHeight < 560.dp, quiet = status.value.visible && statusOnScreen)
-                        if (local != null) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = 12.dp))
+                        if (local != null && parts.preview) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = Space.page))
                         PendingDialogStrip(askingTitle) { memory.hiddenDialog.value = null }
                         QueueStrip(queue, onEdit = controller::clearQueue)
                     }
                     Composer(
                         text = draft,
-                        onText = { draft = it },
+                        onText = {
+                            draft = it
+                            if (it.isBlank()) dictated = false
+                        },
                         enabled = enabled,
                         running = running,
                         mode = mode,
@@ -1013,8 +1127,8 @@ private fun SessionContent(
                                 fill(entry.insert)
                             }
                         },
-                        files = files.takeIf { isLocal },
-                        shell = isLocal,
+                        files = files.takeIf { parts.files },
+                        shell = parts.shell,
                         onCycleModel = ::cycleModel,
                         onCycleThinking = ::cycleThinking,
                         onOpenImage = { index ->
@@ -1027,7 +1141,8 @@ private fun SessionContent(
                         attachAllowed = modelReadsImages != false,
                         onAttach = { sheet = Sheet.Attach },
                         onRemoveImage = { id -> images.removeAll { it.id == id } },
-                        voice = { VoiceButton(draft, onDraft = { draft = it }, enabled = enabled, onMessage = { m -> scope.launch { snackbar.show(m) } }) },
+                        voice = voice,
+                        changes = if (isLocal) ({ SessionChangesPill(review) }) else null,
                         focusRequester = focus,
                         // A user `!` command started while Pi is idle stops through abort_bash; the agent through abort.
                         stoppable = running || shellRuns > 0,
@@ -1047,6 +1162,11 @@ private fun SessionContent(
                             }
                         },
                         onPasteImage = ::pasteImage,
+                        modifier = Modifier.graphicsLayer {
+                            val p = composerIn.value
+                            alpha = p
+                            translationY = (1f - p) * 8.dp.toPx()
+                        },
                     )
                 }
             }
@@ -1094,7 +1214,21 @@ private fun SessionContent(
     }
 
     // Pi's dialogs: one at a time. Swiping away hides the sheet; only an explicit answer or Cancel responds.
-    firstDialog?.let { dialog ->
+    // ask_user_question's dialogs are one question card instead (ui/session/ask): its answers go out on Submit.
+    val askOwner = firstDialog?.let { dialog -> remember(dialog.id) { AskQuestions.owner(state.value, dialog) } }
+    if (askOwner != null && firstDialog != null) {
+        val (call, questions) = askOwner
+        if (!controller.askSubmitting(call.toolCallId)) {
+            key(call.toolCallId) {
+                QuestionSheet(
+                    toolCallId = call.toolCallId,
+                    questions = questions,
+                    first = AskQuestions.stepOf(firstDialog!!, questions)?.question ?: 0,
+                    onSubmit = { controller.submitAsk(it) },
+                )
+            }
+        }
+    } else firstDialog?.let { dialog ->
         val shownAt = remember(dialog.id) { memory.dialogShownAt.getOrPut(dialog.id) { SystemClock.uptimeMillis() } }
         if (memory.hiddenDialog.value != dialog.id) {
             key(dialog.id) {
@@ -1111,6 +1245,9 @@ private fun SessionContent(
         }
     }
 
+    VoiceRationale(voice)
+
+    if (remoteSessions) RemoteSessionsSheet(controller, onDismiss = { remoteSessions = false })
     when (sheet) {
         Sheet.None -> Unit
         Sheet.Attach -> {
@@ -1120,7 +1257,7 @@ private fun SessionContent(
                 actions = listOfNotNull(
                     SheetAction(if (modelReadsImages == false) "Photos (not available for this model)" else "Photos", Icons.Rounded.Image) { attach() },
                     SheetAction("Paste image", Icons.Rounded.ContentPaste) { pasteImage() }.takeIf { clip },
-                    SheetAction("Mention a file", Icons.Rounded.AlternateEmail) { fill(if (draft.isEmpty() || draft.endsWith(" ")) draft + "@" else "$draft @") }.takeIf { isLocal },
+                    SheetAction("Mention a file", Icons.Rounded.AlternateEmail) { fill(if (draft.isEmpty() || draft.endsWith(" ")) draft + "@" else "$draft @") }.takeIf { parts.files },
                     SheetAction("Commands", Icons.Rounded.Code) { fill("/") }.takeIf { palette.isNotEmpty() && draft.isEmpty() },
                     SheetAction("Prompt history", Icons.Rounded.History) { sheet = Sheet.History },
                 ),
@@ -1155,17 +1292,22 @@ private fun SessionContent(
                 current,
                 onPick = {
                     controller.setModel(it)
+                    local?.onModelPicked?.invoke(it)
                     sheet = Sheet.None
                 },
                 onDismiss = { sheet = Sheet.None },
                 initialQuery = modelQuery,
-                thinking = ThinkingPick(levels, thinkingLevel, onPick = { controller.setThinkingLevel(it) }).takeIf { reasons },
+                thinking = ThinkingPick(levels, thinkingLevel, onPick = {
+                    controller.setThinkingLevel(it)
+                    local?.onThinkingPicked?.invoke(it)
+                }).takeIf { reasons },
             )
         }
         Sheet.Thinking -> {
             val levels by controller.thinkingLevels.collectAsStateWithLifecycle()
             ThinkingSheet(levels, thinkingLevel, onPick = {
                 controller.setThinkingLevel(it)
+                local?.onThinkingPicked?.invoke(it)
                 sheet = Sheet.None
             }, onDismiss = { sheet = Sheet.None })
         }
@@ -1177,7 +1319,7 @@ private fun SessionContent(
                         model = s.model,
                         thinkingLevel = s.thinkingLevel,
                         sessionName = s.sessionName,
-                        cwd = s.host?.cwd,
+                        cwd = s.host?.cwd?.takeIf { parts.folder },
                         version = s.host?.version,
                         compacting = s.isCompacting,
                         connected = linkState.value is LinkState.Connected,
@@ -1200,7 +1342,7 @@ private fun SessionContent(
             )
         }
         Sheet.Export -> ActionsSheet(
-            title = "Export or share this session",
+            title = "Export or share this $noun",
             actions = listOfNotNull(
                 SheetAction("Share as Markdown", Icons.Rounded.Share) { exportMarkdown(share = true) },
                 SheetAction("Copy as Markdown", Icons.Rounded.ContentCopy) { exportMarkdown(share = false) },
@@ -1221,16 +1363,16 @@ private fun SessionContent(
                     .onSuccess {
                         forkedDraft(from, it.ifEmpty { point.text })
                         haptics.confirm()
-                        snackbar.show("Forked into a new session. Edit the message and send.", SnackKind.Success)
+                        snackbar.show("Forked into a new $noun. Edit the message and send.", SnackKind.Success)
                     }
                     .onFailure { snackbar.show(it.message ?: "Fork failed", SnackKind.Error) }
             }
         }, onDismiss = { sheet = Sheet.None })
         Sheet.Rename -> TextPromptSheet(
-            title = "Rename session",
+            title = if (chat) "Rename chat" else "Rename session",
             message = null,
             initial = remember { state.value.sessionName.orEmpty() },
-            placeholder = "Session name",
+            placeholder = if (chat) "Chat name" else "Session name",
             confirm = "Rename",
             onConfirm = {
                 controller.rename(it.trim())
@@ -1240,7 +1382,7 @@ private fun SessionContent(
         )
         Sheet.Compact -> TextPromptSheet(
             title = "Compact context",
-            message = "Pi summarises the conversation so far to free context.",
+            message = "Summarises the conversation to free context.",
             initial = "",
             placeholder = "Optional: what to focus the summary on",
             confirm = "Compact",
@@ -1250,9 +1392,19 @@ private fun SessionContent(
             },
             onDismiss = { sheet = Sheet.None },
         )
+        Sheet.DeleteChat -> ConfirmSheet(
+            title = "Delete this chat?",
+            message = "This can't be undone.",
+            confirmLabel = "Delete",
+            onConfirm = {
+                sheet = Sheet.None
+                local?.onDelete?.invoke()
+            },
+            onDismiss = { sheet = Sheet.None },
+        )
         Sheet.Forget -> ConfirmSheet(
             title = "Forget $hostName?",
-            message = "This phone stops connecting to it. To also revoke this phone on the computer, run /\u2060remote-control devices there.",
+            message = "To revoke this phone on the computer too, run /\u2060remote-control devices there.",
             confirmLabel = "Forget",
             onConfirm = {
                 sheet = Sheet.None
@@ -1328,6 +1480,9 @@ private fun SessionContent(
         }
     }
 }
+
+/** How long Regenerate waits for the fork's session before it sends anyway. */
+private const val FORK_SWITCH_MS = 5_000L
 
 /** The status line while compacting: why it runs, as the terminal says it. */
 fun compactionLabel(reason: String?): String = when (reason) {

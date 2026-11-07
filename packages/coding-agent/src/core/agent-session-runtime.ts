@@ -424,6 +424,8 @@ export async function createAgentSessionRuntime(
 		agentDir: string;
 		sessionManager: SessionManager;
 		sessionStartEvent?: SessionStartEvent;
+		/** How the factory asks about trusting the project, for a host without the terminal's prompts. */
+		projectTrustContext?: ProjectTrustContext;
 	},
 ): Promise<AgentSessionRuntime> {
 	assertSessionCwdExists(options.sessionManager, options.cwd);

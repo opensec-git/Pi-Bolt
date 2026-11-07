@@ -250,7 +250,7 @@ class EngineFilesTest {
         assertEquals(1, list[0].messageCount)
         assertEquals("Build fix", list[1].name)
         assertEquals("Fix the build", list[1].preview)
-        assertEquals(3, list[1].messageCount)
+        assertEquals(2, list[1].messageCount, "the saved system prompt is not a message")
         assertEquals(1_000_000, list[1].updatedAt)
         assertEquals(newer.path, index.newest(project))
     }
@@ -362,6 +362,47 @@ class EngineFilesTest {
         settings.writeText("{ not json")
         assertFalse(BundledExtensions.register(p.agentDir, listOf(todo.path), p.extensionsDir.path))
         assertEquals("{ not json", settings.readText())
+    }
+
+    @Test
+    fun prefixSetupUnpacksAnExtensionsNodeModules() {
+        val p = paths()
+        // A third-party extension with runtime dependencies (android/engine/npm): a scoped package ships as "scope-pkg".
+        val m = EngineManifest.parse(
+            manifestJson.replace(
+                "\"env\":",
+                """"extensions": [ { "name": "juicesharp-rpiv-ask-user-question", "package": "@juicesharp/rpiv-ask-user-question",
+                     "version": "2.15.0", "files": [ "package.json", "index.ts" ],
+                     "modules": { "asset": "engine/modules/juicesharp-rpiv-ask-user-question.zip", "sha256": "x", "files": 2, "bytes": 9 } },
+                   { "name": "opensec-pi-todo", "version": "2.13.1", "files": [ "package.json" ] } ], "env":""",
+            ),
+        )
+        assertEquals(
+            EngineManifest.Extension(
+                "juicesharp-rpiv-ask-user-question", "2.15.0", listOf("package.json", "index.ts"),
+                "engine/modules/juicesharp-rpiv-ask-user-question.zip", "@juicesharp/rpiv-ask-user-question",
+            ),
+            m.extensions[0],
+        )
+        assertEquals(EngineManifest.Extension("opensec-pi-todo", "2.13.1", listOf("package.json")), m.extensions[1])
+        assertFailsWith<IllegalArgumentException> { EngineManifest.parse(manifestJson.replace("\"env\":", """"extensions": [ { "name": "@a/b", "version": "1", "files": [] } ], "env":""")) }
+        val assets = BytesAssets(
+            mapOf(
+                "engine/files/ca-certificates.crt" to "CERTS".toByteArray(),
+                "engine/extensions/juicesharp-rpiv-ask-user-question/package.json" to "{}".toByteArray(),
+                "engine/extensions/juicesharp-rpiv-ask-user-question/index.ts" to "export default 1".toByteArray(),
+                "engine/extensions/opensec-pi-todo/package.json" to "{}".toByteArray(),
+                "engine/modules/juicesharp-rpiv-ask-user-question.zip" to zip("@juicesharp/rpiv-config/index.ts" to "x", "@juicesharp/rpiv-config/_internal/a.js" to "y"),
+            ),
+        )
+        assertTrue(EnginePrefix(p, assets).ensure(m))
+        val ask = File(p.extensionsDir, "juicesharp-rpiv-ask-user-question")
+        assertEquals("export default 1", File(ask, "index.ts").readText())
+        assertEquals("x", File(ask, "node_modules/@juicesharp/rpiv-config/index.ts").readText())
+        assertTrue(File(ask, "node_modules/@juicesharp/rpiv-config/_internal/a.js").isFile)
+        assertFalse(File(p.extensionsDir, "opensec-pi-todo/node_modules").exists())
+        val registered = File(p.agentDir, "settings.json").readText()
+        assertTrue(ask.path in registered && File(p.extensionsDir, "opensec-pi-todo").path in registered, registered)
     }
 
     private class BytesAssets(private val files: Map<String, ByteArray>) : AssetSource {

@@ -155,7 +155,7 @@ fun TerminalPane(
                     WorkspaceMenu(sizeMenu, { sizeMenu = false }) {
                         WorkspaceMenuRow("Larger text", Icons.Rounded.TextIncrease, if (fontSp < MAX_FONT_SP) colors.ink1 else colors.ink3) { setFont(fontSp + 1) }
                         WorkspaceMenuRow("Smaller text", Icons.Rounded.TextDecrease, if (fontSp > MIN_FONT_SP) colors.ink1 else colors.ink3) { setFont(fontSp - 1) }
-                        Text("$fontSp sp · pinch the terminal too", style = type.meta, color = colors.ink3, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                        Text("$fontSp sp · or pinch", style = type.meta, color = colors.ink3, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                     }
                 }
             }
@@ -170,11 +170,7 @@ fun TerminalPane(
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (tab == null) {
                 Column(Modifier.fillMaxSize().padding(top = Space.xs)) {
-                    EmptyCard(
-                        Icons.Rounded.Terminal,
-                        "A shell in this project",
-                        "bash with git, curl, rg and the project's secrets as variables. It keeps running when you leave the app.",
-                    ) {
+                    EmptyCard(Icons.Rounded.Terminal, "A shell in this project", "bash with git, curl and rg") {
                         PrimaryButton(if (starting) "Starting…" else "Start a terminal", onClick = ::start, enabled = !starting, modifier = Modifier.fillMaxWidth())
                         error?.let { Text(it, style = type.meta, color = colors.danger, modifier = Modifier.padding(top = 8.dp)) }
                     }

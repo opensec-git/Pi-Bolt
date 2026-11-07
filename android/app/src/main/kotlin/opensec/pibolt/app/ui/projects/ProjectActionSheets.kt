@@ -20,7 +20,7 @@ fun ProjectActionSheets(action: ProjectAction?, projects: Projects, store: Proje
         null -> Unit
         is ProjectAction.Rename -> TextPromptSheet(
             title = "Rename project",
-            message = "Changes the name shown in Pi-Bolt. The folder stays projects/${action.entry.name}.",
+            message = "The folder stays projects/${action.entry.name}.",
             initial = action.entry.title,
             placeholder = action.entry.name,
             confirm = "Rename",
@@ -39,7 +39,7 @@ fun ProjectActionSheets(action: ProjectAction?, projects: Projects, store: Proje
             }.joinToString(" and ")
             ConfirmSheet(
                 title = "Delete ${entry.title}?",
-                message = "This deletes the folder projects/${entry.name} with $what from this phone. It can't be undone; pushed git commits stay on their remote.",
+                message = "Deletes projects/${entry.name} with $what from this phone. This can't be undone. Pushed commits stay on the remote.",
                 confirmLabel = "Delete",
                 onConfirm = {
                     onDone()
