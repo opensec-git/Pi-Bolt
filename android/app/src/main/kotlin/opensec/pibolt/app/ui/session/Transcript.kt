@@ -70,6 +70,7 @@ import opensec.pibolt.app.ui.session.features.SearchJump
 import opensec.pibolt.app.ui.session.features.TranscriptSearch
 import kotlinx.coroutines.launch
 import opensec.pibolt.app.ui.components.QuadMode
+import opensec.pibolt.app.ui.components.glass
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.markdown.MdBlock
 import opensec.pibolt.app.ui.session.review.TurnReviewEntry
@@ -78,6 +79,7 @@ import opensec.pibolt.app.ui.session.subagent.SubagentNoticeRowView
 import opensec.pibolt.app.ui.session.subagent.SubagentStack
 import opensec.pibolt.app.ui.theme.LocalPiType
 import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.PiType
 import opensec.pibolt.protocol.session.NoticeItem
@@ -260,7 +262,7 @@ fun Transcript(
         BoxWithConstraints(modifier.fillMaxSize()) {
             // Past 840dp (landscape phones, tablets, foldables) the text keeps a 720dp reading width, centred; the
             // list itself stays full width so it scrolls from anywhere.
-            val gutter = if (maxWidth > 840.dp) ((maxWidth - 720.dp) / 2).coerceAtLeast(16.dp) else 16.dp
+            val gutter = if (maxWidth > 840.dp) ((maxWidth - 720.dp) / 2).coerceAtLeast(Space.page) else Space.page
             LazyColumn(
                 state = list,
                 reverseLayout = true,
@@ -405,7 +407,7 @@ private fun markLastTurnLive(rows: List<TRow>): List<TRow> {
 }
 
 /**
- * Back to the latest, centred above the composer: a 36dp round button (surface3, 1dp lineStrong, arrow 18dp ink1) in a
+ * Back to the latest, centred above the composer: a 36dp round glass button (the kit's glass, arrow 18dp ink1) in a
  * 4dp ring of canvas, so text passing under it is cut cleanly (as on the desktop). When content arrived while the
  * reader was away it widens into a pill that says so, "New messages" (assistant-ui's pattern). 48dp to touch.
  */
@@ -425,8 +427,7 @@ private fun ScrollButton(unseen: Boolean, onClick: () -> Unit) {
                 .background(colors.canvas, CircleShape)
                 .padding(4.dp)
                 .height(36.dp)
-                .background(colors.surface3, CircleShape)
-                .border(1.dp, colors.lineStrong, CircleShape)
+                .glass(CircleShape, colors)
                 .padding(horizontal = if (unseen) 14.dp else 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -488,12 +489,14 @@ private fun LazyItemScope.RowView(
             modifier = base.padding(top = 4.dp, bottom = 6.dp).riseIn(row.key, row.live, memory, 10.dp),
             thumbs = memory.localImages[row.key],
             onImage = { onImage(row.key, it) },
+            dictated = memory.dictated[row.key] == true,
         )
         is PendingUserRow -> PendingBubble(
             row.pending.text,
             modifier = base.padding(top = 4.dp, bottom = 6.dp).riseIn(row.key, row.live, memory, 10.dp),
             thumbs = memory.localImages[row.key],
             imageCount = row.pending.images,
+            dictated = memory.dictated[row.key] == true,
         )
         is TextRow -> {
             TextRowView(
@@ -573,8 +576,10 @@ private fun LazyItemScope.RowView(
                 },
                 onOpenFile = { onOpen(ViewerContent("Diff", it.path, it.diff, diff = true)) },
             )
-            TurnReviewEntry(row.turnKey, editedFiles = row.files.isNotEmpty())
+            // Per-turn review lives in the opened fold; the changes pill over the composer covers the session.
+            if (row.expanded) TurnReviewEntry(row.turnKey, editedFiles = row.files.isNotEmpty())
         }
+        is TurnMetaRow -> TurnMetaRowView(row, modifier = base)
         is ActionsRow -> ReplyActions(row, memory, onAskAgain = onAskAgain, onMore = { onActions(row) }, modifier = base)
         is SubagentRow -> SubagentCard(row, modifier = base.padding(top = Pi.dims.stepGap + 2.dp, bottom = 2.dp).riseIn(row.key, row.live, memory, 6.dp))
         is SubagentStackRow -> SubagentStack(

@@ -113,7 +113,7 @@ fun SubagentCard(row: SubagentRow, modifier: Modifier = Modifier) {
 @Composable
 internal fun AgentCard(run: Subagent, hue: Color, live: Boolean, onOpen: (() -> Unit)?, modifier: Modifier = Modifier) {
     val colors = Pi.colors
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(Radius.tile)
     val active = run.isActive
     val border by animateColorAsState(if (active) colors.lineStrong else colors.line, PiMotion.effects(), label = "cardLine")
     AgentLines(
@@ -126,12 +126,12 @@ internal fun AgentCard(run: Subagent, hue: Color, live: Boolean, onOpen: (() -> 
             .background(colors.surface1)
             .border(1.dp, border, shape)
             .then(if (active) Modifier.sweep(hue) else Modifier)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp, vertical = 14.dp),
     )
 }
 
 /**
- * One agent in two lines: glyph, name (label ink1) over "type · tool" (meta ink3; a failure in danger), run time at the
+ * One agent in two lines: glyph, name (rowMeta ink1) over "type · tool" (meta ink3; a failure in danger), run time at the
  * end. TalkBack reads it as one node.
  */
 @Composable
@@ -142,7 +142,7 @@ private fun AgentLines(run: Subagent, hue: Color, live: Boolean, modifier: Modif
         AgentGlyph(SubagentFormat.stateOf(run), hue, live, AgentGlyphSize.Card)
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(SubagentFormat.title(run), style = type.label, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(SubagentFormat.title(run), style = type.rowMeta, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
             ActivityText(
                 text = SubagentFormat.cardMeta(run),
                 color = if (run.status == SubagentStatus.Failed) colors.danger else colors.ink3,
@@ -289,7 +289,7 @@ fun SubagentStack(row: SubagentStackRow, onToggle: () -> Unit, modifier: Modifie
     val colors = Pi.colors
     val runs = row.runs
     val active = runs.any { it.isActive }
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(Radius.tile)
     val border by animateColorAsState(if (active) colors.lineStrong else colors.line, PiMotion.effects(), label = "stackLine")
     fun hue(i: Int) = agentHue(row.slots.getOrElse(i) { i }, colors)
     Column(modifier.fillMaxWidth().animateContentSize(PiMotion.settle())) {
@@ -316,7 +316,7 @@ fun SubagentStack(row: SubagentStackRow, onToggle: () -> Unit, modifier: Modifie
                                 // Each line opens its agent, so it is at least a 56dp target.
                                 .heightIn(min = 56.dp)
                                 .then(if (open != null) Modifier.pressable(open, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "Open agent") else Modifier)
-                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
                         )
                     }
                 }
@@ -340,9 +340,9 @@ private fun StackHeader(runs: List<Subagent>, live: Boolean, expanded: Boolean, 
         Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .pressable(onToggle, shape = RoundedCornerShape(Radius.md), pressedScale = 1f, label = if (expanded) "Show as a list" else "Show each agent")
+            .pressable(onToggle, shape = RoundedCornerShape(Radius.tile), pressedScale = 1f, label = if (expanded) "Show as a list" else "Show each agent")
             .semantics(mergeDescendants = true) { contentDescription = title }
-            .padding(start = 14.dp, end = 10.dp),
+            .padding(start = 16.dp, end = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // In a Card-size slot so its centre lines up with the agents' glyphs below.
@@ -350,7 +350,7 @@ private fun StackHeader(runs: List<Subagent>, live: Boolean, expanded: Boolean, 
             AgentGlyph(SubagentFormat.stackState(runs), colors.ink2, live, AgentGlyphSize.Row, spin = false)
         }
         Spacer(Modifier.width(12.dp))
-        Text(title, style = type.label, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(title, style = type.rowMeta, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         // The longest of the runs: the one that started first.
         runs.firstOrNull { it.isActive }?.let { RunTime(it) } ?: runs.maxByOrNull { it.durationMs ?: 0 }?.let { RunTime(it) }
         Spacer(Modifier.width(6.dp))

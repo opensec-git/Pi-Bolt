@@ -12,17 +12,19 @@ import kotlin.test.assertTrue
 
 class ComposerLayoutTest {
     @Test
-    fun sendStopAndMicShareOneDiscInsetEquallyFromTheEndAndBottom() {
-        // The disc is centred in the 48dp target; the row sits EDGE inside the card.
-        val inTarget = (ComposerLayout.TARGET - ComposerLayout.DISC) / 2
-        assertEquals(8.dp, inTarget)
-        assertEquals(10.dp, ComposerLayout.EDGE + inTarget, "10dp from the end and the bottom, as the desktop bar")
+    fun pillCirclesShareOneSizeInsetEquallyFromTheEdges() {
+        // The kit's 36dp circle is centred in the 48dp target; the pill pads its row EDGE (Space.xs) inside.
+        assertEquals(36.dp, ComposerLayout.CIRCLE)
+        val inTarget = (ComposerLayout.TARGET - ComposerLayout.CIRCLE) / 2
+        assertEquals(6.dp, inTarget)
+        assertEquals(10.dp, ComposerLayout.EDGE + inTarget, "10dp from the pill's edge, as the desktop bar")
         assertTrue(ComposerLayout.TARGET >= 48.dp)
     }
 
     @Test
     fun oneRowFieldCentresItsLineOnTheButtons() {
-        // The landscape row: 15sp on a 22sp line gets 13dp above and below, so one line is 48dp, the buttons' target.
+        // The pill's rowTitle (17sp on a 24sp line) gets 12dp above and below, so one line is 48dp, the buttons' target.
+        assertEquals(12.dp, ComposerLayout.fieldPad(24.dp))
         assertEquals(13.dp, ComposerLayout.fieldPad(22.dp))
         // Font scale 1.3: the line is 28.6dp and the padding shrinks so the centre stays on the target's.
         val line = 28.6.dp

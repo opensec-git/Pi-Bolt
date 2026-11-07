@@ -32,18 +32,19 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import opensec.pibolt.app.ui.components.glass
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
 
 /**
- * The suggestion panel above the composer: surface2, radius md, 1dp line, at most [maxHeight] tall, scrolls. The row
+ * The suggestion panel above the composer pill: glass (as the pill), radius tile, at most [maxHeight] tall, scrolls. The row
  * at [highlighted] (chosen with Up / Down on a hardware keyboard) is kept in view.
  */
 @Composable
 private fun SuggestionPanel(maxHeight: Dp, highlighted: Int, modifier: Modifier = Modifier, content: LazyListScope.() -> Unit) {
     val colors = Pi.colors
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(Radius.tile)
     val state = rememberLazyListState()
     LaunchedEffect(highlighted) {
         if (highlighted < 0) return@LaunchedEffect
@@ -61,8 +62,8 @@ private fun SuggestionPanel(maxHeight: Dp, highlighted: Int, modifier: Modifier 
             .fillMaxWidth()
             .heightIn(max = maxHeight)
             .clip(shape)
-            .background(colors.surface2, shape)
-            .border(1.dp, colors.line, shape),
+            .glass(shape, colors)
+            .padding(vertical = 4.dp),
         state = state,
         content = content,
     )
@@ -88,19 +89,19 @@ fun CommandList(entries: List<PaletteEntry>, onPick: (PaletteEntry) -> Unit, mod
                     .heightIn(min = 48.dp)
                     .highlight(index == highlighted)
                     .pressable({ onPick(entry) }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "${entry.label}, ${entry.source.label}")
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(entry.label, style = type.monoSmall, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 200.dp))
+                        Text(entry.label, style = type.mono, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 200.dp))
                         entry.hint?.let {
                             Spacer(Modifier.width(6.dp))
                             Text(it, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     if (entry.description.isNotBlank()) {
-                        Text(entry.description, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(entry.description, style = type.rowMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 }
                 Spacer(Modifier.width(8.dp))
@@ -148,14 +149,14 @@ fun MentionList(paths: List<String>?, query: String, onPick: (String) -> Unit, m
                     .highlight(index == highlighted)
                     .pressable({ onPick(path) }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f)
                     .semantics { contentDescription = if (dir) "Folder $path" else "File $path" }
-                    .padding(horizontal = 14.dp),
+                    .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
                     Icon(if (dir) Icons.Rounded.Folder else Icons.AutoMirrored.Rounded.InsertDriveFile, contentDescription = null, tint = if (dir) colors.ink2 else colors.ink3, modifier = Modifier.size(16.dp))
                 }
                 Spacer(Modifier.width(10.dp))
-                Text(name + if (dir) "/" else "", style = type.monoSmall, color = colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.widthIn(max = 180.dp))
+                Text(name + if (dir) "/" else "", style = type.mono, color = colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.widthIn(max = 180.dp))
                 if (parent.isNotEmpty()) {
                     Spacer(Modifier.width(8.dp))
                     Text(parent, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.StartEllipsis, modifier = Modifier.weight(1f))
@@ -174,6 +175,6 @@ fun ComposerHint(text: String, mono: Boolean, modifier: Modifier = Modifier) {
         color = Pi.colors.ink3,
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
-        modifier = modifier.fillMaxWidth().padding(start = 6.dp, end = 6.dp, bottom = 6.dp),
+        modifier = modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 6.dp),
     )
 }

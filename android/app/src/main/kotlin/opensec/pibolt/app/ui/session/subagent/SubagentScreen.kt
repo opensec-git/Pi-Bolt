@@ -100,6 +100,8 @@ import opensec.pibolt.app.ui.session.SessionMemory
 import opensec.pibolt.app.ui.session.TRow
 import opensec.pibolt.app.ui.session.TextRow
 import opensec.pibolt.app.ui.session.TextRowView
+import opensec.pibolt.app.ui.session.TurnMetaRow
+import opensec.pibolt.app.ui.session.TurnMetaRowView
 import opensec.pibolt.app.ui.session.ThinkingRow
 import opensec.pibolt.app.ui.session.ThinkingRowView
 import opensec.pibolt.app.ui.session.ToolGroupRow
@@ -536,6 +538,7 @@ private fun LazyItemScope.DetailRow(
             onOpenFile = { onOpen(ViewerContent("Diff", it.path, it.diff, diff = true)) },
             modifier = base,
         )
+        is TurnMetaRow -> TurnMetaRowView(row, modifier = base)
         else -> Unit
     }
 }

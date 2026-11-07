@@ -38,6 +38,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Compress
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Info
@@ -56,6 +57,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.onLongClick
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -82,6 +85,7 @@ import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.ShimmerText
 import opensec.pibolt.app.ui.components.TextAction
+import opensec.pibolt.app.ui.components.WorkingLine
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.markdown.MdBlock
 import opensec.pibolt.app.ui.markdown.MdBlockView
@@ -89,6 +93,7 @@ import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.theme.Tnum
 import opensec.pibolt.protocol.session.NoticeItem
 import opensec.pibolt.protocol.session.NoticeKind
@@ -133,52 +138,71 @@ fun Modifier.longPress(label: String, onLongPress: () -> Unit): Modifier {
 // User
 
 /**
- * A user message: a right-aligned bubble (surface2, 1dp line, at most 80% wide). Images sent from this phone show as 56dp thumbnails above the text;
- * images without a local copy (sent from elsewhere, or before this session) read as a compact "2 images" chip.
+ * A user message: a right-aligned soft bubble (the redesign's: radius bubble 22 on every corner, surface2 and a subtle
+ * 1dp line, at most 80% wide). Images sent from this phone show as 56dp thumbnails above the text; images without a
+ * local copy (sent from elsewhere, or before this session) read as a compact "2 images" chip. A message dictated on this
+ * phone ([dictated]) carries a small waveform badge on its top-start corner.
  */
 @Composable
-fun UserBubble(item: UserItem, onLongPress: () -> Unit, modifier: Modifier = Modifier, thumbs: List<ImageBitmap>? = null, onImage: ((Int) -> Unit)? = null) {
+fun UserBubble(item: UserItem, onLongPress: () -> Unit, modifier: Modifier = Modifier, thumbs: List<ImageBitmap>? = null, onImage: ((Int) -> Unit)? = null, dictated: Boolean = false) {
     val colors = Pi.colors
-    // As on the desktop: a subtle bubble, surface2 with a 1dp line, the corner under the sender tucked to xs.
-    val shape = RoundedCornerShape(topStart = Radius.lg, topEnd = Radius.lg, bottomStart = Radius.lg, bottomEnd = Radius.xs)
+    val shape = RoundedCornerShape(Radius.bubble)
     BoxWithConstraints(modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
-        Column(
-            Modifier
-                .widthIn(max = maxWidth * 0.8f)
-                .longPress("Message actions", onLongPress)
-                .background(colors.surface2, shape)
-                .border(1.dp, colors.line, shape)
-                .padding(horizontal = if (thumbs.isNullOrEmpty()) 14.dp else 10.dp, vertical = 10.dp),
-            horizontalAlignment = Alignment.End,
-        ) {
-            if (!thumbs.isNullOrEmpty()) {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    thumbs.forEachIndexed { i, thumb ->
-                        val open = onImage?.let { Modifier.pressable({ it(i) }, shape = RoundedCornerShape(Radius.sm), label = "Open image ${i + 1}") } ?: Modifier
-                        ImageThumb(thumb, Modifier.size(56.dp).then(open))
+        Box(Modifier.widthIn(max = maxWidth * 0.8f)) {
+            Column(
+                Modifier
+                    .longPress("Message actions", onLongPress)
+                    .background(colors.surface2, shape)
+                    .border(1.dp, colors.line, shape)
+                    .padding(horizontal = if (thumbs.isNullOrEmpty()) Space.lg else Space.md, vertical = Space.md),
+                horizontalAlignment = Alignment.End,
+            ) {
+                if (!thumbs.isNullOrEmpty()) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        thumbs.forEachIndexed { i, thumb ->
+                            val open = onImage?.let { Modifier.pressable({ it(i) }, shape = RoundedCornerShape(Radius.md), label = "Open image ${i + 1}") } ?: Modifier
+                            ImageThumb(thumb, Modifier.size(56.dp).then(open))
+                        }
                     }
+                    if (item.text.isNotBlank()) Spacer(Modifier.height(Space.sm))
+                } else if (item.imageCount > 0) {
+                    ImagesChip(item.imageCount)
+                    if (item.text.isNotBlank()) Spacer(Modifier.height(Space.sm))
                 }
-                if (item.text.isNotBlank()) Spacer(Modifier.height(8.dp))
-            } else if (item.imageCount > 0) {
-                ImagesChip(item.imageCount)
-                if (item.text.isNotBlank()) Spacer(Modifier.height(8.dp))
+                if (item.text.isNotBlank()) {
+                    Text(
+                        item.text,
+                        style = Pi.type.prose,
+                        color = colors.ink1,
+                        modifier = Modifier.padding(horizontal = if (thumbs.isNullOrEmpty()) 0.dp else Space.xs).align(Alignment.Start),
+                    )
+                }
             }
-            if (item.text.isNotBlank()) {
-                Text(
-                    item.text,
-                    style = Pi.type.prose,
-                    color = colors.ink1,
-                    modifier = Modifier.padding(horizontal = if (thumbs.isNullOrEmpty()) 0.dp else 4.dp).align(Alignment.Start),
-                )
-            }
+            if (dictated) DictatedBadge(Modifier.align(Alignment.TopStart).offset(x = (-6).dp, y = (-6).dp))
         }
     }
 }
 
-/** A rounded image thumbnail (radius 8, 1dp line), cropped to fill. */
+/** The waveform badge of a dictated message: a 22dp surface3 circle with a 1dp lineStrong ring and a 12dp ink2 glyph. */
+@Composable
+private fun DictatedBadge(modifier: Modifier = Modifier) {
+    val colors = Pi.colors
+    Box(
+        modifier
+            .size(22.dp)
+            .background(colors.surface3, CircleShape)
+            .border(1.dp, colors.lineStrong, CircleShape)
+            .semantics { contentDescription = "Dictated" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(Icons.Rounded.GraphicEq, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(12.dp))
+    }
+}
+
+/** A rounded image thumbnail (radius md, 1dp line), cropped to fill. */
 @Composable
 fun ImageThumb(thumb: ImageBitmap, modifier: Modifier = Modifier) {
-    val shape = RoundedCornerShape(Radius.sm)
+    val shape = RoundedCornerShape(Radius.md)
     Image(
         thumb,
         contentDescription = "Image",
@@ -205,9 +229,9 @@ private fun ImagesChip(count: Int) {
 
 /** A prompt on its way to the host: the bubble at 60% with "Sending" under it, until the host echoes it. */
 @Composable
-fun PendingBubble(text: String, modifier: Modifier = Modifier, thumbs: List<ImageBitmap>? = null, imageCount: Int = 0) {
+fun PendingBubble(text: String, modifier: Modifier = Modifier, thumbs: List<ImageBitmap>? = null, imageCount: Int = 0, dictated: Boolean = false) {
     Column(modifier.fillMaxWidth(), horizontalAlignment = Alignment.End) {
-        UserBubble(UserItem("pending", text, imageCount), onLongPress = {}, modifier = Modifier.graphicsLayer { alpha = 0.6f }, thumbs = thumbs)
+        UserBubble(UserItem("pending", text, imageCount), onLongPress = {}, modifier = Modifier.graphicsLayer { alpha = 0.6f }, thumbs = thumbs, dictated = dictated)
         Text("Sending", style = Pi.type.meta, color = Pi.colors.ink3, modifier = Modifier.padding(top = 4.dp, end = 4.dp))
     }
 }
@@ -218,6 +242,7 @@ fun PendingBubble(text: String, modifier: Modifier = Modifier, thumbs: List<Imag
 @Composable
 fun TextRowView(row: TextRow, previous: MdBlock?, onOpenCode: (String, String) -> Unit, onLongPress: () -> Unit, modifier: Modifier = Modifier) {
     val gap = when {
+        row.title -> 2.dp
         row.first -> 4.dp
         row.block is MdBlock.Heading -> 20.dp
         row.block is MdBlock.ListItem && previous is MdBlock.ListItem -> 4.dp
@@ -228,6 +253,8 @@ fun TextRowView(row: TextRow, previous: MdBlock?, onOpenCode: (String, String) -
         row.block,
         streaming = row.tail,
         onOpenCode = onOpenCode,
+        proseInk = Pi.colors.ink2,
+        title = row.title,
         modifier = modifier
             .padding(top = gap)
             // Prose between the steps of an opened fold lines up with the step text, right of the rail.
@@ -385,38 +412,71 @@ fun StepHeader(
 // Fold
 
 /**
- * The fold of a finished turn: "Edited 3 files · ran 2 commands · 1m 12s" ([FoldRow.summary] and the measured time),
- * tap to open the steps. A step that failed adds "· 1 step failed" in ink3 after a 6dp danger dot; "· failed" in danger
- * only when the turn itself ended in an error or abort.
+ * The start of a finished turn's reply: "Finished 1m 12s" (rowMeta ink3; the time only when this phone watched the
+ * turn), "Stopped" after an abort and "Failed" after an error, each after a 6dp dot (ink3 / danger).
+ */
+@Composable
+fun TurnMetaRowView(row: TurnMetaRow, modifier: Modifier = Modifier) {
+    val colors = Pi.colors
+    val text = buildString {
+        append(
+            when (row.end) {
+                TurnEnd.Finished -> "Finished"
+                TurnEnd.Failed -> "Failed"
+                TurnEnd.Stopped -> "Stopped"
+            },
+        )
+        row.durationMs?.let { append(' ').append(formatWorked(it)) }
+    }
+    Row(modifier.fillMaxWidth().padding(top = Space.sm, bottom = Space.xxs), verticalAlignment = Alignment.CenterVertically) {
+        if (row.end != TurnEnd.Finished) {
+            Box(Modifier.size(6.dp).background(if (row.end == TurnEnd.Failed) colors.danger else colors.ink3, CircleShape))
+            Spacer(Modifier.width(6.dp))
+        }
+        Text(text, style = Pi.type.rowMeta.copy(fontFeatureSettings = Tnum), color = colors.ink3, maxLines = 1)
+    }
+}
+
+/**
+ * The folded work of a finished turn, one quiet line: "Used 4 tools" (rowMeta ink3; "Thought" when it only reasoned)
+ * and a chevron; tap opens the steps, then the chips of the files it edited. A failed step adds "· 1 failed" after a 6dp
+ * danger dot. TalkBack reads the full summary ("Edited 3 files · ran 2 commands").
  */
 @Composable
 fun FoldRowView(row: FoldRow, onToggle: () -> Unit, onOpenFile: (FileChange) -> Unit, modifier: Modifier = Modifier) {
     val colors = Pi.colors
-    val text = buildString {
-        append(row.summary.ifBlank { if (row.steps == 1) "1 step" else "${row.steps} steps" })
-        if (row.durationMs != null) {
-            append(" · ")
-            append(formatWorked(row.durationMs))
-        }
+    val type = Pi.type
+    val label = when {
+        row.tools == 1 -> "Used 1 tool"
+        row.tools > 1 -> "Used ${row.tools} tools"
+        else -> row.summary.ifBlank { if (row.steps == 1) "1 step" else "${row.steps} steps" }
     }
-    Column(modifier.fillMaxWidth().padding(top = 6.dp)) {
-        StepHeader(onClick = onToggle, slot = { Chevron(row.expanded) }) {
-            Text(text, style = Pi.type.label, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-            when {
-                row.endedInFailure -> Text(" · failed", style = Pi.type.label, color = colors.danger, maxLines = 1)
-                row.failedSteps > 0 -> {
-                    Text(" · ", style = Pi.type.label, color = colors.ink3, maxLines = 1)
-                    Box(Modifier.size(6.dp).background(colors.danger, CircleShape))
-                    Text(
-                        if (row.failedSteps == 1) " 1 step failed" else " ${row.failedSteps} steps failed",
-                        style = Pi.type.label,
-                        color = colors.ink3,
-                        maxLines = 1,
-                    )
-                }
+    val spoken = buildString {
+        append(label)
+        if (row.summary.isNotBlank() && row.summary != label) append(": ").append(row.summary)
+        if (row.failedSteps > 0) append(", ").append(row.failedSteps).append(" failed")
+    }
+    Column(modifier.fillMaxWidth()) {
+        Row(
+            Modifier
+                .heightIn(min = 48.dp)
+                .pressable(onToggle, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = if (row.expanded) "Hide steps" else "Show steps")
+                .semantics(mergeDescendants = true) {
+                    contentDescription = spoken
+                    stateDescription = if (row.expanded) "Expanded" else "Collapsed"
+                },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(label, style = type.rowMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            if (row.failedSteps > 0) {
+                Text(" · ", style = type.rowMeta, color = colors.ink3, maxLines = 1)
+                Box(Modifier.size(6.dp).background(colors.danger, CircleShape))
+                Text(" ${row.failedSteps} failed", style = type.rowMeta.copy(fontFeatureSettings = Tnum), color = colors.ink3, maxLines = 1)
             }
+            Spacer(Modifier.width(Space.xs))
+            Chevron(row.expanded)
         }
-        if (row.files.isNotEmpty()) FileChips(row.files, onOpenFile, onMore = onToggle)
+        if (row.expanded && row.files.isNotEmpty()) FileChips(row.files, onOpenFile, onMore = onToggle)
     }
 }
 
@@ -431,7 +491,7 @@ private fun FileChips(files: List<FileChange>, onOpen: (FileChange) -> Unit, onM
     val shape = RoundedCornerShape(Radius.sm)
     val num = type.meta.copy(fontFeatureSettings = Tnum)
     FlowRow(
-        Modifier.fillMaxWidth().padding(start = STEP_TEXT_START, bottom = 4.dp),
+        Modifier.fillMaxWidth().padding(bottom = Space.sm),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -632,9 +692,9 @@ fun NoticeRowView(item: NoticeItem, expanded: Boolean, onToggle: () -> Unit, mod
 // Live status line
 
 /**
- * Quad + shimmer label + elapsed time, at the bottom of the transcript while the agent works. A running tool is
- * named: the verb shimmers and its command or path follows in mono ("Run  npm test"). Its 32dp height stays
- * reserved when idle so the list never jumps.
+ * The live turn's "Working" line at the bottom of the transcript, the kit's [WorkingLine] (a 14dp Quad in the mode and
+ * the shimmering label, rowMeta), then the elapsed time. A running tool is named: the verb shimmers and its command or
+ * path follows in mono ("Run  npm test"). Its 32dp height stays reserved when idle so the list never jumps.
  */
 @Composable
 fun StatusLine(visible: Boolean, mode: QuadMode, text: StatusText, startedAt: Long, modifier: Modifier = Modifier) {
@@ -649,10 +709,7 @@ fun StatusLine(visible: Boolean, mode: QuadMode, text: StatusText, startedAt: Lo
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (visible || alpha > 0f) {
-            Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
-                QuadSpinner(mode, size = 16.dp, color = if (mode == QuadMode.Wait) colors.warning else colors.ink1, animate = visible)
-            }
-            Spacer(Modifier.width(12.dp))
+            // Both sides of a crossfade draw the Quad from the window's one clock, so only the words visibly change.
             Crossfade(
                 targetState = text,
                 animationSpec = if (Pi.reduceMotion) tween(0) else PiMotion.inPlace(PiMotion.QUICK),
@@ -660,9 +717,9 @@ fun StatusLine(visible: Boolean, mode: QuadMode, text: StatusText, startedAt: Lo
                 label = "statusText",
             ) { t ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    ShimmerText(t.label, type.label, active = visible)
+                    WorkingLine(t.label, mode = mode, color = if (mode == QuadMode.Wait) colors.warning else colors.ink2)
                     if (t.detail.isNotEmpty()) {
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(Space.sm))
                         Text(
                             t.detail,
                             style = type.monoSmall,
@@ -672,11 +729,11 @@ fun StatusLine(visible: Boolean, mode: QuadMode, text: StatusText, startedAt: Lo
                             modifier = Modifier.weight(1f, fill = false),
                         )
                     }
-                    if (t.more > 0) Text("  +${t.more}", style = type.label.copy(fontFeatureSettings = Tnum), color = colors.ink3, maxLines = 1)
+                    if (t.more > 0) Text("  +${t.more}", style = type.rowMeta.copy(fontFeatureSettings = Tnum), color = colors.ink3, maxLines = 1)
                 }
             }
             if (startedAt > 0) {
-                if (text.label.isNotEmpty()) Text("  ·  ", style = type.label, color = colors.ink3)
+                if (text.label.isNotEmpty()) Text("  ·  ", style = type.rowMeta, color = colors.ink3)
                 Elapsed(startedAt)
             }
         }
@@ -691,7 +748,7 @@ private fun Elapsed(startedAt: Long) {
             delay(1000 - (value - startedAt) % 1000)
         }
     }
-    Text(formatElapsed(now - startedAt), style = Pi.type.label.copy(fontFeatureSettings = Tnum), color = Pi.colors.ink3)
+    Text(formatElapsed(now - startedAt), style = Pi.type.rowMeta.copy(fontFeatureSettings = Tnum), color = Pi.colors.ink3)
 }
 
 /**
