@@ -93,6 +93,9 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.data.ProjectMeta
@@ -285,11 +288,13 @@ fun ProjectScreen(
     val sessionsList = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val filesList = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
     val changesList = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
-    // The Changes badge needs the status before its tab is opened.
-    LaunchedEffect(dir) { changes.model.refresh() }
-    val liveBusy by remember(liveHere) {
-        derivedStateOf { liveHere?.controller?.state?.value?.let { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() } == true }
+    // The Changes badge needs the status before its tab is opened, and again after a resume or a file change.
+    LaunchedEffect(dir, reload) { if (selected != ProjectTab.Changes) changes.model.refresh() }
+    // Only "working or not" from the live session, so streamed frames do not recompose the project screen.
+    val busyFlow = remember(liveHere) {
+        liveHere?.controller?.state?.map { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() }?.distinctUntilChanged() ?: flowOf(false)
     }
+    val liveBusy by busyFlow.collectAsStateWithLifecycle(false)
     val badges = ProjectBadges(
         changes = ProjectNavRules.changesBadge(changes.model.status),
         terminal = Terminals.inProject(dir).any { it.running },
