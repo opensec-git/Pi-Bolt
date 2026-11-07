@@ -419,7 +419,8 @@ private fun CodeBody(
     val digits = maxOf(lines, first + count - 1).toString().length
     val measurer = rememberTextMeasurer()
     val density = LocalDensity.current
-    val gutter: Dp = remember(numStyle, digits, density) { with(density) { measurer.measure("0".repeat(digits), numStyle).size.width.toDp() } }
+    // The gutter (a text measure) and its numbers only when they show: never while a block streams.
+    val gutter: Dp = if (numbers) remember(numStyle, digits, density) { with(density) { measurer.measure("0".repeat(digits), numStyle).size.width.toDp() } } else 0.dp
     val codeStart = if (numbers) 10.dp else 14.dp
     val ruleX = 12.dp + gutter + 8.dp
     val lineColor = colors.line
@@ -441,9 +442,9 @@ private fun CodeBody(
         }
         return
     }
-    val gutterText = remember(first, count, digits) { (first until first + count).joinToString("\n") { it.toString().padStart(digits) } }
     Row(modifier.fillMaxWidth()) {
         if (numbers) {
+            val gutterText = remember(first, count, digits) { (first until first + count).joinToString("\n") { it.toString().padStart(digits) } }
             Text(
                 gutterText,
                 style = numStyle,

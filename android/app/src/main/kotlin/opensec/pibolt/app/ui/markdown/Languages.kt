@@ -1,5 +1,7 @@
 package opensec.pibolt.app.ui.markdown
 
+import java.util.concurrent.ConcurrentHashMap
+
 /** How a language is tokenised: most share the code tokenizer, the rest have one of their own. */
 enum class LangMode { Code, Shell, Markup, Css, Json, Yaml, Toml, Ini, Markdown, Diff, Makefile, Dockerfile, Plain }
 
@@ -467,9 +469,9 @@ object Languages {
         if (t.startsWith("<!DOCTYPE", ignoreCase = true) || t.startsWith("<html", ignoreCase = true)) return "html"
         if (UnifiedDiff.looksLikeDiff(head)) return "diff"
         if ((t.startsWith("{") || t.startsWith("[")) && looksLikeJson(t)) return "json"
-        if (Regex("^\\$ \\S", RegexOption.MULTILINE).containsMatchIn(head)) return "shell"
+        fun any(r: String) = detectPattern(r).containsMatchIn(head)
+        if (any("^\\$ \\S")) return "shell"
         val lines = head.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.take(40).toList()
-        fun any(r: String) = Regex(r, RegexOption.MULTILINE).containsMatchIn(head)
         return when {
             any("^package main\\b") || any("^func \\w+\\(.*\\)\\s*[\\w*\\[\\]]*\\s*\\{") || any(":= ") && any("\\bfunc\\b") -> "go"
             any("^\\s*fn \\w+") && (any("\\blet mut\\b") || any("->") || any("::")) || any("^use \\w+(::\\w+)+;") -> "rust"
@@ -483,7 +485,7 @@ object Languages {
             any("^\\s*func \\w+") && any("\\b(let|var) \\w+") || any("^import (SwiftUI|UIKit|Foundation)$") -> "swift"
             any("^(FROM|RUN|COPY|WORKDIR|ENTRYPOINT) ") && any("^FROM ") -> "dockerfile"
             any("^[\\w.-]+:( [\\w./$()-]+)*\\s*$") && any("^\\t") -> "makefile"
-            any("^\\s*[\\w-]+:\\s") && lines.count { Regex("^[\\w\"'-]+:( |$)|^- ").containsMatchIn(it) } * 2 >= lines.size -> "yaml"
+            any("^\\s*[\\w-]+:\\s") && lines.count { yamlLine.containsMatchIn(it) } * 2 >= lines.size -> "yaml"
             any("^\\[[\\w.\"-]+\\]\\s*$") && any("^[\\w.-]+\\s*=") -> if (any("=\\s*\"") || any("=\\s*\\[")) "toml" else "ini"
             // Possessive and atomic: the repeated selector part cannot be split in several ways, so a line of words
             // ("a a a a …") fails in linear time instead of backtracking exponentially (PR #254 review).
@@ -495,6 +497,13 @@ object Languages {
             else -> ""
         }
     }
+
+    /** [detect]'s patterns, compiled once each: it runs again as an untagged block streams and when it closes. */
+    private val detectPatterns = ConcurrentHashMap<String, Regex>()
+
+    private fun detectPattern(pattern: String): Regex = detectPatterns.getOrPut(pattern) { Regex(pattern, RegexOption.MULTILINE) }
+
+    private val yamlLine = Regex("^[\\w\"'-]+:( |$)|^- ")
 
     private fun looksLikeJson(t: String): Boolean {
         val s = t.trimEnd()
