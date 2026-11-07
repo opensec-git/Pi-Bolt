@@ -369,6 +369,38 @@ describe("remote control", () => {
 		await expect(connectTestClient(uri(), key, { pair: false })).rejects.toThrow(`closed ${CloseCode.NotAuthorized}`);
 	});
 
+	it("closes a phone's older connection when it connects again, as after leaving Wi-Fi for the tunnel", async () => {
+		const { harness, server, store, uri } = await setup();
+		const phone = generateKeyPair();
+		const lan = track(await connectTestClient(uri(), phone, { device: "motorola edge 60 pro" }));
+		const other = track(await connectTestClient(uri(), generateKeyPair(), { device: "M2101K6P" }));
+		expect(server.clients()).toHaveLength(2);
+
+		// Handshake message 1 alone (a replay, or a phone still connecting) proves nothing: the old socket stays.
+		const unconfirmed = track(
+			await connectTestClient(uri(), phone, { pair: false, ready: false, device: "motorola edge 60 pro" }),
+		);
+		expect(server.clients()).toHaveLength(2);
+		unconfirmed.close();
+
+		const tunnel = track(await connectTestClient(uri(), phone, { pair: false, device: "motorola edge 60 pro" }));
+		expect(await lan.closed).toBe(CloseCode.Replaced);
+		expect(
+			server
+				.clients()
+				.map((client) => client.device.name)
+				.sort(),
+		).toEqual(["M2101K6P", "motorola edge 60 pro"]);
+		expect(store.devices()).toHaveLength(2);
+		// Only the newest connection gets events and runs commands; the other phone is untouched.
+		harness.setResponses([fauxAssistantMessage("after the switch")]);
+		await harness.session.prompt("hi");
+		await tunnel.waitFor((message) => message.type === "agent_end");
+		await other.waitFor((message) => message.type === "agent_end");
+		expect(lan.received.some((message) => message.type === "agent_end")).toBe(false);
+		expect((await tunnel.request({ type: "get_state" })).success).toBe(true);
+	});
+
 	it("runs nothing from a phone revoked elsewhere, even before its socket closes", async () => {
 		const { harness, store, uri } = await setup();
 		const phone = track(await connectTestClient(uri(), generateKeyPair()));

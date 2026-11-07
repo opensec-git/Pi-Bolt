@@ -9,6 +9,9 @@
  *   connection (`remote_endpoints`), so a quick tunnel's new address reaches them.
  * - A phone opens the most recent session when it connects; it can list projects and sessions, open one, or start one
  *   in a project used before (`list_projects`, `list_sessions`, `switch_session`, `new_session`).
+ * - Several sessions stay open at once (at most [MAX_OPEN_SESSIONS]), each with its own runtime: phones see one, the
+ *   current one. Opening another while the current one runs a turn keeps that turn running in the background; it is
+ *   never aborted. `remote_hello.host.parallelSessions` tells phones so.
  * - A terminal's `/remote-control` takes over: the service gives it the port and the tunnel, and listens again when the
  *   terminal lets go (service-control.ts).
  */
@@ -64,6 +67,8 @@ const DEFAULT_RETRY_MS = 5_000;
 const MAX_TUNNEL_RETRY_MS = 10 * 60_000;
 /** Projects and sessions a list answers with, newest first. */
 const MAX_LISTED = 100;
+/** Sessions open at once: the one phones see and the ones still running a turn (or idle, until closed). */
+export const MAX_OPEN_SESSIONS = 3;
 
 export type ServiceTunnelSetting = NonNullable<RemoteControlSettings["tunnel"]>;
 
@@ -109,6 +114,8 @@ export interface ServiceStatus {
 	clients: Array<{ name: string; address: string; connectedAt: string }>;
 	pairedDevices: number;
 	session?: { cwd?: string; file?: string };
+	/** Every open session; `current` is the one phones see. */
+	sessions?: Array<{ cwd: string; file?: string; running: boolean; current: boolean }>;
 }
 
 /** A project for `list_projects`: a directory with sessions, newest first. */
@@ -129,6 +136,10 @@ export interface ServiceSession {
 	preview: string;
 	updatedAt: string;
 	messageCount: number;
+	/** A runtime has the session open (omitted when not). */
+	open?: true;
+	/** Its open runtime runs a turn or a compaction (omitted when not). */
+	running?: true;
 }
 
 export interface ServiceHostOptions {
@@ -151,6 +162,8 @@ export interface ServiceHostOptions {
 	pollMs?: number;
 	idleDisposeMs?: number;
 	idleCheckMs?: number;
+	/** Sessions open at once; default [MAX_OPEN_SESSIONS]. */
+	maxOpenSessions?: number;
 	firstFrameTimeoutMs?: number;
 }
 
@@ -188,7 +201,13 @@ export class ServiceHost {
 	private yieldedTo: ControlConnection | undefined;
 	/** `pi-bolt service pair` connections waiting for a phone to pair. */
 	private readonly pairWaiters = new Set<ControlConnection>();
+	/** The session phones see. */
 	private runtime: AgentSessionRuntime | undefined;
+	/**
+	 * The other open sessions, each with when it was last seen busy or shown (for closing idle ones, least recent first).
+	 * A turn started on the phone keeps running here after the phone opened another session.
+	 */
+	private readonly background = new Map<AgentSessionRuntime, number>();
 	private opening: Promise<void> | undefined;
 	/** Session changes run one at a time: extensions load and trust is decided per session. */
 	private changes: Promise<unknown> = Promise.resolve();
@@ -268,9 +287,10 @@ export class ServiceHost {
 		this.yieldedTo?.close();
 		this.control?.close();
 		this.control = undefined;
-		const runtime = this.runtime;
+		const runtimes = this.openRuntimes();
 		this.runtime = undefined;
-		await runtime?.dispose();
+		this.background.clear();
+		for (const runtime of runtimes) await runtime.dispose();
 	}
 
 	status(): ServiceStatus {
@@ -294,6 +314,16 @@ export class ServiceHost {
 			pairedDevices: this.store.devices().length,
 			...(runtime || file
 				? { session: { ...(runtime ? { cwd: runtime.cwd } : {}), ...(file ? { file } : {}) } }
+				: {}),
+			...(this.background.size > 0
+				? {
+						sessions: this.openRuntimes().map((open) => ({
+							cwd: open.cwd,
+							...(open.session.sessionFile ? { file: open.session.sessionFile } : {}),
+							running: isBusy(open),
+							current: open === runtime,
+						})),
+					}
 				: {}),
 		};
 	}
@@ -325,7 +355,8 @@ export class ServiceHost {
 			getSession: () => this.runtime?.session,
 			openSession: () => this.openSession(),
 			serviceCommands: this.commands,
-			hostInfo: { service: true },
+			hostInfo: { service: true, parallelSessions: true },
+			readSecretFiles: () => this.options.settings.readSecretFiles === true,
 			hostName: this.hostName,
 			version: this.options.version ?? VERSION,
 			port: this.port,
@@ -590,12 +621,17 @@ export class ServiceHost {
 			const last = this.lastSessionFile;
 			const recent =
 				last && existsSync(last) ? last : (await this.allSessions()).find((info) => isDirectory(info.cwd))?.path;
+			const open = recent ? this.openRuntimeOf(recent) : undefined;
+			if (open) {
+				this.show(open);
+				return;
+			}
 			if (recent) {
-				await this.replaceRuntime(SessionManager.open(recent), { type: "session_start", reason: "resume" });
+				await this.openRuntime(SessionManager.open(recent), { type: "session_start", reason: "resume" });
 				return;
 			}
 			const home = homedir();
-			await this.replaceRuntime(SessionManager.create(home, this.sessionDirFor(home)));
+			await this.openRuntime(SessionManager.create(home, this.sessionDirFor(home)));
 		}).finally(() => {
 			this.opening = undefined;
 		});
@@ -608,12 +644,13 @@ export class ServiceHost {
 	): Promise<{ cancelled: boolean }> {
 		const runtime = this.runtime;
 		const target = cwd === undefined ? (runtime?.cwd ?? (await this.recentProject())) : await this.knownProject(cwd);
-		if (runtime && pathsEqual(runtime.cwd, target)) {
+		// An idle session moves to the new one, as in a terminal; a busy one keeps running (openRuntime).
+		if (runtime && !isBusy(runtime) && pathsEqual(runtime.cwd, target)) {
 			return runtime.newSession(parentSession ? { parentSession } : undefined);
 		}
 		const sessionManager = SessionManager.create(target, this.sessionDirFor(target));
 		if (parentSession) sessionManager.newSession({ parentSession });
-		await this.replaceRuntime(sessionManager, {
+		await this.openRuntime(sessionManager, {
 			type: "session_start",
 			reason: "new",
 			previousSessionFile: runtime?.session.sessionFile,
@@ -625,21 +662,62 @@ export class ServiceHost {
 		const info = (await this.allSessions()).find((session) => pathsEqual(session.path, sessionPath));
 		if (!info) throw new Error("No such session on this computer");
 		if (!isDirectory(info.cwd)) throw new Error(`The session's folder no longer exists: ${info.cwd}`);
+		// Open already (a turn running in the background, say): it is shown as it is.
+		const open = this.openRuntimeOf(info.path);
+		if (open) {
+			this.show(open);
+			return { cancelled: false };
+		}
 		const runtime = this.runtime;
-		if (runtime) {
+		if (runtime && !isBusy(runtime)) {
 			return runtime.switchSession(info.path, { projectTrustContextFactory: (cwd) => this.trustContext(cwd) });
 		}
-		await this.replaceRuntime(SessionManager.open(info.path), { type: "session_start", reason: "resume" });
+		await this.openRuntime(SessionManager.open(info.path), { type: "session_start", reason: "resume" });
 		return { cancelled: false };
 	}
 
-	/** Replaces the session with a new runtime (another project, or none open). Failures leave no session open. */
-	private async replaceRuntime(sessionManager: SessionManager, sessionStartEvent?: SessionStartEvent): Promise<void> {
+	private openRuntimes(): AgentSessionRuntime[] {
+		return [...(this.runtime ? [this.runtime] : []), ...this.background.keys()];
+	}
+
+	/** The open runtime that has `sessionFile`. */
+	private openRuntimeOf(sessionFile: string): AgentSessionRuntime | undefined {
+		return this.openRuntimes().find((open) => {
+			const file = open.session.sessionFile;
+			return file !== undefined && pathsEqual(file, sessionFile);
+		});
+	}
+
+	/** Phones see `runtime` from now on; the one they saw stays open in the background. */
+	private show(runtime: AgentSessionRuntime): void {
 		const previous = this.runtime;
-		if (previous) {
+		if (previous === runtime) return;
+		if (previous) this.background.set(previous, Date.now());
+		this.background.delete(runtime);
+		this.runtime = runtime;
+		this.lastSessionFile = runtime.session.sessionFile;
+		this.server?.sessionChanged();
+	}
+
+	/**
+	 * Opens a session in a new runtime and shows it. The session shown so far is replaced when idle, and otherwise keeps
+	 * running in the background: a turn is never aborted for this. At [maxOpenSessions] open sessions an idle background
+	 * one closes first, the least recently used; when every one is busy, nothing opens. Failures leave the sessions as
+	 * they were, except an idle replaced one, which is closed already.
+	 */
+	private async openRuntime(sessionManager: SessionManager, sessionStartEvent?: SessionStartEvent): Promise<void> {
+		const previous = this.runtime;
+		const replace = previous !== undefined && !isBusy(previous);
+		const max = this.options.maxOpenSessions ?? MAX_OPEN_SESSIONS;
+		if (this.openRuntimes().length - (replace ? 1 : 0) >= max) {
+			const idle = [...this.background].filter(([open]) => !isBusy(open)).sort((a, b) => a[1] - b[1])[0]?.[0];
+			if (!idle) throw new Error(`${max} sessions are running on this computer. Stop one, or wait.`);
+			this.background.delete(idle);
+			await idle.dispose();
+			this.log.info(`Closed an idle session in ${idle.cwd} to open another`);
+		}
+		if (replace) {
 			this.runtime = undefined;
-			// As a session switch does: the running turn ends and is saved first.
-			await previous.session.abort();
 			await previous.dispose();
 		}
 		const cwd = sessionManager.getCwd();
@@ -661,10 +739,13 @@ export class ServiceHost {
 			this.server?.sessionChanged();
 			throw new Error(errors.map((error) => error.message).join("\n"));
 		}
+		if (this.runtime) this.background.set(this.runtime, Date.now());
 		this.runtime = runtime;
 		runtime.setRebindSession(() => this.bind(runtime));
 		await this.bind(runtime);
-		this.log.info(`Opened a session in ${cwd}`);
+		this.log.info(
+			`Opened a session in ${cwd}${previous && !replace ? ` (the one in ${previous.cwd} keeps running)` : ""}`,
+		);
 		if (!this.refreshedModels && !this.options.offline) {
 			this.refreshedModels = true;
 			void runtime.services.modelRuntime.refresh({ signal: AbortSignal.timeout(15_000) }).catch(() => {});
@@ -700,20 +781,40 @@ export class ServiceHost {
 			},
 			onError: (error) => this.log.warn(`Extension error (${error.extensionPath}): ${error.error}`),
 		});
+		// A background session that changed (an extension's command) is not what phones see.
+		if (runtime !== this.runtime) return;
 		this.lastSessionFile = session.sessionFile;
 		this.server?.sessionChanged();
 	}
 
-	/** Closes the session when no phone used it for a while; it reopens from its file when one connects. */
+	/**
+	 * Closes sessions nobody uses: the shown one when no phone used it for a while (it reopens from its file when one
+	 * connects), and a background one once idle that long. A busy session is never closed.
+	 */
 	private async closeIdleSession(): Promise<void> {
+		if (this.opening) return;
+		const idleMs = this.options.idleDisposeMs ?? IDLE_DISPOSE_MS;
+		const now = Date.now();
+		for (const [open, since] of [...this.background]) {
+			if (isBusy(open)) {
+				this.background.set(open, now);
+				continue;
+			}
+			if (now - since < idleMs) continue;
+			await this.change(async () => {
+				if (!this.background.has(open) || isBusy(open)) return;
+				this.background.delete(open);
+				await open.dispose();
+				this.log.info(`Closed an idle background session in ${open.cwd}`);
+			});
+		}
 		const runtime = this.runtime;
-		if (!runtime || this.opening) return;
-		const session = runtime.session;
-		if ((this.server?.clients().length ?? 0) > 0 || session.isStreaming || session.isCompacting) {
+		if (!runtime) return;
+		if ((this.server?.clients().length ?? 0) > 0 || isBusy(runtime)) {
 			this.lastActivity = Date.now();
 			return;
 		}
-		if (Date.now() - this.lastActivity < (this.options.idleDisposeMs ?? IDLE_DISPOSE_MS)) return;
+		if (Date.now() - this.lastActivity < idleMs) return;
 		await this.change(async () => {
 			if (this.runtime !== runtime) return;
 			this.runtime = undefined;
@@ -817,15 +918,20 @@ export class ServiceHost {
 		return (await this.allSessions())
 			.filter((info) => target === undefined || pathsEqual(info.cwd, target))
 			.slice(0, MAX_LISTED)
-			.map((info) => ({
-				path: info.path,
-				id: info.id,
-				cwd: info.cwd,
-				...(info.name ? { name: info.name } : {}),
-				preview: info.firstMessage.replace(/\s+/g, " ").trim().slice(0, 100),
-				updatedAt: info.modified.toISOString(),
-				messageCount: info.messageCount,
-			}));
+			.map((info) => {
+				const open = this.openRuntimeOf(info.path);
+				return {
+					path: info.path,
+					id: info.id,
+					cwd: info.cwd,
+					...(info.name ? { name: info.name } : {}),
+					preview: info.firstMessage.replace(/\s+/g, " ").trim().slice(0, 100),
+					updatedAt: info.modified.toISOString(),
+					messageCount: info.messageCount,
+					...(open ? { open: true as const } : {}),
+					...(open && isBusy(open) ? { running: true as const } : {}),
+				};
+			});
 	}
 
 	/** `cwd` when Pi-Bolt has sessions there: a phone starts sessions only in projects used before. */
@@ -838,6 +944,11 @@ export class ServiceHost {
 	private async recentProject(): Promise<string> {
 		return (await this.listProjects())[0]?.cwd ?? homedir();
 	}
+}
+
+/** A turn or a compaction runs: the session is never closed or replaced then. */
+function isBusy(runtime: AgentSessionRuntime): boolean {
+	return runtime.session.isStreaming || runtime.session.isCompacting;
 }
 
 function isDirectory(path: string): boolean {

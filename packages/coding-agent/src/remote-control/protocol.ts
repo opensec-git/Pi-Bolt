@@ -31,6 +31,12 @@ export const CloseCode = {
 	 * dropped connection and reconnect at once, to the same addresses.
 	 */
 	Handoff: 1012,
+	/**
+	 * The same device completed a newer handshake (it changed networks); its older connection is closed. The phone
+	 * already uses the newer one and ignores the old socket's close. A plain close, not one clients retry: two installs
+	 * sharing one device key (a restored backup) would otherwise take the connection from each other forever.
+	 */
+	Replaced: 1000,
 } as const;
 
 /**

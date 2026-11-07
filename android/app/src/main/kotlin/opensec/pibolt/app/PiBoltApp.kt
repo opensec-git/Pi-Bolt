@@ -43,6 +43,7 @@ import opensec.pibolt.app.ui.chats.Chats
 import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.ui.providers.ProviderCatalog
 import opensec.pibolt.app.session.SessionController
+import opensec.pibolt.app.session.SessionService
 import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import opensec.pibolt.app.update.UpdateManager
 import opensec.pibolt.app.update.UpdateNotifications
@@ -173,7 +174,12 @@ class PiBoltApp : Application() {
         appScope.launch(Dispatchers.IO) { ProviderCatalog.registerCustom(ModelsFile.custom(localEngine.agentDir)) }
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) {
-                if (startedActivities++ == 0) localEngine.onForeground()
+                if (startedActivities++ == 0) {
+                    localEngine.onForeground()
+                    // Work that began while Android refused the service (the app was away): it may start now.
+                    if (sessions.value.any { !it.stopped && it.keepsService }) SessionService.ensureRunning(this@PiBoltApp)
+                    sessions.value.forEach { it.onAppForeground() }
+                }
             }
 
             override fun onActivityStopped(activity: Activity) {

@@ -30,6 +30,7 @@ import {
 	WEBSOCKET_PATH,
 	WEBSOCKET_SUBPROTOCOL,
 } from "./protocol.ts";
+import { REVIEW_COMMANDS, runReviewCommand } from "./review.ts";
 import { type PairedDevice, type RemoteControlStore, toBase64Url } from "./store.ts";
 
 /**
@@ -115,6 +116,11 @@ export interface RemoteControlServerOptions {
 	 */
 	openSession?: () => Promise<void>;
 	serviceCommands?: RemoteServiceCommands;
+	/**
+	 * `remoteControl.readSecretFiles`: `rc_read_file` and `rc_git_diff` may show files that look like secrets (review.ts).
+	 * Read on every request, so a settings change applies at once.
+	 */
+	readSecretFiles?: () => boolean;
 	/** More fields of `remote_hello.host` (the service adds `service: true`). */
 	hostInfo?: Record<string, unknown>;
 	hostName: string;
@@ -187,7 +193,7 @@ class RemoteConnection {
 	/** Confirmed and still connected: only such connections get messages and run commands. */
 	get isOpen(): boolean {
 		return (
-			!this.revoked &&
+			!this.dropped &&
 			this.device !== undefined &&
 			this.keys !== undefined &&
 			this.socket.readyState === this.socket.OPEN
@@ -199,16 +205,17 @@ class RemoteConnection {
 		return this.device?.publicKey ?? (this.candidate ? toBase64Url(this.candidate.publicKey) : undefined);
 	}
 
-	/** Set by [revoke]: nothing more from this connection runs, even before its socket is gone. */
-	revoked = false;
+	/** Set by [drop]: nothing more from this connection runs, even before its socket is gone. */
+	dropped = false;
 
 	/**
-	 * The device was revoked: stop handling its messages now, tell it why (4403), and drop the socket after a second
-	 * if the peer does not finish the close handshake.
+	 * Stops handling its messages now, closes with `code` (4403: the device was revoked; [CloseCode.Replaced]: the same
+	 * device connected again), and drops the socket after a second if the peer does not finish the close handshake,
+	 * as a socket on a network the phone left never does.
 	 */
-	revoke(): void {
-		this.revoked = true;
-		this.close(CloseCode.NotAuthorized);
+	drop(code: number, reason?: string): void {
+		this.dropped = true;
+		this.close(code, reason);
 		setTimeout(() => this.socket.terminate(), 1_000).unref?.();
 	}
 
@@ -229,9 +236,9 @@ class RemoteConnection {
 		return true;
 	}
 
-	close(code: number): void {
+	close(code: number, reason?: string): void {
 		clearTimeout(this.handshakeTimer);
-		this.socket.close(code);
+		this.socket.close(code, reason);
 	}
 
 	send(message: unknown): void {
@@ -274,7 +281,7 @@ class RemoteConnection {
 	 * `remote_hello` and runs commands only after this proof.
 	 */
 	private confirm(message: unknown): void {
-		if (this.revoked) return;
+		if (this.dropped) return;
 		const candidate = this.candidate;
 		if (
 			!candidate ||
@@ -492,7 +499,7 @@ export class RemoteControlServer {
 	revoke(publicKey: string): boolean {
 		const removed = this.store.removeDevice(publicKey);
 		for (const connection of this.connections) {
-			if (connection.publicKey === publicKey) connection.revoke();
+			if (connection.publicKey === publicKey) connection.drop(CloseCode.NotAuthorized);
 		}
 		return removed;
 	}
@@ -501,7 +508,9 @@ export class RemoteControlServer {
 	dropRevoked(): void {
 		for (const connection of this.connections) {
 			const key = connection.device?.publicKey;
-			if (key && !connection.revoked && !this.store.findDevice(Buffer.from(key, "base64url"))) connection.revoke();
+			if (key && !connection.dropped && !this.store.findDevice(Buffer.from(key, "base64url"))) {
+				connection.drop(CloseCode.NotAuthorized);
+			}
 		}
 	}
 
@@ -531,6 +540,15 @@ export class RemoteControlServer {
 	}
 
 	async connectionOpened(connection: RemoteConnection, paired: boolean): Promise<void> {
+		// A phone that changed networks (Wi-Fi off, now through the tunnel) left its old socket behind: nothing closed it,
+		// so it would stay listed and get every event until the keepalive noticed. The phone only uses its newest
+		// connection, and this one proved the device's key.
+		const key = connection.device?.publicKey;
+		for (const other of this.connections) {
+			if (other !== connection && !other.dropped && other.device?.publicKey === key) {
+				other.drop(CloseCode.Replaced, "Replaced by a newer connection from this device");
+			}
+		}
 		const session = this.options.getSession();
 		if (session) connection.send(this.hello(session));
 		const client = connection.info();
@@ -645,6 +663,8 @@ export class RemoteControlServer {
 				name: this.hostName,
 				version: this.version,
 				cwd: session.sessionManager.getCwd(),
+				// The read-only review commands (`rc_git_*`, `rc_list_dir`, `rc_read_file`): older hosts send no `review`.
+				review: true,
 				...this.options.hostInfo,
 			},
 			state: this.sessionState(session),
@@ -700,7 +720,7 @@ export class RemoteControlServer {
 		// A revoked device (here, or by another Pi on this machine editing devices.json) runs nothing more.
 		const device = connection.device;
 		if (!connection.isOpen || !device || !this.store.findDevice(Buffer.from(device.publicKey, "base64url"))) {
-			if (connection.device && !connection.revoked) connection.revoke();
+			if (connection.device && !connection.dropped) connection.drop(CloseCode.NotAuthorized);
 			return;
 		}
 		if (typeof message !== "object" || message === null || typeof (message as { type?: unknown }).type !== "string") {
@@ -723,6 +743,19 @@ export class RemoteControlServer {
 		if (service?.types.has(typed.type)) {
 			try {
 				const data = await service.run(message as { type: string });
+				connection.send({ id, type: "response", command: typed.type, success: true, data });
+			} catch (error) {
+				connection.send({ id, type: "response", command: typed.type, success: false, error: asError(error) });
+			}
+			return;
+		}
+		if (REVIEW_COMMANDS.has(typed.type)) {
+			const session = this.options.getSession();
+			try {
+				if (!session) throw new Error("No session is open yet");
+				const data = await runReviewCommand(session.sessionManager.getCwd(), message as { type: string }, {
+					readSecretFiles: this.options.readSecretFiles?.() === true,
+				});
 				connection.send({ id, type: "response", command: typed.type, success: true, data });
 			} catch (error) {
 				connection.send({ id, type: "response", command: typed.type, success: false, error: asError(error) });

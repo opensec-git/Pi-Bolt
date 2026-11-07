@@ -5,6 +5,7 @@ import android.net.Network
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -200,6 +201,14 @@ class SessionController private constructor(
     private val _shellRuns = MutableStateFlow(0)
     val shellRuns: StateFlow<Int> = _shellRuns.asStateFlow()
 
+    /**
+     * User actions on their way that start work: a prompt until its turn shows (or the engine refused it), a manual
+     * compaction until it ends. [SessionService] counts them as work, so the service starts at the tap, while Android
+     * still allows it, and holds the app's network until the work itself keeps it ([KeepAlive]).
+     */
+    private val _actions = MutableStateFlow(0)
+    val actions: StateFlow<Int> = _actions.asStateFlow()
+
     private sealed interface Input {
         class Event(val json: JsonObject) : Input
 
@@ -337,17 +346,32 @@ class SessionController private constructor(
         }
     }
 
-    /** A turn, a compaction, an open dialog or background subagents: never stopped to make room or free memory. */
+    /**
+     * A turn, a compaction, an open dialog, background subagents or jobs, or a `!` command: never stopped to make room
+     * or free memory.
+     */
     val isBusy: Boolean
-        get() = _state.value.let { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() || SUBAGENTS_STATUS in it.statuses || opensec.pibolt.app.engine.BackgroundJobs.STATUS_KEY in it.statuses }
+        get() = KeepAlive.busy(_state.value) || _shellRuns.value > 0
 
-    /** Connected, and nothing runs: no turn, compaction, open dialog or background subagent. */
+    /** Connected, and nothing runs: no turn, compaction, open dialog, background subagent or job, or `!` command. */
     val isIdle: Boolean
-        get() = _state.value.let { !it.isRunning && !it.isCompacting && it.dialogs.isEmpty() && SUBAGENTS_STATUS !in it.statuses && opensec.pibolt.app.engine.BackgroundJobs.STATUS_KEY !in it.statuses } &&
-            _link.value is LinkState.Connected
+        get() = !isBusy && _link.value is LinkState.Connected
+
+    /** Work or a user action on its way: [SessionService] must run (see [KeepAlive]). */
+    val keepsService: Boolean
+        get() = isBusy || _actions.value > 0
 
     fun retryNow() {
         retrySignal.trySend(Unit)
+    }
+
+    /**
+     * The app is back in front. A computer's connection dropped while the app was away (Android freezes a backgrounded
+     * app without a run, and from Android 14 closes its sockets) and may be waiting out a backoff of up to 30 s: retried
+     * now, as on a new network.
+     */
+    fun onAppForeground() {
+        if (_link.value is LinkState.Retrying) retryNow()
     }
 
     private val connectivity: ConnectivityManager? by lazy { app.getSystemService(ConnectivityManager::class.java) }
@@ -654,8 +678,7 @@ class SessionController private constructor(
             if (now.isRunning) app.runMarks.mark(RunMarks.Run(hostId, project?.name?.takeUnless { isChat }, _hostName.value, sessionFile, isChat))
             else app.runMarks.unmark(hostId)
         }
-        val needsService = now.isRunning || now.dialogs.isNotEmpty()
-        if (needsService && !(previous.isRunning || previous.dialogs.isNotEmpty())) SessionService.ensureRunning(app)
+        if (KeepAlive.starts(previous, now)) SessionService.ensureRunning(app)
         if (previous.dialogs.isNotEmpty() && now.dialogs.isEmpty()) Notifications.clearNeedsAnswer(app, hostId)
         if (now.dialogs !== previous.dialogs || ask.submission != null) answerAsk(now)
     }
@@ -695,7 +718,7 @@ class SessionController private constructor(
     fun send(text: String, behavior: StreamingBehavior, images: List<ImageAttachment> = emptyList()): Boolean {
         if (!spendAllows()) return false
         sentAt = SystemClock.elapsedRealtime()
-        scope.launch {
+        launchHeld {
             // Pi refuses a prompt while a manual compaction runs ("Wait for compaction to finish and retry"); the terminal
             // holds it until the compaction ends, and so does this.
             if (holdsForCompaction(_state.value)) withTimeoutOrNull(COMPACTION_HOLD_MS) { _state.first { !holdsForCompaction(it) } }
@@ -708,8 +731,28 @@ class SessionController private constructor(
                 _effects.tryEmit(SessionEffect.EditorText(text, restore = true))
                 _effects.tryEmit(SessionEffect.Error(response.error ?: "Not sent"))
             }
+            // The turn's agent_start may still be on its way behind the response: the hold ends once the turn shows.
+            if (response.success && KeepAlive.waitsForTurn(response.dataObject?.str("disposition"), _state.value.isRunning)) {
+                withTimeoutOrNull(TURN_START_HOLD_MS) { _state.first { it.isRunning } }
+            }
         }
         return true
+    }
+
+    /**
+     * Runs [block] as a user action ([actions]): counted from now, on the caller's (main) thread, and the service started
+     * here, before the user can leave. Started atomically, so the count is given back even when the session stops first.
+     */
+    private fun launchHeld(block: suspend () -> Unit) {
+        _actions.update { it + 1 }
+        SessionService.ensureRunning(app)
+        scope.launch(start = CoroutineStart.ATOMIC) {
+            try {
+                block()
+            } finally {
+                _actions.update { it - 1 }
+            }
+        }
     }
 
     /** Shows [message] as an error on this session's screen (an open beside it that failed). */
@@ -738,7 +781,7 @@ class SessionController private constructor(
     }
 
     fun compact(instructions: String?) {
-        scope.launch {
+        launchHeld {
             val response = rpc.compact(instructions)
             if (!response.success) _effects.tryEmit(SessionEffect.Error(response.error ?: "Compaction failed"))
         }
@@ -921,6 +964,8 @@ class SessionController private constructor(
         val args = JsonObject(mapOf("command" to JsonPrimitive(shell.command)))
         mutate { it.copy(items = it.items + ToolItem(key, key, "bash", args, status = ToolStatus.Running)) }
         _shellRuns.update { it + 1 }
+        // Not a turn: without this a download (`!npm install`, `!git clone`) lost the network once the user left.
+        SessionService.ensureRunning(app)
         scope.launch {
             val response = try {
                 rpc.bash(shell.command, shell.excludeFromContext)
@@ -1023,8 +1068,8 @@ class SessionController private constructor(
         private const val SUBSCRIBE_TRIES = 5
         private const val SUBSCRIBE_RETRY_MS = 1_500L
 
-        /** Status key of the bundled subagents extension, set while background agents run or wait. */
-        private const val SUBAGENTS_STATUS = "subagents"
+        /** The longest a sent prompt holds the service waiting for its turn's `agent_start` after Pi accepted it. */
+        private const val TURN_START_HOLD_MS = 30_000L
         private const val FRAME_MS = 16L
         const val PERF_TAG = "PiBoltPerf"
 

@@ -305,6 +305,12 @@ export const SettingsSchema = Type.Object(
 								'Offer to install cloudflared when /remote-control finds none (false after "Don\'t ask again").',
 						}),
 					),
+					readSecretFiles: Type.Optional(
+						Type.Boolean({
+							description:
+								"Let paired phones read files that look like secrets (.env*, keys, .git/, ...) when reviewing the session's folder. Default false.",
+						}),
+					),
 					service: Type.Optional(
 						Type.Object(
 							{
