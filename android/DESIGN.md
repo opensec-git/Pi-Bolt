@@ -1313,6 +1313,11 @@ long-press sheets; long output goes to full-screen viewers, never nested scroll 
   streamed frame does not recompose Home.
 - Nothing animates while idle: spinners only while busy, the mark's entrance once per launch. Rotations, scales and
   press feedback run in `graphicsLayer`; size changes are limited to expand/collapse and sheets.
+- What redraws every frame has a layer of its own (a Quad), or puts what it decorates in one (the composer's working
+  hairline, a running agent's sweep), so a frame re-records the moving part only. Animated values are read in the
+  draw phase, never while composing. The keyboard's height changes every frame of its animation: the session screen
+  reads it through `derivedStateOf` (`ImeRoom`), so it recomposes only when the composer's layout changes.
+- `e2e/frames.sh` measures each of these scenarios on a phone (README, "Frame timing").
 
 ## Chats
 

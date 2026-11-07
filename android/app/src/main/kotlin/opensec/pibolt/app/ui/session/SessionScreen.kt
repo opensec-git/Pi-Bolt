@@ -950,19 +950,24 @@ internal fun SessionContent(
         val windowHeight = maxHeight
         val density = LocalDensity.current
         val imeVisible = WindowInsets.isImeVisible
-        val imeHeight = with(density) { WindowInsets.ime.getBottom(density).toDp() }
-        // Room above the keyboard: under 360dp (landscape with the keyboard up) the composer is one row.
-        val roomAboveIme = windowHeight - imeHeight
+        // Room above the keyboard: under 360dp (landscape with the keyboard up) the composer is one row. The command /
+        // `@` panel shares that room with the status and top bars and the composer: capped so it never pushes the
+        // composer under the keyboard (in landscape a 264dp panel did). Read through a derived state: the keyboard's
+        // height changes every frame of its animation, and reading it here recomposed the whole screen on each.
+        val ime = WindowInsets.ime
+        val statusBars = WindowInsets.statusBars
+        val room by remember(windowHeight, density, ime, statusBars) {
+            derivedStateOf {
+                with(density) { ImeRoom.of(windowHeight, ime.getBottom(density).toDp(), statusBars.getTop(density).toDp()) }
+            }
+        }
         // The bottom stack's budget: with the keyboard up, or in a short window, the todo card, status extras, a waiting
         // question and the queue fold into one row, so the transcript keeps its room and the composer stays on the
         // keyboard. The swap is instant: it follows the keyboard frame by frame.
         val foldStack = imeVisible || windowHeight < 480.dp
-        val oneRowComposer = roomAboveIme < 360.dp
-        val composerLines = if (roomAboveIme < 560.dp) 4 else MAX_LINES
-        // The command / `@` panel shares that room with the status and top bars and the composer: capped so it never
-        // pushes the composer under the keyboard (in landscape a 264dp panel did).
-        val statusTop = with(density) { WindowInsets.statusBars.getTop(density).toDp() }
-        val suggestionsMax = (roomAboveIme - statusTop - 56.dp - if (oneRowComposer) 72.dp else 140.dp).coerceIn(48.dp, SUGGESTIONS_MAX)
+        val oneRowComposer = room.oneRowComposer
+        val composerLines = room.composerLines
+        val suggestionsMax = room.suggestionsMax
         Column(Modifier.fillMaxSize().imePadding()) {
             if (searching) {
                 SearchBar(
