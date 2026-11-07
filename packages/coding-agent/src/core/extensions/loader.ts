@@ -52,9 +52,14 @@ const usesEmbeddedModules = isBunBinary || isNodeSeaBinary || isBundledNode;
 let createJitiPromise: Promise<typeof createJiti> | undefined;
 
 function getCreateJiti(): Promise<typeof createJiti> {
-	createJitiPromise ??= (usesEmbeddedModules ? import("./jiti-static-loader.ts") : import("./jiti-loader.ts")).then(
-		(module) => module.createJiti,
-	);
+	// (A compiled Bun binary evaluates jiti's embedded Babel only when jiti has a file to transform: jiti-bun-loader.ts.)
+	createJitiPromise ??= (
+		isBunBinary
+			? import("./jiti-bun-loader.ts")
+			: usesEmbeddedModules
+				? import("./jiti-static-loader.ts")
+				: import("./jiti-loader.ts")
+	).then((module) => module.createJiti);
 	return createJitiPromise;
 }
 
