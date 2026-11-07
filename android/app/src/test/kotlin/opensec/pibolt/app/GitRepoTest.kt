@@ -4,6 +4,7 @@ import kotlinx.coroutines.runBlocking
 import opensec.pibolt.app.git.Change
 import opensec.pibolt.app.git.GitException
 import opensec.pibolt.app.git.GitRepo
+import opensec.pibolt.app.git.LineCount
 import opensec.pibolt.app.git.ProcessGitRunner
 import opensec.pibolt.app.git.github.GitCredentials
 import org.junit.After
@@ -141,6 +142,25 @@ class GitRepoTest {
 
         val failure = assertFailsWith<GitException> { repo.createBranch("main") }
         assertTrue(failure.message!!.contains("already exists"), failure.message)
+    }
+
+    @Test
+    fun diffStatsCountStagedAndUnstagedLines() = runBlocking {
+        repo.init()
+        repo.setGlobalIdentity("T", "t@example.com")
+        // Before the first commit the index is compared with the empty tree.
+        write("a.txt", "one\ntwo\n")
+        repo.stage(listOf("a.txt"))
+        assertEquals(LineCount(2, 0), repo.diffStats().staged["a.txt"])
+        repo.commit("first")
+        write("a.txt", "one\nTWO\nthree\n")
+        write("new.txt", "untracked\n")
+        val stats = repo.diffStats()
+        assertTrue(stats.staged.isEmpty())
+        assertEquals(LineCount(2, 1), stats.unstaged["a.txt"])
+        assertNull(stats.unstaged["new.txt"], "git counts untracked files only once they are added")
+        repo.stage(listOf("a.txt"))
+        assertEquals(LineCount(2, 1), repo.diffStats().staged["a.txt"])
     }
 
     @Test

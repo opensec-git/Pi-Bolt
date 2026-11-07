@@ -5,15 +5,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -22,33 +17,36 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import opensec.pibolt.app.git.Change
 import opensec.pibolt.app.git.FileDiff
 import opensec.pibolt.app.git.Hunk
-import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.GlassBar
+import opensec.pibolt.app.ui.components.GlassIconButton
 import opensec.pibolt.app.ui.session.DiffKind
 import opensec.pibolt.app.ui.session.DiffLine
 import opensec.pibolt.app.ui.session.parseDiff
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiColors
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 
-/** surface1 card with a 1dp line, radius 12, 16dp in from the sides. */
+/** A code card (a hunk, a commit's file): surface1 with a 1dp line, radius lg, 16dp in from the sides, clipped. */
 @Composable
 fun GitCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     val colors = Pi.colors
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(Radius.lg)
     Column(
         modifier
-            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .padding(horizontal = Space.lg, vertical = Space.xs)
             .fillMaxWidth()
+            .clip(shape)
             .background(colors.surface1, shape)
             .border(1.dp, colors.line, shape),
         content = content,
@@ -79,19 +77,11 @@ fun changeColor(c: Change, colors: PiColors): Color = when (c) {
     else -> colors.ink2
 }
 
-/** "+12 −3" in the diff colours; nothing for zero. */
-@Composable
-fun Counts(added: Int, removed: Int) {
-    val colors = Pi.colors
-    if (added > 0) Text("+$added", style = Pi.type.monoMeta, color = colors.success)
-    if (added > 0 && removed > 0) Spacer(Modifier.width(6.dp))
-    if (removed > 0) Text("−$removed", style = Pi.type.monoMeta, color = colors.danger)
-}
-
 /**
- * Full-screen overlay top bar: the leading action, a title over a mono subtitle, then [actions]. One rule across the
- * workspace (file viewer, diff, history): a view that covers the project closes with ✕ ("Close"); a step inside one
- * (a commit opened from the history) goes back with ← ([back] true, labelled [backLabel]).
+ * Full-screen overlay top bar, the workspace's [GlassBar]: a glass leading button, a title over a mono subtitle, then
+ * [actions] (glass buttons and chips). One rule across the workspace (file viewer, diff, history): a view that covers
+ * the project closes with ✕ ("Close"); a step inside one (a commit opened from the history) goes back with ←
+ * ([back] true, labelled [backLabel]). [titleVisible] fades the title for a view that shows a large one under the bar.
  */
 @Composable
 fun OverlayBar(
@@ -100,24 +90,22 @@ fun OverlayBar(
     onBack: () -> Unit,
     back: Boolean = false,
     backLabel: String = "Back",
+    titleVisible: Boolean = true,
     actions: @Composable RowScope.() -> Unit = {},
 ) {
-    val colors = Pi.colors
-    Row(
-        Modifier.fillMaxWidth().background(colors.canvas).statusBarsPadding().height(56.dp).padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (back) {
-            IconAction(Icons.AutoMirrored.Rounded.ArrowBack, backLabel, onClick = onBack, tint = colors.ink1)
-        } else {
-            IconAction(Icons.Rounded.Close, "Close", onClick = onBack, tint = colors.ink1)
-        }
-        Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
-            Text(title, style = Pi.type.subhead, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (!subtitle.isNullOrBlank()) Text(subtitle, style = Pi.type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
-        }
-        actions()
-    }
+    GlassBar(
+        title = title,
+        subtitle = subtitle,
+        titleVisible = titleVisible,
+        leading = {
+            if (back) {
+                GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, backLabel, onClick = onBack)
+            } else {
+                GlassIconButton(Icons.Rounded.Close, "Close", onClick = onBack)
+            }
+        },
+        actions = actions,
+    )
 }
 
 /** A hunk's rows for the shared diff renderer, without its `@@` row (the hunk header shows it). */

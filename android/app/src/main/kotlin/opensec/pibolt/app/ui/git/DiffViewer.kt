@@ -5,7 +5,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,13 +12,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
 import androidx.compose.material.icons.automirrored.rounded.Undo
+import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Remove
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import opensec.pibolt.app.ui.components.GlassChip
+import opensec.pibolt.app.ui.components.GlassIconButton
+import opensec.pibolt.app.ui.components.GlassPill
+import opensec.pibolt.app.ui.components.LineCounts
+import opensec.pibolt.app.ui.theme.IconSize
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.components.ErrorState
 import opensec.pibolt.app.ui.components.LoadingRow
 import opensec.pibolt.app.ui.projects.EmptyCard
@@ -84,18 +93,18 @@ fun DiffViewer(ui: ChangesUi, path: String, staged: Boolean, onClose: () -> Unit
         OverlayBar(splitPath(path).first, path, onBack = onClose) {
             if (entry != null && !entry.conflicted) {
                 if (staged) {
-                    TextAction("Unstage", onClick = { model.run("Unstaging") { unstage(listOf(path), initial) } }, enabled = idle, modifier = Modifier.heightIn(min = 48.dp))
+                    GlassChip("Unstage", onClick = { model.run("Unstaging") { unstage(listOf(path), initial) } }, icon = Icons.Rounded.Remove, enabled = idle)
                 } else {
-                    TextAction("Stage", onClick = { model.run("Staging") { stage(listOf(path)) } }, enabled = idle, modifier = Modifier.heightIn(min = 48.dp))
-                    IconAction(Icons.AutoMirrored.Rounded.Undo, "Discard changes", onClick = { ui.sheet = GitSheet.Discard(entry, staged = false) }, enabled = idle)
+                    GlassIconButton(Icons.AutoMirrored.Rounded.Undo, "Discard changes", onClick = { ui.sheet = GitSheet.Discard(entry, staged = false) }, enabled = idle)
+                    GlassChip("Stage", onClick = { model.run("Staging") { stage(listOf(path)) } }, icon = Icons.Rounded.Add, enabled = idle)
                 }
             }
         }
         val d = diff
         when {
-            !loaded -> LoadingRow("Loading diff…", Modifier.padding(top = 8.dp))
+            !loaded -> LoadingRow("Loading diff…", Modifier.padding(top = Space.sm))
             entry == null -> EmptyCard(Icons.Rounded.Check, "No changes left")
-            d == null -> ErrorState("Could not read the diff", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), onRetry = {
+            d == null -> ErrorState("Could not read the diff", Modifier.padding(horizontal = Space.page, vertical = Space.sm), onRetry = {
                 loaded = false
                 attempt++
             })
@@ -103,10 +112,12 @@ fun DiffViewer(ui: ChangesUi, path: String, staged: Boolean, onClose: () -> Unit
             d.hunks.isEmpty() -> EmptyCard(Icons.AutoMirrored.Rounded.InsertDriveFile, if (d.oldPath != null) "Renamed" else "Mode change", d.oldPath?.let { "From $it, contents unchanged" })
             else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
                 item(key = "summary") {
-                    Row(Modifier.padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(if (staged) "Staged" else if (entry.untracked) "New file" else "Not staged", style = type.meta, color = colors.ink3)
-                        Spacer(Modifier.width(10.dp))
-                        Counts(d.added, d.removed)
+                    // Where the file stands, and its "+N −M" on a glass pill, at the gutter.
+                    Row(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, bottom = Space.xs), verticalAlignment = Alignment.CenterVertically) {
+                        Text(if (staged) "Staged" else if (entry.untracked) "New file" else "Not staged", style = type.rowMeta, color = colors.ink3, modifier = Modifier.weight(1f))
+                        if (d.added > 0 || d.removed > 0) {
+                            GlassPill(Modifier.semantics(mergeDescendants = true) { contentDescription = ChangesRules.countsSpoken(d.added, d.removed) }) { LineCounts(d.added, d.removed) }
+                        }
                     }
                 }
                 var rows = 0
@@ -150,17 +161,19 @@ private fun HunkCard(hunk: Hunk, language: String, action: Pair<String, () -> Un
     val colors = Pi.colors
     val rows = remember(hunk) { hunkRows(hunk) }
     val text = remember(rows, language, colors) { diffText(rows, language, colors) }
-    GitCard(Modifier.padding(vertical = 4.dp)) {
-        Row(Modifier.fillMaxWidth().background(colors.surface2).padding(start = 14.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+    GitCard(Modifier.padding(vertical = Space.xs)) {
+        // The `@@` line as the card's header (monoMeta ink3 on surface2), with the hunk's own actions at its end.
+        Row(Modifier.fillMaxWidth().background(colors.surface2).padding(start = Space.lg, end = Space.xs), verticalAlignment = Alignment.CenterVertically) {
             Text(hunk.header, style = Pi.type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            if (onDiscard != null) IconAction(Icons.AutoMirrored.Rounded.Undo, "Discard hunk", onClick = onDiscard, enabled = enabled, size = 18.dp)
+            if (onDiscard != null) IconAction(Icons.AutoMirrored.Rounded.Undo, "Discard hunk", onClick = onDiscard, enabled = enabled, size = IconSize.md)
             if (action != null) TextAction(action.first, onClick = action.second, enabled = enabled, modifier = Modifier.heightIn(min = 48.dp))
         }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
         Box(Modifier.fillMaxWidth()) { DiffBlock(text) }
     }
 }
 
 @Composable
 internal fun Note(text: String) {
-    Text(text, style = Pi.type.body, color = Pi.colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp))
+    Text(text, style = Pi.type.rowMeta, color = Pi.colors.ink3, modifier = Modifier.padding(horizontal = Space.page, vertical = Space.lg))
 }

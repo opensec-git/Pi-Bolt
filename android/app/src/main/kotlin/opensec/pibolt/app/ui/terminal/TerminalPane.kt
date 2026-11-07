@@ -11,9 +11,17 @@ import android.content.Context
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.inputmethod.InputMethodManager
-import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import opensec.pibolt.app.ui.components.GlassIconButton
+import opensec.pibolt.app.ui.components.GlassPill
+import opensec.pibolt.app.ui.components.SOFT_PRESS
+import opensec.pibolt.app.ui.components.glass
+import opensec.pibolt.app.ui.theme.IconSize
+import opensec.pibolt.app.ui.theme.Space
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -54,7 +62,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalDensity
@@ -134,17 +141,17 @@ fun TerminalPane(
     Terminals.applyColors(terminalPalette(colors))
 
     Column(modifier.background(colors.canvas)) {
-        // Tabs and actions.
-        Row(Modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+        // Tabs and actions: shells as capsules (the shown one glass), then + and the glass actions at the gutter.
+        Row(Modifier.fillMaxWidth().height(56.dp).padding(end = Space.lg), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f).horizontalScroll(rememberScrollState()).padding(start = Space.page - Space.sm), verticalAlignment = Alignment.CenterVertically) {
                 for (t in tabs) TabChip(t, selected = t.id == tab?.id, onSelect = { Terminals.selected[t.project] = t.id }, onClose = { Terminals.close(app, t) })
-                IconAction(Icons.Rounded.Add, "New terminal", onClick = ::start, enabled = !starting)
+                IconAction(Icons.Rounded.Add, "New terminal", onClick = ::start, enabled = !starting, tint = colors.ink1)
             }
             if (tab != null) {
-                IconAction(Icons.Rounded.ContentPaste, "Paste", onClick = { tab.session.onPasteTextFromClipboard() })
+                GlassIconButton(Icons.Rounded.ContentPaste, "Paste", onClick = { tab.session.onPasteTextFromClipboard() }, size = 40.dp)
                 // Text size is also a pinch on the terminal: the two steps live in one menu, not two icons.
                 Box {
-                    IconAction(Icons.Rounded.FormatSize, "Text size, $fontSp", onClick = { sizeMenu = true })
+                    GlassIconButton(Icons.Rounded.FormatSize, "Text size, $fontSp", onClick = { sizeMenu = true }, size = 40.dp)
                     WorkspaceMenu(sizeMenu, { sizeMenu = false }) {
                         WorkspaceMenuRow("Larger text", Icons.Rounded.TextIncrease, if (fontSp < MAX_FONT_SP) colors.ink1 else colors.ink3) { setFont(fontSp + 1) }
                         WorkspaceMenuRow("Smaller text", Icons.Rounded.TextDecrease, if (fontSp > MIN_FONT_SP) colors.ink1 else colors.ink3) { setFont(fontSp - 1) }
@@ -152,16 +159,17 @@ fun TerminalPane(
                     }
                 }
             }
-            IconAction(
+            GlassIconButton(
                 if (fullScreen) Icons.Rounded.CloseFullscreen else Icons.Rounded.OpenInFull,
                 if (fullScreen) "Leave full screen" else "Full screen terminal",
                 onClick = onToggleFullScreen,
+                size = 40.dp,
             )
         }
-        PreviewChipRow(onPreview, Modifier.padding(horizontal = 12.dp))
+        PreviewChipRow(onPreview, Modifier.padding(horizontal = Space.page))
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (tab == null) {
-                Column(Modifier.fillMaxSize().padding(top = 4.dp)) {
+                Column(Modifier.fillMaxSize().padding(top = Space.xs)) {
                     EmptyCard(Icons.Rounded.Terminal, "A shell in this project", "bash with git, curl and rg") {
                         PrimaryButton(if (starting) "Starting…" else "Start a terminal", onClick = ::start, enabled = !starting, modifier = Modifier.fillMaxWidth())
                         error?.let { Text(it, style = type.meta, color = colors.danger, modifier = Modifier.padding(top = 8.dp)) }
@@ -316,14 +324,15 @@ private fun TabChip(tab: TerminalTab, selected: Boolean, onSelect: () -> Unit, o
         onClose = onClose,
         description = "${tab.label}, " + if (tab.running) tab.title else "ended",
         closeDescription = "Close ${tab.label}",
-        modifier = Modifier.padding(start = 8.dp),
+        modifier = Modifier.padding(end = Space.xs),
         ended = !tab.running,
     )
 }
 
 /**
- * Esc, Tab, Ctrl, Alt, the arrows and the shell characters a phone keyboard hides. Keys are at least 48dp wide: where
- * all twelve fit (landscape, tablets) they share the width, so the row has no dead end; on a phone it scrolls.
+ * Esc, Tab, Ctrl, Alt, the arrows and the shell characters a phone keyboard hides, as glass keys on the canvas. Keys
+ * are at least 48dp wide: where all twelve fit (landscape, tablets) they share the width, so the row has no dead end;
+ * on a phone it scrolls.
  */
 @Composable
 private fun ExtraKeys(view: TerminalView?, ctrl: MutableState<Boolean>, alt: MutableState<Boolean>) {
@@ -341,10 +350,10 @@ private fun ExtraKeys(view: TerminalView?, ctrl: MutableState<Boolean>, alt: Mut
         ctrl.value = false
         alt.value = false
     }
-    BoxWithConstraints(Modifier.fillMaxWidth().background(colors.surface1)) {
-        val fits = maxWidth >= KEY_MIN * EXTRA_KEYS + 8.dp
+    BoxWithConstraints(Modifier.fillMaxWidth().background(colors.canvas).padding(vertical = Space.xxs)) {
+        val fits = maxWidth >= KEY_MIN * EXTRA_KEYS + Space.lg
         Row(
-            Modifier.fillMaxWidth().then(if (fits) Modifier else Modifier.horizontalScroll(rememberScrollState())).padding(horizontal = 4.dp),
+            Modifier.fillMaxWidth().then(if (fits) Modifier else Modifier.horizontalScroll(rememberScrollState())).padding(horizontal = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             val k = if (fits) Modifier.weight(1f) else Modifier
@@ -367,48 +376,50 @@ private fun ExtraKeys(view: TerminalView?, ctrl: MutableState<Boolean>, alt: Mut
 private const val EXTRA_KEYS = 12
 private val KEY_MIN = 48.dp
 
-/** One key: the whole 48dp cell is the target; the 40dp key face (accent while a modifier is on) sits inside it. */
+/**
+ * One glass key: the whole 48dp cell is the target; the 40dp key face inside it is glass (radius md, gradient, ring
+ * and top highlight), pressed at [SOFT_PRESS]. A modifier key that is on (Ctrl, Alt) fills with accent, onAccent text.
+ */
 @Composable
 private fun ExtraKey(text: String?, description: String, modifier: Modifier = Modifier, icon: ImageVector? = null, toggled: Boolean? = null, onClick: () -> Unit) {
     val colors = Pi.colors
-    val shape = RoundedCornerShape(Radius.sm)
-    val fill by animateColorAsState(if (toggled == true) colors.accent else Color.Transparent, PiMotion.effects(), label = "key")
+    val shape = RoundedCornerShape(Radius.md)
+    val on by animateFloatAsState(if (toggled == true) 1f else 0f, PiMotion.effects(), label = "key")
     val ink = if (toggled == true) colors.onAccent else colors.ink1
     Box(
         modifier
             .widthIn(min = KEY_MIN)
             .height(KEY_MIN)
-            .pressable(onClick, shape = shape, label = description)
-            .padding(4.dp)
-            .background(fill, shape)
+            .pressable(onClick, shape = shape, pressedScale = SOFT_PRESS, label = description)
             .semantics {
                 contentDescription = description
                 role = Role.Button
                 if (toggled != null) stateDescription = if (toggled) "On for the next key" else "Off"
-            },
+            }
+            .padding(horizontal = Space.xxs, vertical = Space.xs)
+            .glass(shape, colors)
+            .drawBehind { if (on > 0f) drawRoundRect(colors.accent.copy(alpha = on), cornerRadius = CornerRadius(Radius.md.toPx())) },
         contentAlignment = Alignment.Center,
     ) {
-        if (icon != null) Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size(20.dp))
+        if (icon != null) Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size(IconSize.md))
         else Text(text.orEmpty(), style = Pi.type.monoMeta, color = ink, maxLines = 1)
     }
 }
 
-/** "Preview: localhost:5173" chips for the dev servers listening now (nothing when none). */
+/**
+ * "Preview · localhost:5173" for the dev servers listening now (nothing when none): glass pills, each with an 8dp
+ * success dot for "it answers", a tap opens the preview.
+ */
 @Composable
 fun PreviewChipRow(onPreview: (Int) -> Unit, modifier: Modifier = Modifier) {
     val ports by Terminals.ports.collectAsStateWithLifecycle()
     if (ports.isEmpty()) return
     val colors = Pi.colors
-    Row(modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Space.sm), verticalAlignment = Alignment.CenterVertically) {
         for (port in ports.take(4)) {
-            val shape = RoundedCornerShape(Radius.sm)
-            Box(Modifier.heightIn(min = 48.dp).pressable({ onPreview(port) }, shape = shape, label = "Preview localhost:$port"), contentAlignment = Alignment.Center) {
-                Text(
-                    "Preview: localhost:$port",
-                    style = Pi.type.label,
-                    color = colors.ink1,
-                    modifier = Modifier.background(colors.successSoft, shape).border(1.dp, colors.success.copy(alpha = 0.4f), shape).padding(horizontal = 10.dp, vertical = 6.dp),
-                )
+            GlassPill(onClick = { onPreview(port) }, label = "Preview localhost:$port") {
+                Box(Modifier.size(8.dp).background(colors.success, CircleShape))
+                Text("Preview · localhost:$port", style = Pi.type.label, color = colors.ink1, maxLines = 1)
             }
         }
     }

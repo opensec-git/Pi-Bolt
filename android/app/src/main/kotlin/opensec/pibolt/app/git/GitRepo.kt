@@ -26,6 +26,12 @@ class GitRepo(private val runner: GitRunner, val dir: File) {
 
     suspend fun status(): GitStatus = PorcelainV2.parse(git("status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all").out)
 
+    /** Line counts of the staged and the unstaged changes, per path (`git diff --numstat`, twice). */
+    suspend fun diffStats(): DiffStats = DiffStats(
+        staged = NumStat.parse(git("diff", "--cached", "--numstat", "-z", "--no-ext-diff").out),
+        unstaged = NumStat.parse(git("diff", "--numstat", "-z", "--no-ext-diff").out),
+    )
+
     /**
      * The diff of [entry]: staged (index against HEAD) or unstaged (worktree against the index). An untracked file
      * diffs against nothing, so it reads as all added. Null when there is nothing to show.

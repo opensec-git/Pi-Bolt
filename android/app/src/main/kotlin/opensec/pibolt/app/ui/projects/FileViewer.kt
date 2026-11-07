@@ -35,7 +35,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -54,7 +53,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.automirrored.rounded.FormatIndentIncrease
-import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.VerticalAlignCenter
@@ -114,7 +113,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.ui.components.ConfirmSheet
+import androidx.compose.foundation.shape.CircleShape
+import opensec.pibolt.app.ui.components.GlassBar
+import opensec.pibolt.app.ui.components.GlassChip
+import opensec.pibolt.app.ui.components.GlassIconButton
 import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.glass
+import opensec.pibolt.app.ui.theme.IconSize
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.components.LoadingRow
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiSnackHost
@@ -427,52 +433,53 @@ fun FileViewer(
             .focusRequester(rootFocus)
             .focusable(),
     ) {
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            // Top bar.
-            Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconAction(Icons.Rounded.Close, if (editing) "Stop editing" else "Close", onClick = { if (editing) leaveEdit() else onClose() }, tint = colors.ink1)
-                Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
-                    Text(if (editing) "Editing $name" else name, style = type.subhead, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    val sub = buildList {
-                        add(rel)
-                        add(FileTypes.label(name))
-                        when (doc) {
-                            is FileDoc.Text -> if (doc.complete) add(if (lines.size == 1) "1 line" else "${lines.size} lines") else add(ProjectFiles.size(doc.size))
-                            is FileDoc.Image -> add("${doc.width} × ${doc.height}")
-                            is FileDoc.Binary -> add(ProjectFiles.size(doc.size))
-                            else -> Unit
-                        }
-                        if (readOnly) add("read-only")
-                        if (tab.dirty) add("unsaved")
-                    }.joinToString(" · ")
-                    Text(sub, style = type.monoMeta, color = if (tab.dirty) colors.warning else colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
+        Column(Modifier.fillMaxSize()) {
+            // The glass bar: close, the name over "path · type · lines", then Find, Edit (or Save) and More.
+            val sub = buildList {
+                add(rel)
+                add(FileTypes.label(name))
+                when (doc) {
+                    is FileDoc.Text -> if (doc.complete) add(if (lines.size == 1) "1 line" else "${lines.size} lines") else add(ProjectFiles.size(doc.size))
+                    is FileDoc.Image -> add("${doc.width} × ${doc.height}")
+                    is FileDoc.Binary -> add(ProjectFiles.size(doc.size))
+                    else -> Unit
                 }
-                if (text != null) {
-                    IconAction(Icons.Rounded.Search, "Find in file", onClick = { if (find.open) find.open = false else openFind(replace = false) }, tint = if (find.open) colors.accent else colors.ink2)
-                }
-                if (editing) {
-                    TextAction(if (saving) "Saving…" else "Save", onClick = ::save, color = colors.accent, enabled = tab.dirty && !saving)
-                } else if (canEdit) {
-                    // Editing is the main thing to do with a file: one tap, not a menu entry.
-                    IconAction(Icons.Rounded.Edit, "Edit", onClick = { startEdit() })
-                }
-                Box {
-                    IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
-                    ViewerMenu(
-                        expanded = menu,
-                        onDismiss = { menu = false },
-                        items = buildList {
-                            if (editing && !tab.value.selection.collapsed) add(MenuEntry("Ask Pi about the selection", Icons.Rounded.AutoAwesome) { ask(selection = true) })
-                            add(MenuEntry("Ask Pi about this file", Icons.Rounded.AutoAwesome) { ask(selection = false) })
-                            if (text != null && !showRendered) add(MenuEntry("Go to line", Icons.Rounded.VerticalAlignCenter) { goTo = true })
-                            if (text != null && !showRendered) add(MenuEntry(if (wrap) "Do not wrap lines" else "Wrap lines", Icons.AutoMirrored.Rounded.WrapText) { wrap = !wrap })
-                            add(MenuEntry("Copy path", Icons.Rounded.ContentCopy) { copy("Path", rel, "Path copied") })
-                            if (text != null && !editing) add(MenuEntry("Copy text", Icons.Rounded.ContentCopy) { copy(name, text.text, "Text copied") })
-                            add(MenuEntry("Share", Icons.Rounded.Share) { share() })
-                        },
-                    )
-                }
-            }
+                if (readOnly) add("read-only")
+                if (tab.dirty) add("unsaved")
+            }.joinToString(" · ")
+            GlassBar(
+                title = if (editing) "Editing $name" else name,
+                subtitle = sub,
+                subtitleColor = if (tab.dirty) colors.warning else colors.ink3,
+                leading = { GlassIconButton(Icons.Rounded.Close, if (editing) "Stop editing" else "Close", onClick = { if (editing) leaveEdit() else onClose() }) },
+                actions = {
+                    if (text != null) {
+                        GlassIconButton(Icons.Rounded.Search, "Find in file", onClick = { if (find.open) find.open = false else openFind(replace = false) }, tint = if (find.open) colors.accent else colors.ink1)
+                    }
+                    if (editing) {
+                        GlassChip(if (saving) "Saving…" else "Save", onClick = ::save, enabled = tab.dirty && !saving, tint = colors.accent)
+                    } else if (canEdit) {
+                        // Editing is the main thing to do with a file: one tap, not a menu entry.
+                        GlassIconButton(Icons.Rounded.Edit, "Edit", onClick = { startEdit() })
+                    }
+                    Box {
+                        GlassIconButton(Icons.Rounded.MoreHoriz, "More", onClick = { menu = true })
+                        ViewerMenu(
+                            expanded = menu,
+                            onDismiss = { menu = false },
+                            items = buildList {
+                                if (editing && !tab.value.selection.collapsed) add(MenuEntry("Ask Pi about the selection", Icons.Rounded.AutoAwesome) { ask(selection = true) })
+                                add(MenuEntry("Ask Pi about this file", Icons.Rounded.AutoAwesome) { ask(selection = false) })
+                                if (text != null && !showRendered) add(MenuEntry("Go to line", Icons.Rounded.VerticalAlignCenter) { goTo = true })
+                                if (text != null && !showRendered) add(MenuEntry(if (wrap) "Do not wrap lines" else "Wrap lines", Icons.AutoMirrored.Rounded.WrapText) { wrap = !wrap })
+                                add(MenuEntry("Copy path", Icons.Rounded.ContentCopy) { copy("Path", rel, "Path copied") })
+                                if (text != null && !editing) add(MenuEntry("Copy text", Icons.Rounded.ContentCopy) { copy(name, text.text, "Text copied") })
+                                add(MenuEntry("Share", Icons.Rounded.Share) { share() })
+                            },
+                        )
+                    }
+                },
+            )
             // Landscape with the keyboard up: the strip gives its 48dp to the text (tabs come back with the keyboard down).
             if (tabs.tabs.size > 1 && ProjectNavRules.showChrome(WindowInsets.isImeVisible, LocalConfiguration.current.screenHeightDp)) {
                 TabStrip(tabs, rel, onSelect = onSelect, onClose = ::closeTab)
@@ -485,7 +492,7 @@ fun FileViewer(
                         rendered = it
                         if (it) find.open = false
                     },
-                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, bottom = Space.sm),
                     height = 48.dp,
                 )
             }
@@ -607,7 +614,7 @@ private fun matchesByLine(matches: List<TextMatch>, lines: List<IntRange>): Map<
 /** Open files as tabs ([WorkspaceTab]): a dot when unsaved, the name and a close button. */
 @Composable
 private fun TabStrip(tabs: EditorTabs, shown: String, onSelect: (String) -> Unit, onClose: (EditorTab) -> Unit) {
-    Row(Modifier.fillMaxWidth().height(48.dp).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(48.dp).horizontalScroll(rememberScrollState()).padding(horizontal = Space.page - Space.xs), verticalAlignment = Alignment.CenterVertically) {
         for (t in tabs.tabs) {
             WorkspaceTab(
                 name = t.name,
@@ -796,8 +803,10 @@ private fun Note(title: String, detail: String?, action: (@Composable () -> Unit
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(Icons.AutoMirrored.Rounded.InsertDriveFile, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(40.dp))
-        Spacer(Modifier.height(16.dp))
+        Box(Modifier.size(56.dp).glass(CircleShape, colors), contentAlignment = Alignment.Center) {
+            Icon(Icons.AutoMirrored.Rounded.InsertDriveFile, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.lg))
+        }
+        Spacer(Modifier.height(Space.lg))
         Text(title, style = Pi.type.title, color = colors.ink1, textAlign = TextAlign.Center)
         detail?.let {
             Spacer(Modifier.height(6.dp))

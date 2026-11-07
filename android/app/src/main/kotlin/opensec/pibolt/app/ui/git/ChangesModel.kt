@@ -13,6 +13,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.engine.EngineApi
+import opensec.pibolt.app.git.DiffStats
 import opensec.pibolt.app.git.GitException
 import opensec.pibolt.app.git.GitProgress
 import opensec.pibolt.app.git.GitRepo
@@ -47,6 +48,10 @@ class ChangesModel(runner: GitRunner, val dir: File, private val scope: Coroutin
     var remote by mutableStateOf<String?>(null)
         private set
 
+    /** Line counts of the staged and unstaged changes, for the "+N −M" summary and the file rows. */
+    var stats by mutableStateOf(DiffStats.EMPTY)
+        private set
+
     /** Bumped after every change so open diffs and the history reload. */
     var version by mutableStateOf(0)
         private set
@@ -62,9 +67,12 @@ class ChangesModel(runner: GitRunner, val dir: File, private val scope: Coroutin
         isRepo = repoHere
         if (!repoHere) {
             status = null
+            stats = DiffStats.EMPTY
             return
         }
         runCatching { repo.status() }.onSuccess { status = it }.onFailure { if (it !is CancellationException) onError(it.message ?: "git status failed") }
+        // Counts are a summary: only read when something changed, and a failure leaves them out quietly.
+        stats = if (status?.clean == false) runCatching { repo.diffStats() }.getOrDefault(DiffStats.EMPTY) else DiffStats.EMPTY
         remote = runCatching { repo.remoteUrl() }.getOrNull()
     }
 
