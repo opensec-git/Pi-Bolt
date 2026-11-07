@@ -5,6 +5,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
+import { registerLiveSession, unregisterLiveSession } from "../../src/core/live-sessions.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import {
 	capMessage,
@@ -409,7 +410,7 @@ describe("subagent stream binding", () => {
 				.map((message) => JSON.stringify(message.content));
 		const resets = (runId: string) =>
 			sent.filter((message) => message.type === "subagent_entries" && message.runId === runId && message.reset);
-		return { streams, call, result, agent, replies, resets };
+		return { streams, parentFile, call, result, agent, replies, resets, sent };
 	}
 
 	it("does not bind a repeated prompt to an earlier run's agent", async () => {
@@ -452,6 +453,51 @@ describe("subagent stream binding", () => {
 		result("run-b", "bbbbbbbb2222");
 		await until(() => replies("run-b").some((reply) => reply.includes("reply b")));
 		expect(resets("run-b")).toHaveLength(2);
+	});
+
+	it("sends the whole saved history before the streaming message's snapshot", async () => {
+		const { streams, parentFile, call, result, agent, sent } = await files();
+		const t = Date.now() - 60_000;
+		call("run-1", { prompt: "long" }, t);
+		result("run-1", "11111111aaaa");
+		const file = agent("11111111aaaa", "long", "first", t + 1_000);
+		// Two saved answers of 700 KB: more than one read of the file.
+		for (const text of ["a", "b"]) {
+			const line = {
+				type: "message",
+				message: { role: "assistant", content: [{ type: "text", text: text.repeat(700_000) }] },
+			};
+			appendFileSync(file, `${JSON.stringify(line)}\n`);
+		}
+		// The agent's session, open in this process and streaming an answer.
+		const listeners: Array<(event: unknown) => void> = [];
+		const live = {
+			sessionFile: file,
+			sessionName: "general-purpose#11111111",
+			sessionManager: { getHeader: () => ({ parentSession: parentFile, timestamp: new Date(t).toISOString() }) },
+			messages: [{ role: "user", content: "long" }],
+			isStreaming: true,
+			agent: { state: { streamingMessage: { role: "assistant", content: [{ type: "text", text: "partial" }] } } },
+			subscribe: (listener: (event: unknown) => void) => {
+				listeners.push(listener);
+				return () => listeners.splice(listeners.indexOf(listener), 1);
+			},
+		};
+		registerLiveSession(live as never);
+		cleanups.push(() => unregisterLiveSession(live as never));
+		streams.subscribe("run-1");
+		const isStart = (message: Message) =>
+			message.type === "subagent_events" &&
+			(message.events as Message[]).some((event) => event.type === "message_start");
+		await until(() => sent.some(isStart));
+		const startAt = sent.findIndex(isStart);
+		const saved = sent
+			.slice(0, startAt)
+			.filter((message) => message.type === "subagent_entries")
+			.flatMap((message) => message.messages as Message[])
+			.filter((message) => message.role === "assistant");
+		expect(saved).toHaveLength(3);
+		expect(sent.slice(startAt).some((message) => message.type === "subagent_entries")).toBe(false);
 	});
 
 	it("lets a resumed run share its agent's file with the original run", async () => {

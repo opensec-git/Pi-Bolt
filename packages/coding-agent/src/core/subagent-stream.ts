@@ -300,6 +300,11 @@ class SubagentStream {
 	/** For a live session without a file: messages already sent. */
 	private sentMessages = 0;
 	private resetPending = true;
+	/**
+	 * True once the phone has every saved message (the file read to its end). Until then live events are not sent: an
+	 * older saved message arriving after them would clear the phone's copy of the streaming one.
+	 */
+	private caughtUp = false;
 	/** Set by `stop()`: a poll deferred before it does nothing, so a stopped stream never listens again. */
 	private stopped = false;
 	private lastScan = 0;
@@ -387,6 +392,7 @@ class SubagentStream {
 		this.rest = Buffer.alloc(0);
 		this.sentMessages = 0;
 		this.resetPending = true;
+		this.caughtUp = false;
 		this.lastScan = 0;
 		this.events = [];
 	}
@@ -416,16 +422,27 @@ class SubagentStream {
 			this.live = session;
 			this.file ??= session.sessionFile;
 			this.unsubscribeLive = session.subscribe((event) => this.onLiveEvent(event));
-			// Joined while a message streams: start the phone's copy from what it has so far.
-			const streaming = session.agent.state.streamingMessage;
-			if (session.isStreaming && streaming?.role === "assistant") {
-				this.queueEvent({
-					type: "message_start",
-					message: capMessage(streaming as unknown as Json, this.owner.limits.maxMessageBytes),
-				});
-			}
+			if (this.caughtUp) this.sendSnapshot();
 			return;
 		}
+	}
+
+	/** Joined while a message streams: starts the phone's copy from what it has so far. */
+	private sendSnapshot(): void {
+		const streaming = this.live?.agent.state.streamingMessage;
+		if (this.live?.isStreaming && streaming?.role === "assistant") {
+			this.queueEvent({
+				type: "message_start",
+				message: capMessage(streaming as unknown as Json, this.owner.limits.maxMessageBytes),
+			});
+		}
+	}
+
+	/** The phone has every saved message now: live events follow, from a snapshot of the streaming message. */
+	private markCaughtUp(): void {
+		if (this.caughtUp) return;
+		this.caughtUp = true;
+		this.sendSnapshot();
 	}
 
 	private scan(): void {
@@ -459,6 +476,8 @@ class SubagentStream {
 			this.offset = 0;
 			this.rest = Buffer.alloc(0);
 			this.resetPending = true;
+			this.caughtUp = false;
+			this.events = [];
 		}
 		if (size === this.offset && !this.resetPending) return;
 		const messages: Json[] = [];
@@ -492,6 +511,7 @@ class SubagentStream {
 			}
 		}
 		this.sendEntries(messages);
+		if (this.offset >= size) this.markCaughtUp();
 	}
 
 	private readLiveMessages(): void {
@@ -499,10 +519,13 @@ class SubagentStream {
 		if (all.length < this.sentMessages) {
 			this.sentMessages = 0;
 			this.resetPending = true;
+			this.caughtUp = false;
+			this.events = [];
 		}
 		const fresh = all.slice(this.sentMessages).filter((message) => message.role !== "system") as unknown as Json[];
 		this.sentMessages = all.length;
 		this.sendEntries(fresh);
+		this.markCaughtUp();
 	}
 
 	private sendEntries(messages: Json[]): void {
@@ -535,6 +558,11 @@ class SubagentStream {
 	}
 
 	private onLiveEvent(event: AgentSessionEvent): void {
+		// Still sending saved messages: the snapshot taken once they are all sent covers what streams meanwhile.
+		if (!this.caughtUp) {
+			if (event.type === "message_end") setImmediate(() => this.poll());
+			return;
+		}
 		switch (event.type) {
 			case "message_start":
 			case "message_end":
