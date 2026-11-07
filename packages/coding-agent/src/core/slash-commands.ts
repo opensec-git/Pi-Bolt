@@ -28,7 +28,7 @@ export const BUILTIN_SLASH_COMMANDS: ReadonlyArray<BuiltinSlashCommand> = [
 	{
 		name: "remote-control",
 		description: "Control this session from the Pi-Bolt Android app (QR pairing)",
-		argumentHint: "[tunnel|copy|stop|devices]",
+		argumentHint: "[lan|tunnel|copy|stop|devices]",
 	},
 	{ name: "bug", description: "Report a bug to the Pi developers", argumentHint: "<description>" },
 	{ name: "copy", description: "Copy last agent message to clipboard" },
