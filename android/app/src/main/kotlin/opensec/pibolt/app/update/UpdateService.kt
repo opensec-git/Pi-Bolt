@@ -119,6 +119,7 @@ object UpdateNotifications {
     fun progress(context: Context, job: UpdateJob): Notification {
         val builder = NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_bolt)
+            .setColor(ContextCompat.getColor(context, R.color.notification_accent))
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -158,6 +159,7 @@ object UpdateNotifications {
         RESULT_ID,
         NotificationCompat.Builder(context, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_bolt)
+            .setColor(ContextCompat.getColor(context, R.color.notification_accent))
             .setContentTitle(title)
             .setContentText(text)
             .setAutoCancel(true)

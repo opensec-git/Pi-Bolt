@@ -158,6 +158,7 @@ object SessionAlerts {
         val open = PendingIntent.getActivity(context, AGENT_ID, openIntent(context), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         val notification = NotificationCompat.Builder(context, CHANNEL_ALERTS)
             .setSmallIcon(R.drawable.ic_stat_bolt)
+            .setColor(ContextCompat.getColor(context, R.color.notification_accent))
             .setContentTitle(title)
             .setContentText(text.take(200))
             .setAutoCancel(true)
@@ -166,6 +167,7 @@ object SessionAlerts {
             .setPublicVersion(
                 NotificationCompat.Builder(context, CHANNEL_ALERTS)
                     .setSmallIcon(R.drawable.ic_stat_bolt)
+                    .setColor(ContextCompat.getColor(context, R.color.notification_accent))
                     // The title names no task, so it is safe on the lock screen, and it stays true for a stop or a group.
                     .setContentTitle(title)
                     .setContentText("Unlock to see it")

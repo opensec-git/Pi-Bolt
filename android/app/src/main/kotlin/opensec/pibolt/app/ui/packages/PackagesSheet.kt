@@ -116,7 +116,7 @@ fun PackagesSheet(engine: EngineApi, controller: SessionController?, onReload: (
     }
 
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Packages", subtitle = "Extensions, skills and prompts that Pi loads. Install from npm or git, switch off, or remove.")
+        SheetHeader("Packages", subtitle = "Extensions, skills and prompts that Pi loads.")
         Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState())) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                 PiTextField(

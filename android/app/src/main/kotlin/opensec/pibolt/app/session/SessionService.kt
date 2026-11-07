@@ -155,6 +155,7 @@ object Notifications {
     fun ongoing(context: Context, host: String, text: String, lines: List<String> = emptyList()): Notification =
         NotificationCompat.Builder(context, CHANNEL_SESSION)
             .setSmallIcon(R.drawable.ic_stat_bolt)
+            .setColor(ContextCompat.getColor(context, R.color.notification_accent))
             .setContentTitle(host)
             .setContentText(text)
             .apply { if (lines.isNotEmpty()) setStyle(NotificationCompat.InboxStyle().also { style -> lines.forEach(style::addLine) }) }
@@ -177,6 +178,7 @@ object Notifications {
             id,
             NotificationCompat.Builder(context, CHANNEL_ALERTS)
                 .setSmallIcon(R.drawable.ic_stat_bolt)
+                .setColor(ContextCompat.getColor(context, R.color.notification_accent))
                 .setContentTitle(title)
                 .setContentText(text)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(lastText.take(1000).ifBlank { text }))
@@ -194,6 +196,7 @@ object Notifications {
             id,
             NotificationCompat.Builder(context, CHANNEL_ALERTS)
                 .setSmallIcon(R.drawable.ic_stat_bolt)
+                .setColor(ContextCompat.getColor(context, R.color.notification_accent))
                 .setContentTitle("Pi needs an answer on $host")
                 .setContentText(title.ifBlank { "Tap to answer" })
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -213,6 +216,7 @@ object Notifications {
         setPublicVersion(
             NotificationCompat.Builder(context, CHANNEL_ALERTS)
                 .setSmallIcon(R.drawable.ic_stat_bolt)
+                .setColor(ContextCompat.getColor(context, R.color.notification_accent))
                 .setContentTitle(publicTitle)
                 .setContentText("Unlock to see it")
                 .build(),
