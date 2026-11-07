@@ -394,7 +394,8 @@ the sheet's memory (never saved instance state), is cleared after saving and nev
 an OAuth client id) and "Use a personal access token" (secondary, key glyph). Device flow sheet: the user code in
 display mono on a surface1 well (TalkBack spells it), Copy, "Open github.com/login/device" (primary), then a 16dp Wait
 Quad and "Waiting for you to approve on GitHub"; errors in danger with Try again. Token sheet: what scopes to pick, a
-link to create one, a masked mono field, the storage line (Keystore, never shown again, never logged) and Save, which
+link to create one, a `SecretField`, the storage line as its `FieldHint` (Keystore, never shown again, never logged;
+the error in its place) and Save, which
 checks the token against GitHub first. Signed in: name and @login, how and which scopes, a line on where it is used,
 Sign out (confirmed).
 
