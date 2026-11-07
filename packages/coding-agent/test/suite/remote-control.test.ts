@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
@@ -8,12 +9,13 @@ import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { SettingsManager } from "../../src/core/settings-manager.ts";
-import { RemoteControlController } from "../../src/remote-control/controller.ts";
+import type { RemoteControlSettings } from "../../src/core/settings-schema.ts";
+import { RemoteControlController, type RemoteControlDeps } from "../../src/remote-control/controller.ts";
 import { generateKeyPair } from "../../src/remote-control/noise.ts";
 import { CloseCode, decodePairingUri, encodePairingUri } from "../../src/remote-control/protocol.ts";
 import { RemoteControlServer } from "../../src/remote-control/server.ts";
 import { RemoteControlStore } from "../../src/remote-control/store.ts";
-import { startTunnel } from "../../src/remote-control/tunnel.ts";
+import { installCloudflared, startTunnel, TunnelError } from "../../src/remote-control/tunnel.ts";
 import { createHarness, type Harness } from "./harness.ts";
 import { connectTestClient, type TestClient } from "./remote-control-client.ts";
 
@@ -389,36 +391,159 @@ describe("remote control", () => {
 	});
 
 	describe("controller", () => {
-		async function controllerSetup() {
+		async function controllerSetup(
+			options: {
+				remoteControl?: RemoteControlSettings;
+				deps?: Partial<RemoteControlDeps>;
+				select?: (title: string, options: string[]) => Promise<string | undefined>;
+				command?: string;
+			} = {},
+		) {
 			const harness = await createHarness();
 			cleanups.push(() => harness.cleanup());
 			const lines: string[][] = [];
 			const statuses: Array<string | undefined> = [];
-			const controller = new RemoteControlController({
-				getSession: () => harness.session,
-				settingsManager: SettingsManager.inMemory({ remoteControl: { port: 0 } }),
-				agentDir: tempDir(),
-				version: "9.9.9",
-				showStatus: () => {},
-				showWarning: () => {},
-				showError: (message) => {
-					throw new Error(message);
+			const warnings: string[] = [];
+			const settingsManager = SettingsManager.inMemory({ remoteControl: { port: 0, ...options.remoteControl } });
+			const controller = new RemoteControlController(
+				{
+					getSession: () => harness.session,
+					settingsManager,
+					agentDir: tempDir(),
+					version: "9.9.9",
+					showStatus: () => {},
+					showWarning: (message) => warnings.push(message),
+					showError: (message) => {
+						throw new Error(message);
+					},
+					showLines: (block) => lines.push(block),
+					setStatus: (text) => statuses.push(text),
+					select: options.select ?? (async () => undefined),
+					copyToClipboard: async () => {},
+					columns: () => 200,
+					rows: () => 60,
+					bindAddress: "127.0.0.1",
 				},
-				showLines: (block) => lines.push(block),
-				setStatus: (text) => statuses.push(text),
-				select: async () => undefined,
-				copyToClipboard: async () => {},
-				columns: () => 200,
-				rows: () => 60,
-				bindAddress: "127.0.0.1",
-			});
+				// No real cloudflared in tests: by default it is "not installed".
+				{
+					startTunnel: async () => {
+						throw new TunnelError("cloudflared was not found.", true);
+					},
+					installCloudflared: async () => "not in tests",
+					platform: "darwin",
+					...options.deps,
+				},
+			);
 			cleanups.push(() => controller.stop());
-			await controller.handleCommand("");
+			await controller.handleCommand(options.command ?? "");
 			const pairing = decodePairingUri(controller.pairingUri ?? "");
 			const port = new URL(pairing.e[0] ?? "ws://127.0.0.1:1").port;
 			const uri = encodePairingUri({ ...pairing, e: [`ws://127.0.0.1:${port}/rc`] });
-			return { controller, lines, statuses, uri };
+			return { controller, lines, statuses, warnings, settingsManager, uri, pairing };
 		}
+
+		const fakeTunnel = (endpoint = "wss://quiet-fox.trycloudflare.com/rc") => {
+			const stopped: string[] = [];
+			return {
+				stopped,
+				start: async () => ({ endpoint, stop: () => stopped.push(endpoint) }),
+			};
+		};
+
+		it("starts the Cloudflare tunnel by default and puts both addresses in the QR code", async () => {
+			const tunnel = fakeTunnel();
+			const { pairing, statuses, lines } = await controllerSetup({ deps: { startTunnel: tunnel.start } });
+			expect(pairing.e.at(-1)).toBe("wss://quiet-fox.trycloudflare.com/rc");
+			expect(pairing.e[0]).toMatch(/^ws:\/\//);
+			expect(statuses.at(-1)).toBe("remote lan+tunnel: waiting");
+			expect(lines.at(-1)?.some((line) => line.includes("internet   wss://quiet-fox.trycloudflare.com/rc"))).toBe(
+				true,
+			);
+		});
+
+		it("stays on the LAN with /remote-control lan and when the tunnel setting is off", async () => {
+			let started = 0;
+			const start = async () => {
+				started++;
+				return { endpoint: "wss://x.trycloudflare.com/rc", stop: () => {} };
+			};
+			const lan = await controllerSetup({ deps: { startTunnel: start }, command: "lan" });
+			expect(lan.pairing.e.every((endpoint) => endpoint.startsWith("ws://"))).toBe(true);
+			const off = await controllerSetup({ deps: { startTunnel: start }, remoteControl: { tunnel: "off" } });
+			expect(off.pairing.e.every((endpoint) => endpoint.startsWith("ws://"))).toBe(true);
+			expect(started).toBe(0);
+		});
+
+		it("offers to install a missing cloudflared, then starts the tunnel", async () => {
+			let installed = false;
+			const asked: string[][] = [];
+			const { pairing } = await controllerSetup({
+				deps: {
+					startTunnel: async () => {
+						if (!installed) throw new TunnelError("cloudflared was not found.", true);
+						return { endpoint: "wss://after-install.trycloudflare.com/rc", stop: () => {} };
+					},
+					installCloudflared: async () => {
+						installed = true;
+						return undefined;
+					},
+				},
+				select: async (_title, options) => {
+					asked.push(options);
+					return options[0];
+				},
+			});
+			expect(asked[0]?.[0]).toBe("Install it now (brew install cloudflared)");
+			expect(pairing.e.at(-1)).toBe("wss://after-install.trycloudflare.com/rc");
+		});
+
+		it('remembers "Don\'t ask again" and keeps working on the LAN', async () => {
+			const first = await controllerSetup({ select: async (_title, options) => options.at(-1) });
+			expect(first.settingsManager.getRemoteControlSettings().askCloudflared).toBe(false);
+			expect(first.pairing.e.every((endpoint) => endpoint.startsWith("ws://"))).toBe(true);
+			let asked = 0;
+			await controllerSetup({
+				remoteControl: { askCloudflared: false },
+				select: async () => {
+					asked++;
+					return undefined;
+				},
+			});
+			expect(asked).toBe(0);
+		});
+
+		it("stops a tunnel that finishes starting after /remote-control lan", async () => {
+			let finish: (() => void) | undefined;
+			const stopped: string[] = [];
+			const slowStart = () =>
+				new Promise<{ endpoint: string; stop: () => void }>((resolve) => {
+					finish = () =>
+						resolve({ endpoint: "wss://late.trycloudflare.com/rc", stop: () => stopped.push("late") });
+				});
+			const { controller } = await controllerSetup({ deps: { startTunnel: slowStart }, command: "lan" });
+			// The default command starts the tunnel; `lan` runs before it finishes (the editor does not await commands).
+			const pending = controller.handleCommand("");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await controller.handleCommand("lan");
+			finish?.();
+			await pending;
+			expect(stopped).toEqual(["late"]);
+			expect(decodePairingUri(controller.pairingUri ?? "").e.every((endpoint) => endpoint.startsWith("ws://"))).toBe(
+				true,
+			);
+		});
+
+		it("keeps the LAN when the tunnel fails, but fails /remote-control tunnel", async () => {
+			const broken = async () => {
+				throw new TunnelError("cloudflared exited with code 1");
+			};
+			const auto = await controllerSetup({ deps: { startTunnel: broken } });
+			expect(auto.warnings.some((warning) => warning.includes("this network only"))).toBe(true);
+			expect(auto.pairing.e.length).toBeGreaterThan(0);
+			await expect(controllerSetup({ deps: { startTunnel: broken }, command: "tunnel" })).rejects.toThrow(
+				"cloudflared exited with code 1",
+			);
+		});
 
 		it("shows the QR code and footer status", async () => {
 			const { lines, statuses } = await controllerSetup();
@@ -489,6 +614,24 @@ describe("remote control", () => {
 			chmodSync(path, 0o755);
 			return path;
 		}
+
+		it("installs cloudflared with the package manager and reports its output", async () => {
+			const ok = fakeCloudflared(`console.log("==> Pouring cloudflared"); console.log("==> Summary");`);
+			const lines: string[] = [];
+			const spawnOk = ((_command: string, args: string[], spawnOptions: object) =>
+				spawn(ok, args, spawnOptions)) as unknown as typeof spawn;
+			expect(
+				await installCloudflared((line) => lines.push(line), { spawnProcess: spawnOk, platform: "darwin" }),
+			).toBeUndefined();
+			expect(lines.at(-1)).toBe("==> Summary");
+			const bad = fakeCloudflared(`console.error("Error: no bottle"); process.exit(1);`);
+			const spawnBad = ((_command: string, args: string[], spawnOptions: object) =>
+				spawn(bad, args, spawnOptions)) as unknown as typeof spawn;
+			expect(await installCloudflared(() => {}, { spawnProcess: spawnBad, platform: "darwin" })).toContain(
+				"brew exited with code 1",
+			);
+			expect(await installCloudflared(() => {}, { platform: "linux" })).toContain("developers.cloudflare.com");
+		});
 
 		it("starts a quick tunnel and returns its wss endpoint", async () => {
 			const path = fakeCloudflared(`

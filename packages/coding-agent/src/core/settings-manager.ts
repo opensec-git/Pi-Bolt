@@ -1052,6 +1052,17 @@ export class SettingsManager {
 		return value && typeof value === "object" ? value : {};
 	}
 
+	/** "Don't ask again" for /remote-control's offer to install cloudflared. */
+	setRemoteControlAskCloudflared(ask: boolean): void {
+		const current = this.globalSettings.remoteControl;
+		this.globalSettings.remoteControl = {
+			...(current && typeof current === "object" ? current : {}),
+			askCloudflared: ask,
+		};
+		this.markModified("remoteControl", "askCloudflared");
+		this.save();
+	}
+
 	setSessionShareDestination(destination: SessionShareDestination): void {
 		this.globalSettings.sessionShareDestination = destination;
 		this.markModified("sessionShareDestination");

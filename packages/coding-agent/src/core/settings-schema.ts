@@ -282,6 +282,7 @@ export const SettingsSchema = Type.Object(
 					tunnel: Type.Optional(
 						Type.Union([
 							Type.Literal("quick"),
+							Type.Literal("off"),
 							Type.Object(
 								{
 									name: Type.String({ description: "Named Cloudflare tunnel (cloudflared tunnel create)." }),
@@ -292,6 +293,12 @@ export const SettingsSchema = Type.Object(
 						]),
 					),
 					cloudflared: Type.Optional(Type.String({ description: "Path to the cloudflared executable." })),
+					askCloudflared: Type.Optional(
+						Type.Boolean({
+							description:
+								'Offer to install cloudflared when /remote-control finds none (false after "Don\'t ask again").',
+						}),
+					),
 				},
 				{ additionalProperties: false, description: "Settings of /remote-control (Pi-Bolt Android app)." },
 			),
