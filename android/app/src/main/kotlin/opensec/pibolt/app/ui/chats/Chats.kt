@@ -25,12 +25,14 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.cost.Cost
 import opensec.pibolt.app.engine.ChatSpace
 import opensec.pibolt.app.engine.EngineApi
 import opensec.pibolt.app.engine.SessionSummary
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.protocol.obj
 import opensec.pibolt.protocol.rpc.ModelInfo
+import opensec.pibolt.app.ui.cost.SpendText
 import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.ui.projects.ProjectRules
 import opensec.pibolt.app.ui.session.features2.SessionBrowse
@@ -43,9 +45,9 @@ import java.util.Locale
 
 /** A saved chat as the Chats list shows it. */
 @Immutable
-data class ChatSummary(val file: String, val title: String, val updatedAt: Long, val messageCount: Int) {
+data class ChatSummary(val file: String, val title: String, val updatedAt: Long, val messageCount: Int, val cost: Cost = Cost.NONE) {
     companion object {
-        fun of(s: SessionSummary): ChatSummary = ChatSummary(s.file, ChatSpace.title(s.name, s.preview), s.updatedAt, s.messageCount)
+        fun of(s: SessionSummary): ChatSummary = ChatSummary(s.file, ChatSpace.title(s.name, s.preview), s.updatedAt, s.messageCount, s.cost)
     }
 }
 
@@ -53,8 +55,9 @@ data class ChatSummary(val file: String, val title: String, val updatedAt: Long,
 object ChatList {
     fun messages(n: Int): String = if (n == 1) "1 message" else "$n messages"
 
-    /** The row's second line: "2h · 12 messages". */
-    fun meta(chat: ChatSummary, now: Long): String = ProjectRules.agoShort(chat.updatedAt, now) + " · " + messages(chat.messageCount)
+    /** The row's second line: "2h · 12 messages", and with [showCost] its cost ("2h · 12 messages · $0.42"). */
+    fun meta(chat: ChatSummary, now: Long, showCost: Boolean = false): String =
+        SpendText.withCost(ProjectRules.agoShort(chat.updatedAt, now) + " · " + messages(chat.messageCount), chat.cost, showCost)
 
     /**
      * [chats] (newest first) under date heads, as ChatGPT's list: "Today", "Yesterday", "Previous 7 days", "Previous 30

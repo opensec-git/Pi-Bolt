@@ -8,7 +8,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import opensec.pibolt.protocol.ProtocolJson
+import opensec.pibolt.app.cost.SpendLimits
 import opensec.pibolt.protocol.bool
+import opensec.pibolt.protocol.double
 import opensec.pibolt.protocol.int
 import opensec.pibolt.protocol.str
 import java.io.File
@@ -61,6 +63,8 @@ data class AppSettings(
      * (engine/ChatSpace.kt). Off: engines start without them.
      */
     val webSearch: Boolean = true,
+    /** Settings > Agent > Spending: limits per session, day and month, and costs on list rows. */
+    val spend: SpendLimits = SpendLimits(),
 ) {
     companion object {
         val TOOL_PREVIEW_CHOICES = listOf(6, 12, 24)
@@ -84,6 +88,10 @@ object SettingsCodec {
         put("notificationsAsked", s.notificationsAsked)
         put("autoUpdateCheck", s.autoUpdateCheck)
         put("webSearch", s.webSearch)
+        s.spend.session?.let { put("spendSession", it) }
+        s.spend.day?.let { put("spendDay", it) }
+        s.spend.month?.let { put("spendMonth", it) }
+        put("spendInLists", s.spend.showInLists)
     }.toString()
 
     fun decode(text: String?): AppSettings {
@@ -101,8 +109,17 @@ object SettingsCodec {
             notificationsAsked = json.bool("notificationsAsked") ?: d.notificationsAsked,
             autoUpdateCheck = json.bool("autoUpdateCheck") ?: d.autoUpdateCheck,
             webSearch = json.bool("webSearch") ?: d.webSearch,
+            spend = SpendLimits(
+                session = limit(json.double("spendSession")),
+                day = limit(json.double("spendDay")),
+                month = limit(json.double("spendMonth")),
+                showInLists = json.bool("spendInLists") ?: d.spend.showInLists,
+            ),
         )
     }
+
+    /** A saved limit: positive and finite, else none. */
+    private fun limit(value: Double?): Double? = value?.takeIf { it.isFinite() && it > 0.0 }
 
     private inline fun <reified E : Enum<E>> enumOr(name: String?, fallback: E): E =
         enumValues<E>().firstOrNull { it.name == name } ?: fallback

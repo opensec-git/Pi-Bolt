@@ -34,6 +34,7 @@ object SettingsIndex {
         SettingEntry("images", SettingsGroup.Agent, "Block images", "pictures photos attachments vision privacy"),
         SettingEntry("thinking-expanded", SettingsGroup.Agent, "Show thinking expanded", "reasoning collapse session display"),
         SettingEntry("tool-preview", SettingsGroup.Agent, "Tool output preview", "lines output tools session display"),
+        SettingEntry("spending", SettingsGroup.Agent, "Spending", "cost costs money budget limit limits cap caps dollars usd price spend daily monthly"),
         SettingEntry("runtimes", SettingsGroup.Projects, "Runtimes", "node nodejs javascript npm npx python python3 pip packages cache languages"),
         SettingEntry("packages", SettingsGroup.Projects, "Packages and extensions", "extensions packages npm git install skills prompts"),
         SettingEntry("mcp", SettingsGroup.Projects, "MCP servers", "mcp model context protocol servers tools"),

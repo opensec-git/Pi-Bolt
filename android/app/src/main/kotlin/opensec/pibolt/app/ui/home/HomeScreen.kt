@@ -130,6 +130,9 @@ import opensec.pibolt.app.ui.chats.ChatList
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Forum
 import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.cost.SpendLimitsSheet
+import opensec.pibolt.app.ui.cost.SpendSheet
+import opensec.pibolt.app.ui.cost.rememberTodayLine
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.hosts.HostCard
 import opensec.pibolt.app.ui.hosts.PasteSheet
@@ -160,6 +163,7 @@ import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Tnum
 import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.update.UpdateCard
 import opensec.pibolt.app.update.UpdateJob
@@ -284,6 +288,8 @@ fun HomeScreen(
     var details by remember { mutableStateOf(false) }
     var addProvider by remember { mutableStateOf(false) }
     var plusMenu by remember { mutableStateOf(false) }
+    var spendSheet by remember { mutableStateOf(false) }
+    var spendLimits by remember { mutableStateOf(false) }
     var sheetList by remember { mutableStateOf<HomeList?>(null) }
     var addComputer by remember { mutableStateOf(false) }
     var managing by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -409,7 +415,8 @@ fun HomeScreen(
     val recentChats = if (unavailable) emptyList() else chats.take(RECENT_CHATS)
     // The Chats row, under Recents, once the folders are read.
     val chatsRow = !unavailable && list != null
-    val recentsAt = 1 + listOf(status.needsBanner(), showUpdate, setup, hasProjects).count { it }
+    // 2: the header and today's spending line (an empty item when nothing was spent).
+    val recentsAt = 2 + listOf(status.needsBanner(), showUpdate, setup, hasProjects).count { it }
     val projectsAt = recentsAt + (if (running.isNotEmpty() || idleRecent.isNotEmpty()) 1 + running.size + idleRecent.size else 0) +
         (if (chatsRow) 1 + recentChats.size + (if (chats.size > recentChats.size || chats.isEmpty()) 1 else 0) else 0)
     val computersAt = projectsAt + if (hasProjects) 1 + list.orEmpty().size else 0
@@ -424,9 +431,10 @@ fun HomeScreen(
         ) {
             item(key = "header", contentType = "header") {
                 // The brand is the title: the bare bolt at the title's cap height and "Pi-Bolt" in largeTitle, with
-                // Settings and + as glass buttons on the same centre line.
+                // Settings and + as glass buttons on the same centre line. Today's spending, when there is any, follows.
+                val spent = rememberTodayLine(app) != null
                 Row(
-                    Modifier.statusBarsPadding().fillMaxWidth().heightIn(min = 72.dp).padding(start = Space.page, end = Space.page - Space.xxs, top = Space.sm, bottom = Space.md),
+                    Modifier.statusBarsPadding().fillMaxWidth().heightIn(min = if (spent) 56.dp else 72.dp).padding(start = Space.page, end = Space.page - Space.xxs, top = Space.sm, bottom = if (spent) 0.dp else Space.md),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     BrandMark(size = 26.dp, play = false, modifier = Modifier.clearAndSetSemantics { })
@@ -448,6 +456,21 @@ fun HomeScreen(
                         }
                     }
                 }
+            }
+            // Today's spending: a quiet meta line under "Pi-Bolt" once Pi used anything today; a tap opens the details.
+            item(key = "today", contentType = "today") {
+                val today = rememberTodayLine(app) ?: return@item
+                Text(
+                    today,
+                    style = type.rowMeta.copy(fontFeatureSettings = Tnum),
+                    color = colors.ink3,
+                    maxLines = 1,
+                    modifier = Modifier
+                        // Past the 26dp mark and its gap, less this line's own press padding.
+                        .padding(start = Space.page + 26.dp + Space.sm - Space.xs, bottom = Space.xs)
+                        .pressable({ spendSheet = true }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "Spending")
+                        .padding(Space.xs),
+                )
             }
             if (status.needsBanner()) {
                 item(key = "engine", contentType = "engine") {
@@ -569,7 +592,7 @@ fun HomeScreen(
                     InsetRow(
                         chat.title,
                         onClick = { openChat(chat.file) },
-                        meta = if (working) "Working" else ChatList.meta(chat, now),
+                        meta = if (working) "Working" else ChatList.meta(chat, now, Pi.settings.spend.showInLists),
                         leading = {
                             if (working) {
                                 QuadSpinner(QuadMode.Write, size = IconSize.md, color = colors.tint2)
@@ -812,6 +835,8 @@ fun HomeScreen(
     )
 
     if (details) EngineDetailsSheet(status, onRetry = engine::prepare, onDismiss = { details = false })
+    if (spendSheet) SpendSheet(app, session = null, onLimits = { spendSheet = false; spendLimits = true }, onDismiss = { spendSheet = false })
+    if (spendLimits) SpendLimitsSheet(app, onDismiss = { spendLimits = false })
 
     if (onboarding || addProvider) {
         ProviderSheet(

@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.Notes
 import androidx.compose.material.icons.automirrored.rounded.Reply
+import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.AccountCircle
 import androidx.compose.material.icons.rounded.Animation
 import androidx.compose.material.icons.rounded.AutoAwesome
@@ -101,6 +102,8 @@ import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.components.show
+import opensec.pibolt.app.ui.cost.SpendLimitsSheet
+import opensec.pibolt.app.ui.cost.SpendText
 import opensec.pibolt.app.ui.git.GitHubSection
 import opensec.pibolt.app.ui.git.GitHubSignInSheet
 import opensec.pibolt.app.ui.packages.McpSheet
@@ -156,6 +159,7 @@ fun SettingsScreen(
     var engineSheet by remember { mutableStateOf<EngineSheet?>(null) }
     var picking by remember { mutableStateOf(false) }
     var signingIn by remember { mutableStateOf(false) }
+    var spendLimits by remember { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     val visible = remember(query) { SettingsIndex.visible(query) }
     val groups = remember(visible) { SettingsIndex.groups(visible).toSet() }
@@ -294,6 +298,9 @@ fun SettingsScreen(
                     if (show("tool-preview")) add { d ->
                         GroupRow("Tool output", icon = Icons.AutoMirrored.Rounded.Notes, iconTint = tint, value = "${settings.toolPreviewLines} lines", onClick = { choice = Choice.ToolPreview }, divider = d)
                     }
+                    if (show("spending")) add { d ->
+                        GroupRow("Spending", icon = Icons.Rounded.Savings, iconTint = tint, value = SpendText.summary(settings.spend), onClick = { spendLimits = true }, divider = d)
+                    }
                 }
                 SettingsBlock(rows, header = SettingsGroup.Agent.title)
             }
@@ -359,6 +366,7 @@ fun SettingsScreen(
     }
     if (textSize) TextSizeSheet(settings.textSize, onSelect = { step -> update { it.copy(textSize = step) } }, onDismiss = { textSize = false })
     if (signingIn) GitHubSignInSheet(app, onDismiss = { signingIn = false })
+    if (spendLimits) SpendLimitsSheet(app, onDismiss = { spendLimits = false })
     val p = prefs
     if (picking && p?.controller != null) {
         ModelSheet(p.models, p.match, onPick = { m ->

@@ -33,9 +33,9 @@ class SessionActionReceiver : BroadcastReceiver() {
                 next(app, c, route.dialogId)
             }
             is SessionActions.Route.Prompt -> session(route.key)?.let { c ->
-                c.send(route.text, StreamingBehavior.Steer)
-                // The run starts (or takes the steer); the session notification shows it from here.
-                Notifications.cancel(app, notification)
+                // The run starts (or takes the steer); the session notification shows it from here. Held back by a
+                // spending limit, the session's notification says so instead.
+                if (c.send(route.text, StreamingBehavior.Steer)) Notifications.cancel(app, notification)
             }
             is SessionActions.Route.Gone -> Notifications.sessionClosed(app, notification)
             is SessionActions.Route.Again -> {

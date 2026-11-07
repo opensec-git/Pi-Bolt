@@ -1407,3 +1407,26 @@ extensions' dialogs keep the generic sheet.
   engine until it ends. The "Searches go to Exa" note shows only while it is on.
 - A dismissed questionnaire's row reads "Declined" with the neutral dash, not "Asked" with a check. With the keyboard
   up the options shrink and scroll, and the action row stays above the keyboard.
+
+## Spending
+
+Pi reports a cost with every reply (`usage.cost.total`); the app adds it up (`cost/`). Figures are monochrome, in
+tabular numerals, `$0.42` with two decimals (`<$0.01` below a cent); use on a model without a price (a custom endpoint)
+shows "—", never `$0`.
+- **Where:** the session's cost after the context meter in the top bar (meta ink3; tap: the Spending sheet); "Today
+  $0.42" as a rowMeta ink3 line under Home's title once anything was spent today (tap: the same sheet without the
+  session); with Settings > Agent > Spending > Show costs in lists, at the end of the meta line of saved sessions and
+  chats ("2h · 12 messages · $0.42").
+- **The Spending sheet:** an inset group of this session, this project (on this phone), today and this month, each with
+  its limit and a `ProgressLine`; then this month by model; then "Spending limits".
+- **Counting:** a session shows its own total (its file and its subagents' files on this phone, `get_session_stats`
+  from a computer) plus each reply as it ends. The day and month (`spend.json`, 35 days and 13 months, the phone's
+  calendar) count only what happened while the app watched: live replies, compactions and subagent messages, each once
+  by key. Reopening, resuming, forking or reconnecting never counts history again. Subagents on a computer are not
+  counted (remote control sends no costs for them).
+- **Limits:** per session, day and month, all off by default. At 80% a warning snackbar, once per period. At a limit no
+  new prompt goes out, a running turn finishes its step (the reply and its tool calls) and is stopped through abort, and
+  a run that starts by itself (a background agent's report) stops at once; a warning `Notice` above the composer says
+  "Daily limit reached ($5.00). Raise it in Settings or continue once." with Not now and Continue once (the next run
+  goes to its end; after a stop it sends "Continue."). Away from the app the "Pi stopped" notification says the same,
+  without Reply.

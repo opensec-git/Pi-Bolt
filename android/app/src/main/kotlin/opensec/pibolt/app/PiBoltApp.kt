@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import okhttp3.OkHttpClient
+import opensec.pibolt.app.cost.SpendStore
 import opensec.pibolt.app.data.DeviceIdentity
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.data.HostStore
@@ -51,6 +52,10 @@ class PiBoltApp : Application() {
     lateinit var settings: SettingsStore
         private set
     lateinit var recents: RecentPrompts
+        private set
+
+    /** Spending per day and month, across sessions (cost/). */
+    lateinit var spend: SpendStore
         private set
     lateinit var updates: UpdateManager
         private set
@@ -117,6 +122,7 @@ class PiBoltApp : Application() {
         super.onCreate()
         hosts = HostStore(this)
         settings = SettingsStore(this)
+        spend = SpendStore(filesDir)
         recents = RecentPrompts(this)
         identity = DeviceIdentity(this)
         updates = UpdateManager(this)

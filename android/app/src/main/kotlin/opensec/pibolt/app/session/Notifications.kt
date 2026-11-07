@@ -128,11 +128,16 @@ object Notifications {
     private fun sessionFile(context: Context, key: String): String? =
         (context.applicationContext as? PiBoltApp)?.sessions?.value?.firstOrNull { it.hostId == key }?.sessionFile
 
-    /** A session finished while the app was away. [key]: its hostId (one notification per session); [project]: its project. */
-    fun settled(context: Context, key: String, project: String?, host: String, lastText: String, aborted: Boolean, chat: Boolean = false) {
+    /**
+     * A session finished while the app was away. [key]: its hostId (one notification per session); [project]: its
+     * project. [capped]: a spending limit stopped it or held a reply back ("Daily limit reached ($5.00)."), said in
+     * place of the last reply.
+     */
+    fun settled(context: Context, key: String, project: String?, host: String, lastText: String, aborted: Boolean, chat: Boolean = false, capped: String? = null) {
         val id = RunningSummary.notificationId(key, RunningSummary.SETTLED)
-        val title = if (aborted) "Pi stopped on $host" else "Pi finished on $host"
-        val text = lastText.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(200) ?: "Tap to see the result"
+        val title = if (aborted || capped != null) "Pi stopped on $host" else "Pi finished on $host"
+        val text = capped ?: lastText.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(200) ?: "Tap to see the result"
+        val big = capped?.let { "$it Open Pi-Bolt to raise it or continue once." } ?: lastText.take(1000).ifBlank { text }
         post(
             context,
             id,
@@ -141,12 +146,13 @@ object Notifications {
                 .setColor(ContextCompat.getColor(context, R.color.notification_accent))
                 .setContentTitle(title)
                 .setContentText(text)
-                .setStyle(NotificationCompat.BigTextStyle().bigText(lastText.take(1000).ifBlank { text }))
+                .setStyle(NotificationCompat.BigTextStyle().bigText(big))
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setAutoCancel(true)
                 .setContentIntent(openApp(context, project, sessionFile(context, key), id, chat))
-                .addAction(reply("Reply", "Message Pi", action(context, id, 0, SessionActions.Request.Reply(key), typed = true)))
-                .privateOnLockScreen(context, if (aborted) "Pi stopped" else "Pi finished")
+                // At a limit a reply would be held back too: the notification only opens the session.
+                .apply { if (capped == null) addAction(reply("Reply", "Message Pi", action(context, id, 0, SessionActions.Request.Reply(key), typed = true))) }
+                .privateOnLockScreen(context, if (aborted || capped != null) "Pi stopped" else "Pi finished")
                 .build(),
         )
     }
