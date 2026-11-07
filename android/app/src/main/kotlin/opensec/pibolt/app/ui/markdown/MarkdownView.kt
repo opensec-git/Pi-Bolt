@@ -120,8 +120,9 @@ fun MdBlockView(block: MdBlock, streaming: Boolean, onOpenCode: (code: String, l
         is MdBlock.Paragraph -> MdText(block.text, type.prose.copy(color = ink), streaming, modifier.indent(block.indent))
         is MdBlock.Code -> {
             val closed = block.closed || !streaming
-            if (block.language.equals("mermaid", ignoreCase = true) && closed) {
-                MermaidBlock(block.code, modifier.indent(block.indent))
+            if (block.language.equals("mermaid", ignoreCase = true)) {
+                // Draws a skeleton while the fence streams (debounced) and at once when it is closed.
+                MermaidBlock(block.code, modifier.indent(block.indent), closed = closed)
             } else {
                 CodeBlock(block.code, block.language, block.info, closed = closed, onOpen = onOpenCode, modifier = modifier.indent(block.indent))
             }
