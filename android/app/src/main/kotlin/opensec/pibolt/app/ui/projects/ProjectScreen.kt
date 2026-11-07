@@ -85,6 +85,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -127,7 +128,8 @@ fun ProjectScreen(
     app: PiBoltApp,
     name: String,
     onBack: () -> Unit,
-    onOpenSession: () -> Unit,
+    /** Shows a live session of this project ([LocalSessions.Live.key]). */
+    onOpenSession: (String) -> Unit,
     onTerminal: () -> Unit = {},
     onSecrets: () -> Unit = {},
     onPreview: (Int) -> Unit = {},
@@ -148,7 +150,9 @@ fun ProjectScreen(
     // This project's own live session (others may run in other projects meanwhile).
     val liveAll by LocalSessions.all.collectAsStateWithLifecycle()
     val live = liveAll[name]
-    val liveHere = live?.takeIf { !it.controller.stopped }
+    // Every live session here (another opens beside a busy one); the front one is the one opened last.
+    val lives = remember(liveAll, name) { liveAll.values.filter { it.project.name == name && !it.controller.stopped } }
+    val liveHere = live?.takeIf { !it.controller.stopped } ?: lives.firstOrNull()
 
     var reload by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { reload++ }
@@ -180,15 +184,15 @@ fun ProjectScreen(
 
     fun open(file: String?, fresh: Boolean) {
         if (opening) return
-        val current = liveHere
-        if (!fresh && current != null && file != null && current.sessionFile == file) {
-            onOpenSession()
+        val current = file?.takeIf { !fresh }?.let { LocalSessions.find(name, it) }
+        if (current != null) {
+            onOpenSession(current.key)
             return
         }
         opening = true
         scope.launch {
             LocalSessions.open(engine, store, dir, sessionFile = file, fresh = fresh)
-                .onSuccess { onOpenSession() }
+                .onSuccess { onOpenSession(it.key) }
                 .onFailure { snackbar.show(it.message ?: "Could not open the session", SnackKind.Error) }
             opening = false
         }
@@ -200,7 +204,7 @@ fun ProjectScreen(
         val current = liveHere
         if (current != null) {
             current.drop(text)
-            onOpenSession()
+            onOpenSession(current.key)
             return
         }
         if (opening) return
@@ -210,7 +214,7 @@ fun ProjectScreen(
             LocalSessions.open(engine, store, dir, sessionFile = latest, fresh = latest == null)
                 .onSuccess {
                     it.drop(text)
-                    onOpenSession()
+                    onOpenSession(it.key)
                 }
                 .onFailure { snackbar.show(it.message ?: "Could not open the session", SnackKind.Error) }
             opening = false
@@ -284,8 +288,9 @@ fun ProjectScreen(
     // The Changes badge needs the status before its tab is opened, and again after a resume or a file change.
     LaunchedEffect(dir, reload) { if (selected != ProjectTab.Changes) changes.model.refresh() }
     // Only "working or not" from the live session, so streamed frames do not recompose the project screen.
-    val busyFlow = remember(liveHere) {
-        liveHere?.controller?.state?.map { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() }?.distinctUntilChanged() ?: flowOf(false)
+    val busyFlow = remember(lives) {
+        if (lives.isEmpty()) flowOf(false)
+        else combine(lives.map { l -> l.controller.state.map { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() }.distinctUntilChanged() }) { busy -> busy.any { it } }
     }
     val liveBusy by busyFlow.collectAsStateWithLifecycle(false)
     val badges = ProjectBadges(
@@ -374,17 +379,20 @@ fun ProjectScreen(
                                 // The engine's own session file: a new session or a fork is not the file the session was opened with.
                                 val liveFile = liveHere?.controller?.sessionFile ?: liveHere?.sessionFile
                                 itemsIndexed(list, key = { _, it -> it.file }, contentType = { _, _ -> "session" }) { i, s ->
-                                    val isLive = liveHere != null && (if (liveFile != null) liveFile == s.file else s == list.first())
+                                    // Every live session here is marked on its row (one still starting: the newest row).
+                                    val rowLive = lives.firstOrNull { (it.controller.sessionFile ?: it.sessionFile) == s.file }
+                                        ?: liveHere?.takeIf { liveFile == null && s == list.first() }
+                                    val isLive = rowLive != null
                                     SessionRow(
                                         s,
-                                        live = if (isLive) liveHere.controller else null,
+                                        live = rowLive?.controller,
                                         unread = !isLive && ProjectRules.unread(s, meta.seen[s.file]),
                                         now = now,
                                         where = branch,
                                         onClick = {
                                             when {
                                                 unavailable -> scope.launch { snackbar.show("Sessions can't run on this phone", SnackKind.Warning) }
-                                                isLive -> onOpenSession()
+                                                rowLive != null -> onOpenSession(rowLive.key)
                                                 else -> open(s.file, fresh = false)
                                             }
                                         },

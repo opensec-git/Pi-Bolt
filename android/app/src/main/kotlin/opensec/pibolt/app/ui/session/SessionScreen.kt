@@ -178,7 +178,10 @@ class LocalUi(
     /** The project's folder name. */
     val project: String,
     val title: String,
+    /** A new session in the project; beside this one if it is busy (both keep running). */
     val onNewSession: () -> Unit,
+    /** Open a saved session of the project; beside this one if it is busy. Null: this engine switches to it. */
+    val onOpenFile: ((String) -> Unit)? = null,
     /** Restart the engine and reconnect. */
     val onRestart: () -> Unit,
     /** A prompt queued when the session was created ("Clone from git"); returned once. */
@@ -246,10 +249,10 @@ fun SessionScreen(
 }
 
 @Composable
-private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Unit, onOpenSession: (String) -> Unit, onPreview: (Int) -> Unit) {
-    // Each project's screen shows its own live session; the others keep running meanwhile.
+private fun LocalSessionScreen(app: PiBoltApp, key: String, onBack: () -> Unit, onOpenSession: (String) -> Unit, onPreview: (Int) -> Unit) {
+    // Each screen shows one live session ([key]: LocalSessions.Live.key); the others keep running meanwhile.
     val all by LocalSessions.all.collectAsStateWithLifecycle()
-    val live = all[project]
+    val live = all[key]
     if (live == null) {
         LaunchedEffect(Unit) { onBack() }
         return
@@ -257,6 +260,7 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
     LaunchedEffect(live.controller) { app.focus(live.controller) }
     val store = remember { ProjectStore.get(app) }
     val meta by store.state.collectAsStateWithLifecycle()
+    val project = live.project.name
     val title = meta.projects[project]?.title ?: project
     val scope = rememberCoroutineScope()
     val engine = app.engine
@@ -271,7 +275,9 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
             local = LocalUi(
                 project = project,
                 title = title,
-                onNewSession = { scope.launch { LocalSessions.open(engine, store, live.project, fresh = true) } },
+                // Opened beside this session when it is busy: the result may live under another key.
+                onNewSession = { scope.launch { opened(LocalSessions.open(engine, store, live.project, fresh = true), key, live, onOpenSession) } },
+                onOpenFile = { file -> scope.launch { opened(LocalSessions.open(engine, store, live.project, sessionFile = file), key, live, onOpenSession) } },
                 onRestart = {
                     engine.prepare()
                     live.controller.retryNow()
@@ -283,6 +289,13 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
             onOpenSession = onOpenSession,
         )
     }
+}
+
+/** After an open from session [from] (shown under [key]): show the result where it lives, or say why it did not open. */
+private fun opened(result: Result<LocalSessions.Live>, key: String, from: LocalSessions.Live, onOpenSession: (String) -> Unit) {
+    result
+        .onSuccess { if (it.key != key) onOpenSession(it.key) }
+        .onFailure { from.controller.showError(it.message ?: "Could not open the session") }
 }
 
 private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget, Export, Resume, Fork, Attach, History, Key, DeleteChat }
@@ -308,7 +321,7 @@ internal fun SessionContent(
     val linkState = controller.link.collectAsStateWithLifecycle()
     val hostName by controller.hostName.collectAsStateWithLifecycle()
     val sessionId by remember { derivedStateOf { state.value.sessionId } }
-    val memory = remember(controller.hostId, sessionId) { SessionMemory.of(controller.hostId, sessionId) }
+    val memory = remember(controller.memoryKey, sessionId) { SessionMemory.of(controller.memoryKey, sessionId) }
     val colors = Pi.colors
     val haptics = Pi.haptics
     val settings = Pi.settings
@@ -355,7 +368,7 @@ internal fun SessionContent(
             },
             message = { m -> scope.launch { snackbar.show(m) } },
             view = { viewer = it },
-            openSession = { controller.switchSession(it.file) },
+            openSession = { local?.onOpenFile?.invoke(it.file) ?: controller.switchSession(it.file) },
         )
     }
     val pickImport = rememberImportPicker(f2Host)
@@ -376,7 +389,7 @@ internal fun SessionContent(
     // The draft is kept per session across restarts and saved as it changes. [draftOwner] is the session whose draft the
     // composer holds: on a switch (Resume, Fork) the outgoing draft is saved under it and the incoming one is loaded,
     // or the text a fork hands over ([forkDraft]).
-    val draftKey = Drafts.key(controller.hostId, sessionId)
+    val draftKey = Drafts.key(controller.memoryKey, sessionId)
     var draftOwner by rememberSaveable(controller.hostId) { mutableStateOf<String?>(null) }
     var forkDraft by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(draftKey) {
@@ -426,7 +439,7 @@ internal fun SessionContent(
                 is SessionEffect.EditorText -> {
                     draft = effect.text
                     // A send that failed comes back to the composer: its "Sending" bubble goes, its images return.
-                    SessionMemory.of(controller.hostId, controller.state.value.sessionId).pending.let { p -> if (p.value?.text == effect.text) p.value = null }
+                    SessionMemory.of(controller.memoryKey, controller.state.value.sessionId).pending.let { p -> if (p.value?.text == effect.text) p.value = null }
                     lastSent?.takeIf { it.first == effect.text && images.isEmpty() }?.let { images.addAll(it.second) }
                 }
             }
@@ -558,7 +571,7 @@ internal fun SessionContent(
         val now = controller.state.value
         val running = now.isRunning
         controller.send(text, behavior, attached.mapNotNull { it.image })
-        SessionMemory.of(controller.hostId, now.sessionId).sent(text, now, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image }, dictated = fromDraft && dictated)
+        SessionMemory.of(controller.memoryKey, now.sessionId).sent(text, now, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image }, dictated = fromDraft && dictated)
         if (fromDraft) dictated = false
         if (text.isNotBlank()) app.recents.record(recentKey, text)
         lastSent = text to attached
@@ -1345,7 +1358,7 @@ internal fun SessionContent(
             onDismiss = { sheet = Sheet.None },
         )
         Sheet.Resume -> ResumeSheet(savedSessions, controller.sessionFile, onPick = {
-            controller.switchSession(it.file)
+            local?.onOpenFile?.invoke(it.file) ?: controller.switchSession(it.file)
             sheet = Sheet.None
         }, onDismiss = { sheet = Sheet.None })
         Sheet.Fork -> ForkSheet(forkPoints, onPick = { point ->

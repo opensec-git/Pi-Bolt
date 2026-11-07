@@ -82,8 +82,8 @@ class PiBoltApp : Application() {
     private val live = LiveRegistry<SessionController>(SystemClock::elapsedRealtime)
 
     /**
-     * Every live session: up to [opensec.pibolt.app.engine.LivePolicy.MAX_LIVE] on this phone's engine (one per
-     * project), each with its own engine process, and at most one with a computer. They run side by side: opening or
+     * Every live session: up to [opensec.pibolt.app.engine.LivePolicy.MAX_LIVE] on this phone's engine (several in one
+     * project when one was busy as another opened), each with its own engine process, and at most one with a computer. They run side by side: opening or
      * switching to one stops none of the others.
      */
     val sessions: StateFlow<List<SessionController>> = live.all
@@ -227,8 +227,8 @@ class PiBoltApp : Application() {
     }
 
     /**
-     * Adds a session on this phone's engine and focuses it, in place of [replacing] (the project's previous session,
-     * which stops). Other sessions keep running.
+     * Adds a session on this phone's engine and focuses it, in place of [replacing] (an idle session of the project,
+     * which stops; never a busy one). Other sessions keep running.
      */
     internal fun addLocalSession(controller: SessionController, replacing: SessionController?): SessionController {
         live.add(controller, replacing)
