@@ -72,8 +72,9 @@ class EditorTab(val rel: String) {
 }
 
 /**
- * The project's open files, in order, and the one shown. Opening a file that is open selects its tab. Only the paths
- * survive a configuration change or process death (an unsaved draft does not outlive the process).
+ * The project's open files, in order, and the one shown. Opening a file that is open selects its tab. A configuration
+ * change (rotation, theme) keeps the tabs themselves, unsaved drafts included ([saver]); after process death only the
+ * paths come back (an unsaved draft does not outlive the process).
  */
 @Stable
 class EditorTabs(initial: List<String> = emptyList()) {
@@ -115,7 +116,25 @@ class EditorTabs(initial: List<String> = emptyList()) {
     val anyDirty: Boolean get() = tabs.any { it.dirty }
 
     companion object {
-        val saver: Saver<EditorTabs, Any> = listSaver(save = { t -> t.tabs.map { it.rel } }, restore = { EditorTabs(it) })
+        private val retained = HashMap<String, EditorTabs>()
+
+        /**
+         * Saves the paths in the saved-state Bundle (a 1 MB draft would overflow it) and keeps the tabs under [key] in
+         * memory, so a configuration change hands back the same tabs with their drafts and undo history; after process
+         * death the tabs reopen from the paths, not editing.
+         */
+        fun saver(key: String): Saver<EditorTabs, Any> = listSaver(
+            save = { t ->
+                retained[key] = t
+                t.tabs.map { it.rel }
+            },
+            restore = { retained.remove(key) ?: EditorTabs(it) },
+        )
+
+        /** Forgets [key]'s kept tabs: the screen closed for good, not for a configuration change. */
+        fun release(key: String) {
+            retained.remove(key)
+        }
     }
 }
 
