@@ -278,7 +278,7 @@ Host to client:
 
 | `type` | Meaning |
 |---|---|
-| `remote_hello` | `{ protocol: 1, host: { name, version, cwd, service?, parallelSessions?, review? }, state: RpcSessionState, messages: AgentMessage[], streamingMessage?: AgentMessage, dialogs: extension_ui_request[], commands: RpcSlashCommand[], omittedMessages: number }`. It stays under 24 MiB: a longer session sends only its newest messages, and `omittedMessages` counts the older ones left out. Sent on connect and again whenever the TUI switches to another session (`/new`, `/resume`, `/fork`): the client replaces everything it shows. `host.service` is `true` from the background service, which also answers the service commands below; `host.parallelSessions` is `true` from a service that keeps a running session going when the phone opens another (below). `host.review` is `true` from hosts that answer the [review commands](#review); older hosts leave it out. |
+| `remote_hello` | `{ protocol: 1, host: { name, version, cwd, service?, parallelSessions?, review? }, state: RpcSessionState, messages: AgentMessage[], streamingMessage?: AgentMessage, dialogs: extension_ui_request[], commands: RpcSlashCommand[], omittedMessages: number, features: string[] }`. `features` names the optional parts of the protocol this host answers (`"subagent_stream"`: [Subagent streams](#subagent-streams)); hosts before it send none. It stays under 24 MiB: a longer session sends only its newest messages, and `omittedMessages` counts the older ones left out. Sent on connect and again whenever the TUI switches to another session (`/new`, `/resume`, `/fork`): the client replaces everything it shows. `host.service` is `true` from the background service, which also answers the service commands below; `host.parallelSessions` is `true` from a service that keeps a running session going when the phone opens another (below). `host.review` is `true` from hosts that answer the [review commands](#review); older hosts leave it out. |
 | `remote_endpoints` | `{ endpoints: string[] }`: every address the host listens on now, in the order of the pairing code's `e` (LAN, Tailscale, then the tunnel). Sent after `remote_hello` on connect, and again whenever the list changes (a quick tunnel's new address, another network). No `id`; clients that do not know it ignore it. |
 | session events | Exactly the RPC/JSON event stream ([JSON Event Stream](json.md)): `agent_start`, `message_start`, `message_update` (deltas), `message_end`, `tool_execution_start/update/end`, `queue_update`, `compaction_start/end`, `auto_retry_start/end`, `agent_end`, `agent_settled`, ... Clients ignore types they do not know. |
 | `response` | Answer to a client command, as in [RPC Commands](rpc-commands.md). |
@@ -314,3 +314,29 @@ arrive meanwhile as `extension_ui_request`, so clients must not wait for the res
 `prompt` while the agent is streaming needs `streamingBehavior` (`"steer"` or `"followUp"`), as in RPC mode. Prompts run
 extension commands, prompt templates and skills; the terminal's own built-in commands (such as `/model`) do not run from
 a phone.
+
+### Subagent streams
+
+A subagent of the subagents extension runs as a session of its own on the computer, so the parent's events carry only
+its prompt, progress line and answer. A client that shows one run asks for the agent's own conversation (hosts with
+`"subagent_stream"` in `remote_hello.features`; RPC mode answers the same commands):
+
+| Client to host | Fields | Response |
+|---|---|---|
+| `subagent_subscribe` | `runId`: the id of the `Agent` tool call that started the run | `success: true`, or an error for an unknown run, a missing `runId` or more than 8 streams at once |
+| `subagent_unsubscribe` | `runId` | `success: true` |
+
+The host then sends, until the client unsubscribes, disconnects or gets a new `remote_hello`:
+
+| `type` | Meaning |
+|---|---|
+| `subagent_entries` | `{ runId, file?, reset, messages: AgentMessage[] }`: finished messages of the agent's session file, oldest first. The first batch has `reset: true` and starts from the beginning; later ones follow lines as they are appended. A compaction arrives as `{ role: "compactionSummary", summary, tokensBefore }`; the system prompt is left out. |
+| `subagent_events` | `{ runId, events }`: while the agent's session runs in this process, its assistant message as it streams (`message_start`, `message_update` deltas as in the event stream, `message_end`) and `tool_execution_start` / `tool_execution_end` (`{ toolCallId, toolName, args }`, `{ toolCallId, toolName, isError }`), sent in batches about every 80 ms. A client that joins mid-message gets a `message_start` with what is written so far. The finished message also arrives in `subagent_entries`. |
+
+The `Agent` call is looked up in the parent's saved current branch as well as its messages, so a run that a compaction
+took out of the model's context can still be followed. The run is found by the `Agent` call's agent id (from its
+result, or `resume`) or by its prompt, among sessions whose header names the parent's file in `parentSession`. Matching by prompt skips sessions made before the call and sessions
+of other runs' agents, takes the newest, and is checked again once the result names the agent: a wrong guess is dropped
+and the stream starts over with `reset: true`. Runs with a known agent id may share a file (a resumed run and the
+original). Streams are read-only. A message or event larger than 256 KiB of JSON is cut (long text, thinking and tool
+arguments, nested values too, shortened; images and `details` dropped; when still too large, only its text is kept).

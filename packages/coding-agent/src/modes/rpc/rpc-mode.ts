@@ -25,6 +25,7 @@ import {
 	waitForRawStdoutBackpressure,
 	writeRawStdout,
 } from "../../core/output-guard.ts";
+import { SubagentStreams } from "../../core/subagent-stream.ts";
 import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { toJsonEvent } from "../json-event.ts";
@@ -60,6 +61,8 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	const output = (obj: RpcResponse | RpcExtensionUIRequest | object) => {
 		writeRawStdout(serializeJsonLine(obj));
 	};
+	/** Subagent runs the client follows (`subagent_subscribe`), made on the first. */
+	let subagentStreams: SubagentStreams | undefined;
 
 	const success = <T extends RpcCommand["type"]>(
 		id: string | undefined,
@@ -316,6 +319,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 
 	const rebindSession = async (): Promise<void> => {
 		session = runtimeHost.session;
+		subagentStreams?.clear();
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
 			mode: "rpc",
@@ -708,6 +712,21 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				return success(id, "get_commands", { commands });
 			}
 
+			// =================================================================
+			// Subagents (read-only live views)
+			// =================================================================
+
+			case "subagent_subscribe": {
+				subagentStreams ??= new SubagentStreams({ getSession: () => session, send: output });
+				subagentStreams.subscribe(command.runId);
+				return success(id, "subagent_subscribe");
+			}
+
+			case "subagent_unsubscribe": {
+				subagentStreams?.unsubscribe(command.runId);
+				return success(id, "subagent_unsubscribe");
+			}
+
 			default: {
 				const unknownCommand = command as { type: string };
 				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
@@ -726,6 +745,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			process.exit(exitCode);
 		}
 		shuttingDown = true;
+		subagentStreams?.clear();
 		for (const cleanup of signalCleanupHandlers) {
 			cleanup();
 		}
