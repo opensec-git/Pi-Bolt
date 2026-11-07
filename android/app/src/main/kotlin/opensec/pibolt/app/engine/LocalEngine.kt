@@ -31,6 +31,8 @@ import opensec.pibolt.app.checkpoints.Git
 import opensec.pibolt.app.checkpoints.ShadowRepo
 import opensec.pibolt.app.checkpoints.TurnCheckpoints
 import opensec.pibolt.app.data.SafeFiles
+import opensec.pibolt.app.secrets.SecretEnv
+import opensec.pibolt.app.secrets.SecretStore
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.protocol.backend.ConnectionState
 import opensec.pibolt.protocol.backend.DisconnectReason
@@ -162,7 +164,13 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         // The live session is in this project: when it is idle, an idle engine that already has the wanted session takes
         // over (the live one is parked for the way back); else the live engine moves over RPC (a busy one is never stopped
         // for this: Pi ends its turn in order).
-        val taken = if (live == null || live.isIdle) idle.take(want, exactOnly = live != null) else null
+        val taken = (if (live == null || live.isIdle) idle.take(want, exactOnly = live != null) else null)?.let { t ->
+            // Secrets are in an engine's environment from its start: one from another project is not moved here.
+            if (SecretStore.get(app).engineFits(t.engine.engineCwd, dir)) return@let t
+            forget(t.engine)
+            t.engine.close()
+            null
+        }
         if (live != null && taken == null) {
             when (resolved) {
                 is SessionTarget.Resume -> live.switchSession(resolved.sessionFile)
@@ -461,7 +469,8 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
             val env = environment()
             val wanted = engineEnvironment(paths, env.toMap(), TimeZone.getDefault().id, m.env, app.github.gitEnvironment())
             env.clear()
-            env.putAll(wanted)
+            // The project's secrets as variables (never in the model's messages).
+            env.putAll(SecretEnv.inject(wanted, SecretStore.get(app).environment(project)))
         }.start()
     }
 

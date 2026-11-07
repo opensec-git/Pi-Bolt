@@ -15,10 +15,10 @@ rpc-extension-ui.md, remote-control.md) and src/modes/interactive.
 
 | | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| done | 41 | 52 | 29 | 122 |
+| done | 41 | 55 | 29 | 125 |
 | partial | 0 | 1 | 4 | 5 |
 | missing | 0 | 1 | 6 | 7 |
-| **Total** | 41 | 54 | 39 | 134 |
+| **Total** | 41 | 57 | 39 | 137 |
 
 Not counted: 12 `n/a` rows (terminal-only features). Before this branch the same rows stood at 53 done, 15 partial and
 55 missing: it moved 37 rows (25 missing to done, 11 partial to done, 1 missing to partial) and closed every P0 gap.
@@ -246,6 +246,9 @@ before a turn with a conversation fork, and redo of any restore. On this phone o
 | GitHub sign-in | — | done: OAuth device flow (when the build has a client id) or a personal access token, sealed by the Keystore | device | P1 |
 | Push, pull, clone private repositories | git in Pi's bash | done: with progress and plain errors; clone picks from the user's GitHub repositories; Pi's own git uses the account too | device | P1 |
 | Pull requests | `gh pr create` | done: title, body (Pi can draft), base branch, then the link | device | P1 |
+| Interactive terminal | `!` runs one command | done: bash on a pty in the project (engine environment, secrets), tabs, full screen, extra keys, copy and paste, font size, scrollback; keeps running in the background | device | P1 |
+| Dev-server preview | — | done: "Preview: localhost:N" chip in the terminal and the session, in-app browser limited to localhost | device | P1 |
+| Project secrets (.env) | — | done: Keystore-encrypted, masked, injected into the project's terminals and engines (not the model's messages), optional .env | device | P1 |
 | TalkBack labels and 48 dp targets | — | done for the new controls | both | P0 |
 
 ## What remains

@@ -308,6 +308,9 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
                             NavRow("Mermaid licence", "MIT, with the projects it bundles", onClick = {
                                 scope.launch { licence = ViewerContent("Mermaid", "MIT, with the projects it bundles", readRaw(context, R.raw.license_mermaid), wrap = true) }
                             })
+                            NavRow("Termux terminal licence", "Apache License 2.0", onClick = {
+                                scope.launch { licence = ViewerContent("Termux terminal", "Apache License 2.0", readRaw(context, R.raw.license_termux_terminal), wrap = true) }
+                            })
                         }
                     }
                 }

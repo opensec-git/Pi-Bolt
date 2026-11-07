@@ -10,7 +10,9 @@ A remote control for Pi-Bolt: pair the phone with `/remote-control` on a compute
 
 ## Build
 
-Needs JDK 21 and the Android SDK (platform 36). Point `ANDROID_HOME` at the SDK, or write `sdk.dir=...` to
+Needs JDK 21 and the Android SDK (platform 36), with the NDK and CMake versions pinned in `app/build.gradle.kts`
+(`ndkVersion`, `externalNativeBuild.cmake.version`; they build the terminal's `libtermux.so`):
+`sdkmanager "ndk;28.2.13676358" "cmake;3.22.1"`. Point `ANDROID_HOME` at the SDK, or write `sdk.dir=...` to
 `android/local.properties`.
 
 ```sh

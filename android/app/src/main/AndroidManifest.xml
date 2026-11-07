@@ -73,6 +73,14 @@
                 android:value="Runs the user's coding agent on the device while it works on a prompt in the background" />
         </service>
         <service
+            android:name=".terminal.TerminalService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the user's interactive terminal shells (and the dev servers and builds they started) running in the background" />
+        </service>
+        <service
             android:name=".update.UpdateService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />

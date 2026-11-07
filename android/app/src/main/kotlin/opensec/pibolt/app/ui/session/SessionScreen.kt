@@ -126,6 +126,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.ui.terminal.PreviewChipRow
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.data.RecentPrompts
@@ -161,6 +162,8 @@ class LocalUi(
     val onRestart: () -> Unit,
     /** A prompt queued when the session was created ("Clone from git"); returned once. */
     val takeFirstPrompt: () -> String?,
+    /** Open a dev server's preview (the "Preview: localhost:3000" chip). */
+    val onPreview: (Int) -> Unit = {},
 )
 
 /**
@@ -168,9 +171,16 @@ class LocalUi(
  * on-device session (the switcher), by project name; this one keeps running.
  */
 @Composable
-fun SessionScreen(app: PiBoltApp, onBack: () -> Unit, onForgotten: () -> Unit, local: String? = null, onOpenSession: (String) -> Unit = {}) {
+fun SessionScreen(
+    app: PiBoltApp,
+    onBack: () -> Unit,
+    onForgotten: () -> Unit,
+    local: String? = null,
+    onOpenSession: (String) -> Unit = {},
+    onPreview: (Int) -> Unit = {},
+) {
     if (local != null) {
-        LocalSessionScreen(app, local, onBack, onOpenSession)
+        LocalSessionScreen(app, local, onBack, onOpenSession, onPreview)
         return
     }
     val controller by app.remote.collectAsStateWithLifecycle()
@@ -198,7 +208,7 @@ fun SessionScreen(app: PiBoltApp, onBack: () -> Unit, onForgotten: () -> Unit, l
 }
 
 @Composable
-private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Unit, onOpenSession: (String) -> Unit) {
+private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Unit, onOpenSession: (String) -> Unit, onPreview: (Int) -> Unit) {
     // Each project's screen shows its own live session; the others keep running meanwhile.
     val all by LocalSessions.all.collectAsStateWithLifecycle()
     val live = all[project]
@@ -229,6 +239,7 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
                     live.controller.retryNow()
                 },
                 takeFirstPrompt = { live.firstPrompt.also { live.firstPrompt = null } },
+                onPreview = onPreview,
             ),
             onOpenSession = onOpenSession,
         )
@@ -939,6 +950,7 @@ private fun SessionContent(
                     } else {
                         StatusExtras(extras)
                         TodoPanel(todos, running, autoCollapse = !running || windowHeight < 560.dp, quiet = status.value.visible && statusOnScreen)
+                        if (local != null) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = 12.dp))
                         PendingDialogStrip(askingTitle) { memory.hiddenDialog.value = null }
                         QueueStrip(queue, onEdit = controller::clearQueue)
                     }

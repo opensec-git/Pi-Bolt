@@ -219,7 +219,7 @@ sessions by path, so the folder never moves. Delete is a confirmation sheet that
 **Project.** Shared bounds from the project card (title as a shared element, like host card to session). Back,
 overflow (Pin, Rename, Delete), the title in display, the folder chip (`projects/x`, monoMeta ink2 on surface1, radius
 8) and, inside a git repository, the branch from `.git/HEAD` (branch glyph + monoMeta ink3). New session (primary,
-full width), then a segmented "Sessions · N | Files | Changes".
+full width), then a segmented "Sessions · N | Files | Changes | Terminal".
 - Sessions: 64dp cards (surface1, line, radius 12): chat glyph ink3 (the live session: its Quad, lineStrong border,
   "Open" first in the meta line), the session name or first prompt (body ink1), "24 messages · 2 h ago" (meta ink3).
   Tap resumes; the live one resumes without reopening.
@@ -250,6 +250,32 @@ full width), then a segmented "Sessions · N | Files | Changes".
 - Pull request sheet: title, description (Markdown), "Merge into" chips (the repository's default branch first),
   "Ask Pi" (Pi drafts title and body from the branch's commits) and Create (pushes first when needed). Done, it shows
   "Pull request #12", the link in accent mono, Copy and "Open on GitHub".
+- Terminal (fourth segment; a key action in the top bar opens Secrets): see Terminal below, at 86% of the screen's
+  height inside the page (drags scroll the terminal's scrollback, not the page).
+
+**Terminal.** Termux's TerminalView in JetBrains Mono on canvas: text ink1, cursor accent, the 16 base colours mapped
+to tokens as in tool output (red danger, green success, blue the syntax function colour...), no cursor blink. A 48dp
+bar: tab chips (36dp, radius 8, surface2 + lineStrong when selected, line otherwise; "1 · title" in label, ink3 when
+the shell ended; a 16dp close glyph), + (new terminal), Paste, smaller and larger text (8 to 28 sp, also by pinch),
+full screen / leave full screen. Under it the Preview chips. The extra-keys row (surface1, 48dp keys, monoMeta ink1 or
+a 20dp arrow glyph): Esc, Tab, Ctrl, Alt, the four arrows, |, ~, /, -; Ctrl and Alt fill with accent (onAccent text)
+while on and apply to the next key only. Long press selects text (Termux's floating Copy / Paste bar); tap shows the
+keyboard (character input, no suggestions). An ended shell says "[Process completed - press Enter]"; Enter closes the
+tab. No tab yet: "A shell in this project", one line, Start a terminal (primary). Full screen: the same pane above
+the keyboard, status and navigation bars padded. Shells keep running off screen; a low-importance "N terminals
+running" notification (Close all) holds them in the background.
+
+**Preview.** Chips "Preview: localhost:5173" (label ink1 on successSoft, success @ 40% line, radius 8, 48dp touch) in
+the terminal and above the composer of an on-device session, while a dev server listens. The preview screen: back,
+the URL (monoMeta ink2, middle ellipsis), Reload, Open in browser; a 2dp accent progress line while loading; the page
+in a WebView (http://localhost and 127.0.0.1 only; tapped links elsewhere open in the browser).
+
+**Secrets.** Back, "Secrets" in display, one paragraph on where values go (engine and terminal environment, never the
+model's messages). 64dp rows: the name in mono ink1, the value masked as eight dots (monoMeta ink3, fixed length),
+Show / Hide, Edit, Delete (danger). Add secret (primary) opens a form card (surface1, line, radius 12): NAME (mono,
+validated: letters, digits, _, not the engine's own variables), Value (masked while typing, eye toggle), Cancel / Save.
+Write .env file (secondary) confirms first: values land in plain text in the project and git would commit them; .env
+is added to .gitignore in git projects. The window is FLAG_SECURE on this screen.
 
 **Provider sheet (first run and Add provider).** Opens by itself once, 450 ms after the first frame of Home, when no
 provider has a key. Eyebrow "Welcome to Pi-Bolt" (first run only), "Connect a model", one line saying the key stays on
@@ -598,7 +624,7 @@ matches" otherwise. Groups, in order, each a SectionLabel over a surface1 card (
   the system page.
 - Security: device key, Reset device key.
 - About: app version, device name, the update status and its action (see Updates), "Check for updates automatically",
-  licences (Inter, JetBrains Mono: OFL).
+  licences (Inter, JetBrains Mono: OFL; Termux terminal libraries: Apache-2.0).
 Segmented controls in Settings are 48dp tall.
 Changes apply live, without recreating the activity, and persist in a small JSON file (read synchronously at
 startup so the first frame has the right theme).

@@ -59,6 +59,7 @@ import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.home.HomeScreen
 import opensec.pibolt.app.ui.projects.ProjectScreen
 import opensec.pibolt.app.ui.scan.ScanScreen
+import opensec.pibolt.app.ui.secrets.SecretsScreen
 import opensec.pibolt.app.ui.session.SessionScreen
 import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import opensec.pibolt.app.ui.session.subagent.LocalSubagentNav
@@ -68,8 +69,11 @@ import opensec.pibolt.app.ui.settings.SettingsScreen
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.terminal.PreviewScreen
+import opensec.pibolt.app.ui.terminal.TerminalScreen
 import opensec.pibolt.app.ui.update.UpdateSheets
 import opensec.pibolt.protocol.PairingPayload
+import java.io.File
 
 object Routes {
     const val HOME = "home"
@@ -78,10 +82,19 @@ object Routes {
     const val SCAN = "scan"
     const val SESSION = "session"
     const val SETTINGS = "settings"
+    const val TERMINAL = "terminal/{name}"
+    const val SECRETS = "secrets/{name}"
+    const val PREVIEW = "preview/{port}"
 
     fun project(name: String) = "project/" + Uri.encode(name)
 
     fun localSession(name: String) = "local/" + Uri.encode(name)
+
+    fun terminal(name: String) = "terminal/" + Uri.encode(name)
+
+    fun secrets(name: String) = "secrets/" + Uri.encode(name)
+
+    fun preview(port: Int) = "preview/$port"
 }
 
 private typealias Enter = AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition
@@ -211,6 +224,9 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
                                 name = name,
                                 onBack = { nav.popBackStack(Routes.HOME, inclusive = false) },
                                 onOpenSession = { nav.navigate(Routes.localSession(name)) { launchSingleTop = true } },
+                                onTerminal = { nav.navigate(Routes.terminal(name)) { launchSingleTop = true } },
+                                onSecrets = { nav.navigate(Routes.secrets(name)) { launchSingleTop = true } },
+                                onPreview = { nav.navigate(Routes.preview(it)) { launchSingleTop = true } },
                             )
                         }
                     }
@@ -229,8 +245,24 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
                                         launchSingleTop = true
                                     }
                                 },
+                                onPreview = { nav.navigate(Routes.preview(it)) { launchSingleTop = true } },
                             )
                         }
+                    }
+                    composable(Routes.TERMINAL, arguments = listOf(navArgument("name") { type = NavType.StringType })) { entry ->
+                        val name = entry.arguments?.getString("name").orEmpty()
+                        TerminalScreen(
+                            app = app,
+                            project = File(app.engine.projectsDir, name),
+                            onBack = { nav.popBackStack() },
+                            onPreview = { nav.navigate(Routes.preview(it)) { launchSingleTop = true } },
+                        )
+                    }
+                    composable(Routes.SECRETS, arguments = listOf(navArgument("name") { type = NavType.StringType })) { entry ->
+                        SecretsScreen(app = app, project = File(app.engine.projectsDir, entry.arguments?.getString("name").orEmpty()), onBack = { nav.popBackStack() })
+                    }
+                    composable(Routes.PREVIEW, arguments = listOf(navArgument("port") { type = NavType.IntType })) { entry ->
+                        PreviewScreen(port = entry.arguments?.getInt("port") ?: 0, onBack = { nav.popBackStack() })
                     }
                     composable(Routes.SCAN) {
                         CompositionLocalProvider(LocalNavScope provides this) {

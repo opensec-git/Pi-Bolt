@@ -26,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.PushPin
@@ -87,6 +88,7 @@ import opensec.pibolt.app.ui.components.sharedHostElement
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.session.TranscriptModel
 import opensec.pibolt.app.ui.session.features2.SessionBrowserSheet
+import opensec.pibolt.app.ui.terminal.TerminalPane
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
 import java.io.File
@@ -97,7 +99,15 @@ import java.io.File
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSession: () -> Unit) {
+fun ProjectScreen(
+    app: PiBoltApp,
+    name: String,
+    onBack: () -> Unit,
+    onOpenSession: () -> Unit,
+    onTerminal: () -> Unit = {},
+    onSecrets: () -> Unit = {},
+    onPreview: (Int) -> Unit = {},
+) {
     val engine = app.engine
     val store = remember { ProjectStore.get(app) }
     val projects = remember(engine) { Projects(engine, store) }
@@ -120,9 +130,10 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
     val sessions by produceState<List<SessionSummary>?>(null, reload, live) { value = projects.sessions(dir) }
     var menu by remember { mutableStateOf(false) }
     var action by remember { mutableStateOf<ProjectAction?>(null) }
-    // 0 sessions, 1 files, 2 changes (git).
+    // 0 sessions, 1 files, 2 changes (git), 3 terminal.
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val showFiles = tab == 1
+    val showTerminal = tab == 3
     val changes = rememberChangesUi(app, dir, store, snackbar)
     // Folder shown in Files, relative to the project ("" is its root).
     var path by rememberSaveable { mutableStateOf("") }
@@ -171,6 +182,7 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
                     IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Projects", onClick = onBack, tint = colors.ink1)
                     Spacer(Modifier.weight(1f))
                     // Sort, filter, search inside messages, rename and delete (features2).
+                    IconAction(Icons.Rounded.Key, "Project secrets", onClick = onSecrets)
                     IconAction(Icons.Rounded.Search, "Search and manage sessions", onClick = { browse = true }, enabled = !unavailable)
                     Box {
                         IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
@@ -234,7 +246,7 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
             }
             item(key = "tabs", contentType = "tabs") {
                 Segmented(
-                    options = listOf(0 to (sessions?.size?.let { "Sessions · $it" } ?: "Sessions"), 1 to "Files", 2 to "Changes"),
+                    options = listOf(0 to (sessions?.size?.let { "Sessions · $it" } ?: "Sessions"), 1 to "Files", 2 to "Changes", 3 to "Terminal"),
                     selected = tab,
                     onSelect = { tab = it },
                     modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 10.dp),
@@ -272,6 +284,11 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
             }
             val list = sessions
             if (tab == 2) changesItems(changes)
+            if (showTerminal) {
+                item(key = "terminal", contentType = "terminal") {
+                    TerminalPane(app, dir, fullScreen = false, onToggleFullScreen = onTerminal, onPreview = onPreview, modifier = Modifier.fillParentMaxHeight(0.86f).fillMaxWidth())
+                }
+            }
             if (list != null && tab == 0) {
                 if (list.isEmpty()) {
                     item(key = "empty", contentType = "empty") {
