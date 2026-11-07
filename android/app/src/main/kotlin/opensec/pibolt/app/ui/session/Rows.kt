@@ -326,7 +326,8 @@ fun Chevron(expanded: Boolean, modifier: Modifier = Modifier) {
     Icon(
         Icons.Rounded.ChevronRight,
         contentDescription = if (expanded) "Collapse" else "Expand",
-        tint = Pi.colors.ink4,
+        // ink3, like every other chevron: it is the only sign the row opens, so it needs 3:1 (ink4 is ~2:1).
+        tint = Pi.colors.ink3,
         modifier = modifier.size(18.dp).graphicsLayer { rotationZ = rotation },
     )
 }
