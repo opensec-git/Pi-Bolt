@@ -618,7 +618,7 @@ messages. Pi has no RPC to read or steer a subagent: steering and resuming go th
   scale 0.98.
 - Stack: two or more consecutive `Agent` calls (one message's parallel calls). Closed: one card with a 48dp header
   (up to 3 avatars, 22dp, overlapping by 8dp with a 2dp ring; "3 agents running", "1 of 3 agents running", "3 agents
-  done", "3 agents · 1 failed"; the longest run time; chevron) over one 40dp line per agent (glyph, type, crossfading
+  done", "3 agents · 1 failed"; the longest run time; chevron) over one 48dp line per agent (glyph, type, crossfading
   activity or task, time; tap opens it). Open (header tap): the header, then each agent's card 8dp apart; the switch
   resizes with the settle spring. The open state lives with the tool groups'.
 - A finished turn folds its steps but not its agent cards: each is a unit of work of its own, and background runs
