@@ -50,6 +50,7 @@ class ShadowRepo(private val git: Git, private val maxFileBytes: Long = MAX_FILE
     /** Records the project as it is now. A project unchanged since the last snapshot gets that snapshot back. */
     fun snapshot(label: String): Snapshot {
         ensureInit()
+        clearStaleLocks()
         val large = largeFiles()
         writeLargeExcludes(large)
         if (large.isNotEmpty()) {
@@ -170,6 +171,7 @@ class ShadowRepo(private val git: Git, private val maxFileBytes: Long = MAX_FILE
      * (git prune walks every object, so not after each turn). [force] prunes objects now.
      */
     fun prune(keep: Set<String>, force: Boolean = false) {
+        clearStaleLocks()
         val refs = Git.splitZ(git.check(listOf("for-each-ref", "--format=%(refname)%00", REF_PREFIX)).out).map { it.trim() }.filter { it.isNotEmpty() }
         val last = readLast()?.commit
         val drop = refs.filter { val sha = it.removePrefix(REF_PREFIX); sha !in keep && sha != last }
@@ -190,6 +192,16 @@ class ShadowRepo(private val git: Git, private val maxFileBytes: Long = MAX_FILE
         Git.splitZ(git.check(listOf("for-each-ref", "--format=%(objectname)%00", REF_PREFIX)).out).map { it.trim() }.filter { it.isNotEmpty() }.toSet()
 
     fun hasObject(sha: String): Boolean = git.run(listOf("cat-file", "-e", sha)).ok
+
+    /**
+     * Removes the lock files of a git that did not finish: the app process was killed during a snapshot, or a git timed
+     * out and was killed. Left there, every later `git add` (index.lock) or ref deletion (packed-refs.lock) would fail,
+     * and checkpoints of the project would stay paused for good. Safe because callers serialise every git run on this
+     * repository in this process (the only one that uses it): no git of ours is running now.
+     */
+    private fun clearStaleLocks() {
+        for (name in STALE_LOCKS) File(gitDir, name).delete()
+    }
 
     private fun largeFiles(): Set<String> {
         // List without the previous large-file excludes: a file that shrank below the cap comes back.
@@ -243,6 +255,7 @@ class ShadowRepo(private val git: Git, private val maxFileBytes: Long = MAX_FILE
         private const val REF_PREFIX = "refs/pi/snapshots/"
         private const val SKIPPED = "Skipped-Large: "
         private const val GITLINK = "160000"
+        private val STALE_LOCKS = listOf("index.lock", "packed-refs.lock")
 
         /** Dependency, cache and build folders left out wherever they are (not worth snapshotting or restoring). */
         val HEAVY_DIRS = listOf(
