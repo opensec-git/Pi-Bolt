@@ -35,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -45,6 +46,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalContext
@@ -150,7 +152,9 @@ fun ProjectScreen(
     var path by rememberSaveable { mutableStateOf("") }
     // The file open in the viewer, relative to the project, and the editor's tabs (open files).
     var openFile by rememberSaveable { mutableStateOf<String?>(null) }
-    val tabs = rememberSaveable(name, saver = EditorTabs.saver) { EditorTabs() }
+    val tabs = rememberSaveable(name, saver = EditorTabs.saver(name)) { EditorTabs() }
+    val activity = LocalActivity.current
+    DisposableEffect(name) { onDispose { if (activity?.isChangingConfigurations != true) EditorTabs.release(name) } }
     var sort by rememberSaveable { mutableStateOf(FileSort.Name) }
     var showHidden by rememberSaveable { mutableStateOf(false) }
     var fileAction by remember { mutableStateOf<FileAction?>(null) }

@@ -190,16 +190,26 @@ object ProjectFiles {
         FileDoc.Image(bitmap.asImageBitmap(), bounds.outWidth, bounds.outHeight, size)
     }.getOrNull()
 
-    /** Writes [text] to [file] through a temporary file and a rename, so a failed save never leaves half a file. */
+    /**
+     * Writes [text] to [file] through a temporary file and a rename, so a failed save never leaves half a file. The
+     * temporary file takes the original's permissions first, so an edited `gradlew` or script stays executable.
+     */
     suspend fun write(file: File, text: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
             val tmp = File(file.parentFile, ".${file.name}.pibolt-tmp")
             tmp.writeText(text)
+            if (file.exists()) copyPermissions(file, tmp)
             if (!tmp.renameTo(file)) {
                 tmp.delete()
                 file.writeText(text)
             }
         }
+    }
+
+    /** Gives [to] the POSIX permissions of [from]; where those are unsupported, at least its executable bit. */
+    private fun copyPermissions(from: File, to: File) {
+        runCatching { Files.setPosixFilePermissions(to.toPath(), Files.getPosixFilePermissions(from.toPath())) }
+            .onFailure { if (from.canExecute()) to.setExecutable(true) }
     }
 
     /** Why [name] cannot be a new entry next to [existing], or null. Dot files are allowed here. */
