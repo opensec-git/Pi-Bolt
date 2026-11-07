@@ -476,3 +476,36 @@ private fun CommandWell(message: String, cwd: String?) {
         )
     }
 }
+
+/**
+ * Prompts sent earlier (most recent first), each up to two lines; a tap puts one in the composer. Up / Down on a
+ * hardware keyboard walk the same list from inside the composer.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun HistorySheet(prompts: List<String>, onPick: (String) -> Unit, onDismiss: () -> Unit) {
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val close = rememberSheetCloser(state)
+    val colors = Pi.colors
+    PiSheet(onDismiss = onDismiss, state = state) {
+        Text("Prompt history", style = Pi.type.subhead, color = colors.ink1, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+        if (prompts.isEmpty()) {
+            Text("Prompts you send from this phone show up here.", style = Pi.type.body, color = colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
+        }
+        LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
+            items(prompts) { prompt ->
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 52.dp)
+                        .pressable({ close { onPick(prompt) } }, shape = RoundedCornerShape(0.dp), pressedScale = 1f, label = "Put in the composer")
+                        .padding(horizontal = 20.dp, vertical = 10.dp),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Text(prompt, style = Pi.type.body, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+}
