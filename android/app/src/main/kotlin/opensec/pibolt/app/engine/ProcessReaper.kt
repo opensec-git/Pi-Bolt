@@ -23,6 +23,7 @@ class ProcessReaper(
     private val myUid: Int = Process.myUid(),
     private val myPid: Int = Process.myPid(),
     private val signal: (Int) -> Unit = { Process.sendSignal(it, Process.SIGNAL_KILL) },
+    private val log: (String) -> Unit = { Log.i(LocalEngine.TAG, it) },
 ) : ProcessKiller {
     internal data class Info(val pid: Int, val ppid: Int, val uid: Int, val token: String? = null)
 
@@ -75,7 +76,7 @@ class ProcessReaper(
     private fun kill(pids: List<Int>) {
         if (pids.isEmpty()) return
         for (p in pids) signal(p)
-        Log.i(LocalEngine.TAG, "killed ${pids.size} engine process(es)")
+        log("killed ${pids.size} engine process(es)")
     }
 
     private fun snapshot(withTokens: Boolean): List<Info> = proc.listFiles().orEmpty().mapNotNull { dir ->

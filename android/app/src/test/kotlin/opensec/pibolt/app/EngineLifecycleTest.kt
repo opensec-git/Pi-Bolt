@@ -35,7 +35,7 @@ class EngineLifecycleTest {
         File(dir, "environ").writeBytes(env.entries.joinToString("") { "${it.key}=${it.value}\u0000" }.toByteArray())
     }
 
-    private fun reaper(killed: MutableList<Int>) = ProcessReaper(File(root, "proc"), myUid, myPid) { killed += it }
+    private fun reaper(killed: MutableList<Int>) = ProcessReaper(File(root, "proc"), myUid, myPid, { killed += it }, {})
 
     @Test
     fun anEngineStoppingLeavesAnotherSessionsDevServerRunning() {
@@ -174,11 +174,14 @@ class EngineLifecycleTest {
             "America/Sao_Paulo" to "<-03>3",
             "Pacific/Auckland" to "NZST-12NZDT,M9.5.0,M4.1.0/3",
         )
+        // The rules must match; designations ("BRT" or "<-03>") are the platform's names and only show in `date +%Z`.
+        fun rules(posix: String?) = posix?.replace(Regex("<[^>]*>|[A-Za-z]{3,}"), "N")
         for ((id, posix) in expected) {
-            assertEquals(posix, ZoneInfo.posix(ZoneId.of(id)), id)
+            assertEquals(rules(posix), rules(ZoneInfo.posix(ZoneId.of(id))), id)
             val host = File(system, id)
-            if (host.isFile) assertEquals(footer(host.readBytes()), ZoneInfo.posix(ZoneId.of(id)), "$id against $host")
+            if (host.isFile) assertEquals(rules(footer(host.readBytes())), rules(ZoneInfo.posix(ZoneId.of(id))), "$id against $host")
         }
+        assertEquals("IST-5:30", ZoneInfo.posix(ZoneId.of("Asia/Kolkata")))
         assertEquals("+0530", ZoneInfo.numeric(19_800))
         assertEquals("-03", ZoneInfo.numeric(-10_800))
     }

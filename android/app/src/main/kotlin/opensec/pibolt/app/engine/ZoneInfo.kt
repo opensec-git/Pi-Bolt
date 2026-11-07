@@ -5,6 +5,7 @@ import java.io.DataOutputStream
 import java.io.File
 import java.time.DayOfWeek
 import java.time.Instant
+import java.time.Month
 import java.time.ZoneId
 import java.time.zone.ZoneOffsetTransitionRule
 import java.time.zone.ZoneRules
@@ -187,6 +188,8 @@ object ZoneInfo {
         val d = r.dayOfMonthIndicator
         val week = when {
             d == -1 -> 5
+            // java.time writes "lastSun" of a 31- or 30-day month as "Sun>=25" or "Sun>=24".
+            d > 0 && d + 6 == r.month.maxLength() && r.month != Month.FEBRUARY -> 5
             d > 0 && (d - 1) % 7 == 0 && d <= 22 -> (d - 1) / 7 + 1
             else -> return null
         }
