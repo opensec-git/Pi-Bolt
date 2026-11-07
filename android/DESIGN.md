@@ -446,15 +446,18 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
 - Todo panel above the queue strip (see Todo panel below).
 - Queue strip above the composer: 44dp rows with a 2dp bar (warning = steer, ink4 = follow-up), swipe to remove.
 - Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–6 lines; bar: attach (+,
-  48dp; ink4 and a "<model> can't read images" snackbar when the model's `input` lacks "image"), model chip, thinking
-  chip, send (40dp accent circle). Attached images (Photo Picker, images only, at most 4) sit in a tray above the
+  48dp; ink4 and a "<model> can't read images" snackbar when the model's `input` lacks "image"), one run-settings chip
+  ("Sonnet 4.5 · High": the model in label ink2, middle-truncated past 180dp, then " · High" in label ink3; the level is
+  left out when thinking is off or the model does not reason; TalkBack "Model: Sonnet 4.5, thinking high"), send (40dp
+  accent circle). The chip opens the model sheet, whose "Thinking" row (36dp level pills, radius full, the current one
+  accent 1.5dp on the selected fill, the level's meaning under it in meta ink3) sets the level without closing it. Attached images (Photo Picker, images only, at most 4) sit in a tray above the
   text: 56dp thumbnails, radius 8, 1dp line, a Quad Write while each encodes, a 20dp ✕ (scrim, lineStrong ring, 48dp
   touch) at the top-end corner. Encoding runs off the main thread: long edge at most 2000 px, JPEG 85 (PNG only when
   transparent and under 1.5 MB), refused over Pi's 4.5 MiB base64 limit. Send works with images and no text. While the agent works: send becomes Stop (surface3 circle, rounded square
   glyph) when the field is empty, and a "Steer | Follow-up" segmented control appears while typing. The palette and
   `@` mentions open above the field (see Command palette below). A thumbnail in the tray opens the image viewer. The
-  model and thinking chips cycle on long press (click label "Next model", "Next thinking level", a tick and a
-  snackbar naming the new value). IME insets animate with the keyboard. The draft is kept per session (computer or
+  run-settings chip cycles the model on long press (click label "Next model", a tick and a snackbar naming it);
+  Shift+Tab cycles the thinking level. IME insets animate with the keyboard. The draft is kept per session (computer or
   project, and Pi session) across restarts.
 - Empty session: the mark, "New session" and the folder tag, then "Commands" (the host's slash commands, mono name
   + description in meta ink3, the first 6 then "Show all N commands"; tap puts "/name " in the composer and focuses
@@ -469,8 +472,9 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   Duplicate session, Rename session, Session and usage, Export or share (no Disconnect or Forget computer). The banner reads "Starting Pi-Bolt…" (Quad Connect) and "Engine stopped" with Restart (danger
   soft, power glyph). Long press on a user message adds "Fork from here": Pi forks the session at that message and
   its text comes back to the composer to edit and send. Recent prompts are kept per project.
-- Sheets (ModalBottomSheet, predictive back): model picker (search, "Current" then one group per provider under a
-  meta-strong heading, 60dp rows with provider initial; `/model text` opens it filtered),
+- Sheets (ModalBottomSheet, predictive back): model picker (the Thinking pills when the model reasons, then search,
+  "Current" then one group per provider under a meta-strong heading, 60dp rows with provider initial; `/model text`
+  opens it filtered),
   thinking level (52dp option rows with a description), Pi's dialogs (Quad Wait eyebrow "Pi is asking", title,
   message in a command well when it looks like a command (surface1, radius 12, the cwd in mono meta ink3 with Copy,
   then `$` in success and the command in mono), options as 52dp rows, primary button; swipe or scrim tap
@@ -497,9 +501,11 @@ runs it at once; others fill `/name ` and wait. Picks tick (haptic).
   level. Enter adds a line, as Android keyboards expect.
 
 **Review changes.** A full screen over the session, like the viewer (sheet motion, predictive back): Close, "Changes"
-and "3 files · +40 −12" (meta ink3, tnum), a 1dp line. Then the prompt (body ink2, three lines), "Undo this turn" and
-"Restore to before" (secondary buttons with undo and history glyphs; off while Pi works, with a meta line saying
-so), and after an undo a surface1 card "Undid 3 files of this turn." with Redo (accent). Each file: a 1dp line, a
+and "3 files · +40 −12" (meta ink3, tnum), a 1dp line. Then the prompt (body ink2, three lines) and, after an undo, a
+surface1 card "Undid 3 files of this turn." with Redo (accent). The turn's actions sit in a bottom bar, in thumb reach
+(canvas, 1dp line above, 12dp padding, over the navigation bar): "Restore to before" (secondary, history glyph) and
+"Undo this turn" (primary, undo glyph: it can be redone); both off while Pi works, with a meta line above them saying
+so. Each file: a 1dp line, a
 56dp row (chevron, the name in mono meta ink1 over its folder in meta ink3, "new" success or "deleted" danger, +n
 success −n danger tnum or "binary", and a 48dp undo button for that file); the first four files start open. An open
 file shows its unified diff with the tool rows' renderer (gutter numbers, changed words, the file's syntax colours) on
