@@ -23,7 +23,8 @@ export function fromBase64Url(text: string): Buffer {
 	return Buffer.from(text, "base64url");
 }
 
-function writePrivateFile(path: string, content: string): void {
+/** Writes `content` readable by the user only (mode 0600), replacing the file atomically. */
+export function writePrivateFile(path: string, content: string): void {
 	const temp = `${path}.${process.pid}.tmp`;
 	writeFileSync(temp, content, { mode: 0o600 });
 	chmodSync(temp, 0o600);
