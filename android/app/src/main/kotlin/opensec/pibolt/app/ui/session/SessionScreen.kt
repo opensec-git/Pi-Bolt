@@ -39,7 +39,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.engine.SessionSummary
 import opensec.pibolt.app.session.ForkPoint
@@ -124,6 +126,7 @@ import kotlinx.coroutines.launch
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.ui.projects.LocalSessions
+import opensec.pibolt.app.ui.projects.editor.AskPi
 import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
@@ -157,6 +160,8 @@ class LocalUi(
     val onRestart: () -> Unit,
     /** A prompt queued when the session was created ("Clone from git"); returned once. */
     val takeFirstPrompt: () -> String?,
+    /** Text and images waiting for the composer ("Ask Pi" in the editor, shares from other apps). */
+    val composerDrop: MutableStateFlow<LocalSessions.ComposerDrop?>? = null,
 )
 
 /** The remote session ([local] null) or the on-device one in project [local]. */
@@ -218,6 +223,7 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
                     live.controller.retryNow()
                 },
                 takeFirstPrompt = { live.firstPrompt.also { live.firstPrompt = null } },
+                composerDrop = live.composerDrop,
             ),
         )
     }
@@ -674,6 +680,18 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         }
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(ImageSizing.MAX_IMAGES)) { addImages(it) }
+
+    // What the editor or another app left for the composer, once this session's draft is loaded (it would be
+    // overwritten otherwise), and later drops while the screen stays open.
+    LaunchedEffect(draftOwner) {
+        val inbox = local?.composerDrop ?: return@LaunchedEffect
+        if (draftOwner == null) return@LaunchedEffect
+        inbox.filterNotNull().collect { d ->
+            inbox.value = null
+            d.text?.let { draft = AskPi.appendTo(draft, it).first }
+            if (d.images.isNotEmpty()) addImages(d.images)
+        }
+    }
 
     /** An image on the clipboard (copied from a browser, a screenshot, a gallery app), or null. */
     fun clipboardImage(): Uri? {

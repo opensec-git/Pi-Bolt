@@ -1,0 +1,157 @@
+package opensec.pibolt.app.ui.projects.transfer
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import opensec.pibolt.app.ui.components.TextAction
+import opensec.pibolt.app.ui.projects.ProjectFiles
+import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.PiMotion
+import opensec.pibolt.app.ui.theme.Radius
+import kotlin.math.roundToInt
+
+/** One running transfer: what it does ("Importing 3 files") and how far it is. */
+class ActiveTransfer(val label: String, val progress: TransferProgress)
+
+/**
+ * Runs one transfer at a time in [scope] and exposes it for [TransferBar]. Progress reaches the UI at most every
+ * [MIN_UPDATE_MS] (a buffer is 64 KB, so raw updates would recompose hundreds of times a second). Cancel stops the
+ * job; the transfer's own cleanup removes partial files.
+ */
+@Stable
+class TransferRunner(private val scope: CoroutineScope) {
+    var active by mutableStateOf<ActiveTransfer?>(null)
+        private set
+
+    private var job: Job? = null
+
+    val busy: Boolean get() = active != null
+
+    fun <T> run(label: String, work: suspend (onProgress: (TransferProgress) -> Unit) -> T, onDone: (T) -> Unit, onError: (String) -> Unit) {
+        if (active != null) return
+        var last = 0L
+        active = ActiveTransfer(label, TransferProgress(0, null, 0))
+        job = scope.launch {
+            try {
+                val result = work { p ->
+                    val now = System.currentTimeMillis()
+                    if (now - last >= MIN_UPDATE_MS) {
+                        last = now
+                        // Written from the transfer's thread; snapshot state takes it and the bar reads it next frame.
+                        if (active != null) active = ActiveTransfer(label, p)
+                    }
+                }
+                active = null
+                onDone(result)
+            } catch (e: CancellationException) {
+                active = null
+                throw e
+            } catch (e: Exception) {
+                active = null
+                onError(e.message ?: "The transfer failed")
+            }
+        }
+    }
+
+    fun cancel() {
+        job?.cancel()
+        job = null
+        active = null
+    }
+
+    private companion object {
+        const val MIN_UPDATE_MS = 100L
+    }
+}
+
+/** A card above the bottom edge while a transfer runs: what it does, the file, a progress line and Cancel. */
+@Composable
+fun TransferBar(runner: TransferRunner, modifier: Modifier = Modifier) {
+    val colors = Pi.colors
+    val type = Pi.type
+    val shown = runner.active
+    val last = remember { mutableStateOf<ActiveTransfer?>(null) }
+    if (shown != null) last.value = shown
+    AnimatedVisibility(
+        visible = shown != null,
+        enter = fadeIn(PiMotion.enter(PiMotion.QUICK)) + slideInVertically(PiMotion.enter(PiMotion.STANDARD)) { it / 2 },
+        exit = fadeOut(PiMotion.leave(PiMotion.QUICK)) + slideOutVertically(PiMotion.leave(PiMotion.STANDARD)) { it / 2 },
+        modifier = modifier,
+    ) {
+        val t = last.value ?: return@AnimatedVisibility
+        val p = t.progress
+        val fraction = p.fraction
+        val shape = RoundedCornerShape(Radius.md)
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .background(colors.surface2, shape)
+                .border(1.dp, colors.lineStrong, shape)
+                .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 10.dp),
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }) {
+                    Text(
+                        t.label + (fraction?.let { " · ${(it * 100).roundToInt()}%" } ?: ""),
+                        style = type.bodyStrong,
+                        color = colors.ink1,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    val detail = buildList {
+                        if (p.files > 0) add(if (p.files == 1) "1 file" else "${p.files} files")
+                        add(ProjectFiles.size(p.bytes) + (p.total?.let { " of " + ProjectFiles.size(it) } ?: ""))
+                        if (p.current.isNotEmpty()) add(p.current)
+                    }.joinToString(" · ")
+                    Text(detail, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
+                }
+                TextAction("Cancel", onClick = runner::cancel, color = colors.danger)
+            }
+            Spacer(Modifier.height(6.dp))
+            Box(
+                Modifier
+                    .padding(end = 12.dp)
+                    .fillMaxWidth()
+                    .height(3.dp)
+                    .background(colors.surface3, RoundedCornerShape(2.dp))
+                    .semantics { progressBarRangeInfo = ProgressBarRangeInfo(fraction ?: 0f, 0f..1f) },
+            ) {
+                // Unknown totals show no fill: an indeterminate bar would be an idle-looking animation.
+                if (fraction != null) Box(Modifier.fillMaxWidth(fraction).height(3.dp).background(colors.accent, RoundedCornerShape(2.dp)))
+            }
+        }
+    }
+}

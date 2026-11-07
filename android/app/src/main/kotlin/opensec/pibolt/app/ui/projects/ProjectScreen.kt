@@ -82,6 +82,7 @@ import opensec.pibolt.app.ui.components.rememberSettledMode
 import opensec.pibolt.app.ui.components.sharedHostBounds
 import opensec.pibolt.app.ui.components.sharedHostElement
 import opensec.pibolt.app.ui.components.show
+import opensec.pibolt.app.ui.projects.editor.EditorTabs
 import opensec.pibolt.app.ui.session.TranscriptModel
 import opensec.pibolt.app.ui.session.features2.SessionBrowserSheet
 import opensec.pibolt.app.ui.theme.Pi
@@ -118,8 +119,9 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
     var showFiles by rememberSaveable { mutableStateOf(false) }
     // Folder shown in Files, relative to the project ("" is its root).
     var path by rememberSaveable { mutableStateOf("") }
-    // The file open in the viewer, relative to the project.
+    // The file open in the viewer, relative to the project, and the editor's tabs (open files).
     var openFile by rememberSaveable { mutableStateOf<String?>(null) }
+    val tabs = rememberSaveable(name, saver = EditorTabs.saver) { EditorTabs() }
     var sort by rememberSaveable { mutableStateOf(FileSort.Name) }
     var showHidden by rememberSaveable { mutableStateOf(false) }
     var fileAction by remember { mutableStateOf<FileAction?>(null) }
@@ -143,6 +145,29 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
         scope.launch {
             LocalSessions.open(engine, store, dir, sessionFile = file, fresh = fresh)
                 .onSuccess { onOpenSession() }
+                .onFailure { snackbar.show(it.message ?: "Could not open the session", SnackKind.Error) }
+            opening = false
+        }
+    }
+
+    // "Ask Pi" in the editor: the text goes into the composer of this project's session (the live one, else the
+    // latest, else a new one), which then opens.
+    fun ask(text: String) {
+        val current = liveHere
+        if (current != null) {
+            current.drop(text)
+            onOpenSession()
+            return
+        }
+        if (opening) return
+        opening = true
+        scope.launch {
+            val latest = sessions?.firstOrNull()?.file
+            LocalSessions.open(engine, store, dir, sessionFile = latest, fresh = latest == null)
+                .onSuccess {
+                    it.drop(text)
+                    onOpenSession()
+                }
                 .onFailure { snackbar.show(it.message ?: "Could not open the session", SnackKind.Error) }
             opening = false
         }
@@ -307,7 +332,9 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
         ) {
             val shown = remember { mutableStateOf(openFile) }
             openFile?.let { shown.value = it }
-            shown.value?.let { rel -> FileViewer(dir, rel, onClose = { openFile = null }, onChanged = { reload++ }) }
+            shown.value?.let { rel ->
+                FileViewer(dir, tabs, rel, onSelect = { openFile = it }, onClose = { openFile = null }, onChanged = { reload++ }, onAsk = ::ask)
+            }
         }
     }
     // Back inside Files goes up a folder first.

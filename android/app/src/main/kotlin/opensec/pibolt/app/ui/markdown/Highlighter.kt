@@ -21,6 +21,9 @@ object Highlighter {
     /** Above this size even background highlighting gives up. */
     const val MAX_BACKGROUND_CHARS = 400_000
 
+    /** [Incremental] highlights texts up to this size (the editor opens files up to 1 MB). */
+    const val MAX_EDIT_CHARS = 1024 * 1024
+
     /** The language a tag stands for; null for plain text. Unknown tags get the generic tokenizer. */
     fun langFor(language: String): Lang? {
         val lang = if (language.isBlank()) Languages.generic else Languages.of(language) ?: Languages.generic
@@ -56,6 +59,202 @@ object Highlighter {
             }
             return t.tokens
         }
+    }
+
+    /**
+     * Tokens of a text being edited. The first [update] tokenises the whole text, saving the tokenizer's state at a
+     * line start every [every] lines (a checkpoint). Each later [update] finds the common prefix and suffix with the
+     * previous text, resumes from the last checkpoint before the change, and stops as soon as it reaches an old
+     * checkpoint past the change with the same state: the old tokens after it are reused, shifted. A keystroke inside
+     * a function costs about [every] lines; one that opens a block comment re-tokenises until the comment closes.
+     * Not thread-safe: one caller (a background coroutine) at a time.
+     */
+    class Incremental(language: String, private val every: Int = 64, private val limit: Int = MAX_EDIT_CHARS) {
+        private val lang = langFor(language)
+        private var text = ""
+        private var tokens: List<Token> = emptyList()
+
+        /** Line-start offsets and the tokenizer state there, ascending; the first is offset 0. */
+        private var checkpoints: List<Checkpoint> = emptyList()
+
+        private class Checkpoint(val offset: Int, val state: Snapshot)
+
+        /** Characters re-tokenised by the last [update] (for tests and tuning). */
+        var lastWork = 0
+            private set
+
+        fun update(next: String): List<Token> {
+            val l = lang
+            if (l == null || next.length > limit) {
+                text = next
+                tokens = emptyList()
+                checkpoints = emptyList()
+                lastWork = 0
+                return tokens
+            }
+            if (checkpoints.isEmpty() || text.length > limit) return full(l, next)
+            if (next == text) {
+                lastWork = 0
+                return tokens
+            }
+            val old = text
+            val max = minOf(old.length, next.length)
+            var p = 0
+            while (p < max && old[p] == next[p]) p++
+            var s = 0
+            while (s < max - p && old[old.length - 1 - s] == next[next.length - 1 - s]) s++
+            val delta = next.length - old.length
+            val oldEditEnd = old.length - s
+            val newEditEnd = next.length - s
+
+            // Resume from the last checkpoint at or before the change.
+            val ci = lastAtOrBefore(checkpoints, p)
+            val start = checkpoints[ci]
+            val t = Tokenizer(l)
+            t.restore(start.state)
+            val kept = ArrayList<Token>(tokens.size + 16)
+            for (tok in tokens) {
+                if (tok.start >= start.offset) break
+                kept += if (tok.end > start.offset) Token(tok.start, start.offset, tok.kind) else tok
+            }
+            val points = ArrayList<Checkpoint>(checkpoints.size + 4)
+            for (i in 0..ci) points += checkpoints[i]
+
+            // Old checkpoints whose line start lies in the unchanged suffix (the character before it unchanged too).
+            var oi = firstAtOrAfter(checkpoints, oldEditEnd + 1)
+            var at = start.offset
+            var work = 0
+            while (at < next.length) {
+                // The next stop: every [every] lines while in the change, then the old checkpoints shifted.
+                val stop = if (at < newEditEnd) {
+                    minOf(linesAhead(next, at, every), next.length)
+                } else {
+                    while (oi < checkpoints.size && checkpoints[oi].offset + delta <= at) oi++
+                    if (oi < checkpoints.size) checkpoints[oi].offset + delta else next.length
+                }
+                t.run(next, at, stop)
+                work += stop - at
+                for (tok in t.tokens) appendMerged(kept, tok)
+                t.tokens.clear()
+                at = stop
+                if (at >= next.length) break
+                val state = t.snapshot()
+                if (at >= newEditEnd && oi < checkpoints.size && checkpoints[oi].offset + delta == at && checkpoints[oi].state == state) {
+                    // Converged: everything after is what it was, moved by [delta].
+                    val oldAt = checkpoints[oi].offset
+                    val from = firstTokenEndingAfter(tokens, oldAt)
+                    for (k in from until tokens.size) {
+                        val tok = tokens[k]
+                        appendMerged(kept, Token(maxOf(tok.start, oldAt) + delta, tok.end + delta, tok.kind))
+                    }
+                    for (k in oi until checkpoints.size) points += Checkpoint(checkpoints[k].offset + delta, checkpoints[k].state)
+                    text = next
+                    tokens = kept
+                    checkpoints = points
+                    lastWork = work
+                    return tokens
+                }
+                points += Checkpoint(at, state)
+            }
+            text = next
+            tokens = kept
+            checkpoints = points
+            lastWork = work
+            return tokens
+        }
+
+        private fun full(l: Lang, next: String): List<Token> {
+            val t = Tokenizer(l)
+            val out = ArrayList<Token>()
+            val points = ArrayList<Checkpoint>()
+            var at = 0
+            points += Checkpoint(0, t.snapshot())
+            while (at < next.length) {
+                val stop = minOf(linesAhead(next, at, every), next.length)
+                t.run(next, at, stop)
+                for (tok in t.tokens) appendMerged(out, tok)
+                t.tokens.clear()
+                at = stop
+                if (at < next.length) points += Checkpoint(at, t.snapshot())
+            }
+            text = next
+            tokens = out
+            checkpoints = points
+            lastWork = next.length
+            return tokens
+        }
+
+        /** Adds [tok], joined to the last token when they touch and are of one kind, as the tokenizer's own emit does. */
+        private fun appendMerged(list: ArrayList<Token>, tok: Token) {
+            val last = list.lastOrNull()
+            if (last != null && last.kind == tok.kind && last.end == tok.start && tok.kind != Kind.Punctuation && tok.kind != Kind.Operator) {
+                list[list.size - 1] = Token(last.start, tok.end, tok.kind)
+            } else {
+                list += tok
+            }
+        }
+
+        private fun linesAhead(code: String, from: Int, n: Int): Int {
+            var i = from
+            repeat(n) {
+                val nl = code.indexOf('\n', i)
+                if (nl < 0) return code.length
+                i = nl + 1
+            }
+            return i
+        }
+
+        private fun lastAtOrBefore(points: List<Checkpoint>, offset: Int): Int {
+            var lo = 0
+            var hi = points.size - 1
+            while (lo < hi) {
+                val mid = (lo + hi + 1) ushr 1
+                if (points[mid].offset <= offset) lo = mid else hi = mid - 1
+            }
+            return lo
+        }
+
+        private fun firstAtOrAfter(points: List<Checkpoint>, offset: Int): Int {
+            var lo = 0
+            var hi = points.size
+            while (lo < hi) {
+                val mid = (lo + hi) ushr 1
+                if (points[mid].offset < offset) lo = mid + 1 else hi = mid
+            }
+            return lo
+        }
+
+        private fun firstTokenEndingAfter(list: List<Token>, offset: Int): Int {
+            var lo = 0
+            var hi = list.size
+            while (lo < hi) {
+                val mid = (lo + hi) ushr 1
+                if (list[mid].end <= offset) lo = mid + 1 else hi = mid
+            }
+            return lo
+        }
+    }
+
+    /** [tokens] of [old] moved onto [next]: kept before the change, shifted after it, dropped where it overlaps. */
+    fun shiftTokens(tokens: List<Token>, old: String, next: String): List<Token> {
+        if (old == next || tokens.isEmpty()) return tokens
+        val max = minOf(old.length, next.length)
+        var p = 0
+        while (p < max && old[p] == next[p]) p++
+        var s = 0
+        while (s < max - p && old[old.length - 1 - s] == next[next.length - 1 - s]) s++
+        val oldEditEnd = old.length - s
+        val delta = next.length - old.length
+        val out = ArrayList<Token>(tokens.size)
+        for (t in tokens) {
+            when {
+                t.end <= p -> out += t
+                t.start >= oldEditEnd -> out += Token(t.start + delta, t.end + delta, t.kind)
+                // A token around the change keeps its parts outside it.
+                t.start < p -> out += Token(t.start, p, t.kind)
+            }
+        }
+        return out
     }
 
     private val sharedTypes = setOf(
@@ -119,8 +318,58 @@ object Highlighter {
         }
     }
 
+    /**
+     * A tokenizer's state at a line start, for [Incremental]. Two equal snapshots tokenise what follows identically
+     * ([budget] is carried, not compared: it only caps work on hostile input).
+     */
+    private data class Snapshot(
+        val block: Int,
+        val close: String,
+        val depth: Int,
+        val blockInterp: Boolean,
+        val blockEscapes: Boolean,
+        val blockQuote: Char,
+        val exprStart: Boolean,
+        val lastWord: String,
+        val commandPos: Boolean,
+        val pendingHeredoc: String?,
+        val cssDepth: Int,
+        val yamlIndent: Int,
+        val dockerShell: Boolean,
+        val markupTagName: String,
+        val embedded: Embedded?,
+    ) {
+        var budget = 0L
+    }
+
+    private data class Embedded(val lang: Lang, val level: Int, val state: Snapshot)
+
     private class Tokenizer(val lang: Lang, val level: Int = 0) {
         val tokens = ArrayList<Token>()
+
+        fun snapshot(): Snapshot = Snapshot(
+            block, close, depth, blockInterp, blockEscapes, blockQuote, exprStart, lastWord, commandPos, pendingHeredoc,
+            cssDepth, yamlIndent, dockerShell, markupTagName, embedded?.let { Embedded(it.lang, it.level, it.snapshot()) },
+        ).also { it.budget = scanBudget }
+
+        fun restore(s: Snapshot) {
+            block = s.block
+            close = s.close
+            depth = s.depth
+            blockInterp = s.blockInterp
+            blockEscapes = s.blockEscapes
+            blockQuote = s.blockQuote
+            exprStart = s.exprStart
+            lastWord = s.lastWord
+            commandPos = s.commandPos
+            pendingHeredoc = s.pendingHeredoc
+            cssDepth = s.cssDepth
+            yamlIndent = s.yamlIndent
+            dockerShell = s.dockerShell
+            markupTagName = s.markupTagName
+            embedded = s.embedded?.let { e -> Tokenizer(e.lang, e.level).also { it.restore(e.state) } }
+            scanBudget = s.budget
+        }
 
         private var block = NONE
         private var close = ""
