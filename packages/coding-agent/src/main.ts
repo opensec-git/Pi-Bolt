@@ -80,6 +80,7 @@ import {
 	handlePackageCommand,
 } from "./package-manager-cli.ts";
 import { PIBOLT } from "./pi-bolt.ts";
+import { loadRemoteControl } from "./remote-control/remote-control.lazy.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 import { createInterface } from "./utils/readline.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
@@ -663,7 +664,14 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
-	const parsed = parseArgs(args);
+	// `service run` is the background service itself (it needs the runtime factory below); the rest manage it.
+	const serviceHost = args[0] === "service" && args[1] === "run";
+	if (args[0] === "service" && !serviceHost) {
+		const { runServiceCommand } = await loadRemoteControl();
+		process.exit(await runServiceCommand(args.slice(1), { agentDir }));
+	}
+
+	const parsed = parseArgs(serviceHost ? args.slice(2) : args);
 	if (parsed.diagnostics.length > 0) {
 		for (const d of parsed.diagnostics) {
 			const color = d.type === "error" ? chalk.red : chalk.yellow;
@@ -712,7 +720,8 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(0);
 	}
 
-	let appMode = resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
+	// The service runs headless as RPC does, whether or not it was started from a terminal.
+	let appMode: AppMode = serviceHost ? "rpc" : resolveAppMode(parsed, process.stdin.isTTY, process.stdout.isTTY);
 	const shouldTakeOverStdout = appMode !== "interactive" && !isPlainRuntimeMetadataCommand(parsed);
 	if (shouldTakeOverStdout) {
 		takeOverStdout();
@@ -825,11 +834,12 @@ export async function main(args: string[], options?: MainOptions) {
 	// Loaded only for `--acp` and `--mcp`: other modes never load their code.
 	const acp = parsed.mode === "acp" ? await loadAcpMode() : undefined;
 	const mcp = parsed.mode === "mcp" ? await loadMcpMode() : undefined;
+	const service = serviceHost ? await loadRemoteControl() : undefined;
 	const runtimeExtensionFactories = acp ? [...extensionFactories, acp.acpExtension] : extensionFactories;
 	// Only the runtime this process starts with uses the startup check. ACP and MCP create every runtime later, on the
 	// client's request, and without a session_start event; the directory may have changed by then (a pull, a branch switch),
 	// so each of their runtimes checks again.
-	let startupRuntimePending = !acp && !mcp;
+	let startupRuntimePending = !acp && !mcp && !service;
 	const createRuntime: CreateAgentSessionRuntimeFactory = async ({
 		cwd,
 		agentDir,
@@ -975,6 +985,11 @@ export async function main(args: string[], options?: MainOptions) {
 	if (mcp) {
 		// Each call names its session and directory, so MCP creates its runtimes itself, one per session.
 		await mcp.runMcpMode({ createRuntime, agentDir, sessionDir: explicitSessionDir, offline: offlineMode, cwd });
+		return;
+	}
+	if (service) {
+		// Phones choose the sessions and their projects, so the service creates its runtimes itself.
+		await service.runServiceHost({ createRuntime, agentDir, sessionDir: explicitSessionDir, offline: offlineMode });
 		return;
 	}
 	const runtime = await createAgentSessionRuntime(createRuntime, {

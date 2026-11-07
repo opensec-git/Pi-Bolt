@@ -12,6 +12,7 @@ import type { RpcExtensionUIResponse } from "../modes/rpc/rpc-types.ts";
 import { WEBSOCKET_PATH } from "./protocol.ts";
 import { renderQrLines } from "./qr.ts";
 import { type RemoteControlEvent, RemoteControlServer, type RemoteDialogRequest } from "./server.ts";
+import { claimRemoteControl, type RemoteControlClaim } from "./service-control.ts";
 import { RemoteControlStore } from "./store.ts";
 import {
 	cloudflaredInstallCommand,
@@ -44,11 +45,12 @@ export interface RemoteControlHost {
 	bindAddress?: string;
 }
 
-/** Tunnel and installer starters; tests replace them so no real cloudflared runs. */
+/** Tunnel and installer starters, and the background service handoff; tests replace them. */
 export interface RemoteControlDeps {
 	startTunnel: typeof startTunnel;
 	installCloudflared: typeof installCloudflared;
 	platform: NodeJS.Platform;
+	claim: typeof claimRemoteControl;
 }
 
 const USAGE = "Usage: /remote-control [lan|tunnel|copy|stop|devices]";
@@ -91,7 +93,7 @@ function localTime(iso: string): string {
 }
 
 /** "internet" for the tunnel, "tailscale" for a Tailscale (CGNAT) address, else "local", padded to one width. */
-function endpointLabel(endpoint: string): string {
+export function endpointLabel(endpoint: string): string {
 	if (endpoint.startsWith("wss:")) return "internet ";
 	const host = new URL(endpoint).hostname;
 	return isCgnatIPv4(host) ? "tailscale" : "local    ";
@@ -114,10 +116,20 @@ export class RemoteControlController {
 	private tunnelGeneration = 0;
 	private readonly store: RemoteControlStore;
 	private lastPairingUri: string | undefined;
+	/** Remote control taken from the background service, or the control channel held while this terminal serves. */
+	private claim: RemoteControlClaim | undefined;
+	/** The background service's tunnel, when this terminal took it over with the port. */
+	private adoptedTunnel: Tunnel | undefined;
 
 	constructor(host: RemoteControlHost, deps: Partial<RemoteControlDeps> = {}) {
 		this.host = host;
-		this.deps = { startTunnel, installCloudflared, platform: process.platform, ...deps };
+		this.deps = {
+			startTunnel,
+			installCloudflared,
+			platform: process.platform,
+			claim: claimRemoteControl,
+			...deps,
+		};
 		this.store = new RemoteControlStore(host.agentDir);
 	}
 
@@ -147,26 +159,47 @@ export class RemoteControlController {
 
 	private async start(reach: Reach): Promise<void> {
 		const settings = this.host.settingsManager.getRemoteControlSettings();
+		const wantTunnel = reach === "tunnel" || (reach === "auto" && settings.tunnel !== "off");
 		if (!this.server) {
+			// A background service gives this terminal its port (phones reconnect to the same addresses) and its tunnel;
+			// without one, this terminal holds remote control so a service that starts meanwhile waits.
+			const claim = await this.deps.claim(this.host.agentDir, {
+				keepTunnel: wantTunnel,
+				onTunnelDown: (message) => this.onAdoptedTunnelDown(message),
+			});
+			this.claim = claim;
+			const port = settings.port || (claim.kind === "service" ? claim.port : 0);
 			this.server = new RemoteControlServer({
 				store: this.store,
 				getSession: () => this.host.getSession(),
 				hostName: hostDisplayName(),
 				version: this.host.version,
-				port: settings.port ?? 0,
+				port,
 				bindAddress: this.host.bindAddress,
 				onEvent: (event) => this.onServerEvent(event),
 			});
+			if (claim.kind === "service") {
+				this.host.showStatus(
+					`Remote control: took over from the background service (port ${claim.port}); it serves again when this stops`,
+				);
+				if (claim.tunnel) {
+					this.adoptedTunnel = { endpoint: claim.tunnel, stop: () => claim.dropTunnel() };
+					this.tunnel = this.adoptedTunnel;
+				}
+			}
 		}
 		if (!this.server.running) {
 			try {
 				await this.server.start();
 			} catch (error) {
+				const claim = this.claim;
+				const port = settings.port || (claim?.kind === "service" ? claim.port : 0);
 				this.server = undefined;
+				this.releaseClaim();
 				const code = (error as NodeJS.ErrnoException).code;
 				throw new Error(
 					code === "EADDRINUSE"
-						? `Remote control: port ${settings.port} is in use (setting remoteControl.port)`
+						? `Remote control: port ${port} is in use (setting remoteControl.port)`
 						: `Remote control could not start: ${error instanceof Error ? error.message : String(error)}`,
 				);
 			}
@@ -175,8 +208,8 @@ export class RemoteControlController {
 			this.tunnelGeneration++;
 			this.tunnel?.stop();
 			this.tunnel = undefined;
+			this.adoptedTunnel = undefined;
 		}
-		const wantTunnel = reach === "tunnel" || (reach === "auto" && settings.tunnel !== "off");
 		if (wantTunnel && !this.tunnel) await this.openTunnel(reach === "tunnel");
 		this.updateStatus();
 		this.showPairingCode();
@@ -268,10 +301,30 @@ export class RemoteControlController {
 		return true;
 	}
 
+	/** The adopted tunnel stopped, or the service that ran it went away. */
+	private onAdoptedTunnelDown(message: string): void {
+		if (!this.adoptedTunnel || this.tunnel !== this.adoptedTunnel) return;
+		this.tunnel = undefined;
+		this.adoptedTunnel = undefined;
+		this.host.showWarning(`Remote control tunnel stopped. ${message}`);
+		this.updateStatus();
+	}
+
+	private releaseClaim(): void {
+		this.claim?.release();
+		this.claim = undefined;
+		this.adoptedTunnel = undefined;
+	}
+
+	/** Every address phones can use now: LAN (with Tailscale) first, then the tunnel. */
+	private endpoints(port: number): string[] {
+		return [...lanEndpoints(port), ...(this.tunnel ? [this.tunnel.endpoint] : [])];
+	}
+
 	private showPairingCode(): void {
 		const server = this.server;
 		if (!server) return;
-		const endpoints = [...lanEndpoints(server.port), ...(this.tunnel ? [this.tunnel.endpoint] : [])];
+		const endpoints = this.endpoints(server.port);
 		if (endpoints.length === 0) {
 			this.host.showWarning("No network address found. Connect to a network, or use /remote-control tunnel.");
 			return;
@@ -312,11 +365,13 @@ export class RemoteControlController {
 
 	async stop(announce = false): Promise<void> {
 		this.tunnelGeneration++;
-		this.tunnel?.stop();
+		// The service's own tunnel stays up for the service, which listens again on release.
+		if (this.tunnel !== this.adoptedTunnel) this.tunnel?.stop();
 		this.tunnel = undefined;
 		const server = this.server;
 		this.server = undefined;
 		if (server) await server.stop();
+		this.releaseClaim();
 		this.host.setStatus(undefined);
 		if (announce) this.host.showStatus(server ? "Remote control stopped" : "Remote control is not running");
 	}
@@ -393,6 +448,8 @@ export class RemoteControlController {
 			this.host.setStatus(undefined);
 			return;
 		}
+		// Connected phones hear about a new tunnel address or network at once.
+		this.server.setEndpoints(this.endpoints(this.server.port));
 		const clients = this.server.clients();
 		const where = this.tunnel ? "lan+tunnel" : "lan";
 		const who =
