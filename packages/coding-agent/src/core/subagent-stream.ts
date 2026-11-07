@@ -25,6 +25,8 @@ const POLL_MS = 250;
 /** How often an unbound stream lists the session folder again. */
 const SCAN_MS = 1_000;
 const EVENT_BATCH_MS = 80;
+/** How long live events wait for the saved copy of a message that ended before them. */
+const BOUNDARY_WAIT_MS = 5_000;
 /** Bytes of the session file read per poll: a long transcript arrives in steps. */
 const READ_CHUNK = 1024 * 1024;
 /** A `subagent_entries` message is sent once its messages reach this size. */
@@ -322,7 +324,12 @@ class SubagentStream {
 	private stopped = false;
 	private lastScan = 0;
 	private lastRefresh = 0;
-	private events: unknown[] = [];
+	/**
+	 * Live events not sent yet, in order. A `boundary` marks where a streamed assistant message ended: the events after
+	 * it wait until that message's saved copy has been sent (`sendEntries`), so the phone gets them in the order they
+	 * happened. A boundary whose saved message does not come within `BOUNDARY_WAIT_MS` is dropped.
+	 */
+	private queue: Array<{ event: unknown } | { boundary: number }> = [];
 	private eventTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly timer: ReturnType<typeof setInterval>;
 
@@ -357,6 +364,7 @@ class SubagentStream {
 		this.stopped = true;
 		clearInterval(this.timer);
 		if (this.eventTimer) clearTimeout(this.eventTimer);
+		this.queue = [];
 		this.eventTimer = undefined;
 		this.unsubscribeLive?.();
 		this.unsubscribeLive = undefined;
@@ -407,7 +415,7 @@ class SubagentStream {
 		this.resetPending = true;
 		this.caughtUp = false;
 		this.lastScan = 0;
-		this.events = [];
+		this.queue = [];
 	}
 
 	/** The agent's session open in this process, if it is: its streaming message comes from its events. */
@@ -498,7 +506,7 @@ class SubagentStream {
 			this.rest = Buffer.alloc(0);
 			this.resetPending = true;
 			this.caughtUp = false;
-			this.events = [];
+			this.queue = [];
 		}
 		if (size === this.offset && !this.resetPending) return;
 		const messages: Json[] = [];
@@ -541,7 +549,7 @@ class SubagentStream {
 			this.sentMessages = 0;
 			this.resetPending = true;
 			this.caughtUp = false;
-			this.events = [];
+			this.queue = [];
 		}
 		const fresh = all.slice(this.sentMessages).filter((message) => message.role !== "system") as unknown as Json[];
 		this.sentMessages = all.length;
@@ -551,9 +559,6 @@ class SubagentStream {
 
 	private sendEntries(messages: Json[]): void {
 		if (messages.length === 0 && !this.resetPending) return;
-		// Streaming events still waiting in the batch belong before the saved messages they led to: a phone that gets
-		// the saved answer first would start a live copy of it again from the late events.
-		if (!this.resetPending) this.flushEvents();
 		const max = this.owner.limits.maxMessageBytes;
 		let batch: Json[] = [];
 		let bytes = 0;
@@ -570,12 +575,21 @@ class SubagentStream {
 			bytes = 0;
 		};
 		for (const message of messages) {
+			// The saved copy of a message seen streaming: the batch so far, then the events up to its end, go first (a
+			// phone given the saved answer before them would start a live copy of it again).
+			if (!this.resetPending && message.role === "assistant" && this.queue.some((item) => "boundary" in item)) {
+				if (batch.length > 0) flush();
+				this.flushEvents();
+				this.queue.shift();
+			}
 			const capped = capMessage(message, max);
 			bytes += Buffer.byteLength(JSON.stringify(capped));
 			batch.push(capped);
 			if (bytes >= ENTRIES_BATCH_BYTES) flush();
 		}
 		if (batch.length > 0 || this.resetPending) flush();
+		// The events that came after the saved messages.
+		this.flushEvents();
 	}
 
 	private onLiveEvent(event: AgentSessionEvent): void {
@@ -593,7 +607,10 @@ class SubagentStream {
 					message: capMessage(event.message as unknown as Json, this.owner.limits.maxMessageBytes),
 				});
 				// The message is saved right after its listeners ran: read it from the file at once.
-				if (event.type === "message_end") setImmediate(() => this.poll());
+				if (event.type === "message_end") {
+					if (!this.stopped) this.queue.push({ boundary: Date.now() });
+					setImmediate(() => this.poll());
+				}
 				return;
 			case "message_update":
 				if (event.message.role !== "assistant") return;
@@ -624,18 +641,35 @@ class SubagentStream {
 		if (this.stopped) return;
 		// A copy now: providers keep appending to the streaming message's content while the batch waits, and the
 		// phone would get text in `message_start` that the following deltas add again.
-		this.events.push(JSON.parse(JSON.stringify(event)));
-		if (this.eventTimer) return;
-		this.eventTimer = setTimeout(() => this.flushEvents(), this.owner.eventBatchMs);
+		this.queue.push({ event: JSON.parse(JSON.stringify(event)) });
+		this.armTimer();
+	}
+
+	private armTimer(): void {
+		if (this.eventTimer || this.queue.length === 0 || this.stopped) return;
+		this.eventTimer = setTimeout(() => {
+			this.eventTimer = undefined;
+			this.flushEvents(true);
+			this.armTimer();
+		}, this.owner.eventBatchMs);
 		this.eventTimer.unref?.();
 	}
 
-	/** Sends the batched events now. */
-	private flushEvents(): void {
-		if (this.eventTimer) clearTimeout(this.eventTimer);
-		this.eventTimer = undefined;
-		const events = this.events;
-		this.events = [];
+	/**
+	 * Sends the queued events up to the first boundary. [timed] (the batch timer): a boundary older than
+	 * `BOUNDARY_WAIT_MS` is dropped, so events never wait forever for a saved message that does not come.
+	 */
+	private flushEvents(timed = false): void {
+		const events: unknown[] = [];
+		while (this.queue.length > 0) {
+			const head = this.queue[0];
+			if ("boundary" in head) {
+				if (!timed || Date.now() - head.boundary < BOUNDARY_WAIT_MS) break;
+			} else {
+				events.push(head.event);
+			}
+			this.queue.shift();
+		}
 		if (events.length > 0) this.owner.send({ type: "subagent_events", runId: this.runId, events });
 	}
 }

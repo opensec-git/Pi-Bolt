@@ -412,6 +412,7 @@ describe("subagent stream binding", () => {
 			sent.filter((message) => message.type === "subagent_entries" && message.runId === runId && message.reset);
 		/** An agent's session open in this process, streaming an answer, as the stream sees it. */
 		const live = (file: string, name: string, messages: Message[], created: number) => {
+			const listeners: Array<(event: unknown) => void> = [];
 			const session = {
 				sessionFile: file,
 				sessionName: name,
@@ -421,10 +422,17 @@ describe("subagent stream binding", () => {
 				messages,
 				isStreaming: true,
 				agent: { state: { streamingMessage: { role: "assistant", content: [{ type: "text", text: "partial" }] } } },
-				subscribe: () => () => {},
+				subscribe: (listener: (event: unknown) => void) => {
+					listeners.push(listener);
+					return () => listeners.splice(listeners.indexOf(listener), 1);
+				},
 			};
 			registerLiveSession(session as never);
 			cleanups.push(() => unregisterLiveSession(session as never));
+			/** Sends [event] to the session's listeners, as the session would. */
+			return (event: unknown) => {
+				for (const listener of [...listeners]) listener(event);
+			};
 		};
 		const isStart = (message: Message) =>
 			message.type === "subagent_events" &&
@@ -544,6 +552,43 @@ describe("subagent stream binding", () => {
 		streams.subscribe("run-old");
 		await until(() => replies("run-old").length > 0);
 		expect(replies("run-old")).toEqual([expect.stringContaining("old reply")]);
+	});
+
+	it("keeps live events that follow a message after its saved copy", async () => {
+		const { streams, call, result, agent, sent, live, isStart } = await files();
+		const t = Date.now() - 60_000;
+		call("run-1", { prompt: "task" }, t);
+		result("run-1", "11111111aaaa");
+		const file = agent("11111111aaaa", "task", "earlier", t + 1_000);
+		const emit = live(file, "general-purpose#11111111", [{ role: "user", content: "task" }], t);
+		streams.subscribe("run-1");
+		await until(() => sent.some(isStart));
+		const from = sent.length;
+		const answer = {
+			role: "assistant",
+			content: [{ type: "toolCall", id: "tool-1", name: "read", arguments: {} }],
+			stopReason: "toolUse",
+		};
+		emit({ type: "message_end", message: answer });
+		// Before the poll the message's end asked for: the tool starts and the next message begins.
+		emit({ type: "tool_execution_start", toolCallId: "tool-1", toolName: "read", args: {} });
+		emit({ type: "message_start", message: { role: "assistant", content: [] } });
+		appendFileSync(file, `${JSON.stringify({ type: "message", message: answer })}\n`);
+		await until(() =>
+			sent
+				.slice(from)
+				.some((message) =>
+					(message.events as Message[] | undefined)?.some((e) => e.type === "tool_execution_start"),
+				),
+		);
+		const order = sent
+			.slice(from)
+			.flatMap((message) =>
+				message.type === "subagent_entries"
+					? (message.messages as Message[]).map((entry) => `saved:${entry.role}`)
+					: (message.events as Message[]).map((event) => String(event.type)),
+			);
+		expect(order).toEqual(["message_end", "saved:assistant", "tool_execution_start", "message_start"]);
 	});
 
 	it("lets a resumed run share its agent's file with the original run", async () => {
