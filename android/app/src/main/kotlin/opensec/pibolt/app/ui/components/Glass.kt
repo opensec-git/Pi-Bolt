@@ -155,8 +155,9 @@ fun StatusTile(label: String, count: Int?, onClick: () -> Unit, modifier: Modifi
     ) {
         Box(Modifier.size(IconSize.md), contentAlignment = Alignment.Center, content = glyph)
         Spacer(Modifier.weight(1f).heightIn(min = Space.md))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(label, style = type.rowMeta, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Row(verticalAlignment = Alignment.Bottom) {
+            // Two lines before an ellipsis: "Waiting for you" fits a half-width tile at font scale 1.3 that way.
+            Text(label, style = type.rowMeta, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             if (count != null) {
                 Spacer(Modifier.width(Space.sm))
                 Text(count.toString(), style = type.rowMeta.copy(fontFeatureSettings = Tnum), color = colors.ink3, maxLines = 1)

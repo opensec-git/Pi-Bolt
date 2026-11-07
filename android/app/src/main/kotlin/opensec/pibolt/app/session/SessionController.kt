@@ -463,14 +463,14 @@ class SessionController private constructor(
                 "notify" -> _effects.tryEmit(SessionEffect.Notify(event.str("message").orEmpty(), event.str("notifyType") ?: "info"))
                 "set_editor_text" -> _effects.tryEmit(SessionEffect.EditorText(event.str("text").orEmpty()))
                 "select", "confirm", "input", "editor" -> if (!app.isForeground) {
-                    SessionReducer.dialogFrom(event)?.let { Notifications.needsAnswer(app, hostId, project?.name?.takeUnless { isChat }, _hostName.value, it, chat = isChat) }
+                    SessionReducer.dialogFrom(event)?.let { Notifications.needsAnswer(app, this, it) }
                 }
             }
             "agent_settled" -> {
                 if (!app.isForeground && before.isRunning) {
                     val last = (before.allItems.lastOrNull { it is AssistantTextItem } as? AssistantTextItem)?.text.orEmpty()
                     val capped = spending.card.value?.takeIf { it.stopped }?.let { SpendCaps.reached(it.kind, it.limit) }
-                    Notifications.settled(app, hostId, project?.name?.takeUnless { isChat }, _hostName.value, last, aborted = event.bool("aborted") == true, chat = isChat, capped = capped)
+                    Notifications.settled(app, hostId, Notifications.projectOf(project, isChat), _hostName.value, last, aborted = event.bool("aborted") == true, chat = isChat, sessionId = before.sessionId, capped = capped)
                 }
                 scope.launch { refreshState() }
             }
@@ -527,7 +527,7 @@ class SessionController private constructor(
     fun spendAllows(): Boolean {
         if (spending.maySend()) return true
         if (!app.isForeground) {
-            spending.card.value?.let { Notifications.settled(app, hostId, project?.name?.takeUnless { isChat }, _hostName.value, "", aborted = true, chat = isChat, capped = SpendCaps.reached(it.kind, it.limit)) }
+            spending.card.value?.let { Notifications.settled(app, hostId, Notifications.projectOf(project, isChat), _hostName.value, "", aborted = true, chat = isChat, sessionId = _state.value.sessionId, capped = SpendCaps.reached(it.kind, it.limit)) }
         }
         return false
     }

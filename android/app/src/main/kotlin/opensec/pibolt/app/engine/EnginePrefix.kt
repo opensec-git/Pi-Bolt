@@ -20,7 +20,12 @@ import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
-import java.util.zip.ZipInputStream
+import java.util.concurrent.Callable
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 
 /** `assets/engine/manifest.json`, written by the pack build (android/engine/CONTRACT.md). */
 data class EngineManifest(
@@ -53,10 +58,21 @@ data class EngineManifest(
      * third-party ones, android/engine/npm) its node_modules tree as the zip asset [modules], unpacked into
      * `<name>/node_modules`. [name] is a directory name; [packageName] the npm name ("@scope/pkg" ships as "scope-pkg").
      */
-    data class Extension(val name: String, val version: String, val files: List<String>, val modules: String? = null, val packageName: String = name)
+    data class Extension(
+        val name: String,
+        val version: String,
+        val files: List<String>,
+        val modules: String? = null,
+        val packageName: String = name,
+        /** The [modules] zip's sha256, when the pack lists it: an unchanged node_modules tree is kept on an update. */
+        val modulesSha256: String? = null,
+    )
 
-    /** `PREFIX/<path>` is the zip asset [asset] unpacked; [executables] (relative to it) get the execute bit. */
-    data class Tree(val path: String, val asset: String, val executables: List<String>)
+    /**
+     * `PREFIX/<path>` is the zip asset [asset] unpacked; [executables] (relative to it) get the execute bit. With its
+     * [sha256] listed, an update to a pack with the same tree keeps the unpacked one.
+     */
+    data class Tree(val path: String, val asset: String, val executables: List<String>, val sha256: String? = null)
 
     /**
      * A language runtime: [commands] on PATH, [bytes] its installed size (executables, modules, libraries only it
@@ -93,6 +109,7 @@ data class EngineManifest(
                         path = safeRelative(o.need("path")),
                         asset = o.need("asset"),
                         executables = o.arr("executables").orEmpty().map { safeRelative((it as JsonPrimitive).content) },
+                        sha256 = o.str("sha256"),
                     )
                 },
                 runtimes = json.arr("runtimes").orEmpty().map { item ->
@@ -114,6 +131,7 @@ data class EngineManifest(
                         files = o.arr("files").orEmpty().map { safeRelative((it as JsonPrimitive).content) },
                         modules = o.obj("modules")?.need("asset"),
                         packageName = o.str("package") ?: o.need("name"),
+                        modulesSha256 = o.obj("modules")?.str("sha256"),
                     )
                 },
             )
@@ -186,7 +204,12 @@ class EnginePaths(
 }
 
 /** Creates and refreshes the prefix: the symlink farm, data files and the engine's side files. */
-class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSource) {
+class EnginePrefix(
+    private val paths: EnginePaths,
+    private val assets: AssetSource,
+    /** Threads that unpack at once. */
+    private val workers: Int = Runtime.getRuntime().availableProcessors().coerceIn(2, 4),
+) {
     /**
      * Brings the prefix up to date with [manifest]. Cheap when nothing changed (one small file read); after an install or
      * update it recreates the links and copies files. Returns true when it did the full setup.
@@ -202,11 +225,98 @@ class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSour
 
     private fun stampFor(manifest: EngineManifest) = "${manifest.packFingerprint}\n${paths.nativeLibDir.path}\n"
 
+    /**
+     * The parts the last [ensure] kept from the installed pack, unchanged (runtime trees, extensions' node_modules), as
+     * paths relative to the prefix. Empty after a first install.
+     */
+    @Volatile
+    var kept: List<String> = emptyList()
+        private set
+
+    /**
+     * Sets the prefix up for [manifest]. The large parts (runtime trees, extensions' node_modules: thousands of files) are
+     * unpacked by [workers] threads at once, and one already unpacked from the same zip (same sha256, its marker file
+     * written once it was complete) is kept: an app update that moves nativeLibraryDir with the same pack only renews the
+     * links and the small files. The steps that may overlap run in the same order as one after another would.
+     */
     private fun install(manifest: EngineManifest) {
         paths.stamp.delete()
         removeLinks(paths.prefix.toPath())
-        // Trees first: the links of their extension modules go inside them.
-        for (tree in manifest.trees) installTree(tree)
+        val staging = File(paths.prefix, STAGING)
+        SafeFiles.deleteTree(staging)
+        val keptNow = ArrayList<String>()
+        // What to unpack: trees into a temporary directory each (swapped in afterwards), node_modules in place.
+        val unpacks = ArrayList<Unpack>()
+        for (tree in manifest.trees) {
+            val dir = File(paths.prefix, tree.path)
+            val key = tree.sha256?.let { "${tree.asset}\n$it\n${tree.executables.joinToString(",")}\n" }
+            if (key != null && isUnpacked(dir, key)) {
+                keptNow += tree.path
+                continue
+            }
+            val temp = File(dir.parentFile, ".${dir.name}.unpack")
+            SafeFiles.deleteTree(temp)
+            unpacks += Unpack(tree.asset, temp, key, tree)
+        }
+        val extensions = manifest.extensions.map { it.name }.toSet()
+        paths.extensionsDir.listFiles().orEmpty().filter { it.name !in extensions }.forEach(SafeFiles::deleteTree)
+        val ownFiles = ArrayList<Pair<String, File>>()
+        for (extension in manifest.extensions) {
+            val dir = File(paths.extensionsDir, extension.name)
+            val modules = File(dir, "node_modules")
+            val key = extension.modules?.let { asset -> extension.modulesSha256?.let { "$asset\n$it\n" } }
+            val keepModules = key != null && isUnpacked(modules, key)
+            // What was there goes, as with a fresh copy (an older version's files), except node_modules when kept.
+            dir.listFiles().orEmpty().filter { !(keepModules && it.name == "node_modules") }.forEach(SafeFiles::deleteTree)
+            if (keepModules) keptNow += modules.relativeTo(paths.prefix).path
+            for (file in extension.files) ownFiles += "$EXTENSIONS_ASSETS/${extension.name}/$file" to File(dir, file)
+            // Its runtime dependencies, unpacked after its own files (the old directory's are gone above).
+            if (extension.modules != null && !keepModules) unpacks += Unpack(extension.modules, modules, key, tree = null)
+        }
+        paths.packageDir.deleteRecursively()
+
+        val pool = Executors.newFixedThreadPool(workers)
+        try {
+            // 1. The zips to temporary files (random access for the workers), the package and the extensions' own files.
+            val zips = unpacks.mapIndexed { i, unpack -> File(staging, "$i.zip") to unpack }
+            val first = ArrayList<Callable<Unit>>()
+            for ((zip, unpack) in zips) first += Callable { assets.open(unpack.asset).use { copyAtomically(it, zip) } }
+            for ((asset, to) in ownFiles) first += Callable { assets.open(asset).use { copyAtomically(it, to) } }
+            first += Callable { copyPackage(manifest) }
+            runAll(pool, first)
+
+            // 2. Every zip's entries, in chunks across the workers.
+            val open = zips.map { (zip, unpack) -> ZipFile(zip) to unpack }
+            try {
+                val chunks = ArrayList<Callable<Unit>>()
+                for ((zip, unpack) in open) {
+                    unpack.into.mkdirs()
+                    for (chunk in zip.entries().toList().chunked(CHUNK_ENTRIES)) chunks += Callable { extract(zip, chunk, unpack.into) }
+                }
+                runAll(pool, chunks)
+            } finally {
+                for ((zip, _) in open) runCatching { zip.close() }
+            }
+        } finally {
+            pool.shutdownNow()
+            SafeFiles.deleteTree(staging)
+        }
+
+        // 3. Trees swapped in, then the links (some go inside the trees), the shell, the files, as before.
+        for (unpack in unpacks) {
+            val tree = unpack.tree
+            if (tree != null) {
+                for (rel in tree.executables) File(unpack.into, rel).setExecutable(true, true)
+                unpack.key?.let { writeAtomically(File(unpack.into, UNPACKED), it) }
+                val dir = File(paths.prefix, tree.path)
+                if (!SafeFiles.deleteTree(dir)) throw IOException("cannot remove the old ${tree.path}")
+                dir.parentFile?.mkdirs()
+                Files.move(unpack.into.toPath(), dir.toPath(), StandardCopyOption.ATOMIC_MOVE)
+            } else {
+                unpack.key?.let { writeAtomically(File(unpack.into, UNPACKED), it) }
+            }
+        }
+        kept = keptNow
         for (link in manifest.links) {
             val at = File(paths.prefix, link.path).toPath()
             Files.createDirectories(at.parent)
@@ -219,7 +329,18 @@ class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSour
         for (file in manifest.files) {
             assets.open(file.asset).use { input -> copyAtomically(input, File(paths.prefix, file.path)) }
         }
-        paths.packageDir.deleteRecursively()
+        // Not fatal: without the entries Pi just runs without the extensions (the next pack update tries again).
+        BundledExtensions.register(paths.agentDir, manifest.extensions.map { File(paths.extensionsDir, it.name).path }, paths.extensionsDir.path)
+    }
+
+    /** A zip asset to unpack into [into]; [key] goes into its marker once complete; [tree] when it is a runtime tree. */
+    private class Unpack(val asset: String, val into: File, val key: String?, val tree: EngineManifest.Tree?)
+
+    /** [dir] holds a complete unpack made with [key] (its marker says so). */
+    private fun isUnpacked(dir: File, key: String): Boolean =
+        SafeFiles.isRealDirectory(dir) && runCatching { File(dir, UNPACKED).readText() }.getOrNull() == key
+
+    private fun copyPackage(manifest: EngineManifest) {
         val listed = manifest.packageFiles
         if (listed != null) {
             for (file in listed) {
@@ -234,17 +355,43 @@ class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSour
         } else {
             copyTree(PACKAGE_ASSETS, paths.packageDir)
         }
-        paths.extensionsDir.deleteRecursively()
-        for (extension in manifest.extensions) {
-            val dir = File(paths.extensionsDir, extension.name)
-            for (file in extension.files) {
-                assets.open("$EXTENSIONS_ASSETS/${extension.name}/$file").use { copyAtomically(it, File(dir, file)) }
+    }
+
+    /** Writes [entries] of [zip] under [into]. Entries are paths inside it (no `..`, not absolute): a bad pack cannot write elsewhere. */
+    private fun extract(zip: ZipFile, entries: List<ZipEntry>, into: File) {
+        val buffer = ByteArray(64 * 1024)
+        for (entry in entries) {
+            val name = EngineManifest.safeRelative(entry.name.trimEnd('/'))
+            val out = File(into, name)
+            if (entry.isDirectory) {
+                Files.createDirectories(out.toPath())
+                continue
             }
-            // Its runtime dependencies (the extensions dir was emptied above, so nothing older is left in it).
-            extension.modules?.let { unzip(it, File(dir, "node_modules")) }
+            out.parentFile?.let { Files.createDirectories(it.toPath()) }
+            zip.getInputStream(entry).use { input ->
+                out.outputStream().use { o ->
+                    while (true) {
+                        val n = input.read(buffer)
+                        if (n < 0) break
+                        o.write(buffer, 0, n)
+                    }
+                }
+            }
         }
-        // Not fatal: without the entries Pi just runs without the extensions (the next pack update tries again).
-        BundledExtensions.register(paths.agentDir, manifest.extensions.map { File(paths.extensionsDir, it.name).path }, paths.extensionsDir.path)
+    }
+
+    /** Runs [tasks] on [pool] and waits for all of them; the first failure is thrown as itself. */
+    private fun runAll(pool: ExecutorService, tasks: List<Callable<Unit>>) {
+        val futures = tasks.map(pool::submit)
+        var failure: Throwable? = null
+        for (future in futures) {
+            try {
+                future.get()
+            } catch (e: ExecutionException) {
+                if (failure == null) failure = e.cause ?: e
+            }
+        }
+        failure?.let { throw it }
     }
 
     /** Every symlink under the prefix (not tmp/): the links of a previous pack, which may point at a moved directory. */
@@ -265,49 +412,6 @@ class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSour
                 override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult = FileVisitResult.CONTINUE
             },
         )
-    }
-
-    /**
-     * Unpacks [tree] next to its place and swaps it in, so a crash never leaves half a tree behind (the stamp is
-     * written only after every step). What was there before (an older version, written bytecode caches) goes.
-     */
-    private fun installTree(tree: EngineManifest.Tree) {
-        val dir = File(paths.prefix, tree.path)
-        val temp = File(dir.parentFile, ".${dir.name}.unpack")
-        SafeFiles.deleteTree(temp)
-        unzip(tree.asset, temp)
-        for (rel in tree.executables) File(temp, rel).setExecutable(true, true)
-        if (!SafeFiles.deleteTree(dir)) throw IOException("cannot remove the old ${tree.path}")
-        dir.parentFile?.mkdirs()
-        Files.move(temp.toPath(), dir.toPath(), StandardCopyOption.ATOMIC_MOVE)
-    }
-
-    /** Unpacks the zip asset [asset] into [into]. */
-    private fun unzip(asset: String, into: File) {
-        into.mkdirs()
-        assets.open(asset).use { raw ->
-            ZipInputStream(raw.buffered(64 * 1024)).use { zip ->
-                val buffer = ByteArray(64 * 1024)
-                while (true) {
-                    val entry = zip.nextEntry ?: break
-                    // Entries are paths inside the tree (no `..`, not absolute): a bad pack cannot write elsewhere.
-                    val name = EngineManifest.safeRelative(entry.name.trimEnd('/'))
-                    val out = File(into, name)
-                    if (entry.isDirectory) {
-                        out.mkdirs()
-                        continue
-                    }
-                    out.parentFile?.mkdirs()
-                    out.outputStream().use { o ->
-                        while (true) {
-                            val n = zip.read(buffer)
-                            if (n < 0) break
-                            o.write(buffer, 0, n)
-                        }
-                    }
-                }
-            }
-        }
     }
 
     private fun copyTree(asset: String, to: File) {
@@ -332,6 +436,15 @@ class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSour
         const val PACKAGE_ASSETS = "engine/package"
         const val EXTENSIONS_ASSETS = "engine/extensions"
         const val SYSTEM_SH = "/system/bin/sh"
+
+        /** In an unpacked tree or node_modules: what it was unpacked from, written once it was complete. */
+        const val UNPACKED = ".pibolt-unpacked"
+
+        /** Under the prefix: the zips being unpacked, gone afterwards. */
+        private const val STAGING = ".unpack"
+
+        /** Entries per task: small enough to spread a zip across the workers, large enough to keep the overhead low. */
+        private const val CHUNK_ENTRIES = 128
 
         fun writeAtomically(to: File, text: String) {
             to.parentFile?.mkdirs()

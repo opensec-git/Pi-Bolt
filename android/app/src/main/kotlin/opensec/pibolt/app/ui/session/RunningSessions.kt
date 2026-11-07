@@ -1,6 +1,5 @@
 package opensec.pibolt.app.ui.session
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
@@ -13,10 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Layers
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,6 +41,7 @@ import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.RunningSummary
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.PiMenu
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.pressable
@@ -54,7 +52,6 @@ import opensec.pibolt.protocol.session.UserItem
 import opensec.pibolt.app.ui.projects.SessionMark
 import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.ui.theme.Pi
-import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Space
 
 /** The live on-device sessions that are working or waiting for an answer, in the order they were opened. */
@@ -180,15 +177,7 @@ fun SessionSwitcher(current: SessionController, titles: Map<String, ProjectMeta>
                 Text("$n", style = Pi.type.meta, color = colors.onAccent, maxLines = 1)
             }
         }
-        DropdownMenu(
-            expanded = open,
-            onDismissRequest = { open = false },
-            containerColor = colors.surface3,
-            shape = RoundedCornerShape(Radius.md),
-            tonalElevation = 0.dp,
-            shadowElevation = 8.dp,
-            border = BorderStroke(1.dp, colors.lineStrong),
-        ) {
+        PiMenu(expanded = open, onDismiss = { open = false }) {
             for (live in others) {
                 val (status, busy) = rememberStatus(live.controller)
                 DropdownMenuItem(

@@ -225,7 +225,7 @@ fun SettingsScreen(
                         "Default model",
                         icon = Icons.Rounded.AutoAwesome,
                         iconTint = colors.tint0,
-                        leading = prefs?.brand?.let { b -> { LogoMark(b, size = IconSize.sm, tint = colors.tint0) } },
+                        leading = prefs?.brand?.let { b -> { LogoMark(b, size = IconSize.sm, tint = colors.ink2) } },
                         value = prefs?.modelText,
                         onClick = ::pickModel,
                         divider = d,

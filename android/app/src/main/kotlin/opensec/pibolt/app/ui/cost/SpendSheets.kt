@@ -152,7 +152,7 @@ fun SpendSheet(app: PiBoltApp, session: Cost?, onLimits: () -> Unit, onDismiss: 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SpendLimitsSheet(app: PiBoltApp, onDismiss: () -> Unit) {
-    val current = app.settings.settings.value.spend
+    val current = Pi.settings.spend
     var session by remember { mutableStateOf(Money.field(current.session)) }
     var day by remember { mutableStateOf(Money.field(current.day)) }
     var month by remember { mutableStateOf(Money.field(current.month)) }
