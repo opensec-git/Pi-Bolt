@@ -25,6 +25,8 @@ env:
 jobs:
   linux:
     name: Bench on ${{ matrix.name }}
+    # (A branch ending in -windows reruns the Windows job alone.)
+    if: ${{ !endsWith(github.ref_name, '-windows') }}
     strategy:
       fail-fast: false
       matrix:
@@ -154,11 +156,12 @@ jobs:
           $nt = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
           $lines = @(
             "pi-bolt: pi-bolt-win32-x64.zip of $env:PIBOLT_TAG (checked against its SHA256SUMS): $(& .work\pi-bolt\pi-bolt.exe --version | Select-Object -First 1)",
-            "octet: $a of the $env:OCTET_TAG release (checked against OCTET_SHA256SUMS), started directly, bash tool on $env:OCTET_SHELL_PATH: $(& .work\octet\octet.exe --version | Select-Object -First 1)",
+            "octet: $a of the $env:OCTET_TAG release (checked against OCTET_SHA256SUMS), started directly, bash tool on $($env:OCTET_SHELL_PATH): $(& .work\octet\octet.exe --version | Select-Object -First 1)",
             "runner: windows-2025, $($cpu.Name.Trim()), $($cpu.NumberOfCores) cores, $($cpu.NumberOfLogicalProcessors) threads; $((Get-CimInstance Win32_OperatingSystem).Caption) build $($nt.CurrentBuild).$($nt.UBR)"
           )
           $lines
           [IO.File]::WriteAllLines("$PWD\results\environment.txt", [string[]]$lines)
+          exit 0
       - name: Suites
         run: |
           $env:PYTHONUTF8 = '1'
