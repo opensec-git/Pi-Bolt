@@ -18,9 +18,9 @@ final class AppModel {
     let deviceName: String
     let appVersion: String
 
-    init(identity: DeviceIdentity = DeviceIdentity(), hosts: HostStore = HostStore()) {
+    init(identity: DeviceIdentity = DeviceIdentity(), hosts: HostStore? = nil) {
         self.identity = identity
-        self.hosts = hosts
+        self.hosts = hosts ?? HostStore()
         deviceName = UIDevice.current.name
         appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
     }

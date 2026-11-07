@@ -50,7 +50,7 @@ final class HostStore: ObservableObject {
         }
     }
 
-    static var defaultFile: URL {
+    nonisolated static var defaultFile: URL {
         let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return dir.appendingPathComponent("hosts.json")
     }
