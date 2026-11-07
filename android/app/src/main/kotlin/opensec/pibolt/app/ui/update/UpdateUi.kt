@@ -63,6 +63,7 @@ import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.update.NetworkKind
 import opensec.pibolt.app.update.UpdateInfo
 import opensec.pibolt.app.update.UpdateJob
@@ -84,18 +85,15 @@ fun UpdateCard(app: PiBoltApp, modifier: Modifier = Modifier) {
     when (val job = state.job) {
         UpdateJob.Idle -> offer?.let { info ->
             UpdateRow(
-                icon = { Glyph(Icons.Rounded.SystemUpdate, colors.ink2) },
-                title = "Pi-Bolt ${info.version} is available",
-                detail = UpdateRules.formatSize(info.size),
+                title = "Pi-Bolt ${info.version}",
+                detail = "Update available · ${UpdateRules.formatSize(info.size)}",
                 modifier = modifier,
-                actionsBelow = true,
             ) {
                 TextAction("Later", onClick = { updates.snooze(info.version) }, color = colors.ink2)
                 TextAction("Update", onClick = { updates.requestUpdate(info) }, color = colors.accent)
             }
         }
         is UpdateJob.Downloading -> UpdateRow(
-            icon = { QuadSpinner(if (job.waitingForNetwork) QuadMode.Connect else QuadMode.Write, size = 20.dp, color = colors.ink2) },
             title = "Downloading Pi-Bolt ${job.info.version}",
             detail = UpdateNotifications.progressText(job),
             progress = job.bytes.toFloat() / job.total.coerceAtLeast(1),
@@ -104,32 +102,27 @@ fun UpdateCard(app: PiBoltApp, modifier: Modifier = Modifier) {
             TextAction("Cancel", onClick = updates::cancelDownload, color = colors.ink2)
         }
         is UpdateJob.Verifying -> UpdateRow(
-            icon = { QuadSpinner(QuadMode.Run, size = 20.dp, color = colors.ink2) },
             title = "Checking Pi-Bolt ${job.info.version}",
             detail = "Checksum and signature",
             modifier = modifier,
         )
         is UpdateJob.Ready -> UpdateRow(
-            icon = { Glyph(Icons.Rounded.GppGood, colors.success) },
-            title = "Pi-Bolt ${job.info.version} is ready to install",
+            title = "Pi-Bolt ${job.info.version} is ready",
             detail = job.message ?: "Signed by OpenSec · checksum matches",
             modifier = modifier,
         ) {
             TextAction("Install", onClick = updates::requestInstall, color = colors.accent)
         }
         is UpdateJob.Installing -> UpdateRow(
-            icon = { QuadSpinner(QuadMode.Connect, size = 20.dp, color = colors.ink2) },
             title = "Installing Pi-Bolt ${job.info.version}",
             detail = "Confirm in Android's dialog",
             modifier = modifier,
         )
         is UpdateJob.Failed -> UpdateRow(
-            icon = { Glyph(Icons.Rounded.ErrorOutline, colors.danger) },
             title = if (job.refused) "Update refused" else "Update failed",
             detail = job.message,
             danger = true,
             modifier = modifier,
-            actionsBelow = !job.refused,
         ) {
             TextAction("Close", onClick = updates::dismissFailure, color = colors.ink2)
             if (!job.refused) TextAction("Retry", onClick = { updates.requestUpdate(job.info) }, color = colors.accent)
@@ -137,23 +130,18 @@ fun UpdateCard(app: PiBoltApp, modifier: Modifier = Modifier) {
     }
 }
 
-@Composable
-private fun Glyph(icon: ImageVector, tint: Color) = Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
-
 /**
- * A 64dp card like the engine banner: glyph, title, one meta line, optional 2dp progress, text actions. One action sits
- * at the end of the row; two ([actionsBelow]) go under the text, end-aligned like a Notice's, so the title keeps the
- * width (two inline actions left "Pi-Bolt 0.5.2 is…" at font scale 1.3 on a 360dp phone).
+ * One slim line on Home, on the canvas: the title (body ink1) over one meta line, its actions at the end, and the 2dp
+ * progress line under it while a download runs. Its text sits on the 20dp page gutter.
+ * Only a failure is filled: dangerSoft with a danger @ 40% line.
  */
 @Composable
 private fun UpdateRow(
-    icon: @Composable () -> Unit,
     title: String,
     detail: String,
     modifier: Modifier = Modifier,
     progress: Float? = null,
     danger: Boolean = false,
-    actionsBelow: Boolean = false,
     actions: (@Composable () -> Unit)? = null,
 ) {
     val colors = Pi.colors
@@ -161,27 +149,18 @@ private fun UpdateRow(
     Column(
         modifier
             .fillMaxWidth()
-            .heightIn(min = 64.dp)
-            .background(if (danger) colors.dangerSoft else colors.surface1, shape)
-            .border(1.dp, if (danger) colors.danger.copy(alpha = 0.4f) else colors.line, shape)
-            .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
+            .padding(horizontal = Space.sm)
+            .then(if (danger) Modifier.background(colors.dangerSoft, shape).border(1.dp, colors.danger.copy(alpha = 0.4f), shape) else Modifier)
+            .padding(start = Space.page - Space.sm, end = Space.xs, top = Space.xs, bottom = Space.xs),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) { icon() }
-            Spacer(Modifier.width(14.dp))
+        Row(Modifier.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                Text(title, style = Pi.type.bodyStrong, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(detail, style = Pi.type.meta.copy(fontFeatureSettings = Tnum), color = if (danger) colors.ink2 else colors.ink3, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text(title, style = Pi.type.rowTitle, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(detail, style = Pi.type.rowMeta.copy(fontFeatureSettings = Tnum), color = if (danger) colors.ink2 else colors.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
-            if (actions != null && !actionsBelow) Row(verticalAlignment = Alignment.CenterVertically) { actions() }
+            if (actions != null) Row(verticalAlignment = Alignment.CenterVertically) { actions() }
         }
-        if (progress != null) {
-            Spacer(Modifier.height(10.dp))
-            ProgressLine(progress, Modifier.padding(start = 34.dp, end = 12.dp))
-        }
-        if (actions != null && actionsBelow) {
-            Row(Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) { actions() }
-        }
+        if (progress != null) ProgressLine(progress, Modifier.padding(top = 4.dp, end = 12.dp, bottom = 4.dp))
     }
 }
 
@@ -207,7 +186,7 @@ fun updateStatus(state: UpdateState): Pair<String, String?> {
 private fun piWorking(app: PiBoltApp): String? {
     if (app.sessions.value.any { it.isLocal && !it.stopped && it.state.value.isRunning }) return "Pi is working; updating stops it."
     val remote = app.remote.value?.takeIf { !it.stopped }
-    if (remote?.state?.value?.isRunning == true) return "Pi is working on ${remote.hostName.value}; updating disconnects this phone, the computer keeps going."
+    if (remote?.state?.value?.isRunning == true) return "Pi is working on ${remote.hostName.value}. Updating disconnects this phone; the computer keeps going."
     return null
 }
 
@@ -226,7 +205,6 @@ fun UpdateSheets(app: PiBoltApp) {
 @Composable
 private fun DownloadSheet(app: PiBoltApp, info: UpdateInfo) {
     val colors = Pi.colors
-    val type = Pi.type
     val updates = app.updates
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
@@ -235,29 +213,20 @@ private fun DownloadSheet(app: PiBoltApp, info: UpdateInfo) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { network = updates.network() }
     val size = UpdateRules.formatSize(info.size)
     PiSheet(onDismiss = updates::dismissPrompt, state = state) {
-        SheetHeader(
-            "Update to Pi-Bolt ${info.version}",
-            subtitle = "Pi-Bolt downloads it from GitHub, checks that OpenSec signed it, then Android asks you to install it.",
-        )
+        SheetHeader("Update to Pi-Bolt ${info.version}")
         Spacer(Modifier.height(8.dp))
         val (icon, text, tint) = when (network) {
             NetworkKind.Wifi -> Triple(Icons.Rounded.Wifi, "$size over Wi-Fi", colors.ink2)
             NetworkKind.MeteredWifi -> Triple(Icons.Rounded.Wifi, "$size over a metered Wi-Fi network", colors.warning)
             NetworkKind.Mobile -> Triple(Icons.Rounded.SignalCellularAlt, "$size over mobile data", colors.warning)
             NetworkKind.MeteredOther -> Triple(Icons.Rounded.SignalCellularAlt, "$size over a metered network", colors.warning)
-            NetworkKind.None -> Triple(Icons.Rounded.CloudOff, "$size · no connection now; it starts when you are back online", colors.warning)
+            NetworkKind.None -> Triple(Icons.Rounded.CloudOff, "$size · starts when you're back online", colors.warning)
             NetworkKind.Unknown -> Triple(Icons.Rounded.Wifi, "$size download", colors.ink2)
         }
         InfoBox(icon, text, tint)
         if (info.page?.startsWith("https://github.com/opensec-git/Pi-Bolt/releases/") == true) {
             TextAction("Release notes", onClick = { runCatching { uri.openUri(info.page) } }, color = colors.accent, modifier = Modifier.padding(start = 8.dp))
         }
-        Text(
-            "It keeps downloading if you leave the app; the notification shows progress.",
-            style = type.meta,
-            color = colors.ink3,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
-        )
         Spacer(Modifier.height(12.dp))
         ButtonRow(Modifier.padding(horizontal = 20.dp)) {
             SecondaryButton("Cancel", onClick = { close(updates::dismissPrompt) })
@@ -287,14 +256,14 @@ private fun InstallSheet(app: PiBoltApp, info: UpdateInfo) {
         }
     }
     PiSheet(onDismiss = updates::dismissPrompt, state = state) {
-        SheetHeader("Install Pi-Bolt ${info.version}", subtitle = "Android asks you to confirm, then offers to open the new version.")
+        SheetHeader("Install Pi-Bolt ${info.version}")
         Spacer(Modifier.height(8.dp))
         InfoBox(Icons.Rounded.GppGood, "Signed by OpenSec · checksum matches", colors.success)
         if (working != null) InfoBox(Icons.Rounded.WarningAmber, working, colors.warning)
         if (!allowed) {
             InfoBox(
                 Icons.Rounded.SystemUpdate,
-                "Android needs your permission once: turn on “Allow from this source” for Pi-Bolt, then come back here.",
+                "Turn on “Allow from this source” for Pi-Bolt, then come back.",
                 colors.ink2,
             )
         }

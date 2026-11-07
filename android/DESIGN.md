@@ -12,15 +12,15 @@ line; no shadows.
 
 | Role | Pi-Bolt (default, id `Graphite`) | Ember (warm) | Claude | Codex | Vercel | GitHub |
 |---|---|---|---|---|---|---|
-| canvas | `#000000` | `#15130F` | `#1F1E1D` | `#0D0D0D` | `#000000` | `#0D1117` |
-| surface1 (cards, composer) | `#0E0E0E` | `#1C1A16` | `#262624` | `#171717` | `#0F0F0F` | `#151B23` |
-| surface2 (bubbles, sheets) | `#161616` | `#24211C` | `#30302E` | `#212121` | `#111111` | `#1C2128` |
-| surface3 (pressed, menus) | `#1D1D1D` | `#2C2822` | `#3A3936` | `#2A2A2A` | `#1A1A1A` | `#262C36` |
-| ink1 (text) | `#EDEDED` | `#EFE9DD` | `#F5F4EE` | `#ECECEC` | `#EDEDED` | `#F0F6FC` |
-| ink2 (secondary) | `#A1A1A1` | `#B9B1A3` | `#C3C0B6` | `#B4B4B4` | `#A1A1A1` | `#B7BDC8` |
-| ink3 (meta, lowest text) | `#858585` | `#979084` | `#A6A49C` | `#929292` | `#8F8F8F` | `#9198A1` |
-| ink4 (rules, never text) | `#595959` | `#5A554D` | `#5E5D59` | `#545454` | `#454545` | `#3D444D` |
-| line / lineStrong | white @ 8% / 14% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 12% / 20% | ink1 @ 10% / 18% |
+| canvas | `#1C1B19` | `#15130F` | `#1F1E1D` | `#0D0D0D` | `#000000` | `#0D1117` |
+| surface1 (cards, composer) | `#232220` | `#1C1A16` | `#262624` | `#171717` | `#0F0F0F` | `#151B23` |
+| surface2 (bubbles, sheets) | `#2A2926` | `#24211C` | `#30302E` | `#212121` | `#111111` | `#1C2128` |
+| surface3 (pressed, menus) | `#32312E` | `#2C2822` | `#3A3936` | `#2A2A2A` | `#1A1A1A` | `#262C36` |
+| ink1 (text) | `#ECEBE8` | `#EFE9DD` | `#F5F4EE` | `#ECECEC` | `#EDEDED` | `#F0F6FC` |
+| ink2 (secondary) | `#B3B1AB` | `#B9B1A3` | `#C3C0B6` | `#B4B4B4` | `#A1A1A1` | `#B7BDC8` |
+| ink3 (meta, lowest text) | `#9C9A94` | `#979084` | `#A6A49C` | `#929292` | `#8F8F8F` | `#9198A1` |
+| ink4 (rules, never text) | `#5E5C57` | `#5A554D` | `#5E5D59` | `#545454` | `#454545` | `#3D444D` |
+| line / lineStrong | white @ 7% / 12% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 12% / 20% | ink1 @ 10% / 18% |
 | scrim | black @ 50% | black @ 56% | black @ 60% | black @ 60% | black @ 70% | black @ 60% |
 
 Claude, Codex, Vercel and GitHub are palettes in the spirit of those products' dark modes, not their assets. Void
@@ -58,30 +58,32 @@ overlays, accent, status, diff, syntax, ANSI, tints), and each held to the role 
 On a light theme the Iris and Glacier accents take deep variants of the same hue (`#5B4BD1`, `#0B6E9E`, white on
 them). The pastels would not read as links on white.
 
-**Pi-Bolt (the default)** is Pi-Bolt Desktop's palette (`pi-bolt-desktop/src/styles/tokens.css`), mapped 1:1, with
-one change. It is monochrome: a pure black canvas, one neutral grey scale, white as the only accent, green, amber and
-red for state only, and no blue anywhere. The enum id stays `Graphite`, so saved settings keep the default; only its
-label changed to "Pi-Bolt".
+**Pi-Bolt (the default)** is a warm charcoal (the owner's 2026-11-07 references, `~/pbw/research/UI-REFERENCES.md`):
+a charcoal canvas with surfaces a warm step above it, quiet warm-grey ink, hairlines and overlays as white alphas, the
+warm white ink as the only accent, green, amber and red for state only, and no blue. The enum id stays `Graphite`, so
+saved settings keep the default; its label is "Pi-Bolt". True black stays available as Contrast and Vercel.
 
-| Android | Desktop token | Value |
-|---|---|---|
-| canvas, surface1, surface2, surface3 | `--bg`, `--bg-elev`, `--bg-elev-2`, `--bg-elev-3` | `#000000`, `#0E0E0E`, `#161616`, `#1D1D1D` |
-| ink1, ink2, ink3, ink4 | `--text`, `--text-2`, `--text-3`, `--text-4` | `#EDEDED`, `#A1A1A1`, `#858585`, `#595959` |
-| line, lineStrong, lineFocus | `--border`, `--border-strong`, `--border-focus` | white @ 8%, 14%, 32% |
-| press, selected | `--bg-active`, `--accent-soft` | white @ 8.5%, 10% |
-| scrim | `--scrim` | black @ 50% |
-| accent, onAccent | `--accent`, `--on-accent` | `#FAFAFA`, `#000000` |
-| success, warning, danger (soft @ 12%) | `--green`, `--amber`, `--red` | `#4CC38A`, `#D4A64A`, `#EF6461` |
-| diff add / delete bg, fg | `--diff-add-*`, `--diff-del-*` | success / danger @ 9%, `#86DFB0`, `#F5A3A1` |
-| ansiBlue, ansiMagenta, ansiCyan | `--ansi-b`, `--ansi-m`, `--ansi-c` | `#C9C9C9`, `#D7A6C8`, `#B8C4C4` |
-| tint0 to tint4 | `--tint-0` to `--tint-4` | see Subagent tints |
+| Role | Value |
+|---|---|
+| canvas, surface1, surface2, surface3 | `#1C1B19`, `#232220`, `#2A2926`, `#32312E` |
+| ink1, ink2, ink3, ink4 | `#ECEBE8`, `#B3B1AB`, `#9C9A94`, `#5E5C57` |
+| line, lineStrong, lineFocus | white @ 7%, 12%, 30% |
+| press, selected | white @ 7%, 9% |
+| scrim | black @ 50% |
+| accent, onAccent | `#ECEBE8`, `#1C1B19` |
+| success, warning, danger (soft @ 12%) | `#4CC38A`, `#D4A64A`, `#F4817D` |
+| diff add / delete fg | `#86DFB0`, `#F5A3A1` |
+| syntax | the desktop's monochrome highlight.js set, its greys warmed: comment `#9C9A94`, operator and tag `#B3B1AB` |
 
-The one change is ink3: `#858585` instead of `#808080`. `#808080` measures 4.27:1 on surface3, below AA; `#858585`
-measures 4.57:1.
+The references' inks (`#A8A6A1`, `#77756F`) are lifted: ink2 to `#B3B1AB` so it stays AA on a pressed menu row (4.56:1),
+ink3 to `#9C9A94` so it stays AA on surface3 (4.62:1). Danger is lifted from the desktop's `#EF6461` to `#F4817D`, AA
+on its 12% fill over sheets (4.69:1 on surface2). The text selection is the accent at 28% (`SELECTION_ALPHA`, every
+theme): at 32% ink1 measured 4.34:1 on a warm surface3. The splash (`splash_bg`) is the canvas.
 
-Before 0.5.2 the default was a blue-grey Graphite. Its hue was 255 to 264 and its chroma reached 0.015, so the
-owner saw it as bluish. Old values: canvas `#0B0C0E`, surfaces `#121417` / `#191C20` / `#21252A`, ink `#E8EAED` /
-`#A3A8B0` / `#878D96` / `#4C5158`, accent ink1, and the Pi syntax palette with a blue-grey comment `#858B94`.
+Before the redesign the default was Pi-Bolt Desktop's pure black (`#000000`, `#0E0E0E` / `#161616` / `#1D1D1D`, ink
+`#EDEDED` / `#A1A1A1` / `#858585` / `#595959`, white accent); before 0.5.2 a blue-grey Graphite (`#0B0C0E`, ink2 `#A3A8B0`).
+`defaultThemeHasNoBlueCast` lets the default's greys lean warm but never cool (blue ≤ green ≤ red, channels at most 10
+apart).
 
 **Subagent tints** (`PiColors.tint0` to `tint4`, `tints[n % 5]`) are the desktop's `--tint-0` to `--tint-4`,
 converted from OKLCH to sRGB. They have the same lightness and chroma, with hues kept clear of the status colours,
@@ -172,8 +174,8 @@ Contrast (WCAG 2.1, checked by `ContrastTest` for every theme and accent):
 - The app's own themes (Pi-Bolt, Paper, Contrast, Lime, Moss) are checked by role in every accent (`ownThemesRolesPass`): ink1 and ink2 AA on each surface,
   plain, pressed and selected; ink3 at least 3:1 as a glyph on all of those; the accent's label AA on it, its fill 3:1
   against the surface (a button's shape) and AA as link text; ink1 AA on the text selection. `defaultThemeHasNoBlueCast`
-  keeps the default's greys and everything drawn from them neutral, `defaultThemeIsTheDesktopPalette` pins the
-  desktop values, `subagentTintsReadInEveryTheme` checks the tints, `elevationStepsStayDistinct` keeps each surface a step further
+  keeps the default's greys and everything drawn from them free of a cool cast, `defaultThemeIsTheWarmCharcoal` pins
+  its values, `subagentTintsReadInEveryTheme` checks the tints, `elevationStepsStayDistinct` keeps each surface a step further
   from the canvas in every theme (lighter on dark themes, darker on Paper; each step of the own themes at least
   1.05:1), `onlyPaperIsLight` pins the one light theme, `contrastThemeIsAaa` holds Contrast to 7:1, and the window
   colour must be the default canvas. Paper, Contrast and Lime greys carry no tint either.
@@ -201,13 +203,18 @@ Inter (UI, prose) and JetBrains Mono (code, paths, terminal), both OFL, bundled 
 | monoSmall | 12.5 / 18 | 400 | diffs, tool cards; code blocks use 12.5 / 19 |
 | monoMeta | 12 / 17 | 400 | paths, hashes, hex values and other mono meta lines |
 | thinking | 14.5 / 22 | 400 ink3 | reasoning text |
+| largeTitle | 28 / 34 | 600, -0.01em | the redesign's screen titles |
+| rowTitle | 17 / 24 | 400 | the redesign's list rows, the composer pill |
+| rowMeta | 15 / 20 | 400 | the line under a row title, tile labels and counts |
 
 System font scale is respected; the transcript is capped at 1.3x, and the Text size setting (-1 … +2 steps) applies
 on top.
 
 ## Space, shape, size
 
-Spacing 2, 4, 8, 12, 16, 20, 24, 32, 40 dp (`Space.xxs … x4`): the desktop's 4px rhythm (`--sp-0` to `--sp-8`, plus 40). Side gutter 16; sheet and header text inset 20; gap
+Spacing 2, 4, 8, 12, 16, 20, 24, 32, 40 dp (`Space.xxs … x4`): the desktop's 4px rhythm (`--sp-0` to `--sp-8`, plus 40).
+The redesign's side gutter is 20 (`Space.page`: Home, and the session's transcript, composer, todo card and preview
+chips); elsewhere it is still 16; sheet and header text inset 20; gap
 between turns 20; between steps 6.
 Radii are the desktop's 4 / 6 / 10 / 14, assigned by role:
 - xs 4: inline code, tags (`--radius-xs`).
@@ -215,8 +222,14 @@ Radii are the desktop's 4 / 6 / 10 / 14, assigned by role:
 - md 10: cards, code blocks, option rows, menus, snackbars, fields (`--radius-lg`, the desktop's card, menu and
   toast).
 - lg 14: user bubble, composer, setting groups (`--radius-xl`, the desktop's composer and bubble).
-- xl 14: sheet top corners (`--radius-xl`, the desktop's dialog).
+- xl 14: the desktop's dialog radius; sheets moved to pill (28) in the redesign.
 - full: send button, pills.
+- tile 16: status tiles, media cards (the redesign).
+- bubble 22: the user bubble (the redesign).
+- media 12: code blocks, tables and image cards in the transcript (`RadiusMedia` in `components/MediaRadius.kt`, until
+  the theme's `Radius` takes it).
+- pill 28: the pill composer (a full round at its 56dp one-line height, kept as it grows), sheet top corners,
+  buttons and snackbars (capsules).
 
 Before 0.5.2 the values were 4 / 8 / 12 / 18 / 28. The desktop's user bubble is 14 with its bottom-end corner at
 4 (`--radius-xs`).
@@ -339,11 +352,38 @@ alpha). No overshoot except sheet drag release.
 
 ## Components
 
-`ui/components` is the kit; screens compose it and never restyle it. `DesignRulesTest` checks the rules below on the
+`ui/components` is the kit; screens compose it and never restyle it.
+
+**The redesign kit** (`components/Glass.kt`, 2026-11-07), after the owner's references:
+- `Modifier.glass(shape, colors)`: a vertical gradient (a touch of ink over surface2 at the top, the canvas on Paper,
+  surface2 at the bottom), a 1dp lineStrong ring and a 1dp inner highlight (ink1 @ 8%, fading to the sides) along the
+  top. No shadows.
+- `GlassIconButton`: a 44dp glass circle in a 48dp target, a 22dp ink1 glyph (back, more, search, +); press 0.96.
+- `GlassPill`: a floating glass pill, 40dp (48dp target), 16dp sides ("View changes +2 −2").
+- `StatusTile`: one tile of a 2x2 grid; radius tile (16), surface1 + 1dp line (lineStrong when active), 104dp; a 20dp
+  glyph top-left in its own colour, the label (rowMeta ink1) and its count (rowMeta ink3, tnum) bottom-left; read as
+  "label, count".
+- `InsetRow`: the plain list row: no card, 14dp vertical padding, at least 56dp; an optional 24dp leading slot (outline
+  glyph ink2, a Quad), the title (rowTitle ink1), an optional meta line (rowMeta ink3), then count (ink3), unread dot
+  (8dp accent) and chevron (ink3); a 1dp hairline under it inset from the text start to the 20dp gutter; `current` sets
+  it on a soft radius-md surface2 highlight. Never a letter tile.
+- `PillComposerShell`: the pill composer: radius pill (28), glass, 56dp at least, 4dp inside; `ComposerCircle` (a 36dp
+  circle on the selected overlay, 20dp ink1 glyph, for + and the mic; `active` while listening: the accent fill and an
+  onAccent glyph, "Listening" to TalkBack) and `ComposerPrimary` (one 36dp slot: Send, an onAccent arrow on the accent,
+  once there is text; Stop, a surface3 disc with a lineStrong ring and a 12dp ink1 square, while Pi works and the field
+  is empty; otherwise voice input, a waveform glyph on the accent; Send at 18% when there is no voice action;
+  `ComposerPrimaryMode` decides, the swap crossfades) in 48dp targets on one centre line.
+- `DotWave`: the dot-matrix waveform of voice input: 9 rows of 2.5dp dots every 6dp, each column lit in a band around
+  the centre whose height follows the audio level (0..1) times two slow travelling sines (`DotWaveMath`); 14% floor,
+  faded edges; still under reduce motion.
+- `WorkingLine`: a 14dp Quad and the shimmering label ("Working"), for live lines and rows.
+- Tokens: type `largeTitle`, `rowTitle`, `rowMeta`; `Space.page` 20; `Radius.tile`, `bubble`, `pill`, `media` (12,
+  images and preview cards in the transcript); `SOFT_PRESS`
+  0.96; `PiMotion.stagger(step)` (120 ms + 70 ms per step, 8 steps at most) for staggered entrances. `DesignRulesTest` checks the rules below on the
 UI sources (with a reviewed exception list that may only shrink) and `ContrastTest` their colour pairs.
 
-**Buttons.** As on Pi-Bolt Desktop: radius-sm rectangles, the label in label weight (500), optional leading icon 6dp
-before it; press = ink overlay and 0.97 scale. A label that does not fit on one line wraps to two, centred, never cut.
+**Buttons.** Capsules (`Radius.pill`) since the redesign (they were the desktop's radius-sm rectangles), the label in
+label weight (500), optional leading icon 6dp before it; press = ink overlay and 0.97 scale. A label that does not fit on one line wraps to two, centred, never cut.
 
 | Kind | Fill / text | Use |
 |---|---|---|
@@ -369,13 +409,28 @@ padding (`RowInsetCard`, rounded press). `SwitchRow` is the same row with `PiSwi
 thumb on; surface3 with a lineStrong ring and an ink2 thumb off), read as one switch with its On / Off state. `ValueRow`: a read-only fact, label body ink2 and value body ink1 at the
 end, 48dp. `RowDivider`: 1dp line between rows of a card. Row titles are never bodyStrong: weight is for headings.
 
+**Grouped lists** (`components/Grouped.kt`, the redesign's Settings): `LargeTitlePage` (a glass back button on a 56dp
+bar, the title in largeTitle as the first thing in the scroll; once it scrolls under the bar the bar shows it small
+and centred over a hairline), `InsetGroup` (an optional rowMeta ink3 header, a surface1 card with radius tile and a
+1dp line, clipped so a row's press fills its band, an optional meta ink3 footer; 16dp from the window's sides, 16dp
+between groups), `GroupRow` (a 30dp `GlyphTile`, the title in rowTitle, an optional meta line, a short value in
+rowMeta ink3 at the end, trailing content, a chevron or open-in-new; at least 52dp; a hairline from the text start),
+`GroupSwitchRow` (the same row with `PiSwitch`, so every switch sits on one end column), `GroupControl` (a block for a
+control inside a group) and `PillSearchField` (a 48dp surface1 pill with the search glyph and a clear button).
+`GlyphTile` is the iOS-settings icon chip, kept quiet: a 30dp radius sm + 2 tile, the section's tint (one of the
+theme's five agent tints) at 16% with the glyph in the tint, or surface3 with an ink1 glyph for neutral sections and
+logos. `ChoiceSheet` picks one of a few values (a sheet of `InsetRow`s, an accent check on the current one; a pick
+applies and closes). `PiMenu` / `PiMenuItem` are the popup menu: surface3, radius tile, a lineStrong ring, rowMeta
+items with 20dp glyphs.
+
 **Cards and groups.** `PiCard`: surface1, 1dp line, radius md, 16dp padding: a surface step plus a line, never a
 shadow. `CardSection`: a `SectionLabel` (metaStrong ink3, sentence case, never capitals) over a radius-md card with
 16dp sides and 8dp top and bottom; controls inside start with a `ControlLabel` (body ink1, value in meta ink3).
 `Tag`: micro on surface3, radius xs, for a source or state; TalkBack reads its text once. A `SectionLabel` (and so a
 `CardSection`) may lead with a 14dp ink3 glyph: Settings' groups do, as the desktop's settings sections.
 
-**Screens.** A pushed screen starts with `ScreenTopBar`: 56dp under the status bar, back, the title in title style
+**Screens.** Settings, Providers and Runtimes are `LargeTitlePage`s. Another pushed screen starts with `ScreenTopBar`:
+56dp under the status bar, a glass back button, the title in title style
 (a heading) with an optional meta line, actions at the end, a 1dp line once the content scrolls. `ScreenIntro` is
 its one paragraph (body ink2). Display type is for empty-state heroes and Project/Home titles only.
 
@@ -384,15 +439,17 @@ cards and sheets surface1 with line (cards) or lineStrong (sheets); snackbars su
 selected fills surface3.
 
 **Sheets and dialogs.** `PiSheet` (the dialog layer: surface1 with a 1dp lineStrong ring down the sides and round the
-radius-xl top corners, the theme scrim, predictive back) with `SheetHeader` (title as a heading, body ink2 subtitle)
-for everything modal; `ConfirmSheet` for consequential yes/no. No `AlertDialog`. The drag handle (36x4 ink4, 10dp
-above and 6dp below) is the kit's own, so TalkBack reads it as "Drag handle" with a Close action. ModalBottomSheet lifts
+28dp (`Radius.pill`) top corners, the theme scrim, predictive back) with `SheetHeader` for everything modal: the
+title in largeTitle (a heading), an optional body ink2 subtitle, an optional glass back button before it and a glass
+close button (36dp in a 48dp target, from `LocalSheetClose`) at its end, so every sheet closes the same way;
+`ConfirmSheet` (no close button: Cancel is in its button row) for consequential yes/no. A sheet step has one primary
+action, full width. No `AlertDialog`. The drag handle (36x5 ink4, 10dp above and 4dp below) is the kit's own, so TalkBack reads it as "Drag handle" with a Close action. ModalBottomSheet lifts
 the whole sheet above the keyboard; `PiSheet` also stops it below the status bar, so a tall sheet's list shrinks and
 scrolls instead of running under the clock. Fields and cards in a sheet sit 16dp in, text and button rows 20dp.
-Menus are DropdownMenus on surface3 with a lineStrong ring and radius md.
+Menus are `PiMenu`: surface3, a lineStrong ring, radius tile.
 
-**Feedback.** Snackbars (`PiSnackHost`, `show(kind)`): surface2, radius md, lineStrong ring, a 20dp kind glyph, ink1
-text (four lines at most) and an ink1 action; a host sits above the navigation bar and the keyboard. `Notice` is the inline and banner form: radius md, 20dp glyph in the kind colour, optional title
+**Feedback.** Snackbars (`PiSnackHost`, `show(kind)`): a glass capsule (`Radius.pill`) 20dp from the sides, a 20dp
+kind glyph, rowMeta ink1 text (four lines at most) and an ink1 action; a host sits above the navigation bar and the keyboard. `Notice` is the inline and banner form: radius md, 20dp glyph in the kind colour, optional title
 (bodyStrong), text ink1 (ink2 under a title) and text actions under it; info and success on surface1 with a line,
 warning and danger on their soft fill with a 40% line. Text is never in the status colour. No Toasts.
 
@@ -402,7 +459,7 @@ a 16dp Quad Think and the label (body ink3), polite live region; never a Materia
 `Notice` with the reason and "Try again" when it may help; an error never looks like an empty list.
 `ProgressLine`: 2dp, surface3 track, accent fill, determinate only.
 
-**Fields.** `PiTextField` (surface1, radius sm like the buttons, lineStrong turning into the focus line, danger on
+**Fields.** `PiTextField` (surface1, radius md, lineStrong turning into the focus line, danger on
 error) for text;
 `SecretField` for keys, tokens and secret values (mono, obscured, Password keyboard without suggestions, Paste while
 empty, Show / Hide once filled, 52dp). `FieldLabel` above (metaStrong ink2), `FieldHint` below (meta ink3, the error
@@ -415,43 +472,53 @@ a selectable group; 48dp in Settings and forms, 36dp only in dense bars.
 
 ## Screens
 
-**Home.** Pi-Bolt runs on the phone, so Home is projects first and remote control second. Large title "Pi-Bolt"
-with the mark, then:
-- Engine banner (only when it has something to say): Preparing (Quad Connect 20dp ink2, "Setting up Pi-Bolt", the
-  step in meta ink3), Failed (dangerSoft fill, danger @ 40% line, error glyph, message, Retry in accent), Unavailable
-  (surface1, phone-off glyph, the reason, Details). 64dp min, radius md. Tapping it opens the details sheet: what
-  happened, the raw detail in a mono well (surface1, radius md, Copy), Close and Retry when a retry may help.
-- "Connect a model" card when no provider has a key and the first-run sheet was already closed (key glyph, Add key).
-- Density and rows follow Pi-Bolt Desktop's Home and sidebar (`home.css`, `sidebar.css`), made for touch. Section
-  heads (`ListHead`, desktop `.hd-head`): the title in metaStrong ink2 (a heading), a count in meta ink3 (tnum), 36dp,
-  text 20dp in. Every Home row has one height token, `PiDims.homeRow` (56dp, 48 compact), as a minimum: text at a
-  large font scale grows the row instead of being cut.
-- "Running" (desktop "Now"): the on-device sessions working or waiting for an answer now, in any project, each its own
-  card (surface1, radius md, lineStrong; warning @ 40% while it waits): the project (body ink1), then its Quad 12dp
-  and what it does (meta ink2). 8dp apart.
-- "Continue" (desktop "Recent") and "Projects" are grouped lists: one surface1 card (radius md, 1dp line) whose rows
-  are split by a 1dp line (`GroupRow` + `groupCell`: the first row rounds the top, the last the bottom, a row never
-  draws its bottom edge, so dividers never double). A row: 16dp in, a 20dp state slot, 12dp, the title, the trailing
-  meta (meta ink3, tnum, never truncated).
-  - Continue: up to 3 projects' newest sessions, the open idle session first; a project already under Running is not
-    repeated. Slot: the live Quad, an 8dp accent dot for new activity, else a 6dp ink4 dot (decoration). Title ink2,
-    ink1 (bodyStrong when unread) when something is new or open, as on the desktop sidebar; the project in meta ink3
-    after it (it gives way first, at most a third); the short time ("now", "5m", "3h", "2d", "3w", "4mo").
-  - Projects: slot the folder glyph ink3 (the live session's Quad while one is open); the title in body ink1 (a 13dp
-    pin glyph when pinned); the short time of its last activity, "open" (ink2) while its session is open, or "new".
-    TalkBack reads the whole line ("calc-parser, pinned, 3 sessions · 2 h ago"). Long press (and a TalkBack action):
-    Pin to top, Rename, Delete (danger). Order: pinned, then most recently active, then title.
-- No model or no project yet: the setup card (surface1, radius lg): "Set up Pi-Bolt", two numbered 56dp steps (connect
-  a model, create a project); only the next step is the primary button.
-- "Computers  N" header (styled as a section head, metaStrong ink2 and the count in meta ink3, 48dp, a chevron that turns 180° in a graphicsLayer):
-  folded by default once projects exist, open when there are none, when the engine is unavailable or a computer
-  session is live. The header is 48dp tall and TalkBack reads it as Expanded / Collapsed. Open: host cards (at least
-  72dp; they grow at large font sizes instead of clipping their third line), a one-line hint, Paste link and Scan code
-  (secondary, a `ButtonRow`: side by side, stacked with Scan on top when the labels do not fit).
-- Bottom: "New project" (accent, primary, full width) on a canvas fade. Nothing below the title is placed until the
-  folders were read (a few ms, off the main thread), so the computers section never jumps.
+**Home.** The redesign's Inbox (the owner's 2026-11-07 references), built from the kit; production copy only, no
+explanatory lines. Top to bottom, on the 20dp page gutter:
+- The title row under the status bar: the brand is the title, the bare bolt (`BrandMark` 26dp, unchanged, no circle) at
+  the cap height and "Pi-Bolt" in largeTitle (a heading), then `GlassIconButton`s on the same centre line: Settings
+  (gear) and + ("Add", once there are projects) whose menu holds New project, Clone from git, Import a zip and Add a
+  computer.
+- Engine banner (only when it has something to say), as before, on the gutter.
+- The update offer as a slim line (`UpdateCard`): "Pi-Bolt 0.5.3" (rowTitle ink1) over "Update available · 109 MB"
+  (rowMeta ink3), Later (ink2) and Update (accent) at the end; downloading adds the 2dp progress line; only a failure is
+  filled (dangerSoft, danger @ 40% line). No glyph, no card.
+- First run (no model or no project): the setup steps on the canvas: two 56dp numbered steps ("Connect a model" with
+  the connected provider's name once done, "Create a project"), the next step's primary button full width, then New
+  project and Clone from git as ink2 text actions. No paragraph.
+- With projects, a 2x2 grid of `StatusTile`s from real state, 12dp apart (one row of four in a window 600dp wide or
+  more), one tint per tile and every glyph 20dp, counts ink3: Working (a Quad in tint4, Run and animated while any
+  session works, a still frame at 0), Waiting for you (a Quad in tint0, Wait while a session asks), Projects (folder in
+  tint3) and Computers (computer in tint1). Working and Waiting open their sessions in a sheet (`HomeListSheet`, the
+  rows of Recents; "Nothing is running." when empty); Projects scrolls to its section; Computers opens and scrolls to
+  its section, or the Add sheet when there is none. They enter once per launch with the stagger (fade, 8dp
+  rise). Home keeps to a 760dp column, centred, in a wide window.
+- "Recents" (a `HomeHead`: rowMeta ink3): the live sessions first (`RunningRow`: the Quad in its mode, what it was asked,
+  "Working · calc-parser"), then each project's newest session (`ContinueRow`: the still ink4 Quad as the bullet, the
+  session's name or first prompt, "calc-parser · 3h", an accent dot when something new happened, the open session on
+  the soft current highlight). Up to 3 projects' sessions; a running project is not repeated.
+- "Projects  3": `ProjectCard` rows (the live Quad or the still bullet, never a folder glyph or letter tile; the title;
+  "6 sessions · 4 h ago" or "Open · 6 sessions"; a 14dp pin when pinned; chevron). Long press: Pin, Rename, Delete.
+- "Computers  N", a head with Add (opens `AddComputerSheet`: "Run /remote-control on it, then scan its code.", Scan a
+  pairing code, Paste a pairing link) and a chevron that folds the section (folded once there are projects, open when
+  there are none, when the engine is unavailable or a computer session is live). `HostCard` rows: status dot or live
+  Quad, the name (the one given on this phone first), "Connected · repo · LAN · Tailscale · v1.1.1" (`Connections`:
+  Tailscale for `*.ts.net` and 100.64.0.0/10, Tunnel for other `wss://`, LAN for other `ws://`), and a 48dp Manage
+  (…; also a long press) that opens `ManageComputerSheet`: the status, each endpoint with its kind, "Name on this phone"
+  (a field and Save; the name is `Host.alias`, kept when the computer connects again) and Forget computer (danger glyph,
+  then the confirm sheet: "To revoke this phone on the computer too, run /remote-control devices there."). With no
+  computer, one row: "Add a computer".
+- The persistent pill at the bottom (`PillComposerShell`, over a canvas fade, above the navigation bar and the
+  keyboard), shown once a model is connected: a project chip above it, left edges aligned and 8dp apart (`GlassPill`:
+  folder glyph, "calc-parser", chevron; its menu lists the projects and New project; with no project it reads "New
+  project" and opens that sheet), then the pill: + (New project), the field "Ask Pi…" (rowTitle; up to 4 lines) and
+  `ComposerPrimary` (voice while empty: Android's speech recognizer fills the field, never sends; Send with text). The
+  chip defaults to the project worked in last (one with no session running); sending opens a new session there with
+  the text as its first prompt. The list's bottom padding clears chip, pill and the navigation bar, so no row is ever
+  under them.
+- Rows are `InsetRow`s: hairlines inset to the text, none under a section's last row. Nothing below the title is placed
+  until the folders were read, so the sections never jump.
 
-**New project sheet.** Title, one line, a 48dp segmented "Empty folder | Clone from git". Clone shows the repository URL
+**New project sheet.** Title, then a 48dp segmented "Empty folder | Clone from git". Clone shows the repository URL
 (monoSmall, URI keyboard, no autocorrect) and, when signed in to GitHub, "Choose from GitHub" (accent text action) that
 opens the repository picker: a search field, then 56dp rows (full name in body ink1, description meta ink3, a lock
 glyph for private ones), 100 per page with "Load more". The URL names the folder until the name is edited. Name field,
@@ -521,9 +588,9 @@ as a shared element, like host card to session).
   deleted). The commit card comes right under the branch card as soon as something is staged (and stays while a
   message is written), so committing never needs a scroll past the file list: "Commit 2 files" (bodyStrong), the
   message field (2 to 8 lines), "Ask Pi" (secondary, sparkle glyph: Pi drafts from the staged diff in the project's
-  session and the answer fills the field) and Commit (primary). With changes but nothing staged, a meta ink3 line under
-  "Changes · N" says how to stage. Clean: "No changes" (EmptyCard, check glyph); outside a repository "Not a git
-  repository" (EmptyCard, branch glyph) with Initialise git; "Reading git status…" (LoadingRow) until git answers. Without a git identity
+  session and the answer fills the field) and Commit (primary). Clean: "No changes" (EmptyCard, check glyph, title
+  only); outside a repository "Not a git repository" (EmptyCard, branch glyph) with Initialise git; "Loading changes…"
+  (LoadingRow) until git answers. Without a git identity
   the commit opens "Who is committing?" (name, email; prefilled with the GitHub name and no-reply address).
 - Closing: a full-screen view over the workspace (file viewer, diff, history) closes with ✕ ("Close"); a step inside
   one (a commit opened from the history) goes back with ← ("Back to history"). `OverlayBar(back = …)` holds the rule.
@@ -531,8 +598,8 @@ as a shared element, like host card to session).
   and, unstaged, Discard. Each hunk is a card: its `@@` header (monoMeta ink3 on surface2) with Stage hunk / Unstage
   hunk and, unstaged, a discard glyph (confirmed), then the rows renderer (DiffBlock: two gutters, sign column, solid
   and hatched bars, syntax colours, word marks). Binary files, renames without changes and a file with no changes left are EmptyCards; very large diffs say so;
-  "Reading the diff…" while git answers, a failed read an ErrorState.
-- History: full screen (✕), "Reading the history…" first, "No commits yet" as an EmptyCard, a failed read an
+  "Loading diff…" while git answers, a failed read an ErrorState.
+- History: full screen (✕), "Loading history…" first, "No commits yet" as an EmptyCard, a failed read an
   ErrorState with Try again; a list of 64dp rows (subject in body, "abc1234 · author · 2 h ago" meta ink3, refs monoMeta ink2),
   100 at a time. A commit (←, back to the list) opens its subject (subhead), body, author, date and a copy-hash button, then a card per file
   (path in monoSmall, +/− counts) that folds its diff (folded first when more than three files).
@@ -549,12 +616,12 @@ to tokens as in tool output (red danger, green success, blue / magenta / cyan `a
 bar: tab chips (`WorkspaceTab`, the editor's too, as the desktop's `.term-tab`: 36dp drawn in a 48dp row, radius 8,
 surface2 + a 1dp line when shown, no fill or border otherwise; "1 · title" in monoSmall, ink1 shown, ink3 otherwise and
 when the shell ended; a 16dp close glyph with a 48dp target; the shown tab scrolls itself into view),
-+ (new terminal), Paste, Text size (one menu: Larger, Smaller, "13 sp · pinch the terminal too"; 8 to 28 sp, also by
++ (new terminal), Paste, Text size (one menu: Larger, Smaller, "13 sp · or pinch"; 8 to 28 sp, also by
 pinch), full screen / leave full screen. Under it the Preview chips. The extra-keys row (surface1; each key a 48dp target with a 40dp face, monoMeta ink1 or
 a 20dp arrow glyph; the keys share the width where all twelve fit, landscape and tablets, and scroll on a phone): Esc, Tab, Ctrl, Alt, the four arrows, |, ~, /, -; Ctrl and Alt fill with accent (onAccent text)
 while on and apply to the next key only. Long press selects text (Termux's floating Copy / Paste bar); tap shows the
 keyboard (character input, no suggestions). An ended shell says "[Process completed - press Enter]"; Enter closes the
-tab. No tab yet: "A shell in this project" (EmptyCard, terminal glyph), one line, Start a terminal (primary). Full screen: the same pane above
+tab. No tab yet: "A shell in this project" (EmptyCard, terminal glyph), "bash with git, curl and rg", Start a terminal (primary). Full screen: the same pane above
 the keyboard, status and navigation bars padded. Shells keep running off screen; a low-importance "N terminals
 running" notification (Close all) holds them in the background.
 
@@ -566,9 +633,9 @@ in a WebView (http://localhost and 127.0.0.1 only; tapped links elsewhere open i
 answer (stopped, still starting), an EmptyCard over the page says so ("Nothing answers on localhost:5173", what to
 check, the WebView's reason) with Reload (primary) instead of WebView's own error page.
 
-**Secrets.** `ScreenTopBar` "Secrets" with the project's name as its meta line, a `ScreenIntro` on where values go
-(engine and terminal environment, never the model's messages) and "Changes apply to new terminals and sessions"
-(meta ink3). None yet: an `EmptyState` (key glyph, "No secrets yet", an example name). Then "Variables · N" and 64dp
+**Secrets.** `ScreenTopBar` "Secrets" with the project's name as its meta line, a `ScreenIntro` ("Encrypted on this
+phone and kept out of the model's messages. Commands in this project can read them.") and "Applies to new terminals
+and sessions" (meta ink3). None yet: an `EmptyState` (key glyph, "No secrets yet"). Then "Variables · N" and 64dp
 rows: the name in mono ink1, the value masked as eight dots (monoMeta ink3, fixed length), Show / Hide, Edit, Delete
 (ink3 glyph; the confirm sheet carries the danger). Add secret (primary) opens a `PiCard` form: Name (`FieldLabel`,
 mono, validated: letters, digits, _, not the engine's own variables, the rule or the error in `FieldHint`), Value
@@ -600,44 +667,47 @@ title, accent check), then the primary action. Attach and Add to chat open the p
 the tray or the text in the composer.
 
 **Provider sheet (first run and Add provider).** Opens by itself once, 450 ms after the first frame of Home, when no
-provider has a key. Eyebrow "Welcome to Pi-Bolt" (first run only), "Connect a model", one line saying the key stays on
-the phone. Search field, then 60dp provider rows (the provider's mark 16dp ink2 in the 20dp slot, name body, note
-meta ink3, "✓ Added" for configured ones; the custom endpoint row the server glyph); "Later" (first run). Picking one
-slides to the key step (standard, enter easing): back, the mark 20dp ink1, provider name (title), what happens to the key, the key field (`SecretField`: mono, obscured, Password
-keyboard, no autocorrect; Paste when empty, Show/Hide when filled), a lock line "Stored on this device only" (or the error in
-danger), "Get a key at console.anthropic.com" (accent, opens the browser), Cancel and Save key. The key lives only in
+provider has a key. First run: the bolt on a 56dp glass disc, then "Connect a model" (largeTitle) and one line ("Pi-Bolt
+runs on this phone with your API key. The key stays here."); Add provider: the same title, "The key stays on this
+phone." A `PillSearchField`, then plain `InsetRow`s under "Popular" and "More providers" (rowMeta ink3 heads): the
+provider's mark (20dp ink2), name, note, a success check for configured ones; last, "Custom endpoint" with the server
+glyph. First run ends with a ghost "Later"; every step has the glass close. Picking one slides to the key step
+(standard, enter easing): the header with a glass back ("All providers"), the mark 22dp ink1 and the provider's name,
+"Paste your API key.", the `SecretField` (mono, obscured, Password keyboard, no autocorrect; Paste when empty,
+Show/Hide when filled), a lock line "Stays on this phone, sent only to <provider>." (or the error in danger), "Get a
+key at console.anthropic.com" (accent, opens the browser) and one full-width primary, Save key. The custom endpoint
+step is the same: back, "Any OpenAI-compatible server.", its fields, one primary "Add endpoint". The key lives only in
 the sheet's memory (never saved instance state), is cleared after saving and never logged.
 
-**Setup card (Home, first run).** "Set up Pi-Bolt", two numbered steps as on the desktop onboarding: the current step
-a 28dp accent disc with its number in onAccent, a finished one surface3 with an ink1 check, a later one a lineStrong
-ring with the number in ink3 (green stays for state, not progress). Then the next step's primary button and the
-others as a `ButtonRow`.
+**Setup steps (Home, first run).** Two numbered steps on the canvas, as on the desktop onboarding: the current step a
+28dp accent disc with its number in onAccent, a finished one surface3 with an ink1 check (and the provider's name in
+meta ink3), a later one a lineStrong ring with the number in ink3 (green stays for state, not progress); labels in
+body. Then the next step's primary button and the others as ink2 text actions.
 
-**Settings > GitHub.** Signed out: one line on what it enables, "Sign in with GitHub" (primary; only when the build has
-an OAuth client id) and "Use a personal access token" (secondary, key glyph). Device flow sheet: the user code in
-display mono on a surface1 well (TalkBack spells it), Copy, "Open github.com/login/device" (primary), then a 16dp Wait
-Quad and "Waiting for you to approve on GitHub"; errors in danger with Try again. Token sheet: what scopes to pick, a
-link to create one, a `SecretField`, the storage line as its `FieldHint` (Keystore, never shown again, never logged;
-the error in its place) and Save, which
-checks the token against GitHub first (the keyboard's Done does the same). Signed in: name and @login, how and which scopes, a line on where it is used,
-Sign out (confirmed).
+**Settings > GitHub.** A group. Signed out: "Sign in with GitHub" (only when the build has an OAuth client id) and
+"Use a personal access token". Signed in: the account row (name and @login; how and which scopes) and a danger "Sign
+out" row (confirmed: the token stays valid on GitHub until revoked there). Device flow sheet: "Enter this code on
+GitHub.", the user code in display mono on a surface2 radius-tile well (TalkBack spells it), Copy, "Open
+github.com/login/device" (primary), then a 16dp Wait Quad and "Waiting for your approval"; errors in danger with Try
+again; the glass close cancels. Token sheet: what scopes to pick, a link to create one, a `SecretField`, the storage
+line as its `FieldHint` (Keystore, never shown again, never logged; the error in its place) and Save, which checks the
+token against GitHub first (the keyboard's Done does the same).
 
-**Settings > Model providers** comes first: configured providers (mark, name, "Key stored on this phone", a delete
-action that asks first and says the key is not revoked at the provider) and Add provider.
-
-**Pair confirmation.** A sheet (not an AlertDialog) for links opened from outside the app: `SheetHeader` "Pair with
-<host>?" and "Only continue if you just ran /remote-control on this computer", "Address(es)" over a `PiCard` of the
-endpoints (monoMeta ink2), a warning `Notice` when it ends the current session, Cancel and Pair / Connect. Scanning
-and pasting stay one-step. The paste sheet: the link field (monoSmall, URI keyboard; Go connects), its error as a
-`FieldHint`, "Paste from clipboard", Cancel and Connect.
+**Pair confirmation.** A sheet (not an AlertDialog) for links opened from outside the app: "Pair with <host>?" or
+"Connect to <host>?" and "Only continue if you just ran /remote-control on this computer.", "Address(es)" over a
+surface2 radius-tile card of the endpoints (monoMeta ink2), a warning `Notice` when it ends the current session, Cancel
+and Pair / Connect. Scanning and pasting stay one-step. The paste sheet ("Paste a link", "Run /remote-control copy on
+the computer."): the link field (monoSmall, URI keyboard; Go connects), its error as a `FieldHint`, "Paste from
+clipboard" and one primary, Connect.
 
 **Scan.** Full-bleed camera, canvas-tinted scrim with a 260dp rounded window, corner brackets that settle in on open.
-At the top, on a canvas fade: back, "Scan the pairing code" (title) and "Run /remote-control on your computer" (meta
-ink2). At the bottom a status pill (surface2 @ 92%, radius lg): Quad Connect + "Looking for a code", the reason in ink1
+At the top, on a canvas fade: a glass back button, "Scan the code" (largeTitle) and "Run /remote-control on your
+computer." (rowMeta ink2). At the bottom a glass status capsule: Quad Connect + "Looking for a code", the reason in ink1
 when a code is refused, a check and "Code read. Connecting…" with a success haptic; TalkBack hears each change (polite
-live region). "Paste link instead" (secondary) under it. Landscape: the pill and the button move to a 320dp column at
-the end side and the window (at most 260dp, never under the title) centres in the rest. Camera refused: "Allow camera"
-asks again; once Android stops asking, "Open settings" opens the app's system page and the camera starts on return.
+live region). "Paste a link instead" (secondary) under it. Landscape: the capsule and the button move to a 320dp column
+at the end side and the window (at most 260dp, never under the title) centres in the rest. Camera refused: a 72dp
+glass disc, "Allow the camera" and one line; "Allow camera" asks again; once Android stops asking, "Open settings"
+opens the app's system page and the camera starts on return.
 
 **Session.**
 - Top bar 56dp: back, computer name (subhead) with the session's cwd basename beneath (meta, mono), Quad 16dp in the
@@ -645,11 +715,18 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
 - Subtitle under the name: model · thinking level · context %, tap → Session info sheet (model, thinking, context
   ring, tokens, cost, compaction button).
 - Transcript (LazyColumn, stable keys and contentType per block; only the last block changes while streaming):
-  - user: right, max 80% width, a subtle bubble as on the desktop: surface2 with a 1dp line, radius 18 with the
-    bottom-end corner 4 (xs), padding 10x14, prose. Images sent from this phone show as
-    56dp thumbnails above the text (kept in memory for the session); images without a local copy read as a compact
-    "2 images" chip (surface3, radius 4, image glyph, meta ink2).
-  - assistant: full width on canvas, prose, no bubble; paragraphs 12dp apart; ink3 list markers.
+  - user: right, max 80% width, the redesign's soft bubble: surface2 with a subtle 1dp line, radius bubble (22) on
+    every corner, padding 12x16, prose ink1. Images sent from this phone show as 56dp thumbnails (radius md) above the
+    text (kept in memory for the session); images without a local copy read as a compact "2 images" chip (surface3,
+    radius 4, image glyph, meta ink2). A message dictated on this phone carries a waveform badge on its top-start
+    corner, 6dp outside it (22dp surface3 circle, 1dp lineStrong, 12dp GraphicEq ink2; TalkBack "Dictated"); the phone
+    remembers which messages it dictated for the session (`SessionMemory.dictated`, matched to the echo by row key, or
+    by text for a steer).
+  - assistant, finished turn: a quiet meta line first, "Finished 1m 12s" (rowMeta ink3, tnum; the time only when this
+    phone watched the turn), "Stopped" after an abort or "Failed" after an error, each after a 6dp dot (ink3 / danger)
+    (`TurnMetaRow`). Then the folded tools ("Used 4 tools", below). When the reply starts with a heading it reads as
+    the turn's bold title (subhead 17/24 ink1, 2dp above), then prose in ink2 on canvas, no bubble; paragraphs 12dp
+    apart; ink3 list markers; headings ink1. The live turn has no meta line: its "Working" line sits at the bottom.
   - user, sending: an idle prompt shows at once as its bubble at 60% with "Sending" (meta ink3) under it, and the
     status line shows Quad Think + "Sending". The host's echo takes over the row in place (no second rise); a failed
     send removes it and returns the text to the composer. Slash commands are not shown early.
@@ -691,9 +768,9 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
     `steer_subagent`, `get_subagent_result` and `SubagentWorkflow` stay step rows: "Steer agent", "Agent result",
     "Workflow" + the workflow's name.
   - `todo` steps read as one line: "Todo  Added: Write tests", "Done: …", "Started: …", "Cleared the list".
-  - code blocks: surface1, radius md, 1dp line. Header 40dp, as on the desktop: the language (monoMeta ink3; shell
+  - code blocks: surface1, radius media (12), 1dp line. A quiet header 40dp on the same surface, no rule under it: the language (monoMeta ink3; shell
     aliases show as `shell`; untagged code shows the language detected from its first lines, else `code`), then
-    " · " and the filename (monoMeta ink1, middle ellipsis) when the fence info string names one (`ts title="src/a.ts"`,
+    " · " and the filename (monoMeta ink2, middle ellipsis) when the fence info string names one (`ts title="src/a.ts"`,
     `ts:src/a.ts`, `src/a.ts`); at the end icon actions: line numbers (toggle, 3+ lines), Wrap (only when a line
     overflows or wrap is on), Open (folded or 40+ lines) and Copy (icon only; a check while copied, 1500 ms). Code Mono 12.5/19, 10dp
     vertical padding; line numbers from 3 lines on, Mono 11.5 ink3 right-aligned, then a 1dp line rule and 10dp to
@@ -719,7 +796,7 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
     the text in body ink2. Autolinks (`<…>`, bare `https://`, `www.`), entities and every backslash escape work;
     `<br>`, `<sub>`, `<sup>`, `<kbd>` (as inline code), `<b>`, `<i>`, `<u>`, `<s>`, `<mark>` render, wrapper tags
     (`<details>`, `<div>`) are dropped and comments hidden. Soft line breaks stay line breaks (as on GitHub).
-  - images: never fetched by themselves. A card (surface1, radius md, 1dp line, 56dp row: image glyph ink3, the alt
+  - images: never fetched by themselves. A card (surface1, radius media (12), 1dp line, 56dp row: image glyph ink3, the alt
     text body ink1, the address monoMeta ink3 middle-ellipsized, "Tap to load" meta ink3, an Open-in-browser
     action); tapping loads it (12 MB at most, long edge 2048 px) above the row, max 360dp tall. Inline images show
     their alt text in ink2 italic with the card under the paragraph.
@@ -731,87 +808,96 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
     "TeX" micro label. Currency (`$5 and $10`) stays text.
   - tables: a grid, not rows of loose cells. Column width = widest single-line cell + 24dp, clamped 64…240dp; spare
     width is spread in proportion so the table spans the card, wider tables scroll with edge fades. While streaming,
-    widths only grow. Radius 12, 1dp line border, header surface1 metaStrong ink2, 1dp lineStrong under it; body
+    widths only grow. Radius media (12), 1dp line border, header surface1 metaStrong ink2, 1dp line under it; body
     Inter 14/20 ink1, cells 12×9dp, 1dp line between rows, no column lines, zebra ink1 @ 3% from 8 rows. `:--`,
     `:--:`, `--:` are honoured; all-numeric columns align to the end with tnum. ✓ / yes success, ✗ / no danger,
     a lone dash ink3.
   - inline code: Mono 0.88em ink1 on a surface3 chip (radius 4, line box inset 14%), one chip per line segment
     when it wraps. A narrow no-break space pads each side inside the chip so it never touches neighbours; code of
     24+ characters without spaces may break after `/ . _ -`.
-  - after a turn: "Edited 3 files · ran 2 commands · 1m 12s" fold collapses its steps (at most three parts: edited
-    files, commands, distinct files read, searches, agents; "N steps" when none apply; the time only when this phone
-    watched the turn). "· 1 step failed" in ink3 after a 6dp danger dot; "· failed" in danger only when the turn ended
-    in an error or abort; the final answer stays visible. Under it,
-    chips for the files the turn edited or wrote (28dp, radius sm, surface1 + 1dp line, name in mono meta ink1, +n
-    success, −n danger, tnum; at most 3, then "+k more"); a chip opens that file's diff. An opened fold draws a 1dp
-    line rail at the slot centre through its steps (broken 4dp around each glyph, ending at the last one) and indents
-    the prose between steps to the step text.
-  - under that fold, in a session on this phone: "Review changes (3 files, +40 −12)" (difference glyph 16dp ink3,
-    label ink2, counts success / danger tnum, " · undone" in ink3 after an undo; 48dp tall), only for turns whose
-    checkpoints show changed files. Over remote control the newest turn that edited files says instead, in meta ink3,
-    that review and undo work in sessions on this phone (the files are on the computer).
+  - after a turn: its steps fold into one quiet line, "Used 4 tools" (rowMeta ink3, a chevron after it; "Thought" when
+    it only reasoned), as OpenCode's; "· 1 failed" after a 6dp danger dot when a step failed (the turn's own failure is
+    on the meta line). TalkBack reads the summary ("Used 4 tools: Edited 3 files · ran 2 commands", Expanded /
+    Collapsed). Tap opens the steps: first the chips of the files the turn edited or wrote (28dp, radius sm, surface1 +
+    1dp line, name in mono meta ink1, +n success, −n danger, tnum; at most 3, then "+k more"; a chip opens that file's
+    diff), then, in a session on this phone, "Review changes (3 files, +40 −12)" (difference glyph 16dp ink3, label
+    ink2, counts success / danger tnum, " · undone" in ink3 after an undo; 48dp tall) for a turn whose checkpoints show
+    changed files (over remote control the newest turn that edited files says instead, in meta ink3, that review and
+    undo work in sessions on this phone), then the steps. An opened fold draws a 1dp line rail at the slot centre
+    through its steps (broken 4dp around each glyph, ending at the last one) and indents the prose between steps to
+    the step text.
+  - the session's changes: in a session on this phone, a floating `GlassPill` at the end of the composer's slim row,
+    "Changes +12 −3" (label ink1, the counts success / danger, tnum), the sum of the session's turns whose files
+    changed (from the turn checkpoints; an undone turn is left out, a redone one counts again; `SessionChanges`).
+    One such turn opens its review; several open a "Changes" sheet of those turns, newest first (`InsetRow`: the
+    prompt's first line, "3 files · +40 −12"), each opening its review. TalkBack: "View changes, 3 files, 40 lines
+    added, 12 removed".
   - under the last finished reply: three icons, ink2 16-18dp, each in a 48dp target, no labels (one calm toolbar):
     Copy (a success check while copied), Ask again (sends the same prompt as a new turn; Pi has no regenerate; hidden
     for prompts with images) and More (Select text, View as Markdown, Share), 40dp tall, the copy glyph aligned with
     the prose. Fades in 150 ms after the turn settles; never animates in history.
-  - live status line: Quad 16dp + shimmer label + elapsed timer. A running tool is named: the verb shimmers and its
-    command or path follows in mono small ink3 ("Run  npm test"; a subagent reads "Agent working" + its task;
-    parallel tools add "+n"); text changes crossfade (quick).
+  - live status line, the turn's "Working" line: the kit's `WorkingLine` (a 14dp Quad in the mode, ink2, warning while
+    Pi asks, and the shimmering label in rowMeta) then " · " and the elapsed timer (rowMeta ink3, tnum). A running tool
+    is named: the verb shimmers and its command or path follows in mono small ink3 ("Run  npm test"; a subagent reads
+    "Agent working" + its task; parallel tools add "+n"); text changes crossfade (quick), and both sides draw the Quad
+    from the one clock, so only the words visibly change.
   - errors and notices: a hairline, not a filled slab (the desktop's): radius md, 1dp outline in danger / warning @
     32%, a 20dp glyph in the kind colour, the title bodyStrong ink1, text buttons.
 - Todo panel above the queue strip (see Todo panel below).
 - Queue strip above the composer: 44dp rows (48dp with the remove button) with a 2dp bar (warning = steer, ink4 =
   follow-up), the label on one line at least 62dp wide, swipe to remove.
-- Composer (after the desktop composer and assistant-ui): one card, surface1, radius lg, a 1dp lineStrong edge that
-  becomes the focus line; body text (15/22) in ink1, its placeholder in the same style in ink3 (one line, ellipsized),
-  accent cursor and selection. As on the desktop the bar is always there, whatever the draft (empty, one line or
-  more), so the model stays in view; the field keeps one place in the composition in both forms, so switching never
-  drops focus or the keyboard:
-  - Field on top (16dp sides, 14dp top, 4dp bottom, grows to 6 lines, 4 in a short window, then scrolls) and the bar:
-    + as a ghost button on the left, the run-settings chip, then the mic (a ghost) just before Stop and Send on the
-    right.
-  - Under 360dp of room above the keyboard (landscape) one row: +, the field (at most 3 lines), the mic, the Steer
-    chip while a steer is typed, Stop, Send. The field's top and bottom padding is (48dp − line) / 2, so one line is
-    centred on the buttons and the last of several stays on that centre (also at font scale 1.3). In a window under
-    420dp wide the + steps aside while a steer is typed (never the mic, which may be listening).
-  Geometry (`ComposerLayout`): every button is a 48dp target on one centre line. Send, Stop and the listening mic are
-  one 32dp disc (the desktop's 30px, assistant-ui's 32px); the button row sits 2dp inside the card, so the send disc
-  is 10dp from the end and the bottom edge alike (it was 10dp and 4dp). + and the mic at rest: a 20dp ink3 glyph, no
-  fill (ghosts, 40% when disabled). Send: the accent circle (white in the default theme) with a 20dp onAccent arrow
-  nudged 0.5dp down (its head carries most of the ink); disabled, the same circle at 18%. Stop: a surface3 disc with
-  a 1dp lineStrong ring and a 10dp ink1 square (the rounded Stop glyph), in Send's slot when the field is empty and
-  beside it while a steer is typed; the same disc in both places. The mode swap crossfades centred in the disc.
-  The run-settings chip ("Sonnet 4.5 · High": the model maker's mark 14dp ink1 6dp before it (see Logos), the model in label ink2, middle-truncated past 180dp, then " · High" in
-  label ink3; the level is left out when thinking is off or the model does not reason; TalkBack "Model: Sonnet 4.5,
-  thinking high") opens the model sheet, whose "Thinking" row (36dp level pills, radius full, the current one accent
-  1.5dp on the selected fill, the level's meaning under it in meta ink3) sets the level without closing it; long press
-  cycles the model (click label "Next model", a tick and a snackbar naming it); Shift+Tab cycles the thinking level.
-  While a steer is typed the "Steer | Follow-up" chip takes the run-settings chip's slot (at 360dp the model chip had
-  about 30dp left beside Stop and Send; the top bar's subtitle still names the model).
-  The + opens the attach sheet (Photos, Mention a file, Commands); when the model's `input` lacks "image" its Photos
-  row says so and picking one shows a "<model> can't read images" snackbar. Attached images (Photo Picker, images
-  only, at most 4) sit in a tray above the text: 56dp thumbnails, radius 8, 1dp line, a Quad Write while each encodes
-  ("Image 2, preparing" to TalkBack; "Image 2 of 3" once ready), a 20dp ✕ (scrim, lineStrong ring) centred 4dp inside
-  each thumbnail's top-end corner, its 48dp target centred on it ("Remove image 2"), so it covers only the corner
-  quarter of the thumbnail (it covered half, and taps meant to open an image removed it); 76dp per item. Encoding
-  runs off the main thread: long edge at most 2000 px, JPEG 85 (PNG only when transparent and under 1.5 MB), refused
-  over Pi's 4.5 MiB base64 limit. Send works with images and no text. A thumbnail opens the image viewer.
-  While the agent works a 1dp accent band (40%, inset 16dp) sweeps the card's top edge. The palette and `@` mentions
-  open above the card (see Command palette below). IME insets animate with the keyboard. The draft is kept per
-  session (computer or project, and Pi session) across restarts.
-- Empty session: the mark, "New session" and the folder tag, then "Commands" (the host's slash commands, mono name
-  + description in meta ink3, the first 6 then "Show all N commands"; tap puts "/name " in the composer and focuses
-  it) and "Recent" (the last 5 distinct prompts this phone sent to this computer; tap fills the composer). 48dp rows,
-  SectionLabel headings (the starters' "Start with" leads with the sparkle glyph, "Recent" with the history glyph),
-  nothing sends by itself. Recent prompts persist per computer (20 at most) in
-  `recent-prompts.json`.
+- Composer, on the redesign's pill (`PillComposerShell`, after the references and OpenCode's composer), 20dp from the
+  window's sides:
+  - The pill: glass, radius pill (28), 56dp at least: a + `ComposerCircle` (opens the attach sheet), the field
+    (rowTitle 17/24 ink1, its placeholder in the same style in ink3, one line, ellipsized; accent cursor and
+    selection; grows to 6 lines, 4 in a short window, then scrolls), the mic (`VoiceMic`, a 36dp surface3 circle with
+    an ink2 MicNone; accent with an onAccent Mic while it dictates in place) and the primary circle in one slot:
+    `ComposerPrimary` (white in the default) with a waveform that opens voice input while the field is empty and an
+    arrow that sends once there is text or an image (18% and disabled while an image encodes); Stop in the same slot
+    while Pi works and nothing is typed (a 36dp surface3 circle, 1dp lineStrong ring, ink1 Stop glyph), and beside the
+    primary while a steer is typed. Every circle is 36dp in a 48dp target on one line along the pill's bottom, 10dp
+    from its edges (`ComposerLayout`); the field's top and bottom padding is (48dp − line) / 2, so one line is centred
+    on them and the last of several stays there (also at font scale 1.3). Attached images sit in a tray inside the
+    pill above the text.
+  - Above the pill, a slim row (48dp): the run-settings chip at the start ("Sonnet 4.5 · High": the model maker's
+    mark 14dp ink1 2dp before it (see Logos), the model in label ink2, middle-truncated past 180dp, then " · High" in
+    label ink3 and a 16dp chevron; the level is left out when thinking is off or the model does not reason; TalkBack
+    "Model: Sonnet 4.5, thinking high"), so the model is always in view; at the end the session's changes pill
+    ("Changes +12 −3", above), or the "Steer | Follow-up" chip while a steer is typed. The chip opens the model sheet,
+    whose "Thinking" row (36dp level pills, radius full, the current one accent 1.5dp on the selected fill, the level's
+    meaning under it in meta ink3) sets the level without closing it; long press cycles the model (click label "Next
+    model", a tick and a snackbar naming it); Shift+Tab cycles the thinking level.
+  - Under 360dp of room above the keyboard (landscape) the slim row steps aside and the field takes at most 3 lines;
+    the Steer chip moves into the pill, before Stop. In a window under 420dp wide the + steps aside while a steer is
+    typed (never the mic, which may be listening). The field keeps its place in the composition, so the switch never
+    drops focus or the keyboard.
+  The attach sheet: Photos, Paste image, Mention a file, Commands, Prompt history; when the model's `input` lacks
+  "image" its Photos row says so and picking one shows a "<model> can't read images" snackbar. Attached images (Photo
+  Picker, images only, at most 4): 56dp thumbnails, radius md, 1dp line, a Quad Write while each encodes ("Image 2,
+  preparing" to TalkBack; "Image 2 of 3" once ready), a 20dp ✕ (scrim, lineStrong ring) centred 4dp inside each
+  thumbnail's top-end corner, its 48dp target centred on it ("Remove image 2"); 76dp per item. Encoding runs off the
+  main thread: long edge at most 2000 px, JPEG 85 (PNG only when transparent and under 1.5 MB), refused over Pi's 4.5
+  MiB base64 limit. Send works with images and no text. A thumbnail opens the image viewer.
+  While the agent works a 1dp accent band (40%) sweeps the pill's top edge, inset by its radius. The palette and `@`
+  mentions open above the pill (see Command palette below). IME insets animate with the keyboard. The draft is kept
+  per session (computer or project, and Pi session) across restarts.
+- Empty session (assistant-ui's Welcome in the redesign's language): the project's name in largeTitle, centred in
+  the room above the suggestions, its branch under it (monoMeta ink3; on a computer, the computer's name). Just above
+  the composer, in thumb reach, the suggestions as `InsetRow`s with hairlines (picked from the project: Inspect the
+  project, Run the tests, Explain the structure, Summarise recent commits or Set up git, Start a new project in an
+  empty folder), then "Recent" and the last 3 prompts this phone sent here (`Welcome.RECENT`; Prompt history in the +
+  sheet keeps all 20), then "/ Commands". Every tap fills the composer; nothing sends by itself. It enters with
+  assistant-ui's stagger (fade + 8dp rise, 120 ms + 70 ms per step: title, its line, each suggestion, the recent
+  prompts, Commands) and the composer comes last (`Welcome.composerStep`); reduce motion shows it at rest. Recent
+  prompts persist per computer (20 at most) in `recent-prompts.json`.
+- Top bar: glass back, search and more (`GlassIconButton`, 44dp in 48dp targets); the Quad shows beside them only while
+  Pi works (the live line off screen) or the link has failed, never as a resting grid that reads as a button.
 - Connection banner under the top bar: Quad Connect + "Reconnecting in 3s" countdown + Retry; slides down/up. Not
   while the session first connects: the centred loading state (Quad Connect 44dp, "Starting Pi-Bolt in x") says that
   alone, so one spinner and one sentence show at a time.
-- Top bar actions, left to right: the Quad slot (40dp, Quad 16dp), the session switcher, Search (48dp), overflow. The
-  Quad animates (ink1, warning while Pi asks) only while Pi is busy and the live status line is off screen; otherwise
-  it rests as one still ink3 frame (danger when the link failed), so the bar keeps its mark and nothing blinks in and
-  out. It is not a control: no press, no ripple, and TalkBack hears it only while it reports work. Search and
+- Top bar actions, left to right: the Quad (only while Pi is busy and the live status line is off screen: ink1,
+  warning while Pi asks; or danger while the link has failed), the session switcher, Search and More (glass). The Quad
+  is not a control: no press, and TalkBack hears what it reports. Search and
   overflow always sit together. Overflow on a computer: Session and usage, Export or share,
   Disconnect, Forget computer.
 - On this phone (a project's session): the title is the project's name and the subtitle drops the folder (session
@@ -821,21 +907,23 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
   its text comes back to the composer to edit and send. Recent prompts are kept per project.
 - Sheets (ModalBottomSheet, predictive back): model picker (the Thinking pills when the model reasons, then search,
   "Current" then one group per maker, as the desktop's picker ("Anthropic" holds Claude from Anthropic, OpenRouter and
-  Bedrock; a model without a known maker goes under its provider's name), under a meta-strong heading; 60dp rows with
-  the maker's mark, the name and "OpenRouter · 200k context · reasoning" (the provider first); search matches the
+  Bedrock; a model without a known maker goes under its provider's name), under a meta-strong heading; the kit's
+  `InsetRow`s: the maker's mark in the leading slot, the name (rowTitle) over "OpenRouter · 200k context · reasoning"
+  (rowMeta ink3, the provider first), inset hairlines, the current model on the soft surface2 highlight with a check; search matches the
   maker and provider names too; no match is an EmptyState with the search-off glyph; `/model text` opens it filtered),
-  thinking level (52dp option rows with a description), Pi's dialogs (Quad Wait eyebrow "Pi is asking", title,
+  thinking level (option rows: radius tile, surface1, rowTitle over a rowMeta description; the selected one on the
+  selected fill with an accent ring and check), Pi's dialogs (Quad Wait eyebrow "Pi is asking", title,
   message in a command well when it looks like a command (surface1, radius md, the cwd in mono meta ink3 with Copy,
   then `$` in success and the command in mono), options as 52dp rows, primary button; swipe or scrim tap
   does not answer: an explicit Cancel does; countdown chip when the dialog has a timeout; haptic on appear).
 - Snackbars for notify: surface3, radius md, line, above the composer, kind-coloured icon.
 
-**Command palette.** Typing `/` opens a panel above the composer (surface2, radius md, 1dp line, at most 264dp and
+**Command palette.** Typing `/` opens a panel above the composer pill (glass, as the pill, radius tile, at most 264dp and
 never more than the room between the top bar and the composer above the keyboard, so it cannot push the composer
 under the keyboard in landscape; scrolls): 48dp rows with the command in mono small ink1, its argument hint in mono meta ink3, the description in meta
-ink3 under it and a source badge at the end (micro, surface3, radius 4: `app`, `extension`, `prompt`, `skill`).
+ink3 under it (rowMeta ink3) and a source badge at the end (micro, surface3, radius 4: `app`, `extension`, `prompt`, `skill`).
 Matching is fuzzy (prefix, then word starts, then scattered letters), by name and then by description; a space closes
-the panel and a usage line takes its place (`/compact [instructions]`, mono meta ink3). The app's own commands are
+the panel and a usage line takes its place (`/compact [instructions]`, mono meta ink3, 16dp in). The app's own commands are
 the terminal built-ins that make sense on a phone: `/new`, `/resume`, `/fork`, `/clone` and `!` (on this phone only),
 `/compact`, `/name`, `/session`, `/model`, `/thinking`, `/copy`, `/export`, `/search`. They run in the app (a sheet or
 an RPC command), never reach the host, and a host command of the same name wins. Picking one that takes no argument
@@ -898,9 +986,9 @@ the message and returns its text), Edit in composer, Select text, Share. On a re
 Markdown), Copy as Markdown, Regenerate (on this phone: forks before the prompt and sends it again), Select text, View
 as Markdown, Share. More under the last reply offers the same.
 
-**Session tree** (`/tree`). A sheet: "Session tree" with "One branch…" or "2 forks. The marked path is what Pi sees."
-(meta ink3), the Messages | Prompts | Labeled | Everything filter, then the entries (forks indented, the active path
-marked). Loading reads "Reading the tree" (Quad Think). A failed read (or a reply without data) is an error, never an
+**Session tree** (`/tree`). A sheet: "Session tree" with "2 forks · Pi sees the marked path" (meta ink3; no subtitle
+with one branch), the Messages | Prompts | Labeled | Everything filter, then the entries (forks indented, the active
+path marked). Loading reads "Loading tree" (Quad Think). A failed read (or a reply without data) is an error, never an
 empty list: no subtitle, no filter, a dangerSoft card (radius md, danger @ 40% line) with the error glyph, "Could not
 read the session tree" (bodyStrong ink1), Pi's message (meta ink3, four lines) and Retry (accent).
 
@@ -908,10 +996,17 @@ read the session tree" (bodyStrong ink1), Pi's message (meta ink3, four lines) a
 Markdown, and on this phone Share session file (the JSONL) and Share as HTML (`export_html`). Files are written to
 `cache/exports` and shared through a FileProvider.
 
-**Dictation.** A 48dp mic just before Send, as on the desktop: a 20dp MicNone ink3 ghost; listening is the composer's
-32dp accent disc with an onAccent Mic (static, no pulse), on Send's centre line, and TalkBack's state "Listening". It
-keeps its state when the composer switches to the landscape row and back (movable content). The first tap explains the microphone in a sheet
-("Continue"), then Android asks; partial words appear in the draft as they are heard.
+**Dictation and voice input** (`ui/session/voice`). One recogniser (`VoiceInput`, held by the screen) behind two ways
+in. The pill's mic dictates in place: tap to start, again (or stop talking) to finish; partial words appear in the
+draft as they are heard, the final result replaces them (`VoiceDraft`). The pill's primary circle, while the field is
+empty, opens the voice surface (OpenCode's voice screen) in the composer's place: what was heard in large type (title
+20/26 regular, ink1; "Listening…" or "Tap the mic to talk" in ink3 before any words; the end of a long dictation from a
+word start), then one row: a round 56dp mic (accent while it listens, surface3 with a lineStrong ring otherwise; tap
+to stop or to talk again, each time adding to the draft), the kit's `DotWave` driven by the microphone's level
+(`onRmsChanged`, −2…10 dB mapped to 0…1 by `VoiceLevel`, eased over the tap duration) in ink1 while listening and ink3
+otherwise, and a round 56dp danger button with a white Stop glyph that ends voice input (Back too). The words are
+already in the draft, so ending it leaves them in the composer, ready to send. The first use explains the microphone
+in a sheet ("Continue"), then Android asks. A message sent with dictated words carries the waveform badge.
 
 **Image viewer.** A tap on an image in a user message or the composer tray opens it full screen on black: swipe
 between images, pinch or double-tap (2.5x) to zoom up to 6x, drag to pan a zoomed image (kept on screen), Back or ✕
@@ -924,7 +1019,7 @@ recent messages; older ones open their thumbnail.
 **Todo panel.** The todo extension (opensec-pi-todo) draws its panel in the TUI only, so the app builds it from the
 `todo` tool's results: each result's `details.tasks` is the whole list after the call (`SessionState.todos`, from
 history and from live `tool_execution_end`).
-- Card above the composer: surface1, radius md, 1dp line, 12dp side inset. Heading 48dp (the tap target): a 14dp
+- Card above the composer: surface1, radius tile, 1dp line, 20dp side inset (the composer's). Heading 48dp (the tap target): a 14dp
   progress ring (ink4 track, success arc of done/total, settle), "Todos" (label ink1), "2/5" (meta ink3, tnum),
   a chevron (ink3) that turns in a graphicsLayer. Tapping collapses the card to the heading, which then names the
   current task (meta ink2).
@@ -971,8 +1066,8 @@ messages. Pi has no RPC to read or steer a subagent: steering and resuming go th
   from 0.7 over the glyph duration in the live turn. Sizes on the icon tokens (`AgentGlyphSize`, the rest glyph one
   step larger since a Material glyph draws inside padding): Card slot 22 / Quad 20 / glyph 22 (an agent's own
   two-line block), Row 20 / 14 / 16 (one-line timeline rows), Bar 20 / 16 / 20 (top bars, live lines).
-- Card (surface1, radius md, 1dp line; lineStrong while active, 14x12dp padding): the glyph, then the agent's name
-  (label ink1: the task title the model gave the call, else its prompt's first line, else the type) over one meta
+- Card (surface1, radius tile, 1dp line; lineStrong while active, 16x14dp padding): the glyph, then the agent's name
+  (rowMeta ink1: the task title the model gave the call, else its prompt's first line, else the type) over one meta
   line, the type and what it does now: "Explore · Reading src/auth.ts" (meta ink3; "background" when it is one; the
   error in danger; done, its metrics "4 tools · 12.3k tokens · 5 turns"), and the run time at the end (meta ink3
   tnum, ticking once a second). No narration: the extension sends the start of the agent's reply in the same field
@@ -1009,57 +1104,60 @@ messages. Pi has no RPC to read or steer a subagent: steering and resuming go th
 - TalkBack: a card is one node ("Find the parser code, Explore agent, running, Reading src/parser.ts") with the click
   label "Open agent".
 
-**Settings.** `ScreenTopBar` "Settings" (a 1dp line under it once the page scrolls), then a
-search field ("Search settings") that narrows the page to matching settings: every query word must appear in the
-group, the label or its keywords (`SettingsIndex`, so "font" finds Text size and "vibrate" finds Haptics); "No setting
-matches" otherwise. Groups, in order, each a `CardSection` with its glyph (key, phone, code, terminal, palette,
-vibration, view-agenda, bell, shield, info); rows are `ListRow` / `SwitchRow` / `ValueRow` in body
-weight with `RowDivider`s, controls start with a `ControlLabel`:
-- Model providers: configured providers by display name (`ProviderCatalog`), Add provider.
-- Messages from the engine links (packages, MCP, tuning) are snackbars on the Settings screen, never Toasts. The MCP
-  sheet's "Add a server" opens a "New server" form (name with its rule as an error hint, address or command, optional
-  token variable) with Cancel and Add.
-- Pi on this phone: Default model (a 56dp row led by the model's mark, the sparkle glyph while automatic: the model and provider; it opens the model picker with the models of
-  the open on-device session, and says to open a session when none is), thinking level for new sessions, steering
-  and follow-up delivery (One at a time / All at once), Auto-compact, Auto-retry with the retry count (1 / 3 / 5 / 10),
-  Skill commands, Block images. They are the engine's own settings (`agent/settings.json`, other keys kept); the
-  queue, compaction and retry switches reach the open on-device session at once over RPC, the rest apply from the next
-  session.
-- Runtimes: the shipped runtimes on one line ("Node.js 22.23.4 · Python 3.14.10") and a row to the Runtimes screen.
-- Appearance: theme tiles (ten, four a row: Pi-Bolt, Paper, Contrast, Lime, Moss, Ember, Claude, Codex, Vercel, GitHub; each drawn in its own theme: canvas, user bubble, prose with an inline
-  code chip, a code card in the theme's syntax colours, the composer with the accent send button; selected = 1.5dp
-  accent ring; the code card has its 1dp line, which keeps it visible on Paper; the near-black themes (Pi-Bolt, Contrast, Codex, Vercel) show their canvas hex under the name in monoMeta ink3; the preview's code card
-  has the same inset on every side; TalkBack reads each tile as "<name> theme", a radio button with its Selected
-  state, and the captions are not read again), accent circles ("Theme"
-  is a split disc: the theme's own accent beside surface3; read as "Iris accent", selected or not), text size ("Text size" with its value in label ink2 beside
-  it, A-glyph steps and a live prose preview), density (Comfortable / Compact).
-- Motion and haptics: Reduce motion (Follow system / On), Haptics.
-- Session display: show thinking expanded, tool output preview lines (6 / 12 / 24).
-- Notifications: one 56dp row, "Notifications" with "Allowed" (meta success) or "Off" (meta warning); tapping opens
-  the system page.
-- Security: device key (mono), what it is for, then "Reset device key" as a row with a danger refresh glyph that
-  opens the confirm sheet (no standing red button).
-- About: app version, device name, the update status and its action (see Updates), "Check for updates automatically",
-  and one "Open-source licences" row (document glyph) that opens a sheet of the five (Inter, JetBrains Mono: OFL;
-  Mermaid: MIT; Termux terminal libraries: Apache-2.0; Lobe Icons, the provider and model logos: MIT); a pick opens
-  the text in the viewer. Packages and extensions, MCP servers, and Retry and compaction lead with the extension,
-  cable and tune glyphs.
-Segmented controls in Settings are 48dp tall.
+**Settings.** A `LargeTitlePage` "Settings" in the iOS-settings manner, and the owner's priority screen. Under the
+title a `PillSearchField` ("Search") narrows the page to matching settings: every query word must appear in the group,
+the label or its keywords (`SettingsIndex`, so "font" finds Text size and "vibrate" finds Haptics); "No results"
+otherwise. With no query an account card leads: the GitHub identity (a 48dp avatar disc, the name and "@login ·
+GitHub", or "Sign in with GitHub", which opens the sign-in sheet) over the default model ("Default model" with the
+model and provider beneath, led by its mark; it opens the model picker of the open on-device session, or Providers
+when there is no key, or says to open a session). Then the groups, in order, as `InsetGroup`s of `GroupRow`s with
+tinted glyph tiles (one theme tint per section; neutral for GitHub, Advanced and About), values in ink3 and chevrons;
+switches on one end column; no explanatory paragraphs:
+- Models & keys (apricot): Providers (count; opens the Providers page), Thinking level (a choice sheet). While
+  searching, Default model is a row here too.
+- Appearance (orchid): Theme and Accent (both open the theme sheet: the ten theme tiles, four a row, each drawn in its
+  own colours, then the accent circles; a pick applies at once), Text size (a sheet with the A steps and a live prose
+  preview), Density (a choice sheet).
+- Agent (violet): Steering and Follow-up (One at a time / All at once), Auto-compact, Auto-retry with Retries (1 / 3 /
+  5 / 10), Skill commands, Block images, Expand thinking, Tool output (6 / 12 / 24 lines). The engine's own settings
+  (`agent/settings.json`, other keys kept) reach the open on-device session at once over RPC where Pi has a command.
+- Projects & runtimes (seafoam): Runtimes (the shipped runtimes' names; the Runtimes page), Packages, MCP servers
+  (their sheets; messages from them are snackbars on Settings).
+- Remote control (rose): the paired computers (desktop glyph, green while connected; "Connected", "Connecting…" or
+  "Last seen 5 min. ago", `RemoteRows`); a tap connects or returns to the live session, a long press or the TalkBack
+  action "Forget computer" asks first. Pair with a code (the scanner), Paste a pairing link, Device key (mono, so "l"
+  and "I" differ), and Reset device key (danger glyph, confirmed; the old key stays listed with a footer on revoking it).
+- GitHub (see Settings > GitHub).
+- Advanced: Retry and compaction (the tuning sheet), Reduce motion (Follow system / On), Haptics, Notifications
+  (Allowed in success or Off in warning; opens the system page).
+- About: Version, This phone, the update status (a Quad while it works, a progress line while it downloads, see
+  Updates) with its one action as a button, Check automatically, and Licences (a sheet of the five: Inter, JetBrains
+  Mono: OFL; Mermaid: MIT; Termux terminal libraries: Apache-2.0; Lobe Icons, the provider and model logos: MIT; a
+  pick opens the text in the viewer).
 Changes apply live, without recreating the activity, and persist in a small JSON file (read synchronously at
 startup so the first frame has the right theme).
 
-**Runtimes** (Settings > Runtimes, and "Runtimes" in a project's menu).
-- `ScreenTopBar` "Runtimes" like Settings, then a `ScreenIntro`: the runtimes come with the app and run in every
-  project. While measuring: a `LoadingRow`; a build without runtimes: an `EmptyState`.
-- Installed: one card row per runtime: name in bodyStrong, version in monoMeta ink2, installed size right-aligned in
-  meta ink3 (tabular figures); below, what comes with it ("npm 10.9.4", "pip 25.2") in meta ink3, then its commands as
-  mono chips (surface2, 1dp line, Radius.sm). No Install/Remove: the runtimes are part of the APK (android/engine/CONTRACT.md).
-- Packages and caches: npm cache and pip cache with their size and a small secondary "Clear" (disabled at 0 B; "Clearing…"
-  while it runs; a ConfirmSheet first, naming the size), then npm global packages and pip packages with their size
-  only (removed with npm uninstall -g / pip uninstall). A failed clear says so in danger under the row.
+**Providers** (Settings > Models & keys > Providers). A `LargeTitlePage`: "On this phone" (or "No provider yet"), each
+provider by its display name (`ProviderCatalog`) with its mark on a neutral tile, "Key on this phone" or the custom
+endpoint's host and model, and a remove action that asks first (the key is not revoked at the provider; a custom
+endpoint's models.json entry goes too); then Add provider (the provider sheet). Footer: "Keys stay on this phone."
+
+**Runtimes** (Settings > Projects & runtimes, and "Runtimes" in a project's menu).
+- A `LargeTitlePage` "Runtimes". While measuring: a `LoadingRow`; a build without runtimes: an `EmptyState`.
+- Included: one group row per runtime: name in rowTitle, version in monoMeta ink2, installed size right-aligned in
+  rowMeta ink3 (tabular figures); below, what comes with it ("npm 10.9.4", "pip 25.2"), then its commands as mono chips
+  (surface2, 1dp line, Radius.sm). No Install/Remove: the runtimes are part of the APK (android/engine/CONTRACT.md).
+- Packages and caches: npm cache and pip cache with their size and a small secondary "Clear" (disabled at 0 B;
+  "Clearing…" while it runs; a ConfirmSheet first, naming the size), then npm global packages and pip packages with
+  their size only. Footer: "Clearing a cache is always safe." A failed clear says so in danger under the row.
 - Sizes are measured on IO when the screen opens and after a clear; nothing animates while idle.
 - TalkBack: a runtime is one node ("Node.js 22.23.4, npm 10.9.4, 150 MB. Commands: node, npm, npx"); each Clear is
   labelled "Clear the npm cache"; the title is a heading. Every row is at least 48 dp tall.
+
+**Notifications.** The small icon is the logo's bolt as one outline (no seams between its facets) at about 20dp in the
+24dp status icon, tinted in the shade by `notification_accent` (the logo's amber, #E9A42C). Titles say what happened
+("Pi finished on <host>", "Pi needs an answer on <host>", "1 terminal running"); text is one short line ("Running until
+you close them"). Lock screens show only a public title and "Unlock to see it".
 
 ## Updates
 
@@ -1143,6 +1241,24 @@ renderer exists. The app has no other WebView, and this one is kept minimal:
 - A dead renderer process (`onRenderProcessGone`) drops the WebView and fails its requests; the app keeps running and
   the next diagram starts a new one.
 
+## Copy
+
+Short, confident, sentence case; no exclamation marks, no emoji. No sentence explains how the app works inside, why a
+design is the way it is, or what is obvious on screen. A settings row is a title plus at most one short meta line that
+carries a value or a consequence ("Applies to new sessions"). An empty state is one line plus its action; an error says
+what happened and what to do. Safety, consent, permission and privacy lines stay, kept short and true.
+
+One name per concept:
+- **Pi** the agent; **Pi-Bolt** the app; **this phone** the device; **computer** the paired machine (never desktop,
+  host or Mac); **remote control**, **pair**, **pairing code** / **pairing link**.
+- **project**, **session**, **provider**, **model**, **API key**, **custom endpoint** (an OpenAI-compatible server),
+  **engine** (only where the user acts on it: "Restart the engine").
+- **steer** / **follow-up**; **compact** (the context); **fork**, **branch**, **label**; **undo**, **put back**,
+  **restore**; **secrets**; **packages**, **skills**, **prompt templates**, **MCP servers**; **sign in** (verb) /
+  **sign-in** (noun).
+- Fixed phrases: "Loading…" or "Loading <thing>" (never Reading or Measuring), "Reload the session to apply changes", "Applies to new sessions",
+  "switch model", "This can't be undone." (destructive confirmations).
+
 ## Not carried over from the desktop app
 
 Geist fonts, 4x4 pixel grid, 80 ms cadence, bolt pattern and lime colour. Hover actions become
@@ -1163,3 +1279,14 @@ long-press sheets; long output goes to full-screen viewers, never nested scroll 
   streamed frame does not recompose Home.
 - Nothing animates while idle: spinners only while busy, the mark's entrance once per launch. Rotations, scales and
   press feedback run in `graphicsLayer`; size changes are limited to expand/collapse and sheets.
+
+## Chats
+
+Plain chats talk to the model without a project (`engine/ChatSpace.kt`): one app-private folder, their own session
+folder, and an engine with `--no-tools`. The Chats screen follows the kit: two glass buttons (back, +) on a 56dp bar,
+"Chats" in largeTitle, a `GlassSearchField` (a full-radius glass pill, 48dp), then `InsetRow`s with the title and
+"2h · 12 messages"; the live chat sits on the current highlight. A long press offers Rename and Delete (a ConfirmSheet,
+"This can't be undone."). No chats: an `EmptyState` with "New chat". A chat opens on the session screen without the
+project-only parts (`SessionParts.CHAT`: no `@` files, `!` shell, preview chips, project starters, folder or subtitle;
+no checkpoints, so no undo or changes pill). On Home, the pill's chip lists "Chat" first (the default with no project),
+Recents shows the three newest chats with a chat glyph and "Chat · 2h", and a "Chats" row under Recents opens the list.

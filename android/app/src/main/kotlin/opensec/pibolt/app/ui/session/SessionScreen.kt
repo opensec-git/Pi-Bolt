@@ -106,6 +106,10 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
+import kotlinx.coroutines.flow.first
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.core.Animatable
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -136,7 +140,9 @@ import opensec.pibolt.app.ui.projects.FileViewer
 import opensec.pibolt.app.ui.projects.editor.AskPi
 import opensec.pibolt.app.ui.projects.editor.EditorTabs
 import opensec.pibolt.app.ui.projects.editor.viewerPlace
-import opensec.pibolt.app.ui.session.voice.VoiceButton
+import opensec.pibolt.app.ui.session.voice.VoiceRationale
+import opensec.pibolt.app.ui.session.voice.rememberVoiceInput
+import opensec.pibolt.app.ui.session.review.SessionChangesPill
 import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
@@ -151,6 +157,7 @@ import opensec.pibolt.app.ui.components.sharedHostBounds
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.components.snackKindOf
 import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.protocol.rpc.StreamingBehavior
 import opensec.pibolt.protocol.session.AssistantTextItem
@@ -174,6 +181,8 @@ class LocalUi(
     val onPreview: (Int) -> Unit = {},
     /** Text and images waiting for the composer ("Ask Pi" in the editor, shares from other apps). */
     val composerDrop: MutableStateFlow<LocalSessions.ComposerDrop?>? = null,
+    /** A plain chat (ui/chats): no project, no tools, so none of the project-only parts ([SessionParts.CHAT]). */
+    val chat: Boolean = false,
 )
 
 /**
@@ -265,7 +274,7 @@ private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget,
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SessionContent(
+internal fun SessionContent(
     app: PiBoltApp,
     controller: SessionController,
     onBack: () -> Unit,
@@ -291,6 +300,8 @@ private fun SessionContent(
     var draft by rememberSaveable(controller.hostId) { mutableStateOf("") }
     var mode by rememberSaveable { mutableStateOf(StreamingBehavior.Steer) }
     var sheet by remember { mutableStateOf(Sheet.None) }
+    var remoteSessions by remember { mutableStateOf(false) }
+    val service by remember { derivedStateOf { state.value.host?.service == true } }
     val f2 = rememberFeatures2()
     var viewer by remember { mutableStateOf<ViewerContent?>(null) }
     // A file on this phone tapped in a tool card opens in the full file viewer (tabs kept while the screen lives).
@@ -308,6 +319,8 @@ private fun SessionContent(
     val recentKey = local?.let { "project:" + it.project } ?: controller.hostId
     val title = local?.title ?: hostName
     val isLocal = local != null
+    val chat = local?.chat == true
+    val parts = SessionParts.of(isLocal, chat)
     val drafts = remember { Drafts(app) }
     val files = remember(controller) { ProjectFileIndex(controller.project) }
     val f2Host = remember(controller) {
@@ -414,6 +427,11 @@ private fun SessionContent(
         context.startActivity(Intent.createChooser(send, null))
     }
 
+    // Dictation (the pill's mic and voice surface). [dictated]: the draft holds dictated words, so the message it
+    // becomes carries the waveform badge.
+    var dictated by remember { mutableStateOf(false) }
+    val voice = rememberVoiceInput(draft, onDraft = { draft = it }, onMessage = { m -> scope.launch { snackbar.show(m) } }, onHeard = { dictated = true })
+
     fun copy(text: String) {
         scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Pi-Bolt", text))) }
         haptics.confirm()
@@ -470,7 +488,7 @@ private fun SessionContent(
             val s = state.value
             // The session name, or for a computer its folder. The model and thinking level live in the composer chip,
             // the context in the top bar's meter. On this phone the title already is the project folder.
-            (if (local != null) s.sessionName else s.sessionName ?: s.host?.cwd?.takeIf { it.isNotBlank() }?.let(::baseName)).orEmpty()
+            (if (!parts.subtitle) null else if (local != null) s.sessionName else s.sessionName ?: s.host?.cwd?.takeIf { it.isNotBlank() }?.let(::baseName)).orEmpty()
         }
     }
     // Context use: hidden until a turn reports usage, and kept through a turn that reports none (a failed request
@@ -489,7 +507,7 @@ private fun SessionContent(
     // The composer's thinking chip is left out for a model that does not reason.
     val reasons by remember { derivedStateOf { state.value.model?.reasoning != false } }
     val commands by remember { derivedStateOf { state.value.commands } }
-    val palette by remember(local != null) { derivedStateOf { CommandPalette.entries(state.value.commands, local != null) } }
+    val palette by remember(local != null, chat) { derivedStateOf { CommandPalette.entries(state.value.commands, local != null, chat) } }
     val queue by remember { derivedStateOf { state.value.queue } }
     // Changes only when a todo result or a run boundary changes the list.
     val todos by remember { derivedStateOf { state.value.todos } }
@@ -502,7 +520,7 @@ private fun SessionContent(
     val focusManager = LocalFocusManager.current
     // The project's traits for the empty session's suggestions (on-device sessions; read once, on IO).
     val traits by produceState<ProjectTraits?>(null, controller.project) {
-        value = controller.project?.let { dir -> withContext(Dispatchers.IO) { runCatching { StarterPrompts.traits(dir) }.getOrNull() } }
+        value = controller.project?.takeIf { parts.projectStarters }?.let { dir -> withContext(Dispatchers.IO) { runCatching { StarterPrompts.traits(dir) }.getOrNull() } }
     }
     val branch by produceState<String?>(null, controller.project) {
         value = controller.project?.let { dir ->
@@ -511,10 +529,11 @@ private fun SessionContent(
     }
 
     /** Sends [text] as typed (a prompt when idle, else per [mode]) with [attached] images and shows it at once. */
-    fun send(text: String, attached: List<ComposerImage> = emptyList(), behavior: StreamingBehavior = mode) {
+    fun send(text: String, attached: List<ComposerImage> = emptyList(), behavior: StreamingBehavior = mode, fromDraft: Boolean = false) {
         val running = state.value.isRunning
         controller.send(text, behavior, attached.mapNotNull { it.image })
-        memory.sent(text, state.value, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image })
+        memory.sent(text, state.value, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image }, dictated = fromDraft && dictated)
+        if (fromDraft) dictated = false
         if (text.isNotBlank()) app.recents.record(recentKey, text)
         lastSent = text to attached
         maybeAskNotifications()
@@ -807,6 +826,22 @@ private fun SessionContent(
         draft = text
         focus.requestFocus()
     }
+    // The empty session's content, and the composer's entrance as its last step: when a new session first shows its
+    // welcome, the composer fades in and rises after the welcome's elements (PiMotion.stagger). Once per screen.
+    val reduceMotion = Pi.reduceMotion
+    val welcomeStarters = if (isLocal) traits?.let { StarterPrompts.pick(it) }.orEmpty() else StarterPrompts.pick(null)
+    val welcomeRecent = recentAll[recentKey].orEmpty().take(Welcome.RECENT)
+    val welcomeCommands = { fill("/") }.takeIf { palette.isNotEmpty() }
+    val composerIn = remember { Animatable(1f) }
+    val welcomeStep by rememberUpdatedState(Welcome.composerStep(welcomeStarters.size, welcomeRecent.isNotEmpty(), welcomeCommands != null))
+    LaunchedEffect(Unit) {
+        if (reduceMotion) return@LaunchedEffect
+        snapshotFlow { empty }.first { it }
+        val step = welcomeStep
+        composerIn.snapTo(0f)
+        composerIn.animateTo(1f, PiMotion.enter(PiMotion.SHEET, PiMotion.stagger(step)))
+    }
+
     val extras by remember {
         derivedStateOf {
             val s = state.value
@@ -824,7 +859,7 @@ private fun SessionContent(
      */
     fun submit(behavior: StreamingBehavior) {
         val text = draft.trim()
-        val call = if (images.isEmpty()) CommandPalette.parse(text, commands, isLocal) else null
+        val call = if (images.isEmpty()) CommandPalette.parse(text, commands, isLocal, chat) else null
         when {
             call != null -> {
                 draft = ""
@@ -835,7 +870,7 @@ private fun SessionContent(
             images.isNotEmpty() && modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
             else -> {
                 val startsRun = !state.value.isRunning
-                send(text, images.toList(), behavior)
+                send(text, images.toList(), behavior, fromDraft = true)
                 draft = ""
                 images.clear()
                 if (startsRun) {
@@ -907,6 +942,7 @@ private fun SessionContent(
                 onResume = ::openResume,
                 onFork = ::openFork,
                 onClone = controller::cloneSession,
+                onProjects = { remoteSessions = true }.takeIf { local == null && service },
                 contextPercent = contextPct,
                 // One spinner at a time: the top bar's Quad steps aside while the live status line is on screen.
                 quadVisible = !(status.value.visible && statusOnScreen),
@@ -951,12 +987,13 @@ private fun SessionContent(
                     if (empty) {
                         EmptySession(
                             title = if (isLocal) title else cwd?.takeIf { it.isNotBlank() }?.let(::baseName) ?: title,
-                            branch = branch,
-                            starters = if (isLocal) traits?.let { StarterPrompts.pick(it) }.orEmpty() else StarterPrompts.pick(null),
-                            recent = recentAll[recentKey].orEmpty().take(RecentPrompts.SHOWN),
+                            subtitle = if (isLocal) branch else hostName,
+                            starters = welcomeStarters,
+                            recent = welcomeRecent,
                             onStarter = { fill(it.prompt) },
                             onRecent = { fill(it) },
-                            onCommands = { fill("/") }.takeIf { palette.isNotEmpty() },
+                            onCommands = welcomeCommands,
+                            play = !reduceMotion,
                         )
                     }
                 }
@@ -989,13 +1026,16 @@ private fun SessionContent(
                     } else {
                         StatusExtras(extras)
                         TodoPanel(todos, running, autoCollapse = !running || windowHeight < 560.dp, quiet = status.value.visible && statusOnScreen)
-                        if (local != null) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = 12.dp))
+                        if (local != null && parts.preview) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = Space.page))
                         PendingDialogStrip(askingTitle) { memory.hiddenDialog.value = null }
                         QueueStrip(queue, onEdit = controller::clearQueue)
                     }
                     Composer(
                         text = draft,
-                        onText = { draft = it },
+                        onText = {
+                            draft = it
+                            if (it.isBlank()) dictated = false
+                        },
                         enabled = enabled,
                         running = running,
                         mode = mode,
@@ -1013,8 +1053,8 @@ private fun SessionContent(
                                 fill(entry.insert)
                             }
                         },
-                        files = files.takeIf { isLocal },
-                        shell = isLocal,
+                        files = files.takeIf { parts.files },
+                        shell = parts.shell,
                         onCycleModel = ::cycleModel,
                         onCycleThinking = ::cycleThinking,
                         onOpenImage = { index ->
@@ -1027,7 +1067,8 @@ private fun SessionContent(
                         attachAllowed = modelReadsImages != false,
                         onAttach = { sheet = Sheet.Attach },
                         onRemoveImage = { id -> images.removeAll { it.id == id } },
-                        voice = { VoiceButton(draft, onDraft = { draft = it }, enabled = enabled, onMessage = { m -> scope.launch { snackbar.show(m) } }) },
+                        voice = voice,
+                        changes = if (isLocal) ({ SessionChangesPill(review) }) else null,
                         focusRequester = focus,
                         // A user `!` command started while Pi is idle stops through abort_bash; the agent through abort.
                         stoppable = running || shellRuns > 0,
@@ -1047,6 +1088,11 @@ private fun SessionContent(
                             }
                         },
                         onPasteImage = ::pasteImage,
+                        modifier = Modifier.graphicsLayer {
+                            val p = composerIn.value
+                            alpha = p
+                            translationY = (1f - p) * 8.dp.toPx()
+                        },
                     )
                 }
             }
@@ -1111,6 +1157,9 @@ private fun SessionContent(
         }
     }
 
+    VoiceRationale(voice)
+
+    if (remoteSessions) RemoteSessionsSheet(controller, onDismiss = { remoteSessions = false })
     when (sheet) {
         Sheet.None -> Unit
         Sheet.Attach -> {
@@ -1120,7 +1169,7 @@ private fun SessionContent(
                 actions = listOfNotNull(
                     SheetAction(if (modelReadsImages == false) "Photos (not available for this model)" else "Photos", Icons.Rounded.Image) { attach() },
                     SheetAction("Paste image", Icons.Rounded.ContentPaste) { pasteImage() }.takeIf { clip },
-                    SheetAction("Mention a file", Icons.Rounded.AlternateEmail) { fill(if (draft.isEmpty() || draft.endsWith(" ")) draft + "@" else "$draft @") }.takeIf { isLocal },
+                    SheetAction("Mention a file", Icons.Rounded.AlternateEmail) { fill(if (draft.isEmpty() || draft.endsWith(" ")) draft + "@" else "$draft @") }.takeIf { parts.files },
                     SheetAction("Commands", Icons.Rounded.Code) { fill("/") }.takeIf { palette.isNotEmpty() && draft.isEmpty() },
                     SheetAction("Prompt history", Icons.Rounded.History) { sheet = Sheet.History },
                 ),
@@ -1177,7 +1226,7 @@ private fun SessionContent(
                         model = s.model,
                         thinkingLevel = s.thinkingLevel,
                         sessionName = s.sessionName,
-                        cwd = s.host?.cwd,
+                        cwd = s.host?.cwd?.takeIf { parts.folder },
                         version = s.host?.version,
                         compacting = s.isCompacting,
                         connected = linkState.value is LinkState.Connected,
@@ -1240,7 +1289,7 @@ private fun SessionContent(
         )
         Sheet.Compact -> TextPromptSheet(
             title = "Compact context",
-            message = "Pi summarises the conversation so far to free context.",
+            message = "Summarises the conversation to free context.",
             initial = "",
             placeholder = "Optional: what to focus the summary on",
             confirm = "Compact",
@@ -1252,7 +1301,7 @@ private fun SessionContent(
         )
         Sheet.Forget -> ConfirmSheet(
             title = "Forget $hostName?",
-            message = "This phone stops connecting to it. To also revoke this phone on the computer, run /\u2060remote-control devices there.",
+            message = "To revoke this phone on the computer too, run /\u2060remote-control devices there.",
             confirmLabel = "Forget",
             onConfirm = {
                 sheet = Sheet.None

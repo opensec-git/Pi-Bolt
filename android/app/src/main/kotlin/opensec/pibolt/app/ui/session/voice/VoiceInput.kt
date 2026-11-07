@@ -11,126 +11,171 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Mic
-import androidx.compose.material.icons.rounded.MicNone
-import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.semantics.LiveRegionMode
-import androidx.compose.ui.semantics.liveRegion
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
 import opensec.pibolt.app.ui.components.ConfirmSheet
-import opensec.pibolt.app.ui.components.pressable
-import opensec.pibolt.app.ui.session.ComposerLayout
-import opensec.pibolt.app.ui.theme.IconSize
-import opensec.pibolt.app.ui.theme.Pi
 
 /**
- * The composer's mic: tap to dictate, tap again (or stop talking) to finish. Speech goes through Android's
- * SpeechRecognizer, on the device when the phone has an on-device recogniser (Android 12+), else the default service
- * with EXTRA_PREFER_OFFLINE. Partial results appear in the draft as they come ([VoiceDraft]); the final result replaces
- * them. RECORD_AUDIO is asked for on the first tap only, after a sheet that says why. At rest it is a ghost button (an
- * ink3 glyph, no fill) just before Send, as on the desktop; listening is the composer's 32dp disc in accent (no animation), the same diameter and
- * centre line as Send ([ComposerLayout]), and TalkBack hears "Listening".
+ * Dictation for the composer, held above it so the pill's mic, its voice button and the voice surface share one
+ * recogniser. Speech goes through Android's SpeechRecognizer, on the device when the phone has an on-device recogniser
+ * (Android 12+), else the default service with EXTRA_PREFER_OFFLINE. Partial results appear in the draft as they come
+ * ([VoiceDraft]); the final result replaces them. RECORD_AUDIO is asked for on the first use only, after a sheet that
+ * says why ([VoiceRationale]).
+ *
+ * Two ways in, one behaviour: the mic dictates in place ([toggle]); the voice button opens the voice surface and
+ * starts listening ([openSurface]). The surface stays until it is ended ([endSurface]); its mic starts and stops
+ * listening again, each time adding to the draft.
  */
-@Composable
-fun VoiceButton(draft: String, onDraft: (String) -> Unit, enabled: Boolean, onMessage: (String) -> Unit, modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    val colors = Pi.colors
-    val currentDraft by rememberUpdatedState(draft)
-    val setDraft by rememberUpdatedState(onDraft)
-    val say by rememberUpdatedState(onMessage)
-    var state by remember { mutableStateOf(VoiceState.Idle) }
-    var rationale by remember { mutableStateOf(false) }
-    val session = remember { VoiceSession() }
-    DisposableEffect(Unit) { onDispose { session.release() } }
+@Stable
+class VoiceInput internal constructor(
+    private val context: Context,
+    private val draft: () -> String,
+    private val onDraft: (String) -> Unit,
+    private val say: (String) -> Unit,
+    private val onHeard: () -> Unit,
+    private val askPermission: () -> Unit,
+) {
+    var state by mutableStateOf(VoiceState.Idle)
+        private set
 
-    fun start() {
-        state = VoiceState.Starting
-        session.start(
-            context,
-            VoiceDraft(currentDraft, currentDraft.length),
-            onState = { state = it },
-            onText = { setDraft(it) },
-            onError = { message -> message?.let(say) },
-        )
+    /** The microphone's level, 0..1 ([VoiceLevel]); 0 while not listening. */
+    var level by mutableFloatStateOf(0f)
+        private set
+
+    /** The voice surface is open. */
+    var surface by mutableStateOf(false)
+        private set
+
+    /** What the current (or last) dictation heard, for the surface's large text. */
+    var heard by mutableStateOf("")
+        private set
+
+    /** The rationale sheet is asked for. */
+    var rationale by mutableStateOf(false)
+
+    val listening: Boolean get() = state == VoiceState.Listening || state == VoiceState.Starting
+
+    private val session = VoiceSession()
+
+    /** The mic: start dictating in place, or stop (the recogniser still delivers its final words). */
+    fun toggle() {
+        if (listening) session.stop() else begin()
     }
 
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) start() else say("Pi-Bolt needs the microphone for dictation. You can allow it in Android's app settings.")
+    /** The voice button: open the surface and start listening. */
+    fun openSurface() {
+        heard = ""
+        surface = true
+        if (!listening) begin()
     }
 
-    val listening = state == VoiceState.Listening || state == VoiceState.Starting
-    val description = if (listening) "Stop dictation" else "Dictate"
-    Box(
-        modifier
-            .size(ComposerLayout.TARGET)
-            .pressable(
-                onClick = {
-                    when {
-                        listening -> session.stop()
-                        !SpeechRecognizer.isRecognitionAvailable(context) -> say("This phone has no speech recognition service")
-                        granted(context) -> start()
-                        else -> rationale = true
-                    }
-                },
-                shape = CircleShape,
-                enabled = enabled,
-                pressedScale = 0.92f,
-                label = description,
-            )
-            .semantics {
-                stateDescription = if (listening) "Listening" else "Not listening"
-                liveRegion = LiveRegionMode.Polite
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            Modifier.size(ComposerLayout.DISC).background(if (listening) colors.accent else Color.Transparent, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                if (listening) Icons.Rounded.Mic else Icons.Rounded.MicNone,
-                contentDescription = description,
-                tint = when {
-                    listening -> colors.onAccent
-                    enabled -> colors.ink3
-                    else -> colors.ink3.copy(alpha = 0.4f)
-                },
-                modifier = Modifier.size(IconSize.md),
-            )
+    /** The surface's red button: stop listening (the words stay in the draft) and close the surface. */
+    fun endSurface() {
+        if (listening) session.stop()
+        surface = false
+    }
+
+    /** After the permission sheet and Android's prompt. */
+    internal fun permissionResult(granted: Boolean) {
+        if (granted) {
+            start()
+        } else {
+            surface = false
+            say("Microphone access is off. Allow it in Android's app settings.")
         }
     }
 
-    if (rationale) {
-        ConfirmSheet(
-            title = "Dictate with the microphone?",
-            message = "Pi-Bolt listens only while the mic is on and turns your speech into text in the composer, on the phone when it can. Android asks for microphone access next.",
-            confirmLabel = "Continue",
-            destructive = false,
-            onConfirm = {
-                rationale = false
-                permission.launch(Manifest.permission.RECORD_AUDIO)
+    internal fun release() = session.release()
+
+    internal fun requestPermission() = askPermission()
+
+    private fun begin() {
+        when {
+            !SpeechRecognizer.isRecognitionAvailable(context) -> {
+                surface = false
+                say("This phone has no speech recognition service")
+            }
+            granted(context) -> start()
+            else -> rationale = true
+        }
+    }
+
+    private fun start() {
+        state = VoiceState.Starting
+        heard = ""
+        val text = draft()
+        session.start(
+            context,
+            VoiceDraft(text, text.length),
+            onState = {
+                state = it
+                if (it != VoiceState.Listening) level = 0f
             },
-            onDismiss = { rationale = false },
+            onText = { spoken, next ->
+                heard = spoken
+                onHeard()
+                onDraft(next)
+            },
+            onLevel = { level = it },
+            onError = { message -> message?.let(say) },
         )
     }
+}
+
+/**
+ * The composer's dictation. [onHeard] is called when speech reaches the draft, so the screen can mark the message as
+ * dictated.
+ */
+@Composable
+fun rememberVoiceInput(draft: String, onDraft: (String) -> Unit, onMessage: (String) -> Unit, onHeard: () -> Unit = {}): VoiceInput {
+    val context = LocalContext.current
+    val currentDraft by rememberUpdatedState(draft)
+    val setDraft by rememberUpdatedState(onDraft)
+    val say by rememberUpdatedState(onMessage)
+    val heard by rememberUpdatedState(onHeard)
+    val holder = remember { arrayOfNulls<VoiceInput>(1) }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted -> holder[0]?.permissionResult(granted) }
+    val voice = remember {
+        VoiceInput(
+            context,
+            draft = { currentDraft },
+            onDraft = { setDraft(it) },
+            say = { say(it) },
+            onHeard = { heard() },
+            askPermission = { permission.launch(Manifest.permission.RECORD_AUDIO) },
+        ).also { holder[0] = it }
+    }
+    DisposableEffect(voice) { onDispose { voice.release() } }
+    return voice
+}
+
+/** The sheet that explains the microphone before Android asks for it, the first time dictation is used. */
+@Composable
+fun VoiceRationale(voice: VoiceInput) {
+    if (!voice.rationale) return
+    ConfirmSheet(
+        title = "Dictate with the microphone?",
+        message = "Pi-Bolt listens only while the mic is on and turns speech into text, on the phone when it can. Android asks for access next.",
+        confirmLabel = "Continue",
+        destructive = false,
+        onConfirm = {
+            voice.rationale = false
+            voice.requestPermission()
+        },
+        onDismiss = {
+            voice.rationale = false
+            voice.endSurface()
+        },
+    )
 }
 
 private fun granted(context: Context): Boolean = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
@@ -139,7 +184,14 @@ private fun granted(context: Context): Boolean = ContextCompat.checkSelfPermissi
 private class VoiceSession {
     private var recognizer: SpeechRecognizer? = null
 
-    fun start(context: Context, dictation: VoiceDraft, onState: (VoiceState) -> Unit, onText: (String) -> Unit, onError: (String?) -> Unit) {
+    fun start(
+        context: Context,
+        dictation: VoiceDraft,
+        onState: (VoiceState) -> Unit,
+        onText: (spoken: String, draft: String) -> Unit,
+        onLevel: (Float) -> Unit,
+        onError: (String?) -> Unit,
+    ) {
         release()
         val onDevice = Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
         val r = runCatching { if (onDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(context) else SpeechRecognizer.createSpeechRecognizer(context) }.getOrNull()
@@ -154,7 +206,7 @@ private class VoiceSession {
 
             override fun onBeginningOfSpeech() = Unit
 
-            override fun onRmsChanged(rmsdB: Float) = Unit
+            override fun onRmsChanged(rmsdB: Float) = onLevel(VoiceLevel.normalize(rmsdB))
 
             override fun onBufferReceived(buffer: ByteArray?) = Unit
 
@@ -167,13 +219,13 @@ private class VoiceSession {
             }
 
             override fun onResults(results: Bundle?) {
-                best(results)?.let { onText(dictation.with(it).first) }
+                best(results)?.let { onText(it, dictation.with(it).first) }
                 onState(VoiceState.Idle)
                 release()
             }
 
             override fun onPartialResults(partialResults: Bundle?) {
-                best(partialResults)?.let { onText(dictation.with(it).first) }
+                best(partialResults)?.let { onText(it, dictation.with(it).first) }
             }
 
             override fun onEvent(eventType: Int, params: Bundle?) = Unit

@@ -2,11 +2,7 @@ package opensec.pibolt.app.ui.session
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +47,9 @@ import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.components.InsetRow
+import opensec.pibolt.app.ui.projects.ProjectRules
+import opensec.pibolt.protocol.session.UserItem
 import opensec.pibolt.app.ui.projects.SessionMark
 import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.ui.theme.Pi
@@ -73,7 +72,7 @@ fun runningSessions(): Flow<List<LocalSessions.Live>> = LocalSessions.all.flatMa
 
 /** What a live session is doing, in a few words ("Working", "Waiting for your answer", "Idle"). */
 @Composable
-private fun rememberStatus(controller: SessionController): Pair<String, Boolean> {
+internal fun rememberStatus(controller: SessionController): Pair<String, Boolean> {
     val state = controller.state.collectAsStateWithLifecycle()
     val link = controller.link.collectAsStateWithLifecycle()
     val status by remember {
@@ -101,37 +100,41 @@ private fun LiveMark(controller: SessionController, busy: Boolean) {
 }
 
 /**
- * A card of Home's "Running" (Pi-Bolt Desktop's "Now" card): one on-device session that is live (its engine stays up
- * while others run). surface1 with a lineStrong ring (warning at 40% while it waits for an answer), the project
- * (body ink1), then its Quad (12dp) and what it does (meta ink2). A tap opens it without stopping any other.
+ * A live session at the top of Home's "Recents" ([InsetRow], the references' "Working · project" row): its Quad in its
+ * mode (warning while Pi waits for an answer), what it was asked (its name, else the latest prompt, else the project),
+ * and what it does with the project under it. A tap opens it without stopping any other.
  */
 @Composable
-fun RunningRow(live: LocalSessions.Live, meta: ProjectMeta?, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    val colors = Pi.colors
-    val type = Pi.type
-    val shape = RoundedCornerShape(Radius.md)
+fun RunningRow(live: LocalSessions.Live, meta: ProjectMeta?, onClick: () -> Unit, modifier: Modifier = Modifier, divider: Boolean = true) {
+    val project = meta?.title ?: live.project.name
     val (status, _) = rememberStatus(live.controller)
     val state = live.controller.state.collectAsStateWithLifecycle()
-    val waiting by remember { derivedStateOf { state.value.dialogs.isNotEmpty() } }
-    val title = meta?.title ?: live.project.name
-    Column(
-        modifier
-            .fillMaxWidth()
-            .heightIn(min = Pi.dims.homeRow)
-            .pressable(onClick, shape = shape, label = "Open session")
-            .semantics(mergeDescendants = true) { contentDescription = "$title, $status" }
-            .background(colors.surface1, shape)
-            .border(1.dp, if (waiting) colors.warning.copy(alpha = 0.4f) else colors.lineStrong, shape)
-            .padding(horizontal = Space.lg, vertical = Space.sm + 2.dp),
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Text(title, style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.height(2.dp))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            SessionMark(live.controller, size = 12.dp)
-            Spacer(Modifier.width(Space.sm))
-            Text(status, style = type.meta, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    val title by remember(project) {
+        derivedStateOf {
+            val s = state.value
+            ProjectRules.focusTitle(s.sessionName, (s.items.lastOrNull { it is UserItem } as? UserItem)?.text, project)
         }
+    }
+    InsetRow(
+        title = title,
+        meta = "$status · $project",
+        onClick = onClick,
+        label = "Open session",
+        divider = divider,
+        modifier = modifier,
+        leading = { SessionMark(live.controller) },
+    )
+}
+
+/** The live on-device sessions waiting for an answer (a dialog is open), in the order they were opened. */
+@OptIn(ExperimentalCoroutinesApi::class)
+fun waitingSessions(): Flow<List<LocalSessions.Live>> = LocalSessions.all.flatMapLatest { all ->
+    if (all.isEmpty()) {
+        flowOf(emptyList())
+    } else {
+        combine(
+            all.values.map { live -> live.controller.state.map { s -> s.dialogs.isNotEmpty() }.distinctUntilChanged().map { live to it } },
+        ) { pairs -> pairs.filter { it.second && !it.first.controller.stopped }.map { it.first } }
     }
 }
 

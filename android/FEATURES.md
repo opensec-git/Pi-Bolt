@@ -238,7 +238,7 @@ before a turn with a conversation fork, and redo of any restore. On this phone o
 | Reconnect after drops | — | done | remote | P0 |
 | Several computers, forget, revoke | `/remote-control devices` | done | remote | P1 |
 | Background notifications (done, needs answer) | — | done: tapping one opens that exact session; also "background agent finished" | both | P0 |
-| Keep running in the background | — | done: foreground service while a turn runs | device | P0 |
+| Keep running in the background | — | done: foreground service while a turn, a compaction, background agents or a `!` command runs; a partial wake lock while local work runs (2 h cap without progress); Stop and Open on its notification; answers and replies from notifications; Run in background setup (battery optimization, OEM autostart) | device | P0 |
 | Several sessions at once | several terminals | done: up to three on this phone (one per project, each with its own engine) plus remote control; Running on Home, a switcher in the session bar; at the cap an idle session makes room, a busy one is never stopped | device | P1 |
 | Projects (create, clone, rename, pin, delete) | — | done | device | P0 |
 | Browse project files | — | done: Files tab and viewer | device | P1 |

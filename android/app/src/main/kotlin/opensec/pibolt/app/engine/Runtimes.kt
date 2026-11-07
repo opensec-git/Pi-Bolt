@@ -17,10 +17,10 @@ data class RuntimesReport(val runtimes: List<EngineManifest.Runtime>, val storag
 /** Space one kind of package-manager data takes; [clearable] when it is a cache that is safe to delete. */
 data class RuntimeStorage(val kind: Kind, val bytes: Long) {
     enum class Kind(val label: String, val detail: String, val clearable: Boolean) {
-        NpmCache("npm cache", "Downloaded packages npm keeps for the next install", true),
-        PipCache("pip cache", "Downloaded wheels pip keeps for the next install", true),
-        NpmGlobal("npm global packages", "npm install -g, in ~/.local/lib/node_modules", false),
-        PipUser("pip packages", "pip install outside a virtualenv, in ~/.local/lib", false),
+        NpmCache("npm cache", "Safe to clear", true),
+        PipCache("pip cache", "Safe to clear", true),
+        NpmGlobal("npm global packages", "npm install -g", false),
+        PipUser("pip packages", "pip install --user", false),
     }
 
     val clearable: Boolean get() = kind.clearable

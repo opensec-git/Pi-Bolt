@@ -9,6 +9,7 @@ import opensec.pibolt.app.ui.components.SnackKind
 import opensec.pibolt.app.ui.components.noticeStyle
 import opensec.pibolt.app.ui.session.subagent.SubagentFormat
 import opensec.pibolt.app.ui.theme.PiColors
+import opensec.pibolt.app.ui.theme.SELECTION_ALPHA
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -200,7 +201,7 @@ class ContrastTest {
                     need("glyph ink3", c.ink3, fill, ground, 3.0)
                 }
                 need("button fill", c.accent, bg, name, 3.0)
-                need("selected text", c.ink1, c.accent.copy(alpha = 0.32f).compositeOver(bg), "$name selection", 4.5)
+                need("selected text", c.ink1, c.accent.copy(alpha = SELECTION_ALPHA).compositeOver(bg), "$name selection", 4.5)
             }
             need("button label", c.onAccent, c.accent, "accent", 4.5)
             for ((name, bg) in surfaces(c).take(3)) need("link", c.accent, bg, name, 4.5)
@@ -210,27 +211,29 @@ class ContrastTest {
 
     @Test
     fun defaultThemeHasNoBlueCast() {
-        // The owner saw the old Graphite (#0B0C0E, ink2 #A3A8B0) as bluish; the default is now Pi-Bolt Desktop's
-        // monochrome palette ("no blue anywhere"). Its greys, and everything drawn from them (lines, overlays, the
-        // scrim, the selection, the comment grey, ANSI blue and cyan), stay neutral: blue never above red, and the
-        // channels at most 4 apart (the desktop's off-blue ANSI cyan #B8C4C4 is the one tinted grey it keeps).
+        // The owner saw the old Graphite (#0B0C0E, ink2 #A3A8B0) as bluish. The default is now a warm charcoal: its
+        // greys, and everything drawn from them (lines, overlays, the scrim, the selection), may lean warm but never
+        // cool: blue at most green, green at most red, and the channels at most 10 apart.
         val c = PiColors.of(ThemeId.Graphite, AccentId.Theme)
         val greys = listOf(
             "canvas" to c.canvas, "surface1" to c.surface1, "surface2" to c.surface2, "surface3" to c.surface3,
-            "ink1" to c.ink1, "ink2" to c.ink2, "ink3" to c.ink3, "ink4" to c.ink4, "comment" to c.syntax.comment,
+            "ink1" to c.ink1, "ink2" to c.ink2, "ink3" to c.ink3, "ink4" to c.ink4,
             "accent" to c.accent, "onAccent" to c.onAccent,
             "line" to c.line.compositeOver(c.canvas), "lineStrong" to c.lineStrong.compositeOver(c.surface1),
             "lineFocus" to c.lineFocus.compositeOver(c.surface1), "press" to c.press.compositeOver(c.surface1),
             "selected" to c.selected.compositeOver(c.surface2), "scrim" to c.scrim.compositeOver(c.surface2),
-            "selection" to c.accent.copy(alpha = 0.32f).compositeOver(c.surface1),
-            "ansiBlue" to c.ansiBlue, "syntax function" to c.syntax.function, "syntax keyword" to c.syntax.keyword,
+            "selection" to c.accent.copy(alpha = SELECTION_ALPHA).compositeOver(c.surface1),
         )
         val failures = ArrayList<String>()
         for ((name, color) in greys) {
             val r = Math.round(color.red * 255)
             val g = Math.round(color.green * 255)
             val b = Math.round(color.blue * 255)
-            if (b > r || maxOf(r, g, b) - minOf(r, g, b) > 4) failures += "$name #%02X%02X%02X".format(r, g, b)
+            if (b > g || g > r || r - b > 10) failures += "$name #%02X%02X%02X".format(r, g, b)
+        }
+        // The syntax and ANSI greys keep the desktop's neutral, off-blue set: never blue above red.
+        for ((name, color) in listOf("comment" to c.syntax.comment, "ansiBlue" to c.ansiBlue, "syntax function" to c.syntax.function, "syntax keyword" to c.syntax.keyword)) {
+            if (Math.round(color.blue * 255) > Math.round(color.red * 255)) failures += "$name has a blue cast"
         }
         // Paper, Contrast and Lime are neutral too: their surfaces and inks carry no tint.
         for (theme in listOf(ThemeId.Paper, ThemeId.Contrast, ThemeId.Lime)) {
@@ -305,24 +308,25 @@ class ContrastTest {
     }
 
     @Test
-    fun defaultThemeIsTheDesktopPalette() {
-        // Pi-Bolt Desktop's tokens.css, 1:1 (ink3 raised from #808080 to #858585 for AA on surface3).
+    fun defaultThemeIsTheWarmCharcoal() {
+        // The 2026-11-07 redesign: a warm charcoal canvas and warm-grey inks (lifted for AA), the warm white as the
+        // accent, the desktop's green, amber and red for state.
         val c = PiColors.of(ThemeId.Graphite, AccentId.Theme)
         val expected = listOf(
-            "canvas (--bg)" to (c.canvas to 0xFF000000), "surface1 (--bg-elev)" to (c.surface1 to 0xFF0E0E0E),
-            "surface2 (--bg-elev-2)" to (c.surface2 to 0xFF161616), "surface3 (--bg-elev-3)" to (c.surface3 to 0xFF1D1D1D),
-            "ink1 (--text)" to (c.ink1 to 0xFFEDEDED), "ink2 (--text-2)" to (c.ink2 to 0xFFA1A1A1),
-            "ink3" to (c.ink3 to 0xFF858585), "ink4 (--text-4)" to (c.ink4 to 0xFF595959),
-            "accent (--accent)" to (c.accent to 0xFFFAFAFA), "onAccent (--on-accent)" to (c.onAccent to 0xFF000000),
-            "success (--green)" to (c.success to 0xFF4CC38A), "warning (--amber)" to (c.warning to 0xFFD4A64A),
-            "danger (--red)" to (c.danger to 0xFFEF6461), "diffAddFg" to (c.diffAddFg to 0xFF86DFB0),
+            "canvas" to (c.canvas to 0xFF1C1B19), "surface1" to (c.surface1 to 0xFF232220),
+            "surface2" to (c.surface2 to 0xFF2A2926), "surface3" to (c.surface3 to 0xFF32312E),
+            "ink1" to (c.ink1 to 0xFFECEBE8), "ink2" to (c.ink2 to 0xFFB3B1AB),
+            "ink3" to (c.ink3 to 0xFF9C9A94), "ink4" to (c.ink4 to 0xFF5E5C57),
+            "accent" to (c.accent to 0xFFECEBE8), "onAccent" to (c.onAccent to 0xFF1C1B19),
+            "success" to (c.success to 0xFF4CC38A), "warning" to (c.warning to 0xFFD4A64A),
+            "danger" to (c.danger to 0xFFF4817D), "diffAddFg" to (c.diffAddFg to 0xFF86DFB0),
             "diffDelFg" to (c.diffDelFg to 0xFFF5A3A1),
         )
         for ((name, pair) in expected) assertEquals(Color(pair.second), pair.first, name)
-        assertEquals(Color.White.copy(alpha = 0.08f), c.line, "line (--border)")
-        assertEquals(Color.White.copy(alpha = 0.14f), c.lineStrong, "lineStrong (--border-strong)")
-        assertEquals(Color.White.copy(alpha = 0.32f), c.lineFocus, "lineFocus (--border-focus)")
-        assertEquals(Color.Black.copy(alpha = 0.5f), c.scrim, "scrim (--scrim)")
+        assertEquals(Color.White.copy(alpha = 0.07f), c.line, "line")
+        assertEquals(Color.White.copy(alpha = 0.12f), c.lineStrong, "lineStrong")
+        assertEquals(Color.White.copy(alpha = 0.30f), c.lineFocus, "lineFocus")
+        assertEquals(Color.Black.copy(alpha = 0.5f), c.scrim, "scrim")
     }
 
     @Test

@@ -67,6 +67,16 @@ class SessionMemory(private val sessionId: String?) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<ImageAttachment>>?): Boolean = size > FULL_KEPT
     }
 
+    /**
+     * Messages dictated on this phone, by row key (as [localImages]): their bubble carries a small waveform badge. Kept
+     * in memory for the session only.
+     */
+    val dictated = mutableStateMapOf<String, Boolean>()
+
+    /** Dictated steers and follow-ups not yet echoed: matched to their user message by text. */
+    private val unclaimedDictation = ArrayList<String>()
+    private var lastDictationSeen: String? = null
+
     /** Images of steers and follow-ups not yet echoed: matched to their user message by text. */
     private val unclaimed = ArrayList<Triple<String, List<ImageBitmap>, List<ImageAttachment>>>()
     private var lastUserSeen: String? = null
@@ -128,6 +138,7 @@ class SessionMemory(private val sessionId: String?) {
         }
         if (running) noteRunningTools(state, now)
         if (unclaimed.isNotEmpty()) claimImages(state)
+        if (unclaimedDictation.isNotEmpty()) claimDictation(state)
         for (item in state.streaming) {
             if (item is ThinkingItem) {
                 if (item.streaming) {
@@ -154,10 +165,17 @@ class SessionMemory(private val sessionId: String?) {
      * Records a send from this phone and asks the transcript to jump down. An idle prompt shows at once as "Sending";
      * the [thumbs] of its images stay with that row (and its echo).
      */
-    fun sent(text: String, state: SessionState, running: Boolean, thumbs: List<ImageBitmap> = emptyList(), full: List<ImageAttachment> = emptyList()) {
+    fun sent(text: String, state: SessionState, running: Boolean, thumbs: List<ImageBitmap> = emptyList(), full: List<ImageAttachment> = emptyList(), dictated: Boolean = false) {
         sends.intValue++
-        if (PendingSend.eligible(text, running, thumbs.size)) {
+        val pendingRow = PendingSend.eligible(text, running, thumbs.size)
+        if (dictated && !pendingRow && text.isNotBlank()) {
+            lastDictationSeen = PendingSend.lastUserKey(state.items)
+            unclaimedDictation += text.trim()
+            if (unclaimedDictation.size > 8) unclaimedDictation.removeAt(0)
+        }
+        if (pendingRow) {
             val p = PendingSend(nextPendingId++, text, PendingSend.lastUserKey(state.items), SystemClock.uptimeMillis(), thumbs.size)
+            if (dictated) this.dictated[p.rowKey] = true
             if (thumbs.isNotEmpty()) localImages[p.rowKey] = thumbs
             if (full.isNotEmpty()) localFull[p.rowKey] = full
             pending.value = p
@@ -181,6 +199,15 @@ class SessionMemory(private val sessionId: String?) {
             localImages[item.key] = thumbs
             if (full.isNotEmpty()) localFull[item.key] = full
         }
+    }
+
+    /** A new user message with the text of an unclaimed dictated send is marked dictated. */
+    private fun claimDictation(state: SessionState) {
+        val last = PendingSend.lastUserKey(state.items)
+        if (last == null || last == lastDictationSeen) return
+        lastDictationSeen = last
+        val item = state.items.lastOrNull { it is UserItem && it.key == last } as? UserItem ?: return
+        if (unclaimedDictation.remove(item.text.trim())) dictated[item.key] = true
     }
 
     private var nextPendingId = 1L

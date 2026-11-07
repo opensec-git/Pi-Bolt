@@ -1,14 +1,12 @@
 package opensec.pibolt.app.ui.settings
 
 import androidx.compose.material.icons.rounded.Terminal
-import androidx.compose.runtime.derivedStateOf
 import opensec.pibolt.app.ui.components.ButtonSize
-import opensec.pibolt.app.ui.components.CardSection
+import opensec.pibolt.app.ui.components.GroupDivider
+import opensec.pibolt.app.ui.components.InsetGroup
+import opensec.pibolt.app.ui.components.LargeTitlePage
 import opensec.pibolt.app.ui.components.EmptyState
 import opensec.pibolt.app.ui.components.LoadingRow
-import opensec.pibolt.app.ui.components.RowDivider
-import opensec.pibolt.app.ui.components.ScreenIntro
-import opensec.pibolt.app.ui.components.ScreenTopBar
 import opensec.pibolt.app.ui.theme.Tnum
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -17,15 +15,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -53,6 +48,7 @@ import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 
 /**
  * Settings → Runtimes (also from a project's menu): the language runtimes the app ships (Node.js with npm, Python
@@ -63,7 +59,6 @@ import opensec.pibolt.app.ui.theme.Radius
 @Composable
 fun RuntimesScreen(app: PiBoltApp, onBack: () -> Unit) {
     val colors = Pi.colors
-    val type = Pi.type
     val scope = rememberCoroutineScope()
     var report by remember { mutableStateOf<RuntimesReport?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
@@ -72,98 +67,74 @@ fun RuntimesScreen(app: PiBoltApp, onBack: () -> Unit) {
     var failed by remember { mutableStateOf<RuntimeStorage.Kind?>(null) }
     LaunchedEffect(refresh) { report = withContext(Dispatchers.IO) { app.engine.runtimes() } }
 
-    Box(Modifier.fillMaxSize().background(colors.canvas)) {
-        val scroll = rememberScrollState()
-        val scrolled by remember { derivedStateOf { scroll.value > 0 } }
-        Column(Modifier.fillMaxSize()) {
-            ScreenTopBar("Runtimes", onBack = onBack, scrolled = scrolled)
-            Column(
-                Modifier
-                    .fillMaxSize()
-                    .verticalScroll(scroll)
-                    .navigationBarsPadding()
-                    .padding(bottom = 32.dp),
-            ) {
-            ScreenIntro("Included in the app. Pi and your shell commands run them in every project.")
-            val current = report
-            when {
-                current == null -> LoadingRow("Measuring the runtimes")
-                current.runtimes.isEmpty() -> EmptyState(
-                    "No language runtimes",
-                    message = "This build of the app ships without Node.js or Python.",
-                    icon = Icons.Rounded.Terminal,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-                else -> {
-                    CardSection("Installed") {
-                        current.runtimes.forEachIndexed { i, runtime ->
-                            if (i > 0) RowDivider()
-                            RuntimeRow(runtime)
-                        }
-                    }
-                    CardSection("Packages and caches") {
-                        current.storage.forEachIndexed { i, item ->
-                            if (i > 0) RowDivider()
-                            StorageRow(item, clearing = clearing == item.kind, failed = failed == item.kind, onClear = { confirm = item })
-                        }
-                        Text(
-                            "Caches only speed up the next install; clearing them is always safe. Packages stay until you uninstall them " +
-                                "(npm uninstall -g, pip uninstall).",
-                            style = type.meta,
-                            color = colors.ink3,
-                            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-                        )
+    LargeTitlePage("Runtimes", onBack = onBack) {
+        val current = report
+        when {
+            current == null -> LoadingRow("Loading runtimes")
+            current.runtimes.isEmpty() -> EmptyState(
+                "No language runtimes",
+                message = "This build ships without Node.js or Python.",
+                icon = Icons.Rounded.Terminal,
+                modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.lg),
+            )
+            else -> {
+                InsetGroup(header = "Included") {
+                    current.runtimes.forEachIndexed { i, runtime -> RuntimeRow(runtime, divider = i < current.runtimes.lastIndex) }
+                }
+                InsetGroup(header = "Packages and caches", footer = "Clearing a cache is always safe.") {
+                    current.storage.forEachIndexed { i, item ->
+                        StorageRow(item, clearing = clearing == item.kind, failed = failed == item.kind, onClear = { confirm = item }, divider = i < current.storage.lastIndex)
                     }
                 }
             }
-            }
         }
+    }
 
-        confirm?.let { item ->
-            ConfirmSheet(
-                title = "Clear the ${item.kind.label}?",
-                message = "Deletes ${formatBytes(item.bytes)} of downloads. The next install downloads them again.",
-                confirmLabel = "Clear",
-                onConfirm = {
-                    confirm = null
-                    clearing = item.kind
-                    failed = null
-                    scope.launch {
-                        val ok = withContext(Dispatchers.IO) { app.engine.clearRuntimeStorage(item.kind) }
-                        clearing = null
-                        if (!ok) failed = item.kind
-                        refresh++
-                    }
-                },
-                onDismiss = { confirm = null },
-            )
-        }
+    confirm?.let { item ->
+        ConfirmSheet(
+            title = "Clear the ${item.kind.label}?",
+            message = "Frees ${formatBytes(item.bytes)}. Packages download again when needed.",
+            confirmLabel = "Clear",
+            onConfirm = {
+                confirm = null
+                clearing = item.kind
+                failed = null
+                scope.launch {
+                    val ok = withContext(Dispatchers.IO) { app.engine.clearRuntimeStorage(item.kind) }
+                    clearing = null
+                    if (!ok) failed = item.kind
+                    refresh++
+                }
+            },
+            onDismiss = { confirm = null },
+        )
     }
 }
 
 @Composable
-private fun RuntimeRow(runtime: EngineManifest.Runtime) {
+private fun RuntimeRow(runtime: EngineManifest.Runtime, divider: Boolean) {
     val colors = Pi.colors
     val type = Pi.type
     val details = runtime.details.entries.joinToString(" · ") { (k, v) -> "$k $v" }
     val size = formatBytes(runtime.bytes)
+    Box(Modifier.fillMaxWidth()) {
     Column(
         Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .padding(vertical = 12.dp)
+            .padding(horizontal = Space.lg, vertical = Space.md)
             .semantics(mergeDescendants = true) {
                 contentDescription = "${runtime.name} ${runtime.version}" + (if (details.isNotEmpty()) ", $details" else "") +
                     ", $size. Commands: ${runtime.commands.joinToString(", ")}"
             },
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(runtime.name, style = type.bodyStrong, color = colors.ink1)
+            Text(runtime.name, style = type.rowTitle, color = colors.ink1)
             Spacer(Modifier.width(8.dp))
             Text(runtime.version, style = type.monoMeta, color = colors.ink2, modifier = Modifier.weight(1f))
-            Text(size, style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3)
+            Text(size, style = type.rowMeta.copy(fontFeatureSettings = Tnum), color = colors.ink3)
         }
-        if (details.isNotEmpty()) Text(details, style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 2.dp))
+        if (details.isNotEmpty()) Text(details, style = type.rowMeta, color = colors.ink3, modifier = Modifier.padding(top = 2.dp))
         Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             val shape = RoundedCornerShape(Radius.sm)
             for (command in runtime.commands) {
@@ -176,21 +147,24 @@ private fun RuntimeRow(runtime: EngineManifest.Runtime) {
             }
         }
     }
+    if (divider) GroupDivider(Modifier.align(Alignment.BottomStart))
+    }
 }
 
 @Composable
-private fun StorageRow(item: RuntimeStorage, clearing: Boolean, failed: Boolean, onClear: () -> Unit) {
+private fun StorageRow(item: RuntimeStorage, clearing: Boolean, failed: Boolean, onClear: () -> Unit, divider: Boolean) {
     val colors = Pi.colors
     val type = Pi.type
-    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Box(Modifier.fillMaxWidth()) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(horizontal = Space.lg, vertical = Space.sm + Space.xxs), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 12.dp).semantics(mergeDescendants = true) {}) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(item.kind.label, style = type.bodyStrong, color = colors.ink1)
+                Text(item.kind.label, style = type.rowTitle, color = colors.ink1)
                 Spacer(Modifier.width(8.dp))
-                Text(formatBytes(item.bytes), style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3)
+                Text(formatBytes(item.bytes), style = type.rowMeta.copy(fontFeatureSettings = Tnum), color = colors.ink3)
             }
             Text(
-                if (failed) "Some files could not be deleted. Try again when no install is running." else item.kind.detail,
+                if (failed) "Some files couldn't be deleted. Try again when no install is running." else item.kind.detail,
                 style = type.meta,
                 color = if (failed) colors.danger else colors.ink3,
             )
@@ -204,5 +178,7 @@ private fun StorageRow(item: RuntimeStorage, clearing: Boolean, failed: Boolean,
                 modifier = Modifier.semantics { contentDescription = "Clear the ${item.kind.label}" },
             )
         }
+    }
+    if (divider) GroupDivider(Modifier.align(Alignment.BottomStart))
     }
 }

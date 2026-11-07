@@ -2,6 +2,16 @@ package opensec.pibolt.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.ui.text.style.TextOverflow
+import opensec.pibolt.app.ui.theme.Space
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Spacer
@@ -43,8 +53,14 @@ import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
 
 /**
- * The app's bottom sheet, the dialog layer of the desktop app's elevation model: one surface (surface1) with a 1dp
- * lineStrong ring along its top and sides, Radius.xl top corners, the theme scrim, no tonal elevation or shadow.
+ * Closes the enclosing [PiSheet] with its exit animation; [SheetHeader] draws its glass close button from it. Null
+ * outside a sheet.
+ */
+val LocalSheetClose = compositionLocalOf<(() -> Unit)?> { null }
+
+/**
+ * The app's bottom sheet, the dialog layer of the redesign: one surface (surface1) with a 1dp lineStrong ring along
+ * its top and sides, [Radius.pill] (28dp) top corners, the theme scrim, no tonal elevation or shadow.
  * Predictive back comes from ModalBottomSheet, which also lifts the whole sheet above the keyboard. The sheet never
  * grows under the status bar: a tall sheet (or one pushed up by the keyboard) stops below it, and its lists shrink.
  * The drag handle is drawn here so TalkBack can close the sheet from it. Content is padded for the navigation bar.
@@ -59,7 +75,7 @@ fun PiSheet(
     val colors = Pi.colors
     val close = rememberSheetCloser(state)
     val statusBars = WindowInsets.statusBars
-    val shape = RoundedCornerShape(topStart = Radius.xl, topEnd = Radius.xl)
+    val shape = RoundedCornerShape(topStart = Radius.pill, topEnd = Radius.pill)
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = state,
@@ -83,7 +99,7 @@ fun PiSheet(
                 }
                 .drawWithContent {
                     drawContent()
-                    sheetRing(colors.lineStrong, Radius.xl.toPx())
+                    sheetRing(colors.lineStrong, Radius.pill.toPx())
                 }
                 .navigationBarsPadding()
                 .imePadding()
@@ -101,9 +117,9 @@ fun PiSheet(
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                Box(Modifier.padding(top = 10.dp, bottom = 6.dp).size(width = 36.dp, height = 4.dp).background(colors.ink4, CircleShape))
+                Box(Modifier.padding(top = Space.sm + Space.xxs, bottom = Space.xs).size(width = 36.dp, height = 5.dp).background(colors.ink4, CircleShape))
             }
-            content()
+            CompositionLocalProvider(LocalSheetClose provides { close(onDismiss) }) { content() }
         }
     }
 }
@@ -134,17 +150,54 @@ fun rememberSheetCloser(state: SheetState): (then: () -> Unit) -> Unit {
     }
 }
 
-/** Sheet title (a heading for TalkBack) with an optional subtitle under it. */
+/**
+ * A sheet's header: the [title] in largeTitle (a heading for TalkBack) with an optional [subtitle] (body ink2) under
+ * it. A glass back button leads when [onBack] is given ([backLabel] for TalkBack); a glass close button ends the row
+ * inside a [PiSheet] unless [closable] is false. [leading] sits before the title (a provider's mark).
+ */
 @Composable
-fun SheetHeader(title: String, modifier: Modifier = Modifier, subtitle: String? = null) {
-    Column(modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
-        Text(title, style = Pi.type.title, color = Pi.colors.ink1, modifier = Modifier.semantics { heading() })
+fun SheetHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+    subtitle: String? = null,
+    onBack: (() -> Unit)? = null,
+    backLabel: String = "Back",
+    closable: Boolean = true,
+    leading: (@Composable () -> Unit)? = null,
+) {
+    val colors = Pi.colors
+    val close = LocalSheetClose.current.takeIf { closable }
+    Column(modifier.fillMaxWidth().padding(start = if (onBack != null) Space.sm else Space.page, end = if (close != null) Space.sm else Space.page, top = Space.xs, bottom = Space.sm)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+            if (onBack != null) {
+                GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, backLabel, onClick = onBack, size = SHEET_BUTTON)
+                Spacer(Modifier.width(Space.xs))
+            }
+            Row(Modifier.weight(1f).heightIn(min = 48.dp).padding(top = (48.dp - 34.dp) / 2), verticalAlignment = Alignment.Top) {
+                if (leading != null) {
+                    Box(Modifier.height(34.dp), contentAlignment = Alignment.Center) { leading() }
+                    Spacer(Modifier.width(Space.md))
+                }
+                Text(title, style = Pi.type.largeTitle, color = colors.ink1, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
+            }
+            if (close != null) {
+                Spacer(Modifier.width(Space.sm))
+                GlassIconButton(Icons.Rounded.Close, "Close", onClick = close, size = SHEET_BUTTON, tint = colors.ink2)
+            }
+        }
         if (!subtitle.isNullOrBlank()) {
-            Spacer(Modifier.height(4.dp))
-            Text(subtitle, style = Pi.type.body, color = Pi.colors.ink2)
+            Text(
+                subtitle,
+                style = Pi.type.body,
+                color = colors.ink2,
+                modifier = Modifier.padding(start = if (onBack != null) Space.page - Space.sm else 0.dp, end = if (close != null) Space.page - Space.sm else 0.dp, top = Space.xs),
+            )
         }
     }
 }
+
+/** A sheet's glass back and close buttons: 36dp circles in 48dp targets. */
+private val SHEET_BUTTON = 36.dp
 
 /** A yes/no sheet for destructive or consequential actions. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -161,9 +214,9 @@ fun ConfirmSheet(
     val close = rememberSheetCloser(state)
     val haptics = Pi.haptics
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader(title, subtitle = message)
-        Spacer(Modifier.height(20.dp))
-        ButtonRow(Modifier.padding(horizontal = 20.dp)) {
+        SheetHeader(title, subtitle = message, closable = false)
+        Spacer(Modifier.height(Space.xl))
+        ButtonRow(Modifier.padding(horizontal = Space.page)) {
             SecondaryButton("Cancel", onClick = { close(onDismiss) })
             if (destructive) {
                 DangerButton(confirmLabel, onClick = {

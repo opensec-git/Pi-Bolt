@@ -10,7 +10,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,7 +25,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Lock
@@ -62,14 +60,21 @@ import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.engine.CustomEndpoint
 import opensec.pibolt.app.engine.ModelsFile
 import opensec.pibolt.app.engine.ProviderAuth
-import opensec.pibolt.app.ui.components.ButtonRow
-import opensec.pibolt.app.ui.components.IconAction
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.heading
+import opensec.pibolt.app.R
+import opensec.pibolt.app.ui.components.GhostButton
+import opensec.pibolt.app.ui.components.InsetRow
+import opensec.pibolt.app.ui.components.PillSearchField
+import opensec.pibolt.app.ui.components.SheetHeader
+import opensec.pibolt.app.ui.components.glass
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiTextField
 import opensec.pibolt.app.ui.components.PrimaryButton
-import opensec.pibolt.app.ui.components.SecondaryButton
-import opensec.pibolt.app.ui.components.SectionLabel
-import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.theme.IconSize
@@ -126,7 +131,6 @@ fun ProviderSheet(auth: ProviderAuth, configured: Set<String>, firstRun: Boolean
                     auth = auth,
                     onBack = if (initial == null) ({ step = null }) else null,
                     onSaved = { close { onSaved(current.provider) } },
-                    onCancel = { close(onDismiss) },
                 )
                 Step.Custom -> CustomStep(
                     auth = auth,
@@ -145,35 +149,32 @@ private fun PickStep(configured: Set<String>, firstRun: Boolean, onPick: (Provid
     var query by rememberSaveable { mutableStateOf("") }
     val shown = remember(query) { ProviderCatalog.search(query) }
     Column {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
-            if (firstRun) {
-                Text("Welcome to Pi-Bolt", style = type.metaStrong, color = colors.ink3)
-                Spacer(Modifier.height(6.dp))
+        if (firstRun) {
+            // The welcome: the bolt on a glass disc, calm and small, over the one question of this step.
+            Box(
+                Modifier.padding(start = Space.page, top = Space.sm, bottom = Space.xs).size(56.dp).glass(CircleShape, colors),
+                contentAlignment = Alignment.Center,
+            ) {
+                Image(painterResource(R.drawable.ic_pibolt_logo), contentDescription = null, modifier = Modifier.size(width = 20.dp, height = 30.dp))
             }
-            Text("Connect a model", style = type.title, color = colors.ink1)
-            Spacer(Modifier.height(6.dp))
-            Text(
-                "Pi-Bolt runs on this phone and calls the model with your API key. The key stays on this device.",
-                style = type.body,
-                color = colors.ink2,
-            )
         }
-        PiTextField(
+        SheetHeader(
+            "Connect a model",
+            subtitle = if (firstRun) "Pi-Bolt runs on this phone with your API key. The key stays here." else "The key stays on this phone.",
+        )
+        PillSearchField(
             value = query,
             onValueChange = { query = it },
             placeholder = "Search ${ProviderCatalog.all.size} providers",
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            leading = { Icon(Icons.Rounded.Search, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(20.dp)) },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.sm),
         )
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
             if (query.isBlank()) {
-                item(key = "popular", contentType = "label") { SectionLabel("Popular", Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 4.dp)) }
+                item(key = "popular", contentType = "label") { ListHead("Popular") }
                 items(ProviderCatalog.popular, key = { it.id }, contentType = { "provider" }) { p ->
                     ProviderRow(p, added = p.id in configured, onClick = { onPick(p) })
                 }
-                item(key = "more", contentType = "label") { SectionLabel("More providers", Modifier.padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 4.dp)) }
+                item(key = "more", contentType = "label") { ListHead("More providers") }
                 items(ProviderCatalog.more, key = { it.id }, contentType = { "provider" }) { p ->
                     ProviderRow(p, added = p.id in configured, onClick = { onPick(p) })
                 }
@@ -183,73 +184,47 @@ private fun PickStep(configured: Set<String>, firstRun: Boolean, onPick: (Provid
                 }
             }
             item(key = "custom", contentType = "custom") {
-                CustomRow(
-                    title = if (shown.isEmpty()) "Use a custom endpoint" else "Custom endpoint (OpenAI-compatible)",
-                    note = if (shown.isEmpty()) "No provider matches “${query.trim()}”. Connect an OpenAI-compatible server instead." else "Ollama, LM Studio, vLLM or a proxy",
+                InsetRow(
+                    if (shown.isEmpty()) "Use a custom endpoint" else "Custom endpoint",
                     onClick = onCustom,
+                    meta = if (shown.isEmpty()) "No provider matches “${query.trim()}”" else "Ollama, LM Studio, vLLM or a proxy",
+                    leading = { LogoMark(Brand.Generic, size = IconSize.md) },
+                    chevron = true,
+                    divider = false,
                 )
             }
         }
         if (firstRun) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.End) {
-                TextAction("Later", onClick = onLater, color = colors.ink2)
-            }
+            GhostButton("Later", onClick = onLater, modifier = Modifier.fillMaxWidth().padding(horizontal = Space.page, vertical = Space.xs))
         }
     }
 }
 
-/** The list's last row: a custom OpenAI-compatible endpoint. */
+/** A section head of the provider list: rowMeta ink3 at the text inset. */
 @Composable
-private fun CustomRow(title: String, note: String, onClick: () -> Unit) {
-    val colors = Pi.colors
-    val type = Pi.type
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 60.dp)
-            .pressable(onClick, shape = RoundedCornerShape(0.dp), pressedScale = 1f, label = title)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ProviderBadge(Brand.Generic)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(note, style = type.meta, color = colors.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-    }
+private fun ListHead(text: String) {
+    Text(text, style = Pi.type.rowMeta, color = Pi.colors.ink3, modifier = Modifier.padding(start = Space.page, end = Space.page, top = Space.lg, bottom = Space.xs).semantics { heading() })
 }
 
-/** 60dp row: provider mark, name with a note beneath, "Added" for configured ones. */
+/** A provider row ([InsetRow]): its mark, the name with its note beneath, a check for configured ones. */
 @Composable
 fun ProviderRow(p: ProviderInfo, added: Boolean, onClick: () -> Unit, trailing: (@Composable () -> Unit)? = null) {
     val colors = Pi.colors
-    val type = Pi.type
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(60.dp)
-            .pressable(onClick, shape = RoundedCornerShape(0.dp), pressedScale = 1f)
-            .padding(start = 20.dp, end = if (trailing != null) 4.dp else 20.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ProviderBadge(p.brand)
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(p.name, style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(p.note, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        if (added) {
-            Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.success, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.width(4.dp))
-            Text("Added", style = type.meta, color = colors.ink2)
-        }
-        trailing?.invoke()
-    }
+    InsetRow(
+        p.name,
+        onClick = onClick,
+        meta = p.note,
+        leading = { LogoMark(p.brand, size = IconSize.md) },
+        label = if (added) "${p.name}, added" else p.name,
+        trailing = {
+            if (added) Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.success, modifier = Modifier.size(IconSize.md))
+            trailing?.invoke()
+        },
+    )
 }
 
 @Composable
-private fun KeyStep(provider: ProviderInfo, auth: ProviderAuth, onBack: (() -> Unit)?, onSaved: () -> Unit, onCancel: () -> Unit) {
+private fun KeyStep(provider: ProviderInfo, auth: ProviderAuth, onBack: (() -> Unit)?, onSaved: () -> Unit) {
     val colors = Pi.colors
     val type = Pi.type
     val haptics = Pi.haptics
@@ -285,24 +260,19 @@ private fun KeyStep(provider: ProviderInfo, auth: ProviderAuth, onBack: (() -> U
     }
 
     Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(start = if (onBack != null) 4.dp else 20.dp, end = 20.dp, top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (onBack != null) {
-                IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "All providers", onClick = {
+        SheetHeader(
+            provider.name,
+            subtitle = "Paste your API key.",
+            onBack = onBack?.let { back ->
+                {
                     key = ""
-                    onBack()
-                }, tint = colors.ink1)
-                Spacer(Modifier.width(4.dp))
-            }
-            LogoMark(provider.brand, size = IconSize.md, tint = colors.ink1)
-            Spacer(Modifier.width(12.dp))
-            Text(provider.name, style = type.title, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        Text(
-            "Paste your ${provider.name} API key.",
-            style = type.body,
-            color = colors.ink2,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                    back()
+                }
+            },
+            backLabel = "All providers",
+            leading = { LogoMark(provider.brand, size = IconSize.lg, tint = colors.ink1) },
         )
+        Spacer(Modifier.height(Space.sm))
         SecretField(
             value = key,
             onValueChange = {
@@ -333,7 +303,7 @@ private fun KeyStep(provider: ProviderInfo, auth: ProviderAuth, onBack: (() -> U
         ) {
             Icon(Icons.Rounded.Lock, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(8.dp))
-            Text(error ?: "Your key stays on this phone and is sent only to ${provider.name}.", style = type.meta, color = if (error != null) colors.danger else colors.ink3)
+            Text(error ?: "Stays on this phone, sent only to ${provider.name}.", style = type.meta, color = if (error != null) colors.danger else colors.ink3)
         }
         provider.keyUrl?.let { url ->
             Row(
@@ -341,7 +311,7 @@ private fun KeyStep(provider: ProviderInfo, auth: ProviderAuth, onBack: (() -> U
                     .padding(horizontal = 12.dp)
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
-                    .pressable({ runCatching { uri.openUri(url) } }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "Get a key")
+                    .pressable({ runCatching { uri.openUri(url) } }, shape = RoundedCornerShape(Radius.pill), pressedScale = 1f, label = "Get a key")
                     .padding(horizontal = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -351,15 +321,9 @@ private fun KeyStep(provider: ProviderInfo, auth: ProviderAuth, onBack: (() -> U
                 Icon(Icons.AutoMirrored.Rounded.OpenInNew, contentDescription = null, tint = colors.accent, modifier = Modifier.size(16.dp))
             }
         }
-        Spacer(Modifier.height(12.dp))
-        ButtonRow(Modifier.padding(horizontal = 20.dp)) {
-            SecondaryButton("Cancel", onClick = {
-                key = ""
-                onCancel()
-            })
-            PrimaryButton(if (saving) "Saving…" else "Save key", onClick = ::save, enabled = key.isNotBlank() && !saving)
-        }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Space.md))
+        PrimaryButton(if (saving) "Saving…" else "Save key", onClick = ::save, enabled = key.isNotBlank() && !saving, modifier = Modifier.fillMaxWidth().padding(horizontal = Space.page))
+        Spacer(Modifier.height(Space.sm))
     }
 }
 
@@ -429,19 +393,14 @@ private fun CustomStep(auth: ProviderAuth, onBack: () -> Unit, onSaved: (Provide
     }
 
     Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 20.dp, top = 2.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "All providers", onClick = {
+        SheetHeader(
+            "Custom endpoint",
+            subtitle = "Any OpenAI-compatible server.",
+            onBack = {
                 key = ""
                 onBack()
-            }, tint = colors.ink1)
-            Spacer(Modifier.width(4.dp))
-            Text("Custom endpoint", style = type.title, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        Text(
-            "Any server that speaks the OpenAI chat completions API: Ollama, LM Studio, vLLM or a proxy.",
-            style = type.body,
-            color = colors.ink2,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+            },
+            backLabel = "All providers",
         )
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 460.dp)) {
             item(key = "fields", contentType = "fields") {
@@ -502,7 +461,7 @@ private fun CustomStep(auth: ProviderAuth, onBack: () -> Unit, onSaved: (Provide
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
                 Column(Modifier.padding(horizontal = 16.dp)) {
-                    FieldHint(error ?: "A key stays on this phone and is sent only to this server.", isError = error != null)
+                    FieldHint(error ?: "The key stays on this phone and is sent only to this server.", isError = error != null)
                     FieldLabel("Name (optional)")
                     PiTextField(
                         value = name,
@@ -516,14 +475,8 @@ private fun CustomStep(auth: ProviderAuth, onBack: () -> Unit, onSaved: (Provide
                 }
             }
         }
-        Spacer(Modifier.height(16.dp))
-        ButtonRow(Modifier.padding(horizontal = 20.dp)) {
-            SecondaryButton("Back", onClick = {
-                key = ""
-                onBack()
-            })
-            PrimaryButton(if (saving) "Saving…" else "Add endpoint", onClick = ::save, enabled = url.isNotBlank() && model.isNotBlank() && !saving)
-        }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(Space.lg))
+        PrimaryButton(if (saving) "Saving…" else "Add endpoint", onClick = ::save, enabled = url.isNotBlank() && model.isNotBlank() && !saving, modifier = Modifier.fillMaxWidth().padding(horizontal = Space.page))
+        Spacer(Modifier.height(Space.sm))
     }
 }

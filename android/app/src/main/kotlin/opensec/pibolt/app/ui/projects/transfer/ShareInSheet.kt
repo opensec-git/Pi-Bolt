@@ -121,7 +121,7 @@ fun ShareInSheet(content: SharedContent, maxImages: Int, projects: suspend () ->
             when {
                 entries == null -> Spacer(Modifier.height(56.dp))
                 entries.isEmpty() -> Text(
-                    "No projects yet. Create one on Home first" + if (ShareAction.NewProjectFromZip in route.actions) ", or make this zip a new project." else ".",
+                    "No projects yet. " + if (ShareAction.NewProjectFromZip in route.actions) "Make this zip a new project." else "Create one on Home.",
                     style = type.body,
                     color = colors.ink2,
                     modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),

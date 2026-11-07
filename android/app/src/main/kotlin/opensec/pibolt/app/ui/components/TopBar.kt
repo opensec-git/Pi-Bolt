@@ -25,7 +25,8 @@ import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Space
 
 /**
- * A pushed screen's pinned bar (Settings, Runtimes, Secrets): 56dp under the status bar, back (48dp, ink1), the title
+ * A pushed screen's pinned bar (Secrets; Settings and Runtimes use [LargeTitlePage]): 56dp under the status bar, a
+ * glass back button, the title
  * in title style (a heading for TalkBack) with an optional meta line under it, then [actions]. A 1dp line appears under
  * it once the content [scrolled]; the bar keeps its canvas fill so content never shows through.
  */
@@ -41,9 +42,9 @@ fun ScreenTopBar(
 ) {
     val colors = Pi.colors
     Column(modifier.fillMaxWidth().background(colors.canvas).statusBarsPadding()) {
-        Row(Modifier.fillMaxWidth().height(56.dp).padding(start = Space.xs, end = Space.xs), verticalAlignment = Alignment.CenterVertically) {
-            IconAction(Icons.AutoMirrored.Rounded.ArrowBack, backLabel, onClick = onBack, tint = colors.ink1)
-            Spacer(Modifier.width(Space.xs))
+        Row(Modifier.fillMaxWidth().height(56.dp).padding(start = Space.sm, end = Space.xs), verticalAlignment = Alignment.CenterVertically) {
+            GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, backLabel, onClick = onBack)
+            Spacer(Modifier.width(Space.sm))
             Column(Modifier.weight(1f).padding(end = Space.sm)) {
                 Text(title, style = Pi.type.title, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
                 if (!subtitle.isNullOrBlank()) Text(subtitle, style = Pi.type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)

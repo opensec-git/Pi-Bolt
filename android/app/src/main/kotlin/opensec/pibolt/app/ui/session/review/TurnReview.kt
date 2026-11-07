@@ -66,6 +66,9 @@ class TurnReview internal constructor(
     /** The turn whose review screen is open. */
     var openTurn by mutableStateOf<String?>(null)
 
+    /** The list of the session's changed turns is open (the changes pill, when several turns changed files). */
+    var chooser by mutableStateOf(false)
+
     /** A restore that needs the user's choices or confirmation. */
     var plan by mutableStateOf<RestorePlan?>(null)
         private set
@@ -105,7 +108,7 @@ class TurnReview internal constructor(
         when {
             p.items.isEmpty() -> {
                 cp().discard(p)
-                message("Nothing to undo: the files are already as before this turn", SnackKind.Info)
+                message("Nothing to undo", SnackKind.Info)
             }
             p.conflicts.isNotEmpty() -> plan = p
             else -> applyNow(p, p.items.map { it.path })
@@ -123,7 +126,7 @@ class TurnReview internal constructor(
         when {
             p.items.isEmpty() -> {
                 cp().discard(p)
-                message("Nothing to put back: the files are already as before the undo", SnackKind.Info)
+                message("Nothing to put back", SnackKind.Info)
             }
             p.conflicts.isNotEmpty() -> plan = p
             else -> applyNow(p, p.items.map { it.path })
@@ -162,7 +165,7 @@ class TurnReview internal constructor(
         val users = state.value.items.filterIsInstance<UserItem>()
         val user = users.lastOrNull { TurnCheckpoints.find(listOf(record), it.timestamp, it.text) != null }
         if (user == null) {
-            message("Files restored. This message is not in the conversation any more, so it was not forked.", SnackKind.Warning)
+            message("Files restored. The message is no longer in the conversation, so nothing was forked.", SnackKind.Warning)
             return
         }
         openTurn = null
@@ -213,10 +216,10 @@ fun TurnReviewEntry(turnKey: String, editedFiles: Boolean) {
         val last by remember(turnKey) { derivedStateOf { review.users.value.keys.lastOrNull() == turnKey } }
         if (editedFiles && last) {
             Text(
-                "Review and undo work in sessions on this phone: these files are on the computer.",
+                "Review and undo are available in sessions on this phone",
                 style = type.meta,
                 color = colors.ink3,
-                modifier = Modifier.padding(start = 32.dp, top = 2.dp, bottom = 6.dp),
+                modifier = Modifier.padding(top = 2.dp, bottom = 6.dp),
             )
         }
         return
@@ -233,11 +236,10 @@ fun TurnReviewEntry(turnKey: String, editedFiles: Boolean) {
     val num = type.label.copy(fontFeatureSettings = Tnum)
     Row(
         Modifier
-            .padding(start = 26.dp)
             .heightIn(min = 48.dp)
             .pressable({ review.open(record) }, shape = RoundedCornerShape(Radius.sm), label = "Review changes")
             .semantics(mergeDescendants = true) { contentDescription = description }
-            .padding(horizontal = 6.dp),
+            .padding(end = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(Icons.Rounded.Difference, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
@@ -264,4 +266,5 @@ fun TurnReviewOverlay(review: TurnReview) {
         shown.value?.let { TurnReviewScreen(review, it, onClose = { review.openTurn = null }) }
     }
     review.plan?.let { RestoreSheet(review, it) }
+    if (review.chooser) ChangesSheet(review, onDismiss = { review.chooser = false })
 }

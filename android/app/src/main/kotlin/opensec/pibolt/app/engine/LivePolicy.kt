@@ -28,7 +28,7 @@ object LivePolicy {
         if (live.size < max) return Room.Free
         val idle = live.filterNot { it.busy }.sortedWith(compareBy<Live> { it.onScreen }.thenBy { it.lastUsed })
         return idle.firstOrNull()?.let { Room.Stop(it.key) }
-            ?: Room.Full("$max sessions are working. Stop one, or wait until one finishes, to open another.")
+            ?: Room.Full("$max sessions are working. Stop one or wait for one to finish.")
     }
 
     /**

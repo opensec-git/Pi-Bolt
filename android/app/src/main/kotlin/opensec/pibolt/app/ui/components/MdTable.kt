@@ -31,7 +31,6 @@ import opensec.pibolt.app.ui.markdown.TableMath
 import opensec.pibolt.app.ui.markdown.inlineAnnotated
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiColors
-import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Tnum
 
 private val CELL_X = 12.dp
@@ -92,7 +91,7 @@ fun MdTable(table: MdBlock.Table, modifier: Modifier = Modifier) {
     memo.measuredRows = (body.size - 1).coerceAtLeast(0)
     val natural = memo.widths
 
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(RadiusMedia)
     BoxWithConstraints(modifier.fillMaxWidth()) {
         val available = constraints.maxWidth
         val widths = with(density) { TableMath.widths(natural, available, MIN_COLUMN.roundToPx(), MAX_COLUMN.roundToPx()) }
@@ -130,7 +129,7 @@ fun MdTable(table: MdBlock.Table, modifier: Modifier = Modifier) {
                         )
                     }
                 }
-                Box(Modifier.width(total).height(1.dp).background(colors.lineStrong))
+                Box(Modifier.width(total).height(1.dp).background(colors.line))
                 val zebra = body.size >= 8
                 body.forEachIndexed { r, row ->
                     Row(if (zebra && r % 2 == 1) Modifier.background(colors.ink1.copy(alpha = 0.03f)) else Modifier) {

@@ -93,14 +93,14 @@ fun DiffViewer(ui: ChangesUi, path: String, staged: Boolean, onClose: () -> Unit
         }
         val d = diff
         when {
-            !loaded -> LoadingRow("Reading the diff…", Modifier.padding(top = 8.dp))
-            entry == null -> EmptyCard(Icons.Rounded.Check, "No changes left", "This file matches its last commit now.")
-            d == null -> ErrorState("Could not read the diff", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), message = "Git did not return a diff for this file.", onRetry = {
+            !loaded -> LoadingRow("Loading diff…", Modifier.padding(top = 8.dp))
+            entry == null -> EmptyCard(Icons.Rounded.Check, "No changes left")
+            d == null -> ErrorState("Could not read the diff", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), onRetry = {
                 loaded = false
                 attempt++
             })
-            d.binary -> EmptyCard(Icons.AutoMirrored.Rounded.InsertDriveFile, "Binary file", "Git has no text diff for it. Stage or discard it as a whole.")
-            d.hunks.isEmpty() -> EmptyCard(Icons.AutoMirrored.Rounded.InsertDriveFile, if (d.oldPath != null) "Renamed" else "Mode change", if (d.oldPath != null) "From ${d.oldPath}, contents unchanged." else "Only the file mode changed.")
+            d.binary -> EmptyCard(Icons.AutoMirrored.Rounded.InsertDriveFile, "Binary file", "No text diff")
+            d.hunks.isEmpty() -> EmptyCard(Icons.AutoMirrored.Rounded.InsertDriveFile, if (d.oldPath != null) "Renamed" else "Mode change", d.oldPath?.let { "From $it, contents unchanged" })
             else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
                 item(key = "summary") {
                     Row(Modifier.padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -125,7 +125,7 @@ fun DiffViewer(ui: ChangesUi, path: String, staged: Boolean, onClose: () -> Unit
                     )
                 }
                 if (shown.size < d.hunks.size) {
-                    item(key = "more") { Note("${d.hunks.size - shown.size} more hunks are not shown: this diff is very large.") }
+                    item(key = "more") { Note("${d.hunks.size - shown.size} more hunks not shown") }
                 }
             }
         }

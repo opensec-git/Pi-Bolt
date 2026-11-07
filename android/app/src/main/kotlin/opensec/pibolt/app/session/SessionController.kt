@@ -25,6 +25,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.checkpoints.TurnCheckpoints
 import opensec.pibolt.app.data.Host
+import opensec.pibolt.app.engine.ChatSpace
 import opensec.pibolt.protocol.Base64Url
 import opensec.pibolt.protocol.backend.ConnectionState
 import opensec.pibolt.protocol.backend.DisconnectReason
@@ -33,7 +34,10 @@ import opensec.pibolt.protocol.backend.RemoteBackend
 import opensec.pibolt.protocol.backend.RemoteConfig
 import opensec.pibolt.protocol.backend.SessionBackend
 import opensec.pibolt.protocol.rpc.ImageAttachment
+import opensec.pibolt.protocol.RemoteEndpoints
 import opensec.pibolt.protocol.rpc.ModelInfo
+import opensec.pibolt.protocol.rpc.RemoteProject
+import opensec.pibolt.protocol.rpc.RemoteSessionInfo
 import opensec.pibolt.protocol.rpc.RpcClient
 import opensec.pibolt.protocol.rpc.RpcResponse
 import opensec.pibolt.protocol.rpc.StreamingBehavior
@@ -107,7 +111,7 @@ class SessionController private constructor(
         class Remote(val endpoints: List<String>, val pairSecret: ByteArray?, val fallbackSecret: ByteArray?) : Origin
 
         /** [release] gets the backend back when the session stops, and whether the engine was idle then. */
-        class Local(val project: File, val backend: LocalBackend, val release: (LocalBackend, Boolean) -> Unit, val checkpoints: TurnCheckpoints?) : Origin
+        class Local(val project: File, val backend: LocalBackend, val release: (LocalBackend, Boolean) -> Unit, val checkpoints: TurnCheckpoints?, val chat: Boolean) : Origin
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -117,8 +121,11 @@ class SessionController private constructor(
     /** Runs on the engine on this phone; every RPC command is available (remote control allows a subset). */
     val isLocal: Boolean = origin is Origin.Local
 
-    /** The project directory of a local session. */
+    /** The project directory of a local session (for a chat: the chats' directory, which is no project). */
     val project: File? = (origin as? Origin.Local)?.project
+
+    /** A plain chat (engine.ChatSpace): on this phone, in no project, without tools. */
+    val isChat: Boolean = (origin as? Origin.Local)?.chat == true
 
     /** Snapshots of the project per turn, for review and undo (on this phone only: remote files are on the computer). */
     val checkpoints: TurnCheckpoints? = (origin as? Origin.Local)?.checkpoints
@@ -273,6 +280,7 @@ class SessionController private constructor(
                 onConnected(connected)
                 val end = backend.state.first { it is ConnectionState.Disconnected } as ConnectionState.Disconnected
                 if (stopped) return
+                if (end.reason == DisconnectReason.Handoff) _effects.tryEmit(SessionEffect.Notify(HANDOFF_NOTICE, "info"))
                 if (end.reason.retryable || end.reason == DisconnectReason.HostStopped) {
                     // Reconnect at once after a drop; back off only if that fails.
                     _link.value = LinkState.Retrying(end.reason, end.detail, 0)
@@ -322,14 +330,15 @@ class SessionController private constructor(
 
     private fun explainRemote(end: ConnectionState.Disconnected): String = when (end.reason) {
         DisconnectReason.Unauthorized -> if (pairing || usedFallback) {
-            "The computer refused this pairing code. It is used once and expires after 10 minutes: run /remote-control for a new one."
+            "The computer refused this pairing code. Codes work once and expire after 10 minutes. Run /remote-control for a new one."
         } else {
             "This phone is no longer paired with ${_hostName.value}. Scan a new code from /remote-control to pair again."
         }
         DisconnectReason.HostStopped -> "Remote control stopped on ${_hostName.value}."
+        DisconnectReason.Handoff -> HANDOFF_NOTICE
         DisconnectReason.Malformed -> "The computer could not read this app's messages. Update Pi-Bolt or the app."
         DisconnectReason.RateLimited -> "Too many failed attempts from this network. Wait a minute and retry."
-        DisconnectReason.Unreachable -> "Can't reach ${_hostName.value}. Is /remote-control running, and is the phone on the same network (or a tunnel on)?"
+        DisconnectReason.Unreachable -> "Can't reach ${_hostName.value}. Check that /remote-control is running and the phone is on the same network."
         DisconnectReason.HandshakeTimeout -> "The computer took too long to answer."
         DisconnectReason.Lost -> "The connection dropped."
         DisconnectReason.Closed -> "Disconnected."
@@ -426,23 +435,37 @@ class SessionController private constructor(
                 "notify" -> _effects.tryEmit(SessionEffect.Notify(event.str("message").orEmpty(), event.str("notifyType") ?: "info"))
                 "set_editor_text" -> _effects.tryEmit(SessionEffect.EditorText(event.str("text").orEmpty()))
                 "select", "confirm", "input", "editor" -> if (!app.isForeground) {
-                    Notifications.needsAnswer(app, hostId, project?.name, _hostName.value, event.str("title").orEmpty())
+                    SessionReducer.dialogFrom(event)?.let { Notifications.needsAnswer(app, hostId, project?.name?.takeUnless { isChat }, _hostName.value, it, chat = isChat) }
                 }
             }
             "agent_settled" -> {
                 if (!app.isForeground && before.isRunning) {
                     val last = (before.allItems.lastOrNull { it is AssistantTextItem } as? AssistantTextItem)?.text.orEmpty()
-                    Notifications.settled(app, hostId, project?.name, _hostName.value, last, aborted = event.bool("aborted") == true)
+                    Notifications.settled(app, hostId, project?.name?.takeUnless { isChat }, _hostName.value, last, aborted = event.bool("aborted") == true, chat = isChat)
                 }
                 scope.launch { refreshState() }
             }
             "remote_hello" -> {
                 val host = (event["host"] as? JsonObject)
-                if (!isLocal) app.hosts.update(hostId) { it.copy(cwd = host?.str("cwd") ?: it.cwd, version = host?.str("version") ?: it.version) }
+                if (!isLocal) {
+                    app.hosts.update(hostId) {
+                        it.copy(cwd = host?.str("cwd") ?: it.cwd, version = host?.str("version") ?: it.version, service = host?.bool("service") == true)
+                    }
+                }
                 _models.value = emptyList()
                 _thinkingLevels.value = emptyList()
             }
+            RemoteEndpoints.TYPE -> onEndpoints(event)
         }
+    }
+
+    /** `remote_endpoints`: the computer's addresses now (a quick tunnel's new one). Used for reconnects and saved. */
+    private fun onEndpoints(event: JsonObject) {
+        val remote = backend as? RemoteBackend ?: return
+        val endpoints = RemoteEndpoints.from(event, remote.lastEndpoint) ?: return
+        if (endpoints == remote.config.endpoints) return
+        remote.updateEndpoints(endpoints)
+        app.hosts.update(hostId) { it.copy(endpoints = endpoints) }
     }
 
     private fun afterPublish(previous: SessionState, now: SessionState) {
@@ -574,6 +597,21 @@ class SessionController private constructor(
 
     fun newSession() = sessionCommand("Could not start a new session") { rpc.newSession() }
 
+    // The background service (`host.service`) lists the computer's projects and sessions, and opens any of them.
+
+    suspend fun listProjects(): Result<List<RemoteProject>> {
+        val response = rpc.listProjects()
+        return if (response.success) Result.success(RemoteProject.listFrom(response)) else Result.failure(IllegalStateException(response.error ?: "Could not list projects"))
+    }
+
+    suspend fun listSessions(cwd: String): Result<List<RemoteSessionInfo>> {
+        val response = rpc.listSessions(cwd)
+        return if (response.success) Result.success(RemoteSessionInfo.listFrom(response)) else Result.failure(IllegalStateException(response.error ?: "Could not list sessions"))
+    }
+
+    /** A new session in the computer's project [cwd] (from [listProjects]). */
+    fun newSessionIn(cwd: String) = sessionCommand("Could not start a new session") { rpc.newSession(cwd = cwd) }
+
     /** Open a saved session ([opensec.pibolt.app.engine.EngineApi.sessions]) in this engine. */
     fun switchSession(sessionFile: String) = sessionCommand("Could not open that session") { rpc.switchSession(sessionFile) }
 
@@ -609,7 +647,8 @@ class SessionController private constructor(
     }
 
     /** Run [command] in the project's shell; its output becomes context for the next prompt unless [excludeFromContext]. */
-    suspend fun runBash(command: String, excludeFromContext: Boolean = false): RpcResponse = rpc.bash(command, excludeFromContext)
+    suspend fun runBash(command: String, excludeFromContext: Boolean = false): RpcResponse =
+        if (isChat) RpcResponse.failure("bash", NO_COMMANDS) else rpc.bash(command, excludeFromContext)
 
     fun abortBash() {
         scope.launch { rpc.abortBash() }
@@ -657,6 +696,11 @@ class SessionController private constructor(
      * shows at once as a step; its output streams in (`bash_execution_update`) and the result replaces it.
      */
     fun runShell(shell: ShellCommand) {
+        // A chat runs nothing on the phone: no tools, no shell.
+        if (isChat) {
+            _effects.tryEmit(SessionEffect.Error(NO_COMMANDS))
+            return
+        }
         val key = SessionReducer.SHELL_PREFIX + System.currentTimeMillis()
         val args = JsonObject(mapOf("command" to JsonPrimitive(shell.command)))
         mutate { it.copy(items = it.items + ToolItem(key, key, "bash", args, status = ToolStatus.Running)) }
@@ -714,6 +758,7 @@ class SessionController private constructor(
                 put("name", host?.name.orEmpty())
                 put("version", host?.version.orEmpty())
                 put("cwd", host?.cwd.orEmpty())
+                if (host?.service == true) put("service", true)
             })
             put("state", state.dataObject ?: JsonObject(emptyMap()))
             put("messages", messages.dataObject?.arr("messages") ?: JsonArray(emptyList()))
@@ -757,9 +802,18 @@ class SessionController private constructor(
         private const val FRAME_MS = 16L
         const val PERF_TAG = "PiBoltPerf"
 
-        /** A session with the engine on this phone, in [project]. [release] takes the backend back when it stops. */
-        fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit, checkpoints: TurnCheckpoints? = null) =
-            SessionController(app, localId(project), project.name, Origin.Local(project, backend, release, checkpoints))
+        /** Close code 1012: the background service gave the port to `/remote-control` in a terminal on the computer. */
+        const val HANDOFF_NOTICE = "The computer's terminal took over. Reconnecting…"
+
+        /** Why a chat refuses a shell command. */
+        const val NO_COMMANDS = "Chats can't run commands"
+
+        /**
+         * A session with the engine on this phone, in [project]. [release] takes the backend back when it stops. A [chat]
+         * runs in the chats' directory (engine.ChatSpace), named [opensec.pibolt.app.engine.ChatSpace.NAME].
+         */
+        fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit, checkpoints: TurnCheckpoints? = null, chat: Boolean = false) =
+            SessionController(app, localId(project), if (chat) ChatSpace.NAME else project.name, Origin.Local(project, backend, release, checkpoints, chat))
 
         /** [hostId] of a local session: per project, so drafts and recent prompts stay with it. */
         fun localId(project: File): String = "local:${project.absolutePath}"

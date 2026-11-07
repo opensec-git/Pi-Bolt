@@ -50,6 +50,7 @@ sealed interface TRow {
         is SubagentRow -> 10
         is SubagentStackRow -> 11
         is SubagentNoticeRow -> 12
+        is TurnMetaRow -> 13
     }
 }
 
@@ -83,6 +84,8 @@ data class TextRow(
     val tail: Boolean,
     override val live: Boolean,
     val rail: Rail? = null,
+    /** The reply starts with this heading: it reads as the turn's bold title. */
+    val title: Boolean = false,
 ) : TRow {
     override val key: String get() = "$itemKey#$index"
 }
@@ -149,8 +152,23 @@ data class FoldRow(
     val endedInFailure: Boolean,
     val files: List<FileChange> = emptyList(),
     val summary: String = "",
+    /** The agent's tool calls among [steps] ("Used 4 tools"). */
+    val tools: Int = 0,
 ) : TRow {
     override val key: String get() = "fold:$turnKey"
+    override val live: Boolean get() = false
+}
+
+/** How a finished turn ended, for its meta line. */
+enum class TurnEnd { Finished, Failed, Stopped }
+
+/**
+ * The quiet line that starts a finished turn's reply: "Finished 1m 12s" ([durationMs] only when this phone watched the
+ * turn), "Stopped" after an abort, "Failed" after an error. The live turn has the status line instead.
+ */
+@Immutable
+data class TurnMetaRow(val turnKey: String, val durationMs: Long?, val end: TurnEnd) : TRow {
+    override val key: String get() = "meta:$turnKey"
     override val live: Boolean get() = false
 }
 
@@ -329,25 +347,34 @@ object TranscriptModel {
             }
             var lastStep = -1
             var steps = 0
+            var tools = 0
             var failedSteps = 0
-            var endedInFailure = false
+            var errored = false
+            var aborted = false
             for (i in bodyStart until end) {
                 val it = items[i]
                 // A command the user ran (`!ls`) is not the agent's work: it stays visible after the answer.
                 if ((it is ToolItem && !isUserShell(it)) || it is ThinkingItem) {
                     lastStep = i
                     steps++
+                    if (it is ToolItem) tools++
                 }
                 if (it is ToolItem && !isUserShell(it) && isFailedStep(it)) failedSteps++
-                if (it is NoticeItem && (it.kind == NoticeKind.Error || it.kind == NoticeKind.Aborted)) endedInFailure = true
+                if (it is NoticeItem && it.kind == NoticeKind.Error) errored = true
+                if (it is NoticeItem && it.kind == NoticeKind.Aborted) aborted = true
             }
+            val endedInFailure = errored || aborted
+            if (!live && first is UserItem && bodyStart < end) {
+                out += TurnMetaRow(turnKey, durations[turnKey], if (errored) TurnEnd.Failed else if (aborted) TurnEnd.Stopped else TurnEnd.Finished)
+            }
+            val turnRowsFrom = out.size
             val foldable = !live && steps > 0
             val open = !foldable || turnKey in expanded
             // Only a duration this phone measured while watching the turn. Summing the tools' own run times would
             // leave out the model's time and read far too short ("1s" for a 10 s turn), so an unwatched turn shows none.
             if (foldable) {
                 val (files, summary) = md.fold(turnKey, items.subList(bodyStart, end))
-                out += FoldRow(turnKey, steps, durations[turnKey], open, failedSteps, endedInFailure, files, summary)
+                out += FoldRow(turnKey, steps, durations[turnKey], open, failedSteps, endedInFailure, files, summary, tools)
             }
             if (open) {
                 out += TurnBody(md, live, turnKey, foldOpen = foldable, openGroups, agents).build(items, bodyStart, end, lastStep)
@@ -365,6 +392,7 @@ object TranscriptModel {
                     i++
                 }
             }
+            markTitle(out, turnRowsFrom)
             if (isLast && !live && pending == null) {
                 val reply = (lastStep + 1 until end).mapNotNull { (items[it] as? AssistantTextItem)?.text?.trim()?.takeIf(String::isNotEmpty) }
                 if (reply.isNotEmpty()) {
@@ -479,6 +507,19 @@ object TranscriptModel {
                 val (stagger, index) = staggers[k] ?: (turnKey to 0)
                 withRail(row, Rail(firstOf[segment] == k, lastOf[segment] == k, stagger, index))
             }
+        }
+    }
+
+    /**
+     * The reply's title: when the first prose of the reply (the first text row off the step rail, from [from] on) is a
+     * heading at the start of its message, it reads as the turn's bold title.
+     */
+    private fun markTitle(out: MutableList<TRow>, from: Int) {
+        for (k in from until out.size) {
+            val row = out[k] as? TextRow ?: continue
+            if (row.rail != null) continue
+            if (row.index == 0 && row.block is MdBlock.Heading) out[k] = row.copy(title = true)
+            return
         }
     }
 

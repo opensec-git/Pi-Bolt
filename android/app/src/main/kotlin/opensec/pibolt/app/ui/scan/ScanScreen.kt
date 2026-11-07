@@ -38,7 +38,6 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -94,7 +93,10 @@ import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.ReaderException
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeReader
-import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.GlassIconButton
+import opensec.pibolt.app.ui.components.glass
+import opensec.pibolt.app.ui.theme.Space
+import androidx.compose.foundation.layout.heightIn
 import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
@@ -169,15 +171,15 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
                 verticalArrangement = Arrangement.Center,
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Box(Modifier.size(72.dp).background(colors.surface2, CircleShape), contentAlignment = Alignment.Center) {
+                Box(Modifier.size(72.dp).glass(CircleShape, colors), contentAlignment = Alignment.Center) {
                     Icon(Icons.Rounded.NoPhotography, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.hero))
                 }
                 Spacer(Modifier.height(20.dp))
-                Text("Camera access needed", style = type.title, color = colors.ink1, modifier = Modifier.semantics { heading() })
+                Text("Allow the camera", style = type.largeTitle, color = colors.ink1, textAlign = TextAlign.Center, modifier = Modifier.semantics { heading() })
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Pi-Bolt uses the camera only to read the pairing code. You can also paste the link from /\u2060remote-control copy.",
-                    style = type.body,
+                    "Used only to read the pairing code. You can also paste the link.",
+                    style = type.rowMeta,
                     color = colors.ink2,
                     textAlign = TextAlign.Center,
                 )
@@ -186,7 +188,7 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
                     if (blocked) {
                         PrimaryButton("Open settings", onClick = { openAppSettings(context) })
                         Spacer(Modifier.height(8.dp))
-                        Text("Allow the camera under Permissions, then come back.", style = type.meta, color = colors.ink3, textAlign = TextAlign.Center)
+                        Text("Allow it under Permissions, then come back.", style = type.meta, color = colors.ink3, textAlign = TextAlign.Center)
                     } else {
                         PrimaryButton("Allow camera", onClick = { launcher.launch(Manifest.permission.CAMERA) })
                     }
@@ -195,20 +197,17 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
         }
 
         // Title over the camera, on a canvas fade so it reads on any picture: what to scan and where it comes from.
-        Row(
+        Column(
             Modifier
                 .fillMaxWidth()
                 .background(Brush.verticalGradient(listOf(colors.canvas.copy(alpha = 0.85f), colors.canvas.copy(alpha = 0f))))
                 .statusBarsPadding()
-                .padding(start = 4.dp, end = 20.dp, top = 4.dp, bottom = 24.dp),
-            verticalAlignment = Alignment.CenterVertically,
+                .padding(start = 8.dp, end = 20.dp, top = 4.dp, bottom = 32.dp),
         ) {
-            IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack, tint = colors.ink1)
-            Spacer(Modifier.width(4.dp))
-            Column {
-                Text("Scan the pairing code", style = type.title, color = colors.ink1, modifier = Modifier.semantics { heading() })
-                Text("Run /\u2060remote-control on your computer", style = type.meta, color = colors.ink2)
-            }
+            GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack)
+            Spacer(Modifier.height(Space.xs))
+            Text("Scan the code", style = type.largeTitle, color = colors.ink1, modifier = Modifier.padding(start = Space.md).semantics { heading() })
+            Text("Run /\u2060remote-control on your computer.", style = type.rowMeta, color = colors.ink2, modifier = Modifier.padding(start = Space.md, top = Space.xxs))
         }
 
         Column(
@@ -222,9 +221,9 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
             if (granted) {
                 Row(
                     Modifier
-                        .background(colors.surface2.copy(alpha = 0.92f), RoundedCornerShape(Radius.lg))
-                        .border(1.dp, colors.lineStrong, RoundedCornerShape(Radius.lg))
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .heightIn(min = 48.dp)
+                        .glass(RoundedCornerShape(Radius.pill), colors)
+                        .padding(horizontal = 20.dp, vertical = 12.dp)
                         .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
@@ -246,13 +245,13 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
                             message != null -> message!!
                             else -> "Looking for a code"
                         },
-                        style = type.body,
+                        style = type.rowMeta,
                         color = if (message != null && !accepted) colors.ink1 else colors.ink2,
                     )
                 }
                 Spacer(Modifier.height(16.dp))
             }
-            SecondaryButton("Paste link instead", onClick = { showPaste = true }, icon = Icons.Rounded.ContentPaste, modifier = Modifier.fillMaxWidth())
+            SecondaryButton("Paste a link instead", onClick = { showPaste = true }, icon = Icons.Rounded.ContentPaste, modifier = Modifier.fillMaxWidth())
         }
     }
 

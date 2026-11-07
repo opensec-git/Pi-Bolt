@@ -30,7 +30,7 @@ data class SyntaxColors(
 ) {
     companion object {
         /**
-         * Graphite: Pi-Bolt Desktop's highlight.js theme (`src/styles/app.css`). Monochrome: white keywords and
+         * Graphite: Pi-Bolt Desktop's highlight.js theme (`src/styles/app.css`), its greys warmed to the default's inks. White keywords and
          * constants a weight up, near-white calls, warm sand types, green strings, orange numbers, greys for the rest.
          * No blue.
          */
@@ -41,13 +41,13 @@ data class SyntaxColors(
             string = Color(0xFF9FD4A8),
             number = Color(0xFFE9B77C),
             constant = Color(0xFFFFFFFF),
-            operator = Color(0xFFA1A1A1),
+            operator = Color(0xFFB3B1AB),
             attribute = Color(0xFFC4C4C4),
-            tag = Color(0xFFA1A1A1),
+            tag = Color(0xFFB3B1AB),
             regex = Color(0xFF9FD4A8),
             escape = Color(0xFFE9B77C),
             variable = Color(0xFFC4C4C4),
-            comment = Color(0xFF858585),
+            comment = Color(0xFF9C9A94),
             keywordWeight = FontWeight.Medium,
         )
 
@@ -180,7 +180,7 @@ data class SyntaxColors(
             string = Color(0xFF6CD58B),
             number = Color(0xFFF5B562),
             constant = Color(0xFF6CB4FF),
-            operator = Color(0xFFA1A1A1),
+            operator = Color(0xFFB3B1AB),
             attribute = Color(0xFFC49BFF),
             tag = Color(0xFF6CD58B),
             regex = Color(0xFFF5B562),

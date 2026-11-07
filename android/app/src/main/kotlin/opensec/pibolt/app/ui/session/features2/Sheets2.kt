@@ -82,7 +82,7 @@ fun SkillsSheet(controller: SessionController, onInsert: (String) -> Unit, onVie
     var query by remember { mutableStateOf("") }
     LaunchedEffect(controller) { items = Resources.from(controller.request("get_commands").dataObject) }
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Skills and prompts", subtitle = "Read one, or put it in the composer to run it.")
+        SheetHeader("Skills and prompts")
         Segmented(
             options = listOf("skill" to "Skills", "prompt" to "Prompt templates"),
             selected = kind,
@@ -100,9 +100,9 @@ fun SkillsSheet(controller: SessionController, onInsert: (String) -> Unit, onVie
         )
         val list = items?.filter { it.source == kind && (query.isBlank() || query.lowercase() in (it.name + " " + it.description).lowercase()) }
         when {
-            list == null -> F2Loading("Reading skills")
+            list == null -> F2Loading("Loading skills")
             list.isEmpty() -> F2Empty(
-                if (kind == "skill") "No skills. Add them under ~/.pi/agent/skills or a project's .pi/skills, or install a package." else "No prompt templates. Add .md files under ~/.pi/agent/prompts or a project's .pi/prompts.",
+                if (kind == "skill") "No skills. Add them in ~/.pi/agent/skills or install a package." else "No prompt templates. Add .md files in ~/.pi/agent/prompts.",
                 if (kind == "skill") Icons.Rounded.AutoAwesome else Icons.Rounded.Description,
             )
             else -> LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
@@ -158,10 +158,10 @@ fun TrustSheet(agentDir: File, project: File, onReload: (() -> Unit)?, onMessage
         }
     }
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Project trust", subtitle = "Trusted projects load their own settings, extensions, skills, prompts and MCP servers from .pi. Extensions run code.")
+        SheetHeader("Project trust", subtitle = "Trusted projects load their .pi settings, extensions, skills, prompts and MCP servers. Extensions run code.")
         val v = view
         if (v == null) {
-            F2Loading("Reading trust")
+            F2Loading("Loading…")
             return@PiSheet
         }
         val (decision, gated, default) = v
@@ -172,16 +172,16 @@ fun TrustSheet(agentDir: File, project: File, onReload: (() -> Unit)?, onMessage
                 Text(if (trusted) "Trusted" else "Not trusted", style = Pi.type.bodyStrong, color = if (trusted) Pi.colors.success else Pi.colors.warning)
                 Text(
                     when {
-                        own != null -> "Saved for this project."
+                        own != null -> "Saved for this project"
                         decision != null -> "Saved for a parent folder: ${decision.path}"
-                        else -> "No saved decision: the default (${if (default == "always") "trust" else "don't trust"}) applies."
+                        else -> "Not saved · default: ${if (default == "always") "trust" else "don't trust"}"
                     },
                     style = Pi.type.meta,
                     color = Pi.colors.ink3,
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    if (gated.isEmpty()) "This project has nothing that needs trust." else "Needs trust: " + gated.joinToString(", "),
+                    if (gated.isEmpty()) "Nothing here needs trust" else "Needs trust: " + gated.joinToString(", "),
                     style = Pi.type.meta,
                     color = Pi.colors.ink2,
                 )
@@ -196,13 +196,13 @@ fun TrustSheet(agentDir: File, project: File, onReload: (() -> Unit)?, onMessage
         )
         F2Toggle(
             "Trust every project by default",
-            "Projects without a saved decision load their .pi resources",
+            "Applies to projects without a saved decision",
             checked = default == "always",
         ) { on -> save(settingsFile) { PiJsonFile.set(it, "defaultProjectTrust", if (on) JsonPrimitive("always") else null) } }
         if (changed && onReload != null) {
             F2Well {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Reload the session to apply it.", style = Pi.type.body, color = Pi.colors.ink1, modifier = Modifier.weight(1f))
+                    Text("Reload the session to apply changes", style = Pi.type.body, color = Pi.colors.ink1, modifier = Modifier.weight(1f))
                     SecondaryButton("Reload", onClick = { close(onReload) })
                 }
             }
@@ -238,9 +238,9 @@ fun TuningSheet(agentDir: File, onReload: (() -> Unit)?, onMessage: (String) -> 
     val invalid = fields.value.any { (_, v) -> v.isNotBlank() && v.trim().toLongOrNull() == null }
     val problems = tuning.problems()
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Retry and compaction", subtitle = "Leave a field empty for Pi's default. Applies to sessions started after saving.")
+        SheetHeader("Retry and compaction", subtitle = "Empty fields use Pi's default. Applies to new sessions.")
         if (loaded == null) {
-            F2Loading("Reading settings")
+            F2Loading("Loading settings")
             return@PiSheet
         }
         Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
@@ -259,7 +259,7 @@ fun TuningSheet(agentDir: File, onReload: (() -> Unit)?, onMessage: (String) -> 
                 PrimaryButton("Save", enabled = !invalid && problems.isEmpty(), onClick = {
                     scope.launch {
                         val ok = withContext(Dispatchers.IO) { PiJsonFile.update(file) { tuning.applyTo(it) } }
-                        onMessage(if (ok) (if (onReload != null) "Saved. Reload the session to use it." else "Saved") else "Could not save settings.json")
+                        onMessage(if (ok) (if (onReload != null) "Saved. Reload the session to apply changes." else "Saved") else "Could not save settings.json")
                         close(onDismiss)
                     }
                 }, modifier = Modifier.weight(1f))
@@ -307,9 +307,9 @@ fun ScopedModelsSheet(agentDir: File, models: List<ModelInfo>, onSaved: (List<St
     PiSheet(onDismiss = onDismiss, state = state) {
         val p = patterns
         val on = if (p == null) 0 else models.count { ModelScope.enabled(p, it.provider, it.id) }
-        SheetHeader("Models in the picker", subtitle = if (p.isNullOrEmpty()) "All ${models.size} models. Switch some off to keep the picker and cycling short." else "$on of ${models.size} models.")
+        SheetHeader("Models in the picker", subtitle = if (p.isNullOrEmpty()) "All ${models.size} models" else "$on of ${models.size} models")
         when {
-            p == null || models.isEmpty() -> F2Loading("Reading models")
+            p == null || models.isEmpty() -> F2Loading("Loading models")
             else -> {
                 if (p.isNotEmpty()) SecondaryButton("Show all models", onClick = { save(emptyList()) }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
@@ -338,7 +338,7 @@ fun BugSheet(initial: String, diagnostics: String, onShare: (String) -> Unit, on
     val close = rememberSheetCloser(state)
     var text by remember { mutableStateOf(initial) }
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Report a bug", subtitle = "Say what happened. The report adds the details below; nothing is sent until you pick where to share it.")
+        SheetHeader("Report a bug", subtitle = "The details below are included. Nothing is sent until you choose where to share it.")
         PiTextField(text, { text = it }, placeholder = "What went wrong, and what you expected", minLines = 3, maxLines = 6, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp))
         F2Well {
             Text(diagnostics, style = Pi.type.monoMeta, color = Pi.colors.ink2, maxLines = 12, modifier = Modifier.heightIn(max = 220.dp).verticalScroll(rememberScrollState()))

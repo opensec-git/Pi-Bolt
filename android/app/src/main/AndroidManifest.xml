@@ -14,6 +14,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- A run on this phone keeps the CPU awake with the screen off (SessionService, background/WakePolicy), and asks
+         once to leave battery optimization (background/BackgroundSetup; the APK is sideloaded, not on Play). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
     <!-- Dictation in the composer (Android's SpeechRecognizer); asked for on the first tap of the mic only. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
@@ -26,6 +31,18 @@
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
+        <!-- OEM background settings (background/OemSetup): resolved before opening, else the app's details. -->
+        <package android:name="com.miui.securitycenter" />
+        <package android:name="com.miui.powerkeeper" />
+        <package android:name="com.huawei.systemmanager" />
+        <package android:name="com.hihonor.systemmanager" />
+        <package android:name="com.coloros.safecenter" />
+        <package android:name="com.oppo.safe" />
+        <package android:name="com.oneplus.security" />
+        <package android:name="com.vivo.permissionmanager" />
+        <package android:name="com.iqoo.secure" />
+        <package android:name="com.samsung.android.lool" />
+        <package android:name="com.samsung.android.sm" />
     </queries>
 
     <application
@@ -94,6 +111,10 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Runs the user's coding agent on the device while it works on a prompt in the background" />
         </service>
+        <!-- Buttons and inline replies of session notifications (Stop, an answer, a message). -->
+        <receiver
+            android:name=".background.SessionActionReceiver"
+            android:exported="false" />
         <service
             android:name=".terminal.TerminalService"
             android:exported="false"

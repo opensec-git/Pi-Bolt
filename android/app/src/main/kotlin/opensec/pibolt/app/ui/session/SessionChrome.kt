@@ -1,11 +1,15 @@
 package opensec.pibolt.app.ui.session
 
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.core.Animatable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.TextStyle
+import opensec.pibolt.app.ui.theme.Space
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -17,7 +21,6 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import opensec.pibolt.app.ui.theme.Tnum
 import androidx.compose.foundation.rememberScrollState
-import opensec.pibolt.app.ui.components.SectionLabel
 import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -44,16 +47,18 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LinkOff
-import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.MoreHoriz
+import opensec.pibolt.app.ui.components.GlassIconButton
+import opensec.pibolt.app.ui.components.InsetRow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.ContentCopy
@@ -85,7 +90,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import opensec.pibolt.app.session.LinkState
-import opensec.pibolt.app.ui.components.BrandMark
+import opensec.pibolt.app.session.SessionController
+import opensec.pibolt.protocol.backend.DisconnectReason
 import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
@@ -140,6 +146,8 @@ fun SessionTopBar(
     onResume: () -> Unit = {},
     onFork: () -> Unit = {},
     onClone: () -> Unit = {},
+    /** The computer's background service lists its projects and sessions: the menu offers them. */
+    onProjects: (() -> Unit)? = null,
     contextPercent: Int? = null,
     quadVisible: Boolean = true,
     status: String? = null,
@@ -153,11 +161,11 @@ fun SessionTopBar(
         Modifier
             .fillMaxWidth()
             .statusBarsPadding()
-            .height(56.dp)
-            .padding(start = 4.dp, end = 4.dp),
+            .height(64.dp)
+            .padding(start = Space.md, end = Space.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconAction(Icons.AutoMirrored.Rounded.ArrowBack, if (local) "Project" else "Computers", onClick = onBack, tint = colors.ink1)
+        GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, if (local) "Project" else "Computers", onClick = onBack)
         Column(
             Modifier
                 .weight(1f)
@@ -189,35 +197,34 @@ fun SessionTopBar(
                 Text(subtitle, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = if (dot) 16.dp else 0.dp))
             }
         }
-        // The Quad sits left of the actions, so Search and More always stay side by side. It animates only while Pi
-        // is busy and the live status line (which owns the one spinner then) is off screen; otherwise it rests as a
-        // still ink3 grid, so the bar keeps its mark and nothing blinks in and out. It is not a control: no press,
-        // no ripple, and TalkBack hears it only while it reports work.
+        // The Quad sits left of the actions, only while Pi is busy and the live status line (which owns the one
+        // spinner then) is off screen, or while the link has failed; at rest a still grid beside the glass buttons
+        // read as one more button. It is not a control: no press, and TalkBack hears what it reports.
         val live = quadVisible && busy
         val failed = link is LinkState.Failed
-        Box(
-            Modifier
-                .size(40.dp)
-                .clearAndSetSemantics { if (live && status != null) contentDescription = status },
-            contentAlignment = Alignment.Center,
-        ) {
-            QuadSpinner(
-                // At rest one still frame, whatever the mode, so the grid does not change shape while the line works.
-                if (live || failed) mode else QuadMode.Think,
-                size = IconSize.sm,
-                color = when {
-                    failed -> colors.danger
-                    live && mode == QuadMode.Wait -> colors.warning
-                    live -> colors.ink1
-                    else -> colors.ink3
-                },
-                animate = spin && live,
-            )
+        if (live || failed) {
+            Box(
+                Modifier
+                    .size(40.dp)
+                    .clearAndSetSemantics { if (failed) contentDescription = "Not connected" else if (status != null) contentDescription = status },
+                contentAlignment = Alignment.Center,
+            ) {
+                QuadSpinner(
+                    mode,
+                    size = IconSize.sm,
+                    color = when {
+                        failed -> colors.danger
+                        mode == QuadMode.Wait -> colors.warning
+                        else -> colors.ink1
+                    },
+                    animate = spin && live,
+                )
+            }
         }
         switcher()
-        IconAction(Icons.Rounded.Search, "Search this session", onClick = onSearch)
+        GlassIconButton(Icons.Rounded.Search, "Search this session", onClick = onSearch)
         Box {
-            IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
+            GlassIconButton(Icons.Rounded.MoreHoriz, "More", onClick = { menu = true })
             DropdownMenu(
                 expanded = menu,
                 onDismissRequest = { menu = false },
@@ -241,6 +248,7 @@ fun SessionTopBar(
                     Item("Session and usage", Icons.Rounded.Info, onInfo)
                     Item("Export or share", Icons.Rounded.IosShare, onExport)
                 } else {
+                    onProjects?.let { Item("Projects and sessions", Icons.Rounded.FolderOpen, it) }
                     Item("Session and usage", Icons.Rounded.Info, onInfo)
                     Item("Export or share", Icons.Rounded.IosShare, onExport)
                     MenuRow("Disconnect", Icons.Rounded.LinkOff, colors.ink1) {
@@ -348,6 +356,7 @@ fun ConnectionBanner(link: LinkState, pairing: Boolean, local: Boolean, onRetry:
 
 @Composable
 private fun retryText(link: LinkState.Retrying): String {
+    if (link.reason == DisconnectReason.Handoff) return SessionController.HANDOFF_NOTICE
     if (link.inMs <= 0) return "Reconnecting…"
     val left by produceState(link.inMs, link) {
         val start = SystemClock.uptimeMillis()
@@ -386,19 +395,25 @@ fun LoadingState(hostName: String, link: LinkState, local: Boolean, onRetry: () 
 }
 
 /**
- * No messages yet: the mark, the project's name and (when known) its branch, then "Start with" suggestions picked
- * from the project and the prompts recently sent from this phone. Every tap fills the composer; nothing sends by
- * itself. Commands are one "All commands" link that opens the palette.
+ * No messages yet: assistant-ui's Welcome in the redesign's language. The project's name in largeTitle is the one
+ * focal point, centred in the room above the suggestions, with its branch (or the computer) under it in ink3. The
+ * suggestions sit just above the composer, in thumb reach, as plain [InsetRow]s with hairlines between them; the
+ * prompts this phone sent here before follow under "Recent" (three at most), then "Commands". Every tap fills the
+ * composer; nothing sends by itself. Text sits on the 20dp page gutter, as on Home.
+ *
+ * With [play] it enters as assistant-ui's does: each element fades in and rises 8dp, 120 ms + 70 ms per step
+ * ([PiMotion.stagger], [Welcome]); the composer is the last step (SessionScreen).
  */
 @Composable
 fun EmptySession(
     title: String,
-    branch: String?,
+    subtitle: String?,
     starters: List<StarterPrompt>,
     recent: List<String>,
     onStarter: (StarterPrompt) -> Unit,
     onRecent: (String) -> Unit,
     onCommands: (() -> Unit)?,
+    play: Boolean,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -408,94 +423,73 @@ fun EmptySession(
             Modifier
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
-                .heightIn(min = maxHeight)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.Top,
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .heightIn(min = maxHeight),
+            // Top, title, rest: the title sits halfway down the room the suggestions leave.
+            verticalArrangement = if (short) Arrangement.Top else Arrangement.SpaceBetween,
         ) {
-            Spacer(Modifier.height(if (short) 16.dp else 40.dp))
-            if (!short) {
-                BrandMark(size = 40.dp, playKey = "session")
-                Spacer(Modifier.height(16.dp))
-            }
-            Text(title, style = type.title, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
-            if (!branch.isNullOrBlank()) {
-                Spacer(Modifier.height(6.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.AutoMirrored.Rounded.CallSplit, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(14.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text(branch, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.semantics { contentDescription = "Branch $branch" })
+            Spacer(Modifier.height(if (short) Space.lg else 0.dp))
+            Column(Modifier.padding(horizontal = Space.page)) {
+                Text(
+                    title,
+                    style = type.largeTitle,
+                    color = colors.ink1,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.entrance(0, play).semantics { heading() },
+                )
+                if (!subtitle.isNullOrBlank()) {
+                    Text(
+                        subtitle,
+                        style = type.monoMeta,
+                        color = colors.ink3,
+                        maxLines = 1,
+                        overflow = TextOverflow.MiddleEllipsis,
+                        modifier = Modifier.padding(top = Space.xs).entrance(1, play),
+                    )
                 }
             }
-            if (starters.isNotEmpty()) {
-                StartSection("Start with", Icons.Rounded.AutoAwesome)
-                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
-                    for (s in starters) StarterChip(s.label) { onStarter(s) }
+            Column(Modifier.fillMaxWidth().padding(top = if (short) Space.xxl else Space.x4, bottom = Space.xs)) {
+                starters.forEachIndexed { i, s ->
+                    InsetRow(s.label, onClick = { onStarter(s) }, label = "Put in the composer", divider = i < starters.lastIndex, modifier = Modifier.entrance(Welcome.FIRST_SUGGESTION + i, play))
+                }
+                var step = Welcome.FIRST_SUGGESTION + starters.size
+                if (recent.isNotEmpty()) {
+                    Column(Modifier.padding(top = Space.md).entrance(step++, play)) {
+                        Text("Recent", style = type.rowMeta, color = colors.ink3, modifier = Modifier.padding(horizontal = Space.page, vertical = Space.sm).semantics { heading() })
+                        recent.forEachIndexed { i, prompt ->
+                            InsetRow(prompt.lineSequence().first(), onClick = { onRecent(prompt) }, label = "Put in the composer", divider = i < recent.lastIndex)
+                        }
+                    }
+                }
+                if (onCommands != null) {
+                    InsetRow(
+                        "Commands",
+                        onClick = onCommands,
+                        divider = false,
+                        modifier = Modifier.padding(top = Space.xs).entrance(step, play),
+                        leading = { Text("/", style = type.mono, color = colors.ink2) },
+                    )
                 }
             }
-            if (recent.isNotEmpty()) {
-                StartSection("Recent", Icons.Rounded.History)
-                for (prompt in recent) StartRow(prompt.lineSequence().first(), null, mono = false) { onRecent(prompt) }
-            }
-            if (onCommands != null) {
-                Spacer(Modifier.height(12.dp))
-                Box(Modifier.fillMaxWidth()) { TextAction("All commands", onClick = onCommands, color = colors.ink2) }
-            }
-            Spacer(Modifier.height(24.dp))
         }
     }
 }
 
-/** A suggestion: 36dp visual (48dp to touch), radius 18, surface1 with a 1dp line, label ink1. */
+/**
+ * The welcome's entrance for the element at [step]: from transparent and 8dp low to rest, over [PiMotion.SHEET] with
+ * the enter easing after [PiMotion.stagger]. Plays once, when the element first composes; without [play] (reduce
+ * motion, a session that was not new) it is simply there.
+ */
 @Composable
-private fun StarterChip(label: String, onClick: () -> Unit) {
-    val colors = Pi.colors
-    val shape = RoundedCornerShape(18.dp)
-    Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
-        Box(
-            Modifier
-                .heightIn(min = 36.dp)
-                .pressable(onClick, shape = shape, label = "Put in the composer: $label")
-                .background(colors.surface1, shape)
-                .border(1.dp, colors.line, shape)
-                .padding(horizontal = 14.dp, vertical = 8.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(label, style = Pi.type.label, color = colors.ink1, maxLines = 1)
-        }
+fun Modifier.entrance(step: Int, play: Boolean): Modifier {
+    val progress = remember { Animatable(if (play) 0f else 1f) }
+    LaunchedEffect(Unit) {
+        if (progress.value < 1f) progress.animateTo(1f, PiMotion.enter(PiMotion.SHEET, PiMotion.stagger(step)))
     }
-}
-
-@Composable
-private fun StartSection(title: String, icon: ImageVector) {
-    SectionLabel(title, Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 4.dp), icon = icon)
-}
-
-/** A 48dp row: label in body ink1 (mono for commands), the description in meta ink3 on the same line. */
-@Composable
-private fun StartRow(label: String, description: String?, mono: Boolean, muted: Boolean = false, onClick: () -> Unit) {
-    val colors = Pi.colors
-    val type = Pi.type
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .pressable(onClick, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f)
-            .padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            label,
-            style = if (mono) type.monoSmall else type.body,
-            color = if (muted) colors.ink2 else colors.ink1,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = if (description.isNullOrBlank()) Modifier.weight(1f) else Modifier.width(120.dp),
-        )
-        if (!description.isNullOrBlank()) {
-            Spacer(Modifier.width(12.dp))
-            Text(description, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        }
+    return graphicsLayer {
+        val p = progress.value
+        alpha = p
+        translationY = (1f - p) * 8.dp.toPx()
     }
 }
 

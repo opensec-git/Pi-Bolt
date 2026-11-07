@@ -60,7 +60,7 @@ fun FieldHint(text: String, modifier: Modifier = Modifier, isError: Boolean = fa
 /**
  * A secret (API key, token, variable value): mono, obscured by default, Password keyboard without autocorrect or
  * suggestions. The end slot is Paste while empty (when [onPaste] is given) and Show / Hide once filled. Same frame as
- * [PiTextField] (surface1, radius sm, lineStrong that turns into the focus line, danger on error), 52dp tall.
+ * [PiTextField] (surface1, radius md, lineStrong that turns into the focus line, danger on error), 52dp tall.
  * Callers keep the value in plain `remember`, never saved instance state, and clear it after use.
  */
 @Composable
@@ -89,7 +89,7 @@ fun SecretField(
         PiMotion.effects(),
         label = "secret-field",
     )
-    val shape = RoundedCornerShape(Radius.sm)
+    val shape = RoundedCornerShape(Radius.md)
     val style = Pi.type.mono
     BasicTextField(
         value = value,
