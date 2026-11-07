@@ -27,6 +27,9 @@ import opensec.pibolt.app.ui.session.TranscriptModel
 import opensec.pibolt.app.ui.session.baseName
 import opensec.pibolt.app.ui.session.linkColor
 import opensec.pibolt.app.ui.components.InsetRow
+import opensec.pibolt.app.ui.components.Tag
+import opensec.pibolt.app.ui.theme.Space
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.rounded.MoreHoriz
 import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.theme.IconSize
@@ -88,7 +91,11 @@ fun HostCard(host: Host, live: SessionController?, now: Long, onClick: () -> Uni
                 StatusDot(linkColor(link, colors), Modifier.sharedHostElement(SharedKeys.dot(host.id)))
             }
         },
-        trailing = { IconAction(Icons.Rounded.MoreHoriz, "Manage ${host.displayName}", onClick = { onManage(status) }, tint = colors.ink3, size = IconSize.md) },
+        trailing = {
+            // The background service answers for this computer: it reaches every project, with no terminal open.
+            if (host.service) Tag("Service", Modifier.padding(end = Space.xs))
+            IconAction(Icons.Rounded.MoreHoriz, "Manage ${host.displayName}", onClick = { onManage(status) }, tint = colors.ink3, size = IconSize.md)
+        },
     )
 }
 

@@ -132,3 +132,27 @@ data class PairingPayload(
         }
     }
 }
+
+/** `remote_endpoints`: the host's current addresses, sent after `remote_hello` and whenever they change. */
+object RemoteEndpoints {
+    const val TYPE = "remote_endpoints"
+
+    /**
+     * The endpoints to use from now on, or null when [message] is malformed or names no usable address. Keeps the
+     * entries that pass [PairingPayload.isValidEndpoint], once each, at most [PairingPayload.MAX_ENDPOINTS]. The
+     * endpoint this connection uses ([connected]) is kept too (last), so a list that leaves it out cannot strand the
+     * phone.
+     */
+    fun from(message: JsonObject, connected: String?): List<String>? {
+        val list = (message["endpoints"] as? JsonArray) ?: return null
+        val valid = list.asSequence()
+            .mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+            .filter(PairingPayload::isValidEndpoint)
+            .distinct()
+            .take(PairingPayload.MAX_ENDPOINTS)
+            .toList()
+        val keep = connected?.takeIf { it !in valid && PairingPayload.isValidEndpoint(it) }
+        val endpoints = if (keep == null) valid else valid.take(PairingPayload.MAX_ENDPOINTS - 1) + keep
+        return endpoints.ifEmpty { null }
+    }
+}

@@ -42,6 +42,9 @@ enum class DisconnectReason {
     /** 1001: Pi-Bolt stopped remote control. */
     HostStopped,
 
+    /** 1012: the background service handed the port to the computer's terminal (`/remote-control`). Reconnect at once. */
+    Handoff,
+
     /** 4400: the host could not read the handshake or a message. */
     Malformed,
 
@@ -59,12 +62,13 @@ enum class DisconnectReason {
     ;
 
     /** Worth retrying automatically. */
-    val retryable: Boolean get() = this == Unreachable || this == Lost || this == HandshakeTimeout
+    val retryable: Boolean get() = this == Unreachable || this == Lost || this == HandshakeTimeout || this == Handoff
 
     companion object {
         fun fromCloseCode(code: Int): DisconnectReason = when (code) {
             1000 -> Closed
             1001 -> HostStopped
+            1012 -> Handoff
             4400 -> Malformed
             4403 -> Unauthorized
             4408 -> HandshakeTimeout
