@@ -21,6 +21,8 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ChatBubbleOutline
+import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material3.SnackbarHostState
@@ -37,7 +39,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -58,6 +59,7 @@ import opensec.pibolt.app.ui.session.SheetAction
 import opensec.pibolt.app.ui.session.TextPromptSheet
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Space
+import java.time.ZoneId
 
 /**
  * Plain chats (engine.ChatSpace): a large "Chats" title, a glass search, + for a new chat, and the saved chats newest
@@ -124,19 +126,21 @@ fun ChatsScreen(app: PiBoltApp, onBack: () -> Unit, onOpenChat: () -> Unit) {
                     all == null -> Unit
                     all.isEmpty() -> EmptyState(
                         title = "No chats yet",
+                        message = "Ask anything, without a project. Your chats show here.",
+                        icon = Icons.Rounded.ChatBubbleOutline,
                         modifier = Modifier.padding(horizontal = Space.page, vertical = Space.xxl).widthIn(max = 560.dp),
                         action = { PrimaryButton("New chat", onClick = { open(null) }, icon = Icons.Rounded.Add, enabled = !opening) },
                     )
                     else -> {
                         val shown = remember(all, query) { ChatList.filter(all, query) }
                         val now = remember(all) { System.currentTimeMillis() }
+                        val sections = remember(shown, now) { ChatList.sections(shown, now, ZoneId.systemDefault()) }
                         if (shown.isEmpty()) {
-                            Text(
-                                "No chats match",
-                                style = type.rowMeta,
-                                color = colors.ink3,
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.fillMaxWidth().padding(Space.xxl),
+                            EmptyState(
+                                title = "No chats match",
+                                message = "Try other words, or start a new chat.",
+                                icon = Icons.Rounded.SearchOff,
+                                modifier = Modifier.padding(horizontal = Space.page, vertical = Space.xl).widthIn(max = 560.dp),
                             )
                         }
                         LazyColumn(
@@ -144,19 +148,30 @@ fun ChatsScreen(app: PiBoltApp, onBack: () -> Unit, onOpenChat: () -> Unit) {
                             contentPadding = PaddingValues(bottom = Space.xxl + WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()),
                             verticalArrangement = Arrangement.Top,
                         ) {
-                            itemsIndexed(shown, key = { _, c -> c.file }) { i, chat ->
-                                InsetRow(
-                                    title = chat.title,
-                                    meta = ChatList.meta(chat, now),
-                                    onClick = { open(chat.file) },
-                                    onLongClick = {
-                                        haptics.longPress()
-                                        actionsFor = chat
-                                    },
-                                    divider = i < shown.lastIndex,
-                                    current = chat.file == liveFile,
-                                    label = "Open chat",
-                                )
+                            for ((head, inSection) in sections) {
+                                item(key = "head:$head", contentType = "head") {
+                                    Text(
+                                        head,
+                                        style = type.rowMeta,
+                                        color = colors.ink3,
+                                        modifier = Modifier.animateItem().padding(start = Space.page, end = Space.page, top = Space.lg, bottom = Space.xs).semantics { heading() },
+                                    )
+                                }
+                                itemsIndexed(inSection, key = { _, c -> c.file }, contentType = { _, _ -> "chat" }) { i, chat ->
+                                    InsetRow(
+                                        title = chat.title,
+                                        meta = ChatList.meta(chat, now),
+                                        onClick = { open(chat.file) },
+                                        onLongClick = {
+                                            haptics.longPress()
+                                            actionsFor = chat
+                                        },
+                                        divider = i < inSection.lastIndex,
+                                        current = chat.file == liveFile,
+                                        label = "Open chat",
+                                        modifier = Modifier.animateItem(),
+                                    )
+                                }
                             }
                         }
                     }

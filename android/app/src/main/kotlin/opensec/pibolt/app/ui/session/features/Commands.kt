@@ -7,19 +7,27 @@ import opensec.pibolt.protocol.session.SlashCommand
  * The app's own slash commands: the terminal's built-ins that make sense on a phone. The host never sees these; the
  * composer runs them here (a sheet, an RPC command). [localOnly] ones need the engine on this phone (remote control
  * refuses session commands). [projectOnly] ones need a project or tools, which a plain chat (engine.ChatSpace) has not.
+ * [inChat] is the description in a chat, where it differs ("Start a new chat").
  */
-enum class Builtin(val command: String, val description: String, val hint: String? = null, val localOnly: Boolean = false, val projectOnly: Boolean = false) {
-    New("new", "Start a new session", localOnly = true),
-    Resume("resume", "Open another session of this project", localOnly = true),
-    Fork("fork", "New session from an earlier message", localOnly = true),
-    Clone("clone", "Duplicate this session", localOnly = true),
+enum class Builtin(
+    val command: String,
+    val description: String,
+    val hint: String? = null,
+    val localOnly: Boolean = false,
+    val projectOnly: Boolean = false,
+    val inChat: String? = null,
+) {
+    New("new", "Start a new session", localOnly = true, inChat = "Start a new chat"),
+    Resume("resume", "Open another session of this project", localOnly = true, inChat = "Open another chat"),
+    Fork("fork", "New session from an earlier message", localOnly = true, inChat = "New chat from an earlier message"),
+    Clone("clone", "Duplicate this session", localOnly = true, inChat = "Duplicate this chat"),
     Compact("compact", "Compact the context", "[instructions]"),
-    Name("name", "Rename this session", "<name>"),
+    Name("name", "Rename this session", "<name>", inChat = "Rename this chat"),
     Session("session", "Tokens, cost and context use"),
     Model("model", "Choose a model", "[search]"),
     Thinking("thinking", "Set the thinking level", "[level]"),
     Copy("copy", "Copy the last reply"),
-    Export("export", "Share the session as Markdown, JSONL or HTML"),
+    Export("export", "Share the session as Markdown, JSONL or HTML", inChat = "Share the chat as Markdown, JSONL or HTML"),
     Search("search", "Search the transcript", "[text]"),
     Shell("!", "Run a shell command (!! keeps output out of context)", "<command>", localOnly = true, projectOnly = true),
     Tree("tree", "Go back, switch or label branches", localOnly = true),
@@ -31,7 +39,7 @@ enum class Builtin(val command: String, val description: String, val hint: Strin
     ScopedModels("scoped-models", "Choose the models in the picker", localOnly = true),
     Tuning("tuning", "Retry and compaction settings", localOnly = true),
     Import("import", "Import a session file (JSONL)", localOnly = true, projectOnly = true),
-    Share("share", "Share this session"),
+    Share("share", "Share this session", inChat = "Share this chat"),
     Bug("bug", "Report a bug", "[description]"),
 }
 
@@ -60,7 +68,7 @@ object CommandPalette {
     fun entries(host: List<SlashCommand>, local: Boolean, chat: Boolean = false): List<PaletteEntry> {
         val hostNames = host.mapTo(HashSet()) { it.name }
         val builtins = Builtin.entries.filter { (local || !it.localOnly) && !(chat && it.projectOnly) && it.command !in hostNames }
-            .map { PaletteEntry(it.command, it.description, CommandSource.App, it.hint, it) }
+            .map { PaletteEntry(it.command, it.inChat?.takeIf { chat } ?: it.description, CommandSource.App, it.hint, it) }
         // The app's own helper extension (features2.AppExtension) is not for people.
         val fromHost = host.filterNot { it.name == "pibolt-app" || it.name.startsWith("pibolt-app:") || (chat && sourceOf(it.source) != CommandSource.Prompt) }.map { c ->
             PaletteEntry(c.name, c.description?.takeIf { it.isNotBlank() }.orEmpty(), sourceOf(c.source), c.argumentHint)

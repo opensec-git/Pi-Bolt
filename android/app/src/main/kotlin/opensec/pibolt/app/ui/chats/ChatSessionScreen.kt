@@ -1,5 +1,16 @@
 package opensec.pibolt.app.ui.chats
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Balance
+import androidx.compose.material.icons.rounded.EditNote
+import androidx.compose.material.icons.rounded.Quiz
+import androidx.compose.material.icons.rounded.Restaurant
+import androidx.compose.material.icons.rounded.School
+import androidx.compose.material.icons.automirrored.rounded.ShortText
+import androidx.compose.material.icons.rounded.Spellcheck
+import androidx.compose.material.icons.rounded.TipsAndUpdates
+import androidx.compose.material.icons.rounded.TravelExplore
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -13,15 +24,19 @@ import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.engine.ChatSpace
 import opensec.pibolt.app.ui.session.LocalUi
 import opensec.pibolt.app.ui.session.SessionContent
+import opensec.pibolt.app.ui.session.StarterPrompt
+import opensec.pibolt.app.ui.session.WelcomeContent
 import opensec.pibolt.protocol.session.UserItem
+import androidx.compose.ui.graphics.vector.ImageVector
+import java.time.LocalDateTime
 
 /**
  * The live chat ([Chats.current]) on the session screen, as a chat: titled by its name or first prompt, without the
- * project-only parts ([LocalUi.chat]). "New session" starts a new chat. [onOpenSession] shows a project's live session
- * from the switcher.
+ * project-only parts ([LocalUi.chat]). Its top bar has New chat and All chats ([onOpenChats]); a new chat greets with
+ * [ChatWelcome]. [onOpenSession] shows a project's live session from the switcher.
  */
 @Composable
-fun ChatSessionScreen(app: PiBoltApp, onBack: () -> Unit, onOpenSession: (String) -> Unit) {
+fun ChatSessionScreen(app: PiBoltApp, onBack: () -> Unit, onOpenSession: (String) -> Unit, onOpenChats: () -> Unit = {}) {
     val current by Chats.current.collectAsStateWithLifecycle()
     val live = current
     if (live == null || live.controller.stopped) {
@@ -31,6 +46,15 @@ fun ChatSessionScreen(app: PiBoltApp, onBack: () -> Unit, onOpenSession: (String
     LaunchedEffect(live.controller) { app.focus(live.controller) }
     val scope = rememberCoroutineScope()
     val engine = app.engine
+    // The greeting and the day's suggestions, fixed while the screen lives.
+    val welcome = remember {
+        val now = LocalDateTime.now()
+        WelcomeContent(
+            title = ChatWelcome.greeting(now.hour),
+            question = ChatWelcome.QUESTION,
+            starters = ChatWelcome.pick(now.toLocalDate().toEpochDay()).map { StarterPrompt(it.label, it.prompt, topicIcon(it.topic)) },
+        )
+    }
     // Every open is a new Live: the screen starts fresh for it (a first prompt is sent once the new chat can take it).
     key(live) {
         val state = live.controller.state.collectAsStateWithLifecycle()
@@ -57,8 +81,32 @@ fun ChatSessionScreen(app: PiBoltApp, onBack: () -> Unit, onOpenSession: (String
                 takeFirstPrompt = { live.firstPrompt.also { live.firstPrompt = null } },
                 composerDrop = live.composerDrop,
                 chat = true,
+                welcome = welcome,
+                onChats = onOpenChats,
+                onModelPicked = Chats::pickedModel,
+                onThinkingPicked = Chats::pickedThinking,
+                onDelete = {
+                    val file = live.controller.sessionFile
+                    scope.launch {
+                        if (file != null) Chats.delete(ChatSummary(file, title, 0L, 0)) else live.controller.stop(keepEngine = false)
+                    }
+                },
             ),
             onOpenSession = onOpenSession,
         )
     }
+}
+
+/** The glyph before a chat suggestion: outline marks in the row's leading slot. */
+private fun topicIcon(topic: ChatTopic): ImageVector = when (topic) {
+    ChatTopic.Explain -> Icons.Rounded.TipsAndUpdates
+    ChatTopic.Write -> Icons.Rounded.EditNote
+    ChatTopic.Ideas -> Icons.Rounded.AutoAwesome
+    ChatTopic.Travel -> Icons.Rounded.TravelExplore
+    ChatTopic.Learn -> Icons.Rounded.School
+    ChatTopic.Cook -> Icons.Rounded.Restaurant
+    ChatTopic.Decide -> Icons.Rounded.Balance
+    ChatTopic.Summarise -> Icons.AutoMirrored.Rounded.ShortText
+    ChatTopic.Quiz -> Icons.Rounded.Quiz
+    ChatTopic.Edit -> Icons.Rounded.Spellcheck
 }

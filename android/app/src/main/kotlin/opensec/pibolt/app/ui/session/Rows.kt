@@ -52,6 +52,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -418,6 +419,10 @@ fun StepHeader(
 @Composable
 fun TurnMetaRowView(row: TurnMetaRow, modifier: Modifier = Modifier) {
     val colors = Pi.colors
+    if (row.end == TurnEnd.Finished && LocalPlainChat.current) {
+        Spacer(modifier.height(Space.sm))
+        return
+    }
     val text = buildString {
         append(
             when (row.end) {
@@ -602,10 +607,17 @@ fun Modifier.staggerIn(key: String, rail: Rail?, memory: SessionMemory): Modifie
 // Reply actions
 
 /**
+ * The transcript of a plain chat (ui/chats). Its reply's second action regenerates the answer in place rather than
+ * asking again as a new turn (TalkBack hears "Regenerate", as the More sheet names it), and a finished turn has no
+ * "Finished 4s" line: a chat's answer follows the question as in ChatGPT; "Failed" and "Stopped" still show.
+ */
+val LocalPlainChat = staticCompositionLocalOf { false }
+
+/**
  * Under the last finished reply, three quiet icons in a row (each 48dp to touch, ink2 at 18dp): Copy (a check while
- * copied), Ask again (sends the same prompt as a new turn: Pi has no regenerate) and More (the long-press sheet). Icons
- * only, so the row reads as one calm toolbar rather than three labelled buttons. Fades in once when the turn settles;
- * history shows it as is.
+ * copied), Ask again (sends the same prompt as a new turn; in a chat, Regenerate: the answer again in its place, see
+ * [LocalPlainChat]) and More (the long-press sheet). Icons only, so the row reads as one calm toolbar rather
+ * than three labelled buttons. Fades in once when the turn settles; history shows it as is.
  */
 @Composable
 fun ReplyActions(row: ActionsRow, memory: SessionMemory, onAskAgain: (String) -> Unit, onMore: () -> Unit, modifier: Modifier = Modifier) {
@@ -625,7 +637,7 @@ fun ReplyActions(row: ActionsRow, memory: SessionMemory, onAskAgain: (String) ->
     ) {
         CopyButton(text = { row.reply }, modifier = Modifier.width(48.dp), label = false, clipLabel = "Reply", description = "Copy reply")
         val prompt = row.prompt
-        if (prompt != null) IconAction(Icons.Rounded.Replay, "Ask again", onClick = { onAskAgain(prompt) }, size = 18.dp)
+        if (prompt != null) IconAction(Icons.Rounded.Replay, if (LocalPlainChat.current) "Regenerate" else "Ask again", onClick = { onAskAgain(prompt) }, size = 18.dp)
         IconAction(Icons.Rounded.MoreHoriz, "More actions", onClick = onMore, size = 18.dp)
     }
 }

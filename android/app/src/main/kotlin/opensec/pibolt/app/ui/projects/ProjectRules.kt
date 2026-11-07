@@ -85,6 +85,14 @@ object ProjectRules {
             .take(limit)
 
     /**
+     * The Home pill starts a chat rather than a session in a project when there is no project, or when a chat changed
+     * last ([lastChatAt]: the newest chat's write) after any project was worked in ([lastProjectAt]: the newest
+     * [ProjectEntry.lastActive]). The user's pick in the chip wins over this default.
+     */
+    fun pillDefaultsToChat(noProjects: Boolean, lastChatAt: Long?, lastProjectAt: Long?): Boolean =
+        noProjects || (lastChatAt != null && lastChatAt > (lastProjectAt ?: 0L))
+
+    /**
      * The focus card's title for a session: its name, else the first line of its latest prompt, else [fallback] (the
      * project). Blank values count as missing.
      */
