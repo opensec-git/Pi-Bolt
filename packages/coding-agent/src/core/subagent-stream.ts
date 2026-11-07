@@ -660,17 +660,27 @@ class SubagentStream {
 	 * `BOUNDARY_WAIT_MS` is dropped, so events never wait forever for a saved message that does not come.
 	 */
 	private flushEvents(timed = false): void {
-		const events: unknown[] = [];
+		let events: unknown[] = [];
+		let bytes = 0;
+		const send = () => {
+			if (events.length > 0) this.owner.send({ type: "subagent_events", runId: this.runId, events });
+			events = [];
+			bytes = 0;
+		};
 		while (this.queue.length > 0) {
 			const head = this.queue[0];
 			if ("boundary" in head) {
 				if (!timed || Date.now() - head.boundary < BOUNDARY_WAIT_MS) break;
 			} else {
+				// Each event is capped, a burst of them is not: a message holds about `ENTRIES_BATCH_BYTES` of them.
+				const size = jsonBytes(head.event);
+				if (events.length > 0 && bytes + size > ENTRIES_BATCH_BYTES) send();
 				events.push(head.event);
+				bytes += size;
 			}
 			this.queue.shift();
 		}
-		if (events.length > 0) this.owner.send({ type: "subagent_events", runId: this.runId, events });
+		send();
 	}
 }
 

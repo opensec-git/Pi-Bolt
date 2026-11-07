@@ -591,6 +591,35 @@ describe("subagent stream binding", () => {
 		expect(order).toEqual(["message_end", "saved:assistant", "tool_execution_start", "message_start"]);
 	});
 
+	it("splits a burst of live events into messages of bounded size", async () => {
+		const { streams, call, result, agent, sent, live, isStart } = await files();
+		const t = Date.now() - 60_000;
+		call("run-1", { prompt: "task" }, t);
+		result("run-1", "11111111aaaa");
+		const file = agent("11111111aaaa", "task", "earlier", t + 1_000);
+		const emit = live(file, "general-purpose#11111111", [{ role: "user", content: "task" }], t);
+		streams.subscribe("run-1");
+		await until(() => sent.some(isStart));
+		const from = sent.length;
+		const message = { role: "assistant", content: [] };
+		for (let i = 0; i < 140; i++) {
+			const delta = String(i % 10).repeat(260_000);
+			emit({
+				type: "message_update",
+				message,
+				assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta },
+			});
+		}
+		await until(() => sent.slice(from).flatMap((m) => (m.events as Message[] | undefined) ?? []).length === 140);
+		const batches = sent.slice(from).filter((m) => m.type === "subagent_events");
+		expect(batches.length).toBeGreaterThan(1);
+		for (const batch of batches) expect(Buffer.byteLength(JSON.stringify(batch))).toBeLessThan(1024 * 1024);
+		const order = batches.flatMap((batch) =>
+			(batch.events as Message[]).map((event) => String((event.assistantMessageEvent as Message).delta)[0]),
+		);
+		expect(order).toEqual(Array.from({ length: 140 }, (_, i) => String(i % 10)));
+	});
+
 	it("lets a resumed run share its agent's file with the original run", async () => {
 		const { streams, call, result, agent, replies } = await files();
 		const t = Date.now() - 60_000;
