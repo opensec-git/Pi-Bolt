@@ -93,6 +93,7 @@ import com.google.zxing.PlanarYUVLuminanceSource
 import com.google.zxing.ReaderException
 import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeReader
+import opensec.pibolt.app.ui.components.GlassBarInset
 import opensec.pibolt.app.ui.components.GlassIconButton
 import opensec.pibolt.app.ui.components.glass
 import opensec.pibolt.app.ui.theme.Space
@@ -202,12 +203,12 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
                 .fillMaxWidth()
                 .background(Brush.verticalGradient(listOf(colors.canvas.copy(alpha = 0.85f), colors.canvas.copy(alpha = 0f))))
                 .statusBarsPadding()
-                .padding(start = 8.dp, end = 20.dp, top = 4.dp, bottom = 32.dp),
+                .padding(start = GlassBarInset, end = Space.page, top = 4.dp, bottom = 32.dp),
         ) {
             GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack)
             Spacer(Modifier.height(Space.xs))
-            Text("Scan the code", style = type.largeTitle, color = colors.ink1, modifier = Modifier.padding(start = Space.md).semantics { heading() })
-            Text("Run /\u2060remote-control on your computer.", style = type.rowMeta, color = colors.ink2, modifier = Modifier.padding(start = Space.md, top = Space.xxs))
+            Text("Scan the code", style = type.largeTitle, color = colors.ink1, modifier = Modifier.padding(start = Space.xxs).semantics { heading() })
+            Text("Run /\u2060remote-control on your computer.", style = type.rowMeta, color = colors.ink2, modifier = Modifier.padding(start = Space.xxs, top = Space.xxs))
         }
 
         Column(

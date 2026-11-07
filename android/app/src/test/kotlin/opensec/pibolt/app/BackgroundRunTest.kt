@@ -199,6 +199,7 @@ class BackgroundRunTest {
             Request.Confirm("local:/p/a", "d1", yes = true),
             Request.Confirm("local:/p/a", "d1", yes = false),
             Request.Reply("remote-host"),
+            Request.Reply("local:/p/a", sessionId = "s1"),
         )
         for (r in requests) {
             val (action, extras) = SessionActions.encode(r)
@@ -267,6 +268,55 @@ class BackgroundRunTest {
         assertEquals(Route.Prompt(k, "use the v2 API", steer = true), SessionActions.route(Request.Reply(k), " use the v2 API ", listOf(live(running = true))))
         assertEquals(Route.Prompt(k, "now the tests", steer = false), SessionActions.route(Request.Reply(k), "now the tests", listOf(live(running = false))))
         assertEquals(Route.Again(k, null, "Type a message"), SessionActions.route(Request.Reply(k), "", listOf(live())))
+    }
+
+    @Test
+    fun aTappedSuggestionOfALongOptionIsThatOption() {
+        // ask_user_question's options run long ("PostgreSQL: a relational database with..."): the inline reply offers them
+        // cut to 40 characters, and tapping one sent the cut text, which matched no option ("Not an option").
+        val k = "local:/p/a"
+        val pg = "PostgreSQL: a relational database with strong consistency"
+        val sqlite = "SQLite: a single file, no server to run on the phone"
+        val db = DialogRequest("d5", DialogKind.Select, "Which database?", options = listOf(pg, sqlite))
+        val typed = assertIs<SessionActions.Answering.Typed>(SessionActions.answering(db))
+        assertTrue(typed.choices.all { it.length <= SessionActions.CHOICE_CHARS })
+        for ((option, offered) in db.options.zip(typed.choices)) {
+            assertEquals(Route.Value(k, "d5", option), SessionActions.route(Request.Answer(k, "d5"), offered, listOf(live(listOf(db)))))
+        }
+        // Two options with the same first 40 characters: a cut one is ambiguous, so it is asked again.
+        val twins = DialogRequest("d6", DialogKind.Select, "Which?", options = listOf("x".repeat(40) + " one", "x".repeat(40) + " two"))
+        assertIs<Route.Again>(SessionActions.route(Request.Answer(k, "d6"), "x".repeat(40), listOf(live(listOf(twins)))))
+    }
+
+    @Test
+    fun aReplyReachesOnlyTheConversationItWasAbout() {
+        // A "Pi finished" notification stays while the user opens another chat (or session) in the same live engine;
+        // its Reply must not land in the conversation that is open now.
+        val k = "local:/chats"
+        val now = SessionActions.Live(k, local = true, running = false, dialogs = emptyList(), sessionId = "chat-b")
+        assertEquals(Route.Gone(k), SessionActions.route(Request.Reply(k, sessionId = "chat-a"), "and in French?", listOf(now)))
+        assertEquals(Route.Prompt(k, "and in French?", steer = false), SessionActions.route(Request.Reply(k, sessionId = "chat-b"), "and in French?", listOf(now)))
+        // Not known on either side (a notification from an older build, a session not yet reported): as before.
+        assertIs<Route.Prompt>(SessionActions.route(Request.Reply(k), "hi", listOf(now)))
+        assertIs<Route.Prompt>(SessionActions.route(Request.Reply(k, sessionId = "chat-a"), "hi", listOf(now.copy(sessionId = null))))
+    }
+
+    @Test
+    fun aReplyThatReachedNoSessionKeepsItsText() {
+        assertEquals("Not sent: now add the tests", SessionActions.closedText("  now add the tests "))
+        assertEquals("Open it to continue", SessionActions.closedText(null))
+        assertEquals("Open it to continue", SessionActions.closedText("   "))
+        assertEquals(200, SessionActions.closedText("x".repeat(500)).removePrefix("Not sent: ").length)
+    }
+
+    @Test
+    fun aChatsNotificationNamesNoProject() {
+        // The chats' directory is HOME/.pibolt/chats: a "needs an answer" re-posted from a notification named the project
+        // "chats", so its tap opened nothing, or a project called "chats".
+        val chats = File("/data/data/in.opensec.pibolt/files/home/.pibolt/chats")
+        assertNull(opensec.pibolt.app.session.Notifications.projectOf(chats, chat = true))
+        assertEquals("app", opensec.pibolt.app.session.Notifications.projectOf(File("/p/app"), chat = false))
+        assertNull(opensec.pibolt.app.session.Notifications.projectOf(null, chat = false))
     }
 
     @Test

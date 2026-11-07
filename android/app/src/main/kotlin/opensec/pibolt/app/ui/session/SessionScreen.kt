@@ -110,6 +110,7 @@ import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberUpdatedState
 import kotlinx.coroutines.flow.first
@@ -392,6 +393,10 @@ internal fun SessionContent(
             delay(400)
             if (sessionId != null) drafts.put(draftKey, it)
         }
+    }
+    // Leaving the screen (Back, New chat on a new engine) within the 400 ms above kept the last keystrokes unsaved.
+    DisposableEffect(draftKey) {
+        onDispose { if (sessionId != null && draftOwner == draftKey) drafts.put(draftKey, draft) }
     }
     LaunchedEffect(searching, query) {
         if (!searching || query.isBlank()) {
@@ -773,7 +778,11 @@ internal fun SessionContent(
     fun regenerate(user: UserItem, occurrence: Int) {
         val before = controller.state.value.sessionId
         scope.launch {
+            val lastUser = PendingSend.lastUserKey(controller.state.value.items)
             if (chat && rewind(user.text, occurrence).isSuccess) {
+                // The rewound transcript is only queued (resync): sent against the old one, the "Sending" row took the
+                // answered message as its base and vanished as soon as the rewind showed, before the run started.
+                withTimeoutOrNull(FORK_SWITCH_MS) { controller.state.first { PendingSend.lastUserKey(it.items) != lastUser } }
                 send(user.text)
                 return@launch
             }
