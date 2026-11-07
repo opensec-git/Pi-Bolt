@@ -227,6 +227,14 @@ full width), then a segmented "Sessions · N | Files | Changes | Terminal".
   52dp rows: folder or file glyph, the name in monoSmall (dot files ink3), size or "N items" (meta ink3) at the end.
   Folders first, then files, by name. Tapping a file opens the full-screen viewer (first 512 KB; binary files say so).
   Back goes up a folder before it leaves the screen.
+  The "+" menu also imports: "Import files…" (ACTION_OPEN_DOCUMENT, several) and "Import a folder…"
+  (ACTION_OPEN_DOCUMENT_TREE) into the folder shown; names that exist get " (2)". A folder's long-press sheet has
+  "Export as zip", a file's "Share"; the project's ⋮ menu has "Export as zip". The export sheet: "Leave out .git and
+  dependencies" (a 56dp checkbox row, on by default), then Share (secondary) and Save to… (primary, ACTION_CREATE_DOCUMENT).
+  A transfer shows a card above the bottom edge (surface2, lineStrong, radius 12): "Importing 3 files · 40%"
+  (bodyStrong), "2 files · 1.2 MB of 3 MB · src/a.kt" (monoMeta ink3), Cancel (danger text action) and a 3dp accent
+  progress line on surface3 (no fill when the total is unknown: never an indeterminate animation). Progress updates
+  at most every 100 ms. New project has "Import a zip as a project…" (accent text action) under its buttons.
 - Changes (git, through the engine's own git off the main thread with timeouts): outside a repository a card offers
   "Initialise git". Inside: the branch card (surface1, radius 12): branch glyph, the branch in bodyStrong and
   "origin/main · 2 to push · 1 to pull" in meta ink3, tap for the Branches sheet; while an operation runs, a 16dp Run
@@ -276,6 +284,25 @@ Show / Hide, Edit, Delete (danger). Add secret (primary) opens a form card (surf
 validated: letters, digits, _, not the engine's own variables), Value (masked while typing, eye toggle), Cancel / Save.
 Write .env file (secondary) confirms first: values land in plain text in the project and git would commit them; .env
 is added to .gitignore in git projects. The window is FLAG_SECURE on this screen.
+
+**File viewer and editor.** Full screen over the project (or the session, for a file on a tool card). Top bar: ✕,
+the name and "path · type · N lines · read-only · unsaved" (monoMeta; warning when unsaved), Find, Wrap (viewing) or
+Save (editing, accent text action), ⋮ (Edit, Ask Pi about the selection / this file, Go to line, Copy path, Copy
+text, Share). Open files are tabs once there are two: a 48dp strip, each tab 40dp (radius 8; surface2 when shown),
+a 7dp warning dot when unsaved, the name (monoSmall, at most 160dp) and a ✕ (48dp target). Find bar: the query
+(mono), "3 of 12" (meta, live region), ↑ ↓ ✕, then 48dp text toggles "Aa" (match case), "ab" underlined (whole
+word), ".*" (regex) in accent with a 18% accent fill when on (TalkBack: switches), and ⇄ for Replace: a second row
+with the replacement and "Replace" / "All" (accent text actions); a bad regex or group shows in danger meta below.
+Matches are accent 22%, the current one 50%. Editing: the same monoSmall text, colours as in code blocks (updated
+as you type), the bracket pair at the cursor on surface3, a 48dp bar over the keyboard (surface1, top line): Undo,
+Redo, Insert indent, Go to line, "Ln 12, Col 4" (monoMeta ink3; "No colours over 400 KB" first for big files).
+Files over 1 MB open read-only. Leaving or closing a tab with unsaved edits asks first ("Discard").
+
+**Share into Pi-Bolt.** Another app's share sheet lists Pi-Bolt for files, images and text. A sheet: "Share to
+Pi-Bolt" with "2 images" / "1 file" / "Text"; a segmented choice when there is more than one (Attach to chat |
+Import files, New project | Import files, Import files | Add to chat), the projects as 52dp radio rows (folder glyph,
+title, accent check), then the primary action. Attach and Add to chat open the project's session with the images in
+the tray or the text in the composer.
 
 **Provider sheet (first run and Add provider).** Opens by itself once, 450 ms after the first frame of Home, when no
 provider has a key. Eyebrow "Welcome to Pi-Bolt" (first run only), "Connect a model", one line saying the key stays on
@@ -513,6 +540,10 @@ as Markdown, Share. More under the last reply offers the same.
 **Export.** "Export or share" (or `/export`): Share as Markdown (a `.md` file through the share sheet), Copy as
 Markdown, and on this phone Share session file (the JSONL) and Share as HTML (`export_html`). Files are written to
 `cache/exports` and shared through a FileProvider.
+
+**Dictation.** A 48dp mic beside Send: MicNone ink2 on a 34dp surface1 disc; listening is an accent disc with an
+onAccent Mic (static, no pulse) and TalkBack's state "Listening". The first tap explains the microphone in a sheet
+("Continue"), then Android asks; partial words appear in the draft as they are heard.
 
 **Image viewer.** A tap on an image in a user message or the composer tray opens it full screen on black: swipe
 between images, pinch or double-tap (2.5x) to zoom up to 6x, drag to pan a zoomed image (kept on screen), Back or ✕

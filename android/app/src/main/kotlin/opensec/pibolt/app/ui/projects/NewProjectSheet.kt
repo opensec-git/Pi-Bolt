@@ -61,6 +61,7 @@ fun NewProjectSheet(
     startWithClone: Boolean,
     onCreate: suspend (name: String, cloneUrl: String?) -> String?,
     onDismiss: () -> Unit,
+    onImportZip: (() -> Unit)? = null,
     github: GitHub? = null,
     progress: String? = null,
 ) {
@@ -188,6 +189,9 @@ fun NewProjectSheet(
                 enabled = ready,
                 modifier = Modifier.weight(1f),
             )
+        }
+        onImportZip?.let { import ->
+            TextAction("Import a zip as a project…", onClick = import, color = colors.accent, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp))
         }
         Spacer(Modifier.height(8.dp))
     }

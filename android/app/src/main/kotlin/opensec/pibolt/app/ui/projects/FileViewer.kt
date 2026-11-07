@@ -12,6 +12,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
@@ -34,24 +35,26 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.WrapText
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
+import androidx.compose.material.icons.automirrored.rounded.Redo
+import androidx.compose.material.icons.automirrored.rounded.Undo
+import androidx.compose.material.icons.automirrored.rounded.WrapText
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.KeyboardArrowUp
+import androidx.compose.material.icons.automirrored.rounded.FormatIndentIncrease
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
@@ -78,9 +81,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.positionChanged
 import androidx.compose.ui.layout.ContentScale
@@ -88,16 +98,15 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -118,12 +127,29 @@ import opensec.pibolt.app.ui.components.Segmented
 import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.SnackKind
 import opensec.pibolt.app.ui.components.TextAction
+import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.markdown.MdBlock
 import opensec.pibolt.app.ui.markdown.MdBlockView
 import opensec.pibolt.app.ui.markdown.MdDoc
 import opensec.pibolt.app.ui.markdown.Markdown
 import opensec.pibolt.app.ui.markdown.rememberHighlighted
+import opensec.pibolt.app.ui.projects.editor.AskPi
+import opensec.pibolt.app.ui.projects.editor.CodeEditor
+import opensec.pibolt.app.ui.projects.editor.EDIT_HIGHLIGHT_CHARS
+import opensec.pibolt.app.ui.projects.editor.EditorCommand
+import opensec.pibolt.app.ui.projects.editor.EditorInput
+import opensec.pibolt.app.ui.projects.editor.EditorShortcuts
+import opensec.pibolt.app.ui.projects.editor.EditorTab
+import opensec.pibolt.app.ui.projects.editor.EditorTabs
+import opensec.pibolt.app.ui.projects.editor.FindOptions
+import opensec.pibolt.app.ui.projects.editor.FindReplace
+import opensec.pibolt.app.ui.projects.editor.FindReplaceBar
+import opensec.pibolt.app.ui.projects.editor.FindResult
+import opensec.pibolt.app.ui.projects.editor.FindState
+import opensec.pibolt.app.ui.projects.editor.KeyChord
+import opensec.pibolt.app.ui.projects.editor.Reveal
+import opensec.pibolt.app.ui.projects.editor.TextMatch
 import opensec.pibolt.app.ui.session.Viewer
 import opensec.pibolt.app.ui.session.ViewerContent
 import opensec.pibolt.app.ui.session.features.ImageZoom
@@ -136,86 +162,134 @@ import java.io.File
 private const val MAX_LINE = 2_000
 
 /**
- * A project file, full screen. Markdown renders with the app's markdown engine (Rendered / Source); code is
- * highlighted by its extension with line numbers; any text can be searched, jumped through by line, wrapped and edited
- * (with Save and a guard for unsaved changes). Images show zoomable; binary files say so and offer Share. Large files
- * load a page at a time. [onChanged] runs after a save, so the list can refresh sizes.
+ * The project's open files, full screen, one tab each ([tabs]; [rel] is the one shown). Markdown renders with the
+ * app's markdown engine (Rendered / Source); code is highlighted by its extension with line numbers; any text can be
+ * searched (plain, whole word, case, regex), jumped through by line and wrapped. Edit turns the text into the code
+ * editor ([CodeEditor]): highlighting as you type, auto-indent, bracket pairs, find and replace with undo, Save, and
+ * a guard for unsaved changes (tabs with unsaved edits show a dot). Files over 1 MB (or not loaded whole) are
+ * read-only. "Ask Pi" hands the file, or the selected lines, to [onAsk] for the project's composer. Hardware keys:
+ * [EditorShortcuts]. Images show zoomable; binary files say so and offer Share. [onChanged] runs after a save.
  */
 @Composable
-fun FileViewer(root: File, rel: String, onClose: () -> Unit, onChanged: () -> Unit) {
+fun FileViewer(
+    root: File,
+    tabs: EditorTabs,
+    rel: String,
+    onSelect: (String) -> Unit,
+    onClose: () -> Unit,
+    onChanged: () -> Unit,
+    onAsk: (String) -> Unit,
+) {
     val colors = Pi.colors
     val type = Pi.type
     val context = LocalContext.current
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    val tab = remember(tabs, rel) { tabs.find(rel) ?: EditorTab(rel) }
+    // Added after composition, not during it (the tab strip reads the list).
+    LaunchedEffect(tab) { tabs.adopt(tab) }
     val file = remember(root, rel) { File(root, rel) }
     val name = file.name
     val kind = remember(name) { FileTypes.kind(name) }
     val language = remember(name) { if (kind == FileKind.Markdown) "markdown" else FileTypes.language(name) }
 
-    var doc by remember(file) { mutableStateOf<FileDoc?>(null) }
-    LaunchedEffect(file) { doc = ProjectFiles.open(file) }
+    LaunchedEffect(tab) { if (tab.doc == null) tab.doc = ProjectFiles.open(file) }
+    val doc = tab.doc
     val text = (doc as? FileDoc.Text)
+    val editing = tab.editing
     var loadingMore by remember { mutableStateOf(false) }
 
     var rendered by rememberSaveable { mutableStateOf(true) }
     var wrap by rememberSaveable { mutableStateOf(kind != FileKind.Code) }
-    var searching by rememberSaveable { mutableStateOf(false) }
-    var query by rememberSaveable { mutableStateOf("") }
-    var current by remember { mutableIntStateOf(0) }
+    val find = remember { FindState() }
     var menu by remember { mutableStateOf(false) }
     var goTo by remember { mutableStateOf(false) }
     var flashLine by remember { mutableIntStateOf(-1) }
-    var editing by rememberSaveable { mutableStateOf(false) }
-    var draft by remember { mutableStateOf(TextFieldValue("")) }
     var saving by remember { mutableStateOf(false) }
-    var confirmDiscard by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
     var codeView by remember { mutableStateOf<ViewerContent?>(null) }
-    val listState = rememberLazyListState()
+    var reveal by remember { mutableStateOf<Reveal?>(null) }
+    val listState = remember(rel) { LazyListState() }
+    val editorFocus = remember { FocusRequester() }
+    val rootFocus = remember { FocusRequester() }
 
     val showRendered = kind == FileKind.Markdown && rendered && !editing
     val lines = remember(text?.text) { text?.let { FileSearch.lines(it.text) }.orEmpty() }
-    val matches = remember(text?.text, query, searching) { if (searching && text != null) FileSearch.find(text.text, lines, query) else emptyList() }
-    val byLine = remember(matches) { matches.withIndex().groupBy({ it.value.line }, { it.index to it.value }) }
-    val dirty = editing && text != null && draft.text != text.text
     val canEdit = text != null && text.complete && text.size <= ProjectFiles.MAX_EDIT
+    val readOnly = text != null && !canEdit
+    val searched = if (editing) tab.value.text else text?.text
 
-    fun startEdit() {
-        val t = text ?: return
-        draft = TextFieldValue(t.text)
-        searching = false
-        editing = true
+    // Matches: off the main thread, 120 ms after the last change (a regex can be slow; FindReplace bounds it too).
+    val options = find.options
+    var lastOptions by remember { mutableStateOf<FindOptions?>(null) }
+    LaunchedEffect(find.open, options, searched) {
+        if (!find.open || options.query.isEmpty() || searched == null) {
+            find.result = FindResult.EMPTY
+            lastOptions = null
+            return@LaunchedEffect
+        }
+        delay(120)
+        val result = withContext(Dispatchers.Default) { FindReplace.find(searched, options) }
+        val at = if (editing) tab.value.selection.min else 0
+        find.result = result
+        find.current = FindReplace.nearest(result.matches, at).coerceAtLeast(0)
+        // A new query (or a replace) goes to its match; results refreshed by typing leave the cursor alone.
+        if (options != lastOptions || find.navigateOnResult) find.navTick++
+        find.navigateOnResult = false
+        lastOptions = options
+    }
+    val matches = find.matches
+    val byLine = remember(matches, lines, editing) { if (editing) emptyMap() else matchesByLine(matches, lines) }
+
+    fun startEdit(): Boolean {
+        val t = text ?: return false
+        if (!canEdit) {
+            scope.launch { snackbar.show("Files over 1 MB open read-only", SnackKind.Warning) }
+            return false
+        }
+        if (!tab.editing) tab.startEditing(t.text)
+        rendered = false
+        return true
     }
 
     fun leaveEdit(then: () -> Unit = {}) {
-        if (dirty) {
-            confirmDiscard = {
-                editing = false
+        if (tab.dirty) {
+            confirm = "Discard your changes to $name?" to {
+                tab.stopEditing()
                 then()
             }
         } else {
-            editing = false
+            tab.stopEditing()
             then()
         }
     }
 
     fun save() {
-        val t = text ?: return
-        if (saving) return
+        if (!tab.editing || saving) return
         saving = true
         scope.launch {
-            val body = draft.text
+            val body = tab.value.text
             ProjectFiles.write(file, body)
                 .onSuccess {
-                    doc = t.copy(text = body, next = null, size = body.toByteArray().size.toLong())
-                    editing = false
+                    tab.saved = body
+                    tab.doc = FileDoc.Text(body, null, body.toByteArray().size.toLong())
                     onChanged()
                     snackbar.show("Saved", SnackKind.Success)
                 }
                 .onFailure { snackbar.show("Could not save: ${it.message ?: "write failed"}", SnackKind.Error) }
             saving = false
         }
+    }
+
+    fun closeTab(target: EditorTab) {
+        val go = {
+            val next = tabs.close(target.rel)
+            if (target.rel == rel) {
+                if (next == null) onClose() else onSelect(next.rel)
+            }
+        }
+        if (target.dirty) confirm = "Close ${target.name} without saving?" to go else go()
     }
 
     fun share() {
@@ -235,6 +309,13 @@ fun FileViewer(root: File, rel: String, onClose: () -> Unit, onChanged: () -> Un
     }
 
     fun jump(line: Int) {
+        if (editing) {
+            val at = EditorInput.lineStart(tab.value.text, line)
+            tab.value = tab.value.copy(selection = TextRange(at))
+            reveal = Reveal(at)
+            runCatching { editorFocus.requestFocus() }
+            return
+        }
         scope.launch {
             listState.scrollToItem(line.coerceAtLeast(0))
             flashLine = line
@@ -243,14 +324,76 @@ fun FileViewer(root: File, rel: String, onClose: () -> Unit, onChanged: () -> Un
         }
     }
 
-    // Moving through matches scrolls to the current one.
-    LaunchedEffect(current, matches) {
-        matches.getOrNull(current)?.let { m -> if (!listState.isScrolledToLine(m.line)) listState.scrollToItem((m.line - 3).coerceAtLeast(0)) }
+    fun openFind(replace: Boolean) {
+        if (replace && !startEdit()) return
+        if (!editing && !replace) rendered = false
+        // A one-line selection seeds the query, as desktop editors do.
+        if (tab.editing) {
+            val sel = tab.value.selection
+            val picked = tab.value.text.substring(sel.min, sel.max)
+            if (picked.isNotEmpty() && '\n' !in picked && picked.length <= 200) find.query = picked
+        }
+        find.open = true
+        if (replace) find.replacing = true
+        find.focusTick++
     }
+
+    fun replaceOne() {
+        val m = matches.getOrNull(find.current) ?: return
+        val r = FindReplace.replacementFor(tab.value.text, find.options, m, find.replacement) ?: return
+        tab.replace(r.start, r.end, r.text)
+        find.navigateOnResult = true
+    }
+
+    fun replaceAll() {
+        val (r, count) = FindReplace.replaceAll(tab.value.text, find.options, find.replacement) ?: return
+        if (count == 0) return
+        tab.replace(r.start, r.end, r.text, TextRange(r.start))
+        scope.launch { snackbar.show(if (count == 1) "Replaced 1 match" else "Replaced $count matches", SnackKind.Success) }
+    }
+
+    fun ask(selection: Boolean) {
+        val v = tab.value
+        onAsk(if (selection && editing) AskPi.prompt(rel, v.text, v.selection.min, v.selection.max, language) else AskPi.prompt(rel, "", 0, 0, null))
+    }
+
+    fun command(c: EditorCommand): Boolean {
+        when (c) {
+            EditorCommand.Save -> if (tab.editing) save() else return false
+            EditorCommand.Find -> if (text != null) openFind(replace = false) else return false
+            EditorCommand.Replace -> if (text != null) openFind(replace = true) else return false
+            EditorCommand.GoToLine -> if (text != null && !showRendered) goTo = true else return false
+            EditorCommand.Undo -> if (tab.editing) tab.undo() else return false
+            EditorCommand.Redo -> if (tab.editing) tab.redo() else return false
+            EditorCommand.CloseTab -> closeTab(tab)
+            EditorCommand.NextTab -> tabs.neighbour(rel, 1)?.let { onSelect(it.rel) }
+            EditorCommand.PreviousTab -> tabs.neighbour(rel, -1)?.let { onSelect(it.rel) }
+            EditorCommand.FindNext -> if (find.open) find.step(1) else return false
+            EditorCommand.FindPrevious -> if (find.open) find.step(-1) else return false
+        }
+        return true
+    }
+
+    // Moving through matches: the view scrolls to the line; the editor selects the match and shows it.
+    LaunchedEffect(find.navTick) {
+        val m = find.matches.getOrNull(find.current) ?: return@LaunchedEffect
+        if (editing) {
+            if (m.end <= tab.value.text.length) {
+                tab.value = tab.value.copy(selection = TextRange(m.start, m.end))
+                reveal = Reveal(m.start)
+            }
+        } else {
+            val line = lineOf(lines, m.start)
+            if (!listState.isScrolledToLine(line)) listState.scrollToItem((line - 3).coerceAtLeast(0))
+        }
+    }
+    // Without a focused field the screen itself takes the keyboard, so shortcuts work while reading too.
+    LaunchedEffect(editing, find.open, rel) { if (!editing && !find.open) runCatching { rootFocus.requestFocus() } }
+    LaunchedEffect(editing, rel) { if (editing) runCatching { editorFocus.requestFocus() } }
 
     var progress by remember { mutableFloatStateOf(0f) }
     var fromLeft by remember { mutableStateOf(true) }
-    PredictiveBackHandler(enabled = !editing && !searching && codeView == null) { events ->
+    PredictiveBackHandler(enabled = !editing && !find.open && codeView == null) { events ->
         try {
             events.collect { e ->
                 progress = e.progress
@@ -262,8 +405,8 @@ fun FileViewer(root: File, rel: String, onClose: () -> Unit, onChanged: () -> Un
             throw e
         }
     }
-    BackHandler(enabled = (editing || searching) && codeView == null) {
-        if (editing) leaveEdit() else searching = false
+    BackHandler(enabled = (editing || find.open) && codeView == null) {
+        if (find.open) find.open = false else leaveEdit()
     }
 
     Box(
@@ -277,7 +420,14 @@ fun FileViewer(root: File, rel: String, onClose: () -> Unit, onChanged: () -> Un
                 shape = RoundedCornerShape(Radius.xl * progress)
                 clip = progress > 0f
             }
-            .background(colors.canvas),
+            .background(colors.canvas)
+            .onPreviewKeyEvent { e ->
+                if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
+                val chord = KeyChord(e.nativeKeyEvent.keyCode, ctrl = e.isCtrlPressed || e.isMetaPressed, shift = e.isShiftPressed, alt = e.isAltPressed)
+                EditorShortcuts.command(chord)?.let(::command) ?: false
+            }
+            .focusRequester(rootFocus)
+            .focusable(),
     ) {
         Column(Modifier.fillMaxSize().statusBarsPadding()) {
             // Top bar.
@@ -288,108 +438,110 @@ fun FileViewer(root: File, rel: String, onClose: () -> Unit, onChanged: () -> Un
                     val sub = buildList {
                         add(rel)
                         add(FileTypes.label(name))
-                        when (val d = doc) {
-                            is FileDoc.Text -> if (d.complete) add(if (lines.size == 1) "1 line" else "${lines.size} lines") else add("${ProjectFiles.size(d.size)}")
-                            is FileDoc.Image -> add("${d.width} × ${d.height}")
-                            is FileDoc.Binary -> add(ProjectFiles.size(d.size))
+                        when (doc) {
+                            is FileDoc.Text -> if (doc.complete) add(if (lines.size == 1) "1 line" else "${lines.size} lines") else add(ProjectFiles.size(doc.size))
+                            is FileDoc.Image -> add("${doc.width} × ${doc.height}")
+                            is FileDoc.Binary -> add(ProjectFiles.size(doc.size))
                             else -> Unit
                         }
-                        if (dirty) add("unsaved")
+                        if (readOnly) add("read-only")
+                        if (tab.dirty) add("unsaved")
                     }.joinToString(" · ")
-                    Text(sub, style = type.monoMeta, color = if (dirty) colors.warning else colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
+                    Text(sub, style = type.monoMeta, color = if (tab.dirty) colors.warning else colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
+                }
+                if (text != null) {
+                    IconAction(Icons.Rounded.Search, "Find in file", onClick = { if (find.open) find.open = false else openFind(replace = false) }, tint = if (find.open) colors.accent else colors.ink2)
                 }
                 if (editing) {
-                    TextAction(if (saving) "Saving…" else "Save", onClick = ::save, color = colors.accent, enabled = dirty && !saving)
-                } else {
-                    if (text != null) {
-                        IconAction(Icons.Rounded.Search, "Find in file", onClick = {
-                            rendered = false
-                            searching = !searching
-                        }, tint = if (searching) colors.accent else colors.ink2)
-                        if (!showRendered) {
-                            IconAction(Icons.AutoMirrored.Rounded.WrapText, if (wrap) "Do not wrap lines" else "Wrap lines", onClick = { wrap = !wrap }, tint = if (wrap) colors.accent else colors.ink2)
-                        }
-                    }
-                    Box {
-                        IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
-                        ViewerMenu(
-                            expanded = menu,
-                            onDismiss = { menu = false },
-                            items = buildList {
-                                if (canEdit) add(MenuEntry("Edit", Icons.Rounded.Edit) { startEdit() })
-                                if (text != null && !showRendered) add(MenuEntry("Go to line", Icons.Rounded.VerticalAlignCenter) { goTo = true })
-                                add(MenuEntry("Copy path", Icons.Rounded.ContentCopy) { copy("Path", rel, "Path copied") })
-                                if (text != null) add(MenuEntry("Copy text", Icons.Rounded.ContentCopy) { copy(name, text.text, "Text copied") })
-                                add(MenuEntry("Share", Icons.Rounded.Share) { share() })
-                            },
-                        )
-                    }
+                    TextAction(if (saving) "Saving…" else "Save", onClick = ::save, color = colors.accent, enabled = tab.dirty && !saving)
+                } else if (text != null && !showRendered) {
+                    IconAction(Icons.AutoMirrored.Rounded.WrapText, if (wrap) "Do not wrap lines" else "Wrap lines", onClick = { wrap = !wrap }, tint = if (wrap) colors.accent else colors.ink2)
+                }
+                Box {
+                    IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
+                    ViewerMenu(
+                        expanded = menu,
+                        onDismiss = { menu = false },
+                        items = buildList {
+                            if (canEdit && !editing) add(MenuEntry("Edit", Icons.Rounded.Edit) { startEdit() })
+                            if (editing && !tab.value.selection.collapsed) add(MenuEntry("Ask Pi about the selection", Icons.Rounded.AutoAwesome) { ask(selection = true) })
+                            add(MenuEntry("Ask Pi about this file", Icons.Rounded.AutoAwesome) { ask(selection = false) })
+                            if (text != null && !showRendered) add(MenuEntry("Go to line", Icons.Rounded.VerticalAlignCenter) { goTo = true })
+                            if (editing) add(MenuEntry(if (wrap) "Do not wrap lines" else "Wrap lines", Icons.AutoMirrored.Rounded.WrapText) { wrap = !wrap })
+                            add(MenuEntry("Copy path", Icons.Rounded.ContentCopy) { copy("Path", rel, "Path copied") })
+                            if (text != null && !editing) add(MenuEntry("Copy text", Icons.Rounded.ContentCopy) { copy(name, text.text, "Text copied") })
+                            add(MenuEntry("Share", Icons.Rounded.Share) { share() })
+                        },
+                    )
                 }
             }
+            if (tabs.tabs.size > 1) TabStrip(tabs, rel, onSelect = onSelect, onClose = ::closeTab)
             if (kind == FileKind.Markdown && text != null && !editing) {
                 Segmented(
                     options = listOf(true to "Rendered", false to "Source"),
                     selected = rendered,
                     onSelect = {
                         rendered = it
-                        if (it) searching = false
+                        if (it) find.open = false
                     },
                     modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
                     height = 40.dp,
                 )
             }
-            if (searching && text != null && !editing) {
-                FindBar(
-                    query = query,
-                    onQuery = {
-                        query = it
-                        current = 0
-                    },
-                    counter = if (query.isEmpty()) "" else FileSearch.counter(current, matches.size, matches.size >= FileSearch.MAX_MATCHES),
-                    hasMatches = matches.isNotEmpty(),
-                    onPrevious = { if (matches.isNotEmpty()) current = (current - 1 + matches.size) % matches.size },
-                    onNext = { if (matches.isNotEmpty()) current = (current + 1) % matches.size },
-                    onClose = { searching = false },
-                )
+            if (find.open && text != null && !showRendered) {
+                FindReplaceBar(find, canReplace = canEdit, onReplace = ::replaceOne, onReplaceAll = ::replaceAll, onClose = { find.open = false })
             }
             Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
-            Box(Modifier.weight(1f).fillMaxWidth()) {
-                when (val d = doc) {
-                    null -> Unit
-                    is FileDoc.Unreadable -> Note(d.reason, null, null)
-                    is FileDoc.Binary -> Note("Binary file", "${FileTypes.label(name)} · ${ProjectFiles.size(d.size)}. Pi-Bolt can't show it; share it to open it in another app.") {
-                        SecondaryButton("Share", onClick = ::share, icon = Icons.Rounded.Share)
-                    }
-                    is FileDoc.Image -> ZoomImage(d, "$name, ${d.width} by ${d.height} pixels")
-                    is FileDoc.Text -> when {
-                        editing -> Editor(draft, onChange = { draft = it })
-                        showRendered -> RenderedMarkdown(d.text, more = d.next != null, loadingMore = loadingMore, footer = moreLabel(d), onMore = {
-                            loadingMore = true
-                            scope.launch {
-                                doc = ProjectFiles.more(file, d)
-                                loadingMore = false
-                            }
-                        }, onOpenCode = { code, lang -> codeView = ViewerContent(lang, null, code) })
-                        else -> Lines(
-                            text = d.text,
-                            lines = lines,
-                            language = language,
-                            wrap = wrap,
-                            byLine = byLine,
-                            current = current,
-                            flashLine = flashLine,
-                            state = listState,
-                            footer = if (d.next != null) moreLabel(d) else null,
-                            loadingMore = loadingMore,
-                            onMore = {
+            Column(Modifier.weight(1f).fillMaxWidth().then(if (editing) Modifier.imePadding() else Modifier)) {
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when (doc) {
+                        null -> Unit
+                        is FileDoc.Unreadable -> Note(doc.reason, null, null)
+                        is FileDoc.Binary -> Note("Binary file", "${FileTypes.label(name)} · ${ProjectFiles.size(doc.size)}. Pi-Bolt can't show it; share it to open it in another app.") {
+                            SecondaryButton("Share", onClick = ::share, icon = Icons.Rounded.Share)
+                        }
+                        is FileDoc.Image -> ZoomImage(doc, "$name, ${doc.width} by ${doc.height} pixels")
+                        is FileDoc.Text -> when {
+                            editing -> CodeEditor(tab, language, wrap, matches, find.current, reveal, editorFocus)
+                            showRendered -> RenderedMarkdown(doc.text, more = doc.next != null, loadingMore = loadingMore, footer = moreLabel(doc), onMore = {
                                 loadingMore = true
                                 scope.launch {
-                                    doc = ProjectFiles.more(file, d)
+                                    tab.doc = ProjectFiles.more(file, doc)
                                     loadingMore = false
                                 }
-                            },
-                        )
+                            }, onOpenCode = { code, lang -> codeView = ViewerContent(lang, null, code) })
+                            else -> Lines(
+                                text = doc.text,
+                                lines = lines,
+                                language = language,
+                                wrap = wrap,
+                                byLine = byLine,
+                                current = find.current,
+                                flashLine = flashLine,
+                                state = listState,
+                                footer = if (doc.next != null) moreLabel(doc) else null,
+                                loadingMore = loadingMore,
+                                onMore = {
+                                    loadingMore = true
+                                    scope.launch {
+                                        tab.doc = ProjectFiles.more(file, doc)
+                                        loadingMore = false
+                                    }
+                                },
+                            )
+                        }
                     }
+                }
+                if (editing) {
+                    EditorBar(
+                        tab = tab,
+                        plain = tab.value.text.length > EDIT_HIGHLIGHT_CHARS && language != null,
+                        onIndent = {
+                            val v = tab.value
+                            tab.replace(v.selection.min, v.selection.max, EditorInput.indentUnit(v.text))
+                        },
+                        onGoTo = { goTo = true },
+                    )
                 }
             }
         }
@@ -407,22 +559,111 @@ fun FileViewer(root: File, rel: String, onClose: () -> Unit, onChanged: () -> Un
     }
 
     if (goTo) {
-        GoToLineSheet(lineCount = lines.size, onGo = { line ->
+        val count = if (editing) EditorInput.lineCount(tab.value.text) else lines.size
+        GoToLineSheet(lineCount = count, onGo = { line ->
             goTo = false
             jump(line)
         }, onDismiss = { goTo = false })
     }
-    confirmDiscard?.let { then ->
+    confirm?.let { (title, then) ->
         ConfirmSheet(
-            title = "Discard your changes?",
-            message = "Your edits to $name are not saved.",
+            title = title,
+            message = "Your edits are not saved.",
             confirmLabel = "Discard",
             onConfirm = {
-                confirmDiscard = null
+                confirm = null
                 then()
             },
-            onDismiss = { confirmDiscard = null },
+            onDismiss = { confirm = null },
         )
+    }
+}
+
+/** The line (0-based) holding [offset]: a binary search over [lines]. */
+private fun lineOf(lines: List<IntRange>, offset: Int): Int {
+    var lo = 0
+    var hi = lines.size - 1
+    while (lo < hi) {
+        val mid = (lo + hi + 1) ushr 1
+        if (lines[mid].first <= offset) lo = mid else hi = mid - 1
+    }
+    return lo.coerceAtLeast(0)
+}
+
+/** [matches] (offsets in the text) by line, each cut to its line, with its index for the current-match colour. */
+private fun matchesByLine(matches: List<TextMatch>, lines: List<IntRange>): Map<Int, List<Pair<Int, FileMatch>>> {
+    if (matches.isEmpty() || lines.isEmpty()) return emptyMap()
+    val out = HashMap<Int, MutableList<Pair<Int, FileMatch>>>()
+    matches.forEachIndexed { i, m ->
+        val line = lineOf(lines, m.start)
+        val range = lines[line]
+        val end = minOf(m.end, range.last + 1)
+        if (end > m.start) out.getOrPut(line) { ArrayList() } += i to FileMatch(line, m.start - range.first, end - range.first)
+    }
+    return out
+}
+
+/** Open files as tabs: name, a dot when unsaved, and a close button; the shown one is underlined in the accent. */
+@Composable
+private fun TabStrip(tabs: EditorTabs, shown: String, onSelect: (String) -> Unit, onClose: (EditorTab) -> Unit) {
+    val colors = Pi.colors
+    val scroll = rememberScrollState()
+    Row(Modifier.fillMaxWidth().height(48.dp).horizontalScroll(scroll).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        for (t in tabs.tabs) {
+            val selected = t.rel == shown
+            val dirty = t.dirty
+            Row(
+                Modifier
+                    .height(40.dp)
+                    .background(if (selected) colors.surface2 else colors.canvas, RoundedCornerShape(Radius.sm))
+                    .pressable({ onSelect(t.rel) }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "Show ${t.name}")
+                    .semantics {
+                        this.selected = selected
+                        contentDescription = t.name + if (dirty) ", unsaved" else ""
+                    }
+                    .padding(start = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                if (dirty) {
+                    Box(Modifier.size(7.dp).background(colors.warning, CircleShape))
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(t.name, style = Pi.type.monoSmall, color = if (selected) colors.ink1 else colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
+                IconAction(Icons.Rounded.Close, "Close ${t.name}", onClick = { onClose(t) }, size = 16.dp, tint = colors.ink3)
+            }
+            Spacer(Modifier.width(4.dp))
+        }
+    }
+}
+
+/**
+ * The bar over the keyboard while editing: Undo, Redo, indent, go to line, and the cursor's line and column. Big
+ * files edit without colours; the bar says so.
+ */
+@Composable
+private fun EditorBar(tab: EditorTab, plain: Boolean, onIndent: () -> Unit, onGoTo: () -> Unit) {
+    val colors = Pi.colors
+    // Reading the version recomposes the bar when the history changes.
+    val canUndo = tab.historyVersion.let { tab.history.canUndo }
+    val canRedo = tab.historyVersion.let { tab.history.canRedo }
+    val v = tab.value
+    val (line, col) = remember(v.text, v.selection.start) { EditorInput.lineCol(v.text, v.selection.start) }
+    Column(Modifier.fillMaxWidth().background(colors.surface1)) {
+        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
+        Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconAction(Icons.AutoMirrored.Rounded.Undo, "Undo", onClick = { tab.undo() }, enabled = canUndo)
+            IconAction(Icons.AutoMirrored.Rounded.Redo, "Redo", onClick = { tab.redo() }, enabled = canRedo)
+            IconAction(Icons.AutoMirrored.Rounded.FormatIndentIncrease, "Insert indent", onClick = onIndent)
+            IconAction(Icons.Rounded.VerticalAlignCenter, "Go to line", onClick = onGoTo)
+            Spacer(Modifier.weight(1f))
+            Text(
+                (if (plain) "No colours over 400 KB · " else "") + "Ln $line, Col $col",
+                style = Pi.type.monoMeta,
+                color = colors.ink3,
+                maxLines = 1,
+                modifier = Modifier.padding(end = 12.dp),
+            )
+        }
     }
 }
 
@@ -458,38 +699,6 @@ private fun ViewerMenu(expanded: Boolean, onDismiss: () -> Unit, items: List<Men
                 modifier = Modifier.width(200.dp).heightIn(min = 48.dp),
             )
         }
-    }
-}
-
-/** Find bar: the query, "3 of 12", previous / next, close. Enter goes to the next match. */
-@Composable
-private fun FindBar(query: String, onQuery: (String) -> Unit, counter: String, hasMatches: Boolean, onPrevious: () -> Unit, onNext: () -> Unit, onClose: () -> Unit) {
-    val colors = Pi.colors
-    val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-        PiTextField(
-            value = query,
-            onValueChange = onQuery,
-            placeholder = "Find in file",
-            singleLine = true,
-            style = Pi.type.mono,
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search, autoCorrectEnabled = false),
-            keyboardActions = KeyboardActions(onSearch = { onNext() }),
-            modifier = Modifier.weight(1f).focusRequester(focus),
-        )
-        if (counter.isNotEmpty()) {
-            Text(
-                counter,
-                style = Pi.type.meta,
-                color = if (hasMatches) colors.ink2 else colors.warning,
-                maxLines = 1,
-                modifier = Modifier.padding(start = 10.dp).semantics { liveRegion = LiveRegionMode.Polite },
-            )
-        }
-        IconAction(Icons.Rounded.KeyboardArrowUp, "Previous match", onClick = onPrevious, enabled = hasMatches)
-        IconAction(Icons.Rounded.KeyboardArrowDown, "Next match", onClick = onNext, enabled = hasMatches)
-        IconAction(Icons.Rounded.Close, "Close find", onClick = onClose, size = 20.dp)
     }
 }
 
@@ -556,8 +765,8 @@ private fun lineText(
     range: IntRange,
     marks: List<Pair<Int, FileMatch>>?,
     current: Int,
-    matchBg: androidx.compose.ui.graphics.Color,
-    currentBg: androidx.compose.ui.graphics.Color,
+    matchBg: Color,
+    currentBg: Color,
 ): AnnotatedString {
     val end = range.last + 1
     val cut = minOf(end, range.first + MAX_LINE)
@@ -601,28 +810,6 @@ private fun RenderedMarkdown(text: String, more: Boolean, loadingMore: Boolean, 
         if (more) item(contentType = "more") { MoreRow(footer, loadingMore, onMore) }
         item(contentType = "end") { Spacer(Modifier.navigationBarsPadding()) }
     }
-}
-
-/** Plain text editing: monospace, no autocorrect, scrolls with the keyboard up. */
-@Composable
-private fun Editor(value: TextFieldValue, onChange: (TextFieldValue) -> Unit) {
-    val colors = Pi.colors
-    val focus = remember { FocusRequester() }
-    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
-    BasicTextField(
-        value = value,
-        onValueChange = onChange,
-        textStyle = Pi.type.monoSmall.copy(color = colors.ink1),
-        cursorBrush = SolidColor(colors.accent),
-        keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
-        modifier = Modifier
-            .fillMaxSize()
-            .imePadding()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp)
-            .focusRequester(focus)
-            .semantics { contentDescription = "File text" },
-    )
 }
 
 /** A centred note for files that are not shown as text, with an optional action. */

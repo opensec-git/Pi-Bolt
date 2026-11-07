@@ -1,10 +1,12 @@
 package opensec.pibolt.app.ui.projects
 
+import android.net.Uri
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.PiBoltApp
@@ -72,7 +74,24 @@ object LocalSessions {
         /** A prompt to send once the session can take it ("Clone from git"). Read and cleared by the session screen. */
         @Volatile
         var firstPrompt: String? = null
+
+        /**
+         * Text and images for the composer ("Ask Pi" in the editor, content shared from another app), waiting for the
+         * session screen, which takes them as soon as its draft is loaded (also while it is already open).
+         */
+        val composerDrop = MutableStateFlow<ComposerDrop?>(null)
+
+        /** Adds to what waits for the composer: text on a new line after earlier text, images after earlier ones. */
+        fun drop(text: String? = null, images: List<Uri> = emptyList()) {
+            composerDrop.update { old ->
+                val joined = listOfNotNull(old?.text, text).takeIf { it.isNotEmpty() }?.joinToString("\n")
+                ComposerDrop(joined, old?.images.orEmpty() + images)
+            }
+        }
     }
+
+    /** What [Live.drop] queued for the composer. */
+    class ComposerDrop(val text: String?, val images: List<Uri>)
 
     private val _current = MutableStateFlow<Live?>(null)
     val current: StateFlow<Live?> = _current.asStateFlow()

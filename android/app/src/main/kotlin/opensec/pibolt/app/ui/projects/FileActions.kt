@@ -20,10 +20,14 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.NoteAdd
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
+import androidx.compose.material.icons.rounded.DriveFolderUpload
+import androidx.compose.material.icons.rounded.FileOpen
+import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -70,6 +74,12 @@ sealed interface FileAction {
     data class Delete(val entry: FileEntry) : FileAction
 
     data class Create(val folder: Boolean) : FileAction
+
+    /** Zip a folder (Save to… or Share); handled by the project screen. */
+    data class Export(val entry: FileEntry) : FileAction
+
+    /** Send one file through the share sheet; handled by the project screen. */
+    data class Share(val entry: FileEntry) : FileAction
 }
 
 /**
@@ -87,6 +97,8 @@ fun FilesBar(
     onHidden: (Boolean) -> Unit,
     onCreate: (folder: Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    /** Import from the system file picker: documents (false) or a whole folder (true). */
+    onImport: ((folder: Boolean) -> Unit)? = null,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -121,6 +133,16 @@ fun FilesBar(
                 MenuRow("New folder", Icons.Rounded.CreateNewFolder, colors.ink1) {
                     newMenu = false
                     onCreate(true)
+                }
+                onImport?.let { import ->
+                    MenuRow("Import files…", Icons.Rounded.FileOpen, colors.ink1) {
+                        newMenu = false
+                        import(false)
+                    }
+                    MenuRow("Import a folder…", Icons.Rounded.DriveFolderUpload, colors.ink1) {
+                        newMenu = false
+                        import(true)
+                    }
                 }
             }
         }
@@ -177,6 +199,11 @@ fun FileMenuSheet(entry: FileEntry, onAction: (FileAction) -> Unit, onDismiss: (
         SheetHeader(entry.name, subtitle = if (entry.dir) "Folder" else "${FileTypes.label(entry.name)} · ${ProjectFiles.size(entry.size)}")
         Spacer(Modifier.height(4.dp))
         SheetRow("Rename", Icons.Rounded.DriveFileRenameOutline, colors.ink1) { close { onAction(FileAction.Rename(entry)) } }
+        if (entry.dir) {
+            SheetRow("Export as zip", Icons.Rounded.Archive, colors.ink1) { close { onAction(FileAction.Export(entry)) } }
+        } else {
+            SheetRow("Share", Icons.Rounded.Share, colors.ink1) { close { onAction(FileAction.Share(entry)) } }
+        }
         SheetRow("New file here", Icons.AutoMirrored.Rounded.NoteAdd, colors.ink1) { close { onAction(FileAction.Create(folder = false)) } }
         SheetRow("New folder here", Icons.Rounded.CreateNewFolder, colors.ink1) { close { onAction(FileAction.Create(folder = true)) } }
         SheetRow("Delete", Icons.Rounded.DeleteOutline, colors.danger) { close { onAction(FileAction.Delete(entry)) } }
@@ -254,7 +281,7 @@ fun NameSheet(title: String, initial: String, action: String, onSubmit: suspend 
 fun FileActionSheets(action: FileAction?, folder: File, onAction: (FileAction?) -> Unit, onDone: () -> Unit, onError: (String) -> Unit) {
     val scope = rememberCoroutineScope()
     when (action) {
-        null -> Unit
+        null, is FileAction.Export, is FileAction.Share -> Unit
         is FileAction.Menu -> FileMenuSheet(action.entry, onAction = { onAction(it) }, onDismiss = { onAction(null) })
         is FileAction.Rename -> NameSheet(
             title = "Rename",

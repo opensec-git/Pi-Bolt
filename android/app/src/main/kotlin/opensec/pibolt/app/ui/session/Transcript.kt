@@ -112,6 +112,8 @@ fun Transcript(
     onToolImages: (ViewerImages) -> Unit = {},
     errorContext: ErrorContext = ErrorContext(null, null, local = false, running = false),
     onErrorAction: (ErrorAction, NoticeItem) -> Unit = { _, _ -> },
+    /** A file on this phone tapped in a tool card: the screen opens it in the full file viewer; null shows it as text. */
+    onOpenLocalFile: ((File) -> Unit)? = null,
 ) {
     val settings = Pi.settings
     val parseScope = rememberCoroutineScope()
@@ -222,6 +224,7 @@ fun Transcript(
     }
     val currentOpen by rememberUpdatedState(onOpen)
     val currentImages by rememberUpdatedState(onToolImages)
+    val currentLocalFile by rememberUpdatedState(onOpenLocalFile)
     // A path in a tool card opens the file: read from this phone when the session's folder is here (on-device Pi),
     // else a note that the file lives on the host.
     val openFile: (String) -> Unit = remember(scope) {
@@ -230,9 +233,14 @@ fun Transcript(
                 val root = state.value.host?.cwd
                 val file = if (path.startsWith("/")) File(path) else root?.let { File(it, path) }
                 val readable = file != null && withContext(Dispatchers.IO) { file.isFile && file.canRead() }
-                currentOpen(
-                    if (readable) fileView(file, path) else ViewerContent(baseName(path), path, "This file is on the computer running Pi, not on this phone."),
-                )
+                val local = currentLocalFile
+                if (readable && local != null) {
+                    local(file)
+                } else {
+                    currentOpen(
+                        if (readable) fileView(file, path) else ViewerContent(baseName(path), path, "This file is on the computer running Pi, not on this phone."),
+                    )
+                }
             }
         }
     }

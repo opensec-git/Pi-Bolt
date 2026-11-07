@@ -39,7 +39,9 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.engine.SessionSummary
 import opensec.pibolt.app.session.ForkPoint
@@ -129,6 +131,11 @@ import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.ui.terminal.PreviewChipRow
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.ui.projects.LocalSessions
+import opensec.pibolt.app.ui.projects.FileViewer
+import opensec.pibolt.app.ui.projects.editor.AskPi
+import opensec.pibolt.app.ui.projects.editor.EditorTabs
+import opensec.pibolt.app.ui.projects.editor.viewerPlace
+import opensec.pibolt.app.ui.session.voice.VoiceButton
 import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
@@ -164,6 +171,8 @@ class LocalUi(
     val takeFirstPrompt: () -> String?,
     /** Open a dev server's preview (the "Preview: localhost:3000" chip). */
     val onPreview: (Int) -> Unit = {},
+    /** Text and images waiting for the composer ("Ask Pi" in the editor, shares from other apps). */
+    val composerDrop: MutableStateFlow<LocalSessions.ComposerDrop?>? = null,
 )
 
 /**
@@ -240,6 +249,7 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
                 },
                 takeFirstPrompt = { live.firstPrompt.also { live.firstPrompt = null } },
                 onPreview = onPreview,
+                composerDrop = live.composerDrop,
             ),
             onOpenSession = onOpenSession,
         )
@@ -282,6 +292,9 @@ private fun SessionContent(
     var sheet by remember { mutableStateOf(Sheet.None) }
     val f2 = rememberFeatures2()
     var viewer by remember { mutableStateOf<ViewerContent?>(null) }
+    // A file on this phone tapped in a tool card opens in the full file viewer (tabs kept while the screen lives).
+    var openedFile by remember { mutableStateOf<File?>(null) }
+    val fileTabs = remember { EditorTabs() }
     var actionsFor by remember { mutableStateOf<TRow?>(null) }
     var statusOnScreen by remember { mutableStateOf(false) }
     val images = remember(controller.hostId) { mutableStateListOf<ComposerImage>() }
@@ -710,6 +723,18 @@ private fun SessionContent(
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(ImageSizing.MAX_IMAGES)) { addImages(it) }
 
+    // What the editor or another app left for the composer, once this session's draft is loaded (it would be
+    // overwritten otherwise), and later drops while the screen stays open.
+    LaunchedEffect(draftOwner) {
+        val inbox = local?.composerDrop ?: return@LaunchedEffect
+        if (draftOwner == null) return@LaunchedEffect
+        inbox.filterNotNull().collect { d ->
+            inbox.value = null
+            d.text?.let { draft = AskPi.appendTo(draft, it).first }
+            if (d.images.isNotEmpty()) addImages(d.images)
+        }
+    }
+
     /** An image on the clipboard (copied from a browser, a screenshot, a gallery app), or null. */
     fun clipboardImage(): Uri? {
         val cm = context.getSystemService(ClipboardManager::class.java) ?: return null
@@ -907,6 +932,7 @@ private fun SessionContent(
                             onToolImages = { imageViewer = it },
                             errorContext = ErrorContext(modelLabel, modelProvider?.let(ProviderCatalog::name), local = isLocal, running = running),
                             onErrorAction = ::onErrorAction,
+                            onOpenLocalFile = { openedFile = it },
                         )
                     }
                     if (empty) {
@@ -987,6 +1013,7 @@ private fun SessionContent(
                         attachAllowed = modelReadsImages != false,
                         onAttach = { sheet = Sheet.Attach },
                         onRemoveImage = { id -> images.removeAll { it.id == id } },
+                        voice = { VoiceButton(draft, onDraft = { draft = it }, enabled = enabled, onMessage = { m -> scope.launch { snackbar.show(m) } }) },
                         focusRequester = focus,
                         // A user `!` command started while Pi is idle stops through abort_bash; the agent through abort.
                         stoppable = running || shellRuns > 0,
@@ -1022,6 +1049,29 @@ private fun SessionContent(
             content.value?.let { Viewer(it, onClose = { viewer = null }) }
         }
         TurnReviewOverlay(review)
+        AnimatedVisibility(
+            visible = openedFile != null,
+            enter = fadeIn(PiMotion.enter(PiMotion.SHEET)) + slideInVertically(PiMotion.enter(PiMotion.SHEET)) { it / 10 },
+            exit = fadeOut(PiMotion.leave(PiMotion.SHEET)) + scaleOut(PiMotion.leave(PiMotion.SHEET), targetScale = 0.94f),
+        ) {
+            val shown = remember { mutableStateOf(openedFile) }
+            openedFile?.let { shown.value = it }
+            shown.value?.let { f ->
+                val (root, rel) = remember(f) { viewerPlace(f, state.value.host?.cwd) }
+                FileViewer(
+                    root,
+                    fileTabs,
+                    rel,
+                    onSelect = { openedFile = File(root, it) },
+                    onClose = { openedFile = null },
+                    onChanged = {},
+                    onAsk = {
+                        draft = AskPi.appendTo(draft, it).first
+                        openedFile = null
+                    },
+                )
+            }
+        }
         AnimatedVisibility(visible = imageViewer != null, enter = fadeIn(PiMotion.enter(PiMotion.SHEET)), exit = fadeOut(PiMotion.leave(PiMotion.SHEET))) {
             val shown = remember { mutableStateOf(imageViewer) }
             imageViewer?.let { shown.value = it }
