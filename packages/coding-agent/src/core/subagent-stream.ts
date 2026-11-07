@@ -85,6 +85,8 @@ function findRuns(messages: readonly unknown[]): Map<string, RunInfo> {
 				if (typeof block.name !== "string" || block.name.toLowerCase() !== "agent") continue;
 				const args = isRecord(block.arguments) ? block.arguments : {};
 				const resume = typeof args.resume === "string" && args.resume.trim() ? args.resume.trim() : undefined;
+				// Seen again (the saved branch, then the session's messages): the first keeps what its result added.
+				if (runs.has(block.id)) continue;
 				runs.set(block.id, {
 					prompt: typeof args.prompt === "string" ? args.prompt : "",
 					agentId: resume,
@@ -98,6 +100,17 @@ function findRuns(messages: readonly unknown[]): Map<string, RunInfo> {
 		}
 	}
 	return runs;
+}
+
+/**
+ * The `Agent` runs of [session]: of its saved current branch, which keeps calls a compaction took out of the model's
+ * context (a phone still shows those runs), and of its messages, which may hold some not saved yet.
+ */
+function sessionRuns(session: AgentSession): Map<string, RunInfo> {
+	const saved = session.sessionManager
+		.getBranch()
+		.flatMap((entry) => (entry.type === "message" ? [entry.message as unknown] : []));
+	return findRuns([...saved, ...session.messages]);
 }
 
 /** The `Agent` call `runId` of the parent's messages: its prompt, and its agent id once its result names one. */
@@ -663,7 +676,7 @@ export class SubagentStreams {
 		if (this.streams.has(runId)) return;
 		const session = this.options.getSession();
 		if (!session) throw new Error("No session is open yet");
-		const runs = findRuns(session.messages);
+		const runs = sessionRuns(session);
 		const run = runs.get(runId);
 		if (!run) throw new Error(`No subagent run ${runId} in this session`);
 		if (this.streams.size >= this.limits.maxStreams) {
@@ -675,7 +688,7 @@ export class SubagentStreams {
 	/** The `Agent` runs of the session phones see now, when it is still the one saved in [parentFile]. */
 	runs(parentFile: string | undefined): Map<string, RunInfo> | undefined {
 		const session = this.options.getSession();
-		return session && session.sessionFile === parentFile ? findRuns(session.messages) : undefined;
+		return session && session.sessionFile === parentFile ? sessionRuns(session) : undefined;
 	}
 
 	unsubscribe(runId: unknown): boolean {

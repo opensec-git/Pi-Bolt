@@ -333,8 +333,9 @@ The host then sends, until the client unsubscribes, disconnects or gets a new `r
 | `subagent_entries` | `{ runId, file?, reset, messages: AgentMessage[] }`: finished messages of the agent's session file, oldest first. The first batch has `reset: true` and starts from the beginning; later ones follow lines as they are appended. A compaction arrives as `{ role: "compactionSummary", summary, tokensBefore }`; the system prompt is left out. |
 | `subagent_events` | `{ runId, events }`: while the agent's session runs in this process, its assistant message as it streams (`message_start`, `message_update` deltas as in the event stream, `message_end`) and `tool_execution_start` / `tool_execution_end` (`{ toolCallId, toolName, args }`, `{ toolCallId, toolName, isError }`), sent in batches about every 80 ms. A client that joins mid-message gets a `message_start` with what is written so far. The finished message also arrives in `subagent_entries`. |
 
-The run is found by the `Agent` call's agent id (from its result, or `resume`) or by its prompt, among sessions whose
-header names the parent's file in `parentSession`. Matching by prompt skips sessions made before the call and sessions
+The `Agent` call is looked up in the parent's saved current branch as well as its messages, so a run that a compaction
+took out of the model's context can still be followed. The run is found by the `Agent` call's agent id (from its
+result, or `resume`) or by its prompt, among sessions whose header names the parent's file in `parentSession`. Matching by prompt skips sessions made before the call and sessions
 of other runs' agents, takes the newest, and is checked again once the result names the agent: a wrong guess is dropped
 and the stream starts over with `reset: true`. Runs with a known agent id may share a file (a resumed run and the
 original). Streams are read-only. A message or event larger than 256 KiB of JSON is cut (long text, thinking and tool

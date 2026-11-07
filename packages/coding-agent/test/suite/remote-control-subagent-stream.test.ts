@@ -429,7 +429,7 @@ describe("subagent stream binding", () => {
 		const isStart = (message: Message) =>
 			message.type === "subagent_events" &&
 			(message.events as Message[]).some((event) => event.type === "message_start");
-		return { streams, call, result, agent, replies, resets, sent, live, isStart };
+		return { parent, streams, call, result, agent, replies, resets, sent, live, isStart };
 	}
 
 	it("does not bind a repeated prompt to an earlier run's agent", async () => {
@@ -519,6 +519,31 @@ describe("subagent stream binding", () => {
 		await until(() => sent.some((message) => message.runId === "run-2" && message.type === "subagent_entries"));
 		live(second, "general-purpose#22222222", compacted, t + 11_000);
 		await until(() => sent.some((message) => message.runId === "run-2" && isStart(message)));
+	});
+
+	it("finds a run that compaction took out of the parent's context in its saved branch", async () => {
+		const { parent, streams, agent, replies } = await files();
+		const t = Date.now() - 60_000;
+		// Saved, but no longer among the session's messages (the model's context after a compaction).
+		parent.session.sessionManager.appendMessage({
+			role: "assistant",
+			content: [{ type: "toolCall", id: "run-old", name: "Agent", arguments: { prompt: "old task" } }],
+			timestamp: t,
+		} as never);
+		parent.session.sessionManager.appendMessage({
+			role: "toolResult",
+			toolCallId: "run-old",
+			toolName: "Agent",
+			content: [],
+			details: { agentId: "33333333cccc" },
+			isError: false,
+			timestamp: t,
+		} as never);
+		expect(parent.session.messages.some((message) => JSON.stringify(message).includes("run-old"))).toBe(false);
+		agent("33333333cccc", "old task", "old reply", t + 1_000);
+		streams.subscribe("run-old");
+		await until(() => replies("run-old").length > 0);
+		expect(replies("run-old")).toEqual([expect.stringContaining("old reply")]);
 	});
 
 	it("lets a resumed run share its agent's file with the original run", async () => {
