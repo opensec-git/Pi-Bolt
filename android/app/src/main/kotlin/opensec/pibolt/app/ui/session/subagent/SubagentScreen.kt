@@ -64,6 +64,8 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
@@ -80,8 +82,9 @@ import kotlinx.coroutines.launch
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
-import opensec.pibolt.app.ui.components.CopyButton
-import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.GlassBar
+import opensec.pibolt.app.ui.components.GlassCopyButton
+import opensec.pibolt.app.ui.components.GlassIconButton
 import opensec.pibolt.app.ui.components.PiTextField
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
@@ -120,6 +123,7 @@ import opensec.pibolt.app.ui.session.stepGlyphY
 import opensec.pibolt.app.ui.session.stepRail
 import opensec.pibolt.app.ui.theme.LocalPiType
 import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.PiType
 import opensec.pibolt.app.ui.theme.Radius
@@ -283,18 +287,24 @@ private fun SubagentScreen(controller: SessionController, key: String, nav: Suba
 private fun TopBar(run: Subagent, hue: Color, spin: Boolean, onClose: () -> Unit) {
     val colors = Pi.colors
     val type = Pi.type
-    Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onClose, tint = colors.ink1)
-        // The agent's state in its own colour, as on its card; part of the title, not a control.
-        Box(Modifier.clearAndSetSemantics { }) { AgentGlyph(SubagentFormat.stateOf(run), hue, live = true, size = AgentGlyphSize.Bar, spin = spin) }
-        Spacer(Modifier.width(10.dp))
-        Column(Modifier.weight(1f)) {
-            Text(SubagentFormat.title(run), style = type.subhead, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(SubagentFormat.typeLabel(run.type) + " agent", style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        val answer = run.result?.takeIf { !run.isActive && it.isNotBlank() }
-        if (answer != null) CopyButton({ answer }, label = false, clipLabel = "Agent answer", description = "Copy answer")
-    }
+    GlassBar(
+        leading = { GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onClose) },
+        center = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // The agent's state in its own colour, as on its card; part of the title, not a control.
+                Box(Modifier.clearAndSetSemantics { }) { AgentGlyph(SubagentFormat.stateOf(run), hue, live = true, size = AgentGlyphSize.Bar, spin = spin) }
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f).semantics(mergeDescendants = true) { heading() }) {
+                    Text(SubagentFormat.title(run), style = type.subhead, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(SubagentFormat.typeLabel(run.type) + " agent", style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
+        },
+        actions = {
+            val answer = run.result?.takeIf { !run.isActive && it.isNotBlank() }
+            if (answer != null) GlassCopyButton({ answer }, clipLabel = "Agent answer", description = "Copy answer")
+        },
+    )
 }
 
 /** State, time and metrics on one 36dp line; "background · id" at its end. */
@@ -303,7 +313,7 @@ private fun StatusStrip(run: Subagent) {
     val colors = Pi.colors
     val type = Pi.type
     Row(
-        Modifier.fillMaxWidth().height(36.dp).padding(horizontal = 16.dp),
+        Modifier.fillMaxWidth().height(36.dp).padding(horizontal = Space.page),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(SubagentFormat.statusWord(run.status).replaceFirstChar { it.uppercaseChar() }, style = type.label, color = colors.ink2, maxLines = 1)
@@ -319,7 +329,7 @@ private fun StatusStrip(run: Subagent) {
             style = type.monoMeta,
             color = colors.ink3,
             maxLines = 1,
-            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+            modifier = Modifier.padding(start = Space.page, end = Space.page, bottom = 8.dp),
         )
     }
 }

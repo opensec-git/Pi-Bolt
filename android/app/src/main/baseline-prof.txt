@@ -1,0 +1,9 @@
+# Hand-written rules, merged with the generated profile (src/release/generated/baselineProfiles, ./gradlew
+# :app:generateReleaseBaselineProfile). The generated one covers what its journey reached on the device it ran on: there
+# it was mostly settings and the computers' list, not Home's projects and chats, a project or a session. These rules
+# have ART compile the app's own code ahead of time at install (hot, post-startup methods), so none of it starts
+# interpreted. No startup (S) or class rules: the startup profile stays what the journey measured.
+HPLopensec/pibolt/app/**;->**(**)**
+HPLopensec/pibolt/protocol/**;->**(**)**
+# The JSON parser: every engine event and session file line goes through it, and nothing in the generated profile does.
+HPLkotlinx/serialization/json/**;->**(**)**

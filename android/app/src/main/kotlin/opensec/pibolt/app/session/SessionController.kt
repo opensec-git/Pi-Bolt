@@ -494,13 +494,13 @@ class SessionController private constructor(
                 "notify" -> _effects.tryEmit(SessionEffect.Notify(event.str("message").orEmpty(), event.str("notifyType") ?: "info"))
                 "set_editor_text" -> _effects.tryEmit(SessionEffect.EditorText(event.str("text").orEmpty()))
                 "select", "confirm", "input", "editor" -> if (!app.isForeground) {
-                    SessionReducer.dialogFrom(event)?.let { Notifications.needsAnswer(app, hostId, project?.name?.takeUnless { isChat }, _hostName.value, it, chat = isChat) }
+                    SessionReducer.dialogFrom(event)?.let { Notifications.needsAnswer(app, this, it) }
                 }
             }
             "agent_settled" -> {
                 if (!app.isForeground && before.isRunning) {
                     val last = (before.allItems.lastOrNull { it is AssistantTextItem } as? AssistantTextItem)?.text.orEmpty()
-                    Notifications.settled(app, hostId, project?.name?.takeUnless { isChat }, _hostName.value, last, aborted = event.bool("aborted") == true, chat = isChat)
+                    Notifications.settled(app, hostId, Notifications.projectOf(project, isChat), _hostName.value, last, aborted = event.bool("aborted") == true, chat = isChat, sessionId = before.sessionId)
                 }
                 scope.launch { refreshState() }
             }

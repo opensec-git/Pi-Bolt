@@ -59,8 +59,11 @@ import opensec.pibolt.app.ui.theme.Radius
 
 private const val THEME_TILES_PER_ROW = 4
 
-/** Near-black themes look alike at tile size; their canvas hex goes under the name. */
-private val NEAR_BLACK = setOf(ThemeId.Graphite, ThemeId.Contrast, ThemeId.Codex, ThemeId.Vercel)
+/**
+ * Near-black themes look alike at tile size; their canvas hex goes under the name. Pi-Bolt (Graphite) is warm charcoal
+ * since the redesign and reads apart without it.
+ */
+private val NEAR_BLACK = setOf(ThemeId.Contrast, ThemeId.Codex, ThemeId.Vercel)
 
 /** Four tiles a row; an incomplete last row keeps the tile width. */
 @Composable
