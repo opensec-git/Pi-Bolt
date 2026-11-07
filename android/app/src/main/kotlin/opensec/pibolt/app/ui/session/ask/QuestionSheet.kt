@@ -161,7 +161,7 @@ private fun QuestionPage(question: AskQuestion, answer: AskAnswer, onAnswer: (As
         Spacer(Modifier.height(Space.sm))
         Text(question.question, style = type.rowTitle, color = colors.ink1, modifier = Modifier.semantics { heading() })
         Spacer(Modifier.height(Space.md))
-        Column(Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+        Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
             question.options.forEachIndexed { i, option ->
                 val on = i in answer.picked
                 AskOptionRow(option, on, question.multiSelect) {
@@ -176,19 +176,21 @@ private fun QuestionPage(question: AskQuestion, answer: AskAnswer, onAnswer: (As
                 }
                 if (on && !question.multiSelect) option.preview?.let { PreviewBlock(it) }
             }
-            PiTextField(
-                value = answer.text,
-                onValueChange = { text ->
-                    // One choice: typing is the answer instead of an option.
-                    onAnswer(if (question.multiSelect || text.isBlank()) answer.copy(text = text) else AskAnswer(text = text))
-                },
-                placeholder = "Type something",
-                maxLines = 4,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
-                modifier = Modifier.fillMaxWidth(),
-            )
         }
+        // Always in view, under the options (which scroll when long), never scrolled out of sight.
+        Spacer(Modifier.height(Space.sm))
+        PiTextField(
+            value = answer.text,
+            onValueChange = { text ->
+                // One choice: typing is the answer instead of an option.
+                onAnswer(if (question.multiSelect || text.isBlank()) answer.copy(text = text) else AskAnswer(text = text))
+            },
+            placeholder = "Type something",
+            maxLines = 4,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { focus.clearFocus() }),
+            modifier = Modifier.fillMaxWidth(),
+        )
     }
 }
 

@@ -9,7 +9,8 @@ import opensec.pibolt.app.ui.components.GroupSwitchRow
 
 /**
  * "Web search" in Settings > Agent: the bundled web tools in on-device chats and projects (AppSettings.webSearch,
- * engine/ChatSpace.kt). A change stops the idle engines, so the next session starts with it; open sessions keep theirs.
+ * engine/ChatSpace.kt). A change stops the idle engines and idle sessions on this phone, so the next one starts with
+ * it (a busy session keeps its engine until it ends).
  */
 internal fun webSearchRow(app: PiBoltApp, on: Boolean, tint: Color): SettingsRow = { divider ->
     GroupSwitchRow(
@@ -17,7 +18,7 @@ internal fun webSearchRow(app: PiBoltApp, on: Boolean, tint: Color): SettingsRow
         on,
         { value ->
             app.settings.update { it.copy(webSearch = value) }
-            (app.engine as? LocalEngine)?.stopIdleEngines("web search turned ${if (value) "on" else "off"}")
+            (app.engine as? LocalEngine)?.restartForSettings("web search turned ${if (value) "on" else "off"}")
         },
         meta = "Searches go to Exa",
         icon = Icons.Rounded.Public,

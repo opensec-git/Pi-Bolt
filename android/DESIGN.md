@@ -1358,9 +1358,12 @@ extensions' dialogs keep the generic sheet.
   heading), then the options: radius tile rows at least `optionRow` tall, a 20dp radio or checkbox glyph (accent when
   on, ink3 off), the label (rowTitle ink1) over its description (rowMeta ink3), selected: the selected fill and a 1.5dp
   accent ring. An option's preview shows under it when picked (monoSmall on surface2). A "Type something" field ends
-  the list: for one choice it replaces the option, for several it adds to them.
+  the card, always in view under the options (which scroll when long): for one choice it replaces the option, for
+  several it adds to them.
 - Back (secondary; Cancel on the first question) and Next / Submit (primary, enabled once the question is answered; a
   multi-select one may stay empty). Questions crossfade (quick).
 - Nothing is sent until Submit; then the walker's dialogs are answered from the card as they arrive (option line, or
   the "Type something." row and the text; for several: `1,3; text`). Dismissing the sheet (swipe, scrim, Cancel)
   declines the whole questionnaire, as the extension's own dismiss does.
+- Turning Web search on or off stops the idle engines and the idle sessions on the phone (`restartForSettings`), so
+  New chat in an open chat gets the new tools too; a busy session keeps its engine until it ends.
