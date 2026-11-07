@@ -464,7 +464,8 @@ private fun LazyItemScope.RowView(
     val animate = row.live && !reduced
     val animated = if (animate) {
         Modifier.animateItem(
-            fadeInSpec = PiMotion.enter(PiMotion.STANDARD),
+            // The fade-in is riseIn's (without an offscreen buffer).
+            fadeInSpec = null,
             // No placement animation: rows above a growing reply would visibly slide over it.
             placementSpec = null,
             fadeOutSpec = PiMotion.leave(PiMotion.STANDARD),

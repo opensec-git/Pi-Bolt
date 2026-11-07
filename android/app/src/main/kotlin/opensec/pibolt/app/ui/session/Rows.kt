@@ -71,6 +71,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
@@ -102,7 +103,12 @@ import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.UserItem
 import kotlin.math.min
 
-/** New rows of the live turn rise into place once; history and rows seen before never animate. */
+/**
+ * New rows of the live turn rise into place and fade in once; history and rows seen before never animate. The fade
+ * (the list's item fade-in before) multiplies each drawing's alpha instead of drawing the row into an offscreen
+ * buffer first: a streamed reply adds a row every few frames, and each fading row's buffer cost the render thread and
+ * the GPU a pass per frame.
+ */
 @Composable
 fun Modifier.riseIn(key: String, live: Boolean, memory: SessionMemory, distance: Dp): Modifier {
     val reduced = Pi.reduceMotion
@@ -114,7 +120,12 @@ fun Modifier.riseIn(key: String, live: Boolean, memory: SessionMemory, distance:
     val px = with(LocalDensity.current) { distance.toPx() }
     val offset = remember(key) { Animatable(px) }
     LaunchedEffect(key) { offset.animateTo(0f, PiMotion.enter(PiMotion.STANDARD)) }
-    return graphicsLayer { translationY = offset.value }
+    return graphicsLayer {
+        translationY = offset.value
+        // The same curve as the rise: STANDARD with the enter easing.
+        alpha = 1f - offset.value / px
+        compositingStrategy = CompositingStrategy.ModulateAlpha
+    }
 }
 
 /**
