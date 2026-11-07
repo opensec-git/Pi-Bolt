@@ -384,6 +384,14 @@ class MarkdownGfmTest {
     }
 
     @Test
+    fun inlineMathOpenersSharingOneCloserStayLinear() {
+        // PR #254 review: every `\(` used to walk to the shared closer.
+        assertTrue(Inline.parse("\\(".repeat(20000) + "\\)").spans.none { it.kind == InlineSpan.Kind.Math })
+        assertLinear("\\(", 20_000) { size -> Inline.parse("\\(".repeat(size) + "\\)") }
+        assertEquals(listOf(InlineSpan(2, 5, InlineSpan.Kind.Math)), Inline.parse("a \\(x+1\\) b").spans)
+    }
+
+    @Test
     fun hostileNewInlineConstructsStayLinear() {
         val unit = 100_000
         for (opener in listOf("\$a ", "\\(a ", "<a ", "![a](", "[a](", "&a ", "http://a ", "[^a ", "<b>a ", "\$\$a ", "<!--a ", "``a ")) {

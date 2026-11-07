@@ -70,7 +70,7 @@ object Inline {
                     // `\(…\)` is inline math; `\[` in prose is an escaped bracket (display math has its own line).
                     if (next == '(') {
                         val close = closers.indexOf("\\)", i + 2)
-                        if (close > i + 2 && (i + 2 until close).any { s[it].isLetterOrDigit() }) {
+                        if (close > i + 2 && closers.hasLetterOrDigit(i + 2, close)) {
                             val start = out.length
                             out.append(s, i + 2, close)
                             spans += InlineSpan(start, out.length, InlineSpan.Kind.Math)
@@ -401,6 +401,9 @@ object Inline {
         private val lastFound = HashMap<String, Int>()
         private val singles = HashMap<Char, IntArray>()
 
+        /** Letters and digits in s[0, k), built on first use. */
+        private var alnumBefore: IntArray? = null
+
         /** Same answer as `s.indexOf(marker, from)`. */
         fun indexOf(marker: String, from: Int): Int {
             val previousFrom = lastFrom[marker]
@@ -420,6 +423,18 @@ object Inline {
             val list = singles.getOrPut(c) { singleClosers(c) }
             val at = Arrays.binarySearch(list, from).let { if (it >= 0) it else -it - 1 }
             return if (at < list.size) list[at] else -1
+        }
+
+        /**
+         * Whether s[from, to) holds a letter or digit. `\(` openers share one closer, so a walk per opener would be
+         * quadratic; a prefix count answers each in constant time.
+         */
+        fun hasLetterOrDigit(from: Int, to: Int): Boolean {
+            val counts = alnumBefore ?: IntArray(s.length + 1).also { c ->
+                for (k in s.indices) c[k + 1] = c[k] + if (s[k].isLetterOrDigit()) 1 else 0
+                alnumBefore = c
+            }
+            return counts[to] > counts[from]
         }
 
         private fun singleClosers(c: Char): IntArray {

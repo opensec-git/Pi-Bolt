@@ -244,10 +244,21 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     var jump by remember { mutableStateOf<SearchJump?>(null) }
     var jumpSeq by remember { mutableIntStateOf(0) }
 
-    // The draft is kept per session across restarts: restored when the composer is empty, saved as it changes.
+    // The draft is kept per session across restarts and saved as it changes. [draftOwner] is the session whose draft the
+    // composer holds: on a switch (Resume, Fork) the outgoing draft is saved under it and the incoming one is loaded,
+    // or the text a fork hands over ([forkDraft]).
     val draftKey = Drafts.key(controller.hostId, sessionId)
+    var draftOwner by rememberSaveable(controller.hostId) { mutableStateOf<String?>(null) }
+    var forkDraft by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(draftKey) {
-        if (sessionId != null && draft.isEmpty()) draft = drafts.get(draftKey)
+        if (sessionId != null && draftKey != draftOwner) {
+            val previous = draftOwner
+            if (previous != null) drafts.put(previous, draft)
+            val incoming = forkDraft
+            forkDraft = null
+            draft = incoming ?: if (previous != null || draft.isEmpty()) drafts.get(draftKey) else draft
+            draftOwner = draftKey
+        }
         snapshotFlow { draft }.drop(1).collectLatest {
             delay(400)
             if (sessionId != null) drafts.put(draftKey, it)
@@ -316,6 +327,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
 
     val hello by remember { derivedStateOf { state.value.hello } }
     val running by remember { derivedStateOf { state.value.isRunning } }
+    val shellRuns by controller.shellRuns.collectAsStateWithLifecycle()
     val connected by remember { derivedStateOf { linkState.value is LinkState.Connected } }
     val enabled = connected && hello
     val quadMode by remember {
@@ -395,14 +407,23 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     }
 
     /**
+     * Puts [text] in the composer of the session a fork opened. The fork's reply and the new session's snapshot come in
+     * either order: when the composer still holds [from]'s draft, the text waits for the switch.
+     */
+    fun forkedDraft(from: String?, text: String) {
+        if (draftOwner == from) forkDraft = text else draft = text
+    }
+
+    /**
      * Forks the session from a user message ([text], its [occurrence]-th copy in the transcript); the text comes back
      * to the composer to edit and send.
      */
     fun fork(text: String, occurrence: Int) {
+        val from = draftOwner
         scope.launch {
             controller.forkFrom(text, occurrence)
                 .onSuccess {
-                    draft = it
+                    forkedDraft(from, it)
                     haptics.confirm()
                     snackbar.show("Forked into a new session. Edit the message and send.", SnackKind.Success)
                 }
@@ -539,12 +560,14 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         }
     }
 
-    /** Regenerates the answer to [user] (its [occurrence]-th copy): forks before it and sends it again. */
+    /**
+     * Regenerates the answer to [user] (its [occurrence]-th copy): forks before it and sends it again. Text only, so it
+     * is offered only for prompts without images.
+     */
     fun regenerate(user: UserItem, occurrence: Int) {
         scope.launch {
             controller.forkFrom(user.text, occurrence)
                 .onSuccess {
-                    draft = ""
                     send(it.ifEmpty { user.text })
                 }
                 .onFailure {
@@ -739,7 +762,9 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 onAttach = ::attach,
                 onRemoveImage = { id -> images.removeAll { it.id == id } },
                 focusRequester = focus,
-                onStop = controller::abort,
+                // A user `!` command started while Pi is idle stops through abort_bash; the agent through abort.
+                stoppable = running || shellRuns > 0,
+                onStop = { if (shellRuns > 0) controller.abortBash() else controller.abort() },
                 onModel = { openModels() },
                 onThinking = ::openThinking,
             )
@@ -843,10 +868,11 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         }, onDismiss = { sheet = Sheet.None })
         Sheet.Fork -> ForkSheet(forkPoints, onPick = { point ->
             sheet = Sheet.None
+            val from = draftOwner
             scope.launch {
                 controller.fork(point.entryId)
                     .onSuccess {
-                        draft = it.ifEmpty { point.text }
+                        forkedDraft(from, it.ifEmpty { point.text })
                         haptics.confirm()
                         snackbar.show("Forked into a new session. Edit the message and send.", SnackKind.Success)
                     }
@@ -901,8 +927,9 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                         haptics.send()
                         send(row.item.text)
                     }.takeIf { row.item.text.isNotBlank() && row.item.imageCount == 0 },
-                    // On-device sessions only: Pi forks from a user message on the active branch.
-                    SheetAction("Edit and resend", Icons.Rounded.Edit) { fork(row.item.text, occurrence) }.takeIf { isLocal && occurrence >= 0 },
+                    // On-device sessions only: Pi forks from a user message on the active branch. The fork hands back
+                    // the text only, so a message with images is not offered (its images would be lost).
+                    SheetAction("Edit and resend", Icons.Rounded.Edit) { fork(row.item.text, occurrence) }.takeIf { isLocal && occurrence >= 0 && row.item.imageCount == 0 },
                     SheetAction("Edit in composer", Icons.Rounded.EditNote) { fill(row.item.text) },
                     SheetAction("Select text", Icons.Rounded.TextFields) { viewer = ViewerContent("Message", null, row.item.text, selectable = true) },
                     SheetAction("Share", Icons.Rounded.Share) { share(row.item.text) },
@@ -914,7 +941,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 listOfNotNull(
                     SheetAction("Copy", Icons.Rounded.ContentCopy) { copy(MessageText.plain(text())) },
                     SheetAction("Copy as Markdown", Icons.Rounded.Code) { copy(text()) },
-                    SheetAction("Regenerate", Icons.Rounded.Replay) { prompt?.let { (u, n) -> regenerate(u, n) } }.takeIf { isLocal && prompt != null && !running },
+                    SheetAction("Regenerate", Icons.Rounded.Replay) { prompt?.let { (u, n) -> regenerate(u, n) } }.takeIf { isLocal && prompt != null && prompt.first.imageCount == 0 && !running },
                     SheetAction("Select text", Icons.Rounded.TextFields) { viewer = ViewerContent("Reply", null, text(), selectable = true) },
                     SheetAction("View as Markdown", Icons.AutoMirrored.Rounded.Notes) { viewer = ViewerContent("Markdown", null, text()) },
                     SheetAction("Share", Icons.Rounded.Share) { share(text()) },
@@ -926,7 +953,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 listOfNotNull(
                     SheetAction("Copy as plain text", Icons.Rounded.ContentCopy) { copy(MessageText.plain(row.reply)) },
                     SheetAction("Copy as Markdown", Icons.Rounded.Code) { copy(row.reply) },
-                    SheetAction("Regenerate", Icons.Rounded.Replay) { if (prompt != null && occurrence != null) regenerate(prompt, occurrence) }.takeIf { isLocal && prompt != null && occurrence != null && !running },
+                    SheetAction("Regenerate", Icons.Rounded.Replay) { if (prompt != null && occurrence != null) regenerate(prompt, occurrence) }.takeIf { isLocal && prompt != null && prompt.imageCount == 0 && occurrence != null && !running },
                     SheetAction("Select text", Icons.Rounded.TextFields) { viewer = ViewerContent("Reply", null, row.reply, selectable = true) },
                     SheetAction("View as Markdown", Icons.AutoMirrored.Rounded.Notes) { viewer = ViewerContent("Markdown", null, row.reply) },
                     SheetAction("Share", Icons.Rounded.Share) { share(row.reply) },

@@ -215,17 +215,24 @@ class HighlighterTest {
 
     @Test
     fun hostileCodeTokenisesInLinearTime() {
-        val n = 30_000
         val samples = mapOf(
-            "kotlin" to "\"\${".repeat(n / 3), "ts" to "/[".repeat(n / 2), "tsx" to "<a {".repeat(n / 4), "python" to "f\"{".repeat(n / 3),
-            "bash" to "\$(".repeat(n / 2), "html" to "<a b='".repeat(n / 6), "css" to "a{b:".repeat(n / 4), "yaml" to "- a: [".repeat(n / 7),
-            "rust" to "/*".repeat(n / 2), "markdown" to "**[`".repeat(n / 4), "sql" to "'--".repeat(n / 3), "" to "\"\\".repeat(n / 2),
+            "kotlin" to "\"\${", "ts" to "/[", "tsx" to "<a {", "python" to "f\"{", "bash" to "\$(", "html" to "<a b='",
+            "css" to "a{b:", "yaml" to "- a: [", "rust" to "/*", "markdown" to "**[`", "sql" to "'--", "" to "\"\\",
         )
-        for ((lang, code) in samples) {
-            val started = System.nanoTime()
-            Highlighter.tokenize(code, lang)
-            val ms = (System.nanoTime() - started) / 1_000_000
-            assertTrue(ms < 1500, "$lang took $ms ms")
+        for ((lang, unit) in samples) {
+            assertLinear(lang.ifEmpty { "generic" }, 10_000) { size ->
+                Highlighter.tokenize(unit.repeat(size / unit.length), lang, limit = Highlighter.MAX_BACKGROUND_CHARS)
+            }
+        }
+    }
+
+    @Test
+    fun hostileMarkdownLineHighlightsInLinearTime() {
+        // PR #254 review: each failed opener used to scan to the end of the text for its closer. 4n is a 100 KB line.
+        for (unit in listOf("`", "*", "**", "_", "[", "[a](", "<a")) {
+            assertLinear(unit, 25_000) { size ->
+                Highlighter.tokenize(unit.repeat(size / unit.length), "markdown", limit = Highlighter.MAX_BACKGROUND_CHARS)
+            }
         }
     }
 }

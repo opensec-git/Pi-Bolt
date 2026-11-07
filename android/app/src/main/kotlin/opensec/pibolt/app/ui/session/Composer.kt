@@ -133,6 +133,8 @@ fun Composer(
     shell: Boolean = false,
     onCycleModel: () -> Unit = {},
     onCycleThinking: () -> Unit = {},
+    /** Something [onStop] can stop: an agent run, or a user shell command started while Pi is idle. */
+    stoppable: Boolean = running,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -225,7 +227,7 @@ fun Composer(
                         // Hardware keyboards, as in the terminal: Ctrl+Enter sends, Esc stops, Ctrl+P next model,
                         // Shift+Tab next thinking level.
                         if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
-                        when (ComposerKeys.action(e.key, ctrl = e.isCtrlPressed || e.isMetaPressed, shift = e.isShiftPressed, running = running, hasContent = hasContent)) {
+                        when (ComposerKeys.action(e.key, ctrl = e.isCtrlPressed || e.isMetaPressed, shift = e.isShiftPressed, running = stoppable, hasContent = hasContent)) {
                             ComposerKeys.Action.Send -> if (enabled && !encoding) onSend()
                             ComposerKeys.Action.Stop -> onStop()
                             ComposerKeys.Action.CycleModel -> if (enabled) onCycleModel()
@@ -282,8 +284,8 @@ fun Composer(
                     }
                 }
                 SendButton(
-                    mode = if (running && !hasContent) SendMode.Stop else SendMode.Send,
-                    enabled = enabled && if (hasContent) !encoding else running,
+                    mode = if (stoppable && !hasContent) SendMode.Stop else SendMode.Send,
+                    enabled = enabled && if (hasContent) !encoding else stoppable,
                     onSend = onSend,
                     onStop = onStop,
                 )

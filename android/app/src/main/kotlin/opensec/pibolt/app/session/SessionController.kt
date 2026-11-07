@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -147,6 +148,10 @@ class SessionController private constructor(
 
     private val _thinkingLevels = MutableStateFlow<List<String>>(emptyList())
     val thinkingLevels: StateFlow<List<String>> = _thinkingLevels.asStateFlow()
+
+    /** User `!` commands ([runShell]) still running. They run outside agent turns, so [SessionState.isRunning] misses them. */
+    private val _shellRuns = MutableStateFlow(0)
+    val shellRuns: StateFlow<Int> = _shellRuns.asStateFlow()
 
     private sealed interface Input {
         class Event(val json: JsonObject) : Input
@@ -611,8 +616,13 @@ class SessionController private constructor(
         val key = SessionReducer.SHELL_PREFIX + System.currentTimeMillis()
         val args = JsonObject(mapOf("command" to JsonPrimitive(shell.command)))
         mutate { it.copy(items = it.items + ToolItem(key, key, "bash", args, status = ToolStatus.Running)) }
+        _shellRuns.update { it + 1 }
         scope.launch {
-            val response = rpc.bash(shell.command, shell.excludeFromContext)
+            val response = try {
+                rpc.bash(shell.command, shell.excludeFromContext)
+            } finally {
+                _shellRuns.update { it - 1 }
+            }
             val data = response.dataObject
             val exit = data?.let { (it["exitCode"] as? JsonPrimitive)?.content?.toIntOrNull() }
             val cancelled = data?.bool("cancelled") == true
