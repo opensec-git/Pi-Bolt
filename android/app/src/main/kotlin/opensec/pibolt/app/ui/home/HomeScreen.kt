@@ -1,6 +1,10 @@
 package opensec.pibolt.app.ui.home
 
 import androidx.activity.compose.ReportDrawnWhen
+import androidx.compose.material.icons.rounded.NotificationsNone
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.ui.graphics.vector.ImageVector
+import opensec.pibolt.app.ui.components.EmptyState
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import opensec.pibolt.app.ui.projects.transfer.SafTransfer
@@ -97,6 +101,7 @@ import opensec.pibolt.app.ui.projects.WorkspaceMenuRow
 import opensec.pibolt.app.ui.hosts.AddComputerSheet
 import opensec.pibolt.app.ui.hosts.ManageComputerSheet
 import opensec.pibolt.app.data.ProjectMeta
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.BoxWithConstraints
 import android.content.Intent
@@ -515,8 +520,9 @@ fun HomeScreen(
                         val perRow = if (maxWidth >= 600.dp) 4 else 2
                         Column(verticalArrangement = Arrangement.spacedBy(Space.md)) {
                             for (row in tiles.chunked(perRow)) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(Space.md)) {
-                                    for (tile in row) tile(Modifier.weight(1f))
+                                // One height per row, so a label that wraps at a large font scale keeps the pair even.
+                                Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Space.md)) {
+                                    for (tile in row) tile(Modifier.weight(1f).fillMaxHeight())
                                 }
                             }
                         }
@@ -911,16 +917,15 @@ private fun ComputersHeader(count: Int, open: Boolean, onToggle: () -> Unit, onA
 }
 
 /** The lists the status tiles open. */
-enum class HomeList(val title: String, val empty: String) {
-    Working("Working", "Nothing is running."),
-    Waiting("Waiting for you", "No questions waiting."),
+enum class HomeList(val title: String, val empty: String, val icon: ImageVector) {
+    Working("Working", "Nothing is running", Icons.Rounded.PlayArrow),
+    Waiting("Waiting for you", "No questions waiting", Icons.Rounded.NotificationsNone),
 }
 
-/** A tile's list in a sheet: the live sessions working, or waiting for an answer. One short line when there are none. */
+/** A tile's list in a sheet: the live sessions working, or waiting for an answer; an [EmptyState] when there are none. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HomeListSheet(which: HomeList, lives: List<LocalSessions.Live>, titles: Map<String, ProjectMeta>, onOpenLive: (LocalSessions.Live) -> Unit, onDismiss: () -> Unit) {
-    val colors = Pi.colors
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
     PiSheet(onDismiss = onDismiss, state = state) {
@@ -930,7 +935,7 @@ private fun HomeListSheet(which: HomeList, lives: List<LocalSessions.Live>, titl
                 RunningRow(live, titles[live.project.name], onClick = { close { onDismiss(); onOpenLive(live) } }, divider = live != lives.last())
             }
         }
-        if (lives.isEmpty()) Text(which.empty, style = Pi.type.rowMeta, color = colors.ink3, modifier = Modifier.padding(horizontal = Space.page, vertical = Space.lg))
+        if (lives.isEmpty()) EmptyState(which.empty, icon = which.icon)
         Spacer(Modifier.navigationBarsPadding().height(Space.lg))
     }
 }
