@@ -5,6 +5,8 @@ import opensec.pibolt.app.ui.projects.ProjectRules
 import opensec.pibolt.app.ui.session.Welcome
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 /** Home's and the empty session's own logic in the redesign. */
 class HomeRulesTest {
@@ -55,5 +57,18 @@ class ComputerRulesTest {
         assertEquals("", Host.fromJson(host("ws://10.0.0.2:1").toJson())!!.alias)
         // Connecting copies the stored host, so the alias stays (SessionController upserts existing.copy(name = …)).
         assertEquals("Studio", named.copy(name = "MacBook Pro").displayName)
+    }
+
+    @Test
+    fun thePillStartsAChatWhenAChatWasTheLatestThing() {
+        // No project: always a chat.
+        assertTrue(ProjectRules.pillDefaultsToChat(noProjects = true, lastChatAt = null, lastProjectAt = null))
+        // A chat written after the last project work.
+        assertTrue(ProjectRules.pillDefaultsToChat(noProjects = false, lastChatAt = 2_000, lastProjectAt = 1_000))
+        assertTrue(ProjectRules.pillDefaultsToChat(noProjects = false, lastChatAt = 2_000, lastProjectAt = null))
+        // A project worked in since, or no chats: the project.
+        assertFalse(ProjectRules.pillDefaultsToChat(noProjects = false, lastChatAt = 1_000, lastProjectAt = 2_000))
+        assertFalse(ProjectRules.pillDefaultsToChat(noProjects = false, lastChatAt = null, lastProjectAt = 2_000))
+        assertFalse(ProjectRules.pillDefaultsToChat(noProjects = false, lastChatAt = 1_000, lastProjectAt = 1_000))
     }
 }

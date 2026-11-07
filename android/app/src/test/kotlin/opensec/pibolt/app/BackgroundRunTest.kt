@@ -140,6 +140,20 @@ class BackgroundRunTest {
     }
 
     @Test
+    fun miuiBatteryRequestGoesToItsOwnScreenNotAChooser() {
+        val steps = OemSetup.steps(Vendor.Xiaomi, "in.opensec.pibolt", "Pi-Bolt")
+        // What MIUI 13 (Redmi Note 10 Pro, Android 12) answers ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS with.
+        val miui = listOf(
+            "com.miui.powerkeeper" to "com.miui.powerkeeper.ui.HiddenAppsConfigActivity",
+            "com.miui.securitycenter" to "com.miui.powercenter.legacypowerrank.PowerDetailActivity",
+        )
+        assertEquals("battery-saver", OemSetup.batteryStep(steps, miui)?.id)
+        assertNull(OemSetup.batteryStep(steps, miui.take(1)), "one handler: Android shows no chooser")
+        assertNull(OemSetup.batteryStep(steps, listOf("a" to "A", "b" to "B")), "none of the vendor's screens")
+        assertNull(OemSetup.batteryStep(emptyList(), miui), "stock Android")
+    }
+
+    @Test
     fun theFirstScreenThatExistsElseAppDetails() {
         val step = OemSetup.steps(Vendor.Vivo, "p", "Pi-Bolt").single()
         val second = step.screens[1]

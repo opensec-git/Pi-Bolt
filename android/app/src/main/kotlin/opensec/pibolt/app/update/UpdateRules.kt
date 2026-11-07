@@ -123,12 +123,29 @@ object UpdateRules {
 
         /** [snoozed]: the user chose Later for this version; Home stays quiet, Settings still offers it. */
         data class Available(val info: UpdateInfo, val snoozed: Boolean) : Decision
+
+        /**
+         * A newer release exists, but this copy is signed with another key than the release (a test build): Android
+         * would refuse the release over it, so it is not offered; Settings points to the website instead.
+         */
+        data class TestBuild(val info: UpdateInfo) : Decision
     }
 
-    fun decide(installed: String, latest: UpdateInfo?, snoozedVersion: String?): Decision {
+    /** Where a test build gets the release from. */
+    const val WEBSITE = "https://pi-bolt.opensec.in/android"
+
+    /** SHA-256 of the certificate OpenSec signs release APKs with. */
+    const val RELEASE_CERT = "f752464c8b6d5906d7fd467346b89316518e3ddfe77843f66b1fa673818a2c90"
+
+    /** A copy signed with neither the release key nor the key [latest] names: a test build. Empty [certs]: not read yet. */
+    fun isTestBuild(certs: Set<String>, latest: UpdateInfo): Boolean = certs.isNotEmpty() && RELEASE_CERT !in certs && latest.certSha256 !in certs
+
+    /** [installedCerts]: this app's signing certificates (SHA-256, lowercase hex); empty while not read yet. */
+    fun decide(installed: String, latest: UpdateInfo?, snoozedVersion: String?, installedCerts: Set<String> = emptySet()): Decision {
         latest ?: return Decision.UpToDate
         val newer = (AppVersion.compare(latest.version, installed) ?: return Decision.UpToDate) > 0
         if (!newer) return Decision.UpToDate
+        if (isTestBuild(installedCerts, latest)) return Decision.TestBuild(latest)
         val snoozed = snoozedVersion != null && AppVersion.compare(snoozedVersion, latest.version) == 0
         return Decision.Available(latest, snoozed)
     }

@@ -18,6 +18,24 @@ function summaryMaxTokens(options: TSchemaOptions = {}) {
 	return Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER, ...options });
 }
 
+/** How remote control reaches a phone away from the local network: a Cloudflare tunnel, or none. */
+function remoteControlTunnel(options: TSchemaOptions = {}) {
+	return Type.Union(
+		[
+			Type.Literal("quick"),
+			Type.Literal("off"),
+			Type.Object(
+				{
+					name: Type.String({ description: "Named Cloudflare tunnel (cloudflared tunnel create)." }),
+					hostname: Type.String({ description: "Public hostname routed to the tunnel." }),
+				},
+				{ additionalProperties: false },
+			),
+		],
+		options,
+	);
+}
+
 const CompactionModelOverrideSchema = Type.Object({
 	reserveTokens: Type.Optional(nonNegativeSafeInteger()),
 	keepRecentTokens: Type.Optional(nonNegativeSafeInteger()),
@@ -279,25 +297,26 @@ export const SettingsSchema = Type.Object(
 								"Port of the /remote-control listener. 0 picks a free port each time; a fixed port lets paired phones reconnect on the LAN without a new QR code.",
 						}),
 					),
-					tunnel: Type.Optional(
-						Type.Union([
-							Type.Literal("quick"),
-							Type.Literal("off"),
-							Type.Object(
-								{
-									name: Type.String({ description: "Named Cloudflare tunnel (cloudflared tunnel create)." }),
-									hostname: Type.String({ description: "Public hostname routed to the tunnel." }),
-								},
-								{ additionalProperties: false },
-							),
-						]),
-					),
+					tunnel: Type.Optional(remoteControlTunnel()),
 					cloudflared: Type.Optional(Type.String({ description: "Path to the cloudflared executable." })),
 					askCloudflared: Type.Optional(
 						Type.Boolean({
 							description:
 								'Offer to install cloudflared when /remote-control finds none (false after "Don\'t ask again").',
 						}),
+					),
+					service: Type.Optional(
+						Type.Object(
+							{
+								tunnel: Type.Optional(
+									remoteControlTunnel({
+										description:
+											'Tunnel of the background service (pi-bolt service install). Default: the remoteControl.tunnel setting; "off" serves the local network and Tailscale only.',
+									}),
+								),
+							},
+							{ additionalProperties: false, description: "The background service (pi-bolt service)." },
+						),
 					),
 				},
 				{ additionalProperties: false, description: "Settings of /remote-control (Pi-Bolt Android app)." },

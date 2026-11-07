@@ -30,18 +30,26 @@ sealed interface VerifyResult {
 
 /**
  * Checks a downloaded APK before it may be installed: its SHA-256 against android.json, then (from the package
- * manager) the package name, a signing certificate equal to android.json's and to the installed app's own, and a
- * higher version code. The first failure wins.
+ * manager) the package name, a signing certificate equal to android.json's, then equal to the installed app's own (a
+ * test build signed with another key cannot take the release), and a higher version code. The first failure wins.
  */
 object UpdateVerifier {
+    const val NOT_OPENSEC = "This update is not signed by OpenSec; not installed."
+    const val TEST_BUILD = "This copy of Pi-Bolt is a test build signed with another key. Install the update from pi-bolt.opensec.in."
+
     fun verify(file: File, info: UpdateInfo, inspector: PackageInspector): VerifyResult {
         if (!file.isFile) return VerifyResult.Refused("The download is missing; try again.")
         if (sha256(file) != info.sha256) return VerifyResult.Refused("The download does not match the published checksum; not installed.")
         val archive = inspector.archive(file) ?: return VerifyResult.Refused("The download is not a valid Android app; not installed.")
         val installed = inspector.installed()
         if (archive.packageName != installed.packageName) return VerifyResult.Refused("The download is a different app (${archive.packageName}); not installed.")
-        if (archive.certSha256.isEmpty() || archive.certSha256 != setOf(info.certSha256) || archive.certSha256 != installed.certSha256) {
-            return VerifyResult.Refused("This update is not signed by OpenSec; not installed.")
+        if (archive.certSha256.isEmpty() || archive.certSha256 != setOf(info.certSha256)) {
+            return VerifyResult.Refused(NOT_OPENSEC)
+        }
+        // Android installs an update only over a copy signed with the same key. Over a test build the release is refused
+        // for that, not for its signature; over a release, a manifest naming another key is still "not signed by OpenSec".
+        if (archive.certSha256 != installed.certSha256) {
+            return VerifyResult.Refused(if (UpdateRules.isTestBuild(installed.certSha256, info)) TEST_BUILD else NOT_OPENSEC)
         }
         if (archive.versionCode <= installed.versionCode) return VerifyResult.Refused("The download is not newer than this app; not installed.")
         return VerifyResult.Ok

@@ -304,6 +304,9 @@ private fun CodeHeader(
                     fadeIn(tween(PiMotion.QUICK)).togetherWith(fadeOut(tween(PiMotion.QUICK)))
                 }
             },
+            // Anchored at the end: the actions replace "12 lines" where it stood, instead of sliding in from the left
+            // while the width animates.
+            contentAlignment = Alignment.CenterEnd,
             label = "codeHeader",
         ) { done ->
             Row(Modifier.height(40.dp), verticalAlignment = Alignment.CenterVertically) {

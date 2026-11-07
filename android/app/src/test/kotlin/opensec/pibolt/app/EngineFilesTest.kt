@@ -250,7 +250,7 @@ class EngineFilesTest {
         assertEquals(1, list[0].messageCount)
         assertEquals("Build fix", list[1].name)
         assertEquals("Fix the build", list[1].preview)
-        assertEquals(3, list[1].messageCount)
+        assertEquals(2, list[1].messageCount, "the saved system prompt is not a message")
         assertEquals(1_000_000, list[1].updatedAt)
         assertEquals(newer.path, index.newest(project))
     }

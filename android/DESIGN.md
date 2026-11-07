@@ -417,9 +417,9 @@ between groups), `GroupRow` (a 30dp `GlyphTile`, the title in rowTitle, an optio
 rowMeta ink3 at the end, trailing content, a chevron or open-in-new; at least 52dp; a hairline from the text start),
 `GroupSwitchRow` (the same row with `PiSwitch`, so every switch sits on one end column), `GroupControl` (a block for a
 control inside a group) and `PillSearchField` (a 48dp surface1 pill with the search glyph and a clear button).
-`GlyphTile` is the iOS-settings icon chip, kept quiet: a 30dp radius sm + 2 tile, the section's tint (one of the
-theme's five agent tints) at 16% with the glyph in the tint, or surface3 with an ink1 glyph for neutral sections and
-logos. `ChoiceSheet` picks one of a few values (a sheet of `InsetRow`s, an accent check on the current one; a pick
+`GlyphTile` is the icon chip, monochrome: a 30dp radius sm + 2 surface3 tile with an ink2 glyph (or a logo). Only a
+status colour (danger, success, warning) colours the glyph, and only where the row reports that state (Reset device key,
+a connected computer); sections are never colour-coded (`GlyphTone`). `ChoiceSheet` picks one of a few values (a sheet of `InsetRow`s, an accent check on the current one; a pick
 applies and closes). `PiMenu` / `PiMenuItem` are the popup menu: surface3, radius tile, a lineStrong ring, rowMeta
 items with 20dp glyphs.
 
@@ -1111,7 +1111,7 @@ otherwise. With no query an account card leads: the GitHub identity (a 48dp avat
 GitHub", or "Sign in with GitHub", which opens the sign-in sheet) over the default model ("Default model" with the
 model and provider beneath, led by its mark; it opens the model picker of the open on-device session, or Providers
 when there is no key, or says to open a session). Then the groups, in order, as `InsetGroup`s of `GroupRow`s with
-tinted glyph tiles (one theme tint per section; neutral for GitHub, Advanced and About), values in ink3 and chevrons;
+monochrome glyph tiles (surface3, ink2 glyphs; colour only for a state), values in ink3 and chevrons;
 switches on one end column; no explanatory paragraphs:
 - Models & keys (apricot): Providers (count; opens the Providers page), Thinking level (a choice sheet). While
   searching, Default model is a row here too.
@@ -1284,14 +1284,43 @@ long-press sheets; long output goes to full-screen viewers, never nested scroll 
 
 Plain chats talk to the model without a project (`engine/ChatSpace.kt`): one app-private folder, their own session
 folder, and an engine limited to the web and question tools (`--tools web_search,fetch_content,get_search_content,
-ask_user_question --no-mcp`; only `ask_user_question` with Settings > Agent > Web search off): no shell, no files
-and no MCP server. The Chats screen follows the kit: two glass buttons (back, +) on a 56dp bar,
-"Chats" in largeTitle, a `GlassSearchField` (a full-radius glass pill, 48dp), then `InsetRow`s with the title and
-"2h · 12 messages"; the live chat sits on the current highlight. A long press offers Rename and Delete (a ConfirmSheet,
-"This can't be undone."). No chats: an `EmptyState` with "New chat". A chat opens on the session screen without the
-project-only parts (`SessionParts.CHAT`: no `@` files, `!` shell, preview chips, project starters, folder or subtitle;
-no checkpoints, so no undo or changes pill). On Home, the pill's chip lists "Chat" first (the default with no project),
-Recents shows the three newest chats with a chat glyph and "Chat · 2h", and a "Chats" row under Recents opens the list.
+ask_user_question --no-mcp`; only `ask_user_question` with Settings > Agent > Web search off): no shell, no files and no
+MCP server. They should feel like ChatGPT's or Claude's app, in the redesign's language.
+
+**Home.** Chats are a section of their own under Recents (Recents holds only project sessions): a `HomeHead` "Chats  3"
+whose end is a "New chat" `TextAction` and a chevron (the head opens the Chats list), the three newest chats as
+`InsetRow`s (chat glyph ink2, title, "2h · 12 messages"; a live chat that is answering leads with a tint2 Quad Write and
+says "Working"), then "All chats  N" (forum glyph, count, chevron) when there are more. With none yet: one row, "Start
+a chat" / "Ask anything, without a project", with a + glyph. The pill's chip lists "Chat" first and defaults to it when
+there is no project or a chat changed after the last project work (`ProjectRules.pillDefaultsToChat`); then the field
+says "Ask anything…".
+
+**The Chats screen.** Two glass buttons (back, +) on a 56dp bar, "Chats" in largeTitle, a `GlassSearchField`, then the
+chats newest first under date heads as ChatGPT's list does ("Today", "Yesterday", "Previous 7 days", "Previous 30 days",
+then the month; `ChatList.sections`), rowMeta ink3 heads, `InsetRow`s with the title and "2h · 12 messages"; the live
+chat sits on the current highlight. A long press offers Rename and Delete (a ConfirmSheet, "This can't be undone.").
+No chats: an `EmptyState` with the chat glyph, "Ask anything, without a project. Your chats show here." and "New chat".
+No match: an `EmptyState` with search-off, never a lone grey line.
+
+**A chat** opens on the session screen without the project-only parts (`SessionParts.CHAT`: no `@` files, `!` shell,
+preview chips, project starters, folder or subtitle; no checkpoints, so no undo or changes pill), and with a chat's own:
+- Top bar: back ("Back"), the chat's title (its name, else its first prompt; tap: chat info), then All chats (forum
+  glyph: back to the Chats list, or the list in the chat's place) and New chat (+) as glass buttons, and More. More
+  reads New chat, All chats, Search this chat, Rename chat, Fork from a message, Duplicate chat, Chat info and usage,
+  Export or share, and Delete chat (danger, confirmed). The context meter shows from 1% ("0%" said nothing on a 1M
+  model).
+- Welcome (`ChatWelcome`): "Good evening" (by the hour) in ink1 over "What's on your mind?" in ink3, both largeTitle;
+  then four everyday suggestions (explain, write, brainstorm, travel, learn, cook, decide, summarise, quiz, polish; one
+  topic each, rotating daily) as `InsetRow`s that lead with their topic's glyph in ink2. A suggestion fills the composer
+  with a prompt that ends where the user goes on typing ("Plan a relaxed three-day trip to "); nothing sends by itself.
+  Recent prompts and Commands follow, as in a project.
+- Transcript (`LocalPlainChat`): no "Finished 4s" line before an answer (Failed and Stopped still show). The reply's
+  second action is Regenerate, not Ask again, and Regenerate and Edit and resend rewind the same chat (Pi's tree,
+  `navigateTree` through the app's helper extension) instead of forking into a new chat that would crowd the list; the
+  old answer stays a branch in /tree. A fork is the fallback.
+- A new chat starts on the model and thinking level last picked in a chat (`ChatModel`; opening an old chat does not
+  change it), not Pi's global default, which belongs to projects.
+- Words: the palette, sheets and messages say "chat" where a project says "session" (`Builtin.inChat`).
 
 ## Sources (web search)
 
@@ -1335,4 +1364,3 @@ extensions' dialogs keep the generic sheet.
 - Nothing is sent until Submit; then the walker's dialogs are answered from the card as they arrive (option line, or
   the "Type something." row and the text; for several: `1,3; text`). Dismissing the sheet (swipe, scrim, Cancel)
   declines the whole questionnaire, as the extension's own dismiss does.
-

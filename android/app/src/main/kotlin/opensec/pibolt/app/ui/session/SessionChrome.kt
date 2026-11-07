@@ -54,6 +54,7 @@ import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.FolderOpen
+import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.MoreHoriz
@@ -124,6 +125,10 @@ fun linkColor(link: LinkState?, colors: PiColors): Color = when (link) {
  * nothing); remote sessions keep it. [contextPercent] is null until a turn has reported usage. [quadVisible] false
  * stills the Quad while the live status line is on screen: one spinner at a time. Idle it rests as a still grid.
  * [status] is what TalkBack hears for the Quad while it animates; otherwise it is silent.
+ *
+ * A plain chat ([chat]) has ChatGPT's bar: back, the chat's title, then All chats ([onChats], the Chats list) and New
+ * chat as glass buttons, and More. Search moves into More with the rest, worded for a chat, and More ends with Delete
+ * chat ([onDelete], in danger).
  */
 @Composable
 fun SessionTopBar(
@@ -153,6 +158,9 @@ fun SessionTopBar(
     status: String? = null,
     /** The other live sessions (RunningSessions.SessionSwitcher); draws nothing while there are none. */
     switcher: @Composable () -> Unit = {},
+    chat: Boolean = false,
+    onChats: (() -> Unit)? = null,
+    onDelete: (() -> Unit)? = null,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -165,7 +173,7 @@ fun SessionTopBar(
             .padding(start = Space.md, end = Space.md),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, if (local) "Project" else "Computers", onClick = onBack)
+        GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, if (chat) "Back" else if (local) "Project" else "Computers", onClick = onBack)
         Column(
             Modifier
                 .weight(1f)
@@ -188,7 +196,8 @@ fun SessionTopBar(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false).sharedHostElement(SharedKeys.name(hostId)),
                 )
-                if (contextPercent != null) {
+                // "0%" says nothing (a chat on a 1M-token model sits there): the meter shows from 1%.
+                if (contextPercent != null && contextPercent > 0) {
                     Spacer(Modifier.width(10.dp))
                     ContextMeter(contextPercent)
                 }
@@ -222,7 +231,12 @@ fun SessionTopBar(
             }
         }
         switcher()
-        GlassIconButton(Icons.Rounded.Search, "Search this session", onClick = onSearch)
+        if (chat) {
+            onChats?.let { GlassIconButton(Icons.Rounded.Forum, "All chats", onClick = it) }
+            GlassIconButton(Icons.Rounded.Add, "New chat", onClick = onNewSession)
+        } else {
+            GlassIconButton(Icons.Rounded.Search, "Search this session", onClick = onSearch)
+        }
         Box {
             GlassIconButton(Icons.Rounded.MoreHoriz, "More", onClick = { menu = true })
             DropdownMenu(
@@ -239,7 +253,22 @@ fun SessionTopBar(
                     menu = false
                     action()
                 }
-                if (local) {
+                if (chat) {
+                    Item("New chat", Icons.Rounded.Add, onNewSession)
+                    onChats?.let { Item("All chats", Icons.Rounded.Forum, it) }
+                    Item("Search this chat", Icons.Rounded.Search, onSearch)
+                    Item("Rename chat", Icons.Rounded.DriveFileRenameOutline, onRename)
+                    Item("Fork from a message", Icons.AutoMirrored.Rounded.CallSplit, onFork)
+                    Item("Duplicate chat", Icons.Rounded.ContentCopy, onClone)
+                    Item("Chat info and usage", Icons.Rounded.Info, onInfo)
+                    Item("Export or share", Icons.Rounded.IosShare, onExport)
+                    onDelete?.let { delete ->
+                        MenuRow("Delete chat", Icons.Rounded.DeleteOutline, colors.danger) {
+                            menu = false
+                            delete()
+                        }
+                    }
+                } else if (local) {
                     Item("New session", Icons.Rounded.Add, onNewSession)
                     Item("Resume a session", Icons.Rounded.History, onResume)
                     Item("Fork from a message", Icons.AutoMirrored.Rounded.CallSplit, onFork)
@@ -369,9 +398,9 @@ private fun retryText(link: LinkState.Retrying): String {
     return if (left > 0) "Connection lost. Reconnecting in ${(left + 999) / 1000}s" else "Reconnecting…"
 }
 
-/** Before the session snapshot arrives. */
+/** Before the session snapshot arrives. A [chat] has no folder to name: "Starting the chat". */
 @Composable
-fun LoadingState(hostName: String, link: LinkState, local: Boolean, onRetry: () -> Unit) {
+fun LoadingState(hostName: String, link: LinkState, local: Boolean, onRetry: () -> Unit, chat: Boolean = false) {
     val colors = Pi.colors
     val failed = link is LinkState.Failed
     Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -379,7 +408,8 @@ fun LoadingState(hostName: String, link: LinkState, local: Boolean, onRetry: () 
         Spacer(Modifier.height(20.dp))
         Text(
             when {
-                failed -> "Could not open the session"
+                failed -> if (chat) "Could not open the chat" else "Could not open the session"
+                chat -> "Starting the chat…"
                 local -> "Starting Pi-Bolt in $hostName"
                 else -> "Opening the session on $hostName"
             },
@@ -401,6 +431,9 @@ fun LoadingState(hostName: String, link: LinkState, local: Boolean, onRetry: () 
  * prompts this phone sent here before follow under "Recent" (three at most), then "Commands". Every tap fills the
  * composer; nothing sends by itself. Text sits on the 20dp page gutter, as on Home.
  *
+ * A chat's welcome ([question] set) is a greeting instead: "Good evening" in ink1 over "What's on your mind?" in ink3,
+ * both largeTitle, and suggestions that lead with their topic's glyph (ink2 in the 24dp slot).
+ *
  * With [play] it enters as assistant-ui's does: each element fades in and rises 8dp, 120 ms + 70 ms per step
  * ([PiMotion.stagger], [Welcome]); the composer is the last step (SessionScreen).
  */
@@ -414,6 +447,7 @@ fun EmptySession(
     onRecent: (String) -> Unit,
     onCommands: (() -> Unit)?,
     play: Boolean,
+    question: String? = null,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -437,7 +471,9 @@ fun EmptySession(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.entrance(0, play).semantics { heading() },
                 )
-                if (!subtitle.isNullOrBlank()) {
+                if (question != null) {
+                    Text(question, style = type.largeTitle, color = colors.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.entrance(1, play))
+                } else if (!subtitle.isNullOrBlank()) {
                     Text(
                         subtitle,
                         style = type.monoMeta,
@@ -450,7 +486,14 @@ fun EmptySession(
             }
             Column(Modifier.fillMaxWidth().padding(top = if (short) Space.xxl else Space.x4, bottom = Space.xs)) {
                 starters.forEachIndexed { i, s ->
-                    InsetRow(s.label, onClick = { onStarter(s) }, label = "Put in the composer", divider = i < starters.lastIndex, modifier = Modifier.entrance(Welcome.FIRST_SUGGESTION + i, play))
+                    InsetRow(
+                        s.label,
+                        onClick = { onStarter(s) },
+                        label = "Put in the composer",
+                        divider = i < starters.lastIndex,
+                        modifier = Modifier.entrance(Welcome.FIRST_SUGGESTION + i, play),
+                        leading = s.icon?.let { icon -> { Icon(icon, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.md)) } },
+                    )
                 }
                 var step = Welcome.FIRST_SUGGESTION + starters.size
                 if (recent.isNotEmpty()) {

@@ -155,6 +155,18 @@ class UpdateRulesTest {
     }
 
     @Test
+    fun aTestBuildIsPointedAtTheWebsiteInsteadOfOffered() {
+        val debug = setOf("d".repeat(64))
+        assertEquals(Decision.TestBuild(info("0.5.3")), UpdateRules.decide("0.1.0", info("0.5.3"), null, debug))
+        assertEquals(Decision.UpToDate, UpdateRules.decide("0.5.3", info("0.5.3"), null, debug), "nothing newer: nothing to say")
+        // A release install is offered the release, as before; so is an install whose certificates were not read yet.
+        assertEquals(Decision.Available(info("0.5.3"), snoozed = false), UpdateRules.decide("0.5.2", info("0.5.3"), null, setOf(cert)))
+        assertEquals(Decision.Available(info("0.5.3"), snoozed = false), UpdateRules.decide("0.5.2", info("0.5.3"), null, emptySet()))
+        // A test server (debug builds) that publishes builds signed like the install: offered.
+        assertEquals(Decision.Available(info("0.5.3").copy(certSha256 = "d".repeat(64)), snoozed = false), UpdateRules.decide("0.5.2", info("0.5.3").copy(certSha256 = "d".repeat(64)), null, debug))
+    }
+
+    @Test
     fun laterSnoozesOnlyThatVersion() {
         assertEquals(Decision.Available(info("0.2.2"), snoozed = true), UpdateRules.decide("0.2.1", info("0.2.2"), "0.2.2"))
         assertEquals(Decision.Available(info("0.2.3"), snoozed = false), UpdateRules.decide("0.2.1", info("0.2.3"), "0.2.2"))

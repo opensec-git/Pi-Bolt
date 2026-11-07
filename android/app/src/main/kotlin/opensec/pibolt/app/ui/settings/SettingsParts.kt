@@ -4,10 +4,10 @@ import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import android.text.format.DateUtils
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Autorenew
@@ -19,14 +19,17 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.ui.components.GhostButton
 import opensec.pibolt.app.ui.components.GroupControl
 import opensec.pibolt.app.ui.components.GroupEnd
 import opensec.pibolt.app.ui.components.GroupRow
@@ -140,17 +143,22 @@ private fun UpdateActionRow(app: PiBoltApp, divider: Boolean) {
     val updates = app.updates
     val state by updates.state.collectAsStateWithLifecycle()
     val job = state.job
-    val available = (state.decision as? UpdateRules.Decision.Available)?.info
+    val decision = state.decision
+    val available = (decision as? UpdateRules.Decision.Available)?.info
+    val uri = LocalUriHandler.current
     if (job is UpdateJob.Verifying || job is UpdateJob.Installing) return
     GroupControl(divider = divider) {
         when {
+            // A test build cannot take the release in place: the website, never a download that is refused at the end.
+            job == UpdateJob.Idle && decision is UpdateRules.Decision.TestBuild ->
+                SecondaryButton("Open pi-bolt.opensec.in", onClick = { uri.openUri(UpdateRules.WEBSITE) }, modifier = Modifier.fillMaxWidth())
             job is UpdateJob.Downloading -> SecondaryButton("Cancel download", onClick = updates::cancelDownload, modifier = Modifier.fillMaxWidth())
             job is UpdateJob.Ready -> PrimaryButton("Install ${job.info.version}", onClick = updates::requestInstall, modifier = Modifier.fillMaxWidth())
-            available != null -> {
-                PrimaryButton("Update to ${available.version}", onClick = { updates.requestUpdate(available) }, modifier = Modifier.fillMaxWidth())
-                // The offer can be a cached or snoozed release: a newer one stays discoverable with automatic checks off.
-                Spacer(Modifier.height(Space.sm))
-                SecondaryButton("Check for updates", onClick = updates::checkNow, enabled = !state.checking, modifier = Modifier.fillMaxWidth())
+            // The offer can be a cached or snoozed release: a newer one stays discoverable with automatic checks off. One
+            // row, the check as a quiet text button, so the group holds one strong action rather than two stacked capsules.
+            available != null -> Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(Space.sm), verticalAlignment = Alignment.CenterVertically) {
+                GhostButton("Check again", onClick = updates::checkNow, enabled = !state.checking, modifier = Modifier.weight(1f))
+                PrimaryButton("Update to ${available.version}", onClick = { updates.requestUpdate(available) }, modifier = Modifier.weight(1f))
             }
             else -> SecondaryButton("Check for updates", onClick = updates::checkNow, enabled = !state.checking, modifier = Modifier.fillMaxWidth())
         }

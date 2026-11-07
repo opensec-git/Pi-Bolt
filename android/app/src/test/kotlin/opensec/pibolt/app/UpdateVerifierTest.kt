@@ -65,6 +65,17 @@ class UpdateVerifierTest {
     }
 
     @Test
+    fun aTestBuildIsToldWhyTheReleaseCannotGoOverIt() {
+        // The owner's Xiaomi: a debug-signed install, a genuine release archive. The archive is fine; the install is not.
+        val debug = PackageFacts(pkg, 1, setOf("d".repeat(64)))
+        assertEquals(VerifyResult.Refused(UpdateVerifier.TEST_BUILD), verify(PackageFacts(pkg, 202, setOf(ours)), installed = debug))
+        // A tampered archive over the same test build is still refused for its signature.
+        assertEquals(VerifyResult.Refused(UpdateVerifier.NOT_OPENSEC), verify(PackageFacts(pkg, 202, setOf(other)), installed = debug))
+        // Release over release is unchanged.
+        assertEquals(VerifyResult.Ok, verify(PackageFacts(pkg, 202, setOf(ours))))
+    }
+
+    @Test
     fun refusesAnotherPackage() {
         val result = verify(PackageFacts("com.example.other", 202, setOf(ours)))
         assertEquals(VerifyResult.Refused("The download is a different app (com.example.other); not installed."), result)
