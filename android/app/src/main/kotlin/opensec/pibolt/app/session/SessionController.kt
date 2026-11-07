@@ -476,6 +476,8 @@ class SessionController private constructor(
         val running = _state.value.isRunning
         sentAt = SystemClock.elapsedRealtime()
         scope.launch {
+            // The turn's start state is recorded before the agent can edit (a steer joins a running turn instead).
+            if (!running) checkpoints?.prepareStart()
             // An extension command answers only when it finishes, after its dialogs: nothing waits on this.
             val response = rpc.prompt(text, images, streamingBehavior = if (running) behavior else null)
             if (!response.success && !stopped) {

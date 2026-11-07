@@ -7,27 +7,27 @@ import okhttp3.OkHttpClient
 
 /**
  * Environment that lets every git the engine runs (the app's own and Pi's bash commands) use the GitHub token for
- * `https://github.com` only, with no file on disk holding it: a URL-scoped credential helper set through
- * `GIT_CONFIG_COUNT` (git 2.31+). The helper is a shell function (git runs `!` helpers through `sh`, which lives in
- * nativeLibraryDir; scripts written to the data dir could not be executed). The empty helper first clears any other
- * helper for github.com, so a stale stored password is never tried.
+ * `https://github.com` only, with the token in no environment and no file: a URL-scoped credential helper set through
+ * `GIT_CONFIG_COUNT` (git 2.31+) that asks the app for it over [GitCredentialBroker]'s socket with the pack's curl.
+ * The helper is a shell function (git runs `!` helpers through `sh`, which lives in nativeLibraryDir; scripts written
+ * to the data dir could not be executed). The empty helper first clears any other helper for github.com, so a stale
+ * stored password is never tried.
  */
 object GitCredentials {
-    const val TOKEN_VAR = "PIBOLT_GITHUB_TOKEN"
-    const val USER_VAR = "PIBOLT_GITHUB_USER"
-    const val HELPER = "!f() { test \"\$1\" = get || exit 0; test -n \"\$$TOKEN_VAR\" || exit 0; " +
-        "printf 'username=%s\\npassword=%s\\n' \"\${$USER_VAR:-x-access-token}\" \"\$$TOKEN_VAR\"; }; f"
+    const val SOCKET_VAR = "PIBOLT_GIT_CREDENTIALS"
+    const val HELPER = "!f() { test \"\$1\" = get || exit 0; test -n \"\$$SOCKET_VAR\" || exit 0; " +
+        "curl -s --max-time 10 --unix-socket \"\$$SOCKET_VAR\" http://pibolt/github; }; f"
 
-    fun env(token: String?, login: String?): Map<String, String> {
-        if (token.isNullOrEmpty()) return emptyMap()
+    /** The variables for [socket] (the broker's), empty without one (signed out). */
+    fun env(socket: String?): Map<String, String> {
+        if (socket.isNullOrEmpty()) return emptyMap()
         return mapOf(
             "GIT_CONFIG_COUNT" to "2",
             "GIT_CONFIG_KEY_0" to "credential.https://github.com.helper",
             "GIT_CONFIG_VALUE_0" to "",
             "GIT_CONFIG_KEY_1" to "credential.https://github.com.helper",
             "GIT_CONFIG_VALUE_1" to HELPER,
-            TOKEN_VAR to token,
-            USER_VAR to (login?.takeIf { it.isNotBlank() } ?: "x-access-token"),
+            SOCKET_VAR to socket,
         )
     }
 }
@@ -49,6 +49,7 @@ class GitHub(
     private val http: OkHttpClient,
     val clientId: String,
     private val onCredentialsChanged: () -> Unit = {},
+    socketBroker: ((() -> Pair<String, String>?) -> GitCredentialBroker)? = null,
     private val webBase: String = "https://github.com",
     apiBase: String = "https://api.github.com",
 ) {
@@ -56,6 +57,10 @@ class GitHub(
     val state: StateFlow<GitHubState> = _state.asStateFlow()
 
     val api = GitHubApi(http, store::token, apiBase)
+
+    private val broker: GitCredentialBroker? = socketBroker?.invoke {
+        store.token()?.takeIf { it.isNotEmpty() }?.let { (account?.login?.takeIf(String::isNotBlank) ?: "x-access-token") to it }
+    }
 
     val deviceFlowAvailable: Boolean get() = clientId.isNotBlank()
 
@@ -82,7 +87,10 @@ class GitHub(
     }
 
     /** The credential environment for git processes (empty when signed out). */
-    fun gitEnvironment(): Map<String, String> = GitCredentials.env(store.token(), account?.login)
+    fun gitEnvironment(): Map<String, String> {
+        if (store.token().isNullOrEmpty()) return emptyMap()
+        return GitCredentials.env(broker?.ensureListening()?.path)
+    }
 
     override fun toString(): String = "GitHub(state=${_state.value})"
 

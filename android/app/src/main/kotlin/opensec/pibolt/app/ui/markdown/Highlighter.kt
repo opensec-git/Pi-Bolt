@@ -1643,7 +1643,7 @@ object Highlighter {
                         emit(i, i + 1, Kind.String)
                         i = stringBody(code, i + 1, e, c.toString(), false, c == '"', multiline = false)
                     }
-                    (c == '|' || c == '>') && code.substring(i, e).trim().matches(Regex("[|>][+-]?\\d?(\\s+#.*)?")) -> {
+                    (c == '|' || c == '>') && isYamlBlockIndicator(code, i, e) -> {
                         emit(i, i + 1, Kind.Operator)
                         block = YAML_BLOCK
                         yamlIndent = indent
@@ -1681,7 +1681,7 @@ object Highlighter {
                         val word = code.substring(i, t)
                         when {
                             word in lang.constants -> emit(i, t, Kind.Constant)
-                            word.matches(Regex("[-+]?(\\d[\\d_]*(\\.\\d*)?([eE][-+]?\\d+)?|0x[0-9a-fA-F]+|\\.inf|\\.nan)")) -> emit(i, t, Kind.Number)
+                            YAML_NUMBER.matches(word) -> emit(i, t, Kind.Number)
                             else -> emit(i, t, Kind.String)
                         }
                         i = maxOf(j, i + 1)
@@ -2026,4 +2026,21 @@ object Highlighter {
             }
         }
     }
+}
+
+/** A YAML number scalar; compiled once (a Regex per token made long hostile lines slow). */
+private val YAML_NUMBER = Regex("[-+]?(\\d[\\d_]*(\\.\\d*)?([eE][-+]?\\d+)?|0x[0-9a-fA-F]+|\\.inf|\\.nan)")
+
+/**
+ * Whether `|` or `>` at [i] starts a YAML block scalar: `[|>][+-]?digit?`, then only spaces, optionally followed by a
+ * ` #` comment, up to [e]. A bounded scan instead of copying the rest of the line and compiling a regex per token.
+ */
+private fun isYamlBlockIndicator(code: String, i: Int, e: Int): Boolean {
+    var j = i + 1
+    if (j < e && (code[j] == '+' || code[j] == '-')) j++
+    if (j < e && code[j].isDigit()) j++
+    if (j >= e) return true
+    if (code[j] != ' ' && code[j] != '\t') return false
+    while (j < e && (code[j] == ' ' || code[j] == '\t')) j++
+    return j >= e || code[j] == '#'
 }

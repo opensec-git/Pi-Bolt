@@ -238,7 +238,8 @@ class EngineFilesTest {
             file.readText(),
         )
         assertEquals("rw-------", PosixFilePermissions.toString(Files.getPosixFilePermissions(file.toPath())))
-        assertFalse(File(agent, "auth.json.lock").exists())
+        // The file is renamed into place before the lock is released: wait for the release (slow CI runners saw it held).
+        withTimeout(5_000) { while (File(agent, "auth.json.lock").exists()) kotlinx.coroutines.delay(10) }
 
         auth.remove("anthropic")
         withTimeout(5_000) { while (file.readText().contains("anthropic")) kotlinx.coroutines.delay(10) }

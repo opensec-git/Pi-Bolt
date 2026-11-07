@@ -152,20 +152,46 @@ class GitRepoTest {
     }
 
     @Test
-    fun credentialHelperAnswersForGithubOnly() = runBlocking {
+    fun credentialHelperAsksTheBrokerSocketForGithubOnly() = runBlocking {
         val token = "gho_" + "A".repeat(36)
-        extraEnv = GitCredentials.env(token, "octocat")
+        // A stand-in for the pack's curl: answers like the broker when asked over the configured socket.
+        val bin = File(root, "bin").apply { mkdirs() }
+        val sock = File(root, "cred/socket").path
+        File(bin, "curl").apply {
+            writeText("#!/bin/sh\ncase \"\$*\" in *\"--unix-socket $sock http://pibolt/github\"*) printf 'username=octocat\\npassword=$token\\n' ;; esac\n")
+            setExecutable(true)
+        }
+        extraEnv = GitCredentials.env(sock) + ("PATH" to "${bin.path}:${System.getenv("PATH") ?: "/usr/bin:/bin"}")
+        assertFalse(extraEnv.values.any { token in it })
         val fill = "protocol=https\nhost=github.com\npath=o/r.git\n\n"
         val gh = runner.run(work, listOf("credential", "fill"), 10_000, fill, null)
         assertEquals(0, gh.exit, gh.err)
         assertTrue("username=octocat" in gh.out)
         assertTrue("password=$token" in gh.out)
 
-        // Another host gets nothing from the helper (and git may not prompt): fill fails.
+        // Another host never asks the helper (and git may not prompt): fill fails.
         val other = runner.run(work, listOf("credential", "fill"), 10_000, "protocol=https\nhost=gitlab.com\n\n", null)
         assertFalse(token in other.out)
 
         // Signed out: no helper at all.
-        assertTrue(GitCredentials.env(null, "octocat").isEmpty())
+        assertTrue(GitCredentials.env(null).isEmpty())
+    }
+
+    @Test
+    fun discardTakesTheFileNameLiterally() = runBlocking {
+        repo.init()
+        for (n in listOf("[id].txt", "i.txt", "d.txt")) File(work, n).writeText(n)
+        val entry = repo.status().entries.first { it.path == "[id].txt" }
+        repo.discard(entry, staged = false)
+        assertFalse(File(work, "[id].txt").exists())
+        assertTrue(File(work, "i.txt").exists())
+        assertTrue(File(work, "d.txt").exists())
+    }
+
+    @Test
+    fun showRejectsAnythingButAHash() = runBlocking {
+        repo.init()
+        assertFailsWith<GitException> { repo.show("--output=${File(root, "x").path}") }
+        assertFalse(File(root, "x").exists())
     }
 }

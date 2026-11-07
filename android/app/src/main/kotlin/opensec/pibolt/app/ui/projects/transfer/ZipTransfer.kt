@@ -36,6 +36,7 @@ object ZipTransfer {
     const val BUFFER = 64 * 1024
     const val MAX_ENTRIES = 100_000
     const val MAX_TOTAL = 4L * 1024 * 1024 * 1024
+    const val MAX_SUFFIX = 9_999
 
     /** Folders left out of an export when "Leave out dependencies and .git" is on. */
     val HEAVY = setOf(".git", "node_modules", ".gradle", "__pycache__", ".venv", "venv", ".next", ".cache")
@@ -201,7 +202,8 @@ object ZipTransfer {
 
     /** A project name from an archive's display name: `calc-parser-main.zip` gives `calc-parser-main`. */
     fun projectName(displayName: String?): String {
-        val base = displayName.orEmpty().substringAfterLast('/').removeSuffix(".zip").removeSuffix(".ZIP").trim()
+        // A hidden folder would not show as a project (and no numbered name could fix that): no leading dots.
+        val base = displayName.orEmpty().substringAfterLast('/').removeSuffix(".zip").removeSuffix(".ZIP").trim().trimStart('.')
         return safeName(base) ?: "Imported project"
     }
 
@@ -217,9 +219,11 @@ object ZipTransfer {
         val dot = name.lastIndexOf('.').takeIf { it > 0 } ?: name.length
         val stem = name.substring(0, dot)
         val ext = name.substring(dot)
-        var i = 2
-        while (exists("$stem ($i)$ext")) i++
-        return "$stem ($i)$ext"
+        for (i in 2..MAX_SUFFIX) {
+            val candidate = "$stem ($i)$ext"
+            if (!exists(candidate)) return candidate
+        }
+        throw IOException("Could not pick a free name for $name")
     }
 
     private class CountingInput(input: InputStream) : FilterInputStream(input) {

@@ -13,6 +13,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -79,6 +80,10 @@ class TurnCheckpoints(
     @Volatile
     private var open: String? = null
 
+    /** A start snapshot taken before a prompt was sent ([prepareStart]); the next user message's turn starts there. */
+    @Volatile
+    private var pendingStart: Snapshot? = null
+
     @Volatile
     private var failing = false
 
@@ -126,11 +131,30 @@ class TurnCheckpoints(
         }
     }
 
+    /**
+     * Takes the start snapshot for the prompt about to be sent to an idle agent and returns once it is taken (or after
+     * [timeoutMs]): the agent cannot edit before its turn's start state is recorded.
+     */
+    suspend fun prepareStart(timeoutMs: Long = PREPARE_TIMEOUT_MS) {
+        val done = CompletableDeferred<Unit>()
+        enqueue {
+            try {
+                locked { pendingStart = repo.snapshot("start") }
+            } finally {
+                done.complete(Unit)
+            }
+        }
+        if (closed) return
+        withTimeoutOrNull(timeoutMs) { done.await() }
+    }
+
     /** A user message reached the engine: the previous turn (a steer interrupts one) ends and this one starts. */
     fun userMessage(timestamp: Long?, text: String, sessionId: String?) = enqueue {
         locked {
+            val prepared = pendingStart
+            pendingStart = null
             val snapshot = try {
-                repo.snapshot("start")
+                prepared ?: repo.snapshot("start")
             } catch (e: Exception) {
                 // No start for this turn: the open one cannot end here either, and must not take this turn's changes.
                 open?.let(openTurns::remove)
@@ -363,6 +387,9 @@ class TurnCheckpoints(
 
     companion object {
         private const val PROMPT_CHARS = 500
+
+        // A huge project may take longer to snapshot the first time: the prompt then goes anyway.
+        const val PREPARE_TIMEOUT_MS = 20_000L
 
         /** The turn of [turns] a user message started: by its [timestamp], or by its [text] when it has none. */
         fun find(turns: List<TurnRecord>, timestamp: Long?, text: String): TurnRecord? {

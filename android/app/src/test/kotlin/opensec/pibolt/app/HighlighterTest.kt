@@ -235,4 +235,25 @@ class HighlighterTest {
             }
         }
     }
+
+    // PR #254 review (opensec-code-review, CWE-1333): a line of short words made the CSS selector heuristic backtrack
+    // exponentially; 40 words never returned. Now it must fail fast and real selectors must still be detected.
+    @Test
+    fun cssHeuristicDoesNotBacktrackOnWords() {
+        val words = List(200) { "a" }.joinToString(" ")
+        val started = System.nanoTime()
+        Languages.detect(words)
+        Languages.detect(List(60) { "ab-c" }.joinToString(" ") + " !")
+        assertTrue((System.nanoTime() - started) / 1_000_000 < 2_000, "detect took too long")
+        assertEquals("css", Languages.detect(".card > .title, h1 a:hover {\n  color: red;\n}"))
+    }
+
+    // PR #254 review: the YAML branch copied the rest of the line and compiled a Regex for every `|` or `>`.
+    @Test
+    fun yamlPipesTokeniseInLinearTime() {
+        assertLinear("yaml |,|,…", 6_000) { n -> Highlighter.tokenize("key: " + "|,".repeat(n), "yaml") }
+        val tokens = Highlighter.tokenize("text: |-\n  body\nn: 0x1F", "yaml")
+        assertTrue(tokens.any { it.kind == Highlighter.Kind.Number }, "number still highlighted")
+    }
+
 }

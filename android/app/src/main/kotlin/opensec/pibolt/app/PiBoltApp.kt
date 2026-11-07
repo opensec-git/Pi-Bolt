@@ -23,8 +23,10 @@ import opensec.pibolt.app.engine.EngineApi
 import opensec.pibolt.app.engine.LocalEngine
 import opensec.pibolt.app.git.GitRunner
 import opensec.pibolt.app.git.ProcessGitRunner
+import opensec.pibolt.app.git.github.GitCredentialBroker
 import opensec.pibolt.app.git.github.GitHub
 import opensec.pibolt.app.git.github.KeystoreBox
+import opensec.pibolt.app.git.github.LocalSocketListener
 import opensec.pibolt.app.git.github.PrefsKeyValue
 import opensec.pibolt.app.git.github.TokenStore
 import opensec.pibolt.app.session.Notifications
@@ -37,6 +39,7 @@ import opensec.pibolt.app.update.UpdateNotifications
 import opensec.pibolt.protocol.Base64Url
 import opensec.pibolt.protocol.PairingPayload
 import opensec.pibolt.protocol.backend.RemoteBackend
+import java.io.File
 import java.util.concurrent.TimeUnit
 
 class PiBoltApp : Application() {
@@ -61,6 +64,8 @@ class PiBoltApp : Application() {
             http = http.newBuilder().readTimeout(30, TimeUnit.SECONDS).callTimeout(60, TimeUnit.SECONDS).pingInterval(0, TimeUnit.SECONDS).build(),
             clientId = BuildConfig.GITHUB_CLIENT_ID,
             onCredentialsChanged = { localEngine.stopIdleEngines("GitHub credentials changed") },
+            // The token reaches git through this socket, never through an environment a project's scripts inherit.
+            socketBroker = { credential -> GitCredentialBroker(File(noBackupFilesDir, "git-credentials/socket"), credential, LocalSocketListener::listen) },
         )
     }
 

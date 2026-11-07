@@ -485,7 +485,9 @@ object Languages {
             any("^[\\w.-]+:( [\\w./$()-]+)*\\s*$") && any("^\\t") -> "makefile"
             any("^\\s*[\\w-]+:\\s") && lines.count { Regex("^[\\w\"'-]+:( |$)|^- ").containsMatchIn(it) } * 2 >= lines.size -> "yaml"
             any("^\\[[\\w.\"-]+\\]\\s*$") && any("^[\\w.-]+\\s*=") -> if (any("=\\s*\"") || any("=\\s*\\[")) "toml" else "ini"
-            any("^\\s*[.#]?[\\w-]+(\\s*[,>+~]?\\s*[.#]?[\\w:-]+)*\\s*\\{\\s*$") && any("^\\s*[\\w-]+:\\s*[^;]+;\\s*$") -> "css"
+            // Possessive and atomic: the repeated selector part cannot be split in several ways, so a line of words
+            // ("a a a a …") fails in linear time instead of backtracking exponentially (PR #254 review).
+            any("^\\s*[.#]?[\\w-]++(?>\\s*[,>+~]?\\s*[.#]?[\\w:-]++)*+\\s*\\{\\s*$") && any("^\\s*[\\w-]+:\\s*[^;]+;\\s*$") -> "css"
             any("^\\s*<\\w+[^>]*>") && any("</\\w+>") -> "html"
             any("^\\s*(Get|Set|New|Remove|Invoke|Write)-\\w+") || any("\\\$env:") -> "powershell"
             any("^\\s*(sudo |npm |npx |yarn |pnpm |git |cd |ls |mkdir |curl |brew |apt(-get)? |pip3? |docker |kubectl |export |echo |chmod |cargo |go |make )") -> "shell"

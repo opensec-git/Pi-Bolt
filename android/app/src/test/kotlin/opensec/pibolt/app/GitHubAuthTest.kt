@@ -9,6 +9,7 @@ import opensec.pibolt.app.git.GitErrors
 import opensec.pibolt.app.git.github.AesGcmBox
 import opensec.pibolt.app.git.github.DeviceFlow
 import opensec.pibolt.app.git.github.DeviceFlowState
+import opensec.pibolt.app.git.github.GitCredentialBroker
 import opensec.pibolt.app.git.github.GitCredentials
 import opensec.pibolt.app.git.github.GitHub
 import opensec.pibolt.app.git.github.GitHubException
@@ -18,7 +19,11 @@ import opensec.pibolt.app.git.github.Redact
 import opensec.pibolt.app.git.github.TokenKind
 import opensec.pibolt.app.git.github.TokenStore
 import org.junit.After
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import java.io.Closeable
 import java.io.File
+import java.nio.file.Files
 import java.util.Base64
 import javax.crypto.KeyGenerator
 import kotlin.test.Test
@@ -138,7 +143,12 @@ class GitHubAuthTest {
         server.start()
         val kv = Recording()
         val store = TokenStore(kv, box())
-        val gh = GitHub(store, http, clientId = "", webBase = server.url("/").toString(), apiBase = server.url("/").toString())
+        val sock = File(Files.createTempDirectory("pibolt-cred").toFile(), "cred/socket")
+        var answered: Pair<String, String>? = null
+        val gh = GitHub(
+            store, http, clientId = "", webBase = server.url("/").toString(), apiBase = server.url("/").toString(),
+            socketBroker = { credential -> GitCredentialBroker(sock, credential, { _, _ -> answered = credential(); Closeable {} }) },
+        )
         assertFalse(gh.deviceFlowAvailable)
 
         // A rejected token: the error and everything written say nothing of it.
@@ -172,10 +182,14 @@ class GitHubAuthTest {
         assertFalse(token in Redact.text("token $token"))
         assertFalse(token in GitErrors.explain("fatal: Authentication failed for 'https://github.com/o/r.git/'"))
 
-        // The engine environment carries it only in the helper's variable, never in the helper text or config keys.
+        // The engine environment names the broker's socket and never carries the token; the broker answers with it.
         val env = gh.gitEnvironment()
-        assertEquals(token, env[GitCredentials.TOKEN_VAR])
-        for ((k, v) in env) if (k != GitCredentials.TOKEN_VAR) assertFalse(token in v, k)
+        assertEquals(sock.path, env[GitCredentials.SOCKET_VAR])
+        for ((k, v) in env) assertFalse(token in v, k)
+        assertEquals(account.login to token, answered)
+        val out = ByteArrayOutputStream()
+        GitCredentialBroker.answer(ByteArrayInputStream("GET /github HTTP/1.1\r\nHost: pibolt\r\n\r\n".toByteArray()), out, answered)
+        assertTrue(out.toString(Charsets.UTF_8.name()).endsWith("\r\n\r\nusername=${account.login}\npassword=$token\n"))
 
         // Another key cannot open it (a reset Keystore): signed out, no crash.
         assertNull(TokenStore(kv, box()).token())
