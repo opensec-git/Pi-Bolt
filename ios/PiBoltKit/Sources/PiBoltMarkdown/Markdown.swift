@@ -38,15 +38,23 @@ public enum TableAlignment: Equatable, Sendable {
 public enum Markdown {
     public static func parse(_ text: String) -> [MarkdownBlock] {
         let lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
-        var parser = Parser(lines: lines)
+        var parser = Parser(lines: lines, depth: 0)
         return parser.blocks()
     }
 
+    /// Quotes nest at most this deep; deeper `>` markers stay in the text. A line of thousands of `>` from a reply
+    /// would otherwise recurse once per marker.
+    static let maxQuoteDepth = 4
+
     private struct Parser {
         let lines: [String]
+        let depth: Int
         var i = 0
 
-        init(lines: [String]) { self.lines = lines }
+        init(lines: [String], depth: Int) {
+            self.lines = lines
+            self.depth = depth
+        }
 
         mutating func blocks() -> [MarkdownBlock] {
             var out: [MarkdownBlock] = []
@@ -82,7 +90,7 @@ public enum Markdown {
                     i += 1
                     continue
                 }
-                if trimmed.hasPrefix(">") {
+                if trimmed.hasPrefix(">"), depth < Markdown.maxQuoteDepth {
                     flush()
                     out.append(quote())
                     continue
@@ -166,7 +174,7 @@ public enum Markdown {
                 inner.append(String(rest))
                 i += 1
             }
-            var nested = Parser(lines: inner)
+            var nested = Parser(lines: inner, depth: depth + 1)
             return .quote(nested.blocks())
         }
 

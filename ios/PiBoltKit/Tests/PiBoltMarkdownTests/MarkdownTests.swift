@@ -58,4 +58,20 @@ struct MarkdownTests {
         #expect(Markdown.parse("- - -") == [.rule])
         #expect(Markdown.parse("-not a list") == [.paragraph("-not a list")])
     }
+
+    @Test func deepQuotesStopNestingAtTheCap() {
+        let blocks = Markdown.parse(String(repeating: ">", count: 50_000) + " x")
+        var depth = 0
+        var block = blocks.first
+        while case let .quote(inner)? = block {
+            depth += 1
+            block = inner.first
+        }
+        #expect(depth == Markdown.maxQuoteDepth)
+        guard case let .paragraph(text)? = block else {
+            Issue.record("expected the rest as text")
+            return
+        }
+        #expect(text.hasSuffix("> x"))
+    }
 }

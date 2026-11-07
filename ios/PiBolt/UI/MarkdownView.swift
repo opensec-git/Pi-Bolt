@@ -23,9 +23,15 @@ func inline(_ text: String) -> AttributedString {
     options.interpretedSyntax = .inlineOnlyPreservingWhitespace
     options.failurePolicy = .returnPartiallyParsedIfPossible
     guard var parsed = try? AttributedString(markdown: text, options: options) else { return AttributedString(text) }
-    for run in parsed.runs where run.inlinePresentationIntent?.contains(.code) == true {
-        parsed[run.range].font = .system(size: 15, design: .monospaced)
-        parsed[run.range].backgroundColor = Pi.surface2
+    for run in parsed.runs {
+        if run.inlinePresentationIntent?.contains(.code) == true {
+            parsed[run.range].font = .system(size: 15, design: .monospaced)
+            parsed[run.range].backgroundColor = Pi.surface2
+        } else if let link = run.link, !["http", "https", "mailto"].contains(link.scheme?.lowercased() ?? "") {
+            // Reply text is not trusted: only web and mail links are live, as on Android. A tel:, shortcuts: or the
+            // app's own pibolt:// link stays plain text.
+            parsed[run.range].link = nil
+        }
     }
     return parsed
 }
