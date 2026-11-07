@@ -44,6 +44,17 @@ import kotlin.test.assertTrue
 class Features2Test {
     private fun json(text: String) = ProtocolJson.parseToJsonElement(text).jsonObject
 
+    @Test
+    fun treeLoadErrorsAreErrorsNotAnEmptyList() {
+        val data = json("""{"entries":[],"leafId":null}""")
+        assertEquals(data to null, SessionTree.load(true, data, null))
+        // Success without data would leave the sheet on "Reading the tree" forever.
+        assertEquals(null to "Pi sent no session tree.", SessionTree.load(true, null, null))
+        assertEquals(null to "Unknown command: get_entries", SessionTree.load(false, null, " Unknown command: get_entries "))
+        assertEquals(null to "Pi did not answer.", SessionTree.load(false, null, "  "))
+        assertEquals(null to "Pi did not answer.", SessionTree.load(false, null, null))
+    }
+
     // Session tree
 
     private fun user(id: String, parent: String?, text: String, ts: String) =

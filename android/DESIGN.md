@@ -548,6 +548,12 @@ the message and returns its text), Edit in composer, Select text, Share. On a re
 Markdown), Copy as Markdown, Regenerate (on this phone: forks before the prompt and sends it again), Select text, View
 as Markdown, Share. More under the last reply offers the same.
 
+**Session tree** (`/tree`). A sheet: "Session tree" with "One branch…" or "2 forks. The marked path is what Pi sees."
+(meta ink3), the Messages | Prompts | Labeled | Everything filter, then the entries (forks indented, the active path
+marked). Loading reads "Reading the tree" (Quad Think). A failed read (or a reply without data) is an error, never an
+empty list: no subtitle, no filter, a dangerSoft card (radius 12, danger @ 40% line) with the error glyph, "Could not
+read the session tree" (bodyStrong ink1), Pi's message (meta ink3, four lines) and Retry (accent).
+
 **Export.** "Export or share" (or `/export`): Share as Markdown (a `.md` file through the share sheet), Copy as
 Markdown, and on this phone Share session file (the JSONL) and Share as HTML (`export_html`). Files are written to
 `cache/exports` and shared through a FileProvider.
