@@ -562,17 +562,16 @@ under it.
   follow-up), the label on one line at least 62dp wide, swipe to remove.
 - Composer (after the desktop composer and assistant-ui): one card, surface1, radius lg, a 1dp lineStrong edge that
   becomes the focus line; body text (15/22) in ink1, its placeholder in the same style in ink3 (one line, ellipsized),
-  accent cursor and selection. Two forms, and the field keeps one place in the composition in both, so switching
-  never drops focus or the keyboard:
-  - One row while the draft fits one line (empty, or a line that fits the one-row field's width; measured at that
-    width in both forms so it never flips back and forth), with no images and no steer typed: + and the mic, the
-    field, Send. The field's top and bottom padding is (48dp − line) / 2, so one line is centred on the buttons and,
-    in the landscape-keyboard row, the last of several lines stays on that centre (also at font scale 1.3).
-  - Field on top (16dp sides, 14dp top, 4dp bottom, grows to 6 lines, 4 in a short window, then scrolls) and a bar:
-    + and the mic as ghost buttons on the left, the run-settings chip, then Stop and Send on the right.
-  - Under 360dp of room above the keyboard (landscape) it is always one row, at most 3 lines, with the Steer chip
-    before Stop; in a window under 420dp wide the + steps aside while a steer is typed (never the mic, which may be
-    listening).
+  accent cursor and selection. As on the desktop the bar is always there, whatever the draft (empty, one line or
+  more), so the model stays in view; the field keeps one place in the composition in both forms, so switching never
+  drops focus or the keyboard:
+  - Field on top (16dp sides, 14dp top, 4dp bottom, grows to 6 lines, 4 in a short window, then scrolls) and the bar:
+    + as a ghost button on the left, the run-settings chip, then the mic (a ghost) just before Stop and Send on the
+    right.
+  - Under 360dp of room above the keyboard (landscape) one row: +, the field (at most 3 lines), the mic, the Steer
+    chip while a steer is typed, Stop, Send. The field's top and bottom padding is (48dp − line) / 2, so one line is
+    centred on the buttons and the last of several stays on that centre (also at font scale 1.3). In a window under
+    420dp wide the + steps aside while a steer is typed (never the mic, which may be listening).
   Geometry (`ComposerLayout`): every button is a 48dp target on one centre line. Send, Stop and the listening mic are
   one 32dp disc (the desktop's 30px, assistant-ui's 32px); the button row sits 2dp inside the card, so the send disc
   is 10dp from the end and the bottom edge alike (it was 10dp and 4dp). + and the mic at rest: a 20dp ink3 glyph, no
@@ -700,9 +699,9 @@ read the session tree" (bodyStrong ink1), Pi's message (meta ink3, four lines) a
 Markdown, and on this phone Share session file (the JSONL) and Share as HTML (`export_html`). Files are written to
 `cache/exports` and shared through a FileProvider.
 
-**Dictation.** A 48dp mic beside + on the left: a 20dp MicNone ink3 ghost; listening is the composer's 32dp accent disc
-with an onAccent Mic (static, no pulse), on Send's centre line, and TalkBack's state "Listening". It keeps its state
-when the card collapses or expands (movable content), so a dictation that wraps the draft keeps listening. The first tap explains the microphone in a sheet
+**Dictation.** A 48dp mic just before Send, as on the desktop: a 20dp MicNone ink3 ghost; listening is the composer's
+32dp accent disc with an onAccent Mic (static, no pulse), on Send's centre line, and TalkBack's state "Listening". It
+keeps its state when the composer switches to the landscape row and back (movable content). The first tap explains the microphone in a sheet
 ("Continue"), then Android asks; partial words appear in the draft as they are heard.
 
 **Image viewer.** A tap on an image in a user message or the composer tray opens it full screen on black: swipe

@@ -46,7 +46,7 @@ import opensec.pibolt.app.ui.theme.Pi
  * SpeechRecognizer, on the device when the phone has an on-device recogniser (Android 12+), else the default service
  * with EXTRA_PREFER_OFFLINE. Partial results appear in the draft as they come ([VoiceDraft]); the final result replaces
  * them. RECORD_AUDIO is asked for on the first tap only, after a sheet that says why. At rest it is a ghost button (an
- * ink3 glyph, no fill) beside +; listening is the composer's 32dp disc in accent (no animation), the same diameter and
+ * ink3 glyph, no fill) just before Send, as on the desktop; listening is the composer's 32dp disc in accent (no animation), the same diameter and
  * centre line as Send ([ComposerLayout]), and TalkBack hears "Listening".
  */
 @Composable

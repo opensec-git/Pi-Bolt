@@ -22,7 +22,7 @@ class ComposerLayoutTest {
 
     @Test
     fun oneRowFieldCentresItsLineOnTheButtons() {
-        // 15sp on a 22sp line: 13dp above and below, so one line is 48dp, the buttons' target.
+        // The landscape row: 15sp on a 22sp line gets 13dp above and below, so one line is 48dp, the buttons' target.
         assertEquals(13.dp, ComposerLayout.fieldPad(22.dp))
         // Font scale 1.3: the line is 28.6dp and the padding shrinks so the centre stays on the target's.
         val line = 28.6.dp
@@ -30,16 +30,6 @@ class ComposerLayoutTest {
         assertEquals(24f, (pad + line / 2).value, 0.01f)
         // Very large text keeps a little room.
         assertEquals(4.dp, ComposerLayout.fieldPad(60.dp))
-    }
-
-    @Test
-    fun oneLineDraftsCollapseTheCard() {
-        assertTrue(ComposerLayout.fitsOneLine("") { error("not measured") })
-        assertTrue(ComposerLayout.fitsOneLine("fix the test") { 1 })
-        assertFalse(ComposerLayout.fitsOneLine("a long prompt") { 2 })
-        assertFalse(ComposerLayout.fitsOneLine("two\nlines") { 1 }, "a newline always expands")
-        // +, mic and Send take 3 targets, plus the end edge, the field's sides and the cursor.
-        assertEquals(48.dp * 3 + 2.dp + 8.dp + 2.dp, ComposerLayout.rowWidth(3))
     }
 
     @Test

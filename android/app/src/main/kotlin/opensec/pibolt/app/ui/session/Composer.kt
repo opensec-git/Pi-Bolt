@@ -78,9 +78,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.text.rememberTextMeasurer
-import androidx.compose.ui.unit.Constraints
 import opensec.pibolt.app.ui.theme.IconSize
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -117,10 +114,10 @@ private enum class SendMode { Send, Stop }
 
 /**
  * The composer, after the desktop composer and assistant-ui: one rounded card (surface1, radius lg, a 1dp lineStrong
- * edge that becomes the focus line) with a tray of attached images, the field, and a bar: + and the mic as ghost
- * buttons on the left, the run-settings chip, then Send (the accent circle) or Stop in the same slot on the right. A
- * one-line draft collapses the card to one row (+, mic, field, Send). Every button is a 48dp target on one centre line
- * ([ComposerLayout]). While the agent works Send turns into Stop when the field is empty, and a Steer | Follow-up chip
+ * edge that becomes the focus line) with a tray of attached images, the field, and a bar that is always there: + as
+ * a ghost button on the left, the run-settings chip, then the mic (a ghost) and Send (the accent circle) or Stop in
+ * the same slot on the right. Only a landscape keyboard puts it all on one row ([compact]). Every button is a 48dp
+ * target on one centre line ([ComposerLayout]). While the agent works Send turns into Stop when the field is empty, and a Steer | Follow-up chip
  * takes the run-settings chip's place while typing.
  *
  * [attachAllowed] false only changes the + button's description: its sheet also mentions files and commands, and its
@@ -246,29 +243,16 @@ fun Composer(
         val sendEnabled = enabled && if (hasContent) !encoding else stoppable
         val steering = running && hasContent
         val stopBeside = stoppable && hasContent
-        // A one-line draft collapses the card to one row (+, mic, the field, Send), as assistant-ui does; the bar with
-        // the run-settings chip comes back once the draft wraps, images are attached or a steer is typed. The test is
-        // made at the one-row field's width in both forms, so the switch never flips back and forth.
-        var cardWidth by remember { mutableIntStateOf(0) }
-        val measurer = rememberTextMeasurer()
-        val oneRowButtons = 2 + (if (voice != null) 1 else 0) + (if (stopBeside) 1 else 0)
-        val oneRowField = with(density) { (cardWidth.toDp() - ComposerLayout.rowWidth(oneRowButtons)).roundToPx() }
-        val oneLine = remember(text, oneRowField, fieldStyle) {
-            ComposerLayout.fitsOneLine(text) { measurer.measure(it, fieldStyle, constraints = Constraints(maxWidth = oneRowField.coerceAtLeast(1))).lineCount }
-        }
-        // Before the card is measured, an empty draft is one row already, so the screen does not open with the bar.
-        val oneRow = compact || (images.isEmpty() && !steering && if (cardWidth > 0) oneLine else text.isEmpty())
         // At 360dp the landscape-keyboard row has no room for the field beside +, mic, Steer, Stop and Send: the +
         // steps aside while a steer is typed (not the mic, which may be listening).
         val narrow = with(density) { LocalWindowInfo.current.containerSize.width.toDp() } < ComposerLayout.NARROW
         val showAttach = ComposerLayout.showAttach(compact, narrow, steering)
-        // The mic keeps its state (a dictation in progress) when it moves between the row and the bar.
+        // The mic keeps its state (a dictation in progress) when it moves between the bar and the landscape row.
         val currentVoice by rememberUpdatedState(voice)
         val mic = remember { movableContentOf { currentVoice?.invoke() } }
         Column(
             Modifier
                 .fillMaxWidth()
-                .onSizeChanged { cardWidth = it.width }
                 .background(colors.surface1, shape)
                 .border(1.dp, border, shape)
                 .workingHairline(running && !reduced, colors.accent)
@@ -347,7 +331,7 @@ fun Composer(
                         true
                     },
                 decorationBox = { inner ->
-                    val pad = if (oneRow) {
+                    val pad = if (compact) {
                         PaddingValues(start = ComposerLayout.ROW_FIELD_SIDE, end = ComposerLayout.ROW_FIELD_SIDE, top = linePad, bottom = linePad)
                     } else {
                         PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp)
@@ -372,7 +356,7 @@ fun Composer(
                     }
                 },
             ) }
-            // + and the mic: ghost buttons (ink3 glyph, no fill) in 48dp targets, on the left.
+            // + on the left and the mic before Send: ghost buttons (ink3 glyph, no fill) in 48dp targets.
             val attach = @Composable {
                 IconAction(
                     Icons.Rounded.Add,
@@ -383,26 +367,25 @@ fun Composer(
                     size = IconSize.md,
                 )
             }
-            // The field keeps one place in the composition in both forms, so collapsing or expanding the card (or the
-            // keyboard opening in landscape) never drops its focus and the keyboard with it. Every button is a 48dp
-            // target on one centre line; the row sits EDGE inside the card, so the 32dp send disc is 10dp from the end
-            // and the bottom edges alike, as on the desktop (it was 10dp from the end and 4dp from the bottom).
+            // As on the desktop the bar (with the run-settings chip) is always under the field, whatever the draft;
+            // only the short window of a landscape keyboard puts everything on one row ([compact]). The field keeps
+            // one place in the composition in both forms, so that switch never drops its focus and the keyboard.
+            // Every button is a 48dp target on one centre line; the row sits EDGE inside the card, so the 32dp send
+            // disc is 10dp from the end and the bottom edges alike, as on the desktop (it was 10dp and 4dp).
             Row(
-                Modifier.fillMaxWidth().padding(end = if (oneRow) ComposerLayout.EDGE else 0.dp, top = if (oneRow) ComposerLayout.EDGE else 0.dp, bottom = if (oneRow) ComposerLayout.EDGE else 0.dp),
+                Modifier.fillMaxWidth().padding(end = if (compact) ComposerLayout.EDGE else 0.dp, top = if (compact) ComposerLayout.EDGE else 0.dp, bottom = if (compact) ComposerLayout.EDGE else 0.dp),
                 verticalAlignment = Alignment.Bottom,
             ) {
-                if (oneRow) {
-                    if (showAttach) attach()
-                    mic()
-                }
+                if (compact && showAttach) attach()
                 textField(Modifier.weight(1f))
-                if (oneRow) {
-                    if (compact && steering) SteerChip(mode, onMode)
+                if (compact) {
+                    mic()
+                    if (steering) SteerChip(mode, onMode)
                     if (stopBeside) StopButton(onStop)
                     SendButton(sendMode, sendEnabled, onSend, onStop)
                 }
             }
-            if (!oneRow) {
+            if (!compact) {
                 Row(
                     Modifier
                         .fillMaxWidth()
@@ -411,11 +394,10 @@ fun Composer(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     attach()
-                    mic()
                     // One run-settings chip, "Sonnet 4.5 · High": the model gives way first, the level never wraps.
                     // Tap opens one sheet for both; long press is the next model. While a steer is typed the
-                    // Steer / Follow-up chip takes its slot: beside Stop and Send at 360dp the model chip had about
-                    // 30dp left, and the top bar's subtitle still names the model.
+                    // Steer / Follow-up chip takes its slot: beside mic, Stop and Send at 360dp the model chip had
+                    // about 30dp left, and the top bar's subtitle still names the model.
                     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                         val chip = ModelChipText.of(modelLabel, thinkingLevel)
                         if (steering) SteerChip(mode, onMode) else Chip(
@@ -430,6 +412,7 @@ fun Composer(
                             Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
                         }
                     }
+                    mic()
                     // While a steer is typed Send takes the button: Stop stays one tap away beside it.
                     if (stopBeside) StopButton(onStop)
                     SendButton(sendMode, sendEnabled, onSend, onStop)
@@ -584,7 +567,7 @@ object ComposerLayout {
      */
     val EDGE = 2.dp
 
-    /** The one-row field's side padding, between the buttons' targets and the text. */
+    /** The landscape row's field side padding, between the buttons' targets and the text. */
     val ROW_FIELD_SIDE = 4.dp
 
     /** Windows narrower than this cannot fit the field beside +, mic, Steer, Stop and Send in the one-row form. */
@@ -595,16 +578,6 @@ object ComposerLayout {
      * centred on the buttons' target, and with more lines the last one stays on it.
      */
     fun fieldPad(lineHeight: Dp): Dp = ((TARGET - lineHeight) / 2).coerceAtLeast(4.dp)
-
-    /** What the one-row form's [buttons] and paddings take from the card's width (2dp for the cursor). */
-    fun rowWidth(buttons: Int): Dp = TARGET * buttons + EDGE + ROW_FIELD_SIDE * 2 + 2.dp
-
-    /** Whether [text] stays on one line; [lines] counts the lines it takes at the one-row field's width. */
-    fun fitsOneLine(text: String, lines: (String) -> Int): Boolean = when {
-        text.isEmpty() -> true
-        '\n' in text -> false
-        else -> lines(text) <= 1
-    }
 
     /** The + shows unless the landscape-keyboard row in a narrow window needs its room for Steer and Stop. */
     fun showAttach(compact: Boolean, narrow: Boolean, steering: Boolean): Boolean = !(compact && narrow && steering)
