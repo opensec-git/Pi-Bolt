@@ -706,7 +706,7 @@ fun NoticeRowView(item: NoticeItem, expanded: Boolean, onToggle: () -> Unit, mod
 /**
  * The live turn's "Working" line at the bottom of the transcript, the kit's [WorkingLine] (a 14dp Quad in the mode and
  * the shimmering label, rowMeta), then the elapsed time. A running tool is named: the verb shimmers and its command or
- * path follows in mono ("Run  npm test"). Its 32dp height stays reserved when idle so the list never jumps.
+ * path follows in mono ("Run  npm test"); other details (a retry's attempt) follow in rowMeta. Its 32dp height stays reserved when idle so the list never jumps.
  */
 @Composable
 fun StatusLine(visible: Boolean, mode: QuadMode, text: StatusText, startedAt: Long, modifier: Modifier = Modifier) {
@@ -734,7 +734,8 @@ fun StatusLine(visible: Boolean, mode: QuadMode, text: StatusText, startedAt: Lo
                         Spacer(Modifier.width(Space.sm))
                         Text(
                             t.detail,
-                            style = type.monoSmall,
+                            // A command or path in mono; prose ("attempt 2 of 3", an agent's task) in the line's own type.
+                            style = if (t.mono) type.monoSmall else type.rowMeta.copy(fontFeatureSettings = Tnum),
                             color = colors.ink3,
                             maxLines = 1,
                             overflow = if (t.path) TextOverflow.MiddleEllipsis else TextOverflow.Ellipsis,

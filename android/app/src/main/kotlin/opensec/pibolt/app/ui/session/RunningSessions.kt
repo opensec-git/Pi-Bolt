@@ -49,6 +49,7 @@ import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.InsetRow
 import opensec.pibolt.app.ui.projects.ProjectRules
+import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.session.UserItem
 import opensec.pibolt.app.ui.projects.SessionMark
 import opensec.pibolt.app.ui.projects.LocalSessions
@@ -64,7 +65,7 @@ fun runningSessions(): Flow<List<LocalSessions.Live>> = LocalSessions.all.flatMa
     } else {
         combine(
             all.values.map { live ->
-                live.controller.state.map { s -> s.isRunning || s.isCompacting || s.dialogs.isNotEmpty() }.distinctUntilChanged().map { live to it }
+                live.controller.state.map(SwitcherRules::inTurn).distinctUntilChanged().map { live to it }
             },
         ) { pairs -> pairs.filter { it.second && !it.first.controller.stopped }.map { it.first } }
     }
@@ -138,28 +139,46 @@ fun waitingSessions(): Flow<List<LocalSessions.Live>> = LocalSessions.all.flatMa
     }
 }
 
+/** The words and badge of the top bar's session switcher, from how many other sessions are open and how many run. */
+object SwitcherRules {
+    /** A session in a turn: working, compacting or waiting for an answer. An open, idle session is not running. */
+    fun inTurn(s: SessionState): Boolean = s.isRunning || s.isCompacting || s.dialogs.isNotEmpty()
+
+    /** "Other sessions, 2 running" while any of them is in a turn, else "Other sessions, 1 open". */
+    fun label(open: Int, running: Int): String = if (running > 0) "Other sessions, $running running" else "Other sessions, $open open"
+
+    /** The accent badge counts running sessions only: none while all of them are idle. */
+    fun badge(running: Int): Int? = running.takeIf { it > 0 }
+}
+
 /**
- * The session switcher in a session's top bar: shown only while other sessions are live, with their count; it lists
- * them with what each is doing, and a tap moves to one without stopping any. [onOpen] gets the project's name.
+ * The session switcher in a session's top bar: shown only while other sessions are live; its badge counts the ones in
+ * a turn ([SwitcherRules]). It lists them with what each is doing, and a tap moves to one without stopping any.
+ * [onOpen] gets the project's name.
  */
 @Composable
 fun SessionSwitcher(current: SessionController, titles: Map<String, ProjectMeta>, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val all by LocalSessions.all.collectAsStateWithLifecycle()
     val others = all.values.filter { it.controller !== current && !it.controller.stopped }
+    val running by remember(others) {
+        if (others.isEmpty()) flowOf(0) else combine(others.map { it.controller.state.map(SwitcherRules::inTurn).distinctUntilChanged() }) { busy -> busy.count { it } }
+    }.collectAsStateWithLifecycle(0)
     if (others.isEmpty()) return
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
-        IconAction(Icons.Rounded.Layers, "Other sessions, ${others.size} running", onClick = { open = true }, tint = colors.ink2)
-        Box(
-            Modifier
-                .align(Alignment.TopEnd)
-                .offset(x = (-8).dp, y = 8.dp)
-                .size(16.dp)
-                .background(colors.accent, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("${others.size}", style = Pi.type.meta, color = colors.onAccent, maxLines = 1)
+        IconAction(Icons.Rounded.Layers, SwitcherRules.label(others.size, running), onClick = { open = true }, tint = colors.ink2)
+        SwitcherRules.badge(running)?.let { n ->
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = (-8).dp, y = 8.dp)
+                    .size(16.dp)
+                    .background(colors.accent, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("$n", style = Pi.type.meta, color = colors.onAccent, maxLines = 1)
+            }
         }
         DropdownMenu(
             expanded = open,

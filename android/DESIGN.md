@@ -421,7 +421,7 @@ control inside a group) and `PillSearchField` (a 48dp surface1 pill with the sea
 status colour (danger, success, warning) colours the glyph, and only where the row reports that state (Reset device key,
 a connected computer); sections are never colour-coded (`GlyphTone`). `ChoiceSheet` picks one of a few values (a sheet of `InsetRow`s, an accent check on the current one; a pick
 applies and closes). `PiMenu` / `PiMenuItem` are the popup menu: surface3, radius tile, a lineStrong ring, rowMeta
-items with 20dp glyphs.
+items with 20dp glyphs; a picker's current item ends in a 20dp accent check (`checked`, read as Selected).
 
 **Cards and groups.** `PiCard`: surface1, 1dp line, radius md, 16dp padding: a surface step plus a line, never a
 shadow. `CardSection`: a `SectionLabel` (metaStrong ink3, sentence case, never capitals) over a radius-md card with
@@ -509,8 +509,11 @@ explanatory lines. Top to bottom, on the 20dp page gutter:
   computer, one row: "Add a computer".
 - The persistent pill at the bottom (`PillComposerShell`, over a canvas fade, above the navigation bar and the
   keyboard), shown once a model is connected: a project chip above it, left edges aligned and 8dp apart (`GlassPill`:
-  folder glyph, "calc-parser", chevron; its menu lists the projects and New project; with no project it reads "New
-  project" and opens that sheet), then the pill: + (New project), the field "Ask Pi…" (rowTitle; up to 4 lines) and
+  folder glyph, "calc-parser", chevron; its menu, a `PiMenu`, lists Chat (chat glyph), the projects (folder glyphs)
+  and New project, an accent check at the end of the current one; with no project it reads "New project" and opens
+  that sheet), then the pill: + (New project; with Chat picked a `PiMenu` of a chat's actions instead: Photos, Paste
+  image while the clipboard holds one, Voice and New chat, each opening a new chat with the draft and the images in
+  its composer, never sent; `ProjectRules.pillPlus`), the field "Ask Pi…" (rowTitle; up to 4 lines) and
   `ComposerPrimary` (voice while empty: Android's speech recognizer fills the field, never sends; Send with text). The
   chip defaults to the project worked in last (one with no session running); sending opens a new session there with
   the text as its first prompt. The list's bottom padding clears chip, pill and the navigation bar, so no row is ever
@@ -839,8 +842,10 @@ opens the app's system page and the camera starts on return.
   - live status line, the turn's "Working" line: the kit's `WorkingLine` (a 14dp Quad in the mode, ink2, warning while
     Pi asks, and the shimmering label in rowMeta) then " · " and the elapsed timer (rowMeta ink3, tnum). A running tool
     is named: the verb shimmers and its command or path follows in mono small ink3 ("Run  npm test"; a subagent reads
-    "Agent working" + its task; parallel tools add "+n"); text changes crossfade (quick), and both sides draw the Quad
-    from the one clock, so only the words visibly change.
+    "Agent working" + its task in rowMeta ink3; parallel tools add "+n"); a retry reads "Retrying" + "attempt 2 of 3"
+    in rowMeta ink3 (tnum), never mono; text changes crossfade (quick), and both sides draw the Quad from the one
+    clock, so only the words visibly change. With thinking off (level off, or a model that does not reason;
+    `ThinkingRules`) nothing says "Thinking": the idle line reads "Working" and an empty reasoning block gets no row.
   - errors and notices: a hairline, not a filled slab (the desktop's): radius md, 1dp outline in danger / warning @
     32%, a 20dp glyph in the kind colour, the title bodyStrong ink1, text buttons.
 - Todo panel above the queue strip (see Todo panel below).
@@ -896,7 +901,9 @@ opens the app's system page and the camera starts on return.
   while the session first connects: the centred loading state (Quad Connect 44dp, "Starting Pi-Bolt in x") says that
   alone, so one spinner and one sentence show at a time.
 - Top bar actions, left to right: the Quad (only while Pi is busy and the live status line is off screen: ink1,
-  warning while Pi asks; or danger while the link has failed), the session switcher, Search and More (glass). The Quad
+  warning while Pi asks; or danger while the link has failed), the session switcher (while other sessions are open; its
+  accent badge counts only those in a turn and is gone while all are idle; TalkBack: "Other sessions, 2 running" or
+  "Other sessions, 1 open"; `SwitcherRules`), Search and More (glass). The Quad
   is not a control: no press, and TalkBack hears what it reports. Search and
   overflow always sit together. Overflow on a computer: Session and usage, Export or share,
   Disconnect, Forget computer.
