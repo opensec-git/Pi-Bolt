@@ -63,8 +63,10 @@ data class UpdateState(
     val job: UpdateJob = UpdateJob.Idle,
     /** Set on the first launch after an update, until Home has said so. */
     val justUpdated: String? = null,
+    /** This app's signing certificates, read with update.json (empty until then). */
+    val installedCerts: Set<String> = emptySet(),
 ) {
-    val decision: UpdateRules.Decision get() = UpdateRules.decide(installed, latest, snoozedVersion)
+    val decision: UpdateRules.Decision get() = UpdateRules.decide(installed, latest, snoozedVersion, installedCerts)
 }
 
 /** A sheet the app shows on top of any screen: confirm the download (network and size), or install. */
@@ -95,7 +97,8 @@ class UpdateManager(private val app: PiBoltApp) {
     private var saved = UpdateFile()
     private val file = BackgroundFile(app, "update.json") { text ->
         saved = UpdateFileCodec.decode(text, source)
-        _state.update { it.copy(loaded = true, lastCheckAt = saved.lastCheckAt, latest = saved.latest, snoozedVersion = saved.snoozedVersion) }
+        val certs = runCatching { AndroidPackageInspector(app).installed().certSha256 }.getOrDefault(emptySet())
+        _state.update { it.copy(loaded = true, lastCheckAt = saved.lastCheckAt, latest = saved.latest, snoozedVersion = saved.snoozedVersion, installedCerts = certs) }
     }
 
     private val http: OkHttpClient by lazy {
