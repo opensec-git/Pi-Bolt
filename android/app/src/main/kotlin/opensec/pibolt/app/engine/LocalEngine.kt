@@ -196,6 +196,13 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         return controller
     }
 
+    /** The engine's git (`PREFIX/bin/git`) once the prefix is set up; null where the engine cannot run. */
+    suspend fun gitBinary(): File? = ensureSetup()?.let { File(paths.bin, "git").takeIf(File::exists) }
+
+    /** The environment engine processes get, for tools the app runs itself (git). */
+    suspend fun toolEnvironment(): Map<String, String> =
+        engineEnvironment(paths, System.getenv(), TimeZone.getDefault().id, ensureSetup()?.env.orEmpty(), app.github.gitEnvironment())
+
     /** Saved sessions with at least one message, newest first. Blocking file I/O: call off the main thread. */
     override fun sessions(project: File): List<SessionSummary> = index.list(engineForm(project)).filter { it.messageCount > 0 }
 
@@ -236,12 +243,21 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
      * ([LivePolicy.trim]; all of them when [critical]). A busy session is never stopped.
      */
     fun trimMemory(reason: String, critical: Boolean = false) {
-        val stopped = idle.drain()
-        stopped.forEach(::stopIdle)
+        stopIdleEngines(reason)
         val sessions = localSessions()
         val victims = LivePolicy.trim(liveRules(), critical, SystemClock.elapsedRealtime()).mapNotNull { key -> sessions.firstOrNull { it.project?.path == key } }
         for (session in victims) session.stop(keepEngine = false)
-        if (stopped.isNotEmpty() || victims.isNotEmpty()) Log.i(TAG, "memory ($reason): stopped ${stopped.size} idle engines and ${victims.size} idle sessions")
+        if (victims.isNotEmpty()) Log.i(TAG, "memory ($reason): stopped ${victims.size} idle sessions")
+    }
+
+    /**
+     * Stops the parked and spare engines only (live sessions keep theirs), so the next engine starts with fresh state:
+     * new credentials, secrets or settings.
+     */
+    fun stopIdleEngines(reason: String) {
+        val stopped = idle.drain()
+        stopped.forEach(::stopIdle)
+        if (stopped.isNotEmpty()) Log.i(TAG, "stopping ${stopped.size} idle engines ($reason)")
     }
 
     private fun stopIdle(backend: LocalBackend) {
@@ -431,7 +447,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         Log.i(TAG, "starting engine ${m.engine} in ${project.name} ${target.cliArgs().joinToString(" ")}")
         ProcessBuilder(command).directory(project).apply {
             val env = environment()
-            val wanted = engineEnvironment(paths, env.toMap(), TimeZone.getDefault().id, m.env)
+            val wanted = engineEnvironment(paths, env.toMap(), TimeZone.getDefault().id, m.env, app.github.gitEnvironment())
             env.clear()
             env.putAll(wanted)
         }.start()

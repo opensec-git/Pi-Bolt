@@ -27,6 +27,13 @@ val appVersionCode: Int = appVersion.split(".").map { it.takeWhile(Char::isDigit
 val updateManifestOverride: String = providers.environmentVariable("PIBOLT_UPDATE_MANIFEST_URL").orNull.orEmpty()
 val updateApkPrefixOverride: String = providers.environmentVariable("PIBOLT_UPDATE_APK_PREFIX").orNull.orEmpty()
 
+// GitHub sign-in through the OAuth device flow needs the client id of a GitHub OAuth App with Device Flow enabled
+// (android/README.md, "GitHub"). From the Gradle property `pibolt.githubClientId` or PIBOLT_GITHUB_CLIENT_ID; empty by
+// default, and then the app offers a personal access token instead. A client id is public (not a secret).
+val githubClientId: String = (providers.gradleProperty("pibolt.githubClientId").orNull ?: providers.environmentVariable("PIBOLT_GITHUB_CLIENT_ID").orNull)
+    .orEmpty().trim()
+    .also { require(it.all { c -> c.isLetterOrDigit() || c == '.' || c == '_' || c == '-' }) { "pibolt.githubClientId has unexpected characters" } }
+
 fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
 // The on-device engine pack (android/engine/build-pack.sh, CONTRACT.md): jniLibs/arm64-v8a and assets/engine. Added when
@@ -119,6 +126,7 @@ android {
         versionName = appVersion
         buildConfigField("String", "UPDATE_MANIFEST_OVERRIDE", "\"\"")
         buildConfigField("String", "UPDATE_APK_PREFIX_OVERRIDE", "\"\"")
+        buildConfigField("String", "GITHUB_CLIENT_ID", quoted(githubClientId))
         // The engine and its userland are linux-arm64 only.
         ndk {
             abiFilters += "arm64-v8a"
@@ -225,4 +233,5 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
+    testImplementation(libs.okhttp.mockwebserver)
 }

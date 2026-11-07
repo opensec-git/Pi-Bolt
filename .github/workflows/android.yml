@@ -30,6 +30,11 @@ concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# The GitHub OAuth App client id for device-flow sign-in (android/README.md, "GitHub"): a repository variable, not a
+# secret (client ids are public). Empty or unset builds an app that offers only personal access tokens.
+env:
+  PIBOLT_GITHUB_CLIENT_ID: ${{ vars.PIBOLT_GITHUB_CLIENT_ID }}
+
 defaults:
   run:
     working-directory: android

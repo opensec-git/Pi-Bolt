@@ -71,9 +71,10 @@ class ProjectsTest {
     }
 
     @Test
-    fun clonePromptRunsGitInTheFolder() {
+    fun clonePromptAsksForAnOverviewOfTheClone() {
         val p = ProjectRules.clonePrompt(" https://github.com/user/repo.git ")
-        assertTrue("git clone https://github.com/user/repo.git ." in p)
+        assertTrue("cloned https://github.com/user/repo.git into this folder" in p)
+        assertTrue("git clone" !in p, "the app clones; Pi does not run it again")
     }
 
     private fun entry(name: String, pinned: Boolean = false, opened: Long = 0, session: Long? = null, title: String? = null) = ProjectEntry(

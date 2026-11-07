@@ -1,0 +1,202 @@
+package opensec.pibolt.app.ui.git
+
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import opensec.pibolt.app.git.Commit
+import opensec.pibolt.app.git.FileDiff
+import opensec.pibolt.app.git.GitException
+import opensec.pibolt.app.ui.components.CopyButton
+import opensec.pibolt.app.ui.components.DiffBlock
+import opensec.pibolt.app.ui.components.TextAction
+import opensec.pibolt.app.ui.components.diffText
+import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.markdown.CodeInfo
+import opensec.pibolt.app.ui.projects.ProjectRules
+import opensec.pibolt.app.ui.session.parseDiff
+import opensec.pibolt.app.ui.theme.Pi
+import java.text.DateFormat
+import java.util.Date
+
+private const val PAGE = 100
+
+/** The branch's log, newest first, 100 at a time; a commit opens its message, author and per-file diffs. */
+@Composable
+fun HistoryViewer(ui: ChangesUi, onClose: () -> Unit) {
+    val colors = Pi.colors
+    val type = Pi.type
+    val model = ui.model
+    val commits = remember { mutableStateListOf<Commit>() }
+    var end by remember { mutableStateOf(false) }
+    var loading by remember { mutableStateOf(false) }
+    var page by remember { mutableStateOf(0) }
+    var open by rememberSaveable { mutableStateOf<String?>(null) }
+    LaunchedEffect(page, model.version) {
+        loading = true
+        try {
+            val got = model.repo.log(PAGE, skip = page * PAGE)
+            if (page == 0) commits.clear()
+            commits += got
+            end = got.size < PAGE
+        } catch (e: GitException) {
+            ui.error(e.message ?: "Could not read the history")
+            end = true
+        }
+        loading = false
+    }
+    val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val now = remember(commits.size) { System.currentTimeMillis() }
+    Box(Modifier.fillMaxSize().background(colors.canvas)) {
+        Column(Modifier.fillMaxSize()) {
+            OverlayBar("History", model.status?.branch?.head, onBack = onClose)
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
+                if (!loading && commits.isEmpty()) item(key = "empty") { Note("No commits yet.") }
+                items(commits, key = { it.hash }) { c ->
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 64.dp)
+                            .pressable({ open = c.hash }, label = "Open commit ${c.short}")
+                            .padding(horizontal = 20.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text(c.subject.ifBlank { "(no message)" }, style = type.body, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Spacer(Modifier.height(2.dp))
+                            val meta = buildList {
+                                add(c.short)
+                                add(c.author)
+                                add(ProjectRules.ago(c.time * 1000, now))
+                                if (c.merge) add("merge")
+                            }
+                            Text(meta.joinToString(" · "), style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            val refs = c.refs.filter { it != "HEAD" }
+                            if (refs.isNotEmpty()) Text(refs.joinToString("  "), style = type.monoMeta, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+                if (!end && commits.isNotEmpty()) {
+                    item(key = "more") {
+                        TextAction(if (loading) "Loading…" else "Load more", onClick = { if (!loading) page++ }, modifier = Modifier.padding(horizontal = 8.dp).heightIn(min = 48.dp))
+                    }
+                }
+            }
+        }
+        open?.let { hash -> CommitViewer(ui, hash, onClose = { open = null }) }
+    }
+    BackHandler(enabled = open != null) { open = null }
+}
+
+/** One commit: subject and body, author and date, the hash to copy, then each changed file (tap to fold its diff). */
+@Composable
+private fun CommitViewer(ui: ChangesUi, hash: String, onClose: () -> Unit) {
+    val colors = Pi.colors
+    val type = Pi.type
+    var commit by remember(hash) { mutableStateOf<Commit?>(null) }
+    var files by remember(hash) { mutableStateOf<List<FileDiff>>(emptyList()) }
+    val folded = remember(hash) { mutableStateListOf<Int>() }
+    LaunchedEffect(hash) {
+        try {
+            val (c, f) = ui.model.repo.show(hash)
+            commit = c
+            files = f
+            // Many files: start folded, so the list opens fast.
+            if (f.size > 3) folded += f.indices
+        } catch (e: GitException) {
+            ui.error(e.message ?: "Could not open the commit")
+        }
+    }
+    val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    Column(Modifier.fillMaxSize().background(colors.canvas)) {
+        OverlayBar(commit?.subject ?: "Commit", hash.take(12), onBack = onClose) {
+            CopyButton(text = { hash }, label = false, description = "Copy the commit hash")
+        }
+        val c = commit ?: return@Column
+        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
+            item(key = "head") {
+                Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+                    Text(c.subject, style = type.subhead, color = colors.ink1)
+                    if (c.body.isNotBlank()) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(c.body, style = type.body, color = colors.ink2)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    val date = remember(c.time) { DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(c.time * 1000)) }
+                    Text("${c.author} <${c.email}>", style = type.meta, color = colors.ink3)
+                    Text(date, style = type.meta, color = colors.ink3)
+                    if (c.merge) Text("Merge: the diff is against the first parent", style = type.meta, color = colors.ink3)
+                }
+            }
+            itemsIndexed(files, key = { i, f -> "$i:${f.path}" }) { i, f ->
+                val isFolded = i in folded
+                GitCard {
+                    Row(
+                        Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .pressable({ if (isFolded) folded -= i else folded += i }, label = if (isFolded) "Show the diff of ${f.path}" else "Hide the diff of ${f.path}")
+                            .padding(start = 8.dp, end = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                            contentDescription = null,
+                            tint = colors.ink3,
+                            modifier = Modifier.size(20.dp).rotate(if (isFolded) 0f else 90f),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(f.path, style = type.monoSmall, color = colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f))
+                        Spacer(Modifier.width(8.dp))
+                        Counts(f.added, f.removed)
+                    }
+                    if (!isFolded) {
+                        when {
+                            f.binary -> Note("Binary file")
+                            f.hunks.isEmpty() -> Note(if (f.oldPath != null) "Renamed from ${f.oldPath}" else "Mode change only")
+                            f.rowCount() > MAX_ROWS -> Note("Too large to show here (${f.rowCount()} lines).")
+                            else -> {
+                                val language = remember(f.path) { CodeInfo.languageOfFile(f.path).orEmpty() }
+                                val text = remember(f, colors) { diffText(parseDiff(f.text), language, colors) }
+                                DiffBlock(text)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

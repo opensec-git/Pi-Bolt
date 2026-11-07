@@ -55,6 +55,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.ui.git.GitHubSection
 import opensec.pibolt.app.R
 import opensec.pibolt.app.data.AccentId
 import opensec.pibolt.app.data.AppSettings
@@ -138,6 +139,10 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
 
                 if (SettingsGroup.Agent in groups) {
                     Section(SettingsGroup.Agent.title) { AgentSection(app, show) }
+                }
+
+                if (SettingsGroup.GitHub in groups) {
+                    Section(SettingsGroup.GitHub.title) { GitHubSection(app) }
                 }
 
                 if (SettingsGroup.Appearance in groups) {

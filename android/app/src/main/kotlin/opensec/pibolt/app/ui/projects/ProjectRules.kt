@@ -55,9 +55,9 @@ object ProjectRules {
         return last.filter { it.isLetterOrDigit() || it in "-_." }.trimStart('.').take(MAX_NAME)
     }
 
-    /** The first prompt of a "Clone from git" project: git runs inside the engine, so Pi does the clone. */
+    /** The first prompt of a "Clone from git" project, once the app has cloned it. */
     fun clonePrompt(url: String): String =
-        "Clone ${url.trim()} into this folder: run `git clone ${url.trim()} .` here, then give me a short overview of the repository."
+        "I cloned ${url.trim()} into this folder. Give me a short overview of the repository."
 
     /** Pinned first, then most recently active, then by title. */
     fun order(projects: List<ProjectEntry>): List<ProjectEntry> =

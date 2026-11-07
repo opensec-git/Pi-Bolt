@@ -62,6 +62,7 @@ import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.engine.EngineStatus
+import opensec.pibolt.app.git.GitRepo
 import opensec.pibolt.app.ui.components.BrandMark
 import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.components.IconAction
@@ -177,6 +178,7 @@ fun HomeScreen(
     var computersOpen by rememberSaveable { mutableStateOf<Boolean?>(null) }
     val showComputers = computersOpen ?: (unavailable || (list != null && list.isEmpty() && hosts.isNotEmpty()) || remote?.stopped == false)
     var newProject by remember { mutableStateOf<Boolean?>(null) }
+    var cloneProgress by remember { mutableStateOf<String?>(null) }
     var action by remember { mutableStateOf<ProjectAction?>(null) }
     var showPaste by remember { mutableStateOf(false) }
     var forgetting by remember { mutableStateOf<Host?>(null) }
@@ -353,9 +355,20 @@ fun HomeScreen(
         NewProjectSheet(
             existing = names,
             startWithClone = clone,
+            github = app.github,
+            progress = cloneProgress,
             onCreate = { name, url ->
                 projects.create(name).fold(
                     onSuccess = { dir ->
+                        if (url != null) {
+                            cloneProgress = "Cloning…"
+                            val cloned = runCatching { GitRepo.clone(app.git, url, dir) { cloneProgress = it.label } }
+                            cloneProgress = null
+                            cloned.exceptionOrNull()?.let { e ->
+                                projects.delete(dir.name)
+                                return@NewProjectSheet e.message ?: "Could not clone the repository"
+                            }
+                        }
                         LocalSessions.open(engine, store, dir, fresh = true, firstPrompt = url?.let(ProjectRules::clonePrompt)).fold(
                             onSuccess = {
                                 reload++

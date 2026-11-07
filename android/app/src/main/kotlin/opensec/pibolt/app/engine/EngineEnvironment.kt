@@ -5,9 +5,16 @@ import java.io.File
 /**
  * The engine's environment (android/engine/CONTRACT.md, Runtime setup step 3), on top of the app process's own
  * ([base]: ANDROID_ROOT, ANDROID_DATA and the like, which /system/bin tools need), then the manifest's `env`
- * ([fromPack]). No LD_LIBRARY_PATH or LD_PRELOAD: the loader finds glibc in its compiled-in prefix.
+ * ([fromPack]), then [extra] (the GitHub credential helper, see GitCredentials). No LD_LIBRARY_PATH or LD_PRELOAD: the
+ * loader finds glibc in its compiled-in prefix.
  */
-fun engineEnvironment(paths: EnginePaths, base: Map<String, String>, timeZone: String, fromPack: Map<String, String> = emptyMap()): Map<String, String> {
+fun engineEnvironment(
+    paths: EnginePaths,
+    base: Map<String, String>,
+    timeZone: String,
+    fromPack: Map<String, String> = emptyMap(),
+    extra: Map<String, String> = emptyMap(),
+): Map<String, String> {
     val prefix = paths.prefix.path
     val env = base.toMutableMap()
     env.remove("LD_LIBRARY_PATH")
@@ -34,6 +41,7 @@ fun engineEnvironment(paths: EnginePaths, base: Map<String, String>, timeZone: S
     if (certs.isFile) env["SSL_CERT_FILE"] = certs.path else env.remove("SSL_CERT_FILE")
     // The pack knows its own layout best (a shell it ships, for example).
     env.putAll(fromPack)
+    env.putAll(extra)
     return env
 }
 

@@ -70,6 +70,20 @@ Measure cold start and scroll frames, without and with the profile:
 Results land in `baselineprofile/build/outputs/connected_android_test_additional_output/`. Emulator numbers are for
 comparing builds; take absolute numbers on a phone.
 
+## GitHub
+
+The app signs in to GitHub with the OAuth device flow. That needs the client id of a GitHub OAuth App, which the
+owner creates once: GitHub Settings > Developer settings > OAuth Apps > New OAuth App (any homepage and callback URL,
+e.g. `https://pi-bolt.opensec.in`), then tick **Enable Device Flow** and copy the Client ID (it is public, not a
+secret). Pass it at build time as the Gradle property `pibolt.githubClientId` or the environment variable
+`PIBOLT_GITHUB_CLIENT_ID`; CI reads the repository variable `PIBOLT_GITHUB_CLIENT_ID` (Settings > Secrets and variables
+> Actions > Variables). Without it the build is fine and Settings > GitHub offers only a personal access token.
+
+The token is sealed with AES-GCM under a Keystore key and kept in the app's preferences. Git gets it through a
+credential helper for `https://github.com` set by `GIT_CONFIG_*` environment variables (no file holds it), in the
+app's own git and in the engine processes, so Pi's bash `git push` works too. A new token restarts only the idle
+engine; open sessions pick it up when they restart.
+
 ## Sign a release
 
 Without signing variables, `assembleRelease` makes `app-release-unsigned.apk`. To sign, make a keystore once and keep it
