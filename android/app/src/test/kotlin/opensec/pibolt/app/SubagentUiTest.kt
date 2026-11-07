@@ -314,7 +314,7 @@ class SubagentUiTest {
         assertEquals("Stopped", SubagentFormat.liveLine(run("w", SubagentStatus.Stopped)))
         // A vague line from the file never hides the extension's tool report.
         assertEquals("reading…", SubagentFormat.liveActivity("reading…", "working…"))
-        assertEquals("reading src/a.kt", SubagentFormat.liveActivity("thinking…", "reading src/a.kt"))
+        assertEquals("reading src/a.kt", SubagentFormat.liveActivity(null, "reading src/a.kt"))
     }
 
     @Test
