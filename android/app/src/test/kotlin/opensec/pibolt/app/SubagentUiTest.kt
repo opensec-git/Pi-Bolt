@@ -300,4 +300,41 @@ class SubagentUiTest {
         assertEquals(1, events.size)
         dir.deleteRecursively()
     }
+
+    @Test
+    fun theDetailScreenNeverLooksStuck() {
+        val running = run("w")
+        // Nothing reported yet: working, not a frozen line.
+        assertEquals("Working…", SubagentFormat.liveLine(running.copy(activity = null)))
+        assertEquals("Thinking…", SubagentFormat.liveLine(running.copy(activity = "thinking…")))
+        assertEquals("Reading src/a.kt", SubagentFormat.liveLine(running.copy(activity = "reading src/a.kt")))
+        // When it ends, it says so.
+        assertEquals("Finished", SubagentFormat.liveLine(run("w", SubagentStatus.Done)))
+        assertEquals("Failed: boom", SubagentFormat.liveLine(run("w", SubagentStatus.Failed).copy(error = "boom\nmore")))
+        assertEquals("Stopped", SubagentFormat.liveLine(run("w", SubagentStatus.Stopped)))
+        // A vague line from the file never hides the extension's tool report.
+        assertEquals("reading…", SubagentFormat.liveActivity("reading…", "working…"))
+        assertEquals("reading src/a.kt", SubagentFormat.liveActivity("thinking…", "reading src/a.kt"))
+    }
+
+    @Test
+    fun theNoteSaysWhereMessagesComeFrom() {
+        val running = run("n")
+        val withMessages = running.copy(transcript = SubagentTranscript("/f", items = listOf(UserItem("u", "go"))))
+        assertEquals("Live view needs Pi-Bolt 1.1.5 on the computer", SubagentFormat.note(running, SubagentFormat.Source.Unavailable))
+        assertEquals("Loading messages…", SubagentFormat.note(running, SubagentFormat.Source.Stream))
+        assertEquals("Loading messages…", SubagentFormat.note(running, SubagentFormat.Source.Device))
+        assertEquals(null, SubagentFormat.note(withMessages, SubagentFormat.Source.Stream))
+        assertEquals("Messages weren't saved. Showing the prompt and answer.", SubagentFormat.note(run("n", SubagentStatus.Done), SubagentFormat.Source.Stream))
+        // Only a streamed message so far: it shows, no loading note.
+        val streamed = running.copy(transcript = SubagentTranscript("/f", live = listOf(AssistantTextItem("live0.0", "Hi", streaming = true))))
+        assertEquals(null, SubagentFormat.note(streamed, SubagentFormat.Source.Stream))
+    }
+
+    @Test
+    fun theStreamedMessageShowsOnlyWhileTheRunIsLive() {
+        val t = SubagentTranscript("/f", items = listOf(UserItem("u", "go")), live = listOf(AssistantTextItem("live0.0", "Hi", streaming = true)))
+        assertEquals(2, SubagentFormat.detailItems(run("s").copy(transcript = t)).size)
+        assertEquals(1, SubagentFormat.detailItems(run("s", SubagentStatus.Stopped).copy(transcript = t)).size)
+    }
 }

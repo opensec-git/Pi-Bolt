@@ -6,7 +6,6 @@ import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -128,6 +127,7 @@ import opensec.pibolt.app.ui.theme.Tnum
 import opensec.pibolt.protocol.rpc.StreamingBehavior
 import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.session.Subagent
+import opensec.pibolt.protocol.session.SubagentStatus
 import opensec.pibolt.protocol.session.ToolStatus
 import opensec.pibolt.protocol.session.UserItem
 
@@ -191,7 +191,9 @@ fun SubagentOverlay(app: PiBoltApp, nav: SubagentNav) {
 /**
  * One subagent, full screen: its messages, thinking, tool calls with results and answer, live while it runs (the list
  * follows the newest row while the reader is at the bottom; otherwise "jump to latest"). On this phone they come from
- * its session file; over remote control only its prompt, progress and answer reach the app, which the screen says.
+ * its session file (and the message it writes from the engine, when it streams it); over remote control the computer
+ * streams them while the screen is open (Pi-Bolt 1.1.5 and later). An older computer sends only the prompt, progress
+ * and answer, which the screen says.
  * Below: steer a running background agent or continue a finished one (both through Pi), or stop a foreground one.
  */
 @Composable
@@ -250,7 +252,17 @@ private fun SubagentScreen(controller: SessionController, key: String, nav: Suba
             StatusStrip(run)
             Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
             Box(Modifier.weight(1f)) {
-                Body(runState, hue, controller.readsSubagentFiles, memory, list, onOpen = { viewer = it })
+                val source by remember {
+                    derivedStateOf {
+                        when {
+                            controller.isLocal -> SubagentFormat.Source.Device
+                            // Before the computer's hello, assume it streams: the note would flash otherwise.
+                            state.value.host?.streamsSubagents == false -> SubagentFormat.Source.Unavailable
+                            else -> SubagentFormat.Source.Stream
+                        }
+                    }
+                }
+                Body(runState, hue, source, memory, list, onOpen = { viewer = it })
             }
             Actions(run, enabled = connected && linkState.value is LinkState.Connected, controller)
             Spacer(Modifier.navigationBarsPadding().padding(bottom = 4.dp))
@@ -317,7 +329,7 @@ private fun StatusStrip(run: Subagent) {
 private fun Body(
     runState: State<Subagent?>,
     hue: Color,
-    readsFiles: Boolean,
+    source: SubagentFormat.Source,
     memory: SessionMemory,
     list: LazyListState,
     onOpen: (ViewerContent) -> Unit,
@@ -341,18 +353,7 @@ private fun Body(
             TranscriptModel.rows(items, run.isActive, open, emptyMap(), md, groups, agentCards = false).filterNot { it is ActionsRow }
         }
     }
-    val note by remember {
-        derivedStateOf {
-            val run = runState.value
-            when {
-                run == null -> null
-                !readsFiles -> "Messages aren't available over remote control"
-                run.transcript == null && run.isActive -> "Loading messages…"
-                run.transcript == null -> "Messages weren't saved. Showing the prompt and answer."
-                else -> null
-            }
-        }
-    }
+    val note by remember(source) { derivedStateOf { runState.value?.let { SubagentFormat.note(it, source) } } }
     if (!memory.primed && rows.isNotEmpty()) {
         rows.forEach { memory.seen.add(it.key) }
         memory.primed = true
@@ -428,25 +429,42 @@ private fun Note(text: String) {
 }
 
 /**
- * What the agent does now: Quad Agent (16dp, its tint), the shimmering activity (crossfades, quick) and the run time.
- * Keeps its 32dp while the agent is done so the list does not jump.
+ * What the agent does now, and that it ends. Live: Quad Agent (its tint, animating as long as the run is live, whether or
+ * not anything new arrived), the shimmering activity ("Working…" when nothing more is known; crossfades, quick) and the
+ * run time. Ended: its check, cross or dash, "Finished", "Failed: …" or "Stopped", and the final time. Always 32dp, so
+ * the list does not jump when it ends.
  */
 @Composable
 private fun LiveLine(run: Subagent, hue: Color, modifier: Modifier = Modifier) {
-    val visible = run.isActive
-    val alpha by animateFloatAsState(if (visible) 1f else 0f, if (visible) PiMotion.enter(PiMotion.STANDARD) else PiMotion.leave(PiMotion.QUICK), label = "live")
-    Row(modifier.fillMaxWidth().height(32.dp).graphicsLayer { this.alpha = alpha }, verticalAlignment = Alignment.CenterVertically) {
-        if (visible || alpha > 0f) {
-            Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
-                QuadSpinner(QuadMode.Agent, size = AgentGlyphSize.Bar.quad, color = hue, animate = visible)
+    val live = run.isActive
+    Row(modifier.fillMaxWidth().height(32.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+            if (live) {
+                QuadSpinner(QuadMode.Agent, size = AgentGlyphSize.Bar.quad, color = hue, animate = true)
+            } else {
+                AgentGlyph(SubagentFormat.stateOf(run), hue, live = true, size = AgentGlyphSize.Bar)
             }
-            Spacer(Modifier.width(12.dp))
-            Crossfade(
-                targetState = SubagentFormat.activityLine(run),
-                animationSpec = if (Pi.reduceMotion) tween(0) else PiMotion.inPlace(PiMotion.QUICK),
-                modifier = Modifier.weight(1f, fill = false),
-                label = "liveText",
-            ) { t -> ShimmerText(t, Pi.type.label, active = visible) }
+        }
+        Spacer(Modifier.width(12.dp))
+        Crossfade(
+            targetState = SubagentFormat.liveLine(run),
+            animationSpec = if (Pi.reduceMotion) tween(0) else PiMotion.inPlace(PiMotion.QUICK),
+            modifier = Modifier.weight(1f, fill = false),
+            label = "liveText",
+        ) { t ->
+            if (live) {
+                ShimmerText(t, Pi.type.label, active = true)
+            } else {
+                Text(
+                    t,
+                    style = Pi.type.label,
+                    color = if (run.status == SubagentStatus.Failed) Pi.colors.danger else Pi.colors.ink2,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        if (live || SubagentFormat.finalDuration(run) != null) {
             Text("  ·  ", style = Pi.type.label, color = Pi.colors.ink3)
             RunTime(run)
         }

@@ -44,7 +44,9 @@ import opensec.pibolt.protocol.rpc.StreamingBehavior
 import opensec.pibolt.protocol.rpc.clearedQueue
 import opensec.pibolt.protocol.rpc.thinkingLevels
 import opensec.pibolt.protocol.session.AssistantTextItem
+import opensec.pibolt.protocol.session.SUBAGENT_STREAM_FEATURE
 import opensec.pibolt.protocol.session.SessionReducer
+import opensec.pibolt.protocol.session.SubagentReducer
 import opensec.pibolt.app.ui.session.ask.AskReply
 import opensec.pibolt.app.ui.session.ask.AskResponder
 import opensec.pibolt.app.ui.session.ask.AskSubmission
@@ -188,8 +190,16 @@ class SessionController private constructor(
     private val subagentTail: SubagentTail? =
         if (origin is Origin.Local) SubagentTail(state, { sessionFile }) { inputs.trySend(Input.Event(it)) } else null
 
-    /** True when a subagent's own messages can be shown (a session on this phone); remote control sends only progress. */
-    val readsSubagentFiles: Boolean get() = subagentTail != null
+    /**
+     * Runs whose detail screen is open. The computer (remote control, `subagent_stream`) or this phone's engine streams
+     * their own conversation while they are watched (`subagent_subscribe`); subscribed again after every `remote_hello`
+     * (a reconnect or another session), since the computer drops a phone's streams with its connection.
+     */
+    private val watchedSubagents = MutableStateFlow<Set<String>>(emptySet())
+
+    /** A local engine that refused `subagent_subscribe` (before Pi-Bolt 1.1.5): not asked again. */
+    @Volatile
+    private var engineStreamsSubagents = true
 
     @Volatile
     var stopped = false
@@ -215,9 +225,47 @@ class SessionController private constructor(
         }
     }
 
-    /** Keep reading subagent [key]'s session file while its detail screen is open, also after it finished. */
+    /**
+     * Subagent [key]'s detail screen opened ([on]) or closed: on this phone its session file is read while it is open,
+     * also after it finished; the computer (or an engine that can) streams its conversation until it closes.
+     */
     fun watchSubagent(key: String, on: Boolean) {
         subagentTail?.watch(key, on)
+        val before = watchedSubagents.value
+        watchedSubagents.update { if (on) it + key else it - key }
+        if ((key in before) == on) return
+        if (on) subscribeSubagent(key) else unsubscribeSubagent(key)
+    }
+
+    /** The computer's (or engine's) answer to `subagent_subscribe`; [computer]: its `remote_hello` lists the feature. */
+    private fun canStreamSubagents(computer: Boolean = _state.value.host?.streamsSubagents == true): Boolean =
+        if (isLocal) engineStreamsSubagents else computer
+
+    private fun subscribeSubagent(key: String, computer: Boolean = _state.value.host?.streamsSubagents == true) {
+        if (!canStreamSubagents(computer)) return
+        val client = rpc
+        scope.launch {
+            // A call still being written is not a run yet on the computer: asked again a few times while it is watched.
+            // An engine without the command says so once. Neither is an error the reader sees: the screen keeps what
+            // it has (the file on this phone, the prompt and progress over remote control).
+            repeat(SUBSCRIBE_TRIES) {
+                val response = client.request("subagent_subscribe", timeoutMs = 15_000) { put("runId", key) }
+                if (response.success) return@launch
+                if (isLocal && response.error?.startsWith("Unknown command") == true) {
+                    engineStreamsSubagents = false
+                    return@launch
+                }
+                if (response.error?.startsWith("No subagent run") != true) return@launch
+                delay(SUBSCRIBE_RETRY_MS)
+                if (key !in watchedSubagents.value || client !== rpc) return@launch
+            }
+        }
+    }
+
+    private fun unsubscribeSubagent(key: String) {
+        if (!canStreamSubagents()) return
+        val client = rpc
+        scope.launch { client.request("subagent_unsubscribe", timeoutMs = 15_000) { put("runId", key) } }
     }
 
     /**
@@ -429,7 +477,9 @@ class SessionController private constructor(
             is Input.Event -> {
                 val event = input.json
                 sideEffects(state, event)
-                SessionReducer.reduce(state, event)
+                // On this phone the app reads the subagent's file itself; the engine's stream adds only the message
+                // being written (`subagent_events`).
+                if (isLocal && event.type == SubagentReducer.ENTRIES_EVENT) state else SessionReducer.reduce(state, event)
             }
         }
     } catch (e: RuntimeException) {
@@ -455,6 +505,12 @@ class SessionController private constructor(
                 scope.launch { refreshState() }
             }
             "remote_hello" -> {
+                // The computer forgot this phone's subagent streams (a new connection or session): ask again.
+                val watched = watchedSubagents.value
+                if (watched.isNotEmpty()) {
+                    val streams = event.arr("features")?.any { (it as? JsonPrimitive)?.content == SUBAGENT_STREAM_FEATURE } == true
+                    watched.forEach { subscribeSubagent(it, streams) }
+                }
                 val host = (event["host"] as? JsonObject)
                 if (!isLocal) {
                     app.hosts.update(hostId) {
@@ -824,6 +880,9 @@ class SessionController private constructor(
     }
 
     companion object {
+        private const val SUBSCRIBE_TRIES = 5
+        private const val SUBSCRIBE_RETRY_MS = 1_500L
+
         /** Status key of the bundled subagents extension, set while background agents run or wait. */
         private const val SUBAGENTS_STATUS = "subagents"
         private const val FRAME_MS = 16L
