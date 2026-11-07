@@ -31,6 +31,7 @@ import opensec.pibolt.app.checkpoints.Git
 import opensec.pibolt.app.checkpoints.ShadowRepo
 import opensec.pibolt.app.checkpoints.TurnCheckpoints
 import opensec.pibolt.app.data.SafeFiles
+import opensec.pibolt.app.preview.PreviewExtension
 import opensec.pibolt.app.secrets.SecretEnv
 import opensec.pibolt.app.secrets.SecretStore
 import opensec.pibolt.app.session.SessionController
@@ -492,6 +493,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
             val full = EnginePrefix(paths, AndroidAssets(app.assets)).ensure(m)
             dns.start()
             AppExtension.install(paths.agentDir)
+            PreviewExtension.install(paths.agentDir) { app.assets.open(PreviewExtension.ASSET) }
             Log.i(TAG, "prepare: prefix ${if (full) "installed" else "up to date"}, ${SystemClock.elapsedRealtime() - started} ms (engine ${m.engine}, glibc ${m.glibc})")
         } catch (e: Exception) {
             Log.e(TAG, "prefix setup failed", e)
@@ -596,7 +598,9 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         Log.i(TAG, "starting engine ${m.engine} in ${project.name} ${target.cliArgs().joinToString(" ")}${if (isChat(cwd)) " (chat)" else ""}")
         return ProcessBuilder(command).directory(project).apply {
             val env = environment()
-            val wanted = engineEnvironment(paths, env.toMap(), TimeZone.getDefault().id, m.env, app.github.gitEnvironment())
+            // Project engines on this phone get the preview tools' socket; chats do not (no preview_* tools there).
+            val preview = if (isChat(cwd)) emptyMap() else app.previewBroker.environment()
+            val wanted = engineEnvironment(paths, env.toMap(), TimeZone.getDefault().id, m.env, app.github.gitEnvironment() + preview)
             env.clear()
             // The project's secrets as variables (never in the model's messages).
             env.putAll(SecretEnv.inject(wanted, SecretStore.get(app).environment(project)))

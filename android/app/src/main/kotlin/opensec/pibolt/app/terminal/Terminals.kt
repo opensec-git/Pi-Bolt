@@ -137,6 +137,9 @@ object Terminals {
 
     private val portScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** Dev-server ports now, with [extra] probed too (a port Pi asks the preview for). Blocking: call off the main thread. */
+    fun scanPorts(extra: Collection<Int> = emptyList()): List<Int> = DevServerPorts(mentionedPorts = { hintPorts + extra }).scan()
+
     /** Dev-server ports, scanned while a chip shows them. */
     val ports: StateFlow<List<Int>> by lazy { DevServerPorts(mentionedPorts = { hintPorts }).watch(portScope) }
 
