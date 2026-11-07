@@ -56,7 +56,8 @@ object SessionReducer {
         "extension_ui_dismissed" -> event.str("id")?.let { id -> state.copy(dialogs = state.dialogs.filterNot { it.id == id }) } ?: state
         "extension_error" -> state.notice(NoticeKind.Error, "Extension error", event.str("error") ?: "")
         "bash_execution_update" -> shellOutput(state, event.str("delta").orEmpty())
-        SubagentReducer.TRANSCRIPT_EVENT -> SubagentReducer.transcript(state, event)
+        SubagentReducer.TRANSCRIPT_EVENT, SubagentReducer.ENTRIES_EVENT -> SubagentReducer.transcript(state, event)
+        SubagentReducer.EVENTS_EVENT -> SubagentReducer.events(state, event)
         else -> state
     }
 
@@ -77,7 +78,14 @@ object SessionReducer {
         val host = hello.obj("host")
         var state = SessionState(
             hello = true,
-            host = HostInfo(host?.str("name") ?: "Computer", host?.str("version") ?: "", host?.str("cwd") ?: "", service = host?.bool("service") == true, parallelSessions = host?.bool("parallelSessions") == true),
+            host = HostInfo(
+                host?.str("name") ?: "Computer",
+                host?.str("version") ?: "",
+                host?.str("cwd") ?: "",
+                service = host?.bool("service") == true,
+                parallelSessions = host?.bool("parallelSessions") == true,
+                features = hello.arr("features").orEmpty().mapNotNullTo(HashSet()) { (it as? JsonPrimitive)?.content },
+            ),
         )
         state = applyRpcState(state, hello.obj("state"))
         // A long session sends only its newest messages: say so, or the transcript seems to start midway (or, when one
@@ -154,14 +162,14 @@ object SessionReducer {
         return if (message.str("role") == "assistant") startStream(state, message) else state
     }
 
-    private fun startStream(state: SessionState, message: JsonObject): SessionState {
-        val key = "m${state.seq}"
+    /** [key]: the stream's row key (a subagent's live message uses its own key space); default `m<seq>`. */
+    internal fun startStream(state: SessionState, message: JsonObject, key: String = "m${state.seq}"): SessionState {
         val blocks = message.arr("content").orEmpty().mapIndexed { i, block -> blockItem(key, i, block as? JsonObject, streaming = true) }
         val stream = StreamingMessage(key, blocks)
         return state.copy(seq = state.seq + 1, stream = stream, streaming = blocks.filterNotNull())
     }
 
-    private fun messageUpdate(state: SessionState, event: JsonObject): SessionState {
+    internal fun messageUpdate(state: SessionState, event: JsonObject): SessionState {
         val delta = event.obj("assistantMessageEvent") ?: return state
         var s = state
         if (s.stream == null) s = startStream(s, JsonObject(emptyMap()))
