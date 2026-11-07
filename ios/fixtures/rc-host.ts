@@ -16,7 +16,8 @@
 // The process exits when stdin closes.
 //
 // Prompts the faux model understands: a prompt containing "tool" gets a `shout` tool call, then a reply that quotes
-// its result; "wait" gets a `wait` tool call that runs until it is aborted; anything else gets thinking and an echo.
+// its result; "demo" the same call, then a markdown reply with every kind of block; "wait" gets a `wait` tool call
+// that runs until it is aborted; anything else gets thinking and an echo.
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -94,11 +95,36 @@ function textOf(content: unknown): string {
 }
 
 /** The scripted model: one reply per call, from the conversation so far. */
+/** A reply with every block the transcript renders, for screenshots. */
+const DEMO_REPLY = [
+	"## Fixed the flaky test",
+	"",
+	"The race was in `connect()`: a **second** attempt could adopt a socket the first one had abandoned.",
+	"",
+	"- Serialized the attempts behind one lock",
+	"- Closed abandoned sockets on every path",
+	"- [x] Added a regression test",
+	"",
+	"```swift",
+	"await connectLock.lock()",
+	"defer { Task { await connectLock.unlock() } }",
+	"```",
+	"",
+	"| Run | Before | After |",
+	"|---|---:|---:|",
+	"| CI | 3 of 20 failed | 0 of 50 |",
+].join("\n");
+
 function reply(context: { messages: Array<{ role: string; content: unknown }> }): AssistantMessage {
 	const last = context.messages[context.messages.length - 1];
-	if (last?.role === "toolResult") return fauxAssistantMessage(`The tool said ${textOf(last.content)}.`);
+	const prompt = textOf([...context.messages].reverse().find((message) => message.role === "user")?.content);
+	if (last?.role === "toolResult") {
+		if (/\bdemo\b/i.test(prompt))
+			return fauxAssistantMessage([fauxThinking("The test passes now."), fauxText(DEMO_REPLY)]);
+		return fauxAssistantMessage(`The tool said ${textOf(last.content)}.`);
+	}
 	const text = textOf(last?.content);
-	if (/\btool\b/i.test(text))
+	if (/\b(tool|demo)\b/i.test(text))
 		return fauxAssistantMessage(fauxToolCall("shout", { text: "hello" }), { stopReason: "toolUse" });
 	if (/\bwait\b/i.test(text)) return fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" });
 	return fauxAssistantMessage([

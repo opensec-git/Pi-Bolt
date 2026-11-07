@@ -5,7 +5,8 @@ name: ios
 # - kit: the Swift package's tests (ios/PiBoltKit: Noise, pairing, framing, reducer, markdown), including the live
 #   tests against Pi-Bolt's own remote control server (ios/fixtures/rc-host.ts, run with Node from this checkout).
 # - app: generates the Xcode project with XcodeGen, runs the app's unit tests in the iOS Simulator (with that same host
-#   running on the runner, so the app pairs, prompts and reconnects for real), then builds an unsigned IPA.
+#   running on the runner, so the app pairs, prompts and reconnects for real), takes screenshots of the debug build
+#   driving that host, then builds an unsigned IPA.
 # - release: an `ios-vX.Y.Z` tag on a pi-bolt commit publishes that IPA and its SHA-256 as a GitHub release of its own,
 #   never marked latest (the Pi-Bolt installers read the latest release). The IPA is unsigned: AltStore, SideStore or
 #   Sideloadly sign it with the user's own Apple ID on install (ios/README.md).
@@ -81,8 +82,10 @@ jobs:
         run: xcodegen generate
       - name: Start the fixture host
         run: |
-          # stdin stays open (tail), or the host exits; its first line carries the pairing link.
-          (tail -f /dev/null | node --import ./ios/fixtures/workspace-hooks.mjs ios/fixtures/rc-host.ts > "$RUNNER_TEMP/host.log" 2>&1 &)
+          # Its stdin follows host.cmd (later steps append commands such as `pair`), so it stays open; the host's first
+          # line carries the pairing link.
+          touch "$RUNNER_TEMP/host.cmd"
+          (tail -f "$RUNNER_TEMP/host.cmd" | node --import ./ios/fixtures/workspace-hooks.mjs ios/fixtures/rc-host.ts > "$RUNNER_TEMP/host.log" 2>&1 &)
           for _ in $(seq 1 120); do
             grep -q '"event":"ready"' "$RUNNER_TEMP/host.log" 2>/dev/null && break
             sleep 1
@@ -118,6 +121,42 @@ jobs:
           xcodebuild test -project PiBolt.xcodeproj -scheme PiBolt -destination "id=$SIMULATOR" \
             -derivedDataPath "$RUNNER_TEMP/dd-sim" CODE_SIGNING_ALLOWED=NO | tee "$RUNNER_TEMP/test.log" | grep -E '(error|warning: .*\.swift|Test (Suite|Case|run)|✔|✘|passed|failed|\*\*)' || true
           grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/test.log"
+      - name: Screenshots
+        run: |
+          app="$RUNNER_TEMP/dd-sim/Build/Products/Debug-iphonesimulator/PiBolt.app"
+          id=in.opensec.pibolt.ios
+          shots="$RUNNER_TEMP/shots"
+          mkdir -p "$shots"
+          xcrun simctl boot "$SIMULATOR" 2>/dev/null || true
+          xcrun simctl bootstatus "$SIMULATOR" -b > /dev/null
+          xcrun simctl status_bar "$SIMULATOR" override --time 9:41 --batteryState charged --batteryLevel 100 || true
+          xcrun simctl uninstall "$SIMULATOR" "$id" || true
+          xcrun simctl install "$SIMULATOR" "$app"
+          xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 5
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/1-home-empty.png"
+          xcrun simctl terminate "$SIMULATOR" "$id" || true
+          # A fresh pairing link (the tests used the first one), then the debug build's autopilot pairs and prompts.
+          echo pair >> "$RUNNER_TEMP/host.cmd"
+          for _ in $(seq 1 30); do
+            grep -q '"event":"pair"' "$RUNNER_TEMP/host.log" && break
+            sleep 1
+          done
+          uri=$(grep '"event":"pair"' "$RUNNER_TEMP/host.log" | tail -n 1 | python3 -c 'import json,sys; print(json.loads(sys.stdin.readline())["uri"])')
+          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$uri" SIMCTL_CHILD_PIBOLT_AUTOPROMPT="demo: fix the flaky connect test" \
+            xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 15
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/2-session.png"
+          xcrun simctl terminate "$SIMULATOR" "$id" || true
+          xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 5
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/3-home.png"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-screenshots
+          path: ${{ runner.temp }}/shots/*.png
+          if-no-files-found: warn
+          retention-days: 14
       - name: Fixture host log
         if: ${{ failure() }}
         run: cat "$RUNNER_TEMP/host.log"

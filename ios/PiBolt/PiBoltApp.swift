@@ -61,7 +61,26 @@ struct RootView: View {
             }
         }
         .animation(.easeOut(duration: 0.18), value: model.toast)
+        #if DEBUG
+            .task { await autopilot() }
+        #endif
     }
+
+    #if DEBUG
+        /// CI screenshots (`.github/workflows/ios.yml`): `PIBOLT_AUTOPAIR` pairs with that link and opens the session,
+        /// `PIBOLT_AUTOPROMPT` then sends a prompt. Debug builds only.
+        private func autopilot() async {
+            let env = ProcessInfo.processInfo.environment
+            guard let link = env["PIBOLT_AUTOPAIR"], let payload = try? PairingPayload.parse(link) else { return }
+            let controller = model.pair(payload)
+            showSession = true
+            guard let prompt = env["PIBOLT_AUTOPROMPT"] else { return }
+            for _ in 0 ..< 200 where !(controller.link.isConnected && controller.state.hello) {
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            controller.send(prompt)
+        }
+    #endif
 }
 
 /// Before pairing: which computer, over which addresses.

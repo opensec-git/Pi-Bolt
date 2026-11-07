@@ -35,7 +35,7 @@ function sourceFor(specifier) {
 		for (const [key, value] of Object.entries(pkg.exports)) {
 			if (!key.endsWith("*") || !subpath.startsWith(key.slice(0, -1))) continue;
 			const pattern = exportTarget(value);
-			if (pattern) target = pattern.replace("*", subpath.slice(key.length - 1));
+			if (pattern) target = pattern.replaceAll("*", subpath.slice(key.length - 1));
 		}
 	}
 	if (!target) return undefined;
