@@ -300,6 +300,9 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
                             NavRow("JetBrains Mono licence", "SIL Open Font License 1.1", onClick = {
                                 scope.launch { licence = ViewerContent("JetBrains Mono", "SIL Open Font License 1.1", readRaw(context, R.raw.license_jetbrains_mono), wrap = true) }
                             })
+                            NavRow("Mermaid licence", "MIT, with the projects it bundles", onClick = {
+                                scope.launch { licence = ViewerContent("Mermaid", "MIT, with the projects it bundles", readRaw(context, R.raw.license_mermaid), wrap = true) }
+                            })
                         }
                     }
                 }
