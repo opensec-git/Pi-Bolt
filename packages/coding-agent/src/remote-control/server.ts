@@ -30,6 +30,7 @@ import {
 	WEBSOCKET_PATH,
 	WEBSOCKET_SUBPROTOCOL,
 } from "./protocol.ts";
+import { REVIEW_COMMANDS, runReviewCommand } from "./review.ts";
 import { type PairedDevice, type RemoteControlStore, toBase64Url } from "./store.ts";
 
 /**
@@ -115,6 +116,11 @@ export interface RemoteControlServerOptions {
 	 */
 	openSession?: () => Promise<void>;
 	serviceCommands?: RemoteServiceCommands;
+	/**
+	 * `remoteControl.readSecretFiles`: `rc_read_file` and `rc_git_diff` may show files that look like secrets (review.ts).
+	 * Read on every request, so a settings change applies at once.
+	 */
+	readSecretFiles?: () => boolean;
 	/** More fields of `remote_hello.host` (the service adds `service: true`). */
 	hostInfo?: Record<string, unknown>;
 	hostName: string;
@@ -657,6 +663,8 @@ export class RemoteControlServer {
 				name: this.hostName,
 				version: this.version,
 				cwd: session.sessionManager.getCwd(),
+				// The read-only review commands (`rc_git_*`, `rc_list_dir`, `rc_read_file`): older hosts send no `review`.
+				review: true,
 				...this.options.hostInfo,
 			},
 			state: this.sessionState(session),
@@ -735,6 +743,19 @@ export class RemoteControlServer {
 		if (service?.types.has(typed.type)) {
 			try {
 				const data = await service.run(message as { type: string });
+				connection.send({ id, type: "response", command: typed.type, success: true, data });
+			} catch (error) {
+				connection.send({ id, type: "response", command: typed.type, success: false, error: asError(error) });
+			}
+			return;
+		}
+		if (REVIEW_COMMANDS.has(typed.type)) {
+			const session = this.options.getSession();
+			try {
+				if (!session) throw new Error("No session is open yet");
+				const data = await runReviewCommand(session.sessionManager.getCwd(), message as { type: string }, {
+					readSecretFiles: this.options.readSecretFiles?.() === true,
+				});
 				connection.send({ id, type: "response", command: typed.type, success: true, data });
 			} catch (error) {
 				connection.send({ id, type: "response", command: typed.type, success: false, error: asError(error) });
