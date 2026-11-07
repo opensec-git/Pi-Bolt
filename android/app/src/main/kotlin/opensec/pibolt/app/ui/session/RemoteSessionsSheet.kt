@@ -41,7 +41,9 @@ import opensec.pibolt.protocol.rpc.RemoteSessionInfo
  * The computer's projects and their sessions, from its background service (`host.service`): pick a project, then one
  * of its sessions or "New session". The pick opens on the computer (`switch_session` / `new_session`), and its
  * `remote_hello` replaces this transcript. [onDismiss] runs on every close, a pick's too: hiding the sheet alone left it
- * composed, so the next tap on Projects opened nothing.
+ * composed, so the next tap on Projects opened nothing. A service with `host.parallelSessions` keeps a running session
+ * working meanwhile (its row says "Running"; picking it again shows it); an older one cannot, so while this session
+ * works the pick is refused with a message (SessionController.switchRefusal) instead of stopping the run.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -111,6 +113,7 @@ fun RemoteSessionsSheet(controller: SessionController, onDismiss: () -> Unit) {
                     val current = s.id.isNotEmpty() && s.id == currentSessionId
                     val meta = listOfNotNull(
                         "Open".takeIf { current },
+                        "Running".takeIf { s.running && !current },
                         count(s.messageCount, "message"),
                         ProjectRules.ago(s.updatedAtMs, now),
                     ).joinToString(" · ")

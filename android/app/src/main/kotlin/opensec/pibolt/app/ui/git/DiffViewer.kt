@@ -68,6 +68,8 @@ fun DiffViewer(ui: ChangesUi, path: String, staged: Boolean, onClose: () -> Unit
     val entry = model.status?.entries?.firstOrNull { it.path == path }
     var diff by remember(path, staged) { mutableStateOf<FileDiff?>(null) }
     var loaded by remember(path, staged) { mutableStateOf(false) }
+    // Git failed to read the diff (as opposed to this side having no changes left).
+    var readFailed by remember(path, staged) { mutableStateOf(false) }
     var discardHunk by remember { mutableStateOf<Int?>(null) }
     var attempt by remember { mutableIntStateOf(0) }
     LaunchedEffect(path, staged, model.version, entry, attempt) {
@@ -76,10 +78,12 @@ fun DiffViewer(ui: ChangesUi, path: String, staged: Boolean, onClose: () -> Unit
             loaded = true
             return@LaunchedEffect
         }
+        readFailed = false
         diff = try {
             model.repo.diff(e, staged)
         } catch (ex: GitException) {
             ui.error(ex.message ?: "Could not read the diff")
+            readFailed = true
             null
         }
         loaded = true
@@ -104,6 +108,8 @@ fun DiffViewer(ui: ChangesUi, path: String, staged: Boolean, onClose: () -> Unit
         when {
             !loaded -> LoadingRow("Loading diff…", Modifier.padding(top = Space.sm))
             entry == null -> EmptyCard(Icons.Rounded.Check, "No changes left")
+            // Every hunk staged (or unstaged) from here: the file's changes are now all on the other side.
+            d == null && !readFailed -> EmptyCard(Icons.Rounded.Check, if (staged) "Nothing staged in this file" else "No unstaged changes left")
             d == null -> ErrorState("Could not read the diff", Modifier.padding(horizontal = Space.page, vertical = Space.sm), onRetry = {
                 loaded = false
                 attempt++

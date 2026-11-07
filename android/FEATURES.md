@@ -251,6 +251,7 @@ before a turn with a conversation fork, and redo of any restore. On this phone o
 | Pull requests | `gh pr create` | done: title, body (Pi can draft), base branch, then the link | device | P1 |
 | Interactive terminal | `!` runs one command | done: bash on a pty in the project (engine environment, secrets), tabs, full screen, extra keys, copy and paste, font size, scrollback; keeps running in the background | device | P1 |
 | Dev-server preview | — | done: "Preview: localhost:N" chip in the terminal and the session, in-app browser limited to localhost | device | P1 |
+| Pi sees its own preview | — | done (0.6.0): project sessions on the phone get `preview_open`, `preview_screenshot` (a PNG of at most 1280 px, shown in the transcript), `preview_console` (console, uncaught errors with stacks, failed requests), `preview_click`, `preview_type`, `preview_scroll` and `preview_eval`, driving the same WebView the user sees ("Pi is using the preview"); only detected dev-server ports on localhost; never in chats | device | P1 |
 | Project secrets (.env) | — | done: Keystore-encrypted, masked, injected into the project's terminals and engines (not the model's messages), optional .env | device | P1 |
 | Edit project files | `edit` tool | done (0.5.0): tabs with unsaved dots; highlighting while typing (incremental, off the main thread); find and replace with regex groups, case, whole word, undo; go to line; auto-indent, bracket pairs, soft wrap; read-only over 1 MB | device | P1 |
 | Ask Pi about a file or selection | `@file` | done (0.5.0): the viewer puts an `@mention` and the selected lines into the project's composer | device | P1 |
@@ -258,6 +259,7 @@ before a turn with a conversation fork, and redo of any restore. On this phone o
 | Files in and out | — | done (0.5.0): import files or a folder (SAF), a zip as a new project; export a project or folder as a zip (Save to… or Share); share a file; streamed, cancellable, zip-slip safe | device | P1 |
 | Share into Pi-Bolt | — | done (0.5.0): files, images and text from other apps: attach to a project's composer, import, or a zip as a project | device | P1 |
 | Voice input | — | done (0.5.0): composer mic, Android speech recognition (on-device when available), live partial text | both | P1 |
+| Hands-free voice mode | — | done (0.6.0): listen, send on end of speech, "Working" with the Quad and the tool, a spoken 2-3 sentence summary of the reply (Android TextToSpeech, no extra model call), listen again; question cards read out and answered by voice; mute, barge-in where the phone cancels echo, pauses for calls and other audio; speech rate and voice in Settings | both | P2 |
 | Files on tool cards | — | done (0.5.0): a path on this phone opens in the file viewer and editor | device | P1 |
 | Language runtimes: `node`, `npm`, `npx`, `python3`, `pip` | your system's | done: Node.js 22 LTS and Python 3.14 in the APK, in Pi's bash, `!` commands and the terminal (all with the engine's environment); npm/pip installs over HTTPS | device | P1 |
 | Runtimes screen (versions, sizes, npm/pip caches) | — | done: Settings > Runtimes, project menu | device | P2 |

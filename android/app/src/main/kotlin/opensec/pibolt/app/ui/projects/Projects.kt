@@ -2,6 +2,7 @@ package opensec.pibolt.app.ui.projects
 
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +15,9 @@ import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.data.SafeFiles
 import opensec.pibolt.app.engine.EngineApi
 import opensec.pibolt.app.engine.SessionSummary
+import opensec.pibolt.app.git.GitProgress
+import opensec.pibolt.app.git.GitRepo
+import opensec.pibolt.app.git.GitRunner
 import opensec.pibolt.app.session.SessionController
 import java.io.File
 
@@ -64,13 +68,36 @@ class Projects(private val engine: EngineApi, private val store: ProjectStore) {
     }
 }
 
+/** Cloning into a new project folder. */
+object ProjectClone {
+    /**
+     * Clones [url] into the new, empty [dir]. When the clone fails, or is cancelled (the sheet swiped away or the
+     * screen rotated while it ran), the half-cloned folder is removed: never a broken project left in the list.
+     */
+    suspend fun run(runner: GitRunner, url: String, dir: File, progress: (GitProgress) -> Unit) {
+        try {
+            GitRepo.clone(runner, url, dir, progress)
+        } catch (e: Throwable) {
+            withContext(NonCancellable + Dispatchers.IO) { SafeFiles.deleteTree(dir) }
+            throw e
+        }
+    }
+}
+
 /**
- * The on-device sessions the UI opened, by project (several run at once, one per project): Home's "Running" section and
- * the project list read them, each project's session screen its own controller. [current] is the one opened or shown
- * last. A process-wide holder kept in step with [PiBoltApp.sessions] ([follow]).
+ * The on-device sessions the UI opened (several run at once): Home's "Running" section and the project list read them,
+ * each session screen its own controller. Keyed by [Live.key], the session screen's route: a project's name for its
+ * front session (the one opened last), `name#2`, `name#3`... for others of the same project still live beside it (one
+ * was busy when another opened: LivePolicy.planOpen). [current] is the one opened or shown last. A process-wide holder
+ * kept in step with [PiBoltApp.sessions] ([follow]).
  */
 object LocalSessions {
-    class Live(val project: File, val controller: SessionController, val sessionFile: String?) {
+    class Live(val project: File, val controller: SessionController, val sessionFile: String?, key: String = project.name) {
+        /** Where [all] holds it and the route of its screen: the project's name for its front session, else `name#n`. */
+        @Volatile
+        var key: String = key
+            internal set
+
         /** A prompt to send once the session can take it ("Clone from git"). Read and cleared by the session screen. */
         @Volatile
         var firstPrompt: String? = null
@@ -98,11 +125,21 @@ object LocalSessions {
 
     private val _all = MutableStateFlow<Map<String, Live>>(emptyMap())
 
-    /** Live sessions by project name, in the order they were opened. */
+    /** Live sessions by [Live.key], in the order they were opened. */
     val all: StateFlow<Map<String, Live>> = _all.asStateFlow()
 
-    /** The live session of [project], if any. */
+    /** The front live session of [project] (the one opened there last), if any. */
     fun get(project: String): Live? = _all.value[project]?.takeIf { !it.controller.stopped }
+
+    /** The session screen's session: [key] is [Live.key]. */
+    fun byKey(key: String): Live? = _all.value[key]?.takeIf { !it.controller.stopped }
+
+    /** Every live session of [project], the front one first. */
+    fun inProject(project: String): List<Live> =
+        _all.value.values.filter { it.project.name == project && !it.controller.stopped }.sortedBy { if (it.key == project) 0 else 1 }
+
+    /** The live session of [project] that has [sessionFile] open, if any. */
+    fun find(project: String, sessionFile: String): Live? = inProject(project).firstOrNull { (it.controller.sessionFile ?: it.sessionFile) == sessionFile }
 
     /** Keeps [all] and [current] in step with the app's live sessions (one that stops leaves). Call once. */
     fun follow(app: PiBoltApp) {
@@ -117,31 +154,59 @@ object LocalSessions {
         }
     }
 
-    /** Opens (or resumes) a session through the engine, off the main thread, and makes it the live one. */
+    /**
+     * Opens (or resumes) a session through the engine, off the main thread, and makes it the current one. A session
+     * already live keeps its key; a new one becomes its project's front session, and the one there before moves aside
+     * (to `name#n`) when it still runs ([place]). Show the result's [Live.key].
+     */
     suspend fun open(engine: EngineApi, store: ProjectStore, project: File, sessionFile: String? = null, fresh: Boolean = false, firstPrompt: String? = null): Result<Live> {
         val result = withContext(Dispatchers.IO) { runCatching { engine.open(project, sessionFile, fresh) } }
         return result.map { controller ->
             store.opened(project.name)
             sessionFile?.let { store.seen(it) }
-            Live(project, controller, sessionFile).also {
-                it.firstPrompt = firstPrompt
-                synchronized(this) {
-                    _all.value = (_all.value - project.name) + (project.name to it)
-                    _current.value = it
+            synchronized(this) {
+                val keys = _all.value.mapValues { (_, live) -> Placed(live.project.name, live.controller.stopped) }
+                val existing = _all.value.entries.firstOrNull { it.value.controller === controller }?.key
+                val (key, moved) = place(keys, project.name, existing)
+                val live = Live(project, controller, sessionFile, key).also { it.firstPrompt = firstPrompt }
+                var next = _all.value
+                if (moved != null) {
+                    val aside = next.getValue(key)
+                    aside.key = moved
+                    next = next - key + (moved to aside)
                 }
+                _all.value = next - key + (key to live)
+                _current.value = live
+                live
             }
         }
     }
 
-    fun isLive(project: String): Boolean = get(project) != null
+    /** A live session's place in [all] as [place] sees it. */
+    data class Placed(val project: String, val stopped: Boolean)
 
-    /** The project was deleted or renamed away: drop its session. */
+    /**
+     * Where an opened session goes in [all] ([keys]: what is there now): its [existing] key if it is already live, else
+     * the [project]'s name, and the live session there moves to the first free `name#n` (the second value) unless it
+     * has stopped (it was replaced). Pure.
+     */
+    fun place(keys: Map<String, Placed>, project: String, existing: String?): Pair<String, String?> {
+        if (existing != null) return existing to null
+        val front = keys[project]
+        if (front == null || front.stopped) return project to null
+        val free = generateSequence(2) { it + 1 }.map { "$project#$it" }.first { k -> keys[k]?.stopped != false }
+        return project to free
+    }
+
+    fun isLive(project: String): Boolean = inProject(project).isNotEmpty()
+
+    /** The project was deleted or renamed away: drop its sessions. */
     fun close(project: String) {
-        val live = _all.value[project] ?: return
-        live.controller.stop()
+        val lives = inProject(project)
+        for (live in lives) live.controller.stop()
         synchronized(this) {
-            _all.value = _all.value - project
-            if (_current.value === live) _current.value = null
+            _all.value = _all.value.filterValues { it !in lives }
+            if (_current.value in lives) _current.value = null
         }
     }
 }

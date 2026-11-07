@@ -61,8 +61,17 @@ data class AppSettings(
      * (engine/ChatSpace.kt). Off: engines start without them.
      */
     val webSearch: Boolean = true,
+    /** Voice mode says each reply's summary aloud (off: it is shown only). */
+    val voiceSpeakReplies: Boolean = true,
+    /** Voice mode's speech rate in percent: one of [VOICE_RATE_CHOICES]. */
+    val voiceRate: Int = 100,
+    /** The text-to-speech voice by its engine name; null is the engine's default. */
+    val voiceName: String? = null,
+    /** [voiceName] as the picker named it ("English (United States) 2"), for the Settings row. */
+    val voiceLabel: String? = null,
 ) {
     companion object {
+        val VOICE_RATE_CHOICES = listOf(75, 100, 125, 150, 200)
         val TOOL_PREVIEW_CHOICES = listOf(6, 12, 24)
         const val TEXT_SIZE_MIN = -1
         const val TEXT_SIZE_MAX = 2
@@ -84,6 +93,10 @@ object SettingsCodec {
         put("notificationsAsked", s.notificationsAsked)
         put("autoUpdateCheck", s.autoUpdateCheck)
         put("webSearch", s.webSearch)
+        put("voiceSpeakReplies", s.voiceSpeakReplies)
+        put("voiceRate", s.voiceRate)
+        s.voiceName?.let { put("voiceName", it) }
+        s.voiceLabel?.let { put("voiceLabel", it) }
     }.toString()
 
     fun decode(text: String?): AppSettings {
@@ -101,6 +114,10 @@ object SettingsCodec {
             notificationsAsked = json.bool("notificationsAsked") ?: d.notificationsAsked,
             autoUpdateCheck = json.bool("autoUpdateCheck") ?: d.autoUpdateCheck,
             webSearch = json.bool("webSearch") ?: d.webSearch,
+            voiceSpeakReplies = json.bool("voiceSpeakReplies") ?: d.voiceSpeakReplies,
+            voiceRate = json.int("voiceRate")?.takeIf { it in AppSettings.VOICE_RATE_CHOICES } ?: d.voiceRate,
+            voiceName = json.str("voiceName")?.takeIf { it.isNotBlank() },
+            voiceLabel = json.str("voiceLabel")?.takeIf { it.isNotBlank() && !json.str("voiceName").isNullOrBlank() },
         )
     }
 

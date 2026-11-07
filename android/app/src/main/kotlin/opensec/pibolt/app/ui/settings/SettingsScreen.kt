@@ -110,6 +110,7 @@ import opensec.pibolt.app.ui.session.ModelSheet
 import opensec.pibolt.app.ui.session.Viewer
 import opensec.pibolt.app.ui.session.ViewerContent
 import opensec.pibolt.app.ui.session.features2.TuningSheet
+import opensec.pibolt.app.ui.session.voice.VoicePickerSheet
 import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
@@ -118,7 +119,7 @@ import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Space
 
 /** The few-option settings that open a [ChoiceSheet] from their row. */
-private enum class Choice { Thinking, Density, Steering, FollowUp, Retries, ToolPreview, ReduceMotion }
+private enum class Choice { Thinking, Density, Steering, FollowUp, Retries, ToolPreview, ReduceMotion, VoiceRate }
 
 /** The engine's sheets that Settings opens. */
 private enum class EngineSheet { Packages, Mcp, Tuning }
@@ -155,6 +156,7 @@ fun SettingsScreen(
     var choice by remember { mutableStateOf<Choice?>(null) }
     var engineSheet by remember { mutableStateOf<EngineSheet?>(null) }
     var picking by remember { mutableStateOf(false) }
+    var voicePicker by remember { mutableStateOf(false) }
     var signingIn by remember { mutableStateOf(false) }
     var query by rememberSaveable { mutableStateOf("") }
     val visible = remember(query) { SettingsIndex.visible(query) }
@@ -294,6 +296,7 @@ fun SettingsScreen(
                     if (show("tool-preview")) add { d ->
                         GroupRow("Tool output", icon = Icons.AutoMirrored.Rounded.Notes, iconTint = tint, value = "${settings.toolPreviewLines} lines", onClick = { choice = Choice.ToolPreview }, divider = d)
                     }
+                    if (show("voice")) addAll(voiceRows(settings, tint, ::update, onRate = { choice = Choice.VoiceRate }, onVoice = { voicePicker = true }))
                 }
                 SettingsBlock(rows, header = SettingsGroup.Agent.title)
             }
@@ -359,6 +362,9 @@ fun SettingsScreen(
     }
     if (textSize) TextSizeSheet(settings.textSize, onSelect = { step -> update { it.copy(textSize = step) } }, onDismiss = { textSize = false })
     if (signingIn) GitHubSignInSheet(app, onDismiss = { signingIn = false })
+    if (voicePicker) {
+        VoicePickerSheet(settings.voiceName, settings.voiceRate, onPick = { name, label -> update { it.copy(voiceName = name, voiceLabel = label) } }, onDismiss = { voicePicker = false })
+    }
     val p = prefs
     if (picking && p?.controller != null) {
         ModelSheet(p.models, p.match, onPick = { m ->
@@ -405,6 +411,13 @@ fun SettingsScreen(
             AppSettings.TOOL_PREVIEW_CHOICES.map { it to "$it lines" },
             settings.toolPreviewLines,
             onSelect = { n -> update { it.copy(toolPreviewLines = n) } },
+            onDismiss = dismiss,
+        )
+        Choice.VoiceRate -> ChoiceSheet(
+            "Speech rate",
+            AppSettings.VOICE_RATE_CHOICES.map { it to rateLabel(it) },
+            settings.voiceRate,
+            onSelect = { n -> update { it.copy(voiceRate = n) } },
             onDismiss = dismiss,
         )
         Choice.ReduceMotion -> ChoiceSheet("Reduce motion", ReduceMotion.entries.map { it to it.label }, settings.reduceMotion, onSelect = { r -> update { it.copy(reduceMotion = r) } }, onDismiss = dismiss)

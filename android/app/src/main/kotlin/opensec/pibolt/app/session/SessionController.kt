@@ -1,5 +1,7 @@
 package opensec.pibolt.app.session
 
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -26,6 +28,7 @@ import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.checkpoints.TurnCheckpoints
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.engine.ChatSpace
+import opensec.pibolt.app.engine.LivePolicy
 import opensec.pibolt.protocol.Base64Url
 import opensec.pibolt.protocol.backend.ConnectionState
 import opensec.pibolt.protocol.backend.DisconnectReason
@@ -114,7 +117,7 @@ class SessionController private constructor(
         class Remote(val endpoints: List<String>, val pairSecret: ByteArray?, val fallbackSecret: ByteArray?) : Origin
 
         /** [release] gets the backend back when the session stops, and whether the engine was idle then. */
-        class Local(val project: File, val backend: LocalBackend, val release: (LocalBackend, Boolean) -> Unit, val checkpoints: TurnCheckpoints?, val chat: Boolean) : Origin
+        class Local(val project: File, val backend: LocalBackend, val release: (LocalBackend, Boolean) -> Unit, val checkpoints: TurnCheckpoints?, val chat: Boolean, val slot: Int) : Origin
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -129,6 +132,15 @@ class SessionController private constructor(
 
     /** The project directory of a local session (for a chat: the chats' directory, which is no project). */
     val project: File? = (origin as? Origin.Local)?.project
+
+    /**
+     * This session's place among its project's live sessions (0 for the first; another one opens beside a busy one, see
+     * [LivePolicy.planOpen]). Part of [hostId], so notifications and their answers reach this very session.
+     */
+    val slot: Int = (origin as? Origin.Local)?.slot ?: 0
+
+    /** Drafts and per-session memory: per project on this phone (a session keeps them whichever slot shows it), else [hostId]. */
+    val memoryKey: String = (origin as? Origin.Local)?.project?.let { localId(it) } ?: hostId
 
     /** A plain chat (engine.ChatSpace): on this phone, in no project, without tools. */
     val isChat: Boolean = (origin as? Origin.Local)?.chat == true
@@ -207,6 +219,10 @@ class SessionController private constructor(
     fun start() {
         scope.launch { reduceLoop() }
         scope.launch { connectLoop() }
+        if (origin is Origin.Remote) {
+            val cm = connectivity
+            networkRegistered = cm != null && runCatching { cm.registerDefaultNetworkCallback(networkCallback) }.isSuccess
+        }
         pumpEvents()
         subagentTail?.start(scope)
         checkpoints?.let {
@@ -233,6 +249,7 @@ class SessionController private constructor(
         app.sessionStopped(this)
         when (origin) {
             is Origin.Remote -> {
+                if (networkRegistered) runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
                 backend.close()
                 rpc.stop()
                 scope.cancel()
@@ -260,6 +277,19 @@ class SessionController private constructor(
 
     fun retryNow() {
         retrySignal.trySend(Unit)
+    }
+
+    private val connectivity: ConnectivityManager? by lazy { app.getSystemService(ConnectivityManager::class.java) }
+    private var networkRegistered = false
+
+    /**
+     * A computer's session waiting out its backoff (up to 30 s) retries as soon as a network comes up: back in Wi-Fi
+     * range, mobile data after Wi-Fi, out of airplane mode.
+     */
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            if (_link.value is LinkState.Retrying) retryNow()
+        }
     }
 
     private fun newBackend(endpoints: List<String>, secret: ByteArray?) = RemoteBackend(
@@ -465,6 +495,15 @@ class SessionController private constructor(
                 }
                 _models.value = emptyList()
                 _thinkingLevels.value = emptyList()
+                // A reconnect after the run ended or a dialog opened: the "finished" and "needs an answer" alerts of the
+                // events the drop swallowed, with the snapshot's own text.
+                if (!isLocal) {
+                    val missed = SessionReducer.missedWhileAway(before, event)
+                    if (missed.isNotEmpty()) {
+                        val after = SessionReducer.reduce(before, event).copy(isRunning = true)
+                        missed.forEach { sideEffects(after, it) }
+                    }
+                }
             }
             RemoteEndpoints.TYPE -> onEndpoints(event)
         }
@@ -542,6 +581,11 @@ class SessionController private constructor(
                 _effects.tryEmit(SessionEffect.Error(response.error ?: "Not sent"))
             }
         }
+    }
+
+    /** Shows [message] as an error on this session's screen (an open beside it that failed). */
+    fun showError(message: String) {
+        _effects.tryEmit(SessionEffect.Error(message))
     }
 
     fun abort() {
@@ -627,7 +671,12 @@ class SessionController private constructor(
     }
 
     // Sessions and shell. A local engine runs all of these; remote control answers "Not available over remote control".
-    // A session switch replaces the conversation through a new `remote_hello`, as on a computer.
+    // A session switch replaces the conversation through a new `remote_hello`, as on a computer. Pi aborts the turn of
+    // the session it replaces, so these are refused while this one is busy ([switchRefusal]): on this phone another
+    // session opens beside it instead (LocalEngine), and a computer's service with `parallelSessions` keeps it running.
+
+    /** Why this session may not move to another one now, or null ([LivePolicy.switchRefusal]). */
+    fun switchRefusal(): String? = LivePolicy.switchRefusal(isLocal, isBusy, _state.value.host?.parallelSessions == true)
 
     fun newSession() = sessionCommand("Could not start a new session") { rpc.newSession() }
 
@@ -658,6 +707,7 @@ class SessionController private constructor(
      * the composer.
      */
     suspend fun fork(entryId: String): Result<String> {
+        switchRefusal()?.let { return Result.failure(IllegalStateException(it)) }
         val response = rpc.fork(entryId)
         if (!response.success) return Result.failure(IllegalStateException(response.error ?: "Fork failed"))
         val data = response.dataObject
@@ -793,6 +843,7 @@ class SessionController private constructor(
                 put("version", host?.version.orEmpty())
                 put("cwd", host?.cwd.orEmpty())
                 if (host?.service == true) put("service", true)
+                if (host?.parallelSessions == true) put("parallelSessions", true)
             })
             put("state", state.dataObject ?: JsonObject(emptyMap()))
             put("messages", messages.dataObject?.arr("messages") ?: JsonArray(emptyList()))
@@ -808,7 +859,13 @@ class SessionController private constructor(
     suspend fun request(type: String, timeoutMs: Long = 30_000, fields: JsonObjectBuilder.() -> Unit = {}): RpcResponse =
         rpc.request(type, timeoutMs, fields)
 
+    /** A command that replaces this session's runtime (new, switch, clone): never sent while it is busy. */
     private fun sessionCommand(failure: String, run: suspend () -> RpcResponse) {
+        switchRefusal()?.let { why ->
+            Log.i("PiBolt", "refused a session switch while busy ($hostId)")
+            _effects.tryEmit(SessionEffect.Error(why))
+            return
+        }
         scope.launch {
             val response = run()
             when {
@@ -846,10 +903,13 @@ class SessionController private constructor(
          * A session with the engine on this phone, in [project]. [release] takes the backend back when it stops. A [chat]
          * runs in the chats' directory (engine.ChatSpace), named [opensec.pibolt.app.engine.ChatSpace.NAME].
          */
-        fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit, checkpoints: TurnCheckpoints? = null, chat: Boolean = false) =
-            SessionController(app, localId(project), if (chat) ChatSpace.NAME else project.name, Origin.Local(project, backend, release, checkpoints, chat))
+        fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit, checkpoints: TurnCheckpoints? = null, chat: Boolean = false, slot: Int = 0) =
+            SessionController(app, localId(project, slot), if (chat) ChatSpace.NAME else project.name, Origin.Local(project, backend, release, checkpoints, chat, slot))
 
-        /** [hostId] of a local session: per project, so drafts and recent prompts stay with it. */
-        fun localId(project: File): String = "local:${project.absolutePath}"
+        /**
+         * [hostId] of a local session: per project and [slot] (several sessions of one project may run at once), so
+         * notifications reach the right one. The first slot's id is the project's.
+         */
+        fun localId(project: File, slot: Int = 0): String = "local:${project.absolutePath}" + if (slot > 0) "#$slot" else ""
     }
 }

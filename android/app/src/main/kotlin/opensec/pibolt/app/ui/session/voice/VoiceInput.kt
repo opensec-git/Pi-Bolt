@@ -2,12 +2,7 @@ package opensec.pibolt.app.ui.session.voice
 
 import android.Manifest
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.os.Build
-import android.os.Bundle
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -33,7 +28,8 @@ import opensec.pibolt.app.ui.components.ConfirmSheet
  *
  * Two ways in, one behaviour: the mic dictates in place ([toggle]); the voice button opens the voice surface and
  * starts listening ([openSurface]). The surface stays until it is ended ([endSurface]); its mic starts and stops
- * listening again, each time adding to the draft.
+ * listening again, each time adding to the draft. Voice mode ([VoiceMode]) asks for the microphone through [withMic]
+ * and takes it over with [handOff].
  */
 @Stable
 class VoiceInput internal constructor(
@@ -64,7 +60,10 @@ class VoiceInput internal constructor(
 
     val listening: Boolean get() = state == VoiceState.Listening || state == VoiceState.Starting
 
-    private val session = VoiceSession()
+    private val session = VoiceRecognizer()
+
+    /** What to run once the microphone is allowed (dictation, or voice mode). */
+    private var afterGrant: (() -> Unit)? = null
 
     /** The mic: start dictating in place, or stop (the recogniser still delivers its final words). */
     fun toggle() {
@@ -86,26 +85,51 @@ class VoiceInput internal constructor(
 
     /** After the permission sheet and Android's prompt. */
     internal fun permissionResult(granted: Boolean) {
+        val then = afterGrant
+        afterGrant = null
         if (granted) {
-            start()
+            (then ?: ::start)()
         } else {
             surface = false
             say("Microphone access is off. Allow it in Android's app settings.")
         }
     }
 
+    /** The rationale sheet was dismissed: nothing waits for the microphone any more. */
+    internal fun declined() {
+        afterGrant = null
+        endSurface()
+    }
+
+    /** Voice mode takes the microphone: dictation stops at once (the words heard stay in the draft). */
+    internal fun handOff() {
+        session.release()
+        state = VoiceState.Idle
+        level = 0f
+        surface = false
+    }
+
     internal fun release() = session.release()
 
     internal fun requestPermission() = askPermission()
 
-    private fun begin() {
+    private fun begin() = withMic { start() }
+
+    /**
+     * Runs [then] once the microphone may be used: at once when RECORD_AUDIO is granted, else after the rationale sheet
+     * and Android's prompt (voice mode starts through here too). Without a speech service it says so instead.
+     */
+    internal fun withMic(then: () -> Unit) {
         when {
             !SpeechRecognizer.isRecognitionAvailable(context) -> {
                 surface = false
                 say("This phone has no speech recognition service")
             }
-            granted(context) -> start()
-            else -> rationale = true
+            granted(context) -> then()
+            else -> {
+                afterGrant = then
+                rationale = true
+            }
         }
     }
 
@@ -113,21 +137,41 @@ class VoiceInput internal constructor(
         state = VoiceState.Starting
         heard = ""
         val text = draft()
+        val dictation = VoiceDraft(text, text.length)
+        fun idle() {
+            state = VoiceState.Idle
+            level = 0f
+        }
         session.start(
             context,
-            VoiceDraft(text, text.length),
-            onState = {
-                state = it
-                if (it != VoiceState.Listening) level = 0f
+            object : VoiceRecognizer.Listener {
+                override fun onReady() {
+                    state = VoiceState.Listening
+                }
+
+                override fun onLevel(level: Float) {
+                    this@VoiceInput.level = level
+                }
+
+                override fun onPartial(text: String) = heard(text)
+
+                override fun onFinal(text: String?) {
+                    text?.let(::heard)
+                    idle()
+                }
+
+                override fun onError(message: String) {
+                    idle()
+                    say(message)
+                }
+
+                private fun heard(spoken: String) {
+                    heard = spoken
+                    onHeard()
+                    onDraft(dictation.with(spoken).first)
+                }
             },
-            onText = { spoken, next ->
-                heard = spoken
-                onHeard()
-                onDraft(next)
-            },
-            onLevel = { level = it },
-            onError = { message -> message?.let(say) },
-        )
+        ).also { started -> if (!started) idle() }
     }
 }
 
@@ -173,84 +217,9 @@ fun VoiceRationale(voice: VoiceInput) {
         },
         onDismiss = {
             voice.rationale = false
-            voice.endSurface()
+            voice.declined()
         },
     )
 }
 
 private fun granted(context: Context): Boolean = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-
-/** One recogniser at a time, created on the main thread when dictation starts and destroyed when it ends. */
-private class VoiceSession {
-    private var recognizer: SpeechRecognizer? = null
-
-    fun start(
-        context: Context,
-        dictation: VoiceDraft,
-        onState: (VoiceState) -> Unit,
-        onText: (spoken: String, draft: String) -> Unit,
-        onLevel: (Float) -> Unit,
-        onError: (String?) -> Unit,
-    ) {
-        release()
-        val onDevice = Build.VERSION.SDK_INT >= 31 && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
-        val r = runCatching { if (onDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(context) else SpeechRecognizer.createSpeechRecognizer(context) }.getOrNull()
-        if (r == null) {
-            onState(VoiceState.Idle)
-            onError("Speech recognition is not available")
-            return
-        }
-        recognizer = r
-        r.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) = onState(VoiceState.Listening)
-
-            override fun onBeginningOfSpeech() = Unit
-
-            override fun onRmsChanged(rmsdB: Float) = onLevel(VoiceLevel.normalize(rmsdB))
-
-            override fun onBufferReceived(buffer: ByteArray?) = Unit
-
-            override fun onEndOfSpeech() = Unit
-
-            override fun onError(error: Int) {
-                onState(VoiceState.Idle)
-                onError(VoiceErrors.message(error))
-                release()
-            }
-
-            override fun onResults(results: Bundle?) {
-                best(results)?.let { onText(it, dictation.with(it).first) }
-                onState(VoiceState.Idle)
-                release()
-            }
-
-            override fun onPartialResults(partialResults: Bundle?) {
-                best(partialResults)?.let { onText(it, dictation.with(it).first) }
-            }
-
-            override fun onEvent(eventType: Int, params: Bundle?) = Unit
-        })
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-            .putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 1)
-        runCatching { r.startListening(intent) }.onFailure {
-            onState(VoiceState.Idle)
-            onError("Could not start listening")
-            release()
-        }
-    }
-
-    /** Ends listening; the recogniser still delivers its final result. */
-    fun stop() {
-        recognizer?.stopListening()
-    }
-
-    fun release() {
-        recognizer?.let { runCatching { it.destroy() } }
-        recognizer = null
-    }
-
-    private fun best(results: Bundle?): String? = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()?.takeIf { it.isNotBlank() }
-}
