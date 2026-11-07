@@ -507,6 +507,9 @@ class SubagentStream {
 
 	private sendEntries(messages: Json[]): void {
 		if (messages.length === 0 && !this.resetPending) return;
+		// Streaming events still waiting in the batch belong before the saved messages they led to: a phone that gets
+		// the saved answer first would start a live copy of it again from the late events.
+		if (!this.resetPending) this.flushEvents();
 		const max = this.owner.limits.maxMessageBytes;
 		let batch: Json[] = [];
 		let bytes = 0;
@@ -574,13 +577,17 @@ class SubagentStream {
 		// phone would get text in `message_start` that the following deltas add again.
 		this.events.push(JSON.parse(JSON.stringify(event)));
 		if (this.eventTimer) return;
-		this.eventTimer = setTimeout(() => {
-			this.eventTimer = undefined;
-			const events = this.events;
-			this.events = [];
-			if (events.length > 0) this.owner.send({ type: "subagent_events", runId: this.runId, events });
-		}, this.owner.eventBatchMs);
+		this.eventTimer = setTimeout(() => this.flushEvents(), this.owner.eventBatchMs);
 		this.eventTimer.unref?.();
+	}
+
+	/** Sends the batched events now. */
+	private flushEvents(): void {
+		if (this.eventTimer) clearTimeout(this.eventTimer);
+		this.eventTimer = undefined;
+		const events = this.events;
+		this.events = [];
+		if (events.length > 0) this.owner.send({ type: "subagent_events", runId: this.runId, events });
 	}
 }
 

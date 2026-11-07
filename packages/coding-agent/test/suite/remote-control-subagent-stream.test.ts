@@ -252,6 +252,44 @@ describe("remote control subagent streams", () => {
 		expect(JSON.stringify(start)).not.toContain("APPENDED LATER");
 	});
 
+	it("sends the streamed events before the saved message they led to", async () => {
+		const { parent, release, child } = await setup();
+		const done = parent.session.prompt("go");
+		await until(() => child()?.session.messages.some((message) => message.role === "user") === true);
+		const sent: Message[] = [];
+		// A batch that never fills on its own: only the saved message can push it out.
+		const streams = new SubagentStreams({
+			getSession: () => parent.session,
+			send: (message) => sent.push(message as Message),
+			pollMs: 20,
+			eventBatchMs: 60_000,
+		});
+		cleanups.push(() => streams.clear());
+		streams.subscribe("run-1");
+		await until(() => sent.length > 0);
+		release();
+		await done;
+		await until(() =>
+			sent.some(
+				(message) =>
+					message.type === "subagent_entries" &&
+					(message.messages as Message[]).some((entry) => entry.role === "assistant"),
+			),
+		);
+		const savedAt = sent.findIndex(
+			(message) =>
+				message.type === "subagent_entries" &&
+				(message.messages as Message[]).some((entry) => entry.role === "assistant"),
+		);
+		const endAt = sent.findIndex(
+			(message) =>
+				message.type === "subagent_events" &&
+				(message.events as Message[]).some((event) => event.type === "message_end"),
+		);
+		expect(endAt).toBeGreaterThanOrEqual(0);
+		expect(endAt).toBeLessThan(savedAt);
+	});
+
 	it("does not listen again when a stream stops right after a message ends", async () => {
 		const { parent, release, child } = await setup();
 		const done = parent.session.prompt("go");
