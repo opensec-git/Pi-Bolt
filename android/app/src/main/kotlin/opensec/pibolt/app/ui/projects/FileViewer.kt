@@ -3,6 +3,7 @@ package opensec.pibolt.app.ui.projects
 import android.content.ClipData
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.PredictiveBackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -63,6 +64,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -167,8 +169,11 @@ fun FileViewer(root: File, rel: String, onClose: () -> Unit, onChanged: () -> Un
     var menu by remember { mutableStateOf(false) }
     var goTo by remember { mutableStateOf(false) }
     var flashLine by remember { mutableIntStateOf(-1) }
-    var editing by rememberSaveable { mutableStateOf(false) }
-    var draft by remember { mutableStateOf(TextFieldValue("")) }
+    // Kept across an activity recreation; dropped when the viewer closes for good.
+    val edit = rememberSaveable(file, saver = FileEdit.saver(file.path)) { FileEdit() }
+    val activity = LocalActivity.current
+    DisposableEffect(file) { onDispose { if (activity?.isChangingConfigurations != true) FileEdit.release(file.path) } }
+    val editing = edit.editing
     var saving by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf<(() -> Unit)?>(null) }
     var codeView by remember { mutableStateOf<ViewerContent?>(null) }
@@ -178,24 +183,23 @@ fun FileViewer(root: File, rel: String, onClose: () -> Unit, onChanged: () -> Un
     val lines = remember(text?.text) { text?.let { FileSearch.lines(it.text) }.orEmpty() }
     val matches = remember(text?.text, query, searching) { if (searching && text != null) FileSearch.find(text.text, lines, query) else emptyList() }
     val byLine = remember(matches) { matches.withIndex().groupBy({ it.value.line }, { it.index to it.value }) }
-    val dirty = editing && text != null && draft.text != text.text
+    val dirty = edit.dirty
     val canEdit = text != null && text.complete && text.size <= ProjectFiles.MAX_EDIT
 
     fun startEdit() {
         val t = text ?: return
-        draft = TextFieldValue(t.text)
+        edit.start(t.text)
         searching = false
-        editing = true
     }
 
     fun leaveEdit(then: () -> Unit = {}) {
         if (dirty) {
             confirmDiscard = {
-                editing = false
+                edit.stop()
                 then()
             }
         } else {
-            editing = false
+            edit.stop()
             then()
         }
     }
@@ -205,11 +209,11 @@ fun FileViewer(root: File, rel: String, onClose: () -> Unit, onChanged: () -> Un
         if (saving) return
         saving = true
         scope.launch {
-            val body = draft.text
+            val body = edit.draft.text
             ProjectFiles.write(file, body)
                 .onSuccess {
                     doc = t.copy(text = body, next = null, size = body.toByteArray().size.toLong())
-                    editing = false
+                    edit.stop()
                     onChanged()
                     snackbar.show("Saved", SnackKind.Success)
                 }
@@ -362,7 +366,7 @@ fun FileViewer(root: File, rel: String, onClose: () -> Unit, onChanged: () -> Un
                     }
                     is FileDoc.Image -> ZoomImage(d, "$name, ${d.width} by ${d.height} pixels")
                     is FileDoc.Text -> when {
-                        editing -> Editor(draft, onChange = { draft = it })
+                        editing -> Editor(edit.draft, onChange = { edit.draft = it })
                         showRendered -> RenderedMarkdown(d.text, more = d.next != null, loadingMore = loadingMore, footer = moreLabel(d), onMore = {
                             loadingMore = true
                             scope.launch {

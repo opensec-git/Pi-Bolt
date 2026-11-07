@@ -8,8 +8,6 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -19,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -83,29 +82,40 @@ object SessionAlerts {
 
     /**
      * Opens the pending target: makes its session the live one (resuming the file if another session is open) and
-     * shows it through [onLocal] (the project name) or [onRemote].
+     * shows it through [onLocal] (the project name) or [onRemote]. The target is consumed only after it is handled, so
+     * leaving composition mid-open (the activity recreated while the session starts) handles it again next time.
      */
     @Composable
     fun Navigate(app: PiBoltApp, onLocal: (String) -> Unit, onRemote: () -> Unit) {
-        val target by pending.collectAsState()
-        LaunchedEffect(target) {
-            val t = target ?: return@LaunchedEffect
-            _pending.value = null
-            when (t) {
-                Target.Remote -> if (app.session.value?.let { !it.isLocal && !it.stopped } == true) onRemote()
-                is Target.Local -> {
-                    val live = LocalSessions.current.value
-                    val here = live != null && !live.controller.stopped && live.project.name == t.project
-                    if (here && (t.sessionFile == null || live.controller.sessionFile == t.sessionFile)) {
-                        onLocal(t.project)
-                        return@LaunchedEffect
+        LaunchedEffect(Unit) {
+            drain(_pending) { t ->
+                when (t) {
+                    Target.Remote -> if (app.session.value?.let { !it.isLocal && !it.stopped } == true) onRemote()
+                    is Target.Local -> {
+                        val live = LocalSessions.current.value
+                        val here = live != null && !live.controller.stopped && live.project.name == t.project
+                        if (here && (t.sessionFile == null || live.controller.sessionFile == t.sessionFile)) {
+                            onLocal(t.project)
+                            return@drain
+                        }
+                        val dir = File(app.engine.projectsDir, t.project)
+                        if (!dir.isDirectory) return@drain
+                        LocalSessions.open(app.engine, ProjectStore.get(app), dir, sessionFile = t.sessionFile?.takeIf { File(it).isFile })
+                            .onSuccess { onLocal(t.project) }
                     }
-                    val dir = File(app.engine.projectsDir, t.project)
-                    if (!dir.isDirectory) return@LaunchedEffect
-                    LocalSessions.open(app.engine, ProjectStore.get(app), dir, sessionFile = t.sessionFile?.takeIf { File(it).isFile })
-                        .onSuccess { onLocal(t.project) }
                 }
             }
+        }
+    }
+
+    /**
+     * Handles each target [pending] holds with [handle], then clears it unless a newer target replaced it meanwhile.
+     * Clearing first would restart a collector keyed on the value and cancel [handle] halfway.
+     */
+    internal suspend fun drain(pending: MutableStateFlow<Target?>, handle: suspend (Target) -> Unit) {
+        pending.filterNotNull().collect { t ->
+            handle(t)
+            pending.compareAndSet(t, null)
         }
     }
 
