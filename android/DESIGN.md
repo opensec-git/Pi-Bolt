@@ -466,7 +466,9 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   SectionLabel headings, nothing sends by itself. Recent prompts persist per computer (20 at most) in
   `recent-prompts.json`.
 - Connection banner under the top bar: Quad Connect + "Reconnecting in 3s" countdown + Retry; slides down/up.
-- Top bar: a Search action (48dp) sits before the Quad. Overflow on a computer: Session and usage, Export or share,
+- Top bar actions, left to right: the Quad slot (40dp), the session switcher, Search (48dp), overflow. The Quad is
+  drawn only while Pi is busy and the live status line is off screen (or the link failed); otherwise its slot is
+  blank space beside the title, never a still grid, so Search and overflow always sit together. Overflow on a computer: Session and usage, Export or share,
   Disconnect, Forget computer.
 - On this phone (a project's session): the title is the project's name and the subtitle drops the folder (session
   name and context only); back reads "Project". Overflow: New session, Resume a session, Fork from a message,
