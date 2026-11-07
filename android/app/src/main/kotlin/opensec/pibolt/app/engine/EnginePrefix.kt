@@ -163,6 +163,9 @@ class EnginePaths(
     val cache = File(dataDir, "cache/xdg")
     val etc = File(prefix, "etc")
 
+    /** glibc's and Python's tz database directory (ZoneInfo writes the phone's zone there). */
+    val zoneinfo = File(prefix, "share/zoneinfo")
+
     /** `HOME/.local`: global npm packages (lib/node_modules), user pip packages (lib/pythonX.Y), their commands (bin). */
     val userBase = File(home, ".local")
     val bin = File(prefix, "bin")
@@ -371,3 +374,12 @@ fun engineUnavailableReason(
 }
 
 const val MIN_ENGINE_SDK = 29
+
+/**
+ * What the engine banner says when the prefix could not be set up. A full disk says so (the setup unpacks a few hundred
+ * MB on first launch and after updates): "Could not set up the engine" and Retry alone did not tell the user what to do.
+ */
+fun setupFailure(e: Throwable): String {
+    val full = generateSequence(e) { it.cause }.any { t -> t.message?.let { "ENOSPC" in it || "No space left on device" in it } == true }
+    return if (full) "Not enough free storage to set up the engine. Free some space, then retry." else "Could not set up the engine"
+}
