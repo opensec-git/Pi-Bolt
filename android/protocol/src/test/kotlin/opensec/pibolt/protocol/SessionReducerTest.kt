@@ -53,6 +53,8 @@ class SessionReducerTest {
         assertFalse(s.isRunning)
         assertEquals(4, s.items.size)
         assertEquals("list files", (s.items[0] as UserItem).text)
+        // The message's own timestamp ties the row to its turn checkpoints.
+        assertEquals(2L, (s.items[0] as UserItem).timestamp)
         assertEquals("Use ls.", (s.items[1] as ThinkingItem).text)
         assertEquals("Listing.", (s.items[2] as AssistantTextItem).text)
         val tool = s.items[3] as ToolItem
@@ -80,6 +82,7 @@ class SessionReducerTest {
         )
         assertTrue(s.isRunning)
         assertEquals("now run the tests", (s.items.last() as UserItem).text)
+        assertEquals(10L, (s.items.last() as UserItem).timestamp)
         val thinking = s.streaming.single() as ThinkingItem
         assertEquals("Run npm test.", thinking.text)
         assertTrue(thinking.streaming)

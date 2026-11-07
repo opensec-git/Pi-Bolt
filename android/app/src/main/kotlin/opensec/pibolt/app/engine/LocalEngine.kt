@@ -27,6 +27,9 @@ import opensec.pibolt.app.ui.session.features2.AppExtension
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.checkpoints.Git
+import opensec.pibolt.app.checkpoints.ShadowRepo
+import opensec.pibolt.app.checkpoints.TurnCheckpoints
 import opensec.pibolt.app.data.SafeFiles
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.protocol.backend.ConnectionState
@@ -170,7 +173,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         }
         val config = configFor(dir)
         val backend = taken?.engine?.also { it.assign(config, resolved) } ?: newBackend(config, resolved)
-        val controller = SessionController.local(app, dir, backend, ::release)
+        val controller = SessionController.local(app, dir, backend, ::release, checkpointsFor(dir))
         app.addLocalSession(controller, replacing = live)
         opening.incrementAndGet()
         scope.launch {
@@ -202,6 +205,15 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     /** The environment engine processes get, for tools the app runs itself (git). */
     suspend fun toolEnvironment(): Map<String, String> =
         engineEnvironment(paths, System.getenv(), TimeZone.getDefault().id, ensureSetup()?.env.orEmpty(), app.github.gitEnvironment())
+
+    /**
+     * Turn checkpoints of [project]: a shadow repository under the agent dir, run with the pack's git and the engine's
+     * environment (read when git runs: the pack may still be setting up now).
+     */
+    private fun checkpointsFor(project: File): TurnCheckpoints {
+        val git = Git(File(paths.bin, "git").path, { engineEnvironment(paths, System.getenv(), TimeZone.getDefault().id, manifest?.env.orEmpty()) }, ShadowRepo.dirFor(paths.agentDir, project), project)
+        return TurnCheckpoints(ShadowRepo(git))
+    }
 
     /** Saved sessions with at least one message, newest first. Blocking file I/O: call off the main thread. */
     override fun sessions(project: File): List<SessionSummary> = index.list(engineForm(project)).filter { it.messageCount > 0 }

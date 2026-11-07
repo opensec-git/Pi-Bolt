@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -68,6 +69,7 @@ import kotlinx.coroutines.launch
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.markdown.MdBlock
+import opensec.pibolt.app.ui.session.review.TurnReviewEntry
 import opensec.pibolt.app.ui.session.subagent.SubagentCard
 import opensec.pibolt.app.ui.session.subagent.SubagentNoticeRowView
 import opensec.pibolt.app.ui.session.subagent.SubagentStack
@@ -563,16 +565,18 @@ private fun LazyItemScope.RowView(
                 modifier = base.riseIn(row.key, row.live, memory, 6.dp),
             )
         }
-        is FoldRow -> FoldRowView(
-            row,
-            onToggle = {
-                if (!row.expanded) memory.openedAt[row.turnKey] = SystemClock.uptimeMillis()
-                memory.openFolds[row.turnKey] = !row.expanded
-                keep()
-            },
-            onOpenFile = { onOpen(ViewerContent("Diff", it.path, it.diff, diff = true)) },
-            modifier = base,
-        )
+        is FoldRow -> Column(base) {
+            FoldRowView(
+                row,
+                onToggle = {
+                    if (!row.expanded) memory.openedAt[row.turnKey] = SystemClock.uptimeMillis()
+                    memory.openFolds[row.turnKey] = !row.expanded
+                    keep()
+                },
+                onOpenFile = { onOpen(ViewerContent("Diff", it.path, it.diff, diff = true)) },
+            )
+            TurnReviewEntry(row.turnKey, editedFiles = row.files.isNotEmpty())
+        }
         is ActionsRow -> ReplyActions(row, memory, onAskAgain = onAskAgain, onMore = { onActions(row) }, modifier = base)
         is SubagentRow -> SubagentCard(row, modifier = base.padding(top = Pi.dims.stepGap + 2.dp, bottom = 2.dp).riseIn(row.key, row.live, memory, 6.dp))
         is SubagentStackRow -> SubagentStack(

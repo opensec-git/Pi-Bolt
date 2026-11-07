@@ -23,6 +23,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.checkpoints.TurnCheckpoints
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.protocol.Base64Url
 import opensec.pibolt.protocol.backend.ConnectionState
@@ -106,7 +107,7 @@ class SessionController private constructor(
         class Remote(val endpoints: List<String>, val pairSecret: ByteArray?, val fallbackSecret: ByteArray?) : Origin
 
         /** [release] gets the backend back when the session stops, and whether the engine was idle then. */
-        class Local(val project: File, val backend: LocalBackend, val release: (LocalBackend, Boolean) -> Unit) : Origin
+        class Local(val project: File, val backend: LocalBackend, val release: (LocalBackend, Boolean) -> Unit, val checkpoints: TurnCheckpoints?) : Origin
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -118,6 +119,9 @@ class SessionController private constructor(
 
     /** The project directory of a local session. */
     val project: File? = (origin as? Origin.Local)?.project
+
+    /** Snapshots of the project per turn, for review and undo (on this phone only: remote files are on the computer). */
+    val checkpoints: TurnCheckpoints? = (origin as? Origin.Local)?.checkpoints
 
     /** The session file the local engine has open, from its last state. */
     val sessionFile: String? get() = (origin as? Origin.Local)?.backend?.sessionFile
@@ -189,6 +193,10 @@ class SessionController private constructor(
         scope.launch { connectLoop() }
         pumpEvents()
         subagentTail?.start(scope)
+        checkpoints?.let {
+            it.onNotice = { message -> _effects.tryEmit(SessionEffect.Notify(message, "warning")) }
+            it.start()
+        }
     }
 
     /** Keep reading subagent [key]'s session file while its detail screen is open, also after it finished. */
@@ -203,6 +211,7 @@ class SessionController private constructor(
     fun stop(keepEngine: Boolean = true) {
         if (stopped) return
         stopped = true
+        checkpoints?.close()
         app.sessionStopped(this)
         when (origin) {
             is Origin.Remote -> {
@@ -411,6 +420,7 @@ class SessionController private constructor(
     }
 
     private fun sideEffects(before: SessionState, event: JsonObject) {
+        checkpoints?.onEvent(event, before.sessionId)
         when (event.type) {
             "extension_ui_request" -> when (event.str("method")) {
                 "notify" -> _effects.tryEmit(SessionEffect.Notify(event.str("message").orEmpty(), event.str("notifyType") ?: "info"))
@@ -746,8 +756,8 @@ class SessionController private constructor(
         const val PERF_TAG = "PiBoltPerf"
 
         /** A session with the engine on this phone, in [project]. [release] takes the backend back when it stops. */
-        fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit) =
-            SessionController(app, localId(project), project.name, Origin.Local(project, backend, release))
+        fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit, checkpoints: TurnCheckpoints? = null) =
+            SessionController(app, localId(project), project.name, Origin.Local(project, backend, release, checkpoints))
 
         /** [hostId] of a local session: per project, so drafts and recent prompts stay with it. */
         fun localId(project: File): String = "local:${project.absolutePath}"
