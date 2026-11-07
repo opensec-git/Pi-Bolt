@@ -25,6 +25,7 @@ import opensec.pibolt.app.ui.session.features2.ProjectTrust
 import opensec.pibolt.app.ui.session.features2.Resources
 import opensec.pibolt.app.ui.session.features2.SessionBrowse
 import opensec.pibolt.app.ui.session.features2.SessionSort
+import opensec.pibolt.app.ui.session.features2.readAtMost
 import opensec.pibolt.app.ui.session.tree.SessionTree
 import opensec.pibolt.app.ui.session.tree.TreeFilter
 import opensec.pibolt.app.ui.session.tree.TreeKind
@@ -334,5 +335,13 @@ class Features2Test {
         assertEquals(listOf("fix", "skill:review"), list.map { it.name })
         assertEquals("/s/review/SKILL.md", list[1].path)
         assertTrue(Resources.from(JsonObject(mapOf("commands" to JsonArray(emptyList())))).isEmpty())
+    }
+
+    @Test
+    fun importReadsUpToTheLimitAndRefusesMore() {
+        val ok = ByteArray(200_000) { 'a'.code.toByte() }
+        assertEquals(200_000, readAtMost(java.io.ByteArrayInputStream(ok), 200_000).size)
+        assertTrue(readAtMost(java.io.ByteArrayInputStream(ByteArray(0)), 10).isEmpty())
+        assertTrue(runCatching { readAtMost(java.io.ByteArrayInputStream(ok), 199_999) }.isFailure)
     }
 }

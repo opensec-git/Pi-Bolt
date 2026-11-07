@@ -285,9 +285,7 @@ fun rememberImportPicker(host: Features2Host): () -> Unit {
             val result = withContext(Dispatchers.IO) {
                 runCatching {
                     val text = context.contentResolver.openInputStream(uri)?.use { input ->
-                        val bytes = input.readNBytes(MAX_IMPORT_BYTES + 1)
-                        require(bytes.size <= MAX_IMPORT_BYTES) { "That file is larger than 64 MB" }
-                        String(bytes, Charsets.UTF_8)
+                        String(readAtMost(input, MAX_IMPORT_BYTES), Charsets.UTF_8)
                     } ?: error("Could not read that file")
                     Features2.importSession(SessionIndex(host.app.engine.agentDir), project, text, displayName(context, uri)).getOrThrow()
                 }
@@ -304,6 +302,19 @@ fun rememberImportPicker(host: Features2Host): () -> Unit {
 }
 
 private const val MAX_IMPORT_BYTES = 64 * 1024 * 1024
+
+/** Reads the whole stream, failing once it passes [max] bytes (`InputStream.readNBytes` needs API 33; minSdk is 26). */
+internal fun readAtMost(input: java.io.InputStream, max: Int): ByteArray {
+    val out = java.io.ByteArrayOutputStream()
+    val buf = ByteArray(64 * 1024)
+    while (true) {
+        val n = input.read(buf)
+        if (n < 0) break
+        require(out.size() + n <= max) { "That file is larger than ${max / (1024 * 1024)} MB" }
+        out.write(buf, 0, n)
+    }
+    return out.toByteArray()
+}
 
 private fun displayName(context: Context, uri: Uri): String? = runCatching {
     context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
