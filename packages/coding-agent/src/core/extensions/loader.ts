@@ -25,6 +25,7 @@ import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-model
 import { compiledExtensionFor, firstLineOf } from "./compiled.ts";
 import { PI_MODULE_NAMES, provideModulesToFiles } from "./compiled-modules.ts";
 import { extensionDisplayName, withJitHint } from "./jit-hint.ts";
+import { loadJitiBunLoader } from "./jiti-bun-loader.lazy.ts";
 import type {
 	EntryRenderer,
 	Extension,
@@ -55,7 +56,7 @@ function getCreateJiti(): Promise<typeof createJiti> {
 	// (A compiled Bun binary evaluates jiti's embedded Babel only when jiti has a file to transform: jiti-bun-loader.ts.)
 	createJitiPromise ??= (
 		isBunBinary
-			? import("./jiti-bun-loader.ts")
+			? loadJitiBunLoader()
 			: usesEmbeddedModules
 				? import("./jiti-static-loader.ts")
 				: import("./jiti-loader.ts")
