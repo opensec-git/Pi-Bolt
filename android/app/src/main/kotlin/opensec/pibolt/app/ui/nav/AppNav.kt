@@ -314,6 +314,16 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendin
                                 app = app,
                                 onBack = { if (!nav.popBackStack()) nav.navigate(Routes.HOME) },
                                 onOpenSession = { other -> nav.navigate(Routes.localSession(other)) { launchSingleTop = true } },
+                                // Back to the Chats list when the chat was opened from it; otherwise the list takes the
+                                // chat's place, so Back from it goes where the chat would have.
+                                onOpenChats = {
+                                    if (!nav.popBackStack(Routes.CHATS, inclusive = false)) {
+                                        nav.navigate(Routes.CHATS) {
+                                            popUpTo(Routes.CHAT) { inclusive = true }
+                                            launchSingleTop = true
+                                        }
+                                    }
+                                },
                             )
                         }
                     }

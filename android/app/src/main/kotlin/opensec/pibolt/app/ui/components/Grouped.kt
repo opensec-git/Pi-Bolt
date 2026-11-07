@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.PiColors
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Space
@@ -180,20 +181,27 @@ fun InsetGroup(modifier: Modifier = Modifier, header: String? = null, footer: St
 }
 
 /**
- * A group's glyph tile, iOS-settings style but quiet: [icon] (18dp) or [content] (a provider's logo) on a 30dp tile,
- * radius sm + 2. Tinted ([tint] other than ink1: one of the theme's five tints per section, or danger) the tile is the
- * tint at 16% and the glyph the tint; untinted it is surface3 with an ink1 glyph.
+ * A group's glyph tile, monochrome: [icon] (18dp) or [content] (a provider's logo) on a 30dp surface3 tile, radius
+ * sm + 2. The glyph is ink2 whatever [tint] says, except a status colour (danger, success, warning), which keeps its
+ * meaning: colour in Settings only ever reports a state, never decorates a section.
  */
 @Composable
 fun GlyphTile(icon: ImageVector?, modifier: Modifier = Modifier, tint: Color = Pi.colors.ink1, content: (@Composable BoxScope.() -> Unit)? = null) {
     val colors = Pi.colors
-    val fill = if (tint == colors.ink1) colors.surface3 else tint.copy(alpha = 0.16f)
+    val fill = colors.surface3
+    val glyph = GlyphTone.of(tint, colors)
     Box(
         modifier.size(GROUP_TILE).background(fill, RoundedCornerShape(Radius.sm + 2.dp)).clearAndSetSemantics {},
         contentAlignment = Alignment.Center,
     ) {
-        if (content != null) content() else if (icon != null) Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+        if (content != null) content() else if (icon != null) Icon(icon, contentDescription = null, tint = glyph, modifier = Modifier.size(18.dp))
     }
+}
+
+/** The glyph colour of a [GlyphTile] (unit-tested): status colours keep their meaning, everything else is ink2. */
+object GlyphTone {
+    fun of(tint: Color, colors: PiColors): Color =
+        if (tint == colors.danger || tint == colors.success || tint == colors.warning) tint else colors.ink2
 }
 
 /**

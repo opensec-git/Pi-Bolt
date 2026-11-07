@@ -122,6 +122,17 @@ object OemSetup {
     /** The first of [step]'s screens that [exists] (resolves to an exported activity), else the app's details. */
     fun resolve(step: Step, exists: (Screen) -> Boolean): Target = step.screens.firstOrNull(exists)?.let { Target.Open(it) } ?: Target.AppDetails
 
+    /**
+     * The step whose screen answers Android's battery optimization request, when several activities [handlers]
+     * (package, class) answer it. MIUI does: its per-app battery saver ("No restrictions" puts the app on Android's
+     * allowlist) and a power usage page, so the request shows a chooser and the step repeats the battery row. Null when
+     * one or no activity answers (Android's own dialog) or none of them is a step's screen.
+     */
+    fun batteryStep(steps: List<Step>, handlers: List<Pair<String, String>>): Step? {
+        if (handlers.size < 2) return null
+        return steps.firstOrNull { step -> step.screens.any { s -> handlers.any { it.first == s.pkg && it.second == s.cls } } }
+    }
+
     /** Every package [steps] may open, for the manifest's <queries> (package visibility). Kept in sync by a test. */
     fun packages(): Set<String> = Vendor.entries.flatMap { v -> steps(v, "p", "a").flatMap { s -> s.screens.map { it.pkg } } }.toSet()
 }

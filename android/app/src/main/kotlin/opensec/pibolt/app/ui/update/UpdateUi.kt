@@ -177,6 +177,7 @@ fun updateStatus(state: UpdateState): Pair<String, String?> {
         state.checkError != null -> state.checkError to null
         else -> when (val d = state.decision) {
             is UpdateRules.Decision.Available -> "${d.info.version} is available · ${UpdateRules.formatSize(d.info.size)}" to null
+            is UpdateRules.Decision.TestBuild -> "Test build · updates from the website" to "${d.info.version} is on pi-bolt.opensec.in"
             UpdateRules.Decision.UpToDate -> if (state.latest != null) "Up to date (${state.installed})" to null else "Not checked yet" to null
         }
     }

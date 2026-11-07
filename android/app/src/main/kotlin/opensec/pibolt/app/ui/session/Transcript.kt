@@ -134,7 +134,8 @@ fun Transcript(
     // Rows are read only inside the list, effects and snapshot flows, never while composing this function: a streamed
     // frame then re-runs the list's item lookup instead of recomposing the whole transcript, and finished rows (equal
     // to their previous value) skip.
-    val rowsState = remember {
+    // Keyed on the memory: after a fork or a resume the rows read the new session's folds, aliases and pending send.
+    val rowsState = remember(memory) {
         derivedStateOf {
             val s = state.value
             md.version.intValue

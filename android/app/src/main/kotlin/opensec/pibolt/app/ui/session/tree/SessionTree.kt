@@ -130,6 +130,32 @@ object SessionTree {
         return out
     }
 
+    /**
+     * The entry to rewind to for the user message [text] that is the [fromEnd]-th copy counting back from the newest
+     * on the active branch (0: the newest). Only the path from the root to the leaf counts: a regenerate leaves the old
+     * prompt on a branch the transcript no longer shows, and counting it would pick the wrong copy. Counted from the
+     * end because the transcript shows the end of that path (a compaction drops its start). Null when there is none.
+     */
+    fun rewindTarget(data: JsonObject?, text: String, fromEnd: Int): String? {
+        data ?: return null
+        val entries = data.arr("entries").orEmpty().mapNotNull { it as? JsonObject }
+        val byId = HashMap<String, JsonObject>(entries.size * 2)
+        for (e in entries) e.str("id")?.let { byId[it] = e }
+        val wanted = flat(text)
+        val matches = ArrayList<String>()
+        var at = data.str("leafId")
+        var guard = 0
+        while (at != null && guard++ <= entries.size) {
+            val e = byId[at] ?: break
+            if (kindOf(e) == TreeKind.User && flat(content(e.obj("message"))) == wanted) matches += at
+            at = e.str("parentId")
+        }
+        // Walked from the leaf back: the newest copy is first.
+        return matches.getOrNull(fromEnd)
+    }
+
+    private fun flat(text: String): String = text.replace(Regex("\\s+"), " ").trim()
+
     fun kindOf(entry: JsonObject): TreeKind = when (entry.str("type")) {
         "message" -> when (entry.obj("message")?.str("role")) {
             "user" -> TreeKind.User
