@@ -57,6 +57,8 @@ import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.home.HomeScreen
+import opensec.pibolt.app.ui.projects.transfer.ShareInHost
+import opensec.pibolt.app.ui.projects.transfer.SharedContent
 import opensec.pibolt.app.ui.projects.ProjectScreen
 import opensec.pibolt.app.ui.scan.ScanScreen
 import opensec.pibolt.app.ui.session.SessionScreen
@@ -88,7 +90,7 @@ private typealias Enter = AnimatedContentTransitionScope<NavBackStackEntry>.() -
 private typealias Exit = AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition
 
 @Composable
-fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
+fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendingShare: SharedContent? = null, consumeShare: () -> Unit = {}) {
     val nav = rememberNavController()
     var linkError by remember { mutableStateOf<String?>(null) }
     // A link from outside the app (a browser, a chat) pairs only after the user confirms it in the app.
@@ -257,6 +259,14 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
         app,
         onLocal = { nav.navigate(Routes.localSession(it)) { launchSingleTop = true } },
         onRemote = { nav.navigate(Routes.SESSION) { launchSingleTop = true } },
+    )
+    // Content shared from another app: a sheet picks what to do and where (ui/projects/transfer).
+    ShareInHost(
+        app,
+        pendingShare,
+        onConsumed = consumeShare,
+        onProject = { nav.navigate(Routes.project(it)) { launchSingleTop = true } },
+        onSession = { nav.navigate(Routes.localSession(it)) { launchSingleTop = true } },
     )
 
     UpdateSheets(app)

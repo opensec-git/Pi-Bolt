@@ -1,5 +1,11 @@
 package opensec.pibolt.app.ui.home
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import opensec.pibolt.app.ui.projects.transfer.SafTransfer
+import opensec.pibolt.app.ui.projects.transfer.TransferBar
+import opensec.pibolt.app.ui.projects.transfer.TransferRunner
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -133,6 +139,21 @@ fun HomeScreen(
     val unavailable = status is EngineStatus.Unavailable
 
     var reload by remember { mutableIntStateOf(0) }
+    // "Import a zip" in the new-project sheet: the archive becomes a project, which then opens.
+    val context = LocalContext.current
+    val transfers = remember { TransferRunner(app.appScope) }
+    val importZip = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        transfers.run(
+            "Importing the zip",
+            { p -> SafTransfer.importZipAsProject(context, uri, engine.projectsDir, p) },
+            onDone = { name ->
+                reload++
+                onOpenProject(ProjectEntry(name, File(engine.projectsDir, name).absolutePath, store.meta(name), null, 0))
+            },
+            onError = { m -> scope.launch { snackbar.show(m, SnackKind.Error) } },
+        )
+    }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { reload++ }
     LaunchedEffect(Unit) { engine.prepare() }
     // Folders and sessions from disk (IO); meta (pins, titles) is applied below in memory.
@@ -323,6 +344,7 @@ fun HomeScreen(
                 .fillMaxWidth()
                 .background(Brush.verticalGradient(0f to colors.canvas.copy(alpha = 0f), 0.3f to colors.canvas)),
         ) {
+            TransferBar(transfers, if (hasBottomBar) Modifier else Modifier.navigationBarsPadding())
             PiSnackHost(snackbar, if (hasBottomBar) Modifier else Modifier.navigationBarsPadding())
             if (hasBottomBar) {
                 PrimaryButton(
@@ -359,6 +381,10 @@ fun HomeScreen(
                 )
             },
             onDismiss = { newProject = null },
+            onImportZip = {
+                newProject = null
+                importZip.launch(arrayOf("application/zip", "application/x-zip-compressed"))
+            },
         )
     }
 

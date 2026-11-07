@@ -38,6 +38,7 @@ import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiTextField
 import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.SecondaryButton
+import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.Segmented
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.theme.Pi
@@ -50,7 +51,7 @@ import opensec.pibolt.app.ui.theme.PiMotion
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NewProjectSheet(existing: List<String>, startWithClone: Boolean, onCreate: suspend (name: String, cloneUrl: String?) -> String?, onDismiss: () -> Unit) {
+fun NewProjectSheet(existing: List<String>, startWithClone: Boolean, onCreate: suspend (name: String, cloneUrl: String?) -> String?, onDismiss: () -> Unit, onImportZip: (() -> Unit)? = null) {
     val colors = Pi.colors
     val type = Pi.type
     val haptics = Pi.haptics
@@ -161,6 +162,9 @@ fun NewProjectSheet(existing: List<String>, startWithClone: Boolean, onCreate: s
                 enabled = ready,
                 modifier = Modifier.weight(1f),
             )
+        }
+        onImportZip?.let { import ->
+            TextAction("Import a zip as a project…", onClick = import, color = colors.accent, modifier = Modifier.align(Alignment.CenterHorizontally).padding(top = 8.dp))
         }
         Spacer(Modifier.height(8.dp))
     }

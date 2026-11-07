@@ -126,7 +126,11 @@ import kotlinx.coroutines.launch
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.ui.projects.LocalSessions
+import opensec.pibolt.app.ui.projects.FileViewer
 import opensec.pibolt.app.ui.projects.editor.AskPi
+import opensec.pibolt.app.ui.projects.editor.EditorTabs
+import opensec.pibolt.app.ui.projects.editor.viewerPlace
+import opensec.pibolt.app.ui.session.voice.VoiceButton
 import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
@@ -255,6 +259,9 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     var sheet by remember { mutableStateOf(Sheet.None) }
     val f2 = rememberFeatures2()
     var viewer by remember { mutableStateOf<ViewerContent?>(null) }
+    // A file on this phone tapped in a tool card opens in the full file viewer (tabs kept while the screen lives).
+    var openedFile by remember { mutableStateOf<File?>(null) }
+    val fileTabs = remember { EditorTabs() }
     var actionsFor by remember { mutableStateOf<TRow?>(null) }
     var statusOnScreen by remember { mutableStateOf(false) }
     val images = remember(controller.hostId) { mutableStateListOf<ComposerImage>() }
@@ -888,6 +895,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                         onToolImages = { imageViewer = it },
                         errorContext = ErrorContext(modelLabel, modelProvider?.let(ProviderCatalog::name), local = isLocal, running = running),
                         onErrorAction = ::onErrorAction,
+                        onOpenLocalFile = { openedFile = it },
                     )
                     if (empty) {
                         EmptySession(
@@ -966,6 +974,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                         attachAllowed = modelReadsImages != false,
                         onAttach = { sheet = Sheet.Attach },
                         onRemoveImage = { id -> images.removeAll { it.id == id } },
+                        voice = { VoiceButton(draft, onDraft = { draft = it }, enabled = enabled, onMessage = { m -> scope.launch { snackbar.show(m) } }) },
                         focusRequester = focus,
                         // A user `!` command started while Pi is idle stops through abort_bash; the agent through abort.
                         stoppable = running || shellRuns > 0,
@@ -999,6 +1008,29 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
             val content = remember { mutableStateOf(viewer) }
             viewer?.let { content.value = it }
             content.value?.let { Viewer(it, onClose = { viewer = null }) }
+        }
+        AnimatedVisibility(
+            visible = openedFile != null,
+            enter = fadeIn(PiMotion.enter(PiMotion.SHEET)) + slideInVertically(PiMotion.enter(PiMotion.SHEET)) { it / 10 },
+            exit = fadeOut(PiMotion.leave(PiMotion.SHEET)) + scaleOut(PiMotion.leave(PiMotion.SHEET), targetScale = 0.94f),
+        ) {
+            val shown = remember { mutableStateOf(openedFile) }
+            openedFile?.let { shown.value = it }
+            shown.value?.let { f ->
+                val (root, rel) = remember(f) { viewerPlace(f, state.value.host?.cwd) }
+                FileViewer(
+                    root,
+                    fileTabs,
+                    rel,
+                    onSelect = { openedFile = File(root, it) },
+                    onClose = { openedFile = null },
+                    onChanged = {},
+                    onAsk = {
+                        draft = AskPi.appendTo(draft, it).first
+                        openedFile = null
+                    },
+                )
+            }
         }
         AnimatedVisibility(visible = imageViewer != null, enter = fadeIn(PiMotion.enter(PiMotion.SHEET)), exit = fadeOut(PiMotion.leave(PiMotion.SHEET))) {
             val shown = remember { mutableStateOf(imageViewer) }

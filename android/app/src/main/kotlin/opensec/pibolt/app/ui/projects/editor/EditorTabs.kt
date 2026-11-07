@@ -11,6 +11,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import opensec.pibolt.app.ui.projects.FileDoc
+import java.io.File
 
 /**
  * One open file of the editor: what was read ([doc]), the text on disk ([saved], set when editing starts), the text
@@ -82,6 +83,11 @@ class EditorTabs(initial: List<String> = emptyList()) {
 
     fun open(rel: String): EditorTab = find(rel) ?: EditorTab(rel).also { tabs += it }
 
+    /** Adds [tab] unless a tab for its file is open. */
+    fun adopt(tab: EditorTab) {
+        if (find(tab.rel) == null) tabs += tab
+    }
+
     /** Closes [rel]'s tab; returns the tab to show next (the neighbour), or null when none are left. */
     fun close(rel: String): EditorTab? {
         val i = tabs.indexOfFirst { it.rel == rel }
@@ -111,4 +117,15 @@ class EditorTabs(initial: List<String> = emptyList()) {
     companion object {
         val saver: Saver<EditorTabs, Any> = listSaver(save = { t -> t.tabs.map { it.rel } }, restore = { EditorTabs(it) })
     }
+}
+
+/**
+ * Where the viewer opens [file] from: the session folder [cwd] and the path inside it when the file lies in it (so the
+ * tab and "Ask Pi" use the project path the agent knows), else its own folder and name.
+ */
+fun viewerPlace(file: File, cwd: String?): Pair<File, String> {
+    val f = file.absoluteFile.normalize()
+    val root = cwd?.let { File(it).absoluteFile.normalize() }
+    if (root != null && f.path.startsWith(root.path + File.separator)) return root to f.path.substring(root.path.length + 1).replace(File.separatorChar, '/')
+    return (f.parentFile ?: f) to f.name
 }

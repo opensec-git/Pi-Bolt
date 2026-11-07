@@ -1,8 +1,6 @@
 package opensec.pibolt.app.ui.projects.transfer
 
-import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -11,7 +9,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
-import opensec.pibolt.app.MainActivity
 import opensec.pibolt.app.data.SafeFiles
 import opensec.pibolt.app.ui.session.features.ShareFiles
 import java.io.File
@@ -161,12 +158,6 @@ object SafTransfer {
         name
     }
 
-    /** Unpacks the zip at [uri] into [folder] (an existing project's folder). Returns the files written. */
-    suspend fun importZipInto(context: Context, uri: Uri, folder: File, onProgress: (TransferProgress) -> Unit): Int = withContext(Dispatchers.IO) {
-        val input = context.contentResolver.openInputStream(uri) ?: throw IOException("Could not open the archive")
-        input.use { ZipTransfer.unzip(it, folder, size(context, uri), onProgress) }
-    }
-
     /** Packs [source] into the document [dest] (from ACTION_CREATE_DOCUMENT); the document is deleted on failure. */
     suspend fun exportZip(context: Context, source: File, dest: Uri, prefix: String, skip: Set<String>, onProgress: (TransferProgress) -> Unit): Int = withContext(Dispatchers.IO) {
         try {
@@ -191,10 +182,4 @@ object SafTransfer {
         }
         ShareFiles.share(context, file, "application/zip", name)
     }
-
-    /** Pi-Bolt itself, left out of its own share sheet (it receives shares since 0.5.0). */
-    fun self(context: Context): ComponentName = ComponentName(context, MainActivity::class.java)
-
-    /** [chooser] with Pi-Bolt excluded. */
-    fun excludeSelf(context: Context, chooser: Intent): Intent = chooser.putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(self(context)))
 }

@@ -1,12 +1,14 @@
 package opensec.pibolt.app.ui.session.features
 
 import android.content.ClipData
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
+import opensec.pibolt.app.MainActivity
 import opensec.pibolt.protocol.session.AssistantTextItem
 import opensec.pibolt.protocol.session.ChatItem
 import opensec.pibolt.protocol.session.NoticeItem
@@ -114,7 +116,9 @@ object ShareFiles {
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         subject?.let { send.putExtra(Intent.EXTRA_SUBJECT, it) }
         send.clipData = ClipData.newRawUri(file.name, uri)
-        context.startActivity(Intent.createChooser(send, null).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION))
+        // Pi-Bolt receives shares too: leave it out of its own chooser.
+        val chooser = Intent.createChooser(send, null).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        context.startActivity(chooser.putExtra(Intent.EXTRA_EXCLUDE_COMPONENTS, arrayOf(ComponentName(context, MainActivity::class.java))))
     }
 
     fun shareText(context: Context, text: String) {

@@ -13,6 +13,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import opensec.pibolt.app.ui.nav.AppNav
+import opensec.pibolt.app.ui.projects.transfer.SharedContent
+import opensec.pibolt.app.ui.projects.transfer.sharedContent
 import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import opensec.pibolt.app.ui.theme.PiBoltTheme
 import opensec.pibolt.app.update.UpdateNotifications
@@ -22,6 +24,9 @@ class MainActivity : ComponentActivity() {
     /** A pairing link from a deep link, waiting for the UI to pick it up. */
     private var pendingLink by mutableStateOf<String?>(null)
 
+    /** Files, images or text shared from another app, waiting for the share sheet. */
+    private var pendingShare by mutableStateOf<SharedContent?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         // Dark only: light system bar icons on every theme.
         enableEdgeToEdge(
@@ -30,7 +35,10 @@ class MainActivity : ComponentActivity() {
         )
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced = false
-        if (savedInstanceState == null) pendingLink = linkFrom(intent)
+        if (savedInstanceState == null) {
+            pendingLink = linkFrom(intent)
+            pendingShare = sharedContent(intent)
+        }
         if (savedInstanceState == null) SessionAlerts.take(intent)
         val app = application as PiBoltApp
         if (savedInstanceState == null) {
@@ -40,7 +48,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val settings by app.settings.settings.collectAsStateWithLifecycle()
             PiBoltTheme(settings) {
-                AppNav(app, pendingLink) { pendingLink = null }
+                AppNav(app, pendingLink, consumeLink = { pendingLink = null }, pendingShare = pendingShare, consumeShare = { pendingShare = null })
             }
         }
     }
@@ -54,6 +62,7 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         linkFrom(intent)?.let { pendingLink = it }
+        sharedContent(intent)?.let { pendingShare = it }
         SessionAlerts.take(intent)
     }
 
