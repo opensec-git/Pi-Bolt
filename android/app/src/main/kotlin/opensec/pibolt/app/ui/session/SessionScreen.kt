@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.session
 
+import kotlinx.coroutines.flow.update
 import android.Manifest
 import android.net.Uri
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -270,6 +271,11 @@ private fun LocalSessionScreen(app: PiBoltApp, key: String, onBack: () -> Unit, 
         return
     }
     LaunchedEffect(live.controller) { app.focus(live.controller) }
+    // While this screen shows the session, it sends a queued first prompt itself (LocalSessions.Live.queueFirstPrompt).
+    DisposableEffect(live) {
+        live.screens.update { it + 1 }
+        onDispose { live.screens.update { it - 1 } }
+    }
     val store = remember { ProjectStore.get(app) }
     val meta by store.state.collectAsStateWithLifecycle()
     val project = live.project.name
@@ -294,7 +300,7 @@ private fun LocalSessionScreen(app: PiBoltApp, key: String, onBack: () -> Unit, 
                     engine.prepare()
                     live.controller.retryNow()
                 },
-                takeFirstPrompt = { live.firstPrompt.also { live.firstPrompt = null } },
+                takeFirstPrompt = live::takeFirstPrompt,
                 onPreview = onPreview,
                 composerDrop = live.composerDrop,
             ),
