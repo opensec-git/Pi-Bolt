@@ -1,7 +1,6 @@
 package opensec.pibolt.app.ui.projects
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -14,7 +13,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.heading
 import opensec.pibolt.app.terminal.Terminals
 import opensec.pibolt.app.ui.components.SecondaryButton
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,15 +33,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Key
-import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material3.Icon
@@ -80,7 +76,6 @@ import opensec.pibolt.app.ui.git.ChangesOverlays
 import opensec.pibolt.app.ui.git.changesItems
 import opensec.pibolt.app.ui.git.rememberChangesUi
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import opensec.pibolt.app.ui.theme.PiMotion
 import androidx.compose.ui.Alignment
@@ -99,15 +94,20 @@ import opensec.pibolt.app.data.ProjectMeta
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.engine.EngineStatus
 import opensec.pibolt.app.engine.SessionSummary
-import opensec.pibolt.app.session.SessionController
-import opensec.pibolt.app.ui.components.IconAction
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.derivedStateOf
+import opensec.pibolt.app.ui.components.GlassBar
+import opensec.pibolt.app.ui.components.GlassIconButton
+import opensec.pibolt.app.ui.components.InsetSectionHead
+import opensec.pibolt.app.ui.components.glass
+import opensec.pibolt.app.ui.theme.IconSize
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.components.LoadingRow
 import opensec.pibolt.app.ui.components.PiSnackHost
 import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.SharedKeys
 import opensec.pibolt.app.ui.components.SnackKind
 import opensec.pibolt.app.ui.components.StatusBarScrim
-import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.sharedHostBounds
 import opensec.pibolt.app.ui.components.sharedHostElement
 import opensec.pibolt.app.ui.components.show
@@ -115,7 +115,6 @@ import opensec.pibolt.app.ui.projects.editor.EditorTabs
 import opensec.pibolt.app.ui.session.features2.SessionBrowserSheet
 import opensec.pibolt.app.ui.terminal.TerminalPane
 import opensec.pibolt.app.ui.theme.Pi
-import opensec.pibolt.app.ui.theme.Radius
 import java.io.File
 
 /**
@@ -306,20 +305,29 @@ fun ProjectScreen(
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
     ) {
         Column(Modifier.fillMaxSize().imePadding()) {
-            if (ProjectNavRules.showChrome(imeVisible, LocalConfiguration.current.screenHeightDp)) ProjectTopBar(
+            // The list tabs open on the project's large title; the bar's compact title fades in once it scrolled away.
+            // The terminal has no large title: its bar always names the project.
+            val shownList = when (selected) {
+                ProjectTab.Sessions -> sessionsList
+                ProjectTab.Files -> filesList
+                ProjectTab.Changes -> changesList
+                ProjectTab.Terminal -> null
+            }
+            val pastTitle by remember(shownList) { derivedStateOf { shownList == null || shownList.firstVisibleItemIndex > 0 } }
+            if (ProjectNavRules.showChrome(imeVisible, LocalConfiguration.current.screenHeightDp)) GlassBar(
                 title = title,
-                name = name,
-                pinned = pm.pinned,
-                branch = branch,
-                onBack = onBack,
+                subtitle = if (shownList == null) branch?.let { "projects/$name · $it" } ?: "projects/$name" else null,
+                titleVisible = pastTitle,
+                titleModifier = if (shownList == null) Modifier.sharedHostElement(SharedKeys.projectName(name)) else Modifier,
+                leading = { GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Projects", onClick = onBack) },
                 actions = {
                     when (selected) {
-                        ProjectTab.Sessions -> IconAction(Icons.Rounded.Search, "Search and manage sessions", onClick = { browse = true }, enabled = !unavailable)
-                        ProjectTab.Terminal -> IconAction(Icons.Rounded.Key, "Project secrets", onClick = onSecrets)
+                        ProjectTab.Sessions -> GlassIconButton(Icons.Rounded.Search, "Search and manage sessions", onClick = { browse = true }, enabled = !unavailable)
+                        ProjectTab.Terminal -> GlassIconButton(Icons.Rounded.Key, "Project secrets", onClick = onSecrets)
                         ProjectTab.Files, ProjectTab.Changes -> Unit
                     }
                     Box {
-                        IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
+                        GlassIconButton(Icons.Rounded.MoreHoriz, "More", onClick = { menu = true })
                         ProjectMenu(
                             menu,
                             pm.pinned,
@@ -334,11 +342,15 @@ fun ProjectScreen(
                     }
                 },
             ) else Spacer(Modifier.statusBarsPadding())
+            val header: @Composable () -> Unit = {
+                ProjectHeader(title = title, name = name, pinned = pm.pinned, branch = branch, titleModifier = Modifier.sharedHostElement(SharedKeys.projectName(name)))
+            }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when (selected) {
-                    ProjectTab.Sessions -> LazyColumn(Modifier.fillMaxSize(), state = sessionsList, contentPadding = PaddingValues(bottom = 24.dp)) {
+                    ProjectTab.Sessions -> LazyColumn(Modifier.fillMaxSize(), state = sessionsList, contentPadding = PaddingValues(bottom = Space.xxl)) {
+                        item(key = "head", contentType = "head") { header() }
                         item(key = "new", contentType = "new") {
-                            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp)) {
+                            Column(Modifier.padding(horizontal = Space.page, vertical = Space.xs)) {
                                 PrimaryButton(
                                     if (opening) "Opening…" else "New session",
                                     onClick = { open(null, fresh = true) },
@@ -347,7 +359,7 @@ fun ProjectScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                 )
                                 if (unavailable) {
-                                    Text("Pi-Bolt can't run on this phone, so sessions here can't be opened.", style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 8.dp))
+                                    Text("Pi-Bolt can't run on this phone, so sessions here can't be opened.", style = type.rowMeta, color = colors.ink3, modifier = Modifier.padding(top = Space.sm))
                                 }
                             }
                         }
@@ -362,28 +374,33 @@ fun ProjectScreen(
                                 )
                             }
                             else -> {
-                                item(key = "label", contentType = "label") {
-                                    ListHead("Sessions", Modifier.padding(top = 8.dp), sub = list.size.toString())
-                                }
+                                item(key = "label", contentType = "label") { InsetSectionHead("Sessions", count = list.size) }
                                 // The engine's own session file: a new session or a fork is not the file the session was opened with.
                                 val liveFile = liveHere?.controller?.sessionFile ?: liveHere?.sessionFile
                                 itemsIndexed(list, key = { _, it -> it.file }, contentType = { _, _ -> "session" }) { i, s ->
                                     val isLive = liveHere != null && (if (liveFile != null) liveFile == s.file else s == list.first())
                                     SessionRow(
                                         s,
-                                        pos = GroupPos.of(i, list.size),
-                                        live = if (isLive) liveHere?.controller else null,
+                                        live = if (isLive) liveHere.controller else null,
                                         unread = !isLive && ProjectRules.unread(s, meta.seen[s.file]),
                                         now = now,
-                                        enabled = !unavailable,
-                                        onClick = { if (isLive) onOpenSession() else open(s.file, fresh = false) },
-                                        modifier = Modifier.animateItem().padding(horizontal = 16.dp),
+                                        where = branch,
+                                        onClick = {
+                                            when {
+                                                unavailable -> scope.launch { snackbar.show("Pi-Bolt can't run on this phone", SnackKind.Warning) }
+                                                isLive -> onOpenSession()
+                                                else -> open(s.file, fresh = false)
+                                            }
+                                        },
+                                        divider = i < list.lastIndex,
+                                        modifier = Modifier.animateItem(),
                                     )
                                 }
                             }
                         }
                     }
-                    ProjectTab.Files -> LazyColumn(Modifier.fillMaxSize(), state = filesList, contentPadding = PaddingValues(bottom = 24.dp)) {
+                    ProjectTab.Files -> LazyColumn(Modifier.fillMaxSize(), state = filesList, contentPadding = PaddingValues(bottom = Space.xxl)) {
+                        item(key = "head", contentType = "head") { header() }
                         stickyHeader(key = "files-bar", contentType = "files-bar") {
                             FilesBar(
                                 root = title,
@@ -395,7 +412,7 @@ fun ProjectScreen(
                                 onHidden = { showHidden = it },
                                 onCreate = { fileAction = FileAction.Create(it) },
                                 onImport = { tree -> if (tree) importTree.launch(null) else importDocs.launch(arrayOf("*/*")) },
-                                modifier = Modifier.background(colors.canvas).padding(horizontal = 4.dp),
+                                modifier = Modifier.background(colors.canvas),
                             )
                         }
                         val entries = shownFiles
@@ -412,21 +429,22 @@ fun ProjectScreen(
                                         else -> "Add a file or import one from the phone."
                                     },
                                 ) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(Space.md)) {
                                         SecondaryButton("New file", onClick = { fileAction = FileAction.Create(false) }, icon = Icons.AutoMirrored.Rounded.NoteAdd, modifier = Modifier.weight(1f))
                                         SecondaryButton("Import", onClick = { importDocs.launch(arrayOf("*/*")) }, icon = Icons.Rounded.FileOpen, modifier = Modifier.weight(1f))
                                     }
                                 }
                             }
-                            else -> items(entries, key = { "f:" + it.name }, contentType = { "file" }) { entry ->
+                            else -> itemsIndexed(entries, key = { _, it -> "f:" + it.name }, contentType = { _, _ -> "file" }) { i, entry ->
                                 FileRow(entry, folder, onClick = {
                                     val rel = if (path.isEmpty()) entry.name else path + "/" + entry.name
                                     if (entry.dir) path = rel else openFile = rel
-                                }, onLongClick = { fileAction = FileAction.Menu(entry) }, modifier = Modifier.animateItem().padding(horizontal = 16.dp))
+                                }, onLongClick = { fileAction = FileAction.Menu(entry) }, divider = i < entries.lastIndex, modifier = Modifier.animateItem())
                             }
                         }
                     }
-                    ProjectTab.Changes -> LazyColumn(Modifier.fillMaxSize(), state = changesList, contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)) {
+                    ProjectTab.Changes -> LazyColumn(Modifier.fillMaxSize(), state = changesList, contentPadding = PaddingValues(bottom = Space.xxl)) {
+                        item(key = "head", contentType = "head") { header() }
                         changesItems(changes)
                     }
                     ProjectTab.Terminal -> TerminalPane(app, dir, fullScreen = false, onToggleFullScreen = onTerminal, onPreview = onPreview, modifier = Modifier.fillMaxSize())
@@ -539,115 +557,64 @@ fun ProjectScreen(
 }
 
 /**
- * One saved session, a row of the "Sessions" group ([GroupRow], desktop `.hd-row`): the state slot (the live Quad, an
- * accent dot for new activity, else a quiet dot), the session's name or first prompt (ink2 when nothing is new), then
- * "24 msg · 2h" (meta ink3, tabular). TalkBack reads it in words.
+ * The project's large title at the top of a list tab: the title (largeTitle ink1, the shared element from Home's
+ * project row, a 16dp pin glyph when pinned) over `projects/x` and, in a git repository, the branch glyph and the branch
+ * from `.git/HEAD` (monoMeta ink3).
  */
 @Composable
-private fun SessionRow(s: SessionSummary, pos: GroupPos, live: SessionController?, unread: Boolean, now: Long, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun ProjectHeader(title: String, name: String, pinned: Boolean, branch: String?, titleModifier: Modifier) {
     val colors = Pi.colors
     val type = Pi.type
-    val title = ProjectRules.sessionTitle(s)
-    val spoken = listOfNotNull(
-        title,
-        "open".takeIf { live != null },
-        "new activity".takeIf { unread },
-        (if (s.messageCount == 1) "1 message" else "${s.messageCount} messages").takeIf { s.messageCount > 0 },
-        ProjectRules.ago(s.updatedAt, now),
-    ).joinToString(", ")
-    GroupRow(
-        pos = pos,
-        modifier = modifier,
-        interaction = Modifier
-            .pressable(onClick, shape = groupShape(pos), enabled = enabled, pressedScale = 1f, label = if (live != null) "Open session" else "Resume session")
-            .semantics(mergeDescendants = true) { contentDescription = spoken },
-        lead = {
-            when {
-                live != null -> SessionMark(live)
-                unread -> StateDot(colors.accent)
-                else -> StateDot(null)
-            }
-        },
-    ) {
-        Text(
-            title,
-            style = if (unread) type.bodyStrong else type.body,
-            color = if (unread || live != null) colors.ink1 else colors.ink2,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        RowMeta(buildList {
-            if (live != null) add("open")
-            if (s.messageCount > 0) add("${s.messageCount} msg")
-            add(ProjectRules.agoShort(s.updatedAt, now))
-        }.joinToString(" · "))
-    }
-}
-
-/**
- * The project's 56dp bar: back, the title (subhead, the shared element from the project card) over
- * `projects/x · branch` (monoMeta ink3), then the shown tab's own action and the project menu.
- */
-@Composable
-private fun ProjectTopBar(title: String, name: String, pinned: Boolean, branch: String?, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit) {
-    val colors = Pi.colors
-    val type = Pi.type
-    Row(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Projects", onClick = onBack, tint = colors.ink1)
-        Column(Modifier.weight(1f).padding(start = 4.dp, end = 4.dp).semantics(mergeDescendants = true) { heading() }) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    title,
-                    style = type.subhead,
-                    color = colors.ink1,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false).sharedHostElement(SharedKeys.projectName(name)),
-                )
-                if (pinned) {
-                    Spacer(Modifier.width(6.dp))
-                    Icon(Icons.Rounded.PushPin, contentDescription = "Pinned", tint = colors.ink3, modifier = Modifier.size(13.dp))
-                }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("projects/$name", style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f, fill = false))
-                if (branch != null) {
-                    Spacer(Modifier.width(8.dp))
-                    Icon(Icons.AutoMirrored.Rounded.CallSplit, contentDescription = "Branch", tint = colors.ink3, modifier = Modifier.size(12.dp))
-                    Spacer(Modifier.width(3.dp))
-                    Text(branch, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                }
+    Column(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = Space.xs, bottom = Space.md)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                title,
+                style = type.largeTitle,
+                color = colors.ink1,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = titleModifier.weight(1f, fill = false).semantics { heading() },
+            )
+            if (pinned) {
+                Spacer(Modifier.width(Space.sm))
+                Icon(Icons.Rounded.PushPin, contentDescription = "Pinned", tint = colors.ink3, modifier = Modifier.size(IconSize.sm))
             }
         }
-        actions()
+        Spacer(Modifier.height(Space.xxs))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("projects/$name", style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f, fill = false))
+            if (branch != null) {
+                Spacer(Modifier.width(Space.md))
+                Icon(Icons.AutoMirrored.Rounded.CallSplit, contentDescription = "Branch", tint = colors.ink3, modifier = Modifier.size(IconSize.xs))
+                Spacer(Modifier.width(Space.xs))
+                Text(branch, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            }
+        }
     }
 }
 
 /**
- * The empty state of a project tab: surface1, radius 12, 1dp line; a 20dp glyph (ink3), the title (bodyStrong), one
- * line on what to do (body ink2) and, when given, the actions under it.
+ * The empty state of a workspace view, calm and unboxed at the 20dp gutter: a 24dp glyph (ink2) in a 48dp glass
+ * circle, the title (rowTitle ink1), one line on what to do (rowMeta ink2) and, when given, the actions under it.
  */
 @Composable
 internal fun EmptyCard(icon: ImageVector, title: String, text: String, actions: (@Composable () -> Unit)? = null) {
     val colors = Pi.colors
     val type = Pi.type
-    val shape = RoundedCornerShape(Radius.md)
     Column(
         Modifier
-            .padding(horizontal = 16.dp, vertical = 4.dp)
             .fillMaxWidth()
-            .background(colors.surface1, shape)
-            .border(1.dp, colors.line, shape)
-            .padding(16.dp),
+            .padding(horizontal = Space.page, vertical = Space.lg),
     ) {
-        Icon(icon, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.height(10.dp))
-        Text(title, style = type.bodyStrong, color = colors.ink1)
-        Spacer(Modifier.height(4.dp))
-        Text(text, style = type.body, color = colors.ink2)
+        Box(Modifier.size(48.dp).glass(CircleShape, colors), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.lg))
+        }
+        Spacer(Modifier.height(Space.lg))
+        Text(title, style = type.rowTitle, color = colors.ink1, modifier = Modifier.semantics { heading() })
+        Spacer(Modifier.height(Space.xs))
+        Text(text, style = type.rowMeta, color = colors.ink2)
         if (actions != null) {
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(Space.lg))
             actions()
         }
     }

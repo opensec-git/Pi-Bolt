@@ -16,7 +16,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.automirrored.rounded.CallMerge
+import androidx.compose.material.icons.rounded.ArrowDownward
+import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.Commit
+import androidx.compose.ui.semantics.heading
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import androidx.compose.material.icons.rounded.Add
@@ -60,15 +68,22 @@ import opensec.pibolt.app.ui.components.LoadingRow
 import opensec.pibolt.app.ui.components.PiTextField
 import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.QuadMode
-import opensec.pibolt.app.ui.components.QuadSpinner
+import opensec.pibolt.app.ui.components.GlassChip
+import opensec.pibolt.app.ui.components.GlassPill
+import opensec.pibolt.app.ui.components.InsetRow
+import opensec.pibolt.app.ui.components.InsetSectionHead
+import opensec.pibolt.app.ui.components.LineCounts
+import opensec.pibolt.app.ui.components.WorkingLine
 import opensec.pibolt.app.ui.components.SecondaryButton
-import opensec.pibolt.app.ui.components.SectionLabel
 import opensec.pibolt.app.ui.components.SnackKind
 import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.PiMotion
+import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 import java.io.File
 
 /** What the Changes tab has open on top of the project screen. */
@@ -175,30 +190,34 @@ fun LazyListScope.changesItems(ui: ChangesUi) {
         item(key = "git-loading", contentType = "loading") { LoadingRow("Reading git status…") }
         return
     }
-    item(key = "git-branch", contentType = "git-card") { BranchCard(ui) }
+    item(key = "git-branch", contentType = "git-card") { BranchHeader(ui) }
     val staged = status.staged
     val unstaged = status.unstaged
-    if (ChangesRules.showCommit(staged.size, ui.message)) item(key = "git-commit", contentType = "git-card") { CommitCard(ui, staged.size) }
+    if (ChangesRules.showCommit(staged.size, ui.message)) item(key = "git-commit", contentType = "git-card") { CommitBox(ui, staged.size) }
     if (status.conflicts.isNotEmpty()) {
-        item(key = "git-h-conflicts", contentType = "git-head") { Header("Conflicts · ${status.conflicts.size}", null, null) }
-        items(status.conflicts, key = { "gc:" + it.path }, contentType = { "git-file" }) { FileRow(ui, it, staged = false) }
+        item(key = "git-h-conflicts", contentType = "git-head") { InsetSectionHead("Conflicts", count = status.conflicts.size) }
+        itemsIndexed(status.conflicts, key = { _, it -> "gc:" + it.path }, contentType = { _, _ -> "git-file" }) { i, e -> FileRow(ui, e, staged = false, divider = i < status.conflicts.lastIndex) }
     }
     if (staged.isNotEmpty()) {
         item(key = "git-h-staged", contentType = "git-head") {
-            Header("Staged · ${staged.size}", "Unstage all") { model.run("Unstaging") { unstage(staged.map { it.path }, status.branch.initial) } }
+            InsetSectionHead("Staged", count = staged.size, action = {
+                TextAction("Unstage all", onClick = { model.run("Unstaging") { unstage(staged.map { it.path }, status.branch.initial) } }, modifier = Modifier.heightIn(min = 48.dp), color = Pi.colors.ink2, enabled = model.busy == null)
+            })
         }
-        items(staged, key = { "gs:" + it.path }, contentType = { "git-file" }) { FileRow(ui, it, staged = true) }
+        itemsIndexed(staged, key = { _, it -> "gs:" + it.path }, contentType = { _, _ -> "git-file" }) { i, e -> FileRow(ui, e, staged = true, divider = i < staged.lastIndex) }
     }
     if (unstaged.isNotEmpty()) {
         item(key = "git-h-changes", contentType = "git-head") {
-            Header("Changes · ${unstaged.size}", "Stage all") { model.run("Staging") { stage(unstaged.map { it.path }) } }
+            InsetSectionHead("Changes", count = unstaged.size, action = {
+                TextAction("Stage all", onClick = { model.run("Staging") { stage(unstaged.map { it.path }) } }, modifier = Modifier.heightIn(min = 48.dp), color = Pi.colors.ink2, enabled = model.busy == null)
+            })
         }
         if (staged.isEmpty()) {
             item(key = "git-hint", contentType = "git-note") {
-                Text("Stage the files to commit with +, or Stage all.", style = Pi.type.meta, color = Pi.colors.ink3, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 4.dp))
+                Text("Stage the files to commit with +, or Stage all.", style = Pi.type.rowMeta, color = Pi.colors.ink3, modifier = Modifier.padding(start = Space.page, end = Space.page, bottom = Space.xs))
             }
         }
-        items(unstaged, key = { "gu:" + it.path }, contentType = { "git-file" }) { FileRow(ui, it, staged = false) }
+        itemsIndexed(unstaged, key = { _, it -> "gu:" + it.path }, contentType = { _, _ -> "git-file" }) { i, e -> FileRow(ui, e, staged = false, divider = i < unstaged.lastIndex) }
     }
     if (status.clean) {
         item(key = "git-clean", contentType = "git-note") {
@@ -211,6 +230,19 @@ fun LazyListScope.changesItems(ui: ChangesUi) {
 object ChangesRules {
     /** The commit box shows once something is staged, and stays while a message is being written. */
     fun showCommit(stagedCount: Int, message: String): Boolean = stagedCount > 0 || message.isNotBlank()
+
+    /** The branch header's second line: "origin/main · 2 to push · 1 to pull", "Not pushed yet", "No remote". */
+    fun tracking(upstream: String?, hasRemote: Boolean, ahead: Int, behind: Int): String = buildList {
+        add(upstream ?: if (hasRemote) "Not pushed yet" else "No remote")
+        if (ahead > 0) add("$ahead to push")
+        if (behind > 0) add("$behind to pull")
+    }.joinToString(" · ")
+
+    /** The "+N −M" pill in words. */
+    fun countsSpoken(added: Int, removed: Int): String = buildList {
+        if (added > 0) add(if (added == 1) "1 line added" else "$added lines added")
+        if (removed > 0) add(if (removed == 1) "1 line removed" else "$removed lines removed")
+    }.joinToString(", ")
 }
 
 @Composable
@@ -224,8 +256,14 @@ private fun NotARepo(ui: ChangesUi) {
     }
 }
 
+/**
+ * The branch as the tab's calm header (no card): the branch glyph, the branch (rowTitle ink1, a chooser glyph) over
+ * "origin/main · 2 to push · 1 to pull" (rowMeta ink3), tap for the Branches sheet, and a glass pill with the
+ * working tree's "+N −M". Then, while an operation runs, its working line (a Run Quad and git's progress); the
+ * actions as glass chips (Pull, Push, Pull request, History) and a line on what is missing to push.
+ */
 @Composable
-private fun BranchCard(ui: ChangesUi) {
+private fun BranchHeader(ui: ChangesUi) {
     val colors = Pi.colors
     val type = Pi.type
     val model = ui.model
@@ -233,136 +271,132 @@ private fun BranchCard(ui: ChangesUi) {
     val b = status.branch
     val busy = model.busy
     val github by ui.app.github.state.collectAsStateWithLifecycle()
-    GitCard {
+    val total = model.stats.total
+    Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier
                 .fillMaxWidth()
-                .heightIn(min = 56.dp)
-                .pressable({ ui.sheet = GitSheet.Branches }, label = "Change branch")
-                .padding(start = 16.dp, end = 8.dp),
+                .padding(horizontal = Space.sm)
+                .heightIn(min = 64.dp)
+                .pressable({ ui.sheet = GitSheet.Branches }, shape = RoundedCornerShape(Radius.md), pressedScale = 1f, label = "Change branch")
+                .padding(horizontal = Space.page - Space.sm, vertical = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.AutoMirrored.Rounded.CallSplit, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(12.dp))
+            Icon(Icons.AutoMirrored.Rounded.CallSplit, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.md))
+            Spacer(Modifier.width(Space.md))
             Column(Modifier.weight(1f)) {
-                Text(b.head ?: "Detached at ${b.oid?.take(7).orEmpty()}", style = type.bodyStrong, color = colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
-                val track = buildList {
-                    add(b.upstream ?: if (model.remote == null) "No remote" else "Not pushed yet")
-                    if (b.ahead > 0) add("${b.ahead} to push")
-                    if (b.behind > 0) add("${b.behind} to pull")
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(b.head ?: "Detached at ${b.oid?.take(7).orEmpty()}", style = type.rowTitle, color = colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f, fill = false))
+                    Spacer(Modifier.width(Space.xs))
+                    Icon(Icons.Rounded.UnfoldMore, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(IconSize.sm))
                 }
-                Text(track.joinToString(" · "), style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(ChangesRules.tracking(b.upstream, model.remote != null, b.ahead, b.behind), style = type.rowMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Icon(Icons.Rounded.UnfoldMore, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(18.dp))
+            if (total.added > 0 || total.removed > 0) {
+                Spacer(Modifier.width(Space.sm))
+                GlassPill(Modifier.semantics(mergeDescendants = true) { contentDescription = ChangesRules.countsSpoken(total.added, total.removed) }) {
+                    LineCounts(total.added, total.removed)
+                }
+            }
         }
         if (busy != null) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically) {
-                QuadSpinner(QuadMode.Run, size = 16.dp, color = colors.ink2)
-                Spacer(Modifier.width(10.dp))
-                Text(model.progress?.label ?: "$busy…", style = type.meta, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            WorkingLine(
+                model.progress?.label ?: "$busy…",
+                Modifier.padding(horizontal = Space.page, vertical = Space.xs).semantics(mergeDescendants = true) { },
+                mode = QuadMode.Run,
+            )
         }
         val hasRemote = model.remote != null
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextAction("Pull", onClick = ui::pull, modifier = Modifier.heightIn(min = 48.dp), enabled = busy == null && hasRemote && b.upstream != null, color = colors.ink1)
-            TextAction("Push", onClick = ui::push, modifier = Modifier.heightIn(min = 48.dp), enabled = busy == null && hasRemote && !b.detached && !b.initial, color = colors.ink1)
-            Spacer(Modifier.weight(1f))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = Space.page),
+            horizontalArrangement = Arrangement.spacedBy(Space.sm),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            GlassChip("Pull", onClick = ui::pull, icon = Icons.Rounded.ArrowDownward, enabled = busy == null && hasRemote && b.upstream != null)
+            GlassChip("Push", onClick = ui::push, icon = Icons.Rounded.ArrowUpward, enabled = busy == null && hasRemote && !b.detached && !b.initial)
             val onGitHub = model.remote?.let { GitHubRemote.parse(it) } != null
             if (onGitHub && !b.detached && !b.initial) {
-                TextAction("Pull request", onClick = { ui.sheet = GitSheet.PullRequest }, modifier = Modifier.heightIn(min = 48.dp), enabled = busy == null && github is GitHubState.SignedIn, color = colors.accent)
+                GlassChip("Pull request", onClick = { ui.sheet = GitSheet.PullRequest }, icon = Icons.AutoMirrored.Rounded.CallMerge, enabled = busy == null && github is GitHubState.SignedIn)
             }
-            IconAction(Icons.Rounded.History, "History", onClick = { ui.overlay = GitOverlay.History })
+            GlassChip("History", onClick = { ui.overlay = GitOverlay.History }, icon = Icons.Rounded.History)
         }
-        Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp)) {
-            if (!hasRemote) Text("Add a remote (ask Pi) to push and pull.", style = type.meta, color = colors.ink3)
-            else if (github !is GitHubState.SignedIn && model.remote?.let { GitHubRemote.parse(it) } != null) {
-                Text("Sign in to GitHub in Settings to push, pull private repositories and open pull requests.", style = type.meta, color = colors.ink3)
-            }
+        val hint = when {
+            !hasRemote -> "Add a remote (ask Pi) to push and pull."
+            github !is GitHubState.SignedIn && model.remote?.let { GitHubRemote.parse(it) } != null -> "Sign in to GitHub in Settings to push, pull private repositories and open pull requests."
+            else -> null
         }
+        if (hint != null) Text(hint, style = type.rowMeta, color = colors.ink3, modifier = Modifier.padding(start = Space.page, end = Space.page, top = Space.xs))
     }
 }
 
+/**
+ * One changed file, an [InsetRow]: the change letter in the leading slot, the file name over its folder (or "from
+ * old/path" for a staged rename), its "+N −M" and a 48dp + / − button to stage or unstage. Tap opens the diff; long
+ * press asks to discard.
+ */
 @Composable
-private fun Header(title: String, action: String?, onAction: (() -> Unit)?) {
-    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        SectionLabel(title, Modifier.weight(1f))
-        if (action != null && onAction != null) TextAction(action, onClick = onAction, modifier = Modifier.heightIn(min = 48.dp), color = Pi.colors.ink2)
-    }
-}
-
-/** 56dp: change letter, file name over its folder, and the stage / unstage button. */
-@Composable
-private fun FileRow(ui: ChangesUi, entry: StatusEntry, staged: Boolean) {
-    val colors = Pi.colors
-    val type = Pi.type
+private fun FileRow(ui: ChangesUi, entry: StatusEntry, staged: Boolean, divider: Boolean) {
     val model = ui.model
     val change = if (staged) entry.index else entry.worktree ?: entry.index
     val (name, folder) = splitPath(entry.path)
     val initial = model.status?.branch?.initial == true
-    Row(
-        Modifier
-            .padding(horizontal = 16.dp, vertical = 2.dp)
-            .fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .pressable(
-                onClick = { ui.overlay = GitOverlay.Diff(entry.path, staged) },
-                onLongClick = { if (!entry.conflicted) ui.sheet = GitSheet.Discard(entry, staged) },
-                label = "Show the diff of ${entry.path}",
-            )
-            .padding(start = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ChangeBadge(change)
-        Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(name, style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
-            val sub = buildString {
-                if (entry.origPath != null && staged) append("from ").append(entry.origPath) else append(folder.ifEmpty { "/" })
+    val counts = model.stats.of(entry.path, staged)
+    InsetRow(
+        title = name,
+        onClick = { ui.overlay = GitOverlay.Diff(entry.path, staged) },
+        onLongClick = if (!entry.conflicted) ({ ui.sheet = GitSheet.Discard(entry, staged) }) else null,
+        label = "Show the diff of ${entry.path}",
+        meta = if (entry.origPath != null && staged) "from ${entry.origPath}" else folder.ifEmpty { "/" },
+        leading = { ChangeBadge(change) },
+        divider = divider,
+        trailing = {
+            if (counts != null) LineCounts(counts.added, counts.removed, Modifier.padding(end = Space.xs))
+            when {
+                entry.conflicted -> IconAction(Icons.Rounded.Add, "Mark ${entry.path} resolved", onClick = { model.run("Staging") { stage(listOf(entry.path)) } }, enabled = model.busy == null)
+                staged -> IconAction(Icons.Rounded.Remove, "Unstage ${entry.path}", onClick = { model.run("Unstaging") { unstage(listOf(entry.path), initial) } }, enabled = model.busy == null)
+                else -> IconAction(Icons.Rounded.Add, "Stage ${entry.path}", onClick = { model.run("Staging") { stage(listOf(entry.path)) } }, enabled = model.busy == null)
             }
-            Text(sub, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
-        }
-        when {
-            entry.conflicted -> IconAction(Icons.Rounded.Add, "Mark ${entry.path} resolved", onClick = { model.run("Staging") { stage(listOf(entry.path)) } }, enabled = model.busy == null)
-            staged -> IconAction(Icons.Rounded.Remove, "Unstage ${entry.path}", onClick = { model.run("Unstaging") { unstage(listOf(entry.path), initial) } }, enabled = model.busy == null)
-            else -> IconAction(Icons.Rounded.Add, "Stage ${entry.path}", onClick = { model.run("Staging") { stage(listOf(entry.path)) } }, enabled = model.busy == null)
-        }
-    }
+        },
+    )
 }
 
+/**
+ * The commit flow, right under the branch: "Commit 2 files" (rowTitle ink1, a heading), the message field (2 to 8
+ * lines), then "Ask Pi" (secondary: Pi drafts from the staged diff) and Commit (primary), at the 20dp gutter.
+ */
 @Composable
-private fun CommitCard(ui: ChangesUi, stagedCount: Int) {
+private fun CommitBox(ui: ChangesUi, stagedCount: Int) {
     val engineStatus by ui.app.engine.status.collectAsStateWithLifecycle()
     val colors = Pi.colors
     val type = Pi.type
     val busy = ui.model.busy
-    GitCard {
-        Column(Modifier.padding(16.dp)) {
-            Text(if (stagedCount == 1) "Commit 1 file" else "Commit $stagedCount files", style = type.bodyStrong, color = colors.ink1)
-            Spacer(Modifier.height(8.dp))
-            PiTextField(
-                ui.message,
-                { ui.message = it },
-                placeholder = if (stagedCount == 0) "Stage files to commit them" else "What changed, and why",
-                minLines = 2,
-                maxLines = 8,
-                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Commit message" },
+    Column(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = Space.lg, bottom = Space.xs)) {
+        Text(if (stagedCount == 1) "Commit 1 file" else "Commit $stagedCount files", style = type.rowTitle, color = colors.ink1, modifier = Modifier.semantics { heading() })
+        Spacer(Modifier.height(Space.sm))
+        PiTextField(
+            ui.message,
+            { ui.message = it },
+            placeholder = if (stagedCount == 0) "Stage files to commit them" else "What changed, and why",
+            minLines = 2,
+            maxLines = 8,
+            modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Commit message" },
+        )
+        Spacer(Modifier.height(Space.md))
+        Row(horizontalArrangement = Arrangement.spacedBy(Space.md)) {
+            SecondaryButton(
+                if (ui.drafting) "Pi is writing…" else "Ask Pi",
+                onClick = ui::askPi,
+                icon = Icons.Rounded.AutoAwesome,
+                enabled = !ui.drafting && stagedCount > 0 && engineStatus !is EngineStatus.Unavailable,
+                modifier = Modifier.weight(1f).semantics { contentDescription = "Ask Pi for a message" },
             )
-            Spacer(Modifier.height(12.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SecondaryButton(
-                    if (ui.drafting) "Pi is writing…" else "Ask Pi",
-                    onClick = ui::askPi,
-                    icon = Icons.Rounded.AutoAwesome,
-                    enabled = !ui.drafting && stagedCount > 0 && engineStatus !is EngineStatus.Unavailable,
-                    modifier = Modifier.weight(1f).semantics { contentDescription = "Ask Pi for a message" },
-                )
-                PrimaryButton(
-                    if (busy == "Committing") "Committing…" else "Commit",
-                    onClick = ui::commit,
-                    enabled = busy == null && stagedCount > 0 && ui.message.isNotBlank(),
-                    modifier = Modifier.weight(1f),
-                )
-            }
+            PrimaryButton(
+                if (busy == "Committing") "Committing…" else "Commit",
+                onClick = ui::commit,
+                icon = Icons.Rounded.Commit,
+                enabled = busy == null && stagedCount > 0 && ui.message.isNotBlank(),
+                modifier = Modifier.weight(1f),
+            )
         }
     }
 }

@@ -24,13 +24,11 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
@@ -50,7 +48,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
-import opensec.pibolt.app.ui.components.IconAction
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.shape.CircleShape
+import opensec.pibolt.app.ui.components.GlassBar
+import opensec.pibolt.app.ui.components.GlassIconButton
+import opensec.pibolt.app.ui.components.glass
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.components.ProgressLine
 import opensec.pibolt.app.ui.theme.Pi
 
@@ -134,26 +137,33 @@ fun PreviewScreen(port: Int, onBack: () -> Unit) {
     BackHandler(enabled = canGoBack) { web.goBack() }
 
     Column(Modifier.fillMaxSize().background(colors.canvas).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))) {
-        Row(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Close the preview", onClick = onBack, tint = colors.ink1)
-            Text(
-                url.removePrefix("http://"),
-                style = type.monoMeta,
-                color = colors.ink2,
-                maxLines = 1,
-                overflow = TextOverflow.MiddleEllipsis,
-                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
-            )
-            IconAction(Icons.Rounded.Refresh, "Reload", onClick = { web.reload() })
-            IconAction(Icons.AutoMirrored.Rounded.OpenInNew, "Open in browser", onClick = { openOutside(context, url) })
-        }
+        // The glass bar: close, the address in a glass capsule (monoMeta ink2, middle ellipsis), Reload and Open in browser.
+        GlassBar(
+            leading = { GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Close the preview", onClick = onBack) },
+            center = {
+                Box(
+                    Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 40.dp)
+                        .glass(CircleShape, colors)
+                        .padding(horizontal = Space.lg),
+                    contentAlignment = Alignment.CenterStart,
+                ) {
+                    Text(url.removePrefix("http://"), style = type.monoMeta, color = colors.ink2, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
+                }
+            },
+            actions = {
+                GlassIconButton(Icons.Rounded.Refresh, "Reload", onClick = { web.reload() })
+                GlassIconButton(Icons.AutoMirrored.Rounded.OpenInNew, "Open in browser", onClick = { openOutside(context, url) })
+            },
+        )
         Box(Modifier.fillMaxWidth().height(2.dp)) {
             if (loading) ProgressLine(progress / 100f)
         }
         Box(Modifier.weight(1f).fillMaxWidth().navigationBarsPadding()) {
             AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
             failed?.let { reason ->
-                Column(Modifier.fillMaxSize().background(colors.canvas).padding(top = 8.dp)) {
+                Column(Modifier.fillMaxSize().background(colors.canvas).padding(top = Space.sm)) {
                     EmptyCard(
                         Icons.Rounded.CloudOff,
                         "Nothing answers on localhost:$port",

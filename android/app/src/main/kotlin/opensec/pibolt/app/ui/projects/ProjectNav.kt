@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.Difference
@@ -38,10 +37,13 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import opensec.pibolt.app.git.GitStatus
+import opensec.pibolt.app.ui.components.SOFT_PRESS
+import opensec.pibolt.app.ui.components.glass
 import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
-import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 
 /** The four places of a project. [index] is what the screen saves across rotation and process death. */
 enum class ProjectTab(val index: Int, val label: String) {
@@ -104,20 +106,31 @@ object ProjectNavRules {
 }
 
 /**
- * The project's bottom bar: Sessions, Files, Changes, Terminal. 64dp on surface1 with a 1dp line above; each item a
- * 22dp glyph in a 56x30 pill (surface3 when selected) over its label (meta; ink1 selected, ink3 otherwise). Changes
- * carries the changed-file count (accent, micro), Sessions and Terminal an 8dp dot while something runs there.
+ * The project's bottom bar: Sessions, Files, Changes, Terminal on one floating glass capsule (radius full, glass),
+ * 20dp from the window's sides, 8dp above the navigation bar, at least 64dp tall (it grows with large text). Each item
+ * is a 22dp glyph over its label (metaStrong ink1 selected, meta ink3 otherwise); the selected one sits on a soft
+ * surface3 capsule that crossfades. Changes carries the changed-file count (accent, micro), Sessions and Terminal an
+ * 8dp success dot while something runs there.
  */
 @Composable
 fun ProjectNavBar(selected: ProjectTab, badges: ProjectBadges, onSelect: (ProjectTab) -> Unit, modifier: Modifier = Modifier) {
     val colors = Pi.colors
-    Column(modifier.fillMaxWidth().background(colors.surface1)) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
+    Box(
+        modifier
+            .fillMaxWidth()
+            .background(colors.canvas)
+            .navigationBarsPadding()
+            .padding(start = Space.page, end = Space.page, top = Space.xs, bottom = Space.sm),
+    ) {
         // A minimum height, so labels at a large font scale grow the bar instead of being cut; one selectable group, so
         // TalkBack reads "Tab, 2 of 4".
         Row(
-            Modifier.fillMaxWidth().navigationBarsPadding().heightIn(min = 64.dp).selectableGroup(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
+            Modifier
+                .fillMaxWidth()
+                .heightIn(min = 64.dp)
+                .glass(CircleShape, colors)
+                .padding(horizontal = Space.xs, vertical = Space.xs)
+                .selectableGroup(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             for (tab in ProjectTab.entries) {
@@ -144,27 +157,28 @@ private fun NavItem(tab: ProjectTab, on: Boolean, badge: String?, dot: Boolean, 
     Column(
         modifier
             .heightIn(min = 56.dp)
-            .padding(vertical = 4.dp)
             .pressable(
                 {
                     if (!on) haptics.tick()
                     onClick()
                 },
-                shape = RoundedCornerShape(Radius.md),
-                pressedScale = 1f,
+                shape = CircleShape,
+                pressedScale = SOFT_PRESS,
                 role = Role.Tab,
                 label = tab.label,
             )
+            .background(pill, CircleShape)
             .semantics {
                 selected = on
                 state?.let { stateDescription = it }
-            },
+            }
+            .padding(vertical = Space.xs + Space.xxs),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
         Box(contentAlignment = Alignment.Center) {
-            Box(Modifier.size(width = 56.dp, height = 30.dp).background(pill, CircleShape), contentAlignment = Alignment.Center) {
-                Icon(tab.icon, contentDescription = null, tint = ink, modifier = Modifier.size(22.dp))
+            Box(Modifier.size(width = 40.dp, height = 26.dp), contentAlignment = Alignment.Center) {
+                Icon(tab.icon, contentDescription = null, tint = ink, modifier = Modifier.size(IconSize.lg))
             }
             if (badge != null) {
                 Text(
@@ -175,8 +189,8 @@ private fun NavItem(tab: ProjectTab, on: Boolean, badge: String?, dot: Boolean, 
                     maxLines = 1,
                     modifier = Modifier
                         .align(Alignment.TopEnd)
-                        .offset(x = 2.dp, y = (-4).dp)
-                        .background(colors.surface1, CircleShape)
+                        .offset(x = 4.dp, y = (-2).dp)
+                        .background(colors.surface2, CircleShape)
                         .padding(1.5.dp)
                         .background(colors.accent, CircleShape)
                         .widthIn(min = 16.dp)
@@ -186,15 +200,15 @@ private fun NavItem(tab: ProjectTab, on: Boolean, badge: String?, dot: Boolean, 
                 Box(
                     Modifier
                         .align(Alignment.TopEnd)
-                        .offset(x = (-8).dp, y = 2.dp)
+                        .offset(x = (-2).dp, y = 1.dp)
                         .size(10.dp)
-                        .background(colors.surface1, CircleShape)
+                        .background(colors.surface2, CircleShape)
                         .padding(2.dp)
                         .background(colors.success, CircleShape),
                 )
             }
         }
-        Spacer(Modifier.height(4.dp))
+        Spacer(Modifier.height(Space.xxs))
         Text(tab.label, style = if (on) Pi.type.metaStrong else Pi.type.meta, color = ink, maxLines = 1)
     }
 }
