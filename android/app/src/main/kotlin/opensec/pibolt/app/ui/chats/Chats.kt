@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.put
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.engine.ChatSpace
 import opensec.pibolt.app.engine.EngineApi
@@ -146,9 +147,13 @@ data class ChatModel(val provider: String, val id: String, val thinking: String?
          */
         fun leaving(before: String?, reused: Boolean, readyEmpty: Boolean): String? = if (reused && readyEmpty) null else before
 
-        /** The model a chat on [current] should switch to: [remembered], or null when it already runs it (or none). */
-        fun switchTo(remembered: ChatModel?, current: ModelInfo?): ChatModel? =
+        /**
+         * The model a chat on [current] should switch to: [remembered], or null when it already runs it (or none), or when
+         * it is not among the engine's [available] models (null: unknown), such as one whose provider key was removed.
+         */
+        fun switchTo(remembered: ChatModel?, current: ModelInfo?, available: List<ModelInfo>? = null): ChatModel? =
             remembered?.takeIf { current == null || it.provider != current.provider || it.id != current.id }
+                ?.takeIf { r -> available == null || available.any { it.provider == r.provider && it.id == r.id } }
     }
 }
 
@@ -212,8 +217,11 @@ object Chats {
         val ready = withTimeoutOrNull(MODEL_WAIT_MS) { controller.state.first { it.hello && (before == null || it.sessionId != before) } } ?: return
         // The engine's own word: right after a new session the state can still show the last session's model.
         val actual = ModelInfo.from(controller.request("get_state").dataObject?.obj("model")) ?: ready.model
-        val to = ChatModel.switchTo(wanted, actual)
-        if (to != null) {
+        // Pi refuses a model it cannot use ("Model not found": its key removed): waiting for that switch held a first
+        // prompt from Home for the whole timeout, on every new chat. Such a model is skipped; the chat keeps Pi's default.
+        if (ChatModel.switchTo(wanted, actual) != null) {
+            val available = controller.request("get_available_models").takeIf { it.success }?.let(ModelInfo::listFrom)
+            val to = ChatModel.switchTo(wanted, actual, available) ?: return
             controller.setModel(ModelInfo(to.id, to.id, to.provider, reasoning = true, contextWindow = null))
             withTimeoutOrNull(MODEL_WAIT_MS) { controller.state.first { s -> s.model?.let { it.provider == to.provider && it.id == to.id } == true } }
         }
@@ -271,13 +279,17 @@ object Chats {
             .mapLatest { withContext(Dispatchers.IO) { runCatching { engine.chats() }.getOrDefault(emptyList()).map(ChatSummary::of) } }
     }
 
-    /** Renames [chat]: over RPC when it is the live chat, else in its file. False when it could not be written. */
+    /**
+     * Renames [chat]: over RPC when it is the live chat, else in its file. False when it could not be written, or [name]
+     * is blank (Pi refuses an empty name: the live chat's refusal went to no screen, and a saved chat lost its name).
+     */
     suspend fun rename(chat: ChatSummary, name: String): Boolean {
         val trimmed = name.trim()
+        if (trimmed.isEmpty()) return false
         val live = liveWith(chat.file)
         val ok = if (live != null) {
-            live.controller.rename(trimmed)
-            true
+            // Pi's answer, not the fire-and-forget rename: its error has no session screen to show on here.
+            live.controller.request("set_session_name") { put("name", trimmed) }.success
         } else {
             withContext(Dispatchers.IO) { SessionBrowse.rename(File(chat.file), trimmed) }
         }
