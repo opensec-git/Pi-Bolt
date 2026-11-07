@@ -259,6 +259,7 @@ before a turn with a conversation fork, and redo of any restore. On this phone o
 | Files in and out | — | done (0.5.0): import files or a folder (SAF), a zip as a new project; export a project or folder as a zip (Save to… or Share); share a file; streamed, cancellable, zip-slip safe | device | P1 |
 | Share into Pi-Bolt | — | done (0.5.0): files, images and text from other apps: attach to a project's composer, import, or a zip as a project | device | P1 |
 | Voice input | — | done (0.5.0): composer mic, Android speech recognition (on-device when available), live partial text | both | P1 |
+| Hands-free voice mode | — | done (0.6.0): listen, send on end of speech, "Working" with the Quad and the tool, a spoken 2-3 sentence summary of the reply (Android TextToSpeech, no extra model call), listen again; question cards read out and answered by voice; mute, barge-in where the phone cancels echo, pauses for calls and other audio; speech rate and voice in Settings | both | P2 |
 | Files on tool cards | — | done (0.5.0): a path on this phone opens in the file viewer and editor | device | P1 |
 | Language runtimes: `node`, `npm`, `npx`, `python3`, `pip` | your system's | done: Node.js 22 LTS and Python 3.14 in the APK, in Pi's bash, `!` commands and the terminal (all with the engine's environment); npm/pip installs over HTTPS | device | P1 |
 | Runtimes screen (versions, sizes, npm/pip caches) | — | done: Settings > Runtimes, project menu | device | P2 |

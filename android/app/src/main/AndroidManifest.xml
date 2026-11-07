@@ -19,7 +19,7 @@
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
-    <!-- Dictation in the composer (Android's SpeechRecognizer); asked for on the first tap of the mic only. -->
+    <!-- Dictation and voice mode (Android's SpeechRecognizer); asked for on the first tap of the mic only. -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
@@ -30,6 +30,10 @@
     <queries>
         <intent>
             <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <!-- The text-to-speech engine voice mode speaks replies with. -->
+        <intent>
+            <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>
         <!-- OEM background settings (background/OemSetup): resolved before opening, else the app's details. -->
         <package android:name="com.miui.securitycenter" />

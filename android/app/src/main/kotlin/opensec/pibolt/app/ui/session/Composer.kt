@@ -105,6 +105,8 @@ import opensec.pibolt.app.ui.session.features.PaletteEntry
 import opensec.pibolt.app.ui.session.features.ProjectFileIndex
 import opensec.pibolt.app.ui.session.voice.VoiceInput
 import opensec.pibolt.app.ui.session.voice.VoiceMic
+import opensec.pibolt.app.ui.session.voice.VoiceMode
+import opensec.pibolt.app.ui.session.voice.VoiceModeSurface
 import opensec.pibolt.app.ui.session.voice.VoiceSurface
 import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
@@ -122,7 +124,7 @@ import opensec.pibolt.protocol.rpc.StreamingBehavior
  * text. Only a landscape keyboard ([compact]) drops the slim row: then the Steer chip moves into the pill. Every button is
  * a 48dp target on one line along the pill's bottom ([ComposerLayout]).
  *
- * While the voice surface is open ([VoiceInput.surface]) it takes the composer's place.
+ * While the voice surface is open ([VoiceInput.surface]), or voice mode runs ([VoiceMode]), it takes the composer's place.
  *
  * [attachAllowed] false only changes the + button's description: its sheet also mentions files and commands, and its
  * Photos row says why images are off.
@@ -169,6 +171,8 @@ fun Composer(
     onPasteImage: () -> Boolean = { false },
     /** Dictation (ui/session/voice): the pill's mic and voice button; null shows neither. */
     voice: VoiceInput? = null,
+    /** Hands-free voice mode: it takes the composer's place while active; a long press on the voice button starts it. */
+    voiceMode: VoiceMode? = null,
     /** The session's changes ("View changes +12 −3"), at the end of the slim row; null when there are none. */
     changes: (@Composable () -> Unit)? = null,
     /** The slash-command and `@` panel's height cap: the screen lowers it so the composer stays above the keyboard. */
@@ -194,7 +198,8 @@ fun Composer(
     val allFiles = files?.files?.value
     val mentionPaths = remember(mention?.query, allFiles) { allFiles?.let { list -> mention?.let { FileMentions.rank(it.query, list) } } }
     val shellMode = shell && text.startsWith("!")
-    val voiceOpen = voice?.surface == true
+    val modeOn = voiceMode?.active == true
+    val voiceOpen = voice?.surface == true || modeOn
     // Esc closes the panel for the text it was open on; typing on opens it again.
     var dismissedFor by remember { mutableStateOf<String?>(null) }
     val suggesting = (commands.isNotEmpty() || mention != null) && dismissedFor != value.text && !voiceOpen
@@ -257,13 +262,17 @@ fun Composer(
         val narrow = with(density) { LocalWindowInfo.current.containerSize.width.toDp() } < ComposerLayout.NARROW
         val showAttach = ComposerLayout.showAttach(compact, narrow, steering)
         AnimatedContent(
-            targetState = voiceOpen,
+            targetState = if (modeOn) VOICE_MODE else if (voiceOpen) VOICE_SURFACE else PILL,
             transitionSpec = { fadeIn(PiMotion.enter(PiMotion.STANDARD)) togetherWith fadeOut(PiMotion.leave(PiMotion.QUICK)) },
             contentAlignment = Alignment.BottomCenter,
             label = "voiceSurface",
         ) { open ->
-            if (open && voice != null) {
-                VoiceSurface(voice)
+            if (open == VOICE_MODE && voiceMode != null) {
+                VoiceModeSurface(voiceMode)
+                return@AnimatedContent
+            }
+            if (open == VOICE_SURFACE && voice != null) {
+                VoiceSurface(voice, onVoiceMode = voiceMode?.let { m -> { m.start() } })
                 return@AnimatedContent
             }
             Column(Modifier.fillMaxWidth()) {
@@ -318,6 +327,12 @@ fun Composer(
                                         }
                                     },
                                     enabled = enabled && !encoding,
+                                    onVoiceLong = voiceMode?.let { m ->
+                                        {
+                                            haptics.longPress()
+                                            m.start()
+                                        }
+                                    },
                                 )
                             }
                         }
@@ -634,6 +649,11 @@ private class ShownSuggestions {
 
 /** Lines the composer grows to before it scrolls. */
 const val MAX_LINES = 6
+
+/** What the composer's place shows: the pill, the voice surface, or voice mode. */
+private const val PILL = 0
+private const val VOICE_SURFACE = 1
+private const val VOICE_MODE = 2
 
 /** Hardware-keyboard shortcuts of the composer. */
 object ComposerKeys {
