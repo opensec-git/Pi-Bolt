@@ -1,6 +1,7 @@
 package opensec.pibolt.app.engine
 
 import kotlinx.coroutines.flow.StateFlow
+import opensec.pibolt.app.cost.Cost
 import opensec.pibolt.app.session.SessionController
 import java.io.File
 
@@ -40,6 +41,9 @@ interface EngineApi {
 
     /** Saved Pi sessions for [project], newest first (read from the agent dir; no engine needed). For [chatDir]: [chats]. */
     fun sessions(project: File): List<SessionSummary>
+
+    /** What the saved session [sessionFile] cost so far, with its subagents' sessions. Blocking file I/O. */
+    fun sessionCost(sessionFile: String): Cost = Cost.NONE
 
     /** Deletes every saved session of [project], including empty ones [sessions] does not list, and their folder. */
     fun deleteSessions(project: File)
@@ -90,6 +94,8 @@ data class SessionSummary(
     val preview: String?,
     val updatedAt: Long,
     val messageCount: Int,
+    /** What the session cost: its own usage records plus its subagents' sessions. */
+    val cost: Cost = Cost.NONE,
 )
 
 /** Pi's provider credentials (auth.json in the agent dir). Values never leave the device and are never logged. */

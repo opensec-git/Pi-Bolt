@@ -137,8 +137,25 @@ object Terminals {
 
     private val portScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** Dev-server ports now, with [extra] probed too (a port Pi asks the preview for). Blocking: call off the main thread. */
+    @Synchronized
+    fun scanPorts(extra: Collection<Int> = emptyList()): List<Int> {
+        probeAlso = extra
+        return try {
+            previewScanner.scan()
+        } finally {
+            probeAlso = emptyList()
+        }
+    }
+
+    @Volatile
+    private var probeAlso: Collection<Int> = emptyList()
+
+    /** One scanner for the preview tools, so a denied /proc table is read once (DevServerPorts remembers it). */
+    private val previewScanner by lazy { DevServerPorts(mentionedPorts = { hintPorts + probeAlso }) }
+
     /** Dev-server ports, scanned while a chip shows them. */
-    val ports: StateFlow<List<Int>> by lazy { DevServerPorts(mentionedPorts = { hintPorts }).watch(portScope) }
+    val ports: StateFlow<List<Int>> by lazy { DevServerPorts(mentionedPorts = { hintPorts + opensec.pibolt.app.engine.BackgroundJobs.hintPorts }).watch(portScope) }
 
     /** The theme's colours as the terminal palette: background, text, cursor and the 16 base colours. */
     fun applyColors(background: Int, foreground: Int, cursor: Int, base16: IntArray) {

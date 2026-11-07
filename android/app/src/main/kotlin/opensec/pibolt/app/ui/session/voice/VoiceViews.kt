@@ -6,6 +6,7 @@ import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MicNone
+import androidx.compose.material.icons.rounded.RecordVoiceOver
 import androidx.compose.material.icons.rounded.Stop
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -35,7 +37,9 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import opensec.pibolt.app.ui.components.ButtonSize
 import opensec.pibolt.app.ui.components.DotWave
+import opensec.pibolt.app.ui.components.GhostButton
 import opensec.pibolt.app.ui.components.SOFT_PRESS
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.session.ComposerLayout
@@ -45,7 +49,7 @@ import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Space
 
 /**
- * The pill's mic: a 36dp circle in a 48dp target, like the kit's `ComposerCircle` (surface3, an ink2 MicNone) at
+ * The pill's mic: a 36dp circle in a 48dp target, the kit's `ComposerCircle` look (the selected overlay, an ink1 MicNone) at
  * rest; while it dictates in place the circle turns accent with an onAccent Mic (no pulse), and TalkBack hears
  * "Listening". The surface's own listening shows on the surface, not here.
  */
@@ -53,7 +57,7 @@ import opensec.pibolt.app.ui.theme.Space
 fun VoiceMic(voice: VoiceInput, enabled: Boolean, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val on = voice.listening && !voice.surface
-    val fill by animateColorAsState(if (on) colors.accent else colors.surface3, PiMotion.effects(), label = "mic")
+    val fill by animateColorAsState(if (on) colors.accent else colors.selected, PiMotion.effects(), label = "mic")
     val description = if (on) "Stop dictation" else "Dictate"
     Box(modifier.size(ComposerLayout.TARGET), contentAlignment = Alignment.Center) {
         Box(
@@ -73,8 +77,8 @@ fun VoiceMic(voice: VoiceInput, enabled: Boolean, modifier: Modifier = Modifier)
                 contentDescription = null,
                 tint = when {
                     on -> colors.onAccent
-                    enabled -> colors.ink2
-                    else -> colors.ink2.copy(alpha = 0.4f)
+                    enabled -> colors.ink1
+                    else -> colors.ink1.copy(alpha = 0.4f)
                 },
                 modifier = Modifier.size(IconSize.md),
             )
@@ -87,12 +91,13 @@ fun VoiceMic(voice: VoiceInput, enabled: Boolean, modifier: Modifier = Modifier)
  * ink3 before any words), then one row: a round mic (56dp; accent while it listens, tap to stop or to talk again), the
  * dot-matrix waveform driven by the microphone's level, and a round red button that ends voice input. The words go to
  * the draft as they are heard, so ending it leaves them in the composer, ready to send. Back ends it too.
+ * [onVoiceMode] adds "Voice mode" above the row: the hands-free conversation ([VoiceModeSurface]).
  */
 @Composable
-fun VoiceSurface(voice: VoiceInput, modifier: Modifier = Modifier) {
+fun VoiceSurface(voice: VoiceInput, modifier: Modifier = Modifier, onVoiceMode: (() -> Unit)? = null) {
     val colors = Pi.colors
     val type = Pi.type
-    BackHandler { voice.endSurface() }
+    BackHandler(enabled = voice.surface) { voice.endSurface() }
     val level by animateFloatAsState(if (voice.listening) voice.level else 0f, PiMotion.inPlace(PiMotion.TAP), label = "level")
     Column(modifier.fillMaxWidth().padding(top = Space.sm)) {
         val words = voice.heard
@@ -112,6 +117,11 @@ fun VoiceSurface(voice: VoiceInput, modifier: Modifier = Modifier) {
                     .padding(horizontal = Space.xs, vertical = Space.md)
                     .semantics { liveRegion = LiveRegionMode.Polite },
             )
+        }
+        if (onVoiceMode != null) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                GhostButton("Voice mode", onClick = onVoiceMode, icon = Icons.Rounded.RecordVoiceOver, size = ButtonSize.Small)
+            }
         }
         Row(Modifier.fillMaxWidth().heightIn(min = ROUND + Space.sm), verticalAlignment = Alignment.CenterVertically) {
             RoundButton(
@@ -134,14 +144,14 @@ fun VoiceSurface(voice: VoiceInput, modifier: Modifier = Modifier) {
     }
 }
 
-/** A 56dp round button of the voice surface (a 48dp target inside it). */
+/** A round button of the voice surface and voice mode: 56dp by default (a 48dp target inside it). */
 @Composable
-private fun RoundButton(description: String, fill: Color, ring: Color, onClick: () -> Unit, state: String? = null, content: @Composable () -> Unit) {
+internal fun RoundButton(description: String, fill: Color, ring: Color, onClick: () -> Unit, state: String? = null, size: Dp = ROUND, content: @Composable () -> Unit) {
     val bg by animateColorAsState(fill, PiMotion.effects(), label = "round")
     val edge by animateColorAsState(ring, PiMotion.effects(), label = "roundEdge")
     Box(
         Modifier
-            .size(ROUND)
+            .size(size)
             .pressable(onClick, shape = CircleShape, pressedScale = SOFT_PRESS, label = description)
             .semantics {
                 contentDescription = description
@@ -153,7 +163,7 @@ private fun RoundButton(description: String, fill: Color, ring: Color, onClick: 
     ) { content() }
 }
 
-private val ROUND: Dp = 56.dp
+internal val ROUND: Dp = 56.dp
 
 /** What the voice surface shows of a long dictation. */
 object VoiceText {

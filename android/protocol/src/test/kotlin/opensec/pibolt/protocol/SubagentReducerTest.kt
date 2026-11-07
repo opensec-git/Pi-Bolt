@@ -7,11 +7,13 @@ import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.session.SubagentNoticeItem
 import opensec.pibolt.protocol.session.SubagentReducer
 import opensec.pibolt.protocol.session.SubagentStatus
+import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
 import opensec.pibolt.protocol.session.UserItem
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -228,7 +230,8 @@ class SubagentReducerTest {
         assertEquals(ToolStatus.Done, agent.transcript!!.items.filterIsInstance<ToolItem>().single().status)
         assertEquals(1, agent.toolUses)
         assertEquals(2, agent.turns)
-        assertEquals("thinking…", agent.activity)
+        // Between messages nothing names what it does: it works on its next message.
+        assertEquals("working…", agent.activity)
         assertNull(agent.result)
         // Done: the last reply in the file is the whole answer, longer than a notification's preview.
         s = run(s, """{"type":"message_end","message":${notification("""{"id":"bg-1","status":"completed","resultPreview":"All…"}""")}}""")
@@ -247,7 +250,7 @@ class SubagentReducerTest {
         s = run(s, """{"type":"subagent_transcript","key":"b1","file":"/s/x.jsonl","reset":true,"messages":[{"role":"user","content":"Scan slowly"}]}""")
         val again = run(s, hello(false, *history))
         assertEquals(s.subagents.getValue("b1").transcript, again.subagents.getValue("b1").transcript)
-        assertEquals("thinking…", again.subagents.getValue("b1").activity)
+        assertEquals("working…", again.subagents.getValue("b1").activity)
         // An idle snapshot of an open foreground call: it ended with its turn.
         val cut = run(SessionState(), hello(false, user, call("a1" to explore)))
         assertEquals(SubagentStatus.Stopped, cut.subagents.getValue("a1").status)
@@ -274,6 +277,84 @@ class SubagentReducerTest {
             ToolItem("tool:$name", name, name, SessionReducer.parse(args), status = status)
         assertEquals("running npm test", SubagentReducer.activityOf(listOf(tool("bash", """{"command":"npm test\nmore"}""", ToolStatus.Pending))))
         assertEquals("reading 2 files…", SubagentReducer.activityOf(listOf(tool("read", """{"path":"a"}""", ToolStatus.Pending), tool("read", """{"path":"b"}""", ToolStatus.Pending).copy(toolCallId = "r2"))))
-        assertEquals("thinking…", SubagentReducer.activityOf(listOf(tool("bash", """{"command":"ls"}""", ToolStatus.Done))))
+        assertEquals("working…", SubagentReducer.activityOf(listOf(tool("bash", """{"command":"ls"}""", ToolStatus.Done))))
+        assertEquals("thinking…", SubagentReducer.activityOf(listOf(ThinkingItem("t", "hm", streaming = true))))
+        assertEquals("writing…", SubagentReducer.activityOf(listOf(AssistantTextItem("x", "Here", streaming = true))))
+    }
+
+    private val bg = args("Explore", "Slow scan", "Scan slowly", background = true)
+    private val bgHistory = arrayOf(user, call("b1" to bg), result("b1", "Agent started in background.", """{"status":"background","agentId":"bg-1"}"""))
+
+    @Test
+    fun theComputerAdvertisesSubagentStreams() {
+        val old = run(SessionState(), hello(false))
+        assertFalse(old.host!!.streamsSubagents)
+        val new = run(SessionState(), """{"type":"remote_hello","host":{"name":"mac","version":"1.1.5","cwd":"/p"},"features":["subagent_stream","later"],"state":{},"messages":[]}""")
+        assertTrue(new.host!!.streamsSubagents)
+        assertEquals(setOf("subagent_stream", "later"), new.host.features)
+    }
+
+    @Test
+    fun streamedMessageShowsLiveThenTakesItsSavedPlace() {
+        var s = run(SessionState(), hello(true, *bgHistory))
+        // The computer's saved messages: subagent_entries with runId.
+        s = run(s, """{"type":"subagent_entries","runId":"b1","file":"/c/x.jsonl","reset":true,"messages":[{"role":"user","content":"Scan slowly"}]}""")
+        assertEquals(1, s.subagents.getValue("b1").transcript!!.items.size)
+        // Its message streams: thinking, then text.
+        s = run(
+            s,
+            """{"type":"subagent_events","runId":"b1","events":[
+                {"type":"message_start","message":{"role":"assistant","content":[]}},
+                {"type":"message_update","assistantMessageEvent":{"type":"thinking_start","contentIndex":0}},
+                {"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"Let me "}},
+                {"type":"message_update","assistantMessageEvent":{"type":"thinking_delta","contentIndex":0,"delta":"look."}}
+            ]}""",
+        )
+        var t = s.subagents.getValue("b1").transcript!!
+        val thinking = t.live.single() as ThinkingItem
+        assertEquals("Let me look.", thinking.text)
+        assertTrue(thinking.streaming)
+        assertEquals("thinking…", s.subagents.getValue("b1").activity)
+        s = run(
+            s,
+            """{"type":"subagent_events","runId":"b1","events":[
+                {"type":"message_update","assistantMessageEvent":{"type":"thinking_end","contentIndex":0,"content":"Let me look."}},
+                {"type":"message_update","assistantMessageEvent":{"type":"text_start","contentIndex":1}},
+                {"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":1,"delta":"Two files"}},
+                {"type":"message_end","message":{"role":"assistant","content":[]}}
+            ]}""",
+        )
+        t = s.subagents.getValue("b1").transcript!!
+        assertEquals("writing…", s.subagents.getValue("b1").activity)
+        val liveKeys = t.live.map { it.key }
+        // message_end leaves it: the saved message replaces it, with the same row keys.
+        assertEquals(2, t.live.size)
+        s = run(
+            s,
+            """{"type":"subagent_entries","runId":"b1","file":"/c/x.jsonl","reset":false,"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"Let me look."},{"type":"text","text":"Two files"}]}]}""",
+        )
+        t = s.subagents.getValue("b1").transcript!!
+        assertTrue(t.live.isEmpty())
+        assertNull(t.stream)
+        assertEquals(liveKeys, t.items.drop(1).map { it.key })
+        assertEquals("Two files", (t.items.last() as AssistantTextItem).text)
+        // Keys of streamed and saved messages never meet.
+        assertEquals(t.items.size, t.items.map { it.key }.toSet().size)
+    }
+
+    @Test
+    fun aResetKeepsTheStreamAndAToolStartMarksItsCallRunning() {
+        var s = run(SessionState(), hello(true, *bgHistory))
+        s = run(s, """{"type":"subagent_entries","runId":"b1","file":"/c/x.jsonl","reset":true,"messages":[{"role":"user","content":"Scan"},{"role":"assistant","content":[{"type":"toolCall","id":"t1","name":"bash","arguments":{"command":"ls"}}]}]}""")
+        assertEquals(ToolStatus.Pending, s.subagents.getValue("b1").transcript!!.items.filterIsInstance<ToolItem>().single().status)
+        s = run(s, """{"type":"subagent_events","runId":"b1","events":[{"type":"tool_execution_start","toolCallId":"t1","toolName":"bash","args":{"command":"ls"}}]}""")
+        assertEquals(ToolStatus.Running, s.subagents.getValue("b1").transcript!!.items.filterIsInstance<ToolItem>().single().status)
+        s = run(s, """{"type":"subagent_events","runId":"b1","events":[{"type":"message_update","assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"Hi"}}]}""")
+        s = run(s, """{"type":"subagent_entries","runId":"b1","file":"/c/x.jsonl","reset":true,"messages":[{"role":"user","content":"Scan"}]}""")
+        val t = s.subagents.getValue("b1").transcript!!
+        assertEquals(1, t.items.size)
+        assertEquals("Hi", (t.live.single() as AssistantTextItem).text)
+        // Events for a run this session does not have change nothing.
+        assertSame(s, run(s, """{"type":"subagent_events","runId":"nope","events":[]}"""))
     }
 }

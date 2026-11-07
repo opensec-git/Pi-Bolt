@@ -27,7 +27,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -53,12 +52,16 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Difference
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.MoreHoriz
+import opensec.pibolt.app.ui.components.GlassBarInset
 import opensec.pibolt.app.ui.components.GlassIconButton
+import opensec.pibolt.app.ui.components.PiMenu
 import opensec.pibolt.app.ui.components.InsetRow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.History
@@ -71,7 +74,6 @@ import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.runtime.key
 import androidx.compose.ui.draw.clip
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MenuDefaults
@@ -153,6 +155,9 @@ fun SessionTopBar(
     onClone: () -> Unit = {},
     /** The computer's background service lists its projects and sessions: the menu offers them. */
     onProjects: (() -> Unit)? = null,
+    /** The computer reviews its working tree read-only (`host.review`): the menu offers its Changes and Files. */
+    onChanges: (() -> Unit)? = null,
+    onFiles: (() -> Unit)? = null,
     contextPercent: Int? = null,
     quadVisible: Boolean = true,
     status: String? = null,
@@ -161,6 +166,10 @@ fun SessionTopBar(
     chat: Boolean = false,
     onChats: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
+    /** This session's cost ("$0.42", "—"); null before any use. A tap opens [onCost], the spending sheet. */
+    cost: String? = null,
+    costSpoken: String? = null,
+    onCost: () -> Unit = {},
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -170,7 +179,7 @@ fun SessionTopBar(
             .fillMaxWidth()
             .statusBarsPadding()
             .height(64.dp)
-            .padding(start = Space.md, end = Space.md),
+            .padding(horizontal = GlassBarInset),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, if (chat) "Back" else if (local) "Project" else "Computers", onClick = onBack)
@@ -200,6 +209,19 @@ fun SessionTopBar(
                 if (contextPercent != null && contextPercent > 0) {
                     Spacer(Modifier.width(10.dp))
                     ContextMeter(contextPercent)
+                }
+                if (cost != null) {
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        cost,
+                        style = type.meta.copy(fontFeatureSettings = Tnum),
+                        color = colors.ink3,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .pressable(onCost, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "Spending")
+                            .clearAndSetSemantics { contentDescription = "Session cost ${costSpoken ?: cost}" }
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                    )
                 }
             }
             if (subtitle.isNotBlank()) {
@@ -239,15 +261,7 @@ fun SessionTopBar(
         }
         Box {
             GlassIconButton(Icons.Rounded.MoreHoriz, "More", onClick = { menu = true })
-            DropdownMenu(
-                expanded = menu,
-                onDismissRequest = { menu = false },
-                containerColor = colors.surface3,
-                shape = RoundedCornerShape(Radius.md),
-                tonalElevation = 0.dp,
-                shadowElevation = 8.dp,
-                border = BorderStroke(1.dp, colors.lineStrong),
-            ) {
+            PiMenu(expanded = menu, onDismiss = { menu = false }) {
                 @Composable
                 fun Item(text: String, icon: ImageVector, action: () -> Unit) = MenuRow(text, icon, colors.ink1) {
                     menu = false
@@ -278,6 +292,8 @@ fun SessionTopBar(
                     Item("Export or share", Icons.Rounded.IosShare, onExport)
                 } else {
                     onProjects?.let { Item("Projects and sessions", Icons.Rounded.FolderOpen, it) }
+                    onChanges?.let { Item("Changes", Icons.Rounded.Difference, it) }
+                    onFiles?.let { Item("Files", Icons.Rounded.Folder, it) }
                     Item("Session and usage", Icons.Rounded.Info, onInfo)
                     Item("Export or share", Icons.Rounded.IosShare, onExport)
                     MenuRow("Disconnect", Icons.Rounded.LinkOff, colors.ink1) {

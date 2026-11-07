@@ -130,7 +130,8 @@ class SessionMemory(private val sessionId: String?) {
         wasRunning = running
         pending.value?.let { p ->
             val last = PendingSend.lastUserKey(state.items)
-            if (PendingSend.resolved(p, last, settledAt.longValue, running, now)) {
+            // A compaction holds the prompt (SessionController.send): not timed out meanwhile.
+            if (PendingSend.resolved(p, last, settledAt.longValue, running || state.isCompacting, now)) {
                 // The echo takes over the "Sending" row's place in the list instead of animating in again.
                 if (last != null && last != p.lastUserKey) aliases[last] = p.rowKey
                 pending.value = null

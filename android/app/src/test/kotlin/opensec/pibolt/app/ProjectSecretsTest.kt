@@ -53,6 +53,20 @@ class ProjectSecretsTest {
     }
 
     @Test
+    fun aDeletedProjectsSecretsDoNotPassToANewProjectOfTheSameName() = withDirs { store, projects ->
+        val secrets = ProjectSecrets(store, box)
+        val app = File(projects, "app").apply { mkdirs() }
+        secrets.put(app, "STRIPE_KEY", "sk_live_old")
+        // Deleting the project (Projects.delete) forgets its secrets; "app" made again starts empty.
+        app.deleteRecursively()
+        secrets.forget(app)
+        File(projects, "app").mkdirs()
+        assertFalse(secrets.hasAny(File(projects, "app")))
+        assertEquals(emptyMap(), secrets.environment(File(projects, "app")))
+        assertTrue(store.listFiles().orEmpty().isEmpty())
+    }
+
+    @Test
     fun aBlobOpensOnlyForItsProjectAndKey() = withDirs { store, projects ->
         val a = File(projects, "a").apply { mkdirs() }
         val b = File(projects, "b").apply { mkdirs() }

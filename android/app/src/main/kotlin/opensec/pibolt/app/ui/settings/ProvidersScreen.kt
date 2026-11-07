@@ -16,6 +16,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.data.AgentSettingsFile
 import opensec.pibolt.app.engine.CustomProvider
 import opensec.pibolt.app.engine.ModelsFile
 import opensec.pibolt.app.ui.components.ConfirmSheet
@@ -28,6 +29,7 @@ import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.providers.ProviderCatalog
 import opensec.pibolt.app.ui.providers.ProviderSheet
 import opensec.pibolt.app.ui.theme.Pi
+import java.io.File
 
 /**
  * Settings > Models & keys > Providers, a large-title page: the providers with a stored credential, by their human
@@ -100,6 +102,7 @@ private fun ProvidersList(app: PiBoltApp) {
                 scope.launch {
                     withContext(Dispatchers.IO) { runCatching { auth.remove(id) } }
                     if (isCustom) runCatching { ModelsFile.update(agentDir) { ModelsFile.remove(it, id) } }
+                    runCatching { AgentSettingsFile(File(agentDir, "settings.json")).forgetDefaultModelOf(id) }
                     reload++
                 }
             },
