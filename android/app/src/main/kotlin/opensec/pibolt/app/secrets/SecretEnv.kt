@@ -16,8 +16,8 @@ object SecretEnv {
     val RESERVED = setOf(
         "PATH", "HOME", "TMPDIR", "SHELL", "LANG", "TZ", "TERM", "COLORTERM", "TERMINFO", "PI_PACKAGE_DIR",
         "GIT_EXEC_PATH", "GIT_TEMPLATE_DIR", "SSL_CERT_FILE", "ANDROID_ROOT", "ANDROID_DATA", "PWD", "OLDPWD",
-        // The runtimes' package-manager dirs (EngineEnvironment.kt, Runtimes.kt).
-        "npm_config_cache", "PIP_CACHE_DIR", "PYTHONUSERBASE",
+        // The runtimes' package-manager dirs (EngineEnvironment.kt, Runtimes.kt) and the pack's esbuild.
+        "npm_config_cache", "PIP_CACHE_DIR", "PYTHONUSERBASE", "ESBUILD_BINARY_PATH",
     )
 
     /** Prefixes the app owns: the loader's, XDG dirs, git's config (the GitHub credential helper) and Pi-Bolt's own. */

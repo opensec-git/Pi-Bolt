@@ -27,6 +27,7 @@ ASSETS = f"{OUT}/assets/engine"
 GLIBC_LIB = "/stage/glibc/lib"
 USERLAND = "/stage/userland/root"
 RUNTIMES = "/stage/runtimes/root"
+ESBUILD = "/stage/esbuild/root"
 LICENSES_SRC = "/engine/licenses"
 EXTENSION_PINS = "/extensions.txt"  # the repo's extensions.txt (name, version, npm integrity), mounted by build-pack.sh
 
@@ -62,12 +63,15 @@ PYTHON_LIB = "lib/python" + ".".join(V["PYTHON_VERSION"].split(".")[:2])
 RUNTIME_TREES = {"lib/node_modules/npm": "npm.zip", PYTHON_LIB: "python.zip"}
 # id, display name, version, commands, and the prefix paths that belong to it (for its size on the Runtimes screen).
 RUNTIMES_INFO = [
-    ("node", "Node.js", V["NODE_VERSION"], ["node", "npm", "npx"], ["bin/node", "bin/npm", "bin/npx", "lib/node_modules/npm"]),
+    ("node", "Node.js", V["NODE_VERSION"], ["node", "npm", "npx", "esbuild"],
+     ["bin/node", "bin/npm", "bin/npx", "lib/node_modules/npm", "bin/esbuild"]),
     ("python", "Python", V["PYTHON_VERSION"], ["python3", "python", "pip", "pip3"],
      ["bin/python", "bin/pip", PYTHON_LIB, "pip.conf"]),
 ]
 LOADER_SONAME = "ld-linux-aarch64.so.1"
 LOADER = f"{PREFIX}/lib/{LOADER_SONAME}"
+# Android's own linker: the interpreter of programs built for Android (esbuild), which ship unchanged.
+ANDROID_LINKER = "/system/bin/linker64"
 
 
 def sha256_file(path):
@@ -264,9 +268,9 @@ def walk_root(root):
 
 
 def walk_stage():
-    """(relpath, source, root) for the userland and the runtimes; a path both provide is an error."""
+    """(relpath, source, root) for the userland, the runtimes and esbuild; a path two provide is an error."""
     seen = {}
-    for root in [USERLAND, RUNTIMES]:
+    for root in [USERLAND, RUNTIMES, ESBUILD]:
         for rel, src in walk_root(root):
             if rel in seen:
                 sys.exit(f"{rel} is in both {seen[rel]} and {root}")
@@ -326,7 +330,10 @@ def write_licenses(extensions):
     if not ENGINE_ONLY:
         lines += [f"curl {V['CURL_VERSION']}", f"git {V['GIT_VERSION']}"]
         lines += [f"Node.js {V['NODE_VERSION']} ({V['NODE_URL']}, sha256 {V['NODE_SHA256']})",
-                  f"CPython {V['PYTHON_VERSION']} ({V['PYTHON_URL']}, sha256 {V['PYTHON_SHA256']})", ""]
+                  f"CPython {V['PYTHON_VERSION']} ({V['PYTHON_URL']}, sha256 {V['PYTHON_SHA256']})",
+                  f"esbuild {V['ESBUILD_VERSION']} ({V['ESBUILD_URL']}, sha256 {V['ESBUILD_SHA256']}) + "
+                  "runtimes/esbuild-host-versions.patch",
+                  f"Go {V['GO_VERSION']} ({V['GO_URL']}, sha256 {V['GO_SHA256']})", ""]
         with open("/stage/userland/licenses/debian-packages.txt") as f:
             lines += f.read().splitlines()
     with open(f"{lic}/VERSIONS.txt", "w") as f:
@@ -384,7 +391,7 @@ def runtime_details(rid):
     """Versions of the package managers that come with a runtime."""
     if rid == "node":
         with open(f"{RUNTIMES}/lib/node_modules/npm/package.json") as f:
-            return {"npm": json.load(f)["version"]}
+            return {"npm": json.load(f)["version"], "esbuild": V["ESBUILD_VERSION"]}
     site = f"{RUNTIMES}/{PYTHON_LIB}/site-packages"
     pips = [d for d in os.listdir(site) if d.startswith("pip-") and d.endswith(".dist-info")]
     return {"pip": pips[0][len("pip-"):-len(".dist-info")]} if pips else {}
@@ -464,8 +471,14 @@ def main():
                     shutil.copyfile(real, f"{JNI}/{name}")
                     jni_by_hash[digest] = name
                     if is_elf(real):
-                        exes.append(name)
-                        roots += elf_info(real)[1]
+                        interp, needed, _, _ = elf_info(real)
+                        if interp == ANDROID_LINKER:
+                            # Built for Android (no glibc): the kernel runs it with Android's linker. Not patched.
+                            if needed:
+                                sys.exit(f"{rel}: an Android program that needs libraries: {needed}")
+                        else:
+                            exes.append(name)
+                            roots += needed
                 links[rel] = name
             else:
                 asset = f"engine/files/{rel}"
@@ -478,6 +491,9 @@ def main():
         lic = "/stage/runtimes/licenses"
         if os.path.isdir(lic):
             shutil.copytree(lic, f"{ASSETS}/licenses/runtimes")
+        lic = "/stage/esbuild/licenses"
+        if os.path.isdir(lic):
+            shutil.copytree(lic, f"{ASSETS}/licenses/esbuild")
         for tree in sorted(tree_members):
             trees.append(write_tree_zip(tree, tree_members[tree]))
 

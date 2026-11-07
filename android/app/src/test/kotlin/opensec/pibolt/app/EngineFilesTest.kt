@@ -19,6 +19,7 @@ import opensec.pibolt.app.engine.SessionIndex
 import opensec.pibolt.app.engine.engineEnvironment
 import opensec.pibolt.app.engine.engineUnavailableReason
 import opensec.pibolt.app.engine.resolvConf
+import opensec.pibolt.app.secrets.SecretEnv
 import opensec.pibolt.app.terminal.shellEnvironment
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -139,6 +140,40 @@ class EngineFilesTest {
         assertEquals(File(p.prefix, "etc/ssl/certs/ca-certificates.crt").path, withPack["SSL_CERT_FILE"])
         assertEquals(File(p.bin, "bash").path, withPack["SHELL"])
         assertEquals("/x/bash", engineEnvironment(p, emptyMap(), "UTC", mapOf("SHELL" to "/x/bash"))["SHELL"])
+    }
+
+    @Test
+    fun esbuildBinaryPathIsThePacksLinkToNativeLibraryDirAndSecretsCannotOverrideIt() {
+        val p = paths()
+        // Not shipped (an engine-only pack): esbuild's npm package keeps its own binary, and a stale value goes.
+        assertNull(engineEnvironment(p, mapOf("ESBUILD_BINARY_PATH" to "/x/esbuild"), "UTC")["ESBUILD_BINARY_PATH"])
+
+        p.nativeLibDir.mkdirs()
+        File(p.nativeLibDir, "libesbuild_exe.so").writeText("ELF")
+        val m = EngineManifest.parse(
+            manifestJson.replace(
+                """{ "path": "lib/libc.so.6", "target": "libc_so_6.so" }""",
+                """{ "path": "lib/libc.so.6", "target": "libc_so_6.so" }, { "path": "bin/esbuild", "target": "libesbuild_exe.so" }""",
+            ),
+        )
+        assertTrue(EnginePrefix(p, MapAssets(mapOf("engine/files/ca-certificates.crt" to "CERTS"))).ensure(m))
+        val env = engineEnvironment(p, emptyMap(), "UTC")
+        // A stable path (esbuild's postinstall writes it into node_modules) that resolves to nativeLibraryDir's file.
+        assertEquals(File(p.bin, "esbuild").path, env["ESBUILD_BINARY_PATH"])
+        assertEquals(File(p.nativeLibDir, "libesbuild_exe.so").canonicalPath, File(env.getValue("ESBUILD_BINARY_PATH")).canonicalPath)
+        // After an app update the link follows nativeLibraryDir; the variable stays the same.
+        val moved = paths(File(root, "nlib2"))
+        moved.nativeLibDir.mkdirs()
+        File(moved.nativeLibDir, "libesbuild_exe.so").writeText("ELF")
+        assertTrue(EnginePrefix(moved, MapAssets(mapOf("engine/files/ca-certificates.crt" to "CERTS"))).ensure(m))
+        val updated = engineEnvironment(moved, emptyMap(), "UTC")
+        assertEquals(env["ESBUILD_BINARY_PATH"], updated["ESBUILD_BINARY_PATH"])
+        assertEquals(File(moved.nativeLibDir, "libesbuild_exe.so").canonicalPath, File(updated.getValue("ESBUILD_BINARY_PATH")).canonicalPath)
+
+        // A project secret of that name is refused in the form and never replaces the value.
+        assertNotNull(SecretEnv.nameProblem("ESBUILD_BINARY_PATH"))
+        assertEquals(env["ESBUILD_BINARY_PATH"], SecretEnv.inject(env, mapOf("ESBUILD_BINARY_PATH" to "/evil/esbuild"))["ESBUILD_BINARY_PATH"])
+        assertEquals(env["ESBUILD_BINARY_PATH"], shellEnvironment(env, mapOf("ESBUILD_BINARY_PATH" to "/evil/esbuild"))["ESBUILD_BINARY_PATH"])
     }
 
     @Test

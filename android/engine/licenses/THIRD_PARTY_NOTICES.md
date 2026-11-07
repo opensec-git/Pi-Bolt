@@ -3,7 +3,7 @@
 The app runs Pi-Bolt on the phone with the programs and libraries below, shipped inside the APK as separate files
 (lib*.so in the app's native library directory). Exact versions: `VERSIONS.txt`. Full licence texts: `texts/`.
 Per-package copyright files: `userland/` (Debian packages), `pi-bolt/` (the engine itself), `extensions/` (the
-bundled Pi extensions) and `runtimes/` (Node.js, npm, Python, pip).
+bundled Pi extensions), `runtimes/` (Node.js, npm, Python, pip) and `esbuild/` (esbuild, Go, golang.org/x/sys).
 
 ## Corresponding source
 
@@ -39,6 +39,9 @@ https://github.com/opensec-git/Pi-Bolt/issues.
 | npm | `npm`, `npx`: Node's package manager, with its bundled dependencies | Artistic-2.0 (`runtimes/npm.LICENSE`); dependencies: ISC, MIT, BSD-2/3-Clause, Apache-2.0 (each in its own folder under `lib/node_modules/npm/node_modules`) |
 | CPython | `python3`: the Python interpreter and standard library | PSF-2.0 (`runtimes/python.LICENSE`, which also lists the licences of the parts it includes) |
 | pip | `pip`: Python's package installer, with its vendored libraries | MIT (`runtimes/pip.LICENSE`) |
+| esbuild | `esbuild`: the JavaScript and TypeScript bundler that Vite and other tools run through its npm package | MIT, Copyright (c) 2020 Evan Wallace (`esbuild/esbuild.LICENSE`) |
+| Go runtime and standard library | compiled into `esbuild` | BSD-3-Clause, Copyright 2009 The Go Authors (`esbuild/go.LICENSE`) |
+| golang.org/x/sys | compiled into `esbuild` | BSD-3-Clause, Copyright 2009 The Go Authors (`esbuild/golang-x-sys.LICENSE`) |
 | GNU C++ library (libstdc++) | C++ runtime for Node.js | GPL-3.0-or-later with the GCC Runtime Library Exception 3.1 |
 | SQLite | `sqlite3` module | public domain |
 | libffi | `ctypes` module | MIT |
@@ -65,6 +68,9 @@ bash, busybox, ripgrep, fd and the shared libraries from Debian are Debian's bin
 program interpreter path is set to the app's glibc loader and the run-path entry is removed (patchelf), and debug
 symbols are stripped. git and curl are built from the unmodified release tarballs. Node.js is the official
 linux-arm64 release binary with the same interpreter change; CPython is built from the unmodified release tarball.
+
+esbuild is built from its release source with one change (`android/engine/runtimes/esbuild-host-versions.patch`): it
+accepts the JavaScript API of other esbuild versions (0.19 to 0.28), so projects that pin different versions share it.
 
 ## Licence texts
 
