@@ -71,7 +71,11 @@ export type RpcCommand =
 	| { id?: string; type: "get_messages" }
 
 	// Commands (available for invocation via prompt)
-	| { id?: string; type: "get_commands" };
+	| { id?: string; type: "get_commands" }
+
+	// Subagents: follow one run's own session (read-only)
+	| { id?: string; type: "subagent_subscribe"; runId: string }
+	| { id?: string; type: "subagent_unsubscribe"; runId: string };
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -240,6 +244,10 @@ export type RpcResponse =
 			success: true;
 			data: { commands: RpcSlashCommand[] };
 	  }
+
+	// Subagents
+	| { id?: string; type: "response"; command: "subagent_subscribe"; success: true }
+	| { id?: string; type: "response"; command: "subagent_unsubscribe"; success: true }
 
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };

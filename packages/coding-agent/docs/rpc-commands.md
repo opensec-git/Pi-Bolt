@@ -833,6 +833,23 @@ Each command has:
 
 **Note**: Built-in TUI commands (`/settings`, `/hotkeys`, etc.) are not included. They are handled only in interactive mode and would not execute if sent via `prompt`.
 
+## Subagent streams
+
+### subagent_subscribe / subagent_unsubscribe
+
+Follow one subagent run of the subagents extension: its own conversation, read-only. `runId` is the id of the `Agent`
+tool call that started it.
+
+```json
+{"type": "subagent_subscribe", "runId": "call_abc"}
+{"type": "subagent_unsubscribe", "runId": "call_abc"}
+```
+
+Both answer `{"type": "response", "command": "...", "success": true}`; `subagent_subscribe` fails for a run this session
+does not have. Until unsubscribed (or the session is replaced), stdout carries `subagent_entries` (the agent's saved
+messages, from the start, then as they are appended) and `subagent_events` (its streaming message and tool starts and
+ends). The shapes are in [Subagent streams](remote-control.md#subagent-streams).
+
 ## Model object
 
 Model commands return the complete configured model definition. Costs are in US dollars per million tokens.
