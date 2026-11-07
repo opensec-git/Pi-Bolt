@@ -1,6 +1,21 @@
 package opensec.pibolt.app.ui.projects
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.material.icons.automirrored.rounded.NoteAdd
+import androidx.compose.material.icons.rounded.FileOpen
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.heading
+import opensec.pibolt.app.terminal.Terminals
+import opensec.pibolt.app.ui.components.QuadMode
+import opensec.pibolt.app.ui.components.SecondaryButton
+import opensec.pibolt.app.ui.components.SectionLabel
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -47,6 +62,7 @@ import androidx.compose.runtime.setValue
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import opensec.pibolt.app.ui.projects.transfer.ExportSheet
 import opensec.pibolt.app.ui.projects.transfer.SafTransfer
@@ -107,7 +123,7 @@ import java.io.File
  * One project: its saved sessions (newest first), "New session", tap to resume. The live session, if it belongs
  * here, is marked and resumes without reopening. Opens with shared bounds from the project card on Home.
  */
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun ProjectScreen(
     app: PiBoltApp,
@@ -141,10 +157,9 @@ fun ProjectScreen(
     val sessions by produceState<List<SessionSummary>?>(null, reload, live) { value = projects.sessions(dir) }
     var menu by remember { mutableStateOf(false) }
     var action by remember { mutableStateOf<ProjectAction?>(null) }
-    // 0 sessions, 1 files, 2 changes (git), 3 terminal.
+    // ProjectTab.index: 0 sessions, 1 files, 2 changes (git), 3 terminal.
     var tab by rememberSaveable { mutableIntStateOf(0) }
     val showFiles = tab == 1
-    val showTerminal = tab == 3
     val changes = rememberChangesUi(app, dir, store, snackbar)
     // Folder shown in Files, relative to the project ("" is its root).
     var path by rememberSaveable { mutableStateOf("") }
@@ -261,7 +276,23 @@ fun ProjectScreen(
     }
 
     val entry = ProjectEntry(name, dir.absolutePath, pm, sessions?.firstOrNull(), sessions?.size ?: 0)
-    val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val selected = ProjectTab.of(tab)
+    // Each tab keeps its own scroll position while the others are shown.
+    val sessionsList = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
+    val filesList = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
+    val changesList = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
+    // The Changes badge needs the status before its tab is opened.
+    LaunchedEffect(dir) { changes.model.refresh() }
+    val liveBusy by remember(liveHere) {
+        derivedStateOf { liveHere?.controller?.state?.value?.let { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() } == true }
+    }
+    val badges = ProjectBadges(
+        changes = ProjectNavRules.changesBadge(changes.model.status),
+        terminal = Terminals.inProject(dir).any { it.running },
+        sessions = liveBusy,
+    )
+    val imeVisible = WindowInsets.isImeVisible
+    val overlayOpen = openFile != null || (selected == ProjectTab.Changes && changes.overlay != null)
 
     Box(
         Modifier
@@ -269,14 +300,19 @@ fun ProjectScreen(
             .sharedHostBounds(SharedKeys.project(name), card = false)
             .background(colors.canvas),
     ) {
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
-            item(key = "top", contentType = "top") {
-                Row(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Projects", onClick = onBack, tint = colors.ink1)
-                    Spacer(Modifier.weight(1f))
-                    // Sort, filter, search inside messages, rename and delete (features2).
-                    IconAction(Icons.Rounded.Key, "Project secrets", onClick = onSecrets)
-                    IconAction(Icons.Rounded.Search, "Search and manage sessions", onClick = { browse = true }, enabled = !unavailable)
+        Column(Modifier.fillMaxSize().imePadding()) {
+            if (ProjectNavRules.showChrome(imeVisible, LocalConfiguration.current.screenHeightDp)) ProjectTopBar(
+                title = title,
+                name = name,
+                pinned = pm.pinned,
+                branch = branch,
+                onBack = onBack,
+                actions = {
+                    when (selected) {
+                        ProjectTab.Sessions -> IconAction(Icons.Rounded.Search, "Search and manage sessions", onClick = { browse = true }, enabled = !unavailable)
+                        ProjectTab.Terminal -> IconAction(Icons.Rounded.Key, "Project secrets", onClick = onSecrets)
+                        ProjectTab.Files, ProjectTab.Changes -> Unit
+                    }
                     Box {
                         IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
                         ProjectMenu(
@@ -288,142 +324,119 @@ fun ProjectScreen(
                             onDelete = { action = ProjectAction.Delete(entry) },
                             onExport = { export(dir, name) },
                             onRuntimes = onRuntimes,
+                            onSecrets = onSecrets,
                         )
                     }
-                }
-            }
-            item(key = "head", contentType = "head") {
-                Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 16.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            title,
-                            style = type.display,
-                            color = colors.ink1,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false).sharedHostElement(SharedKeys.projectName(name)),
-                        )
-                        if (pm.pinned) {
-                            Spacer(Modifier.width(8.dp))
-                            Icon(Icons.Rounded.PushPin, contentDescription = "Pinned", tint = colors.ink3, modifier = Modifier.size(16.dp))
+                },
+            ) else Spacer(Modifier.statusBarsPadding())
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                when (selected) {
+                    ProjectTab.Sessions -> LazyColumn(Modifier.fillMaxSize(), state = sessionsList, contentPadding = PaddingValues(bottom = 24.dp)) {
+                        item(key = "new", contentType = "new") {
+                            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp)) {
+                                PrimaryButton(
+                                    if (opening) "Opening…" else "New session",
+                                    onClick = { open(null, fresh = true) },
+                                    icon = Icons.Rounded.Add,
+                                    enabled = !unavailable && !opening,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                if (unavailable) {
+                                    Text("Pi-Bolt can't run on this phone, so sessions here can't be opened.", style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 8.dp))
+                                }
+                            }
+                        }
+                        val list = sessions
+                        when {
+                            list == null -> item(key = "loading", contentType = "loading") { LoadingRow("Reading sessions") }
+                            list.isEmpty() -> item(key = "empty", contentType = "empty") {
+                                EmptyCard(
+                                    Icons.AutoMirrored.Rounded.Chat,
+                                    "No sessions yet",
+                                    "Start one and ask Pi to look around, set the project up, or explain the code.",
+                                )
+                            }
+                            else -> {
+                                item(key = "label", contentType = "label") {
+                                    SectionLabel(if (list.size == 1) "1 session" else "${list.size} sessions", Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp))
+                                }
+                                // The engine's own session file: a new session or a fork is not the file the session was opened with.
+                                val liveFile = liveHere?.controller?.sessionFile ?: liveHere?.sessionFile
+                                items(list, key = { it.file }, contentType = { "session" }) { s ->
+                                    val isLive = liveHere != null && (if (liveFile != null) liveFile == s.file else s == list.first())
+                                    SessionRow(
+                                        s,
+                                        live = if (isLive) liveHere?.controller else null,
+                                        unread = !isLive && ProjectRules.unread(s, meta.seen[s.file]),
+                                        now = now,
+                                        enabled = !unavailable,
+                                        onClick = { if (isLive) onOpenSession() else open(s.file, fresh = false) },
+                                        modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp),
+                                    )
+                                }
+                            }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
-                    val shape = RoundedCornerShape(Radius.sm)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "projects/$name",
-                            style = type.monoMeta,
-                            color = colors.ink2,
-                            maxLines = 1,
-                            overflow = TextOverflow.MiddleEllipsis,
-                            modifier = Modifier.weight(1f, fill = false).background(colors.surface1, shape).border(1.dp, colors.line, shape).padding(horizontal = 10.dp, vertical = 5.dp),
-                        )
-                        branch?.let {
-                            Spacer(Modifier.width(10.dp))
-                            Icon(Icons.AutoMirrored.Rounded.CallSplit, contentDescription = "Branch", tint = colors.ink3, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text(it, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    ProjectTab.Files -> LazyColumn(Modifier.fillMaxSize(), state = filesList, contentPadding = PaddingValues(bottom = 24.dp)) {
+                        stickyHeader(key = "files-bar", contentType = "files-bar") {
+                            FilesBar(
+                                root = title,
+                                path = path,
+                                sort = sort,
+                                showHidden = showHidden,
+                                onPath = { path = it },
+                                onSort = { sort = it },
+                                onHidden = { showHidden = it },
+                                onCreate = { fileAction = FileAction.Create(it) },
+                                onImport = { tree -> if (tree) importTree.launch(null) else importDocs.launch(arrayOf("*/*")) },
+                                modifier = Modifier.background(colors.canvas).padding(horizontal = 4.dp),
+                            )
+                        }
+                        val entries = shownFiles
+                        when {
+                            entries == null -> item(key = "files-loading", contentType = "loading") { LoadingRow("Reading the folder") }
+                            entries.isEmpty() -> item(key = "files-empty", contentType = "empty") {
+                                val hidden = files.orEmpty().size
+                                EmptyCard(
+                                    Icons.Rounded.Folder,
+                                    if (path.isEmpty()) "No files yet" else "This folder is empty",
+                                    when {
+                                        hidden > 0 -> if (hidden == 1) "1 hidden file. Show hidden files from the sort menu." else "$hidden hidden files. Show hidden files from the sort menu."
+                                        path.isEmpty() -> "Ask Pi to set the project up, or add files yourself."
+                                        else -> "Add a file or import one from the phone."
+                                    },
+                                ) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        SecondaryButton("New file", onClick = { fileAction = FileAction.Create(false) }, icon = Icons.AutoMirrored.Rounded.NoteAdd, modifier = Modifier.weight(1f))
+                                        SecondaryButton("Import", onClick = { importDocs.launch(arrayOf("*/*")) }, icon = Icons.Rounded.FileOpen, modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                            else -> items(entries, key = { "f:" + it.name }, contentType = { "file" }) { entry ->
+                                FileRow(entry, folder, onClick = {
+                                    val rel = if (path.isEmpty()) entry.name else path + "/" + entry.name
+                                    if (entry.dir) path = rel else openFile = rel
+                                }, onLongClick = { fileAction = FileAction.Menu(entry) }, modifier = Modifier.animateItem().padding(horizontal = 16.dp))
+                            }
                         }
                     }
-                    Spacer(Modifier.height(20.dp))
-                    PrimaryButton(
-                        if (opening) "Opening…" else "New session",
-                        onClick = { open(null, fresh = true) },
-                        icon = Icons.Rounded.Add,
-                        enabled = !unavailable && !opening,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    if (unavailable) {
-                        Text("Pi-Bolt can't run on this phone, so sessions here can't be opened.", style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 8.dp))
+                    ProjectTab.Changes -> LazyColumn(Modifier.fillMaxSize(), state = changesList, contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)) {
+                        changesItems(changes)
                     }
+                    ProjectTab.Terminal -> TerminalPane(app, dir, fullScreen = false, onToggleFullScreen = onTerminal, onPreview = onPreview, modifier = Modifier.fillMaxSize())
+                }
+                Column(Modifier.align(Alignment.BottomCenter)) {
+                    TransferBar(transfers)
+                    PiSnackHost(snackbar)
                 }
             }
-            item(key = "tabs", contentType = "tabs") {
-                Segmented(
-                    options = listOf(0 to (sessions?.size?.let { "Sessions · $it" } ?: "Sessions"), 1 to "Files", 2 to "Changes", 3 to "Terminal"),
-                    selected = tab,
-                    onSelect = { tab = it },
-                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 10.dp),
-                    height = 40.dp,
-                )
-            }
-            if (showFiles) {
-                stickyHeader(key = "files-bar", contentType = "files-bar") {
-                    FilesBar(
-                        root = title,
-                        path = path,
-                        sort = sort,
-                        showHidden = showHidden,
-                        onPath = { path = it },
-                        onSort = { sort = it },
-                        onHidden = { showHidden = it },
-                        onCreate = { fileAction = FileAction.Create(it) },
-                        onImport = { tree -> if (tree) importTree.launch(null) else importDocs.launch(arrayOf("*/*")) },
-                        modifier = Modifier.background(colors.canvas).padding(horizontal = 4.dp),
-                    )
-                }
-                val entries = shownFiles
-                if (entries != null && entries.isEmpty()) {
-                    item(key = "files-empty", contentType = "empty") {
-                        Text("This folder is empty.", style = type.body, color = colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
-                    }
-                }
-                if (entries != null) {
-                    items(entries, key = { "f:" + it.name }, contentType = { "file" }) { entry ->
-                        FileRow(entry, folder, onClick = {
-                            val rel = if (path.isEmpty()) entry.name else path + "/" + entry.name
-                            if (entry.dir) path = rel else openFile = rel
-                        }, onLongClick = { fileAction = FileAction.Menu(entry) }, modifier = Modifier.animateItem().padding(horizontal = 16.dp))
-                    }
-                }
-            }
-            val list = sessions
-            if (tab == 2) changesItems(changes)
-            if (showTerminal) {
-                item(key = "terminal", contentType = "terminal") {
-                    TerminalPane(app, dir, fullScreen = false, onToggleFullScreen = onTerminal, onPreview = onPreview, modifier = Modifier.fillParentMaxHeight(0.86f).fillMaxWidth())
-                }
-            }
-            if (list != null && tab == 0) {
-                if (list.isEmpty()) {
-                    item(key = "empty", contentType = "empty") {
-                        val shape = RoundedCornerShape(Radius.md)
-                        Column(
-                            Modifier
-                                .padding(horizontal = 16.dp, vertical = 4.dp)
-                                .fillMaxWidth()
-                                .background(colors.surface1, shape)
-                                .border(1.dp, colors.line, shape)
-                                .padding(16.dp),
-                        ) {
-                            Text("No sessions yet", style = type.bodyStrong, color = colors.ink1)
-                            Spacer(Modifier.height(4.dp))
-                            Text("Start one and ask Pi to look around, set the project up, or clone a repository.", style = type.body, color = colors.ink2)
-                        }
-                    }
-                }
-                // The engine's own session file: a new session or a fork is not the file the session was opened with.
-                val liveFile = liveHere?.controller?.sessionFile ?: liveHere?.sessionFile
-                items(list, key = { it.file }, contentType = { "session" }) { s ->
-                    val isLive = liveHere != null && (if (liveFile != null) liveFile == s.file else s == list.first())
-                    SessionRow(
-                        s,
-                        live = if (isLive) liveHere?.controller else null,
-                        unread = !isLive && ProjectRules.unread(s, meta.seen[s.file]),
-                        now = now,
-                        enabled = !unavailable,
-                        onClick = { if (isLive) onOpenSession() else open(s.file, fresh = false) },
-                        modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp),
-                    )
-                }
+            if (ProjectNavRules.showBar(imeVisible, overlayOpen)) {
+                ProjectNavBar(selected, badges, onSelect = { tab = it.index })
+            } else if (!imeVisible) {
+                Spacer(Modifier.navigationBarsPadding())
             }
         }
         StatusBarScrim()
-        Column(Modifier.align(Alignment.BottomCenter).navigationBarsPadding()) {
-            TransferBar(transfers)
-            PiSnackHost(snackbar)
-        }
 
         AnimatedVisibility(
             visible = openFile != null,
@@ -436,7 +449,7 @@ fun ProjectScreen(
                 FileViewer(dir, tabs, rel, onSelect = { openFile = it }, onClose = { openFile = null }, onChanged = { reload++ }, onAsk = ::ask)
             }
         }
-        ChangesOverlays(changes, visible = tab == 2)
+        ChangesOverlays(changes, visible = selected == ProjectTab.Changes)
     }
     // Back inside Files goes up a folder first.
     BackHandler(enabled = showFiles && path.isNotEmpty() && openFile == null) { path = path.substringBeforeLast('/', "") }
@@ -569,4 +582,82 @@ private fun LiveMark(live: SessionController) {
         }
     }
     QuadSpinner(rememberSettledMode(raw), size = 16.dp, color = if (busy) colors.ink1 else colors.success, animate = busy)
+}
+
+/**
+ * The project's 56dp bar: back, the title (subhead, the shared element from the project card) over
+ * `projects/x · branch` (monoMeta ink3), then the shown tab's own action and the project menu.
+ */
+@Composable
+private fun ProjectTopBar(title: String, name: String, pinned: Boolean, branch: String?, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit) {
+    val colors = Pi.colors
+    val type = Pi.type
+    Row(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Projects", onClick = onBack, tint = colors.ink1)
+        Column(Modifier.weight(1f).padding(start = 4.dp, end = 4.dp).semantics(mergeDescendants = true) { heading() }) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    title,
+                    style = type.subhead,
+                    color = colors.ink1,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false).sharedHostElement(SharedKeys.projectName(name)),
+                )
+                if (pinned) {
+                    Spacer(Modifier.width(6.dp))
+                    Icon(Icons.Rounded.PushPin, contentDescription = "Pinned", tint = colors.ink3, modifier = Modifier.size(13.dp))
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("projects/$name", style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f, fill = false))
+                if (branch != null) {
+                    Spacer(Modifier.width(8.dp))
+                    Icon(Icons.AutoMirrored.Rounded.CallSplit, contentDescription = "Branch", tint = colors.ink3, modifier = Modifier.size(12.dp))
+                    Spacer(Modifier.width(3.dp))
+                    Text(branch, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+                }
+            }
+        }
+        actions()
+    }
+}
+
+/** A list that is still reading from disk: a 16dp Quad Run and what it reads (meta ink3), 48dp. */
+@Composable
+internal fun LoadingRow(text: String) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 20.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically) {
+        QuadSpinner(QuadMode.Run, size = 16.dp, color = Pi.colors.ink3)
+        Spacer(Modifier.width(12.dp))
+        Text("$text…", style = Pi.type.meta, color = Pi.colors.ink3, maxLines = 1)
+    }
+}
+
+/**
+ * The empty state of a project tab: surface1, radius 12, 1dp line; a 20dp glyph (ink3), the title (bodyStrong), one
+ * line on what to do (body ink2) and, when given, the actions under it.
+ */
+@Composable
+internal fun EmptyCard(icon: ImageVector, title: String, text: String, actions: (@Composable () -> Unit)? = null) {
+    val colors = Pi.colors
+    val type = Pi.type
+    val shape = RoundedCornerShape(Radius.md)
+    Column(
+        Modifier
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .fillMaxWidth()
+            .background(colors.surface1, shape)
+            .border(1.dp, colors.line, shape)
+            .padding(16.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.height(10.dp))
+        Text(title, style = type.bodyStrong, color = colors.ink1)
+        Spacer(Modifier.height(4.dp))
+        Text(text, style = type.body, color = colors.ink2)
+        if (actions != null) {
+            Spacer(Modifier.height(14.dp))
+            actions()
+        }
+    }
 }
