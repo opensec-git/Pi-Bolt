@@ -916,7 +916,7 @@ internal fun SessionContent(
             val s = state.value
             buildList {
                 // Retries are told by the error notice (with Stop retrying) and the status line, not here.
-                addAll(s.statuses.values.map { it to false })
+                addAll(s.statuses.filterKeys { it != opensec.pibolt.app.engine.BackgroundJobs.STATUS_KEY }.values.map { it to false })
                 s.widgets.values.forEach { lines -> addAll(lines.map { it to false }) }
             }
         }
@@ -1103,6 +1103,7 @@ internal fun SessionContent(
                         StatusExtras(extras)
                         TodoPanel(todos, running, autoCollapse = !running || windowHeight < 560.dp, quiet = status.value.visible && statusOnScreen)
                         if (local != null && parts.preview) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = Space.page))
+                        if (local != null && parts.preview) BackgroundJobsPill(controller.localBackend?.pid, Modifier.padding(horizontal = Space.page))
                         PendingDialogStrip(askingTitle) { memory.hiddenDialog.value = null }
                         QueueStrip(queue, onEdit = controller::clearQueue)
                     }
