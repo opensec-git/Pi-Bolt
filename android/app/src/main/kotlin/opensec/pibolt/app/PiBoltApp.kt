@@ -31,6 +31,7 @@ import opensec.pibolt.app.git.github.PrefsKeyValue
 import opensec.pibolt.app.git.github.TokenStore
 import opensec.pibolt.app.session.Notifications
 import opensec.pibolt.app.session.LiveRegistry
+import opensec.pibolt.app.session.RunMarks
 import opensec.pibolt.app.ui.chats.Chats
 import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.session.SessionController
@@ -57,6 +58,9 @@ class PiBoltApp : Application() {
     val http: OkHttpClient by lazy { RemoteBackend.defaultClient() }
 
     private val localEngine: LocalEngine by lazy { LocalEngine(this) }
+
+    /** Turns running on this phone, kept on disk to tell after a process death which ones were cut off. */
+    val runMarks: RunMarks by lazy { RunMarks(File(noBackupFilesDir, "running-turns.json")) }
 
     /** GitHub sign-in (token sealed by the Keystore) and REST calls. A new token restarts the idle engine with it. */
     val github: GitHub by lazy {
@@ -123,6 +127,8 @@ class PiBoltApp : Application() {
         Notifications.createChannels(this)
         // No session lives yet: a "needs an answer" or session notification from a killed process is stale.
         Notifications.clearStale(this)
+        // Turns the previous process was running when Android ended it: said once, each reopens its session.
+        for (run in runMarks.takeAll()) Notifications.interrupted(this, run)
         LocalSessions.follow(this)
         Chats.follow(this)
         SessionAlerts.watchBackgroundAgents(this)

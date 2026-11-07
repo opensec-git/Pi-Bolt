@@ -228,6 +228,8 @@ class SessionController private constructor(
         if (stopped) return
         stopped = true
         checkpoints?.close()
+        // Stopped on purpose: a turn it was running did not end by a process death.
+        if (isLocal) app.runMarks.unmark(hostId)
         app.sessionStopped(this)
         when (origin) {
             is Origin.Remote -> {
@@ -486,6 +488,11 @@ class SessionController private constructor(
         if (sent != 0L && now.streaming.isNotEmpty()) {
             sentAt = 0L
             Log.i(PERF_TAG, "first token ${SystemClock.elapsedRealtime() - sent} ms")
+        }
+        // A turn on this phone is on disk while it runs: a process killed meanwhile says so on the next launch (RunMarks).
+        if (isLocal && now.isRunning != previous.isRunning) {
+            if (now.isRunning) app.runMarks.mark(RunMarks.Run(hostId, project?.name?.takeUnless { isChat }, _hostName.value, sessionFile, isChat))
+            else app.runMarks.unmark(hostId)
         }
         val needsService = now.isRunning || now.dialogs.isNotEmpty()
         if (needsService && !(previous.isRunning || previous.dialogs.isNotEmpty())) SessionService.ensureRunning(app)

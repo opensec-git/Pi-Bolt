@@ -152,6 +152,30 @@ object Notifications {
     }
 
     /**
+     * [run]'s turn was cut off: Android ended the app (and its engine) while it worked ([RunMarks]). Takes the place of
+     * the session's "finished" alert; the tap reopens the session, where what was saved before the kill is shown.
+     */
+    fun interrupted(context: Context, run: RunMarks.Run) {
+        val id = RunningSummary.notificationId(run.key, RunningSummary.SETTLED)
+        val text = "Android closed Pi-Bolt while Pi was working. Open the session to continue."
+        post(
+            context,
+            id,
+            NotificationCompat.Builder(context, CHANNEL_ALERTS)
+                .setSmallIcon(R.drawable.ic_stat_bolt)
+                .setColor(ContextCompat.getColor(context, R.color.notification_accent))
+                .setContentTitle("Pi was stopped on ${run.host}")
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setAutoCancel(true)
+                .setContentIntent(openApp(context, run.project, run.sessionFile, id, run.chat))
+                .privateOnLockScreen(context, "Pi was stopped")
+                .build(),
+        )
+    }
+
+    /**
      * Session [key] waits for [dialog]: a heads-up with the answer in it (option buttons, Yes and No, or an inline
      * reply). [why]: the last reply was not usable, said in place of the message.
      */
