@@ -2,6 +2,7 @@ package opensec.pibolt.app.ui.theme
 
 import androidx.compose.runtime.Immutable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
 import opensec.pibolt.app.data.ThemeId
 
 /**
@@ -22,11 +23,35 @@ data class SyntaxColors(
     val regex: Color,
     val escape: Color,
     val variable: Color,
-    /** Comments: the theme's ink3, a step lighter where ink3 misses AA on surface2 (Graphite). */
+    /** Comments: the theme's ink3 (a neutral grey for the shared Pi palette), italic. */
     val comment: Color,
+    /** Keywords and constants in a heavier weight where their colour alone is close to the text (Desktop). */
+    val keywordWeight: FontWeight? = null,
 ) {
     companion object {
-        /** Graphite, Void and Codex: cool pastels on neutral greys. */
+        /**
+         * Graphite: Pi-Bolt Desktop's highlight.js theme (`src/styles/app.css`). Monochrome: white keywords and
+         * constants a weight up, near-white calls, warm sand types, green strings, orange numbers, greys for the rest.
+         * No blue.
+         */
+        val Desktop = SyntaxColors(
+            keyword = Color(0xFFFFFFFF),
+            type = Color(0xFFDCC38C),
+            function = Color(0xFFF0F0F0),
+            string = Color(0xFF9FD4A8),
+            number = Color(0xFFE9B77C),
+            constant = Color(0xFFFFFFFF),
+            operator = Color(0xFFA1A1A1),
+            attribute = Color(0xFFC4C4C4),
+            tag = Color(0xFFA1A1A1),
+            regex = Color(0xFF9FD4A8),
+            escape = Color(0xFFE9B77C),
+            variable = Color(0xFFC4C4C4),
+            comment = Color(0xFF858585),
+            keywordWeight = FontWeight.Medium,
+        )
+
+        /** Void and Codex: pastels on neutral greys; the comment grey is neutral too (no blue cast). */
         val Pi = SyntaxColors(
             keyword = Color(0xFFC9A0F5),
             type = Color(0xFFE8C67E),
@@ -40,7 +65,7 @@ data class SyntaxColors(
             regex = Color(0xFF86CBDD),
             escape = Color(0xFF86CBDD),
             variable = Color(0xFFF08E9A),
-            comment = Color(0xFF858B94),
+            comment = Color(0xFF8F8E8C),
         )
 
         /** Ember: warm, earthy (in the spirit of Gruvbox). */
@@ -112,7 +137,8 @@ data class SyntaxColors(
         )
 
         fun of(theme: ThemeId): SyntaxColors = when (theme) {
-            ThemeId.Graphite, ThemeId.Void, ThemeId.Codex -> Pi
+            ThemeId.Graphite -> Desktop
+            ThemeId.Void, ThemeId.Codex -> Pi
             ThemeId.Ember -> Ember
             ThemeId.Claude -> Claude
             ThemeId.Vercel -> Vercel

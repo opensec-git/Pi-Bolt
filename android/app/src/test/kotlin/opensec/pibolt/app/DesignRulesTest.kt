@@ -1,5 +1,7 @@
 package opensec.pibolt.app
 
+import androidx.compose.ui.unit.dp
+import opensec.pibolt.app.ui.theme.PiDims
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -128,5 +130,14 @@ class DesignRulesTest {
             }
         }
         assertTrue(failures.isEmpty(), failures.joinToString("\n"))
+    }
+
+    @Test
+    fun densityTokensKeepTouchTargets() {
+        // An option row is one touch target, so Compact density may tighten it only down to 48dp (it was 46dp).
+        for (compact in listOf(false, true)) {
+            assertTrue(PiDims(compact).optionRow >= 48.dp, "optionRow (compact = $compact) under 48dp")
+            assertTrue(PiDims(compact).hostCard >= 48.dp, "hostCard (compact = $compact) under 48dp")
+        }
     }
 }

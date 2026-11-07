@@ -16,7 +16,8 @@ import java.util.concurrent.Executors
 
 /** Dark themes. Claude, Codex, Vercel and GitHub are palettes in the spirit of those products' dark modes. */
 enum class ThemeId(val label: String) {
-    Graphite("Graphite"),
+    /** The default: Pi-Bolt Desktop's palette. The id stays Graphite so saved settings keep it. */
+    Graphite("Pi-Bolt"),
     Void("Void"),
     Ember("Ember"),
     Claude("Claude"),
@@ -25,7 +26,7 @@ enum class ThemeId(val label: String) {
     GitHub("GitHub"),
 }
 
-/** [Theme] uses the theme's own accent (Claude's coral, GitHub's blue, ink for the others). */
+/** [Theme] uses the theme's own accent (white for Pi-Bolt, Claude's coral, GitHub's blue, ink for the others). */
 enum class AccentId(val label: String) { Theme("Theme"), Ink("Ink"), Iris("Iris"), Glacier("Glacier") }
 
 enum class Density(val label: String) { Comfortable("Comfortable"), Compact("Compact") }

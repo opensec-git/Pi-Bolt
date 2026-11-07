@@ -193,9 +193,9 @@ object Ansi {
             2 -> colors.success
             10 -> colors.diffAddFg
             3, 11 -> colors.warning
-            4, 12 -> colors.syntax.function
-            5, 13 -> colors.syntax.keyword
-            6, 14 -> colors.syntax.operator
+            4, 12 -> colors.ansiBlue
+            5, 13 -> colors.ansiMagenta
+            6, 14 -> colors.ansiCyan
             7 -> colors.ink2
             15 -> colors.ink1
             else -> Color(0xFF000000.toInt() or paletteRgb(c.index))

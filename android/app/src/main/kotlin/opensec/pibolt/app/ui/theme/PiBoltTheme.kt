@@ -51,19 +51,24 @@ import opensec.pibolt.app.ui.components.QuadMath
 @Immutable
 data class PiDims(val compact: Boolean) {
     val hostCard: Dp get() = if (compact) 64.dp else 72.dp
-    val optionRow: Dp get() = if (compact) 46.dp else 52.dp
+    // Never under 48dp: an option row is one touch target.
+    val optionRow: Dp get() = if (compact) 48.dp else 52.dp
     val turnGap: Dp get() = if (compact) 14.dp else 20.dp
     val stepGap: Dp get() = if (compact) 4.dp else 6.dp
     val gutter: Dp get() = 16.dp
 }
 
-/** Corner radii (DESIGN.md "Space, shape, size"): xs tags, sm chips, md cards and rows, lg groups and composer, xl sheets. */
+/**
+ * Corner radii (DESIGN.md "Space, shape, size"), Pi-Bolt Desktop's 4 / 6 / 10 / 14 by role: xs tags and inline code
+ * (--radius-xs), sm chips and small buttons (--radius-sm), md cards, menus, snackbars and rows (--radius-lg), lg the
+ * composer, user bubble and groups (--radius-xl), xl sheets (a dialog's --radius-xl).
+ */
 object Radius {
     val xs = 4.dp
-    val sm = 8.dp
-    val md = 12.dp
-    val lg = 18.dp
-    val xl = 28.dp
+    val sm = 6.dp
+    val md = 10.dp
+    val lg = 14.dp
+    val xl = 14.dp
 }
 
 /** The spacing scale. Side gutter is [lg] (16dp); sheets and headers inset their text by [xl] (20dp). */

@@ -10,24 +10,62 @@ One `PiColors` set per theme, provided through `LocalPiColors` and mapped onto M
 (`surfaceTint = Transparent`, tonal elevation 0) so stock components match. Elevation = a surface step plus a 1dp
 line; no shadows.
 
-| Role | Graphite (default) | Void (AMOLED) | Ember (warm) | Claude | Codex | Vercel | GitHub |
+| Role | Pi-Bolt (default, id `Graphite`) | Void (AMOLED) | Ember (warm) | Claude | Codex | Vercel | GitHub |
 |---|---|---|---|---|---|---|---|
-| canvas | `#0B0C0E` | `#000000` | `#15130F` | `#1F1E1D` | `#0D0D0D` | `#000000` | `#0D1117` |
-| surface1 (cards, composer) | `#121417` | `#0D0E10` | `#1C1A16` | `#262624` | `#171717` | `#0F0F0F` | `#151B23` |
-| surface2 (bubbles, sheets) | `#191C20` | `#101113` | `#24211C` | `#30302E` | `#212121` | `#111111` | `#1C2128` |
-| surface3 (pressed, menus) | `#21252A` | `#17191C` | `#2C2822` | `#3A3936` | `#2A2A2A` | `#1A1A1A` | `#262C36` |
-| ink1 (text) | `#E8EAED` | `#E8EAED` | `#EFE9DD` | `#F5F4EE` | `#ECECEC` | `#EDEDED` | `#F0F6FC` |
-| ink2 (secondary) | `#A3A8B0` | `#A3A8B0` | `#B9B1A3` | `#C3C0B6` | `#B4B4B4` | `#A1A1A1` | `#B7BDC8` |
-| ink3 (meta, lowest text) | `#878D96` | `#7D838C` | `#979084` | `#A6A49C` | `#929292` | `#8F8F8F` | `#9198A1` |
-| ink4 (rules, never text) | `#4C5158` | `#4C5158` | `#5A554D` | `#5E5D59` | `#545454` | `#454545` | `#3D444D` |
-| line / lineStrong | ink1 @ 9% / 16% | ink1 @ 11% / 19% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 12% / 20% | ink1 @ 10% / 18% |
-| scrim | black @ 56% | black @ 70% | black @ 56% | black @ 60% | black @ 60% | black @ 70% | black @ 60% |
+| canvas | `#000000` | `#000000` | `#15130F` | `#1F1E1D` | `#0D0D0D` | `#000000` | `#0D1117` |
+| surface1 (cards, composer) | `#0E0E0E` | `#0D0E10` | `#1C1A16` | `#262624` | `#171717` | `#0F0F0F` | `#151B23` |
+| surface2 (bubbles, sheets) | `#161616` | `#101113` | `#24211C` | `#30302E` | `#212121` | `#111111` | `#1C2128` |
+| surface3 (pressed, menus) | `#1D1D1D` | `#17191C` | `#2C2822` | `#3A3936` | `#2A2A2A` | `#1A1A1A` | `#262C36` |
+| ink1 (text) | `#EDEDED` | `#E8EAED` | `#EFE9DD` | `#F5F4EE` | `#ECECEC` | `#EDEDED` | `#F0F6FC` |
+| ink2 (secondary) | `#A1A1A1` | `#A3A8B0` | `#B9B1A3` | `#C3C0B6` | `#B4B4B4` | `#A1A1A1` | `#B7BDC8` |
+| ink3 (meta, lowest text) | `#858585` | `#7D838C` | `#979084` | `#A6A49C` | `#929292` | `#8F8F8F` | `#9198A1` |
+| ink4 (rules, never text) | `#595959` | `#4C5158` | `#5A554D` | `#5E5D59` | `#545454` | `#454545` | `#3D444D` |
+| line / lineStrong | white @ 8% / 14% | ink1 @ 11% / 19% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 12% / 20% | ink1 @ 10% / 18% |
+| scrim | black @ 50% | black @ 70% | black @ 56% | black @ 60% | black @ 60% | black @ 70% | black @ 60% |
 
 Claude, Codex, Vercel and GitHub are palettes in the spirit of those products' dark modes, not their assets.
 
-Overlays: press = ink1 @ 7%, selected = ink1 @ 11%, focus line = ink1 @ 40%.
+**Pi-Bolt (the default)** is Pi-Bolt Desktop's palette (`pi-bolt-desktop/src/styles/tokens.css`), mapped 1:1, with
+one change. It is monochrome: a pure black canvas, one neutral grey scale, white as the only accent, green, amber and
+red for state only, and no blue anywhere. The enum id stays `Graphite`, so saved settings keep the default; only its
+label changed to "Pi-Bolt".
 
-Accent (independent of theme): **Theme** (default: the theme's own accent, Claude coral `#E08566` / `#1F1E1D` (lifted
+| Android | Desktop token | Value |
+|---|---|---|
+| canvas, surface1, surface2, surface3 | `--bg`, `--bg-elev`, `--bg-elev-2`, `--bg-elev-3` | `#000000`, `#0E0E0E`, `#161616`, `#1D1D1D` |
+| ink1, ink2, ink3, ink4 | `--text`, `--text-2`, `--text-3`, `--text-4` | `#EDEDED`, `#A1A1A1`, `#858585`, `#595959` |
+| line, lineStrong, lineFocus | `--border`, `--border-strong`, `--border-focus` | white @ 8%, 14%, 32% |
+| press, selected | `--bg-active`, `--accent-soft` | white @ 8.5%, 10% |
+| scrim | `--scrim` | black @ 50% |
+| accent, onAccent | `--accent`, `--on-accent` | `#FAFAFA`, `#000000` |
+| success, warning, danger (soft @ 12%) | `--green`, `--amber`, `--red` | `#4CC38A`, `#D4A64A`, `#EF6461` |
+| diff add / delete bg, fg | `--diff-add-*`, `--diff-del-*` | success / danger @ 9%, `#86DFB0`, `#F5A3A1` |
+| ansiBlue, ansiMagenta, ansiCyan | `--ansi-b`, `--ansi-m`, `--ansi-c` | `#C9C9C9`, `#D7A6C8`, `#B8C4C4` |
+| tint0 to tint4 | `--tint-0` to `--tint-4` | see Subagent tints |
+
+The one change is ink3: `#858585` instead of `#808080`. `#808080` measures 4.27:1 on surface3, below AA; `#858585`
+measures 4.57:1.
+
+Before 0.5.2 the default was a blue-grey Graphite. Its hue was 255 to 264 and its chroma reached 0.015, so the
+owner saw it as bluish. Old values: canvas `#0B0C0E`, surfaces `#121417` / `#191C20` / `#21252A`, ink `#E8EAED` /
+`#A3A8B0` / `#878D96` / `#4C5158`, accent ink1, and the Pi syntax palette with a blue-grey comment `#858B94`.
+
+**Subagent tints** (`PiColors.tint0` to `tint4`, `tints[n % 5]`) are the desktop's `--tint-0` to `--tint-4`,
+converted from OKLCH to sRGB. They have the same lightness and chroma, with hues kept clear of the status colours,
+the brand and blue. They are shared by every theme. A tint marks which agent is which and never stands for state. Each one
+passes 3:1 as a glyph on every surface, and AA as an initial on its own 16% fill over the canvas and cards.
+
+| Token | Name | OKLCH | sRGB |
+|---|---|---|---|
+| tint0 | apricot | 0.80 0.13 55 | `#FEA668` |
+| tint1 | rose | 0.78 0.14 0 | `#FF8FB4` |
+| tint2 | orchid | 0.76 0.15 325 | `#E08EE5` |
+| tint3 | violet | 0.74 0.14 298 | `#B696F7` |
+| tint4 | seafoam | 0.80 0.11 185 | `#5CD5C7` |
+
+Overlays: press = ink1 @ 7%, selected = ink1 @ 11%, focus line = ink1 @ 40% (Pi-Bolt: white @ 8.5%, 10%, 32%).
+
+Accent (independent of theme): **Theme** (default: the theme's own accent: Pi-Bolt white `#FAFAFA` / `#000000`, Claude coral `#E08566` / `#1F1E1D` (lifted
 from `#D97757`, which measured 4.24:1 as link text on Claude's sheets),
 GitHub blue `#4493F8` / `#0D1117`, ink1 / canvas for the others), **Ink** (accent = ink1, onAccent = canvas),
 **Iris** `#A99CFF` / `#120F2A`, **Glacier** `#7CC4F0` / `#06202E`. Accent marks the primary button, send button, focus ring, selection, links and
@@ -38,9 +76,10 @@ bolt (`ic_pibolt_logo`, cropped from docs/images/logo.svg): an upper blade in ye
 shaded face) and a lower blade in blue (`#4C96EA` lit, `#2A78D6` shaded). Yellow and blue are both brand colours and
 never stand for state or action. `PiColors.brand` (`#FFD84D`) is the single-colour fallback where the logo can't be drawn.
 
-Status (all themes): success `#5FD39A`, warning `#E8B04B` (needs you, steer), danger `#F2706B` (Claude: `#FF8681`, its
-lighter canvas needs it); soft fills @ 14% (Claude's danger fill @ 12%).
-Diff: add bg success @ 11% / fg `#9BE6BF`, delete bg danger @ 11% / fg `#F7A9A5`; changed words in paired lines
+Status: success `#5FD39A`, warning `#E8B04B` (needs you, steer), danger `#F2706B` (Claude: `#FF8681`, its
+lighter canvas needs it); soft fills @ 14% (Claude's danger fill @ 12%). Pi-Bolt uses the desktop's `#4CC38A`,
+`#D4A64A`, `#EF6461` with soft fills @ 12%.
+Diff: add bg success @ 11% / fg `#9BE6BF`, delete bg danger @ 11% / fg `#F7A9A5` (Pi-Bolt: @ 9%, `#86DFB0`, `#F5A3A1`); changed words in paired lines
 success / danger @ 22%. Add and delete never differ by hue alone: a `+` / `−` sign column, a solid 3dp gutter bar
 (success @ 60%) for additions and a hatched one (2dp stripes every 4dp, danger @ 70%) for deletions. Context rows
 ink2, line numbers ink3, hunk rows monoMeta ink3 on surface2.
@@ -48,29 +87,31 @@ Syntax: one palette per theme (`SyntaxColors`): keyword, type (capitalised names
 function (calls and declarations), string, number, constant (`true`, `null`, ALL_CAPS), operator, attribute
 (annotations, decorators, object and YAML keys, HTML attributes), tag, regex, escape (escapes and `${…}`), variable
 (`$x`, `@x`), comments italic; punctuation ink2, base text ink1, the shell `$` prompt success SemiBold, diff lines in
-the diff colours. Graphite, Void and Codex share the cool "Pi" palette (violet keywords, yellow types, blue calls,
-green strings, orange numbers); Ember is warm and earthy, Claude coral / sand / sage, Vercel pink / purple / blue /
+the diff colours. Pi-Bolt uses the desktop's monochrome highlight.js theme: white keywords and constants in Medium
+weight (`keywordWeight`), near-white calls, sand types, green strings, orange numbers, greys for the rest, no blue.
+Void and Codex share the "Pi" palette (violet keywords, yellow types, blue calls, green strings, orange numbers, a
+neutral comment grey); Ember is warm and earthy, Claude coral / sand / sage, Vercel pink / purple / blue /
 green, GitHub uses its dark "prettylights" roles. Only `text`, `log` and `output` fences stay plain.
 
-| Role | Pi | Ember | Claude | Vercel | GitHub |
-|---|---|---|---|---|---|
-| keyword | `#C9A0F5` | `#F28E7E` | `#E8956F` | `#FF6B98` | `#FF7B72` |
-| type | `#E8C67E` | `#F2C46A` | `#E3C590` | `#C49BFF` | `#FFA657` |
-| function | `#7FB6F5` | `#9CC78B` | `#9DBAE8` | `#6CB4FF` | `#D2A8FF` |
-| string | `#A3D58E` | `#C8CC6E` | `#B6CF8F` | `#6CD58B` | `#A5D6FF` |
-| number / constant | `#E9A77C` | `#D99BB8` | `#D9A3D9` | `#F5B562` / `#6CB4FF` | `#79C0FF` |
-| operator | `#86CBDD` | `#F0A35C` | ink2 | ink2 | `#FF7B72` |
-| attribute | `#E9A77C` | `#8DB8A8` | `#E3C590` | `#C49BFF` | `#79C0FF` |
-| tag | `#F08E9A` | `#F28E7E` | `#E8956F` | `#6CD58B` | `#7EE787` |
-| regex / escape | `#86CBDD` | `#9CC78B` / `#F0A35C` | `#8FCBC0` | `#F5B562` | `#7EE787` |
-| variable | `#F08E9A` | `#8DB8A8` | `#9DBAE8` | `#FF9F6B` | `#FFA657` |
-| comment | `#858B94` | ink3 | ink3 | ink3 | ink3 |
+| Role | Pi-Bolt | Pi | Ember | Claude | Vercel | GitHub |
+|---|---|---|---|---|---|---|
+| keyword | `#FFFFFF` Medium | `#C9A0F5` | `#F28E7E` | `#E8956F` | `#FF6B98` | `#FF7B72` |
+| type | `#DCC38C` | `#E8C67E` | `#F2C46A` | `#E3C590` | `#C49BFF` | `#FFA657` |
+| function | `#F0F0F0` | `#7FB6F5` | `#9CC78B` | `#9DBAE8` | `#6CB4FF` | `#D2A8FF` |
+| string | `#9FD4A8` | `#A3D58E` | `#C8CC6E` | `#B6CF8F` | `#6CD58B` | `#A5D6FF` |
+| number / constant | `#E9B77C` / `#FFFFFF` Medium | `#E9A77C` | `#D99BB8` | `#D9A3D9` | `#F5B562` / `#6CB4FF` | `#79C0FF` |
+| operator | `#A1A1A1` | `#86CBDD` | `#F0A35C` | ink2 | ink2 | `#FF7B72` |
+| attribute | `#C4C4C4` | `#E9A77C` | `#8DB8A8` | `#E3C590` | `#C49BFF` | `#79C0FF` |
+| tag | `#A1A1A1` | `#F08E9A` | `#F28E7E` | `#E8956F` | `#6CD58B` | `#7EE787` |
+| regex / escape | `#9FD4A8` / `#E9B77C` | `#86CBDD` | `#9CC78B` / `#F0A35C` | `#8FCBC0` | `#F5B562` | `#7EE787` |
+| variable | `#C4C4C4` | `#F08E9A` | `#8DB8A8` | `#9DBAE8` | `#FF9F6B` | `#FFA657` |
+| comment | ink3 | `#8F8E8C` | ink3 | ink3 | ink3 | ink3 |
 
 Contrast (WCAG 2.1, checked by `ContrastTest` for every theme and accent):
 - ink1, ink2 and ink3 pass AA (4.5:1) on canvas, surface1, surface2 and surface3. ink3 is the lowest text and was
-  raised where it missed AA on surface2 or surface3 (Graphite `#7D838C` → `#878D96`, Ember `#8E877B` → `#979084`,
-  Claude `#9C9A92` → `#A6A49C`, Codex `#8F8F8F` → `#929292`). ink3 on surface3 (menus, snackbars, inline code) now
-  measures 4.61 to 5.38:1; it was 4.03 to 4.44 in Graphite, Ember, Claude and Codex.
+  raised where it missed AA on surface2 or surface3 (old Graphite `#7D838C` → `#878D96`, Pi-Bolt `#808080` →
+  `#858585`, Ember `#8E877B` → `#979084`, Claude `#9C9A92` → `#A6A49C`, Codex `#8F8F8F` → `#929292`). ink3 on surface3
+  (menus, snackbars, inline code) now measures 4.57 to 5.38:1; it was 4.03 to 4.44 in Graphite, Ember, Claude and Codex.
 - Rule: no text below ink3, and no ink4 text anywhere. On surface3 prefer ink2 for anything longer than a meta line.
 - Status colours pass on canvas, surface1 and surface2; danger passes on dangerSoft over cards and sheets (the danger
   button), which is why Claude has its own danger.
@@ -79,6 +120,12 @@ Contrast (WCAG 2.1, checked by `ContrastTest` for every theme and accent):
 - A Notice's text (ink1, ink2 under a title) passes on its fill over canvas, cards and sheets; its glyph passes 3:1.
 - Button labels pass: secondary ink1 on surface2, danger on dangerSoft, the disabled primary's ink3 on surface3.
 - Void and Vercel cards (surface1) are one step lighter (`#0D0E10`, `#0F0F0F`) so they stand off the pure-black canvas.
+- The default theme is checked by role in every accent (`defaultThemeRolesPass`): ink1 and ink2 AA on each surface,
+  plain, pressed and selected; ink3 at least 3:1 as a glyph on all of those; the accent's label AA on it, its fill 3:1
+  against the surface (a button's shape) and AA as link text; ink1 AA on the text selection. `defaultThemeHasNoBlueCast`
+  keeps the default's greys and everything drawn from them neutral, `defaultThemeIsTheDesktopPalette` pins the
+  desktop values, `subagentTintsReadInEveryTheme` checks the tints, `elevationStepsStayDistinct` keeps canvas < surface1
+  < surface2 < surface3 in every theme (each Graphite step at least 1.05:1), and the window colour must be the canvas.
 - Syntax colours pass on canvas, surface1 and surface2 (`SyntaxColorsTest`). Lines (1.2 to 1.3:1) are decoration: a
   1dp line is never the only cue that something is interactive without a fill or label.
 
@@ -101,6 +148,7 @@ Inter (UI, prose) and JetBrains Mono (code, paths, terminal), both OFL, bundled 
 | micro | 11 / 14 | 500 | badges, exit codes |
 | mono | 13.5 / 20 | 400 | terminal, viewer text |
 | monoSmall | 12.5 / 18 | 400 | diffs, tool cards; code blocks use 12.5 / 19 |
+| monoMeta | 12 / 17 | 400 | paths, hashes, hex values and other mono meta lines |
 | thinking | 14.5 / 22 | 400 ink3 | reasoning text |
 
 System font scale is respected; the transcript is capped at 1.3x, and the Text size setting (-1 … +2 steps) applies
@@ -108,10 +156,21 @@ on top.
 
 ## Space, shape, size
 
-Spacing 2, 4, 8, 12, 16, 20, 24, 32, 40 dp (`Space.xxs … x4`). Side gutter 16; sheet and header text inset 20; gap
+Spacing 2, 4, 8, 12, 16, 20, 24, 32, 40 dp (`Space.xxs … x4`): the desktop's 4px rhythm (`--sp-0` to `--sp-8`, plus 40). Side gutter 16; sheet and header text inset 20; gap
 between turns 20; between steps 6.
-Radii: xs 4 (inline code, tags), sm 8 (chips), md 12 (cards, code blocks, option rows), lg 18 (user bubble,
-composer), xl 28 (sheet top corners), full (send button, pills). User bubble: 18 with the bottom-end corner 6.
+Radii are the desktop's 4 / 6 / 10 / 14, assigned by role:
+- xs 4: inline code, tags (`--radius-xs`).
+- sm 6: chips, small buttons (`--radius-sm`).
+- md 10: cards, code blocks, option rows, menus, snackbars, fields (`--radius-lg`, the desktop's card, menu and
+  toast).
+- lg 14: user bubble, composer, setting groups (`--radius-xl`, the desktop's composer and bubble).
+- xl 14: sheet top corners (`--radius-xl`, the desktop's dialog).
+- full: send button, pills.
+
+Before 0.5.2 the values were 4 / 8 / 12 / 18 / 28. The desktop's user bubble is 14 with its bottom-end corner at
+4 (`--radius-xs`).
+Compact density: host and project cards 64dp, option rows 48dp (never under the touch target), turn gap 14, step
+gap 4, prose 15 / 23.
 Touch targets at least 48dp. Every timeline row has a 20dp leading slot (spinner or glyph) and a 12dp gap.
 Icons: one family, Material Rounded (`Icons.Rounded`, `Icons.AutoMirrored.Rounded`). Sizes (`IconSize`): 14 beside
 meta text, 16 beside labels and in small buttons, 20 leading glyphs in rows, notices and buttons, 22 toolbar
@@ -153,20 +212,23 @@ and place (fade, scale 0.82→1 and a 6dp rise over the sheet duration); never w
 
 | Token | ms | Use |
 |---|---|---|
-| tap | 90 | press overlay, press scale |
-| quick | 150 | chevrons, chip select, icon swaps, crossfades |
-| standard | 220 | expand/collapse, message rise, menus |
-| sheet | 300 | sheets, viewers, screen transitions |
-| exit | 0.7 × enter | anything leaving |
-| settle | 400 | meters, counters |
-| glyph | 160 | a finished step's spinner becoming its check or cross (exit 0.7x) |
+| tap | 120 | press overlay, press scale, colour (`--dur-1`) |
+| quick | 140 | chevrons, chip select, icon swaps, crossfades, menus (`--dur-2`) |
+| standard | 180 | expand/collapse, message rise, folds (`--dur-3`) |
+| sheet | 240 | sheets, viewers, screen transitions (`--dur-4`) |
+| exit | 110, sheets 0.7 × enter | anything leaving (`--dur-exit`; sheets and screens at 0.7x) |
+| settle | 360 | meters, counters (`--dur-slow`) |
+| glyph | 180 | a finished step's spinner becoming its check or cross (the desktop's pop-in) |
 | fade | 120 | reduced motion: every transition becomes this crossfade |
-| pulse | 450 | half the end-of-text caret pulse |
-| sweep | 1400 | the working hairline, a running card's top band |
+| pulse | 500 | half the end-of-text caret pulse (`--dur-blink`) |
+| sweep | 1400 | the working hairline, a running card's top band (`--dur-pulse`) |
 
 All durations come from `PiMotion` (`DesignRulesTest` refuses a numeric `tween` outside the reviewed exceptions).
 
-Easing: enter `cubic(0.05, 0.7, 0.1, 1)`, exit `cubic(0.3, 0, 0.8, 0.15)`, in place `cubic(0.2, 0, 0, 1)`.
+Easing (the desktop's): enter `cubic(0.16, 1, 0.3, 1)` (`--ease-out`), exit `cubic(0.4, 0, 1, 1)` (`--ease-in`), in
+place `cubic(0.65, 0, 0.35, 1)` (`--ease-in-out`). Before 0.5.2 the values were tap 90, quick 150, standard 220,
+sheet 300, settle 400, glyph 160, pulse 450, exits at 0.7x, enter `(0.05, 0.7, 0.1, 1)`, exit `(0.3, 0, 0.8, 0.15)`
+and in place `(0.2, 0, 0, 1)`.
 Springs for drags and settles: damping 0.8 / stiffness 380 (default), 0.6 / 800 (fast), 1.0 / 1600 (colours,
 alpha). No overshoot except sheet drag release.
 
@@ -261,18 +323,18 @@ sliding (quick, in place), label ink1 on / ink3 off, role Tab; 48dp in Settings 
 with the mark, then:
 - Engine banner (only when it has something to say): Preparing (Quad Connect 20dp ink2, "Setting up Pi-Bolt", the
   step in meta ink3), Failed (dangerSoft fill, danger @ 40% line, error glyph, message, Retry in accent), Unavailable
-  (surface1, phone-off glyph, the reason, Details). 64dp min, radius 12. Tapping it opens the details sheet: what
-  happened, the raw detail in a mono well (surface1, radius 12, Copy), Close and Retry when a retry may help.
+  (surface1, phone-off glyph, the reason, Details). 64dp min, radius md. Tapping it opens the details sheet: what
+  happened, the raw detail in a mono well (surface1, radius md, Copy), Close and Retry when a retry may help.
 - "Connect a model" card when no provider has a key and the first-run sheet was already closed (key glyph, Add key).
 - "Running": the on-device sessions working or waiting for an answer now, in any project (56dp rows: the live Quad,
   the project, what it does). "Continue": up to 3 projects' newest sessions (64dp rows, one tap resumes), the open
   idle session first; a project already under Running is not repeated here.
-- "Projects" (on this phone): project cards, 72dp like host cards (surface1, line, radius 12): a 40dp tile (surface2, radius 10,
+- "Projects" (on this phone): project cards, 72dp like host cards (surface1, line, radius md): a 40dp tile (surface2, radius 10,
   folder glyph ink2; the live session's Quad 20dp with an 8dp status pip, success or warning, while one is open), the
   title (bodyStrong; a 13dp pin glyph when pinned), then the last session's name or first prompt (meta ink3, ellipsized)
   and " · 3 min ago" that never truncates. Overflow and long press: Pin to top, Rename, Delete (danger). Order: pinned,
   then most recently active, then title.
-- No projects: a surface1 card (radius 18) with the mark, "Code on this phone", one line on what a project is, New
+- No projects: a surface1 card (radius lg) with the mark, "Code on this phone", one line on what a project is, New
   project (primary) and Clone from git (secondary).
 - "Computers · N" header (metaStrong ink3, "Remote control" meta and a chevron that turns 180° in a graphicsLayer):
   folded by default once projects exist, open when there are none, when the engine is unavailable or a computer
@@ -311,11 +373,11 @@ as a shared element, like host card to session).
   and while a full-screen view (file, diff, history) covers the project. In a window under 480dp tall (landscape) the
   top bar also steps aside while the keyboard is up, so the terminal keeps its lines.
 - Each tab keeps its own scroll position; the shown tab survives rotation and process death.
-- Empty and loading states share one pattern: an `EmptyCard` (surface1, line, radius 12, 16dp padding; a 20dp ink3
+- Empty and loading states share one pattern: an `EmptyCard` (surface1, line, radius md, 16dp padding; a 20dp ink3
   glyph, the title in bodyStrong, one line in body ink2, then its actions) and a `LoadingRow` (16dp Quad Run ink3 +
   "Reading sessions…" in meta ink3, 48dp) while a list is read from disk.
 - Sessions: New session (primary, full width) first, then "6 sessions" (SectionLabel) over the rows; without any,
-  "No sessions yet" (EmptyCard, chat glyph). Rows: 64dp cards (surface1, line, radius 12): chat glyph ink3 (the live session: its Quad, lineStrong border,
+  "No sessions yet" (EmptyCard, chat glyph). Rows: 64dp cards (surface1, line, radius md): chat glyph ink3 (the live session: its Quad, lineStrong border,
   "Open" first in the meta line), the session name or first prompt (body ink1), "24 messages · 2 h ago" (meta ink3).
   Tap resumes; the live one resumes without reopening.
 - Files: one folder at a time, under a sticky breadcrumb bar (+ for new file, folder and import; sort and hidden
@@ -327,12 +389,12 @@ as a shared element, like host card to session).
   (ACTION_OPEN_DOCUMENT_TREE) into the folder shown; names that exist get " (2)". A folder's long-press sheet has
   "Export as zip", a file's "Share"; the project's ⋮ menu has "Export as zip". The export sheet: "Leave out .git and
   dependencies" (a 56dp checkbox row, on by default), then Share (secondary) and Save to… (primary, ACTION_CREATE_DOCUMENT).
-  A transfer shows a card above the bottom edge (surface2, lineStrong, radius 12): "Importing 3 files · 40%"
+  A transfer shows a card above the bottom edge (surface2, lineStrong, radius md): "Importing 3 files · 40%"
   (bodyStrong), "2 files · 1.2 MB of 3 MB · src/a.kt" (monoMeta ink3), Cancel (danger text action) and a 3dp accent
   progress line on surface3 (no fill when the total is unknown: never an indeterminate animation). Progress updates
   at most every 100 ms. New project has "Import a zip as a project…" (accent text action) under its buttons.
 - Changes (git, through the engine's own git off the main thread with timeouts): outside a repository a card offers
-  "Initialise git". Inside: the branch card (surface1, radius 12): branch glyph, the branch in bodyStrong and
+  "Initialise git". Inside: the branch card (surface1, radius md): branch glyph, the branch in bodyStrong and
   "origin/main · 2 to push · 1 to pull" in meta ink3, tap for the Branches sheet; while an operation runs, a 16dp Run
   Quad and git's progress in meta ink2; then Pull, Push (text actions), "Pull request" (accent, GitHub remotes when
   signed in) and History. Sections "Conflicts", "Staged · N" (Unstage all) and "Changes · N" (Stage all) list 56dp file
@@ -362,8 +424,9 @@ as a shared element, like host card to session).
   extra-keys row always sits on the keyboard.
 
 **Terminal.** Termux's TerminalView in JetBrains Mono on canvas: text ink1, cursor accent, the 16 base colours mapped
-to tokens as in tool output (red danger, green success, blue the syntax function colour...), no cursor blink. A 48dp
-bar: tab chips (`WorkspaceTab`, the editor's too: 36dp drawn in a 48dp row, radius 8, surface2 + lineStrong when
+to tokens as in tool output (red danger, green success, blue / magenta / cyan `ansiBlue` / `ansiMagenta` /
+`ansiCyan`...), no cursor blink. A 48dp
+bar: tab chips (`WorkspaceTab`, the editor's too: 36dp drawn in a 48dp row, radius sm, surface2 + lineStrong when
 selected, line otherwise; "1 · title" in monoSmall, ink3 when the shell ended; a 16dp close glyph with a 48dp target),
 + (new terminal), Paste, Text size (one menu: Larger, Smaller, "13 sp · pinch the terminal too"; 8 to 28 sp, also by
 pinch), full screen / leave full screen. Under it the Preview chips. The extra-keys row (surface1, 48dp keys, monoMeta ink1 or
@@ -374,7 +437,7 @@ tab. No tab yet: "A shell in this project" (EmptyCard, terminal glyph), one line
 the keyboard, status and navigation bars padded. Shells keep running off screen; a low-importance "N terminals
 running" notification (Close all) holds them in the background.
 
-**Preview.** Chips "Preview: localhost:5173" (label ink1 on successSoft, success @ 40% line, radius 8, 48dp touch) in
+**Preview.** Chips "Preview: localhost:5173" (label ink1 on successSoft, success @ 40% line, radius sm, 48dp touch) in
 the terminal and above the composer of an on-device session, while a dev server listens. The preview screen: back,
 the URL (monoMeta ink2, middle ellipsis), Reload, Open in browser; a 2dp accent progress line while loading; the page
 in a WebView (http://localhost and 127.0.0.1 only; tapped links elsewhere open in the browser). When the dev server does not
@@ -397,7 +460,7 @@ Save (editing, accent text action), ⋮ (Ask Pi about the selection / this file,
 text, Share). Open files are tabs once there are two: a 48dp strip of `WorkspaceTab`s (as the terminal's: surface2 +
 lineStrong when shown), a 7dp warning dot when unsaved, the name (monoSmall, at most 160dp) and a ✕ (48dp target).
 With the keyboard up in a window under 480dp tall the strip steps aside. Menus in the workspace (project, files,
-viewer, terminal) are one `WorkspaceMenu`: surface3, radius 12, lineStrong border, 48dp rows with a 20dp glyph slot. Find bar: the query
+viewer, terminal) are one `WorkspaceMenu`: surface3, radius md, lineStrong border, 48dp rows with a 20dp glyph slot. Find bar: the query
 (mono), "3 of 12" (meta, live region), ↑ ↓ ✕, then 48dp text toggles "Aa" (match case), "ab" underlined (whole
 word), ".*" (regex) in accent with a 18% accent fill when on (TalkBack: switches), and ⇄ for Replace: a second row
 with the replacement and "Replace" / "All" (accent text actions); a bad regex or group shows in danger meta below.
@@ -470,8 +533,8 @@ under it.
   - tool cards (tap a row): one Copy at most, and a footer only when something is cut: "Show all N lines" opens the
     rest in place (up to 400 lines), past that "Open output / file / diff" goes to the full-screen viewer.
     - bash: `$` (success, danger on a failing exit), command, exit badge, Copy (the output). The output is a terminal
-      on the canvas: SGR colours mapped to tokens (red danger, green success, yellow warning, blue/magenta/cyan the
-      syntax function/keyword/operator colours, 256 and 24-bit as given), bold SemiBold, dim 60%; other escapes are
+      on the canvas: SGR colours mapped to tokens (red danger, green success, yellow warning, blue/magenta/cyan
+      `ansiBlue` / `ansiMagenta` / `ansiCyan`: the syntax function/keyword/operator colours, Pi-Bolt's off-blue greys; 256 and 24-bit as given), bold SemiBold, dim 60%; other escapes are
       dropped and a bare CR rewinds the line. Plain output stays ink2 whatever the exit code; without colours of its
       own, lines starting FAIL/ERROR/Error:/✗ get danger and ok/PASS/✓ success at 80%. Pi's "Command exited with
       code N" line is dropped (the badge says it). The tail shows first (summaries come last).
@@ -490,7 +553,7 @@ under it.
     `steer_subagent`, `get_subagent_result` and `SubagentWorkflow` stay step rows: "Steer agent", "Agent result",
     "Workflow" + the workflow's name.
   - `todo` steps read as one line: "Todo  Added: Write tests", "Done: …", "Started: …", "Cleared the list".
-  - code blocks: surface1, radius 12, 1dp line. Header 40dp: code glyph 14dp ink3, then the filename (monoSmall
+  - code blocks: surface1, radius md, 1dp line. Header 40dp: code glyph 14dp ink3, then the filename (monoSmall
     ink1, middle ellipsis) from the fence info string (`ts title="src/a.ts"`, `ts:src/a.ts`, `src/a.ts`) or the
     language (monoMeta ink3; shell aliases show as `shell`; untagged code shows the language detected from its first
     lines, else `code`); right side line numbers (toggle, 3+ lines), Wrap (only when a line overflows or wrap is
@@ -518,7 +581,7 @@ under it.
     the text in body ink2. Autolinks (`<…>`, bare `https://`, `www.`), entities and every backslash escape work;
     `<br>`, `<sub>`, `<sup>`, `<kbd>` (as inline code), `<b>`, `<i>`, `<u>`, `<s>`, `<mark>` render, wrapper tags
     (`<details>`, `<div>`) are dropped and comments hidden. Soft line breaks stay line breaks (as on GitHub).
-  - images: never fetched by themselves. A card (surface1, radius 12, 1dp line, 56dp row: image glyph ink3, the alt
+  - images: never fetched by themselves. A card (surface1, radius md, 1dp line, 56dp row: image glyph ink3, the alt
     text body ink1, the address monoMeta ink3 middle-ellipsized, "Tap to load" meta ink3, an Open-in-browser
     action); tapping loads it (12 MB at most, long edge 2048 px) above the row, max 360dp tall. Inline images show
     their alt text in ink2 italic with the card under the paragraph.
@@ -541,7 +604,7 @@ under it.
     files, commands, distinct files read, searches, agents; "N steps" when none apply; the time only when this phone
     watched the turn). "· 1 step failed" in ink3 after a 6dp danger dot; "· failed" in danger only when the turn ended
     in an error or abort; the final answer stays visible. Under it,
-    chips for the files the turn edited or wrote (28dp, radius 8, surface1 + 1dp line, name in mono meta ink1, +n
+    chips for the files the turn edited or wrote (28dp, radius sm, surface1 + 1dp line, name in mono meta ink1, +n
     success, −n danger, tnum; at most 3, then "+k more"); a chip opens that file's diff. An opened fold draws a 1dp
     line rail at the slot centre through its steps (broken 4dp around each glyph, ending at the last one) and indents
     the prose between steps to the step text.
@@ -556,16 +619,16 @@ under it.
   - live status line: Quad 16dp + shimmer label + elapsed timer. A running tool is named: the verb shimmers and its
     command or path follows in mono small ink3 ("Run  npm test"; a subagent reads "Agent working" + its task;
     parallel tools add "+n"); text changes crossfade (quick).
-  - errors and notices: radius 12 outline in danger/warning @ 40%, text buttons.
+  - errors and notices: radius md outline in danger/warning @ 40%, text buttons.
 - Todo panel above the queue strip (see Todo panel below).
 - Queue strip above the composer: 44dp rows with a 2dp bar (warning = steer, ink4 = follow-up), swipe to remove.
-- Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–6 lines; bar: attach (+,
+- Composer: surface1, radius lg, 1dp lineStrong (focus line when focused), 16sp text, 1–6 lines; bar: attach (+,
   48dp; ink4 and a "<model> can't read images" snackbar when the model's `input` lacks "image"), one run-settings chip
   ("Sonnet 4.5 · High": the model in label ink2, middle-truncated past 180dp, then " · High" in label ink3; the level is
   left out when thinking is off or the model does not reason; TalkBack "Model: Sonnet 4.5, thinking high"), send (40dp
   accent circle). The chip opens the model sheet, whose "Thinking" row (36dp level pills, radius full, the current one
   accent 1.5dp on the selected fill, the level's meaning under it in meta ink3) sets the level without closing it. Attached images (Photo Picker, images only, at most 4) sit in a tray above the
-  text: 56dp thumbnails, radius 8, 1dp line, a Quad Write while each encodes, a 20dp ✕ (scrim, lineStrong ring, 48dp
+  text: 56dp thumbnails, radius sm, 1dp line, a Quad Write while each encodes, a 20dp ✕ (scrim, lineStrong ring, 48dp
   touch) at the top-end corner. Encoding runs off the main thread: long edge at most 2000 px, JPEG 85 (PNG only when
   transparent and under 1.5 MB), refused over Pi's 4.5 MiB base64 limit. Send works with images and no text. While the agent works: send becomes Stop (surface3 circle, rounded square
   glyph) when the field is empty, and a "Steer | Follow-up" segmented control appears while typing. The palette and
@@ -594,12 +657,12 @@ under it.
   "Current" then one group per provider under a meta-strong heading, 60dp rows with provider initial; `/model text`
   opens it filtered),
   thinking level (52dp option rows with a description), Pi's dialogs (Quad Wait eyebrow "Pi is asking", title,
-  message in a command well when it looks like a command (surface1, radius 12, the cwd in mono meta ink3 with Copy,
+  message in a command well when it looks like a command (surface1, radius md, the cwd in mono meta ink3 with Copy,
   then `$` in success and the command in mono), options as 52dp rows, primary button; swipe or scrim tap
   does not answer: an explicit Cancel does; countdown chip when the dialog has a timeout; haptic on appear).
-- Snackbars for notify: surface3, radius 12, line, above the composer, kind-coloured icon.
+- Snackbars for notify: surface3, radius md, line, above the composer, kind-coloured icon.
 
-**Command palette.** Typing `/` opens a panel above the composer (surface2, radius 12, 1dp line, at most 264dp,
+**Command palette.** Typing `/` opens a panel above the composer (surface2, radius md, 1dp line, at most 264dp,
 scrolls): 48dp rows with the command in mono small ink1, its argument hint in mono meta ink3, the description in meta
 ink3 under it and a source badge at the end (micro, surface3, radius 4: `app`, `extension`, `prompt`, `skill`).
 Matching is fuzzy (prefix, then word starts, then scattered letters), by name and then by description; a space closes
@@ -664,7 +727,7 @@ as Markdown, Share. More under the last reply offers the same.
 **Session tree** (`/tree`). A sheet: "Session tree" with "One branch…" or "2 forks. The marked path is what Pi sees."
 (meta ink3), the Messages | Prompts | Labeled | Everything filter, then the entries (forks indented, the active path
 marked). Loading reads "Reading the tree" (Quad Think). A failed read (or a reply without data) is an error, never an
-empty list: no subtitle, no filter, a dangerSoft card (radius 12, danger @ 40% line) with the error glyph, "Could not
+empty list: no subtitle, no filter, a dangerSoft card (radius md, danger @ 40% line) with the error glyph, "Could not
 read the session tree" (bodyStrong ink1), Pi's message (meta ink3, four lines) and Retry (accent).
 
 **Export.** "Export or share" (or `/export`): Share as Markdown (a `.md` file through the share sheet), Copy as
@@ -686,7 +749,7 @@ recent messages; older ones open their thumbnail.
 **Todo panel.** The todo extension (opensec-pi-todo) draws its panel in the TUI only, so the app builds it from the
 `todo` tool's results: each result's `details.tasks` is the whole list after the call (`SessionState.todos`, from
 history and from live `tool_execution_end`).
-- Card above the composer: surface1, radius 12, 1dp line, 12dp side inset. Heading 48dp (the tap target): a 14dp
+- Card above the composer: surface1, radius md, 1dp line, 12dp side inset. Heading 48dp (the tap target): a 14dp
   progress ring (ink4 track, success arc of done/total, settle), "Todos" (label ink1), "2/5" (meta ink3, tnum),
   a chevron (ink3) that turns in a graphicsLayer. Tapping collapses the card to the heading, which then names the
   current task (meta ink2).
@@ -723,7 +786,7 @@ Subagent session files (a `parentSession` header and that name) are not listed o
 Remote control gets the events only: progress of foreground runs, the start and end of background runs, never their
 messages. Pi has no RPC to read or steer a subagent: steering and resuming go through a prompt to Pi.
 
-- Card (surface1, radius 12, 1dp line; lineStrong while active): 32dp avatar (the type's initial in its tint on the
+- Card (surface1, radius md, 1dp line; lineStrong while active): 32dp avatar (the type's initial in its tint on the
   tint @ 16%, radius 30%; tints glacier `#7CC4F0` Explore, iris `#A99CFF` Plan, mint `#9ED3C6` general-purpose, peach
   `#E5A97E` and lilac `#C9B8F0` hashed for others: never a status colour), the type (label ink1), a "background · id"
   pill (micro, surface3) for background runs, the task (meta ink2), the run time (meta ink3 tnum, ticking once a
@@ -815,7 +878,7 @@ plain GET with no identifiers. The APK URL must be under `github.com/opensec-git
 - Check: on launch at most once a day (on IO, "Check for updates automatically", on by default) and from Settings >
   About > "Check for updates". About shows "Up to date (0.2.1)" or "0.2.2 is available · 109 MB", then "Checked 3 min
   ago".
-- Home card (64dp, surface1, radius 12, after the engine banner): system-update glyph, "Pi-Bolt 0.2.2 is available",
+- Home card (64dp, surface1, radius md, after the engine banner): system-update glyph, "Pi-Bolt 0.2.2 is available",
   the size (meta ink3), Later (ink2, snoozes that version only) and Update (accent). The same card then shows the job:
   Quad Write + "54 MB of 109 MB · 49%" and a 2dp accent bar (Cancel); Quad Connect + "Waiting for network" when the
   connection drops; Quad Run "Checking"; a success shield and Install; danger soft fill with the reason on failure.
@@ -837,7 +900,7 @@ plain GET with no identifiers. The APK URL must be under `github.com/opensec-git
 
 ```` ```mermaid ```` fences render as diagrams (`ui/diagram/MermaidBlock`), offline. Flowcharts, sequence, class,
 state, ER, gantt, pie and mind maps are checked; the other Mermaid types work the same way.
-- Card: surface1, radius 12, 1dp line. Header 40dp: diagram glyph 14dp ink3, the type (monoMeta ink3), full screen
+- Card: surface1, radius md, 1dp line. Header 40dp: diagram glyph 14dp ink3, the type (monoMeta ink3), full screen
   and Copy (the source). The diagram fits the column, at most 480dp tall, centred, 12dp inset; tap opens it full
   screen.
 - Streaming: each change to the source waits 300 ms for the next (a fence known to be closed draws at once), so a
@@ -848,7 +911,7 @@ state, ER, gantt, pie and mind maps are checked; the other Mermaid types work th
   ink3, a 14dp danger error glyph).
 - Theme: Mermaid's base theme from the palette: nodes surface3 with a solid border (ink1 @ 26% over surface3), text
   ink1, edges ink2, clusters surface2, notes warning @ 16%. Charts use a fixed categorical set (types, strings,
-  numbers, glacier, success, warning, iris, rose, danger, diff fgs, ink2), full strength for pie slices and dimmed to
+  numbers, seafoam, success, warning, violet, rose (the tint tokens), danger, diff fgs, ink2), full strength for pie slices and dimmed to
   42% over surface2 where text sits on them. Every theme is dark; `darkMode` follows the canvas luminance.
 - Full screen (a dialog on canvas): pinch zoom 1x (fit) to 8x around the fingers, pan, double-tap to 2.5x or back,
   Fit, Share as PNG (FileProvider, cache/diagrams/ only) and Save as PNG (the system file picker, no permission). It
@@ -890,7 +953,7 @@ renderer exists. The app has no other WebView, and this one is kept minimal:
 
 ## Not carried over from the desktop app
 
-Its hex values, Geist fonts, 4x4 pixel grid, 80 ms cadence, bolt pattern and lime colour. Hover actions become
+Geist fonts, 4x4 pixel grid, 80 ms cadence, bolt pattern and lime colour. Hover actions become
 long-press sheets; long output goes to full-screen viewers, never nested scroll boxes.
 
 ## Smoothness

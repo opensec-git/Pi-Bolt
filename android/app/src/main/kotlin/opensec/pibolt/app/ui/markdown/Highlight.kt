@@ -19,12 +19,12 @@ import opensec.pibolt.app.ui.theme.PiColors
 fun tokenStyle(kind: Highlighter.Kind, colors: PiColors): SpanStyle {
     val s = colors.syntax
     return when (kind) {
-        Highlighter.Kind.Keyword -> SpanStyle(color = s.keyword)
+        Highlighter.Kind.Keyword -> SpanStyle(color = s.keyword, fontWeight = s.keywordWeight)
         Highlighter.Kind.Type -> SpanStyle(color = s.type)
         Highlighter.Kind.Function -> SpanStyle(color = s.function)
         Highlighter.Kind.String -> SpanStyle(color = s.string)
         Highlighter.Kind.Number -> SpanStyle(color = s.number)
-        Highlighter.Kind.Constant -> SpanStyle(color = s.constant)
+        Highlighter.Kind.Constant -> SpanStyle(color = s.constant, fontWeight = s.keywordWeight)
         Highlighter.Kind.Comment -> SpanStyle(color = s.comment, fontStyle = FontStyle.Italic)
         Highlighter.Kind.Operator -> SpanStyle(color = s.operator)
         Highlighter.Kind.Punctuation -> SpanStyle(color = colors.ink2)
