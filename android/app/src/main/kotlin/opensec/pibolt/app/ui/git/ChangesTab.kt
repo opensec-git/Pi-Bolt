@@ -20,6 +20,9 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Check
+import opensec.pibolt.app.ui.projects.EmptyCard
+import opensec.pibolt.app.ui.projects.LoadingRow
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Remove
@@ -152,25 +155,34 @@ fun rememberChangesUi(app: PiBoltApp, dir: File, store: ProjectStore, snackbar: 
 }
 
 /**
- * The project screen's Changes tab, as items of its list: the branch with push and pull, staged and unstaged files
- * (tap for the diff, the trailing button stages or unstages, long press discards), then the commit box.
+ * The project screen's Changes tab, as items of its list: the branch with push and pull, the commit box as soon as
+ * something is staged (so committing never needs a scroll past the file list), then conflicts, staged and unstaged
+ * files (tap for the diff, the trailing button stages or unstages, long press discards).
  */
 fun LazyListScope.changesItems(ui: ChangesUi) {
     val model = ui.model
     val repo = model.isRepo
-    if (repo == null) return
+    if (repo == null) {
+        item(key = "git-loading", contentType = "loading") { LoadingRow("Reading git status") }
+        return
+    }
     if (!repo) {
         item(key = "git-none", contentType = "git-card") { NotARepo(ui) }
         return
     }
-    val status = model.status ?: return
+    val status = model.status
+    if (status == null) {
+        item(key = "git-loading", contentType = "loading") { LoadingRow("Reading git status") }
+        return
+    }
     item(key = "git-branch", contentType = "git-card") { BranchCard(ui) }
+    val staged = status.staged
+    val unstaged = status.unstaged
+    if (ChangesRules.showCommit(staged.size, ui.message)) item(key = "git-commit", contentType = "git-card") { CommitCard(ui, staged.size) }
     if (status.conflicts.isNotEmpty()) {
         item(key = "git-h-conflicts", contentType = "git-head") { Header("Conflicts · ${status.conflicts.size}", null, null) }
         items(status.conflicts, key = { "gc:" + it.path }, contentType = { "git-file" }) { FileRow(ui, it, staged = false) }
     }
-    val staged = status.staged
-    val unstaged = status.unstaged
     if (staged.isNotEmpty()) {
         item(key = "git-h-staged", contentType = "git-head") {
             Header("Staged · ${staged.size}", "Unstage all") { model.run("Unstaging") { unstage(staged.map { it.path }, status.branch.initial) } }
@@ -181,28 +193,34 @@ fun LazyListScope.changesItems(ui: ChangesUi) {
         item(key = "git-h-changes", contentType = "git-head") {
             Header("Changes · ${unstaged.size}", "Stage all") { model.run("Staging") { stage(unstaged.map { it.path }) } }
         }
+        if (staged.isEmpty()) {
+            item(key = "git-hint", contentType = "git-note") {
+                Text("Stage the files to commit with +, or Stage all.", style = Pi.type.meta, color = Pi.colors.ink3, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 4.dp))
+            }
+        }
         items(unstaged, key = { "gu:" + it.path }, contentType = { "git-file" }) { FileRow(ui, it, staged = false) }
     }
     if (status.clean) {
         item(key = "git-clean", contentType = "git-note") {
-            Text("No changes. Everything is committed.", style = Pi.type.body, color = Pi.colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
+            EmptyCard(Icons.Rounded.Check, "No changes", "Everything is committed. Edits by you or Pi show up here to review and commit.")
         }
     }
-    item(key = "git-commit", contentType = "git-card") { CommitCard(ui, staged.size) }
+}
+
+/** Pure rules of the Changes tab (unit-tested). */
+object ChangesRules {
+    /** The commit box shows once something is staged, and stays while a message is being written. */
+    fun showCommit(stagedCount: Int, message: String): Boolean = stagedCount > 0 || message.isNotBlank()
 }
 
 @Composable
 private fun NotARepo(ui: ChangesUi) {
-    val type = Pi.type
-    val colors = Pi.colors
-    GitCard {
-        Column(Modifier.padding(16.dp)) {
-            Text("Not a git repository", style = type.bodyStrong, color = colors.ink1)
-            Spacer(Modifier.height(4.dp))
-            Text("Start tracking this project's changes with git, or clone a repository into a new project from Home.", style = type.body, color = colors.ink2)
-            Spacer(Modifier.height(12.dp))
-            SecondaryButton(if (ui.model.busy != null) "Setting up…" else "Initialise git", onClick = { ui.model.run("Initialising") { init() } }, enabled = ui.model.busy == null, modifier = Modifier.fillMaxWidth())
-        }
+    EmptyCard(
+        Icons.AutoMirrored.Rounded.CallSplit,
+        "Not a git repository",
+        "Track this project's changes with git to review, commit and push them here.",
+    ) {
+        SecondaryButton(if (ui.model.busy != null) "Setting up…" else "Initialise git", onClick = { ui.model.run("Initialising") { init() } }, enabled = ui.model.busy == null, modifier = Modifier.fillMaxWidth())
     }
 }
 
@@ -317,10 +335,9 @@ private fun CommitCard(ui: ChangesUi, stagedCount: Int) {
     val colors = Pi.colors
     val type = Pi.type
     val busy = ui.model.busy
-    Spacer(Modifier.height(8.dp))
     GitCard {
         Column(Modifier.padding(16.dp)) {
-            Text("Commit", style = type.bodyStrong, color = colors.ink1)
+            Text(if (stagedCount == 1) "Commit 1 file" else "Commit $stagedCount files", style = type.bodyStrong, color = colors.ink1)
             Spacer(Modifier.height(8.dp))
             PiTextField(
                 ui.message,

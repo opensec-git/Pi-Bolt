@@ -1,5 +1,9 @@
 package opensec.pibolt.app.ui.projects
 
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import android.content.ClipData
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.BackHandler
@@ -9,7 +13,6 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -28,20 +31,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -59,8 +58,6 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.VerticalAlignCenter
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarHostState
@@ -127,7 +124,6 @@ import opensec.pibolt.app.ui.components.Segmented
 import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.SnackKind
 import opensec.pibolt.app.ui.components.TextAction
-import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.markdown.MdBlock
 import opensec.pibolt.app.ui.markdown.MdBlockView
@@ -170,6 +166,7 @@ private const val MAX_LINE = 2_000
  * read-only. "Ask Pi" hands the file, or the selected lines, to [onAsk] for the project's composer. Hardware keys:
  * [EditorShortcuts]. Images show zoomable; binary files say so and offer Share. [onChanged] runs after a save.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FileViewer(
     root: File,
@@ -454,8 +451,9 @@ fun FileViewer(
                 }
                 if (editing) {
                     TextAction(if (saving) "Saving…" else "Save", onClick = ::save, color = colors.accent, enabled = tab.dirty && !saving)
-                } else if (text != null && !showRendered) {
-                    IconAction(Icons.AutoMirrored.Rounded.WrapText, if (wrap) "Do not wrap lines" else "Wrap lines", onClick = { wrap = !wrap }, tint = if (wrap) colors.accent else colors.ink2)
+                } else if (canEdit) {
+                    // Editing is the main thing to do with a file: one tap, not a menu entry.
+                    IconAction(Icons.Rounded.Edit, "Edit", onClick = { startEdit() })
                 }
                 Box {
                     IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
@@ -463,11 +461,10 @@ fun FileViewer(
                         expanded = menu,
                         onDismiss = { menu = false },
                         items = buildList {
-                            if (canEdit && !editing) add(MenuEntry("Edit", Icons.Rounded.Edit) { startEdit() })
                             if (editing && !tab.value.selection.collapsed) add(MenuEntry("Ask Pi about the selection", Icons.Rounded.AutoAwesome) { ask(selection = true) })
                             add(MenuEntry("Ask Pi about this file", Icons.Rounded.AutoAwesome) { ask(selection = false) })
                             if (text != null && !showRendered) add(MenuEntry("Go to line", Icons.Rounded.VerticalAlignCenter) { goTo = true })
-                            if (editing) add(MenuEntry(if (wrap) "Do not wrap lines" else "Wrap lines", Icons.AutoMirrored.Rounded.WrapText) { wrap = !wrap })
+                            if (text != null && !showRendered) add(MenuEntry(if (wrap) "Do not wrap lines" else "Wrap lines", Icons.AutoMirrored.Rounded.WrapText) { wrap = !wrap })
                             add(MenuEntry("Copy path", Icons.Rounded.ContentCopy) { copy("Path", rel, "Path copied") })
                             if (text != null && !editing) add(MenuEntry("Copy text", Icons.Rounded.ContentCopy) { copy(name, text.text, "Text copied") })
                             add(MenuEntry("Share", Icons.Rounded.Share) { share() })
@@ -475,7 +472,10 @@ fun FileViewer(
                     )
                 }
             }
-            if (tabs.tabs.size > 1) TabStrip(tabs, rel, onSelect = onSelect, onClose = ::closeTab)
+            // Landscape with the keyboard up: the strip gives its 48dp to the text (tabs come back with the keyboard down).
+            if (tabs.tabs.size > 1 && ProjectNavRules.showChrome(WindowInsets.isImeVisible, LocalConfiguration.current.screenHeightDp)) {
+                TabStrip(tabs, rel, onSelect = onSelect, onClose = ::closeTab)
+            }
             if (kind == FileKind.Markdown && text != null && !editing) {
                 Segmented(
                     options = listOf(true to "Rendered", false to "Source"),
@@ -603,35 +603,21 @@ private fun matchesByLine(matches: List<TextMatch>, lines: List<IntRange>): Map<
     return out
 }
 
-/** Open files as tabs: name, a dot when unsaved, and a close button; the shown one is underlined in the accent. */
+/** Open files as tabs ([WorkspaceTab]): a dot when unsaved, the name and a close button. */
 @Composable
 private fun TabStrip(tabs: EditorTabs, shown: String, onSelect: (String) -> Unit, onClose: (EditorTab) -> Unit) {
-    val colors = Pi.colors
-    val scroll = rememberScrollState()
-    Row(Modifier.fillMaxWidth().height(48.dp).horizontalScroll(scroll).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(48.dp).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         for (t in tabs.tabs) {
-            val selected = t.rel == shown
-            val dirty = t.dirty
-            Row(
-                Modifier
-                    .height(40.dp)
-                    .background(if (selected) colors.surface2 else colors.canvas, RoundedCornerShape(Radius.sm))
-                    .pressable({ onSelect(t.rel) }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "Show ${t.name}")
-                    .semantics {
-                        this.selected = selected
-                        contentDescription = t.name + if (dirty) ", unsaved" else ""
-                    }
-                    .padding(start = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (dirty) {
-                    Box(Modifier.size(7.dp).background(colors.warning, CircleShape))
-                    Spacer(Modifier.width(6.dp))
-                }
-                Text(t.name, style = Pi.type.monoSmall, color = if (selected) colors.ink1 else colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
-                IconAction(Icons.Rounded.Close, "Close ${t.name}", onClick = { onClose(t) }, size = 16.dp, tint = colors.ink3)
-            }
-            Spacer(Modifier.width(4.dp))
+            WorkspaceTab(
+                name = t.name,
+                selected = t.rel == shown,
+                onSelect = { onSelect(t.rel) },
+                onClose = { onClose(t) },
+                description = t.name + if (t.dirty) ", unsaved" else "",
+                closeDescription = "Close ${t.name}",
+                dirty = t.dirty,
+            )
+            Spacer(Modifier.width(6.dp))
         }
     }
 }
@@ -678,26 +664,12 @@ private class MenuEntry(val label: String, val icon: ImageVector, val onClick: (
 
 @Composable
 private fun ViewerMenu(expanded: Boolean, onDismiss: () -> Unit, items: List<MenuEntry>) {
-    val colors = Pi.colors
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss,
-        containerColor = colors.surface3,
-        shape = RoundedCornerShape(Radius.md),
-        tonalElevation = 0.dp,
-        shadowElevation = 8.dp,
-        border = BorderStroke(1.dp, colors.lineStrong),
-    ) {
+    WorkspaceMenu(expanded, onDismiss) {
         for (item in items) {
-            DropdownMenuItem(
-                text = { Text(item.label, style = Pi.type.body, color = colors.ink1) },
-                leadingIcon = { Icon(item.icon, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(20.dp)) },
-                onClick = {
-                    onDismiss()
-                    item.onClick()
-                },
-                modifier = Modifier.width(200.dp).heightIn(min = 48.dp),
-            )
+            WorkspaceMenuRow(item.label, item.icon, Pi.colors.ink1) {
+                onDismiss()
+                item.onClick()
+            }
         }
     }
 }

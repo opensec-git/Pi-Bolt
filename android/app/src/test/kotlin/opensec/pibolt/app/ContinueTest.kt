@@ -32,6 +32,16 @@ class ContinueTest {
     }
 
     @Test
+    fun runningProjectsAreNotRepeatedUnderContinue() {
+        val projects = listOf(project("a", 100), project("b", 300), project("d", 200), project("e", 50))
+        // "b" works now: Home's Running section shows it, so Continue moves on to the next ones.
+        assertEquals(listOf("d", "a", "e"), ProjectRules.continueList(projects, liveProject = null, running = setOf("b")).map { it.name })
+        // The live project leads only while it is idle; once it runs it leaves Continue.
+        assertEquals(listOf("e", "b", "d"), ProjectRules.continueList(projects, liveProject = "e").map { it.name })
+        assertEquals(listOf("b", "d", "a"), ProjectRules.continueList(projects, liveProject = "e", running = setOf("e")).map { it.name })
+    }
+
+    @Test
     fun unreadNeedsAWriteAfterTheLastLook() {
         val s = session("x", 10_000)
         assertFalse(ProjectRules.unread(s, null), "never seen here: no dot")

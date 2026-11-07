@@ -264,7 +264,10 @@ with the mark, then:
   (surface1, phone-off glyph, the reason, Details). 64dp min, radius 12. Tapping it opens the details sheet: what
   happened, the raw detail in a mono well (surface1, radius 12, Copy), Close and Retry when a retry may help.
 - "Connect a model" card when no provider has a key and the first-run sheet was already closed (key glyph, Add key).
-- "On this phone": project cards, 72dp like host cards (surface1, line, radius 12): a 40dp tile (surface2, radius 10,
+- "Running": the on-device sessions working or waiting for an answer now, in any project (56dp rows: the live Quad,
+  the project, what it does). "Continue": up to 3 projects' newest sessions (64dp rows, one tap resumes), the open
+  idle session first; a project already under Running is not repeated here.
+- "Projects" (on this phone): project cards, 72dp like host cards (surface1, line, radius 12): a 40dp tile (surface2, radius 10,
   folder glyph ink2; the live session's Quad 20dp with an 8dp status pip, success or warning, while one is open), the
   title (bodyStrong; a 13dp pin glyph when pinned), then the last session's name or first prompt (meta ink3, ellipsized)
   and " · 3 min ago" that never truncates. Overflow and long press: Pin to top, Rename, Delete (danger). Order: pinned,
@@ -290,15 +293,34 @@ or collide (case-insensitive) with another project.
 sessions by path, so the folder never moves. Delete is a confirmation sheet that counts what goes ("with 312 files and
 4 saved sessions"), then removes the folder and those session files.
 
-**Project.** Shared bounds from the project card (title as a shared element, like host card to session). Back,
-overflow (Pin, Rename, Delete), the title in display, the folder chip (`projects/x`, monoMeta ink2 on surface1, radius
-8) and, inside a git repository, the branch from `.git/HEAD` (branch glyph + monoMeta ink3). New session (primary,
-full width), then a segmented "Sessions · N | Files | Changes | Terminal".
-- Sessions: 64dp cards (surface1, line, radius 12): chat glyph ink3 (the live session: its Quad, lineStrong border,
+**Project.** One workspace with four places, Sessions, Files, Changes and Terminal, under one top bar and over one
+bottom bar, so the project reads as a single tool rather than four screens. Shared bounds from the project card (title
+as a shared element, like host card to session).
+- Top bar 56dp: back ("Projects"), the title (subhead ink1, a 13dp pin glyph when pinned) over `projects/x` and, in a
+  git repository, the branch glyph + the branch from `.git/HEAD` (monoMeta ink3); then the shown tab's own action
+  (Sessions: search and manage sessions; Terminal: Secrets) and ⋮ (Pin, Rename, Export as zip, Secrets, Runtimes,
+  Delete in danger). Nothing else sits above a tab's content, so each tab starts 56dp under the status bar.
+- Bottom bar (`ProjectNavBar`): surface1, a 1dp line above, 64dp plus the navigation bar. Four equal items: a 22dp
+  glyph (filled when selected, outlined otherwise; the terminal glyph for Terminal) in a 56x30 pill (surface3 when
+  selected, crossfading), the label under it (metaStrong ink1 selected, meta ink3 otherwise). Changes carries the
+  number of changed paths (micro onAccent on accent, at least 16dp wide, "99+" past 99, ringed in surface1); Sessions
+  (Pi working in this project) and Terminal (a shell running) an 8dp success dot. TalkBack: tabs with Selected state
+  and the badge in words ("4 changed files", "Shell running", "Pi is working"). It is read when the project opens
+  (git status once), not only when Changes is shown.
+- The bar steps aside while the keyboard is up (the commit field, a new file's name and the terminal keep the room)
+  and while a full-screen view (file, diff, history) covers the project. In a window under 480dp tall (landscape) the
+  top bar also steps aside while the keyboard is up, so the terminal keeps its lines.
+- Each tab keeps its own scroll position; the shown tab survives rotation and process death.
+- Empty and loading states share one pattern: an `EmptyCard` (surface1, line, radius 12, 16dp padding; a 20dp ink3
+  glyph, the title in bodyStrong, one line in body ink2, then its actions) and a `LoadingRow` (16dp Quad Run ink3 +
+  "Reading sessions…" in meta ink3, 48dp) while a list is read from disk.
+- Sessions: New session (primary, full width) first, then "6 sessions" (SectionLabel) over the rows; without any,
+  "No sessions yet" (EmptyCard, chat glyph). Rows: 64dp cards (surface1, line, radius 12): chat glyph ink3 (the live session: its Quad, lineStrong border,
   "Open" first in the meta line), the session name or first prompt (body ink1), "24 messages · 2 h ago" (meta ink3).
   Tap resumes; the live one resumes without reopening.
-- Files: one folder at a time. An "up" row (back glyph + the relative path, monoSmall ink2) when inside a folder;
-  52dp rows: folder or file glyph, the name in monoSmall (dot files ink3), size or "N items" (meta ink3) at the end.
+- Files: one folder at a time, under a sticky breadcrumb bar (+ for new file, folder and import; sort and hidden
+  files). An empty folder is an EmptyCard ("No files yet" at the root, "This folder is empty" inside, or the count of
+  hidden files) with New file and Import (secondary, side by side); 52dp rows: folder or file glyph, the name in monoSmall (dot files ink3), size or "N items" (meta ink3) at the end.
   Folders first, then files, by name. Tapping a file opens the full-screen viewer (first 512 KB; binary files say so).
   Back goes up a folder before it leaves the screen.
   The "+" menu also imports: "Import files…" (ACTION_OPEN_DOCUMENT, several) and "Import a folder…"
@@ -317,8 +339,12 @@ full width), then a segmented "Sessions · N | Files | Changes | Terminal".
   rows: the change letter in a 20dp surface2 tile (added/untracked success, deleted/conflict danger, renamed warning,
   modified ink2; TalkBack reads the word), the file name in body over its folder in monoMeta ink3, and a 48dp + / −
   button to stage or unstage. Tap opens the diff; long press asks to discard (ConfirmSheet, danger; untracked files are
-  deleted). The commit card: message field (2 to 8 lines), "Ask Pi" (secondary, sparkle glyph: Pi drafts from the
-  staged diff in the project's session and the answer fills the field) and Commit (primary). Without a git identity
+  deleted). The commit card comes right under the branch card as soon as something is staged (and stays while a
+  message is written), so committing never needs a scroll past the file list: "Commit 2 files" (bodyStrong), the
+  message field (2 to 8 lines), "Ask Pi" (secondary, sparkle glyph: Pi drafts from the staged diff in the project's
+  session and the answer fills the field) and Commit (primary). With changes but nothing staged, a meta ink3 line under
+  "Changes · N" says how to stage. Clean: "No changes" (EmptyCard, check glyph); outside a repository "Not a git
+  repository" (EmptyCard, branch glyph) with Initialise git; "Reading git status…" (LoadingRow) until git answers. Without a git identity
   the commit opens "Who is committing?" (name, email; prefilled with the GitHub name and no-reply address).
 - Diff viewer: full screen (fade and 10% rise, sheet duration). Bar: back, file name over its path, Stage or Unstage
   and, unstaged, Discard. Each hunk is a card: its `@@` header (monoMeta ink3 on surface2) with Stage hunk / Unstage
@@ -332,25 +358,28 @@ full width), then a segmented "Sessions · N | Files | Changes | Terminal".
 - Pull request sheet: title, description (Markdown), "Merge into" chips (the repository's default branch first),
   "Ask Pi" (Pi drafts title and body from the branch's commits) and Create (pushes first when needed). Done, it shows
   "Pull request #12", the link in accent mono, Copy and "Open on GitHub".
-- Terminal (fourth segment; a key action in the top bar opens Secrets): see Terminal below, at 86% of the screen's
-  height inside the page (drags scroll the terminal's scrollback, not the page).
+- Terminal: see Terminal below; the pane fills the tab between the top bar and the bottom bar (or the keyboard), so the
+  extra-keys row always sits on the keyboard.
 
 **Terminal.** Termux's TerminalView in JetBrains Mono on canvas: text ink1, cursor accent, the 16 base colours mapped
 to tokens as in tool output (red danger, green success, blue the syntax function colour...), no cursor blink. A 48dp
-bar: tab chips (36dp, radius 8, surface2 + lineStrong when selected, line otherwise; "1 · title" in label, ink3 when
-the shell ended; a 16dp close glyph), + (new terminal), Paste, smaller and larger text (8 to 28 sp, also by pinch),
-full screen / leave full screen. Under it the Preview chips. The extra-keys row (surface1, 48dp keys, monoMeta ink1 or
+bar: tab chips (`WorkspaceTab`, the editor's too: 36dp drawn in a 48dp row, radius 8, surface2 + lineStrong when
+selected, line otherwise; "1 · title" in monoSmall, ink3 when the shell ended; a 16dp close glyph with a 48dp target),
++ (new terminal), Paste, Text size (one menu: Larger, Smaller, "13 sp · pinch the terminal too"; 8 to 28 sp, also by
+pinch), full screen / leave full screen. Under it the Preview chips. The extra-keys row (surface1, 48dp keys, monoMeta ink1 or
 a 20dp arrow glyph): Esc, Tab, Ctrl, Alt, the four arrows, |, ~, /, -; Ctrl and Alt fill with accent (onAccent text)
 while on and apply to the next key only. Long press selects text (Termux's floating Copy / Paste bar); tap shows the
 keyboard (character input, no suggestions). An ended shell says "[Process completed - press Enter]"; Enter closes the
-tab. No tab yet: "A shell in this project", one line, Start a terminal (primary). Full screen: the same pane above
+tab. No tab yet: "A shell in this project" (EmptyCard, terminal glyph), one line, Start a terminal (primary). Full screen: the same pane above
 the keyboard, status and navigation bars padded. Shells keep running off screen; a low-importance "N terminals
 running" notification (Close all) holds them in the background.
 
 **Preview.** Chips "Preview: localhost:5173" (label ink1 on successSoft, success @ 40% line, radius 8, 48dp touch) in
 the terminal and above the composer of an on-device session, while a dev server listens. The preview screen: back,
 the URL (monoMeta ink2, middle ellipsis), Reload, Open in browser; a 2dp accent progress line while loading; the page
-in a WebView (http://localhost and 127.0.0.1 only; tapped links elsewhere open in the browser).
+in a WebView (http://localhost and 127.0.0.1 only; tapped links elsewhere open in the browser). When the dev server does not
+answer (stopped, still starting), an EmptyCard over the page says so ("Nothing answers on localhost:5173", what to
+check, the WebView's reason) with Reload (primary) instead of WebView's own error page.
 
 **Secrets.** `ScreenTopBar` "Secrets" with the project's name as its meta line, a `ScreenIntro` on where values go
 (engine and terminal environment, never the model's messages) and "Changes apply to new terminals and sessions"
@@ -363,10 +392,12 @@ Write .env file (secondary) confirms first: values land in plain text in the pro
 is added to .gitignore in git projects. The window is FLAG_SECURE on this screen.
 
 **File viewer and editor.** Full screen over the project (or the session, for a file on a tool card). Top bar: ✕,
-the name and "path · type · N lines · read-only · unsaved" (monoMeta; warning when unsaved), Find, Wrap (viewing) or
-Save (editing, accent text action), ⋮ (Edit, Ask Pi about the selection / this file, Go to line, Copy path, Copy
-text, Share). Open files are tabs once there are two: a 48dp strip, each tab 40dp (radius 8; surface2 when shown),
-a 7dp warning dot when unsaved, the name (monoSmall, at most 160dp) and a ✕ (48dp target). Find bar: the query
+the name and "path · type · N lines · read-only · unsaved" (monoMeta; warning when unsaved), Find, Edit (pencil; files that can be edited) or
+Save (editing, accent text action), ⋮ (Ask Pi about the selection / this file, Go to line, Wrap lines, Copy path, Copy
+text, Share). Open files are tabs once there are two: a 48dp strip of `WorkspaceTab`s (as the terminal's: surface2 +
+lineStrong when shown), a 7dp warning dot when unsaved, the name (monoSmall, at most 160dp) and a ✕ (48dp target).
+With the keyboard up in a window under 480dp tall the strip steps aside. Menus in the workspace (project, files,
+viewer, terminal) are one `WorkspaceMenu`: surface3, radius 12, lineStrong border, 48dp rows with a 20dp glyph slot. Find bar: the query
 (mono), "3 of 12" (meta, live region), ↑ ↓ ✕, then 48dp text toggles "Aa" (match case), "ab" underlined (whole
 word), ".*" (regex) in accent with a 18% accent fill when on (TalkBack: switches), and ⇄ for Replace: a second row
 with the replacement and "Replace" / "All" (accent text actions); a bad regex or group shows in danger meta below.
