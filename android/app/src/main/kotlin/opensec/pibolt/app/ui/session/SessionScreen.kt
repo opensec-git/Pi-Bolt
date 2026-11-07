@@ -136,7 +136,9 @@ import opensec.pibolt.app.ui.projects.FileViewer
 import opensec.pibolt.app.ui.projects.editor.AskPi
 import opensec.pibolt.app.ui.projects.editor.EditorTabs
 import opensec.pibolt.app.ui.projects.editor.viewerPlace
-import opensec.pibolt.app.ui.session.voice.VoiceButton
+import opensec.pibolt.app.ui.session.voice.VoiceRationale
+import opensec.pibolt.app.ui.session.voice.rememberVoiceInput
+import opensec.pibolt.app.ui.session.review.SessionChangesPill
 import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
@@ -151,6 +153,7 @@ import opensec.pibolt.app.ui.components.sharedHostBounds
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.components.snackKindOf
 import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.protocol.rpc.StreamingBehavior
 import opensec.pibolt.protocol.session.AssistantTextItem
@@ -414,6 +417,11 @@ private fun SessionContent(
         context.startActivity(Intent.createChooser(send, null))
     }
 
+    // Dictation (the pill's mic and voice surface). [dictated]: the draft holds dictated words, so the message it
+    // becomes carries the waveform badge.
+    var dictated by remember { mutableStateOf(false) }
+    val voice = rememberVoiceInput(draft, onDraft = { draft = it }, onMessage = { m -> scope.launch { snackbar.show(m) } }, onHeard = { dictated = true })
+
     fun copy(text: String) {
         scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("Pi-Bolt", text))) }
         haptics.confirm()
@@ -511,10 +519,11 @@ private fun SessionContent(
     }
 
     /** Sends [text] as typed (a prompt when idle, else per [mode]) with [attached] images and shows it at once. */
-    fun send(text: String, attached: List<ComposerImage> = emptyList(), behavior: StreamingBehavior = mode) {
+    fun send(text: String, attached: List<ComposerImage> = emptyList(), behavior: StreamingBehavior = mode, fromDraft: Boolean = false) {
         val running = state.value.isRunning
         controller.send(text, behavior, attached.mapNotNull { it.image })
-        memory.sent(text, state.value, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image })
+        memory.sent(text, state.value, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image }, dictated = fromDraft && dictated)
+        if (fromDraft) dictated = false
         if (text.isNotBlank()) app.recents.record(recentKey, text)
         lastSent = text to attached
         maybeAskNotifications()
@@ -835,7 +844,7 @@ private fun SessionContent(
             images.isNotEmpty() && modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
             else -> {
                 val startsRun = !state.value.isRunning
-                send(text, images.toList(), behavior)
+                send(text, images.toList(), behavior, fromDraft = true)
                 draft = ""
                 images.clear()
                 if (startsRun) {
@@ -989,13 +998,16 @@ private fun SessionContent(
                     } else {
                         StatusExtras(extras)
                         TodoPanel(todos, running, autoCollapse = !running || windowHeight < 560.dp, quiet = status.value.visible && statusOnScreen)
-                        if (local != null) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = 12.dp))
+                        if (local != null) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = Space.page))
                         PendingDialogStrip(askingTitle) { memory.hiddenDialog.value = null }
                         QueueStrip(queue, onEdit = controller::clearQueue)
                     }
                     Composer(
                         text = draft,
-                        onText = { draft = it },
+                        onText = {
+                            draft = it
+                            if (it.isBlank()) dictated = false
+                        },
                         enabled = enabled,
                         running = running,
                         mode = mode,
@@ -1027,7 +1039,8 @@ private fun SessionContent(
                         attachAllowed = modelReadsImages != false,
                         onAttach = { sheet = Sheet.Attach },
                         onRemoveImage = { id -> images.removeAll { it.id == id } },
-                        voice = { VoiceButton(draft, onDraft = { draft = it }, enabled = enabled, onMessage = { m -> scope.launch { snackbar.show(m) } }) },
+                        voice = voice,
+                        changes = if (isLocal) ({ SessionChangesPill(review) }) else null,
                         focusRequester = focus,
                         // A user `!` command started while Pi is idle stops through abort_bash; the agent through abort.
                         stoppable = running || shellRuns > 0,
@@ -1110,6 +1123,8 @@ private fun SessionContent(
             }
         }
     }
+
+    VoiceRationale(voice)
 
     when (sheet) {
         Sheet.None -> Unit

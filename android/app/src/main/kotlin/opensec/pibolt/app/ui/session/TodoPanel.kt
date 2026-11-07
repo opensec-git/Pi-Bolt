@@ -59,6 +59,7 @@ import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Tnum
@@ -135,10 +136,10 @@ fun TodoPanel(todos: TodoState, running: Boolean, autoCollapse: Boolean = false,
         val current = tasks.firstOrNull { it.status == TodoStatus.InProgress } ?: tasks.firstOrNull { it.status == TodoStatus.Pending }
         val layout = remember(tasks) { todoLayout(tasks) }
         val reduced = Pi.reduceMotion
-        val shape = RoundedCornerShape(Radius.md)
+        val shape = RoundedCornerShape(Radius.tile)
         Column(
             Modifier
-                .padding(start = 12.dp, end = 12.dp, bottom = 8.dp)
+                .padding(start = Space.page, end = Space.page, bottom = 8.dp)
                 .fillMaxWidth()
                 .clip(shape)
                 .background(colors.surface1, shape)

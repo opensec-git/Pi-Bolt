@@ -41,6 +41,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
+import opensec.pibolt.app.ui.components.RadiusMedia
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
@@ -57,7 +58,7 @@ fun MdImage(alt: String, url: String, modifier: Modifier = Modifier) {
     val uri = LocalUriHandler.current
     val remote = url.startsWith("https://") || url.startsWith("http://")
     var state by remember(url) { mutableStateOf<ImageState>(loaded.get(url)?.let { ImageState.Loaded(it) } ?: ImageState.Idle) }
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(RadiusMedia)
     Column(
         modifier
             .fillMaxWidth()

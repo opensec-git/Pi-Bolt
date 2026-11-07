@@ -213,7 +213,8 @@ on top.
 ## Space, shape, size
 
 Spacing 2, 4, 8, 12, 16, 20, 24, 32, 40 dp (`Space.xxs … x4`): the desktop's 4px rhythm (`--sp-0` to `--sp-8`, plus 40).
-The redesign's side gutter is 20 (`Space.page`); elsewhere it is still 16; sheet and header text inset 20; gap
+The redesign's side gutter is 20 (`Space.page`: Home, and the session's transcript, composer, todo card and preview
+chips); elsewhere it is still 16; sheet and header text inset 20; gap
 between turns 20; between steps 6.
 Radii are the desktop's 4 / 6 / 10 / 14, assigned by role:
 - xs 4: inline code, tags (`--radius-xs`).
@@ -225,6 +226,8 @@ Radii are the desktop's 4 / 6 / 10 / 14, assigned by role:
 - full: send button, pills.
 - tile 16: status tiles, media cards (the redesign).
 - bubble 22: the user bubble (the redesign).
+- media 12: code blocks, tables and image cards in the transcript (`RadiusMedia` in `components/MediaRadius.kt`, until
+  the theme's `Radius` takes it).
 - pill 28: the pill composer, a full round at its 56dp one-line height, kept as it grows.
 
 Before 0.5.2 the values were 4 / 8 / 12 / 18 / 28. The desktop's user bubble is 14 with its bottom-end corner at
@@ -678,11 +681,18 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
 - Subtitle under the name: model · thinking level · context %, tap → Session info sheet (model, thinking, context
   ring, tokens, cost, compaction button).
 - Transcript (LazyColumn, stable keys and contentType per block; only the last block changes while streaming):
-  - user: right, max 80% width, a subtle bubble as on the desktop: surface2 with a 1dp line, radius 18 with the
-    bottom-end corner 4 (xs), padding 10x14, prose. Images sent from this phone show as
-    56dp thumbnails above the text (kept in memory for the session); images without a local copy read as a compact
-    "2 images" chip (surface3, radius 4, image glyph, meta ink2).
-  - assistant: full width on canvas, prose, no bubble; paragraphs 12dp apart; ink3 list markers.
+  - user: right, max 80% width, the redesign's soft bubble: surface2 with a subtle 1dp line, radius bubble (22) on
+    every corner, padding 12x16, prose ink1. Images sent from this phone show as 56dp thumbnails (radius md) above the
+    text (kept in memory for the session); images without a local copy read as a compact "2 images" chip (surface3,
+    radius 4, image glyph, meta ink2). A message dictated on this phone carries a waveform badge on its top-start
+    corner, 6dp outside it (22dp surface3 circle, 1dp lineStrong, 12dp GraphicEq ink2; TalkBack "Dictated"); the phone
+    remembers which messages it dictated for the session (`SessionMemory.dictated`, matched to the echo by row key, or
+    by text for a steer).
+  - assistant, finished turn: a quiet meta line first, "Finished 1m 12s" (rowMeta ink3, tnum; the time only when this
+    phone watched the turn), "Stopped" after an abort or "Failed" after an error, each after a 6dp dot (ink3 / danger)
+    (`TurnMetaRow`). Then the folded tools ("Used 4 tools", below). When the reply starts with a heading it reads as
+    the turn's bold title (subhead 17/24 ink1, 2dp above), then prose in ink2 on canvas, no bubble; paragraphs 12dp
+    apart; ink3 list markers; headings ink1. The live turn has no meta line: its "Working" line sits at the bottom.
   - user, sending: an idle prompt shows at once as its bubble at 60% with "Sending" (meta ink3) under it, and the
     status line shows Quad Think + "Sending". The host's echo takes over the row in place (no second rise); a failed
     send removes it and returns the text to the composer. Slash commands are not shown early.
@@ -724,9 +734,9 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
     `steer_subagent`, `get_subagent_result` and `SubagentWorkflow` stay step rows: "Steer agent", "Agent result",
     "Workflow" + the workflow's name.
   - `todo` steps read as one line: "Todo  Added: Write tests", "Done: …", "Started: …", "Cleared the list".
-  - code blocks: surface1, radius md, 1dp line. Header 40dp, as on the desktop: the language (monoMeta ink3; shell
+  - code blocks: surface1, radius media (12), 1dp line. A quiet header 40dp on the same surface, no rule under it: the language (monoMeta ink3; shell
     aliases show as `shell`; untagged code shows the language detected from its first lines, else `code`), then
-    " · " and the filename (monoMeta ink1, middle ellipsis) when the fence info string names one (`ts title="src/a.ts"`,
+    " · " and the filename (monoMeta ink2, middle ellipsis) when the fence info string names one (`ts title="src/a.ts"`,
     `ts:src/a.ts`, `src/a.ts`); at the end icon actions: line numbers (toggle, 3+ lines), Wrap (only when a line
     overflows or wrap is on), Open (folded or 40+ lines) and Copy (icon only; a check while copied, 1500 ms). Code Mono 12.5/19, 10dp
     vertical padding; line numbers from 3 lines on, Mono 11.5 ink3 right-aligned, then a 1dp line rule and 10dp to
@@ -752,7 +762,7 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
     the text in body ink2. Autolinks (`<…>`, bare `https://`, `www.`), entities and every backslash escape work;
     `<br>`, `<sub>`, `<sup>`, `<kbd>` (as inline code), `<b>`, `<i>`, `<u>`, `<s>`, `<mark>` render, wrapper tags
     (`<details>`, `<div>`) are dropped and comments hidden. Soft line breaks stay line breaks (as on GitHub).
-  - images: never fetched by themselves. A card (surface1, radius md, 1dp line, 56dp row: image glyph ink3, the alt
+  - images: never fetched by themselves. A card (surface1, radius media (12), 1dp line, 56dp row: image glyph ink3, the alt
     text body ink1, the address monoMeta ink3 middle-ellipsized, "Tap to load" meta ink3, an Open-in-browser
     action); tapping loads it (12 MB at most, long edge 2048 px) above the row, max 360dp tall. Inline images show
     their alt text in ink2 italic with the card under the paragraph.
@@ -764,74 +774,79 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
     "TeX" micro label. Currency (`$5 and $10`) stays text.
   - tables: a grid, not rows of loose cells. Column width = widest single-line cell + 24dp, clamped 64…240dp; spare
     width is spread in proportion so the table spans the card, wider tables scroll with edge fades. While streaming,
-    widths only grow. Radius 12, 1dp line border, header surface1 metaStrong ink2, 1dp lineStrong under it; body
+    widths only grow. Radius media (12), 1dp line border, header surface1 metaStrong ink2, 1dp line under it; body
     Inter 14/20 ink1, cells 12×9dp, 1dp line between rows, no column lines, zebra ink1 @ 3% from 8 rows. `:--`,
     `:--:`, `--:` are honoured; all-numeric columns align to the end with tnum. ✓ / yes success, ✗ / no danger,
     a lone dash ink3.
   - inline code: Mono 0.88em ink1 on a surface3 chip (radius 4, line box inset 14%), one chip per line segment
     when it wraps. A narrow no-break space pads each side inside the chip so it never touches neighbours; code of
     24+ characters without spaces may break after `/ . _ -`.
-  - after a turn: "Edited 3 files · ran 2 commands · 1m 12s" fold collapses its steps (at most three parts: edited
-    files, commands, distinct files read, searches, agents; "N steps" when none apply; the time only when this phone
-    watched the turn). "· 1 step failed" in ink3 after a 6dp danger dot; "· failed" in danger only when the turn ended
-    in an error or abort; the final answer stays visible. Under it,
-    chips for the files the turn edited or wrote (28dp, radius sm, surface1 + 1dp line, name in mono meta ink1, +n
-    success, −n danger, tnum; at most 3, then "+k more"); a chip opens that file's diff. An opened fold draws a 1dp
-    line rail at the slot centre through its steps (broken 4dp around each glyph, ending at the last one) and indents
-    the prose between steps to the step text.
-  - under that fold, in a session on this phone: "Review changes (3 files, +40 −12)" (difference glyph 16dp ink3,
-    label ink2, counts success / danger tnum, " · undone" in ink3 after an undo; 48dp tall), only for turns whose
-    checkpoints show changed files. Over remote control the newest turn that edited files says instead, in meta ink3,
-    that review and undo work in sessions on this phone (the files are on the computer).
+  - after a turn: its steps fold into one quiet line, "Used 4 tools" (rowMeta ink3, a chevron after it; "Thought" when
+    it only reasoned), as OpenCode's; "· 1 failed" after a 6dp danger dot when a step failed (the turn's own failure is
+    on the meta line). TalkBack reads the summary ("Used 4 tools: Edited 3 files · ran 2 commands", Expanded /
+    Collapsed). Tap opens the steps: first the chips of the files the turn edited or wrote (28dp, radius sm, surface1 +
+    1dp line, name in mono meta ink1, +n success, −n danger, tnum; at most 3, then "+k more"; a chip opens that file's
+    diff), then, in a session on this phone, "Review changes (3 files, +40 −12)" (difference glyph 16dp ink3, label
+    ink2, counts success / danger tnum, " · undone" in ink3 after an undo; 48dp tall) for a turn whose checkpoints show
+    changed files (over remote control the newest turn that edited files says instead, in meta ink3, that review and
+    undo work in sessions on this phone), then the steps. An opened fold draws a 1dp line rail at the slot centre
+    through its steps (broken 4dp around each glyph, ending at the last one) and indents the prose between steps to
+    the step text.
+  - the session's changes: in a session on this phone, a floating `GlassPill` at the end of the composer's slim row,
+    "Changes +12 −3" (label ink1, the counts success / danger, tnum), the sum of the session's turns whose files
+    changed (from the turn checkpoints; an undone turn is left out, a redone one counts again; `SessionChanges`).
+    One such turn opens its review; several open a "Changes" sheet of those turns, newest first (`InsetRow`: the
+    prompt's first line, "3 files · +40 −12"), each opening its review. TalkBack: "View changes, 3 files, 40 lines
+    added, 12 removed".
   - under the last finished reply: three icons, ink2 16-18dp, each in a 48dp target, no labels (one calm toolbar):
     Copy (a success check while copied), Ask again (sends the same prompt as a new turn; Pi has no regenerate; hidden
     for prompts with images) and More (Select text, View as Markdown, Share), 40dp tall, the copy glyph aligned with
     the prose. Fades in 150 ms after the turn settles; never animates in history.
-  - live status line: Quad 16dp + shimmer label + elapsed timer. A running tool is named: the verb shimmers and its
-    command or path follows in mono small ink3 ("Run  npm test"; a subagent reads "Agent working" + its task;
-    parallel tools add "+n"); text changes crossfade (quick).
+  - live status line, the turn's "Working" line: the kit's `WorkingLine` (a 14dp Quad in the mode, ink2, warning while
+    Pi asks, and the shimmering label in rowMeta) then " · " and the elapsed timer (rowMeta ink3, tnum). A running tool
+    is named: the verb shimmers and its command or path follows in mono small ink3 ("Run  npm test"; a subagent reads
+    "Agent working" + its task; parallel tools add "+n"); text changes crossfade (quick), and both sides draw the Quad
+    from the one clock, so only the words visibly change.
   - errors and notices: a hairline, not a filled slab (the desktop's): radius md, 1dp outline in danger / warning @
     32%, a 20dp glyph in the kind colour, the title bodyStrong ink1, text buttons.
 - Todo panel above the queue strip (see Todo panel below).
 - Queue strip above the composer: 44dp rows (48dp with the remove button) with a 2dp bar (warning = steer, ink4 =
   follow-up), the label on one line at least 62dp wide, swipe to remove.
-- Composer (after the desktop composer and assistant-ui): one card, surface1, radius lg, a 1dp lineStrong edge that
-  becomes the focus line; body text (15/22) in ink1, its placeholder in the same style in ink3 (one line, ellipsized),
-  accent cursor and selection. As on the desktop the bar is always there, whatever the draft (empty, one line or
-  more), so the model stays in view; the field keeps one place in the composition in both forms, so switching never
-  drops focus or the keyboard:
-  - Field on top (16dp sides, 14dp top, 4dp bottom, grows to 6 lines, 4 in a short window, then scrolls) and the bar:
-    + as a ghost button on the left, the run-settings chip, then the mic (a ghost) just before Stop and Send on the
-    right.
-  - Under 360dp of room above the keyboard (landscape) one row: +, the field (at most 3 lines), the mic, the Steer
-    chip while a steer is typed, Stop, Send. The field's top and bottom padding is (48dp − line) / 2, so one line is
-    centred on the buttons and the last of several stays on that centre (also at font scale 1.3). In a window under
-    420dp wide the + steps aside while a steer is typed (never the mic, which may be listening).
-  Geometry (`ComposerLayout`): every button is a 48dp target on one centre line. Send, Stop and the listening mic are
-  one 32dp disc (the desktop's 30px, assistant-ui's 32px); the button row sits 2dp inside the card, so the send disc
-  is 10dp from the end and the bottom edge alike (it was 10dp and 4dp). + and the mic at rest: a 20dp ink3 glyph, no
-  fill (ghosts, 40% when disabled). Send: the accent circle (white in the default theme) with a 20dp onAccent arrow
-  nudged 0.5dp down (its head carries most of the ink); disabled, the same circle at 18%. Stop: a surface3 disc with
-  a 1dp lineStrong ring and a 10dp ink1 square (the rounded Stop glyph), in Send's slot when the field is empty and
-  beside it while a steer is typed; the same disc in both places. The mode swap crossfades centred in the disc.
-  The run-settings chip ("Sonnet 4.5 · High": the model maker's mark 14dp ink1 6dp before it (see Logos), the model in label ink2, middle-truncated past 180dp, then " · High" in
-  label ink3; the level is left out when thinking is off or the model does not reason; TalkBack "Model: Sonnet 4.5,
-  thinking high") opens the model sheet, whose "Thinking" row (36dp level pills, radius full, the current one accent
-  1.5dp on the selected fill, the level's meaning under it in meta ink3) sets the level without closing it; long press
-  cycles the model (click label "Next model", a tick and a snackbar naming it); Shift+Tab cycles the thinking level.
-  While a steer is typed the "Steer | Follow-up" chip takes the run-settings chip's slot (at 360dp the model chip had
-  about 30dp left beside Stop and Send; the top bar's subtitle still names the model).
-  The + opens the attach sheet (Photos, Mention a file, Commands); when the model's `input` lacks "image" its Photos
-  row says so and picking one shows a "<model> can't read images" snackbar. Attached images (Photo Picker, images
-  only, at most 4) sit in a tray above the text: 56dp thumbnails, radius 8, 1dp line, a Quad Write while each encodes
-  ("Image 2, preparing" to TalkBack; "Image 2 of 3" once ready), a 20dp ✕ (scrim, lineStrong ring) centred 4dp inside
-  each thumbnail's top-end corner, its 48dp target centred on it ("Remove image 2"), so it covers only the corner
-  quarter of the thumbnail (it covered half, and taps meant to open an image removed it); 76dp per item. Encoding
-  runs off the main thread: long edge at most 2000 px, JPEG 85 (PNG only when transparent and under 1.5 MB), refused
-  over Pi's 4.5 MiB base64 limit. Send works with images and no text. A thumbnail opens the image viewer.
-  While the agent works a 1dp accent band (40%, inset 16dp) sweeps the card's top edge. The palette and `@` mentions
-  open above the card (see Command palette below). IME insets animate with the keyboard. The draft is kept per
-  session (computer or project, and Pi session) across restarts.
+- Composer, on the redesign's pill (`PillComposerShell`, after the references and OpenCode's composer), 20dp from the
+  window's sides:
+  - The pill: glass, radius pill (28), 56dp at least: a + `ComposerCircle` (opens the attach sheet), the field
+    (rowTitle 17/24 ink1, its placeholder in the same style in ink3, one line, ellipsized; accent cursor and
+    selection; grows to 6 lines, 4 in a short window, then scrolls), the mic (`VoiceMic`, a 36dp surface3 circle with
+    an ink2 MicNone; accent with an onAccent Mic while it dictates in place) and the primary circle in one slot:
+    `ComposerPrimary` (white in the default) with a waveform that opens voice input while the field is empty and an
+    arrow that sends once there is text or an image (18% and disabled while an image encodes); Stop in the same slot
+    while Pi works and nothing is typed (a 36dp surface3 circle, 1dp lineStrong ring, ink1 Stop glyph), and beside the
+    primary while a steer is typed. Every circle is 36dp in a 48dp target on one line along the pill's bottom, 10dp
+    from its edges (`ComposerLayout`); the field's top and bottom padding is (48dp − line) / 2, so one line is centred
+    on them and the last of several stays there (also at font scale 1.3). Attached images sit in a tray inside the
+    pill above the text.
+  - Above the pill, a slim row (48dp): the run-settings chip at the start ("Sonnet 4.5 · High": the model maker's
+    mark 14dp ink1 2dp before it (see Logos), the model in label ink2, middle-truncated past 180dp, then " · High" in
+    label ink3 and a 16dp chevron; the level is left out when thinking is off or the model does not reason; TalkBack
+    "Model: Sonnet 4.5, thinking high"), so the model is always in view; at the end the session's changes pill
+    ("Changes +12 −3", above), or the "Steer | Follow-up" chip while a steer is typed. The chip opens the model sheet,
+    whose "Thinking" row (36dp level pills, radius full, the current one accent 1.5dp on the selected fill, the level's
+    meaning under it in meta ink3) sets the level without closing it; long press cycles the model (click label "Next
+    model", a tick and a snackbar naming it); Shift+Tab cycles the thinking level.
+  - Under 360dp of room above the keyboard (landscape) the slim row steps aside and the field takes at most 3 lines;
+    the Steer chip moves into the pill, before Stop. In a window under 420dp wide the + steps aside while a steer is
+    typed (never the mic, which may be listening). The field keeps its place in the composition, so the switch never
+    drops focus or the keyboard.
+  The attach sheet: Photos, Paste image, Mention a file, Commands, Prompt history; when the model's `input` lacks
+  "image" its Photos row says so and picking one shows a "<model> can't read images" snackbar. Attached images (Photo
+  Picker, images only, at most 4): 56dp thumbnails, radius md, 1dp line, a Quad Write while each encodes ("Image 2,
+  preparing" to TalkBack; "Image 2 of 3" once ready), a 20dp ✕ (scrim, lineStrong ring) centred 4dp inside each
+  thumbnail's top-end corner, its 48dp target centred on it ("Remove image 2"); 76dp per item. Encoding runs off the
+  main thread: long edge at most 2000 px, JPEG 85 (PNG only when transparent and under 1.5 MB), refused over Pi's 4.5
+  MiB base64 limit. Send works with images and no text. A thumbnail opens the image viewer.
+  While the agent works a 1dp accent band (40%) sweeps the pill's top edge, inset by its radius. The palette and `@`
+  mentions open above the pill (see Command palette below). IME insets animate with the keyboard. The draft is kept
+  per session (computer or project, and Pi session) across restarts.
 - Empty session: the mark, "New session" and the folder tag, then "Commands" (the host's slash commands, mono name
   + description in meta ink3, the first 6 then "Show all N commands"; tap puts "/name " in the composer and focuses
   it) and "Recent" (the last 5 distinct prompts this phone sent to this computer; tap fills the composer). 48dp rows,
@@ -854,21 +869,23 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
   its text comes back to the composer to edit and send. Recent prompts are kept per project.
 - Sheets (ModalBottomSheet, predictive back): model picker (the Thinking pills when the model reasons, then search,
   "Current" then one group per maker, as the desktop's picker ("Anthropic" holds Claude from Anthropic, OpenRouter and
-  Bedrock; a model without a known maker goes under its provider's name), under a meta-strong heading; 60dp rows with
-  the maker's mark, the name and "OpenRouter · 200k context · reasoning" (the provider first); search matches the
+  Bedrock; a model without a known maker goes under its provider's name), under a meta-strong heading; the kit's
+  `InsetRow`s: the maker's mark in the leading slot, the name (rowTitle) over "OpenRouter · 200k context · reasoning"
+  (rowMeta ink3, the provider first), inset hairlines, the current model on the soft surface2 highlight with a check; search matches the
   maker and provider names too; no match is an EmptyState with the search-off glyph; `/model text` opens it filtered),
-  thinking level (52dp option rows with a description), Pi's dialogs (Quad Wait eyebrow "Pi is asking", title,
+  thinking level (option rows: radius tile, surface1, rowTitle over a rowMeta description; the selected one on the
+  selected fill with an accent ring and check), Pi's dialogs (Quad Wait eyebrow "Pi is asking", title,
   message in a command well when it looks like a command (surface1, radius md, the cwd in mono meta ink3 with Copy,
   then `$` in success and the command in mono), options as 52dp rows, primary button; swipe or scrim tap
   does not answer: an explicit Cancel does; countdown chip when the dialog has a timeout; haptic on appear).
 - Snackbars for notify: surface3, radius md, line, above the composer, kind-coloured icon.
 
-**Command palette.** Typing `/` opens a panel above the composer (surface2, radius md, 1dp line, at most 264dp and
+**Command palette.** Typing `/` opens a panel above the composer pill (glass, as the pill, radius tile, at most 264dp and
 never more than the room between the top bar and the composer above the keyboard, so it cannot push the composer
 under the keyboard in landscape; scrolls): 48dp rows with the command in mono small ink1, its argument hint in mono meta ink3, the description in meta
-ink3 under it and a source badge at the end (micro, surface3, radius 4: `app`, `extension`, `prompt`, `skill`).
+ink3 under it (rowMeta ink3) and a source badge at the end (micro, surface3, radius 4: `app`, `extension`, `prompt`, `skill`).
 Matching is fuzzy (prefix, then word starts, then scattered letters), by name and then by description; a space closes
-the panel and a usage line takes its place (`/compact [instructions]`, mono meta ink3). The app's own commands are
+the panel and a usage line takes its place (`/compact [instructions]`, mono meta ink3, 16dp in). The app's own commands are
 the terminal built-ins that make sense on a phone: `/new`, `/resume`, `/fork`, `/clone` and `!` (on this phone only),
 `/compact`, `/name`, `/session`, `/model`, `/thinking`, `/copy`, `/export`, `/search`. They run in the app (a sheet or
 an RPC command), never reach the host, and a host command of the same name wins. Picking one that takes no argument
@@ -941,10 +958,17 @@ read the session tree" (bodyStrong ink1), Pi's message (meta ink3, four lines) a
 Markdown, and on this phone Share session file (the JSONL) and Share as HTML (`export_html`). Files are written to
 `cache/exports` and shared through a FileProvider.
 
-**Dictation.** A 48dp mic just before Send, as on the desktop: a 20dp MicNone ink3 ghost; listening is the composer's
-32dp accent disc with an onAccent Mic (static, no pulse), on Send's centre line, and TalkBack's state "Listening". It
-keeps its state when the composer switches to the landscape row and back (movable content). The first tap explains the microphone in a sheet
-("Continue"), then Android asks; partial words appear in the draft as they are heard.
+**Dictation and voice input** (`ui/session/voice`). One recogniser (`VoiceInput`, held by the screen) behind two ways
+in. The pill's mic dictates in place: tap to start, again (or stop talking) to finish; partial words appear in the
+draft as they are heard, the final result replaces them (`VoiceDraft`). The pill's primary circle, while the field is
+empty, opens the voice surface (OpenCode's voice screen) in the composer's place: what was heard in large type (title
+20/26 regular, ink1; "Listening…" or "Tap the mic to talk" in ink3 before any words; the end of a long dictation from a
+word start), then one row: a round 56dp mic (accent while it listens, surface3 with a lineStrong ring otherwise; tap
+to stop or to talk again, each time adding to the draft), the kit's `DotWave` driven by the microphone's level
+(`onRmsChanged`, −2…10 dB mapped to 0…1 by `VoiceLevel`, eased over the tap duration) in ink1 while listening and ink3
+otherwise, and a round 56dp danger button with a white Stop glyph that ends voice input (Back too). The words are
+already in the draft, so ending it leaves them in the composer, ready to send. The first use explains the microphone
+in a sheet ("Continue"), then Android asks. A message sent with dictated words carries the waveform badge.
 
 **Image viewer.** A tap on an image in a user message or the composer tray opens it full screen on black: swipe
 between images, pinch or double-tap (2.5x) to zoom up to 6x, drag to pan a zoomed image (kept on screen), Back or ✕
@@ -957,7 +981,7 @@ recent messages; older ones open their thumbnail.
 **Todo panel.** The todo extension (opensec-pi-todo) draws its panel in the TUI only, so the app builds it from the
 `todo` tool's results: each result's `details.tasks` is the whole list after the call (`SessionState.todos`, from
 history and from live `tool_execution_end`).
-- Card above the composer: surface1, radius md, 1dp line, 12dp side inset. Heading 48dp (the tap target): a 14dp
+- Card above the composer: surface1, radius tile, 1dp line, 20dp side inset (the composer's). Heading 48dp (the tap target): a 14dp
   progress ring (ink4 track, success arc of done/total, settle), "Todos" (label ink1), "2/5" (meta ink3, tnum),
   a chevron (ink3) that turns in a graphicsLayer. Tapping collapses the card to the heading, which then names the
   current task (meta ink2).
@@ -1004,8 +1028,8 @@ messages. Pi has no RPC to read or steer a subagent: steering and resuming go th
   from 0.7 over the glyph duration in the live turn. Sizes on the icon tokens (`AgentGlyphSize`, the rest glyph one
   step larger since a Material glyph draws inside padding): Card slot 22 / Quad 20 / glyph 22 (an agent's own
   two-line block), Row 20 / 14 / 16 (one-line timeline rows), Bar 20 / 16 / 20 (top bars, live lines).
-- Card (surface1, radius md, 1dp line; lineStrong while active, 14x12dp padding): the glyph, then the agent's name
-  (label ink1: the task title the model gave the call, else its prompt's first line, else the type) over one meta
+- Card (surface1, radius tile, 1dp line; lineStrong while active, 16x14dp padding): the glyph, then the agent's name
+  (rowMeta ink1: the task title the model gave the call, else its prompt's first line, else the type) over one meta
   line, the type and what it does now: "Explore · Reading src/auth.ts" (meta ink3; "background" when it is one; the
   error in danger; done, its metrics "4 tools · 12.3k tokens · 5 turns"), and the run time at the end (meta ink3
   tnum, ticking once a second). No narration: the extension sends the start of the agent's reply in the same field

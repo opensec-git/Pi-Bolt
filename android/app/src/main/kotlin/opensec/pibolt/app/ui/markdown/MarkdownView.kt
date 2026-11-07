@@ -98,16 +98,18 @@ private const val MAX_LIST_DEPTH = 8
 /**
  * One markdown block. [streaming] marks the block still being written: newly revealed text fades in and a small block
  * pulses at its end. [onOpenCode] opens a long code block in the full-screen viewer with a title the viewer resolves
- * back to its language ([CodeInfo.viewerTitle]).
+ * back to its language ([CodeInfo.viewerTitle]). [proseInk] colours paragraphs and list items (the transcript's ink2;
+ * headings stay ink1); [title] draws a heading as the turn's bold title (subhead, ink1).
  */
 @Composable
-fun MdBlockView(block: MdBlock, streaming: Boolean, onOpenCode: (code: String, language: String) -> Unit, modifier: Modifier = Modifier) {
+fun MdBlockView(block: MdBlock, streaming: Boolean, onOpenCode: (code: String, language: String) -> Unit, modifier: Modifier = Modifier, proseInk: Color? = null, title: Boolean = false) {
     val colors = Pi.colors
     val type = Pi.type
     val ink = LocalProseInk.current ?: colors.ink1
+    val prose = proseInk ?: ink
     when (block) {
         is MdBlock.Heading -> {
-            val style = when (block.level) {
+            val style = if (title) type.subhead else when (block.level) {
                 1 -> type.headline
                 2 -> type.subhead
                 3 -> type.prose.copy(fontWeight = FontWeight.SemiBold)
@@ -115,9 +117,9 @@ fun MdBlockView(block: MdBlock, streaming: Boolean, onOpenCode: (code: String, l
                 5 -> type.label.copy(fontWeight = FontWeight.SemiBold)
                 else -> type.label.copy(fontWeight = FontWeight.SemiBold, color = colors.ink2)
             }
-            MdText(block.text, style.copy(color = if (block.level == 6) colors.ink2 else ink), streaming, modifier)
+            MdText(block.text, style.copy(color = if (block.level == 6 && !title) colors.ink2 else ink), streaming, modifier)
         }
-        is MdBlock.Paragraph -> MdText(block.text, type.prose.copy(color = ink), streaming, modifier.indent(block.indent))
+        is MdBlock.Paragraph -> MdText(block.text, type.prose.copy(color = prose), streaming, modifier.indent(block.indent))
         is MdBlock.Code -> {
             val closed = block.closed || !streaming
             if (block.language.equals("mermaid", ignoreCase = true)) {
@@ -129,7 +131,7 @@ fun MdBlockView(block: MdBlock, streaming: Boolean, onOpenCode: (code: String, l
         }
         is MdBlock.ListItem -> Row(modifier.padding(start = LIST_INDENT * minOf(block.depth, MAX_LIST_DEPTH))) {
             ListMarker(block)
-            MdText(block.text, type.prose.copy(color = ink), streaming)
+            MdText(block.text, type.prose.copy(color = prose), streaming)
         }
         is MdBlock.Quote -> QuoteView(block, streaming, onOpenCode, modifier.indent(block.indent))
         MdBlock.Rule -> Box(

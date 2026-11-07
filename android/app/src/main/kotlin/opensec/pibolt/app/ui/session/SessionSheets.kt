@@ -64,6 +64,9 @@ import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.pressable
+import androidx.compose.foundation.lazy.itemsIndexed
+import opensec.pibolt.app.ui.components.SOFT_PRESS
+import opensec.pibolt.app.ui.components.InsetRow
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.providers.LogoMark
 import opensec.pibolt.app.ui.session.features2.F2Empty
@@ -84,16 +87,16 @@ import opensec.pibolt.protocol.session.SessionReducer
 @Composable
 fun OptionRow(title: String, subtitle: String?, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier, leading: (@Composable () -> Unit)? = null) {
     val colors = Pi.colors
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(Radius.tile)
     val border by animateColorAsState(if (selected) colors.accent else colors.line, PiMotion.effects(), label = "option")
     Row(
         modifier
             .fillMaxWidth()
             .heightIn(min = Pi.dims.optionRow)
-            .pressable(onClick, shape = shape)
-            .background(if (selected) colors.selected else colors.surface2, shape)
+            .pressable(onClick, shape = shape, pressedScale = SOFT_PRESS)
+            .background(if (selected) colors.selected else colors.surface1, shape)
             .border(if (selected) 1.5.dp else 1.dp, border, shape)
-            .padding(horizontal = 14.dp, vertical = 8.dp),
+            .padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (leading != null) {
@@ -101,8 +104,8 @@ fun OptionRow(title: String, subtitle: String?, selected: Boolean, onClick: () -
             Spacer(Modifier.width(12.dp))
         }
         Column(Modifier.weight(1f)) {
-            Text(title, style = Pi.type.body, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (!subtitle.isNullOrBlank()) Text(subtitle, style = Pi.type.meta, color = colors.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(title, style = Pi.type.rowTitle, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (!subtitle.isNullOrBlank()) Text(subtitle, style = Pi.type.rowMeta, color = colors.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
         if (selected) {
             Spacer(Modifier.width(10.dp))
@@ -170,41 +173,30 @@ fun ModelSheet(
             for ((title, group) in sections) {
                 if (sections.size > 1) {
                     item(key = "h:$title", contentType = "header") {
-                        Text(title, style = Pi.type.metaStrong, color = colors.ink3, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 4.dp).semantics { heading() })
+                        Text(title, style = Pi.type.metaStrong, color = colors.ink3, modifier = Modifier.padding(start = Space.page, end = Space.page, top = 16.dp, bottom = 4.dp).semantics { heading() })
                     }
                 }
-            items(group, key = { "${it.provider}/${it.id}" }) { model ->
+            itemsIndexed(group, key = { _, it -> "${it.provider}/${it.id}" }) { index, model ->
                 val selected = isCurrent(model)
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(60.dp)
-                        .pressable({
-                            haptics.tick()
-                            close { onPick(model) }
-                        }, shape = RoundedCornerShape(0.dp), pressedScale = 1f)
-                        .padding(horizontal = 20.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // The maker's mark, 16dp: ink2, the current model's ink1 (Pi-Bolt Desktop's picker rows).
-                    LogoMark(ProviderCatalog.modelBrand(model.id, model.provider), size = IconSize.sm, tint = if (selected) colors.ink1 else colors.ink2)
-                    Spacer(Modifier.width(Space.md + 2.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(model.label, style = Pi.type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(
-                            listOfNotNull(
-                                model.provider.ifBlank { null }?.let(ProviderCatalog::name),
-                                model.contextWindow?.let { "${SessionReducer.formatTokens(it)} context" },
-                                "reasoning".takeIf { model.reasoning },
-                            ).joinToString(" · "),
-                            style = Pi.type.meta,
-                            color = colors.ink3,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    if (selected) Icon(Icons.Rounded.Check, contentDescription = "Current", tint = colors.accent, modifier = Modifier.size(20.dp))
-                }
+                // The kit's plain row: the maker's mark (16dp: ink2, the current model's ink1, as Pi-Bolt Desktop's
+                // picker), the name over "OpenRouter · 200k context · reasoning", inset hairlines; the current model
+                // on the soft highlight with a check.
+                InsetRow(
+                    title = model.label,
+                    meta = listOfNotNull(
+                        model.provider.ifBlank { null }?.let(ProviderCatalog::name),
+                        model.contextWindow?.let { "${SessionReducer.formatTokens(it)} context" },
+                        "reasoning".takeIf { model.reasoning },
+                    ).joinToString(" · ").ifEmpty { null },
+                    onClick = {
+                        haptics.tick()
+                        close { onPick(model) }
+                    },
+                    leading = { LogoMark(ProviderCatalog.modelBrand(model.id, model.provider), size = IconSize.sm, tint = if (selected) colors.ink1 else colors.ink2) },
+                    current = selected,
+                    divider = index < group.lastIndex,
+                    trailing = if (selected) ({ Icon(Icons.Rounded.Check, contentDescription = "Current", tint = colors.accent, modifier = Modifier.size(20.dp)) }) else null,
+                )
             }
             }
             if (shown.isEmpty()) {

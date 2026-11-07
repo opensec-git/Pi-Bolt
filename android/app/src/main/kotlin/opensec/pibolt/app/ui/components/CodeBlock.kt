@@ -139,7 +139,7 @@ fun CodeBlock(
     val header = remember { BringIntoViewRequester() }
     val scope = rememberCoroutineScope()
     val open = { onOpen?.invoke(code, if (meta.viewerTitle.isEmpty() && detected.isNotEmpty()) detected else meta.viewerTitle) ?: Unit }
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(RadiusMedia)
     Column(
         modifier
             .fillMaxWidth()
@@ -170,7 +170,6 @@ fun CodeBlock(
             copy = { code },
             modifier = Modifier.bringIntoViewRequester(header),
         )
-        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
         Crossfade(
             targetState = mode == CodeFold.Mode.Tail,
             animationSpec = if (reduced) snap() else tween(PiMotion.QUICK),
@@ -292,7 +291,7 @@ private fun CodeHeader(
         Text(language, style = type.monoMeta, color = colors.ink3, maxLines = 1)
         if (named && label != language) {
             Text(" · ", style = type.monoMeta, color = colors.ink3, maxLines = 1)
-            Text(label, style = type.monoMeta, color = colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f))
+            Text(label, style = type.monoMeta, color = colors.ink2, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f))
         } else {
             Spacer(Modifier.weight(1f))
         }
