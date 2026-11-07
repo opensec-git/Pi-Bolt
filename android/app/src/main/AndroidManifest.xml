@@ -45,6 +45,11 @@
             </intent-filter>
         </activity>
 
+        <!-- The diagram renderer's WebView (ui/diagram) sends no usage metrics to Google. -->
+        <meta-data
+            android:name="android.webkit.WebView.MetricsOptOut"
+            android:value="true" />
+
         <!-- Shares a diagram as PNG (ui/diagram): only cache/diagrams/, read-only grants per share. -->
         <provider
             android:name="androidx.core.content.FileProvider"

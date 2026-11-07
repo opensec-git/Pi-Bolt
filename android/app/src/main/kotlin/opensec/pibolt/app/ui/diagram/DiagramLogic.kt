@@ -175,10 +175,18 @@ object DiagramText {
         return if (first.isEmpty()) "Diagram: $name" else "Diagram: $name, $first"
     }
 
-    /** Mermaid's error as one short line: its first line, without the parser's caret drawing. */
+    /**
+     * Mermaid's error as one short line: its first line, without the parser's caret drawing, plus what the parser
+     * found instead ("Parse error on line 5, unexpected end of input").
+     */
     fun errorLine(message: String): String {
         val first = message.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() && !it.all { c -> c == '-' || c == '^' } } ?: "Unknown error"
-        val clean = first.removeSuffix(":").trim()
+        var clean = first.removeSuffix(":").trim()
+        val got = Regex("got '([^']*)'\\s*$").find(message.trim())?.groupValues?.get(1)
+        // The parser's token names are words (PIPE, SQE); a bare number is an internal id and says nothing.
+        if (got != null && clean.startsWith("Parse error") && got.any { it.isLetter() }) {
+            clean += if (got == "EOF") ", unexpected end of input" else ", unexpected $got"
+        }
         return if (clean.length > 160) clean.take(159) + "…" else clean
     }
 }

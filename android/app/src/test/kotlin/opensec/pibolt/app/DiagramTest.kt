@@ -177,7 +177,9 @@ class DiagramTest {
     @Test
     fun errorLineIsTheFirstMeaningfulLine() {
         val message = "Parse error on line 2:\ngraph TD A-->\n-------------^\nExpecting 'AMP', got 'EOF'"
-        assertEquals("Parse error on line 2", DiagramText.errorLine(message))
+        assertEquals("Parse error on line 2, unexpected end of input", DiagramText.errorLine(message))
+        assertEquals("Parse error on line 5, unexpected PIPE", DiagramText.errorLine("Parse error on line 5:\n...\n---^\nExpecting 'SQE', 'PE', got 'PIPE'"))
+        assertEquals("Parse error on line 5", DiagramText.errorLine("Parse error on line 5:\n...\nExpecting 'SQE', got '1'"))
         assertEquals("No diagram type detected matching given configuration for text: hello", DiagramText.errorLine("No diagram type detected matching given configuration for text: hello"))
         assertEquals(160, DiagramText.errorLine("x".repeat(500)).length)
     }
@@ -187,7 +189,7 @@ class DiagramTest {
         for (theme in ThemeId.entries) {
             val vars = MermaidTheme.variables(PiColors.of(theme, AccentId.Theme))
             for ((k, v) in vars) {
-                if (k in setOf("fontFamily", "fontSize", "pieStrokeWidth", "pieOuterStrokeWidth", "pieOpacity")) continue
+                if (k in setOf("fontFamily", "fontSize", "pieStrokeWidth", "pieOuterStrokeWidth", "pieOpacity", "dropShadow", "useGradient")) continue
                 assertTrue(Regex("#[0-9a-f]{6}").matches(v as String), "$theme $k = $v")
             }
             assertEquals(MermaidTheme.hex(PiColors.of(theme, AccentId.Theme).ink1), vars["primaryTextColor"])

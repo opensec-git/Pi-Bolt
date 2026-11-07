@@ -367,8 +367,8 @@ must match npm's sha512 integrity pinned in `app/build.gradle.kts`; it is packag
 committed. Licence: Settings > About > Mermaid licence (`res/raw/license_mermaid.txt`, with the projects it bundles).
 
 One offscreen WebView, created on first use, never attached to a window, renders one diagram at a time. Mermaid draws
-the SVG, the page rasterises it on a canvas (Inter embedded as a data URL, since an SVG drawn as an image cannot see
-the page's fonts) and returns a PNG, which becomes a hardware bitmap shown with a plain `Image`. Bitmaps are cached by
+the SVG, the page rasterises it on a canvas (as a `data:` URL: an SVG image from a `blob:` URL never finishes loading
+in Android WebView; with Inter embedded, since an SVG drawn as an image cannot see the page's fonts) and returns a PNG, which becomes a hardware bitmap shown with a plain `Image`. Bitmaps are cached by
 SHA-256 of source, theme and render size (LRU, 1/8 of the heap up to 48 MB; failures in a small map), and a render
 whose block scrolled away still finishes into the cache. So scrolling never hosts live WebViews: a diagram row is a
 bitmap like any image, and nothing is drawn for rows flung past within 300 ms. Live WebViews per diagram would be
@@ -382,9 +382,12 @@ renderer exists. The app has no other WebView, and this one is kept minimal:
   request"), before the network stack. `blockNetworkLoads` and `blockNetworkImage` are on as well, and the page's CSP
   is `default-src 'none'` with only `'self'` scripts.
 - No file access, no content access, no file-URL access, no DOM storage, no windows, no geolocation, no Safe
-  Browsing lookups, no cache; every navigation is refused; the view is not focusable and hidden from accessibility.
+  Browsing lookups, no cache, no WebView metrics (`MetricsOptOut` in the manifest); every navigation is refused; the
+  view is not focusable and hidden from accessibility. Debug builds only: page console lines go to logcat
+  (`PiBoltDiagram`) and the page can be inspected over adb.
 - Mermaid runs with `securityLevel: "strict"` (DOMPurify, no click handlers or scripts in diagrams) and
-  `htmlLabels: false` (SVG text, no `foreignObject`).
+  `htmlLabels: false` (SVG text, no `foreignObject`), `look: "classic"`, and flat theme variables (no drop shadows or
+  gradients).
 - The source reaches the page only as a JSON string literal (`JsonText.quote`, which also escapes `<`, U+2028/2029
   and lone surrogates) in `piRender(id, "<json>", {theme}, {size})`; it is never concatenated into code.
 - The only JavaScript interface is `PiBoltDiagram.result(id, width, height, type, label, png, error)`, typed. It

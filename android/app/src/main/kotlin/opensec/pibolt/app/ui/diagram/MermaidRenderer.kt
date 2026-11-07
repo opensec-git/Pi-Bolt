@@ -8,11 +8,13 @@ import android.util.Base64
 import android.util.Log
 import android.util.LruCache
 import android.view.View
+import android.webkit.ConsoleMessage
 import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
+import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.annotation.MainThread
@@ -28,6 +30,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+import opensec.pibolt.app.BuildConfig
 import opensec.pibolt.app.R
 import java.io.ByteArrayInputStream
 import java.io.InputStream
@@ -103,12 +106,19 @@ object MermaidRenderer {
             return DiagramResult.Failed("The diagram renderer did not start", transient = true)
         }
         val id = ids.incrementAndGet()
+        val started = System.nanoTime()
         val result = CompletableDeferred<DiagramResult>()
         pending[id] = result
         try {
             // Every argument is a JSON literal: the source is data to the page, never code.
             view.evaluateJavascript("piRender($id,${JsonText.quote(code)},${theme.json},${size.json});", null)
-            return withTimeoutOrNull(TIMEOUT_MS) { result.await() } ?: DiagramResult.Failed("Drawing the diagram took too long", transient = true)
+            val outcome = withTimeoutOrNull(TIMEOUT_MS) { result.await() } ?: DiagramResult.Failed("Drawing the diagram took too long", transient = true)
+            val ms = (System.nanoTime() - started) / 1_000_000
+            when (outcome) {
+                is DiagramResult.Drawn -> Log.d(TAG, "drew #$id ${outcome.image.kind} ${outcome.image.bitmap.width}x${outcome.image.bitmap.height} in $ms ms")
+                is DiagramResult.Failed -> Log.d(TAG, "failed #$id in $ms ms: ${outcome.message.take(120)}")
+            }
+            return outcome
         } finally {
             pending.remove(id)
         }
@@ -170,11 +180,16 @@ object MermaidRenderer {
         view.isFocusable = false
         view.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS
         view.webViewClient = Client(loader)
+        if (BuildConfig.DEBUG) {
+            WebView.setWebContentsDebuggingEnabled(true)
+            view.webChromeClient = object : WebChromeClient() {
+                override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+                    Log.d(TAG, "console ${message.messageLevel()}: ${message.message().take(300)} (${message.sourceId().substringAfterLast('/')}:${message.lineNumber()})")
+                    return true
+                }
+            }
+        }
         view.addJavascriptInterface(DiagramBridge(), DiagramBridge.NAME)
-        // Never attached to a window: give it a size so the page has a layout viewport.
-        val side = View.MeasureSpec.makeMeasureSpec(1024, View.MeasureSpec.EXACTLY)
-        view.measure(side, side)
-        view.layout(0, 0, 1024, 1024)
         val done = CompletableDeferred<Boolean>()
         loaded = done
         webView = view
@@ -206,6 +221,7 @@ object MermaidRenderer {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean = true
 
         override fun onPageFinished(view: WebView, url: String) {
+            Log.d(TAG, "page loaded")
             if (view === webView && url == PAGE) loaded?.complete(true)
         }
 

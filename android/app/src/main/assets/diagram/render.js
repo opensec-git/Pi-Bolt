@@ -33,6 +33,7 @@
 			startOnLoad: false,
 			securityLevel: "strict",
 			htmlLabels: false,
+			look: "classic",
 			theme: "base",
 			darkMode: theme.dark !== false,
 			themeVariables: theme.vars,
@@ -105,25 +106,22 @@
 		const cw = Math.max(1, Math.round(w * s));
 		const ch = Math.max(1, Math.round(h * s));
 
-		const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: "image/svg+xml" }));
-		try {
-			const img = new Image();
-			await new Promise((resolve, reject) => {
-				img.onload = resolve;
-				img.onerror = () => reject(new Error("The diagram image could not be decoded"));
-				img.src = url;
-			});
-			const canvas = document.createElement("canvas");
-			canvas.width = cw;
-			canvas.height = ch;
-			const ctx = canvas.getContext("2d");
-			ctx.drawImage(img, 0, 0, cw, ch);
-			const png = canvas.toDataURL("image/png");
-			const comma = png.indexOf(",");
-			return { w, h, kind: out.diagramType || "", label: firstLabel(svg), png: png.slice(comma + 1) };
-		} finally {
-			URL.revokeObjectURL(url);
-		}
+		// A data: URL: SVG images from blob: URLs never finish loading in Android WebView.
+		const url = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(svg));
+		const img = new Image();
+		await new Promise((resolve, reject) => {
+			img.onload = resolve;
+			img.onerror = () => reject(new Error("The diagram image could not be decoded"));
+			img.src = url;
+		});
+		const canvas = document.createElement("canvas");
+		canvas.width = cw;
+		canvas.height = ch;
+		const ctx = canvas.getContext("2d");
+		ctx.drawImage(img, 0, 0, cw, ch);
+		const png = canvas.toDataURL("image/png");
+		const comma = png.indexOf(",");
+		return { w, h, kind: out.diagramType || "", label: firstLabel(svg), png: png.slice(comma + 1) };
 	}
 
 	window.piRender = function (id, code, theme, opts) {

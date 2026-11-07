@@ -30,7 +30,7 @@ class MermaidTheme private constructor(val json: String, val background: Int) {
             return MermaidTheme(JsonText.obj(mapOf("dark" to dark, "vars" to vars)), colors.surface1.toArgb())
         }
 
-        /** Every value is `#rrggbb` except the font and sizes. */
+        /** Every value is `#rrggbb` except the font, sizes, `dropShadow` and `useGradient`. */
         fun variables(c: PiColors): Map<String, Any> {
             val border = lerp(c.surface3, c.ink1, 0.26f)
             val categorical = listOf(c.synType, c.synString, c.synNumber, Glacier, c.success, c.warning, Iris, Rose, c.danger, c.diffAddFg, c.diffDelFg, c.ink2)
@@ -41,6 +41,9 @@ class MermaidTheme private constructor(val json: String, val background: Int) {
             }
             v["fontFamily"] = "Inter, sans-serif"
             v["fontSize"] = "14px"
+            // Flat, like the rest of the app: no node shadows or gradients.
+            v["dropShadow"] = "none"
+            v["useGradient"] = false
             put("background", c.surface1)
             put("primaryColor", c.surface3)
             put("primaryTextColor", c.ink1)
@@ -97,6 +100,8 @@ class MermaidTheme private constructor(val json: String, val background: Int) {
             // Entity relationship
             put("attributeBackgroundColorOdd", c.surface2)
             put("attributeBackgroundColorEven", c.surface3)
+            put("rowOdd", c.surface2)
+            put("rowEven", c.surface3)
             // Gantt
             put("sectionBkgColor", lerp(c.surface1, c.ink1, 0.05f))
             put("altSectionBkgColor", c.surface1)
@@ -132,6 +137,7 @@ class MermaidTheme private constructor(val json: String, val background: Int) {
                 put("cScale$i", color)
                 put("cScaleLabel$i", c.ink1)
                 put("cScalePeer$i", categorical[i])
+                put("cScaleInv$i", categorical[i])
             }
             categorical.take(8).forEachIndexed { i, color ->
                 put("git$i", color)
