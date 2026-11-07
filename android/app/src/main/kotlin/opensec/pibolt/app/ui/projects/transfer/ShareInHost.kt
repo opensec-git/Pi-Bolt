@@ -1,6 +1,6 @@
 package opensec.pibolt.app.ui.projects.transfer
 
-import android.net.Uri
+import androidx.core.net.toUri
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -55,7 +55,7 @@ fun ShareInHost(app: PiBoltApp, pending: SharedContent?, onConsumed: () -> Unit,
     }
 
     fun run(content: SharedContent, choice: ShareChoice) {
-        val uris = content.items.map { Uri.parse(it.uri) }
+        val uris = content.items.map { it.uri.toUri() }
         when (choice.action) {
             ShareAction.AttachImages, ShareAction.InsertText -> {
                 val name = choice.project ?: return

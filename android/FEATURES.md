@@ -15,10 +15,10 @@ rpc-extension-ui.md, remote-control.md) and src/modes/interactive.
 
 | | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| done | 39 | 46 | 29 | 114 |
+| done | 39 | 52 | 30 | 121 |
 | partial | 0 | 1 | 4 | 5 |
 | missing | 0 | 1 | 6 | 7 |
-| **Total** | 39 | 48 | 39 | 126 |
+| **Total** | 39 | 54 | 40 | 133 |
 
 Not counted: 12 `n/a` rows (terminal-only features). Before this branch the same rows stood at 53 done, 15 partial and
 55 missing: it moved 37 rows (25 missing to done, 11 partial to done, 1 missing to partial) and closed every P0 gap.
@@ -229,6 +229,13 @@ Tree navigation, labels and the tool list go through a small helper extension th
 | Keep running in the background | — | done: foreground service while a turn runs | device | P0 |
 | Projects (create, clone, rename, pin, delete) | — | done | device | P0 |
 | Browse project files | — | done: Files tab and viewer | device | P1 |
+| Edit project files | `edit` tool | done (0.5.0): tabs with unsaved dots; highlighting while typing (incremental, off the main thread); find and replace with regex groups, case, whole word, undo; go to line; auto-indent, bracket pairs, soft wrap; read-only over 1 MB | device | P1 |
+| Ask Pi about a file or selection | `@file` | done (0.5.0): the viewer puts an `@mention` and the selected lines into the project's composer | device | P1 |
+| Editor keyboard shortcuts | — | done (0.5.0): Ctrl+S, Ctrl+F, Ctrl+H, Ctrl+G, Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y, Ctrl+W, Ctrl+Tab, F3 | device | P2 |
+| Files in and out | — | done (0.5.0): import files or a folder (SAF), a zip as a new project; export a project or folder as a zip (Save to… or Share); share a file; streamed, cancellable, zip-slip safe | device | P1 |
+| Share into Pi-Bolt | — | done (0.5.0): files, images and text from other apps: attach to a project's composer, import, or a zip as a project | device | P1 |
+| Voice input | — | done (0.5.0): composer mic, Android speech recognition (on-device when available), live partial text | both | P1 |
+| Files on tool cards | — | done (0.5.0): a path on this phone opens in the file viewer and editor | device | P1 |
 | TalkBack labels and 48 dp targets | — | done for the new controls | both | P0 |
 
 ## What remains

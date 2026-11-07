@@ -54,7 +54,7 @@ import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Edit
-import androidx.compose.material.icons.rounded.FormatIndentIncrease
+import androidx.compose.material.icons.automirrored.rounded.FormatIndentIncrease
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
@@ -142,6 +142,7 @@ import opensec.pibolt.app.ui.projects.editor.EditorInput
 import opensec.pibolt.app.ui.projects.editor.EditorShortcuts
 import opensec.pibolt.app.ui.projects.editor.EditorTab
 import opensec.pibolt.app.ui.projects.editor.EditorTabs
+import opensec.pibolt.app.ui.projects.editor.FindOptions
 import opensec.pibolt.app.ui.projects.editor.FindReplace
 import opensec.pibolt.app.ui.projects.editor.FindReplaceBar
 import opensec.pibolt.app.ui.projects.editor.FindResult
@@ -185,7 +186,9 @@ fun FileViewer(
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    val tab = remember(tabs, rel) { tabs.open(rel) }
+    val tab = remember(tabs, rel) { tabs.find(rel) ?: EditorTab(rel) }
+    // Added after composition, not during it (the tab strip reads the list).
+    LaunchedEffect(tab) { tabs.adopt(tab) }
     val file = remember(root, rel) { File(root, rel) }
     val name = file.name
     val kind = remember(name) { FileTypes.kind(name) }
@@ -219,9 +222,11 @@ fun FileViewer(
 
     // Matches: off the main thread, 120 ms after the last change (a regex can be slow; FindReplace bounds it too).
     val options = find.options
+    var lastOptions by remember { mutableStateOf<FindOptions?>(null) }
     LaunchedEffect(find.open, options, searched) {
         if (!find.open || options.query.isEmpty() || searched == null) {
             find.result = FindResult.EMPTY
+            lastOptions = null
             return@LaunchedEffect
         }
         delay(120)
@@ -229,6 +234,10 @@ fun FileViewer(
         val at = if (editing) tab.value.selection.min else 0
         find.result = result
         find.current = FindReplace.nearest(result.matches, at).coerceAtLeast(0)
+        // A new query (or a replace) goes to its match; results refreshed by typing leave the cursor alone.
+        if (options != lastOptions || find.navigateOnResult) find.navTick++
+        find.navigateOnResult = false
+        lastOptions = options
     }
     val matches = find.matches
     val byLine = remember(matches, lines, editing) { if (editing) emptyMap() else matchesByLine(matches, lines) }
@@ -333,6 +342,7 @@ fun FileViewer(
         val m = matches.getOrNull(find.current) ?: return
         val r = FindReplace.replacementFor(tab.value.text, find.options, m, find.replacement) ?: return
         tab.replace(r.start, r.end, r.text)
+        find.navigateOnResult = true
     }
 
     fun replaceAll() {
@@ -365,8 +375,8 @@ fun FileViewer(
     }
 
     // Moving through matches: the view scrolls to the line; the editor selects the match and shows it.
-    LaunchedEffect(find.current, matches) {
-        val m = matches.getOrNull(find.current) ?: return@LaunchedEffect
+    LaunchedEffect(find.navTick) {
+        val m = find.matches.getOrNull(find.current) ?: return@LaunchedEffect
         if (editing) {
             if (m.end <= tab.value.text.length) {
                 tab.value = tab.value.copy(selection = TextRange(m.start, m.end))
@@ -643,7 +653,7 @@ private fun EditorBar(tab: EditorTab, plain: Boolean, onIndent: () -> Unit, onGo
         Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconAction(Icons.AutoMirrored.Rounded.Undo, "Undo", onClick = { tab.undo() }, enabled = canUndo)
             IconAction(Icons.AutoMirrored.Rounded.Redo, "Redo", onClick = { tab.redo() }, enabled = canRedo)
-            IconAction(Icons.Rounded.FormatIndentIncrease, "Insert indent", onClick = onIndent)
+            IconAction(Icons.AutoMirrored.Rounded.FormatIndentIncrease, "Insert indent", onClick = onIndent)
             IconAction(Icons.Rounded.VerticalAlignCenter, "Go to line", onClick = onGoTo)
             Spacer(Modifier.weight(1f))
             Text(

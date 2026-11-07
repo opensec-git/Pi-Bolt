@@ -61,12 +61,22 @@ class FindState {
     /** Bumped to move the focus into the query field (Ctrl+F while the bar is open). */
     var focusTick by mutableIntStateOf(0)
 
+    /**
+     * Bumped when the viewer should go to the current match: a step, a new query, or the results after a replace.
+     * Results refreshed by typing in the editor do not move the cursor.
+     */
+    var navTick by mutableIntStateOf(0)
+
+    /** The next results go to their current match (set by a replace). */
+    var navigateOnResult = false
+
     val options: FindOptions get() = FindOptions(query, regex, matchCase, wholeWord)
     val matches: List<TextMatch> get() = if (open) result.matches else emptyList()
 
     fun step(by: Int) {
         val n = result.matches.size
         if (n > 0) current = ((current + by) % n + n) % n
+        navTick++
     }
 }
 
@@ -86,10 +96,7 @@ fun FindReplaceBar(state: FindState, canReplace: Boolean, onReplace: () -> Unit,
         Row(Modifier.fillMaxWidth().padding(start = 12.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             PiTextField(
                 value = state.query,
-                onValueChange = {
-                    state.query = it
-                    state.current = 0
-                },
+                onValueChange = { state.query = it },
                 placeholder = if (state.regex) "Find (regex)" else "Find in file",
                 singleLine = true,
                 style = Pi.type.mono,

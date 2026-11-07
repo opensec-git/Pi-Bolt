@@ -4,14 +4,19 @@ import android.view.KeyEvent
 import opensec.pibolt.app.ui.markdown.Highlighter
 import opensec.pibolt.app.ui.projects.editor.AskPi
 import opensec.pibolt.app.ui.projects.editor.EditState
+import opensec.pibolt.app.ui.projects.editor.EditorTab
+import opensec.pibolt.app.ui.projects.editor.EditorTabs
+import opensec.pibolt.app.ui.projects.editor.viewerPlace
 import opensec.pibolt.app.ui.projects.editor.EditorCommand
 import opensec.pibolt.app.ui.projects.editor.EditorInput
 import opensec.pibolt.app.ui.projects.editor.EditorShortcuts
 import opensec.pibolt.app.ui.projects.editor.KeyChord
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 import kotlin.random.Random
 
 class EditorInputTest {
@@ -132,6 +137,50 @@ class EditorInputTest {
         assertNull(EditorShortcuts.command(KeyChord(KeyEvent.KEYCODE_S)))
         assertEquals("Ctrl+Shift+Z", EditorShortcuts.label(EditorCommand.Redo))
         assertEquals("Ctrl+S", EditorShortcuts.label(EditorCommand.Save))
+    }
+
+    // ---- Tabs
+
+    @Test
+    fun tabsOpenOnceCloseToANeighbourAndFollowRenames() {
+        val tabs = EditorTabs()
+        tabs.open("a.kt")
+        tabs.open("src/b.kt")
+        tabs.open("src/c.kt")
+        tabs.open("a.kt")
+        assertEquals(3, tabs.tabs.size)
+        assertEquals("src/c.kt", tabs.neighbour("src/b.kt", 1)?.rel)
+        assertEquals("src/c.kt", tabs.neighbour("a.kt", -1)?.rel)
+        assertEquals("src/c.kt", tabs.close("src/b.kt")?.rel)
+        tabs.moved("src", "lib")
+        assertEquals(listOf("a.kt", "lib/c.kt"), tabs.tabs.map { it.rel })
+        tabs.moved("lib/c.kt", null)
+        assertNull(tabs.close("a.kt"))
+        assertTrue(tabs.tabs.isEmpty())
+        assertNull(tabs.close("nothing"))
+    }
+
+    @Test
+    fun aTabIsDirtyOnlyWhileItsTextDiffersFromTheSavedOne() {
+        val tab = EditorTab("x.txt")
+        tab.startEditing("hello")
+        assertFalse(tab.dirty)
+        tab.replace(5, 5, " world")
+        assertTrue(tab.dirty)
+        assertTrue(tab.undo())
+        assertFalse(tab.dirty)
+        assertTrue(tab.redo())
+        assertEquals("hello world", tab.value.text)
+    }
+
+    @Test
+    fun toolCardFilesOpenRelativeToTheSessionFolder() {
+        val (root, rel) = viewerPlace(File("/data/projects/calc/src/../src/Main.kt"), "/data/projects/calc")
+        assertEquals(File("/data/projects/calc"), root)
+        assertEquals("src/Main.kt", rel)
+        val (other, name) = viewerPlace(File("/tmp/notes.md"), "/data/projects/calc")
+        assertEquals(File("/tmp"), other)
+        assertEquals("notes.md", name)
     }
 
     // ---- Ask Pi
