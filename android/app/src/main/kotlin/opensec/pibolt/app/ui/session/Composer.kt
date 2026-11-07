@@ -290,7 +290,7 @@ fun Composer(
             val attach = @Composable {
                 IconAction(
                     Icons.Rounded.Add,
-                    description = if (attachAllowed) "Attach or insert" else "Attach or insert (images not available for this model)",
+                    description = if (attachAllowed) "Attach images and more" else "Attach images and more (images not available for this model)",
                     onClick = onAttach,
                     enabled = enabled,
                     tint = colors.ink2,

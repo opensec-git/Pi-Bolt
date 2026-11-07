@@ -24,8 +24,8 @@ case_open() {
 	open_project "$P"
 	assert_visible "text~=No sessions yet" "a new project should have no sessions"
 	new_session
-	# Empty session: the mark, "New session", the composer with the model chip.
-	assert_visible "text=New session"
+	# Empty session: the mark, the project name, "Start with" suggestions, the composer with the model chip.
+	assert_visible "text=Start with"
 	assert_visible "text=$P" "the top bar does not show the project title"
 	assert_visible "desc~=Attach images" "composer bar missing"
 }
@@ -53,8 +53,12 @@ case_steer() {
 	WAIT=$E2E_ENGINE_TIMEOUT assert_visible "text=Steer Pi…" "the turn did not start running"
 	tap "text=Steer Pi…"
 	type_text "$STEER"
+	# The Steer / Follow-up chip next to send toggles between the two; it starts on Steer.
 	assert_visible "text=Steer" "no Steer / Follow-up choice while typing during a turn"
+	tap "text=Steer"
 	assert_visible "text=Follow-up"
+	tap "text=Follow-up"
+	assert_visible "text=Steer"
 	tap_send
 	hide_keyboard
 	assert_fake_log '"event":"steer"' "$STEER"
