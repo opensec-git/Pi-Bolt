@@ -74,7 +74,7 @@ class Git(
         outReader.join(JOIN_MS)
         errReader.join(JOIN_MS)
         writer.join(JOIN_MS)
-        return Result(process.exitValue(), out.toByteArray(), err.toString(Charsets.UTF_8).trim())
+        return Result(process.exitValue(), out.toByteArray(), String(err.toByteArray(), Charsets.UTF_8).trim())
     }
 
     /** [run] that throws [GitException] unless git exits with 0. */

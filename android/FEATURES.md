@@ -15,10 +15,10 @@ rpc-extension-ui.md, remote-control.md) and src/modes/interactive.
 
 | | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| done | 39 | 46 | 29 | 114 |
+| done | 40 | 48 | 29 | 117 |
 | partial | 0 | 1 | 4 | 5 |
 | missing | 0 | 1 | 6 | 7 |
-| **Total** | 39 | 48 | 39 | 126 |
+| **Total** | 40 | 50 | 39 | 129 |
 
 Not counted: 12 `n/a` rows (terminal-only features). Before this branch the same rows stood at 53 done, 15 partial and
 55 missing: it moved 37 rows (25 missing to done, 11 partial to done, 1 missing to partial) and closed every P0 gap.
@@ -37,6 +37,10 @@ retry and compaction numbers (`/tuning`, Settings); "Stop retrying"; `/import`, 
 templates browser (`/skills`); notifications that open their exact session, and one when a background agent finishes.
 Tree navigation, labels and the tool list go through a small helper extension the app writes to
 `~/.pi/agent/extensions/pibolt-app.js` (RPC has no command for them).
+
+Built in the undo branch (3 new rows): per-turn checkpoints in a shadow git repository outside the project, "Review
+changes" with per-file diffs, undo of a turn or a file with per-file choices for files changed since, restore to
+before a turn with a conversation fork, and redo of any restore. On this phone only (remote files are on the computer).
 
 ## Prompting and the composer
 
@@ -155,6 +159,14 @@ Tree navigation, labels and the tool list go through a small helper extension th
 | Regenerate an answer | `/fork` + resend | done: "Regenerate" (forks before the prompt, sends it) | device | P1 |
 | Edit and resend | `/fork` | done: "Edit and resend" | device | P1 |
 | Share a message | — | done: Android share sheet | both | P1 |
+
+## Review and undo (checkpoints)
+
+| Feature | Terminal | App | Where | Pri |
+|---|---|---|---|---|
+| Review what a turn changed | — | done: "Review changes (3 files, +40 −12)" under the turn, per-file diffs from snapshots | device | P1 |
+| Undo a turn or one file | — | done: Undo this turn / per file; files changed since ask Keep or Restore; Redo | device | P0 |
+| Restore to before a turn | `/fork` (conversation only) | done: files back to the turn's start, then the conversation forks there | device | P1 |
 
 ## Export and share
 

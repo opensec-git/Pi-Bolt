@@ -275,7 +275,7 @@ class CheckpointsTest {
         write("f.txt", "3\n")
         val c = repo.snapshot("c")
         assertEquals(setOf(a.commit, b.commit, c.commit), repo.snapshotCommits())
-        repo.prune(setOf(b.commit))
+        repo.prune(setOf(b.commit), force = true)
         // The newest snapshot stays too: the next one deduplicates against it.
         assertEquals(setOf(b.commit, c.commit), repo.snapshotCommits())
         assertFalse(repo.hasObject(a.commit), "a pruned snapshot's objects are gone")
@@ -289,7 +289,7 @@ class CheckpointsTest {
         cp.turn("new", 2) { write("f.txt", "5\n") }
         assertNull(cp.turn(oldTurn.id))
         assertEquals(1, cp.turns.value.size)
-        assertFalse(repo.hasObject(oldTurn.start))
+        assertFalse(oldTurn.start in repo.snapshotCommits(), "its snapshots lose their refs (objects go at the next daily prune)")
         cp.close()
     }
 

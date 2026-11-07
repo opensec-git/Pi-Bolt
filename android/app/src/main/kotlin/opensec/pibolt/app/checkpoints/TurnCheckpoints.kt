@@ -88,7 +88,12 @@ class TurnCheckpoints(
     fun start() {
         scope.launch {
             try {
-                locked { _turns.value = index.load() }
+                // A first snapshot now: the one when the first message arrives is then incremental and quick, so the
+                // agent's first edits cannot land before it.
+                locked {
+                    _turns.value = index.load()
+                    repo.snapshot("open")
+                }
             } catch (e: Exception) {
                 fail(e)
             }
@@ -124,7 +129,14 @@ class TurnCheckpoints(
     /** A user message reached the engine: the previous turn (a steer interrupts one) ends and this one starts. */
     fun userMessage(timestamp: Long?, text: String, sessionId: String?) = enqueue {
         locked {
-            val snapshot = repo.snapshot("start")
+            val snapshot = try {
+                repo.snapshot("start")
+            } catch (e: Exception) {
+                // No start for this turn: the open one cannot end here either, and must not take this turn's changes.
+                open?.let(openTurns::remove)
+                open = null
+                throw e
+            }
             failing = false
             // The open turn ends here, and so does one a process that died left open: the best end it can still get.
             val all = index.load()

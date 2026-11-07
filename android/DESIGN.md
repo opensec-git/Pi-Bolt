@@ -346,6 +346,10 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
     success, −n danger, tnum; at most 3, then "+k more"); a chip opens that file's diff. An opened fold draws a 1dp
     line rail at the slot centre through its steps (broken 4dp around each glyph, ending at the last one) and indents
     the prose between steps to the step text.
+  - under that fold, in a session on this phone: "Review changes (3 files, +40 −12)" (difference glyph 16dp ink3,
+    label ink2, counts success / danger tnum, " · undone" in ink3 after an undo; 48dp tall), only for turns whose
+    checkpoints show changed files. Over remote control the newest turn that edited files says instead, in meta ink3,
+    that review and undo work in sessions on this phone (the files are on the computer).
   - under the last finished reply: Copy (check + "Copied"), Ask again (sends the same prompt as a new turn; Pi has
     no regenerate; hidden for prompts with images) and More (Select text, View as Markdown, Share), 40dp tall,
     aligned with the prose. Fades in 150 ms after the turn settles; never animates in history.
@@ -405,6 +409,29 @@ runs it at once; others fill `/name ` and wait. Picks tick (haptic).
   visible after the answer instead of folding with the agent's steps.
 - Hardware keyboards: Ctrl+Enter sends, Esc stops a run (empty field), Ctrl+P next model, Shift+Tab next thinking
   level. Enter adds a line, as Android keyboards expect.
+
+**Review changes.** A full screen over the session, like the viewer (sheet motion, predictive back): Close, "Changes"
+and "3 files · +40 −12" (meta ink3, tnum), a 1dp line. Then the prompt (body ink2, three lines), "Undo this turn" and
+"Restore to before" (secondary buttons with undo and history glyphs; off while Pi works, with a meta line saying
+so), and after an undo a surface1 card "Undid 3 files of this turn." with Redo (accent). Each file: a 1dp line, a
+56dp row (chevron, the name in mono meta ink1 over its folder in meta ink3, "new" success or "deleted" danger, +n
+success −n danger tnum or "binary", and a 48dp undo button for that file); the first four files start open. An open
+file shows its unified diff with the tool rows' renderer (gutter numbers, changed words, the file's syntax colours) on
+surface1, one lazy row each, at most 1500 rows. The diff is between the turn's two snapshots: the start when the user
+message reached the engine, the end when the agent settled (a steer ends one turn and starts the next).
+- Undo restores the files the turn changed to the start snapshot. Files no longer as the turn left them (a later turn
+  or the user changed them) open a sheet "Changed since": per file a 48dp Keep / Restore segmented control (Keep is
+  the default), "k other files go back as they are", Cancel and "Undo n files". Otherwise it runs at once and a
+  success snackbar says "Undid 3 files".
+- "Restore to before" always asks: the files that differ from the start snapshot (later turns too; the user's own
+  edits are the Keep / Restore rows), then "Restore and fork" restores them and forks the conversation at the message,
+  which returns to the composer as "Edit and resend" does.
+- Every restore first snapshots the project, so it can be undone: Redo puts the files back (same sheet when they
+  changed since). A file over 5 MB is never in a snapshot, so a restore never deletes one ("too large to restore").
+- Snapshots live outside the project, in `HOME/.pi/agent/checkpoints/<hash>.git` (a shadow git repository run with
+  the pack's git; the project's own `.git` is untouched), honour .gitignore, skip node_modules-like folders and files
+  over 5 MB, and keep the last 50 turns of the last 14 days. They run on a background queue; a failure is one warning
+  snackbar ("Checkpoints paused: ...") until a snapshot works again.
 
 **Session sheet.** Opened from the title or "Session and usage": the context card (label, "30.0% of 200k" in meta
 tnum, a 6dp bar on surface3, ink2, warning over 70%, danger over 90%, animated in place; then the terminal footer's

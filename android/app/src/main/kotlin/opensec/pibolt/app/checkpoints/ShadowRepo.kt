@@ -56,7 +56,7 @@ class ShadowRepo(private val git: Git, private val maxFileBytes: Long = MAX_FILE
             git.check(listOf("rm", "--cached", "-f", "-q", "--ignore-unmatch", "--pathspec-from-file=-", "--pathspec-file-nul"), Git.joinZ(large), literal = true)
         }
         // An unreadable file is left out (git still exits with 1); anything worse stops the snapshot.
-        val add = git.run(listOf("add", "-A", "--ignore-errors"))
+        val add = git.run(listOf("add", "-A", "--ignore-errors"), timeoutMs = ADD_TIMEOUT_MS)
         if (!add.ok && (add.code != 1 || "fatal:" in add.err)) throw GitException("git add failed (${add.code}): ${add.err.take(400)}")
         val tree = git.check(listOf("write-tree")).text.trim()
         readLast()?.let { if (it.tree == tree && it.skipped == large) return it }
@@ -165,16 +165,24 @@ class ShadowRepo(private val git: Git, private val maxFileBytes: Long = MAX_FILE
         return kept
     }
 
-    /** Deletes the refs of snapshots not in [keep] and the objects only they held. */
-    fun prune(keep: Set<String>) {
+    /**
+     * Deletes the refs of snapshots not in [keep]; the objects only they held go too, at most once per [PRUNE_EVERY_MS]
+     * (git prune walks every object, so not after each turn). [force] prunes objects now.
+     */
+    fun prune(keep: Set<String>, force: Boolean = false) {
         val refs = Git.splitZ(git.check(listOf("for-each-ref", "--format=%(refname)%00", REF_PREFIX)).out).map { it.trim() }.filter { it.isNotEmpty() }
         val last = readLast()?.commit
         val drop = refs.filter { val sha = it.removePrefix(REF_PREFIX); sha !in keep && sha != last }
         if (drop.isEmpty()) return
         val script = drop.joinToString("") { "delete $it\n" }
         git.check(listOf("update-ref", "--stdin"), script.toByteArray())
-        git.run(listOf("prune", "--expire=now"))
-        git.run(listOf("gc", "--auto", "--quiet"))
+        val stamp = File(gitDir, "pi-pruned")
+        val now = System.currentTimeMillis()
+        if (!force && stamp.isFile && now - stamp.lastModified() in 0 until PRUNE_EVERY_MS) return
+        git.run(listOf("prune", "--expire=now"), timeoutMs = ADD_TIMEOUT_MS)
+        git.run(listOf("gc", "--auto", "--quiet"), timeoutMs = ADD_TIMEOUT_MS)
+        stamp.writeText(now.toString())
+        stamp.setLastModified(now)
     }
 
     /** The refs this repository keeps, for tests. */
@@ -228,6 +236,8 @@ class ShadowRepo(private val git: Git, private val maxFileBytes: Long = MAX_FILE
 
     companion object {
         const val MAX_FILE_BYTES = 5L * 1024 * 1024
+        private const val ADD_TIMEOUT_MS = 10 * 60_000L
+        private const val PRUNE_EVERY_MS = 24L * 60 * 60 * 1000
         private const val MAX_PATCH = 4 * 1024 * 1024
         private const val MAX_SKIPPED_LISTED = 2000
         private const val REF_PREFIX = "refs/pi/snapshots/"
