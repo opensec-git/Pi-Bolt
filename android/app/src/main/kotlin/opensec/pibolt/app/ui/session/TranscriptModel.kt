@@ -11,6 +11,7 @@ import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.markdown.Markdown
 import opensec.pibolt.app.ui.markdown.MdBlock
 import opensec.pibolt.app.ui.markdown.MdDoc
+import opensec.pibolt.app.ui.markdown.MdPrefetch
 import opensec.pibolt.protocol.session.AssistantTextItem
 import opensec.pibolt.protocol.session.ChatItem
 import opensec.pibolt.protocol.session.NoticeItem
@@ -281,6 +282,13 @@ class MdCache(
 
     fun parse(item: AssistantTextItem): MdDoc {
         val previous = docs[item.key]
+        if (previous == null && !item.streaming) {
+            // Parsed off the main thread when the history arrived (MdPrefetch).
+            MdPrefetch.take(item.text)?.let {
+                docs[item.key] = it
+                return it
+            }
+        }
         val incremental = previous != null && (previous.text == item.text || item.text.startsWith(previous.text))
         if (background != null && !incremental && item.text.length > LARGE) {
             // A restored or replaced long message: parse it on Default and show a plain first screen meanwhile.
@@ -323,6 +331,20 @@ class MdCache(
         return value
     }
 
+    private val turns = HashMap<String, Pair<TurnInputs, List<TRow>>>()
+
+    /** The rows built for [turnKey] from equal [inputs], else null. */
+    fun turnRows(turnKey: String, inputs: TurnInputs): List<TRow>? = turns[turnKey]?.takeIf { it.first == inputs }?.second
+
+    fun putTurnRows(turnKey: String, inputs: TurnInputs, rows: List<TRow>) {
+        turns[turnKey] = inputs to rows
+    }
+
+    /** Drops cached turns once there are more than the transcript has (a fork, a resume or a compaction replaced them). */
+    fun retainTurns(count: Int) {
+        if (turns.size > count * 2 + 8) turns.clear()
+    }
+
     private val webSources = HashMap<String, Pair<List<ToolItem>, WebSources>>()
 
     /** The sources of a run of web steps, parsed again only when one of its tools changed. */
@@ -343,6 +365,31 @@ class MdCache(
         /** Messages longer than this (characters) are fully parsed off the main thread. */
         const val LARGE = 20_000
     }
+}
+
+/**
+ * Everything a turn's rows are built from, compared by [MdCache.turnRows]: its items (equal items are usually the
+ * same instances, so the comparison is cheap), whether a gap starts it, whether it is live or ends the transcript, its fold and groups, its
+ * duration and alias, the subagent runs when it shows any, and [MdCache.version] (a background parse landed).
+ */
+class TurnInputs(
+    val items: Array<ChatItem>,
+    val gap: Boolean,
+    val live: Boolean,
+    val actions: Boolean,
+    val expanded: Boolean,
+    val openGroups: Set<String>,
+    val duration: Long?,
+    val alias: String?,
+    val runs: Map<String, Subagent>?,
+    val version: Int,
+) {
+    override fun equals(other: Any?): Boolean =
+        other is TurnInputs && gap == other.gap && live == other.live && actions == other.actions && expanded == other.expanded &&
+            version == other.version && duration == other.duration && alias == other.alias && runs === other.runs &&
+            openGroups == other.openGroups && items.contentEquals(other.items)
+
+    override fun hashCode(): Int = items.size
 }
 
 /**
@@ -384,13 +431,33 @@ object TranscriptModel {
             val live = liveTurn && isLast
             val first = items[start]
             val turnKey = if (first is UserItem) first.key else "t:${first.key}"
+            // A turn whose inputs did not change since the last call (every turn but the live one, while it streams)
+            // takes its rows from the cache instead of being rebuilt on every streamed frame.
+            val inputs = TurnInputs(
+                items.subList(start, end).toTypedArray(),
+                gap = t > 0,
+                live = live,
+                actions = isLast && !live && pending == null,
+                expanded = turnKey in expanded,
+                openGroups = openGroups,
+                duration = durations[turnKey],
+                alias = (first as? UserItem)?.let { aliases[it.key] },
+                runs = if (agentCards && usesAgents(items, start, end)) subagents else null,
+                version = md.version.intValue,
+            )
+            md.turnRows(turnKey, inputs)?.let {
+                out.addAll(it)
+                continue
+            }
+            val turnFrom = out.size
             if (t > 0) out += GapRow(turnKey)
             var bodyStart = start
             if (first is UserItem) {
                 out += UserRow(first, live, aliases[first.key])
                 bodyStart = start + 1
             }
-            var lastStep = -1
+            // Before the turn's body while it has no step: the answer is then all of the body, never earlier turns.
+            var lastStep = bodyStart - 1
             var steps = 0
             var tools = 0
             var failedSteps = 0
@@ -450,7 +517,9 @@ object TranscriptModel {
                     out += ActionsRow(turnKey, reply.joinToString("\n\n"), prompt)
                 }
             }
+            md.putTurnRows(turnKey, inputs, out.subList(turnFrom, out.size).toList())
         }
+        md.retainTurns(starts.size)
         if (pending != null) {
             if (out.isNotEmpty()) out += GapRow("pending:${pending.id}")
             out += PendingUserRow(pending)
@@ -590,6 +659,15 @@ object TranscriptModel {
             if (row.index == 0 && row.block is MdBlock.Heading) out[k] = row.copy(title = true)
             return
         }
+    }
+
+    /** The turn in [from] until [end] shows subagent cards or notices, so its rows depend on the session's runs. */
+    private fun usesAgents(items: List<ChatItem>, from: Int, end: Int): Boolean {
+        for (i in from until end) {
+            val item = items[i]
+            if (item is SubagentNoticeItem || item is ToolItem && SubagentReducer.isAgentCall(item.name)) return true
+        }
+        return false
     }
 
     /** A step after [from] (up to [end]) finished without error. */

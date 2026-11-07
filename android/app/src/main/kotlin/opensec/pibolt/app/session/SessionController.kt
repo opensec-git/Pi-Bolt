@@ -34,6 +34,7 @@ import opensec.pibolt.app.cost.SpendCaps
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.engine.ChatSpace
 import opensec.pibolt.app.engine.LivePolicy
+import opensec.pibolt.app.ui.markdown.MdPrefetch
 import opensec.pibolt.protocol.Base64Url
 import opensec.pibolt.protocol.backend.ConnectionState
 import opensec.pibolt.protocol.backend.DisconnectReason
@@ -492,6 +493,8 @@ class SessionController private constructor(
             s = applyBatch(s, batch)
             batch.clear()
             val previous = _state.value
+            // A history that arrived (a session opened or reloaded) is parsed here, off the main thread.
+            MdPrefetch.warm(previous.items, s.items)
             _state.value = s
             lastPublish = SystemClock.uptimeMillis()
             afterPublish(previous, s)
