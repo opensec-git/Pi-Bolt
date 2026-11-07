@@ -1,45 +1,60 @@
 package opensec.pibolt.app.session
 
-import android.Manifest
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
-import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
-import opensec.pibolt.app.MainActivity
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.R
-import opensec.pibolt.app.ui.session.features2.SessionAlerts
+import opensec.pibolt.app.background.AgentLocks
+import opensec.pibolt.app.background.BackgroundSetup
+import opensec.pibolt.app.background.WakePolicy
+import opensec.pibolt.protocol.session.SessionState
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Keeps the process (and so the connections, and every local engine process) alive while any session works or waits for
  * an answer, when the app is in the background. One foreground notification sums them up ([RunningSummary]); it stops
  * itself once none is busy. Without it a backgrounded app is cached and frozen, and the engines with it.
+ *
+ * While a session on this phone works it also holds a partial wake lock ([WakePolicy], [AgentLocks]), so the engines
+ * keep the CPU with the screen off. Its foreground-service state keeps the app's network in Doze, App Standby and
+ * Battery Saver (NetworkPolicyManager allows process states up to BOUND_FOREGROUND_SERVICE there).
+ *
+ * START_NOT_STICKY: the sessions live in this process. After a kill a restarted service would find none (the engines
+ * died with the process; their session files stay and reopen from Home or a notification), so it would only stop again.
  */
 class SessionService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private lateinit var locks: AgentLocks
+    private var collecting = false
+    private var tick: Job? = null
+    private var working = false
+
+    /** The local sessions' states at the last update, to tell progress from a repeat. */
+    private var seen: List<SessionState> = emptyList()
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        locks = AgentLocks(this)
+    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -48,11 +63,12 @@ class SessionService : Service() {
             // Local runs are work on this phone (the engine processes live as long as this service keeps the app up);
             // a remote one relays messages from a computer. Both types are declared: sessions of either kind may join.
             val type = if (Build.VERSION.SDK_INT < 34) 0 else ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
-            val summary = RunningSummary.of(entries(app.sessions.value), getString(R.string.app_name))
+            val live = live(app.sessions.value)
+            val summary = RunningSummary.of(live.map(::entry), getString(R.string.app_name))
             ServiceCompat.startForeground(
                 this,
                 Notifications.ONGOING_ID,
-                Notifications.ongoing(this, summary?.title ?: getString(R.string.app_name), summary?.text ?: "Working", summary?.lines.orEmpty()),
+                Notifications.ongoing(this, summary?.title ?: getString(R.string.app_name), summary?.text ?: "Working", summary?.lines.orEmpty(), stoppable(live)),
                 type,
             )
         }.isSuccess
@@ -60,51 +76,105 @@ class SessionService : Service() {
             stop()
             return START_NOT_STICKY
         }
+        if (collecting) return START_NOT_STICKY
+        collecting = true
         scope.launch {
             app.sessions.flatMapLatest { list ->
                 if (list.isEmpty()) {
                     flowOf(emptyList())
                 } else {
-                    combine(list.map { c -> combine(c.state, c.link, c.hostName) { _, _, _ -> c } }) { entries(it.toList()) }
+                    combine(list.map { c -> combine(c.state, c.link, c.hostName, c.shellRuns) { _, _, _, _ -> c } }) { it.toList() }
                 }
-            }.collect { entries ->
-                val summary = RunningSummary.of(entries, getString(R.string.app_name))
-                if (summary == null) {
-                    stop()
-                    return@collect
-                }
-                Notifications.update(this@SessionService, Notifications.ONGOING_ID, Notifications.ongoing(this@SessionService, summary.title, summary.text, summary.lines))
-            }
+            }.collect { sessions -> onSessions(app, sessions) }
         }
         return START_NOT_STICKY
     }
 
-    /** The sessions as the notification sees them; one whose link failed for good no longer counts as working. */
-    private fun entries(sessions: List<SessionController>): List<RunningSummary.Entry> = sessions.filter { !it.stopped && it.link.value !is LinkState.Failed }.map {
-        val s = it.state.value
-        RunningSummary.Entry(
-            name = it.hostName.value,
-            local = it.isLocal,
+    private fun onSessions(app: PiBoltApp, sessions: List<SessionController>) {
+        val live = live(sessions)
+        val states = live.filter { it.isLocal }.map { it.state.value }
+        if (states.size != seen.size || states.indices.any { states[it] !== seen[it] }) locks.progress()
+        seen = states
+        val nowWorking = WakePolicy.working(live.map(::work))
+        applyLocks(nowWorking)
+        if (nowWorking && !app.isForeground) BackgroundSetup.noteBackgroundRun(this)
+        val summary = RunningSummary.of(live.map(::entry), getString(R.string.app_name))
+        if (summary == null) {
+            stop()
+            return
+        }
+        Notifications.update(this, Notifications.ONGOING_ID, Notifications.ongoing(this, summary.title, summary.text, summary.lines, stoppable(live)))
+    }
+
+    /** Applies [WakePolicy] now, and again when it asks to (a renewal while working, the release after the work). */
+    private fun applyLocks(working: Boolean) {
+        this.working = working
+        tick?.cancel()
+        tick = null
+        val next = locks.update(working) ?: return
+        tick = scope.launch {
+            delay(next)
+            tick = null
+            applyLocks(this@SessionService.working)
+        }
+    }
+
+    /** The sessions that count; one whose link failed for good no longer counts as working. */
+    private fun live(sessions: List<SessionController>): List<SessionController> = sessions.filter { !it.stopped && it.link.value !is LinkState.Failed }
+
+    private fun stoppable(live: List<SessionController>): Boolean = live.any { it.isLocal && it.state.value.isRunning }
+
+    private fun subagents(s: SessionState): Boolean = SUBAGENTS_STATUS in s.statuses || s.subagents.values.any { it.background && it.isActive }
+
+    /** A session as the notification sees it. */
+    private fun entry(c: SessionController): RunningSummary.Entry {
+        val s = c.state.value
+        return RunningSummary.Entry(
+            name = c.hostName.value,
+            local = c.isLocal,
             running = s.isRunning,
             waiting = s.dialogs.isNotEmpty(),
             compacting = s.isCompacting,
-            connected = it.link.value is LinkState.Connected,
+            connected = c.link.value is LinkState.Connected,
+            subagents = subagents(s),
+            shell = c.shellRuns.value > 0,
+        )
+    }
+
+    /** A session as the wake lock policy sees it. */
+    private fun work(c: SessionController): WakePolicy.Work {
+        val s = c.state.value
+        return WakePolicy.Work(
+            local = c.isLocal,
+            running = s.isRunning,
+            waiting = s.dialogs.isNotEmpty(),
+            compacting = s.isCompacting,
+            subagents = subagents(s),
+            shell = c.shellRuns.value > 0,
         )
     }
 
     private fun stop() {
         running.set(false)
+        tick?.cancel()
+        tick = null
+        // The run just ended: a few seconds more for the engine's last writes and the finished alert, then the lock goes.
+        locks.releaseSoon()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
     override fun onDestroy() {
         running.set(false)
+        locks.releaseSoon()
         scope.cancel()
         super.onDestroy()
     }
 
     companion object {
+        /** Status key of the bundled subagents extension, set while background agents run (SessionController). */
+        private const val SUBAGENTS_STATUS = "subagents"
+
         private val running = AtomicBoolean(false)
 
         fun ensureRunning(context: Context) {
@@ -113,128 +183,5 @@ class SessionService : Service() {
             val ok = runCatching { ContextCompat.startForegroundService(context, Intent(context, SessionService::class.java)) }.isSuccess
             if (!ok) running.set(false)
         }
-    }
-}
-
-object Notifications {
-    const val ONGOING_ID = 1
-    private const val CHANNEL_SESSION = "session"
-    private const val CHANNEL_ALERTS = "alerts"
-
-    fun createChannels(context: Context) {
-        val manager = context.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_SESSION, context.getString(R.string.channel_session), NotificationManager.IMPORTANCE_LOW)
-                .apply {
-                    description = context.getString(R.string.channel_session_desc)
-                    lockscreenVisibility = Notification.VISIBILITY_PRIVATE
-                },
-        )
-        manager.createNotificationChannel(
-            NotificationChannel(CHANNEL_ALERTS, context.getString(R.string.channel_alerts), NotificationManager.IMPORTANCE_HIGH)
-                .apply {
-                    description = context.getString(R.string.channel_alerts_desc)
-                    lockscreenVisibility = Notification.VISIBILITY_PRIVATE
-                },
-        )
-    }
-
-    private fun openApp(context: Context, project: String? = null, requestCode: Int = 0): PendingIntent = PendingIntent.getActivity(
-        context,
-        requestCode,
-        // Carries the session, so a tap opens that exact one (features2.SessionAlerts); without one, the session in focus.
-        if (project != null) {
-            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
-                .putExtra(SessionAlerts.EXTRA_PROJECT, project)
-        } else {
-            SessionAlerts.openIntent(context)
-        },
-        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-    )
-
-    fun ongoing(context: Context, host: String, text: String, lines: List<String> = emptyList()): Notification =
-        NotificationCompat.Builder(context, CHANNEL_SESSION)
-            .setSmallIcon(R.drawable.ic_stat_bolt)
-            .setColor(ContextCompat.getColor(context, R.color.notification_accent))
-            .setContentTitle(host)
-            .setContentText(text)
-            .apply { if (lines.isNotEmpty()) setStyle(NotificationCompat.InboxStyle().also { style -> lines.forEach(style::addLine) }) }
-            .setOngoing(true)
-            .setOnlyAlertOnce(true)
-            .setSilent(true)
-            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
-            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
-            .setContentIntent(openApp(context))
-            .privateOnLockScreen(context, "Pi is working")
-            .build()
-
-    /** A session finished while the app was away. [key]: its hostId (one notification per session); [project]: its project. */
-    fun settled(context: Context, key: String, project: String?, host: String, lastText: String, aborted: Boolean) {
-        val id = RunningSummary.notificationId(key, RunningSummary.SETTLED)
-        val title = if (aborted) "Pi stopped on $host" else "Pi finished on $host"
-        val text = lastText.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(200) ?: "Tap to see the result"
-        post(
-            context,
-            id,
-            NotificationCompat.Builder(context, CHANNEL_ALERTS)
-                .setSmallIcon(R.drawable.ic_stat_bolt)
-                .setColor(ContextCompat.getColor(context, R.color.notification_accent))
-                .setContentTitle(title)
-                .setContentText(text)
-                .setStyle(NotificationCompat.BigTextStyle().bigText(lastText.take(1000).ifBlank { text }))
-                .setAutoCancel(true)
-                .setContentIntent(openApp(context, project, id))
-                .privateOnLockScreen(context, if (aborted) "Pi stopped" else "Pi finished")
-                .build(),
-        )
-    }
-
-    fun needsAnswer(context: Context, key: String, project: String?, host: String, title: String) {
-        val id = RunningSummary.notificationId(key, RunningSummary.ANSWER)
-        post(
-            context,
-            id,
-            NotificationCompat.Builder(context, CHANNEL_ALERTS)
-                .setSmallIcon(R.drawable.ic_stat_bolt)
-                .setColor(ContextCompat.getColor(context, R.color.notification_accent))
-                .setContentTitle("Pi needs an answer on $host")
-                .setContentText(title.ifBlank { "Tap to answer" })
-                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
-                .setAutoCancel(true)
-                .setContentIntent(openApp(context, project, id))
-                .privateOnLockScreen(context, "Pi needs an answer")
-                .build(),
-        )
-    }
-
-    /**
-     * Agent output, dialog titles and host names stay off the lock screen: a locked phone shows only [publicTitle],
-     * whatever the user's "sensitive notifications" setting.
-     */
-    private fun NotificationCompat.Builder.privateOnLockScreen(context: Context, publicTitle: String) = apply {
-        setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-        setPublicVersion(
-            NotificationCompat.Builder(context, CHANNEL_ALERTS)
-                .setSmallIcon(R.drawable.ic_stat_bolt)
-                .setColor(ContextCompat.getColor(context, R.color.notification_accent))
-                .setContentTitle(publicTitle)
-                .setContentText("Unlock to see it")
-                .build(),
-        )
-    }
-
-    fun clearNeedsAnswer(context: Context, key: String) {
-        NotificationManagerCompat.from(context).cancel(RunningSummary.notificationId(key, RunningSummary.ANSWER))
-    }
-
-    fun update(context: Context, id: Int, notification: Notification) = post(context, id, notification)
-
-    private fun post(context: Context, id: Int, notification: Notification) {
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-        NotificationManagerCompat.from(context).notify(id, notification)
     }
 }
