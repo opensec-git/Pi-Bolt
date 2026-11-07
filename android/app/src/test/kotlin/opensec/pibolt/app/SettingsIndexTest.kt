@@ -37,4 +37,28 @@ class SettingsIndexTest {
         assertEquals(emptyList(), SettingsIndex.groups(emptySet()))
         assertEquals(SettingsIndex.entries.size, SettingsIndex.entries.map { it.id }.toSet().size, "ids are unique")
     }
+
+    @Test
+    fun everyGroupHasSettingsAndTidyEntries() {
+        for (g in SettingsGroup.entries) assertTrue(SettingsIndex.entries.any { it.group == g }, "${g.title} has no entries: search could never show it")
+        for (e in SettingsIndex.entries) {
+            assertTrue(Regex("[a-z0-9]+(-[a-z0-9]+)*").matches(e.id), "id ${e.id} is kebab-case")
+            assertEquals(e.keywords.lowercase(), e.keywords, "${e.id} keywords are lower case")
+            assertTrue(e.label.first().isUpperCase(), "${e.id} label starts with a capital (sentence case)")
+            assertTrue(!e.label.endsWith("."), "${e.id} label has no full stop")
+        }
+    }
+
+    @Test
+    fun findsWhatTheRowsSay() {
+        // The words on the redesigned rows and sheets must find them.
+        assertTrue("licences" in SettingsIndex.visible("open source")!!)
+        assertTrue("licences" in SettingsIndex.visible("license")!!)
+        assertTrue("github" in SettingsIndex.visible("token")!!)
+        assertTrue("device-key" in SettingsIndex.visible("reset key")!!)
+        assertTrue("updates" in SettingsIndex.visible("check for updates")!!)
+        assertTrue("notifications" in SettingsIndex.visible("alerts")!!)
+        // Case and extra spaces do not matter.
+        assertEquals(SettingsIndex.visible("text size"), SettingsIndex.visible("  TEXT   Size "))
+    }
 }

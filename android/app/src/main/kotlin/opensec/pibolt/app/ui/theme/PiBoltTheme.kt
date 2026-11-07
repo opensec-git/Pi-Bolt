@@ -57,12 +57,39 @@ data class PiDims(val compact: Boolean) {
     val gutter: Dp get() = 16.dp
 }
 
+/** Corner radii (DESIGN.md "Space, shape, size"): xs tags, sm chips, md cards and rows, lg groups and composer, xl sheets. */
 object Radius {
     val xs = 4.dp
     val sm = 8.dp
     val md = 12.dp
     val lg = 18.dp
     val xl = 28.dp
+}
+
+/** The spacing scale. Side gutter is [lg] (16dp); sheets and headers inset their text by [xl] (20dp). */
+object Space {
+    val xxs = 2.dp
+    val xs = 4.dp
+    val sm = 8.dp
+    val md = 12.dp
+    val lg = 16.dp
+    val xl = 20.dp
+    val xxl = 24.dp
+    val x3 = 32.dp
+    val x4 = 40.dp
+}
+
+/**
+ * Icon sizes, one Rounded family. [xs] 14dp beside meta text, [sm] 16dp beside labels and in small buttons, [md] 20dp
+ * leading glyphs in rows, notices and buttons, [lg] 22dp toolbar actions ([IconAction]'s default), [hero] 32dp empty
+ * and permission states.
+ */
+object IconSize {
+    val xs = 14.dp
+    val sm = 16.dp
+    val md = 20.dp
+    val lg = 22.dp
+    val hero = 32.dp
 }
 
 /**

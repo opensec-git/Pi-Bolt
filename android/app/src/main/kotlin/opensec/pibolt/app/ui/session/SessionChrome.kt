@@ -115,8 +115,8 @@ fun linkColor(link: LinkState?, colors: PiColors): Color = when (link) {
  *
  * The status dot shows on this phone only when the engine is not connected (a green dot that is always on says
  * nothing); remote sessions keep it. [contextPercent] is null until a turn has reported usage. [quadVisible] false
- * hides the Quad (keeping its slot) while the live status line is on screen: one spinner at a time. [status] is what
- * TalkBack hears for the Quad while [busy]; idle it is silent.
+ * hides the Quad (keeping its slot) while the live status line is on screen: one spinner at a time. Idle the slot is
+ * blank. [status] is what TalkBack hears for the Quad while [busy]; idle it is silent.
  */
 @Composable
 fun SessionTopBar(
@@ -188,27 +188,32 @@ fun SessionTopBar(
                 Text(subtitle, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = if (dot) 16.dp else 0.dp))
             }
         }
-        switcher()
-        IconAction(Icons.Rounded.Search, "Search this session", onClick = onSearch)
+        // The live Quad sits left of the actions, so its empty slot reads as part of the title's space and Search and
+        // More always stay side by side. It is drawn only when it says something: busy with the status line off
+        // screen (the line owns the one spinner when visible), or a failed link. Idle it is blank, not a still grid.
+        val showQuad = quadVisible && (busy || link is LinkState.Failed)
         Box(
             Modifier
                 .size(40.dp)
-                .graphicsLayer { alpha = if (quadVisible) 1f else 0f }
-                .clearAndSetSemantics { if (busy && quadVisible && status != null) contentDescription = status },
+                .graphicsLayer { alpha = if (showQuad) 1f else 0f }
+                .clearAndSetSemantics { if (busy && showQuad && status != null) contentDescription = status },
             contentAlignment = Alignment.Center,
         ) {
-            QuadSpinner(
-                mode,
-                size = 16.dp,
-                color = when {
-                    link is LinkState.Failed -> colors.danger
-                    mode == QuadMode.Wait -> colors.warning
-                    busy -> colors.ink1
-                    else -> colors.ink3
-                },
-                animate = spin && quadVisible,
-            )
+            if (showQuad) {
+                QuadSpinner(
+                    mode,
+                    size = 16.dp,
+                    color = when {
+                        link is LinkState.Failed -> colors.danger
+                        mode == QuadMode.Wait -> colors.warning
+                        else -> colors.ink1
+                    },
+                    animate = spin,
+                )
+            }
         }
+        switcher()
+        IconAction(Icons.Rounded.Search, "Search this session", onClick = onSearch)
         Box {
             IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
             DropdownMenu(

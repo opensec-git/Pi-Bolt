@@ -192,7 +192,9 @@ private fun Features2State.openTree(host: Features2Host, scope: kotlinx.coroutin
     sheet = F2Sheet.Tree
     scope.launch {
         val response = host.controller.request("get_entries", timeoutMs = 60_000)
-        if (response.success) tree = response.dataObject else treeError = response.error ?: "Could not read the tree"
+        val (data, error) = opensec.pibolt.app.ui.session.tree.SessionTree.load(response.success, response.dataObject, response.error)
+        tree = data
+        treeError = error
     }
 }
 
@@ -222,6 +224,7 @@ fun Features2Sheets(f2: Features2State, host: Features2Host, state: State<Sessio
             data = f2.tree,
             error = f2.treeError,
             busy = running,
+            onRetry = { f2.openTree(host, scope) },
             onGoto = { row: TreeRow ->
                 close()
                 scope.launch {

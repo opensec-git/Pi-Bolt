@@ -65,7 +65,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -126,7 +125,6 @@ fun Composer(
     onSend: () -> Unit,
     onStop: () -> Unit,
     onModel: () -> Unit,
-    onThinking: () -> Unit,
     modifier: Modifier = Modifier,
     images: List<ComposerImage> = emptyList(),
     attachAllowed: Boolean = true,
@@ -322,23 +320,25 @@ fun Composer(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     attach()
-                    // The chips share what the attach and send buttons leave; the model name gives way first. While
-                    // a steer is typed the Steer / Follow-up chip takes the thinking chip's place.
+                    // One run-settings chip, "Sonnet 4.5 · High": the model gives way first, the level never wraps.
+                    // Tap opens one sheet for both; long press is the next model. While a steer is typed the
+                    // Steer / Follow-up chip sits at the end, next to send.
                     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                        Chip(onClick = onModel, enabled = enabled, onLongClick = onCycleModel, longClickLabel = "Next model", modifier = Modifier.weight(1f, fill = false).semantics { contentDescription = "Model: ${modelLabel ?: "not set"}" }) {
-                            Text(modelLabel ?: "Model", style = type.label, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).widthIn(max = 160.dp))
+                        val chip = ModelChipText.of(modelLabel, thinkingLevel)
+                        Chip(
+                            onClick = onModel,
+                            enabled = enabled,
+                            onLongClick = onCycleModel,
+                            longClickLabel = "Next model",
+                            modifier = Modifier.weight(1f, fill = false).semantics { contentDescription = chip.description },
+                        ) {
+                            Text(chip.model, style = type.label, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).widthIn(max = 180.dp))
+                            if (chip.level != null) Text(" · " + chip.level, style = type.label, color = colors.ink3, maxLines = 1, softWrap = false)
                             Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
                         }
                         if (running && hasContent) {
                             Spacer(Modifier.weight(1f, fill = true))
                             SteerChip(mode, onMode)
-                        } else if (thinkingLevel != null) {
-                            Spacer(Modifier.width(2.dp))
-                            val short = LocalDensity.current.fontScale >= 1.5f
-                            Chip(onClick = onThinking, enabled = enabled, onLongClick = onCycleThinking, longClickLabel = "Next thinking level", modifier = Modifier.semantics { contentDescription = thinkingChipLabel(thinkingLevel) }) {
-                                Text(if (short) thinkingShortLabel(thinkingLevel) else thinkingChipLabel(thinkingLevel), style = type.label, color = colors.ink2, maxLines = 1)
-                                Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
-                            }
                         }
                     }
                     voice?.invoke()
@@ -502,8 +502,26 @@ fun thinkingChipLabel(level: String?): String = when {
     else -> "Thinking: $level"
 }
 
-/** At very large text the chip keeps only the level ("Medium", "Off"). */
-fun thinkingShortLabel(level: String?): String = level?.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() } ?: "Thinking"
+/**
+ * The composer's run-settings chip: the model, then " · High" for the thinking level. The level is left out when the
+ * model does not reason (null) or thinking is off: a chip reading "· Off" says nothing useful, and the sheet shows it.
+ */
+data class ModelChipText(val model: String, val level: String?, val description: String) {
+    companion object {
+        fun of(model: String?, thinkingLevel: String?): ModelChipText {
+            val name = model?.takeIf { it.isNotBlank() } ?: "Model"
+            val level = thinkingLevel?.trim()?.takeIf { it.isNotEmpty() && !it.equals("off", ignoreCase = true) }?.replaceFirstChar { it.uppercase() }
+            val spoken = buildString {
+                append("Model: ").append(model?.takeIf { it.isNotBlank() } ?: "not set")
+                when {
+                    level != null -> append(", thinking ").append(level.lowercase())
+                    thinkingLevel.equals("off", ignoreCase = true) -> append(", thinking off")
+                }
+            }
+            return ModelChipText(name, level, spoken)
+        }
+    }
+}
 
 /**
  * Send / Stop, 40dp in a 48dp target. Send enabled: accent fill, onAccent arrow. Disabled: no fill, a 1dp lineStrong

@@ -76,10 +76,11 @@ object ProjectRules {
     /**
      * Home's "Continue": each project's newest session (subagent sessions are never listed, see SessionIndex), the live
      * project's first, then the most recently changed; projects without sessions are left out; at most [limit].
+     * Projects in [running] are left out too: Home's "Running" section already shows them, with what they do.
      */
-    fun continueList(projects: List<ProjectEntry>, liveProject: String?, limit: Int = 3): List<ProjectEntry> =
+    fun continueList(projects: List<ProjectEntry>, liveProject: String?, limit: Int = 3, running: Set<String> = emptySet()): List<ProjectEntry> =
         projects
-            .filter { it.lastSession != null }
+            .filter { it.lastSession != null && it.name !in running }
             .sortedWith(compareByDescending<ProjectEntry> { it.name == liveProject }.thenByDescending { it.lastSession?.updatedAt ?: 0 }.thenBy { it.title.lowercase() })
             .take(limit)
 

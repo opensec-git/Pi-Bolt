@@ -1,5 +1,11 @@
 package opensec.pibolt.app.ui.terminal
 
+import opensec.pibolt.app.ui.projects.EmptyCard
+import opensec.pibolt.app.ui.projects.WorkspaceMenu
+import opensec.pibolt.app.ui.projects.WorkspaceMenuRow
+import opensec.pibolt.app.ui.projects.WorkspaceTab
+import androidx.compose.material.icons.rounded.FormatSize
+import androidx.compose.material.icons.rounded.Terminal
 import android.annotation.SuppressLint
 import android.content.Context
 import android.view.KeyEvent
@@ -13,14 +19,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -51,7 +55,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -59,7 +62,6 @@ import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.edit
@@ -110,6 +112,7 @@ fun TerminalPane(
     val ctrl = remember { mutableStateOf(false) }
     val alt = remember { mutableStateOf(false) }
     var view by remember { mutableStateOf<TerminalView?>(null) }
+    var sizeMenu by remember { mutableStateOf(false) }
 
     fun setFont(sp: Int) {
         fontSp = sp.coerceIn(MIN_FONT_SP, MAX_FONT_SP)
@@ -137,8 +140,15 @@ fun TerminalPane(
             }
             if (tab != null) {
                 IconAction(Icons.Rounded.ContentPaste, "Paste", onClick = { tab.session.onPasteTextFromClipboard() })
-                IconAction(Icons.Rounded.TextDecrease, "Smaller text", onClick = { setFont(fontSp - 1) }, enabled = fontSp > MIN_FONT_SP)
-                IconAction(Icons.Rounded.TextIncrease, "Larger text", onClick = { setFont(fontSp + 1) }, enabled = fontSp < MAX_FONT_SP)
+                // Text size is also a pinch on the terminal: the two steps live in one menu, not two icons.
+                Box {
+                    IconAction(Icons.Rounded.FormatSize, "Text size, $fontSp", onClick = { sizeMenu = true })
+                    WorkspaceMenu(sizeMenu, { sizeMenu = false }) {
+                        WorkspaceMenuRow("Larger text", Icons.Rounded.TextIncrease, if (fontSp < MAX_FONT_SP) colors.ink1 else colors.ink3) { setFont(fontSp + 1) }
+                        WorkspaceMenuRow("Smaller text", Icons.Rounded.TextDecrease, if (fontSp > MIN_FONT_SP) colors.ink1 else colors.ink3) { setFont(fontSp - 1) }
+                        Text("$fontSp sp · pinch the terminal too", style = type.meta, color = colors.ink3, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                    }
+                }
             }
             IconAction(
                 if (fullScreen) Icons.Rounded.CloseFullscreen else Icons.Rounded.OpenInFull,
@@ -149,17 +159,15 @@ fun TerminalPane(
         PreviewChipRow(onPreview, Modifier.padding(horizontal = 12.dp))
         Box(Modifier.weight(1f).fillMaxWidth()) {
             if (tab == null) {
-                Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("A shell in this project", style = type.bodyStrong, color = colors.ink1)
-                    Spacer(Modifier.height(4.dp))
-                    Text(
+                Column(Modifier.fillMaxSize().padding(top = 4.dp)) {
+                    EmptyCard(
+                        Icons.Rounded.Terminal,
+                        "A shell in this project",
                         "bash with git, curl, rg and the project's secrets as variables. It keeps running when you leave the app.",
-                        style = type.body,
-                        color = colors.ink2,
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    PrimaryButton(if (starting) "Starting…" else "Start a terminal", onClick = ::start, enabled = !starting, modifier = Modifier.fillMaxWidth())
-                    error?.let { Text(it, style = type.meta, color = colors.danger, modifier = Modifier.padding(top = 8.dp)) }
+                    ) {
+                        PrimaryButton(if (starting) "Starting…" else "Start a terminal", onClick = ::start, enabled = !starting, modifier = Modifier.fillMaxWidth())
+                        error?.let { Text(it, style = type.meta, color = colors.danger, modifier = Modifier.padding(top = 8.dp)) }
+                    }
                 }
             } else {
                 TerminalSurface(app, tab, fontSp, ctrl, alt, onFont = ::setFont, onView = { view = it })
@@ -303,32 +311,16 @@ private class ViewClient(
 
 @Composable
 private fun TabChip(tab: TerminalTab, selected: Boolean, onSelect: () -> Unit, onClose: () -> Unit) {
-    val colors = Pi.colors
-    val shape = RoundedCornerShape(Radius.sm)
-    val fill by animateColorAsState(if (selected) colors.surface2 else colors.canvas, PiMotion.effects(), label = "tab")
-    Row(Modifier.padding(start = 8.dp).height(36.dp).background(fill, shape).border(1.dp, if (selected) colors.lineStrong else colors.line, shape), verticalAlignment = Alignment.CenterVertically) {
-        Box(
-            Modifier
-                .heightIn(min = 48.dp)
-                .pressable(onSelect, shape = shape, label = tab.label)
-                .semantics {
-                    this.selected = selected
-                    stateDescription = if (tab.running) tab.title else "ended"
-                }
-                .padding(start = 10.dp, end = 2.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                "${tab.id} · ${tab.title}",
-                style = Pi.type.label,
-                color = if (!tab.running) colors.ink3 else if (selected) colors.ink1 else colors.ink2,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 140.dp),
-            )
-        }
-        IconAction(Icons.Rounded.Close, "Close ${tab.label}", onClick = onClose, size = 16.dp)
-    }
+    WorkspaceTab(
+        name = "${tab.id} · ${tab.title}",
+        selected = selected,
+        onSelect = onSelect,
+        onClose = onClose,
+        description = "${tab.label}, " + if (tab.running) tab.title else "ended",
+        closeDescription = "Close ${tab.label}",
+        modifier = Modifier.padding(start = 8.dp),
+        ended = !tab.running,
+    )
 }
 
 /** Esc, Tab, Ctrl, Alt, the arrows and the shell characters a phone keyboard hides. 48dp keys. */

@@ -34,6 +34,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Icon
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -57,6 +58,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Radius
 
 /**
@@ -102,31 +104,51 @@ fun Modifier.pressable(
         }
 }
 
-/** Primary action: accent fill, 52dp, pill. */
+/**
+ * Button heights. [Large] (52dp) is the default: sheet and screen actions. [Small] (40dp visual) sits inside rows and
+ * cards ("Clear", "Retry"); its touch target is still 48dp.
+ */
+enum class ButtonSize(val height: Dp, val padding: Dp, val icon: Dp) {
+    Large(52.dp, 20.dp, IconSize.md),
+    Small(40.dp, 14.dp, IconSize.sm),
+}
+
+/** Primary action: accent fill, pill. One per screen or sheet. */
 @Composable
-fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, enabled: Boolean = true) {
+fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, enabled: Boolean = true, size: ButtonSize = ButtonSize.Large) {
     val colors = Pi.colors
     if (enabled) {
-        ButtonBase(text, onClick, modifier, icon, true, colors.accent, colors.onAccent, null)
+        ButtonBase(text, onClick, modifier, icon, true, colors.accent, colors.onAccent, null, size)
     } else {
-        ButtonBase(text, onClick, modifier, icon, false, colors.surface3, colors.ink3, null)
+        ButtonBase(text, onClick, modifier, icon, false, colors.surface3, colors.ink3, null, size, dim = false)
     }
 }
 
-/** Secondary action: surface2 with a line, 52dp, pill. */
+/** Secondary action: surface2 with a line, pill. */
 @Composable
-fun SecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, enabled: Boolean = true) {
+fun SecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, enabled: Boolean = true, size: ButtonSize = ButtonSize.Large) {
     val colors = Pi.colors
-    ButtonBase(text, onClick, modifier, icon, enabled, colors.surface2, colors.ink1, colors.line)
+    ButtonBase(text, onClick, modifier, icon, enabled, colors.surface2, colors.ink1, colors.line, size)
 }
 
-/** Destructive confirmation: danger soft fill, danger text. */
+/** Ghost action: no fill or line, ink1 label. The quiet third choice in a button row ("Later", "Not now"). */
 @Composable
-fun DangerButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null) {
-    val colors = Pi.colors
-    ButtonBase(text, onClick, modifier, icon, true, colors.dangerSoft, colors.danger, null)
+fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, enabled: Boolean = true, color: Color = Pi.colors.ink1, size: ButtonSize = ButtonSize.Large) {
+    ButtonBase(text, onClick, modifier, icon, enabled, Color.Transparent, color, null, size)
 }
 
+/** Destructive action: danger soft fill, danger text. Only for the step that destroys something. */
+@Composable
+fun DangerButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, enabled: Boolean = true, size: ButtonSize = ButtonSize.Large) {
+    val colors = Pi.colors
+    ButtonBase(text, onClick, modifier, icon, enabled, colors.dangerSoft, colors.danger, null, size)
+}
+
+/**
+ * Every button: a pill of [size]'s height (a small one keeps a 48dp touch target), label SemiBold, optional leading
+ * icon. Press: ink overlay and 0.97 scale. Disabled: content and line at 40% (the primary button switches to surface3
+ * and ink3 instead, so a disabled one never reads as the accent action).
+ */
 @Composable
 private fun ButtonBase(
     text: String,
@@ -137,21 +159,24 @@ private fun ButtonBase(
     container: Color,
     content: Color,
     border: Color?,
+    size: ButtonSize,
+    dim: Boolean = true,
 ) {
     val shape = CircleShape
+    val tint = if (enabled || !dim) content else content.copy(alpha = content.alpha * 0.4f)
     Row(
         modifier
-            .heightIn(min = 52.dp)
+            .then(if (size.height < 48.dp) Modifier.minimumInteractiveComponentSize() else Modifier)
+            .heightIn(min = size.height)
             .pressable(onClick, shape = shape, enabled = enabled)
             .background(container, shape)
-            .then(if (border != null) Modifier.border(1.dp, border, shape) else Modifier)
-            .padding(horizontal = 20.dp),
+            .then(if (border != null) Modifier.border(1.dp, if (enabled) border else border.copy(alpha = border.alpha * 0.4f), shape) else Modifier)
+            .padding(horizontal = size.padding),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        val tint = content
         if (icon != null) {
-            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(size.icon))
             Spacer(Modifier.width(8.dp))
         }
         Text(text, style = Pi.type.label.copy(fontWeight = FontWeight.SemiBold), color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis)

@@ -1,6 +1,5 @@
 package opensec.pibolt.app.ui.projects
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -21,10 +20,9 @@ import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.automirrored.rounded.Chat
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material.icons.rounded.Terminal
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -35,8 +33,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -226,50 +222,39 @@ fun ProjectMenu(
     onDelete: () -> Unit,
     onExport: (() -> Unit)? = null,
     onRuntimes: (() -> Unit)? = null,
+    onSecrets: (() -> Unit)? = null,
 ) {
     val colors = Pi.colors
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss,
-        containerColor = colors.surface3,
-        shape = RoundedCornerShape(Radius.md),
-        tonalElevation = 0.dp,
-        shadowElevation = 8.dp,
-        border = BorderStroke(1.dp, colors.lineStrong),
-    ) {
-        MenuItem(if (pinned) "Unpin" else "Pin to top", if (pinned) Icons.Outlined.PushPin else Icons.Rounded.PushPin, colors.ink1) {
+    WorkspaceMenu(expanded, onDismiss) {
+        WorkspaceMenuRow(if (pinned) "Unpin" else "Pin to top", if (pinned) Icons.Outlined.PushPin else Icons.Rounded.PushPin, colors.ink1) {
             onDismiss()
             onPin(!pinned)
         }
-        MenuItem("Rename", Icons.Rounded.DriveFileRenameOutline, colors.ink1) {
+        WorkspaceMenuRow("Rename", Icons.Rounded.DriveFileRenameOutline, colors.ink1) {
             onDismiss()
             onRename()
         }
         onExport?.let { export ->
-            MenuItem("Export as zip", Icons.Rounded.Archive, colors.ink1) {
+            WorkspaceMenuRow("Export as zip", Icons.Rounded.Archive, colors.ink1) {
                 onDismiss()
                 export()
             }
         }
-        onRuntimes?.let { open ->
-            MenuItem("Runtimes", Icons.Rounded.Terminal, colors.ink1) {
+        onSecrets?.let { open ->
+            WorkspaceMenuRow("Secrets", Icons.Rounded.Key, colors.ink1) {
                 onDismiss()
                 open()
             }
         }
-        MenuItem("Delete", Icons.Rounded.DeleteOutline, colors.danger) {
+        onRuntimes?.let { open ->
+            WorkspaceMenuRow("Runtimes", Icons.Rounded.Terminal, colors.ink1) {
+                onDismiss()
+                open()
+            }
+        }
+        WorkspaceMenuRow("Delete", Icons.Rounded.DeleteOutline, colors.danger) {
             onDismiss()
             onDelete()
         }
     }
-}
-
-@Composable
-private fun MenuItem(text: String, icon: ImageVector, color: Color, onClick: () -> Unit) {
-    DropdownMenuItem(
-        text = { Text(text, style = Pi.type.body, color = color) },
-        leadingIcon = { Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp)) },
-        onClick = onClick,
-        modifier = Modifier.width(200.dp),
-    )
 }

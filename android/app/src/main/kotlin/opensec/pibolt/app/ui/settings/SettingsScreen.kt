@@ -21,17 +21,19 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Description
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
@@ -46,12 +48,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.semantics.heading
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -63,7 +62,14 @@ import opensec.pibolt.app.data.AppSettings
 import opensec.pibolt.app.data.Density
 import opensec.pibolt.app.data.ReduceMotion
 import opensec.pibolt.app.ui.components.ConfirmSheet
-import opensec.pibolt.app.ui.components.DangerButton
+import opensec.pibolt.app.ui.components.ListRow
+import opensec.pibolt.app.ui.components.PiSheet
+import opensec.pibolt.app.ui.components.RowDivider
+import opensec.pibolt.app.ui.components.RowEnd
+import opensec.pibolt.app.ui.components.RowInsetCard
+import opensec.pibolt.app.ui.components.ScreenTopBar
+import opensec.pibolt.app.ui.components.SheetHeader
+import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.PiTextField
 import opensec.pibolt.app.ui.components.Segmented
@@ -87,6 +93,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
     val context = LocalContext.current
     val focus = LocalFocusManager.current
     var licence by remember { mutableStateOf<ViewerContent?>(null) }
+    var licences by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     var query by rememberSaveable { mutableStateOf("") }
     val visible = remember(query) { SettingsIndex.visible(query) }
@@ -97,13 +104,8 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
     fun update(change: (AppSettings) -> AppSettings) = app.settings.update(change)
 
     Box(Modifier.fillMaxSize().background(colors.canvas)) {
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            Row(Modifier.fillMaxWidth().height(56.dp).padding(start = 4.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack, tint = colors.ink1)
-                Spacer(Modifier.size(4.dp))
-                Text("Settings", style = type.title, color = colors.ink1, modifier = Modifier.semantics { heading() })
-            }
-            Box(Modifier.fillMaxWidth().height(1.dp).background(if (scrolled) colors.line else colors.canvas))
+        Column(Modifier.fillMaxSize()) {
+            ScreenTopBar("Settings", onBack = onBack, scrolled = scrolled)
             Column(
                 Modifier
                     .fillMaxSize()
@@ -185,7 +187,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                             ) { i, on ->
                                 Text(
                                     "A",
-                                    style = type.label.copy(fontSize = 13.sp * (1f + 0.2f * i), fontWeight = FontWeight.SemiBold),
+                                    style = type.label.copy(fontSize = type.label.fontSize * (0.93f + 0.2f * i), fontWeight = FontWeight.SemiBold),
                                     color = if (on) colors.ink1 else colors.ink3,
                                 )
                             }
@@ -281,7 +283,15 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                             color = if (oldKeyId != null) colors.success else colors.ink3,
                             modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
                         )
-                        DangerButton("Reset device key", onClick = { confirmReset = true }, modifier = Modifier.fillMaxWidth())
+                        RowDivider()
+                        ListRow(
+                            "Reset device key",
+                            meta = "Makes a new key; every computer has to pair again",
+                            icon = Icons.Rounded.Refresh,
+                            iconTint = colors.danger,
+                            onClick = { confirmReset = true },
+                            padding = RowInsetCard,
+                        )
                         if (confirmReset) {
                             ConfirmSheet(
                                 title = "Reset this phone's key?",
@@ -308,19 +318,8 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                         }
                         if (show("updates")) UpdateBlock(app, settings.autoUpdateCheck) { on -> update { it.copy(autoUpdateCheck = on) } }
                         if (show("licences")) {
-                            // Licence texts are read off the main thread.
-                            NavRow("Inter licence", "SIL Open Font License 1.1", onClick = {
-                                scope.launch { licence = ViewerContent("Inter", "SIL Open Font License 1.1", readRaw(context, R.raw.license_inter), wrap = true) }
-                            })
-                            NavRow("JetBrains Mono licence", "SIL Open Font License 1.1", onClick = {
-                                scope.launch { licence = ViewerContent("JetBrains Mono", "SIL Open Font License 1.1", readRaw(context, R.raw.license_jetbrains_mono), wrap = true) }
-                            })
-                            NavRow("Mermaid licence", "MIT, with the projects it bundles", onClick = {
-                                scope.launch { licence = ViewerContent("Mermaid", "MIT, with the projects it bundles", readRaw(context, R.raw.license_mermaid), wrap = true) }
-                            })
-                            NavRow("Termux terminal licence", "Apache License 2.0", onClick = {
-                                scope.launch { licence = ViewerContent("Termux terminal", "Apache License 2.0", readRaw(context, R.raw.license_termux_terminal), wrap = true) }
-                            })
+                            RowDivider()
+                            NavRow("Open-source licences", "Inter, JetBrains Mono, Mermaid, Termux terminal", onClick = { licences = true })
                         }
                     }
                 }
@@ -337,7 +336,38 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
             shown.value?.let { Viewer(it, onClose = { licence = null }) }
         }
     }
+    if (licences) {
+        LicencesSheet(
+            onPick = { name, kind, raw ->
+                licences = false
+                scope.launch { licence = ViewerContent(name, kind, readRaw(context, raw), wrap = true) }
+            },
+            onDismiss = { licences = false },
+        )
+    }
 }
+
+/** The bundled projects' licences, one row each; a tap opens the text in the viewer. */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LicencesSheet(onPick: (name: String, kind: String, raw: Int) -> Unit, onDismiss: () -> Unit) {
+    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val close = rememberSheetCloser(state)
+    PiSheet(onDismiss = onDismiss, state = state) {
+        SheetHeader("Open-source licences", subtitle = "Pi-Bolt ships these projects with the app.")
+        Spacer(Modifier.height(8.dp))
+        for ((name, kind, raw) in LICENCES) {
+            ListRow(name, meta = kind, icon = Icons.Rounded.Description, end = RowEnd.Chevron, onClick = { close { onPick(name, kind, raw) } })
+        }
+    }
+}
+
+private val LICENCES = listOf(
+    Triple("Inter", "SIL Open Font License 1.1", R.raw.license_inter),
+    Triple("JetBrains Mono", "SIL Open Font License 1.1", R.raw.license_jetbrains_mono),
+    Triple("Mermaid", "MIT, with the projects it bundles", R.raw.license_mermaid),
+    Triple("Termux terminal", "Apache License 2.0", R.raw.license_termux_terminal),
+)
 
 private fun textSizeLabel(step: Int) = when (step) {
     -1 -> "Small"

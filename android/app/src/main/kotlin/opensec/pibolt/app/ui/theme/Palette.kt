@@ -73,7 +73,7 @@ data class PiColors(
             }.copy(syntax = SyntaxColors.of(theme))
             return when (accent) {
                 AccentId.Theme -> when (theme) {
-                    ThemeId.Claude -> base.copy(accent = Color(0xFFD97757), onAccent = Color(0xFF1F1E1D))
+                    ThemeId.Claude -> base.copy(accent = Color(0xFFE08566), onAccent = Color(0xFF1F1E1D))
                     ThemeId.GitHub -> base.copy(accent = Color(0xFF4493F8), onAccent = Color(0xFF0D1117))
                     else -> base.copy(accent = base.ink1, onAccent = base.canvas)
                 }

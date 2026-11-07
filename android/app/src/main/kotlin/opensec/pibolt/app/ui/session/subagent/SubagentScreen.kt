@@ -286,9 +286,9 @@ private fun StatusStrip(run: Subagent) {
         Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) { RunGlyph(run, live = true) }
         Spacer(Modifier.width(8.dp))
         Text(SubagentFormat.statusWord(run.status).replaceFirstChar { it.uppercaseChar() }, style = type.label, color = colors.ink2, maxLines = 1)
-        Text("  ·  ", style = type.meta, color = colors.ink4)
+        Text("  ·  ", style = type.meta, color = colors.ink3)
         RunTime(run)
-        Text("  ·  ", style = type.meta, color = colors.ink4)
+        Text("  ·  ", style = type.meta, color = colors.ink3)
         Text(SubagentFormat.metrics(run), style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
     }
     val second = listOfNotNull(run.model, if (run.background) "background" else null, run.agentId?.let(SubagentFormat::shortId)).joinToString(" · ")
@@ -437,7 +437,7 @@ private fun LiveLine(run: Subagent, modifier: Modifier = Modifier) {
                 modifier = Modifier.weight(1f, fill = false),
                 label = "liveText",
             ) { t -> ShimmerText(t, Pi.type.label, active = visible) }
-            Text("  ·  ", style = Pi.type.label, color = Pi.colors.ink4)
+            Text("  ·  ", style = Pi.type.label, color = Pi.colors.ink3)
             RunTime(run)
         }
     }

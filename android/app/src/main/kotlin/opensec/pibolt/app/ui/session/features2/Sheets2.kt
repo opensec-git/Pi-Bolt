@@ -239,11 +239,11 @@ fun TuningSheet(agentDir: File, onReload: (() -> Unit)?, onMessage: (String) -> 
             return@PiSheet
         }
         Column(Modifier.fillMaxWidth().heightIn(max = 560.dp).verticalScroll(rememberScrollState())) {
-            F2Section("COMPACTION")
+            F2Section("Compaction")
             NumberField("Compact above this % of the context", "90", fields, "threshold")
             NumberField("Tokens kept for the reply", "16384", fields, "reserve")
             NumberField("Recent tokens kept as they are", "20000 or 5% of the window", fields, "keep")
-            F2Section("RETRY")
+            F2Section("Retry")
             NumberField("Retries", "3", fields, "retries")
             NumberField("First delay (ms)", "2000", fields, "base")
             NumberField("Longest delay (ms)", "60000", fields, "max")

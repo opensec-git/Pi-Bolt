@@ -17,6 +17,18 @@ object PiMotion {
     const val SHEET = 300
     const val SETTLE = 400
 
+    /** A finished step's spinner turning into its check or cross (exit at [exit] of it). */
+    const val GLYPH = 160
+
+    /** Reduced motion: transitions become this short crossfade. */
+    const val FADE = 120
+
+    /** Half a period of the end-of-text caret pulse (900 ms round trip). */
+    const val PULSE = 450
+
+    /** The working hairline and a running card's top band. */
+    const val SWEEP = 1400
+
     fun exit(enterMs: Int): Int = enterMs * 7 / 10
 
     val Enter = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)

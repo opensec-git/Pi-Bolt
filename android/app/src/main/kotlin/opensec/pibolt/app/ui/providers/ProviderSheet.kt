@@ -1,17 +1,16 @@
 package opensec.pibolt.app.ui.providers
 
+import opensec.pibolt.app.ui.components.FieldHint
+import opensec.pibolt.app.ui.components.FieldLabel
+import opensec.pibolt.app.ui.components.SecretField
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,7 +25,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -36,8 +34,6 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.Visibility
-import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -51,19 +47,15 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.password
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -220,7 +212,7 @@ private fun CustomRow(title: String, note: String, onClick: () -> Unit) {
             .padding(horizontal = 20.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(32.dp).background(colors.surface3, RoundedCornerShape(8.dp)), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(32.dp).background(colors.surface3, RoundedCornerShape(Radius.sm)), contentAlignment = Alignment.Center) {
             Icon(Icons.Rounded.Dns, contentDescription = null, tint = colors.ink1, modifier = Modifier.size(18.dp))
         }
         Spacer(Modifier.width(14.dp))
@@ -262,7 +254,7 @@ fun ProviderRow(p: ProviderInfo, added: Boolean, onClick: () -> Unit, trailing: 
 /** 32dp square with the provider's two-letter badge (see [ProviderCatalog.badge]); decorative for TalkBack. */
 @Composable
 fun ProviderBadge(badge: String) {
-    Box(Modifier.size(32.dp).background(Pi.colors.surface3, RoundedCornerShape(8.dp)).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
+    Box(Modifier.size(32.dp).background(Pi.colors.surface3, RoundedCornerShape(Radius.sm)).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
         Text(badge.ifBlank { "?" }, style = Pi.type.label.copy(fontWeight = FontWeight.SemiBold), color = Pi.colors.ink1, maxLines = 1)
     }
 }
@@ -322,13 +314,14 @@ private fun KeyStep(provider: ProviderInfo, auth: ProviderAuth, onBack: (() -> U
             color = colors.ink2,
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
         )
-        KeyField(
+        SecretField(
             value = key,
             onValueChange = {
                 key = it
                 error = null
             },
-            hint = provider.keyHint.ifBlank { "API key" },
+            placeholder = provider.keyHint.ifBlank { "API key" },
+            label = "API key",
             shown = shown,
             isError = error != null,
             onToggleShown = { shown = !shown },
@@ -474,7 +467,7 @@ private fun CustomStep(auth: ProviderAuth, onBack: () -> Unit, onSaved: (Provide
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false, imeAction = ImeAction.Next),
                         modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Base URL" },
                     )
-                    FieldNote(urlError ?: "Usually ends in /v1", urlError != null)
+                    FieldHint(urlError ?: "Usually ends in /v1", isError = urlError != null)
                     FieldLabel("Model id")
                     PiTextField(
                         value = model,
@@ -489,16 +482,17 @@ private fun CustomStep(auth: ProviderAuth, onBack: () -> Unit, onSaved: (Provide
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false, imeAction = ImeAction.Next),
                         modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Model id" },
                     )
-                    FieldNote(modelError ?: "As the server names it", modelError != null)
+                    FieldHint(modelError ?: "As the server names it", isError = modelError != null)
                     FieldLabel("API key (optional)")
                 }
-                KeyField(
+                SecretField(
                     value = key,
                     onValueChange = {
                         key = it
                         error = null
                     },
-                    hint = "Leave empty if the server needs none",
+                    placeholder = "Leave empty if the server needs none",
+                    label = "API key",
                     shown = shown,
                     isError = error != null,
                     onToggleShown = { shown = !shown },
@@ -511,11 +505,11 @@ private fun CustomStep(auth: ProviderAuth, onBack: () -> Unit, onSaved: (Provide
                             }
                         }
                     },
-                    onDone = {},
+                    imeAction = ImeAction.Next,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
                 Column(Modifier.padding(horizontal = 16.dp)) {
-                    FieldNote(error ?: "A key stays on this phone and is sent only to this server.", error != null)
+                    FieldHint(error ?: "A key stays on this phone and is sent only to this server.", isError = error != null)
                     FieldLabel("Name (optional)")
                     PiTextField(
                         value = name,
@@ -539,84 +533,4 @@ private fun CustomStep(auth: ProviderAuth, onBack: () -> Unit, onSaved: (Provide
         }
         Spacer(Modifier.height(8.dp))
     }
-}
-
-@Composable
-private fun FieldLabel(text: String) {
-    Text(text, style = Pi.type.metaStrong, color = Pi.colors.ink2, modifier = Modifier.padding(start = 4.dp, top = 10.dp, bottom = 6.dp))
-}
-
-@Composable
-private fun FieldNote(text: String, isError: Boolean) {
-    Text(
-        text,
-        style = Pi.type.meta,
-        color = if (isError) Pi.colors.danger else Pi.colors.ink3,
-        modifier = Modifier.padding(start = 4.dp, top = 4.dp),
-    )
-}
-
-/** The key field: obscured by default, Paste and Show/Hide at the end, no autocorrect or suggestions. */
-@Composable
-private fun KeyField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    hint: String,
-    shown: Boolean,
-    isError: Boolean,
-    onToggleShown: () -> Unit,
-    onPaste: () -> Unit,
-    onDone: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val colors = Pi.colors
-    val interaction = remember { MutableInteractionSource() }
-    val focused by interaction.collectIsFocusedAsState()
-    val border by animateColorAsState(
-        when {
-            isError -> colors.danger.copy(alpha = 0.7f)
-            focused -> colors.lineFocus
-            else -> colors.lineStrong
-        },
-        PiMotion.effects(),
-        label = "key-field",
-    )
-    val shape = RoundedCornerShape(Radius.md)
-    val style = Pi.type.mono
-    BasicTextField(
-        value = value,
-        onValueChange = onValueChange,
-        singleLine = true,
-        textStyle = style.copy(color = colors.ink1),
-        cursorBrush = SolidColor(colors.accent),
-        visualTransformation = if (shown) VisualTransformation.None else PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false, imeAction = ImeAction.Done),
-        keyboardActions = KeyboardActions(onDone = { onDone() }),
-        interactionSource = interaction,
-        modifier = modifier.fillMaxWidth().semantics {
-            password()
-            contentDescription = "API key"
-        },
-        decorationBox = { inner ->
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 52.dp)
-                    .background(colors.surface1, shape)
-                    .border(1.dp, border, shape)
-                    .padding(start = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Box(Modifier.weight(1f).padding(vertical = 12.dp)) {
-                    if (value.isEmpty()) Text(hint, style = style, color = colors.ink3, maxLines = 1)
-                    inner()
-                }
-                if (value.isEmpty()) {
-                    TextAction("Paste", onClick = onPaste, color = colors.accent)
-                } else {
-                    IconAction(if (shown) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, if (shown) "Hide key" else "Show key", onClick = onToggleShown, size = 20.dp)
-                }
-            }
-        },
-    )
 }

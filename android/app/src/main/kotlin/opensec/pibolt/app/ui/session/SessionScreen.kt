@@ -568,6 +568,8 @@ private fun SessionContent(
     fun openModels(search: String = "") {
         modelQuery = search
         controller.loadModels()
+        // The model sheet also sets the thinking level (one run-settings chip, one sheet).
+        if (reasons) controller.loadThinkingLevels()
         sheet = Sheet.Model
     }
 
@@ -904,7 +906,11 @@ private fun SessionContent(
                 status = status.value.text.let { t -> listOf(t.label.ifBlank { status.value.mode.label }, t.detail).filter { it.isNotBlank() }.joinToString(" ") },
                 switcher = { SessionSwitcher(controller, projectMeta, onOpen = onOpenSession) },
             )
-            ConnectionBanner(linkState.value, controller.pairing, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
+            // Before the first snapshot the loading state already says "Starting…" with its own spinner: the banner
+            // would say it twice. It still shows a stopped engine or a lost link (with Restart / Retry).
+            if (hello || linkState.value !is LinkState.Connecting) {
+                ConnectionBanner(linkState.value, controller.pairing, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
+            }
             Box(Modifier.weight(1f)) {
                 if (!hello) {
                     LoadingState(title, linkState.value, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
@@ -1019,7 +1025,6 @@ private fun SessionContent(
                         stoppable = running || shellRuns > 0,
                         onStop = { if (shellRuns > 0) controller.abortBash() else controller.abort() },
                         onModel = { openModels() },
-                        onThinking = ::openThinking,
                         compact = oneRowComposer,
                         maxLines = composerLines,
                         history = recentAll[recentKey].orEmpty(),
@@ -1135,10 +1140,18 @@ private fun SessionContent(
             val models by controller.models.collectAsStateWithLifecycle()
             val current by remember { derivedStateOf { state.value.model } }
             val shown = if (isLocal) rememberScopedModels(f2, app.engine.agentDir, models, current) else models
-            ModelSheet(shown, current, onPick = {
-                controller.setModel(it)
-                sheet = Sheet.None
-            }, onDismiss = { sheet = Sheet.None }, initialQuery = modelQuery)
+            val levels by controller.thinkingLevels.collectAsStateWithLifecycle()
+            ModelSheet(
+                shown,
+                current,
+                onPick = {
+                    controller.setModel(it)
+                    sheet = Sheet.None
+                },
+                onDismiss = { sheet = Sheet.None },
+                initialQuery = modelQuery,
+                thinking = ThinkingPick(levels, thinkingLevel, onPick = { controller.setThinkingLevel(it) }).takeIf { reasons },
+            )
         }
         Sheet.Thinking -> {
             val levels by controller.thinkingLevels.collectAsStateWithLifecycle()
