@@ -473,7 +473,8 @@ fun HomeScreen(
             }
             if (hasProjects) {
                 item(key = "tiles", contentType = "tiles") {
-                    val working = running.size - waiting.size
+                    // Two flows: for a frame one may still hold a session the other dropped (never -1).
+                    val working = running.count { it !in waiting }
                     // The 2x2 status grid from real state (one row of four in a wide window); each tile opens its
                     // list (Projects scrolls to its section).
                     // One tint per tile, every glyph 20dp: the Quads move only while their count is not zero.
