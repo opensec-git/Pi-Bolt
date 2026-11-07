@@ -29,7 +29,11 @@ import opensec.pibolt.app.git.github.KeystoreBox
 import opensec.pibolt.app.git.github.LocalSocketListener
 import opensec.pibolt.app.git.github.PrefsKeyValue
 import opensec.pibolt.app.git.github.TokenStore
+import opensec.pibolt.app.preview.PreviewBroker
+import opensec.pibolt.app.preview.PreviewController
+import opensec.pibolt.app.preview.PreviewReply
 import opensec.pibolt.app.session.Notifications
+import opensec.pibolt.app.terminal.Terminals
 import opensec.pibolt.app.session.LiveRegistry
 import opensec.pibolt.app.ui.chats.Chats
 import opensec.pibolt.app.ui.projects.LocalSessions
@@ -54,6 +58,24 @@ class PiBoltApp : Application() {
         private set
     lateinit var updates: UpdateManager
         private set
+
+    /** The in-app preview's WebView, shared by the preview screen and Pi's preview tools. */
+    lateinit var preview: PreviewController
+        private set
+
+    /**
+     * The preview tools' socket (assets/extensions/pibolt-preview.js): project engines get its path; requests from the
+     * chats' directory are refused (chat engines get no path and no tools either).
+     */
+    val previewBroker: PreviewBroker by lazy {
+        PreviewBroker(File(noBackupFilesDir, "preview/socket"), { path, handle -> LocalSocketListener.listen(path, handle, "preview-tools") }) { request ->
+            if (File(request.cwd).absoluteFile.normalize() == engine.chatDir.absoluteFile.normalize()) {
+                PreviewReply.error("The preview is only for projects")
+            } else {
+                preview.handle(request)
+            }
+        }
+    }
     val http: OkHttpClient by lazy { RemoteBackend.defaultClient() }
 
     private val localEngine: LocalEngine by lazy { LocalEngine(this) }
@@ -82,8 +104,8 @@ class PiBoltApp : Application() {
     private val live = LiveRegistry<SessionController>(SystemClock::elapsedRealtime)
 
     /**
-     * Every live session: up to [opensec.pibolt.app.engine.LivePolicy.MAX_LIVE] on this phone's engine (one per
-     * project), each with its own engine process, and at most one with a computer. They run side by side: opening or
+     * Every live session: up to [opensec.pibolt.app.engine.LivePolicy.MAX_LIVE] on this phone's engine (several in one
+     * project when one was busy as another opened), each with its own engine process, and at most one with a computer. They run side by side: opening or
      * switching to one stops none of the others.
      */
     val sessions: StateFlow<List<SessionController>> = live.all
@@ -120,6 +142,8 @@ class PiBoltApp : Application() {
         recents = RecentPrompts(this)
         identity = DeviceIdentity(this)
         updates = UpdateManager(this)
+        // Before any activity starts: the controller tracks the activity it parks its WebView in.
+        preview = PreviewController(this) { extra -> Terminals.scanPorts(extra) }
         Notifications.createChannels(this)
         // No session lives yet: a "needs an answer" or session notification from a killed process is stale.
         Notifications.clearStale(this)
@@ -227,8 +251,8 @@ class PiBoltApp : Application() {
     }
 
     /**
-     * Adds a session on this phone's engine and focuses it, in place of [replacing] (the project's previous session,
-     * which stops). Other sessions keep running.
+     * Adds a session on this phone's engine and focuses it, in place of [replacing] (an idle session of the project,
+     * which stops; never a busy one). Other sessions keep running.
      */
     internal fun addLocalSession(controller: SessionController, replacing: SessionController?): SessionController {
         live.add(controller, replacing)

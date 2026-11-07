@@ -1052,6 +1052,30 @@ otherwise, and a round 56dp danger button with a white Stop glyph that ends voic
 already in the draft, so ending it leaves them in the composer, ready to send. The first use explains the microphone
 in a sheet ("Continue"), then Android asks. A message sent with dictated words carries the waveform badge.
 
+**Voice mode** (`ui/session/voice`, `VoiceMode`). A hands-free conversation in chats and project sessions, started by
+"Voice mode" on the voice surface (a small ghost button above its row) or a long press on the pill's waveform button
+(a TalkBack action too). It takes the composer's place like the voice surface, and loops: listen (Android's
+SpeechRecognizer, on the phone when it can, `VoiceRecognizer`), send when the speaker stops (a steer while Pi works),
+"Working" with the Quad in its mode and the live tool line, then say a short summary with TextToSpeech and listen
+again. The summary (`SpokenSummary`) is the final reply's first paragraph as plain prose (no code, tables, links, URLs
+or marks), at most 3 sentences and about 320 characters, then "I changed 3 files." from the turn's finished
+write/edit calls, "Stopped." or the error's plain title; never an extra model call. Layout: a state line (polite live
+region: "Listening", the Working line, "Pi is asking" with the Wait Quad in warning, the pause reason; "On-device
+speech" or "Online speech" at its end, or "Show card" while a question is read), the captions (heard: title 20/26
+regular ink2; spoken: rowTitle ink1, 6 lines; not live regions, the speech says them), a read question's options
+("1  Postgres", rowMeta), then one row: the 56dp mic (accent while it listens; tap to talk, to finish, or to interrupt
+the speech), the `DotWave` (the mic level while listening; while speaking a slow breath plus a lift at each word the
+engine reports, still under reduce motion), a 48dp mute circle (VolumeUp / VolumeOff) and the 56dp danger end button
+(CallEnd, white). Behaviour lives in a pure state machine (`VoiceModeMachine`): two silent listens wait for a tap;
+"stop" or "wait" is never sent; `ask_user_question` cards are read out ("Option 1, Postgres.") and answered by number,
+ordinal or label (`SpokenAnswers`; "other …" types an answer, "never mind" declines), two unclear answers give the card
+back on screen; other dialogs are announced and answered on screen. Barge-in (talking stops the speech) is on only
+where the phone has an echo canceller and TalkBack is off; its own words are told apart from the user's (`BargeIn`).
+It holds transient audio focus as an assistant, pauses for calls (audio mode) and other apps' audio, and while the
+app is in the background; it keeps the screen on; the end button and Back leave it. With TalkBack on it waits a moment
+before listening. Settings > Agent: Speak replies, Speech rate (0.75x to 2x) and Voice (the engine's installed voices
+in the phone's language, on-device first, each tried with a sample).
+
 **Image viewer.** A tap on an image in a user message or the composer tray opens it full screen on black: swipe
 between images, pinch or double-tap (2.5x) to zoom up to 6x, drag to pan a zoomed image (kept on screen), Back or ✕
 to close. Save puts a PNG in Pictures/Pi-Bolt (Android 10+); Share sends it. The full image is kept for the six most
@@ -1323,6 +1347,11 @@ long-press sheets; long output goes to full-screen viewers, never nested scroll 
   streamed frame does not recompose Home.
 - Nothing animates while idle: spinners only while busy, the mark's entrance once per launch. Rotations, scales and
   press feedback run in `graphicsLayer`; size changes are limited to expand/collapse and sheets.
+- What redraws every frame has a layer of its own (a Quad), or puts what it decorates in one (the composer's working
+  hairline, a running agent's sweep), so a frame re-records the moving part only. Animated values are read in the
+  draw phase, never while composing. The keyboard's height changes every frame of its animation: the session screen
+  reads it through `derivedStateOf` (`ImeRoom`), so it recomposes only when the composer's layout changes.
+- `e2e/frames.sh` measures each of these scenarios on a phone (README, "Frame timing").
 
 ## Chats
 

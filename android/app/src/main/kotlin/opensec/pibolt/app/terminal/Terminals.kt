@@ -137,6 +137,23 @@ object Terminals {
 
     private val portScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
+    /** Dev-server ports now, with [extra] probed too (a port Pi asks the preview for). Blocking: call off the main thread. */
+    @Synchronized
+    fun scanPorts(extra: Collection<Int> = emptyList()): List<Int> {
+        probeAlso = extra
+        return try {
+            previewScanner.scan()
+        } finally {
+            probeAlso = emptyList()
+        }
+    }
+
+    @Volatile
+    private var probeAlso: Collection<Int> = emptyList()
+
+    /** One scanner for the preview tools, so a denied /proc table is read once (DevServerPorts remembers it). */
+    private val previewScanner by lazy { DevServerPorts(mentionedPorts = { hintPorts + probeAlso }) }
+
     /** Dev-server ports, scanned while a chip shows them. */
     val ports: StateFlow<List<Int>> by lazy { DevServerPorts(mentionedPorts = { hintPorts }).watch(portScope) }
 

@@ -40,7 +40,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -290,7 +292,7 @@ fun ComposerCircle(icon: ImageVector, description: String, onClick: () -> Unit, 
  * - empty while Pi works and [onStop] is given, Stop: a surface3 disc with a 1dp lineStrong ring and a 12dp ink1
  *   square;
  * - empty otherwise, voice input: the accent with a waveform glyph, [onVoice]; without [onVoice], Send at 18%,
- *   disabled.
+ *   disabled. A long press there ([onVoiceLong], also a TalkBack action "Voice mode") starts voice mode.
  * The glyph swap crossfades.
  */
 @Composable
@@ -302,9 +304,11 @@ fun ComposerPrimary(
     enabled: Boolean = true,
     running: Boolean = false,
     onStop: (() -> Unit)? = null,
+    onVoiceLong: (() -> Unit)? = null,
 ) {
     val colors = Pi.colors
     val mode = ComposerPrimaryMode.of(hasText, running, onStop != null, onVoice != null)
+    val long = onVoiceLong?.takeIf { mode == ComposerPrimaryMode.Voice && enabled }
     val active = enabled && mode != ComposerPrimaryMode.SendDisabled
     val label = when (mode) {
         ComposerPrimaryMode.Stop -> "Stop"
@@ -320,7 +324,8 @@ fun ComposerPrimary(
         Box(
             Modifier
                 .size(36.dp)
-                .pressable(action, shape = CircleShape, enabled = active, pressedScale = 0.92f, role = Role.Button, label = label)
+                .pressable(action, shape = CircleShape, enabled = active, pressedScale = 0.92f, onLongClick = long, role = Role.Button, label = label)
+                .then(if (long != null) Modifier.semantics { customActions = listOf(CustomAccessibilityAction("Voice mode") { long(); true }) } else Modifier)
                 .then(
                     if (mode == ComposerPrimaryMode.Stop) {
                         Modifier.background(colors.surface3, CircleShape).border(1.dp, colors.lineStrong, CircleShape)
