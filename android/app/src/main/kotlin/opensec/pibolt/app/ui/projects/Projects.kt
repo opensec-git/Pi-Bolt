@@ -120,14 +120,17 @@ object LocalSessions {
 
         /**
          * A prompt to send once the session can take it (the Home composer, "Clone from git"). Its session screen sends
-         * it when the session connects; when no screen shows the session by then (the user went back), it is sent from
-         * here, so it does not wait for the screen to open again. [kept] is true while the app still holds this session;
-         * once it is not (closed, replaced), the prompt is dropped.
+         * it when the session connects; when the screen has been left before that (the user went back), it is sent
+         * from here, so it does not wait for the screen to open again. [kept] is true while the app still holds this
+         * session; once it is not (closed, replaced), the prompt is dropped.
          */
         fun queueFirstPrompt(text: String?, kept: Flow<Boolean>) {
             text ?: return
             first.set(text)
             deliveries.launch {
+                // The screen opened for this session sends it (with its "Sending" row and the notification prompt);
+                // this only takes over once that screen has shown and gone.
+                combine(screens, kept) { shown, held -> shown > 0 || !held }.first { it }
                 // True: send now; false: the session is gone. Null: keep waiting.
                 val send = combine(controller.link, controller.state, screens, kept) { link, state, shown, held ->
                     when {
