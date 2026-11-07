@@ -117,6 +117,7 @@ fun ProjectScreen(
     onTerminal: () -> Unit = {},
     onSecrets: () -> Unit = {},
     onPreview: (Int) -> Unit = {},
+    onRuntimes: () -> Unit = {},
 ) {
     val engine = app.engine
     val store = remember { ProjectStore.get(app) }
@@ -286,6 +287,7 @@ fun ProjectScreen(
                             onRename = { action = ProjectAction.Rename(entry) },
                             onDelete = { action = ProjectAction.Delete(entry) },
                             onExport = { export(dir, name) },
+                            onRuntimes = onRuntimes,
                         )
                     }
                 }

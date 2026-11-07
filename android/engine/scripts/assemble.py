@@ -18,6 +18,7 @@ import struct
 import subprocess
 import sys
 import tarfile
+import zipfile
 
 ENGINE_ONLY = "--engine-only" in sys.argv[1:]
 OUT = "/out"
@@ -25,6 +26,7 @@ JNI = f"{OUT}/jniLibs/arm64-v8a"
 ASSETS = f"{OUT}/assets/engine"
 GLIBC_LIB = "/stage/glibc/lib"
 USERLAND = "/stage/userland/root"
+RUNTIMES = "/stage/runtimes/root"
 LICENSES_SRC = "/engine/licenses"
 EXTENSION_PINS = "/extensions.txt"  # the repo's extensions.txt (name, version, npm integrity), mounted by build-pack.sh
 
@@ -52,6 +54,18 @@ def read_env(path):
 
 V = read_env("/engine/versions.env")
 PREFIX = V["PREFIX"]
+PYTHON_LIB = "lib/python" + ".".join(V["PYTHON_VERSION"].split(".")[:2])
+
+# Language runtimes (runtimes/build-runtimes.sh). Their library trees hold thousands of files, some in directories
+# the APK build would drop (names starting with "_"), so each ships as one zip asset that the app unpacks into
+# PREFIX/<path>. Extension modules (ELF) inside a tree ship from jniLibs like any library, linked into the tree.
+RUNTIME_TREES = {"lib/node_modules/npm": "npm.zip", PYTHON_LIB: "python.zip"}
+# id, display name, version, commands, and the prefix paths that belong to it (for its size on the Runtimes screen).
+RUNTIMES_INFO = [
+    ("node", "Node.js", V["NODE_VERSION"], ["node", "npm", "npx"], ["bin/node", "bin/npm", "bin/npx", "lib/node_modules/npm"]),
+    ("python", "Python", V["PYTHON_VERSION"], ["python3", "python", "pip", "pip3"],
+     ["bin/python", "bin/pip", PYTHON_LIB, "pip.conf"]),
+]
 LOADER_SONAME = "ld-linux-aarch64.so.1"
 LOADER = f"{PREFIX}/lib/{LOADER_SONAME}"
 
@@ -240,13 +254,54 @@ def is_script(path):
         return f.read(2) == b"#!"
 
 
-def walk_userland():
-    """Yield (relpath, kind, source) for every file/symlink in the userland root. kind: link|file."""
-    for dirpath, dirnames, filenames in os.walk(USERLAND):
+def walk_root(root):
+    """Yield (relpath, source) for every file/symlink in a stage root."""
+    for dirpath, dirnames, filenames in os.walk(root):
         dirnames.sort()
         for fn in sorted(filenames):
             p = os.path.join(dirpath, fn)
-            yield os.path.relpath(p, USERLAND), p
+            yield os.path.relpath(p, root), p
+
+
+def walk_stage():
+    """(relpath, source, root) for the userland and the runtimes; a path both provide is an error."""
+    seen = {}
+    for root in [USERLAND, RUNTIMES]:
+        for rel, src in walk_root(root):
+            if rel in seen:
+                sys.exit(f"{rel} is in both {seen[rel]} and {root}")
+            seen[rel] = root
+            yield rel, src, root
+
+
+def tree_of(rel):
+    for tree in RUNTIME_TREES:
+        if rel.startswith(tree + "/"):
+            return tree
+    return None
+
+
+def write_tree_zip(tree, members):
+    """members: [(relpath inside the tree, source)]. Deterministic: sorted, fixed times. Returns the manifest entry."""
+    asset = f"engine/trees/{RUNTIME_TREES[tree]}"
+    dst = f"{OUT}/assets/{asset}"
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    executables = []
+    size = 0
+    with zipfile.ZipFile(dst, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for rel, src in sorted(members):
+            info = zipfile.ZipInfo(rel, date_time=(2000, 1, 1, 0, 0, 0))
+            mode = 0o755 if os.stat(src).st_mode & 0o111 else 0o644  # by mode bits: root passes X_OK on some mounts
+            info.external_attr = (0o100000 | mode) << 16
+            info.compress_type = zipfile.ZIP_DEFLATED
+            with open(src, "rb") as f:
+                data = f.read()
+            z.writestr(info, data)
+            size += len(data)
+            if mode == 0o755:
+                executables.append(rel)
+    return {"path": tree, "asset": asset, "sha256": sha256_file(dst), "files": len(members), "bytes": size,
+            "executables": executables}
 
 
 def write_licenses(extensions):
@@ -269,11 +324,70 @@ def write_licenses(extensions):
     ]
     lines += [f"{e['name']} {e['version']} (npm, {e['integrity']})" for e in extensions]
     if not ENGINE_ONLY:
-        lines += [f"curl {V['CURL_VERSION']}", f"git {V['GIT_VERSION']}", ""]
+        lines += [f"curl {V['CURL_VERSION']}", f"git {V['GIT_VERSION']}"]
+        lines += [f"Node.js {V['NODE_VERSION']} ({V['NODE_URL']}, sha256 {V['NODE_SHA256']})",
+                  f"CPython {V['PYTHON_VERSION']} ({V['PYTHON_URL']}, sha256 {V['PYTHON_SHA256']})", ""]
         with open("/stage/userland/licenses/debian-packages.txt") as f:
             lines += f.read().splitlines()
     with open(f"{lic}/VERSIONS.txt", "w") as f:
         f.write("\n".join(lines) + "\n")
+
+
+def runtimes_info(links, files, trees, engine_needed):
+    """Manifest `runtimes`: what the Runtimes screen shows. bytes = its executables, modules and tree, plus the shared
+    libraries only it needs (not the engine or the userland), uncompressed as installed."""
+    if ENGINE_ONLY or not os.path.isdir(RUNTIMES):
+        return []
+    def owner(rel):
+        for rid, _, _, _, paths in RUNTIMES_INFO:
+            if any(rel == p or rel.startswith(p + "/") or (p.startswith("bin/") and rel.startswith(p)) for p in paths):
+                return rid
+        return None
+    jni_size = lambda name: os.path.getsize(f"{JNI}/{name}")
+    # Who needs each shared library (NEEDED closure per owner: engine/userland = None).
+    lib_owners = {}
+    def need(soname, who, seen):
+        if soname in seen or f"lib/{soname}" not in links:
+            return
+        seen.add(soname)
+        lib_owners.setdefault(soname, set()).add(who)
+        for dep in elf_info(f"{JNI}/{links['lib/' + soname]}")[1]:
+            need(dep, who, seen)
+    for so in engine_needed:
+        need(so, None, set())
+    counted = set()
+    for rel, name in links.items():
+        if rel.startswith("lib/") and "/" not in rel[4:] or name in counted:
+            continue
+        counted.add(name)
+        p = f"{JNI}/{name}"
+        if is_elf(p):
+            for so in elf_info(p)[1]:
+                need(so, owner(rel), set())
+    out = []
+    for rid, title, version, commands, _ in RUNTIMES_INFO:
+        size, seen = 0, set()
+        for rel, name in links.items():
+            if name in seen:
+                continue
+            if owner(rel) == rid or (rel.startswith("lib/") and "/" not in rel[4:] and lib_owners.get(rel[4:]) == {rid}):
+                seen.add(name)
+                size += jni_size(name)
+        size += sum(t["bytes"] for t in trees if owner(t["path"]) == rid)
+        size += sum(os.path.getsize(f"{OUT}/assets/{a}") for rel, a in files.items() if owner(rel) == rid)
+        out.append({"id": rid, "name": title, "version": version, "commands": commands, "bytes": size,
+                    "details": runtime_details(rid)})
+    return out
+
+
+def runtime_details(rid):
+    """Versions of the package managers that come with a runtime."""
+    if rid == "node":
+        with open(f"{RUNTIMES}/lib/node_modules/npm/package.json") as f:
+            return {"npm": json.load(f)["version"]}
+    site = f"{RUNTIMES}/{PYTHON_LIB}/site-packages"
+    pips = [d for d in os.listdir(site) if d.startswith("pip-") and d.endswith(".dist-info")]
+    return {"pip": pips[0][len("pip-"):-len(".dist-info")]} if pips else {}
 
 
 def main():
@@ -288,6 +402,9 @@ def main():
     jni_by_hash = {}  # content sha256 -> jniLibs file name (hardlinks and copies ship once)
     exes = []  # (jni name, source) of userland ELF executables, patched after copying
     shared = []  # jni names of userland shared libraries
+    modules = []  # jni names of extension modules inside runtime trees (no SONAME, never NEEDED)
+    tree_members = {}  # runtime tree -> [(path inside the tree, source)]
+    trees = []  # manifest entries of the runtime tree zips
 
     # Engine: exec'd directly as nativeLibraryDir/libpibolt.so; PT_INTERP rewritten in place, never patchelf'd or
     # stripped (its embedded code and static heap are read from /proc/self/exe).
@@ -308,24 +425,40 @@ def main():
 
     roots = list(engine_needed)
     if not ENGINE_ONLY:
-        for rel, src in walk_userland():
-            if rel.startswith("lib/") and not os.path.islink(src) and is_elf(src):
+        for rel, src, _ in walk_stage():
+            if rel.startswith("lib/") and "/" not in rel[4:] and not os.path.islink(src) and is_elf(src):
                 soname = elf_info(src)[2] or os.path.basename(rel)
                 if soname in libs:
                     sys.exit(f"{rel}: soname {soname} also provided by {libs[soname]}")
                 libs[soname] = src
-        for rel, src in walk_userland():
-            if rel.startswith("lib/") and is_elf(src):
+        for rel, src, root in walk_stage():
+            if rel.startswith("lib/") and "/" not in rel[4:] and is_elf(src):
                 continue  # shared libraries are added by need, below
             real = os.path.realpath(src)
-            if not real.startswith(USERLAND + "/"):
-                sys.exit(f"{rel} points outside the userland root: {os.readlink(src)}")
+            if not real.startswith(root + "/"):
+                sys.exit(f"{rel} points outside its stage root: {os.readlink(src)}")
+            tree = tree_of(rel)
+            if tree is not None and is_elf(real):
+                # An extension module (Python lib-dynload, a .node addon): from jniLibs, linked into its tree.
+                if not (rel.endswith(".so") or rel.endswith(".node")):
+                    sys.exit(f"{rel}: an ELF file in a runtime tree that is not an extension module")
+                name = lib_file_name(os.path.basename(rel))
+                if os.path.exists(f"{JNI}/{name}"):
+                    sys.exit(f"{rel}: jniLibs name {name} already taken")
+                shutil.copyfile(real, f"{JNI}/{name}")
+                modules.append(name)
+                roots += elf_info(real)[1]
+                links[rel] = name
+                continue
+            if tree is not None:
+                tree_members.setdefault(tree, []).append((os.path.relpath(rel, tree), real))
+                continue
             executable = os.access(real, os.X_OK) and (rel.startswith("bin/") or rel.startswith("libexec/"))
             if executable and (is_elf(real) or is_script(real)):
                 digest = sha256_file(real)
                 name = jni_by_hash.get(digest)
                 if name is None:
-                    name = exe_file_name(os.path.basename(os.path.relpath(real, USERLAND)))
+                    name = exe_file_name(os.path.basename(os.path.relpath(real, root)))
                     if os.path.exists(f"{JNI}/{name}"):
                         sys.exit(f"{rel}: jniLibs name {name} already taken")
                     shutil.copyfile(real, f"{JNI}/{name}")
@@ -342,6 +475,11 @@ def main():
         lic = "/stage/userland/licenses"
         if os.path.isdir(lic):
             shutil.copytree(lic, f"{ASSETS}/licenses/userland")
+        lic = "/stage/runtimes/licenses"
+        if os.path.isdir(lic):
+            shutil.copytree(lic, f"{ASSETS}/licenses/runtimes")
+        for tree in sorted(tree_members):
+            trees.append(write_tree_zip(tree, tree_members[tree]))
 
     # Shared libraries: the NEEDED closure of the engine and every shipped executable.
     todo, seen = list(roots), set()
@@ -363,7 +501,7 @@ def main():
         shutil.copyfile(libs[LOADER_SONAME], f"{JNI}/libld.so")
 
     # Userland ELFs: debug info stripped, loader set to the shipped one, no RPATH/RUNPATH.
-    for name in exes + shared:
+    for name in exes + shared + modules:
         p = f"{JNI}/{name}"
         run("strip", "--strip-unneeded", p)
         if name in exes:
@@ -372,7 +510,7 @@ def main():
             run("patchelf", "--remove-rpath", p)
         interp, _, _, has_rpath = elf_info(p)
         assert not has_rpath, p
-        assert name in shared or interp == LOADER, (p, interp)
+        assert name not in exes or interp == LOADER, (p, interp)
     for name in os.listdir(JNI):
         os.chmod(f"{JNI}/{name}", 0o755)
 
@@ -404,6 +542,8 @@ def main():
         "files": [{"path": p, "asset": files[p]} for p in sorted(files)],
         "package": package,
         "extensions": [{"name": e["name"], "version": e["version"], "files": e["files"]} for e in extensions],
+        "trees": trees,
+        "runtimes": runtimes_info(links, files, trees, engine_needed),
         "env": env,
     }
     # Fingerprint: every shipped file's content plus the manifest itself.

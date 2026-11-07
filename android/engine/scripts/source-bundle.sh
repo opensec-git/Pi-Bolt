@@ -52,7 +52,8 @@ cat >$S/README.md <<EOF
 - termux-glibc-packages-$TERMUX_GLIBC_COMMIT.tar.gz: termux-pacman/glibc-packages gpkg/glibc at that commit: the
   Android patches and added source files applied to glibc (build scripts MIT, see LICENSE.md).
 - build/: android/engine from the Pi-Bolt repository. build/glibc/build-glibc.sh applies the patches with the app
-  prefix substituted for @TERMUX_PREFIX@ and builds glibc; build/build-pack.sh builds the whole pack (Docker).
+  prefix substituted for @TERMUX_PREFIX@, replaces execve with build/glibc/execve.c (ours, LGPL-2.1-or-later like
+  glibc) and builds glibc; build/build-pack.sh builds the whole pack (Docker).
 - git-$GIT_VERSION.tar.xz, curl-$CURL_VERSION.tar.xz: unmodified release tarballs, built by
   build/userland/build-userland.sh.
 - debian/: Debian source packages of bash and busybox, whose Debian arm64 binaries are shipped (interpreter path

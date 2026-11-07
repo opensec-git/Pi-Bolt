@@ -21,6 +21,7 @@ class SettingsIndexTest {
         assertEquals(setOf("haptics"), SettingsIndex.visible("Vibrate"))
         assertTrue("default-model" in SettingsIndex.visible("default model")!!)
         assertTrue("providers" in SettingsIndex.visible("api key")!!)
+        assertEquals(setOf("runtimes"), SettingsIndex.visible("python"))
     }
 
     @Test

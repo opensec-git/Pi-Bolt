@@ -4,7 +4,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.protocol.ProtocolJson
 import opensec.pibolt.protocol.arr
+import opensec.pibolt.app.data.SafeFiles
 import opensec.pibolt.protocol.int
+import opensec.pibolt.protocol.long
 import opensec.pibolt.protocol.obj
 import opensec.pibolt.protocol.str
 import java.io.File
@@ -18,6 +20,7 @@ import java.nio.file.Path
 import java.nio.file.SimpleFileVisitor
 import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
+import java.util.zip.ZipInputStream
 
 /** `assets/engine/manifest.json`, written by the pack build (android/engine/CONTRACT.md). */
 data class EngineManifest(
@@ -34,6 +37,10 @@ data class EngineManifest(
     val env: Map<String, String> = emptyMap(),
     /** Pi extensions the pack bundles, each with every file under assets `engine/extensions/<name>/` (relative). */
     val extensions: List<Extension> = emptyList(),
+    /** Directory trees shipped as one zip asset each (the runtimes' libraries: npm, the Python stdlib). */
+    val trees: List<Tree> = emptyList(),
+    /** The language runtimes in this pack, for the Runtimes screen. */
+    val runtimes: List<Runtime> = emptyList(),
 ) {
     /** `PREFIX/<path>` is a symlink to `nativeLibraryDir/<target>`. */
     data class Link(val path: String, val target: String)
@@ -43,6 +50,15 @@ data class EngineManifest(
 
     /** A bundled Pi extension: assets `engine/extensions/<name>/<files>`. */
     data class Extension(val name: String, val version: String, val files: List<String>)
+
+    /** `PREFIX/<path>` is the zip asset [asset] unpacked; [executables] (relative to it) get the execute bit. */
+    data class Tree(val path: String, val asset: String, val executables: List<String>)
+
+    /**
+     * A language runtime: [commands] on PATH, [bytes] its installed size (executables, modules, libraries only it
+     * uses, its library tree), [details] the versions of what comes with it (npm, pip).
+     */
+    data class Runtime(val id: String, val name: String, val version: String, val commands: List<String>, val bytes: Long, val details: Map<String, String>)
 
     companion object {
         fun parse(text: String): EngineManifest {
@@ -67,6 +83,25 @@ data class EngineManifest(
                     // The loader must find glibc by its compiled-in prefix only.
                     if (k.startsWith("LD_")) null else (v as? JsonPrimitive)?.takeIf { it.isString }?.let { k to it.content }
                 }.toMap(),
+                trees = json.arr("trees").orEmpty().map { item ->
+                    val o = item as JsonObject
+                    Tree(
+                        path = safeRelative(o.need("path")),
+                        asset = o.need("asset"),
+                        executables = o.arr("executables").orEmpty().map { safeRelative((it as JsonPrimitive).content) },
+                    )
+                },
+                runtimes = json.arr("runtimes").orEmpty().map { item ->
+                    val o = item as JsonObject
+                    Runtime(
+                        id = safeName(o.need("id")),
+                        name = o.need("name"),
+                        version = o.need("version"),
+                        commands = o.arr("commands").orEmpty().map { (it as JsonPrimitive).content },
+                        bytes = o.long("bytes") ?: 0L,
+                        details = o.obj("details").orEmpty().mapNotNull { (k, v) -> (v as? JsonPrimitive)?.takeIf { it.isString }?.let { k to it.content } }.toMap(),
+                    )
+                },
                 extensions = json.arr("extensions").orEmpty().map { item ->
                     val o = item as JsonObject
                     Extension(
@@ -79,7 +114,7 @@ data class EngineManifest(
         }
 
         /** A path inside the prefix: relative, no `..`, no empty parts. */
-        private fun safeRelative(path: String): String {
+        internal fun safeRelative(path: String): String {
             val parts = path.split('/')
             require(path.isNotEmpty() && !path.startsWith("/") && parts.none { it.isEmpty() || it == "." || it == ".." }) { "manifest: bad path $path" }
             return path
@@ -121,6 +156,9 @@ class EnginePaths(
     /** XDG_CACHE_HOME: the app's cache dir, which the system may clear when storage runs low. */
     val cache = File(dataDir, "cache/xdg")
     val etc = File(prefix, "etc")
+
+    /** `HOME/.local`: global npm packages (lib/node_modules), user pip packages (lib/pythonX.Y), their commands (bin). */
+    val userBase = File(home, ".local")
     val bin = File(prefix, "bin")
 
     /** PI_PACKAGE_DIR: theme/, export-html/, assets/, package.json from APK assets `engine/package/`. */
@@ -161,6 +199,8 @@ class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSour
     private fun install(manifest: EngineManifest) {
         paths.stamp.delete()
         removeLinks(paths.prefix.toPath())
+        // Trees first: the links of their extension modules go inside them.
+        for (tree in manifest.trees) installTree(tree)
         for (link in manifest.links) {
             val at = File(paths.prefix, link.path).toPath()
             Files.createDirectories(at.parent)
@@ -217,6 +257,44 @@ class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSour
                 override fun visitFileFailed(file: Path, exc: IOException): FileVisitResult = FileVisitResult.CONTINUE
             },
         )
+    }
+
+    /**
+     * Unpacks [tree] next to its place and swaps it in, so a crash never leaves half a tree behind (the stamp is
+     * written only after every step). What was there before (an older version, written bytecode caches) goes.
+     */
+    private fun installTree(tree: EngineManifest.Tree) {
+        val dir = File(paths.prefix, tree.path)
+        val temp = File(dir.parentFile, ".${dir.name}.unpack")
+        SafeFiles.deleteTree(temp)
+        temp.mkdirs()
+        assets.open(tree.asset).use { raw ->
+            ZipInputStream(raw.buffered(64 * 1024)).use { zip ->
+                val buffer = ByteArray(64 * 1024)
+                while (true) {
+                    val entry = zip.nextEntry ?: break
+                    // Entries are paths inside the tree (no `..`, not absolute): a bad pack cannot write elsewhere.
+                    val name = EngineManifest.safeRelative(entry.name.trimEnd('/'))
+                    val out = File(temp, name)
+                    if (entry.isDirectory) {
+                        out.mkdirs()
+                        continue
+                    }
+                    out.parentFile?.mkdirs()
+                    out.outputStream().use { o ->
+                        while (true) {
+                            val n = zip.read(buffer)
+                            if (n < 0) break
+                            o.write(buffer, 0, n)
+                        }
+                    }
+                }
+            }
+        }
+        for (rel in tree.executables) File(temp, rel).setExecutable(true, true)
+        if (!SafeFiles.deleteTree(dir)) throw IOException("cannot remove the old ${tree.path}")
+        dir.parentFile?.mkdirs()
+        Files.move(temp.toPath(), dir.toPath(), StandardCopyOption.ATOMIC_MOVE)
     }
 
     private fun copyTree(asset: String, to: File) {

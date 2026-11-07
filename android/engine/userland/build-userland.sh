@@ -40,7 +40,7 @@ while read -r pkg _ver role path sha; do
 done <"$LOCK"
 # libgcc-s1 has no copyright file of its own: gcc-14-base's covers it.
 # Build curl and git against the pinned library versions that ship.
-xargs dpkg -i --force-downgrade <"$B/dpkg-install.list" >/dev/null
+xargs dpkg -i --force-downgrade --force-depends <"$B/dpkg-install.list" >/dev/null
 {
 	echo "# Debian packages in this pack (trixie, arm64; sources: https://snapshot.debian.org)"
 	grep -v '^[#@]' "$LOCK" | awk '$3 != "dev" {print $1, $2}'

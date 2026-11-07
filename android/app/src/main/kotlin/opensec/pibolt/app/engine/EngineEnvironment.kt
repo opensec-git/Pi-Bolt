@@ -39,8 +39,16 @@ fun engineEnvironment(
     // Only when shipped: pointing TLS at a missing bundle would break HTTPS that works with built-in roots.
     val certs = File(paths.prefix, "etc/ssl/certs/ca-certificates.crt")
     if (certs.isFile) env["SSL_CERT_FILE"] = certs.path else env.remove("SSL_CERT_FILE")
+    // Language runtimes: caches in the cache dir (the system may clear it, and Settings → Runtimes can), global npm
+    // and user pip installs under HOME/.local (npm's builtin npmrc and the pack's pip.conf say so too).
+    env["npm_config_cache"] = File(paths.cache, "npm").path
+    env["PIP_CACHE_DIR"] = File(paths.cache, "pip").path
+    env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    env["PYTHONUSERBASE"] = paths.userBase.path
     // The pack knows its own layout best (a shell it ships, for example).
     env.putAll(fromPack)
+    // Commands installed by `npm install -g` and `pip install` come first, so an upgraded npm or pip wins.
+    env["PATH"] = File(paths.userBase, "bin").path + ":" + (env["PATH"] ?: "$prefix/bin:/system/bin")
     env.putAll(extra)
     return env
 }

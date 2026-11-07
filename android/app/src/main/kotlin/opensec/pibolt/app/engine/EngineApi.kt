@@ -40,6 +40,12 @@ interface EngineApi {
      * null) and returns its exit code and output. Not available where the engine is not.
      */
     suspend fun cli(args: List<String>, cwd: File? = null, timeoutMs: Long = 180_000): CliResult = CliResult(-1, "", "The engine is not available on this phone")
+
+    /** The language runtimes this build ships and the space npm and pip use. Blocking file I/O: call off the main thread. */
+    fun runtimes(): RuntimesReport
+
+    /** Deletes the npm or pip cache. Blocking: call off the main thread. */
+    fun clearRuntimeStorage(kind: RuntimeStorage.Kind): Boolean
 }
 
 /** A finished `pi` command: [code] is its exit status (-1 when it did not run or timed out). */

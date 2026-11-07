@@ -67,6 +67,7 @@ import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import opensec.pibolt.app.ui.session.subagent.LocalSubagentNav
 import opensec.pibolt.app.ui.session.subagent.SubagentNav
 import opensec.pibolt.app.ui.session.subagent.SubagentOverlay
+import opensec.pibolt.app.ui.settings.RuntimesScreen
 import opensec.pibolt.app.ui.settings.SettingsScreen
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
@@ -87,6 +88,7 @@ object Routes {
     const val TERMINAL = "terminal/{name}"
     const val SECRETS = "secrets/{name}"
     const val PREVIEW = "preview/{port}"
+    const val RUNTIMES = "runtimes"
 
     fun project(name: String) = "project/" + Uri.encode(name)
 
@@ -229,6 +231,7 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendin
                                 onTerminal = { nav.navigate(Routes.terminal(name)) { launchSingleTop = true } },
                                 onSecrets = { nav.navigate(Routes.secrets(name)) { launchSingleTop = true } },
                                 onPreview = { nav.navigate(Routes.preview(it)) { launchSingleTop = true } },
+                                onRuntimes = { nav.navigate(Routes.RUNTIMES) { launchSingleTop = true } },
                             )
                         }
                     }
@@ -286,7 +289,12 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendin
                     }
                     composable(Routes.SETTINGS) {
                         CompositionLocalProvider(LocalNavScope provides this) {
-                            SettingsScreen(app = app, onBack = { nav.popBackStack() })
+                            SettingsScreen(app = app, onBack = { nav.popBackStack() }, onRuntimes = { nav.navigate(Routes.RUNTIMES) { launchSingleTop = true } })
+                        }
+                    }
+                    composable(Routes.RUNTIMES) {
+                        CompositionLocalProvider(LocalNavScope provides this) {
+                            RuntimesScreen(app = app, onBack = { nav.popBackStack() })
                         }
                     }
                 }

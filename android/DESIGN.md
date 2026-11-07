@@ -644,6 +644,7 @@ matches" otherwise. Groups, in order, each a SectionLabel over a surface1 card (
   Skill commands, Block images. They are the engine's own settings (`agent/settings.json`, other keys kept); the
   queue, compaction and retry switches reach the open on-device session at once over RPC, the rest apply from the next
   session.
+- Runtimes: the shipped runtimes on one line ("Node.js 22.23.4 · Python 3.14.10") and a row to the Runtimes screen.
 - Appearance: theme tiles (seven, four a row, each drawn in its own theme: canvas, user bubble, prose with an inline
   code chip, a code card in the theme's syntax colours, the composer with the accent send button; selected = 1.5dp
   accent ring; the near-black themes show their canvas hex under the name in monoMeta ink3), accent circles ("Theme"
@@ -659,6 +660,18 @@ matches" otherwise. Groups, in order, each a SectionLabel over a surface1 card (
 Segmented controls in Settings are 48dp tall.
 Changes apply live, without recreating the activity, and persist in a small JSON file (read synchronously at
 startup so the first frame has the right theme).
+
+**Runtimes** (Settings > Runtimes, and "Runtimes" in a project's menu).
+- Header like Settings (back, display title), then one line: the runtimes come with the app and run in every project.
+- Installed: one card row per runtime: name in bodyStrong, version in monoMeta ink2, installed size right-aligned in
+  meta ink3 (tabular figures); below, what comes with it ("npm 10.9.4", "pip 25.2") in meta ink3, then its commands as
+  mono chips (surface2, 1dp line, Radius.sm). No Install/Remove: the runtimes are part of the APK (android/engine/CONTRACT.md).
+- Packages and caches: npm cache and pip cache with their size and a secondary "Clear" (disabled at 0 B; "Clearing…"
+  while it runs; a ConfirmSheet first, naming the size), then npm global packages and pip packages with their size
+  only (removed with npm uninstall -g / pip uninstall). A failed clear says so in danger under the row.
+- Sizes are measured on IO when the screen opens and after a clear; nothing animates while idle.
+- TalkBack: a runtime is one node ("Node.js 22.23.4, npm 10.9.4, 150 MB. Commands: node, npm, npx"); each Clear is
+  labelled "Clear the npm cache"; the title is a heading. Every row is at least 48 dp tall.
 
 ## Updates
 
