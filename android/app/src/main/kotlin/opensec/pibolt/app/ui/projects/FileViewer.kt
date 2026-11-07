@@ -498,7 +498,7 @@ fun FileViewer(
                     when (doc) {
                         null -> LoadingRow("Opening $name…", Modifier.padding(top = 8.dp))
                         is FileDoc.Unreadable -> Note(doc.reason, null, null)
-                        is FileDoc.Binary -> Note("Binary file", "${FileTypes.label(name)} · ${ProjectFiles.size(doc.size)}. Pi-Bolt can't show it; share it to open it in another app.") {
+                        is FileDoc.Binary -> Note("Binary file", "${FileTypes.label(name)} · ${ProjectFiles.size(doc.size)}. Share it to open in another app.") {
                             SecondaryButton("Share", onClick = ::share, icon = Icons.Rounded.Share)
                         }
                         is FileDoc.Image -> ZoomImage(doc, "$name, ${doc.width} by ${doc.height} pixels")
@@ -646,7 +646,7 @@ private fun EditorBar(tab: EditorTab, plain: Boolean, onIndent: () -> Unit, onGo
             IconAction(Icons.Rounded.VerticalAlignCenter, "Go to line", onClick = onGoTo)
             Spacer(Modifier.weight(1f))
             Text(
-                (if (plain) "No colours over 400 KB · " else "") + "Ln $line, Col $col",
+                (if (plain) "No highlighting · " else "") + "Ln $line, Col $col",
                 style = Pi.type.monoMeta,
                 color = colors.ink3,
                 maxLines = 1,

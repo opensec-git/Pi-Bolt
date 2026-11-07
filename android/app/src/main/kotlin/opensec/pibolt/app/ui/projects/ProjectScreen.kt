@@ -347,19 +347,15 @@ fun ProjectScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                 )
                                 if (unavailable) {
-                                    Text("Pi-Bolt can't run on this phone, so sessions here can't be opened.", style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 8.dp))
+                                    Text("Sessions can't run on this phone", style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 8.dp))
                                 }
                             }
                         }
                         val list = sessions
                         when {
-                            list == null -> item(key = "loading", contentType = "loading") { LoadingRow("Reading sessions…") }
+                            list == null -> item(key = "loading", contentType = "loading") { LoadingRow("Loading sessions…") }
                             list.isEmpty() -> item(key = "empty", contentType = "empty") {
-                                EmptyCard(
-                                    Icons.AutoMirrored.Rounded.Chat,
-                                    "No sessions yet",
-                                    "Start one and ask Pi to look around, set the project up, or explain the code.",
-                                )
+                                EmptyCard(Icons.AutoMirrored.Rounded.Chat, "No sessions yet")
                             }
                             else -> {
                                 item(key = "label", contentType = "label") {
@@ -400,16 +396,16 @@ fun ProjectScreen(
                         }
                         val entries = shownFiles
                         when {
-                            entries == null -> item(key = "files-loading", contentType = "loading") { LoadingRow("Reading the folder…") }
+                            entries == null -> item(key = "files-loading", contentType = "loading") { LoadingRow("Loading files…") }
                             entries.isEmpty() -> item(key = "files-empty", contentType = "empty") {
                                 val hidden = files.orEmpty().size
                                 EmptyCard(
                                     Icons.Rounded.Folder,
                                     if (path.isEmpty()) "No files yet" else "This folder is empty",
                                     when {
-                                        hidden > 0 -> if (hidden == 1) "1 hidden file. Show hidden files from the sort menu." else "$hidden hidden files. Show hidden files from the sort menu."
-                                        path.isEmpty() -> "Ask Pi to set the project up, or add files yourself."
-                                        else -> "Add a file or import one from the phone."
+                                        hidden == 1 -> "1 hidden file"
+                                        hidden > 1 -> "$hidden hidden files"
+                                        else -> null
                                     },
                                 ) {
                                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -629,7 +625,7 @@ private fun ProjectTopBar(title: String, name: String, pinned: Boolean, branch: 
  * line on what to do (body ink2) and, when given, the actions under it.
  */
 @Composable
-internal fun EmptyCard(icon: ImageVector, title: String, text: String, actions: (@Composable () -> Unit)? = null) {
+internal fun EmptyCard(icon: ImageVector, title: String, text: String? = null, actions: (@Composable () -> Unit)? = null) {
     val colors = Pi.colors
     val type = Pi.type
     val shape = RoundedCornerShape(Radius.md)
@@ -644,8 +640,10 @@ internal fun EmptyCard(icon: ImageVector, title: String, text: String, actions: 
         Icon(icon, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(20.dp))
         Spacer(Modifier.height(10.dp))
         Text(title, style = type.bodyStrong, color = colors.ink1)
-        Spacer(Modifier.height(4.dp))
-        Text(text, style = type.body, color = colors.ink2)
+        if (text != null) {
+            Spacer(Modifier.height(4.dp))
+            Text(text, style = type.body, color = colors.ink2)
+        }
         if (actions != null) {
             Spacer(Modifier.height(14.dp))
             actions()

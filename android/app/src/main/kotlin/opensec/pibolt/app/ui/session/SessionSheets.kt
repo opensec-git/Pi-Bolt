@@ -200,7 +200,7 @@ fun ModelSheet(
             }
             }
             if (shown.isEmpty()) {
-                item { F2Empty("No model matches “${query.trim()}”. Try the provider's or the maker's name.", Icons.Rounded.SearchOff) }
+                item { F2Empty("No model matches “${query.trim()}”", Icons.Rounded.SearchOff) }
             }
         }
     }
@@ -569,7 +569,7 @@ fun HistorySheet(prompts: List<String>, onPick: (String) -> Unit, onDismiss: () 
     PiSheet(onDismiss = onDismiss, state = state) {
         Text("Prompt history", style = Pi.type.subhead, color = colors.ink1, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
         if (prompts.isEmpty()) {
-            Text("Prompts you send from this phone show up here.", style = Pi.type.body, color = colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
+            Text("No prompts yet", style = Pi.type.body, color = colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
         }
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
             items(prompts) { prompt ->

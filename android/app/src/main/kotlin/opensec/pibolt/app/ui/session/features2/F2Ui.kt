@@ -63,7 +63,7 @@ fun F2Loading(label: String) = LoadingRow(label, Modifier.padding(vertical = Spa
 fun F2Empty(text: String, icon: ImageVector? = null) {
     val cut = text.indexOf(". ").takeIf { it in 1 until text.length - 2 }
     EmptyState(
-        title = if (cut != null) text.substring(0, cut + 1) else text,
+        title = if (cut != null) text.substring(0, cut) else text.removeSuffix("."),
         message = cut?.let { text.substring(it + 2) },
         icon = icon,
         modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.sm),

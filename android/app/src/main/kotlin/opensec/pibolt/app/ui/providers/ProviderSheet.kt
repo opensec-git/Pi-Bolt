@@ -461,7 +461,7 @@ private fun CustomStep(auth: ProviderAuth, onBack: () -> Unit, onSaved: (Provide
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
                 Column(Modifier.padding(horizontal = 16.dp)) {
-                    FieldHint(error ?: "A key stays on this phone and is sent only to this server.", isError = error != null)
+                    FieldHint(error ?: "The key stays on this phone and is sent only to this server.", isError = error != null)
                     FieldLabel("Name (optional)")
                     PiTextField(
                         value = name,

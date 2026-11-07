@@ -131,7 +131,7 @@ fun MentionList(paths: List<String>?, query: String, onPick: (String) -> Unit, m
     val type = Pi.type
     SuggestionPanel(maxHeight, highlighted, modifier) {
         if (paths == null) {
-            item { Text("Reading the project's files…", style = type.meta, color = colors.ink3, modifier = Modifier.padding(14.dp)) }
+            item { Text("Loading files…", style = type.meta, color = colors.ink3, modifier = Modifier.padding(14.dp)) }
             return@SuggestionPanel
         }
         if (paths.isEmpty()) {

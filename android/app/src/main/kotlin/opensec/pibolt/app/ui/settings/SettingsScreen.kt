@@ -545,7 +545,7 @@ private val LICENCES = listOf(
     Triple("JetBrains Mono", "SIL Open Font License 1.1", R.raw.license_jetbrains_mono),
     Triple("Mermaid", "MIT, with the projects it bundles", R.raw.license_mermaid),
     Triple("Termux terminal", "Apache License 2.0", R.raw.license_termux_terminal),
-    Triple("Lobe Icons", "MIT: provider and model logos", R.raw.license_lobe_icons),
+    Triple("Lobe Icons", "MIT", R.raw.license_lobe_icons),
 )
 
 private fun textSizeLabel(step: Int) = when (step) {

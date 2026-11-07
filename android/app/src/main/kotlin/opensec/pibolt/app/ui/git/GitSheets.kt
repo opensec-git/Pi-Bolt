@@ -92,7 +92,7 @@ fun BranchSheet(ui: ChangesUi, onDismiss: () -> Unit) {
     val dirty = model.status?.clean == false
 
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Branches", subtitle = if (dirty) "Uncommitted changes move with you to the other branch when they don't conflict." else null)
+        SheetHeader("Branches", subtitle = if (dirty) "Uncommitted changes come with you." else null)
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             PiTextField(
                 name,
@@ -117,7 +117,7 @@ fun BranchSheet(ui: ChangesUi, onDismiss: () -> Unit) {
             items(local, key = { "l:" + it.name }) { b -> BranchRow(b) { if (!b.current) close { model.run("Switching") { switchTo(b) } } else close(onDismiss) } }
             if (remote.isNotEmpty()) item(key = "h-remote") { SectionLabel("On the remote", Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp)) }
             items(remote, key = { "r:" + it.name }) { b -> BranchRow(b) { close { model.run("Switching") { switchTo(b) } } } }
-            if (branches != null && all.isEmpty()) item(key = "none") { Note("No branches yet: make the first commit.") }
+            if (branches != null && all.isEmpty()) item(key = "none") { Note("No branches yet. Make the first commit.") }
         }
     }
 }
@@ -154,7 +154,7 @@ fun IdentitySheet(ui: ChangesUi, onDismiss: () -> Unit) {
     var email by rememberSaveable { mutableStateOf(account?.noreplyEmail.orEmpty()) }
     val ok = name.isNotBlank() && email.contains('@') && email.none { it.isWhitespace() }
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Who is committing?", subtitle = "Git records a name and email with each commit. They are saved for every project on this phone.")
+        SheetHeader("Who is committing?", subtitle = "Used for commits in every project on this phone.")
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             PiTextField(name, { name = it }, placeholder = "Name", singleLine = true, modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Name" })
             PiTextField(
@@ -165,7 +165,7 @@ fun IdentitySheet(ui: ChangesUi, onDismiss: () -> Unit) {
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email, autoCorrectEnabled = false),
                 modifier = Modifier.fillMaxWidth().semantics { contentDescription = "Email" },
             )
-            if (account != null) Text("The GitHub no-reply address keeps your real email private.", style = Pi.type.meta, color = Pi.colors.ink3)
+            if (account != null) Text("The GitHub no-reply address keeps your email private.", style = Pi.type.meta, color = Pi.colors.ink3)
             Spacer(Modifier.height(4.dp))
             PrimaryButton("Save and commit", onClick = {
                 close { ui.commit(who = name to email) }

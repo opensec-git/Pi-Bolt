@@ -265,7 +265,7 @@ private fun TokenSheet(app: PiBoltApp, onDismiss: () -> Unit) {
                 isError = error != null,
                 onDone = ::save,
             )
-            FieldHint(error ?: "Stored encrypted with a key in this phone's Keystore. It is never shown again or written to logs.", isError = error != null)
+            FieldHint(error ?: "Encrypted on this phone. Never shown again or logged.", isError = error != null)
             PrimaryButton(
                 if (checking) "Checking…" else "Save",
                 onClick = ::save,

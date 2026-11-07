@@ -90,9 +90,9 @@ private fun ProvidersList(app: PiBoltApp) {
         ConfirmSheet(
             title = "Remove $name?",
             message = if (isCustom) {
-                "Pi on this phone stops using this endpoint. Its entry is removed from models.json and its key from auth.json here."
+                "This server's models and key are removed from this phone."
             } else {
-                "Pi on this phone stops using $name until you add a key again. The key is deleted from auth.json here; it is not revoked at $name."
+                "The key is deleted from this phone. It stays valid at $name until you revoke it there."
             },
             confirmLabel = "Remove",
             onConfirm = {

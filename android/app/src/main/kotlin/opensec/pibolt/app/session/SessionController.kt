@@ -322,14 +322,14 @@ class SessionController private constructor(
 
     private fun explainRemote(end: ConnectionState.Disconnected): String = when (end.reason) {
         DisconnectReason.Unauthorized -> if (pairing || usedFallback) {
-            "The computer refused this pairing code. It is used once and expires after 10 minutes: run /remote-control for a new one."
+            "The computer refused this pairing code. Codes work once and expire after 10 minutes. Run /remote-control for a new one."
         } else {
             "This phone is no longer paired with ${_hostName.value}. Scan a new code from /remote-control to pair again."
         }
         DisconnectReason.HostStopped -> "Remote control stopped on ${_hostName.value}."
-        DisconnectReason.Malformed -> "The computer could not read this app's messages. Update Pi-Bolt or the app."
+        DisconnectReason.Malformed -> "The computer could not read this app's messages. Update Pi on the computer, or this app."
         DisconnectReason.RateLimited -> "Too many failed attempts from this network. Wait a minute and retry."
-        DisconnectReason.Unreachable -> "Can't reach ${_hostName.value}. Is /remote-control running, and is the phone on the same network (or a tunnel on)?"
+        DisconnectReason.Unreachable -> "Can't reach ${_hostName.value}. Check that /remote-control is running and the phone is on the same network."
         DisconnectReason.HandshakeTimeout -> "The computer took too long to answer."
         DisconnectReason.Lost -> "The connection dropped."
         DisconnectReason.Closed -> "Disconnected."

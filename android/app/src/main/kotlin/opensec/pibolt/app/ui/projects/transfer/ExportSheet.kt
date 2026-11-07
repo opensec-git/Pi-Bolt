@@ -55,7 +55,7 @@ fun ExportSheet(title: String, onChoose: (ExportChoice) -> Unit, onDismiss: () -
     val close = rememberSheetCloser(state)
     var lean by rememberSaveable { mutableStateOf(true) }
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Export $title", subtitle = "A zip of the folder and everything in it. Links are left out.")
+        SheetHeader("Export $title", subtitle = "A zip of the folder. Symlinks are left out.")
         Row(
             Modifier
                 .fillMaxWidth()

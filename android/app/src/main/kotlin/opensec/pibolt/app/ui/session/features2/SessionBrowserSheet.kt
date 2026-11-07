@@ -121,13 +121,13 @@ fun SessionBrowserSheet(
         )
         val list = all
         when {
-            list == null -> F2Loading("Reading sessions")
-            list.isEmpty() -> F2Empty("No saved sessions in this project yet.", Icons.AutoMirrored.Rounded.Chat)
+            list == null -> F2Loading("Loading sessions")
+            list.isEmpty() -> F2Empty("No saved sessions yet", Icons.AutoMirrored.Rounded.Chat)
             inside && query.trim().length >= 2 -> {
                 val found = hits
                 when {
                     found == null -> F2Loading("Searching ${list.size} sessions")
-                    found.isEmpty() -> F2Empty("No message mentions \"${query.trim()}\".", Icons.Rounded.SearchOff)
+                    found.isEmpty() -> F2Empty("No message mentions “${query.trim()}”", Icons.Rounded.SearchOff)
                     else -> LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
                         items(found, key = { it.session.summary.file }) { hit ->
                             val s = hit.session
@@ -145,7 +145,7 @@ fun SessionBrowserSheet(
             }
             else -> {
                 val shown = remember(list, sort, query) { SessionBrowse.arrange(list, sort, if (inside) "" else query) }
-                if (shown.isEmpty()) F2Empty("No session matches \"${query.trim()}\".", Icons.Rounded.SearchOff)
+                if (shown.isEmpty()) F2Empty("No session matches “${query.trim()}”", Icons.Rounded.SearchOff)
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
                     items(shown, key = { it.summary.file }) { s ->
                         val open = s.summary.file == liveFile

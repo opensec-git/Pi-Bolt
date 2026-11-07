@@ -344,9 +344,9 @@ private fun Body(
             val run = runState.value
             when {
                 run == null -> null
-                !readsFiles -> "Over remote control Pi sends this agent's progress and answer, not its messages."
-                run.transcript == null && run.isActive -> "Reading its messages…"
-                run.transcript == null -> "Its messages were not saved on this phone: its prompt and answer show."
+                !readsFiles -> "Messages aren't available over remote control"
+                run.transcript == null && run.isActive -> "Loading messages…"
+                run.transcript == null -> "Messages weren't saved. Showing the prompt and answer."
                 else -> null
             }
         }
@@ -616,7 +616,7 @@ private fun Actions(run: Subagent, enabled: Boolean, controller: SessionControll
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "Pi waits for this agent. A message reaches it only after the agent returns.",
+                        "Pi is waiting for this agent to return",
                         style = type.meta,
                         color = colors.ink3,
                         modifier = Modifier.weight(1f),
@@ -657,7 +657,7 @@ private fun Actions(run: Subagent, enabled: Boolean, controller: SessionControll
                                     haptics.send()
                                     controller.send(if (steer) SubagentFormat.steerPrompt(run, text) else SubagentFormat.resumePrompt(run, text), StreamingBehavior.Steer)
                                     draft = ""
-                                    sent = if (steer) "Sent to Pi, which passes it on to the agent" else "Sent to Pi, which resumes the agent"
+                                    sent = if (steer) "Sent. Pi passes it on." else "Sent. Pi resumes the agent."
                                 },
                                 shape = CircleShape,
                                 enabled = ready,
@@ -674,12 +674,7 @@ private fun Actions(run: Subagent, enabled: Boolean, controller: SessionControll
                         }
                     }
                 }
-                Text(
-                    if (steer) "Pi passes your message to the agent (steer_subagent)." else "Pi continues the agent with your prompt; it keeps its context.",
-                    style = type.meta,
-                    color = colors.ink3,
-                    modifier = Modifier.padding(top = 4.dp, bottom = 4.dp),
-                )
+                Spacer(Modifier.height(4.dp))
             }
             SubagentFormat.Reach.None -> Unit
         }

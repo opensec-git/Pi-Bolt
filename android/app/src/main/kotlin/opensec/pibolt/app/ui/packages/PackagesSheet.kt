@@ -137,7 +137,7 @@ fun PackagesSheet(engine: EngineApi, controller: SessionController?, onReload: (
                 )
             }
             Text(
-                "For example pi-foo, @scope/pi-foo@1.2.0 or github.com/user/repo. Packages run code with this app's access to your projects: install only what you trust.",
+                "Packages run code with access to your projects. Install only what you trust.",
                 style = Pi.type.meta,
                 color = Pi.colors.ink3,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
@@ -149,20 +149,20 @@ fun PackagesSheet(engine: EngineApi, controller: SessionController?, onReload: (
             if (changed && onReload != null) {
                 F2Well {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Reload the session to load the changes.", style = Pi.type.body, color = Pi.colors.ink1, modifier = Modifier.weight(1f))
+                        Text("Reload the session to apply changes", style = Pi.type.body, color = Pi.colors.ink1, modifier = Modifier.weight(1f))
                         SecondaryButton("Reload", onClick = { close(onReload) })
                     }
                 }
             }
             val v = view
             when {
-                v == null -> F2Loading("Reading packages")
+                v == null -> F2Loading("Loading packages")
                 else -> {
                     F2Section("Installed")
                     if (v.listError != null) {
                         ErrorState("Could not list the packages", message = v.listError, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                     } else if (v.packages.isEmpty()) {
-                        F2Empty("No packages yet.", Icons.Rounded.Extension)
+                        F2Empty("No packages yet", Icons.Rounded.Extension)
                     }
                     for (pkg in v.packages) {
                         val meta = buildList {
@@ -261,13 +261,13 @@ private fun PackageDetailSheet(
                     Text(listOfNotNull(pkg.kind, pkg.version?.let { "v$it" }, if (pkg.scope == PackageScope.Project) "this project" else "all projects").joinToString(" · "), style = Pi.type.meta, color = Pi.colors.ink3)
                 }
             }
-            F2Toggle("Load this package", if (pkg.disabled) "Off: its extensions, skills and prompts are not loaded" else "Its extensions, skills and prompts load in every session", checked = !pkg.disabled) { onEnabled(it) }
+            F2Toggle("Load this package", if (pkg.disabled) "Not loaded" else "Loads in every session", checked = !pkg.disabled) { onEnabled(it) }
             F2Section("Commands and tools")
             val list = provided
             when {
-                list == null -> F2Loading("Asking the session")
-                controller == null -> F2Empty("Open a session on this phone to see what it provides.", Icons.Rounded.PhoneAndroid)
-                list.isEmpty() -> F2Empty(if (pkg.disabled) "Switched off: nothing loaded." else "Nothing loaded from it in this session (reload after installing).", Icons.Rounded.Extension)
+                list == null -> F2Loading("Loading…")
+                controller == null -> F2Empty("Open a session on this phone to see them", Icons.Rounded.PhoneAndroid)
+                list.isEmpty() -> F2Empty(if (pkg.disabled) "Switched off" else "Nothing loaded. Reload the session after installing.", Icons.Rounded.Extension)
                 else -> for (p in list) {
                     F2Row(p.name, p.description.ifBlank { null }, Icons.Rounded.Extension, onClick = null, titleMaxLines = 1) {
                         F2Tag(p.kind)
@@ -278,7 +278,7 @@ private fun PackageDetailSheet(
             if (!pkg.bundled) {
                 SecondaryButton("Remove", onClick = { confirmRemove = true }, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp))
             } else {
-                Text("Comes with Pi-Bolt: switch it off instead of removing it.", style = Pi.type.meta, color = Pi.colors.ink3, modifier = Modifier.padding(horizontal = 20.dp))
+                Text("Built in. Switch it off instead.", style = Pi.type.meta, color = Pi.colors.ink3, modifier = Modifier.padding(horizontal = 20.dp))
             }
             Spacer(Modifier.height(8.dp))
         }
@@ -286,7 +286,7 @@ private fun PackageDetailSheet(
     if (confirmRemove) {
         ConfirmSheet(
             title = "Remove ${pkg.title}?",
-            message = "Pi uninstalls it and drops it from settings.json.",
+            message = "It is uninstalled from this phone.",
             confirmLabel = "Remove",
             onConfirm = {
                 confirmRemove = false

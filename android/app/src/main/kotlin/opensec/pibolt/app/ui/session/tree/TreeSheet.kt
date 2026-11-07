@@ -85,8 +85,8 @@ fun TreeSheet(
             "Session tree",
             subtitle = when {
                 error != null || data == null -> null
-                forks == 0 -> "One branch. Go back to an earlier message to start another here."
-                else -> "$forks ${if (forks == 1) "fork" else "forks"}. The marked path is what Pi sees."
+                forks == 0 -> null
+                else -> "$forks ${if (forks == 1) "fork" else "forks"} · Pi sees the marked path"
             },
         )
         if (error != null) {
@@ -101,8 +101,8 @@ fun TreeSheet(
             height = 40.dp,
         )
         when {
-            data == null -> F2Loading("Reading the tree")
-            rows.isEmpty() -> F2Empty(if (filter == TreeFilter.Labeled) "No labels yet. Long-press an entry to label it." else "Nothing here yet.", if (filter == TreeFilter.Labeled) Icons.AutoMirrored.Rounded.Label else Icons.Rounded.AccountTree)
+            data == null -> F2Loading("Loading tree")
+            rows.isEmpty() -> F2Empty(if (filter == TreeFilter.Labeled) "No labels yet. Long-press an entry to label it." else "Nothing here yet", if (filter == TreeFilter.Labeled) Icons.AutoMirrored.Rounded.Label else Icons.Rounded.AccountTree)
             else -> {
                 val list = rememberLazyListState()
                 // Open at the leaf: where the reader is.
@@ -117,7 +117,7 @@ fun TreeSheet(
                 }
             }
         }
-        if (busy) Text("Pi is working: wait for it to finish to switch branches.", style = Pi.type.meta, color = colors.warning, modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
+        if (busy) Text("Wait for Pi to finish to switch branches", style = Pi.type.meta, color = colors.warning, modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
     }
     actionsFor?.let { row ->
         ActionsSheet(
@@ -133,7 +133,7 @@ fun TreeSheet(
     labelFor?.let { row ->
         TextPromptSheet(
             title = "Label this entry",
-            message = "Labels mark points to come back to. They are saved in the session.",
+            message = null,
             initial = row.label.orEmpty(),
             placeholder = "checkpoint",
             confirm = "Save",

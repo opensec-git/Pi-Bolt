@@ -152,8 +152,8 @@ fun TurnReviewScreen(review: TurnReview, turnId: String, onClose: () -> Unit) {
             val list = changes
             when {
                 failure != null -> item(key = "failure") { Note(failure.orEmpty()) }
-                list == null -> item(key = "loading") { Note("Reading the changes…") }
-                list.isEmpty() -> item(key = "none") { Note("No files differ between the start and the end of this turn.") }
+                list == null -> item(key = "loading") { Note("Loading changes…") }
+                list.isEmpty() -> item(key = "none") { Note("No file changes in this turn") }
                 else -> list.forEachIndexed { index, delta ->
                     val expanded = open[delta.path] ?: (index < OPEN_FILES)
                     item(key = "f:" + delta.path, contentType = "file") {
@@ -166,7 +166,7 @@ fun TurnReviewScreen(review: TurnReview, turnId: String, onClose: () -> Unit) {
                                 LaunchedEffect(delta.path) {
                                     diffs[delta.path] = runCatching { load(checkpoints.patch(record, delta.path), delta.binary) }.getOrElse { load("", true) }
                                 }
-                                Note("Loading the diff…")
+                                Note("Loading diff…")
                             }
                         } else {
                             fileDiff(delta.path, diff)
@@ -191,7 +191,7 @@ private fun ActionBar(review: TurnReview, record: TurnRecord, locked: Boolean) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
         if (review.running) {
             Text(
-                "Undo is available once Pi finishes the current turn.",
+                "Undo is available when Pi finishes",
                 style = Pi.type.meta,
                 color = colors.ink3,
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp),
@@ -319,10 +319,10 @@ fun RestoreSheet(review: TurnReview, plan: RestorePlan) {
     val restoreBefore = plan.kind == RestoreKind.RestoreBefore
     val title = if (restoreBefore) "Restore to before this turn" else "Changed since"
     val subtitle = when {
-        restoreBefore && plan.items.isEmpty() -> "No files differ from when this message was sent. The conversation forks here and the message returns to the composer."
-        restoreBefore -> "Files go back to how they were when this message was sent, with the changes of later turns. The conversation then forks here and the message returns to the composer."
-        plan.kind == RestoreKind.Redo -> "These files changed after the undo. Put them back anyway, or keep them as they are now."
-        else -> "A later turn or you changed these files after this turn. Undo them anyway, or keep them as they are now."
+        restoreBefore && plan.items.isEmpty() -> "No files differ. The conversation forks here and the message returns to the composer."
+        restoreBefore -> "Files go back to how they were when this message was sent, including later turns' changes. The conversation forks here and the message returns to the composer."
+        plan.kind == RestoreKind.Redo -> "These files changed after the undo. Put them back anyway, or keep them as they are."
+        else -> "These files changed after this turn. Undo them anyway, or keep them as they are."
     }
     PiSheet(onDismiss = { review.dismiss(plan) }, state = state) {
         SheetHeader(title, subtitle = subtitle)

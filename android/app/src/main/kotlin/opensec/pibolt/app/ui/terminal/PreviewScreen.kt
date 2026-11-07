@@ -157,7 +157,7 @@ fun PreviewScreen(port: Int, onBack: () -> Unit) {
                     EmptyCard(
                         Icons.Rounded.CloudOff,
                         "Nothing answers on localhost:$port",
-                        "The dev server may have stopped or still be starting. Check its terminal, then reload." +
+                        "Check the dev server's terminal, then reload." +
                             if (reason.isNotBlank()) " ($reason)" else "",
                     ) {
                         PrimaryButton("Reload", onClick = { web.reload() }, icon = Icons.Rounded.Refresh, modifier = Modifier.fillMaxWidth())

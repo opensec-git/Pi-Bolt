@@ -99,9 +99,9 @@ fun HistoryViewer(ui: ChangesUi, onClose: () -> Unit) {
                             attempt++
                         })
                     }
-                    loading && commits.isEmpty() -> item(key = "loading") { LoadingRow("Reading the history…", Modifier.padding(top = 8.dp)) }
+                    loading && commits.isEmpty() -> item(key = "loading") { LoadingRow("Loading history…", Modifier.padding(top = 8.dp)) }
                     commits.isEmpty() -> item(key = "empty") {
-                        Box(Modifier.padding(top = 4.dp)) { EmptyCard(Icons.Rounded.History, "No commits yet", "Stage files in Changes and commit them; they show up here.") }
+                        Box(Modifier.padding(top = 4.dp)) { EmptyCard(Icons.Rounded.History, "No commits yet") }
                     }
                 }
                 items(commits, key = { it.hash }) { c ->
@@ -173,7 +173,7 @@ private fun CommitViewer(ui: ChangesUi, hash: String, onClose: () -> Unit) {
             if (error != null) {
                 ErrorState("Could not open the commit", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), message = error, onRetry = { attempt++ })
             } else {
-                LoadingRow("Reading the commit…", Modifier.padding(top = 8.dp))
+                LoadingRow("Loading commit…", Modifier.padding(top = 8.dp))
             }
             return@Column
         }
@@ -218,7 +218,7 @@ private fun CommitViewer(ui: ChangesUi, hash: String, onClose: () -> Unit) {
                         when {
                             f.binary -> Note("Binary file")
                             f.hunks.isEmpty() -> Note(if (f.oldPath != null) "Renamed from ${f.oldPath}" else "Mode change only")
-                            f.rowCount() > MAX_ROWS -> Note("Too large to show here (${f.rowCount()} lines).")
+                            f.rowCount() > MAX_ROWS -> Note("Too large to show (${f.rowCount()} lines).")
                             else -> {
                                 val language = remember(f.path) { CodeInfo.languageOfFile(f.path).orEmpty() }
                                 val text = remember(f, colors) { diffText(parseDiff(f.text), language, colors) }
