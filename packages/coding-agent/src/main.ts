@@ -80,7 +80,7 @@ import {
 	handlePackageCommand,
 } from "./package-manager-cli.ts";
 import { PIBOLT } from "./pi-bolt.ts";
-import { loadServiceCommand, loadServiceHost } from "./remote-control/remote-control.lazy.ts";
+import { loadRemoteControl } from "./remote-control/remote-control.lazy.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 import { createInterface } from "./utils/readline.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
@@ -667,7 +667,7 @@ export async function main(args: string[], options?: MainOptions) {
 	// `service run` is the background service itself (it needs the runtime factory below); the rest manage it.
 	const serviceHost = args[0] === "service" && args[1] === "run";
 	if (args[0] === "service" && !serviceHost) {
-		const { runServiceCommand } = await loadServiceCommand();
+		const { runServiceCommand } = await loadRemoteControl();
 		process.exit(await runServiceCommand(args.slice(1), { agentDir }));
 	}
 
@@ -834,7 +834,7 @@ export async function main(args: string[], options?: MainOptions) {
 	// Loaded only for `--acp` and `--mcp`: other modes never load their code.
 	const acp = parsed.mode === "acp" ? await loadAcpMode() : undefined;
 	const mcp = parsed.mode === "mcp" ? await loadMcpMode() : undefined;
-	const service = serviceHost ? await loadServiceHost() : undefined;
+	const service = serviceHost ? await loadRemoteControl() : undefined;
 	const runtimeExtensionFactories = acp ? [...extensionFactories, acp.acpExtension] : extensionFactories;
 	// Only the runtime this process starts with uses the startup check. ACP and MCP create every runtime later, on the
 	// client's request, and without a session_start event; the directory may have changed by then (a pull, a branch switch),
