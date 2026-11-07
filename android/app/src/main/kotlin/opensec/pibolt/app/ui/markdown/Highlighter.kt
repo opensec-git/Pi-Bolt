@@ -84,8 +84,40 @@ object Highlighter {
     private const val FENCE = 9
     private const val SHELL_QUOTE = 10
 
+    /** Scan budget every tokenised range adds beyond its length, so short texts always get their regexes and strings. */
+    private const val SCAN_SLACK = 4096L
+
     /** Interpolations, JSX attributes and embedded code nest at most this deep; deeper text stays plain. */
     private const val MAX_NESTING = 4
+
+    /**
+     * The first marker at or after a position in code[.., end) (one line), as Inline's Closers: the cursor only moves
+     * forward, so an answer still ahead is reused and each marker scans the line about once in total.
+     */
+    private class LineMarkers(private val code: String, private val end: Int) {
+        private val searchedFrom = HashMap<String, Int>()
+        private val found = HashMap<String, Int>()
+
+        /** Same answer as `code.indexOf(marker, from)` when that lies on the line, else -1. */
+        fun indexOf(marker: String, from: Int): Int {
+            val previousFrom = searchedFrom[marker]
+            val previous = found[marker]
+            // Nothing in [previousFrom, previous) (or in the rest of the line when -1), so nothing in [from, previous).
+            if (previousFrom != null && previous != null && from >= previousFrom && (previous < 0 || previous >= from)) return previous
+            var k = from
+            var result = -1
+            while (k <= end - marker.length) {
+                if (code.startsWith(marker, k)) {
+                    result = k
+                    break
+                }
+                k++
+            }
+            searchedFrom[marker] = from
+            found[marker] = result
+            return result
+        }
+    }
 
     private class Tokenizer(val lang: Lang, val level: Int = 0) {
         val tokens = ArrayList<Token>()
@@ -130,6 +162,7 @@ object Highlighter {
         }
 
         fun run(code: String, from: Int, end: Int) {
+            scanBudget += 4L * (end - from) + SCAN_SLACK
             when (lang.mode) {
                 LangMode.Code -> code(code, from, end)
                 LangMode.Shell -> shell(code, from, end)
@@ -147,7 +180,25 @@ object Highlighter {
         private fun isIdentStart(c: Char) = c.isLetter() || c == '_' || c == '$' && lang.interpInBacktickOnly
         private fun isIdent(c: Char) = c.isLetterOrDigit() || c == '_' || c == '$' && lang.interpInBacktickOnly
 
-        private fun lineEnd(code: String, i: Int, end: Int): Int = code.indexOf('\n', i).let { if (it < 0 || it > end) end else it }
+        /**
+         * Characters [interpolation] and [regex] may still walk ahead: a few times the text. Each unclosed opener scans
+         * to the line's end, so without it a long line of them is quadratic; once spent, further openers stay plain.
+         */
+        private var scanBudget = 0L
+
+        // The last newline search: indexOf('\n', nlFrom) in nlCode was nlAt. Reused while i lies in [nlFrom, nlAt].
+        private var nlCode: String? = null
+        private var nlFrom = 0
+        private var nlAt = -1
+
+        private fun lineEnd(code: String, i: Int, end: Int): Int {
+            if (code !== nlCode || i < nlFrom || nlAt in 0 until i) {
+                nlCode = code
+                nlFrom = i
+                nlAt = code.indexOf('\n', i)
+            }
+            return if (nlAt < 0 || nlAt > end) end else nlAt
+        }
 
         private fun atLineStart(code: String, i: Int): Boolean {
             var j = i - 1
@@ -557,7 +608,8 @@ object Highlighter {
             val opener = code[i + open - 1]
             var j = i + open
             var d = 1
-            val limit = lineEnd(code, i, end)
+            val line = lineEnd(code, i, end)
+            val limit = minOf(line.toLong(), j + scanBudget).toInt()
             while (j < limit) {
                 if (code[j] == opener) d++ else if (code[j] == closer) {
                     d--
@@ -565,6 +617,7 @@ object Highlighter {
                 }
                 j++
             }
+            scanBudget -= j - i
             if (j >= limit) return i
             emit(segment, i, Kind.String)
             emit(i, i + open, Kind.Escape)
@@ -654,7 +707,8 @@ object Highlighter {
         private fun regex(code: String, i: Int, end: Int): Int {
             var j = i + 1
             var inClass = false
-            val limit = lineEnd(code, i, end)
+            val line = lineEnd(code, i, end)
+            val limit = minOf(line.toLong(), j + scanBudget).toInt()
             while (j < limit) {
                 val ch = code[j]
                 when {
@@ -663,12 +717,14 @@ object Highlighter {
                     ch == ']' -> inClass = false
                     ch == '/' && !inClass -> {
                         j++
-                        while (j < limit && code[j].isLetter()) j++
+                        while (j < line && code[j].isLetter()) j++
+                        scanBudget -= j - i
                         return j
                     }
                 }
                 j++
             }
+            scanBudget -= j - i
             return i
         }
 
@@ -1516,11 +1572,14 @@ object Highlighter {
 
         private fun markdownInline(code: String, from: Int, e: Int) {
             var i = from
+            // Closer searches stay on this line and are amortised: hostile text (openers that never close) stays linear.
+            var line: LineMarkers? = null
+            fun find(marker: String, at: Int): Int = (line ?: LineMarkers(code, e).also { line = it }).indexOf(marker, at)
             while (i < e) {
                 val c = code[i]
                 when {
                     c == '`' -> {
-                        val close = code.indexOf('`', i + 1)
+                        val close = find("`", i + 1)
                         if (close in i + 1 until e) {
                             emit(i, close + 1, Kind.String)
                             i = close + 1
@@ -1531,7 +1590,7 @@ object Highlighter {
                     (c == '*' || c == '_') && i + 1 < e -> {
                         val double = code[i + 1] == c
                         val marker = if (double) "$c$c" else "$c"
-                        val close = code.indexOf(marker, i + marker.length)
+                        val close = find(marker, i + marker.length)
                         if (close in i + marker.length + 1 until e) {
                             emit(i, close + marker.length, Kind.Emphasis)
                             i = close + marker.length
@@ -1541,9 +1600,9 @@ object Highlighter {
                     }
                     c == '[' || c == '!' && i + 1 < e && code[i + 1] == '[' -> {
                         val open = if (c == '!') i + 1 else i
-                        val closeText = code.indexOf(']', open)
+                        val closeText = find("]", open)
                         if (closeText in open until e && closeText + 1 < e && code[closeText + 1] == '(') {
-                            val closeUrl = code.indexOf(')', closeText)
+                            val closeUrl = find(")", closeText)
                             if (closeUrl in closeText until e) {
                                 emit(i, closeText + 1, Kind.Function)
                                 emit(closeText + 1, closeUrl + 1, Kind.Attribute)
@@ -1554,7 +1613,7 @@ object Highlighter {
                         i++
                     }
                     c == '<' && i + 1 < e && (code[i + 1].isLetter() || code[i + 1] == '/') -> {
-                        val close = code.indexOf('>', i)
+                        val close = find(">", i)
                         if (close in i until e) {
                             emit(i, close + 1, Kind.Tag)
                             i = close + 1

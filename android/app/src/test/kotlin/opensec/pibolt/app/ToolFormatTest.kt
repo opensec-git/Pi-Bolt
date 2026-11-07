@@ -35,7 +35,9 @@ class ToolFormatTest {
         val diff = " 1 keep\n-2 old line\n+2 new line\n+3 added\n   ...\n 9 tail"
         val lines = parseDiff(diff)
         assertEquals(listOf(DiffKind.Context, DiffKind.Del, DiffKind.Add, DiffKind.Add, DiffKind.Skip, DiffKind.Context), lines.map { it.kind })
-        assertEquals("2", lines[1].number)
+        // A deletion carries its old-file number only.
+        assertEquals("2", lines[1].old)
+        assertEquals("", lines[1].number)
         assertEquals("old line", lines[1].text)
         assertEquals("new line", lines[2].text)
         val stats = diffStats(lines)
@@ -45,12 +47,15 @@ class ToolFormatTest {
 
     @Test
     fun parsesPaddedNumbersAndUnifiedDiffs() {
-        val lines = parseDiff("+ 7 x\n@@ -1 +1 @@\n-plain")
-        assertEquals("7", lines[0].number)
-        assertEquals("x", lines[0].text)
-        assertEquals(DiffKind.Hunk, lines[1].kind)
-        assertEquals(DiffKind.Del, lines[2].kind)
-        assertEquals("plain", lines[2].text)
+        val pi = parseDiff("+ 7 x")
+        assertEquals("7", pi[0].number)
+        assertEquals("x", pi[0].text)
+        val lines = parseDiff("@@ -1 +1 @@\n-plain\n+new")
+        assertEquals(DiffKind.Hunk, lines[0].kind)
+        assertEquals(DiffKind.Del, lines[1].kind)
+        assertEquals("plain", lines[1].text)
+        assertEquals("1", lines[1].old)
+        assertEquals("1", lines[2].number)
     }
 
     @Test
@@ -80,7 +85,7 @@ class ToolFormatTest {
         assertEquals(100, contextPercent(300_000, 200_000))
         assertNull(contextPercent(10, null))
         assertEquals("Thinking off", thinkingChipLabel("off"))
-        assertEquals("High", thinkingChipLabel("high"))
+        assertEquals("Thinking: high", thinkingChipLabel("high"))
     }
 
     @Test

@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
@@ -39,6 +41,14 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import opensec.pibolt.app.ui.projects.FileDoc
+import opensec.pibolt.app.ui.projects.ProjectFiles
+import opensec.pibolt.app.ui.session.features.ViewerImages
+import opensec.pibolt.protocol.rpc.ImageAttachment
+import java.io.File
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.foundation.gestures.scrollBy
@@ -65,8 +75,15 @@ import opensec.pibolt.app.ui.theme.LocalPiType
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.PiType
+import opensec.pibolt.protocol.session.NoticeItem
 import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.session.ToolStatus
+
+/**
+ * True while the live status line is on screen. It owns the one animated spinner then: step rows, the todo row and
+ * the top bar show still frames. Read the value in the draw or layout phase where possible.
+ */
+val LocalStatusOnScreen = compositionLocalOf<State<Boolean>> { mutableStateOf(false) }
 
 /** Live status for the transcript's bottom line. */
 @Immutable
@@ -75,7 +92,7 @@ data class LiveStatus(val visible: Boolean, val mode: QuadMode, val text: Status
 /**
  * The conversation. A reversed LazyColumn whose index 0 is the live status line: while the reader is at the bottom,
  * new rows and a growing reply stay pinned there; once they scroll up the view stays put and a round scroll button
- * appears at the end edge (with a dot when there is unseen content). A send always jumps to the bottom. Each markdown
+ * appears centred above the composer (with a dot when there is unseen content). A send always jumps to the bottom. Each markdown
  * block is its own row with a stable key, so streaming re-lays out only the block being written.
  */
 @Composable
@@ -90,10 +107,14 @@ fun Transcript(
     onStatusOnScreen: (Boolean) -> Unit = {},
     jump: SearchJump? = null,
     onImage: (String, Int) -> Unit = { _, _ -> },
+    onToolImages: (ViewerImages) -> Unit = {},
+    errorContext: ErrorContext = ErrorContext(null, null, local = false, running = false),
+    onErrorAction: (ErrorAction, NoticeItem) -> Unit = { _, _ -> },
 ) {
     val settings = Pi.settings
     val parseScope = rememberCoroutineScope()
     val md = remember { MdCache(parseScope) }
+    val uniqueCache = remember { UniqueCache() }
     var settledTick by remember { mutableIntStateOf(0) }
     // The finished turn keeps its row animations for a moment so its steps fold away smoothly.
     LaunchedEffect(memory.settledAt.longValue) {
@@ -101,7 +122,10 @@ fun Transcript(
         delay(1200)
         settledTick++
     }
-    val rows by remember {
+    // Rows are read only inside the list, effects and snapshot flows, never while composing this function: a streamed
+    // frame then re-runs the list's item lookup instead of recomposing the whole transcript, and finished rows (equal
+    // to their previous value) skip.
+    val rowsState = remember {
         derivedStateOf {
             val s = state.value
             md.version.intValue
@@ -109,15 +133,20 @@ fun Transcript(
             val recent = settledTick >= 0 && memory.settledAt.longValue > 0 && SystemClock.uptimeMillis() - memory.settledAt.longValue < 1200
             val open = memory.openFolds.filterValues { it }.keys
             val groups = memory.openGroups.filterValues { it }.keys
-            TranscriptModel.rows(s.allItems, liveTurn, open, memory.turnDurations, md, groups, memory.pending.value, memory.aliases, s.subagents).let { list ->
+            // The failed attempts of a retry (and a "Compaction failed" after an overflow) are one error notice.
+            val (items, errors) = ErrorNotices.collapse(s.allItems, s.retry)
+            val list = TranscriptModel.rows(items, liveTurn, open, memory.turnDurations, md, groups, memory.pending.value, memory.aliases, s.subagents).let { list ->
                 if (!recent || liveTurn) list else markLastTurnLive(list)
             }
+            RowsState(list, uniqueCache.unique(list), errors)
         }
     }
-    val unique = remember(rows.size, rows.firstOrNull()?.key, rows.lastOrNull()?.key) { TranscriptModel.keysUnique(rows) }
-    if (!memory.primed && state.value.hello) {
-        rows.forEach { memory.seen.add(it.key) }
-        memory.primed = true
+    val hello by remember { derivedStateOf { state.value.hello } }
+    LaunchedEffect(hello) {
+        if (hello && !memory.primed) {
+            rowsState.value.rows.forEach { memory.seen.add(it.key) }
+            memory.primed = true
+        }
     }
 
     val list = rememberLazyListState()
@@ -131,13 +160,17 @@ fun Transcript(
     LaunchedEffect(list) {
         // Only content added at the end counts as new (opening a fold or card does not).
         var lastKey: String? = null
-        snapshotFlow { rows.lastOrNull()?.key }.collect { key ->
+        snapshotFlow { rowsState.value.rows.lastOrNull()?.key }.collect { key ->
             if (lastKey != null && key != lastKey && !atBottom) unseen = true
             lastKey = key
         }
     }
+    val statusOnScreen = remember { mutableStateOf(false) }
     LaunchedEffect(list) {
-        snapshotFlow { list.layoutInfo.visibleItemsInfo.any { it.key == "status" } }.collect { onStatusOnScreen(it) }
+        snapshotFlow { list.layoutInfo.visibleItemsInfo.any { it.key == "status" } }.collect {
+            statusOnScreen.value = it
+            onStatusOnScreen(it)
+        }
     }
     LaunchedEffect(list) {
         // Every send from this phone jumps to the bottom, wherever the reader was.
@@ -152,34 +185,56 @@ fun Transcript(
     }
     LaunchedEffect(jump) {
         val hit = jump?.hit ?: return@LaunchedEffect
+        fun rows() = rowsState.value.rows
         // A hit in a folded turn or a closed group opens it first; then the row is brought into view.
-        if (TranscriptSearch.rowIndex(rows, hit).let { it < 0 || rows[it] is FoldRow }) memory.openFolds[hit.turnKey] = true
-        (rows.getOrNull(TranscriptSearch.rowIndex(rows, hit)) as? ToolGroupRow)?.takeIf { !it.expanded }?.let { memory.openGroups[it.key] = true }
-        val index = withTimeoutOrNull(1_000) { snapshotFlow { TranscriptSearch.rowIndex(rows, hit) }.first { it >= 0 && rows[it] !is FoldRow } }
-            ?: TranscriptSearch.rowIndex(rows, hit)
-        if (index >= 0) list.animateScrollToItem(TranscriptSearch.listIndex(rows.size, index), scrollOffset = -list.layoutInfo.viewportSize.height / 3)
+        if (TranscriptSearch.rowIndex(rows(), hit).let { it < 0 || rows()[it] is FoldRow }) memory.openFolds[hit.turnKey] = true
+        (rows().getOrNull(TranscriptSearch.rowIndex(rows(), hit)) as? ToolGroupRow)?.takeIf { !it.expanded }?.let { memory.openGroups[it.key] = true }
+        val index = withTimeoutOrNull(1_000) { snapshotFlow { TranscriptSearch.rowIndex(rows(), hit) }.first { it >= 0 && rows()[it] !is FoldRow } }
+            ?: TranscriptSearch.rowIndex(rows(), hit)
+        if (index >= 0) list.animateScrollToItem(TranscriptSearch.listIndex(rows().size, index), scrollOffset = -list.layoutInfo.viewportSize.height / 3)
     }
     val reduced = Pi.reduceMotion
     /**
      * The list is anchored at the bottom, so a row opened above the reader's position would grow upward and slide
      * away. While scrolled up, keep the toggled row's top edge where it was for the length of the expand animation.
+     * Remembered once, so rows that capture it stay skippable.
      */
-    fun keepInPlace(key: Any) {
-        if (atBottom) return
-        scope.launch {
-            fun top(): Int? = list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }?.let { it.offset + it.size }
-            var last = top() ?: return@launch
-            val end = SystemClock.uptimeMillis() + PiMotion.STANDARD + 200
-            while (SystemClock.uptimeMillis() < end) {
-                withFrameNanos { }
-                val now = top() ?: break
-                if (now != last) {
-                    list.scrollBy((now - last).toFloat())
-                    last = top() ?: break
+    val keepInPlace: (Any) -> Unit = remember(list, scope) {
+        { key ->
+            if (!atBottom) {
+                scope.launch {
+                    fun top(): Int? = list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }?.let { it.offset + it.size }
+                    var last = top() ?: return@launch
+                    val end = SystemClock.uptimeMillis() + PiMotion.STANDARD + 200
+                    while (SystemClock.uptimeMillis() < end) {
+                        withFrameNanos { }
+                        val now = top() ?: break
+                        if (now != last) {
+                            list.scrollBy((now - last).toFloat())
+                            last = top() ?: break
+                        }
+                    }
                 }
             }
         }
     }
+    val currentOpen by rememberUpdatedState(onOpen)
+    val currentImages by rememberUpdatedState(onToolImages)
+    // A path in a tool card opens the file: read from this phone when the session's folder is here (on-device Pi),
+    // else a note that the file lives on the host.
+    val openFile: (String) -> Unit = remember(scope) {
+        { path ->
+            scope.launch {
+                val root = state.value.host?.cwd
+                val file = if (path.startsWith("/")) File(path) else root?.let { File(it, path) }
+                val readable = file != null && withContext(Dispatchers.IO) { file.isFile && file.canRead() }
+                currentOpen(
+                    if (readable) fileView(file, path) else ViewerContent(baseName(path), path, "This file is on the computer running Pi, not on this phone."),
+                )
+            }
+        }
+    }
+    val openImages: (List<ImageAttachment>, Int) -> Unit = remember { { images, index -> currentImages(ViewerImages(images, emptyList(), index)) } }
     val showPill by remember { derivedStateOf { !atBottom && (unseen || dragged || list.firstVisibleItemIndex > 2) } }
 
     val density = LocalDensity.current
@@ -187,38 +242,62 @@ fun Transcript(
     val baseType = Pi.type
     val type = remember(baseType, settings.textSize) { baseType.scaled(PiType.factorFor(settings.textSize)) }
 
-    CompositionLocalProvider(LocalDensity provides capped, LocalPiType provides type) {
-        Box(modifier.fillMaxSize()) {
+    val canvas = Pi.colors.canvas
+    CompositionLocalProvider(LocalDensity provides capped, LocalPiType provides type, LocalStatusOnScreen provides statusOnScreen) {
+        BoxWithConstraints(modifier.fillMaxSize()) {
+            // Past 840dp (landscape phones, tablets, foldables) the text keeps a 720dp reading width, centred; the
+            // list itself stays full width so it scrolls from anywhere.
+            val gutter = if (maxWidth > 840.dp) ((maxWidth - 720.dp) / 2).coerceAtLeast(16.dp) else 16.dp
             LazyColumn(
                 state = list,
                 reverseLayout = true,
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+                contentPadding = PaddingValues(start = gutter, end = gutter, top = 12.dp + TOP_FADE, bottom = 4.dp + BOTTOM_FADE),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                item(key = "status", contentType = "status") {
+                item(key = "status", contentType = -1) {
                     val s by status
                     StatusLine(s.visible, s.mode, s.text, memory.runStart.longValue, Modifier.padding(top = 6.dp))
                 }
+                val (rows, unique, errorGroups) = rowsState.value
                 val n = rows.size
                 items(
                     count = n,
                     key = { i -> if (unique) rows[n - 1 - i].key else "row$i" },
-                    contentType = { i -> rows[n - 1 - i]::class.simpleName },
+                    contentType = { i -> rows[n - 1 - i].contentType },
                 ) { i ->
                     val index = n - 1 - i
                     val row = rows[index]
-                    val previous = rows.getOrNull(index - 1)
-                    RowView(row, previous, memory, settings.toolPreviewLines, settings.thinkingExpanded, onOpen, onActions, onAskAgain, reduced, onImage) {
-                        keepInPlace(if (unique) row.key else "row$i")
+                    if (row is NoticeRow && ErrorNotices.isProviderError(row.item)) {
+                        ErrorNoticeView(
+                            row.item,
+                            errorGroups[row.item.key],
+                            errorContext,
+                            onAction = { onErrorAction(it, row.item) },
+                            modifier = if (row.live && !reduced) Modifier.animateItem(fadeInSpec = PiMotion.enter(PiMotion.STANDARD), placementSpec = null, fadeOutSpec = PiMotion.leave(PiMotion.STANDARD)) else Modifier,
+                        )
+                    } else {
+                        // Only prose spacing looks at the row before, and only at its block.
+                        val prevBlock = if (row is TextRow) (rows.getOrNull(index - 1) as? TextRow)?.takeIf { it.itemKey == row.itemKey }?.block else null
+                        val keepKey: Any = if (unique) row.key else "row$i"
+                        RowView(row, prevBlock, memory, settings.toolPreviewLines, settings.thinkingExpanded, onOpen, onActions, onAskAgain, reduced, onImage, openFile, openImages) {
+                            keepInPlace(keepKey)
+                        }
                     }
                 }
             }
-            // Rows slide under a short canvas fade instead of being cut at the top bar.
+            // Rows slide under canvas fades instead of being cut by the top bar and the composer.
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(12.dp)
-                    .background(Brush.verticalGradient(0f to Pi.colors.canvas, 1f to Pi.colors.canvas.copy(alpha = 0f))),
+                    .height(TOP_FADE)
+                    .background(Brush.verticalGradient(0f to canvas, 1f to canvas.copy(alpha = 0f))),
+            )
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(BOTTOM_FADE)
+                    .background(Brush.verticalGradient(0f to canvas.copy(alpha = 0f), 1f to canvas)),
             )
             AnimatedVisibility(
                 visible = showPill,
@@ -236,7 +315,8 @@ fun Transcript(
                         scaleOut(PiMotion.leave(PiMotion.QUICK), targetScale = 0.95f) +
                         slideOutVertically(PiMotion.leave(PiMotion.QUICK)) { with(density) { 16.dp.roundToPx() } }
                 },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 12.dp),
+                // Centred above the composer, out of the text column's end edge where it covered table cells and code.
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
             ) {
                 ScrollButton(unseen) {
                     scope.launch {
@@ -248,6 +328,45 @@ fun Transcript(
         }
     }
 }
+
+/** A tool card's file as viewer text: the first page of a text file ([ProjectFiles.open]), else what it is. */
+private suspend fun fileView(file: File, path: String): ViewerContent {
+    val text = when (val doc = ProjectFiles.open(file)) {
+        is FileDoc.Text -> if (doc.complete) doc.text else doc.text + "\n\n… the first ${ProjectFiles.size(doc.next ?: doc.size)} of ${ProjectFiles.size(doc.size)}"
+        is FileDoc.Image -> "Image, ${doc.width} × ${doc.height}, ${ProjectFiles.size(doc.size)}."
+        is FileDoc.Binary -> "Binary file, ${ProjectFiles.size(doc.size)}."
+        is FileDoc.Unreadable -> doc.reason
+    }
+    return ViewerContent(file.name, path, text)
+}
+
+/** The transcript's rows, whether their keys are unique (the list needs unique keys) and the collapsed error groups. */
+@Immutable
+private data class RowsState(val rows: List<TRow>, val unique: Boolean, val errors: Map<String, ErrorGroup>)
+
+/** [TranscriptModel.keysUnique], re-checked only when the row count or the first or last key changes. */
+private class UniqueCache {
+    private var size = -1
+    private var first: String? = null
+    private var last: String? = null
+    private var value = true
+
+    fun unique(rows: List<TRow>): Boolean {
+        val f = rows.firstOrNull()?.key
+        val l = rows.lastOrNull()?.key
+        if (rows.size != size || f != first || l != last) {
+            size = rows.size
+            first = f
+            last = l
+            value = TranscriptModel.keysUnique(rows)
+        }
+        return value
+    }
+}
+
+/** Canvas fades over the list's top and bottom edges. */
+private val TOP_FADE = 24.dp
+private val BOTTOM_FADE = 16.dp
 
 private fun markLastTurnLive(rows: List<TRow>): List<TRow> {
     val lastUser = rows.indexOfLast { it is UserRow }
@@ -273,7 +392,7 @@ private fun markLastTurnLive(rows: List<TRow>): List<TRow> {
 }
 
 /**
- * Scroll to the latest: a 40dp round button (surface3, 1dp lineStrong, arrow) at the end edge, 48dp to touch. An
+ * Scroll to the latest: a 40dp round button (surface3, 1dp lineStrong, arrow) centred above the composer, 48dp to touch. An
  * accent dot at its top-end marks unseen content; it pulses twice when it appears (static under reduce motion).
  */
 @Composable
@@ -323,7 +442,7 @@ private fun ScrollButton(unseen: Boolean, onClick: () -> Unit) {
 @Composable
 private fun LazyItemScope.RowView(
     row: TRow,
-    previous: TRow?,
+    prevBlock: MdBlock?,
     memory: SessionMemory,
     previewLines: Int,
     thinkingExpandedDefault: Boolean,
@@ -332,6 +451,8 @@ private fun LazyItemScope.RowView(
     onAskAgain: (String) -> Unit,
     reduced: Boolean,
     onImage: (String, Int) -> Unit,
+    onOpenFile: (String) -> Unit,
+    onImages: (List<ImageAttachment>, Int) -> Unit,
     keep: () -> Unit,
 ) {
     val animate = row.live && !reduced
@@ -375,7 +496,6 @@ private fun LazyItemScope.RowView(
             imageCount = row.pending.images,
         )
         is TextRow -> {
-            val prevBlock: MdBlock? = (previous as? TextRow)?.takeIf { it.itemKey == row.itemKey }?.block
             TextRowView(
                 row,
                 prevBlock,
@@ -417,6 +537,8 @@ private fun LazyItemScope.RowView(
                 onLongPress = { onActions(row) },
                 modifier = base.padding(top = Pi.dims.stepGap).riseIn(row.key, row.live, memory, 6.dp),
                 runningSince = since,
+                onOpenFile = onOpenFile,
+                onImages = onImages,
             )
         }
         is ToolGroupRow -> ToolGroupRowView(

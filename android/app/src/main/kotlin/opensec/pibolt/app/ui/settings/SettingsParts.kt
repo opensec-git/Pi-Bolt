@@ -210,7 +210,12 @@ internal fun UpdateBlock(app: PiBoltApp, autoCheck: Boolean, onAutoCheck: (Boole
         job is UpdateJob.Downloading -> SecondaryButton("Cancel download", onClick = updates::cancelDownload, modifier = Modifier.fillMaxWidth())
         job is UpdateJob.Ready -> PrimaryButton("Install ${job.info.version}", onClick = updates::requestInstall, modifier = Modifier.fillMaxWidth())
         job is UpdateJob.Verifying || job is UpdateJob.Installing -> Unit
-        available != null -> PrimaryButton("Update to ${available.version}", onClick = { updates.requestUpdate(available) }, modifier = Modifier.fillMaxWidth())
+        available != null -> {
+            PrimaryButton("Update to ${available.version}", onClick = { updates.requestUpdate(available) }, modifier = Modifier.fillMaxWidth())
+            // The offer can be a cached or snoozed release: a newer one stays discoverable with automatic checks off.
+            Spacer(Modifier.height(8.dp))
+            SecondaryButton("Check for updates", onClick = updates::checkNow, enabled = !state.checking, modifier = Modifier.fillMaxWidth())
+        }
         else -> SecondaryButton("Check for updates", onClick = updates::checkNow, enabled = !state.checking, modifier = Modifier.fillMaxWidth())
     }
     Spacer(Modifier.height(8.dp))

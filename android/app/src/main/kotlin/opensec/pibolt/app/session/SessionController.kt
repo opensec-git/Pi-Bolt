@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
@@ -51,6 +52,8 @@ import opensec.pibolt.app.ui.session.features.ShellCommand
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.buildJsonObject
 
 sealed interface SessionEffect {
     data class Notify(val message: String, val kind: String) : SessionEffect
@@ -148,6 +151,10 @@ class SessionController private constructor(
     private val _thinkingLevels = MutableStateFlow<List<String>>(emptyList())
     val thinkingLevels: StateFlow<List<String>> = _thinkingLevels.asStateFlow()
 
+    /** User `!` commands ([runShell]) still running. They run outside agent turns, so [SessionState.isRunning] misses them. */
+    private val _shellRuns = MutableStateFlow(0)
+    val shellRuns: StateFlow<Int> = _shellRuns.asStateFlow()
+
     private sealed interface Input {
         class Event(val json: JsonObject) : Input
 
@@ -169,6 +176,13 @@ class SessionController private constructor(
         private set
 
     private var usedFallback = false
+
+    /** Perf log (tag [PERF_TAG]): when this controller started, and when the last prompt was sent (0: none waiting). */
+    private val createdAt = SystemClock.elapsedRealtime()
+
+    @Volatile
+    private var sentAt = 0L
+    private var readyLogged = false
 
     fun start() {
         scope.launch { reduceLoop() }
@@ -195,14 +209,18 @@ class SessionController private constructor(
                 // An idle engine can serve the next open of this project (the engine decides); stop reading it first.
                 // Not idle while the subagents extension runs background agents (its "subagents" status): a parked
                 // engine would keep them running unseen, and their completion would start a new turn of a closed session.
-                val idle = _state.value.let { !it.isRunning && !it.isCompacting && it.dialogs.isEmpty() && SUBAGENTS_STATUS !in it.statuses } &&
-                    _link.value is LinkState.Connected
+                val idle = isIdle
                 rpc.stop()
                 scope.cancel()
                 origin.release(origin.backend, idle)
             }
         }
     }
+
+    /** Connected, and nothing runs: no turn, compaction, open dialog or background subagent. */
+    val isIdle: Boolean
+        get() = _state.value.let { !it.isRunning && !it.isCompacting && it.dialogs.isEmpty() && SUBAGENTS_STATUS !in it.statuses } &&
+            _link.value is LinkState.Connected
 
     fun retryNow() {
         retrySignal.trySend(Unit)
@@ -409,6 +427,15 @@ class SessionController private constructor(
     }
 
     private fun afterPublish(previous: SessionState, now: SessionState) {
+        if (!readyLogged && now.hello) {
+            readyLogged = true
+            Log.i(PERF_TAG, "session ready ${SystemClock.elapsedRealtime() - createdAt} ms (${now.items.size} items)")
+        }
+        val sent = sentAt
+        if (sent != 0L && now.streaming.isNotEmpty()) {
+            sentAt = 0L
+            Log.i(PERF_TAG, "first token ${SystemClock.elapsedRealtime() - sent} ms")
+        }
         val needsService = now.isRunning || now.dialogs.isNotEmpty()
         if (needsService && !(previous.isRunning || previous.dialogs.isNotEmpty())) SessionService.ensureRunning(app)
         if (previous.dialogs.isNotEmpty() && now.dialogs.isEmpty()) Notifications.clearNeedsAnswer(app)
@@ -428,6 +455,7 @@ class SessionController private constructor(
     /** Send a prompt. While the agent runs, [behavior] says whether it steers or waits as a follow-up. */
     fun send(text: String, behavior: StreamingBehavior, images: List<ImageAttachment> = emptyList()) {
         val running = _state.value.isRunning
+        sentAt = SystemClock.elapsedRealtime()
         scope.launch {
             // An extension command answers only when it finishes, after its dialogs: nothing waits on this.
             val response = rpc.prompt(text, images, streamingBehavior = if (running) behavior else null)
@@ -611,8 +639,13 @@ class SessionController private constructor(
         val key = SessionReducer.SHELL_PREFIX + System.currentTimeMillis()
         val args = JsonObject(mapOf("command" to JsonPrimitive(shell.command)))
         mutate { it.copy(items = it.items + ToolItem(key, key, "bash", args, status = ToolStatus.Running)) }
+        _shellRuns.update { it + 1 }
         scope.launch {
-            val response = rpc.bash(shell.command, shell.excludeFromContext)
+            val response = try {
+                rpc.bash(shell.command, shell.excludeFromContext)
+            } finally {
+                _shellRuns.update { it - 1 }
+            }
             val data = response.dataObject
             val exit = data?.let { (it["exitCode"] as? JsonPrimitive)?.content?.toIntOrNull() }
             val cancelled = data?.bool("cancelled") == true
@@ -641,6 +674,34 @@ class SessionController private constructor(
             rpc.request("set_auto_compaction") { put("enabled", defaults.autoCompaction) }
             rpc.request("set_auto_retry") { put("enabled", defaults.autoRetry) }
         }
+    }
+
+    /**
+     * Reads the session again (state, messages, commands) and replaces the transcript with it, as a session switch does:
+     * for changes RPC does not announce, such as moving the leaf of the session tree. Open dialogs are kept.
+     */
+    suspend fun resync(): Boolean {
+        val state = rpc.getState()
+        val messages = rpc.getMessages()
+        val commands = rpc.getCommands()
+        if (!state.success || !messages.success) return false
+        val host = _state.value.host
+        val hello = buildJsonObject {
+            put("type", "remote_hello")
+            put("protocol", 1)
+            put("host", buildJsonObject {
+                put("name", host?.name.orEmpty())
+                put("version", host?.version.orEmpty())
+                put("cwd", host?.cwd.orEmpty())
+            })
+            put("state", state.dataObject ?: JsonObject(emptyMap()))
+            put("messages", messages.dataObject?.arr("messages") ?: JsonArray(emptyList()))
+            put("commands", commands.dataObject?.arr("commands") ?: JsonArray(emptyList()))
+        }
+        val dialogs = _state.value.dialogs
+        inputs.send(Input.Event(hello))
+        if (dialogs.isNotEmpty()) mutate { it.copy(dialogs = dialogs) }
+        return true
     }
 
     /** Any other RPC command (packages/coding-agent/docs/rpc-commands.md). */
@@ -673,6 +734,7 @@ class SessionController private constructor(
         /** Status key of the bundled subagents extension, set while background agents run or wait. */
         private const val SUBAGENTS_STATUS = "subagents"
         private const val FRAME_MS = 16L
+        const val PERF_TAG = "PiBoltPerf"
 
         /** A session with the engine on this phone, in [project]. [release] takes the backend back when it stops. */
         fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit) =

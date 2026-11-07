@@ -22,6 +22,17 @@ enum class Builtin(val command: String, val description: String, val hint: Strin
     Export("export", "Share the session as Markdown, JSONL or HTML"),
     Search("search", "Search the transcript", "[text]"),
     Shell("!", "Run a shell command in the project (!! keeps it out of context)", "<command>", localOnly = true),
+    Tree("tree", "Branches of this session: go back, switch, label", localOnly = true),
+    Skills("skills", "Browse skills and prompt templates"),
+    Packages("packages", "Install, switch off or remove packages", localOnly = true),
+    Mcp("mcp-servers", "MCP servers: add, check, remove", localOnly = true),
+    Trust("trust", "Trust this project's .pi resources", localOnly = true),
+    Reload("reload", "Restart the engine: reload extensions, skills and settings", localOnly = true),
+    ScopedModels("scoped-models", "Choose the models in the picker", localOnly = true),
+    Tuning("tuning", "Retry and compaction settings", localOnly = true),
+    Import("import", "Import a session file (JSONL)", localOnly = true),
+    Share("share", "Share this session"),
+    Bug("bug", "Report a bug", "[description]"),
 }
 
 enum class CommandSource(val label: String) { App("app"), Extension("extension"), Prompt("prompt"), Skill("skill") }
@@ -49,7 +60,8 @@ object CommandPalette {
         val hostNames = host.mapTo(HashSet()) { it.name }
         val builtins = Builtin.entries.filter { (local || !it.localOnly) && it.command !in hostNames }
             .map { PaletteEntry(it.command, it.description, CommandSource.App, it.hint, it) }
-        val fromHost = host.map { c ->
+        // The app's own helper extension (features2.AppExtension) is not for people.
+        val fromHost = host.filterNot { it.name == "pibolt-app" || it.name.startsWith("pibolt-app:") }.map { c ->
             PaletteEntry(c.name, c.description?.takeIf { it.isNotBlank() }.orEmpty(), sourceOf(c.source), c.argumentHint)
         }
         return builtins + fromHost

@@ -28,6 +28,7 @@ import kotlinx.coroutines.launch
 import opensec.pibolt.app.MainActivity
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.R
+import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -141,7 +142,8 @@ object Notifications {
     private fun openApp(context: Context): PendingIntent = PendingIntent.getActivity(
         context,
         0,
-        Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        // Carries the live session, so a tap opens that exact session (features2.SessionAlerts).
+        SessionAlerts.openIntent(context),
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 

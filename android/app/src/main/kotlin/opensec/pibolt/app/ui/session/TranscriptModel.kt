@@ -1,6 +1,7 @@
 package opensec.pibolt.app.ui.session
 
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.mutableIntStateOf
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -13,6 +14,7 @@ import opensec.pibolt.app.ui.markdown.MdDoc
 import opensec.pibolt.protocol.session.AssistantTextItem
 import opensec.pibolt.protocol.session.ChatItem
 import opensec.pibolt.protocol.session.NoticeItem
+import opensec.pibolt.protocol.session.NoticeKind
 import opensec.pibolt.protocol.session.SessionReducer
 import opensec.pibolt.protocol.session.Subagent
 import opensec.pibolt.protocol.session.SubagentNoticeItem
@@ -23,10 +25,31 @@ import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
 import opensec.pibolt.protocol.session.UserItem
 
-/** One lazy-list row of the transcript. Keys are stable for the life of the row. */
+/**
+ * One lazy-list row of the transcript. Keys are stable for the life of the row. Every row is an immutable data class, so
+ * Compose compares rows by value: a finished row that the model rebuilt unchanged while another streams is skipped.
+ */
+@Stable
 sealed interface TRow {
     val key: String
     val live: Boolean
+
+    /** The lazy list's content type: rows of one kind reuse each other's compositions. */
+    val contentType: Int get() = when (this) {
+        is TextRow -> 0
+        is ToolRow -> 1
+        is ThinkingRow -> 2
+        is ToolGroupRow -> 3
+        is UserRow -> 4
+        is FoldRow -> 5
+        is GapRow -> 6
+        is NoticeRow -> 7
+        is ActionsRow -> 8
+        is PendingUserRow -> 9
+        is SubagentRow -> 10
+        is SubagentStackRow -> 11
+        is SubagentNoticeRow -> 12
+    }
 }
 
 /**
@@ -109,9 +132,10 @@ data class SubagentNoticeRow(val item: SubagentNoticeItem, val runs: List<Subage
 }
 
 /**
- * "Worked for 12s · 6 steps": the folded work of a finished turn. [failedSteps] counts tool steps that failed;
- * [endedInFailure] is true only when the turn's last step failed (a failed test run that a later step fixed does not
- * make the turn a failure). [files] are the files the turn edited or wrote.
+ * "Edited 3 files · ran 2 commands · 1m 12s": the folded work of a finished turn ([summary], see [turnSummary]).
+ * [failedSteps] counts tool steps that failed ([isFailedStep]); [endedInFailure] is true only when the turn ended in an
+ * error or was aborted (a failing test the agent then explained is information, not a failed turn). [files] are the
+ * files the turn edited or wrote.
  */
 @Immutable
 data class FoldRow(
@@ -122,6 +146,7 @@ data class FoldRow(
     val failedSteps: Int,
     val endedInFailure: Boolean,
     val files: List<FileChange> = emptyList(),
+    val summary: String = "",
 ) : TRow {
     override val key: String get() = "fold:$turnKey"
     override val live: Boolean get() = false
@@ -194,6 +219,7 @@ class MdCache(
     private val docs = HashMap<String, MdDoc>()
     private val changes = HashMap<String, Pair<ToolItem, FileChange?>>()
     private val parsing = HashMap<String, String>()
+    private val folds = HashMap<String, Pair<List<ChatItem>, Pair<List<FileChange>, String>>>()
 
     /** Bumped when a background parse lands; readers (the transcript's derived rows) recompute then. */
     val version = mutableIntStateOf(0)
@@ -229,9 +255,23 @@ class MdCache(
         return change
     }
 
+    /**
+     * A finished turn's changed files and summary, computed once per turn content: the fold rebuilds on every streamed
+     * frame of a later turn, and merging diffs each time would allocate their text again.
+     */
+    fun fold(turnKey: String, body: List<ChatItem>): Pair<List<FileChange>, String> {
+        folds[turnKey]?.let { (old, value) -> if (old == body) return value }
+        val tools = body.filterIsInstance<ToolItem>().filter { !TranscriptModel.isUserShell(it) }
+        val files = mergeChanges(tools.mapNotNull(::change))
+        val value = files to turnSummary(tools, files.size, body.count { it is ThinkingItem })
+        folds[turnKey] = body.toList() to value
+        return value
+    }
+
     fun retain(keys: Set<String>) {
         docs.keys.retainAll(keys)
         changes.keys.retainAll(keys)
+        folds.keys.retainAll(keys)
     }
 
     companion object {
@@ -288,7 +328,7 @@ object TranscriptModel {
             var lastStep = -1
             var steps = 0
             var failedSteps = 0
-            var lastToolFailed = false
+            var endedInFailure = false
             for (i in bodyStart until end) {
                 val it = items[i]
                 // A command the user ran (`!ls`) is not the agent's work: it stays visible after the answer.
@@ -296,18 +336,16 @@ object TranscriptModel {
                     lastStep = i
                     steps++
                 }
-                if (it is ToolItem && !isUserShell(it)) {
-                    lastToolFailed = it.status == ToolStatus.Error
-                    if (lastToolFailed) failedSteps++
-                }
+                if (it is ToolItem && !isUserShell(it) && isFailedStep(it)) failedSteps++
+                if (it is NoticeItem && (it.kind == NoticeKind.Error || it.kind == NoticeKind.Aborted)) endedInFailure = true
             }
             val foldable = !live && steps > 0
             val open = !foldable || turnKey in expanded
             // Only a duration this phone measured while watching the turn. Summing the tools' own run times would
             // leave out the model's time and read far too short ("1s" for a 10 s turn), so an unwatched turn shows none.
             if (foldable) {
-                val files = mergeChanges((bodyStart until end).mapNotNull { (items[it] as? ToolItem)?.let(md::change) })
-                out += FoldRow(turnKey, steps, durations[turnKey], open, failedSteps, lastToolFailed, files)
+                val (files, summary) = md.fold(turnKey, items.subList(bodyStart, end))
+                out += FoldRow(turnKey, steps, durations[turnKey], open, failedSteps, endedInFailure, files, summary)
             }
             if (open) {
                 out += TurnBody(md, live, turnKey, foldOpen = foldable, openGroups, agents).build(items, bodyStart, end, lastStep)
@@ -386,6 +424,11 @@ object TranscriptModel {
                     }
                     continue
                 }
+                if (item is ToolItem && isUnavailable(item) && laterSuccess(items, i, end)) {
+                    // A tool this host lacks, which Pi then worked around: nothing to show.
+                    i++
+                    continue
+                }
                 if (item is ToolItem && isGroupable(item)) {
                     val run = ArrayList<ToolItem>()
                     var j = i
@@ -398,7 +441,7 @@ object TranscriptModel {
                         }
                         j++
                     }
-                    if (run.size >= GROUP_MIN) {
+                    if (run.size >= GROUP_MIN || run.all(::isTodo)) {
                         val groupKey = "group:${run[0].key}"
                         val groupOpen = groupKey in openGroups
                         emit(ToolGroupRow(groupKey, run, groupOpen, live), foldSegment, foldStagger)
@@ -436,6 +479,10 @@ object TranscriptModel {
             }
         }
     }
+
+    /** A step after [from] (up to [end]) finished without error. */
+    private fun laterSuccess(items: List<ChatItem>, from: Int, end: Int): Boolean =
+        (from + 1 until end).any { (items[it] as? ToolItem)?.status == ToolStatus.Done }
 
     private fun withRail(row: TRow, rail: Rail): TRow = when (row) {
         is TextRow -> row.copy(rail = rail)

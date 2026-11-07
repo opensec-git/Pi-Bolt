@@ -6,6 +6,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -29,7 +31,8 @@ import java.io.RandomAccessFile
  *
  * A run is matched to its file by that id once known (background runs at once, foreground runs when they end), else by
  * its prompt (the file's first user message ends with it; an inherited conversation comes before). Running runs are
- * read every [ACTIVE_MS]; a finished one once more, then only while its detail screen is open ([watch]). Everything
+ * read every [ACTIVE_MS]; a finished one once more, then only while its detail screen is open ([watch]). With
+ * nothing to read it does not poll: it waits for the session state or [watch] to change. Everything
  * runs on [Dispatchers.IO]; only complete lines are parsed, so a line being written is read on the next pass.
  */
 class SubagentTail(
@@ -61,10 +64,17 @@ class SubagentTail(
                 } catch (e: Exception) {
                     false
                 }
-                delay(if (busy) ACTIVE_MS else IDLE_MS)
+                // Nothing to follow: no polling (an idle session must not wake the phone). Sleep until a run starts,
+                // a detail screen opens or a snapshot brings runs to read.
+                if (!busy) combine(state, wanted) { s, want -> hasWork(s, want) }.first { it }
+                delay(ACTIVE_MS)
             }
         }
     }
+
+    /** True when [pass] has something to read: a running or watched run, or a finished one not yet read to its end. */
+    internal fun hasWork(s: SessionState = state.value, want: Set<String> = wanted.value): Boolean =
+        s.subagents.values.any { run -> run.isActive || run.key in want || bindings[run.key]?.finished == false }
 
     /** Read run [key]'s file while [on] (its detail screen is open), also after it finished. */
     fun watch(key: String, on: Boolean) {
@@ -75,11 +85,11 @@ class SubagentTail(
     internal fun pass(): Boolean {
         val s = state.value
         bindings.keys.retainAll(s.subagents.keys)
-        val parent = parentFile() ?: return false
-        val dir = File(parent).parentFile ?: return false
         val want = wanted.value
         val targets = s.subagents.values.filter { run -> run.isActive || run.key in want || bindings[run.key]?.finished == false }
         if (targets.isEmpty()) return false
+        val parent = parentFile() ?: return false
+        val dir = File(parent).parentFile ?: return false
         var files: List<File>? = null
         for (run in targets) {
             var binding = bindings[run.key]
@@ -200,7 +210,6 @@ class SubagentTail(
 
     private companion object {
         const val ACTIVE_MS = 400L
-        const val IDLE_MS = 1000L
         const val HEADER_LINES = 40
 
         /** Read at most this much per pass, so a long saved transcript arrives in steps. */

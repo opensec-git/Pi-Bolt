@@ -261,17 +261,32 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   - thinking: row "Thinking" (Quad Think 12dp + shimmer) live, "Thought for 8s" after; collapsed by default; body
     thinking style with a 1dp rail; live body is a 5-line window pinned to the newest text that glides up (120 ms,
     in place) as lines arrive, with a 24dp top fade.
-  - tool row: 20dp slot (Run/Write spinner → result glyph), verb (label ink2: Run, Read, Edit, Write, Search),
-    argument (mono ink3, middle ellipsis for paths), right meta (+n success, −n danger, duration tnum; while running,
-    the elapsed time from 1 s: "4s", "1m 3s", ticking once a second). Tap expands a card: bash (`$` glyph, command,
-    Copy, exit badge, last 12 lines, footer Copy output + "Show N more" → full-screen viewer with copy and wrap
-    toggle), edit/diff (gutter bars, unchanged runs collapsed), read (path, line range, preview).
-  - running bash card: the output's live tail with a 24dp top fade and a terminal cursor after the last glyph (7x14dp
-    ink2 block, hard blink 500 ms on / 500 ms off, solid at 60% under reduce motion; alone on the first line before
-    any output). It is the card's only live signal: no top sweep (other running cards keep the 2dp sweep).
-  - three or more consecutive finished Read/Search/Find/List steps (and `todo` calls) fold into one step row: check
-    glyph, "Read 3 files, ran 1 search" or "Updated todos 7 times" (label ink2), the base names or task subjects (mono
-    ink3), summed duration, chevron; tap lists them. Run, Edit and Write are never grouped.
+  - tool row: 20dp slot (Run/Write spinner → result glyph), verb (label ink2: "Run" while active, "Ran", "Read",
+    "Edited", "Wrote", "Searched", "Found", "Listed" once done), argument (mono ink3, middle ellipsis for paths; a read
+    carries its range, `src/app.ts:10-80`), right meta (+n success, −n danger, a failing bash exit "exit 1" in danger,
+    "no results" ink3 for an empty search or listing, a duration only from 1 s, tnum; while running, the elapsed time
+    from 1 s: "4s", "1m 3s", ticking once a second). A tool the host lacks reads as one meta ink3 line ("List isn't
+    available here", no danger glyph) and is hidden once a later step succeeds. Images in a result (`content` items
+    of type image) show as 120dp thumbnails under the row, open or not; a tap opens the image viewer.
+  - tool cards (tap a row): one Copy at most, and a footer only when something is cut: "Show all N lines" opens the
+    rest in place (up to 400 lines), past that "Open output / file / diff" goes to the full-screen viewer.
+    - bash: `$` (success, danger on a failing exit), command, exit badge, Copy (the output). The output is a terminal
+      on the canvas: SGR colours mapped to tokens (red danger, green success, yellow warning, blue/magenta/cyan the
+      syntax function/keyword/operator colours, 256 and 24-bit as given), bold SemiBold, dim 60%; other escapes are
+      dropped and a bare CR rewinds the line. Plain output stays ink2 whatever the exit code; without colours of its
+      own, lines starting FAIL/ERROR/Error:/✗ get danger and ok/PASS/✓ success at 80%. Pi's "Command exited with
+      code N" line is dropped (the badge says it). The tail shows first (summaries come last).
+    - edit: the path (tap opens the file), +n −n, an open-in-full action; rows with old and new line numbers in two
+      ink3 gutters (a deletion has no new number, an addition no old one), the sign, the code in its syntax colours
+      over the add/delete tints, changed words of paired lines marked, unchanged runs folded to "⋯ N unchanged lines".
+      The card lays out as two texts (gutters, code) with the row tints drawn behind them.
+    - write: the new file as a numbered, highlighted preview with +n. read: path chip (tap opens the file), "L10–49"
+      range chip, numbered preview in the file's syntax colours; Pi's "[Showing lines …]" note is dropped.
+    - grep/find/ls: a line-count chip; grep lines as path ink1, line number ink3, text ink2 with a literal pattern in
+      warning; listings as paths, folders ink1.
+  - three or more consecutive finished Read/Search/Find/List steps fold into one step row, and `todo` calls at any
+    count: check glyph, "Read 3 files, ran 1 search" or "Updated todos 7 times" (label ink2), the base names or task
+    subjects (mono ink3), summed duration from 1 s, chevron; tap lists them. Run, Edit and Write are never grouped.
   - subagent calls (opensec-pi-subagents): each `Agent` call is a card, parallel calls a stack (see Subagents below).
     `steer_subagent`, `get_subagent_result` and `SubagentWorkflow` stay step rows: "Steer agent", "Agent result",
     "Workflow" + the workflow's name.
@@ -323,7 +338,10 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   - inline code: Mono 0.88em ink1 on a surface3 chip (radius 4, line box inset 14%), one chip per line segment
     when it wraps. A narrow no-break space pads each side inside the chip so it never touches neighbours; code of
     24+ characters without spaces may break after `/ . _ -`.
-  - after a turn: "Worked for 12s · 6 steps" fold collapses its steps; the final answer stays visible. Under it,
+  - after a turn: "Edited 3 files · ran 2 commands · 1m 12s" fold collapses its steps (at most three parts: edited
+    files, commands, distinct files read, searches, agents; "N steps" when none apply; the time only when this phone
+    watched the turn). "· 1 step failed" in ink3 after a 6dp danger dot; "· failed" in danger only when the turn ended
+    in an error or abort; the final answer stays visible. Under it,
     chips for the files the turn edited or wrote (28dp, radius 8, surface1 + 1dp line, name in mono meta ink1, +n
     success, −n danger, tnum; at most 3, then "+k more"); a chip opens that file's diff. An opened fold draws a 1dp
     line rail at the slot centre through its steps (broken 4dp around each glyph, ending at the last one) and indents

@@ -5,6 +5,8 @@ paths-ignore:
   - "**/tests/**"
   - "**/*.test.ts"
   - "**/*.test.mjs"
+  # The Android e2e harness: its ui.mjs `re=` queries are regexes by design, written by the test scripts.
+  - android/e2e/**
   - bench/**
   - scripts/**
   - packages/*/scripts/**

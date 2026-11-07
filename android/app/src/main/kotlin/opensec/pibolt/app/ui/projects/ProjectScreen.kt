@@ -27,6 +27,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarHostState
@@ -82,6 +83,7 @@ import opensec.pibolt.app.ui.components.sharedHostBounds
 import opensec.pibolt.app.ui.components.sharedHostElement
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.session.TranscriptModel
+import opensec.pibolt.app.ui.session.features2.SessionBrowserSheet
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
 import java.io.File
@@ -126,6 +128,7 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
     val files by produceState<List<FileEntry>?>(null, folder, showFiles, reload) { if (showFiles) value = ProjectFiles.list(folder) }
     val shownFiles = remember(files, sort, showHidden) { files?.let { ProjectFiles.visible(ProjectFiles.order(it, sort), showHidden) } }
     var opening by remember { mutableStateOf(false) }
+    var browse by remember { mutableStateOf(false) }
     val unavailable = status is EngineStatus.Unavailable
     val now = remember(sessions) { System.currentTimeMillis() }
 
@@ -159,6 +162,8 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
                 Row(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Projects", onClick = onBack, tint = colors.ink1)
                     Spacer(Modifier.weight(1f))
+                    // Sort, filter, search inside messages, rename and delete (features2).
+                    IconAction(Icons.Rounded.Search, "Search and manage sessions", onClick = { browse = true }, enabled = !unavailable)
                     Box {
                         IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
                         ProjectMenu(
@@ -318,6 +323,23 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
         },
         onError = { scope.launch { snackbar.show(it, SnackKind.Error) } },
     )
+
+    if (browse) {
+        SessionBrowserSheet(
+            engine = engine,
+            project = dir,
+            live = liveHere?.controller,
+            onOpen = {
+                browse = false
+                open(it.file, fresh = false)
+            },
+            onMessage = { m -> scope.launch { snackbar.show(m) } },
+            onDismiss = {
+                browse = false
+                reload++
+            },
+        )
+    }
 
     ProjectActionSheets(
         action = action,
