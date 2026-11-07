@@ -436,9 +436,10 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
     label ink2, counts success / danger tnum, " · undone" in ink3 after an undo; 48dp tall), only for turns whose
     checkpoints show changed files. Over remote control the newest turn that edited files says instead, in meta ink3,
     that review and undo work in sessions on this phone (the files are on the computer).
-  - under the last finished reply: Copy (check + "Copied"), Ask again (sends the same prompt as a new turn; Pi has
-    no regenerate; hidden for prompts with images) and More (Select text, View as Markdown, Share), 40dp tall,
-    aligned with the prose. Fades in 150 ms after the turn settles; never animates in history.
+  - under the last finished reply: three icons, ink2 16-18dp, each in a 48dp target, no labels (one calm toolbar):
+    Copy (a success check while copied), Ask again (sends the same prompt as a new turn; Pi has no regenerate; hidden
+    for prompts with images) and More (Select text, View as Markdown, Share), 40dp tall, the copy glyph aligned with
+    the prose. Fades in 150 ms after the turn settles; never animates in history.
   - live status line: Quad 16dp + shimmer label + elapsed timer. A running tool is named: the verb shimmers and its
     command or path follows in mono small ink3 ("Run  npm test"; a subagent reads "Agent working" + its task;
     parallel tools add "+n"); text changes crossfade (quick).

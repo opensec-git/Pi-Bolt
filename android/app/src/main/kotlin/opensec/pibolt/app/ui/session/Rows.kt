@@ -510,12 +510,13 @@ fun Modifier.staggerIn(key: String, rail: Rail?, memory: SessionMemory): Modifie
 // Reply actions
 
 /**
- * Under the last finished reply: Copy (the answer), Ask again (sends the same prompt as a new turn: Pi has no
- * regenerate) and More (the long-press sheet). Fades in once when the turn settles; history shows it as is.
+ * Under the last finished reply, three quiet icons in a row (each 48dp to touch, ink2 at 18dp): Copy (a check while
+ * copied), Ask again (sends the same prompt as a new turn: Pi has no regenerate) and More (the long-press sheet). Icons
+ * only, so the row reads as one calm toolbar rather than three labelled buttons. Fades in once when the turn settles;
+ * history shows it as is.
  */
 @Composable
 fun ReplyActions(row: ActionsRow, memory: SessionMemory, onAskAgain: (String) -> Unit, onMore: () -> Unit, modifier: Modifier = Modifier) {
-    val colors = Pi.colors
     val reduced = Pi.reduceMotion
     val animate = remember(row.key) { !reduced && memory.primed && memory.seen.add(row.key) && memory.settledAt.longValue > 0 && SystemClock.uptimeMillis() - memory.settledAt.longValue < 3000 }
     memory.seen.add(row.key)
@@ -525,27 +526,14 @@ fun ReplyActions(row: ActionsRow, memory: SessionMemory, onAskAgain: (String) ->
         modifier
             .fillMaxWidth()
             .height(40.dp)
-            // Each action's padding starts it 10dp in; pull the row back so the first icon lines up with the prose.
-            .offset(x = (-10).dp)
+            // Each icon sits in a 48dp target; pull the row back so the copy glyph lines up with the prose.
+            .offset(x = (-12).dp)
             .graphicsLayer { this.alpha = alpha.value },
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        CopyButton(text = { row.reply }, clipLabel = "Reply", description = "Copy reply")
+        CopyButton(text = { row.reply }, modifier = Modifier.width(48.dp), label = false, clipLabel = "Reply", description = "Copy reply")
         val prompt = row.prompt
-        if (prompt != null) {
-            val shape = RoundedCornerShape(Radius.sm)
-            Row(
-                Modifier
-                    .heightIn(min = 48.dp)
-                    .pressable({ onAskAgain(prompt) }, shape = shape, label = "Send this prompt again")
-                    .padding(horizontal = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Icon(Icons.Rounded.Replay, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text("Ask again", style = Pi.type.meta, color = colors.ink2)
-            }
-        }
+        if (prompt != null) IconAction(Icons.Rounded.Replay, "Ask again", onClick = { onAskAgain(prompt) }, size = 18.dp)
         IconAction(Icons.Rounded.MoreHoriz, "More actions", onClick = onMore, size = 18.dp)
     }
 }
