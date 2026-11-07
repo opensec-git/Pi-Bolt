@@ -151,6 +151,9 @@ private fun DeviceSignInSheet(app: PiBoltApp, onDismiss: () -> Unit) {
                     throw e
                 } catch (e: GitHubException) {
                     step = DeviceFlowState.Failed(e.message ?: "Sign-in failed", canRetry = true)
+                } catch (e: Exception) {
+                    // The Keystore refused to seal the token: an error in the sheet, not a crash of the app.
+                    step = DeviceFlowState.Failed("Could not store the token on this phone", canRetry = true)
                 }
             } else {
                 step = s

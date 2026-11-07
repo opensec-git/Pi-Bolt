@@ -47,6 +47,7 @@ import kotlinx.coroutines.launch
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.components.EmptyState
+import opensec.pibolt.app.ui.components.GlassBarInset
 import opensec.pibolt.app.ui.components.GlassIconButton
 import opensec.pibolt.app.ui.components.GlassSearchField
 import opensec.pibolt.app.ui.components.InsetRow
@@ -104,7 +105,7 @@ fun ChatsScreen(app: PiBoltApp, onBack: () -> Unit, onOpenChat: () -> Unit) {
     Box(Modifier.fillMaxSize().background(colors.canvas)) {
         Column(Modifier.fillMaxSize()) {
             Row(
-                Modifier.statusBarsPadding().fillMaxWidth().height(56.dp).padding(horizontal = Space.page - Space.sm),
+                Modifier.statusBarsPadding().fillMaxWidth().height(56.dp).padding(horizontal = GlassBarInset),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack)
@@ -160,7 +161,7 @@ fun ChatsScreen(app: PiBoltApp, onBack: () -> Unit, onOpenChat: () -> Unit) {
                                 itemsIndexed(inSection, key = { _, c -> c.file }, contentType = { _, _ -> "chat" }) { i, chat ->
                                     InsetRow(
                                         title = chat.title,
-                                        meta = ChatList.meta(chat, now),
+                                        meta = ChatList.meta(chat, now, Pi.settings.spend.showInLists),
                                         onClick = { open(chat.file) },
                                         onLongClick = {
                                             haptics.longPress()

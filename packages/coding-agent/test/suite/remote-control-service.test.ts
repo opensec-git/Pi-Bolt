@@ -608,6 +608,23 @@ describe("remote control background service", () => {
 			expect(tty.at(-1)).toContain("Scan with a paired phone to give it these addresses; it pairs nothing.");
 		});
 
+		it("lists a phone that reconnected from another network once, not once per socket", async () => {
+			const { agentDir } = await setup();
+			const { phone: lan, key, uri } = await pairPhone(agentDir, "motorola edge 60 pro");
+			const tunnel = track(await connectTestClient(uri, key, { pair: false, device: "motorola edge 60 pro" }));
+			expect(await lan.closed).toBe(CloseCode.Replaced);
+			const lines: string[] = [];
+			await runServiceCommand(["status"], {
+				agentDir,
+				out: (line) => lines.push(line),
+				system: system(tempDir("pi-svc-home-"), false),
+			});
+			expect(lines).toContain("  Phones: 1 paired, connected: motorola edge 60 pro");
+			expect((await tunnel.request({ type: "get_state" })).success).toBe(true);
+			const log = () => readFileSync(join(agentDir, "remote-control", "service.log"), "utf8");
+			await until(() => log().includes("Disconnected motorola edge 60 pro"), "the old socket's disconnect");
+		});
+
 		it("pairs a new phone with the running service from a terminal", async () => {
 			const { agentDir } = await setup();
 			const lines: string[] = [];

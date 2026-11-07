@@ -1,7 +1,8 @@
 // fake-model-ext.mjs: fake-model-scripted.mjs plus extension tool scripts (extensions.sh): e2e-todo-create,
 // e2e-todo-update, e2e-todo-done, e2e-todo-list (`todo`), e2e-agent (foreground `Agent`), e2e-bgagent (slow background
 // `Agent`), e2e-web-search, e2e-web-multi, e2e-web-fetch (pi-web-access; real network), e2e-ask (`ask_user_question`, a
-// single and a multi-select question). See TOOL_SCRIPTS.
+// single and a multi-select question). See TOOL_SCRIPTS. For frames.sh: smooth-md (a long markdown reply in 16-character
+// chunks every 8 ms) and smooth-agents (three foreground `Agent` calls at once, each subagent writing for 8 s).
 // Fake OpenAI-compatible chat completions server for the Android on-device E2E suite.
 // The basic fake model (default, "tool" and "slow" replies) plus a scripted mode:
 //
@@ -81,6 +82,17 @@ const TOOL_SCRIPTS = {
 		{ subagent_type: "general-purpose", description: "E2E subagent", prompt: "e2e-subtask: reply with a greeting", run_in_background: false },
 	],
 };
+
+function longReply() {
+	const parts = [];
+	for (let s = 1; s <= 12; s++) {
+		parts.push(`## Section ${s}\n\nThis paragraph explains part ${s} of the change in some detail, with \`inline code\`, **bold** and *italic* words so the markdown renderer has real work on every frame. It wraps over several lines on a phone.\n`);
+		parts.push(`- item one of ${s}\n- item two with a [link](https://example.com/${s})\n- item three\n`);
+		parts.push("```kotlin\nfun section" + s + "(x: Int): Int {\n    val y = x * " + s + "\n    return y + 1 // comment\n}\n```\n");
+		if (s % 3 === 0) parts.push(`| key | value |\n| --- | --- |\n| a${s} | ${s * 2} |\n| b${s} | ${s * 3} |\n`);
+	}
+	return parts.join("\n");
+}
 
 function scriptFor(text) {
 	const run = /e2e-run:\s*(.+)$/im.exec(text);
@@ -178,6 +190,37 @@ createServer(async (req, res) => {
 	if (last.role === "user" && /e2e-subtask/i.test(text)) {
 		log({ ...entry, event: "subagent-request", tools: (request.tools ?? []).map((t) => t.function?.name) });
 		await stream("SUBAGENT-OK hello from the subagent.", 10);
+		return;
+	}
+	if (last.role === "user" && /smooth-md/i.test(text)) {
+		log({ ...entry, event: "smooth-md" });
+		send({ role: "assistant", content: "" });
+		const content = longReply();
+		for (let i = 0; i < content.length; i += 16) {
+			if (aborted) return;
+			send({ content: content.slice(i, i + 16) });
+			await sleep(8);
+		}
+		send({}, "stop");
+		end();
+		return;
+	}
+	if (last.role === "user" && /smooth-subwork/i.test(text)) {
+		log({ ...entry, event: "smooth-subwork" });
+		await stream(Array.from({ length: 80 }, (_, i) => `step${i} `).join(""), 100);
+		return;
+	}
+	if (last.role === "user" && /smooth-agents/i.test(text)) {
+		log({ ...entry, event: "smooth-agents" });
+		send({ role: "assistant", content: "Starting three agents. " });
+		for (let k = 0; k < 3; k++)
+			send({ tool_calls: [{ index: k, id: `call_${Date.now()}_${k}`, type: "function", function: { name: "Agent", arguments: JSON.stringify({ subagent_type: "general-purpose", description: `Smooth agent ${k + 1}`, prompt: `smooth-subwork ${k}`, run_in_background: false }) } }] });
+		send({}, "tool_calls");
+		end();
+		return;
+	}
+	if (last.role === "tool" && /smooth-agents/i.test(text)) {
+		await stream("All three agents finished. **Done.**", 10);
 		return;
 	}
 	// A reminder on its own (not right after a prompt) gets a short reply.

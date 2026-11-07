@@ -307,6 +307,21 @@ class CheckpointsTest {
     }
 
     @Test
+    fun aSnapshotKilledHalfwayDoesNotPauseCheckpointsForGood() {
+        write("a.txt", "one\n")
+        val repo = repo()
+        repo.snapshot("first")
+        // The app process was killed during `git add` (or git timed out and was killed): its lock files stay.
+        File(gitDir, "index.lock").writeText("")
+        File(gitDir, "packed-refs.lock").writeText("")
+        write("a.txt", "two\n")
+        val next = repo.snapshot("second")
+        assertEquals(listOf("a.txt"), repo.changes(repo.snapshotCommits().first { it != next.commit }, next.commit).map { it.path })
+        repo.prune(keep = setOf(next.commit), force = true)
+        assertEquals(setOf(next.commit), repo.snapshotCommits())
+    }
+
+    @Test
     fun aFailingSnapshotIsOneQuietNotice() {
         val broken = ShadowRepo(Git(File(root, "no-git").path, { System.getenv() }, gitDir, project))
         val cp = checkpoints(broken)

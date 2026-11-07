@@ -3,11 +3,14 @@ package opensec.pibolt.app.ui.projects
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
 import opensec.pibolt.app.data.ProjectStore
+import opensec.pibolt.app.terminal.Terminals
 import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.session.TextPromptSheet
+import java.io.File
 
 /**
  * Rename (the shown title only: the folder keeps its name so Pi still finds its sessions) and Delete (folder, files
@@ -16,6 +19,7 @@ import opensec.pibolt.app.ui.session.TextPromptSheet
  */
 @Composable
 fun ProjectActionSheets(action: ProjectAction?, projects: Projects, store: ProjectStore, scope: CoroutineScope, onDone: () -> Unit, onDeleted: (String) -> Unit, onError: (String) -> Unit) {
+    val context = LocalContext.current.applicationContext
     when (action) {
         null -> Unit
         is ProjectAction.Rename -> TextPromptSheet(
@@ -44,6 +48,9 @@ fun ProjectActionSheets(action: ProjectAction?, projects: Projects, store: Proje
                 onConfirm = {
                     onDone()
                     LocalSessions.close(entry.name)
+                    // Its shells (and a dev server in them) go too: left running, they would hold files in the folder
+                    // being deleted, keep the terminal notification up, and show up in a new project of the same name.
+                    Terminals.inProject(File(entry.path)).forEach { Terminals.close(context, it) }
                     scope.launch {
                         projects.delete(entry.name).onSuccess { onDeleted(entry.name) }.onFailure { onError(it.message ?: "Could not delete the folder") }
                     }

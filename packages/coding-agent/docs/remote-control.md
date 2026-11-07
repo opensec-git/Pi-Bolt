@@ -177,8 +177,8 @@ The fragment (`#...`) is never sent anywhere; the app parses it locally.
    starting at 0, as in the Noise spec). The plaintext is `flag || data`: flag `0x00` marks the last chunk of a
    message, `0x01` a chunk with more to follow. Chunks carry at most 65000 data bytes. The concatenated data of a
    message is one UTF-8 JSON object.
-4. Close codes: 4400 malformed handshake or decryption failure, 4403 not authorized, 4408 no handshake message within 3 seconds of connecting, or no `remote_ready` within 3 seconds of frame 2 (both count as failed handshakes), 4429 too many failed handshakes from this address; an address may have at most 3 connections in their handshake at once, 1001 host stopping, 1012 the background service handed the port to a terminal or took it back (reconnect at once, to the same addresses).
-5. Keepalive: the host sends WebSocket pings every 20 seconds and drops a client that misses two; clients may ping too.
+4. Close codes: 4400 malformed handshake or decryption failure, 4403 not authorized, 4408 no handshake message within 3 seconds of connecting, or no `remote_ready` within 3 seconds of frame 2 (both count as failed handshakes), 4429 too many failed handshakes from this address; an address may have at most 3 connections in their handshake at once, 1001 host stopping, 1012 the background service handed the port to a terminal or took it back (reconnect at once, to the same addresses), 1000 replaced: the same device completed a newer handshake (after `remote_ready`), so the host closed its older connection (a client does not reconnect on it; it already uses the newer one).
+5. Keepalive: the host sends WebSocket pings every 20 seconds and drops a client that has not answered the previous one (20 to 40 seconds after it went silent); clients may ping too.
 
 ### Messages
 

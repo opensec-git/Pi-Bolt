@@ -17,6 +17,7 @@ import opensec.pibolt.protocol.session.ToolStatus
 import opensec.pibolt.protocol.str
 import opensec.pibolt.protocol.toDisplayString
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /** What kind of step a tool is; picks the expanded card. */
 enum class ToolKind { Bash, Read, Write, Edit, Search, List, Todo, Web, Ask, Other }
@@ -28,6 +29,10 @@ enum class ToolKind { Bash, Read, Write, Edit, Search, List, Todo, Web, Ask, Oth
 data class ToolLabel(val kind: ToolKind, val verb: String, val detail: String, val past: String = verb)
 
 private val partialField = Regex("\"(command|path|file_path|pattern|query|url|description|prompt|subagent_type|subject|agent_id|message|action|status)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)")
+
+/** "#2" for a background-job tool's `id` (a number, or a numeric string). */
+private fun jobRef(item: ToolItem): String =
+    (item.args?.get("id") as? JsonPrimitive)?.content?.let { "#$it" } ?: Regex(""""id"\s*:\s*"?(\d+)""").find(item.argsText)?.let { "#${it.groupValues[1]}" }.orEmpty()
 
 fun toolLabel(item: ToolItem): ToolLabel {
     val args = item.args
@@ -48,6 +53,11 @@ fun toolLabel(item: ToolItem): ToolLabel {
         "grep" -> ToolLabel(ToolKind.Search, "Search", listOfNotNull(arg("pattern"), arg("path")?.let { "in $it" }).joinToString(" "), "Searched")
         "find", "glob" -> ToolLabel(ToolKind.Search, "Find", listOfNotNull(arg("pattern"), arg("path")?.let { "in $it" }).joinToString(" "), "Found")
         "ls" -> ToolLabel(ToolKind.List, "List", arg("path") ?: ".", "Listed")
+        // The app's background jobs (engine/BackgroundJobs.kt): job ids are numbers.
+        "bash_background" -> ToolLabel(ToolKind.Bash, "Start in the background", arg("name")?.takeIf { it.isNotBlank() } ?: firstLine(arg("command")), "Started in the background")
+        "bash_output" -> ToolLabel(ToolKind.Bash, "Read output", jobRef(item), "Read output")
+        "bash_kill" -> ToolLabel(ToolKind.Bash, "Stop job", jobRef(item), "Stopped job")
+        "bash_jobs" -> ToolLabel(ToolKind.Bash, "List background jobs", "", "Listed background jobs")
         // The subagents extension (opensec-pi-subagents): the agent type, then its task.
         "agent" -> when {
             args?.str("resume") != null -> ToolLabel(ToolKind.Other, "Resume agent", firstLine(arg("prompt")).ifBlank { args.str("resume").orEmpty() })
@@ -66,6 +76,14 @@ fun toolLabel(item: ToolItem): ToolLabel {
         "source_check" -> ToolLabel(ToolKind.Web, "Check sources", firstLine(arg("claim")), "Checked sources")
         "fetch_content" -> ToolLabel(ToolKind.Web, "Read", WebTools.fetchUrls(item).joinToString(", ").ifBlank { arg("url").orEmpty() }, "Read")
         "get_search_content" -> ToolLabel(ToolKind.Web, "Read results", arg("query", "url").orEmpty(), "Read results")
+        // The app's preview tools (assets/extensions/pibolt-preview.js).
+        "preview_open" -> ToolLabel(ToolKind.Other, "Open preview", arg("url") ?: "dev server", "Opened preview")
+        "preview_screenshot" -> ToolLabel(ToolKind.Other, "Screenshot", "preview", "Took a screenshot")
+        "preview_console" -> ToolLabel(ToolKind.Other, "Read console", "preview", "Read the console")
+        "preview_click" -> ToolLabel(ToolKind.Other, "Click", arg("selector") ?: pointOf(args).orEmpty(), "Clicked")
+        "preview_type" -> ToolLabel(ToolKind.Other, "Type", arg("selector").orEmpty(), "Typed")
+        "preview_scroll" -> ToolLabel(ToolKind.Other, "Scroll", arg("selector", "to") ?: "preview", "Scrolled")
+        "preview_eval" -> ToolLabel(ToolKind.Other, "Run in page", firstLine(arg("js")), "Ran in page")
         ASK_TOOL -> ToolLabel(ToolKind.Ask, "Ask", AskQuestions.parse(item.args)?.firstOrNull()?.question?.let(::firstLine).orEmpty(), if (isDeclinedAsk(item)) "Declined" else "Asked")
         else -> {
             val first = args?.entries?.firstOrNull { (it.value as? JsonPrimitive)?.isString == true }?.let { (it.value as JsonPrimitive).content }
@@ -85,6 +103,13 @@ fun readRange(item: ToolItem): String? {
         limit != null -> ":1-$limit"
         else -> null
     }
+}
+
+/** "120, 340": a preview click's x and y, null without them. */
+private fun pointOf(args: JsonObject?): String? {
+    val x = (args?.get("x") as? JsonPrimitive)?.content?.toDoubleOrNull() ?: return null
+    val y = (args["y"] as? JsonPrimitive)?.content?.toDoubleOrNull() ?: return null
+    return "${x.roundToInt()}, ${y.roundToInt()}"
 }
 
 /** Tools that run another agent: the Quad shows Agent while they run. */

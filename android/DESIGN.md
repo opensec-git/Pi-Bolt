@@ -361,8 +361,9 @@ alpha). No overshoot except sheet drag release.
 - `GlassIconButton`: a 44dp glass circle in a 48dp target, a 22dp ink1 glyph (back, more, search, +); press 0.96.
 - `GlassPill`: a floating glass pill, 40dp (48dp target), 16dp sides ("View changes +2 −2").
 - `StatusTile`: one tile of a 2x2 grid; radius tile (16), surface1 + 1dp line (lineStrong when active), 104dp; a 20dp
-  glyph top-left in its own colour, the label (rowMeta ink1) and its count (rowMeta ink3, tnum) bottom-left; read as
-  "label, count".
+  glyph top-left in its own colour, the label (rowMeta ink1, two lines before an ellipsis at a large font scale) and its
+  count (rowMeta ink3, tnum, on the label's last line) bottom-left; read as "label, count". A row of tiles shares one
+  height.
 - `InsetRow`: the plain list row: no card, 14dp vertical padding, at least 56dp; an optional 24dp leading slot (outline
   glyph ink2, a Quad), the title (rowTitle ink1), an optional meta line (rowMeta ink3), then count (ink3), unread dot
   (8dp accent) and chevron (ink3); a 1dp hairline under it inset from the text start to the 20dp gutter; `current` sets
@@ -377,6 +378,17 @@ alpha). No overshoot except sheet drag release.
   the centre whose height follows the audio level (0..1) times two slow travelling sines (`DotWaveMath`); 14% floor,
   faded edges; still under reduce motion.
 - `WorkingLine`: a 14dp Quad and the shimmering label ("Working"), for live lines and rows.
+- Screen chrome on the kit (`components/GlassChrome.kt`): `GlassBar` (56dp on the canvas: a glass leading button and
+  glass actions on the 20dp gutter, a compact subhead title with a monoMeta subtitle that fades in with
+  `titleVisible` once the large title scrolled away, hidden for TalkBack meanwhile; a `center` slot for other content),
+  `PageTitle` (largeTitle ink1, a heading, 20dp in, an optional rowMeta ink3 meta line), `InsetSectionHead` (the quiet
+  head of an inset list: rowMeta ink3, a tabular count, an optional text action, 44dp, 16dp above), `GlassChip` (a glass
+  capsule action, 40dp in a 48dp target, a 16dp glyph and the label; 40% when disabled) and `LineCounts` ("+12 −3",
+  success / danger, rowMeta tnum). Every row of glass top-bar buttons (`GlassBar`, `LargeTitlePage`, Home, Chats,
+  the session, Scan) pads its sides by `GlassBarInset` (18dp), so each 44dp circle's edge sits on the 20dp gutter,
+  in line with the page title. Full-screen overlays (the output viewer, a turn's Changes, a subagent, a diagram) are
+  `GlassBar`s too: a glass ✕ or back, glass actions, and `GlassCopyButton` (the copy glyph that flips to a success
+  check for 1.5 s) where the bar copies.
 - Tokens: type `largeTitle`, `rowTitle`, `rowMeta`; `Space.page` 20; `Radius.tile`, `bubble`, `pill`, `media` (12,
   images and preview cards in the transcript); `SOFT_PRESS`
   0.96; `PiMotion.stagger(step)` (120 ms + 70 ms per step, 8 steps at most) for staggered entrances. `DesignRulesTest` checks the rules below on the
@@ -421,7 +433,7 @@ control inside a group) and `PillSearchField` (a 48dp surface1 pill with the sea
 status colour (danger, success, warning) colours the glyph, and only where the row reports that state (Reset device key,
 a connected computer); sections are never colour-coded (`GlyphTone`). `ChoiceSheet` picks one of a few values (a sheet of `InsetRow`s, an accent check on the current one; a pick
 applies and closes). `PiMenu` / `PiMenuItem` are the popup menu: surface3, radius tile, a lineStrong ring, rowMeta
-items with 20dp glyphs.
+items with 20dp glyphs; a picker's current item ends in a 20dp accent check (`checked`, read as Selected).
 
 **Cards and groups.** `PiCard`: surface1, 1dp line, radius md, 16dp padding: a surface step plus a line, never a
 shadow. `CardSection`: a `SectionLabel` (metaStrong ink3, sentence case, never capitals) over a radius-md card with
@@ -453,8 +465,9 @@ kind glyph, rowMeta ink1 text (four lines at most) and an ink1 action; a host si
 (bodyStrong), text ink1 (ink2 under a title) and text actions under it; info and success on surface1 with a line,
 warning and danger on their soft fill with a 40% line. Text is never in the status colour. No Toasts.
 
-**Empty, loading, error.** `EmptyState`: a surface1 card with an optional 56dp surface2 disc and 26dp glyph, the title
-(bodyStrong), one or two lines (body ink2) and at most one action, centred; never a lone grey sentence. `LoadingRow`:
+**Empty, loading, error.** `EmptyState`: unboxed, as the workspace's empty views: an optional 48dp glass circle with a
+22dp ink2 glyph, the title (rowTitle ink1, a heading), one or two lines (rowMeta ink2) and at most one action, centred;
+never a lone grey sentence. `LoadingRow`:
 a 16dp Quad Think and the label (body ink3), polite live region; never a Material spinner. `ErrorState`: a danger
 `Notice` with the reason and "Try again" when it may help; an error never looks like an empty list.
 `ProgressLine`: 2dp, surface3 track, accent fill, determinate only.
@@ -497,7 +510,7 @@ explanatory lines. Top to bottom, on the 20dp page gutter:
   session's name or first prompt, "calc-parser · 3h", an accent dot when something new happened, the open session on
   the soft current highlight). Up to 3 projects' sessions; a running project is not repeated.
 - "Projects  3": `ProjectCard` rows (the live Quad or the still bullet, never a folder glyph or letter tile; the title;
-  "6 sessions · 4 h ago" or "Open · 6 sessions"; a 14dp pin when pinned; chevron). Long press: Pin, Rename, Delete.
+  "6 sessions · 4h" or "Open · 6 sessions"; ages on Home's rows are all the short form, as in Recents and Chats; a 14dp pin when pinned; chevron). Long press: Pin, Rename, Delete.
 - "Computers  N", a head with Add (opens `AddComputerSheet`: "Run /remote-control on it, then scan its code.", Scan a
   pairing code, Paste a pairing link) and a chevron that folds the section (folded once there are projects, open when
   there are none, when the engine is unavailable or a computer session is live). `HostCard` rows: status dot or live
@@ -509,8 +522,11 @@ explanatory lines. Top to bottom, on the 20dp page gutter:
   computer, one row: "Add a computer".
 - The persistent pill at the bottom (`PillComposerShell`, over a canvas fade, above the navigation bar and the
   keyboard), shown once a model is connected: a project chip above it, left edges aligned and 8dp apart (`GlassPill`:
-  folder glyph, "calc-parser", chevron; its menu lists the projects and New project; with no project it reads "New
-  project" and opens that sheet), then the pill: + (New project), the field "Ask Pi…" (rowTitle; up to 4 lines) and
+  folder glyph, "calc-parser", chevron; its menu, a `PiMenu`, lists Chat (chat glyph), the projects (folder glyphs)
+  and New project, an accent check at the end of the current one; with no project it reads "New project" and opens
+  that sheet), then the pill: + (New project; with Chat picked a `PiMenu` of a chat's actions instead: Photos, Paste
+  image while the clipboard holds one, Voice and New chat, each opening a new chat with the draft and the images in
+  its composer, never sent; `ProjectRules.pillPlus`), the field "Ask Pi…" (rowTitle; up to 4 lines) and
   `ComposerPrimary` (voice while empty: Android's speech recognizer fills the field, never sends; Send with text). The
   chip defaults to the project worked in last (one with no session running); sending opens a new session there with
   the text as its first prompt. The list's bottom padding clears chip, pill and the navigation bar, so no row is ever
@@ -536,15 +552,17 @@ bottom bar, so the project reads as a single tool rather than four screens. Shar
 as a shared element, like host card to session).
 - Landscape: Home, the project (with its overlays), the preview and the full-screen terminal keep the side navigation
   bar and a display cutout's side (`safeDrawing`, horizontal); the canvas still fills the window.
-- Top bar 56dp: back ("Projects"), the title (subhead ink1, a 13dp pin glyph when pinned) over `projects/x` and, in a
-  git repository, the branch glyph + the branch from `.git/HEAD` (monoMeta ink3); then the shown tab's own action
-  (Sessions: search and manage sessions; Terminal: Secrets) and ⋮ (Pin, Rename, Export as zip, Secrets, Runtimes,
-  Delete in danger). Nothing else sits above a tab's content, so each tab starts 56dp under the status bar.
-- Bottom bar (`ProjectNavBar`): surface1, a 1dp line above, at least 64dp (it grows with large text) plus the
-  navigation bar; the four tabs are one selectable group, so TalkBack reads "Tab, 2 of 4". Four equal items: a 22dp
-  glyph (filled when selected, outlined otherwise; the terminal glyph for Terminal) in a 56x30 pill (surface3 when
-  selected, crossfading), the label under it (metaStrong ink1 selected, meta ink3 otherwise). Changes carries the
-  number of changed paths (micro onAccent on accent, at least 16dp wide, "99+" past 99, ringed in surface1); Sessions
+- Top bar (`GlassBar`, 56dp on the canvas): a glass back button ("Projects") on the 20dp gutter; then the shown tab's
+  own glass button (Sessions: search and manage sessions; Terminal: Secrets) and the glass ••• (Pin, Rename, Export as
+  zip, Secrets, Runtimes, Delete in danger). Sessions, Files and Changes open on the project's large title (largeTitle
+  ink1, the shared element from Home, a 16dp pin glyph when pinned) over `projects/x` and, in a git repository, the
+  branch glyph + the branch from `.git/HEAD` (monoMeta ink3); it scrolls with the list, and the bar's compact title
+  (subhead) fades in once it has gone. The terminal has no large title: its bar always names the project.
+- Bottom bar (`ProjectNavBar`): one floating glass capsule (radius full), 20dp from the window's sides and 8dp above the
+  navigation bar, at least 64dp (it grows with large text); the four tabs are one selectable group, so TalkBack reads
+  "Tab, 2 of 4". Four equal items: a 22dp glyph over the label (metaStrong ink1 selected, meta ink3 otherwise); the
+  selected one sits on a soft surface3 capsule (crossfading), press 0.96. Changes carries the
+  number of changed paths (micro onAccent on accent, at least 16dp wide, "99+" past 99, ringed in surface2); Sessions
   (Pi working in this project) and Terminal (a shell running) an 8dp success dot. TalkBack: tabs with Selected state
   and the badge in words ("4 changed files", "Shell running", "Pi is working"). It is read when the project opens
   (git status once), not only when Changes is shown.
@@ -552,104 +570,123 @@ as a shared element, like host card to session).
   and while a full-screen view (file, diff, history) covers the project. In a window under 480dp tall (landscape) the
   top bar also steps aside while the keyboard is up, so the terminal keeps its lines.
 - Each tab keeps its own scroll position; the shown tab survives rotation and process death.
-- Empty, loading and error states share one pattern: an `EmptyCard` (surface1, line, radius md, 16dp padding; a 20dp
-  ink3 glyph, the title in bodyStrong, one line in body ink2, then its actions), the kit's `LoadingRow` ("Reading
+- Lists are lists: `InsetRow`s with hairlines inset to the text, under quiet `InsetSectionHead`s (rowMeta ink3, a
+  count), never boxed cards; code (hunks, a commit's files) keeps its cards.
+- Empty, loading and error states share one pattern: an `EmptyCard`, calm and unboxed at the 20dp gutter (a 22dp ink2
+  glyph in a 48dp glass circle, the title in rowTitle ink1, one line in rowMeta ink2, then its actions), the kit's `LoadingRow` ("Reading
   sessions…") while a list, a file, a diff or the history is read, and the kit's `ErrorState` (with Try again) when a
   read fails: an error never looks like an empty list, and no view is ever blank while it loads.
-- Sessions: New session (primary, full width) first, then the "Sessions  6" head over a grouped list of `GroupRow`s
-  (desktop `.hd-row`): the live Quad, an accent dot for new activity or a quiet ink4 dot; the session name or first
-  prompt (ink2, ink1 when new or open); "open · 24 msg · 2h" (meta ink3, tnum). Without any, "No sessions yet"
+- Sessions: New session (primary, full width, at the gutter) first, then the "Sessions  6" head over `SessionRow`s
+  (`InsetRow`): a 20dp Quad in the leading slot (live in its mode while Pi works, warning while it waits for an answer,
+  a still ink4 frame otherwise), the session name or first prompt (rowTitle ink1), and under it "Working · main",
+  "Waiting for you · main" or "Open · 24 messages" for the open session (which sits on the row highlight) and
+  "2h · 24 messages" for the others (`SessionRowRules`); new activity is the 8dp accent unread dot at the end. TalkBack
+  reads the line in words. While Pi-Bolt cannot run, a tap says so. Without any, "No sessions yet"
   (EmptyCard, chat glyph). Tap resumes; the live one resumes without reopening. The search sheet stacks its two
   48dp segmented controls (Names | Messages, then the sort) so neither clips at 360dp and font scale 1.3.
-- Files: one folder at a time, under a sticky breadcrumb bar (+ for new file, folder and import; sort and hidden
-  files). An empty folder is an EmptyCard ("No files yet" at the root, "This folder is empty" inside, or the count of
-  hidden files) with New file and Import (secondary, side by side); 52dp rows: folder or file glyph, the name in monoSmall (dot files ink3), size or "N items" (meta ink3) at the end,
-  an auto-mirrored chevron for folders; long press is also a TalkBack action ("File actions"). Breadcrumb separators
-  are ink3 (no ink4 text).
+- Files: one folder at a time, under a sticky glass toolbar (56dp on the canvas): the breadcrumb (rowMeta; the folder
+  shown ink1, the way back ink2, auto-mirrored chevrons ink3 between), then 40dp glass buttons + (new file, folder and
+  import) and sort (and hidden files). An empty folder is an EmptyCard ("No files yet" at the root, "This folder is
+  empty" inside, or the count of hidden files) with New file and Import (secondary, side by side). Rows are `InsetRow`s:
+  the type glyph (folder ink2, files ink3) in the leading slot, the name (dot files at 62% ink1, which lands on ink3),
+  size or "N items" (rowMeta ink3, tnum) at the end, a chevron for folders; long press is also a TalkBack action
+  ("File actions").
   Folders first, then files, by name. Tapping a file opens the full-screen viewer (first 512 KB; binary files say so).
   Back goes up a folder before it leaves the screen.
   The "+" menu also imports: "Import files…" (ACTION_OPEN_DOCUMENT, several) and "Import a folder…"
   (ACTION_OPEN_DOCUMENT_TREE) into the folder shown; names that exist get " (2)". A folder's long-press sheet has
   "Export as zip", a file's "Share"; the project's ⋮ menu has "Export as zip". The export sheet: "Leave out .git and
   dependencies" (a 56dp checkbox row, on by default), then Share (secondary) and Save to… (primary, ACTION_CREATE_DOCUMENT).
-  A transfer shows a card above the bottom edge (surface2, lineStrong, radius md): "Importing 3 files · 40%"
-  (bodyStrong; TalkBack announces only the label, once), "2 files · 1.2 MB of 3 MB · src/a.kt" (monoMeta ink3),
+  A transfer shows a floating glass card above the bottom edge (radius tile, 20dp from the sides): "Importing 3 files ·
+  40%" (rowTitle; TalkBack announces only the label, once), "2 files · 1.2 MB of 3 MB · src/a.kt" (monoMeta ink3),
   Cancel (danger text action, 48dp) and a 3dp accent
   progress line on surface3 (no fill when the total is unknown: never an indeterminate animation). Progress updates
   at most every 100 ms. New project has "Import a zip as a project…" (accent text action) under its buttons.
-- Changes (git, through the engine's own git off the main thread with timeouts): outside a repository a card offers
-  "Initialise git". Inside: the branch card (surface1, radius md): branch glyph, the branch in bodyStrong and
-  "origin/main · 2 to push · 1 to pull" in meta ink3, tap for the Branches sheet; while an operation runs, a 16dp Run
-  Quad and git's progress in meta ink2; then Pull, Push (text actions), "Pull request" (accent, GitHub remotes when
-  signed in) and History. Sections "Conflicts", "Staged · N" (Unstage all) and "Changes · N" (Stage all) list 56dp file
-  rows: the change letter in a 20dp slot, mono SemiBold with no tile, as the desktop's `.gx-st` (added/untracked
-  success, deleted/conflict danger, modified warning, renamed ink2; TalkBack reads the word), the file name in body over its folder in monoMeta ink3, and a 48dp + / −
-  button to stage or unstage. Tap opens the diff; long press asks to discard (ConfirmSheet, danger; untracked files are
-  deleted). The commit card comes right under the branch card as soon as something is staged (and stays while a
-  message is written), so committing never needs a scroll past the file list: "Commit 2 files" (bodyStrong), the
-  message field (2 to 8 lines), "Ask Pi" (secondary, sparkle glyph: Pi drafts from the staged diff in the project's
-  session and the answer fills the field) and Commit (primary). Clean: "No changes" (EmptyCard, check glyph, title
-  only); outside a repository "Not a git repository" (EmptyCard, branch glyph) with Initialise git; "Loading changes…"
-  (LoadingRow) until git answers. Without a git identity
+- Changes (git, through the engine's own git off the main thread with timeouts): outside a repository an EmptyCard
+  offers "Initialise git". Inside, under the large title, the branch as a calm header (no card): the branch glyph, the
+  branch in rowTitle ink1 with a chooser glyph over "origin/main · 2 to push · 1 to pull" (rowMeta ink3), tap for the
+  Branches sheet, and at its end a `GlassPill` with the working tree's "+N −M" (success / danger, rowMeta tnum; from
+  `git diff --numstat`, staged plus unstaged; untracked files are not counted until added; TalkBack: "12 lines added,
+  1 line removed"). While an operation runs, a `WorkingLine` (Run Quad, git's progress shimmering). Then the actions
+  as `GlassChip`s: Pull, Push, Pull request (GitHub remotes when signed in) and History; a rowMeta ink3 line says what
+  is missing to push. Sections ("Conflicts", "Staged" with Unstage all, "Changes" with Stage all; `InsetSectionHead`
+  with the count) list `InsetRow`s: the change letter in the leading slot, mono SemiBold with no tile, as the desktop's
+  `.gx-st` (added/untracked success, deleted/conflict danger, modified warning, renamed ink2; TalkBack reads the word),
+  the file name over its folder, the file's "+N −M" and a 48dp + / − button to stage or unstage. Tap opens the diff;
+  long press asks to discard (ConfirmSheet, danger; untracked files are deleted). The commit flow comes right under the
+  branch as soon as something is staged (and stays while a message is written), so committing never needs a scroll
+  past the file list: "Commit 2 files" (rowTitle, a heading), the message field (2 to 8 lines), "Ask Pi" (secondary,
+  sparkle glyph: Pi drafts from the staged diff in the project's session and the answer fills the field) and Commit
+  (primary, commit glyph). Clean: "No changes" (EmptyCard, check glyph, title only); outside a
+  repository "Not a git repository" (EmptyCard, branch glyph) with Initialise git; "Loading changes…" (LoadingRow)
+  until git answers. Without a git identity
   the commit opens "Who is committing?" (name, email; prefilled with the GitHub name and no-reply address).
 - Closing: a full-screen view over the workspace (file viewer, diff, history) closes with ✕ ("Close"); a step inside
-  one (a commit opened from the history) goes back with ← ("Back to history"). `OverlayBar(back = …)` holds the rule.
-- Diff viewer: full screen (fade and 10% rise, sheet duration). Bar: ✕, file name over its path, Stage or Unstage
-  and, unstaged, Discard. Each hunk is a card: its `@@` header (monoMeta ink3 on surface2) with Stage hunk / Unstage
+  one (a commit opened from the history) goes back with ← ("Back to history"). `OverlayBar(back = …)` holds the rule;
+  it is a `GlassBar` with glass buttons and chips.
+- Diff viewer: full screen (fade and 10% rise, sheet duration). Bar: glass ✕, file name over its path, then (unstaged)
+  a glass Discard button and a Stage chip, or an Unstage chip. Under it "Not staged" / "Staged" / "New file" (rowMeta
+  ink3) and the file's "+N −M" on a `GlassPill`. Each hunk is a card (radius lg, 16dp in): its `@@` header (monoMeta ink3 on surface2, a hairline under it) with Stage hunk / Unstage
   hunk and, unstaged, a discard glyph (confirmed), then the rows renderer (DiffBlock: two gutters, sign column, solid
   and hatched bars, syntax colours, word marks). Binary files, renames without changes and a file with no changes left are EmptyCards; very large diffs say so;
   "Loading diff…" while git answers, a failed read an ErrorState.
-- History: full screen (✕), "Loading history…" first, "No commits yet" as an EmptyCard, a failed read an
-  ErrorState with Try again; a list of 64dp rows (subject in body, "abc1234 · author · 2 h ago" meta ink3, refs monoMeta ink2),
-  100 at a time. A commit (←, back to the list) opens its subject (subhead), body, author, date and a copy-hash button, then a card per file
-  (path in monoSmall, +/− counts) that folds its diff (folded first when more than three files).
+- History: full screen (glass ✕), the large title "History" over the branch (the bar's title fades in once it scrolled
+  away), "Loading history…" first, "No commits yet" as an EmptyCard, a failed read an ErrorState with Try again;
+  `InsetRow`s: a commit glyph (ink2 when the commit carries a ref, ink4 otherwise), the subject, "abc1234 · 2h · author"
+  and the first ref as a `Tag` ("main +1"), 100 at a time. A commit (glass ←, back to the list) opens its subject
+  (title), body, author, date (rowMeta ink3) and a copy-hash button, then a card per file (path in monoSmall, "+N −M")
+  that folds its diff (folded first when more than three files).
 - Branches sheet: a new-branch field (mono, validated like `git check-ref-format`) with Create, then "On this phone"
-  (current first, success check) and "On the remote" (switching creates a tracking branch).
-- Pull request sheet: title, description (Markdown), "Merge into" chips (the repository's default branch first),
+  (current first, on the row highlight with a success check) and "On the remote" (switching creates a tracking branch);
+  branches are `InsetRow`s with the branch glyph.
+- Pull request sheet: title, description (Markdown), "Merge into" capsule chips (the repository's default branch first),
   "Ask Pi" (Pi drafts title and body from the branch's commits) and Create (pushes first when needed). Done, it shows
   "Pull request #12", the link in accent mono, Copy and "Open on GitHub".
 - Terminal: see Terminal below; the pane fills the tab between the top bar and the bottom bar (or the keyboard), so the
   extra-keys row always sits on the keyboard.
 
 **Terminal.** Termux's TerminalView in JetBrains Mono on canvas: text ink1, cursor accent, the 16 base colours mapped
-to tokens as in tool output (red danger, green success, blue / magenta / cyan `ansiBlue` / `ansiMagenta` / `ansiCyan`...), no cursor blink. A 48dp
-bar: tab chips (`WorkspaceTab`, the editor's too, as the desktop's `.term-tab`: 36dp drawn in a 48dp row, radius 8,
-surface2 + a 1dp line when shown, no fill or border otherwise; "1 · title" in monoSmall, ink1 shown, ink3 otherwise and
+to tokens as in tool output (red danger, green success, blue / magenta / cyan `ansiBlue` / `ansiMagenta` / `ansiCyan`...), no cursor blink. A 56dp
+bar: tab capsules (`WorkspaceTab`, the editor's too: 36dp drawn in a 48dp row, radius full, glass when shown (fading
+in), no fill or border otherwise; "1 · title" in monoSmall, ink1 shown, ink3 otherwise and
 when the shell ended; a 16dp close glyph with a 48dp target; the shown tab scrolls itself into view),
-+ (new terminal), Paste, Text size (one menu: Larger, Smaller, "13 sp · or pinch"; 8 to 28 sp, also by
-pinch), full screen / leave full screen. Under it the Preview chips. The extra-keys row (surface1; each key a 48dp target with a 40dp face, monoMeta ink1 or
-a 20dp arrow glyph; the keys share the width where all twelve fit, landscape and tablets, and scroll on a phone): Esc, Tab, Ctrl, Alt, the four arrows, |, ~, /, -; Ctrl and Alt fill with accent (onAccent text)
++ (new terminal), then 40dp glass buttons: Paste, Text size (one menu: Larger, Smaller, "13 sp · or pinch"; 8 to 28 sp, also by
+pinch), full screen / leave full screen. Under it the Preview pills. The extra-keys row (canvas; each key a 48dp target with a glass face, radius md, monoMeta ink1 or
+a 20dp arrow glyph, press 0.96; the keys share the width where all twelve fit, landscape and tablets, and scroll on a phone): Esc, Tab, Ctrl, Alt, the four arrows, |, ~, /, -; Ctrl and Alt fill with accent (onAccent text)
 while on and apply to the next key only. Long press selects text (Termux's floating Copy / Paste bar); tap shows the
 keyboard (character input, no suggestions). An ended shell says "[Process completed - press Enter]"; Enter closes the
 tab. No tab yet: "A shell in this project" (EmptyCard, terminal glyph), "bash with git, curl and rg", Start a terminal (primary). Full screen: the same pane above
 the keyboard, status and navigation bars padded. Shells keep running off screen; a low-importance "N terminals
 running" notification (Close all) holds them in the background.
 
-**Preview.** Chips "Preview: localhost:5173" (label ink1 on successSoft, success @ 40% line, radius sm, 48dp touch) in
-the terminal and above the composer of an on-device session, while a dev server listens. The preview screen: back,
-the URL (monoMeta ink2, middle ellipsis), Reload, Open in browser; a 2dp `ProgressLine` while loading, filled from
+**Preview.** `GlassPill`s "Preview · localhost:5173" (an 8dp success dot, label ink1, 48dp touch) in
+the terminal and above the composer of an on-device session, while a dev server listens. The preview screen: a
+`GlassBar` with glass back, the URL in a glass capsule (monoMeta ink2, middle ellipsis), glass Reload and Open in browser; a 2dp `ProgressLine` while loading, filled from
 WebView's own progress (determinate, never an indeterminate bar); the page
 in a WebView (http://localhost and 127.0.0.1 only; tapped links elsewhere open in the browser). When the dev server does not
 answer (stopped, still starting), an EmptyCard over the page says so ("Nothing answers on localhost:5173", what to
 check, the WebView's reason) with Reload (primary) instead of WebView's own error page.
 
-**Secrets.** `ScreenTopBar` "Secrets" with the project's name as its meta line, a `ScreenIntro` ("Encrypted on this
-phone and kept out of the model's messages. Commands in this project can read them.") and "Applies to new terminals
-and sessions" (meta ink3). None yet: an `EmptyState` (key glyph, "No secrets yet"). Then "Variables · N" and 64dp
-rows: the name in mono ink1, the value masked as eight dots (monoMeta ink3, fixed length), Show / Hide, Edit, Delete
+**Secrets.** A project page: a `GlassBar` (glass back; "Secrets" fades in once the large title scrolled away), the
+large title "Secrets" over the project's name, a `ScreenIntro`
+("Encrypted on this phone and kept out of the model's messages. Commands in this project can read them.") and "Applies
+to new terminals and sessions" (rowMeta ink3). None yet: an `EmptyState` (key glyph, "No secrets yet"). Then "Variables  N"
+(`InsetSectionHead`) and 64dp rows with hairlines inset to the gutter: the name in mono ink1, the value masked as eight dots (monoMeta ink3, fixed length), Show / Hide, Edit, Delete
 (ink3 glyph; the confirm sheet carries the danger). Add secret (primary) opens a `PiCard` form: Name (`FieldLabel`,
 mono, validated: letters, digits, _, not the engine's own variables, the rule or the error in `FieldHint`), Value
 (`SecretField`), then small Cancel (secondary) and Save (primary).
 Write .env file (secondary) confirms first: values land in plain text in the project and git would commit them; .env
 is added to .gitignore in git projects. The window is FLAG_SECURE on this screen.
 
-**File viewer and editor.** Full screen over the project (or the session, for a file on a tool card). Top bar: ✕,
-the name and "path · type · N lines · read-only · unsaved" (monoMeta; warning when unsaved), Find, Edit (pencil; files that can be edited) or
-Save (editing, accent text action), ⋮ (Ask Pi about the selection / this file, Go to line, Wrap lines, Copy path, Copy
-text, Share). Open files are tabs once there are two: a 48dp strip of `WorkspaceTab`s (as the terminal's: surface2 +
-lineStrong when shown), a 7dp warning dot when unsaved, the name (monoSmall, at most 160dp) and a ✕ (48dp target).
+**File viewer and editor.** Full screen over the project (or the session, for a file on a tool card). Top bar
+(`GlassBar`): glass ✕, the name and "path · type · N lines · read-only · unsaved" (monoMeta; warning when unsaved),
+glass Find (accent while open), Edit (pencil; files that can be edited) or Save (editing, an accent `GlassChip`),
+••• (Ask Pi about the selection / this file, Go to line, Wrap lines, Copy path, Copy
+text, Share). Open files are tabs once there are two: a 48dp strip of `WorkspaceTab`s (as the terminal's: glass
+capsules when shown), a 7dp warning dot when unsaved, the name (monoSmall, at most 160dp) and a ✕ (48dp target).
 With the keyboard up in a window under 480dp tall the strip steps aside. Menus in the workspace (project, files,
-viewer, terminal) are one `WorkspaceMenu`: surface3, radius md, lineStrong border, 48dp rows with a 20dp glyph slot. Find bar: the query
+viewer, terminal) are one `WorkspaceMenu`, the kit's `PiMenu` (as every popup menu: the session's ⋯, the running
+sessions switcher), with 48dp rows and a 20dp glyph slot. Find bar: the query
 (mono), "3 of 12" (meta, live region), ↑ ↓ ✕, then 48dp text toggles "Aa" (match case), "ab" underlined (whole
 word), ".*" (regex) in accent with a 18% accent fill when on (TalkBack: switches), and ⇄ for Replace: a second row
 with the replacement and "Replace" / "All" (accent text actions); a bad regex or group shows in danger meta below.
@@ -839,8 +876,10 @@ opens the app's system page and the camera starts on return.
   - live status line, the turn's "Working" line: the kit's `WorkingLine` (a 14dp Quad in the mode, ink2, warning while
     Pi asks, and the shimmering label in rowMeta) then " · " and the elapsed timer (rowMeta ink3, tnum). A running tool
     is named: the verb shimmers and its command or path follows in mono small ink3 ("Run  npm test"; a subagent reads
-    "Agent working" + its task; parallel tools add "+n"); text changes crossfade (quick), and both sides draw the Quad
-    from the one clock, so only the words visibly change.
+    "Agent working" + its task in rowMeta ink3; parallel tools add "+n"); a retry reads "Retrying" + "attempt 2 of 3"
+    in rowMeta ink3 (tnum), never mono; text changes crossfade (quick), and both sides draw the Quad from the one
+    clock, so only the words visibly change. With thinking off (level off, or a model that does not reason;
+    `ThinkingRules`) nothing says "Thinking": the idle line reads "Working" and an empty reasoning block gets no row.
   - errors and notices: a hairline, not a filled slab (the desktop's): radius md, 1dp outline in danger / warning @
     32%, a 20dp glyph in the kind colour, the title bodyStrong ink1, text buttons.
 - Todo panel above the queue strip (see Todo panel below).
@@ -850,8 +889,8 @@ opens the app's system page and the camera starts on return.
   window's sides:
   - The pill: glass, radius pill (28), 56dp at least: a + `ComposerCircle` (opens the attach sheet), the field
     (rowTitle 17/24 ink1, its placeholder in the same style in ink3, one line, ellipsized; accent cursor and
-    selection; grows to 6 lines, 4 in a short window, then scrolls), the mic (`VoiceMic`, a 36dp surface3 circle with
-    an ink2 MicNone; accent with an onAccent Mic while it dictates in place) and the primary circle in one slot:
+    selection; grows to 6 lines, 4 in a short window, then scrolls), the mic (`VoiceMic`, a 36dp circle on the selected overlay with
+    an ink1 MicNone, the same circle as +; accent with an onAccent Mic while it dictates in place) and the primary circle in one slot:
     `ComposerPrimary` (white in the default) with a waveform that opens voice input while the field is empty and an
     arrow that sends once there is text or an image (18% and disabled while an image encodes); Stop in the same slot
     while Pi works and nothing is typed (a 36dp surface3 circle, 1dp lineStrong ring, ink1 Stop glyph), and beside the
@@ -896,10 +935,15 @@ opens the app's system page and the camera starts on return.
   while the session first connects: the centred loading state (Quad Connect 44dp, "Starting Pi-Bolt in x") says that
   alone, so one spinner and one sentence show at a time.
 - Top bar actions, left to right: the Quad (only while Pi is busy and the live status line is off screen: ink1,
-  warning while Pi asks; or danger while the link has failed), the session switcher, Search and More (glass). The Quad
+  warning while Pi asks; or danger while the link has failed), the session switcher (while other sessions are open; its
+  accent badge counts only those in a turn and is gone while all are idle; TalkBack: "Other sessions, 2 running" or
+  "Other sessions, 1 open"; `SwitcherRules`), Search and More (glass). The Quad
   is not a control: no press, and TalkBack hears what it reports. Search and
   overflow always sit together. Overflow on a computer: Session and usage, Export or share,
-  Disconnect, Forget computer.
+  Disconnect, Forget computer. With a Pi-Bolt that offers review (`host.review`), Changes and Files follow Projects
+  and sessions: the project's Changes and Files views, full screen and read-only, over the computer's working tree (no
+  staging, commit, branch, push or edit; Refresh in the bar). The working tree's "Changes +N −M" pill in the
+  composer's slim row opens Changes too (ui/session/remote).
 - On this phone (a project's session): the title is the project's name and the subtitle drops the folder (session
   name and context only); back reads "Project". Overflow: New session, Resume a session, Fork from a message,
   Duplicate session, Rename session, Session and usage, Export or share (no Disconnect or Forget computer). The banner reads "Starting Pi-Bolt…" (Quad Connect) and "Engine stopped" with Restart (danger
@@ -1007,6 +1051,30 @@ to stop or to talk again, each time adding to the draft), the kit's `DotWave` dr
 otherwise, and a round 56dp danger button with a white Stop glyph that ends voice input (Back too). The words are
 already in the draft, so ending it leaves them in the composer, ready to send. The first use explains the microphone
 in a sheet ("Continue"), then Android asks. A message sent with dictated words carries the waveform badge.
+
+**Voice mode** (`ui/session/voice`, `VoiceMode`). A hands-free conversation in chats and project sessions, started by
+"Voice mode" on the voice surface (a small ghost button above its row) or a long press on the pill's waveform button
+(a TalkBack action too). It takes the composer's place like the voice surface, and loops: listen (Android's
+SpeechRecognizer, on the phone when it can, `VoiceRecognizer`), send when the speaker stops (a steer while Pi works),
+"Working" with the Quad in its mode and the live tool line, then say a short summary with TextToSpeech and listen
+again. The summary (`SpokenSummary`) is the final reply's first paragraph as plain prose (no code, tables, links, URLs
+or marks), at most 3 sentences and about 320 characters, then "I changed 3 files." from the turn's finished
+write/edit calls, "Stopped." or the error's plain title; never an extra model call. Layout: a state line (polite live
+region: "Listening", the Working line, "Pi is asking" with the Wait Quad in warning, the pause reason; "On-device
+speech" or "Online speech" at its end, or "Show card" while a question is read), the captions (heard: title 20/26
+regular ink2; spoken: rowTitle ink1, 6 lines; not live regions, the speech says them), a read question's options
+("1  Postgres", rowMeta), then one row: the 56dp mic (accent while it listens; tap to talk, to finish, or to interrupt
+the speech), the `DotWave` (the mic level while listening; while speaking a slow breath plus a lift at each word the
+engine reports, still under reduce motion), a 48dp mute circle (VolumeUp / VolumeOff) and the 56dp danger end button
+(CallEnd, white). Behaviour lives in a pure state machine (`VoiceModeMachine`): two silent listens wait for a tap;
+"stop" or "wait" is never sent; `ask_user_question` cards are read out ("Option 1, Postgres.") and answered by number,
+ordinal or label (`SpokenAnswers`; "other …" types an answer, "never mind" declines), two unclear answers give the card
+back on screen; other dialogs are announced and answered on screen. Barge-in (talking stops the speech) is on only
+where the phone has an echo canceller and TalkBack is off; its own words are told apart from the user's (`BargeIn`).
+It holds transient audio focus as an assistant, pauses for calls (audio mode) and other apps' audio, and while the
+app is in the background; it keeps the screen on; the end button and Back leave it. With TalkBack on it waits a moment
+before listening. Settings > Agent: Speak replies, Speech rate (0.75x to 2x) and Voice (the engine's installed voices
+in the phone's language, on-device first, each tried with a sample).
 
 **Image viewer.** A tap on an image in a user message or the composer tray opens it full screen on black: swipe
 between images, pinch or double-tap (2.5x) to zoom up to 6x, drag to pan a zoomed image (kept on screen), Back or ✕
@@ -1279,6 +1347,11 @@ long-press sheets; long output goes to full-screen viewers, never nested scroll 
   streamed frame does not recompose Home.
 - Nothing animates while idle: spinners only while busy, the mark's entrance once per launch. Rotations, scales and
   press feedback run in `graphicsLayer`; size changes are limited to expand/collapse and sheets.
+- What redraws every frame has a layer of its own (a Quad), or puts what it decorates in one (the composer's working
+  hairline, a running agent's sweep), so a frame re-records the moving part only. Animated values are read in the
+  draw phase, never while composing. The keyboard's height changes every frame of its animation: the session screen
+  reads it through `derivedStateOf` (`ImeRoom`), so it recomposes only when the composer's layout changes.
+- `e2e/frames.sh` measures each of these scenarios on a phone (README, "Frame timing").
 
 ## Chats
 
@@ -1350,6 +1423,17 @@ plain row ("Read results").
   lineStrong ring, so black marks (GitHub) stay visible. Without one: the Rounded Public glyph on surface3, never a
   letter tile.
 
+## Background jobs (bash_background)
+
+The app's `pibolt-bg` extension runs shell commands in the background for the agent (`engine/BackgroundJobs.kt`,
+`ui/session/BackgroundJobsUi.kt`). In a project session with jobs, a `GlassPill` sits under the Preview chips: an 8dp
+dot (success while any job runs, else ink3) and "Background · 2 running · 1 ended" (label ink1). Tap opens a `PiSheet`
+"Background": running jobs first, newest first; each row a status dot (success running, ink3 done, danger failed),
+"#id name" (bodyStrong ink1, one line) over "Running · 3m 4s" (label ink2), Log and Stop (`GhostButton` Small, Stop
+in danger, "Stopping" while it waits), then the last six output lines (monoSmall ink2). Log opens the full log in the
+same sheet (monoSmall, scrolled to the end, back arrow). Read every 2 s, every second while the sheet is open. The
+extension's status line (`bg-jobs`) is not shown as a status line: the pill tells it.
+
 ## Question card (ask_user_question)
 
 `ask_user_question` (rpiv-ask-user-question) walks its questions with Pi's select and input dialogs; the app shows
@@ -1373,3 +1457,26 @@ extensions' dialogs keep the generic sheet.
   engine until it ends. The "Searches go to Exa" note shows only while it is on.
 - A dismissed questionnaire's row reads "Declined" with the neutral dash, not "Asked" with a check. With the keyboard
   up the options shrink and scroll, and the action row stays above the keyboard.
+
+## Spending
+
+Pi reports a cost with every reply (`usage.cost.total`); the app adds it up (`cost/`). Figures are monochrome, in
+tabular numerals, `$0.42` with two decimals (`<$0.01` below a cent); use on a model without a price (a custom endpoint)
+shows "—", never `$0`.
+- **Where:** the session's cost after the context meter in the top bar (meta ink3; tap: the Spending sheet); "Today
+  $0.42" as a rowMeta ink3 line under Home's title once anything was spent today (tap: the same sheet without the
+  session); with Settings > Agent > Spending > Show costs in lists, at the end of the meta line of saved sessions and
+  chats ("2h · 12 messages · $0.42").
+- **The Spending sheet:** an inset group of this session, this project (on this phone), today and this month, each with
+  its limit and a `ProgressLine`; then this month by model; then "Spending limits".
+- **Counting:** a session shows its own total (its file and its subagents' files on this phone, `get_session_stats`
+  from a computer) plus each reply as it ends. The day and month (`spend.json`, 35 days and 13 months, the phone's
+  calendar) count only what happened while the app watched: live replies, compactions and subagent messages, each once
+  by key. Reopening, resuming, forking or reconnecting never counts history again. Subagents on a computer are not
+  counted (remote control sends no costs for them).
+- **Limits:** per session, day and month, all off by default. At 80% a warning snackbar, once per period. At a limit no
+  new prompt goes out, a running turn finishes its step (the reply and its tool calls) and is stopped through abort, and
+  a run that starts by itself (a background agent's report) stops at once; a warning `Notice` above the composer says
+  "Daily limit reached ($5.00). Raise it in Settings or continue once." with Not now and Continue once (the next run
+  goes to its end; after a stop it sends "Continue."). Away from the app the "Pi stopped" notification says the same,
+  without Reply.

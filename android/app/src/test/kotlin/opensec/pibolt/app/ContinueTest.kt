@@ -66,7 +66,7 @@ class ContinueTest {
         assertEquals("?", ProjectRules.monogram(""))
         val now = 10L * 3_600_000
         assertEquals("No sessions yet", ProjectRules.projectMeta(project("c", null), now))
-        assertEquals("1 session · 2 h ago", ProjectRules.projectMeta(project("a", now - 2 * 3_600_000), now))
+        assertEquals("1 session · 2h", ProjectRules.projectMeta(project("a", now - 2 * 3_600_000), now))
     }
 
     @Test
@@ -99,11 +99,11 @@ class ContinueTest {
     fun projectMetaSplitsSoTheAgeNeverTruncates() {
         val now = 30L * 86_400_000
         // The card ellipsizes the first part only; the age is a separate text.
-        assertEquals("1 session" to "2 h ago", ProjectRules.projectMetaParts(project("a", now - 2 * 3_600_000), now))
+        assertEquals("1 session" to "2h", ProjectRules.projectMetaParts(project("a", now - 2 * 3_600_000), now))
         assertEquals("No sessions yet" to null, ProjectRules.projectMetaParts(project("c", null), now))
         val opened = project("o", null).let { it.copy(meta = it.meta.copy(lastOpenedAt = now - 3 * 86_400_000L)) }
-        assertEquals("No sessions" to "opened 3 d ago", ProjectRules.projectMetaParts(opened, now))
-        assertEquals("No sessions · opened 3 d ago", ProjectRules.projectMeta(opened, now))
+        assertEquals("No sessions" to "opened 3d", ProjectRules.projectMetaParts(opened, now))
+        assertEquals("No sessions · opened 3d", ProjectRules.projectMeta(opened, now))
     }
 
     @Test

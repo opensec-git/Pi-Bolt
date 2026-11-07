@@ -145,7 +145,9 @@ fun Transcript(
             val open = memory.openFolds.filterValues { it }.keys
             val groups = memory.openGroups.filterValues { it }.keys
             // The failed attempts of a retry (and a "Compaction failed" after an overflow) are one error notice.
-            val (items, errors) = ErrorNotices.collapse(s.allItems, s.retry)
+            // With thinking off, an empty reasoning block gets no "Thinking" row.
+            val (all, errors) = ErrorNotices.collapse(s.allItems, s.retry)
+            val items = ThinkingRules.visible(all, ThinkingRules.on(s.thinkingLevel, s.model?.reasoning))
             val list = TranscriptModel.rows(items, liveTurn, open, memory.turnDurations, md, groups, memory.pending.value, memory.aliases, s.subagents).let { list ->
                 if (!recent || liveTurn) list else markLastTurnLive(list)
             }

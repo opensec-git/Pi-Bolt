@@ -11,6 +11,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,10 +23,12 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import opensec.pibolt.app.MainActivity
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.R
 import opensec.pibolt.app.data.ProjectStore
+import opensec.pibolt.app.engine.ChatSpace
 import opensec.pibolt.app.ui.chats.Chats
 import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.protocol.session.SubagentStatus
@@ -102,7 +105,9 @@ object SessionAlerts {
     @Composable
     fun Navigate(app: PiBoltApp, onLocal: (String) -> Unit, onRemote: () -> Unit, onChat: () -> Unit = {}) {
         LaunchedEffect(Unit) {
-            drain(_pending) { t ->
+            drain(_pending) { asked ->
+                val roots = listOf(File(app.engine.agentDir, "sessions"), ChatSpace.sessionDir(app.engine.agentDir))
+                val t = withContext(Dispatchers.IO) { safe(asked, app.engine.projectsDir, roots) } ?: return@drain
                 when (t) {
                     Target.Remote -> if (app.remote.value?.stopped == false) onRemote()
                     is Target.Chat -> {
@@ -114,18 +119,41 @@ object SessionAlerts {
                         }
                     }
                     is Target.Local -> {
-                        // Several sessions run at once: the project's own live session, whichever is in focus.
-                        val live = LocalSessions.get(t.project)
-                        if (live != null && (t.sessionFile == null || live.controller.sessionFile == t.sessionFile)) {
-                            onLocal(t.project)
+                        // Several sessions run at once, also in one project: the live session the alert is about.
+                        val live = t.sessionFile?.let { LocalSessions.find(t.project, it) } ?: LocalSessions.get(t.project)?.takeIf { t.sessionFile == null }
+                        if (live != null) {
+                            onLocal(live.key)
                             return@drain
                         }
                         val dir = File(app.engine.projectsDir, t.project)
                         if (!dir.isDirectory) return@drain
                         LocalSessions.open(app.engine, ProjectStore.get(app), dir, sessionFile = t.sessionFile?.takeIf { File(it).isFile })
-                            .onSuccess { onLocal(t.project) }
+                            .onSuccess { onLocal(it.key) }
                     }
                 }
+            }
+        }
+    }
+
+    /**
+     * [t] when it names a session of this app, else null. MainActivity is exported, so any app can start it with these
+     * extras: a project is a plain folder name directly in [projectsDir] (not `..`, which would start an engine with every
+     * tool in HOME), and a session file lies under one of [sessionRoots] (else it is dropped, and the project's own
+     * session opens).
+     */
+    internal fun safe(t: Target, projectsDir: File, sessionRoots: List<File>): Target? {
+        fun ours(path: String?): String? = path?.takeIf { p ->
+            val real = runCatching { File(p).canonicalPath }.getOrNull() ?: return@takeIf false
+            sessionRoots.any { root -> runCatching { real.startsWith(root.canonicalPath + File.separator) }.getOrDefault(false) }
+        }
+        return when (t) {
+            Target.Remote -> t
+            is Target.Chat -> Target.Chat(ours(t.sessionFile))
+            is Target.Local -> {
+                val name = t.project
+                val plain = name.isNotBlank() && !name.startsWith(".") && name.none { it == '/' || it == '\\' || it.isISOControl() }
+                val inProjects = plain && runCatching { File(projectsDir, name).canonicalFile.parentFile == projectsDir.canonicalFile }.getOrDefault(false)
+                if (inProjects) Target.Local(name, ours(t.sessionFile)) else null
             }
         }
     }

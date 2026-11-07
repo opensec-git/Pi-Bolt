@@ -20,9 +20,16 @@ import opensec.pibolt.app.background.SessionActionReceiver
 import opensec.pibolt.app.background.SessionActions
 import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import opensec.pibolt.protocol.session.DialogRequest
+import java.io.File
 
 object Notifications {
     const val ONGOING_ID = 1
+
+    /**
+     * The session notification's Open button. Not [ONGOING_ID]: the update notification's tap is request code 1 on the
+     * same activity, so each would take the other's extras (FLAG_UPDATE_CURRENT) and Open lost its session.
+     */
+    private const val OPEN_REQUEST = 2
     private const val CHANNEL_SESSION = "session"
     private const val CHANNEL_ALERTS = "alerts"
 
@@ -95,7 +102,7 @@ object Notifications {
 
     private fun reply(title: String, label: String, intent: PendingIntent, choices: List<String> = emptyList()): NotificationCompat.Action {
         val input = RemoteInput.Builder(SessionActions.REPLY_KEY).setLabel(label)
-            .apply { if (choices.isNotEmpty()) setChoices(choices.map { it.take(40) }.toTypedArray()) }
+            .apply { if (choices.isNotEmpty()) setChoices(choices.toTypedArray()) }
             .build()
         return NotificationCompat.Action.Builder(0, title, intent)
             .addRemoteInput(input)
@@ -121,18 +128,29 @@ object Notifications {
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .setContentIntent(openApp(context))
             .apply { if (stoppable) addAction(button("Stop", action(context, ONGOING_ID, 0, SessionActions.Request.StopAll))) }
-            .addAction(NotificationCompat.Action.Builder(0, "Open", openApp(context, requestCode = ONGOING_ID)).build())
+            .addAction(NotificationCompat.Action.Builder(0, "Open", openApp(context, requestCode = OPEN_REQUEST)).build())
             .privateOnLockScreen(context, "Pi is working")
             .build()
 
     private fun sessionFile(context: Context, key: String): String? =
         (context.applicationContext as? PiBoltApp)?.sessions?.value?.firstOrNull { it.hostId == key }?.sessionFile
 
-    /** A session finished while the app was away. [key]: its hostId (one notification per session); [project]: its project. */
-    fun settled(context: Context, key: String, project: String?, host: String, lastText: String, aborted: Boolean, chat: Boolean = false) {
+    /**
+     * The project a notification about a session in [project] opens: none for a chat (its directory is no project, and a
+     * project of the same name must not open in its place).
+     */
+    fun projectOf(project: File?, chat: Boolean): String? = project?.name?.takeUnless { chat }
+
+    /**
+     * A session finished while the app was away. [key]: its hostId (one notification per session); [project]: its project;
+     * [sessionId]: the Pi session that finished (a reply goes to it only while it is still the one open). [capped]: a
+     * spending limit stopped it or held a reply back ("Daily limit reached ($5.00)."), said in place of the last reply.
+     */
+    fun settled(context: Context, key: String, project: String?, host: String, lastText: String, aborted: Boolean, chat: Boolean = false, sessionId: String? = null, capped: String? = null) {
         val id = RunningSummary.notificationId(key, RunningSummary.SETTLED)
-        val title = if (aborted) "Pi stopped on $host" else "Pi finished on $host"
-        val text = lastText.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(200) ?: "Tap to see the result"
+        val title = if (aborted || capped != null) "Pi stopped on $host" else "Pi finished on $host"
+        val text = capped ?: lastText.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(200) ?: "Tap to see the result"
+        val big = capped?.let { "$it Open Pi-Bolt to raise it or continue once." } ?: lastText.take(1000).ifBlank { text }
         post(
             context,
             id,
@@ -141,12 +159,37 @@ object Notifications {
                 .setColor(ContextCompat.getColor(context, R.color.notification_accent))
                 .setContentTitle(title)
                 .setContentText(text)
-                .setStyle(NotificationCompat.BigTextStyle().bigText(lastText.take(1000).ifBlank { text }))
+                .setStyle(NotificationCompat.BigTextStyle().bigText(big))
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setAutoCancel(true)
                 .setContentIntent(openApp(context, project, sessionFile(context, key), id, chat))
-                .addAction(reply("Reply", "Message Pi", action(context, id, 0, SessionActions.Request.Reply(key), typed = true)))
-                .privateOnLockScreen(context, if (aborted) "Pi stopped" else "Pi finished")
+                // At a limit a reply would be held back too: the notification only opens the session.
+                .apply { if (capped == null) addAction(reply("Reply", "Message Pi", action(context, id, 0, SessionActions.Request.Reply(key, sessionId), typed = true))) }
+                .privateOnLockScreen(context, if (aborted || capped != null) "Pi stopped" else "Pi finished")
+                .build(),
+        )
+    }
+
+    /**
+     * [run]'s turn was cut off: Android ended the app (and its engine) while it worked ([RunMarks]). Takes the place of
+     * the session's "finished" alert; the tap reopens the session, where what was saved before the kill is shown.
+     */
+    fun interrupted(context: Context, run: RunMarks.Run) {
+        val id = RunningSummary.notificationId(run.key, RunningSummary.SETTLED)
+        val text = "Android closed Pi-Bolt while Pi was working. Open the session to continue."
+        post(
+            context,
+            id,
+            NotificationCompat.Builder(context, CHANNEL_ALERTS)
+                .setSmallIcon(R.drawable.ic_stat_bolt)
+                .setColor(ContextCompat.getColor(context, R.color.notification_accent))
+                .setContentTitle("Pi was stopped on ${run.host}")
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setCategory(NotificationCompat.CATEGORY_STATUS)
+                .setAutoCancel(true)
+                .setContentIntent(openApp(context, run.project, run.sessionFile, id, run.chat))
+                .privateOnLockScreen(context, "Pi was stopped")
                 .build(),
         )
     }
@@ -185,8 +228,20 @@ object Notifications {
         post(context, id, builder.build())
     }
 
-    /** A reply reached a session that is no longer live (the app restarted, or the session closed). */
-    fun sessionClosed(context: Context, notificationId: Int) {
+    /** [controller] waits for [dialog]: [needsAnswer] with its project, or as a chat. */
+    fun needsAnswer(context: Context, controller: SessionController, dialog: DialogRequest, why: String? = null) =
+        needsAnswer(context, controller.hostId, projectOf(controller.project, controller.isChat), controller.hostName.value, dialog, why, chat = controller.isChat)
+
+    /**
+     * A reply ([typed]) reached no live session (the app restarted, the session closed, or it moved to another
+     * conversation). The tap still opens the session the notification was about: its own content intent is kept (it
+     * carries the session file, and outlives the process), so the reply can be sent from there.
+     */
+    fun sessionClosed(context: Context, notificationId: Int, typed: String? = null) {
+        val text = SessionActions.closedText(typed)
+        // The notification's own tap target, as posted (FLAG_NO_CREATE returns it unchanged); a new one only if it is gone.
+        val open = PendingIntent.getActivity(context, notificationId, Intent(context, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_NO_CREATE)
+            ?: openApp(context, requestCode = notificationId)
         post(
             context,
             notificationId,
@@ -194,10 +249,12 @@ object Notifications {
                 .setSmallIcon(R.drawable.ic_stat_bolt)
                 .setColor(ContextCompat.getColor(context, R.color.notification_accent))
                 .setContentTitle("Session closed")
-                .setContentText("Open it to continue")
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
                 .setOnlyAlertOnce(true)
                 .setAutoCancel(true)
-                .setContentIntent(openApp(context, requestCode = notificationId))
+                .setContentIntent(open)
+                .privateOnLockScreen(context, "Session closed")
                 .build(),
         )
     }
