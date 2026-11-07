@@ -234,6 +234,134 @@ describe("remote control background service", () => {
 		expect(unknownFile).toMatchObject({ success: false, error: "No such session on this computer" });
 	});
 
+	describe("several sessions at once", () => {
+		/** A faux response that waits for `release()`: a turn that runs until the test lets it end. */
+		function gated(text: string) {
+			let release = () => {};
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const respond = async () => {
+				await gate;
+				return fauxAssistantMessage(text);
+			};
+			return { respond, release };
+		}
+
+		type Listed = { path: string; open?: boolean; running?: boolean };
+		async function listed(phone: TestClient, cwd: string): Promise<Listed[]> {
+			const response = await phone.request({ type: "list_sessions", cwd });
+			return (response.data as { sessions: Listed[] }).sessions;
+		}
+
+		const helloCount = (client: TestClient) => client.received.filter((m) => m.type === "remote_hello").length;
+
+		it("says so in remote_hello", async () => {
+			const { agentDir } = await setup();
+			const { phone } = await pairPhone(agentDir);
+			expect(helloOf(phone)?.host).toMatchObject({ service: true, parallelSessions: true });
+		});
+
+		it("keeps a running turn going when the phone opens another session, and shows it again as it is", async () => {
+			const { agentDir, older, newer, olderSession, newerSession, faux } = await setup();
+			const { phone } = await pairPhone(agentDir);
+			const long = gated("long task done");
+			faux.setResponses([long.respond]);
+			expect((await phone.request({ type: "prompt", message: "long task" })).success).toBe(true);
+			await phone.waitFor((message) => message.type === "agent_start");
+
+			const switched = await phone.request({ type: "switch_session", sessionPath: olderSession });
+			expect(switched).toMatchObject({ success: true, data: { cancelled: false } });
+			await until(() => helloOf(phone, 1) !== undefined, "the second remote_hello");
+			expect(helloOf(phone, 1)?.host.cwd).toBe(older);
+			expect(await listed(phone, newer)).toEqual([
+				expect.objectContaining({ path: newerSession, open: true, running: true }),
+			]);
+			expect((await listed(phone, older))[0]).toMatchObject({ path: olderSession, open: true });
+			expect((await listed(phone, older))[0]?.running).toBeUndefined();
+
+			// A new session in the running one's project leaves it running too.
+			expect((await phone.request({ type: "new_session", cwd: newer })).success).toBe(true);
+			await until(() => helloOf(phone, 2) !== undefined, "the third remote_hello");
+
+			long.release();
+			await until(() => readFileSync(newerSession, "utf8").includes("long task done"), "the turn to finish");
+			expect(readFileSync(newerSession, "utf8")).not.toContain('"stopReason":"aborted"');
+			const before = helloCount(phone);
+			expect((await phone.request({ type: "switch_session", sessionPath: newerSession })).success).toBe(true);
+			await until(() => helloCount(phone) > before, "the session's remote_hello");
+			const back = phone.received.filter((m) => m.type === "remote_hello").at(-1) as {
+				host: { cwd: string };
+				messages: Array<{ role: string }>;
+			};
+			expect(back.host.cwd).toBe(newer);
+			expect(back.messages.filter((message) => message.role === "user")).toHaveLength(2);
+			// The same runtime, shown again: the first session, the older one and the new one were opened, nothing more.
+			const log = readFileSync(join(agentDir, "remote-control", "service.log"), "utf8");
+			expect(log.match(/Opened a session in /g)).toHaveLength(3);
+			expect(log).toContain(`Opened a session in ${older} (the one in ${newer} keeps running)`);
+		});
+
+		it("opens at most maxOpenSessions: an idle background session makes room, running ones are never closed", async () => {
+			const { agentDir, older, newer, olderSession, newerSession, faux } = await setup({
+				host: { maxOpenSessions: 2 },
+			});
+			const { phone } = await pairPhone(agentDir);
+			const first = gated("first done");
+			const second = gated("second done");
+			faux.setResponses([first.respond, second.respond]);
+			await phone.request({ type: "prompt", message: "first" });
+			await phone.waitFor((message) => message.type === "agent_start");
+			await phone.request({ type: "switch_session", sessionPath: olderSession });
+			await until(() => helloOf(phone, 1) !== undefined, "the second remote_hello");
+			await phone.request({ type: "prompt", message: "second" });
+			await phone.waitFor((message) => message.type === "agent_start");
+
+			const refused = await phone.request({ type: "new_session", cwd: newer });
+			expect(refused).toMatchObject({
+				success: false,
+				error: "2 sessions are running on this computer. Stop one, or wait.",
+			});
+			const refusedSwitch = await phone.request({ type: "new_session", cwd: older });
+			expect(refusedSwitch.success).toBe(false);
+
+			first.release();
+			await until(() => readFileSync(newerSession, "utf8").includes("first done"), "the first turn to finish");
+			const fresh = await phone.request({ type: "new_session", cwd: newer });
+			expect(fresh).toMatchObject({ success: true, data: { cancelled: false } });
+			// The idle one closed for it; the running one is still open and running.
+			expect((await listed(phone, newer)).find((s) => s.path === newerSession)?.open).toBeUndefined();
+			expect((await listed(phone, older))[0]).toMatchObject({ path: olderSession, open: true, running: true });
+
+			second.release();
+			await until(() => readFileSync(olderSession, "utf8").includes("second done"), "the second turn to finish");
+			expect(readFileSync(olderSession, "utf8")).not.toContain('"stopReason":"aborted"');
+		});
+
+		it("closes a background session once it has been idle for idleDisposeMs, not while it runs", async () => {
+			const { agentDir, newer, olderSession, newerSession, faux } = await setup({
+				host: { idleDisposeMs: 100, idleCheckMs: 20 },
+			});
+			const { phone } = await pairPhone(agentDir);
+			const long = gated("done");
+			faux.setResponses([long.respond]);
+			await phone.request({ type: "prompt", message: "long" });
+			await phone.waitFor((message) => message.type === "agent_start");
+			await phone.request({ type: "switch_session", sessionPath: olderSession });
+			await until(() => helloOf(phone, 1) !== undefined, "the second remote_hello");
+			await new Promise((resolve) => setTimeout(resolve, 300));
+			expect((await listed(phone, newer))[0]).toMatchObject({ path: newerSession, open: true, running: true });
+
+			long.release();
+			await until(() => readFileSync(newerSession, "utf8").includes("done"), "the turn to finish");
+			const deadline = Date.now() + 5000;
+			while ((await listed(phone, newer))[0]?.open) {
+				if (Date.now() > deadline) throw new Error("The idle background session stayed open");
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			}
+		});
+	});
+
 	it("refuses phones that are not paired and drops one revoked meanwhile, even while it sends nothing", async () => {
 		const { agentDir } = await setup({ host: { pollMs: 50 } });
 		const { phone, key, uri } = await pairPhone(agentDir);
