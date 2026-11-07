@@ -92,16 +92,6 @@
             android:name="android.webkit.WebView.MetricsOptOut"
             android:value="true" />
 
-        <!-- Shares a diagram as PNG (ui/diagram): only cache/diagrams/, read-only grants per share. -->
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.diagrams"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/diagram_share_paths" />
-        </provider>
 
         <service
             android:name=".session.SessionService"
@@ -128,11 +118,13 @@
             android:exported="false"
             android:foregroundServiceType="dataSync" />
 
-        <!-- One FileProvider for both uses (a class can be declared once): session exports and shared images under
-             cache/exports, and the verified update APK under cache/updates, read by Android's package installer. -->
+        <!-- The one FileProvider (a component class can be declared once: a second <provider> with the same class left
+             the installer without its read grant, so in-app updates failed with "App not installed"): session exports and
+             shared images under cache/exports, the verified update APK under cache/updates (read by Android's package
+             installer), and shared diagrams under cache/diagrams. ManifestRulesTest keeps component classes unique. -->
         <provider
             android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.exports;${applicationId}.updates"
+            android:authorities="${applicationId}.exports;${applicationId}.updates;${applicationId}.diagrams"
             android:exported="false"
             android:grantUriPermissions="true">
             <meta-data

@@ -42,6 +42,12 @@ import opensec.pibolt.app.ui.theme.Tnum
  */
 
 /**
+ * The side padding of a row of glass top-bar buttons: a [GlassIconButton] draws its 44dp circle inside a 48dp target,
+ * so 2dp less than the 20dp gutter puts the circle's edge on the gutter, in line with the page title and list text.
+ */
+val GlassBarInset = Space.page - Space.xxs
+
+/**
  * The glass top bar: 56dp under the status bar on the canvas, [leading] (a [GlassIconButton]: back or close) and
  * [actions] (more glass buttons) 20dp from the window's sides. A compact [title] (subhead ink1, a [subtitle] in
  * monoMeta ink3 under it) sits between them and fades in with [titleVisible], for when the [PageTitle] has scrolled
@@ -68,8 +74,7 @@ fun GlassBar(
             .background(colors.canvas)
             .statusBarsPadding()
             .height(56.dp)
-            // A glass button draws its 44dp circle inside a 48dp target: 2dp less padding puts the circle on the gutter.
-            .padding(horizontal = Space.page - Space.xxs),
+            .padding(horizontal = GlassBarInset),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         leading?.invoke(this)

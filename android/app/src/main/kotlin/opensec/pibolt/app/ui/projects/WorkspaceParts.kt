@@ -10,9 +10,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.Icon
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -24,7 +22,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.Text
@@ -39,10 +36,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.PiMenu
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
-import opensec.pibolt.app.ui.theme.Radius
 
 /**
  * One tab of the workspace's tab strips (open files in the editor, shells in the terminal): a 36dp capsule drawn
@@ -107,19 +104,10 @@ fun WorkspaceTab(
     }
 }
 
-/** The workspace's dropdown menus (project, files, viewer, terminal): surface3, radius md, a lineStrong border. */
+/** The workspace's dropdown menus (project, files, viewer, terminal): the kit's [PiMenu]. */
 @Composable
 fun WorkspaceMenu(expanded: Boolean, onDismiss: () -> Unit, content: @Composable () -> Unit) {
-    val colors = Pi.colors
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss,
-        containerColor = colors.surface3,
-        shape = RoundedCornerShape(Radius.md),
-        tonalElevation = 0.dp,
-        shadowElevation = 8.dp,
-        border = BorderStroke(1.dp, colors.lineStrong),
-    ) { content() }
+    PiMenu(expanded = expanded, onDismiss = onDismiss) { content() }
 }
 
 /** A 48dp menu row: a 20dp glyph slot (empty when [icon] is null, so labels line up) and the label in body. */
