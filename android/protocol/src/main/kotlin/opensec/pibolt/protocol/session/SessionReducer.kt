@@ -14,6 +14,7 @@ import opensec.pibolt.protocol.obj
 import opensec.pibolt.protocol.rpc.ModelInfo
 import opensec.pibolt.protocol.str
 import opensec.pibolt.protocol.type
+import opensec.pibolt.protocol.rpc.ImageAttachment
 
 /**
  * Pure reducer: `remote_hello` snapshot + session events -> [SessionState]. Unknown types and fields are ignored.
@@ -239,6 +240,7 @@ object SessionReducer {
                         result = result,
                         details = message.obj("details") ?: it.details,
                         durationMs = it.durationMs ?: message.long("durationMs"),
+                        images = contentImages(message["content"]),
                     )
                 }
             }
@@ -331,6 +333,7 @@ object SessionReducer {
                 result = text,
                 details = result?.obj("details") ?: it.details,
                 durationMs = event.long("durationMs") ?: it.durationMs,
+                images = contentImages(result?.get("content")),
             )
         }
     }
@@ -564,6 +567,17 @@ object SessionReducer {
             text.toString() to images
         }
         else -> "" to 0
+    }
+
+    /** The images of a content field (`{type: "image", data, mimeType}`), base64 as sent. */
+    fun contentImages(content: JsonElement?): List<ImageAttachment> {
+        if (content !is JsonArray) return emptyList()
+        return content.mapNotNull { block ->
+            val b = block as? JsonObject ?: return@mapNotNull null
+            if (b.type != "image") return@mapNotNull null
+            val data = b.str("data") ?: return@mapNotNull null
+            ImageAttachment(data, b.str("mimeType") ?: "image/png")
+        }
     }
 
     private fun JsonObject.strings(key: String): List<String> =

@@ -39,6 +39,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberUpdatedState
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import opensec.pibolt.app.ui.projects.ProjectFiles
+import opensec.pibolt.app.ui.session.features.ViewerImages
+import opensec.pibolt.protocol.rpc.ImageAttachment
+import java.io.File
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.foundation.gestures.scrollBy
@@ -90,10 +97,12 @@ fun Transcript(
     onStatusOnScreen: (Boolean) -> Unit = {},
     jump: SearchJump? = null,
     onImage: (String, Int) -> Unit = { _, _ -> },
+    onToolImages: (ViewerImages) -> Unit = {},
 ) {
     val settings = Pi.settings
     val parseScope = rememberCoroutineScope()
     val md = remember { MdCache(parseScope) }
+    val uniqueCache = remember { UniqueCache() }
     var settledTick by remember { mutableIntStateOf(0) }
     // The finished turn keeps its row animations for a moment so its steps fold away smoothly.
     LaunchedEffect(memory.settledAt.longValue) {
@@ -101,7 +110,10 @@ fun Transcript(
         delay(1200)
         settledTick++
     }
-    val rows by remember {
+    // Rows are read only inside the list, effects and snapshot flows, never while composing this function: a streamed
+    // frame then re-runs the list's item lookup instead of recomposing the whole transcript, and finished rows (equal
+    // to their previous value) skip.
+    val rowsState = remember {
         derivedStateOf {
             val s = state.value
             md.version.intValue
@@ -109,15 +121,18 @@ fun Transcript(
             val recent = settledTick >= 0 && memory.settledAt.longValue > 0 && SystemClock.uptimeMillis() - memory.settledAt.longValue < 1200
             val open = memory.openFolds.filterValues { it }.keys
             val groups = memory.openGroups.filterValues { it }.keys
-            TranscriptModel.rows(s.allItems, liveTurn, open, memory.turnDurations, md, groups, memory.pending.value, memory.aliases, s.subagents).let { list ->
+            val list = TranscriptModel.rows(s.allItems, liveTurn, open, memory.turnDurations, md, groups, memory.pending.value, memory.aliases, s.subagents).let { list ->
                 if (!recent || liveTurn) list else markLastTurnLive(list)
             }
+            RowsState(list, uniqueCache.unique(list))
         }
     }
-    val unique = remember(rows.size, rows.firstOrNull()?.key, rows.lastOrNull()?.key) { TranscriptModel.keysUnique(rows) }
-    if (!memory.primed && state.value.hello) {
-        rows.forEach { memory.seen.add(it.key) }
-        memory.primed = true
+    val hello by remember { derivedStateOf { state.value.hello } }
+    LaunchedEffect(hello) {
+        if (hello && !memory.primed) {
+            rowsState.value.rows.forEach { memory.seen.add(it.key) }
+            memory.primed = true
+        }
     }
 
     val list = rememberLazyListState()
@@ -131,7 +146,7 @@ fun Transcript(
     LaunchedEffect(list) {
         // Only content added at the end counts as new (opening a fold or card does not).
         var lastKey: String? = null
-        snapshotFlow { rows.lastOrNull()?.key }.collect { key ->
+        snapshotFlow { rowsState.value.rows.lastOrNull()?.key }.collect { key ->
             if (lastKey != null && key != lastKey && !atBottom) unseen = true
             lastKey = key
         }
@@ -152,34 +167,56 @@ fun Transcript(
     }
     LaunchedEffect(jump) {
         val hit = jump?.hit ?: return@LaunchedEffect
+        fun rows() = rowsState.value.rows
         // A hit in a folded turn or a closed group opens it first; then the row is brought into view.
-        if (TranscriptSearch.rowIndex(rows, hit).let { it < 0 || rows[it] is FoldRow }) memory.openFolds[hit.turnKey] = true
-        (rows.getOrNull(TranscriptSearch.rowIndex(rows, hit)) as? ToolGroupRow)?.takeIf { !it.expanded }?.let { memory.openGroups[it.key] = true }
-        val index = withTimeoutOrNull(1_000) { snapshotFlow { TranscriptSearch.rowIndex(rows, hit) }.first { it >= 0 && rows[it] !is FoldRow } }
-            ?: TranscriptSearch.rowIndex(rows, hit)
-        if (index >= 0) list.animateScrollToItem(TranscriptSearch.listIndex(rows.size, index), scrollOffset = -list.layoutInfo.viewportSize.height / 3)
+        if (TranscriptSearch.rowIndex(rows(), hit).let { it < 0 || rows()[it] is FoldRow }) memory.openFolds[hit.turnKey] = true
+        (rows().getOrNull(TranscriptSearch.rowIndex(rows(), hit)) as? ToolGroupRow)?.takeIf { !it.expanded }?.let { memory.openGroups[it.key] = true }
+        val index = withTimeoutOrNull(1_000) { snapshotFlow { TranscriptSearch.rowIndex(rows(), hit) }.first { it >= 0 && rows()[it] !is FoldRow } }
+            ?: TranscriptSearch.rowIndex(rows(), hit)
+        if (index >= 0) list.animateScrollToItem(TranscriptSearch.listIndex(rows().size, index), scrollOffset = -list.layoutInfo.viewportSize.height / 3)
     }
     val reduced = Pi.reduceMotion
     /**
      * The list is anchored at the bottom, so a row opened above the reader's position would grow upward and slide
      * away. While scrolled up, keep the toggled row's top edge where it was for the length of the expand animation.
+     * Remembered once, so rows that capture it stay skippable.
      */
-    fun keepInPlace(key: Any) {
-        if (atBottom) return
-        scope.launch {
-            fun top(): Int? = list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }?.let { it.offset + it.size }
-            var last = top() ?: return@launch
-            val end = SystemClock.uptimeMillis() + PiMotion.STANDARD + 200
-            while (SystemClock.uptimeMillis() < end) {
-                withFrameNanos { }
-                val now = top() ?: break
-                if (now != last) {
-                    list.scrollBy((now - last).toFloat())
-                    last = top() ?: break
+    val keepInPlace: (Any) -> Unit = remember(list, scope) {
+        { key ->
+            if (!atBottom) {
+                scope.launch {
+                    fun top(): Int? = list.layoutInfo.visibleItemsInfo.firstOrNull { it.key == key }?.let { it.offset + it.size }
+                    var last = top() ?: return@launch
+                    val end = SystemClock.uptimeMillis() + PiMotion.STANDARD + 200
+                    while (SystemClock.uptimeMillis() < end) {
+                        withFrameNanos { }
+                        val now = top() ?: break
+                        if (now != last) {
+                            list.scrollBy((now - last).toFloat())
+                            last = top() ?: break
+                        }
+                    }
                 }
             }
         }
     }
+    val currentOpen by rememberUpdatedState(onOpen)
+    val currentImages by rememberUpdatedState(onToolImages)
+    // A path in a tool card opens the file: read from this phone when the session's folder is here (on-device Pi),
+    // else a note that the file lives on the host.
+    val openFile: (String) -> Unit = remember(scope) {
+        { path ->
+            scope.launch {
+                val root = state.value.host?.cwd
+                val file = if (path.startsWith("/")) File(path) else root?.let { File(it, path) }
+                val readable = file != null && withContext(Dispatchers.IO) { file.isFile && file.canRead() }
+                currentOpen(
+                    if (readable) ProjectFiles.view(file, path) else ViewerContent(baseName(path), path, "This file is on the computer running Pi, not on this phone."),
+                )
+            }
+        }
+    }
+    val openImages: (List<ImageAttachment>, Int) -> Unit = remember { { images, index -> currentImages(ViewerImages(images, emptyList(), index)) } }
     val showPill by remember { derivedStateOf { !atBottom && (unseen || dragged || list.firstVisibleItemIndex > 2) } }
 
     val density = LocalDensity.current
@@ -195,21 +232,24 @@ fun Transcript(
                 contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
                 modifier = Modifier.fillMaxSize(),
             ) {
-                item(key = "status", contentType = "status") {
+                item(key = "status", contentType = -1) {
                     val s by status
                     StatusLine(s.visible, s.mode, s.text, memory.runStart.longValue, Modifier.padding(top = 6.dp))
                 }
+                val (rows, unique) = rowsState.value
                 val n = rows.size
                 items(
                     count = n,
                     key = { i -> if (unique) rows[n - 1 - i].key else "row$i" },
-                    contentType = { i -> rows[n - 1 - i]::class.simpleName },
+                    contentType = { i -> rows[n - 1 - i].contentType },
                 ) { i ->
                     val index = n - 1 - i
                     val row = rows[index]
-                    val previous = rows.getOrNull(index - 1)
-                    RowView(row, previous, memory, settings.toolPreviewLines, settings.thinkingExpanded, onOpen, onActions, onAskAgain, reduced, onImage) {
-                        keepInPlace(if (unique) row.key else "row$i")
+                    // Only prose spacing looks at the row before, and only at its block.
+                    val prevBlock = if (row is TextRow) (rows.getOrNull(index - 1) as? TextRow)?.takeIf { it.itemKey == row.itemKey }?.block else null
+                    val keepKey: Any = if (unique) row.key else "row$i"
+                    RowView(row, prevBlock, memory, settings.toolPreviewLines, settings.thinkingExpanded, onOpen, onActions, onAskAgain, reduced, onImage, openFile, openImages) {
+                        keepInPlace(keepKey)
                     }
                 }
             }
@@ -246,6 +286,30 @@ fun Transcript(
                 }
             }
         }
+    }
+}
+
+/** The transcript's rows and whether their keys are unique (the list needs unique keys). */
+@Immutable
+private data class RowsState(val rows: List<TRow>, val unique: Boolean)
+
+/** [TranscriptModel.keysUnique], re-checked only when the row count or the first or last key changes. */
+private class UniqueCache {
+    private var size = -1
+    private var first: String? = null
+    private var last: String? = null
+    private var value = true
+
+    fun unique(rows: List<TRow>): Boolean {
+        val f = rows.firstOrNull()?.key
+        val l = rows.lastOrNull()?.key
+        if (rows.size != size || f != first || l != last) {
+            size = rows.size
+            first = f
+            last = l
+            value = TranscriptModel.keysUnique(rows)
+        }
+        return value
     }
 }
 
@@ -323,7 +387,7 @@ private fun ScrollButton(unseen: Boolean, onClick: () -> Unit) {
 @Composable
 private fun LazyItemScope.RowView(
     row: TRow,
-    previous: TRow?,
+    prevBlock: MdBlock?,
     memory: SessionMemory,
     previewLines: Int,
     thinkingExpandedDefault: Boolean,
@@ -332,6 +396,8 @@ private fun LazyItemScope.RowView(
     onAskAgain: (String) -> Unit,
     reduced: Boolean,
     onImage: (String, Int) -> Unit,
+    onOpenFile: (String) -> Unit,
+    onImages: (List<ImageAttachment>, Int) -> Unit,
     keep: () -> Unit,
 ) {
     val animate = row.live && !reduced
@@ -375,7 +441,6 @@ private fun LazyItemScope.RowView(
             imageCount = row.pending.images,
         )
         is TextRow -> {
-            val prevBlock: MdBlock? = (previous as? TextRow)?.takeIf { it.itemKey == row.itemKey }?.block
             TextRowView(
                 row,
                 prevBlock,
@@ -417,6 +482,8 @@ private fun LazyItemScope.RowView(
                 onLongPress = { onActions(row) },
                 modifier = base.padding(top = Pi.dims.stepGap).riseIn(row.key, row.live, memory, 6.dp),
                 runningSince = since,
+                onOpenFile = onOpenFile,
+                onImages = onImages,
             )
         }
         is ToolGroupRow -> ToolGroupRowView(

@@ -16,9 +16,11 @@ import java.util.Locale
 /** What kind of step a tool is; picks the expanded card. */
 enum class ToolKind { Bash, Read, Write, Edit, Search, List, Todo, Other }
 
+/**
+ * How a step reads: [verb] while it runs ("Run", "Edit"), [past] once it finished ("Ran", "Edited"), and its argument.
+ */
 @Immutable
-
-data class ToolLabel(val kind: ToolKind, val verb: String, val detail: String)
+data class ToolLabel(val kind: ToolKind, val verb: String, val detail: String, val past: String = verb)
 
 private val partialField = Regex("\"(command|path|file_path|pattern|query|url|description|prompt|subagent_type|subject|agent_id|message|action|status)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)")
 
@@ -34,16 +36,13 @@ fun toolLabel(item: ToolItem): ToolLabel {
     }
     val name = item.name
     return when (name.lowercase()) {
-        "bash", "shell", "exec" -> ToolLabel(ToolKind.Bash, "Run", arg("command").orEmpty().lineSequence().firstOrNull().orEmpty())
-        "read" -> {
-            val range = listOfNotNull(args?.get("offset")?.let { "from ${(it as? JsonPrimitive)?.content}" }, args?.get("limit")?.let { "${(it as? JsonPrimitive)?.content} lines" })
-            ToolLabel(ToolKind.Read, "Read", listOfNotNull(arg("path", "file_path"), range.joinToString(", ").ifBlank { null }).joinToString("  "))
-        }
-        "write" -> ToolLabel(ToolKind.Write, "Write", arg("path", "file_path").orEmpty())
-        "edit", "multiedit" -> ToolLabel(ToolKind.Edit, "Edit", arg("path", "file_path").orEmpty())
-        "grep" -> ToolLabel(ToolKind.Search, "Search", listOfNotNull(arg("pattern"), arg("path")?.let { "in $it" }).joinToString(" "))
-        "find", "glob" -> ToolLabel(ToolKind.Search, "Find", listOfNotNull(arg("pattern"), arg("path")?.let { "in $it" }).joinToString(" "))
-        "ls" -> ToolLabel(ToolKind.List, "List", arg("path") ?: ".")
+        "bash", "shell", "exec" -> ToolLabel(ToolKind.Bash, "Run", arg("command").orEmpty().lineSequence().firstOrNull().orEmpty(), "Ran")
+        "read" -> ToolLabel(ToolKind.Read, "Read", arg("path", "file_path").orEmpty() + readRange(item).orEmpty())
+        "write" -> ToolLabel(ToolKind.Write, "Write", arg("path", "file_path").orEmpty(), "Wrote")
+        "edit", "multiedit" -> ToolLabel(ToolKind.Edit, "Edit", arg("path", "file_path").orEmpty(), "Edited")
+        "grep" -> ToolLabel(ToolKind.Search, "Search", listOfNotNull(arg("pattern"), arg("path")?.let { "in $it" }).joinToString(" "), "Searched")
+        "find", "glob" -> ToolLabel(ToolKind.Search, "Find", listOfNotNull(arg("pattern"), arg("path")?.let { "in $it" }).joinToString(" "), "Found")
+        "ls" -> ToolLabel(ToolKind.List, "List", arg("path") ?: ".", "Listed")
         // The subagents extension (opensec-pi-subagents): the agent type, then its task.
         "agent" -> when {
             args?.str("resume") != null -> ToolLabel(ToolKind.Other, "Resume agent", firstLine(arg("prompt")).ifBlank { args.str("resume").orEmpty() })
@@ -61,6 +60,19 @@ fun toolLabel(item: ToolItem): ToolLabel {
             val first = args?.entries?.firstOrNull { (it.value as? JsonPrimitive)?.isString == true }?.let { (it.value as JsonPrimitive).content }
             ToolLabel(ToolKind.Other, name, (first ?: arg("command", "path", "pattern", "query", "url")).orEmpty().lineSequence().firstOrNull().orEmpty())
         }
+    }
+}
+
+/** A read's line range as `:10-49` (offset 10, limit 40), `:10-` (offset only) or `:1-40` (limit only); null for all. */
+fun readRange(item: ToolItem): String? {
+    val args = item.args ?: return null
+    val offset = (args["offset"] as? JsonPrimitive)?.content?.toIntOrNull()?.coerceAtLeast(1)
+    val limit = (args["limit"] as? JsonPrimitive)?.content?.toIntOrNull()?.coerceAtLeast(1)
+    return when {
+        offset != null && limit != null -> ":$offset-${offset + limit - 1}"
+        offset != null -> ":$offset-"
+        limit != null -> ":1-$limit"
+        else -> null
     }
 }
 
@@ -278,26 +290,41 @@ fun looksLikeCommand(text: String): Boolean {
 
 enum class DiffKind { Add, Del, Context, Skip, Hunk }
 
+/**
+ * One diff row. [number] is the line in the new file (blank for deletions), [old] the line in the old file (blank for
+ * additions, and for diffs that carry one number only, such as markdown fences). A [DiffKind.Skip] row's [number]
+ * counts the lines it stands for.
+ */
 @Immutable
+data class DiffLine(val kind: DiffKind, val number: String, val text: String, val old: String = "")
 
-data class DiffLine(val kind: DiffKind, val number: String, val text: String)
+private val hunkHeader = Regex("""^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@.*""")
+private val fileMeta = listOf("diff --git ", "index ", "--- ", "+++ ", "new file mode", "deleted file mode", "similarity index", "rename from", "rename to", "old mode", "new mode")
 
-/** Pi's edit diff (`+12 text`, `-12 text`, ` 12 text`, `   ...`) and plain unified diffs. */
-fun parseDiff(diff: String): List<DiffLine> {
+/**
+ * A tool's diff as rows with both line numbers. Pi's edit diff (`+12 text`, `-12 text`, ` 12 text`, `   ...`) numbers
+ * additions in the new file and deletions and context in the old one; the other number follows from the lines added
+ * and removed so far (a skipped run moves both alike). A unified diff (`@@ -a,b +c,d @@`) counts from its hunk headers;
+ * its `---`/`+++` file lines are dropped (the card's header names the file).
+ */
+fun parseDiff(diff: String): List<DiffLine> =
+    if (diff.lineSequence().any { hunkHeader.matches(it) }) parseUnified(diff.trimEnd('\n')) else parsePiDiff(diff)
+
+private fun parsePiDiff(diff: String): List<DiffLine> {
     val out = ArrayList<DiffLine>()
+    var shift = 0 // new line - old line, from the changes so far
     for (line in diff.lineSequence()) {
         if (line.isEmpty()) {
             out += DiffLine(DiffKind.Context, "", "")
             continue
         }
         if (line.startsWith("@@")) {
+            // A merged change's next edit (see [mergeChanges]) numbers from scratch.
+            shift = 0
             out += DiffLine(DiffKind.Hunk, "", line)
             continue
         }
-        if (line.startsWith("+++") || line.startsWith("---")) {
-            out += DiffLine(DiffKind.Hunk, "", line)
-            continue
-        }
+        if (line.startsWith("+++") || line.startsWith("---")) continue
         val kind = when (line[0]) {
             '+' -> DiffKind.Add
             '-' -> DiffKind.Del
@@ -310,14 +337,52 @@ fun parseDiff(diff: String): List<DiffLine> {
             continue
         }
         val digits = trimmed.takeWhile { it.isDigit() }
-        if (digits.isNotEmpty() && trimmed.length > digits.length && trimmed[digits.length] == ' ') {
-            out += DiffLine(kind, digits, trimmed.substring(digits.length + 1))
-        } else if (digits.isNotEmpty() && trimmed.length == digits.length) {
-            out += DiffLine(kind, digits, "")
-        } else {
+        val numbered = digits.isNotEmpty() && digits.length <= 9 && (trimmed.length == digits.length || trimmed[digits.length] == ' ')
+        if (!numbered) {
             out += DiffLine(kind, "", rest)
+            continue
+        }
+        val n = digits.toInt()
+        val text = if (trimmed.length > digits.length) trimmed.substring(digits.length + 1) else ""
+        out += when (kind) {
+            DiffKind.Add -> {
+                shift++
+                DiffLine(kind, n.toString(), text)
+            }
+            DiffKind.Del -> {
+                shift--
+                DiffLine(kind, "", text, old = n.toString())
+            }
+            else -> DiffLine(kind, (n + shift).takeIf { it > 0 }?.toString().orEmpty(), text, old = n.toString())
         }
     }
+    return out
+}
+
+private fun parseUnified(diff: String): List<DiffLine> {
+    val out = ArrayList<DiffLine>()
+    var oldNo = 0
+    var newNo = 0
+    var inHunk = false
+    for (line in diff.lineSequence()) {
+        val h = hunkHeader.matchEntire(line)
+        when {
+            h != null -> {
+                oldNo = h.groupValues[1].toIntOrNull() ?: 0
+                newNo = h.groupValues[3].toIntOrNull() ?: 0
+                inHunk = true
+                out += DiffLine(DiffKind.Hunk, "", line)
+            }
+            !inHunk && fileMeta.any(line::startsWith) -> Unit
+            line.startsWith("diff --git ") -> inHunk = false
+            line.startsWith("\\") -> Unit
+            !inHunk -> out += DiffLine(DiffKind.Context, "", line)
+            line.startsWith("+") -> out += DiffLine(DiffKind.Add, (newNo++).toString(), line.substring(1))
+            line.startsWith("-") -> out += DiffLine(DiffKind.Del, "", line.substring(1), old = (oldNo++).toString())
+            else -> out += DiffLine(DiffKind.Context, (newNo++).toString(), line.removePrefix(" "), old = (oldNo++).toString())
+        }
+    }
+    while (out.isNotEmpty() && out.last().kind == DiffKind.Context && out.last().text.isEmpty() && out.last().number.isEmpty()) out.removeAt(out.lastIndex)
     return out
 }
 
@@ -380,28 +445,101 @@ fun fileChange(item: ToolItem): FileChange? {
     }
     if (name != "write") return null
     val content = item.args?.str("content") ?: return null
-    return FileChange(path, lineCount(content), 0, content.trimEnd('\n').lineSequence().joinToString("\n") { "+$it" })
+    return FileChange(path, lineCount(content), 0, newFileDiff(content))
 }
 
-/** Changes per path in first-touched order; several edits of one file add up and their diffs follow each other. */
+/** A new file as Pi's diff format: every line added, numbered from 1. */
+fun newFileDiff(content: String): String =
+    content.trimEnd('\n').lineSequence().withIndex().joinToString("\n") { (i, line) -> "+${i + 1} $line" }
+
+/** The row that separates two edits of one file in a merged diff. */
+const val NEXT_EDIT = "@@ next edit"
+
+/**
+ * Changes per path in first-touched order; several edits of one file add up and their diffs follow each other, split
+ * by a [NEXT_EDIT] row.
+ */
 fun mergeChanges(changes: List<FileChange>): List<FileChange> {
     val byPath = LinkedHashMap<String, FileChange>()
     for (c in changes) {
         val old = byPath[c.path]
-        byPath[c.path] = if (old == null) c else FileChange(c.path, old.added + c.added, old.removed + c.removed, old.diff + "\n" + c.diff)
+        byPath[c.path] = if (old == null) c else FileChange(c.path, old.added + c.added, old.removed + c.removed, old.diff + "\n" + NEXT_EDIT + "\n" + c.diff)
     }
     return byPath.values.toList()
 }
 
 /**
- * Read-only steps (and todo list updates, which the panel shows) that a run of three or more folds into one row.
- * Failed or running steps stay on their own.
+ * Read-only steps (and todo list updates, which the panel shows) that a run of three or more folds into one row; a run
+ * of todo updates alone folds at any length. Failed or running steps stay on their own, except a search or listing
+ * that found nothing ([isEmptyResult]).
  */
 fun isGroupable(item: ToolItem): Boolean =
-    item.status == ToolStatus.Done && when (toolLabel(item).kind) {
+    (item.status == ToolStatus.Done || isEmptyResult(item)) && when (toolLabel(item).kind) {
         ToolKind.Read, ToolKind.Search, ToolKind.List, ToolKind.Todo -> true
         else -> false
     }
+
+fun isTodo(item: ToolItem): Boolean = item.name == TODO_TOOL
+
+private val unavailable = Regex("""(?i)(tool\b.*\b(not found|not available|unavailable|is disabled|not enabled)|unknown tool|no such tool)""")
+private val noResults = Regex("""(?i)(no (files|matches|results)( found)?|empty directory|no such file or directory|path not found|does not exist|enoent)""")
+
+/** A call to a tool this host does not offer ("Tool ls not found"): it reads as a quiet note, not a failure. */
+fun isUnavailable(item: ToolItem): Boolean = item.status == ToolStatus.Error && unavailable.containsMatchIn(item.result.orEmpty().take(300))
+
+/**
+ * A search or listing that found nothing ("No matches found"), or failed only because the folder is missing: it reads
+ * "no results", not as a failed step.
+ */
+fun isEmptyResult(item: ToolItem): Boolean {
+    if (item.status != ToolStatus.Error && item.status != ToolStatus.Done || isUnavailable(item)) return false
+    val result = item.result.orEmpty().trim()
+    if (result.length > 200) return false
+    val kind = toolLabel(item).kind
+    return (kind == ToolKind.Search || kind == ToolKind.List) && noResults.containsMatchIn(result)
+}
+
+/** A step that counts as failed in the turn's summary: an error that is neither [isUnavailable] nor [isEmptyResult]. */
+fun isFailedStep(item: ToolItem): Boolean = item.status == ToolStatus.Error && !isUnavailable(item) && !isEmptyResult(item)
+
+/** A finished step's duration for its row: nothing under a second (fast steps stay quiet), else "1.4s", "2m 5s". */
+fun stepDuration(ms: Long?): String? = ms?.takeIf { it >= 1000 }?.let(::formatDuration)
+
+/**
+ * What a finished turn did, for its fold: "Edited 3 files · ran 2 commands · read 4 files", at most three parts in
+ * the order edits, commands, reads, searches, agents. [files] are the files it changed. Falls back to "Thought" (only
+ * reasoning) or "N steps".
+ */
+fun turnSummary(tools: List<ToolItem>, files: Int, thoughts: Int): String {
+    var commands = 0
+    var searches = 0
+    var agents = 0
+    val readPaths = HashSet<String>()
+    for (t in tools) {
+        if (isUnavailable(t)) continue
+        val label = toolLabel(t)
+        when {
+            isSubagentTool(t.name) -> agents++
+            label.kind == ToolKind.Bash -> commands++
+            label.kind == ToolKind.Read -> readPaths += label.detail.substringBefore(':')
+            label.kind == ToolKind.Search || label.kind == ToolKind.List -> searches++
+            else -> Unit
+        }
+    }
+    fun count(n: Int, one: String, many: String) = if (n == 1) "1 $one" else "$n $many"
+    val parts = buildList {
+        if (files > 0) add("edited " + count(files, "file", "files"))
+        if (commands > 0) add("ran " + count(commands, "command", "commands"))
+        if (readPaths.isNotEmpty()) add("read " + count(readPaths.size, "file", "files"))
+        if (searches > 0) add(count(searches, "search", "searches"))
+        if (agents > 0) add(count(agents, "agent", "agents"))
+    }.take(3)
+    if (parts.isEmpty()) {
+        val steps = tools.size + thoughts
+        return if (tools.isEmpty() && thoughts > 0) "Thought" else if (steps == 1) "1 step" else "$steps steps"
+    }
+    return parts.joinToString(" · ").replaceFirstChar { it.uppercase() }
+}
 
 /** "Read 3 files, ran 1 search": what a group of read-only steps did. */
 fun groupSummary(tools: List<ToolItem>): String {

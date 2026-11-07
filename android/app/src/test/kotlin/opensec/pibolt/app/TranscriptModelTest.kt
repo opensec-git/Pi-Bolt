@@ -67,7 +67,10 @@ class TranscriptModelTest {
         val endsFailing = failedThenFixed.map { if (it.key == "tool:t2") (it as ToolItem).copy(status = ToolStatus.Error) else it }
         val failing = TranscriptModel.rows(endsFailing, liveTurn = false, expanded = emptySet(), durations = emptyMap(), md = MdCache())[1] as FoldRow
         assertEquals(2, failing.failedSteps)
-        assertTrue(failing.endedInFailure)
+        // A failing last step is information the answer explains: only an error or abort fails the turn.
+        assertFalse(failing.endedInFailure)
+        val errored = TranscriptModel.rows(endsFailing + NoticeItem("n", NoticeKind.Error, "Error"), liveTurn = false, expanded = emptySet(), durations = emptyMap(), md = MdCache())[1] as FoldRow
+        assertTrue(errored.endedInFailure)
     }
 
     @Test

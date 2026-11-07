@@ -43,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import opensec.pibolt.app.ui.components.CopyButton
+import opensec.pibolt.app.ui.components.DiffGutter
 import opensec.pibolt.app.ui.components.DiffRow
 import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.markdown.CodeFold
@@ -134,10 +135,12 @@ fun Viewer(content: ViewerContent, onClose: () -> Unit) {
                 )
             }
             diffRows != null -> {
-                val numWidth = remember(diffRows) { diffRows.maxOfOrNull { it.number.length } ?: 0 }
+                val gutter = remember(diffRows) { DiffGutter.of(diffRows) }
                 val words = remember(diffRows) { UnifiedDiff.wordRanges(diffRows) }
+                // A tool diff's subtitle is its path: the rows keep that file's syntax colours.
+                val diffLanguage = remember(content) { content.subtitle?.let(CodeInfo::languageOfFile).orEmpty() }
                 LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(vertical = 8.dp)) {
-                    itemsIndexed(diffRows, contentType = { _, l -> l.kind }) { i, line -> DiffRow(line, numWidth, words[i], wrap = true) }
+                    itemsIndexed(diffRows, contentType = { _, l -> l.kind }) { i, line -> DiffRow(line, gutter, words[i], wrap = true, language = diffLanguage) }
                     item { Spacer(Modifier.navigationBarsPadding()) }
                 }
             }
