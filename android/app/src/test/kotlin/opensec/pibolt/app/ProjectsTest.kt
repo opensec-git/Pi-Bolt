@@ -138,7 +138,7 @@ class ProjectsTest {
         assertEquals(listOf("anthropic"), ProviderCatalog.search("anthro").map { it.id })
         assertTrue(ProviderCatalog.search("CLAUDE").any { it.id == "anthropic" })
         assertTrue(ProviderCatalog.all.map { it.id }.toSet().size == ProviderCatalog.all.size)
-        assertEquals("custom-x", ProviderCatalog.name("custom-x"))
+        assertEquals("Custom x", ProviderCatalog.name("custom-x"))
 
         assertEquals("sk-ant-123", ProviderCatalog.cleanKey("  sk-ant-123\n"))
         assertEquals("sk-ant-123", ProviderCatalog.cleanKey("\"sk-ant-123\""))
