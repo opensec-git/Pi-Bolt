@@ -149,8 +149,10 @@ The commands are read-only. None stages, commits, edits, or runs a shell:
   segment, is refused. So is a path that leads outside the cwd through a symlink: the path is resolved (for a missing
   file, its nearest existing parent) and must stay inside the cwd's real path. When the cwd is a subfolder of a
   repository, status, diffs and history cover that subfolder only, with paths relative to it.
-- **Secret files.** `rc_read_file` and `rc_git_diff` refuse paths that usually hold secrets. A commit shown with
-  `rc_git_show` leaves those files out of its patch and names them in `withheld`. Matched case-insensitively:
+- **Secret files.** `rc_read_file` and `rc_git_diff` refuse paths that usually hold secrets, checking both the path
+  asked for and the path it resolves to through symlinks. A commit shown with `rc_git_show` leaves those files out of
+  its patch and names them in `withheld`; a rename is left out whole when either name matches. Matched
+  case-insensitively:
   - names starting with `.env` (`.env`, `.env.local`, `.envrc`);
   - SSH keys: `id_` followed by a name without an extension, or with `.pub` (`id_rsa`, `id_ed25519.pub`);
   - `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `*.kdbx`, `*.ppk`;
@@ -168,7 +170,7 @@ The commands are read-only. None stages, commits, edits, or runs a shell:
   -c log.showSignature=false`; diffs add `--no-ext-diff --no-textconv`, so the repository's own diff, textconv and
   fsmonitor programs never run. `GIT_OPTIONAL_LOCKS=0` keeps status from rewriting the index, and
   `GIT_TERMINAL_PROMPT=0` keeps git from asking for anything. A commit hash must be 4 to 64 lowercase hex characters
-  and follows `--end-of-options`.
+  and name a commit (a tag is peeled to its commit; a blob or tree is refused).
 
 Each command takes an `id` and gets a `response` like any other. A refused or failed command has `success: false` and
 an `error` to show. Before the background service has a session open, every review command fails with
@@ -177,7 +179,7 @@ an `error` to show. Before the background service has a session open, every revi
 | `type` | Fields | `data` of the response |
 |---|---|---|
 | `rc_git_status` | | `{ repo, branch, entries, total, truncated }`, below. Outside a git working tree: `{ repo: false, branch: null, entries: [], total: { added: 0, removed: 0 }, truncated: false }`. |
-| `rc_git_diff` | `path`; `staged?` (default `false`); `origPath?`, the source of a staged rename | `{ path, staged, untracked, diff, truncated }`. `diff` is the unified diff (`git diff`), empty when nothing changed. Unstaged is the worktree against the index; `staged` the index against `HEAD`, with rename detection. An untracked file (`untracked: true`) diffs against `/dev/null`, so every line reads as added. Fails outside a repository. |
+| `rc_git_diff` | `path`; `staged?` (default `false`); `origPath?`, the source of a staged rename | `{ path, staged, untracked, diff, truncated }`. `diff` is the unified diff (`git diff`), empty when nothing changed. Unstaged is the worktree against the index; `staged` the index against `HEAD`, with rename detection. `path` names one file: a folder is refused. An untracked file (`untracked: true`) diffs against `/dev/null`, so every line reads as added. Fails outside a repository. |
 | `rc_git_log` | `limit?` (1 to 200, default 50); `skip?` (default 0) | `{ repo, commits: Commit[], more }`, newest first. `more` is true when older commits follow. A repository without commits gives `commits: []`. |
 | `rc_git_show` | `hash`: 4 to 64 lowercase hex characters | `{ commit: Commit \| null, diff, truncated, withheld: string[] }`. `diff` is the patch against the first parent. |
 | `rc_list_dir` | `path?` (default the cwd, `""`) | `{ path, entries: DirEntry[], truncated }`, sorted by name, `.git` included. |

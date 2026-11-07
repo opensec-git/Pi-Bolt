@@ -467,10 +467,18 @@ class Review {
 		return { rel, real, exists };
 	}
 
-	private refuseSecret(rel: string): void {
-		if (!this.options.readSecretFiles && isSecretPath(rel)) {
+	/**
+	 * Refuses a secret file by the requested path and by the path it resolves to: a symlink `notes.txt -> .env` (or a
+	 * folder link into `.ssh`) is refused like its target.
+	 */
+	private async refuseSecret(target: { rel: string; real: string }): Promise<void> {
+		if (this.options.readSecretFiles) return;
+		const resolved = relative(await this.root(), target.real)
+			.split(sep)
+			.join("/");
+		if (isSecretPath(target.rel) || isSecretPath(resolved)) {
 			throw new ReviewError(
-				`${rel} looks like a secret file and is not shown over remote control (setting remoteControl.readSecretFiles)`,
+				`${target.rel} looks like a secret file and is not shown over remote control (setting remoteControl.readSecretFiles)`,
 			);
 		}
 	}
@@ -569,9 +577,9 @@ class Review {
 
 	async diff(path: unknown, staged: unknown, origPath: unknown): Promise<object> {
 		const target = await this.resolvePath(path, false);
-		this.refuseSecret(target.rel);
+		await this.refuseSecret(target);
 		const orig = origPath === undefined || origPath === null ? undefined : await this.resolvePath(origPath, false);
-		if (orig) this.refuseSecret(orig.rel);
+		if (orig) await this.refuseSecret(orig);
 		const isStaged = staged === true;
 		if ((await this.repoPrefix()) === undefined)
 			throw new ReviewError("The session's folder is not a git repository");
@@ -590,18 +598,14 @@ class Review {
 			);
 		} else {
 			const paths = orig && isStaged ? [orig.rel, target.rel] : [target.rel];
-			run = await this.gitOk(
-				[
-					"diff",
-					...(isStaged ? ["--cached", "-M"] : []),
-					"--no-ext-diff",
-					"--no-textconv",
-					"--relative",
-					"--",
-					...paths,
-				],
-				REVIEW_LIMITS.diffBytes,
-			);
+			const flags = [...(isStaged ? ["--cached", "-M"] : []), "--no-ext-diff", "--no-textconv", "--relative"];
+			// A folder path matches every file below it, past the secret check: the diff may hold only the named files.
+			const names = await this.gitOk(["diff", "--name-only", "-z", ...flags, "--", ...paths], STATUS_BYTES);
+			const listed = names.stdout.toString("utf8").split("\0").filter(Boolean);
+			if (names.truncated || listed.some((name) => !paths.includes(name))) {
+				throw new ReviewError(`${target.rel} is not a file`);
+			}
+			run = await this.gitOk(["diff", ...flags, "--", ...paths], REVIEW_LIMITS.diffBytes);
 		}
 		const cut = cutAt(run.stdout, REVIEW_LIMITS.diffBytes, 0x0a);
 		return {
@@ -632,16 +636,50 @@ class Review {
 		if (typeof hash !== "string" || !HASH.test(hash)) throw new ReviewError("hash must be a commit hash (hex)");
 		const prefix = await this.repoPrefix();
 		if (prefix === undefined) throw new ReviewError("The session's folder is not a git repository");
-		const head = await this.gitOk(["show", "-s", LOG_FORMAT, "--end-of-options", hash], 4 * 1024 * 1024);
+		// Any object id passes the hex check, and `git show <blob>` prints the blob whatever its path: only a commit (a
+		// tag peels to its commit) is shown, by its full id.
+		const verified = await this.git(["rev-parse", "--verify", "--quiet", `${hash}^{commit}`], 4096);
+		const oid = verified.stdout.toString("utf8").trim();
+		if (verified.code !== 0 || !HASH.test(oid)) throw new ReviewError(`${hash} is not a commit`);
+		const head = await this.gitOk(["show", "-s", LOG_FORMAT, "--end-of-options", oid], 4 * 1024 * 1024);
 		const commit = parseLog(head.stdout.toString("utf8"))[0] ?? null;
 		const scope = ["--diff-merges=first-parent", "-M", "--relative", "--no-ext-diff", "--no-textconv"];
 		const names = await this.gitOk(
-			["show", "--format=", "--name-only", "-z", ...scope, "--end-of-options", hash],
+			["show", "--format=", "--name-status", "-z", ...scope, "--end-of-options", oid],
 			STATUS_BYTES,
 		);
-		const files = [...new Set(names.stdout.toString("utf8").split("\0").filter(Boolean))];
-		const withheld = this.options.readSecretFiles ? [] : files.filter((file) => isSecretPath(file));
-		const allowed = files.filter((file) => !withheld.includes(file));
+		// A partial list could miss a secret file that the unfiltered patch below would include.
+		if (names.truncated && !this.options.readSecretFiles) {
+			throw new ReviewError("The commit changes too many files to show");
+		}
+		// `status\0path\0`, or for a rename or copy `status\0source\0destination\0`: a change is withheld when any of
+		// its paths is secret, so a secret renamed to an allowed name does not show its old lines.
+		const tokens = names.stdout.toString("utf8").split("\0");
+		const withheld: string[] = [];
+		const allowed: string[] = [];
+		for (let i = 0; i < tokens.length; i++) {
+			if (!tokens[i]) continue;
+			const count = tokens[i][0] === "R" || tokens[i][0] === "C" ? 2 : 1;
+			const paths = tokens.slice(i + 1, i + 1 + count).filter(Boolean);
+			i += count;
+			const secret = !this.options.readSecretFiles && paths.some((file) => isSecretPath(file));
+			for (const file of paths) {
+				const into = secret ? withheld : allowed;
+				if (!into.includes(file)) into.push(file);
+			}
+		}
+		// A path also matches the files below it: one that names a folder holding a withheld file (a file replaced by a
+		// folder in this commit) is withheld too.
+		for (let moved = true; moved; ) {
+			moved = false;
+			for (const file of [...allowed]) {
+				if (withheld.some((secret) => secret === file || secret.startsWith(`${file}/`))) {
+					allowed.splice(allowed.indexOf(file), 1);
+					if (!withheld.includes(file)) withheld.push(file);
+					moved = true;
+				}
+			}
+		}
 		if (allowed.length === 0) return { commit, diff: "", truncated: false, withheld };
 		const run = await this.gitOk(
 			[
@@ -650,7 +688,7 @@ class Review {
 				"--patch",
 				...scope,
 				"--end-of-options",
-				hash,
+				oid,
 				...(withheld.length > 0 ? ["--", ...allowed] : prefix ? ["--", "."] : []),
 			],
 			REVIEW_LIMITS.diffBytes,
@@ -712,7 +750,7 @@ class Review {
 
 	async readFile(path: unknown): Promise<object> {
 		const target = await this.resolvePath(path, false);
-		this.refuseSecret(target.rel);
+		await this.refuseSecret(target);
 		if (!target.exists) throw new ReviewError(`${target.rel} does not exist`);
 		// A FIFO would block the open: only regular files, and never wait (O_NONBLOCK does nothing to a regular file).
 		if (!(await stat(target.real)).isFile()) throw new ReviewError(`${target.rel} is not a file`);

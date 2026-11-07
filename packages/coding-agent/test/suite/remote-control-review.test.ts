@@ -263,6 +263,89 @@ describe("remote control review", () => {
 		expect(all.diff).toContain("hunter2");
 	});
 
+	it("refuses a folder path in a diff, so files below it are not shown past the secret check", async () => {
+		const repo = makeRepo();
+		mkdirSync(join(repo, "config"));
+		writeFileSync(join(repo, "config", ".env"), "TOKEN=old\n");
+		git(repo, "add", "config");
+		git(repo, "commit", "-q", "-m", "config");
+		writeFileSync(join(repo, "config", ".env"), "TOKEN=changed\n");
+		const { phone } = await connect(repo);
+		expect(await refused(phone, { type: "rc_git_diff", path: "config" })).toContain("not a file");
+		git(repo, "add", "config");
+		expect(await refused(phone, { type: "rc_git_diff", path: "config", staged: true })).toContain("not a file");
+		// A deleted folder no longer exists on disk, but git still matches the files below it.
+		git(repo, "rm", "-q", "-r", "-f", "config");
+		expect(await refused(phone, { type: "rc_git_diff", path: "config", staged: true })).toContain("not a file");
+		expect(await ok(phone, { type: "rc_git_diff", path: "a.txt" })).toMatchObject({ path: "a.txt" });
+	});
+
+	it("shows only commits, not a blob or tree by its id", async () => {
+		const repo = makeRepo();
+		const { phone } = await connect(repo);
+		for (const object of ["HEAD:.env", "HEAD^{tree}"]) {
+			const id = git(repo, "rev-parse", object).trim();
+			const error = await refused(phone, { type: "rc_git_show", hash: id });
+			expect(error).toContain("is not a commit");
+			expect(error).not.toContain("hunter2");
+		}
+	});
+
+	it("withholds a whole rename when either side is a secret file", async () => {
+		const repo = makeRepo();
+		mkdirSync(join(repo, "config"));
+		// Enough unchanged lines that git detects the rename (50% similar).
+		const rest = Array.from({ length: 20 }, (_, i) => `SETTING_${i}=${i}\n`).join("");
+		writeFileSync(join(repo, "config", ".env"), `TOKEN=old-secret\n${rest}`);
+		git(repo, "add", "config");
+		git(repo, "commit", "-q", "-m", "config");
+		git(repo, "mv", "config/.env", "config/public.txt");
+		writeFileSync(join(repo, "config", "public.txt"), `TOKEN=changed\n${rest}`);
+		writeFileSync(join(repo, "visible.txt"), "visible\n");
+		git(repo, "add", "-A", "config", "visible.txt");
+		git(repo, "commit", "-q", "-m", "rename");
+		const { phone } = await connect(repo);
+		const shown = await ok(phone, { type: "rc_git_show", hash: git(repo, "rev-parse", "HEAD").trim() });
+		expect(shown.withheld).toEqual(["config/.env", "config/public.txt"]);
+		expect(shown.diff).toContain("+visible");
+		expect(shown.diff).not.toContain("TOKEN");
+	});
+
+	it("withholds a file that becomes a folder holding a secret file", async () => {
+		const repo = makeRepo();
+		writeFileSync(join(repo, "cfg"), "plain\n");
+		git(repo, "add", "cfg");
+		git(repo, "commit", "-q", "-m", "cfg file");
+		git(repo, "rm", "-q", "cfg");
+		mkdirSync(join(repo, "cfg"));
+		writeFileSync(join(repo, "cfg", ".env"), "TOKEN=nested\n");
+		git(repo, "add", "cfg");
+		git(repo, "commit", "-q", "-m", "cfg folder");
+		const { phone } = await connect(repo);
+		const shown = await ok(phone, { type: "rc_git_show", hash: git(repo, "rev-parse", "HEAD").trim() });
+		expect(shown.withheld).toEqual(expect.arrayContaining(["cfg", "cfg/.env"]));
+		expect(shown.diff).not.toContain("nested");
+	});
+
+	it.skipIf(process.platform === "win32")("refuses a symlink that resolves to a secret file", async () => {
+		const repo = makeRepo();
+		mkdirSync(join(repo, "config"));
+		writeFileSync(join(repo, "config", ".env"), "TOKEN=linked\n");
+		mkdirSync(join(repo, ".ssh"));
+		writeFileSync(join(repo, ".ssh", "config"), "Host x\n");
+		symlinkSync(join(repo, "config", ".env"), join(repo, "alias.txt"));
+		symlinkSync(join(repo, ".ssh"), join(repo, "keys-link"));
+		const { phone } = await connect(repo);
+		for (const path of ["alias.txt", "keys-link/config"]) {
+			expect(await refused(phone, { type: "rc_read_file", path })).toContain("looks like a secret file");
+			expect(await refused(phone, { type: "rc_git_diff", path })).toContain("looks like a secret file");
+		}
+		const { phone: trusting } = await connect(repo, { readSecretFiles: true });
+		expect(await ok(trusting, { type: "rc_read_file", path: "alias.txt" })).toMatchObject({
+			content: "TOKEN=linked\n",
+		});
+	});
+
 	it("pages the history and shows a commit", async () => {
 		const repo = makeRepo();
 		const { phone } = await connect(repo);
