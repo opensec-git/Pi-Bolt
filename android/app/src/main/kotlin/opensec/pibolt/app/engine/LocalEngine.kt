@@ -489,12 +489,14 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         val m = loaded.getOrThrow()
         _status.value = EngineStatus.Preparing("Setting up the engine")
         try {
-            val full = EnginePrefix(paths, AndroidAssets(app.assets)).ensure(m)
+            val prefix = EnginePrefix(paths, AndroidAssets(app.assets))
+            val full = prefix.ensure(m)
             // Leftovers of a previous app process (its engines are gone with it).
             runCatching { reaper.reapOrphans() }
             dns.start()
             AppExtension.install(paths.agentDir)
-            Log.i(TAG, "prepare: prefix ${if (full) "installed" else "up to date"}, ${SystemClock.elapsedRealtime() - started} ms (engine ${m.engine}, glibc ${m.glibc})")
+            val how = if (full) "installed (kept ${prefix.kept.size} unchanged trees)" else "up to date"
+            Log.i(TAG, "prepare: prefix $how, ${SystemClock.elapsedRealtime() - started} ms (engine ${m.engine}, glibc ${m.glibc})")
         } catch (e: Exception) {
             Log.e(TAG, "prefix setup failed", e)
             _status.value = EngineStatus.Failed(setupFailure(e), e.toString(), canRetry = true)
