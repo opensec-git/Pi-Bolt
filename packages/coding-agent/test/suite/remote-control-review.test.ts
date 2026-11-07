@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -305,6 +305,32 @@ describe("remote control review", () => {
 		const shown = await ok(phone, { type: "rc_git_show", hash: git(repo, "rev-parse", "HEAD").trim() });
 		expect(shown.diff).toContain("Subproject commit");
 		expect(shown.diff).not.toContain("TOKEN");
+	});
+
+	it.skipIf(process.platform === "win32")("never runs the repository's content filters", async () => {
+		const repo = makeRepo();
+		const markers = tempDir("pi-review-markers-");
+		writeFileSync(join(repo, ".gitattributes"), "visible.txt filter=probe\nother.txt filter=pro.be\n");
+		writeFileSync(join(repo, "visible.txt"), "one\n");
+		writeFileSync(join(repo, "other.txt"), "one\n");
+		git(repo, "add", ".gitattributes", "visible.txt", "other.txt");
+		git(repo, "commit", "-q", "-m", "filtered files");
+		git(repo, "config", "filter.probe.clean", `touch '${join(markers, "clean")}'; cat`);
+		git(repo, "config", "filter.probe.required", "true");
+		git(repo, "config", "filter.pro.be.process", `touch '${join(markers, "process")}'`);
+		writeFileSync(join(repo, "visible.txt"), "two\n");
+		writeFileSync(join(repo, "other.txt"), "two\n");
+		writeFileSync(join(repo, "untracked.txt"), "new\n");
+		const { phone } = await connect(repo);
+		const status = await ok(phone, { type: "rc_git_status" });
+		expect((status.entries as Data[]).map((entry) => entry.path)).toEqual(
+			expect.arrayContaining(["visible.txt", "other.txt"]),
+		);
+		expect((await ok(phone, { type: "rc_git_diff", path: "visible.txt" })).diff).toContain("+two");
+		expect((await ok(phone, { type: "rc_git_diff", path: "other.txt" })).diff).toContain("+two");
+		git(repo, "-c", "filter.probe.clean=cat", "-c", "filter.pro.be.process=", "add", "visible.txt", "other.txt");
+		await ok(phone, { type: "rc_git_diff", path: "visible.txt", staged: true });
+		expect(readdirSync(markers)).toEqual([]);
 	});
 
 	it("refuses a folder as the source of a staged rename", async () => {

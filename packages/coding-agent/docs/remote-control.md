@@ -169,6 +169,9 @@ The commands are read-only. None stages, commits, edits, or runs a shell:
   passes `--no-pager --literal-pathspecs -c core.quotePath=false -c color.ui=false -c core.fsmonitor=false
   -c log.showSignature=false -c diff.submodule=short`; diffs add `--no-ext-diff --no-textconv --submodule=short`, so
   the repository's own diff, textconv and fsmonitor programs never run and a submodule shows only its commit ids.
+  Every configured content filter is turned off (`-c filter.<name>.clean= -c filter.<name>.smudge=
+  -c filter.<name>.process= -c filter.<name>.required=false` for each name in the git config), and status and diffs
+  pass `--ignore-submodules=dirty`, so no filter program runs and a submodule's own files are not scanned.
   `GIT_OPTIONAL_LOCKS=0` keeps status from rewriting the index, and `GIT_TERMINAL_PROMPT=0` keeps git from asking for
   anything. A commit hash must be 4 to 64 lowercase hex characters and name a commit (a tag is peeled to its commit; a
   blob or tree is refused).

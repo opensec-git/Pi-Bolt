@@ -326,13 +326,47 @@ class Review {
 	private readonly cwd: string;
 	private readonly options: ReviewOptions;
 	private rootReal: string | undefined;
+	private filterOverrides: Promise<string[]> | undefined;
 
 	constructor(cwd: string, options: ReviewOptions) {
 		this.cwd = cwd;
 		this.options = options;
 	}
 
-	private git(args: string[], maxBytes: number): Promise<GitRun> {
+	/** git with the safe flags, every configured content filter turned off (`noFilters`). */
+	private async git(args: string[], maxBytes: number): Promise<GitRun> {
+		this.filterOverrides ??= this.noFilters();
+		return this.run([...(await this.filterOverrides), ...args], maxBytes);
+	}
+
+	/**
+	 * `-c` flags that turn off every configured content filter (`filter.<name>.clean`, `.smudge`, `.process`): status
+	 * and worktree diffs would run a file's clean filter, a program, which a read-only review must not start.
+	 */
+	private async noFilters(): Promise<string[]> {
+		const run = await this.run(["config", "-z", "--get-regexp", "^filter\\."], 1024 * 1024);
+		// 1: no filter is configured.
+		if (run.code !== 0 || run.truncated) {
+			if (run.code === 1) return [];
+			throw new ReviewError("Could not read git's filter settings");
+		}
+		const names = new Set<string>();
+		for (const entry of run.stdout.toString("utf8").split("\0")) {
+			const key = entry.split("\n")[0] ?? "";
+			const dot = key.lastIndexOf(".");
+			if (key.startsWith("filter.") && dot > "filter.".length) names.add(key.slice("filter.".length, dot));
+		}
+		const flags: string[] = [];
+		for (const name of names) {
+			// `-c` splits at the first `=`: such a name cannot be overridden, so nothing runs at all.
+			if (name.includes("=")) throw new ReviewError(`The git filter "${name}" cannot be turned off for review`);
+			for (const key of ["clean", "smudge", "process"]) flags.push("-c", `filter.${name}.${key}=`);
+			flags.push("-c", `filter.${name}.required=false`);
+		}
+		return flags;
+	}
+
+	private run(args: string[], maxBytes: number): Promise<GitRun> {
 		const timeoutMs = this.options.gitTimeoutMs ?? REVIEW_LIMITS.gitTimeoutMs;
 		return new Promise((resolve, reject) => {
 			const child = spawn("git", [...SAFE_GIT_FLAGS, ...args], {
@@ -492,12 +526,37 @@ class Review {
 			return { repo: false, branch: null, entries: [], total: zero(), truncated: false };
 		}
 		const [status, staged, unstaged] = await Promise.all([
-			this.gitOk(["status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all", "--", "."], STATUS_BYTES),
+			// `dirty`: a submodule's own files are not scanned (its filters are its own config).
 			this.gitOk(
-				["diff", "--cached", "--numstat", "-z", "--no-ext-diff", "--no-textconv", "--relative"],
+				[
+					"status",
+					"--porcelain=v2",
+					"--branch",
+					"-z",
+					"--untracked-files=all",
+					"--ignore-submodules=dirty",
+					"--",
+					".",
+				],
 				STATUS_BYTES,
 			),
-			this.gitOk(["diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv", "--relative"], STATUS_BYTES),
+			this.gitOk(
+				[
+					"diff",
+					"--cached",
+					"--numstat",
+					"-z",
+					"--no-ext-diff",
+					"--no-textconv",
+					"--ignore-submodules=dirty",
+					"--relative",
+				],
+				STATUS_BYTES,
+			),
+			this.gitOk(
+				["diff", "--numstat", "-z", "--no-ext-diff", "--no-textconv", "--ignore-submodules=dirty", "--relative"],
+				STATUS_BYTES,
+			),
 		]);
 		const stagedCounts = parseNumstat(staged.stdout.toString("utf8"));
 		const unstagedCounts = parseNumstat(unstaged.stdout.toString("utf8"));
@@ -606,6 +665,7 @@ class Review {
 				"--no-ext-diff",
 				"--no-textconv",
 				"--submodule=short",
+				"--ignore-submodules=dirty",
 				"--relative",
 			];
 			// A folder path matches every file below it, past the secret check: the diff may hold only the named files,
