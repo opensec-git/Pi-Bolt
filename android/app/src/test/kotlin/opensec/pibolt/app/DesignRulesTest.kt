@@ -50,6 +50,19 @@ class DesignRulesTest {
             "use QuadSpinner, LoadingRow or ProgressLine",
         ),
         Rule(
+            "the app's menus",
+            Regex("""(?<![\w.])DropdownMenu\("""),
+            "use PiMenu (surface3, radius tile, a lineStrong ring, no shadow)",
+            setOf("components/Menus.kt"),
+        ),
+        Rule(
+            "glass back and close",
+            Regex("""IconAction\(Icons\.(AutoMirrored\.Rounded\.ArrowBack|Rounded\.Close), "(Close|Back)""""),
+            "a screen's back or close is a GlassIconButton (in a GlassBar)",
+            // The image viewer is immersive: white glyphs on black, over the picture.
+            setOf("session/features/ImageViewer.kt"),
+        ),
+        Rule(
             "the app's snackbars",
             Regex("""(?<![\w.])Snackbar\(|Toast\.makeText"""),
             "use PiSnackHost and SnackbarHostState.show",

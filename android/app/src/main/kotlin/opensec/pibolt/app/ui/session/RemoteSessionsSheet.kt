@@ -40,7 +40,8 @@ import opensec.pibolt.protocol.rpc.RemoteSessionInfo
 /**
  * The computer's projects and their sessions, from its background service (`host.service`): pick a project, then one
  * of its sessions or "New session". The pick opens on the computer (`switch_session` / `new_session`), and its
- * `remote_hello` replaces this transcript.
+ * `remote_hello` replaces this transcript. [onDismiss] runs on every close, a pick's too: hiding the sheet alone left it
+ * composed, so the next tap on Projects opened nothing.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -97,7 +98,7 @@ fun RemoteSessionsSheet(controller: SessionController, onDismiss: () -> Unit) {
             item(key = "new") {
                 InsetRow(
                     title = "New session",
-                    onClick = { close { controller.newSessionIn(open.cwd) } },
+                    onClick = { close { onDismiss(); controller.newSessionIn(open.cwd) } },
                     leading = { Icon(Icons.Rounded.Add, contentDescription = null, tint = colors.accent, modifier = Modifier.size(IconSize.md)) },
                 )
             }
@@ -117,7 +118,7 @@ fun RemoteSessionsSheet(controller: SessionController, onDismiss: () -> Unit) {
                         title = s.title,
                         meta = meta,
                         current = current,
-                        onClick = { if (current) close {} else close { controller.switchSession(s.path) } },
+                        onClick = { if (current) close(onDismiss) else close { onDismiss(); controller.switchSession(s.path) } },
                         leading = { Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(IconSize.md)) },
                     )
                 }
