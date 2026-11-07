@@ -44,6 +44,7 @@ import opensec.pibolt.app.git.github.GitHubState
 import opensec.pibolt.app.ui.git.RepoPickerSheet
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import opensec.pibolt.app.ui.components.Segmented
+import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
@@ -102,9 +103,7 @@ fun NewProjectSheet(
     LaunchedEffect(clone) { runCatching { focus.requestFocus() } }
 
     PiSheet(onDismiss = onDismiss, state = state) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp)) {
-            Text("New project", style = type.title, color = colors.ink1)
-        }
+        SheetHeader("New project")
         Segmented(
             options = listOf(false to "Empty folder", true to "Clone from git"),
             selected = clone,

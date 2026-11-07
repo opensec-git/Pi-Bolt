@@ -12,19 +12,16 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
@@ -50,7 +47,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import androidx.core.graphics.createBitmap
@@ -58,9 +54,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.GlassBar
+import opensec.pibolt.app.ui.components.GlassIconButton
+import opensec.pibolt.app.ui.components.glass
 import opensec.pibolt.app.ui.theme.Pi
-import opensec.pibolt.app.ui.theme.Radius
 import java.io.ByteArrayOutputStream
 import java.io.File
 
@@ -181,28 +178,23 @@ internal fun DiagramScreen(source: String, preview: DiagramImage, theme: Mermaid
             )
         }
 
-        Row(
-            Modifier
-                .fillMaxWidth()
-                .background(colors.canvas.copy(alpha = 0.86f))
-                .statusBarsPadding()
-                .padding(horizontal = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            IconAction(Icons.Rounded.Close, "Close", onClose, tint = colors.ink1)
-            Text(name, style = Pi.type.subhead, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-            IconAction(Icons.Rounded.FitScreen, "Fit to screen", {
-                zoom = 1f
-                offset = Offset.Zero
-            })
-            IconAction(Icons.Rounded.Share, "Share as PNG", {
-                scope.launch {
-                    val shared = runCatching { sharePng(context, image, theme.background) }.isSuccess
-                    if (!shared) notice = "Could not share the diagram"
-                }
-            })
-            IconAction(Icons.Rounded.Download, "Save as PNG", { save.launch("diagram.png") })
-        }
+        GlassBar(
+            title = name,
+            leading = { GlassIconButton(Icons.Rounded.Close, "Close", onClick = onClose) },
+            actions = {
+                GlassIconButton(Icons.Rounded.FitScreen, "Fit to screen", onClick = {
+                    zoom = 1f
+                    offset = Offset.Zero
+                })
+                GlassIconButton(Icons.Rounded.Share, "Share as PNG", onClick = {
+                    scope.launch {
+                        val shared = runCatching { sharePng(context, image, theme.background) }.isSuccess
+                        if (!shared) notice = "Could not share the diagram"
+                    }
+                })
+                GlassIconButton(Icons.Rounded.Download, "Save as PNG", onClick = { save.launch("diagram.png") })
+            },
+        )
 
         AnimatedVisibility(
             visible = notice != null,
@@ -213,15 +205,14 @@ internal fun DiagramScreen(source: String, preview: DiagramImage, theme: Mermaid
                 .navigationBarsPadding()
                 .padding(bottom = 24.dp),
         ) {
-            val shape = RoundedCornerShape(Radius.md)
+            // A glass capsule, as the app's snackbars.
             Text(
                 notice.orEmpty(),
-                style = Pi.type.label,
+                style = Pi.type.rowMeta,
                 color = colors.ink1,
                 modifier = Modifier
-                    .background(colors.surface3, shape)
-                    .border(1.dp, colors.line, shape)
-                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                    .glass(CircleShape, colors)
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
             )
         }
     }

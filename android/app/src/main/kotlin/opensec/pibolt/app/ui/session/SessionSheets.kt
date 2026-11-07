@@ -567,7 +567,7 @@ fun HistorySheet(prompts: List<String>, onPick: (String) -> Unit, onDismiss: () 
     val close = rememberSheetCloser(state)
     val colors = Pi.colors
     PiSheet(onDismiss = onDismiss, state = state) {
-        Text("Prompt history", style = Pi.type.subhead, color = colors.ink1, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+        SheetHeader("Prompt history")
         if (prompts.isEmpty()) {
             Text("No prompts yet", style = Pi.type.body, color = colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
         }
