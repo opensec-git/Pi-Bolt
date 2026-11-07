@@ -35,7 +35,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.WrapText
-import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.FormatListNumbered
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.OpenInFull
@@ -89,7 +88,7 @@ import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Tnum
 
 /**
- * A fenced code block: surface1 card, 40dp header (code glyph, filename or language, then Wrap, Open and Copy), code in
+ * A fenced code block: surface1 card, 40dp header (language · file, then Lines, Wrap, Open and Copy as icons), code in
  * Mono 12.5/19 with optional line numbers behind a 1dp rule, horizontal scroll with edge fades. Blocks over
  * [CodeFold.FOLD_AT] lines fold to their first [CodeFold.FOLDED] with a bottom fade and a "Show all" bar that expands in
  * place (up to [CodeFold.INLINE_MAX] lines) or opens the viewer. While streaming ([closed] false) the header shows a
@@ -151,6 +150,11 @@ fun CodeBlock(
     ) {
         CodeHeader(
             meta = meta,
+            language = when {
+                diff -> "diff"
+                lang.isNotEmpty() -> CodeInfo.displayLanguage(lang)
+                else -> "code"
+            },
             label = label,
             closed = closed,
             lines = lines,
@@ -257,6 +261,7 @@ fun CodeBlock(
 @Composable
 private fun CodeHeader(
     meta: CodeInfo,
+    language: String,
     label: String,
     closed: Boolean,
     lines: Int,
@@ -279,18 +284,18 @@ private fun CodeHeader(
         modifier
             .fillMaxWidth()
             .heightIn(min = 40.dp)
-            .padding(start = 12.dp, end = 4.dp),
+            .padding(start = 14.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(Icons.Rounded.Code, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(14.dp))
-        Spacer(Modifier.width(8.dp))
-        Text(
-            label,
-            style = if (named) type.monoSmall.copy(color = colors.ink1) else type.monoMeta.copy(color = colors.ink3),
-            maxLines = 1,
-            overflow = if (named) TextOverflow.MiddleEllipsis else TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
+        // As on the desktop: the language, then " · " and the file when the fence names one (cut in the middle so
+        // the file name stays), the actions as icons at the end.
+        Text(language, style = type.monoMeta, color = colors.ink3, maxLines = 1)
+        if (named && label != language) {
+            Text(" · ", style = type.monoMeta, color = colors.ink3, maxLines = 1)
+            Text(label, style = type.monoMeta, color = colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f))
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
         AnimatedContent(
             targetState = closed,
             transitionSpec = {
@@ -339,7 +344,7 @@ private fun CodeHeader(
                         )
                     }
                     if (showOpen) HeaderIcon(Icons.Rounded.OpenInFull, "Open code", tint = colors.ink3, onClick = onOpen)
-                    CopyButton(copy, Modifier.height(40.dp), clipLabel = meta.filename ?: meta.label, description = "Copy code")
+                    CopyButton(copy, Modifier.height(40.dp), label = false, clipLabel = meta.filename ?: meta.label, description = "Copy code")
                 }
             }
         }

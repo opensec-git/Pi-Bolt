@@ -111,7 +111,7 @@ on top.
 Spacing 2, 4, 8, 12, 16, 20, 24, 32, 40 dp (`Space.xxs … x4`). Side gutter 16; sheet and header text inset 20; gap
 between turns 20; between steps 6.
 Radii: xs 4 (inline code, tags), sm 8 (chips), md 12 (cards, code blocks, option rows), lg 18 (user bubble,
-composer), xl 28 (sheet top corners), full (send button, pills). User bubble: 18 with the bottom-end corner 6.
+composer), xl 28 (sheet top corners), full (send button, pills). User bubble: 18 with the bottom-end corner 4.
 Touch targets at least 48dp. Every timeline row has a 20dp leading slot (spinner or glyph) and a 12dp gap.
 Icons: one family, Material Rounded (`Icons.Rounded`, `Icons.AutoMirrored.Rounded`). Sizes (`IconSize`): 14 beside
 meta text, 16 beside labels and in small buttons, 20 leading glyphs in rows, notices and buttons, 22 toolbar
@@ -178,10 +178,11 @@ alpha). No overshoot except sheet drag release.
 - Live turn only: the user bubble rises 10dp and fades in; new steps rise 6dp. History and restored sessions never
   animate. Streaming text is updated at most once per frame and newly revealed text fades in over 120 ms; a 6x12dp
   ink3 block pulses at the end of the live paragraph (900 ms) instead of a caret.
-- Auto-scroll sticks to the bottom only while the user is there; otherwise a 40dp round scroll button (surface3, 1dp
-  lineStrong, arrow 20dp ink1, 48dp touch) appears at the end edge, 16dp in from the side and bottom, out of the
-  reading column. Enter: rise 16dp, scale 0.95→1, fade, quick; exit 0.7x. Unseen content adds an 8dp accent dot at
-  its top-end that pulses twice (scale 1↔1.3, 300 ms each way). Every send jumps to the bottom. The live status line
+- Auto-scroll sticks to the bottom only while the user is there; otherwise a scroll button appears centred above the
+  composer, 8dp up: a 36dp round button (surface3, 1dp lineStrong, arrow 18dp ink1) in a 4dp ring of canvas so text
+  passing under it is cut cleanly (the desktop's), 48dp touch. When content arrived while the reader was away it
+  widens (quick, in place) into a pill, arrow + "New messages" (metaStrong ink1). Enter: rise 16dp, scale 0.95→1,
+  fade, quick; exit 0.7x. Every send jumps to the bottom. The live status line
   keeps its 32dp height while hidden so the list does not jump.
 - Labels such as "Thinking", "Running", "Writing" shimmer: ink2 base, a band of ink1 through 9 eased alpha stops per
   side (0, .04, .17, .33, .5, .67, .83, .96, 1), band max(96dp, 0.6 × label width), a constant 200dp/s with a 100 ms
@@ -452,24 +453,30 @@ under it.
 - Subtitle under the name: model · thinking level · context %, tap → Session info sheet (model, thinking, context
   ring, tokens, cost, compaction button).
 - Transcript (LazyColumn, stable keys and contentType per block; only the last block changes while streaming):
-  - user: right, max 84% width, surface2, radius 18/6, padding 12x16, prose. Images sent from this phone show as
+  - user: right, max 80% width, a subtle bubble as on the desktop: surface2 with a 1dp line, radius 18 with the
+    bottom-end corner 4 (xs), padding 10x14, prose. Images sent from this phone show as
     56dp thumbnails above the text (kept in memory for the session); images without a local copy read as a compact
     "2 images" chip (surface3, radius 4, image glyph, meta ink2).
   - assistant: full width on canvas, prose, no bubble; paragraphs 12dp apart; ink3 list markers.
   - user, sending: an idle prompt shows at once as its bubble at 60% with "Sending" (meta ink3) under it, and the
     status line shows Quad Think + "Sending". The host's echo takes over the row in place (no second rise); a failed
     send removes it and returns the text to the composer. Slash commands are not shown early.
-  - thinking: row "Thinking" (Quad Think 12dp + shimmer) live, "Thought for 8s" after; collapsed by default; body
+  - thinking: row "Thinking" (Quad Think 14dp + shimmer, the chevron right after the label) live, "Thought for 8s"
+    (the chevron in the slot) after; collapsed by default; body
     thinking style with a 1dp rail; live body is a 5-line window pinned to the newest text that glides up (120 ms,
     in place) as lines arrive, with a 24dp top fade.
-  - tool row: 20dp slot (Run/Write spinner → result glyph), verb (label ink2: "Run" while active, "Ran", "Read",
+  - tool row (assistant-ui's one collapsed line): 20dp slot (Run/Write spinner 14dp → result glyph), verb (label ink2,
+    danger when the step failed: "Run" while active, "Ran", "Read",
     "Edited", "Wrote", "Searched", "Found", "Listed" once done), argument (mono ink3, middle ellipsis for paths; a read
     carries its range, `src/app.ts:10-80`), right meta (+n success, −n danger, a failing bash exit "exit 1" in danger,
     "no results" ink3 for an empty search or listing, a duration only from 1 s, tnum; while running, the elapsed time
     from 1 s: "4s", "1m 3s", ticking once a second). A tool the host lacks reads as one meta ink3 line ("List isn't
     available here", no danger glyph) and is hidden once a later step succeeds. Images in a result (`content` items
     of type image) show as 120dp thumbnails under the row, open or not; a tap opens the image viewer.
-  - tool cards (tap a row): one Copy at most, and a footer only when something is cut: "Show all N lines" opens the
+  - tool cards (tap a row) hang under the row's text (32dp in, `STEP_TEXT_START`, so an opened fold's rail runs
+    past them, as the desktop's `.tool-detail`); a failed step's card has a danger @ 32% outline. A path in a card
+    header takes all the room up to the header's trailing meta. One Copy at most, and a footer only when something is
+    cut: "Show all N lines" opens the
     rest in place (up to 400 lines), past that "Open output / file / diff" goes to the full-screen viewer.
     - bash: `$` (success, danger on a failing exit), command, exit badge, Copy (the output). The output is a terminal
       on the canvas: SGR colours mapped to tokens (red danger, green success, yellow warning, blue/magenta/cyan the
@@ -492,16 +499,16 @@ under it.
     `steer_subagent`, `get_subagent_result` and `SubagentWorkflow` stay step rows: "Steer agent", "Agent result",
     "Workflow" + the workflow's name.
   - `todo` steps read as one line: "Todo  Added: Write tests", "Done: …", "Started: …", "Cleared the list".
-  - code blocks: surface1, radius 12, 1dp line. Header 40dp: code glyph 14dp ink3, then the filename (monoSmall
-    ink1, middle ellipsis) from the fence info string (`ts title="src/a.ts"`, `ts:src/a.ts`, `src/a.ts`) or the
-    language (monoMeta ink3; shell aliases show as `shell`; untagged code shows the language detected from its first
-    lines, else `code`); right side line numbers (toggle, 3+ lines), Wrap (only when a line overflows or wrap is
-    on), Open (folded or 40+ lines) and the shared Copy button (check + "Copied", 1500 ms). Code Mono 12.5/19, 10dp
+  - code blocks: surface1, radius 12, 1dp line. Header 40dp, as on the desktop: the language (monoMeta ink3; shell
+    aliases show as `shell`; untagged code shows the language detected from its first lines, else `code`), then
+    " · " and the filename (monoMeta ink1, middle ellipsis) when the fence info string names one (`ts title="src/a.ts"`,
+    `ts:src/a.ts`, `src/a.ts`); at the end icon actions: line numbers (toggle, 3+ lines), Wrap (only when a line
+    overflows or wrap is on), Open (folded or 40+ lines) and Copy (icon only; a check while copied, 1500 ms). Code Mono 12.5/19, 10dp
     vertical padding; line numbers from 3 lines on, Mono 11.5 ink3 right-aligned, then a 1dp line rule and 10dp to
     the code. No wrap by default: one horizontal scroll with 20dp edge fades into surface1.
     Over 20 lines the block folds to 14 with a 40dp bottom fade and a 44dp footer ("Show all 84 lines" + chevron)
     that expands in place up to 150 lines ("Show less" scrolls the header back into view) and opens the viewer
-    beyond ("Open all 1,240 lines"). Streaming: the header shows Quad Write 12dp + a ticking line count, the code
+    beyond ("Open all 1,240 lines"). Streaming: the header shows Quad Write 14dp + a ticking line count, the code
     end pulses like prose, and a block past 20 lines shows its last 14 lines at a fixed height under a 32dp top
     fade; on close it crossfades (quick) to the folded start at the same height. Only complete lines are
     highlighted, each once: the tokenizer resumes from the previous line's state (open comments, strings,
@@ -558,7 +565,8 @@ under it.
   - live status line: Quad 16dp + shimmer label + elapsed timer. A running tool is named: the verb shimmers and its
     command or path follows in mono small ink3 ("Run  npm test"; a subagent reads "Agent working" + its task;
     parallel tools add "+n"); text changes crossfade (quick).
-  - errors and notices: radius 12 outline in danger/warning @ 40%, text buttons.
+  - errors and notices: a hairline, not a filled slab (the desktop's): radius 12, 1dp outline in danger / warning @
+    32%, a 20dp glyph in the kind colour, the title bodyStrong ink1, text buttons.
 - Todo panel above the queue strip (see Todo panel below).
 - Queue strip above the composer: 44dp rows with a 2dp bar (warning = steer, ink4 = follow-up), swipe to remove.
 - Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–6 lines; bar: attach (+,
@@ -660,7 +668,9 @@ hit shows under it (meta ink2, two lines). Every message, reasoning block, tool 
 a folded turn opens the fold, one in a "Read 3 files" group opens the group, then the row scrolls to a third of the
 screen. Hits start at the newest. Back closes.
 
-**Message actions.** Long press on a user message: Copy, Send again, Edit and resend (on this phone: forks before
+**Message actions.** Messages take a long press only (`Modifier.longPress`: the long-press haptic, and TalkBack
+offers "Message actions" as a long-click action instead of announcing each paragraph as a button); taps reach links.
+Long press on a user message: Copy, Send again, Edit and resend (on this phone: forks before
 the message and returns its text), Edit in composer, Select text, Share. On a reply block: Copy (plain text, without
 Markdown), Copy as Markdown, Regenerate (on this phone: forks before the prompt and sends it again), Select text, View
 as Markdown, Share. More under the last reply offers the same.
@@ -694,7 +704,7 @@ history and from live `tool_execution_end`).
   progress ring (ink4 track, success arc of done/total, settle), "Todos" (label ink1), "2/5" (meta ink3, tnum),
   a chevron (ink3) that turns in a graphicsLayer. Tapping collapses the card to the heading, which then names the
   current task (meta ink2).
-- Rows 32dp: 20dp glyph slot, 12dp gap, body text. Pending: 12dp ring ink3, text ink2. In progress: Quad Think 12dp
+- Rows 32dp: 20dp glyph slot, 12dp gap, body text. Pending: 12dp ring ink3, text ink2. In progress: Quad Think 14dp
   ink1 and the task's activeForm ("Writing tests") while the agent runs; idle, a half-filled ring ink2 and the
   subject; text ink1. Completed: check success, text ink3 with strikethrough. Glyph swaps crossfade (quick, scale
   0.7→1), text colour changes in place; none of it under reduce motion.
@@ -854,7 +864,7 @@ state, ER, gantt, pie and mind maps are checked; the other Mermaid types work th
   screen.
 - Streaming: each change to the source waits 300 ms for the next (a fence known to be closed draws at once), so a
   diagram appears when the model pauses or the fence closes, never per token. Until then a 160dp skeleton (Quad Write
-  20dp ink3, "Drawing diagram"), or the previous drawing with a Quad Write 12dp in the header. An error in a fence
+  20dp ink3, "Drawing diagram"), or the previous drawing with a Quad Write 14dp in the header. An error in a fence
   that is still open is not shown.
 - Error: the source as a normal code block, then "Diagram could not be drawn: <Mermaid's first error line>" (meta
   ink3, a 14dp danger error glyph).

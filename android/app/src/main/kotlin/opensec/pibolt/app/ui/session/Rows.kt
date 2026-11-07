@@ -54,6 +54,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.drawWithContent
@@ -106,23 +111,44 @@ fun Modifier.riseIn(key: String, live: Boolean, memory: SessionMemory, distance:
     return graphicsLayer { translationY = offset.value }
 }
 
+/**
+ * A long press without a click, for messages: it opens their actions sheet (with the long-press haptic), and TalkBack
+ * offers it as a long-click action only, instead of announcing every paragraph as a button that does nothing. Taps
+ * pass through to links inside the text.
+ */
+@Composable
+fun Modifier.longPress(label: String, onLongPress: () -> Unit): Modifier {
+    val haptics = Pi.haptics
+    val current by rememberUpdatedState(onLongPress)
+    return this
+        .pointerInput(Unit) {
+            detectTapGestures(onLongPress = {
+                haptics.longPress()
+                current()
+            })
+        }
+        .semantics { onLongClick(label) { current(); true } }
+}
+
 // User
 
 /**
- * A user message: right-aligned surface2 bubble. Images sent from this phone show as 56dp thumbnails above the text;
+ * A user message: a right-aligned bubble (surface2, 1dp line, at most 80% wide). Images sent from this phone show as 56dp thumbnails above the text;
  * images without a local copy (sent from elsewhere, or before this session) read as a compact "2 images" chip.
  */
 @Composable
 fun UserBubble(item: UserItem, onLongPress: () -> Unit, modifier: Modifier = Modifier, thumbs: List<ImageBitmap>? = null, onImage: ((Int) -> Unit)? = null) {
     val colors = Pi.colors
-    val shape = RoundedCornerShape(topStart = Radius.lg, topEnd = Radius.lg, bottomStart = Radius.lg, bottomEnd = 6.dp)
+    // As on the desktop: a subtle bubble, surface2 with a 1dp line, the corner under the sender tucked to xs.
+    val shape = RoundedCornerShape(topStart = Radius.lg, topEnd = Radius.lg, bottomStart = Radius.lg, bottomEnd = Radius.xs)
     BoxWithConstraints(modifier.fillMaxWidth(), contentAlignment = Alignment.CenterEnd) {
         Column(
             Modifier
-                .widthIn(max = maxWidth * 0.84f)
-                .pressable({}, shape = shape, pressedScale = 0.98f, onLongClick = onLongPress, role = null)
+                .widthIn(max = maxWidth * 0.8f)
+                .longPress("Message actions", onLongPress)
                 .background(colors.surface2, shape)
-                .padding(horizontal = if (thumbs.isNullOrEmpty()) 16.dp else 12.dp, vertical = 12.dp),
+                .border(1.dp, colors.line, shape)
+                .padding(horizontal = if (thumbs.isNullOrEmpty()) 14.dp else 10.dp, vertical = 10.dp),
             horizontalAlignment = Alignment.End,
         ) {
             if (!thumbs.isNullOrEmpty()) {
@@ -205,8 +231,8 @@ fun TextRowView(row: TextRow, previous: MdBlock?, onOpenCode: (String, String) -
         modifier = modifier
             .padding(top = gap)
             // Prose between the steps of an opened fold lines up with the step text, right of the rail.
-            .padding(start = if (row.rail != null) 32.dp else 0.dp)
-            .pressable({}, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, onLongClick = onLongPress, role = null),
+            .padding(start = if (row.rail != null) STEP_TEXT_START else 0.dp)
+            .longPress("Message actions", onLongPress),
     )
 }
 
@@ -232,7 +258,7 @@ fun ThinkingRowView(item: ThinkingItem, live: Boolean, expanded: Boolean, durati
         ) {
             if (streaming) ShimmerText(label, type.label) else Text(label, style = type.label, color = colors.ink3)
             if (streaming) {
-                Spacer(Modifier.weight(1f))
+                Spacer(Modifier.width(4.dp))
                 Chevron(expanded)
             }
         }
@@ -405,7 +431,7 @@ private fun FileChips(files: List<FileChange>, onOpen: (FileChange) -> Unit, onM
     val shape = RoundedCornerShape(Radius.sm)
     val num = type.meta.copy(fontFeatureSettings = Tnum)
     FlowRow(
-        Modifier.fillMaxWidth().padding(start = 32.dp, bottom = 4.dp),
+        Modifier.fillMaxWidth().padding(start = STEP_TEXT_START, bottom = 4.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
@@ -452,10 +478,14 @@ fun ToolGroupRowView(row: ToolGroupRow, onToggle: () -> Unit, modifier: Modifier
     StepHeader(onClick = onToggle, modifier = modifier, slot = {
         Icon(Icons.Rounded.Check, contentDescription = "Done", tint = colors.ink3, modifier = Modifier.size(16.dp))
     }) {
-        Text(summary, style = type.label, color = colors.ink2, maxLines = 1)
-        Spacer(Modifier.width(8.dp))
-        val detailAlpha by animateFloatAsState(if (row.expanded) 0f else 1f, PiMotion.inPlace(PiMotion.QUICK), label = "detail")
-        Text(detail, style = type.monoSmall, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).graphicsLayer { alpha = detailAlpha })
+        // Summary and names share the room left by the time and chevron (measured first), so at 360dp and 1.3x the
+        // chevron never gets pushed out; the summary keeps priority and ellipsises only past the whole row.
+        Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+            Text(summary, style = type.label, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Spacer(Modifier.width(8.dp))
+            val detailAlpha by animateFloatAsState(if (row.expanded) 0f else 1f, PiMotion.inPlace(PiMotion.QUICK), label = "detail")
+            Text(detail, style = type.monoSmall, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).graphicsLayer { alpha = detailAlpha })
+        }
         Spacer(Modifier.width(8.dp))
         stepDuration(total)?.let { Text(it, style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3) }
         Spacer(Modifier.width(4.dp))
@@ -555,8 +585,8 @@ fun NoticeRowView(item: NoticeItem, expanded: Boolean, onToggle: () -> Unit, mod
         return
     }
     val (icon, tint, border) = when (item.kind) {
-        NoticeKind.Error -> Triple(Icons.Rounded.ErrorOutline, colors.danger, colors.danger.copy(alpha = 0.4f))
-        NoticeKind.Aborted -> Triple(Icons.Rounded.StopCircle, colors.warning, colors.warning.copy(alpha = 0.4f))
+        NoticeKind.Error -> Triple(Icons.Rounded.ErrorOutline, colors.danger, colors.danger.copy(alpha = 0.32f))
+        NoticeKind.Aborted -> Triple(Icons.Rounded.StopCircle, colors.warning, colors.warning.copy(alpha = 0.32f))
         NoticeKind.Compaction -> Triple(Icons.Rounded.Compress, colors.ink2, colors.lineStrong)
         else -> Triple(Icons.Rounded.Info, colors.ink2, colors.lineStrong)
     }
@@ -572,9 +602,10 @@ fun NoticeRowView(item: NoticeItem, expanded: Boolean, onToggle: () -> Unit, mod
             .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = if (open && item.text.isNotBlank()) 4.dp else 12.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(10.dp))
-            Text(item.title, style = type.bodyStrong, color = if (item.kind == NoticeKind.Error) colors.danger else colors.ink1, modifier = Modifier.weight(1f))
+            Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(IconSize.md))
+            Spacer(Modifier.width(8.dp))
+            // The glyph and outline carry the state; the title stays ink1 (text is never in a status colour).
+            Text(item.title, style = type.bodyStrong, color = colors.ink1, modifier = Modifier.weight(1f))
             if (!alwaysOpen && item.text.isNotBlank()) {
                 Chevron(expanded, Modifier.padding(end = 8.dp))
             }
