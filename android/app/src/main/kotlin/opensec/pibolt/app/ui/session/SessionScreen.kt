@@ -177,6 +177,8 @@ class LocalUi(
     val onPreview: (Int) -> Unit = {},
     /** Text and images waiting for the composer ("Ask Pi" in the editor, shares from other apps). */
     val composerDrop: MutableStateFlow<LocalSessions.ComposerDrop?>? = null,
+    /** A plain chat (ui/chats): no project, no tools, so none of the project-only parts ([SessionParts.CHAT]). */
+    val chat: Boolean = false,
 )
 
 /**
@@ -268,7 +270,7 @@ private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget,
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SessionContent(
+internal fun SessionContent(
     app: PiBoltApp,
     controller: SessionController,
     onBack: () -> Unit,
@@ -311,6 +313,8 @@ private fun SessionContent(
     val recentKey = local?.let { "project:" + it.project } ?: controller.hostId
     val title = local?.title ?: hostName
     val isLocal = local != null
+    val chat = local?.chat == true
+    val parts = SessionParts.of(isLocal, chat)
     val drafts = remember { Drafts(app) }
     val files = remember(controller) { ProjectFileIndex(controller.project) }
     val f2Host = remember(controller) {
@@ -473,7 +477,7 @@ private fun SessionContent(
             val s = state.value
             // The session name, or for a computer its folder. The model and thinking level live in the composer chip,
             // the context in the top bar's meter. On this phone the title already is the project folder.
-            (if (local != null) s.sessionName else s.sessionName ?: s.host?.cwd?.takeIf { it.isNotBlank() }?.let(::baseName)).orEmpty()
+            (if (!parts.subtitle) null else if (local != null) s.sessionName else s.sessionName ?: s.host?.cwd?.takeIf { it.isNotBlank() }?.let(::baseName)).orEmpty()
         }
     }
     // Context use: hidden until a turn reports usage, and kept through a turn that reports none (a failed request
@@ -492,7 +496,7 @@ private fun SessionContent(
     // The composer's thinking chip is left out for a model that does not reason.
     val reasons by remember { derivedStateOf { state.value.model?.reasoning != false } }
     val commands by remember { derivedStateOf { state.value.commands } }
-    val palette by remember(local != null) { derivedStateOf { CommandPalette.entries(state.value.commands, local != null) } }
+    val palette by remember(local != null, chat) { derivedStateOf { CommandPalette.entries(state.value.commands, local != null, chat) } }
     val queue by remember { derivedStateOf { state.value.queue } }
     // Changes only when a todo result or a run boundary changes the list.
     val todos by remember { derivedStateOf { state.value.todos } }
@@ -505,7 +509,7 @@ private fun SessionContent(
     val focusManager = LocalFocusManager.current
     // The project's traits for the empty session's suggestions (on-device sessions; read once, on IO).
     val traits by produceState<ProjectTraits?>(null, controller.project) {
-        value = controller.project?.let { dir -> withContext(Dispatchers.IO) { runCatching { StarterPrompts.traits(dir) }.getOrNull() } }
+        value = controller.project?.takeIf { parts.projectStarters }?.let { dir -> withContext(Dispatchers.IO) { runCatching { StarterPrompts.traits(dir) }.getOrNull() } }
     }
     val branch by produceState<String?>(null, controller.project) {
         value = controller.project?.let { dir ->
@@ -843,7 +847,7 @@ private fun SessionContent(
      */
     fun submit(behavior: StreamingBehavior) {
         val text = draft.trim()
-        val call = if (images.isEmpty()) CommandPalette.parse(text, commands, isLocal) else null
+        val call = if (images.isEmpty()) CommandPalette.parse(text, commands, isLocal, chat) else null
         when {
             call != null -> {
                 draft = ""
@@ -1009,7 +1013,7 @@ private fun SessionContent(
                     } else {
                         StatusExtras(extras)
                         TodoPanel(todos, running, autoCollapse = !running || windowHeight < 560.dp, quiet = status.value.visible && statusOnScreen)
-                        if (local != null) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = 12.dp))
+                        if (local != null && parts.preview) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = 12.dp))
                         PendingDialogStrip(askingTitle) { memory.hiddenDialog.value = null }
                         QueueStrip(queue, onEdit = controller::clearQueue)
                     }
@@ -1033,8 +1037,8 @@ private fun SessionContent(
                                 fill(entry.insert)
                             }
                         },
-                        files = files.takeIf { isLocal },
-                        shell = isLocal,
+                        files = files.takeIf { parts.files },
+                        shell = parts.shell,
                         onCycleModel = ::cycleModel,
                         onCycleThinking = ::cycleThinking,
                         onOpenImage = { index ->
@@ -1145,7 +1149,7 @@ private fun SessionContent(
                 actions = listOfNotNull(
                     SheetAction(if (modelReadsImages == false) "Photos (not available for this model)" else "Photos", Icons.Rounded.Image) { attach() },
                     SheetAction("Paste image", Icons.Rounded.ContentPaste) { pasteImage() }.takeIf { clip },
-                    SheetAction("Mention a file", Icons.Rounded.AlternateEmail) { fill(if (draft.isEmpty() || draft.endsWith(" ")) draft + "@" else "$draft @") }.takeIf { isLocal },
+                    SheetAction("Mention a file", Icons.Rounded.AlternateEmail) { fill(if (draft.isEmpty() || draft.endsWith(" ")) draft + "@" else "$draft @") }.takeIf { parts.files },
                     SheetAction("Commands", Icons.Rounded.Code) { fill("/") }.takeIf { palette.isNotEmpty() && draft.isEmpty() },
                     SheetAction("Prompt history", Icons.Rounded.History) { sheet = Sheet.History },
                 ),
@@ -1202,7 +1206,7 @@ private fun SessionContent(
                         model = s.model,
                         thinkingLevel = s.thinkingLevel,
                         sessionName = s.sessionName,
-                        cwd = s.host?.cwd,
+                        cwd = s.host?.cwd?.takeIf { parts.folder },
                         version = s.host?.version,
                         compacting = s.isCompacting,
                         connected = linkState.value is LinkState.Connected,

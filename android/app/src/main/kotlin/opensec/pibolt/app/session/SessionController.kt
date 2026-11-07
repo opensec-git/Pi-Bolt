@@ -25,6 +25,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.checkpoints.TurnCheckpoints
 import opensec.pibolt.app.data.Host
+import opensec.pibolt.app.engine.ChatSpace
 import opensec.pibolt.protocol.Base64Url
 import opensec.pibolt.protocol.backend.ConnectionState
 import opensec.pibolt.protocol.backend.DisconnectReason
@@ -107,7 +108,7 @@ class SessionController private constructor(
         class Remote(val endpoints: List<String>, val pairSecret: ByteArray?, val fallbackSecret: ByteArray?) : Origin
 
         /** [release] gets the backend back when the session stops, and whether the engine was idle then. */
-        class Local(val project: File, val backend: LocalBackend, val release: (LocalBackend, Boolean) -> Unit, val checkpoints: TurnCheckpoints?) : Origin
+        class Local(val project: File, val backend: LocalBackend, val release: (LocalBackend, Boolean) -> Unit, val checkpoints: TurnCheckpoints?, val chat: Boolean) : Origin
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -117,8 +118,11 @@ class SessionController private constructor(
     /** Runs on the engine on this phone; every RPC command is available (remote control allows a subset). */
     val isLocal: Boolean = origin is Origin.Local
 
-    /** The project directory of a local session. */
+    /** The project directory of a local session (for a chat: the chats' directory, which is no project). */
     val project: File? = (origin as? Origin.Local)?.project
+
+    /** A plain chat (engine.ChatSpace): on this phone, in no project, without tools. */
+    val isChat: Boolean = (origin as? Origin.Local)?.chat == true
 
     /** Snapshots of the project per turn, for review and undo (on this phone only: remote files are on the computer). */
     val checkpoints: TurnCheckpoints? = (origin as? Origin.Local)?.checkpoints
@@ -426,13 +430,13 @@ class SessionController private constructor(
                 "notify" -> _effects.tryEmit(SessionEffect.Notify(event.str("message").orEmpty(), event.str("notifyType") ?: "info"))
                 "set_editor_text" -> _effects.tryEmit(SessionEffect.EditorText(event.str("text").orEmpty()))
                 "select", "confirm", "input", "editor" -> if (!app.isForeground) {
-                    Notifications.needsAnswer(app, hostId, project?.name, _hostName.value, event.str("title").orEmpty())
+                    Notifications.needsAnswer(app, hostId, project?.name?.takeUnless { isChat }, _hostName.value, event.str("title").orEmpty(), chat = isChat)
                 }
             }
             "agent_settled" -> {
                 if (!app.isForeground && before.isRunning) {
                     val last = (before.allItems.lastOrNull { it is AssistantTextItem } as? AssistantTextItem)?.text.orEmpty()
-                    Notifications.settled(app, hostId, project?.name, _hostName.value, last, aborted = event.bool("aborted") == true)
+                    Notifications.settled(app, hostId, project?.name?.takeUnless { isChat }, _hostName.value, last, aborted = event.bool("aborted") == true, chat = isChat)
                 }
                 scope.launch { refreshState() }
             }
@@ -609,7 +613,8 @@ class SessionController private constructor(
     }
 
     /** Run [command] in the project's shell; its output becomes context for the next prompt unless [excludeFromContext]. */
-    suspend fun runBash(command: String, excludeFromContext: Boolean = false): RpcResponse = rpc.bash(command, excludeFromContext)
+    suspend fun runBash(command: String, excludeFromContext: Boolean = false): RpcResponse =
+        if (isChat) RpcResponse.failure("bash", NO_COMMANDS) else rpc.bash(command, excludeFromContext)
 
     fun abortBash() {
         scope.launch { rpc.abortBash() }
@@ -657,6 +662,11 @@ class SessionController private constructor(
      * shows at once as a step; its output streams in (`bash_execution_update`) and the result replaces it.
      */
     fun runShell(shell: ShellCommand) {
+        // A chat runs nothing on the phone: no tools, no shell.
+        if (isChat) {
+            _effects.tryEmit(SessionEffect.Error(NO_COMMANDS))
+            return
+        }
         val key = SessionReducer.SHELL_PREFIX + System.currentTimeMillis()
         val args = JsonObject(mapOf("command" to JsonPrimitive(shell.command)))
         mutate { it.copy(items = it.items + ToolItem(key, key, "bash", args, status = ToolStatus.Running)) }
@@ -757,9 +767,15 @@ class SessionController private constructor(
         private const val FRAME_MS = 16L
         const val PERF_TAG = "PiBoltPerf"
 
-        /** A session with the engine on this phone, in [project]. [release] takes the backend back when it stops. */
-        fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit, checkpoints: TurnCheckpoints? = null) =
-            SessionController(app, localId(project), project.name, Origin.Local(project, backend, release, checkpoints))
+        /** Why a chat refuses a shell command. */
+        const val NO_COMMANDS = "Chats can't run commands"
+
+        /**
+         * A session with the engine on this phone, in [project]. [release] takes the backend back when it stops. A [chat]
+         * runs in the chats' directory (engine.ChatSpace), named [opensec.pibolt.app.engine.ChatSpace.NAME].
+         */
+        fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit, checkpoints: TurnCheckpoints? = null, chat: Boolean = false) =
+            SessionController(app, localId(project), if (chat) ChatSpace.NAME else project.name, Origin.Local(project, backend, release, checkpoints, chat))
 
         /** [hostId] of a local session: per project, so drafts and recent prompts stay with it. */
         fun localId(project: File): String = "local:${project.absolutePath}"

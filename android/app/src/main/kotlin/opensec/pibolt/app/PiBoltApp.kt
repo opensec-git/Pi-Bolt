@@ -31,6 +31,7 @@ import opensec.pibolt.app.git.github.PrefsKeyValue
 import opensec.pibolt.app.git.github.TokenStore
 import opensec.pibolt.app.session.Notifications
 import opensec.pibolt.app.session.LiveRegistry
+import opensec.pibolt.app.ui.chats.Chats
 import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.ui.session.features2.SessionAlerts
@@ -121,6 +122,7 @@ class PiBoltApp : Application() {
         updates = UpdateManager(this)
         Notifications.createChannels(this)
         LocalSessions.follow(this)
+        Chats.follow(this)
         SessionAlerts.watchBackgroundAgents(this)
         UpdateNotifications.createChannel(this)
         localEngine.prefetch()

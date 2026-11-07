@@ -26,6 +26,7 @@ import opensec.pibolt.app.MainActivity
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.R
 import opensec.pibolt.app.data.ProjectStore
+import opensec.pibolt.app.ui.chats.Chats
 import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.protocol.session.SubagentStatus
 import java.io.File
@@ -39,6 +40,9 @@ object SessionAlerts {
     const val EXTRA_PROJECT = "opensec.pibolt.session.project"
     const val EXTRA_SESSION = "opensec.pibolt.session.file"
     const val EXTRA_REMOTE = "opensec.pibolt.session.remote"
+
+    /** The live plain chat (ui/chats). */
+    const val EXTRA_CHAT = "opensec.pibolt.session.chat"
     private const val AGENT_ID = 4
 
     /** Must match Notifications' alerts channel (SessionService.kt). */
@@ -47,6 +51,9 @@ object SessionAlerts {
     /** Where a tapped notification leads. */
     sealed interface Target {
         data class Local(val project: String, val sessionFile: String?) : Target
+
+        /** A plain chat: [sessionFile], or the live chat when null. */
+        data class Chat(val sessionFile: String?) : Target
 
         data object Remote : Target
     }
@@ -58,7 +65,10 @@ object SessionAlerts {
     fun openIntent(context: Context): Intent {
         val intent = Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
         val live = (context.applicationContext as? PiBoltApp)?.session?.value ?: return intent
-        if (live.isLocal) {
+        if (live.isChat) {
+            intent.putExtra(EXTRA_CHAT, true)
+            live.sessionFile?.let { intent.putExtra(EXTRA_SESSION, it) }
+        } else if (live.isLocal) {
             live.project?.let { intent.putExtra(EXTRA_PROJECT, it.name) }
             live.sessionFile?.let { intent.putExtra(EXTRA_SESSION, it) }
         } else {
@@ -72,6 +82,7 @@ object SessionAlerts {
         intent ?: return
         val project = intent.getStringExtra(EXTRA_PROJECT)
         _pending.value = when {
+            intent.getBooleanExtra(EXTRA_CHAT, false) -> Target.Chat(intent.getStringExtra(EXTRA_SESSION))
             project != null -> Target.Local(project, intent.getStringExtra(EXTRA_SESSION))
             intent.getBooleanExtra(EXTRA_REMOTE, false) -> Target.Remote
             else -> return
@@ -79,19 +90,29 @@ object SessionAlerts {
         intent.removeExtra(EXTRA_PROJECT)
         intent.removeExtra(EXTRA_SESSION)
         intent.removeExtra(EXTRA_REMOTE)
+        intent.removeExtra(EXTRA_CHAT)
     }
 
     /**
      * Opens the pending target: makes its session the live one (resuming the file if another session is open) and
-     * shows it through [onLocal] (the project name) or [onRemote]. The target is consumed only after it is handled, so
-     * leaving composition mid-open (the activity recreated while the session starts) handles it again next time.
+     * shows it through [onLocal] (the project name), [onRemote] or [onChat]. The target is consumed only after it is
+     * handled, so leaving composition mid-open (the activity recreated while the session starts) handles it again next
+     * time.
      */
     @Composable
-    fun Navigate(app: PiBoltApp, onLocal: (String) -> Unit, onRemote: () -> Unit) {
+    fun Navigate(app: PiBoltApp, onLocal: (String) -> Unit, onRemote: () -> Unit, onChat: () -> Unit = {}) {
         LaunchedEffect(Unit) {
             drain(_pending) { t ->
                 when (t) {
                     Target.Remote -> if (app.remote.value?.stopped == false) onRemote()
+                    is Target.Chat -> {
+                        val live = Chats.current.value?.takeIf { !it.controller.stopped }
+                        val file = t.sessionFile?.takeIf { File(it).isFile }
+                        when {
+                            live != null && (file == null || live.controller.sessionFile == file) -> onChat()
+                            file != null -> Chats.resume(app.engine, file).onSuccess { onChat() }
+                        }
+                    }
                     is Target.Local -> {
                         // Several sessions run at once: the project's own live session, whichever is in focus.
                         val live = LocalSessions.get(t.project)

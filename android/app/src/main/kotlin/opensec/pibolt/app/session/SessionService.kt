@@ -139,11 +139,14 @@ object Notifications {
         )
     }
 
-    private fun openApp(context: Context, project: String? = null, requestCode: Int = 0): PendingIntent = PendingIntent.getActivity(
+    private fun openApp(context: Context, project: String? = null, requestCode: Int = 0, chat: Boolean = false): PendingIntent = PendingIntent.getActivity(
         context,
         requestCode,
         // Carries the session, so a tap opens that exact one (features2.SessionAlerts); without one, the session in focus.
-        if (project != null) {
+        if (chat) {
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .putExtra(SessionAlerts.EXTRA_CHAT, true)
+        } else if (project != null) {
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 .putExtra(SessionAlerts.EXTRA_PROJECT, project)
         } else {
@@ -167,8 +170,11 @@ object Notifications {
             .privateOnLockScreen(context, "Pi is working")
             .build()
 
-    /** A session finished while the app was away. [key]: its hostId (one notification per session); [project]: its project. */
-    fun settled(context: Context, key: String, project: String?, host: String, lastText: String, aborted: Boolean) {
+    /**
+     * A session finished while the app was away. [key]: its hostId (one notification per session); [project]: its
+     * project; [chat]: it is the live plain chat.
+     */
+    fun settled(context: Context, key: String, project: String?, host: String, lastText: String, aborted: Boolean, chat: Boolean = false) {
         val id = RunningSummary.notificationId(key, RunningSummary.SETTLED)
         val title = if (aborted) "Pi stopped on $host" else "Pi finished on $host"
         val text = lastText.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(200) ?: "Tap to see the result"
@@ -181,13 +187,13 @@ object Notifications {
                 .setContentText(text)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(lastText.take(1000).ifBlank { text }))
                 .setAutoCancel(true)
-                .setContentIntent(openApp(context, project, id))
+                .setContentIntent(openApp(context, project, id, chat))
                 .privateOnLockScreen(context, if (aborted) "Pi stopped" else "Pi finished")
                 .build(),
         )
     }
 
-    fun needsAnswer(context: Context, key: String, project: String?, host: String, title: String) {
+    fun needsAnswer(context: Context, key: String, project: String?, host: String, title: String, chat: Boolean = false) {
         val id = RunningSummary.notificationId(key, RunningSummary.ANSWER)
         post(
             context,
@@ -198,7 +204,7 @@ object Notifications {
                 .setContentText(title.ifBlank { "Tap to answer" })
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setAutoCancel(true)
-                .setContentIntent(openApp(context, project, id))
+                .setContentIntent(openApp(context, project, id, chat))
                 .privateOnLockScreen(context, "Pi needs an answer")
                 .build(),
         )
