@@ -9,6 +9,7 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { AgentSession } from "../core/agent-session.ts";
+import { SUBAGENT_STREAM_FEATURE, SubagentStreams, type SubagentStreamsOptions } from "../core/subagent-stream.ts";
 import { toJsonEvent } from "../modes/json-event.ts";
 import type {
 	RpcCommand,
@@ -134,6 +135,8 @@ export interface RemoteControlServerOptions {
 	helloBudgetBytes?: number;
 	/** Deadline for a client's first frame and for its `remote_ready`; default 3 s (tests shorten it). */
 	firstFrameTimeoutMs?: number;
+	/** Limits and timings of `subagent_subscribe` streams (tests shrink them). */
+	subagentStreams?: Pick<SubagentStreamsOptions, "limits" | "pollMs" | "eventBatchMs">;
 	onEvent?: (event: RemoteControlEvent) => void;
 }
 
@@ -170,6 +173,8 @@ class RemoteConnection {
 	readonly socket: WebSocket;
 	readonly address: string;
 	private readonly server: RemoteControlServer;
+	/** Subagent runs this phone follows (`subagent_subscribe`), made on the first. */
+	private subagentStreams: SubagentStreams | undefined;
 
 	constructor(socket: WebSocket, address: string, server: RemoteControlServer) {
 		this.socket = socket;
@@ -239,6 +244,16 @@ class RemoteConnection {
 	close(code: number, reason?: string): void {
 		clearTimeout(this.handshakeTimer);
 		this.socket.close(code, reason);
+	}
+
+	streams(): SubagentStreams {
+		this.subagentStreams ??= this.server.newSubagentStreams((message) => this.send(message));
+		return this.subagentStreams;
+	}
+
+	/** Stops following subagents: the phone left, or the session it showed was replaced. */
+	stopStreams(): void {
+		this.subagentStreams?.clear();
 	}
 
 	send(message: unknown): void {
@@ -450,7 +465,10 @@ export class RemoteControlServer {
 		if (this.pingTimer) clearInterval(this.pingTimer);
 		for (const dialog of this.dialogs.values()) dialog.resolve(undefined);
 		this.dialogs.clear();
-		for (const connection of this.connections) connection.close(closeCode);
+		for (const connection of this.connections) {
+			connection.stopStreams();
+			connection.close(closeCode);
+		}
 		this.connections.clear();
 		this.wss?.close();
 		const httpServer = this.httpServer;
@@ -585,6 +603,7 @@ export class RemoteControlServer {
 	}
 
 	connectionClosed(connection: RemoteConnection): void {
+		connection.stopStreams();
 		const wasOpen = this.connections.delete(connection) && connection.device !== undefined;
 		const client = connection.info();
 		if (wasOpen && client) this.options.onEvent?.({ type: "client_disconnected", client });
@@ -602,6 +621,8 @@ export class RemoteControlServer {
 	/** Call after the terminal switched to another session: phones get the new session's snapshot. */
 	sessionChanged(): void {
 		if (!this.running) return;
+		// The phones get the new session and subscribe again to what they show of it.
+		for (const connection of this.connections) connection.stopStreams();
 		this.subscribe();
 		const session = this.options.getSession();
 		if (!session) return;
@@ -673,6 +694,7 @@ export class RemoteControlServer {
 			dialogs: [...this.dialogs.values()].map((dialog) => dialog.request),
 			commands: this.commands(session),
 			omittedMessages: 0,
+			features: [SUBAGENT_STREAM_FEATURE],
 		};
 		// Newest messages first, while they fit; a client would refuse the whole snapshot otherwise.
 		let budget = (this.options.helloBudgetBytes ?? HELLO_BUDGET_BYTES) - Buffer.byteLength(JSON.stringify(hello));
@@ -712,6 +734,15 @@ export class RemoteControlServer {
 		});
 	}
 
+	/** Streams of one phone's subagent views, reading the session phones see now. */
+	newSubagentStreams(send: (message: object) => void): SubagentStreams {
+		return new SubagentStreams({
+			getSession: () => this.options.getSession(),
+			send,
+			...this.options.subagentStreams,
+		});
+	}
+
 	notify(message: string, notifyType?: "info" | "warning" | "error"): void {
 		this.broadcast({ type: "extension_ui_request", id: randomUUID(), method: "notify", message, notifyType });
 	}
@@ -739,6 +770,17 @@ export class RemoteControlServer {
 			return;
 		}
 		const id = typeof typed.id === "string" ? typed.id : undefined;
+		if (typed.type === "subagent_subscribe" || typed.type === "subagent_unsubscribe") {
+			const runId = (message as { runId?: unknown }).runId;
+			try {
+				if (typed.type === "subagent_subscribe") connection.streams().subscribe(runId);
+				else connection.streams().unsubscribe(runId);
+				connection.send({ id, type: "response", command: typed.type, success: true });
+			} catch (error) {
+				connection.send({ id, type: "response", command: typed.type, success: false, error: asError(error) });
+			}
+			return;
+		}
 		const service = this.options.serviceCommands;
 		if (service?.types.has(typed.type)) {
 			try {
