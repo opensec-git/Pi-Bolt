@@ -15,10 +15,10 @@ rpc-extension-ui.md, remote-control.md) and src/modes/interactive.
 
 | | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| done | 39 | 46 | 29 | 114 |
+| done | 39 | 47 | 30 | 116 |
 | partial | 0 | 1 | 4 | 5 |
 | missing | 0 | 1 | 6 | 7 |
-| **Total** | 39 | 48 | 39 | 126 |
+| **Total** | 39 | 49 | 40 | 128 |
 
 Not counted: 12 `n/a` rows (terminal-only features). Before this branch the same rows stood at 53 done, 15 partial and
 55 missing: it moved 37 rows (25 missing to done, 11 partial to done, 1 missing to partial) and closed every P0 gap.
@@ -229,6 +229,8 @@ Tree navigation, labels and the tool list go through a small helper extension th
 | Keep running in the background | — | done: foreground service while a turn runs | device | P0 |
 | Projects (create, clone, rename, pin, delete) | — | done | device | P0 |
 | Browse project files | — | done: Files tab and viewer | device | P1 |
+| Language runtimes: `node`, `npm`, `npx`, `python3`, `pip` | your system's | done: Node.js 22 LTS and Python 3.14 in the APK, in Pi's bash and `!` commands (and any shell started with the engine's environment); npm/pip installs over HTTPS | device | P1 |
+| Runtimes screen (versions, sizes, npm/pip caches) | — | done: Settings > Runtimes, project menu | device | P2 |
 | TalkBack labels and 48 dp targets | — | done for the new controls | both | P0 |
 
 ## What remains

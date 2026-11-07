@@ -25,6 +25,12 @@ import java.io.FileNotFoundException
 import java.io.InputStream
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
+import java.io.ByteArrayOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import opensec.pibolt.app.engine.RuntimeStorage
+import opensec.pibolt.app.engine.RuntimeStore
+import opensec.pibolt.app.engine.formatBytes
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -112,7 +118,12 @@ class EngineFilesTest {
         assertNull(env["LD_PRELOAD"])
         assertNull(env["LD_LIBRARY_PATH"])
         assertEquals(File(root, "data/files/home").path, env["HOME"])
-        assertEquals("${p.prefix.path}/bin:/system/bin", env["PATH"])
+        assertEquals("${File(root, "data/files/home/.local/bin").path}:${p.prefix.path}/bin:/system/bin", env["PATH"])
+        assertEquals(File(root, "data/cache/xdg/npm").path, env["npm_config_cache"])
+        assertEquals(File(root, "data/cache/xdg/pip").path, env["PIP_CACHE_DIR"])
+        assertEquals(File(root, "data/files/home/.local").path, env["PYTHONUSERBASE"])
+        // The pack's PATH still gets the user's bin dir in front.
+        assertEquals("${p.userBase.path}/bin:/x/bin", engineEnvironment(p, emptyMap(), "UTC", mapOf("PATH" to "/x/bin"))["PATH"])
         assertEquals("/system/bin/sh", env["SHELL"])
         assertEquals(p.packageDir.path, env["PI_PACKAGE_DIR"])
         assertEquals("Asia/Kolkata", env["TZ"])
@@ -298,5 +309,115 @@ class EngineFilesTest {
         settings.writeText("{ not json")
         assertFalse(BundledExtensions.register(p.agentDir, listOf(todo.path), p.extensionsDir.path))
         assertEquals("{ not json", settings.readText())
+    }
+
+    private class BytesAssets(private val files: Map<String, ByteArray>) : AssetSource {
+        override fun open(path: String): InputStream = files[path]?.let(::ByteArrayInputStream) ?: throw FileNotFoundException(path)
+
+        override fun list(path: String): List<String> = emptyList()
+    }
+
+    private fun zip(vararg entries: Pair<String, String>): ByteArray {
+        val out = ByteArrayOutputStream()
+        ZipOutputStream(out).use { z ->
+            for ((name, text) in entries) {
+                z.putNextEntry(ZipEntry(name))
+                z.write(text.toByteArray())
+                z.closeEntry()
+            }
+        }
+        return out.toByteArray()
+    }
+
+    private val runtimesJson = manifestJson.replace(
+        "\"env\":",
+        """"trees": [ { "path": "lib/python3.14", "asset": "engine/trees/python.zip", "sha256": "x", "files": 3, "bytes": 10,
+                       "executables": [ "bin-ish/run.py" ] } ],
+          "runtimes": [ { "id": "node", "name": "Node.js", "version": "22.23.4", "commands": [ "node", "npm", "npx" ], "bytes": 150000000,
+                          "details": { "npm": "10.9.4" } },
+                        { "id": "python", "name": "Python", "version": "3.14.10", "commands": [ "python3", "pip" ], "bytes": 60000000,
+                          "details": { "pip": "25.2" } } ],
+          "env":""",
+    ).replace(
+        "{ \"path\": \"lib/ld-linux-aarch64.so.1\", \"target\": \"libld.so\" }",
+        "{ \"path\": \"lib/ld-linux-aarch64.so.1\", \"target\": \"libld.so\" }, " +
+            "{ \"path\": \"lib/python3.14/lib-dynload/_ssl.cpython-314-aarch64-linux-gnu.so\", \"target\": \"lib_ssl_cpython_314_aarch64_linux_gnu_so.so\" }",
+    )
+
+    @Test
+    fun manifestParsesTreesAndRuntimes() {
+        val m = EngineManifest.parse(runtimesJson)
+        assertEquals(listOf(EngineManifest.Tree("lib/python3.14", "engine/trees/python.zip", listOf("bin-ish/run.py"))), m.trees)
+        assertEquals(listOf("node", "python"), m.runtimes.map { it.id })
+        assertEquals(EngineManifest.Runtime("node", "Node.js", "22.23.4", listOf("node", "npm", "npx"), 150_000_000, mapOf("npm" to "10.9.4")), m.runtimes[0])
+        assertFailsWith<IllegalArgumentException> { EngineManifest.parse(runtimesJson.replace("\"lib/python3.14\"", "\"../python\"")) }
+        // An older pack without them.
+        assertEquals(emptyList(), EngineManifest.parse(manifestJson).trees)
+        assertEquals(emptyList(), EngineManifest.parse(manifestJson).runtimes)
+    }
+
+    @Test
+    fun prefixUnpacksRuntimeTreesWithTheirModuleLinks() {
+        val p = paths()
+        val m = EngineManifest.parse(runtimesJson)
+        val assets = BytesAssets(
+            mapOf(
+                "engine/files/ca-certificates.crt" to "CERTS".toByteArray(),
+                "engine/trees/python.zip" to zip("os.py" to "import sys", "_pyrepl/__init__.py" to "", "bin-ish/run.py" to "#!x"),
+            ),
+        )
+        // Left from an older version: goes with the old tree.
+        File(p.prefix, "lib/python3.14/__pycache__/old.pyc").apply { parentFile.mkdirs(); writeText("old") }
+        assertTrue(EnginePrefix(p, assets).ensure(m))
+        val lib = File(p.prefix, "lib/python3.14")
+        assertEquals("import sys", File(lib, "os.py").readText())
+        assertTrue(File(lib, "_pyrepl/__init__.py").isFile)
+        assertTrue(File(lib, "bin-ish/run.py").canExecute())
+        assertFalse(File(lib, "os.py").canExecute())
+        assertFalse(File(lib, "__pycache__").exists())
+        assertEquals(
+            File(p.nativeLibDir, "lib_ssl_cpython_314_aarch64_linux_gnu_so.so").toPath(),
+            Files.readSymbolicLink(File(lib, "lib-dynload/_ssl.cpython-314-aarch64-linux-gnu.so").toPath()),
+        )
+        assertTrue(File(p.prefix, "lib").listFiles()!!.none { it.name.endsWith(".unpack") })
+
+        // A zip entry outside the tree is refused, and the setup is not marked done.
+        val evil = BytesAssets(mapOf("engine/files/ca-certificates.crt" to "C".toByteArray(), "engine/trees/python.zip" to zip("../../escape.txt" to "x")))
+        val moved = paths(File(root, "nlib2"))
+        assertFailsWith<IllegalArgumentException> { EnginePrefix(moved, evil).ensure(m) }
+        assertFalse(File(p.prefix, "escape.txt").exists())
+        assertFalse(moved.stamp.exists())
+    }
+
+    @Test
+    fun runtimeStorageIsMeasuredAndOnlyCachesClear() {
+        val p = paths()
+        val m = EngineManifest.parse(runtimesJson)
+        File(p.cache, "npm/_cacache/content/a").apply { parentFile.mkdirs(); writeBytes(ByteArray(1500)) }
+        File(p.cache, "pip/http/b").apply { parentFile.mkdirs(); writeBytes(ByteArray(700)) }
+        File(p.userBase, "lib/node_modules/semver/index.js").apply { parentFile.mkdirs(); writeBytes(ByteArray(300)) }
+        File(p.userBase, "lib/python3.14/site-packages/six.py").apply { parentFile.mkdirs(); writeBytes(ByteArray(200)) }
+        // A link is neither followed nor counted.
+        Files.createSymbolicLink(File(p.cache, "npm/link").toPath(), File(p.userBase, "lib").toPath())
+        val usage = RuntimeStore.usage(p, m.runtimes).associate { it.kind to it.bytes }
+        assertEquals(
+            mapOf(RuntimeStorage.Kind.NpmCache to 1500L, RuntimeStorage.Kind.PipCache to 700L, RuntimeStorage.Kind.NpmGlobal to 300L, RuntimeStorage.Kind.PipUser to 200L),
+            usage,
+        )
+        assertTrue(RuntimeStore.clear(p, RuntimeStorage.Kind.NpmCache))
+        assertFalse(File(p.cache, "npm").exists())
+        assertTrue(File(p.userBase, "lib/node_modules/semver/index.js").exists())
+        assertFailsWith<IllegalArgumentException> { RuntimeStore.clear(p, RuntimeStorage.Kind.PipUser) }
+        // Only the kinds of shipped runtimes.
+        assertEquals(listOf(RuntimeStorage.Kind.PipCache, RuntimeStorage.Kind.PipUser), RuntimeStore.usage(p, m.runtimes.filter { it.id == "python" }).map { it.kind })
+    }
+
+    @Test
+    fun bytesReadLikeAndroidStorage() {
+        assertEquals("0 B", formatBytes(0))
+        assertEquals("860 KB", formatBytes(860_000))
+        assertEquals("4.2 MB", formatBytes(4_200_000))
+        assertEquals("128 MB", formatBytes(127_600_000))
+        assertEquals("1.3 GB", formatBytes(1_300_000_000))
     }
 }

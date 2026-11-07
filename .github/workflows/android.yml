@@ -38,7 +38,8 @@ jobs:
   pack:
     name: Engine pack (linux-arm64)
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
+    # glibc, curl and git, CPython from source; verify-pack.sh installs npm and pip packages over HTTPS.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,7 +51,7 @@ jobs:
           restore-keys: engine-dl-
       - name: Build the pack
         run: engine/build-pack.sh
-      - name: Run the pack the way the app does (Alpine container, real prefix)
+      - name: Run the pack the way the app does (Alpine container, real prefix; node, npm, python3, pip)
         run: engine/scripts/verify-pack.sh
       - name: Corresponding source of the GPL/LGPL parts
         if: ${{ startsWith(github.ref, 'refs/tags/android-v') }}

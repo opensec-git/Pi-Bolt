@@ -64,6 +64,7 @@ import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import opensec.pibolt.app.ui.session.subagent.LocalSubagentNav
 import opensec.pibolt.app.ui.session.subagent.SubagentNav
 import opensec.pibolt.app.ui.session.subagent.SubagentOverlay
+import opensec.pibolt.app.ui.settings.RuntimesScreen
 import opensec.pibolt.app.ui.settings.SettingsScreen
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
@@ -78,6 +79,7 @@ object Routes {
     const val SCAN = "scan"
     const val SESSION = "session"
     const val SETTINGS = "settings"
+    const val RUNTIMES = "runtimes"
 
     fun project(name: String) = "project/" + Uri.encode(name)
 
@@ -211,6 +213,7 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
                                 name = name,
                                 onBack = { nav.popBackStack(Routes.HOME, inclusive = false) },
                                 onOpenSession = { nav.navigate(Routes.localSession(name)) { launchSingleTop = true } },
+                                onRuntimes = { nav.navigate(Routes.RUNTIMES) { launchSingleTop = true } },
                             )
                         }
                     }
@@ -244,7 +247,12 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
                     }
                     composable(Routes.SETTINGS) {
                         CompositionLocalProvider(LocalNavScope provides this) {
-                            SettingsScreen(app = app, onBack = { nav.popBackStack() })
+                            SettingsScreen(app = app, onBack = { nav.popBackStack() }, onRuntimes = { nav.navigate(Routes.RUNTIMES) { launchSingleTop = true } })
+                        }
+                    }
+                    composable(Routes.RUNTIMES) {
+                        CompositionLocalProvider(LocalNavScope provides this) {
+                            RuntimesScreen(app = app, onBack = { nav.popBackStack() })
                         }
                     }
                 }

@@ -184,6 +184,15 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         return controller
     }
 
+    override fun runtimes(): RuntimesReport {
+        // The manifest without the setup: the screen works before the engine first starts (and when it cannot run).
+        val shipped = manifest?.runtimes
+            ?: runCatching { app.assets.open(EnginePrefix.MANIFEST_ASSET).use { EngineManifest.parse(it.reader().readText()) }.runtimes }.getOrDefault(emptyList())
+        return RuntimesReport(shipped, RuntimeStore.usage(paths, shipped))
+    }
+
+    override fun clearRuntimeStorage(kind: RuntimeStorage.Kind): Boolean = RuntimeStore.clear(paths, kind)
+
     /** Saved sessions with at least one message, newest first. Blocking file I/O: call off the main thread. */
     override fun sessions(project: File): List<SessionSummary> = index.list(engineForm(project)).filter { it.messageCount > 0 }
 

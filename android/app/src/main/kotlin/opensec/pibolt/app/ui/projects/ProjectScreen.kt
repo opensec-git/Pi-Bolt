@@ -94,7 +94,7 @@ import java.io.File
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSession: () -> Unit) {
+fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSession: () -> Unit, onRuntimes: () -> Unit) {
     val engine = app.engine
     val store = remember { ProjectStore.get(app) }
     val projects = remember(engine) { Projects(engine, store) }
@@ -173,6 +173,7 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
                             onPin = { store.setPinned(name, it) },
                             onRename = { action = ProjectAction.Rename(entry) },
                             onDelete = { action = ProjectAction.Delete(entry) },
+                            onRuntimes = onRuntimes,
                         )
                     }
                 }
