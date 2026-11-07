@@ -1,0 +1,274 @@
+diff --git a/cmd/esbuild/host_version.go b/cmd/esbuild/host_version.go
+new file mode 100644
+index 00000000..ed3c8ada
+--- /dev/null
++++ b/cmd/esbuild/host_version.go
+@@ -0,0 +1,79 @@
++package main
++
++// Pi-Bolt (Android): one esbuild binary serves the JS API of every esbuild
++// release from 0.19.0 through 0.28.x, so projects that pin different versions
++// (Vite 5, 6 and 7) can share it via ESBUILD_BINARY_PATH. Upstream refuses any
++// host whose version differs from the binary's. The stdio protocol is the same
++// over that range (packet encoding and commands unchanged; new request fields
++// are optional), except for two response fields older hosts read differently,
++// which "hostBefore" lets the service encode the old way:
++//
++//   - 0.27.4 sends "metafile" as bytes; older hosts call JSON.parse on a string.
++//   - 0.25.0 replaced the serve response's "host" (a string) with "hosts".
++//
++// esbuild's postinstall script also runs "esbuild --version" in the package's
++// directory and fails unless it prints the package's version, which
++// "versionForWorkingDirectory" answers.
++//
++// See android/engine/CONTRACT.md in the Pi-Bolt repository.
++
++import (
++	"encoding/json"
++	"io/ioutil"
++	"strconv"
++	"strings"
++)
++
++// The oldest and the newest minor release whose host this binary accepts.
++const oldestHostMinor = 19
++const newestHostMinor = 28
++
++// "0.21.5" -> [0 21 5]. False for anything else (pre-releases included).
++func parseHostVersion(version string) ([3]int, bool) {
++	var out [3]int
++	parts := strings.Split(version, ".")
++	if len(parts) != 3 {
++		return out, false
++	}
++	for i, part := range parts {
++		n, err := strconv.Atoi(part)
++		if err != nil || n < 0 || strconv.Itoa(n) != part {
++			return out, false
++		}
++		out[i] = n
++	}
++	return out, true
++}
++
++func isCompatibleHostVersion(version string) bool {
++	v, ok := parseHostVersion(version)
++	return ok && v[0] == 0 && v[1] >= oldestHostMinor && v[1] <= newestHostMinor
++}
++
++// Whether the host is older than "version". False when the host is unknown
++// (tests construct the service without one) or is this binary's own version.
++func (service *serviceType) hostBefore(version string) bool {
++	host, ok := parseHostVersion(service.hostVersion)
++	if !ok {
++		return false
++	}
++	want, _ := parseHostVersion(version)
++	for i := range host {
++		if host[i] != want[i] {
++			return host[i] < want[i]
++		}
++	}
++	return false
++}
++
++// What "--version" prints: the version of a compatible esbuild package in the
++// working directory (where its postinstall script runs), else this binary's.
++func versionForWorkingDirectory() string {
++	if data, err := ioutil.ReadFile("package.json"); err == nil {
++		var pkg struct{ Name, Version string }
++		if json.Unmarshal(data, &pkg) == nil && pkg.Name == "esbuild" && isCompatibleHostVersion(pkg.Version) {
++			return pkg.Version
++		}
++	}
++	return esbuildVersion
++}
+diff --git a/cmd/esbuild/host_version_test.go b/cmd/esbuild/host_version_test.go
+new file mode 100644
+index 00000000..ff9b389f
+--- /dev/null
++++ b/cmd/esbuild/host_version_test.go
+@@ -0,0 +1,57 @@
++package main
++
++import (
++	"io/ioutil"
++	"os"
++	"path/filepath"
++	"testing"
++)
++
++func TestCompatibleHostVersion(t *testing.T) {
++	for version, want := range map[string]bool{
++		"0.19.0": true, "0.19.12": true, "0.21.5": true, "0.25.12": true, "0.27.7": true, "0.28.2": true, "0.28.9": true,
++		"0.18.20": false, "0.29.0": false, "1.0.0": false, "0.21": false, "0.21.5-beta": false, "0.021.5": false, "": false,
++	} {
++		if got := isCompatibleHostVersion(version); got != want {
++			t.Errorf("isCompatibleHostVersion(%q) = %v, want %v", version, got, want)
++		}
++	}
++}
++
++func TestHostBefore(t *testing.T) {
++	for _, c := range []struct {
++		host, version string
++		want          bool
++	}{
++		{"0.21.5", "0.27.4", true}, {"0.27.3", "0.27.4", true}, {"0.27.4", "0.27.4", false}, {"0.28.2", "0.27.4", false},
++		{"0.24.2", "0.25.0", true}, {"0.25.0", "0.25.0", false}, {"", "0.27.4", false},
++	} {
++		service := serviceType{hostVersion: c.host}
++		if got := service.hostBefore(c.version); got != c.want {
++			t.Errorf("host %q before %q = %v, want %v", c.host, c.version, got, c.want)
++		}
++	}
++}
++
++func TestVersionForWorkingDirectory(t *testing.T) {
++	wd, _ := os.Getwd()
++	defer os.Chdir(wd)
++	dir, _ := ioutil.TempDir("", "esbuild-version")
++	defer os.RemoveAll(dir)
++	os.Chdir(dir)
++	for pkg, want := range map[string]string{
++		"":                                       esbuildVersion,
++		`{"name":"esbuild","version":"0.21.5"}`:  "0.21.5",
++		`{"name":"esbuild","version":"0.18.20"}`: esbuildVersion,
++		`{"name":"my-app","version":"0.21.5"}`:   esbuildVersion,
++		`{"name":"esbuild","version":"0.25.0"`:   esbuildVersion,
++	} {
++		os.Remove(filepath.Join(dir, "package.json"))
++		if pkg != "" {
++			ioutil.WriteFile(filepath.Join(dir, "package.json"), []byte(pkg), 0644)
++		}
++		if got := versionForWorkingDirectory(); got != want {
++			t.Errorf("package.json %s: version %q, want %q", pkg, got, want)
++		}
++	}
++}
+diff --git a/cmd/esbuild/main.go b/cmd/esbuild/main.go
+index 3ff4481e..533fbda1 100644
+--- a/cmd/esbuild/main.go
++++ b/cmd/esbuild/main.go
+@@ -164,6 +164,7 @@ func main() {
+ 	traceFile := ""
+ 	cpuprofileFile := ""
+ 	isRunningService := false
++	serviceHostVersion := ""
+ 	sendPings := false
+ 	isWatch := false
+ 	isWatchForever := false
+@@ -180,7 +181,7 @@ func main() {
+ 
+ 		// Special-case the version flag here
+ 		case arg == "--version":
+-			fmt.Printf("%s\n", esbuildVersion)
++			fmt.Printf("%s\n", versionForWorkingDirectory()) // Pi-Bolt: host_version.go
+ 			os.Exit(0)
+ 
+ 		case strings.HasPrefix(arg, "--heap="):
+@@ -206,12 +207,16 @@ func main() {
+ 			// Validate the host's version number to make sure esbuild was installed
+ 			// correctly. This check was added because some people have reported
+ 			// errors that appear to indicate an incorrect installation.
+-			if hostVersion != esbuildVersion {
++			//
++			// Pi-Bolt: any host whose protocol this binary speaks (host_version.go).
++			if !isCompatibleHostVersion(hostVersion) {
+ 				logger.PrintErrorToStderr(osArgs,
+-					fmt.Sprintf("Cannot start service: Host version %q does not match binary version %q",
+-						hostVersion, esbuildVersion))
++					fmt.Sprintf("Cannot start service: Host version %q is not supported by binary version %q "+
++						"(Pi-Bolt's esbuild serves the JS API of esbuild 0.%d.0 to 0.%d.x)",
++						hostVersion, esbuildVersion, oldestHostMinor, newestHostMinor))
+ 				os.Exit(1)
+ 			}
++			serviceHostVersion = hostVersion
+ 
+ 		case strings.HasPrefix(arg, "--ping"):
+ 			sendPings = true
+@@ -249,7 +254,7 @@ func main() {
+ 
+ 	// Run in service mode if requested
+ 	if isRunningService {
+-		runService(sendPings)
++		runService(sendPings, serviceHostVersion)
+ 		return
+ 	}
+ 
+diff --git a/cmd/esbuild/service.go b/cmd/esbuild/service.go
+index c4c2178b..de6249e5 100644
+--- a/cmd/esbuild/service.go
++++ b/cmd/esbuild/service.go
+@@ -46,6 +46,7 @@ type serviceType struct {
+ 	keepAliveWaitGroup *helpers.ThreadSafeWaitGroup
+ 	mutex              sync.Mutex
+ 	nextRequestID      uint32
++	hostVersion        string // Pi-Bolt: the JS API's version (host_version.go)
+ }
+ 
+ func (service *serviceType) getActiveBuild(key int) *activeBuild {
+@@ -81,7 +82,7 @@ func (service *serviceType) destroyActiveBuild(key int) {
+ 	service.keepAliveWaitGroup.Done()
+ }
+ 
+-func runService(sendPings bool) {
++func runService(sendPings bool, hostVersion string) {
+ 	logger.API = logger.JSAPI
+ 
+ 	service := serviceType{
+@@ -89,6 +90,7 @@ func runService(sendPings bool) {
+ 		activeBuilds:       make(map[int]*activeBuild),
+ 		outgoingPackets:    make(chan []byte),
+ 		keepAliveWaitGroup: helpers.MakeThreadSafeWaitGroup(),
++		hostVersion:        hostVersion,
+ 	}
+ 	buffer := make([]byte, 16*1024)
+ 	stream := []byte{}
+@@ -103,8 +105,9 @@ func runService(sendPings bool) {
+ 		}
+ 	}()
+ 
+-	// The protocol always starts with the version
+-	os.Stdout.Write(append(writeUint32(nil, uint32(len(esbuildVersion))), esbuildVersion...))
++	// The protocol always starts with the version. Pi-Bolt: the host's own (main.go checked it is compatible), as
++	// the host refuses any other.
++	os.Stdout.Write(append(writeUint32(nil, uint32(len(hostVersion))), hostVersion...))
+ 
+ 	// Wait for the last response to be written to stdout before returning from
+ 	// the enclosing function, which will return from "main()" and exit.
+@@ -437,12 +440,16 @@ func (service *serviceType) handleIncomingPacket(bytes []byte) {
+ 						for i, host := range result.Hosts {
+ 							hosts[i] = host
+ 						}
++						response := map[string]interface{}{
++							"port":  int(result.Port),
++							"hosts": hosts,
++						}
++						if service.hostBefore("0.25.0") && len(result.Hosts) > 0 {
++							response["host"] = result.Hosts[0] // Pi-Bolt: hosts before 0.25.0 read "host"
++						}
+ 						service.sendPacket(encodePacket(packet{
+-							id: p.id,
+-							value: map[string]interface{}{
+-								"port":  int(result.Port),
+-								"hosts": hosts,
+-							},
++							id:    p.id,
++							value: response,
+ 						}))
+ 					}
+ 				}()
+@@ -666,7 +673,11 @@ func (service *serviceType) handleBuildRequest(id uint32, request map[string]int
+ 			response["outputFiles"] = encodeOutputFiles(result.OutputFiles)
+ 		}
+ 		if options.Metafile {
+-			response["metafile"] = []byte(result.Metafile)
++			if service.hostBefore("0.27.4") {
++				response["metafile"] = result.Metafile // Pi-Bolt: hosts before 0.27.4 JSON.parse a string
++			} else {
++				response["metafile"] = []byte(result.Metafile)
++			}
+ 		}
+ 		if options.MangleCache != nil {
+ 			response["mangleCache"] = result.MangleCache

@@ -55,6 +55,7 @@ stage glibc glibc/build-glibc.sh "$HERE/glibc/execve.c"
 if [ "$ENGINE_ONLY" = false ]; then
 	stage userland userland/build-userland.sh "$HERE/userland/debs.lock" "$HERE"/userland/*.txt
 	stage runtimes runtimes/build-runtimes.sh "$HERE/userland/debs.lock"
+	stage esbuild runtimes/build-esbuild.sh "$HERE/runtimes/esbuild-host-versions.patch"
 fi
 echo "== assemble"
 if [ "$ENGINE_ONLY" = true ]; then

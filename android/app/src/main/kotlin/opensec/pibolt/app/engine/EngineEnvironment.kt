@@ -45,6 +45,11 @@ fun engineEnvironment(
     env["PIP_CACHE_DIR"] = File(paths.cache, "pip").path
     env["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
     env["PYTHONUSERBASE"] = paths.userBase.path
+    // esbuild's npm package runs this binary instead of its own (a static Linux one, which cannot run from app data):
+    // PREFIX/bin/esbuild, a link to nativeLibraryDir's libesbuild_exe.so. The link, not nativeLibraryDir itself, because
+    // esbuild's postinstall writes the path into node_modules and nativeLibraryDir moves on every app update.
+    val esbuild = File(paths.bin, "esbuild")
+    if (esbuild.exists()) env["ESBUILD_BINARY_PATH"] = esbuild.path else env.remove("ESBUILD_BINARY_PATH")
     // The pack knows its own layout best (a shell it ships, for example).
     env.putAll(fromPack)
     // Commands installed by `npm install -g` and `pip install` come first, so an upgraded npm or pip wins.
