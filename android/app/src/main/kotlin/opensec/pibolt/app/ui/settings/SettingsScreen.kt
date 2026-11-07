@@ -73,6 +73,12 @@ import kotlinx.coroutines.withContext
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.R
 import opensec.pibolt.app.data.AccentId
+import opensec.pibolt.app.data.AgentDefaults
+import opensec.pibolt.app.data.AgentSettingsFile
+import opensec.pibolt.app.data.QueueMode
+import opensec.pibolt.app.ui.projects.LocalSessions
+import androidx.compose.runtime.produceState
+import java.io.File
 import opensec.pibolt.app.data.AppSettings
 import opensec.pibolt.app.data.Density
 import opensec.pibolt.app.data.ReduceMotion
@@ -224,6 +230,10 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
                 )
             }
 
+            Section("Pi on this phone") {
+                AgentSection(app)
+            }
+
             Section("Notifications") {
                 var allowed by remember { mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled()) }
                 LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { allowed = NotificationManagerCompat.from(context).areNotificationsEnabled() }
@@ -279,6 +289,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
                 // Licence texts are read off the main thread.
                 NavLine("Inter licence (OFL 1.1)") { scope.launch { licence = ViewerContent("Inter", "SIL Open Font License 1.1", readRaw(context, R.raw.license_inter), wrap = true) } }
                 NavLine("JetBrains Mono licence (OFL 1.1)") { scope.launch { licence = ViewerContent("JetBrains Mono", "SIL Open Font License 1.1", readRaw(context, R.raw.license_jetbrains_mono), wrap = true) } }
+                NavLine("Mermaid licence (MIT)") { scope.launch { licence = ViewerContent("Mermaid", "MIT, with the projects it bundles", readRaw(context, R.raw.license_mermaid), wrap = true) } }
             }
         }
 
@@ -466,7 +477,12 @@ private fun UpdateBlock(app: PiBoltApp, autoCheck: Boolean, onAutoCheck: (Boolea
         job is UpdateJob.Downloading -> SecondaryButton("Cancel download", onClick = updates::cancelDownload, modifier = Modifier.fillMaxWidth())
         job is UpdateJob.Ready -> PrimaryButton("Install ${job.info.version}", onClick = updates::requestInstall, modifier = Modifier.fillMaxWidth())
         job is UpdateJob.Verifying || job is UpdateJob.Installing -> Unit
-        available != null -> PrimaryButton("Update to ${available.version}", onClick = { updates.requestUpdate(available) }, modifier = Modifier.fillMaxWidth())
+        available != null -> {
+            PrimaryButton("Update to ${available.version}", onClick = { updates.requestUpdate(available) }, modifier = Modifier.fillMaxWidth())
+            // The offer can be a cached or snoozed release: a newer one stays discoverable with automatic checks off.
+            Spacer(Modifier.height(8.dp))
+            SecondaryButton("Check for updates", onClick = updates::checkNow, enabled = !state.checking, modifier = Modifier.fillMaxWidth())
+        }
         else -> SecondaryButton("Check for updates", onClick = updates::checkNow, enabled = !state.checking, modifier = Modifier.fillMaxWidth())
     }
     Spacer(Modifier.height(8.dp))
@@ -502,4 +518,70 @@ private fun NavLine(label: String, onClick: () -> Unit) {
         Text(label, style = Pi.type.body, color = Pi.colors.ink1, modifier = Modifier.weight(1f))
         Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = Pi.colors.ink4, modifier = Modifier.size(20.dp))
     }
+}
+
+/**
+ * The on-device engine's settings (its agent/settings.json, as in the terminal's /settings): queued message delivery,
+ * automatic compaction and retry, and the thinking level new sessions start with. A change also reaches the open
+ * on-device session at once.
+ */
+@Composable
+private fun AgentSection(app: PiBoltApp) {
+    val colors = Pi.colors
+    val type = Pi.type
+    val scope = rememberCoroutineScope()
+    val file = remember { AgentSettingsFile(File(app.engine.agentDir, "settings.json")) }
+    val loaded by produceState<AgentDefaults?>(null) { value = file.read() }
+    var defaults by remember { mutableStateOf<AgentDefaults?>(null) }
+    val current = defaults ?: loaded
+    if (current == null) {
+        Text("Reading settings…", style = type.meta, color = colors.ink3)
+        return
+    }
+    fun update(change: (AgentDefaults) -> AgentDefaults) {
+        val next = change(current)
+        defaults = next
+        scope.launch {
+            runCatching { file.write(next) }
+            LocalSessions.current.value?.controller?.takeIf { !it.stopped }?.applyAgentDefaults(next)
+        }
+    }
+    Label("Steering messages")
+    Segmented(
+        options = QueueMode.entries.map { it to it.label },
+        selected = current.steeringMode,
+        onSelect = { m -> update { it.copy(steeringMode = m) } },
+        modifier = Modifier.fillMaxWidth(),
+        height = 40.dp,
+    )
+    Text("Sent while Pi works; delivered after its current step.", style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 6.dp, bottom = 16.dp))
+    Label("Follow-up messages")
+    Segmented(
+        options = QueueMode.entries.map { it to it.label },
+        selected = current.followUpMode,
+        onSelect = { m -> update { it.copy(followUpMode = m) } },
+        modifier = Modifier.fillMaxWidth(),
+        height = 40.dp,
+    )
+    Text("Queued until Pi finishes, then sent.", style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 6.dp, bottom = 16.dp))
+    Label("Thinking level for new sessions")
+    Segmented(
+        options = AgentDefaults.THINKING_LEVELS.map { it to thinkingShort(it) },
+        selected = current.defaultThinking.takeIf { it in AgentDefaults.THINKING_LEVELS } ?: "medium",
+        onSelect = { level -> update { it.copy(defaultThinking = level) } },
+        modifier = Modifier.fillMaxWidth(),
+        height = 40.dp,
+    )
+    Spacer(Modifier.height(8.dp))
+    ToggleRow("Auto-compact", "Summarise older messages when the context is nearly full", current.autoCompaction) { on -> update { it.copy(autoCompaction = on) } }
+    ToggleRow("Auto-retry", "Retry when the provider is overloaded or rate-limited", current.autoRetry) { on -> update { it.copy(autoRetry = on) } }
+    InfoLine("Default model", current.defaultModel ?: "Automatic")
+    Text("The model you pick in a session becomes the default, as in the terminal.", style = type.meta, color = colors.ink3)
+}
+
+private fun thinkingShort(level: String): String = when (level) {
+    "minimal" -> "Min"
+    "medium" -> "Med"
+    "xhigh" -> "XHigh"
+    else -> level.replaceFirstChar { it.uppercase() }
 }

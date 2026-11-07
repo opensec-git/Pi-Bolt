@@ -44,6 +44,8 @@ data class PiColors(
     val synString: Color = Color(0xFF9ED3C6),
     val synNumber: Color = Color(0xFFE5A97E),
     val synType: Color = Color(0xFFC9B8F0),
+    /** Code colours for the highlighter's token kinds (see [SyntaxColors]). */
+    val syntax: SyntaxColors = SyntaxColors.Pi,
 ) {
     companion object {
         val Brand = Color(0xFFFFD84D)
@@ -64,7 +66,7 @@ data class PiColors(
                 ThemeId.Vercel -> base(0xFF000000, 0xFF0A0A0A, 0xFF111111, 0xFF1A1A1A, 0xFFEDEDED, 0xFFA1A1A1, 0xFF8F8F8F, 0xFF454545, 0.12f, 0.20f, 0.70f)
                 // GitHub's dark canvas and borders.
                 ThemeId.GitHub -> base(0xFF0D1117, 0xFF151B23, 0xFF1C2128, 0xFF262C36, 0xFFF0F6FC, 0xFFB7BDC8, 0xFF9198A1, 0xFF3D444D, 0.10f, 0.18f, 0.60f)
-            }
+            }.copy(syntax = SyntaxColors.of(theme))
             return when (accent) {
                 AccentId.Theme -> when (theme) {
                     ThemeId.Claude -> base.copy(accent = Color(0xFFD97757), onAccent = Color(0xFF1F1E1D))

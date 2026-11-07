@@ -1,3 +1,7 @@
+import java.net.URI
+import java.security.MessageDigest
+import java.util.Base64
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -28,6 +32,80 @@ fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("
 // The on-device engine pack (android/engine/build-pack.sh, CONTRACT.md): jniLibs/arm64-v8a and assets/engine. Added when
 // built; without it the APK has no engine (remote control still works).
 val enginePack = rootDir.resolve("engine/out")
+
+// Mermaid for diagrams in the chat (ui/diagram), from the npm registry at an exact version. The tarball must match
+// npm's sha512 integrity for that version, so a changed or tampered release fails the build. Only dist/mermaid.min.js
+// is packaged (assets/diagram/); its licence and the bundled projects' licences are in res/raw/license_mermaid.txt.
+val mermaidVersion = "12.2.0"
+val mermaidIntegrity = "sha512-w7nr/SFrLO7BaVTs3dQTvYSV6nYSBj0Yy9DjBhsIJtAcHqRzXSq4Pg32ujHZ/AdWsAMNEvvhbm5dt9E2tOiHzw=="
+
+abstract class FetchMermaid : DefaultTask() {
+    @get:Input abstract val version: Property<String>
+
+    @get:Input abstract val integrity: Property<String>
+
+    /** Survives `clean`, so a rebuild does not download again. */
+    @get:Internal abstract val cacheDir: DirectoryProperty
+
+    @get:OutputDirectory abstract val outputDir: DirectoryProperty
+
+    @get:Inject abstract val archives: ArchiveOperations
+
+    @get:Inject abstract val files: FileSystemOperations
+
+    @TaskAction
+    fun fetch() {
+        val name = "mermaid-${version.get()}.tgz"
+        val tgz = cacheDir.file(name).get().asFile
+        if (!tgz.isFile || integrityOf(tgz) != integrity.get()) {
+            tgz.parentFile.mkdirs()
+            val part = File(tgz.parentFile, "$name.part")
+            URI("https://registry.npmjs.org/mermaid/-/$name").toURL().openStream().use { input ->
+                part.outputStream().use { input.copyTo(it) }
+            }
+            val got = integrityOf(part)
+            if (got != integrity.get()) {
+                part.delete()
+                throw GradleException("mermaid $name: integrity $got does not match the pinned ${integrity.get()}")
+            }
+            if (!part.renameTo(tgz)) throw GradleException("mermaid: cannot move $part to $tgz")
+        }
+        files.sync {
+            from(archives.tarTree(archives.gzip(tgz))) {
+                include("package/dist/mermaid.min.js")
+                eachFile { path = "diagram/${this.name}" }
+            }
+            includeEmptyDirs = false
+            into(outputDir)
+        }
+    }
+
+    private fun integrityOf(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-512")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(1 shl 16)
+            while (true) {
+                val n = input.read(buffer)
+                if (n < 0) break
+                digest.update(buffer, 0, n)
+            }
+        }
+        return "sha512-" + Base64.getEncoder().encodeToString(digest.digest())
+    }
+}
+
+val fetchMermaid = tasks.register<FetchMermaid>("fetchMermaid") {
+    version.set(mermaidVersion)
+    integrity.set(mermaidIntegrity)
+    cacheDir.set(rootProject.layout.projectDirectory.dir(".gradle/pibolt-downloads"))
+    outputDir.set(layout.buildDirectory.dir("generated/mermaid"))
+}
+
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(fetchMermaid, FetchMermaid::outputDir)
+    }
+}
 
 android {
     namespace = "opensec.pibolt.app"
@@ -131,6 +209,8 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.zxing.core)
+    // WebViewAssetLoader for the offscreen diagram renderer (ui/diagram).
+    implementation(libs.androidx.webkit)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)

@@ -263,7 +263,7 @@ class BlockMathTest {
         fun kinds(s: String) = tokens.filter { code.substring(it.start, it.end) == s }.map { it.kind }
         assertEquals(listOf(Highlighter.Kind.Type, Highlighter.Kind.Type), kinds("HttpClient"))
         assertEquals(listOf(Highlighter.Kind.Type), kinds("string"))
-        assertEquals(emptyList(), kinds("MAX_SIZE"))
+        assertEquals(listOf(Highlighter.Kind.Constant), kinds("MAX_SIZE"))
         assertEquals(listOf(Highlighter.Kind.Function), kinds("f"))
         assertTrue(kinds(":").all { it == Highlighter.Kind.Punctuation } && kinds(":").size == 2)
         assertEquals(listOf(Highlighter.Kind.Punctuation), kinds(");"))
@@ -274,7 +274,7 @@ class BlockMathTest {
         val code = "a =// note"
         val tokens = Highlighter.tokenize(code, "js")
         assertEquals(listOf("=", "// note"), tokens.map { code.substring(it.start, it.end) })
-        assertEquals(listOf(Highlighter.Kind.Punctuation, Highlighter.Kind.Comment), tokens.map { it.kind })
+        assertEquals(listOf(Highlighter.Kind.Operator, Highlighter.Kind.Comment), tokens.map { it.kind })
     }
 
     @Test
@@ -291,7 +291,8 @@ class BlockMathTest {
     @Test
     fun plainLanguagesAreNotHighlighted() {
         assertTrue(Highlighter.tokenize("if this is true, return", "text").isEmpty())
-        assertTrue(Highlighter.tokenize("# Title", "markdown").isEmpty())
+        assertTrue(Highlighter.tokenize("# Title", "log").isEmpty())
+        assertEquals(listOf(Highlighter.Kind.Heading), Highlighter.tokenize("# Title", "markdown").map { it.kind })
         assertFalse(Highlighter.tokenize("if (x) return", "").isEmpty())
     }
 

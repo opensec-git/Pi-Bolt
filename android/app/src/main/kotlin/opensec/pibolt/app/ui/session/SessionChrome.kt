@@ -39,6 +39,11 @@ import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.ContentCopy
+import androidx.compose.material.icons.rounded.IosShare
+import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.rememberSwipeToDismissBoxState
@@ -109,6 +114,11 @@ fun SessionTopBar(
     onForget: () -> Unit,
     onNewSession: () -> Unit,
     onRename: () -> Unit,
+    onSearch: () -> Unit = {},
+    onExport: () -> Unit = {},
+    onResume: () -> Unit = {},
+    onFork: () -> Unit = {},
+    onClone: () -> Unit = {},
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -146,6 +156,7 @@ fun SessionTopBar(
                 Text(subtitle, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 16.dp))
             }
         }
+        IconAction(Icons.Rounded.Search, "Search this session", onClick = onSearch)
         Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
             QuadSpinner(
                 mode,
@@ -170,24 +181,22 @@ fun SessionTopBar(
                 shadowElevation = 8.dp,
                 border = BorderStroke(1.dp, colors.lineStrong),
             ) {
+                @Composable
+                fun Item(text: String, icon: ImageVector, action: () -> Unit) = MenuRow(text, icon, colors.ink1) {
+                    menu = false
+                    action()
+                }
                 if (local) {
-                    MenuRow("New session", Icons.Rounded.Add, colors.ink1) {
-                        menu = false
-                        onNewSession()
-                    }
-                    MenuRow("Rename session", Icons.Rounded.DriveFileRenameOutline, colors.ink1) {
-                        menu = false
-                        onRename()
-                    }
-                    MenuRow("Session info", Icons.Rounded.Info, colors.ink1) {
-                        menu = false
-                        onInfo()
-                    }
+                    Item("New session", Icons.Rounded.Add, onNewSession)
+                    Item("Resume a session", Icons.Rounded.History, onResume)
+                    Item("Fork from a message", Icons.AutoMirrored.Rounded.CallSplit, onFork)
+                    Item("Duplicate session", Icons.Rounded.ContentCopy, onClone)
+                    Item("Rename session", Icons.Rounded.DriveFileRenameOutline, onRename)
+                    Item("Session and usage", Icons.Rounded.Info, onInfo)
+                    Item("Export or share", Icons.Rounded.IosShare, onExport)
                 } else {
-                    MenuRow("Session info", Icons.Rounded.Info, colors.ink1) {
-                        menu = false
-                        onInfo()
-                    }
+                    Item("Session and usage", Icons.Rounded.Info, onInfo)
+                    Item("Export or share", Icons.Rounded.IosShare, onExport)
                     MenuRow("Disconnect", Icons.Rounded.LinkOff, colors.ink1) {
                         menu = false
                         onDisconnect()

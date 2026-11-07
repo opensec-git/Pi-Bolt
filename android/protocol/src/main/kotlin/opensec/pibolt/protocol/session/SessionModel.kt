@@ -40,9 +40,16 @@ enum class NoticeKind { Info, Error, Aborted, Compaction, Summary, Custom }
 
 data class NoticeItem(override val key: String, val kind: NoticeKind, val title: String, val text: String = "") : ChatItem
 
+/**
+ * Background subagents ended (the subagents extension's `subagent-notification`): their [agentIds], the runs they
+ * ended ([runKeys], keys of [SessionState.subagents]; a later resume of the same agent is another run) and the message.
+ */
+data class SubagentNoticeItem(override val key: String, val agentIds: List<String>, val text: String, val runKeys: List<String> = emptyList()) : ChatItem
+
 data class HostInfo(val name: String, val version: String, val cwd: String)
 
-data class SlashCommand(val name: String, val description: String?, val source: String)
+/** A command from `get_commands`. [argumentHint] is shown while typing its arguments (hosts that send one). */
+data class SlashCommand(val name: String, val description: String?, val source: String, val argumentHint: String? = null)
 
 enum class DialogKind { Select, Confirm, Input, Editor }
 
@@ -79,6 +86,8 @@ data class SessionState(
     val streaming: List<ChatItem> = emptyList(),
     val isRunning: Boolean = false,
     val isCompacting: Boolean = false,
+    /** Why the running compaction started: `manual`, `threshold` (context nearly full) or `overflow`; null when none runs. */
+    val compactionReason: String? = null,
     val model: ModelInfo? = null,
     val thinkingLevel: String? = null,
     val sessionName: String? = null,
@@ -92,6 +101,8 @@ data class SessionState(
     val lastUsage: Usage? = null,
     /** The todo extension's list, built from its `todo` tool results. */
     val todos: TodoState = TodoState(),
+    /** Subagent runs (opensec-pi-subagents) by the id of the `Agent` call that started them, oldest first. */
+    val subagents: Map<String, Subagent> = emptyMap(),
     val stream: StreamingMessage? = null,
     val seq: Long = 0,
 ) {

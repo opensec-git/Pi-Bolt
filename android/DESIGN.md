@@ -39,11 +39,30 @@ Diff: add bg success @ 11% / fg `#9BE6BF`, delete bg danger @ 11% / fg `#F7A9A5`
 success / danger @ 22%. Add and delete never differ by hue alone: a `+` / `−` sign column, a solid 3dp gutter bar
 (success @ 60%) for additions and a hatched one (2dp stripes every 4dp, danger @ 70%) for deletions. Context rows
 ink2, line numbers ink3, hunk rows monoMeta ink3 on surface2.
-Syntax: base ink1, keywords ink1 SemiBold, calls ink1 Medium, strings `#9ED3C6`, numbers `#E5A97E`, types
-`#C9B8F0` (capitalised names and built-ins such as `string`), comments ink3 italic, punctuation and operators ink2,
-the shell `$` prompt success SemiBold, JSON keys ink1. Plain-text fences (`text`, `markdown`, `log`) stay plain.
+Syntax: one palette per theme (`SyntaxColors`): keyword, type (capitalised names and built-ins such as `string`),
+function (calls and declarations), string, number, constant (`true`, `null`, ALL_CAPS), operator, attribute
+(annotations, decorators, object and YAML keys, HTML attributes), tag, regex, escape (escapes and `${…}`), variable
+(`$x`, `@x`), comments italic; punctuation ink2, base text ink1, the shell `$` prompt success SemiBold, diff lines in
+the diff colours. Graphite, Void and Codex share the cool "Pi" palette (violet keywords, yellow types, blue calls,
+green strings, orange numbers); Ember is warm and earthy, Claude coral / sand / sage, Vercel pink / purple / blue /
+green, GitHub uses its dark "prettylights" roles. Only `text`, `log` and `output` fences stay plain.
 
-Every text token passes WCAG AA (4.5:1) on canvas and surface2 in all seven themes; ink4 is decorative only.
+| Role | Pi | Ember | Claude | Vercel | GitHub |
+|---|---|---|---|---|---|
+| keyword | `#C9A0F5` | `#F28E7E` | `#E8956F` | `#FF6B98` | `#FF7B72` |
+| type | `#E8C67E` | `#F2C46A` | `#E3C590` | `#C49BFF` | `#FFA657` |
+| function | `#7FB6F5` | `#9CC78B` | `#9DBAE8` | `#6CB4FF` | `#D2A8FF` |
+| string | `#A3D58E` | `#C8CC6E` | `#B6CF8F` | `#6CD58B` | `#A5D6FF` |
+| number / constant | `#E9A77C` | `#D99BB8` | `#D9A3D9` | `#F5B562` / `#6CB4FF` | `#79C0FF` |
+| operator | `#86CBDD` | `#F0A35C` | ink2 | ink2 | `#FF7B72` |
+| attribute | `#E9A77C` | `#8DB8A8` | `#E3C590` | `#C49BFF` | `#79C0FF` |
+| tag | `#F08E9A` | `#F28E7E` | `#E8956F` | `#6CD58B` | `#7EE787` |
+| regex / escape | `#86CBDD` | `#9CC78B` / `#F0A35C` | `#8FCBC0` | `#F5B562` | `#7EE787` |
+| variable | `#F08E9A` | `#8DB8A8` | `#9DBAE8` | `#FF9F6B` | `#FFA657` |
+| comment | `#858B94` | ink3 | ink3 | ink3 | ink3 |
+
+Every text token passes WCAG AA (4.5:1) on canvas and surface2 in all seven themes (syntax colours on surface1 too,
+`SyntaxColorsTest`); ink4 is decorative only.
 
 ## Type
 
@@ -239,25 +258,48 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   - three or more consecutive finished Read/Search/Find/List steps (and `todo` calls) fold into one step row: check
     glyph, "Read 3 files, ran 1 search" or "Updated todos 7 times" (label ink2), the base names or task subjects (mono
     ink3), summed duration, chevron; tap lists them. Run, Edit and Write are never grouped.
-  - subagent steps (opensec-pi-subagents): `Agent` reads as its type and task ("Explore  Find the parser code"),
-    `steer_subagent`, `get_subagent_result` and `SubagentWorkflow` as "Steer agent", "Agent result", "Workflow" + the
-    workflow's name. Under the row, one meta ink3 line: what the agent is doing while it runs ("reading 3 files… · 4
-    tool uses"), the start of its answer when done (without the "Agent completed in" headline and the resume hint).
+  - subagent calls (opensec-pi-subagents): each `Agent` call is a card, parallel calls a stack (see Subagents below).
+    `steer_subagent`, `get_subagent_result` and `SubagentWorkflow` stay step rows: "Steer agent", "Agent result",
+    "Workflow" + the workflow's name.
   - `todo` steps read as one line: "Todo  Added: Write tests", "Done: …", "Started: …", "Cleared the list".
   - code blocks: surface1, radius 12, 1dp line. Header 40dp: code glyph 14dp ink3, then the filename (monoSmall
     ink1, middle ellipsis) from the fence info string (`ts title="src/a.ts"`, `ts:src/a.ts`, `src/a.ts`) or the
-    language (monoMeta ink3; shell aliases show as `shell`, none as `code`); right side Wrap (only when a line
-    overflows or wrap is on), Open (folded or 40+ lines) and the shared Copy button (check + "Copied", 1500 ms).
-    Code Mono 12.5/19, 10dp vertical padding; line numbers from 3 lines on, Mono 11.5 ink3 right-aligned, then a 1dp
-    line rule and 10dp to the code. No wrap by default: one horizontal scroll with 20dp edge fades into surface1.
+    language (monoMeta ink3; shell aliases show as `shell`; untagged code shows the language detected from its first
+    lines, else `code`); right side line numbers (toggle, 3+ lines), Wrap (only when a line overflows or wrap is
+    on), Open (folded or 40+ lines) and the shared Copy button (check + "Copied", 1500 ms). Code Mono 12.5/19, 10dp
+    vertical padding; line numbers from 3 lines on, Mono 11.5 ink3 right-aligned, then a 1dp line rule and 10dp to
+    the code. No wrap by default: one horizontal scroll with 20dp edge fades into surface1.
     Over 20 lines the block folds to 14 with a 40dp bottom fade and a 44dp footer ("Show all 84 lines" + chevron)
     that expands in place up to 150 lines ("Show less" scrolls the header back into view) and opens the viewer
     beyond ("Open all 1,240 lines"). Streaming: the header shows Quad Write 12dp + a ticking line count, the code
     end pulses like prose, and a block past 20 lines shows its last 14 lines at a fixed height under a 32dp top
     fade; on close it crossfades (quick) to the folded start at the same height. Only complete lines are
-    highlighted (once per new line); closed blocks are cached by content. ```diff / ```patch (and untagged text that
-    is mostly a unified diff) render as diff rows with numbers from the `@@` headers, the path from `+++ b/…` and
-    `+n −n` in the header.
+    highlighted, each once: the tokenizer resumes from the previous line's state (open comments, strings,
+    heredocs). Closed blocks are cached by content; blocks over 12,000 characters are highlighted on
+    `Dispatchers.Default` and show plain meanwhile. ```diff / ```patch (and untagged text that is mostly a unified
+    diff) render as diff rows with numbers from the `@@` headers, the path from `+++ b/…` (which also gives the rows
+    their syntax colours) and `+n −n` in the header. ```mermaid fences go to `ui/diagram/MermaidBlock`.
+  - markdown: CommonMark + GFM as models write it. Lists nest by indentation (a 26dp step per level, at most 8),
+    ordered lists renumber from their start (`1. 1. 1.` reads 1, 2, 3), continuation paragraphs and code fences
+    indent with their item, task items draw a 16dp box (ink3 outline; done: success outline, 18% fill and a tick).
+    Bullets • ◦ ▪ by depth. Headings: h1 headline, h2 subhead, h3 prose SemiBold, h4 body SemiBold, h5 label
+    SemiBold, h6 label SemiBold ink2; setext underlines count. Quotes: a 2dp lineStrong rail and their own blocks
+    in ink2 (nested quotes, lists, code), at most 6 deep; GitHub alerts (`> [!NOTE]`, TIP, IMPORTANT, WARNING,
+    CAUTION) colour the rail and add a 16dp icon + title (function colour, success, keyword colour, warning,
+    danger). Footnote references are accent superscripts; definitions are rows with the label in accent meta and
+    the text in body ink2. Autolinks (`<…>`, bare `https://`, `www.`), entities and every backslash escape work;
+    `<br>`, `<sub>`, `<sup>`, `<kbd>` (as inline code), `<b>`, `<i>`, `<u>`, `<s>`, `<mark>` render, wrapper tags
+    (`<details>`, `<div>`) are dropped and comments hidden. Soft line breaks stay line breaks (as on GitHub).
+  - images: never fetched by themselves. A card (surface1, radius 12, 1dp line, 56dp row: image glyph ink3, the alt
+    text body ink1, the address monoMeta ink3 middle-ellipsized, "Tap to load" meta ink3, an Open-in-browser
+    action); tapping loads it (12 MB at most, long edge 2048 px) above the row, max 360dp tall. Inline images show
+    their alt text in ink2 italic with the card under the paragraph.
+  - math: `$…$`, `\(…\)`, `$$…$$`, `\[…\]`, `\begin{align}…` and ```math render natively (no WebView): serif
+    italic variables, TeX atom spacing, fractions on the math axis, big operators with limits in display style,
+    radicals, growing delimiters, accents, `\mathbb` / `\mathcal` / `\mathfrak` alphabets, matrices, `cases` and
+    `aligned`. Display math centres in the column and scrolls sideways when wider. TeX that does not parse (or
+    display math still streaming) shows as its source: inline in Mono ink2, blocks in a surface1 box with a
+    "TeX" micro label. Currency (`$5 and $10`) stays text.
   - tables: a grid, not rows of loose cells. Column width = widest single-line cell + 24dp, clamped 64…240dp; spare
     width is spread in proportion so the table spans the card, wider tables scroll with edge fades. While streaming,
     widths only grow. Radius 12, 1dp line border, header surface1 metaStrong ink2, 1dp lineStrong under it; body
@@ -281,31 +323,86 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   - errors and notices: radius 12 outline in danger/warning @ 40%, text buttons.
 - Todo panel above the queue strip (see Todo panel below).
 - Queue strip above the composer: 44dp rows with a 2dp bar (warning = steer, ink4 = follow-up), swipe to remove.
-- Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–8 lines; bar: attach (+,
+- Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–6 lines; bar: attach (+,
   48dp; ink4 and a "<model> can't read images" snackbar when the model's `input` lacks "image"), model chip, thinking
   chip, send (40dp accent circle). Attached images (Photo Picker, images only, at most 4) sit in a tray above the
   text: 56dp thumbnails, radius 8, 1dp line, a Quad Write while each encodes, a 20dp ✕ (scrim, lineStrong ring, 48dp
   touch) at the top-end corner. Encoding runs off the main thread: long edge at most 2000 px, JPEG 85 (PNG only when
   transparent and under 1.5 MB), refused over Pi's 4.5 MiB base64 limit. Send works with images and no text. While the agent works: send becomes Stop (surface3 circle, rounded square
-  glyph) when the field is empty, and a "Steer | Follow-up" segmented control appears while typing. Slash
-  suggestions above the field. IME insets animate with the keyboard.
+  glyph) when the field is empty, and a "Steer | Follow-up" segmented control appears while typing. The palette and
+  `@` mentions open above the field (see Command palette below). A thumbnail in the tray opens the image viewer. The
+  model and thinking chips cycle on long press (click label "Next model", "Next thinking level", a tick and a
+  snackbar naming the new value). IME insets animate with the keyboard. The draft is kept per session (computer or
+  project, and Pi session) across restarts.
 - Empty session: the mark, "New session" and the folder tag, then "Commands" (the host's slash commands, mono name
   + description in meta ink3, the first 6 then "Show all N commands"; tap puts "/name " in the composer and focuses
   it) and "Recent" (the last 5 distinct prompts this phone sent to this computer; tap fills the composer). 48dp rows,
   SectionLabel headings, nothing sends by itself. Recent prompts persist per computer (20 at most) in
   `recent-prompts.json`.
 - Connection banner under the top bar: Quad Connect + "Reconnecting in 3s" countdown + Retry; slides down/up.
+- Top bar: a Search action (48dp) sits before the Quad. Overflow on a computer: Session and usage, Export or share,
+  Disconnect, Forget computer.
 - On this phone (a project's session): the title is the project's name and the subtitle drops the folder (session
-  name and context only); back reads "Project". Overflow: New session, Rename session, Session info (no Disconnect or
-  Forget computer). The banner reads "Starting Pi-Bolt…" (Quad Connect) and "Engine stopped" with Restart (danger
+  name and context only); back reads "Project". Overflow: New session, Resume a session, Fork from a message,
+  Duplicate session, Rename session, Session and usage, Export or share (no Disconnect or Forget computer). The banner reads "Starting Pi-Bolt…" (Quad Connect) and "Engine stopped" with Restart (danger
   soft, power glyph). Long press on a user message adds "Fork from here": Pi forks the session at that message and
   its text comes back to the composer to edit and send. Recent prompts are kept per project.
-- Sheets (ModalBottomSheet, predictive back): model picker (search, current first, 60dp rows with provider initial),
+- Sheets (ModalBottomSheet, predictive back): model picker (search, "Current" then one group per provider under a
+  meta-strong heading, 60dp rows with provider initial; `/model text` opens it filtered),
   thinking level (52dp option rows with a description), Pi's dialogs (Quad Wait eyebrow "Pi is asking", title,
   message in a command well when it looks like a command (surface1, radius 12, the cwd in mono meta ink3 with Copy,
   then `$` in success and the command in mono), options as 52dp rows, primary button; swipe or scrim tap
   does not answer: an explicit Cancel does; countdown chip when the dialog has a timeout; haptic on appear).
 - Snackbars for notify: surface3, radius 12, line, above the composer, kind-coloured icon.
+
+**Command palette.** Typing `/` opens a panel above the composer (surface2, radius 12, 1dp line, at most 264dp,
+scrolls): 48dp rows with the command in mono small ink1, its argument hint in mono meta ink3, the description in meta
+ink3 under it and a source badge at the end (micro, surface3, radius 4: `app`, `extension`, `prompt`, `skill`).
+Matching is fuzzy (prefix, then word starts, then scattered letters), by name and then by description; a space closes
+the panel and a usage line takes its place (`/compact [instructions]`, mono meta ink3). The app's own commands are
+the terminal built-ins that make sense on a phone: `/new`, `/resume`, `/fork`, `/clone` and `!` (on this phone only),
+`/compact`, `/name`, `/session`, `/model`, `/thinking`, `/copy`, `/export`, `/search`. They run in the app (a sheet or
+an RPC command), never reach the host, and a host command of the same name wins. Picking one that takes no argument
+runs it at once; others fill `/name ` and wait. Picks tick (haptic).
+- `@` (at the start or after a space) lists the project's files and folders the same way (file glyph, the name in
+  mono small, its folder in mono meta ink3, start-ellipsised); the file name counts more than its folders. Picking
+  puts `@path ` in the prompt (quoted when it has spaces). The list is read once per screen off the main thread,
+  breadth first, skipping `.git`, `node_modules` and build folders, at most 20 000 entries. On this phone only.
+- `!command` runs in the project's shell without the model; `!!command` keeps the output out of Pi's context. A
+  quiet line above the field says which. The run shows at once as a Run step (its output streams in) and stays
+  visible after the answer instead of folding with the agent's steps.
+- Hardware keyboards: Ctrl+Enter sends, Esc stops a run (empty field), Ctrl+P next model, Shift+Tab next thinking
+  level. Enter adds a line, as Android keyboards expect.
+
+**Session sheet.** Opened from the title or "Session and usage": the context card (label, "30.0% of 200k" in meta
+tnum, a 6dp bar on surface3, ink2, warning over 70%, danger over 90%, animated in place; then the terminal footer's
+line `↑50k ↓10k R40k W5.0k $0.450` in mono meta ink3), a totals card (input, output, cost; cache read, cache write,
+cache hit; prompts, replies, tool calls; values in body-strong tnum over meta labels), Model and Thinking rows (tap
+to pick, a "Next" text action to cycle), folder and version, then Compact, Rename and Export. Totals come from
+`get_session_stats` when the sheet opens; until then the bar uses the last reply's usage.
+
+**Search.** The search action (or `/search text`) swaps the top bar for a search bar: back, the field (focused),
+"3 of 12" (meta tnum, polite live region; "No match" in warning), previous and next (48dp). The line of the current
+hit shows under it (meta ink2, two lines). Every message, reasoning block, tool call and output is searched; a hit in
+a folded turn opens the fold, one in a "Read 3 files" group opens the group, then the row scrolls to a third of the
+screen. Hits start at the newest. Back closes.
+
+**Message actions.** Long press on a user message: Copy, Send again, Edit and resend (on this phone: forks before
+the message and returns its text), Edit in composer, Select text, Share. On a reply block: Copy (plain text, without
+Markdown), Copy as Markdown, Regenerate (on this phone: forks before the prompt and sends it again), Select text, View
+as Markdown, Share. More under the last reply offers the same.
+
+**Export.** "Export or share" (or `/export`): Share as Markdown (a `.md` file through the share sheet), Copy as
+Markdown, and on this phone Share session file (the JSONL) and Share as HTML (`export_html`). Files are written to
+`cache/exports` and shared through a FileProvider.
+
+**Image viewer.** A tap on an image in a user message or the composer tray opens it full screen on black: swipe
+between images, pinch or double-tap (2.5x) to zoom up to 6x, drag to pan a zoomed image (kept on screen), Back or ✕
+to close. Save puts a PNG in Pictures/Pi-Bolt (Android 10+); Share sends it. The full image is kept for the six most
+recent messages; older ones open their thumbnail.
+
+**Compaction.** The status line names why it runs: "Compacting" (manual), "Auto-compacting" (threshold) or
+"Context full, compacting" (overflow); its summary stays as an expandable notice.
 
 **Todo panel.** The todo extension (opensec-pi-todo) draws its panel in the TUI only, so the app builds it from the
 `todo` tool's results: each result's `details.tasks` is the whole list after the call (`SessionState.todos`, from
@@ -330,11 +427,72 @@ history and from live `tool_execution_end`).
 - TalkBack: the heading is one node, "Todos, 2 of 5 done" (collapsed: ". Now: <task>"), with Expanded/Collapsed
   state and an Expand/Collapse click label; each row is "Done: …", "In progress: …" or "To do: …".
 
+**Subagents.** The subagents extension (opensec-pi-subagents) runs each agent in its own in-process Pi session. Its
+TUI widget is a component, so over RPC it arrives empty; the app builds `SessionState.subagents` (by `Agent` call id)
+from what does arrive:
+- the call's arguments (type, task, prompt, `run_in_background`);
+- a foreground run's partial results, about 12 a second: `details` has the activity line, tool uses, turns, tokens
+  and run time (kept in whole seconds so the state changes about once a second);
+- the final result (the answer; for a background start, the agent id);
+- `subagent-notification` messages when background runs end (status, metrics, a preview of the answer; a group
+  names several runs), `subagents-interrupted`, and `get_subagent_result` results (the full answer);
+- on this phone only, the agent's session file (`sessions/--<cwd>--/…jsonl`, one line per finished message, its
+  header naming the parent session and its name "<type>#<agent id prefix>"). `SubagentTail` matches a run to its file
+  by that id, or by its prompt before the id is known, and reads new complete lines every 400 ms while it runs (once
+  more when it ends, and while its screen is open), on `Dispatchers.IO`, as `subagent_transcript` events.
+Subagent session files (a `parentSession` header and that name) are not listed or resumed as project sessions.
+Remote control gets the events only: progress of foreground runs, the start and end of background runs, never their
+messages. Pi has no RPC to read or steer a subagent: steering and resuming go through a prompt to Pi.
+
+- Card (surface1, radius 12, 1dp line; lineStrong while active): 32dp avatar (the type's initial in its tint on the
+  tint @ 16%, radius 30%; tints glacier `#7CC4F0` Explore, iris `#A99CFF` Plan, mint `#9ED3C6` general-purpose, peach
+  `#E5A97E` and lilac `#C9B8F0` hashed for others: never a status colour), the type (label ink1), a "background · id"
+  pill (micro, surface3) for background runs, the task (meta ink2), the run time (meta ink3 tnum, ticking once a
+  second while it runs, the final time after). Then the activity line: a 20dp-high slot under the avatar with Quad
+  Agent 12dp in the tint (still Quad Think ink3 while queued; check success, cross danger, stop ink3 after, swapped
+  with a 160 ms scale 0.7→1 in the live turn) and the activity (meta ink3, one line) that crossfades (quick, 4dp rise)
+  at most every 450 ms, so a streaming reply does not flicker. Then the metrics ("4 tools · 12.3k tokens · turn 2",
+  meta ink3 tnum). While it runs a 2dp band in the tint sweeps the top edge (1400 ms) and every line keeps one line,
+  so the card never changes height. Done, the activity gives way to the answer's first lines as one paragraph (headings end
+  with a colon, list items keep a bullet; up to 3 lines, ink2; the error in danger); a finished run counts "5 turns" and the card grows to them with the settle spring (`animateContentSize`). Tap opens the agent; press
+  scale 0.98.
+- Stack: two or more consecutive `Agent` calls (one message's parallel calls). Closed: one card with a 48dp header
+  (up to 3 avatars, 22dp, overlapping by 8dp with a 2dp ring; "3 agents running", "1 of 3 agents running", "3 agents
+  done", "3 agents · 1 failed"; the longest run time; chevron) over one 40dp line per agent (glyph, type, crossfading
+  activity or task, time; tap opens it). Open (header tap): the header, then each agent's card 8dp apart; the switch
+  resizes with the settle spring. The open state lives with the tool groups'.
+- A finished turn folds its steps but not its agent cards: each is a unit of work of its own, and background runs
+  outlive the turn.
+  A background run's end shows where the notification lands: a step line "Explore finished" + task + time, tapping
+  opens the agent.
+- Detail screen (over the whole app; the session screen stays composed below, so its scroll position, draft and
+  images are as they were): enters like a screen (24dp slide + fade, sheet), predictive back scales it to 0.9. Top bar:
+  back, 28dp avatar, type (subhead) and task (meta ink3), Copy answer once there is one. A 36dp strip: glyph, state,
+  run time, metrics; the model, "background" and the agent id under it (monoMeta ink3). The transcript is the main one's
+  rows (user bubble for its prompt, thinking, tool rows and cards, prose, notices) built by `TranscriptModel` with every
+  turn open by default and `Agent` calls as plain rows. Reversed list with a 32dp live line at index 0 (Quad Agent 16dp
+  in the tint, the activity in shimmer, the run time; kept while done so nothing jumps); it follows the newest row only
+  while the reader is at the bottom, else the 40dp jump button with the unseen dot. Each agent keeps its list position
+  and toggles for the app's life. Over remote control (or when its file was not saved) it shows the prompt and the
+  answer with one info line saying why.
+- Reaching the agent (bottom bar, 1dp line above): a running background agent takes a message ("Message this agent",
+  sent to Pi as a prompt that asks it to call `steer_subagent`); a finished agent with an id can be continued ("Continue
+  this agent": Pi resumes it with `Agent` `resume`); a running foreground agent cannot be messaged (Pi is inside its
+  call: a message would reach Pi only after it returns), so the bar says so and offers Stop (surface3 pill; a first tap
+  arms "Stop turn?" in danger for 3 s, the second aborts Pi's turn, which stops the agent). A green line confirms a send
+  for 3.5 s.
+- TalkBack: a card is one node ("Explore agent, Find the parser code, running, Reading 3 files…") with the click label
+  "Open agent".
+
 **Settings.**
 - Appearance: theme tiles (seven swatches, four a row, drawn with each theme's canvas, surface and ink lines; selected = 1.5dp accent
   ring), accent circles, text size slider with a live prose preview, density (Comfortable / Compact).
 - Motion and feedback: Reduce motion (Follow system / On), Haptics.
 - Session: show thinking expanded, tool output preview lines (6 / 12 / 24).
+- Pi on this phone: steering and follow-up delivery (One at a time / All at once), the thinking level new sessions
+  start with (six segments), Auto-compact and Auto-retry toggles, and the default model (the last one picked, as in
+  the terminal). They are the engine's own settings (`agent/settings.json`, other keys kept) and reach the open
+  on-device session at once over RPC.
 - Notifications: permission state with a button to the system settings.
 - About: app version, device name, the update status and its action (see Updates), "Check for updates automatically",
   licences (Inter, JetBrains Mono: OFL).
@@ -366,6 +524,61 @@ plain GET with no identifiers. The APK URL must be under `github.com/opensec-git
   FileProvider), which always asks to confirm and then offers Open: Android stops the app to replace it and blocks a
   package-installer session or a MY_PACKAGE_REPLACED receiver from reopening it. Back in the app without an update
   (cancelled), the card offers Install again. The first launch of the new version says "Updated to 0.2.2" once.
+
+## Diagrams
+
+```` ```mermaid ```` fences render as diagrams (`ui/diagram/MermaidBlock`), offline. Flowcharts, sequence, class,
+state, ER, gantt, pie and mind maps are checked; the other Mermaid types work the same way.
+- Card: surface1, radius 12, 1dp line. Header 40dp: diagram glyph 14dp ink3, the type (monoMeta ink3), full screen
+  and Copy (the source). The diagram fits the column, at most 480dp tall, centred, 12dp inset; tap opens it full
+  screen.
+- Streaming: each change to the source waits 300 ms for the next (a fence known to be closed draws at once), so a
+  diagram appears when the model pauses or the fence closes, never per token. Until then a 160dp skeleton (Quad Write
+  20dp ink3, "Drawing diagram"), or the previous drawing with a Quad Write 12dp in the header. An error in a fence
+  that is still open is not shown.
+- Error: the source as a normal code block, then "Diagram could not be drawn: <Mermaid's first error line>" (meta
+  ink3, a 14dp danger error glyph).
+- Theme: Mermaid's base theme from the palette: nodes surface3 with a solid border (ink1 @ 26% over surface3), text
+  ink1, edges ink2, clusters surface2, notes warning @ 16%. Charts use a fixed categorical set (types, strings,
+  numbers, glacier, success, warning, iris, rose, danger, diff fgs, ink2), full strength for pie slices and dimmed to
+  42% over surface2 where text sits on them. Every theme is dark; `darkMode` follows the canvas luminance.
+- Full screen (a dialog on canvas): pinch zoom 1x (fit) to 8x around the fingers, pan, double-tap to 2.5x or back,
+  Fit, Share as PNG (FileProvider, cache/diagrams/ only) and Save as PNG (the system file picker, no permission). It
+  shows the inline bitmap at once and swaps in one drawn at twice the screen density.
+- TalkBack: "Diagram: Flowchart, Start" (type and first node label), click label "Open full screen".
+
+**Rendering.** Mermaid 12.2.0 (MIT, `dist/mermaid.min.js` from npm) is fetched by the `fetchMermaid` Gradle task and
+must match npm's sha512 integrity pinned in `app/build.gradle.kts`; it is packaged in `assets/diagram/` and never
+committed. Licence: Settings > About > Mermaid licence (`res/raw/license_mermaid.txt`, with the projects it bundles).
+
+One offscreen WebView, created on first use, never attached to a window, renders one diagram at a time. Mermaid draws
+the SVG, the page rasterises it on a canvas (as a `data:` URL: an SVG image from a `blob:` URL never finishes loading
+in Android WebView; with Inter embedded, since an SVG drawn as an image cannot see the page's fonts) and returns a PNG, which becomes a hardware bitmap shown with a plain `Image`. Bitmaps are cached by
+SHA-256 of source, theme and render size (LRU, 1/8 of the heap up to 48 MB; failures in a small map), and a render
+whose block scrolled away still finishes into the cache. So scrolling never hosts live WebViews: a diagram row is a
+bitmap like any image, and nothing is drawn for rows flung past within 300 ms. Live WebViews per diagram would be
+simpler but cost a renderer view each, re-layout on every scroll and cannot be skipped by Compose.
+
+**Why a WebView, and how it is locked down.** Mermaid is JavaScript that needs a DOM to measure text; no native
+renderer exists. The app has no other WebView, and this one is kept minimal:
+- JavaScript is on only for the renderer page, `https://appassets.androidplatform.net/diagram/index.html`, served
+  from the APK by `WebViewAssetLoader`. Its path handler serves exactly four files (the page, `render.js`,
+  `mermaid.min.js`, Inter); everything else is answered 403 in `shouldInterceptRequest` (and logged as "Blocked
+  request"), before the network stack. `blockNetworkLoads` and `blockNetworkImage` are on as well, and the page's CSP
+  is `default-src 'none'` with only `'self'` scripts.
+- No file access, no content access, no file-URL access, no DOM storage, no windows, no geolocation, no Safe
+  Browsing lookups, no cache, no WebView metrics (`MetricsOptOut` in the manifest); every navigation is refused; the
+  view is not focusable and hidden from accessibility. Debug builds only: page console lines go to logcat
+  (`PiBoltDiagram`) and the page can be inspected over adb.
+- Mermaid runs with `securityLevel: "strict"` (DOMPurify, no click handlers or scripts in diagrams) and
+  `htmlLabels: false` (SVG text, no `foreignObject`), `look: "classic"`, and flat theme variables (no drop shadows or
+  gradients).
+- The source reaches the page only as a JSON string literal (`JsonText.quote`, which also escapes `<`, U+2028/2029
+  and lone surrogates) in `piRender(id, "<json>", {theme}, {size})`; it is never concatenated into code.
+- The only JavaScript interface is `PiBoltDiagram.result(id, width, height, type, label, png, error)`, typed. It
+  ignores ids the app is not waiting for and caps the PNG (64 MB of base64, 24 M pixels).
+- A dead renderer process (`onRenderProcessGone`) drops the WebView and fails its requests; the app keeps running and
+  the next diagram starts a new one.
 
 ## Not carried over from the desktop app
 

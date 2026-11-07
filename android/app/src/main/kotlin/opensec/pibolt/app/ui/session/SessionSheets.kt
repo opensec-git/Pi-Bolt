@@ -2,8 +2,6 @@ package opensec.pibolt.app.ui.session
 
 import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -26,7 +24,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -42,10 +39,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -54,9 +47,9 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.delay
-import java.util.Locale
 import opensec.pibolt.app.ui.components.CopyButton
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiTextField
@@ -120,12 +113,12 @@ private fun SheetLoading(label: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ModelSheet(models: List<ModelInfo>, current: ModelInfo?, onPick: (ModelInfo) -> Unit, onDismiss: () -> Unit) {
+fun ModelSheet(models: List<ModelInfo>, current: ModelInfo?, onPick: (ModelInfo) -> Unit, onDismiss: () -> Unit, initialQuery: String = "") {
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
     val colors = Pi.colors
     val haptics = Pi.haptics
-    var query by rememberSaveable { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf(initialQuery) }
     PiSheet(onDismiss = onDismiss, state = state) {
         SheetHeader("Model")
         if (models.isEmpty()) {
@@ -140,7 +133,7 @@ fun ModelSheet(models: List<ModelInfo>, current: ModelInfo?, onPick: (ModelInfo)
             val q = query.trim().lowercase()
             if (q.isEmpty()) ordered else ordered.filter { q in it.label.lowercase() || q in it.id.lowercase() || q in it.provider.lowercase() }
         }
-        if (models.size > 6) {
+        if (models.size > 6 || query.isNotEmpty()) {
             PiTextField(
                 value = query,
                 onValueChange = { query = it },
@@ -152,7 +145,15 @@ fun ModelSheet(models: List<ModelInfo>, current: ModelInfo?, onPick: (ModelInfo)
             )
         }
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
-            items(shown, key = { "${it.provider}/${it.id}" }) { model ->
+            // By provider, each under its name; the current model first under "Current".
+            val sections = ModelGroups.of(shown, current)
+            for ((title, group) in sections) {
+                if (sections.size > 1) {
+                    item(key = "h:$title", contentType = "header") {
+                        Text(title, style = Pi.type.metaStrong, color = colors.ink3, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 4.dp).semantics { heading() })
+                    }
+                }
+            items(group, key = { "${it.provider}/${it.id}" }) { model ->
                 val selected = isCurrent(model)
                 Row(
                     Modifier
@@ -186,10 +187,22 @@ fun ModelSheet(models: List<ModelInfo>, current: ModelInfo?, onPick: (ModelInfo)
                     if (selected) Icon(Icons.Rounded.Check, contentDescription = "Current", tint = colors.accent, modifier = Modifier.size(20.dp))
                 }
             }
+            }
             if (shown.isEmpty()) {
                 item { Text("No model matches “$query”.", style = Pi.type.body, color = colors.ink3, modifier = Modifier.padding(20.dp)) }
             }
         }
+    }
+}
+
+/** Models grouped for the picker: "Current" first, then each provider (sorted), keeping the order within a group. */
+object ModelGroups {
+    fun of(models: List<ModelInfo>, current: ModelInfo?): List<Pair<String, List<ModelInfo>>> {
+        val isCurrent = { m: ModelInfo -> current != null && m.id == current.id && m.provider == current.provider }
+        val out = ArrayList<Pair<String, List<ModelInfo>>>()
+        models.filter(isCurrent).takeIf { it.isNotEmpty() }?.let { out += "Current" to it }
+        models.filterNot(isCurrent).groupBy { it.provider.ifBlank { "Other" } }.toSortedMap(String.CASE_INSENSITIVE_ORDER).forEach { (provider, list) -> out += provider to list }
+        return out
     }
 }
 
@@ -351,121 +364,6 @@ private fun Countdown(shownAt: Long, timeoutMs: Long) {
         color = colors.warning,
         modifier = Modifier.background(colors.warningSoft, CircleShape).padding(horizontal = 10.dp, vertical = 4.dp),
     )
-}
-
-// Session info
-
-data class SessionFacts(
-    val model: ModelInfo?,
-    val thinkingLevel: String?,
-    val totalTokens: Long?,
-    val input: Long?,
-    val output: Long?,
-    val cacheRead: Long?,
-    val cost: Double?,
-    val cwd: String?,
-    val version: String?,
-    val sessionName: String?,
-    val compacting: Boolean,
-    val connected: Boolean,
-)
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun SessionInfoSheet(
-    facts: SessionFacts,
-    onModel: () -> Unit,
-    onThinking: () -> Unit,
-    onCompact: () -> Unit,
-    onRename: () -> Unit,
-    onDismiss: () -> Unit,
-) {
-    val colors = Pi.colors
-    val type = Pi.type
-    val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val close = rememberSheetCloser(state)
-    PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Session", subtitle = facts.sessionName)
-        Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            val percent = facts.totalTokens?.let { contextPercent(it, facts.model?.contextWindow) }
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(colors.surface1, RoundedCornerShape(Radius.md))
-                    .border(1.dp, colors.line, RoundedCornerShape(Radius.md))
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                ContextRing(percent ?: 0)
-                Spacer(Modifier.width(16.dp))
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        when {
-                            percent != null -> "$percent% of ${SessionReducer.formatTokens(facts.model?.contextWindow ?: 0)} context"
-                            facts.totalTokens != null -> "${SessionReducer.formatTokens(facts.totalTokens)} tokens in context"
-                            else -> "No usage yet"
-                        },
-                        style = type.bodyStrong.copy(fontFeatureSettings = Tnum),
-                        color = colors.ink1,
-                    )
-                    val details = listOfNotNull(
-                        facts.input?.let { "${SessionReducer.formatTokens(it)} in" },
-                        facts.output?.let { "${SessionReducer.formatTokens(it)} out" },
-                        facts.cacheRead?.takeIf { it > 0 }?.let { "${SessionReducer.formatTokens(it)} cached" },
-                        facts.cost?.takeIf { it > 0 }?.let { String.format(Locale.ROOT, "$%.3f", it) },
-                    ).joinToString(" · ")
-                    if (details.isNotBlank()) Text("Last turn: $details", style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3)
-                }
-            }
-            InfoRow("Model", facts.model?.label ?: "—", onClick = { close(onModel) }, enabled = facts.connected)
-            InfoRow("Thinking", facts.thinkingLevel?.replaceFirstChar { it.uppercase() } ?: "—", onClick = { close(onThinking) }, enabled = facts.connected)
-            facts.cwd?.takeIf { it.isNotBlank() }?.let { InfoRow("Folder", shortPath(it), mono = true) }
-            facts.version?.takeIf { it.isNotBlank() }?.let { InfoRow("Pi-Bolt", "v$it") }
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SecondaryButton(if (facts.compacting) "Compacting…" else "Compact context", onClick = { close(onCompact) }, enabled = facts.connected && !facts.compacting, modifier = Modifier.weight(1f))
-                SecondaryButton("Rename", onClick = { close(onRename) }, enabled = facts.connected, modifier = Modifier.weight(1f))
-            }
-        }
-    }
-}
-
-@Composable
-private fun InfoRow(label: String, value: String, onClick: (() -> Unit)? = null, enabled: Boolean = true, mono: Boolean = false) {
-    val colors = Pi.colors
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .height(48.dp)
-            .then(if (onClick != null) Modifier.pressable(onClick, shape = RoundedCornerShape(Radius.sm), enabled = enabled, pressedScale = 1f) else Modifier)
-            .padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(label, style = Pi.type.body, color = colors.ink2, modifier = Modifier.width(96.dp))
-        Text(value, style = if (mono) Pi.type.monoSmall else Pi.type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-        if (onClick != null) Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.ink4, modifier = Modifier.size(20.dp))
-    }
-}
-
-@Composable
-private fun ContextRing(percent: Int) {
-    val colors = Pi.colors
-    val target = percent / 100f
-    val sweep by animateFloatAsState(target, PiMotion.inPlace(PiMotion.SETTLE), label = "ring")
-    val color = when {
-        percent > 90 -> colors.danger
-        percent > 70 -> colors.warning
-        else -> colors.ink2
-    }
-    Box(Modifier.size(44.dp), contentAlignment = Alignment.Center) {
-        Canvas(Modifier.size(40.dp)) {
-            val stroke = 3.dp.toPx()
-            val inset = stroke / 2
-            drawArc(colors.lineStrong, 0f, 360f, false, topLeft = Offset(inset, inset), size = Size(size.width - stroke, size.height - stroke), style = Stroke(stroke))
-            drawArc(color, -90f, 360f * sweep, false, topLeft = Offset(inset, inset), size = Size(size.width - stroke, size.height - stroke), style = Stroke(stroke, cap = StrokeCap.Round))
-        }
-        Text("$percent%", style = Pi.type.micro.copy(fontFeatureSettings = Tnum, fontWeight = FontWeight.SemiBold, fontSize = 10.sp), color = colors.ink1)
-    }
 }
 
 // Text prompt (rename, compact)

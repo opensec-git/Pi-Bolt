@@ -1,0 +1,229 @@
+# Pi-Bolt Android: feature parity with the terminal
+
+Every user-facing feature of Pi-Bolt's terminal UI (TUI) and RPC, and its state in the Android app as of 0.3.0.
+
+- **State**: `done` (works on a phone as in the terminal, or better), `partial` (some of it, or only on-device or only
+  remote), `missing`, `n/a` (has no meaning on a phone; not counted below).
+- **Priority** for a phone: `P0` (expected in daily use), `P1` (regularly useful), `P2` (rare, or for power users).
+- **Where**: `both` = on-device sessions and remote control; `device` = only the engine on this phone (remote control
+  accepts a subset of RPC commands, see docs/remote-control.md).
+
+Sources: packages/coding-agent/docs (slash-commands.md, keybindings.md, settings.md, rpc-commands.md, rpc.md,
+rpc-extension-ui.md, remote-control.md) and src/modes/interactive.
+
+## Summary
+
+| | P0 | P1 | P2 | Total |
+|---|---|---|---|---|
+| done | 39 | 44 | 6 | 89 |
+| partial | 0 | 2 | 3 | 5 |
+| missing | 0 | 2 | 27 | 29 |
+| **Total** | 39 | 48 | 36 | 123 |
+
+Not counted: 12 `n/a` rows (terminal-only features). Before this branch the same rows stood at 53 done, 15 partial and
+55 missing: it moved 37 rows (25 missing to done, 11 partial to done, 1 missing to partial) and closed every P0 gap.
+
+Built in 0.3.0 (this branch): command palette with built-ins, extension commands, prompt templates and skills;
+argument hints; `@` file mentions; `!` / `!!` shell; model and thinking cycling (long-press, hardware keys, session
+sheet); models grouped by provider; session statistics sheet with the footer's context bar and token line; transcript
+search with jump to match; message actions (copy plain or Markdown, send again, edit and resend, regenerate, share);
+resume, fork and duplicate from the session; export or share as Markdown, JSONL or HTML; image viewer (zoom, save,
+share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts; on-device agent settings.
+
+## Prompting and the composer
+
+| Feature | Terminal | App | Where | Pri |
+|---|---|---|---|---|
+| Send a prompt | Enter | done | both | P0 |
+| Multi-line input | Shift+Enter | done: the composer grows to 6 lines, then scrolls | both | P0 |
+| Steer while Pi works | Enter while running | done: Steer / Follow-up switch | both | P0 |
+| Follow-up while Pi works | Alt+Enter | done: Steer / Follow-up switch (no hardware key) | both | P0 |
+| Stop the run | Esc | done: Stop button, Esc on a hardware keyboard | both | P0 |
+| Queue view (steering and follow-ups) | above the editor | done: queue strip, steer/follow-up marked | both | P0 |
+| Restore queued messages to the editor | Alt+Up | done: Edit / swipe returns them to the composer | both | P1 |
+| Attach images | Ctrl+V paste, drag | done: photo picker, up to 4, resized | both | P0 |
+| Paste an image from the clipboard | Ctrl+V | missing | both | P2 |
+| Slash command menu | `/` | done: fuzzy palette, built-ins + extension, prompt and skill commands with source badges | both | P0 |
+| Argument hints | menu | done for built-ins; host commands when the host sends `argumentHint` | both | P1 |
+| Prompt templates (`/name`) | `/` | done (expanded by Pi) | both | P0 |
+| Skills (`/skill:name`) | `/` | done | both | P1 |
+| Extension commands | `/` | done | both | P0 |
+| `@` file mention | `@` | done: fuzzy over the project's files and folders | device | P1 |
+| `!command` shell | `!` | done: runs in the project, output streams into a step | device | P1 |
+| `!!command` (out of context) | `!!` | done | device | P2 |
+| Prompt history | Up / Down | partial: recent prompts on the empty session; no in-composer history | both | P1 |
+| Draft kept per session | editor buffer | done: saved per session across restarts | both | P1 |
+| Send shortcut | Enter | done: Ctrl+Enter on a hardware keyboard | both | P1 |
+| Haptics on send, stop, answers, errors | — | done | both | P1 |
+| External editor | Ctrl+G | n/a | — | — |
+| Kill ring, undo, word motions | Ctrl+K/Y/W, Ctrl+- | n/a (Android text editing) | — | — |
+| Clear editor / exit | Ctrl+C / Ctrl+D | n/a | — | — |
+| Suspend | Ctrl+Z | n/a | — | — |
+
+## Models and thinking
+
+| Feature | Terminal | App | Where | Pri |
+|---|---|---|---|---|
+| Model picker | `/model`, Ctrl+L | done: search, grouped by provider, current first | both | P0 |
+| `/model <search>` | `/model provider/id` | done: opens the picker filtered | both | P1 |
+| Cycle model | Ctrl+P | done: long-press the model chip, Next in Session, Ctrl+P | both | P1 |
+| Cycle model backwards | Shift+Ctrl+P | missing | both | P2 |
+| Thinking level picker | `/thinking` | done: levels the model supports | both | P0 |
+| `/thinking <level>` | `/thinking high` | done | both | P1 |
+| Cycle thinking level | Shift+Tab | done: long-press the thinking chip, Next in Session, Shift+Tab | both | P1 |
+| Scoped models for cycling | `/scoped-models` | missing | device | P2 |
+| Save default model / thinking | Ctrl+S in selectors | partial: the last model picked becomes the default (as in Pi); thinking default in Settings | device | P1 |
+| Provider sign-in (API key) | `/login` | done: Settings, Model providers | device | P0 |
+| Provider sign-in (OAuth) | `/login` | missing | device | P1 |
+| Sign out | `/logout` | done: remove a key in Settings | device | P1 |
+| llama.cpp router | `/llama` | n/a | — | — |
+
+## Sessions
+
+| Feature | Terminal | App | Where | Pri |
+|---|---|---|---|---|
+| New session | `/new` | done: menu, `/new`, project screen | device | P0 |
+| Resume a session | `/resume` | done: `/resume` sheet, menu, project screen list | device | P0 |
+| Rename session | `/name` | done: menu, `/name <name>`, Session sheet | both | P1 |
+| Fork from an earlier message | `/fork` | done: `/fork` sheet, "Edit and resend" on a message | device | P1 |
+| Duplicate session | `/clone` | done: menu, `/clone` | device | P2 |
+| Session tree navigation | `/tree`, double Esc | missing | device | P2 |
+| Tree labels, filters | `/tree` keys | missing | device | P2 |
+| Session info and statistics | `/session` | done: Session sheet (`get_session_stats`) | both | P0 |
+| Context usage in the footer | footer | done: top-bar subtitle, context bar in Session | both | P0 |
+| Tokens in/out, cache, cost | footer | done: footer line and totals in Session | both | P0 |
+| Delete a session | session picker Ctrl+D | missing (projects delete all their sessions) | device | P2 |
+| Session list sort / named filter | Ctrl+S / Ctrl+N | missing | device | P2 |
+| Import a JSONL session | `/import` | missing | device | P2 |
+| Switch sessions from another project | `/resume` all | partial: per project, from Home | device | P2 |
+| Quit | `/quit` | n/a (back / Home) | — | — |
+
+## Context and compaction
+
+| Feature | Terminal | App | Where | Pri |
+|---|---|---|---|---|
+| Manual compaction with instructions | `/compact [text]` | done: sheet or `/compact <instructions>` | both | P0 |
+| Auto-compaction indicator | status | done: "Auto-compacting" / "Context full, compacting" | both | P0 |
+| Compaction summary in the transcript | summary block | done: expandable notice with the summary | both | P0 |
+| Branch summary | summary block | done | both | P2 |
+| Auto-compaction on/off | settings | done: Settings, Pi on this phone | device | P1 |
+| Compaction thresholds (reserve, keep recent) | settings.json | missing | device | P2 |
+
+## Transcript
+
+| Feature | Terminal | App | Where | Pri |
+|---|---|---|---|---|
+| Streaming replies | — | done | both | P0 |
+| Markdown | renderer | done (markdown work in 0.3.0) | both | P0 |
+| Mermaid diagrams | `markdown.mermaid` | done (diagram work in 0.3.0) | both | P1 |
+| Code blocks: highlight, copy, full view | — | done | both | P0 |
+| Tool calls with output | tool blocks | done: folded per turn, cards, full-screen output | both | P0 |
+| Expand / collapse all tool output | Ctrl+O | partial: per step and per turn | both | P2 |
+| Thinking blocks | — | done: per block, default in Settings | both | P1 |
+| Toggle all thinking | Ctrl+T | partial: Settings default, per block | both | P2 |
+| Diffs of edits | diff view | done: inline and full screen | both | P0 |
+| Search the transcript | Ctrl+Shift+F | done: search bar, n of m, jump (opens folds and groups) | both | P1 |
+| Jump to previous / next prompt | Ctrl+Shift+Up/Down | missing | both | P2 |
+| Scroll to bottom, follow output | Ctrl+End | done: scroll button with unseen dot | both | P0 |
+| Select and copy text | selection | done: "Select text" | both | P0 |
+| Images in user messages | inline | done: thumbnails, full-screen viewer (zoom, save, share) | both | P1 |
+| Images in tool results | inline | missing: shown as "[1 image]" | both | P1 |
+| Todo list | extension | done: todo panel | both | P1 |
+| Subagent progress | extension | done (subagent work in 0.3.0) | both | P1 |
+| Extension notices / custom messages | — | done | both | P1 |
+| Errors and retries | status | done: notices, "Retrying 1/3" | both | P0 |
+| Stop an automatic retry | `abort_retry` | missing (Stop aborts the run) | both | P2 |
+| Cache-miss notices | `showCacheMissNotices` | missing | both | P2 |
+
+## Message actions
+
+| Feature | Terminal | App | Where | Pri |
+|---|---|---|---|---|
+| Copy the last reply | `/copy`, Ctrl+X | done: Copy under the reply, `/copy` | both | P0 |
+| Copy as plain text or Markdown | — | done | both | P1 |
+| Send a prompt again | — | done: Ask again, "Send again" | both | P1 |
+| Regenerate an answer | `/fork` + resend | done: "Regenerate" (forks before the prompt, sends it) | device | P1 |
+| Edit and resend | `/fork` | done: "Edit and resend" | device | P1 |
+| Share a message | — | done: Android share sheet | both | P1 |
+
+## Export and share
+
+| Feature | Terminal | App | Where | Pri |
+|---|---|---|---|---|
+| Export as HTML | `/export` | done: shared through Android | device | P1 |
+| Export as JSONL | `/export x.jsonl` | done: the session file, shared | device | P1 |
+| Export as Markdown | — | done: share or copy (remote too) | both | P1 |
+| Share as gist / Radius link | `/share` | missing | device | P2 |
+| Bug report | `/bug` | missing | device | P2 |
+
+## Extensions and dialogs
+
+| Feature | Terminal | App | Where | Pri |
+|---|---|---|---|---|
+| Select / confirm / input / editor dialogs | dialogs | done: sheets, countdown, hide and come back | both | P0 |
+| Notifications from extensions | `notify` | done: snackbar | both | P1 |
+| Status line and widgets | `setStatus`, `setWidget` | done: lines above the composer | both | P1 |
+| Put text in the editor | `set_editor_text` | done | both | P1 |
+| Bundled extensions (todo, subagents) | packages | done | device | P1 |
+| Install / manage packages | `pi install`, settings | missing | device | P2 |
+| MCP servers | `/mcp` | missing | device | P2 |
+| Reload resources | `/reload` | missing | device | P2 |
+| Project trust | `/trust` | missing | device | P2 |
+| Custom TUI components | `ctx.ui.custom` | n/a | — | — |
+
+## Settings (docs/settings.md)
+
+| Feature | Terminal | App | Where | Pri |
+|---|---|---|---|---|
+| Steering mode | `steeringMode` | done | device | P1 |
+| Follow-up mode | `followUpMode` | done | device | P1 |
+| Default thinking level | `defaultThinkingLevel` | done | device | P1 |
+| Auto-retry | `retry.enabled` | done | device | P2 |
+| Retry counts and delays | `retry.*` | missing | device | P2 |
+| Hide thinking blocks | `hideThinkingBlock` | done: thinking shown collapsed by default | both | P1 |
+| Block images | `images.blockImages` | missing | device | P2 |
+| Theme | `/theme` | done: seven app themes, accents, text size, density | both | P0 |
+| Reduce motion | — | done | both | P1 |
+| Skill commands on/off | `enableSkillCommands` | missing | device | P2 |
+| Enabled models | `enabledModels` | missing | device | P2 |
+| HTTP proxy, timeouts, transport | `httpProxy`, … | missing | device | P2 |
+| Shell path and prefix | `shellPath`, … | n/a (bundled shell) | — | — |
+| Terminal display options | `tuiMode`, `terminal.*`, `editorPaddingX`, … | n/a | — | — |
+| Quiet startup, changelog | `quietStartup`, `collapseChangelog` | n/a | — | — |
+| Show hotkeys / changelog | `/hotkeys`, `/changelog` | n/a | — | — |
+| Settings menu | `/settings` | done: Settings screen | both | P0 |
+
+## Keyboard (hardware keyboards on a phone or tablet)
+
+| Feature | Terminal | App | Where | Pri |
+|---|---|---|---|---|
+| Send | Enter | done: Ctrl+Enter (Enter adds a line, as Android IMEs expect) | both | P1 |
+| Stop | Esc | done | both | P1 |
+| Next model | Ctrl+P | done | both | P2 |
+| Next thinking level | Shift+Tab | done | both | P2 |
+| Follow-up | Alt+Enter | missing | both | P2 |
+| Restore queue | Alt+Up | missing | both | P2 |
+| Open model picker | Ctrl+L | missing | both | P2 |
+| Search | Ctrl+Shift+F | missing | both | P2 |
+| Custom keybindings | keybindings.json | n/a | — | — |
+
+## Remote control and the phone
+
+| Feature | Terminal | App | Where | Pri |
+|---|---|---|---|---|
+| Pair with a computer (QR, paste) | `/remote-control` | done | remote | P0 |
+| Reconnect after drops | — | done | remote | P0 |
+| Several computers, forget, revoke | `/remote-control devices` | done | remote | P1 |
+| Background notifications (done, needs answer) | — | done | both | P0 |
+| Keep running in the background | — | done: foreground service while a turn runs | device | P0 |
+| Projects (create, clone, rename, pin, delete) | — | done | device | P0 |
+| Browse project files | — | done: Files tab and viewer | device | P1 |
+| TalkBack labels and 48 dp targets | — | done for the new controls | both | P0 |
+
+## What remains
+
+- **P1** (2 missing, 2 partial): OAuth sign-in; images in tool results; prompt history in the composer (Up/Down; today
+  only the empty session lists recent prompts); choosing the default model in Settings (today the last model picked).
+- **P2**: session tree (`/tree`) and labels; delete a single session; session sort and filters; `/import`; `/share`
+  and `/bug`; scoped and enabled models; MCP, packages, reload and trust; retry and compaction tuning; block images;
+  cache-miss notices; jump between prompts; stop an automatic retry; paste images; the missing hardware shortcuts.

@@ -24,7 +24,7 @@ object SessionReducer {
     private const val MAX_CONTENT_BLOCKS = 1024
 
     fun reduce(state: SessionState, event: JsonObject): SessionState = when (event.type) {
-        "remote_hello" -> keepTodos(state, fromHello(event))
+        "remote_hello" -> SubagentReducer.keep(state, keepTodos(state, fromHello(event)))
         // A new run: the completed rows of the previous one leave the todo panel.
         "agent_start" -> state.copy(isRunning = true, todos = hideCompleted(state.todos))
         "agent_settled" -> settle(state)
@@ -35,7 +35,7 @@ object SessionReducer {
         "tool_execution_update" -> toolUpdate(state, event)
         "tool_execution_end" -> toolEnd(state, event)
         "queue_update" -> state.copy(queue = QueueState(event.strings("steering"), event.strings("followUp")))
-        "compaction_start" -> state.copy(isCompacting = true)
+        "compaction_start" -> state.copy(isCompacting = true, compactionReason = event.str("reason"))
         "compaction_end" -> compactionEnd(state, event)
         "auto_retry_start" -> state.copy(
             retry = RetryInfo(
@@ -54,6 +54,8 @@ object SessionReducer {
         "extension_ui_request" -> extensionRequest(state, event)
         "extension_ui_dismissed" -> event.str("id")?.let { id -> state.copy(dialogs = state.dialogs.filterNot { it.id == id }) } ?: state
         "extension_error" -> state.notice(NoticeKind.Error, "Extension error", event.str("error") ?: "")
+        "bash_execution_update" -> shellOutput(state, event.str("delta").orEmpty())
+        SubagentReducer.TRANSCRIPT_EVENT -> SubagentReducer.transcript(state, event)
         else -> state
     }
 
@@ -86,7 +88,7 @@ object SessionReducer {
         hello.obj("streamingMessage")?.let { streaming ->
             if (streaming.str("role") == "assistant") state = startStream(state, streaming)
         }
-        if (!state.isRunning) state = closeDanglingTools(state).let { it.copy(todos = hideFinished(it.todos)) }
+        if (!state.isRunning) state = SubagentReducer.settled(closeDanglingTools(state).let { it.copy(todos = hideFinished(it.todos)) })
         state = state.copy(
             dialogs = hello.arr("dialogs").orEmpty().mapNotNull { (it as? JsonObject)?.let(::dialogFrom) },
             commands = hello.arr("commands").orEmpty().mapNotNull { (it as? JsonObject)?.let(::commandFrom) },
@@ -189,7 +191,7 @@ object SessionReducer {
     }
 
     /** Add a finished message to [SessionState.items]. [key] reuses the streaming key so rows keep their identity. */
-    private fun commitMessage(state: SessionState, message: JsonObject, key: String?): SessionState {
+    internal fun commitMessage(state: SessionState, message: JsonObject, key: String?): SessionState {
         val nextSeq = if (key == null) state.seq + 1 else state.seq
         val k = key ?: "m${state.seq}"
         val s = state.copy(seq = nextSeq)
@@ -200,9 +202,11 @@ object SessionReducer {
             }
             "assistant" -> {
                 val items = s.items.toMutableList()
+                var runs = s
                 message.arr("content").orEmpty().forEachIndexed { i, block ->
                     val item = blockItem(k, i, block as? JsonObject, streaming = false) ?: return@forEachIndexed
                     if (item is ToolItem) {
+                        runs = SubagentReducer.called(runs, item.toolCallId, item.name, item.args)
                         // A tool call already known (from execution events) keeps its progress.
                         val existing = items.indexOfLast { it is ToolItem && it.toolCallId == item.toolCallId }
                         if (existing >= 0) {
@@ -219,15 +223,17 @@ object SessionReducer {
                     "aborted" -> items += NoticeItem("$k.aborted", NoticeKind.Aborted, "Aborted", message.str("errorMessage").orEmpty())
                     "length" -> items += NoticeItem("$k.length", NoticeKind.Info, "Stopped at the output limit")
                 }
-                s.copy(items = items)
+                runs.copy(items = items)
             }
             "toolResult" -> {
                 val id = message.str("toolCallId") ?: return s
                 val (text, images) = contentText(message["content"])
                 val result = if (images > 0) listOf(text, "[${images} image${if (images > 1) "s" else ""}]").filter { it.isNotBlank() }.joinToString("\n") else text
                 val isError = message.bool("isError") ?: false
-                val withTodos = if (message.str("toolName") == TODO_TOOL && !isError) s.copy(todos = applyTodo(s.todos, message.obj("details"))) else s
-                updateTool(withTodos, id, message.str("toolName")) {
+                val toolName = message.str("toolName")
+                val withTodos = if (toolName == TODO_TOOL && !isError) s.copy(todos = applyTodo(s.todos, message.obj("details"))) else s
+                val withRuns = SubagentReducer.ended(withTodos, id, toolName, text, message.obj("details"), isError, message.long("timestamp"))
+                updateTool(withRuns, id, toolName) {
                     it.copy(
                         status = if (isError) ToolStatus.Error else ToolStatus.Done,
                         result = result,
@@ -252,9 +258,17 @@ object SessionReducer {
                 )
             }
             "custom" -> {
-                if (message.bool("display") == false) return s
+                val customType = message.str("customType")
+                val withRuns = SubagentReducer.custom(s, customType, message.obj("details"), message.long("timestamp"))
+                if (message.bool("display") == false) return withRuns
                 val (text, _) = contentText(message["content"])
-                s.copy(items = s.items + NoticeItem(k, NoticeKind.Custom, message.str("customType") ?: "Message", text))
+                val item = if (customType == SubagentReducer.NOTIFICATION) {
+                    val ids = SubagentReducer.notifiedIds(message.obj("details"))
+                    SubagentNoticeItem(k, ids, text, ids.mapNotNull { SubagentReducer.byAgentId(withRuns, it)?.key })
+                } else {
+                    NoticeItem(k, NoticeKind.Custom, customType ?: "Message", text)
+                }
+                withRuns.copy(items = withRuns.items + item)
             }
             "compactionSummary" -> s.copy(
                 items = s.items + NoticeItem(k, NoticeKind.Compaction, compactedTitle(message.long("tokensBefore"), null), message.str("summary").orEmpty()),
@@ -286,7 +300,8 @@ object SessionReducer {
 
     private fun toolStart(state: SessionState, event: JsonObject): SessionState {
         val id = event.str("toolCallId") ?: return state
-        return updateTool(state, id, event.str("toolName")) {
+        val withRun = SubagentReducer.called(state, id, event.str("toolName"), event.obj("args"), started = true)
+        return updateTool(withRun, id, event.str("toolName")) {
             it.copy(status = ToolStatus.Running, args = event.obj("args") ?: it.args)
         }
     }
@@ -296,7 +311,8 @@ object SessionReducer {
         val (text, _) = contentText(event.obj("partialResult")?.get("content"))
         // The partial details too: a subagent reports what it is doing there.
         val details = event.obj("partialResult")?.obj("details")
-        return updateTool(state, id, event.str("toolName")) {
+        val withRun = SubagentReducer.progress(state, id, event.str("toolName"), details)
+        return updateTool(withRun, id, event.str("toolName")) {
             it.copy(status = ToolStatus.Running, output = text, details = details ?: it.details)
         }
     }
@@ -308,7 +324,8 @@ object SessionReducer {
         val isError = event.bool("isError") ?: false
         val name = event.str("toolName") ?: (state.allItems.lastOrNull { it is ToolItem && it.toolCallId == id } as? ToolItem)?.name
         val withTodos = if (name == TODO_TOOL && !isError) state.copy(todos = applyTodo(state.todos, result?.obj("details"))) else state
-        return updateTool(withTodos, id, event.str("toolName")) {
+        val withRuns = SubagentReducer.ended(withTodos, id, name, text, result?.obj("details"), isError, at = null)
+        return updateTool(withRuns, id, event.str("toolName")) {
             it.copy(
                 status = if (isError) ToolStatus.Error else ToolStatus.Done,
                 result = text,
@@ -340,7 +357,7 @@ object SessionReducer {
     }
 
     private fun settle(state: SessionState): SessionState {
-        var s = state.copy(isRunning = false, retry = null, isCompacting = false, todos = hideFinished(state.todos))
+        var s = state.copy(isRunning = false, retry = null, isCompacting = false, compactionReason = null, todos = hideFinished(state.todos))
         if (s.stream != null) {
             // A stream without message_end (aborted mid-flight): keep what arrived.
             val blocks = s.stream.blocks.filterNotNull().map {
@@ -352,13 +369,32 @@ object SessionReducer {
             }
             s = s.copy(items = s.items + blocks, stream = null, streaming = emptyList())
         }
-        return closeDanglingTools(s)
+        return SubagentReducer.settled(closeDanglingTools(s))
     }
 
     private fun closeDanglingTools(state: SessionState): SessionState {
         if (state.items.none { it is ToolItem && it.isActive }) return state
         return state.copy(items = state.items.map { if (it is ToolItem && it.isActive) it.copy(status = ToolStatus.Cancelled) else it })
     }
+
+    // The user's shell (`!command`)
+
+    /** Key prefix of a shell command the user ran from the app; its output streams in as `bash_execution_update`. */
+    const val SHELL_PREFIX = "shell:"
+
+    /** Output of the running user shell command: appended to the newest running `shell:` step. */
+    private fun shellOutput(state: SessionState, delta: String): SessionState {
+        if (delta.isEmpty()) return state
+        val index = state.items.indexOfLast { it is ToolItem && it.key.startsWith(SHELL_PREFIX) && it.status == ToolStatus.Running }
+        if (index < 0) return state
+        val items = state.items.toMutableList()
+        val item = items[index] as ToolItem
+        items[index] = item.copy(output = (item.output + delta).takeLast(MAX_SHELL_OUTPUT))
+        return state.copy(items = items)
+    }
+
+    /** Characters of streamed shell output kept while it runs (the final result replaces it). */
+    private const val MAX_SHELL_OUTPUT = 64_000
 
     // Todos
 
@@ -410,7 +446,7 @@ object SessionReducer {
     // Compaction
 
     private fun compactionEnd(state: SessionState, event: JsonObject): SessionState {
-        val s = state.copy(isCompacting = false)
+        val s = state.copy(isCompacting = false, compactionReason = null)
         val result = event.obj("result")
         val key = "m${s.seq}"
         val next = s.copy(seq = s.seq + 1)
@@ -493,7 +529,7 @@ object SessionReducer {
 
     private fun commandFrom(json: JsonObject): SlashCommand? {
         val name = json.str("name") ?: return null
-        return SlashCommand(name, json.str("description"), json.str("source") ?: "")
+        return SlashCommand(name, json.str("description"), json.str("source") ?: "", json.str("argumentHint")?.takeIf { it.isNotBlank() })
     }
 
     // Helpers

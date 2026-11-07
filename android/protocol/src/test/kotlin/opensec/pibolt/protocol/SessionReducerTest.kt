@@ -235,4 +235,40 @@ class SessionReducerTest {
         assertEquals(listOf("ok"), state.streaming.filterIsInstance<AssistantTextItem>().map { it.text })
     }
 
+
+    @Test
+    fun userShellOutputStreamsIntoTheRunningShellStep() {
+        val running = ToolItem("shell:1", "shell:1", "bash", null, status = ToolStatus.Running)
+        val start = SessionState(hello = true, items = listOf(ToolItem("tool:a", "a", "bash", null, status = ToolStatus.Running), running))
+        val state = run(
+            start,
+            """{"type":"bash_execution_update","id":"a7","delta":"line 1\n"}""",
+            """{"type":"bash_execution_update","id":"a7","delta":"line 2\n"}""",
+        )
+        assertEquals("line 1\nline 2\n", (state.items[1] as ToolItem).output)
+        // The agent's own running tool is not touched.
+        assertEquals("", (state.items[0] as ToolItem).output)
+        // Without a running shell step the update is ignored.
+        val done = SessionState(items = listOf(running.copy(status = ToolStatus.Done)))
+        assertEquals(done, run(done, """{"type":"bash_execution_update","delta":"x"}"""))
+    }
+
+    @Test
+    fun compactionKeepsItsReasonWhileItRuns() {
+        val started = run(SessionState(hello = true), """{"type":"compaction_start","reason":"threshold"}""")
+        assertTrue(started.isCompacting)
+        assertEquals("threshold", started.compactionReason)
+        val ended = run(started, """{"type":"compaction_end","reason":"threshold","result":{"summary":"s","tokensBefore":150000,"estimatedTokensAfter":30000}}""")
+        assertFalse(ended.isCompacting)
+        assertNull(ended.compactionReason)
+    }
+
+    @Test
+    fun commandsKeepAnArgumentHintWhenTheHostSendsOne() {
+        val commands = SessionReducer.commandsFrom(
+            SessionReducer.parse("""{"commands":[{"name":"review","source":"prompt","argumentHint":"<pr>"},{"name":"todo","source":"extension","argumentHint":" "}]}"""),
+        )
+        assertEquals("<pr>", commands[0].argumentHint)
+        assertNull(commands[1].argumentHint)
+    }
 }

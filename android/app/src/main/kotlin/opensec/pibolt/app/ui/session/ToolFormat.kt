@@ -6,7 +6,7 @@ import kotlinx.serialization.json.JsonObject
 import opensec.pibolt.protocol.arr
 import opensec.pibolt.protocol.int
 import opensec.pibolt.protocol.session.SessionReducer.TODO_TOOL
-import opensec.pibolt.protocol.session.SlashCommand
+import opensec.pibolt.protocol.session.SubagentReducer
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
 import opensec.pibolt.protocol.str
@@ -96,14 +96,9 @@ fun subagentProgress(item: ToolItem): String? {
     ).joinToString(" · ").ifBlank { null }
 }
 
-private val agentIdLine = Regex("""(?m)^Agent ID: .*$""")
-
-/** The stats headline a foreground run puts first; the row already shows the duration. Stops and aborts keep theirs. */
-private val completedHeadline = Regex("""(?m)^Agent completed in .*$""")
-
 /**
- * A finished subagent call's text: its answer without the stats headline and the resume hint, or that it went to the
- * background. Null for other tools.
+ * A finished subagent call's text: its answer without the stats headline, the resume hint and the session file line
+ * ([SubagentReducer.answerOf]), or that it went to the background. Null for other tools.
  */
 fun subagentResult(item: ToolItem): String? {
     if (!isSubagentTool(item.name) || item.isActive) return null
@@ -111,7 +106,7 @@ fun subagentResult(item: ToolItem): String? {
     if (d?.str("status") == "background") {
         return "Running in background" + (d.str("agentId")?.let { " · $it" } ?: "")
     }
-    return item.result?.replace(agentIdLine, "")?.replace(completedHeadline, "")?.trim()
+    return item.result?.let(SubagentReducer::answerOf)
 }
 
 /**
@@ -254,12 +249,6 @@ fun shortPath(path: String): String {
 }
 
 fun baseName(path: String): String = path.trimEnd('/').substringAfterLast('/').ifBlank { path }
-
-fun slashSuggestions(text: String, commands: List<SlashCommand>): List<SlashCommand> {
-    if (!text.startsWith("/") || text.contains(' ') || text.contains('\n')) return emptyList()
-    val query = text.drop(1).lowercase()
-    return commands.filter { it.name.lowercase().startsWith(query) }.take(5)
-}
 
 /** Context use in percent, when the model's window is known. */
 fun contextPercent(totalTokens: Long, window: Long?): Int? =
