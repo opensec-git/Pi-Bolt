@@ -50,7 +50,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.font.FontWeight
@@ -65,6 +67,7 @@ import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.engine.CustomEndpoint
 import opensec.pibolt.app.engine.ModelsFile
 import opensec.pibolt.app.engine.ProviderAuth
+import opensec.pibolt.app.ui.components.ButtonRow
 import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiTextField
@@ -337,7 +340,11 @@ private fun KeyStep(provider: ProviderInfo, auth: ProviderAuth, onBack: (() -> U
             onDone = ::save,
             modifier = Modifier.padding(horizontal = 16.dp),
         )
-        Row(Modifier.fillMaxWidth().heightIn(min = 32.dp).padding(horizontal = 20.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 32.dp).padding(horizontal = 20.dp, vertical = 6.dp)
+                .semantics(mergeDescendants = true) { if (error != null) liveRegion = LiveRegionMode.Polite },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Icon(Icons.Rounded.Lock, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(14.dp))
             Spacer(Modifier.width(8.dp))
             Text(error ?: "Your key stays on this phone and is sent only to ${provider.name}.", style = type.meta, color = if (error != null) colors.danger else colors.ink3)
@@ -359,12 +366,12 @@ private fun KeyStep(provider: ProviderInfo, auth: ProviderAuth, onBack: (() -> U
             }
         }
         Spacer(Modifier.height(12.dp))
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        ButtonRow(Modifier.padding(horizontal = 20.dp)) {
             SecondaryButton("Cancel", onClick = {
                 key = ""
                 onCancel()
-            }, modifier = Modifier.weight(1f))
-            PrimaryButton(if (saving) "Saving…" else "Save key", onClick = ::save, enabled = key.isNotBlank() && !saving, modifier = Modifier.weight(1f))
+            })
+            PrimaryButton(if (saving) "Saving…" else "Save key", onClick = ::save, enabled = key.isNotBlank() && !saving)
         }
         Spacer(Modifier.height(8.dp))
     }
@@ -524,12 +531,12 @@ private fun CustomStep(auth: ProviderAuth, onBack: () -> Unit, onSaved: (Provide
             }
         }
         Spacer(Modifier.height(16.dp))
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        ButtonRow(Modifier.padding(horizontal = 20.dp)) {
             SecondaryButton("Back", onClick = {
                 key = ""
                 onBack()
-            }, modifier = Modifier.weight(1f))
-            PrimaryButton(if (saving) "Saving…" else "Add endpoint", onClick = ::save, enabled = url.isNotBlank() && model.isNotBlank() && !saving, modifier = Modifier.weight(1f))
+            })
+            PrimaryButton(if (saving) "Saving…" else "Add endpoint", onClick = ::save, enabled = url.isNotBlank() && model.isNotBlank() && !saving)
         }
         Spacer(Modifier.height(8.dp))
     }

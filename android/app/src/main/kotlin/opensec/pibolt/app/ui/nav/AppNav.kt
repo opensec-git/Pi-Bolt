@@ -2,6 +2,7 @@ package opensec.pibolt.app.ui.nav
 
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.text.style.TextOverflow
+import opensec.pibolt.app.ui.components.ButtonRow
 import opensec.pibolt.app.ui.components.Notice
 import opensec.pibolt.app.ui.components.PiCard
 import opensec.pibolt.app.ui.components.SectionLabel
@@ -349,12 +350,12 @@ private fun PairConfirmSheet(payload: PairingPayload, known: Boolean, endsSessio
                 Notice("This ends the current session with $endsSession.", kind = SnackKind.Warning)
             }
             Spacer(Modifier.height(20.dp))
-            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                SecondaryButton("Cancel", onClick = { close(onCancel) }, modifier = Modifier.weight(1f))
+            ButtonRow(Modifier.padding(horizontal = 4.dp)) {
+                SecondaryButton("Cancel", onClick = { close(onCancel) })
                 PrimaryButton(if (known) "Connect" else "Pair", onClick = {
                     haptics.confirm()
                     close(onConfirm)
-                }, modifier = Modifier.weight(1f))
+                })
             }
             Spacer(Modifier.height(8.dp))
         }

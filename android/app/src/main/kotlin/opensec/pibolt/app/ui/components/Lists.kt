@@ -18,7 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
-import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.automirrored.rounded.NavigateNext
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -29,8 +29,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.toggleableState
+import androidx.compose.ui.state.ToggleableState
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -111,7 +114,7 @@ fun ListRow(
         if (end != RowEnd.None) {
             Spacer(Modifier.width(Space.sm))
             Icon(
-                if (end == RowEnd.External) Icons.AutoMirrored.Rounded.OpenInNew else Icons.Rounded.ChevronRight,
+                if (end == RowEnd.External) Icons.AutoMirrored.Rounded.OpenInNew else Icons.AutoMirrored.Rounded.NavigateNext,
                 contentDescription = null,
                 tint = colors.ink3,
                 modifier = Modifier.size(if (end == RowEnd.External) IconSize.sm + 2.dp else IconSize.md),
@@ -120,7 +123,7 @@ fun ListRow(
     }
 }
 
-/** A switch row: the whole row toggles, TalkBack reads it as one switch. */
+/** A switch row: the whole row toggles, TalkBack reads it as one switch with its On / Off state. */
 @Composable
 fun SwitchRow(
     title: String,
@@ -141,6 +144,7 @@ fun SwitchRow(
                 haptics.toggle(!checked)
                 onChange(!checked)
             }, shape = pressShape(padding), pressedScale = 1f, enabled = enabled, role = Role.Switch, label = title)
+            .semantics { toggleableState = ToggleableState(checked) }
             .padding(padding),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -164,7 +168,7 @@ fun PiSwitch(checked: Boolean, enabled: Boolean = true, onCheckedChange: ((Boole
             checkedThumbColor = colors.onAccent,
             checkedTrackColor = colors.accent,
             checkedBorderColor = colors.accent,
-            uncheckedThumbColor = colors.ink3,
+            uncheckedThumbColor = colors.ink2,
             uncheckedTrackColor = colors.surface3,
             uncheckedBorderColor = colors.lineStrong,
             disabledCheckedThumbColor = colors.surface3,
@@ -198,14 +202,14 @@ fun PiCard(
 }
 
 /**
- * A titled group (Settings, Runtimes): a [SectionLabel] over a radius-lg card. Rows inside use [RowInsetCard], with
+ * A titled group (Settings, Runtimes): a [SectionLabel] over a radius-md card. Rows inside use [RowInsetCard], with
  * the card's 16dp side padding and 8dp top and bottom (rows bring their own height; text blocks add 4dp more).
  */
 @Composable
 fun CardSection(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.sm + 2.dp)) {
         SectionLabel(title, Modifier.padding(bottom = Space.sm))
-        PiCard(radius = Radius.lg, padding = PaddingValues(horizontal = Space.lg, vertical = Space.sm), content = content)
+        PiCard(radius = Radius.md, padding = PaddingValues(horizontal = Space.lg, vertical = Space.sm), content = content)
     }
 }
 
@@ -222,7 +226,7 @@ fun Tag(text: String, modifier: Modifier = Modifier, color: Color = Pi.colors.in
         modifier
             .background(fill, RoundedCornerShape(Radius.xs))
             .padding(horizontal = 6.dp, vertical = Space.xxs)
-            .semantics { contentDescription = text },
+            .clearAndSetSemantics { contentDescription = text },
     ) {
         Text(text, style = Pi.type.micro, color = color, maxLines = 1)
     }

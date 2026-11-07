@@ -51,6 +51,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.ui.components.ButtonRow
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.ProgressLine
 import opensec.pibolt.app.ui.components.PrimaryButton
@@ -87,6 +88,7 @@ fun UpdateCard(app: PiBoltApp, modifier: Modifier = Modifier) {
                 title = "Pi-Bolt ${info.version} is available",
                 detail = UpdateRules.formatSize(info.size),
                 modifier = modifier,
+                actionsBelow = true,
             ) {
                 TextAction("Later", onClick = { updates.snooze(info.version) }, color = colors.ink2)
                 TextAction("Update", onClick = { updates.requestUpdate(info) }, color = colors.accent)
@@ -127,6 +129,7 @@ fun UpdateCard(app: PiBoltApp, modifier: Modifier = Modifier) {
             detail = job.message,
             danger = true,
             modifier = modifier,
+            actionsBelow = !job.refused,
         ) {
             TextAction("Close", onClick = updates::dismissFailure, color = colors.ink2)
             if (!job.refused) TextAction("Retry", onClick = { updates.requestUpdate(job.info) }, color = colors.accent)
@@ -137,7 +140,11 @@ fun UpdateCard(app: PiBoltApp, modifier: Modifier = Modifier) {
 @Composable
 private fun Glyph(icon: ImageVector, tint: Color) = Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
 
-/** A 64dp card like the engine banner: glyph, title, one meta line, optional 2dp progress, text actions. */
+/**
+ * A 64dp card like the engine banner: glyph, title, one meta line, optional 2dp progress, text actions. One action sits
+ * at the end of the row; two ([actionsBelow]) go under the text, end-aligned like a Notice's, so the title keeps the
+ * width (two inline actions left "Pi-Bolt 0.5.2 is…" at font scale 1.3 on a 360dp phone).
+ */
 @Composable
 private fun UpdateRow(
     icon: @Composable () -> Unit,
@@ -146,6 +153,7 @@ private fun UpdateRow(
     modifier: Modifier = Modifier,
     progress: Float? = null,
     danger: Boolean = false,
+    actionsBelow: Boolean = false,
     actions: (@Composable () -> Unit)? = null,
 ) {
     val colors = Pi.colors
@@ -165,11 +173,14 @@ private fun UpdateRow(
                 Text(title, style = Pi.type.bodyStrong, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(detail, style = Pi.type.meta.copy(fontFeatureSettings = Tnum), color = if (danger) colors.ink2 else colors.ink3, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
-            if (actions != null) Row(verticalAlignment = Alignment.CenterVertically) { actions() }
+            if (actions != null && !actionsBelow) Row(verticalAlignment = Alignment.CenterVertically) { actions() }
         }
         if (progress != null) {
             Spacer(Modifier.height(10.dp))
             ProgressLine(progress, Modifier.padding(start = 34.dp, end = 12.dp))
+        }
+        if (actions != null && actionsBelow) {
+            Row(Modifier.fillMaxWidth().padding(top = 2.dp), horizontalArrangement = Arrangement.End, verticalAlignment = Alignment.CenterVertically) { actions() }
         }
     }
 }
@@ -248,9 +259,9 @@ private fun DownloadSheet(app: PiBoltApp, info: UpdateInfo) {
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
         )
         Spacer(Modifier.height(12.dp))
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            SecondaryButton("Cancel", onClick = { close(updates::dismissPrompt) }, modifier = Modifier.weight(1f))
-            PrimaryButton("Download", onClick = { close { updates.startDownload(info) } }, modifier = Modifier.weight(1f))
+        ButtonRow(Modifier.padding(horizontal = 20.dp)) {
+            SecondaryButton("Cancel", onClick = { close(updates::dismissPrompt) })
+            PrimaryButton("Download", onClick = { close { updates.startDownload(info) } })
         }
     }
 }
@@ -288,18 +299,18 @@ private fun InstallSheet(app: PiBoltApp, info: UpdateInfo) {
             )
         }
         Spacer(Modifier.height(12.dp))
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            SecondaryButton("Cancel", onClick = { close(updates::dismissPrompt) }, modifier = Modifier.weight(1f))
+        ButtonRow(Modifier.padding(horizontal = 20.dp)) {
+            SecondaryButton("Cancel", onClick = { close(updates::dismissPrompt) })
             if (allowed) {
                 PrimaryButton(if (working != null) "Update anyway" else "Install", onClick = {
                     haptics.confirm()
                     close { updates.install(context) }
-                }, modifier = Modifier.weight(1f))
+                })
             } else {
                 PrimaryButton("Open settings", onClick = {
                     askedForPermission = true
                     openInstallPermission(context)
-                }, modifier = Modifier.weight(1f))
+                })
             }
         }
     }

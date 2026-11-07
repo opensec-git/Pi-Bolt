@@ -46,6 +46,7 @@ import opensec.pibolt.app.ui.components.Segmented
 import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.session.ViewerContent
+import opensec.pibolt.app.ui.providers.ProviderCatalog
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.protocol.obj
 import opensec.pibolt.protocol.rpc.ModelInfo
@@ -310,7 +311,7 @@ fun ScopedModelsSheet(agentDir: File, models: List<ModelInfo>, onSaved: (List<St
                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
                     val groups = models.groupBy { it.provider }
                     for ((provider, list) in groups) {
-                        item(key = "h:$provider") { F2Section(provider.uppercase()) }
+                        item(key = "h:$provider") { F2Section(ProviderCatalog.name(provider)) }
                         items(list, key = { it.provider + "/" + it.id }) { m ->
                             F2Toggle(m.label, m.id, checked = ModelScope.enabled(p, m.provider, m.id)) { checked ->
                                 val next = ModelScope.toggle(p, m.provider, m.id, checked, all)

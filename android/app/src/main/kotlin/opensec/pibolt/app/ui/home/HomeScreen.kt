@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import java.io.File
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,6 +71,7 @@ import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.engine.EngineStatus
 import opensec.pibolt.app.git.GitRepo
 import opensec.pibolt.app.ui.components.BrandMark
+import opensec.pibolt.app.ui.components.ButtonRow
 import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.PiSnackHost
@@ -346,9 +348,9 @@ fun HomeScreen(
                             color = colors.ink3,
                             modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 10.dp),
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            SecondaryButton("Scan code", onClick = onScan, icon = Icons.Rounded.QrCodeScanner, modifier = Modifier.weight(1f))
-                            SecondaryButton("Paste link", onClick = { showPaste = true }, icon = Icons.Rounded.ContentPaste, modifier = Modifier.weight(1f))
+                        ButtonRow {
+                            SecondaryButton("Paste link", onClick = { showPaste = true }, icon = Icons.Rounded.ContentPaste)
+                            SecondaryButton("Scan code", onClick = onScan, icon = Icons.Rounded.QrCodeScanner)
                         }
                     }
                 }
@@ -480,9 +482,10 @@ private fun ComputersHeader(count: Int, open: Boolean, onToggle: () -> Unit, mod
     val turn by animateFloatAsState(if (open) 180f else 0f, PiMotion.inPlace(PiMotion.QUICK), label = "computers-chevron")
     Row(
         modifier
-            .padding(start = 12.dp, end = 12.dp, top = 20.dp, bottom = 4.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 16.dp, bottom = 4.dp)
             .fillMaxWidth()
-            .height(44.dp)
+            .height(48.dp)
+            .semantics { stateDescription = if (open) "Expanded" else "Collapsed" }
             .pressable(onToggle, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, role = Role.Button, label = if (open) "Hide computers" else "Show computers")
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,

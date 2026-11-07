@@ -135,8 +135,9 @@ class ContrastTest {
 
     @Test
     fun buttonLabelsPass() {
-        // Secondary (ink1 on surface2), danger (danger on dangerSoft over a sheet) and the disabled primary (ink3 on
-        // surface3, which must still be readable: it says what will be possible).
+        // Secondary (ink1 on surface2), danger (danger on dangerSoft over a sheet, which is surface1, or a card) and the
+        // disabled primary (ink3 on surface3, which must still be readable: it says what will be possible). The ghost
+        // button's ink2 label sits on a sheet (surface1) or the canvas.
         val failures = ArrayList<String>()
         for (theme in ThemeId.entries) {
             val c = PiColors.of(theme, AccentId.Theme)
@@ -145,6 +146,10 @@ class ContrastTest {
                 "danger" to contrast(c.danger, c.dangerSoft.compositeOver(c.surface2)),
                 "disabled primary" to contrast(c.ink3, c.surface3),
                 "ghost on sheet" to contrast(c.ink1, c.surface2),
+                "danger on a surface1 sheet" to contrast(c.danger, c.dangerSoft.compositeOver(c.surface1)),
+                "ghost (ink2) on a sheet" to contrast(c.ink2, c.surface1),
+                "ghost (ink2) on canvas" to contrast(c.ink2, c.canvas),
+                "snackbar text on surface2" to contrast(c.ink1, c.surface2),
             )
             for ((name, r) in pairs) if (r < 4.5) failures += "$theme $name: ${"%.2f".format(r)}"
         }
