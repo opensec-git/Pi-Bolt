@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -29,13 +28,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
-import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.QuadMath
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
@@ -77,32 +78,32 @@ fun HostCard(host: Host, live: SessionController?, now: Long, onClick: () -> Uni
         }
     }
     val shape = RoundedCornerShape(Radius.md)
-    val detail = buildList {
-        when {
-            connected && dialog -> add("Waiting for you")
-            connected && running -> add("Working")
-            connected -> add("Connected")
-            link is LinkState.Connecting || link is LinkState.Retrying -> add("Connecting…")
-            link is LinkState.Failed -> add("Not connected")
-        }
-        if (host.cwd.isNotBlank()) add(baseName(host.cwd))
-        if (host.hasLan) add("LAN")
-        if (host.hasTunnel) add("tunnel")
-        if (host.version.isNotBlank()) add("v${host.version}")
-        if (link == null) add(lastSeen(host, now))
-    }.joinToString(" · ")
+    // Status first, then the folder; transport and version are details, not meta, so the line never cuts the status.
+    val status = when {
+        connected && dialog -> "Waiting for you"
+        connected && running -> "Working"
+        connected -> "Connected"
+        link is LinkState.Connecting || link is LinkState.Retrying -> "Connecting…"
+        link is LinkState.Failed -> "Not connected"
+        else -> lastSeen(host, now).replaceFirstChar { it.uppercase() }
+    }
+    val folder = host.cwd.takeIf { it.isNotBlank() }?.let(::baseName)
+    val transport = listOfNotNull("LAN".takeIf { host.hasLan }, "tunnel".takeIf { host.hasTunnel }, host.version.takeIf { it.isNotBlank() }?.let { "v$it" }).joinToString(" · ")
     Row(
         modifier
             .fillMaxWidth()
             .height(Pi.dims.hostCard)
             .sharedHostBounds(SharedKeys.card(host.id), card = true)
-            .pressable(onClick, shape = shape, onLongClick = { menu = true })
+            .pressable(onClick, shape = shape, onLongClick = { menu = true }, label = "Open computer")
+            .semantics { customActions = listOf(CustomAccessibilityAction("Forget computer") { menu = true; true }) }
             .background(colors.surface1, shape)
             .border(1.dp, colors.line, shape)
-            .padding(start = 18.dp, end = 4.dp),
+            .padding(start = 18.dp, end = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        StatusDot(linkColor(link, colors), Modifier.sharedHostElement(SharedKeys.dot(host.id)))
+        // One live indicator: the Quad while a session is live, the status dot otherwise.
+        val showQuad = live != null && link != null
+        if (!showQuad) StatusDot(linkColor(link, colors), Modifier.sharedHostElement(SharedKeys.dot(host.id)))
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(
@@ -114,9 +115,15 @@ fun HostCard(host: Host, live: SessionController?, now: Long, onClick: () -> Uni
                 modifier = Modifier.sharedHostElement(SharedKeys.name(host.id)),
             )
             Spacer(Modifier.height(2.dp))
-            Text(detail, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row {
+                Text(status, style = type.meta, color = colors.ink3, maxLines = 1)
+                if (folder != null) Text(" · $folder", style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            }
+            if (transport.isNotEmpty() && !Pi.dims.compact) {
+                Text(transport, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
         }
-        if (live != null && link != null) {
+        if (showQuad) {
             val busy = running || dialog || !connected
             val mode: QuadMode = rememberSettledMode(liveMode)
             Box(Modifier.size(32.dp), contentAlignment = Alignment.Center) {
@@ -124,7 +131,6 @@ fun HostCard(host: Host, live: SessionController?, now: Long, onClick: () -> Uni
             }
         }
         Box {
-            IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
             DropdownMenu(
                 expanded = menu,
                 onDismissRequest = { menu = false },

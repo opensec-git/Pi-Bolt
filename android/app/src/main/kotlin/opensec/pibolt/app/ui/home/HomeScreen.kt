@@ -29,7 +29,6 @@ import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.ExpandMore
-import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.QrCodeScanner
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarHostState
@@ -49,6 +48,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import java.io.File
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -78,6 +80,7 @@ import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.ui.projects.NewProjectSheet
 import opensec.pibolt.app.ui.projects.ProjectAction
 import opensec.pibolt.app.ui.projects.ProjectActionSheets
+import opensec.pibolt.app.ui.projects.ContinueRow
 import opensec.pibolt.app.ui.projects.ProjectCard
 import opensec.pibolt.app.ui.projects.ProjectEntry
 import opensec.pibolt.app.ui.projects.ProjectRules
@@ -144,6 +147,28 @@ fun HomeScreen(
         }
     }
 
+    val recent = remember(list, local) { list?.let { ProjectRules.continueList(it, local?.takeIf { l -> !l.controller.stopped }?.project?.name) }.orEmpty() }
+    // Coming back to Home from a session: what it shows now has been seen. A run that is still going and writes
+    // later turns the session unread, so it gets a dot once it finishes here or in the background.
+    LaunchedEffect(Unit) {
+        LocalSessions.current.value?.takeIf { !it.controller.stopped }?.let { live -> (live.controller.sessionFile ?: live.sessionFile)?.let(store::seen) }
+    }
+    var resuming by remember { mutableStateOf(false) }
+    fun resume(entry: ProjectEntry, file: String, isLive: Boolean) {
+        if (isLive) {
+            onOpenLocalSession(entry.name)
+            return
+        }
+        if (resuming) return
+        resuming = true
+        scope.launch {
+            LocalSessions.open(engine, store, File(entry.path), sessionFile = file)
+                .onSuccess { onOpenLocalSession(entry.name) }
+                .onFailure { snackbar.show(it.message ?: "Could not open the session", SnackKind.Error) }
+            resuming = false
+        }
+    }
+
     var computersOpen by rememberSaveable { mutableStateOf<Boolean?>(null) }
     val showComputers = computersOpen ?: (unavailable || (list != null && list.isEmpty() && hosts.isNotEmpty()) || remote?.stopped == false)
     var newProject by remember { mutableStateOf<Boolean?>(null) }
@@ -174,7 +199,7 @@ fun HomeScreen(
         onErrorShown()
     }
     val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
-    val hasBottomBar = !unavailable && !list.isNullOrEmpty()
+    val hasBottomBar = !unavailable && !list.isNullOrEmpty() && configured.isNotEmpty()
 
     Box(Modifier.fillMaxSize().background(colors.canvas)) {
         LazyColumn(
@@ -182,16 +207,12 @@ fun HomeScreen(
             modifier = Modifier.fillMaxSize(),
         ) {
             item(key = "header", contentType = "header") {
-                Column(Modifier.statusBarsPadding()) {
-                    Row(Modifier.fillMaxWidth().height(56.dp).padding(end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Spacer(Modifier.weight(1f))
-                        IconAction(Icons.Outlined.Settings, "Settings", onClick = onSettings)
-                    }
-                    Row(Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        BrandMark(size = 28.dp, play = false)
-                        Spacer(Modifier.width(12.dp))
-                        Text("Pi-Bolt", style = type.display.copy(fontSize = type.display.fontSize * 1.15f), color = colors.ink1)
-                    }
+                // A compact 56dp bar: the mark and the name, settings on the right.
+                Row(Modifier.statusBarsPadding().fillMaxWidth().height(56.dp).padding(start = 18.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    BrandMark(size = 24.dp, play = false)
+                    Spacer(Modifier.width(10.dp))
+                    Text("Pi-Bolt", style = type.title, color = colors.ink1, modifier = Modifier.weight(1f).semantics { heading() })
+                    IconAction(Icons.Outlined.Settings, "Settings", onClick = onSettings)
                 }
             }
             if (status.needsBanner()) {
@@ -204,20 +225,47 @@ fun HomeScreen(
                     UpdateCard(app, modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp))
                 }
             }
-            if (!unavailable && metaLoaded && authLoaded && meta.providerPromptSeen && configured.isEmpty()) {
-                item(key = "provider", contentType = "provider") {
-                    ProviderNudge(onAdd = { addProvider = true }, modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp))
+            // No model yet, or no project yet: one setup card whose only primary action is the next step.
+            val needsModel = !unavailable && authLoaded && configured.isEmpty()
+            if (!unavailable && metaLoaded && authLoaded && list != null && (needsModel || list.isEmpty())) {
+                item(key = "setup", contentType = "setup") {
+                    SetupCard(
+                        modelName = configured.minOrNull()?.let(ProviderCatalog::name),
+                        onConnect = { addProvider = true },
+                        onNewProject = { newProject = false },
+                        onClone = { newProject = true },
+                        modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
+            }
+            if (!unavailable && recent.isNotEmpty()) {
+                item(key = "continue-label", contentType = "label") {
+                    SectionLabel("Continue", Modifier.animateItem().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp))
+                }
+                items(recent, key = { "c:" + it.name }, contentType = { "continue" }) { entry ->
+                    val session = entry.lastSession ?: return@items
+                    val liveHere = local?.takeIf { it.project.name == entry.name && !it.controller.stopped }
+                    val liveFile = liveHere?.let { it.controller.sessionFile ?: it.sessionFile }
+                    val isLive = liveHere != null && (liveFile == null || liveFile == session.file)
+                    ContinueRow(
+                        entry = entry,
+                        session = session,
+                        live = if (isLive) liveHere?.controller else null,
+                        unread = !isLive && ProjectRules.unread(session, meta.seen[session.file]),
+                        now = now,
+                        onClick = { resume(entry, session.file, isLive) },
+                        modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
+            }
+            if (!unavailable && !list.isNullOrEmpty()) {
+                item(key = "projects-label", contentType = "label") {
+                    SectionLabel("Projects", Modifier.animateItem().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp))
                 }
             }
             if (!unavailable) {
-                item(key = "projects-label", contentType = "label") {
-                    SectionLabel("On this phone", Modifier.animateItem().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp))
-                }
                 when {
-                    list == null -> Unit
-                    list.isEmpty() -> item(key = "projects-empty", contentType = "empty") {
-                        EmptyProjects(onNew = { newProject = false }, onClone = { newProject = true }, modifier = Modifier.animateItem())
-                    }
+                    list == null || list.isEmpty() -> Unit
                     else -> items(list, key = { "p:" + it.name }, contentType = { "project" }) { entry ->
                         ProjectCard(
                             entry = entry,
@@ -260,7 +308,7 @@ fun HomeScreen(
                             modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 10.dp),
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            SecondaryButton("Scan QR code", onClick = onScan, icon = Icons.Rounded.QrCodeScanner, modifier = Modifier.weight(1f))
+                            SecondaryButton("Scan code", onClick = onScan, icon = Icons.Rounded.QrCodeScanner, modifier = Modifier.weight(1f))
                             SecondaryButton("Paste link", onClick = { showPaste = true }, icon = Icons.Rounded.ContentPaste, modifier = Modifier.weight(1f))
                         }
                     }
@@ -370,61 +418,6 @@ fun HomeScreen(
     }
 }
 
-/** No projects yet: what a project is, and the two ways to start one. */
-@Composable
-private fun EmptyProjects(onNew: () -> Unit, onClone: () -> Unit, modifier: Modifier = Modifier) {
-    val colors = Pi.colors
-    val type = Pi.type
-    val shape = RoundedCornerShape(Radius.lg)
-    Column(
-        modifier
-            .padding(horizontal = 16.dp, vertical = 4.dp)
-            .fillMaxWidth()
-            .background(colors.surface1, shape)
-            .border(1.dp, colors.line, shape)
-            .padding(20.dp),
-    ) {
-        BrandMark(size = 40.dp, playKey = "home")
-        Spacer(Modifier.height(18.dp))
-        Text("Code on this phone", style = type.title, color = colors.ink1)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            "A project is a folder Pi works in: it reads and edits files, runs git and your tests, here, without a computer.",
-            style = type.body,
-            color = colors.ink2,
-        )
-        Spacer(Modifier.height(20.dp))
-        PrimaryButton("New project", onClick = onNew, icon = Icons.Rounded.Add, modifier = Modifier.fillMaxWidth())
-        Spacer(Modifier.height(10.dp))
-        SecondaryButton("Clone from git", onClick = onClone, modifier = Modifier.fillMaxWidth())
-    }
-}
-
-/** Set up after the first-run sheet was closed without a key. */
-@Composable
-private fun ProviderNudge(onAdd: () -> Unit, modifier: Modifier = Modifier) {
-    val colors = Pi.colors
-    val shape = RoundedCornerShape(Radius.md)
-    Row(
-        modifier
-            .fillMaxWidth()
-            .heightIn(min = 64.dp)
-            .pressable(onAdd, shape = shape, label = "Add an API key")
-            .background(colors.surface1, shape)
-            .border(1.dp, colors.line, shape)
-            .padding(start = 16.dp, end = 4.dp, top = 10.dp, bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Rounded.Key, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f).padding(end = 8.dp)) {
-            Text("Connect a model", style = Pi.type.bodyStrong, color = colors.ink1)
-            Text("Add an API key from ${ProviderCatalog.all.take(3).joinToString(", ") { it.name }} or others", style = Pi.type.meta, color = colors.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-        TextAction("Add key", onClick = onAdd, color = colors.accent)
-    }
-}
-
 /** "Computers · 2" with a chevron; folds the remote-control section. */
 @Composable
 private fun ComputersHeader(count: Int, open: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
@@ -441,11 +434,15 @@ private fun ComputersHeader(count: Int, open: Boolean, onToggle: () -> Unit, mod
     ) {
         Text("Computers", style = Pi.type.metaStrong, color = colors.ink3)
         if (count > 0) {
-            Text(" · $count", style = Pi.type.meta, color = colors.ink3)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "$count",
+                style = Pi.type.meta,
+                color = colors.ink2,
+                modifier = Modifier.background(colors.surface2, RoundedCornerShape(Radius.sm)).padding(horizontal = 7.dp, vertical = 1.dp),
+            )
         }
         Spacer(Modifier.weight(1f))
-        Text("Remote control", style = Pi.type.meta, color = colors.ink3)
-        Spacer(Modifier.width(6.dp))
         Icon(Icons.Rounded.ExpandMore, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = turn })
     }
 }

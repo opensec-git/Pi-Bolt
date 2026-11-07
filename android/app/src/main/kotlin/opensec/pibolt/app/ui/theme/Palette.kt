@@ -7,7 +7,8 @@ import opensec.pibolt.app.data.ThemeId
 
 /**
  * Every colour the app draws. Text uses ink1…ink3 (ink4 is decorative only), colour is reserved for state, and the
- * accent marks what can be acted on. See android/DESIGN.md.
+ * accent marks what can be acted on. Every text ink passes WCAG AA (4.5:1) on canvas and on surface1 to surface3 in every
+ * theme (ContrastTest). See android/DESIGN.md.
  */
 @Immutable
 data class PiColors(
@@ -52,18 +53,21 @@ data class PiColors(
         val Success = Color(0xFF5FD39A)
         val Warning = Color(0xFFE8B04B)
         val Danger = Color(0xFFF2706B)
+        private val ClaudeDanger = Color(0xFFFF8681)
 
         fun of(theme: ThemeId, accent: AccentId): PiColors {
             val base = when (theme) {
-                ThemeId.Graphite -> base(0xFF0B0C0E, 0xFF121417, 0xFF191C20, 0xFF21252A, 0xFFE8EAED, 0xFFA3A8B0, 0xFF7D838C, 0xFF4C5158, 0.09f, 0.16f, 0.56f)
-                ThemeId.Void -> base(0xFF000000, 0xFF08090A, 0xFF101113, 0xFF17191C, 0xFFE8EAED, 0xFFA3A8B0, 0xFF7D838C, 0xFF4C5158, 0.11f, 0.19f, 0.70f)
-                ThemeId.Ember -> base(0xFF15130F, 0xFF1C1A16, 0xFF24211C, 0xFF2C2822, 0xFFEFE9DD, 0xFFB9B1A3, 0xFF8E877B, 0xFF5A554D, 0.10f, 0.17f, 0.56f)
+                ThemeId.Graphite -> base(0xFF0B0C0E, 0xFF121417, 0xFF191C20, 0xFF21252A, 0xFFE8EAED, 0xFFA3A8B0, 0xFF878D96, 0xFF4C5158, 0.09f, 0.16f, 0.56f)
+                ThemeId.Void -> base(0xFF000000, 0xFF0D0E10, 0xFF101113, 0xFF17191C, 0xFFE8EAED, 0xFFA3A8B0, 0xFF7D838C, 0xFF4C5158, 0.11f, 0.19f, 0.70f)
+                ThemeId.Ember -> base(0xFF15130F, 0xFF1C1A16, 0xFF24211C, 0xFF2C2822, 0xFFEFE9DD, 0xFFB9B1A3, 0xFF979084, 0xFF5A554D, 0.10f, 0.17f, 0.56f)
                 // Warm charcoal with cream ink.
-                ThemeId.Claude -> base(0xFF1F1E1D, 0xFF262624, 0xFF30302E, 0xFF3A3936, 0xFFF5F4EE, 0xFFC3C0B6, 0xFF9C9A92, 0xFF5E5D59, 0.10f, 0.17f, 0.60f)
+                ThemeId.Claude -> base(0xFF1F1E1D, 0xFF262624, 0xFF30302E, 0xFF3A3936, 0xFFF5F4EE, 0xFFC3C0B6, 0xFFA6A49C, 0xFF5E5D59, 0.10f, 0.17f, 0.60f)
+                    // The lighter canvas needs a lighter danger so a danger button (danger on dangerSoft) passes on sheets.
+                    .copy(danger = ClaudeDanger, dangerSoft = ClaudeDanger.copy(alpha = 0.12f))
                 // Neutral near-black, no tint.
-                ThemeId.Codex -> base(0xFF0D0D0D, 0xFF171717, 0xFF212121, 0xFF2A2A2A, 0xFFECECEC, 0xFFB4B4B4, 0xFF8F8F8F, 0xFF545454, 0.10f, 0.17f, 0.60f)
+                ThemeId.Codex -> base(0xFF0D0D0D, 0xFF171717, 0xFF212121, 0xFF2A2A2A, 0xFFECECEC, 0xFFB4B4B4, 0xFF929292, 0xFF545454, 0.10f, 0.17f, 0.60f)
                 // Pure black; borders do the separating.
-                ThemeId.Vercel -> base(0xFF000000, 0xFF0A0A0A, 0xFF111111, 0xFF1A1A1A, 0xFFEDEDED, 0xFFA1A1A1, 0xFF8F8F8F, 0xFF454545, 0.12f, 0.20f, 0.70f)
+                ThemeId.Vercel -> base(0xFF000000, 0xFF0F0F0F, 0xFF111111, 0xFF1A1A1A, 0xFFEDEDED, 0xFFA1A1A1, 0xFF8F8F8F, 0xFF454545, 0.12f, 0.20f, 0.70f)
                 // GitHub's dark canvas and borders.
                 ThemeId.GitHub -> base(0xFF0D1117, 0xFF151B23, 0xFF1C2128, 0xFF262C36, 0xFFF0F6FC, 0xFFB7BDC8, 0xFF9198A1, 0xFF3D444D, 0.10f, 0.18f, 0.60f)
             }.copy(syntax = SyntaxColors.of(theme))

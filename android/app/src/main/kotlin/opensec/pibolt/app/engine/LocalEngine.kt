@@ -20,6 +20,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.async
+import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
+import opensec.pibolt.app.ui.session.features2.AppExtension
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import opensec.pibolt.app.PiBoltApp
@@ -49,10 +53,11 @@ import java.util.concurrent.atomic.AtomicInteger
  * The engine on this phone (android/engine/CONTRACT.md): sets up the prefix, runs `libpibolt.so --mode rpc` processes
  * and hands sessions to the UI as [SessionController]s over [LocalBackend]s.
  *
- * Fast opens: once ready, one spare engine is kept started and idle. Opening a project or creating a session takes the
- * spare and moves it there over RPC (`switch_session`, `new_session`): no process start on the user's tap. A new spare is
- * started after each open; a session that ends while idle becomes the spare. The spare is stopped on memory pressure and
- * after [BACKGROUND_IDLE_MS] in the background.
+ * Fast opens: once ready, idle engines are kept started ([IdlePool]): a fresh spare (a new empty session in the last
+ * project) and the last session that ended while idle, parked on its session. An open takes the engine that already has
+ * the wanted session (no RPC at all: tens of milliseconds), else the spare, which moves there over RPC (`switch_session`,
+ * which rebuilds Pi's runtime: seconds on a phone); no process start on the user's tap either way. A new spare is started
+ * after each open. Idle engines stop on memory pressure and after [BACKGROUND_IDLE_MS] in the background.
  *
  * Engines belong to the application object (the process), not to an Activity: configuration changes and backgrounding
  * do not touch them, and SessionService keeps the process in the foreground while a turn runs. Everything that touches
@@ -88,8 +93,8 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
 
     private val prefs by lazy { app.getSharedPreferences(PREFS, Context.MODE_PRIVATE) }
 
-    /** The idle engine for the next open. Guarded by `this`. */
-    private var spare: LocalBackend? = null
+    /** Idle engines for the next opens. */
+    private val idle = IdlePool<LocalBackend>(maxParked = 1) { it.sessionFile }
     private val watchers = HashMap<LocalBackend, Job>()
 
     /** Empty session files made to start a session in another project, deleted again if never used. */
@@ -132,18 +137,27 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
             fresh -> SessionTarget.Fresh
             else -> SessionTarget.Continue
         }
-        // The live session is in this project: move it over RPC.
-        app.session.value?.takeIf { it.isLocal && it.project == dir && !it.stopped }?.let { live ->
-            when (target) {
-                SessionTarget.Continue -> Unit
-                is SessionTarget.Resume -> if (target.sessionFile != live.sessionFile) live.switchSession(target.sessionFile)
-                SessionTarget.Fresh -> live.newSession()
+        val live = app.session.value?.takeIf { it.isLocal && it.project == dir && !it.stopped }
+        if (live != null && (target == SessionTarget.Continue || (target is SessionTarget.Resume && target.sessionFile == live.sessionFile))) return live
+        // "Continue" is the project's newest saved session (subagents' sessions skipped), or a new one.
+        val resolved = if (target == SessionTarget.Continue) sessions(dir).firstOrNull()?.let { SessionTarget.Resume(it.file) } ?: SessionTarget.Fresh else target
+        val want = when (resolved) {
+            is SessionTarget.Resume -> IdlePool.Want.Session(resolved.sessionFile)
+            else -> IdlePool.Want.New(dir.path)
+        }
+        // The live session is in this project: when it is idle, an idle engine that already has the wanted session takes
+        // over (the live one is parked for the way back); else the live engine moves over RPC (a busy one is never stopped
+        // for this: Pi ends its turn in order).
+        val taken = if (live == null || live.isIdle) idle.take(want, exactOnly = live != null) else null
+        if (live != null && taken == null) {
+            when (resolved) {
+                is SessionTarget.Resume -> live.switchSession(resolved.sessionFile)
+                else -> live.newSession()
             }
             return live
         }
         val config = configFor(dir)
-        val taken = synchronized(this) { spare.also { spare = null } }
-        val backend = taken?.also { it.assign(config, target) } ?: newBackend(config, target)
+        val backend = taken?.engine?.also { it.assign(config, resolved) } ?: newBackend(config, resolved)
         val controller = SessionController.local(app, dir, backend, ::release)
         app.replaceSession(controller)
         opening.incrementAndGet()
@@ -155,7 +169,12 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
             if (end is ConnectionState.Connected) {
                 val timing = OpenTiming(dir.name, SystemClock.elapsedRealtime() - started, taken != null, backend.lastStartMs)
                 lastOpen = timing
-                Log.i(TAG, "open ${timing.project}: ready in ${timing.readyMs} ms (${if (timing.warm) "warm" else "cold"}, engine start ${timing.engineStartMs} ms, pid ${backend.pid})")
+                val kind = when {
+                    taken == null -> "cold"
+                    taken.exact -> "warm, same session"
+                    else -> "warm, moved"
+                }
+                Log.i(TAG, "open ${timing.project}: ready in ${timing.readyMs} ms ($kind, engine start ${timing.engineStartMs} ms, pid ${backend.pid})")
             }
             // The next open is warm too; started only now so it does not compete with this one.
             opening.decrementAndGet()
@@ -175,6 +194,24 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         for (dir in dirs) SafeFiles.deleteTree(dir)
     }
 
+    override suspend fun cli(args: List<String>, cwd: File?, timeoutMs: Long): CliResult = withContext(Dispatchers.IO) {
+        val m = ensureSetup() ?: return@withContext CliResult(-1, "", unavailable ?: "The engine is not available")
+        val dir = cwd?.let(::engineForm) ?: paths.home
+        val process = runCatching {
+            ProcessBuilder(listOf(paths.engine.path) + args).directory(dir).apply {
+                val env = environment()
+                val wanted = engineEnvironment(paths, env.toMap(), TimeZone.getDefault().id, m.env) + ("NO_COLOR" to "1")
+                env.clear()
+                env.putAll(wanted)
+            }.redirectInput(ProcessBuilder.Redirect.from(File("/dev/null"))).start()
+        }.getOrElse { return@withContext CliResult(-1, "", it.message ?: "Could not start the engine") }
+        val out = async { process.inputStream.bufferedReader().readText() }
+        val err = async { process.errorStream.bufferedReader().readText() }
+        val finished = runInterruptible { process.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS) }
+        if (!finished) process.destroyForcibly()
+        CliResult(if (finished) process.exitValue() else -1, out.await(), err.await().ifBlank { if (finished) "" else "Timed out" })
+    }
+
     /** [file] with `ApplicationInfo.dataDir` (`/data/user/0/<id>`) written as the engine sees it (`/data/data/<id>`). */
     private fun engineForm(file: File): File {
         val path = file.absolutePath
@@ -182,21 +219,41 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         return if (path == userForm || path.startsWith("$userForm/")) File(paths.dataDir.path + path.removePrefix(userForm)) else File(path)
     }
 
-    /** Stop the spare engine (memory pressure, or long in the background). */
+    /** Stop the idle engines (memory pressure, or long in the background). */
     fun trimMemory(reason: String) {
-        val idle = synchronized(this) { spare.also { spare = null } } ?: return
-        Log.i(TAG, "stopping the spare engine ($reason)")
-        forget(idle)
-        idle.close()
+        val stopped = idle.drain()
+        if (stopped.isEmpty()) return
+        Log.i(TAG, "stopping the spare engine ($reason): ${stopped.size} idle")
+        for (backend in stopped) {
+            forget(backend)
+            backend.close()
+        }
     }
 
     /** No activity is visible. The spare stops after a while unless the app comes back. */
     fun onBackground() {
         inBackground = true
+        stopSpareIn(BACKGROUND_IDLE_MS, "idle in the background")
+    }
+
+    /** The system asked for memory while the app is in the background: stop the spare after [TRIM_GRACE_MS]. */
+    fun trimSoon(reason: String) {
+        if (!inBackground) return trimMemory(reason)
+        stopSpareIn(TRIM_GRACE_MS, reason)
+    }
+
+    /** When the scheduled stop runs (elapsedRealtime); a later request never postpones an earlier stop. */
+    @Volatile
+    private var stopAt = 0L
+
+    private fun stopSpareIn(ms: Long, reason: String) {
+        val at = SystemClock.elapsedRealtime() + ms
+        if (backgroundJob?.isActive == true && stopAt <= at) return
+        stopAt = at
         backgroundJob?.cancel()
         backgroundJob = scope.launch {
-            delay(BACKGROUND_IDLE_MS)
-            trimMemory("idle in the background")
+            delay(ms)
+            trimMemory(reason)
         }
     }
 
@@ -267,6 +324,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         try {
             val full = EnginePrefix(paths, AndroidAssets(app.assets)).ensure(m)
             dns.start()
+            AppExtension.install(paths.agentDir)
             Log.i(TAG, "prepare: prefix ${if (full) "installed" else "up to date"}, ${SystemClock.elapsedRealtime() - started} ms (engine ${m.engine}, glibc ${m.glibc})")
         } catch (e: Exception) {
             Log.e(TAG, "prefix setup failed", e)
@@ -282,27 +340,31 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     private suspend fun ensureSpare() {
         if (inBackground || opening.get() > 0 || ensureSetup() == null) return
         val home = prefs.getString(KEY_LAST_PROJECT, null)?.let(::File)?.takeIf { it.isDirectory } ?: paths.projects
-        val backend = synchronized(this) {
-            if (spare != null) return
-            newBackend(configFor(home), SessionTarget.Fresh).also { spare = it }
+        if (idle.hasFresh()) return
+        val backend = newBackend(configFor(home), SessionTarget.Fresh)
+        if (!idle.addFresh(backend, home.path)) {
+            forget(backend)
+            return
         }
         if (_status.value !is EngineStatus.Ready) _status.value = EngineStatus.Preparing("Starting the engine")
         if (backend.warmUp()) {
             Log.i(TAG, "spare engine ready: cold spawn to first answer ${backend.lastStartMs} ms (pid ${backend.pid}, in ${home.name})")
         } else {
-            synchronized(this) { if (spare === backend) spare = null }
+            idle.remove(backend)
             forget(backend)
         }
     }
 
-    /** A session stopped. An idle engine becomes the spare (replacing the old one); a busy one is stopped. */
-    private fun release(backend: LocalBackend, idle: Boolean) {
-        if (idle && backend.isAlive && manifest != null) {
+    /**
+     * A session stopped. An idle engine is parked on its session for a later open of it (pushing out an older parked
+     * one); a busy one is stopped.
+     */
+    private fun release(backend: LocalBackend, wasIdle: Boolean) {
+        if (wasIdle && backend.isAlive && manifest != null) {
             backend.park()
-            val previous = synchronized(this) { spare.also { spare = backend } }
-            previous?.takeIf { it !== backend }?.let {
-                forget(it)
-                it.close()
+            for (old in idle.park(backend, backend.engineCwd ?: backend.config.cwd)) {
+                forget(old)
+                old.close()
             }
             scope.launch { deleteUnusedEmptySessions() }
             return
@@ -371,7 +433,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     /** Empty session files this engine made that no engine has open and that never got a message. */
     private fun deleteUnusedEmptySessions() {
         val inUse = buildSet {
-            synchronized(this@LocalEngine) { spare?.sessionFile?.let(::add) }
+            for (backend in idle.engines()) backend.sessionFile?.let(::add)
             app.session.value?.sessionFile?.let(::add)
         }
         for (path in emptySessions.toList()) {
@@ -415,6 +477,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         private const val KEY_LAST_PROJECT = "lastProject"
         private const val OPEN_TIMEOUT_MS = 180_000L
         private const val BACKGROUND_IDLE_MS = 5 * 60_000L
+        private const val TRIM_GRACE_MS = 60_000L
 
         /** `Date.toISOString()`: always milliseconds, always Z. */
         private val ISO_MILLIS: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)

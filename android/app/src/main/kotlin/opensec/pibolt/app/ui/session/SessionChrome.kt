@@ -1,9 +1,24 @@
 package opensec.pibolt.app.ui.session
 
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import opensec.pibolt.app.ui.theme.Tnum
 import androidx.compose.foundation.rememberScrollState
 import opensec.pibolt.app.ui.components.SectionLabel
-import opensec.pibolt.protocol.session.SlashCommand
 import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
@@ -57,7 +72,6 @@ import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
@@ -95,8 +109,14 @@ fun linkColor(link: LinkState?, colors: PiColors): Color = when (link) {
 }
 
 /**
- * Top bar: back, computer (or, on this phone, project) name with the folder and context beneath (tap: session info),
- * the Quad, overflow. On-device sessions offer New session and Rename instead of Disconnect and Forget computer.
+ * Top bar: back, computer (or, on this phone, project) name with the session name beneath (tap: session info), the
+ * context ring, search, the Quad, overflow. On-device sessions offer New session and Rename instead of Disconnect and
+ * Forget computer.
+ *
+ * The status dot shows on this phone only when the engine is not connected (a green dot that is always on says
+ * nothing); remote sessions keep it. [contextPercent] is null until a turn has reported usage. [quadVisible] false
+ * hides the Quad (keeping its slot) while the live status line is on screen: one spinner at a time. [status] is what
+ * TalkBack hears for the Quad while [busy]; idle it is silent.
  */
 @Composable
 fun SessionTopBar(
@@ -119,6 +139,9 @@ fun SessionTopBar(
     onResume: () -> Unit = {},
     onFork: () -> Unit = {},
     onClone: () -> Unit = {},
+    contextPercent: Int? = null,
+    quadVisible: Boolean = true,
+    status: String? = null,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -140,24 +163,37 @@ fun SessionTopBar(
                 .padding(horizontal = 6.dp),
             verticalArrangement = Arrangement.Center,
         ) {
+            val dot = !local || link !is LinkState.Connected
             Row(verticalAlignment = Alignment.CenterVertically) {
-                StatusDot(linkColor(link, colors), Modifier.sharedHostElement(SharedKeys.dot(hostId)))
-                Spacer(Modifier.width(8.dp))
+                if (dot) {
+                    StatusDot(linkColor(link, colors), Modifier.sharedHostElement(SharedKeys.dot(hostId)))
+                    Spacer(Modifier.width(8.dp))
+                }
                 Text(
                     hostName,
                     style = type.subhead,
                     color = colors.ink1,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.sharedHostElement(SharedKeys.name(hostId)),
+                    modifier = Modifier.weight(1f, fill = false).sharedHostElement(SharedKeys.name(hostId)),
                 )
+                if (contextPercent != null) {
+                    Spacer(Modifier.width(10.dp))
+                    ContextMeter(contextPercent)
+                }
             }
             if (subtitle.isNotBlank()) {
-                Text(subtitle, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 16.dp))
+                Text(subtitle, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = if (dot) 16.dp else 0.dp))
             }
         }
         IconAction(Icons.Rounded.Search, "Search this session", onClick = onSearch)
-        Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .size(40.dp)
+                .graphicsLayer { alpha = if (quadVisible) 1f else 0f }
+                .clearAndSetSemantics { if (busy && quadVisible && status != null) contentDescription = status },
+            contentAlignment = Alignment.Center,
+        ) {
             QuadSpinner(
                 mode,
                 size = 16.dp,
@@ -167,7 +203,7 @@ fun SessionTopBar(
                     busy -> colors.ink1
                     else -> colors.ink3
                 },
-                animate = spin,
+                animate = spin && quadVisible,
             )
         }
         Box {
@@ -208,6 +244,37 @@ fun SessionTopBar(
                 }
             }
         }
+    }
+}
+
+/**
+ * Context use next to the title: a 14dp ring (ink4 track, ink2 arc; warning from 80%, danger from 90%) and the
+ * percentage in meta. The arc settles to a new value (400 ms), never springs.
+ */
+@Composable
+fun ContextMeter(percent: Int) {
+    val colors = Pi.colors
+    val reduced = Pi.reduceMotion
+    val sweep by animateFloatAsState(percent / 100f, if (reduced) snap() else tween(PiMotion.SETTLE, easing = PiMotion.InPlace), label = "context")
+    val arc = when {
+        percent >= 90 -> colors.danger
+        percent >= 80 -> colors.warning
+        else -> colors.ink2
+    }
+    val track = colors.ink4
+    Row(
+        Modifier.clearAndSetSemantics { contentDescription = "$percent% of context used" },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Canvas(Modifier.size(14.dp)) {
+            val stroke = 2.dp.toPx()
+            val inset = stroke / 2
+            val box = Size(size.width - stroke, size.height - stroke)
+            drawArc(track, 0f, 360f, false, Offset(inset, inset), box, style = Stroke(stroke))
+            if (sweep > 0f) drawArc(arc, -90f, 360f * sweep.coerceIn(0.02f, 1f), false, Offset(inset, inset), box, style = Stroke(stroke, cap = StrokeCap.Round))
+        }
+        Spacer(Modifier.width(4.dp))
+        Text("$percent%", style = Pi.type.meta.copy(fontFeatureSettings = Tnum), color = if (percent >= 80) arc else colors.ink3, maxLines = 1)
     }
 }
 
@@ -309,73 +376,89 @@ fun LoadingState(hostName: String, link: LinkState, local: Boolean, onRetry: () 
 }
 
 /**
- * No messages yet: the mark, "New session" and the folder, then two quiet lists to start from. "Commands" are the
- * host's slash commands (tap puts "/name " in the composer); "Recent" are prompts this phone sent to this computer
- * (tap fills the composer). Nothing here sends by itself.
+ * No messages yet: the mark, the project's name and (when known) its branch, then "Start with" suggestions picked
+ * from the project and the prompts recently sent from this phone. Every tap fills the composer; nothing sends by
+ * itself. Commands are one "All commands" link that opens the palette.
  */
 @Composable
 fun EmptySession(
-    cwd: String?,
-    commands: List<SlashCommand>,
+    title: String,
+    branch: String?,
+    starters: List<StarterPrompt>,
     recent: List<String>,
-    onCommand: (SlashCommand) -> Unit,
+    onStarter: (StarterPrompt) -> Unit,
     onRecent: (String) -> Unit,
+    onCommands: (() -> Unit)?,
 ) {
     val colors = Pi.colors
     val type = Pi.type
-    val lists = commands.isNotEmpty() || recent.isNotEmpty()
-    var allCommands by rememberSaveable { mutableStateOf(false) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .heightIn(min = maxHeight)
-            .padding(horizontal = 16.dp),
-        verticalArrangement = if (lists) Arrangement.Top else Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        if (lists) Spacer(Modifier.height(40.dp))
-        BrandMark(size = 40.dp, playKey = "session")
-        Spacer(Modifier.height(20.dp))
-        Text("New session", style = type.display, color = colors.ink1)
-        if (!cwd.isNullOrBlank()) {
-            Spacer(Modifier.height(12.dp))
-            val shape = RoundedCornerShape(Radius.sm)
-            Text(
-                baseName(cwd),
-                style = type.monoMeta,
-                color = colors.ink2,
-                maxLines = 1,
-                overflow = TextOverflow.MiddleEllipsis,
-                modifier = Modifier.background(colors.surface1, shape).border(1.dp, colors.line, shape).padding(horizontal = 10.dp, vertical = 5.dp),
-            )
-        }
-        if (commands.isNotEmpty()) {
-            StartSection("Commands")
-            val shown = if (allCommands) commands else commands.take(COMMANDS_SHOWN)
-            for (command in shown) {
-                StartRow("/${command.name}", command.description?.takeIf { it.isNotBlank() } ?: command.source, mono = true) { onCommand(command) }
+        val short = maxHeight < 420.dp
+        Column(
+            Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .heightIn(min = maxHeight)
+                .padding(horizontal = 16.dp),
+            verticalArrangement = Arrangement.Top,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Spacer(Modifier.height(if (short) 16.dp else 40.dp))
+            if (!short) {
+                BrandMark(size = 40.dp, playKey = "session")
+                Spacer(Modifier.height(16.dp))
             }
-            if (shown.size < commands.size) {
-                StartRow("Show all ${commands.size} commands", null, mono = false, muted = true) { allCommands = true }
+            Text(title, style = type.title, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.semantics { heading() })
+            if (!branch.isNullOrBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.AutoMirrored.Rounded.CallSplit, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(branch, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.semantics { contentDescription = "Branch $branch" })
+                }
             }
+            if (starters.isNotEmpty()) {
+                StartSection("Start with")
+                FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                    for (s in starters) StarterChip(s.label) { onStarter(s) }
+                }
+            }
+            if (recent.isNotEmpty()) {
+                StartSection("Recent")
+                for (prompt in recent) StartRow(prompt.lineSequence().first(), null, mono = false) { onRecent(prompt) }
+            }
+            if (onCommands != null) {
+                Spacer(Modifier.height(12.dp))
+                Box(Modifier.fillMaxWidth()) { TextAction("All commands", onClick = onCommands, color = colors.ink2) }
+            }
+            Spacer(Modifier.height(24.dp))
         }
-        if (recent.isNotEmpty()) {
-            StartSection("Recent")
-            for (prompt in recent) StartRow(prompt.lineSequence().first(), null, mono = false) { onRecent(prompt) }
-        }
-        Spacer(Modifier.height(if (lists) 24.dp else 48.dp))
-    }
     }
 }
 
-/** Commands listed before "Show all". */
-private const val COMMANDS_SHOWN = 6
+/** A suggestion: 36dp visual (48dp to touch), radius 18, surface1 with a 1dp line, label ink1. */
+@Composable
+private fun StarterChip(label: String, onClick: () -> Unit) {
+    val colors = Pi.colors
+    val shape = RoundedCornerShape(18.dp)
+    Box(Modifier.heightIn(min = 48.dp), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .heightIn(min = 36.dp)
+                .pressable(onClick, shape = shape, label = "Put in the composer: $label")
+                .background(colors.surface1, shape)
+                .border(1.dp, colors.line, shape)
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(label, style = Pi.type.label, color = colors.ink1, maxLines = 1)
+        }
+    }
+}
 
 @Composable
 private fun StartSection(title: String) {
-    SectionLabel(title, Modifier.fillMaxWidth().padding(top = 28.dp, bottom = 4.dp))
+    SectionLabel(title, Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 4.dp))
 }
 
 /** A 48dp row: label in body ink1 (mono for commands), the description in meta ink3 on the same line. */
@@ -397,14 +480,57 @@ private fun StartRow(label: String, description: String?, mono: Boolean, muted: 
             color = if (muted) colors.ink2 else colors.ink1,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            // With a description the label takes only its own width (capped) and the description the rest; equal
-            // weights cut short descriptions at half the row.
-            modifier = if (description.isNullOrBlank()) Modifier.weight(1f) else Modifier.widthIn(max = 160.dp),
+            modifier = if (description.isNullOrBlank()) Modifier.weight(1f) else Modifier.width(120.dp),
         )
         if (!description.isNullOrBlank()) {
             Spacer(Modifier.width(12.dp))
             Text(description, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         }
+    }
+}
+
+/**
+ * While the keyboard is up (or the window is short) the todo card, status extras, a waiting question and the queue
+ * fold into this one 48dp row above the composer, so the transcript keeps its room. It says what each holds
+ * ("Todos 1/4 · Fixing caret associativity · Queued 1"); a tap hides the keyboard and opens them again. It appears
+ * and leaves with the keyboard, without a tween.
+ */
+@Composable
+fun CompactStack(todoDone: Int, todoTotal: Int, todoNow: String?, queued: Int, asking: String?, extras: Int, onExpand: () -> Unit) {
+    val colors = Pi.colors
+    val type = Pi.type
+    if (todoTotal == 0 && queued == 0 && asking == null && extras == 0) return
+    val parts = buildList {
+        if (asking != null) add("Pi is asking: $asking")
+        if (todoTotal > 0) add("Todos $todoDone/$todoTotal" + (todoNow?.let { " · $it" } ?: ""))
+        if (queued > 0) add("Queued $queued")
+        if (extras > 0 && size < 2) add(if (extras == 1) "1 status" else "$extras statuses")
+    }
+    val shape = RoundedCornerShape(Radius.md)
+    Row(
+        Modifier
+            .padding(start = 12.dp, end = 12.dp, bottom = 6.dp)
+            .fillMaxWidth()
+            .height(40.dp)
+            .pressable(onExpand, shape = shape, pressedScale = 1f, label = "Show todos and queue")
+            .background(if (asking != null) colors.warningSoft else colors.surface1, shape)
+            .border(1.dp, if (asking != null) colors.warning.copy(alpha = 0.4f) else colors.line, shape)
+            .clearAndSetSemantics { contentDescription = parts.joinToString(". ") }
+            .padding(start = 14.dp, end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (todoTotal > 0) {
+            Canvas(Modifier.size(14.dp)) {
+                val stroke = 2.dp.toPx()
+                val inset = stroke / 2
+                val box = Size(size.width - stroke, size.height - stroke)
+                drawArc(colors.ink4, 0f, 360f, false, Offset(inset, inset), box, style = Stroke(stroke))
+                if (todoDone > 0) drawArc(colors.success, -90f, 360f * todoDone / todoTotal, false, Offset(inset, inset), box, style = Stroke(stroke))
+            }
+            Spacer(Modifier.width(10.dp))
+        }
+        Text(parts.joinToString("  ·  "), style = type.label, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Icon(Icons.Rounded.ExpandLess, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(20.dp))
     }
 }
 

@@ -97,8 +97,13 @@ class SessionIndex(private val agentDir: File) {
         const val ROLE = "\"message\":{\"role\":\""
         const val PREVIEW_CHARS = 160
 
-        /** The name the subagents extension gives an agent's session: "<type>#<first 8 characters of its id>". */
-        val SUBAGENT_NAME = Regex("""^\S+#[0-9a-f]{8}$""")
+        /**
+         * The name the subagents extension gives an agent's session: "<agent name>#<first 8 characters of its id>". The
+         * id is a UUID for spawned agents and "wf-agent-<n>" for workflow agents ("wf-agent" after the cut). A custom
+         * agent's name may have spaces ("Code Reviewer#1669f14e"); a spaced name needs one of those two id forms, so a
+         * user's "Try #2" fork stays listed.
+         */
+        val SUBAGENT_NAME = Regex("""^(?:\S+#[0-9A-Za-z_-]{1,8}|.+#(?:[0-9a-f]{8}|wf-agent))$""")
 
         /** Calls [onLine] with each LF-terminated line (CR stripped) as bytes of a reused buffer, until it returns false. */
         fun forEachLine(input: java.io.InputStream, onLine: (ByteArray, Int) -> Boolean) {

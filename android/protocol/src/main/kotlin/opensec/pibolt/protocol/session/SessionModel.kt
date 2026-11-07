@@ -2,6 +2,7 @@ package opensec.pibolt.protocol.session
 
 import kotlinx.serialization.json.JsonObject
 import opensec.pibolt.protocol.rpc.ModelInfo
+import opensec.pibolt.protocol.rpc.ImageAttachment
 
 /** One row of the conversation as the app shows it. [key] is stable across updates of the same row. */
 sealed interface ChatItem {
@@ -31,6 +32,8 @@ data class ToolItem(
     val result: String? = null,
     val details: JsonObject? = null,
     val durationMs: Long? = null,
+    /** Images in the result (`content` items of type image), such as a screenshot the read tool opened. */
+    val images: List<ImageAttachment> = emptyList(),
 ) : ChatItem {
     val isError: Boolean get() = status == ToolStatus.Error
     val isActive: Boolean get() = status == ToolStatus.Streaming || status == ToolStatus.Pending || status == ToolStatus.Running

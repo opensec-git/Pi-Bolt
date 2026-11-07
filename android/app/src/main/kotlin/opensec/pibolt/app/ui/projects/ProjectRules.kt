@@ -67,6 +67,40 @@ object ProjectRules {
     fun sessionTitle(s: SessionSummary): String =
         s.name?.takeIf { it.isNotBlank() } ?: s.preview?.lineSequence()?.firstOrNull()?.takeIf { it.isNotBlank() } ?: "Untitled session"
 
+    /** A session written to after it was last looked at here. Never-seen sessions are not unread (no dots on upgrade). */
+    fun unread(s: SessionSummary, seenAt: Long?): Boolean = seenAt != null && s.updatedAt > seenAt + UNREAD_SLACK_MS
+
+    /** Writes that land just after a look (the session closing) do not make it unread. */
+    const val UNREAD_SLACK_MS = 3_000L
+
+    /**
+     * Home's "Continue": each project's newest session (subagent sessions are never listed, see SessionIndex), the live
+     * project's first, then the most recently changed; projects without sessions are left out; at most [limit].
+     */
+    fun continueList(projects: List<ProjectEntry>, liveProject: String?, limit: Int = 3): List<ProjectEntry> =
+        projects
+            .filter { it.lastSession != null }
+            .sortedWith(compareByDescending<ProjectEntry> { it.name == liveProject }.thenByDescending { it.lastSession?.updatedAt ?: 0 }.thenBy { it.title.lowercase() })
+            .take(limit)
+
+    /** Two letters for a project tile: initials of the first two words ("calc-parser" -> "CP"), else its first two letters. */
+    fun monogram(title: String): String {
+        val words = title.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }
+        val letters = when {
+            words.size >= 2 -> "${words[0].first()}${words[1].first()}"
+            words.size == 1 -> words[0].take(2)
+            else -> title.take(2)
+        }
+        return letters.uppercase().ifBlank { "?" }
+    }
+
+    /** "3 sessions · 2 h ago", "1 session · just now", or "Empty folder" for a project that has never had a session. */
+    fun projectMeta(entry: ProjectEntry, now: Long): String {
+        if (entry.sessionCount == 0) return if (entry.meta.lastOpenedAt > 0) "No sessions · opened ${ago(entry.meta.lastOpenedAt, now)}" else "No sessions yet"
+        val count = if (entry.sessionCount == 1) "1 session" else "${entry.sessionCount} sessions"
+        return "$count · ${ago(entry.lastActive, now)}"
+    }
+
     /** "just now", "5 min ago", "3 h ago", "2 d ago", then a date-free "5 wk ago" / "3 mo ago". */
     fun ago(at: Long, now: Long): String {
         if (at <= 0) return "never"

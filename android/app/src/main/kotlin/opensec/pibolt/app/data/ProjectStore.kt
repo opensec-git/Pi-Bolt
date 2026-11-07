@@ -5,6 +5,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import opensec.pibolt.protocol.ProtocolJson
@@ -26,6 +27,8 @@ data class ProjectsFile(
     val projects: Map<String, ProjectMeta> = emptyMap(),
     /** The first-run provider sheet was shown (and closed) once; Home then shows a quiet card instead. */
     val providerPromptSeen: Boolean = false,
+    /** When each session file was last looked at here (path -> epoch ms): a session changed later is unread. */
+    val seen: Map<String, Long> = emptyMap(),
 )
 
 /** JSON form of [ProjectsFile]. Damaged or unknown content falls back to defaults. */
@@ -33,6 +36,7 @@ object ProjectsCodec {
     fun encode(file: ProjectsFile): String = buildJsonObject {
         put("version", 1)
         put("providerPromptSeen", file.providerPromptSeen)
+        put("seen", JsonObject(file.seen.mapValues { (_, at) -> JsonPrimitive(at) }))
         put(
             "projects",
             JsonObject(
@@ -57,7 +61,8 @@ object ProjectsCodec {
                 lastOpenedAt = m.long("lastOpenedAt") ?: 0,
             )
         }?.toMap().orEmpty()
-        return ProjectsFile(projects, json.bool("providerPromptSeen") == true)
+        val seen = json.obj("seen")?.mapNotNull { (path, at) -> (at as? JsonPrimitive)?.content?.toLongOrNull()?.let { path to it } }?.toMap().orEmpty()
+        return ProjectsFile(projects, json.bool("providerPromptSeen") == true, seen)
     }
 }
 
@@ -90,6 +95,12 @@ class ProjectStore private constructor(context: Context) {
 
     fun forget(name: String) = update { it.copy(projects = it.projects - name) }
 
+    /** [sessionFile] was looked at [at]: it is read until it changes again. Keeps the newest [MAX_SEEN] entries. */
+    fun seen(sessionFile: String, at: Long = System.currentTimeMillis()) = update { f ->
+        val next = f.seen + (sessionFile to at)
+        f.copy(seen = if (next.size <= MAX_SEEN) next else next.entries.sortedByDescending { it.value }.take(MAX_SEEN).associate { it.key to it.value })
+    }
+
     fun providerPromptSeen() = update { it.copy(providerPromptSeen = true) }
 
     /** Developer sheet: show the first-run provider sheet again. */
@@ -109,9 +120,11 @@ class ProjectStore private constructor(context: Context) {
 
     /** Edits made before the file was read win over what it held. */
     private fun merge(read: ProjectsFile, early: ProjectsFile): ProjectsFile =
-        ProjectsFile(read.projects + early.projects, read.providerPromptSeen || early.providerPromptSeen)
+        ProjectsFile(read.projects + early.projects, read.providerPromptSeen || early.providerPromptSeen, read.seen + early.seen)
 
     companion object {
+        const val MAX_SEEN = 300
+
         @Volatile
         private var instance: ProjectStore? = null
 
