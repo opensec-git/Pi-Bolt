@@ -6,6 +6,7 @@ import kotlinx.serialization.json.put
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.session.ActionsRow
 import opensec.pibolt.app.ui.session.FileChange
+import opensec.pibolt.app.ui.session.NEXT_EDIT
 import opensec.pibolt.app.ui.session.FoldRow
 import opensec.pibolt.app.ui.session.MdCache
 import opensec.pibolt.app.ui.session.PendingSend
@@ -238,8 +239,8 @@ class ChatComponentsTest {
         )
         val fold = rows(items).filterIsInstance<FoldRow>().single()
         assertEquals(listOf("src/a.kt" to (3 to 1), "src/new.kt" to (2 to 0)), fold.files.map { it.path to (it.added to it.removed) })
-        assertEquals("+1 a\n-2 b\n+2 c\n+9 d", fold.files[0].diff)
-        assertEquals("+one\n+two", fold.files[1].diff)
+        assertEquals("+1 a\n-2 b\n+2 c\n$NEXT_EDIT\n+9 d", fold.files[0].diff)
+        assertEquals("+1 one\n+2 two", fold.files[1].diff)
         assertNull(fileChange(tool("r", "read", ToolStatus.Done, "path" to "src/a.kt")))
         assertEquals(listOf(FileChange("x", 1, 0, "+a")), mergeChanges(listOf(FileChange("x", 1, 0, "+a"))))
     }

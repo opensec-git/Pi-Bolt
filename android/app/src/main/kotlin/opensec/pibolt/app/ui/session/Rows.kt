@@ -31,6 +31,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -355,20 +356,36 @@ fun StepHeader(
 
 // Fold
 
+/**
+ * The fold of a finished turn: "Edited 3 files · ran 2 commands · 1m 12s" ([FoldRow.summary] and the measured time),
+ * tap to open the steps. A step that failed adds "· 1 step failed" in ink3 after a 6dp danger dot; "· failed" in danger
+ * only when the turn itself ended in an error or abort.
+ */
 @Composable
 fun FoldRowView(row: FoldRow, onToggle: () -> Unit, onOpenFile: (FileChange) -> Unit, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val text = buildString {
-        append(if (row.durationMs != null) "Worked for ${formatWorked(row.durationMs)}" else "Worked")
-        append(" · ")
-        append(if (row.steps == 1) "1 step" else "${row.steps} steps")
+        append(row.summary.ifBlank { if (row.steps == 1) "1 step" else "${row.steps} steps" })
+        if (row.durationMs != null) {
+            append(" · ")
+            append(formatWorked(row.durationMs))
+        }
     }
     Column(modifier.fillMaxWidth().padding(top = 6.dp)) {
         StepHeader(onClick = onToggle, slot = { Chevron(row.expanded) }) {
-            Text(text, style = Pi.type.label, color = colors.ink3, maxLines = 1)
+            Text(text, style = Pi.type.label, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             when {
                 row.endedInFailure -> Text(" · failed", style = Pi.type.label, color = colors.danger, maxLines = 1)
-                row.failedSteps > 0 -> Text(" · ${row.failedSteps} failed", style = Pi.type.label, color = colors.ink3, maxLines = 1)
+                row.failedSteps > 0 -> {
+                    Text(" · ", style = Pi.type.label, color = colors.ink3, maxLines = 1)
+                    Box(Modifier.size(6.dp).background(colors.danger, CircleShape))
+                    Text(
+                        if (row.failedSteps == 1) " 1 step failed" else " ${row.failedSteps} steps failed",
+                        style = Pi.type.label,
+                        color = colors.ink3,
+                        maxLines = 1,
+                    )
+                }
             }
         }
         if (row.files.isNotEmpty()) FileChips(row.files, onOpenFile, onMore = onToggle)
@@ -438,7 +455,7 @@ fun ToolGroupRowView(row: ToolGroupRow, onToggle: () -> Unit, modifier: Modifier
         val detailAlpha by animateFloatAsState(if (row.expanded) 0f else 1f, PiMotion.inPlace(PiMotion.QUICK), label = "detail")
         Text(detail, style = type.monoSmall, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f).graphicsLayer { alpha = detailAlpha })
         Spacer(Modifier.width(8.dp))
-        total?.let { Text(formatDuration(it), style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3) }
+        stepDuration(total)?.let { Text(it, style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3) }
         Spacer(Modifier.width(4.dp))
         Chevron(row.expanded)
     }

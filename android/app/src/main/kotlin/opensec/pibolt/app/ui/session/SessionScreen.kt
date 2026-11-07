@@ -670,6 +670,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                             val thumbs = memory.localImages[key].orEmpty()
                             if (thumbs.isNotEmpty()) imageViewer = ViewerImages(memory.localFull[key].orEmpty(), thumbs, index)
                         },
+                        onToolImages = { imageViewer = it },
                     )
                     if (empty) {
                         EmptySession(
