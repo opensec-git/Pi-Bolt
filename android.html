@@ -80,6 +80,8 @@
   .meta { margin-top: 14px; font: 400 12px/1.5 var(--mono); color: var(--muted); }
   .status { margin-top: 18px; padding: 12px 14px; border: 1px solid var(--line); background: var(--surface); font-size: 14px; color: var(--soft); }
   .status[hidden] { display: none; }
+  .inapp p { margin: 0; }
+  .inapp .inapp-actions { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
 
   .panel { position: relative; border: 1px solid var(--line); background: rgba(8, 8, 8, 0.8); padding: 26px; }
   .panel .corner { position: absolute; width: 12px; height: 12px; border-color: var(--accent); border-style: solid; pointer-events: none; }
@@ -164,6 +166,11 @@
       </div>
       <div class="meta" id="meta">Version 0.5.4 · about 168 MB · Android 8.0 or later, 64-bit ARM</div>
       <p class="status" id="status" role="status" hidden></p>
+      <div class="status inapp" id="inapp" hidden>
+        <p>This app's built-in browser can't download files. Open this page in Chrome (or your browser) to get the APK.</p>
+        <p class="inapp-actions"><a class="btn primary small" id="open-browser" href="https://pi-bolt.opensec.in/android"><span>Open in browser</span></a>
+          <button class="btn ghost small" id="copy-link" type="button"><span>Copy link</span></button></p>
+      </div>
     </div>
 
     <div class="panel qr-panel">
@@ -229,30 +236,58 @@
     link.textContent = "android-v" + release.version;
   }
 
-  // On a phone this page is the download link: start it once, without looping on reload or back.
+  // In-app browsers (WhatsApp, Telegram, Gmail, Instagram, X and others) are Android WebViews, which drop file
+  // downloads silently: a tap on the button does nothing there. Show how to get to a real browser instead.
+  var ua = navigator.userAgent;
+  var inApp = isAndroid && (/; wv\)/.test(ua) || /FBAN|FBAV|Instagram|Line\/|Snapchat|MicroMessenger|Twitter|GSA\//.test(ua));
+
+  function showInApp() {
+    document.getElementById("inapp").hidden = false;
+    // intent:// hands the page to the default browser; a WebView that cannot follow it keeps the plain link.
+    document.getElementById("open-browser").href = "intent://pi-bolt.opensec.in/android#Intent;scheme=https;action=android.intent.action.VIEW;S.browser_fallback_url=" + encodeURIComponent("https://pi-bolt.opensec.in/android") + ";end";
+    document.getElementById("copy-link").addEventListener("click", function () {
+      var button = this;
+      if (navigator.clipboard) navigator.clipboard.writeText("https://pi-bolt.opensec.in/android").then(function () { button.querySelector("span").textContent = "Copied"; }, function () {});
+    });
+  }
+
+  // On a phone this page is the download link: start it once (not again on reload or back), and only with the newest
+  // release from android.json, so a slow network never gets the older APK named in the HTML. Chrome may ignore a
+  // download that no tap started; the status line then points at the button, which always works.
   function autoDownload() {
-    if (!isAndroid) return;
+    if (!isAndroid || inApp) return;
     try {
       if (sessionStorage.getItem("pibolt-apk-started")) return;
       sessionStorage.setItem("pibolt-apk-started", "1");
     } catch (e) {}
     var status = document.getElementById("status");
-    status.textContent = "Your download is starting. If it does not, tap Download the APK. Then open the file to install it.";
+    status.textContent = "Your download should start now. If it does not, tap Download the APK. Then open the file to install it.";
     status.hidden = false;
-    setTimeout(function () { location.href = document.getElementById("download").href; }, 700);
+    setTimeout(function () { location.href = document.getElementById("download").href; }, 400);
   }
 
-  var done = false;
-  function go() { if (!done) { done = true; autoDownload(); } }
-  // Wait briefly for android.json so a phone gets the newest version, never longer than a second.
-  setTimeout(go, 1000);
-  fetch("android.json", { cache: "no-cache" })
+  function showTapHint() {
+    if (!isAndroid || inApp) return;
+    var status = document.getElementById("status");
+    status.textContent = "Tap Download the APK to get the app, then open the file to install it.";
+    status.hidden = false;
+  }
+
+  if (inApp) showInApp();
+  var controller = window.AbortController ? new AbortController() : null;
+  var timer = setTimeout(function () { if (controller) controller.abort(); }, 10000);
+  fetch("android.json", { cache: "no-cache", signal: controller ? controller.signal : undefined })
     .then(function (response) { return response.ok ? response.json() : null; })
     .then(function (release) {
-      if (release && /^https:\/\/github\.com\/opensec-git\/Pi-Bolt\/releases\/download\//.test(release.apk)) apply(release);
+      clearTimeout(timer);
+      if (release && /^https:\/\/github\.com\/opensec-git\/Pi-Bolt\/releases\/download\//.test(release.apk)) {
+        apply(release);
+        autoDownload();
+      } else {
+        showTapHint();
+      }
     })
-    .catch(function () {})
-    .then(go);
+    .catch(showTapHint);
 </script>
 </body>
 </html>
