@@ -29,11 +29,11 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import opensec.pibolt.app.background.BackgroundSetup
 import opensec.pibolt.app.background.OemSetup
+import opensec.pibolt.app.ui.components.GroupRow
 import opensec.pibolt.app.ui.components.GhostButton
 import opensec.pibolt.app.ui.components.ListRow
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.RowEnd
-import opensec.pibolt.app.ui.components.RowInsetCard
 import opensec.pibolt.app.ui.components.RowInsetSheet
 import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.rememberSheetCloser
@@ -44,16 +44,16 @@ import opensec.pibolt.app.ui.theme.Pi
  * Settings card: `BackgroundRunRow()`.
  */
 @Composable
-fun BackgroundRunRow() {
+fun BackgroundRunRow(divider: Boolean = false) {
     val state = rememberBackgroundState()
     var open by remember { mutableStateOf(false) }
     val colors = Pi.colors
-    val (meta, color) = when {
-        !state.ready -> "Android may pause Pi with the screen off" to colors.warning
-        state.steps.isNotEmpty() -> "Check ${state.steps.size} phone setting" + (if (state.steps.size == 1) "" else "s") to colors.ink3
+    val (value, color) = when {
+        !state.ready -> "Not set up" to colors.warning
+        state.steps.isNotEmpty() -> "${state.steps.size} to check" to colors.ink3
         else -> "Ready" to colors.success
     }
-    ListRow("Run in background", meta = meta, metaColor = color, icon = Icons.Rounded.Bedtime, onClick = { open = true }, end = RowEnd.Chevron, padding = RowInsetCard)
+    GroupRow("Run in background", icon = Icons.Rounded.Bedtime, value = value, valueColor = color, onClick = { open = true }, divider = divider)
     if (open) BackgroundRunSheet(onDismiss = { open = false })
 }
 

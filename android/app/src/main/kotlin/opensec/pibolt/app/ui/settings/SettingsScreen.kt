@@ -320,6 +320,7 @@ fun SettingsScreen(
                 if (show("reduce-motion")) add { d -> GroupRow("Reduce motion", icon = Icons.Rounded.Animation, value = settings.reduceMotion.label, onClick = { choice = Choice.ReduceMotion }, divider = d) }
                 if (show("haptics")) add { d -> GroupSwitchRow("Haptics", settings.haptics, { on -> update { it.copy(haptics = on) } }, icon = Icons.Rounded.Vibration, divider = d) }
                 if (show("notifications")) add { d -> NotificationsRow(d) }
+                if (show("background")) add { d -> BackgroundRunRow(d) }
             }
             SettingsBlock(rows, header = SettingsGroup.Advanced.title)
         }

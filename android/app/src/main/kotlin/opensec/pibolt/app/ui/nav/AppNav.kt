@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.nav
 
+import opensec.pibolt.app.ui.settings.BackgroundRunPrompt
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.ui.text.style.TextOverflow
 import opensec.pibolt.app.ui.components.ButtonRow
@@ -336,6 +337,7 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendin
     )
 
     UpdateSheets(app)
+    BackgroundRunPrompt()
 }
 
 /**

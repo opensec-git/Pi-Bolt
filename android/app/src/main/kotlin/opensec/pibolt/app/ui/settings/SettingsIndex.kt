@@ -43,6 +43,7 @@ object SettingsIndex {
         SettingEntry("reduce-motion", SettingsGroup.Advanced, "Reduce motion", "animations animation accessibility motion"),
         SettingEntry("haptics", SettingsGroup.Advanced, "Haptics", "vibration vibrate feedback"),
         SettingEntry("notifications", SettingsGroup.Advanced, "Notifications", "alerts finished background permission"),
+        SettingEntry("background", SettingsGroup.Advanced, "Run in background", "battery doze autostart miui sleep screen off"),
         SettingEntry("version", SettingsGroup.About, "Version", "about phone device"),
         SettingEntry("updates", SettingsGroup.About, "Updates", "update check for updates automatically install download new version"),
         SettingEntry("licences", SettingsGroup.About, "Licences", "licence license font inter jetbrains mono mermaid termux terminal apache mit open source logo icons lobe"),
