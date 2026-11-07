@@ -53,7 +53,7 @@ check "AOT code in use (no fallback notice)" t_aot
 if [ "$MODE" = --engine-only ]; then
 	BASH_CMD='echo hi from $0'
 else
-	BASH_CMD='echo shell=$BASH_VERSION && command -v git rg fd ls && git --version'
+	BASH_CMD='echo shell=$BASH_VERSION && command -v git rg fd ls node python3 && git --version && node --version && python3 --version'
 fi
 t_rpc() {
 	{
@@ -98,6 +98,66 @@ if [ "$MODE" != --engine-only ]; then
 			git --exec-path; git var GIT_SHELL_PATH 2>/dev/null || true"
 	}
 	check "git/curl without the env vars" t_noenv
+
+	# Language runtimes, with the app's extra environment (EngineEnvironment.kt): user bins first, caches in the cache dir.
+	CACHE=$DATA/cache/xdg
+	R() {
+		env -i $ENGINE_ENV HOME="$HOMEDIR" TZ=UTC PI_PACKAGE_DIR="$PKGDIR" PATH="$HOMEDIR/.local/bin:$PREFIX/bin:/system/bin" \
+			XDG_CACHE_HOME="$CACHE" npm_config_cache="$CACHE/npm" "$@"
+	}
+	check "node -e" R node -e 'console.log(process.version, process.arch, process.execPath); require("crypto").createHash("sha256"); new Intl.DateTimeFormat("en").format(0)'
+	check "npm --version, npx --version" R bash -c 'npm --version && npx --version && npm config get prefix && npm config get cache'
+	check "npm install over https, a bin script in node_modules (npm run, npx, npm exec)" R bash -c "
+		set -e
+		rm -rf '$HOMEDIR/projects/nodeapp' && mkdir -p '$HOMEDIR/projects/nodeapp' && cd '$HOMEDIR/projects/nodeapp'
+		npm init -y >/dev/null
+		npm pkg set scripts.v='semver 1.2.3 -i minor'
+		npm install --no-audit --no-fund semver@7.6.3 is-number@7.0.0
+		node -e 'console.log(require(\"is-number\")(5), require(\"semver\").valid(\"1.2.3\"))'
+		head -1 node_modules/.bin/semver
+		npm run -s v
+		npx --no-install semver 2.0.0
+		npm exec -- semver -r '>=1' 1.0.0"
+	check "npm global install (HOME/.local)" R bash -c "npm install -g --no-audit --no-fund semver@7.6.3 >/dev/null && command -v semver && semver 3.0.0 && ls '$HOMEDIR/.local/lib/node_modules'"
+	check "python3 -c 'import ssl, sqlite3'" R python3 -c 'import ssl, sqlite3, ctypes, lzma, bz2, zlib, decimal, uuid, json, sys; print(sys.version.split()[0], sys.prefix, ssl.OPENSSL_VERSION, sqlite3.sqlite_version); sqlite3.connect(":memory:").execute("select 1"); print(ctypes.CDLL(None))'
+	check "pip --version" R bash -c 'pip --version && pip3 --version && python3 -m pip --version'
+	check "python https (CA bundle)" R python3 -c 'import urllib.request; print(urllib.request.urlopen("https://pypi.org/simple/six/").status)'
+	check "pip install over https (user site) + console script" R bash -c "
+		set -e
+		pip install --disable-pip-version-check -q six==1.16.0 cowsay==6.1
+		python3 -c 'import six, site; print(six.__file__); print(site.USER_SITE)'
+		command -v cowsay && head -1 \"\$(command -v cowsay)\" && cowsay -t hi | tail -2
+		ls '$CACHE/pip' | head -3"
+	check "python venv + pip inside it" R bash -c "
+		set -e
+		cd '$HOMEDIR/projects' && rm -rf venvtest && python3 -m venv venvtest
+		venvtest/bin/python -c 'import sys; print(sys.prefix, sys.base_prefix)'
+		venvtest/bin/pip --version
+		venvtest/bin/pip install --disable-pip-version-check -q six==1.16.0 && venvtest/bin/python -c 'import six; print(six.__file__)'"
+	# The exec emulation of glibc/execve.c (on a phone the kernel refuses exec in app data; here it would allow it).
+	# Started from bash: the container's own env(1) is musl, which has no emulation.
+	t_exec_shim() {
+		set -e
+		d=$HOMEDIR/execshim && rm -rf "$d" && mkdir -p "$d"
+		cp "$(readlink -f "$PREFIX/bin/busybox")" "$d/busybox" && chmod +x "$d/busybox"
+		exe=$(R bash -c "'$d/busybox' readlink /proc/self/exe")
+		echo "ELF in app data runs via the loader: /proc/self/exe = $exe"
+		case $exe in */libld.so) ;; *) return 1 ;; esac
+		printf '#!/bin/sh\necho "sh=$BASH_VERSION"\n' >"$d/s1" && chmod +x "$d/s1"
+		out=$(R bash -c "'$d/s1'") && echo "#!/bin/sh script runs PREFIX/bin/sh (bash): $out"
+		[ "$out" != "sh=" ]
+		printf '#!/usr/bin/env python3\nimport sys; print("env python3 ->", sys.executable)\n' >"$d/s2" && chmod +x "$d/s2"
+		R bash -c "'$d/s2'"
+		printf '#!/usr/bin/env node\nconsole.log("env node ->", process.version)\n' >"$d/s3" && chmod +x "$d/s3"
+		R bash -c "cd '$d' && ./s3"
+		printf 'echo no shebang: run by the shell\n' >"$d/s4" && chmod +x "$d/s4"
+		R bash -c "'$d/s4'"
+		chmod -x "$d/s1"
+		if R bash -c "'$d/s1'" 2>/dev/null; then echo "non-executable file ran"; return 1; fi
+		R python3 -c "import subprocess; print(subprocess.run(['$d/s2'], capture_output=True, text=True).stdout.strip())"
+		R node -e "console.log(require('child_process').execFileSync('$d/s2').toString().trim())"
+	}
+	check "exec emulation for app data (glibc execve)" t_exec_shim
 fi
 echo "=== $([ $FAIL = 0 ] && echo ALL PASS || echo SOME FAILED)"
 exit $FAIL

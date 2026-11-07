@@ -16,6 +16,12 @@ m = json.load(open(sys.argv[1]))
 nld, prefix = sys.argv[2], m["prefix"]
 q = shlex.quote
 print(f"mkdir -p {q(prefix)}/tmp {q(prefix)}/etc")
+# Runtime trees first: the links of their extension modules go inside them.
+for t in m.get("trees", []):
+    p = f"{prefix}/{t['path']}"
+    print(f"rm -rf {q(p)} && mkdir -p {q(p)} && unzip -q -o /apk-assets/{q(t['asset'])} -d {q(p)}")
+    if t["executables"]:
+        print(f"(cd {q(p)} && chmod 755 " + " ".join(q(x) for x in t["executables"]) + ")")
 for l in m["links"]:
     p = f"{prefix}/{l['path']}"
     print(f"mkdir -p {q(p.rsplit('/', 1)[0])} && ln -sfn {q(nld + '/' + l['target'])} {q(p)}")

@@ -3,7 +3,8 @@
 # Termux's build system). Runs inside the builder container (docker/Dockerfile), linux/arm64.
 #   /engine  this directory's parent (read-only)   /dl  download cache   /stage  output (/stage/glibc)
 # Our changes to Termux's recipe: @TERMUX_PREFIX@ and @TERMUX_PREFIX_CLASSICAL@ are both the app PREFIX, the
-# pkgversion names the app, and systemtap probes are off. Everything else is Termux's patches and files unchanged.
+# pkgversion names the app, systemtap probes are off, and execve is ours (glibc/execve.c). Everything else is Termux's
+# patches and files unchanged.
 set -euo pipefail
 . /engine/versions.env
 OUT=/stage/glibc
@@ -34,6 +35,10 @@ cd "$SRC"
 for p in $(ls "$PKG"/*.patch | sort); do
 	sed -e "s%@TERMUX_PREFIX_CLASSICAL@%$PREFIX%g" -e "s%@TERMUX_PREFIX@%$PREFIX%g" "$p" | patch --silent -p1
 done
+
+# Ours: execve runs scripts and programs in the app's data directory, which Android refuses to exec (glibc/execve.c).
+sed -i '/^execve[[:space:]]/d' sysdeps/unix/sysv/linux/syscalls.list
+sed -e "s%@PREFIX@%$PREFIX%g" -e "s%@APP_DATA@%$(dirname "$APP_BASE_DIR")%g" /engine/glibc/execve.c >sysdeps/unix/sysv/linux/execve.c
 
 # termux_step_pre_configure (aarch64 only)
 rm sysdeps/unix/sysv/linux/*/clone3.S

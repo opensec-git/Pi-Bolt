@@ -2,8 +2,8 @@
 
 The app runs Pi-Bolt on the phone with the programs and libraries below, shipped inside the APK as separate files
 (lib*.so in the app's native library directory). Exact versions: `VERSIONS.txt`. Full licence texts: `texts/`.
-Per-package copyright files: `userland/` (Debian packages), `pi-bolt/` (the engine itself) and `extensions/` (the
-bundled Pi extensions).
+Per-package copyright files: `userland/` (Debian packages), `pi-bolt/` (the engine itself), `extensions/` (the
+bundled Pi extensions) and `runtimes/` (Node.js, npm, Python, pip).
 
 ## Corresponding source
 
@@ -35,6 +35,18 @@ https://github.com/opensec-git/Pi-Bolt/issues.
 | ripgrep | `rg` | MIT or Unlicense |
 | fd | `fd` | MIT or Apache-2.0 |
 | Mozilla CA certificate list (Debian ca-certificates) | trusted root certificates | MPL-2.0 |
+| Node.js | `node`: JavaScript runtime (with V8, libuv, ICU, OpenSSL, llhttp and the other components its licence file lists) | MIT; bundled components under their own licences (`runtimes/node.LICENSE`) |
+| npm | `npm`, `npx`: Node's package manager, with its bundled dependencies | Artistic-2.0 (`runtimes/npm.LICENSE`); dependencies: ISC, MIT, BSD-2/3-Clause, Apache-2.0 (each in its own folder under `lib/node_modules/npm/node_modules`) |
+| CPython | `python3`: the Python interpreter and standard library | PSF-2.0 (`runtimes/python.LICENSE`, which also lists the licences of the parts it includes) |
+| pip | `pip`: Python's package installer, with its vendored libraries | MIT (`runtimes/pip.LICENSE`) |
+| GNU C++ library (libstdc++) | C++ runtime for Node.js | GPL-3.0-or-later with the GCC Runtime Library Exception 3.1 |
+| SQLite | `sqlite3` module | public domain |
+| libffi | `ctypes` module | MIT |
+| bzip2 (libbz2) | `bz2` module | bzip2 licence (BSD-style) |
+| XZ Utils (liblzma) | `lzma` module | 0BSD |
+| mpdecimal (libmpdec) | `decimal` module | BSD-2-Clause |
+| ncurses (libncursesw) | `curses` module | MIT/X11 |
+| util-linux libuuid | `uuid` module | BSD-3-Clause |
 | OpenSec Subagents for Pi (opensec-pi-subagents, from npm) | the engine's `subagent` tool; based on tintinweb/pi-subagents | Apache-2.0 (`extensions/opensec-pi-subagents/LICENSE`, `NOTICE`) |
 | OpenSec Todo for Pi (opensec-pi-todo, from npm) | the engine's `todo` tool; based on juicesharp/rpiv-todo | Apache-2.0 (`extensions/opensec-pi-todo/LICENSE`, `NOTICE`) |
 
@@ -42,14 +54,17 @@ https://github.com/opensec-git/Pi-Bolt/issues.
 
 The glibc in this app is GNU C Library release 2.44 with Termux's Android patches applied and rebuilt for the app's
 private directory (`/data/data/in.opensec.pibolt/files/usr`): its library directory, configuration files (`etc/`),
-temporary directory and `/bin/sh` point there. It is a separate shared library: you may replace it with a modified
+temporary directory and `/bin/sh` point there. Its `execve` is replaced by ours (`android/engine/glibc/execve.c`): it
+runs scripts and programs in the app's data directory, which Android does not let the kernel execute, the way the
+kernel would. It is a separate shared library: you may replace it with a modified
 version by rebuilding the engine pack from the published source (`android/engine/build-pack.sh`) and the APK.
 
 ## Not modified
 
 bash, busybox, ripgrep, fd and the shared libraries from Debian are Debian's binaries, unchanged except that the
 program interpreter path is set to the app's glibc loader and the run-path entry is removed (patchelf), and debug
-symbols are stripped. git and curl are built from the unmodified release tarballs.
+symbols are stripped. git and curl are built from the unmodified release tarballs. Node.js is the official
+linux-arm64 release binary with the same interpreter change; CPython is built from the unmodified release tarball.
 
 ## Licence texts
 

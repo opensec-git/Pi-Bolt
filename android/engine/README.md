@@ -1,7 +1,8 @@
 # On-device engine pack
 
 Everything the Android app needs to run Pi-Bolt on the phone: the stock Pi-Bolt linux-arm64 engine, glibc rebuilt
-for the app's private prefix, and a userland (bash, busybox, git, curl, rg, fd). The paths, file names, manifest and
+for the app's private prefix, a userland (bash, busybox, git, curl, rg, fd) and language runtimes (Node.js with npm,
+Python with pip). The paths, file names, manifest and
 environment the app relies on are in [CONTRACT.md](CONTRACT.md).
 
 ## Build
@@ -21,13 +22,15 @@ Needs Docker on an arm64 host (an Apple Silicon Mac or GitHub's ubuntu-24.04-arm
 
 | Path | What |
 |---|---|
-| `versions.env` | pins: engine release + sha256, glibc + Termux commit, curl, git |
+| `versions.env` | pins: engine release + sha256, glibc + Termux commit, curl, git, Node.js, CPython |
 | `../../extensions.txt` | pins of the bundled Pi extensions (opensec-pi-subagents, opensec-pi-todo): npm version + integrity |
 | `userland/packages.txt`, `userland/debs.lock` | Debian packages and their pinned versions + sha256 (`scripts/lock-debs.sh` refreshes) |
 | `userland/busybox-skip.txt` | busybox applets that get no link |
 | `docker/Dockerfile` | the builder (Debian trixie) |
 | `glibc/build-glibc.sh` | glibc 2.44 + termux-pacman's Android patches, prefix substituted |
 | `userland/build-userland.sh` | Debian binaries + curl and git from source, laid out as PREFIX |
+| `runtimes/build-runtimes.sh` | Node.js (official linux-arm64 build) and CPython (from source for PREFIX), laid out as PREFIX |
+| `glibc/execve.c` | glibc's execve for Android: runs scripts and programs in the app's data dir (CONTRACT.md) |
 | `scripts/assemble.py` | renames to `lib*.so`, sets PT_INTERP (engine: in place; others: patchelf), drops RPATH, strips, writes manifest.json |
 | `licenses/THIRD_PARTY_NOTICES.md` | notices for the app's About screen (copied to `assets/engine/licenses/` with the licence texts) |
 

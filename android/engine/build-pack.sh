@@ -51,9 +51,10 @@ stage() { # name script [inputs...]: run a stage unless its inputs are unchanged
 	echo "== $name: $((SECONDS - t0))s"
 }
 
-stage glibc glibc/build-glibc.sh
+stage glibc glibc/build-glibc.sh "$HERE/glibc/execve.c"
 if [ "$ENGINE_ONLY" = false ]; then
 	stage userland userland/build-userland.sh "$HERE/userland/debs.lock" "$HERE"/userland/*.txt
+	stage runtimes runtimes/build-runtimes.sh "$HERE/userland/debs.lock"
 fi
 echo "== assemble"
 if [ "$ENGINE_ONLY" = true ]; then
