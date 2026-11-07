@@ -24,11 +24,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.withFrameMillis
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
@@ -170,8 +168,8 @@ fun StepSlot(state: StepState, mode: QuadMode, live: Boolean, modifier: Modifier
         targetState = state,
         transitionSpec = {
             if (animate) {
-                (fadeIn(tween(160, easing = PiMotion.InPlace)) + scaleIn(tween(160, easing = PiMotion.InPlace), initialScale = 0.7f)) togetherWith
-                    fadeOut(tween(110))
+                (fadeIn(tween(PiMotion.GLYPH, easing = PiMotion.InPlace)) + scaleIn(tween(PiMotion.GLYPH, easing = PiMotion.InPlace), initialScale = 0.7f)) togetherWith
+                    fadeOut(tween(PiMotion.exit(PiMotion.GLYPH)))
             } else {
                 fadeIn(tween(0)) togetherWith fadeOut(tween(0))
             }

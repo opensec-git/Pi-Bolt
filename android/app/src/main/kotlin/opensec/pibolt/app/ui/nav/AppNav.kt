@@ -1,5 +1,12 @@
 package opensec.pibolt.app.ui.nav
 
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.ui.text.style.TextOverflow
+import opensec.pibolt.app.ui.components.Notice
+import opensec.pibolt.app.ui.components.PiCard
+import opensec.pibolt.app.ui.components.SectionLabel
+import opensec.pibolt.app.ui.components.SheetHeader
+import opensec.pibolt.app.ui.components.SnackKind
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
@@ -11,7 +18,6 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -22,12 +28,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -38,7 +39,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
@@ -71,7 +71,6 @@ import opensec.pibolt.app.ui.settings.RuntimesScreen
 import opensec.pibolt.app.ui.settings.SettingsScreen
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
-import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.terminal.PreviewScreen
 import opensec.pibolt.app.ui.terminal.TerminalScreen
 import opensec.pibolt.app.ui.update.UpdateSheets
@@ -160,7 +159,7 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendin
     val shift = with(LocalDensity.current) { 24.dp.roundToPx() }
     val enter: Enter = {
         if (reduced) {
-            fadeIn(tween(120))
+            fadeIn(tween(PiMotion.FADE))
         } else if (initialState.destination.route == Routes.HOME && targetState.destination.route in setOf(Routes.SESSION, Routes.PROJECT)) {
             // The host or project card's shared bounds carry the motion.
             fadeIn(PiMotion.enter(PiMotion.SHEET))
@@ -170,18 +169,18 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendin
     }
     val exit: Exit = {
         if (reduced) {
-            fadeOut(tween(90))
+            fadeOut(tween(PiMotion.exit(PiMotion.FADE)))
         } else {
             slideOutHorizontally(PiMotion.leave(PiMotion.SHEET)) { -shift } + fadeOut(PiMotion.leave(PiMotion.SHEET))
         }
     }
     val popEnter: Enter = {
-        if (reduced) fadeIn(tween(120)) else slideInHorizontally(PiMotion.enter(PiMotion.SHEET)) { -shift } + fadeIn(PiMotion.enter(PiMotion.SHEET))
+        if (reduced) fadeIn(tween(PiMotion.FADE)) else slideInHorizontally(PiMotion.enter(PiMotion.SHEET)) { -shift } + fadeIn(PiMotion.enter(PiMotion.SHEET))
     }
     // Predictive back seeks this with the gesture: the screen shrinks to 0.9 as it is pulled away.
     val popExit: Exit = {
         if (reduced) {
-            fadeOut(tween(90))
+            fadeOut(tween(PiMotion.exit(PiMotion.FADE)))
         } else {
             scaleOut(tween(PiMotion.SHEET, easing = PiMotion.InPlace), targetScale = 0.9f) + fadeOut(PiMotion.leave(PiMotion.SHEET))
         }
@@ -333,37 +332,24 @@ private fun PairConfirmSheet(payload: PairingPayload, known: Boolean, endsSessio
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
     PiSheet(onDismiss = onCancel, state = state) {
-        Column(Modifier.padding(horizontal = 20.dp)) {
-            Text(if (known) "Connect to ${payload.hostName}?" else "Pair with ${payload.hostName}?", style = type.title, color = colors.ink1)
+        SheetHeader(
+            if (known) "Connect to ${payload.hostName}?" else "Pair with ${payload.hostName}?",
+            subtitle = "A link opened Pi-Bolt to " + (if (known) "connect to a paired computer." else "pair this phone with a computer.") +
+                " Only continue if you just ran /\u2060remote-control on this computer.",
+        )
+        Column(Modifier.padding(horizontal = 16.dp)) {
             Spacer(Modifier.height(8.dp))
-            Text(
-                "A link opened Pi-Bolt to " + (if (known) "connect to a paired computer." else "pair this phone with a computer.") +
-                    " Only continue if you just ran /\u2060remote-control on this computer.",
-                style = type.body,
-                color = colors.ink2,
-            )
-            Spacer(Modifier.height(14.dp))
-            val shape = RoundedCornerShape(Radius.md)
-            Column(
-                Modifier
-                    .fillMaxWidth()
-                    .background(colors.surface1, shape)
-                    .border(1.dp, colors.line, shape)
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                for (endpoint in payload.endpoints) Text(endpoint, style = type.monoMeta, color = colors.ink2, maxLines = 1)
+            SectionLabel(if (payload.endpoints.size == 1) "Address" else "Addresses")
+            Spacer(Modifier.height(6.dp))
+            PiCard(padding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)) {
+                for (endpoint in payload.endpoints) Text(endpoint, style = type.monoMeta, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(vertical = 2.dp))
             }
             if (endsSession != null) {
-                Spacer(Modifier.height(14.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = colors.warning, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(10.dp))
-                    Text("This ends the current session with $endsSession.", style = type.body, color = colors.warning)
-                }
+                Spacer(Modifier.height(12.dp))
+                Notice("This ends the current session with $endsSession.", kind = SnackKind.Warning)
             }
             Spacer(Modifier.height(20.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 SecondaryButton("Cancel", onClick = { close(onCancel) }, modifier = Modifier.weight(1f))
                 PrimaryButton(if (known) "Connect" else "Pair", onClick = {
                     haptics.confirm()

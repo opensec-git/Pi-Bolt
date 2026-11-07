@@ -1,40 +1,27 @@
 package opensec.pibolt.app.ui.session.features2
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Icon
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import opensec.pibolt.app.ui.components.QuadMode
-import opensec.pibolt.app.ui.components.QuadSpinner
-import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.components.EmptyState
+import opensec.pibolt.app.ui.components.ListRow
+import opensec.pibolt.app.ui.components.LoadingRow
+import opensec.pibolt.app.ui.components.PiCard
+import opensec.pibolt.app.ui.components.SwitchRow
+import opensec.pibolt.app.ui.components.Tag
 import opensec.pibolt.app.ui.theme.Pi
-import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 
-/** A list row: icon, title, meta line, optional trailing content. 56 dp tall at least. */
+// The features2 sheets' names for the shared components (ui/components): kept so their call sites stay as they are.
+
+/** A list row: [ListRow] with the sheet inset. */
 @Composable
 fun F2Row(
     title: String,
@@ -47,107 +34,49 @@ fun F2Row(
     onLongClick: (() -> Unit)? = null,
     titleMaxLines: Int = 2,
     trailing: (@Composable RowScope.() -> Unit)? = null,
-) {
-    val colors = Pi.colors
-    val base = modifier.fillMaxWidth().heightIn(min = 56.dp)
-    Row(
-        (if (onClick != null) base.pressable(onClick, shape = RoundedCornerShape(0.dp), enabled = enabled, pressedScale = 1f, onLongClick = onLongClick) else base)
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (icon != null) {
-            Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(14.dp))
-        }
-        Column(Modifier.weight(1f)) {
-            Text(title, style = Pi.type.body, color = if (enabled) colors.ink1 else colors.ink2, maxLines = titleMaxLines, overflow = TextOverflow.Ellipsis)
-            if (!meta.isNullOrBlank()) Text(meta, style = Pi.type.meta, color = colors.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-        if (trailing != null) {
-            Spacer(Modifier.width(8.dp))
-            trailing()
-        }
-    }
-}
+) = ListRow(
+    title = title,
+    modifier = modifier,
+    meta = meta,
+    icon = icon,
+    iconTint = iconTint,
+    onClick = onClick,
+    onLongClick = onLongClick,
+    enabled = enabled,
+    titleMaxLines = titleMaxLines,
+    trailing = trailing,
+)
 
-/** A switch row (the whole row toggles; TalkBack reads it as a switch). */
+/** A switch row: [SwitchRow]. */
 @Composable
-fun F2Toggle(title: String, meta: String?, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) {
-    val colors = Pi.colors
-    val haptics = Pi.haptics
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .pressable({
-                haptics.toggle(!checked)
-                onChange(!checked)
-            }, shape = RoundedCornerShape(0.dp), pressedScale = 1f, enabled = enabled, role = Role.Switch)
-            .padding(horizontal = 20.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f).padding(end = 12.dp)) {
-            Text(title, style = Pi.type.body, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (!meta.isNullOrBlank()) Text(meta, style = Pi.type.meta, color = colors.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
-        }
-        Switch(
-            checked = checked,
-            onCheckedChange = null,
-            enabled = enabled,
-            colors = SwitchDefaults.colors(
-                checkedThumbColor = colors.onAccent,
-                checkedTrackColor = colors.accent,
-                checkedBorderColor = colors.accent,
-                uncheckedThumbColor = colors.ink3,
-                uncheckedTrackColor = colors.surface3,
-                uncheckedBorderColor = colors.lineStrong,
-            ),
-        )
-    }
-}
+fun F2Toggle(title: String, meta: String?, checked: Boolean, enabled: Boolean = true, onChange: (Boolean) -> Unit) =
+    SwitchRow(title, checked, onChange, meta = meta, enabled = enabled, padding = PaddingValues(horizontal = Space.xl, vertical = 6.dp))
 
 @Composable
-fun F2Loading(label: String) {
-    Row(Modifier.fillMaxWidth().padding(vertical = 28.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-        QuadSpinner(QuadMode.Think, size = 18.dp, color = Pi.colors.ink2)
-        Spacer(Modifier.width(12.dp))
-        Text(label, style = Pi.type.body, color = Pi.colors.ink3)
-    }
-}
+fun F2Loading(label: String) = LoadingRow(label, Modifier.padding(vertical = Space.lg))
 
+/** Nothing to list: an [EmptyState] card; the first sentence is its title, the rest the explanation. */
 @Composable
 fun F2Empty(text: String) {
-    Text(text, style = Pi.type.body, color = Pi.colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp))
+    val cut = text.indexOf(". ").takeIf { it in 1 until text.length - 2 }
+    EmptyState(
+        title = if (cut != null) text.substring(0, cut + 1) else text,
+        message = cut?.let { text.substring(it + 2) },
+        modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.sm),
+    )
 }
 
-/** A small rounded tag (source, state). */
+/** A small rounded tag (source, state): [Tag]. */
 @Composable
-fun F2Tag(text: String, color: Color = Pi.colors.ink2, fill: Color = Pi.colors.surface3) {
-    Box(
-        Modifier
-            .background(fill, RoundedCornerShape(Radius.xs))
-            .padding(horizontal = 6.dp, vertical = 2.dp)
-            .semantics { contentDescription = text },
-    ) {
-        Text(text, style = Pi.type.micro, color = color, maxLines = 1)
-    }
-}
+fun F2Tag(text: String, color: Color = Pi.colors.ink2, fill: Color = Pi.colors.surface3) = Tag(text, color = color, fill = fill)
 
-/** A labelled block inside a sheet: surface1 well with a line. */
+/** A labelled block inside a sheet: a [PiCard] well with the sheet's 16dp inset. */
 @Composable
 fun F2Well(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
-    val shape = RoundedCornerShape(Radius.md)
-    Box(
-        modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .background(Pi.colors.surface1, shape)
-            .border(1.dp, Pi.colors.line, shape)
-            .padding(12.dp),
-    ) { content() }
+    PiCard(modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = 6.dp), padding = PaddingValues(Space.md)) { content() }
 }
 
 @Composable
 fun F2Section(text: String) {
-    Text(text, style = Pi.type.metaStrong, color = Pi.colors.ink3, modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 4.dp))
+    Text(text, style = Pi.type.metaStrong, color = Pi.colors.ink3, modifier = Modifier.padding(start = Space.xl, end = Space.xl, top = 14.dp, bottom = Space.xs))
 }

@@ -31,7 +31,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -240,7 +240,7 @@ fun HomeScreen(
                     BrandMark(size = 24.dp, play = false)
                     Spacer(Modifier.width(10.dp))
                     Text("Pi-Bolt", style = type.title, color = colors.ink1, modifier = Modifier.weight(1f).semantics { heading() })
-                    IconAction(Icons.Outlined.Settings, "Settings", onClick = onSettings)
+                    IconAction(Icons.Rounded.Settings, "Settings", onClick = onSettings)
                 }
             }
             if (status.needsBanner()) {

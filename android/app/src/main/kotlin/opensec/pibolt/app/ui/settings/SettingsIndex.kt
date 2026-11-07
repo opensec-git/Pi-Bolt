@@ -43,7 +43,7 @@ object SettingsIndex {
         SettingEntry("notifications", SettingsGroup.Notifications, "Notifications", "alerts finished background permission"),
         SettingEntry("device-key", SettingsGroup.Security, "Device key", "remote control pairing reset revoke computer"),
         SettingEntry("version", SettingsGroup.About, "Version", "about phone device"),
-        SettingEntry("updates", SettingsGroup.About, "Updates", "update check install download new version"),
+        SettingEntry("updates", SettingsGroup.About, "Updates", "update check for updates automatically install download new version"),
         SettingEntry("licences", SettingsGroup.About, "Licences", "licence license font inter jetbrains mono open source"),
     )
 

@@ -1,5 +1,10 @@
 package opensec.pibolt.app.ui.scan
 
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import opensec.pibolt.app.ui.theme.IconSize
+import opensec.pibolt.app.ui.theme.Radius
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -37,7 +42,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
-import androidx.compose.material.icons.outlined.NoPhotography
+import androidx.compose.material.icons.rounded.NoPhotography
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material3.Icon
@@ -140,7 +145,7 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Box(Modifier.size(72.dp).background(colors.surface2, CircleShape), contentAlignment = Alignment.Center) {
-                    Icon(Icons.Outlined.NoPhotography, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(32.dp))
+                    Icon(Icons.Rounded.NoPhotography, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.hero))
                 }
                 Spacer(Modifier.height(20.dp))
                 Text("Camera access needed", style = type.title, color = colors.ink1)
@@ -158,15 +163,21 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
             }
         }
 
-        Box(
+        // Title over the camera, on a canvas fade so it reads on any picture: what to scan and where it comes from.
+        Row(
             Modifier
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(colors.canvas.copy(alpha = 0.85f), colors.canvas.copy(alpha = 0f))))
                 .statusBarsPadding()
-                .padding(8.dp)
-                .size(48.dp)
-                .background(colors.canvas.copy(alpha = 0.55f), CircleShape),
-            contentAlignment = Alignment.Center,
+                .padding(start = 4.dp, end = 20.dp, top = 4.dp, bottom = 24.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack, tint = colors.ink1)
+            Spacer(Modifier.width(4.dp))
+            Column {
+                Text("Scan the pairing code", style = type.title, color = colors.ink1, modifier = Modifier.semantics { heading() })
+                Text("Run /\u2060remote-control on your computer", style = type.meta, color = colors.ink2)
+            }
         }
 
         Column(
@@ -180,18 +191,18 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
             if (granted) {
                 Row(
                     Modifier
-                        .background(colors.surface2.copy(alpha = 0.92f), RoundedCornerShape(24.dp))
-                        .border(1.dp, colors.line, RoundedCornerShape(24.dp))
+                        .background(colors.surface2.copy(alpha = 0.92f), RoundedCornerShape(Radius.lg))
+                        .border(1.dp, colors.line, RoundedCornerShape(Radius.lg))
                         .padding(horizontal = 16.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     AnimatedContent(
                         targetState = accepted,
-                        transitionSpec = { (fadeIn(tween(160)) + scaleIn(tween(160), initialScale = 0.7f)) togetherWith fadeOut(tween(110)) },
+                        transitionSpec = { (fadeIn(tween(PiMotion.GLYPH)) + scaleIn(tween(PiMotion.GLYPH), initialScale = 0.7f)) togetherWith fadeOut(tween(PiMotion.exit(PiMotion.GLYPH))) },
                         label = "scanState",
                     ) { ok ->
                         if (ok) {
-                            Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.success, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.success, modifier = Modifier.size(IconSize.md))
                         } else {
                             QuadSpinner(QuadMode.Connect, size = 16.dp, color = if (message != null) colors.warning else colors.ink2)
                         }
@@ -201,7 +212,7 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
                         when {
                             accepted -> "Code read. Connecting…"
                             message != null -> message!!
-                            else -> "Scan the code from /\u2060remote-control"
+                            else -> "Looking for a code"
                         },
                         style = type.body,
                         color = if (message != null && !accepted) colors.ink1 else colors.ink2,

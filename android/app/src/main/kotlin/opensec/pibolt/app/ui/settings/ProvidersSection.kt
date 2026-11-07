@@ -67,7 +67,7 @@ fun ProvidersSection(app: PiBoltApp) {
             "No provider yet. Add an API key so Pi can call a model from this phone.",
             style = type.body,
             color = colors.ink2,
-            modifier = Modifier.padding(bottom = 12.dp),
+            modifier = Modifier.padding(top = 8.dp, bottom = 12.dp),
         )
     } else {
         Column(Modifier.padding(bottom = 8.dp)) {
@@ -86,7 +86,7 @@ fun ProvidersSection(app: PiBoltApp) {
                     ProviderBadge(ProviderCatalog.badge(id))
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(name, style = type.bodyStrong, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(name, style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(subtitle, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     IconAction(Icons.Rounded.DeleteOutline, "Remove $name", onClick = { removing = id }, tint = colors.ink3, size = 20.dp)
@@ -94,7 +94,7 @@ fun ProvidersSection(app: PiBoltApp) {
             }
         }
     }
-    SecondaryButton("Add provider", onClick = { adding = true }, icon = Icons.Rounded.Add, modifier = Modifier.fillMaxWidth())
+    SecondaryButton("Add provider", onClick = { adding = true }, icon = Icons.Rounded.Add, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
 
     if (adding) {
         ProviderSheet(auth = auth, configured = configured, firstRun = false, onSaved = {
