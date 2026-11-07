@@ -463,7 +463,7 @@ private fun CodeText(text: AnnotatedString, style: TextStyle, streaming: Boolean
     val colors = Pi.colors
     var layout by remember { mutableStateOf<TextLayoutResult?>(null) }
     val pulse: State<Float>? = if (streaming && !Pi.reduceMotion) {
-        rememberInfiniteTransition(label = "codeCaret").animateFloat(0.3f, 1f, infiniteRepeatable(tween(450, easing = LinearEasing), RepeatMode.Reverse), label = "codeCaret")
+        rememberInfiniteTransition(label = "codeCaret").animateFloat(0.3f, 1f, infiniteRepeatable(tween(PiMotion.PULSE, easing = LinearEasing), RepeatMode.Reverse), label = "codeCaret")
     } else {
         null
     }

@@ -80,6 +80,6 @@ private fun PiSnack(data: SnackbarData) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
         Spacer(Modifier.width(12.dp))
         Text(data.visuals.message, style = Pi.type.body, color = colors.ink1, modifier = Modifier.weight(1f).padding(end = 8.dp), maxLines = 4)
-        data.visuals.actionLabel?.let { TextAction(it, onClick = { data.performAction() }, color = colors.accent) }
+        data.visuals.actionLabel?.let { TextAction(it, onClick = { data.performAction() }, color = colors.ink1) }
     }
 }
