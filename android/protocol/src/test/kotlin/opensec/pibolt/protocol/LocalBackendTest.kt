@@ -62,7 +62,7 @@ class LocalBackendTest {
         target: SessionTarget = SessionTarget.Continue,
         env: Map<String, String> = emptyMap(),
         launcher: EngineLauncher = fakeLauncher(env),
-        newest: (String) -> String? = { null },
+        newest: (String) -> String? = { env["FAKE_CONTINUE_FILE"] ?: "/fake/continued.jsonl" },
         fresh: (String) -> String? = { null },
     ) = LocalBackend(LocalConfig(name = "demo", version = "1.1.1", cwd = "/projects/demo", helloTimeoutMs = 20_000), target, launcher, newest, fresh)
         .also { backends += it }
@@ -102,7 +102,18 @@ class LocalBackendTest {
         assertIs<ConnectionState.Connected>(b.state.value)
         assertEquals("/fake/continued.jsonl", b.sessionFile)
         assertNotNull(b.lastStartMs)
-        assertEquals(listOf("--continue"), launches.single())
+        assertEquals(listOf("--session", "/fake/continued.jsonl"), launches.single())
+    }
+
+    @Test
+    fun continueNeverLetsPiPickTheNewestFile() = runBlocking {
+        // Pi's --continue takes the newest file of the session folder, a subagent's own session included. The app's
+        // newestSession lists only real sessions; with none, a cold "continue" starts a new session.
+        val b = backend(newest = { null })
+        val inbox = records(b)
+        assertTrue(b.connect())
+        assertEquals("/fake/new-1.jsonl", inbox.next("remote_hello").obj("state")?.str("sessionFile"))
+        assertEquals(listOf(emptyList()), launches.toList())
     }
 
     @Test

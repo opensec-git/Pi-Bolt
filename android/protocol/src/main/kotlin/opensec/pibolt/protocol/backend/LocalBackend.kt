@@ -188,6 +188,9 @@ class LocalBackend(
 
     val isAlive: Boolean get() = engine?.alive == true
 
+    /** The directory the engine works in for its current session (a switch to another project's session moves it). */
+    val engineCwd: String? get() = engine?.cwd
+
     /** The engine process id, for diagnostics. */
     val pid: Long? get() = engine?.pid
 
@@ -264,9 +267,12 @@ class LocalBackend(
         if (e != null) withTimeoutOrNull(timeoutMs) { e.exit.await() }
     }
 
-    private suspend fun startEngine(t: SessionTarget): Engine {
+    private suspend fun startEngine(target: SessionTarget): Engine {
         val started = System.nanoTime()
         val cwd = config.cwd
+        // "Continue" is resolved here, not by Pi's `--continue`: Pi takes the newest file of the session folder, which
+        // can be a subagent's own session (saved next to its parent, often after it); [newestSession] skips those.
+        val t = if (target == SessionTarget.Continue) newestSession(cwd)?.let { SessionTarget.Resume(it) } ?: SessionTarget.Fresh else target
         val process = try {
             launcher.launch(t, cwd)
         } catch (e: CancellationException) {
