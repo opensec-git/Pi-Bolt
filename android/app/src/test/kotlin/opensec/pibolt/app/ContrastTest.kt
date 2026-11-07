@@ -5,6 +5,8 @@ import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.luminance
 import opensec.pibolt.app.data.AccentId
 import opensec.pibolt.app.data.ThemeId
+import opensec.pibolt.app.ui.components.SnackKind
+import opensec.pibolt.app.ui.components.noticeStyle
 import opensec.pibolt.app.ui.theme.PiColors
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -13,7 +15,7 @@ import kotlin.test.assertTrue
 /**
  * WCAG 2.1 contrast of the palette in every theme and accent (DESIGN.md, "Contrast"): every text ink passes AA (4.5:1)
  * on the canvas and on every surface, including surface3 (menus, snackbars, inline code), and the accent's own ink
- * passes on the accent.
+ * passes on the accent. The shared components' colour pairs are checked here too (DESIGN.md, "Components").
  */
 class ContrastTest {
     private fun contrast(a: Color, b: Color): Double {
@@ -90,5 +92,62 @@ class ContrastTest {
             val c = PiColors.of(theme, AccentId.Theme)
             assertTrue(contrast(c.surface1, c.canvas) >= 1.05, "$theme surface1 / canvas")
         }
+    }
+
+    @Test
+    fun accentTextPassesOnCardsAndSheets() {
+        // Text actions and links ("Paste", "Get a key at …", "Choose from GitHub") are accent text on cards and sheets.
+        val failures = ArrayList<String>()
+        for (theme in ThemeId.entries) {
+            for (accent in AccentId.entries) {
+                val c = PiColors.of(theme, accent)
+                for ((name, bg) in surfaces(c).take(3)) {
+                    val r = contrast(c.accent, bg)
+                    if (r < 4.5) failures += "$theme/$accent accent text on $name: ${"%.2f".format(r)}"
+                }
+            }
+        }
+        assertTrue(failures.isEmpty(), failures.joinToString("\n"))
+    }
+
+    @Test
+    fun noticeTextAndGlyphPassOnTheirFill() {
+        // A Notice's text is ink1 (ink2 under a title) on its fill, which sits on a card, a sheet or the canvas; its glyph
+        // carries the kind and needs 3:1 (WCAG 1.4.11, non-text contrast).
+        val failures = ArrayList<String>()
+        for (theme in ThemeId.entries) {
+            val c = PiColors.of(theme, AccentId.Theme)
+            for (kind in SnackKind.entries) {
+                val style = noticeStyle(kind, c)
+                for ((name, bg) in surfaces(c).take(3)) {
+                    val fill = style.fill.compositeOver(bg)
+                    for ((ink, fg) in listOf("ink1" to c.ink1, "ink2" to c.ink2)) {
+                        val r = contrast(fg, fill)
+                        if (r < 4.5) failures += "$theme $kind notice $ink over $name: ${"%.2f".format(r)}"
+                    }
+                    val g = contrast(style.tint, fill)
+                    if (g < 3.0) failures += "$theme $kind notice glyph over $name: ${"%.2f".format(g)}"
+                }
+            }
+        }
+        assertTrue(failures.isEmpty(), failures.joinToString("\n"))
+    }
+
+    @Test
+    fun buttonLabelsPass() {
+        // Secondary (ink1 on surface2), danger (danger on dangerSoft over a sheet) and the disabled primary (ink3 on
+        // surface3, which must still be readable: it says what will be possible).
+        val failures = ArrayList<String>()
+        for (theme in ThemeId.entries) {
+            val c = PiColors.of(theme, AccentId.Theme)
+            val pairs = listOf(
+                "secondary" to contrast(c.ink1, c.surface2),
+                "danger" to contrast(c.danger, c.dangerSoft.compositeOver(c.surface2)),
+                "disabled primary" to contrast(c.ink3, c.surface3),
+                "ghost on sheet" to contrast(c.ink1, c.surface2),
+            )
+            for ((name, r) in pairs) if (r < 4.5) failures += "$theme $name: ${"%.2f".format(r)}"
+        }
+        assertTrue(failures.isEmpty(), failures.joinToString("\n"))
     }
 }
