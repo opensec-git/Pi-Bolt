@@ -1213,3 +1213,14 @@ long-press sheets; long output goes to full-screen viewers, never nested scroll 
   streamed frame does not recompose Home.
 - Nothing animates while idle: spinners only while busy, the mark's entrance once per launch. Rotations, scales and
   press feedback run in `graphicsLayer`; size changes are limited to expand/collapse and sheets.
+
+## Chats
+
+Plain chats talk to the model without a project (`engine/ChatSpace.kt`): one app-private folder, their own session
+folder, and an engine with `--no-tools`. The Chats screen follows the kit: two glass buttons (back, +) on a 56dp bar,
+"Chats" in largeTitle, a `GlassSearchField` (a full-radius glass pill, 48dp), then `InsetRow`s with the title and
+"2h · 12 messages"; the live chat sits on the current highlight. A long press offers Rename and Delete (a ConfirmSheet,
+"This can't be undone."). No chats: an `EmptyState` with "New chat". A chat opens on the session screen without the
+project-only parts (`SessionParts.CHAT`: no `@` files, `!` shell, preview chips, project starters, folder or subtitle;
+no checkpoints, so no undo or changes pill). On Home, the pill's chip lists "Chat" first (the default with no project),
+Recents shows the three newest chats with a chat glyph and "Chat · 2h", and a "Chats" row under Recents opens the list.

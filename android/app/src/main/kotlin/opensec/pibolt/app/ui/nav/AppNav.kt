@@ -223,6 +223,8 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendin
                                 onScan = { nav.navigate(Routes.SCAN) { launchSingleTop = true } },
                                 onSettings = { nav.navigate(Routes.SETTINGS) { launchSingleTop = true } },
                                 onPairingText = { usePairing(it) },
+                                onOpenChats = { nav.navigate(Routes.CHATS) { launchSingleTop = true } },
+                                onOpenChat = { nav.navigate(Routes.CHAT) { launchSingleTop = true } },
                             )
                         }
                     }
