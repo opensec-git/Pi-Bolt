@@ -336,7 +336,7 @@ internal fun Modifier.sweep(color: Color): Modifier {
 
 /**
  * Parallel agents as one stack. Closed: a card with "3 agents running", the avatars, the longest run time and one
- * 40dp line per agent (glyph, type, crossfading activity, time); tapping a line opens that agent. Open: the header,
+ * 48dp line per agent (glyph, type, crossfading activity, time); tapping a line opens that agent. Open: the header,
  * then each agent's full card. The switch resizes with the card spring.
  */
 @Composable
@@ -423,7 +423,8 @@ private fun CompactRow(run: Subagent, live: Boolean, onOpen: (() -> Unit)?) {
     Row(
         Modifier
             .fillMaxWidth()
-            .height(40.dp)
+            // Each line opens its agent, so it is a full 48dp touch target.
+            .height(48.dp)
             .semantics(mergeDescendants = true) { contentDescription = SubagentFormat.spoken(run) }
             .then(if (onOpen != null) Modifier.pressable(onOpen, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "Open agent") else Modifier)
             .padding(start = 12.dp, end = 14.dp),

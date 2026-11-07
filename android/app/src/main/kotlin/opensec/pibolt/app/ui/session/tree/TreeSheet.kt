@@ -1,6 +1,7 @@
 package opensec.pibolt.app.ui.session.tree
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import androidx.compose.material.icons.rounded.Bookmark
 import androidx.compose.material.icons.rounded.BookmarkBorder
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.NearMe
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -33,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
@@ -41,6 +44,7 @@ import kotlinx.serialization.json.JsonObject
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.Segmented
 import opensec.pibolt.app.ui.components.SheetHeader
+import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.session.ActionsSheet
 import opensec.pibolt.app.ui.session.SheetAction
@@ -62,6 +66,7 @@ fun TreeSheet(
     data: JsonObject?,
     error: String?,
     busy: Boolean,
+    onRetry: () -> Unit,
     onGoto: (TreeRow) -> Unit,
     onLabel: (TreeRow, String) -> Unit,
     onDismiss: () -> Unit,
@@ -76,8 +81,16 @@ fun TreeSheet(
         val forks = rows.count { it.branches > 1 }
         SheetHeader(
             "Session tree",
-            subtitle = if (forks == 0) "One branch. Go back to an earlier message to start another here." else "$forks ${if (forks == 1) "fork" else "forks"}. The marked path is what Pi sees.",
+            subtitle = when {
+                error != null || data == null -> null
+                forks == 0 -> "One branch. Go back to an earlier message to start another here."
+                else -> "$forks ${if (forks == 1) "fork" else "forks"}. The marked path is what Pi sees."
+            },
         )
+        if (error != null) {
+            TreeError(error, onRetry)
+            return@PiSheet
+        }
         Segmented(
             options = TreeFilter.entries.map { it to it.label },
             selected = filter,
@@ -86,7 +99,6 @@ fun TreeSheet(
             height = 40.dp,
         )
         when {
-            error != null -> F2Empty(error)
             data == null -> F2Loading("Reading the tree")
             rows.isEmpty() -> F2Empty(if (filter == TreeFilter.Labeled) "No labels yet. Long-press an entry to label it." else "Nothing here yet.")
             else -> {
@@ -205,5 +217,31 @@ private fun TreeRowView(row: TreeRow, enabled: Boolean, onClick: () -> Unit, onL
                 Text("${row.branches}", style = type.micro, color = colors.ink2)
             }
         }
+    }
+}
+
+/**
+ * The tree could not be read: said as an error (danger glyph, a plain title, Pi's own words in meta ink3) with Retry,
+ * never as an empty list, which would read as "this session has no history".
+ */
+@Composable
+private fun TreeError(message: String, onRetry: () -> Unit) {
+    val colors = Pi.colors
+    val shape = RoundedCornerShape(Radius.md)
+    Column(
+        Modifier
+            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .fillMaxWidth()
+            .background(colors.dangerSoft, shape)
+            .border(1.dp, colors.danger.copy(alpha = 0.4f), shape)
+            .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Rounded.ErrorOutline, contentDescription = null, tint = colors.danger, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(10.dp))
+            Text("Could not read the session tree", style = Pi.type.bodyStrong, color = colors.ink1, modifier = Modifier.weight(1f).semantics { heading() })
+        }
+        Text(message, style = Pi.type.meta, color = colors.ink3, maxLines = 4, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = 28.dp, top = 6.dp, end = 8.dp))
+        Box(Modifier.padding(start = 16.dp)) { TextAction("Retry", onClick = onRetry, color = colors.accent) }
     }
 }

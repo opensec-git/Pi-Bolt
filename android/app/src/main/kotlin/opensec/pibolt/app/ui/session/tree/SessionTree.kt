@@ -40,6 +40,16 @@ enum class TreeFilter(val label: String) {
 }
 
 object SessionTree {
+    /**
+     * What a `get_entries` reply gives the sheet: the data, or an error to show as an error. A reply that succeeds
+     * without data is an error too: otherwise the sheet would wait on "Reading the tree" forever.
+     */
+    fun load(success: Boolean, data: JsonObject?, error: String?): Pair<JsonObject?, String?> = when {
+        success && data != null -> data to null
+        success -> null to "Pi sent no session tree."
+        else -> null to (error?.trim()?.takeIf { it.isNotEmpty() } ?: "Pi did not answer.")
+    }
+
     /** Entries that are not points in the conversation: their children hang from their parent instead. */
     private val COLLAPSED = setOf("label", "usage")
 

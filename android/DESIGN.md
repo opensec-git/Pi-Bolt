@@ -549,9 +549,10 @@ under it.
     label ink2, counts success / danger tnum, " · undone" in ink3 after an undo; 48dp tall), only for turns whose
     checkpoints show changed files. Over remote control the newest turn that edited files says instead, in meta ink3,
     that review and undo work in sessions on this phone (the files are on the computer).
-  - under the last finished reply: Copy (check + "Copied"), Ask again (sends the same prompt as a new turn; Pi has
-    no regenerate; hidden for prompts with images) and More (Select text, View as Markdown, Share), 40dp tall,
-    aligned with the prose. Fades in 150 ms after the turn settles; never animates in history.
+  - under the last finished reply: three icons, ink2 16-18dp, each in a 48dp target, no labels (one calm toolbar):
+    Copy (a success check while copied), Ask again (sends the same prompt as a new turn; Pi has no regenerate; hidden
+    for prompts with images) and More (Select text, View as Markdown, Share), 40dp tall, the copy glyph aligned with
+    the prose. Fades in 150 ms after the turn settles; never animates in history.
   - live status line: Quad 16dp + shimmer label + elapsed timer. A running tool is named: the verb shimmers and its
     command or path follows in mono small ink3 ("Run  npm test"; a subagent reads "Agent working" + its task;
     parallel tools add "+n"); text changes crossfade (quick).
@@ -559,31 +560,39 @@ under it.
 - Todo panel above the queue strip (see Todo panel below).
 - Queue strip above the composer: 44dp rows with a 2dp bar (warning = steer, ink4 = follow-up), swipe to remove.
 - Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–6 lines; bar: attach (+,
-  48dp; ink4 and a "<model> can't read images" snackbar when the model's `input` lacks "image"), model chip, thinking
-  chip, send (40dp accent circle). Attached images (Photo Picker, images only, at most 4) sit in a tray above the
+  48dp; ink4 and a "<model> can't read images" snackbar when the model's `input` lacks "image"), one run-settings chip
+  ("Sonnet 4.5 · High": the model in label ink2, middle-truncated past 180dp, then " · High" in label ink3; the level is
+  left out when thinking is off or the model does not reason; TalkBack "Model: Sonnet 4.5, thinking high"), send (40dp
+  accent circle). The chip opens the model sheet, whose "Thinking" row (36dp level pills, radius full, the current one
+  accent 1.5dp on the selected fill, the level's meaning under it in meta ink3) sets the level without closing it. Attached images (Photo Picker, images only, at most 4) sit in a tray above the
   text: 56dp thumbnails, radius 8, 1dp line, a Quad Write while each encodes, a 20dp ✕ (scrim, lineStrong ring, 48dp
   touch) at the top-end corner. Encoding runs off the main thread: long edge at most 2000 px, JPEG 85 (PNG only when
   transparent and under 1.5 MB), refused over Pi's 4.5 MiB base64 limit. Send works with images and no text. While the agent works: send becomes Stop (surface3 circle, rounded square
   glyph) when the field is empty, and a "Steer | Follow-up" segmented control appears while typing. The palette and
   `@` mentions open above the field (see Command palette below). A thumbnail in the tray opens the image viewer. The
-  model and thinking chips cycle on long press (click label "Next model", "Next thinking level", a tick and a
-  snackbar naming the new value). IME insets animate with the keyboard. The draft is kept per session (computer or
+  run-settings chip cycles the model on long press (click label "Next model", a tick and a snackbar naming it);
+  Shift+Tab cycles the thinking level. IME insets animate with the keyboard. The draft is kept per session (computer or
   project, and Pi session) across restarts.
 - Empty session: the mark, "New session" and the folder tag, then "Commands" (the host's slash commands, mono name
   + description in meta ink3, the first 6 then "Show all N commands"; tap puts "/name " in the composer and focuses
   it) and "Recent" (the last 5 distinct prompts this phone sent to this computer; tap fills the composer). 48dp rows,
   SectionLabel headings, nothing sends by itself. Recent prompts persist per computer (20 at most) in
   `recent-prompts.json`.
-- Connection banner under the top bar: Quad Connect + "Reconnecting in 3s" countdown + Retry; slides down/up.
-- Top bar: a Search action (48dp) sits before the Quad. Overflow on a computer: Session and usage, Export or share,
+- Connection banner under the top bar: Quad Connect + "Reconnecting in 3s" countdown + Retry; slides down/up. Not
+  while the session first connects: the centred loading state (Quad Connect 44dp, "Starting Pi-Bolt in x") says that
+  alone, so one spinner and one sentence show at a time.
+- Top bar actions, left to right: the Quad slot (40dp), the session switcher, Search (48dp), overflow. The Quad is
+  drawn only while Pi is busy and the live status line is off screen (or the link failed); otherwise its slot is
+  blank space beside the title, never a still grid, so Search and overflow always sit together. Overflow on a computer: Session and usage, Export or share,
   Disconnect, Forget computer.
 - On this phone (a project's session): the title is the project's name and the subtitle drops the folder (session
   name and context only); back reads "Project". Overflow: New session, Resume a session, Fork from a message,
   Duplicate session, Rename session, Session and usage, Export or share (no Disconnect or Forget computer). The banner reads "Starting Pi-Bolt…" (Quad Connect) and "Engine stopped" with Restart (danger
   soft, power glyph). Long press on a user message adds "Fork from here": Pi forks the session at that message and
   its text comes back to the composer to edit and send. Recent prompts are kept per project.
-- Sheets (ModalBottomSheet, predictive back): model picker (search, "Current" then one group per provider under a
-  meta-strong heading, 60dp rows with provider initial; `/model text` opens it filtered),
+- Sheets (ModalBottomSheet, predictive back): model picker (the Thinking pills when the model reasons, then search,
+  "Current" then one group per provider under a meta-strong heading, 60dp rows with provider initial; `/model text`
+  opens it filtered),
   thinking level (52dp option rows with a description), Pi's dialogs (Quad Wait eyebrow "Pi is asking", title,
   message in a command well when it looks like a command (surface1, radius 12, the cwd in mono meta ink3 with Copy,
   then `$` in success and the command in mono), options as 52dp rows, primary button; swipe or scrim tap
@@ -610,9 +619,11 @@ runs it at once; others fill `/name ` and wait. Picks tick (haptic).
   level. Enter adds a line, as Android keyboards expect.
 
 **Review changes.** A full screen over the session, like the viewer (sheet motion, predictive back): Close, "Changes"
-and "3 files · +40 −12" (meta ink3, tnum), a 1dp line. Then the prompt (body ink2, three lines), "Undo this turn" and
-"Restore to before" (secondary buttons with undo and history glyphs; off while Pi works, with a meta line saying
-so), and after an undo a surface1 card "Undid 3 files of this turn." with Redo (accent). Each file: a 1dp line, a
+and "3 files · +40 −12" (meta ink3, tnum), a 1dp line. Then the prompt (body ink2, three lines) and, after an undo, a
+surface1 card "Undid 3 files of this turn." with Redo (accent). The turn's actions sit in a bottom bar, in thumb reach
+(canvas, 1dp line above, 12dp padding, over the navigation bar): "Restore to before" (secondary, history glyph) and
+"Undo this turn" (primary, undo glyph: it can be redone); both off while Pi works, with a meta line above them saying
+so. Each file: a 1dp line, a
 56dp row (chevron, the name in mono meta ink1 over its folder in meta ink3, "new" success or "deleted" danger, +n
 success −n danger tnum or "binary", and a 48dp undo button for that file); the first four files start open. An open
 file shows its unified diff with the tool rows' renderer (gutter numbers, changed words, the file's syntax colours) on
@@ -649,6 +660,12 @@ screen. Hits start at the newest. Back closes.
 the message and returns its text), Edit in composer, Select text, Share. On a reply block: Copy (plain text, without
 Markdown), Copy as Markdown, Regenerate (on this phone: forks before the prompt and sends it again), Select text, View
 as Markdown, Share. More under the last reply offers the same.
+
+**Session tree** (`/tree`). A sheet: "Session tree" with "One branch…" or "2 forks. The marked path is what Pi sees."
+(meta ink3), the Messages | Prompts | Labeled | Everything filter, then the entries (forks indented, the active path
+marked). Loading reads "Reading the tree" (Quad Think). A failed read (or a reply without data) is an error, never an
+empty list: no subtitle, no filter, a dangerSoft card (radius 12, danger @ 40% line) with the error glyph, "Could not
+read the session tree" (bodyStrong ink1), Pi's message (meta ink3, four lines) and Retry (accent).
 
 **Export.** "Export or share" (or `/export`): Share as Markdown (a `.md` file through the share sheet), Copy as
 Markdown, and on this phone Share session file (the JSONL) and Share as HTML (`export_html`). Files are written to
@@ -720,7 +737,7 @@ messages. Pi has no RPC to read or steer a subagent: steering and resuming go th
   scale 0.98.
 - Stack: two or more consecutive `Agent` calls (one message's parallel calls). Closed: one card with a 48dp header
   (up to 3 avatars, 22dp, overlapping by 8dp with a 2dp ring; "3 agents running", "1 of 3 agents running", "3 agents
-  done", "3 agents · 1 failed"; the longest run time; chevron) over one 40dp line per agent (glyph, type, crossfading
+  done", "3 agents · 1 failed"; the longest run time; chevron) over one 48dp line per agent (glyph, type, crossfading
   activity or task, time; tap opens it). Open (header tap): the header, then each agent's card 8dp apart; the switch
   resizes with the settle spring. The open state lives with the tool groups'.
 - A finished turn folds its steps but not its agent cards: each is a unit of work of its own, and background runs

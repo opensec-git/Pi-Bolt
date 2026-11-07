@@ -65,7 +65,9 @@ fun SearchBar(
                     textStyle = type.body.copy(color = colors.ink1),
                     cursorBrush = SolidColor(colors.accent),
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { onNext() }),
+                    // Hits start at the newest (the reader is at the bottom): the keyboard's Search walks up to older
+                    // ones, like the up arrow, instead of wrapping to the oldest hit first.
+                    keyboardActions = KeyboardActions(onSearch = { onPrevious() }),
                     modifier = Modifier.fillMaxWidth().focusRequester(focus),
                 )
             }

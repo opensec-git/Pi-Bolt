@@ -2,11 +2,11 @@ package opensec.pibolt.app
 
 import androidx.compose.ui.input.key.Key
 import opensec.pibolt.app.ui.session.ComposerKeys
+import opensec.pibolt.app.ui.session.ModelChipText
 import opensec.pibolt.app.ui.session.ProjectTraits
 import opensec.pibolt.app.ui.session.PromptHistory
 import opensec.pibolt.app.ui.session.StarterPrompts
 import opensec.pibolt.app.ui.session.thinkingChipLabel
-import opensec.pibolt.app.ui.session.thinkingShortLabel
 import java.io.File
 import java.nio.file.Files
 import kotlin.test.Test
@@ -86,7 +86,21 @@ class PromptHistoryTest {
     fun thinkingChipSaysWhatTheLevelIs() {
         assertEquals("Thinking: medium", thinkingChipLabel("medium"))
         assertEquals("Thinking off", thinkingChipLabel("off"))
-        assertEquals("Medium", thinkingShortLabel("medium"))
+    }
+
+    @Test
+    fun runSettingsChipJoinsModelAndLevel() {
+        val chip = ModelChipText.of("Sonnet 4.5", "high")
+        assertEquals("Sonnet 4.5", chip.model)
+        assertEquals("High", chip.level)
+        assertEquals("Model: Sonnet 4.5, thinking high", chip.description)
+        // Off and a model that does not reason show the model alone; TalkBack still hears "thinking off".
+        assertNull(ModelChipText.of("Sonnet 4.5", "off").level)
+        assertEquals("Model: Sonnet 4.5, thinking off", ModelChipText.of("Sonnet 4.5", "off").description)
+        assertNull(ModelChipText.of("Fake", null).level)
+        assertEquals("Model: Fake", ModelChipText.of("Fake", null).description)
+        assertEquals("Model", ModelChipText.of(null, "low").model)
+        assertEquals("Model: not set, thinking low", ModelChipText.of(" ", "low").description)
     }
 
     @Test

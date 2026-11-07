@@ -555,7 +555,7 @@ private fun NumberedBody(body: Numbered) {
     val style = Pi.type.monoSmall
     val scroll = rememberScrollState()
     Row(Modifier.fillMaxWidth().padding(vertical = 12.dp)) {
-        Text(body.gutter, style = style, color = colors.ink4, softWrap = false, modifier = Modifier.padding(start = 14.dp, end = 10.dp))
+        Text(body.gutter, style = style, color = colors.ink3, softWrap = false, modifier = Modifier.padding(start = 14.dp, end = 10.dp))
         Box(Modifier.weight(1f).horizontalEdgeFades(scroll, colors.surface1).horizontalScroll(scroll)) {
             Text(body.code, style = style, color = colors.ink2, softWrap = false, modifier = Modifier.padding(end = 14.dp))
         }
