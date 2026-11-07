@@ -3,6 +3,7 @@ package opensec.pibolt.app
 import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import opensec.pibolt.app.data.AgentDefaults
@@ -79,11 +80,13 @@ class AgentDefaultsTest {
         // Auto-compact then Auto-retry flipped at once: each change is written in turn, and the newer one lands last.
         val file = File(Files.createTempDirectory("pibolt-agent").toFile(), "settings.json")
         val settings = AgentSettingsFile(file)
-        repeat(40) { round ->
-            val on = round % 2 == 0
-            val first = AgentDefaults(autoCompaction = on)
-            launch { settings.write(first) }
-            launch { settings.write(first.copy(autoRetry = on)) }
+        coroutineScope {
+            repeat(40) { round ->
+                val on = round % 2 == 0
+                val first = AgentDefaults(autoCompaction = on)
+                launch { settings.write(first) }
+                launch { settings.write(first.copy(autoRetry = on)) }
+            }
         }
         val last = settings.read()
         assertFalse(last.autoCompaction)
