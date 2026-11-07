@@ -1,6 +1,6 @@
 Lobe Icons (https://github.com/lobehub/lobe-icons), the monochrome marks of AI providers and model makers from the
-npm package @lobehub/icons-static-svg@1.102.0 (integrity
-sha512-3Na6S2kdslmsfnBjuL0PQWQClrmuWe/pWThRN/3J2VzPg5MhVghy8knVu7kd1/lqA9ydZBvwmnKLzuBo0Wm6Qw==), converted to Android
+npm package @lobehub/icons-static-svg@1.98.0 (integrity
+sha512-soyLV2g74ujV+9BBymPwXrorJ+kQsEz7WvVd4uzhN2wZnd4Jbyc2FsmyjZBosGaufOirCs1RGJQlLe6l9bjwLg==), converted to Android
 vector drawables by android/tools/provider-logos.mjs. The names and logos are trademarks of their owners; Pi-Bolt
 shows them only to say which provider or model is in use and is not affiliated with or endorsed by them.
 

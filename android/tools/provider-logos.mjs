@@ -26,9 +26,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PACKAGE = "@lobehub/icons-static-svg";
-const PINNED_VERSION = "1.102.0";
+const PINNED_VERSION = "1.98.0";
 const PINNED_INTEGRITY =
-	"sha512-3Na6S2kdslmsfnBjuL0PQWQClrmuWe/pWThRN/3J2VzPg5MhVghy8knVu7kd1/lqA9ydZBvwmnKLzuBo0Wm6Qw==";
+	"sha512-soyLV2g74ujV+9BBymPwXrorJ+kQsEz7WvVd4uzhN2wZnd4Jbyc2FsmyjZBosGaufOirCs1RGJQlLe6l9bjwLg==";
 
 /** Drawable slug -> Lobe Icons file (without .svg). */
 const BRANDS = {
