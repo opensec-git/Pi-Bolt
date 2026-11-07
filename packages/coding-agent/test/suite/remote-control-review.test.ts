@@ -280,6 +280,20 @@ describe("remote control review", () => {
 		expect(await ok(phone, { type: "rc_git_diff", path: "a.txt" })).toMatchObject({ path: "a.txt" });
 	});
 
+	it("refuses a folder as the source of a staged rename", async () => {
+		const repo = makeRepo();
+		mkdirSync(join(repo, "config"));
+		const rest = Array.from({ length: 20 }, (_, i) => `SETTING_${i}=${i}\n`).join("");
+		writeFileSync(join(repo, "config", ".env"), `TOKEN=old-secret\n${rest}`);
+		git(repo, "add", "config");
+		git(repo, "commit", "-q", "-m", "config");
+		git(repo, "mv", "config/.env", "public.txt");
+		const { phone } = await connect(repo);
+		const error = await refused(phone, { type: "rc_git_diff", path: "public.txt", origPath: "config", staged: true });
+		expect(error).toContain("not a file");
+		expect(error).not.toContain("old-secret");
+	});
+
 	it("shows only commits, not a blob or tree by its id", async () => {
 		const repo = makeRepo();
 		const { phone } = await connect(repo);

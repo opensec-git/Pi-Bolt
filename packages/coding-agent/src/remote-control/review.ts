@@ -599,9 +599,10 @@ class Review {
 		} else {
 			const paths = orig && isStaged ? [orig.rel, target.rel] : [target.rel];
 			const flags = [...(isStaged ? ["--cached", "-M"] : []), "--no-ext-diff", "--no-textconv", "--relative"];
-			// A folder path matches every file below it, past the secret check: the diff may hold only the named files.
-			const names = await this.gitOk(["diff", "--name-only", "-z", ...flags, "--", ...paths], STATUS_BYTES);
-			const listed = names.stdout.toString("utf8").split("\0").filter(Boolean);
+			// A folder path matches every file below it, past the secret check: the diff may hold only the named files,
+			// both sides of a rename included (`origPath: "config"` would match a rename from `config/.env`).
+			const names = await this.gitOk(["diff", "--name-status", "-z", ...flags, "--", ...paths], STATUS_BYTES);
+			const listed = parseNameStatus(names.stdout.toString("utf8")).flat();
 			if (names.truncated || listed.some((name) => !paths.includes(name))) {
 				throw new ReviewError(`${target.rel} is not a file`);
 			}
@@ -652,16 +653,11 @@ class Review {
 		if (names.truncated && !this.options.readSecretFiles) {
 			throw new ReviewError("The commit changes too many files to show");
 		}
-		// `status\0path\0`, or for a rename or copy `status\0source\0destination\0`: a change is withheld when any of
-		// its paths is secret, so a secret renamed to an allowed name does not show its old lines.
-		const tokens = names.stdout.toString("utf8").split("\0");
+		// A change is withheld when any of its paths is secret, so a secret renamed to an allowed name does not show its
+		// old lines.
 		const withheld: string[] = [];
 		const allowed: string[] = [];
-		for (let i = 0; i < tokens.length; i++) {
-			if (!tokens[i]) continue;
-			const count = tokens[i][0] === "R" || tokens[i][0] === "C" ? 2 : 1;
-			const paths = tokens.slice(i + 1, i + 1 + count).filter(Boolean);
-			i += count;
+		for (const paths of parseNameStatus(names.stdout.toString("utf8"))) {
 			const secret = !this.options.readSecretFiles && paths.some((file) => isSecretPath(file));
 			for (const file of paths) {
 				const into = secret ? withheld : allowed;
@@ -781,6 +777,23 @@ class Review {
 			await handle.close();
 		}
 	}
+}
+
+/**
+ * `--name-status -z` output as the paths of each change: `status\0path\0`, or for a rename or copy
+ * `status\0source\0destination\0`.
+ */
+function parseNameStatus(raw: string): string[][] {
+	const changes: string[][] = [];
+	const tokens = raw.split("\0");
+	for (let i = 0; i < tokens.length; i++) {
+		if (!tokens[i]) continue;
+		const count = tokens[i][0] === "R" || tokens[i][0] === "C" ? 2 : 1;
+		const paths = tokens.slice(i + 1, i + 1 + count).filter(Boolean);
+		i += count;
+		if (paths.length > 0) changes.push(paths);
+	}
+	return changes;
 }
 
 /** [record] split on its first [n] - 1 spaces: the last field is the path and may hold spaces. */
