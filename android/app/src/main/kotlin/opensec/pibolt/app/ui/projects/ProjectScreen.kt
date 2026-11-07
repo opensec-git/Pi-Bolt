@@ -12,6 +12,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.heading
 import opensec.pibolt.app.terminal.Terminals
+import opensec.pibolt.app.secrets.SecretStore
 import opensec.pibolt.app.ui.components.SecondaryButton
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -135,7 +136,7 @@ fun ProjectScreen(
 ) {
     val engine = app.engine
     val store = remember { ProjectStore.get(app) }
-    val projects = remember(engine) { Projects(engine, store) }
+    val projects = remember(engine) { Projects(engine, store, SecretStore.get(app)) }
     val colors = Pi.colors
     val type = Pi.type
     val scope = rememberCoroutineScope()

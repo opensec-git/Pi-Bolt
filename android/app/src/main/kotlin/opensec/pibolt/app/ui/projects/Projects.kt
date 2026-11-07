@@ -14,11 +14,12 @@ import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.data.SafeFiles
 import opensec.pibolt.app.engine.EngineApi
 import opensec.pibolt.app.engine.SessionSummary
+import opensec.pibolt.app.secrets.ProjectSecrets
 import opensec.pibolt.app.session.SessionController
 import java.io.File
 
 /** Project folders on this phone. Every call touches the disk, so every call runs on [Dispatchers.IO]. */
-class Projects(private val engine: EngineApi, private val store: ProjectStore) {
+class Projects(private val engine: EngineApi, private val store: ProjectStore, private val secrets: ProjectSecrets? = null) {
     suspend fun list(): List<ProjectEntry> = withContext(Dispatchers.IO) {
         val dirs = engine.projectsDir.listFiles { f -> SafeFiles.isRealDirectory(f) && !f.name.startsWith(".") }.orEmpty()
         val meta = store.state.value.projects
@@ -55,6 +56,8 @@ class Projects(private val engine: EngineApi, private val store: ProjectStore) {
         runCatching { engine.deleteSessions(dir) }
         if (!SafeFiles.deleteTree(dir)) return@withContext Result.failure(IllegalStateException("Some files could not be deleted"))
         store.forget(name)
+        // Secrets are kept by the project's path: a new project of the same name must not inherit them.
+        runCatching { secrets?.forget(dir) }
         Result.success(Unit)
     }
 
