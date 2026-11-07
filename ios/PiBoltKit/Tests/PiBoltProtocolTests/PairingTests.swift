@@ -60,4 +60,12 @@ struct PairingTests {
         #expect(RemoteEndpoints.from(["endpoints": []], connected: nil) == nil)
         #expect(RemoteEndpoints.from(["type": "remote_endpoints"], connected: "ws://a/rc") == nil)
     }
+
+    @Test func pairingGetsTimeBeforeItsSingleUseSecretIsLost() {
+        var config = RemoteConfig(hostKey: Data(count: 32), endpoints: [], identity: .generate(), deviceName: "t", appVersion: "0")
+        #expect(config.timeout(for: "ws://10.0.0.2:48123/rc") == 3)
+        #expect(config.timeout(for: "wss://a.trycloudflare.com/rc") == 15)
+        config.pairSecret = Data(count: 32)
+        #expect(config.timeout(for: "ws://10.0.0.2:48123/rc") == 20)
+    }
 }

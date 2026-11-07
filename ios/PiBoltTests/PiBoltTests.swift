@@ -86,7 +86,7 @@ struct LiveSessionTests {
         app.receive(link: uri)
         let payload = try #require(app.pendingLink)
         let controller = app.pair(payload)
-        #expect(await waitUntil { controller.link.isConnected && controller.state.hello })
+        #expect(await waitUntil(40) { controller.link.isConnected && controller.state.hello }, "\(controller.link)")
         // The computer is stored once the handshake proved its key.
         #expect(app.hosts.get(payload.hostKeyId)?.name == "fixture-host")
         #expect(controller.state.host?.service == true)

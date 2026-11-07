@@ -82,7 +82,15 @@ public struct RemoteConfig: Sendable {
         self.tunnelTimeout = tunnelTimeout
     }
 
-    public func timeout(for endpoint: String) -> TimeInterval { endpoint.hasPrefix("wss://") ? tunnelTimeout : lanTimeout }
+    /// The budget while pairing. The host spends the single-use secret when it reads handshake message 1, so a client
+    /// that gives up before message 2 arrives (a slow first connection, iOS asking for Local Network access) has lost
+    /// the code: give the pairing attempt time.
+    public var pairingTimeout: TimeInterval = 20
+
+    public func timeout(for endpoint: String) -> TimeInterval {
+        let base = endpoint.hasPrefix("wss://") ? tunnelTimeout : lanTimeout
+        return pairSecret == nil ? base : max(base, pairingTimeout)
+    }
 }
 
 /// A value many tasks can watch: `states()` yields the current value, then every change.
