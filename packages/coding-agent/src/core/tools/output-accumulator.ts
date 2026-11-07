@@ -198,10 +198,23 @@ export class OutputAccumulator {
 
 		const bytes = byteLength(text);
 		this.totalDecodedBytes += bytes;
-		this.tailText += text;
-		this.tailBytes += bytes;
-		if (this.tailBytes > this.maxRollingBytes * 2) {
-			this.trimTail();
+		const tailLength = this.tailText.length;
+		if (this.tailBytes + bytes > this.maxRollingBytes * 2 && bytes === text.length && this.tailBytes === tailLength) {
+			// Both ASCII (as many UTF-8 bytes as characters): the last maxRollingBytes characters are what trimTail() keeps,
+			// taken without joining the tail and the text and encoding them. A command's output arrives in chunks of up to
+			// 256 KB, each larger than the rolling limit, so this would otherwise copy and encode every chunk twice.
+			const start = tailLength + bytes - this.maxRollingBytes;
+			const before =
+				start - 1 < tailLength ? this.tailText.charCodeAt(start - 1) : text.charCodeAt(start - 1 - tailLength);
+			this.tailStartsAtLineBoundary = before === 0x0a;
+			this.tailText = start >= tailLength ? text.slice(start - tailLength) : this.tailText.slice(start) + text;
+			this.tailBytes = this.maxRollingBytes;
+		} else {
+			this.tailText += text;
+			this.tailBytes += bytes;
+			if (this.tailBytes > this.maxRollingBytes * 2) {
+				this.trimTail();
+			}
 		}
 
 		let newlines = 0;
