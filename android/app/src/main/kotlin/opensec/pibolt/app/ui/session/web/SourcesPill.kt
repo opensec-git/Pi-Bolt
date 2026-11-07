@@ -89,15 +89,18 @@ fun SourcesPill(row: SourcesRow, onToggle: () -> Unit, modifier: Modifier = Modi
     val type = Pi.type
     val web = row.sources
     val count = web.sources.size
-    val pending = count == 0 && web.searching
-    val failed = count == 0 && !web.searching && web.error != null
+    // Until every step has finished, an empty pill waits ("Searching the web", "Reading the page"); only then can it
+    // say that nothing was found.
+    val pending = count == 0 && web.active
+    val failed = count == 0 && !web.active && web.error != null
+    val waiting = if (web.searching) "Searching the web" else "Reading the page"
     // Favicons already shown when this row appeared do not pop in again (history never animates).
     val seen = remember(row.key) { HashSet<String>().apply { if (!row.live) web.sources.forEach { add(it.url) } } }
     Column(modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             // The timeline's 20dp leading slot (on the fold's rail when opened there).
             Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
-                if (web.searching || web.fetching) {
+                if (web.active) {
                     QuadSpinner(QuadMode.Run, size = 14.dp, color = colors.ink2, animate = row.live)
                 } else {
                     Icon(Icons.Rounded.Public, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
@@ -105,7 +108,7 @@ fun SourcesPill(row: SourcesRow, onToggle: () -> Unit, modifier: Modifier = Modi
             }
             Spacer(Modifier.width(Space.md))
             val label = when {
-                pending -> "Searching the web"
+                pending -> waiting
                 failed -> "Search failed"
                 count == 0 -> "No sources found"
                 else -> "Sources, $count"
@@ -122,7 +125,7 @@ fun SourcesPill(row: SourcesRow, onToggle: () -> Unit, modifier: Modifier = Modi
                 ) {
                     when {
                         pending -> {
-                            ShimmerText("Searching the web", type.label, active = row.live)
+                            ShimmerText(waiting, type.label, active = row.live)
                             WebTools.pendingLabel(web).takeIf { it.isNotBlank() }?.let { q ->
                                 Spacer(Modifier.width(Space.sm))
                                 Text(q, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
@@ -190,7 +193,8 @@ fun SourceIcon(source: WebSource, size: Dp, popIn: Boolean = false, order: Int =
     val icon = rememberFavicon(source.url)
     val appear = remember(source.url) { Animatable(if (popIn && !reduced) 0f else 1f) }
     LaunchedEffect(source.url) {
-        if (appear.value < 1f) appear.animateTo(1f, PiMotion.enter(PiMotion.STANDARD, delay = order.coerceAtMost(PiMotion.STAGGER_MAX_STEPS) * PiMotion.STAGGER_STEP))
+        // One by one, even when every result lands in the same frame: 120ms apart by position.
+        if (appear.value < 1f) appear.animateTo(1f, PiMotion.enter(PiMotion.STANDARD, delay = order.coerceAtMost(PiMotion.STAGGER_MAX_STEPS) * PiMotion.STAGGER))
     }
     val fetching = source.state == SourceState.Fetching
     val arc by animateFloatAsState(if (fetching) 1f else 0f, PiMotion.inPlace(PiMotion.SETTLE), label = "arc")
@@ -210,7 +214,13 @@ fun SourceIcon(source: WebSource, size: Dp, popIn: Boolean = false, order: Int =
         },
         contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.size(size).clip(CircleShape).background(colors.surface3), contentAlignment = Alignment.Center) {
+        // On a dark theme a site's icon sits on a light disc (ink1 at 90%) with a 1dp ring: a black mark (GitHub,
+        // endoflife.date) would vanish on the dark surface. The globe glyph keeps surface3.
+        val backing = if (icon != null && !colors.isLight) colors.ink1.copy(alpha = 0.9f) else colors.surface3
+        Box(
+            Modifier.size(size).clip(CircleShape).background(backing).border(1.dp, colors.lineStrong, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
             if (icon != null) {
                 Image(icon, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.size(size * 0.72f).clip(CircleShape))
             } else {

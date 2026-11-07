@@ -106,8 +106,11 @@ fun QuestionSheet(toolCallId: String, questions: List<AskQuestion>, first: Int, 
                     }
                 }
             }
+            // The page takes what is left above the action row, so with the keyboard up (the sheet stops above it) the
+            // options shrink and scroll, and Back / Next stay in view.
             AnimatedContent(
                 targetState = index,
+                modifier = Modifier.weight(1f, fill = false),
                 transitionSpec = { fadeIn(PiMotion.enter(PiMotion.QUICK)) togetherWith fadeOut(PiMotion.leave(PiMotion.QUICK)) },
                 label = "question",
             ) { shown ->
@@ -161,7 +164,10 @@ private fun QuestionPage(question: AskQuestion, answer: AskAnswer, onAnswer: (As
         Spacer(Modifier.height(Space.sm))
         Text(question.question, style = type.rowTitle, color = colors.ink1, modifier = Modifier.semantics { heading() })
         Spacer(Modifier.height(Space.md))
-        Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(Space.sm)) {
+        Column(
+            Modifier.weight(1f, fill = false).heightIn(max = 320.dp).verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(Space.sm),
+        ) {
             question.options.forEachIndexed { i, option ->
                 val on = i in answer.picked
                 AskOptionRow(option, on, question.multiSelect) {

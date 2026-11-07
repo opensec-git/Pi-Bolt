@@ -362,14 +362,15 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
 
     /**
      * A setting that engines read at their start changed ("Web search": their tool flags, ChatSpace): the idle engines
-     * stop, and so do the live on-device sessions that are idle, so the next open, or New chat in an open chat, starts
-     * an engine with the new flags. A busy session keeps its engine until it ends.
+     * stop, and so does every live on-device session that is not running a turn ([LivePolicy.restartsForSettings]),
+     * so the next open, or New chat in an open chat, starts an engine with the new flags. A session in the middle of a
+     * turn keeps its engine until it ends.
      */
     fun restartForSettings(reason: String) {
         stopIdleEngines(reason)
-        val idleLive = localSessions().filter { it.isIdle }
-        for (session in idleLive) session.stop(keepEngine = false)
-        if (idleLive.isNotEmpty()) Log.i(TAG, "stopped ${idleLive.size} idle sessions ($reason)")
+        val stopped = localSessions().filter { LivePolicy.restartsForSettings(it.state.value) }
+        for (session in stopped) session.stop(keepEngine = false)
+        Log.i(TAG, "stopped ${stopped.size} live sessions not in a turn ($reason)")
     }
 
     private fun stopIdle(backend: LocalBackend) {

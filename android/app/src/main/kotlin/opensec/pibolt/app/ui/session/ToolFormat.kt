@@ -5,6 +5,7 @@ import androidx.compose.runtime.Immutable
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonObject
 import opensec.pibolt.protocol.arr
+import opensec.pibolt.protocol.bool
 import opensec.pibolt.protocol.int
 import opensec.pibolt.app.engine.ChatSpace.ASK_TOOL
 import opensec.pibolt.app.ui.session.ask.AskQuestions
@@ -65,7 +66,7 @@ fun toolLabel(item: ToolItem): ToolLabel {
         "source_check" -> ToolLabel(ToolKind.Web, "Check sources", firstLine(arg("claim")), "Checked sources")
         "fetch_content" -> ToolLabel(ToolKind.Web, "Read", WebTools.fetchUrls(item).joinToString(", ").ifBlank { arg("url").orEmpty() }, "Read")
         "get_search_content" -> ToolLabel(ToolKind.Web, "Read results", arg("query", "url").orEmpty(), "Read results")
-        ASK_TOOL -> ToolLabel(ToolKind.Ask, "Ask", AskQuestions.parse(item.args)?.firstOrNull()?.question?.let(::firstLine).orEmpty(), "Asked")
+        ASK_TOOL -> ToolLabel(ToolKind.Ask, "Ask", AskQuestions.parse(item.args)?.firstOrNull()?.question?.let(::firstLine).orEmpty(), if (isDeclinedAsk(item)) "Declined" else "Asked")
         else -> {
             val first = args?.entries?.firstOrNull { (it.value as? JsonPrimitive)?.isString == true }?.let { (it.value as JsonPrimitive).content }
             ToolLabel(ToolKind.Other, name, (first ?: arg("command", "path", "pattern", "query", "url")).orEmpty().lineSequence().firstOrNull().orEmpty())
@@ -592,3 +593,11 @@ fun groupDetail(tools: List<ToolItem>): String = tools.mapNotNull { t ->
         else -> null
     }
 }.distinct().joinToString(", ")
+
+/**
+ * An `ask_user_question` the user dismissed (or left without an answer): the extension's result is "User declined to
+ * answer questions" with `details.cancelled`. Its row says "Declined" with a neutral glyph, not a check.
+ */
+fun isDeclinedAsk(item: ToolItem): Boolean =
+    item.name == ASK_TOOL && item.status == ToolStatus.Done &&
+        (item.details?.bool("cancelled") == true || item.result?.trim()?.startsWith("User declined to answer questions") == true)

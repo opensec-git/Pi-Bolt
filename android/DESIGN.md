@@ -1332,20 +1332,23 @@ plain row ("Read results").
   12dp, then a `glass` capsule, 40dp in a 48dp target: up to three overlapping 24dp favicon circles, each on a 1.5dp
   ring of the canvas so they separate, overlapping by 9dp, the first on top; "Sources" (label ink1), the count (label
   ink3, tnum) and an ExpandMore chevron that turns 180° (quick, in place). Read as "Sources, 5, show".
-- **Before the first result:** "Searching the web" shimmering, then the query in meta ink3. A search that failed with
+- **Before the first result:** "Searching the web" (or "Reading the page" for a read) shimmering, then the query in
+  meta ink3, as long as any step is still written or running; "No sources found" only once all have finished. A search that failed with
   nothing found reads its reason in ink2 beside the globe.
 - **List** (tap): a surface1 card, radius tile, 1dp line, under the pill from the text start; rows at least 52dp: a
   20dp favicon, the page title (body ink1, one line) over the domain (meta ink3, without "www."; "· reading", "·
   couldn't read"), and Open in browser (`IconAction`, OpenInNew 18dp). The whole row opens the page too.
 - **Motion, live turn only:** each favicon pops in as its results arrive: scale 0.6 to 1 and fade, standard, enter
-  easing, 70ms apart (`PiMotion.STAGGER_STEP`, eight steps at most). A page being read (`fetch_content`) wears a 1.5dp
+  easing, 120ms apart by position (`PiMotion.STAGGER`, eight steps at most), even when all arrive in one frame. A page being read (`fetch_content`) wears a 1.5dp
   ink2 arc of 110° that turns once per `SWEEP`; when the read ends the arc fades out (settle); a page that could not be
   read dims to 40%. History never animates; reduce motion draws the arc still and nothing pops.
 - **Favicons** (`FaviconRules`, `Favicons`): from the site itself, `https://<host>/favicon.ico`, else the first
   `<link rel="icon">` of its home page (first 64KB); never a Google or DuckDuckGo favicon service. https only, public
   host names only (no IP, localhost or LAN names), 256KB at most, decoded to 64px. Memory (64) and disk cache
   (`cacheDir/favicons`, sha256 of the host, 4MB, least recently used out first; a host without one is retried after
-  3 days), all off the main thread. Without one: the Rounded Public glyph on surface3, never a letter tile.
+  3 days), all off the main thread. On a dark theme a site's icon sits on a light disc (ink1 at 90%) with a 1dp
+  lineStrong ring, so black marks (GitHub) stay visible. Without one: the Rounded Public glyph on surface3, never a
+  letter tile.
 
 ## Question card (ask_user_question)
 
@@ -1365,5 +1368,8 @@ extensions' dialogs keep the generic sheet.
 - Nothing is sent until Submit; then the walker's dialogs are answered from the card as they arrive (option line, or
   the "Type something." row and the text; for several: `1,3; text`). Dismissing the sheet (swipe, scrim, Cancel)
   declines the whole questionnaire, as the extension's own dismiss does.
-- Turning Web search on or off stops the idle engines and the idle sessions on the phone (`restartForSettings`), so
-  New chat in an open chat gets the new tools too; a busy session keeps its engine until it ends.
+- Turning Web search on or off stops the idle engines and every on-device session not in a turn
+  (`LivePolicy.restartsForSettings`), so New chat in an open chat gets the new tools too; a session in a turn keeps its
+  engine until it ends. The "Searches go to Exa" note shows only while it is on.
+- A dismissed questionnaire's row reads "Declined" with the neutral dash, not "Asked" with a check. With the keyboard
+  up the options shrink and scroll, and the action row stays above the keyboard.

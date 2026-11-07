@@ -24,7 +24,14 @@ data class WebSource(val url: String, val host: String, val title: String?, val 
  * search listed), the [queries] of searches still running ([searching]), and [error], the reason when every step failed.
  */
 @Immutable
-data class WebSources(val sources: List<WebSource>, val searching: Boolean, val queries: List<String>, val error: String? = null) {
+data class WebSources(
+    val sources: List<WebSource>,
+    val searching: Boolean,
+    val queries: List<String>,
+    val error: String? = null,
+    /** A step is still being written or running: nothing is final yet (no "No sources found" meanwhile). */
+    val active: Boolean = searching,
+) {
     val fetching: Boolean get() = sources.any { it.state == SourceState.Fetching }
 }
 
@@ -70,7 +77,9 @@ object WebTools {
                 else -> old
             }
         }
+        var active = false
         for (item in tools) {
+            if (item.isActive) active = true
             when (item.name) {
                 SEARCH, SOURCE_CHECK -> when {
                     item.isActive -> {
@@ -95,8 +104,8 @@ object WebTools {
                 }
             }
         }
-        val error = if (!anyOk && !searching && errors.isNotEmpty() && out.values.none { it.state == SourceState.Fetching }) errors.first() else null
-        return WebSources(out.values.toList(), searching, queries.distinct(), error)
+        val error = if (!anyOk && !active && errors.isNotEmpty()) errors.first() else null
+        return WebSources(out.values.toList(), searching, queries.distinct(), error, active)
     }
 
     /** A search result's sources: (title, url), each URL once, in the result's order. */

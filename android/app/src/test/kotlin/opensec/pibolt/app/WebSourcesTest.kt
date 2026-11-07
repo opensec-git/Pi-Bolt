@@ -142,6 +142,19 @@ class WebSourcesTest {
     }
 
     @Test
+    fun aReadStillBeingWrittenIsNotAnEmptyResult() {
+        // Xiaomi round: "No sources found" flashed while fetch_content's call was still being written (no URL yet).
+        val writing = ToolItem("tool:f", "f", "fetch_content", null, argsText = "{\"ur", status = ToolStatus.Streaming)
+        val web = WebTools.of(listOf(writing))
+        assertTrue(web.active && web.sources.isEmpty() && !web.searching)
+        assertNull(web.error)
+        val done = WebTools.of(listOf(writing.copy(args = obj("url" to "https://pi.dev/"), status = ToolStatus.Error, result = "Error: Failed to resolve")))
+        assertTrue(!done.active)
+        // Finished: the failed page is listed as failed (not an empty pill).
+        assertEquals(listOf(SourceState.Failed), done.sources.map { it.state })
+    }
+
+    @Test
     fun readingASearchResultMarksThatSourceInsteadOfAddingIt() {
         val search = replay("project-web-ask").first { it.name == "web_search" }
         val fetch = ToolItem("tool:f", "f", "fetch_content", obj("url" to "https://pi.dev/docs/latest/usage#install"), status = ToolStatus.Running)

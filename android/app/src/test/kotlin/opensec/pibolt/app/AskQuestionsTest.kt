@@ -124,6 +124,22 @@ class AskQuestionsTest {
     }
 
     @Test
+    fun aDeclinedQuestionnaireReadsDeclined() {
+        // Xiaomi round: a dismissed card showed "✓ Asked".
+        val events = EngineFixture.events("ask-cancel")
+        var state = SessionState(hello = true, items = listOf(UserItem("u1", "go")))
+        for (e in events) state = SessionReducer.reduce(state, e)
+        val declined = state.allItems.filterIsInstance<ToolItem>().last()
+        assertTrue(opensec.pibolt.app.ui.session.isDeclinedAsk(declined))
+        assertEquals("Declined", opensec.pibolt.app.ui.session.toolLabel(declined).past)
+        var answered = SessionState(hello = true, items = listOf(UserItem("u1", "go")))
+        for (e in EngineFixture.events("ask-back")) answered = SessionReducer.reduce(answered, e)
+        val ok = answered.allItems.filterIsInstance<ToolItem>().last()
+        assertTrue(!opensec.pibolt.app.ui.session.isDeclinedAsk(ok))
+        assertEquals("Asked", opensec.pibolt.app.ui.session.toolLabel(ok).past)
+    }
+
+    @Test
     fun theWalkersBackToOptionsIsAnsweredFromTheCard() {
         // ask-back: the client cancelled the typed input, which returns to the options (not a decline); then SQLite and
         // option 2. The card never sends a blank typed answer: a typed step without text is answered by going back.

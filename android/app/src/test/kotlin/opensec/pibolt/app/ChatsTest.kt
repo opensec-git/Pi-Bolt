@@ -96,6 +96,18 @@ class ChatsTest {
         assertTrue(ChatSpace.isChat(File(home, ".pibolt/./chats").path, home))
     }
 
+    @Test
+    fun turningWebSearchOffRestartsEverySessionNotInATurn() {
+        // Xiaomi round: an open chat kept its web tools. A lasting extension status (background subagents), an open
+        // dialog or a reconnecting link made the session not "idle", so it was skipped; only a turn keeps the engine now.
+        val quiet = opensec.pibolt.protocol.session.SessionState(hello = true)
+        assertTrue(opensec.pibolt.app.engine.LivePolicy.restartsForSettings(quiet))
+        assertTrue(opensec.pibolt.app.engine.LivePolicy.restartsForSettings(quiet.copy(statuses = mapOf("subagents" to "1 agent running", "web" to "Exa"))))
+        assertTrue(opensec.pibolt.app.engine.LivePolicy.restartsForSettings(quiet.copy(dialogs = listOf(opensec.pibolt.protocol.session.DialogRequest("d", opensec.pibolt.protocol.session.DialogKind.Confirm, "Trust?")))))
+        assertFalse(opensec.pibolt.app.engine.LivePolicy.restartsForSettings(quiet.copy(isRunning = true)))
+        assertFalse(opensec.pibolt.app.engine.LivePolicy.restartsForSettings(quiet.copy(isCompacting = true)))
+    }
+
     /**
      * What the engine registered with these flags: the tool lists the model saw in real runs of Pi-Bolt 1.1.2 with the
      * bundled extensions (test/resources/fixtures/engine, recorded with android/e2e's fake model).

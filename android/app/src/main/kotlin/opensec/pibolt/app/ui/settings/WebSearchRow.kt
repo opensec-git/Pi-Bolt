@@ -20,7 +20,8 @@ internal fun webSearchRow(app: PiBoltApp, on: Boolean, tint: Color): SettingsRow
             app.settings.update { it.copy(webSearch = value) }
             (app.engine as? LocalEngine)?.restartForSettings("web search turned ${if (value) "on" else "off"}")
         },
-        meta = "Searches go to Exa",
+        // The privacy note only while searches can happen.
+        meta = if (on) "Searches go to Exa" else null,
         icon = Icons.Rounded.Public,
         iconTint = tint,
         divider = divider,
