@@ -1,5 +1,7 @@
 package opensec.pibolt.app.session
 
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -18,14 +20,20 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.checkpoints.TurnCheckpoints
+import opensec.pibolt.app.cost.CapCard
+import opensec.pibolt.app.cost.Cost
+import opensec.pibolt.app.cost.SessionSpending
+import opensec.pibolt.app.cost.SpendCaps
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.engine.ChatSpace
+import opensec.pibolt.app.engine.LivePolicy
 import opensec.pibolt.protocol.Base64Url
 import opensec.pibolt.protocol.backend.ConnectionState
 import opensec.pibolt.protocol.backend.DisconnectReason
@@ -44,10 +52,16 @@ import opensec.pibolt.protocol.rpc.StreamingBehavior
 import opensec.pibolt.protocol.rpc.clearedQueue
 import opensec.pibolt.protocol.rpc.thinkingLevels
 import opensec.pibolt.protocol.session.AssistantTextItem
+import opensec.pibolt.protocol.session.SUBAGENT_STREAM_FEATURE
 import opensec.pibolt.protocol.session.SessionReducer
+import opensec.pibolt.protocol.session.SubagentReducer
+import opensec.pibolt.app.ui.session.ask.AskReply
+import opensec.pibolt.app.ui.session.ask.AskResponder
+import opensec.pibolt.app.ui.session.ask.AskSubmission
 import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.arr
 import opensec.pibolt.protocol.bool
+import opensec.pibolt.protocol.obj
 import opensec.pibolt.protocol.str
 import opensec.pibolt.protocol.type
 import java.io.File
@@ -63,8 +77,15 @@ import kotlinx.serialization.json.buildJsonObject
 sealed interface SessionEffect {
     data class Notify(val message: String, val kind: String) : SessionEffect
 
-    /** Put text into the composer (extension `set_editor_text`, a failed send, or a cleared queue). */
-    data class EditorText(val text: String) : SessionEffect
+    /**
+     * Put text into the composer: an extension's `set_editor_text` replaces the draft; a failed send or a cleared queue
+     * ([restore]) gives text back without losing what was typed since, as the terminal does: [into].
+     */
+    data class EditorText(val text: String, val restore: Boolean = false) : SessionEffect {
+        /** The composer's text after this effect, from [draft]. */
+        fun into(draft: String): String =
+            if (!restore || draft.isBlank() || draft.trim() == text.trim()) text else listOf(text, draft).filter { it.isNotBlank() }.joinToString("\n\n")
+    }
 
     data class Error(val message: String) : SessionEffect
 }
@@ -111,7 +132,7 @@ class SessionController private constructor(
         class Remote(val endpoints: List<String>, val pairSecret: ByteArray?, val fallbackSecret: ByteArray?) : Origin
 
         /** [release] gets the backend back when the session stops, and whether the engine was idle then. */
-        class Local(val project: File, val backend: LocalBackend, val release: (LocalBackend, Boolean) -> Unit, val checkpoints: TurnCheckpoints?, val chat: Boolean) : Origin
+        class Local(val project: File, val backend: LocalBackend, val release: (LocalBackend, Boolean) -> Unit, val checkpoints: TurnCheckpoints?, val chat: Boolean, val slot: Int) : Origin
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -121,8 +142,20 @@ class SessionController private constructor(
     /** Runs on the engine on this phone; every RPC command is available (remote control allows a subset). */
     val isLocal: Boolean = origin is Origin.Local
 
+    /** The engine of a session on this phone (null for a computer's). */
+    val localBackend: LocalBackend? get() = (origin as? Origin.Local)?.backend
+
     /** The project directory of a local session (for a chat: the chats' directory, which is no project). */
     val project: File? = (origin as? Origin.Local)?.project
+
+    /**
+     * This session's place among its project's live sessions (0 for the first; another one opens beside a busy one, see
+     * [LivePolicy.planOpen]). Part of [hostId], so notifications and their answers reach this very session.
+     */
+    val slot: Int = (origin as? Origin.Local)?.slot ?: 0
+
+    /** Drafts and per-session memory: per project on this phone (a session keeps them whichever slot shows it), else [hostId]. */
+    val memoryKey: String = (origin as? Origin.Local)?.project?.let { localId(it) } ?: hostId
 
     /** A plain chat (engine.ChatSpace): on this phone, in no project, without tools. */
     val isChat: Boolean = (origin as? Origin.Local)?.chat == true
@@ -173,14 +206,34 @@ class SessionController private constructor(
     }
 
     private val inputs = Channel<Input>(Channel.UNLIMITED)
+
+    /** The question card's answers on their way to `ask_user_question`'s dialogs (ui/session/ask). */
+    private val ask = AskResponder()
     private val retrySignal = Channel<Unit>(Channel.CONFLATED)
 
     /** On this phone, subagents' session files are readable: their messages stream into [SessionState.subagents]. */
     private val subagentTail: SubagentTail? =
         if (origin is Origin.Local) SubagentTail(state, { sessionFile }) { inputs.trySend(Input.Event(it)) } else null
 
-    /** True when a subagent's own messages can be shown (a session on this phone); remote control sends only progress. */
-    val readsSubagentFiles: Boolean get() = subagentTail != null
+    /** This session's cost, its share of the day's and month's spending, and the limits (cost/). */
+    private val spending = SessionSpending(app.spend, { app.settings.settings.value.spend }, hostId)
+
+    /** What this session cost so far, its subagents included (on this phone). */
+    val cost: StateFlow<Cost> get() = spending.cost
+
+    /** A spending limit held a prompt back or stopped a run: the card the session shows. */
+    val capCard: StateFlow<CapCard?> get() = spending.card
+
+    /**
+     * Runs whose detail screen is open. The computer (remote control, `subagent_stream`) or this phone's engine streams
+     * their own conversation while they are watched (`subagent_subscribe`); subscribed again after every `remote_hello`
+     * (a reconnect or another session), since the computer drops a phone's streams with its connection.
+     */
+    private val watchedSubagents = MutableStateFlow<Set<String>>(emptySet())
+
+    /** A local engine that refused `subagent_subscribe` (before Pi-Bolt 1.1.5): not asked again. */
+    @Volatile
+    private var engineStreamsSubagents = true
 
     @Volatile
     var stopped = false
@@ -198,6 +251,10 @@ class SessionController private constructor(
     fun start() {
         scope.launch { reduceLoop() }
         scope.launch { connectLoop() }
+        if (origin is Origin.Remote) {
+            val cm = connectivity
+            networkRegistered = cm != null && runCatching { cm.registerDefaultNetworkCallback(networkCallback) }.isSuccess
+        }
         pumpEvents()
         subagentTail?.start(scope)
         checkpoints?.let {
@@ -206,9 +263,47 @@ class SessionController private constructor(
         }
     }
 
-    /** Keep reading subagent [key]'s session file while its detail screen is open, also after it finished. */
+    /**
+     * Subagent [key]'s detail screen opened ([on]) or closed: on this phone its session file is read while it is open,
+     * also after it finished; the computer (or an engine that can) streams its conversation until it closes.
+     */
     fun watchSubagent(key: String, on: Boolean) {
         subagentTail?.watch(key, on)
+        val before = watchedSubagents.value
+        watchedSubagents.update { if (on) it + key else it - key }
+        if ((key in before) == on) return
+        if (on) subscribeSubagent(key) else unsubscribeSubagent(key)
+    }
+
+    /** The computer's (or engine's) answer to `subagent_subscribe`; [computer]: its `remote_hello` lists the feature. */
+    private fun canStreamSubagents(computer: Boolean = _state.value.host?.streamsSubagents == true): Boolean =
+        if (isLocal) engineStreamsSubagents else computer
+
+    private fun subscribeSubagent(key: String, computer: Boolean = _state.value.host?.streamsSubagents == true) {
+        if (!canStreamSubagents(computer)) return
+        val client = rpc
+        scope.launch {
+            // A call still being written is not a run yet on the computer: asked again a few times while it is watched.
+            // An engine without the command says so once. Neither is an error the reader sees: the screen keeps what
+            // it has (the file on this phone, the prompt and progress over remote control).
+            repeat(SUBSCRIBE_TRIES) {
+                val response = client.request("subagent_subscribe", timeoutMs = 15_000) { put("runId", key) }
+                if (response.success) return@launch
+                if (isLocal && response.error?.startsWith("Unknown command") == true) {
+                    engineStreamsSubagents = false
+                    return@launch
+                }
+                if (response.error?.startsWith("No subagent run") != true) return@launch
+                delay(SUBSCRIBE_RETRY_MS)
+                if (key !in watchedSubagents.value || client !== rpc) return@launch
+            }
+        }
+    }
+
+    private fun unsubscribeSubagent(key: String) {
+        if (!canStreamSubagents()) return
+        val client = rpc
+        scope.launch { client.request("subagent_unsubscribe", timeoutMs = 15_000) { put("runId", key) } }
     }
 
     /**
@@ -219,9 +314,12 @@ class SessionController private constructor(
         if (stopped) return
         stopped = true
         checkpoints?.close()
+        // Stopped on purpose: a turn it was running did not end by a process death.
+        if (isLocal) app.runMarks.unmark(hostId)
         app.sessionStopped(this)
         when (origin) {
             is Origin.Remote -> {
+                if (networkRegistered) runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
                 backend.close()
                 rpc.stop()
                 scope.cancel()
@@ -240,15 +338,28 @@ class SessionController private constructor(
 
     /** A turn, a compaction, an open dialog or background subagents: never stopped to make room or free memory. */
     val isBusy: Boolean
-        get() = _state.value.let { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() || SUBAGENTS_STATUS in it.statuses }
+        get() = _state.value.let { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() || SUBAGENTS_STATUS in it.statuses || opensec.pibolt.app.engine.BackgroundJobs.STATUS_KEY in it.statuses }
 
     /** Connected, and nothing runs: no turn, compaction, open dialog or background subagent. */
     val isIdle: Boolean
-        get() = _state.value.let { !it.isRunning && !it.isCompacting && it.dialogs.isEmpty() && SUBAGENTS_STATUS !in it.statuses } &&
+        get() = _state.value.let { !it.isRunning && !it.isCompacting && it.dialogs.isEmpty() && SUBAGENTS_STATUS !in it.statuses && opensec.pibolt.app.engine.BackgroundJobs.STATUS_KEY !in it.statuses } &&
             _link.value is LinkState.Connected
 
     fun retryNow() {
         retrySignal.trySend(Unit)
+    }
+
+    private val connectivity: ConnectivityManager? by lazy { app.getSystemService(ConnectivityManager::class.java) }
+    private var networkRegistered = false
+
+    /**
+     * A computer's session waiting out its backoff (up to 30 s) retries as soon as a network comes up: back in Wi-Fi
+     * range, mobile data after Wi-Fi, out of airplane mode.
+     */
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            if (_link.value is LinkState.Retrying) retryNow()
+        }
     }
 
     private fun newBackend(endpoints: List<String>, secret: ByteArray?) = RemoteBackend(
@@ -420,7 +531,9 @@ class SessionController private constructor(
             is Input.Event -> {
                 val event = input.json
                 sideEffects(state, event)
-                SessionReducer.reduce(state, event)
+                // On this phone the app reads the subagent's file itself; the engine's stream adds only the message
+                // being written (`subagent_events`).
+                if (isLocal && event.type == SubagentReducer.ENTRIES_EVENT) state else SessionReducer.reduce(state, event)
             }
         }
     } catch (e: RuntimeException) {
@@ -430,22 +543,33 @@ class SessionController private constructor(
 
     private fun sideEffects(before: SessionState, event: JsonObject) {
         checkpoints?.onEvent(event, before.sessionId)
+        val spent = spending.onEvent(before, event)
+        if (spent.abort) abort()
+        spent.warning?.let { _effects.tryEmit(SessionEffect.Notify(it, "warning")) }
+        if (spent.snapshot) readCost(event.obj("state")?.str("sessionFile"))
         when (event.type) {
             "extension_ui_request" -> when (event.str("method")) {
                 "notify" -> _effects.tryEmit(SessionEffect.Notify(event.str("message").orEmpty(), event.str("notifyType") ?: "info"))
                 "set_editor_text" -> _effects.tryEmit(SessionEffect.EditorText(event.str("text").orEmpty()))
                 "select", "confirm", "input", "editor" -> if (!app.isForeground) {
-                    SessionReducer.dialogFrom(event)?.let { Notifications.needsAnswer(app, hostId, project?.name?.takeUnless { isChat }, _hostName.value, it, chat = isChat) }
+                    SessionReducer.dialogFrom(event)?.let { Notifications.needsAnswer(app, this, it) }
                 }
             }
             "agent_settled" -> {
                 if (!app.isForeground && before.isRunning) {
                     val last = (before.allItems.lastOrNull { it is AssistantTextItem } as? AssistantTextItem)?.text.orEmpty()
-                    Notifications.settled(app, hostId, project?.name?.takeUnless { isChat }, _hostName.value, last, aborted = event.bool("aborted") == true, chat = isChat)
+                    val capped = spending.card.value?.takeIf { it.stopped }?.let { SpendCaps.reached(it.kind, it.limit) }
+                    Notifications.settled(app, hostId, Notifications.projectOf(project, isChat), _hostName.value, last, aborted = event.bool("aborted") == true, chat = isChat, sessionId = before.sessionId, capped = capped)
                 }
                 scope.launch { refreshState() }
             }
             "remote_hello" -> {
+                // The computer forgot this phone's subagent streams (a new connection or session): ask again.
+                val watched = watchedSubagents.value
+                if (watched.isNotEmpty()) {
+                    val streams = event.arr("features")?.any { (it as? JsonPrimitive)?.content == SUBAGENT_STREAM_FEATURE } == true
+                    watched.forEach { subscribeSubagent(it, streams) }
+                }
                 val host = (event["host"] as? JsonObject)
                 if (!isLocal) {
                     app.hosts.update(hostId) {
@@ -454,6 +578,15 @@ class SessionController private constructor(
                 }
                 _models.value = emptyList()
                 _thinkingLevels.value = emptyList()
+                // A reconnect after the run ended or a dialog opened: the "finished" and "needs an answer" alerts of the
+                // events the drop swallowed, with the snapshot's own text.
+                if (!isLocal) {
+                    val missed = SessionReducer.missedWhileAway(before, event)
+                    if (missed.isNotEmpty()) {
+                        val after = SessionReducer.reduce(before, event).copy(isRunning = true)
+                        missed.forEach { sideEffects(after, it) }
+                    }
+                }
             }
             RemoteEndpoints.TYPE -> onEndpoints(event)
         }
@@ -468,6 +601,41 @@ class SessionController private constructor(
         app.hosts.update(hostId) { it.copy(endpoints = endpoints) }
     }
 
+    /**
+     * Reads the session's own total (its file and its subagents' on this phone, `get_session_stats` from a computer):
+     * it has what the snapshot's context does not (compacted turns, summaries, finished subagents). [file]: the session
+     * file a snapshot named, else the engine's current one.
+     */
+    private fun readCost(file: String?) {
+        val mark = spending.mark()
+        scope.launch {
+            val total = if (isLocal) {
+                val f = file ?: sessionFile ?: return@launch
+                withContext(Dispatchers.IO) { runCatching { app.engine.sessionCost(f) }.getOrNull() }
+            } else {
+                sessionStats().getOrNull()?.let { Cost(it.cost, it.assistantMessages.toInt()) }
+            }
+            total?.let { spending.rebase(it, mark) }
+        }
+    }
+
+    /** "Continue once" on the limit's card: the next run goes to its end. */
+    fun continueOnce() = spending.continueOnce()
+
+    fun dismissCapCard() = spending.dismissCard()
+
+    /**
+     * False when a spending limit holds prompts back: the card says so, and a prompt sent from a notification while the
+     * app is away is answered by one.
+     */
+    fun spendAllows(): Boolean {
+        if (spending.maySend()) return true
+        if (!app.isForeground) {
+            spending.card.value?.let { Notifications.settled(app, hostId, Notifications.projectOf(project, isChat), _hostName.value, "", aborted = true, chat = isChat, sessionId = _state.value.sessionId, capped = SpendCaps.reached(it.kind, it.limit)) }
+        }
+        return false
+    }
+
     private fun afterPublish(previous: SessionState, now: SessionState) {
         if (!readyLogged && now.hello) {
             readyLogged = true
@@ -478,9 +646,32 @@ class SessionController private constructor(
             sentAt = 0L
             Log.i(PERF_TAG, "first token ${SystemClock.elapsedRealtime() - sent} ms")
         }
+        // A turn on this phone is on disk while it runs: a process killed meanwhile says so on the next launch (RunMarks).
+        if (isLocal && now.isRunning != previous.isRunning) {
+            if (now.isRunning) app.runMarks.mark(RunMarks.Run(hostId, project?.name?.takeUnless { isChat }, _hostName.value, sessionFile, isChat))
+            else app.runMarks.unmark(hostId)
+        }
         val needsService = now.isRunning || now.dialogs.isNotEmpty()
         if (needsService && !(previous.isRunning || previous.dialogs.isNotEmpty())) SessionService.ensureRunning(app)
         if (previous.dialogs.isNotEmpty() && now.dialogs.isEmpty()) Notifications.clearNeedsAnswer(app, hostId)
+        if (now.dialogs !== previous.dialogs || ask.submission != null) answerAsk(now)
+    }
+
+    /** True while [toolCallId]'s card answers are being sent (its dialogs are answered as they come, not shown). */
+    fun askSubmitting(toolCallId: String): Boolean = ask.submitting(toolCallId)
+
+    /** Submit (or, with `cancel`, dismiss) the question card: its dialogs are answered from [submission] from now on. */
+    fun submitAsk(submission: AskSubmission) {
+        ask.submit(submission)
+        answerAsk(_state.value)
+    }
+
+    private fun answerAsk(state: SessionState) {
+        val (id, reply) = ask.next(state) ?: return
+        when (reply) {
+            is AskReply.Value -> answer(id, reply.value)
+            AskReply.Cancel -> cancelDialog(id)
+        }
     }
 
     private fun mutate(change: (SessionState) -> SessionState) {
@@ -494,20 +685,33 @@ class SessionController private constructor(
 
     // Commands
 
-    /** Send a prompt. While the agent runs, [behavior] says whether it steers or waits as a follow-up. */
-    fun send(text: String, behavior: StreamingBehavior, images: List<ImageAttachment> = emptyList()) {
-        val running = _state.value.isRunning
+    /**
+     * Send a prompt. While the agent runs, [behavior] says whether it steers or waits as a follow-up. False when a
+     * spending limit held it back ([spendAllows]).
+     */
+    fun send(text: String, behavior: StreamingBehavior, images: List<ImageAttachment> = emptyList()): Boolean {
+        if (!spendAllows()) return false
         sentAt = SystemClock.elapsedRealtime()
         scope.launch {
+            // Pi refuses a prompt while a manual compaction runs ("Wait for compaction to finish and retry"); the terminal
+            // holds it until the compaction ends, and so does this.
+            if (holdsForCompaction(_state.value)) withTimeoutOrNull(COMPACTION_HOLD_MS) { _state.first { !holdsForCompaction(it) } }
+            val running = _state.value.isRunning
             // The turn's start state is recorded before the agent can edit (a steer joins a running turn instead).
             if (!running) checkpoints?.prepareStart()
             // An extension command answers only when it finishes, after its dialogs: nothing waits on this.
             val response = rpc.prompt(text, images, streamingBehavior = if (running) behavior else null)
             if (!response.success && !stopped) {
-                _effects.tryEmit(SessionEffect.EditorText(text))
+                _effects.tryEmit(SessionEffect.EditorText(text, restore = true))
                 _effects.tryEmit(SessionEffect.Error(response.error ?: "Not sent"))
             }
         }
+        return true
+    }
+
+    /** Shows [message] as an error on this session's screen (an open beside it that failed). */
+    fun showError(message: String) {
+        _effects.tryEmit(SessionEffect.Error(message))
     }
 
     fun abort() {
@@ -523,7 +727,7 @@ class SessionController private constructor(
             if (response.success) {
                 val (steering, followUp) = response.clearedQueue()
                 val text = (steering + followUp).joinToString("\n\n")
-                if (text.isNotBlank()) _effects.tryEmit(SessionEffect.EditorText(text))
+                if (text.isNotBlank()) _effects.tryEmit(SessionEffect.EditorText(text, restore = true))
             } else {
                 _effects.tryEmit(SessionEffect.Error(response.error ?: "Could not clear the queue"))
             }
@@ -577,8 +781,11 @@ class SessionController private constructor(
     fun setThinkingLevel(level: String) {
         scope.launch {
             val response = rpc.setThinkingLevel(level)
-            if (response.success) mutate { it.copy(thinkingLevel = level) }
-            else _effects.tryEmit(SessionEffect.Error(response.error ?: "Could not change thinking level"))
+            if (response.success) {
+                mutate { it.copy(thinkingLevel = level) }
+                // Pi clamps a level the model lacks ("/thinking xhigh" on a model up to high): show the level it set.
+                refreshState()
+            } else _effects.tryEmit(SessionEffect.Error(response.error ?: "Could not change thinking level"))
         }
     }
 
@@ -593,7 +800,12 @@ class SessionController private constructor(
     }
 
     // Sessions and shell. A local engine runs all of these; remote control answers "Not available over remote control".
-    // A session switch replaces the conversation through a new `remote_hello`, as on a computer.
+    // A session switch replaces the conversation through a new `remote_hello`, as on a computer. Pi aborts the turn of
+    // the session it replaces, so these are refused while this one is busy ([switchRefusal]): on this phone another
+    // session opens beside it instead (LocalEngine), and a computer's service with `parallelSessions` keeps it running.
+
+    /** Why this session may not move to another one now, or null ([LivePolicy.switchRefusal]). */
+    fun switchRefusal(): String? = LivePolicy.switchRefusal(isLocal, isBusy, _state.value.host?.parallelSessions == true)
 
     fun newSession() = sessionCommand("Could not start a new session") { rpc.newSession() }
 
@@ -624,6 +836,7 @@ class SessionController private constructor(
      * the composer.
      */
     suspend fun fork(entryId: String): Result<String> {
+        switchRefusal()?.let { return Result.failure(IllegalStateException(it)) }
         val response = rpc.fork(entryId)
         if (!response.success) return Result.failure(IllegalStateException(response.error ?: "Fork failed"))
         val data = response.dataObject
@@ -759,6 +972,7 @@ class SessionController private constructor(
                 put("version", host?.version.orEmpty())
                 put("cwd", host?.cwd.orEmpty())
                 if (host?.service == true) put("service", true)
+                if (host?.parallelSessions == true) put("parallelSessions", true)
             })
             put("state", state.dataObject ?: JsonObject(emptyMap()))
             put("messages", messages.dataObject?.arr("messages") ?: JsonArray(emptyList()))
@@ -774,7 +988,13 @@ class SessionController private constructor(
     suspend fun request(type: String, timeoutMs: Long = 30_000, fields: JsonObjectBuilder.() -> Unit = {}): RpcResponse =
         rpc.request(type, timeoutMs, fields)
 
+    /** A command that replaces this session's runtime (new, switch, clone): never sent while it is busy. */
     private fun sessionCommand(failure: String, run: suspend () -> RpcResponse) {
+        switchRefusal()?.let { why ->
+            Log.i("PiBolt", "refused a session switch while busy ($hostId)")
+            _effects.tryEmit(SessionEffect.Error(why))
+            return
+        }
         scope.launch {
             val response = run()
             when {
@@ -797,6 +1017,9 @@ class SessionController private constructor(
     }
 
     companion object {
+        private const val SUBSCRIBE_TRIES = 5
+        private const val SUBSCRIBE_RETRY_MS = 1_500L
+
         /** Status key of the bundled subagents extension, set while background agents run or wait. */
         private const val SUBAGENTS_STATUS = "subagents"
         private const val FRAME_MS = 16L
@@ -805,6 +1028,15 @@ class SessionController private constructor(
         /** Close code 1012: the background service gave the port to `/remote-control` in a terminal on the computer. */
         const val HANDOFF_NOTICE = "The computer's terminal took over. Reconnecting…"
 
+        /** The longest a prompt waits for a manual compaction ([holdsForCompaction]): the compact request's own timeout. */
+        private const val COMPACTION_HOLD_MS = 600_000L
+
+        /**
+         * A prompt sent now waits for the compaction to end: a manual one (or one whose reason a resync lost). Pi takes a
+         * prompt during an automatic compaction (it queues it), but refuses one during `compact`.
+         */
+        fun holdsForCompaction(state: SessionState): Boolean = state.isCompacting && state.compactionReason != "threshold" && state.compactionReason != "overflow"
+
         /** Why a chat refuses a shell command. */
         const val NO_COMMANDS = "Chats can't run commands"
 
@@ -812,10 +1044,13 @@ class SessionController private constructor(
          * A session with the engine on this phone, in [project]. [release] takes the backend back when it stops. A [chat]
          * runs in the chats' directory (engine.ChatSpace), named [opensec.pibolt.app.engine.ChatSpace.NAME].
          */
-        fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit, checkpoints: TurnCheckpoints? = null, chat: Boolean = false) =
-            SessionController(app, localId(project), if (chat) ChatSpace.NAME else project.name, Origin.Local(project, backend, release, checkpoints, chat))
+        fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit, checkpoints: TurnCheckpoints? = null, chat: Boolean = false, slot: Int = 0) =
+            SessionController(app, localId(project, slot), if (chat) ChatSpace.NAME else project.name, Origin.Local(project, backend, release, checkpoints, chat, slot))
 
-        /** [hostId] of a local session: per project, so drafts and recent prompts stay with it. */
-        fun localId(project: File): String = "local:${project.absolutePath}"
+        /**
+         * [hostId] of a local session: per project and [slot] (several sessions of one project may run at once), so
+         * notifications reach the right one. The first slot's id is the project's.
+         */
+        fun localId(project: File, slot: Int = 0): String = "local:${project.absolutePath}" + if (slot > 0) "#$slot" else ""
     }
 }

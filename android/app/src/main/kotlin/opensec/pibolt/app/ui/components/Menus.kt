@@ -4,6 +4,8 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -12,6 +14,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
@@ -37,12 +41,21 @@ fun PiMenu(expanded: Boolean, onDismiss: () -> Unit, modifier: Modifier = Modifi
     )
 }
 
-/** One menu item: a 20dp glyph and the label in rowMeta, both ink1, or [color] (danger for a destructive item). */
+/**
+ * One menu item: a 20dp glyph and the label in rowMeta, both ink1, or [color] (danger for a destructive item).
+ * [checked] marks the current choice of a picker menu with a 20dp accent check at the end (read as Selected).
+ */
 @Composable
-fun PiMenuItem(text: String, onClick: () -> Unit, icon: ImageVector? = null, color: Color = Pi.colors.ink1) {
+fun PiMenuItem(text: String, onClick: () -> Unit, icon: ImageVector? = null, color: Color = Pi.colors.ink1, checked: Boolean = false) {
     DropdownMenuItem(
         text = { Text(text, style = Pi.type.rowMeta, color = color) },
         leadingIcon = icon?.let { { Icon(it, contentDescription = null, tint = color, modifier = Modifier.size(IconSize.md)) } },
+        trailingIcon = if (checked) {
+            { Icon(Icons.Rounded.Check, contentDescription = null, tint = Pi.colors.accent, modifier = Modifier.size(IconSize.md)) }
+        } else {
+            null
+        },
         onClick = onClick,
+        modifier = if (checked) Modifier.semantics { selected = true } else Modifier,
     )
 }

@@ -1,6 +1,5 @@
 package opensec.pibolt.app.ui.session
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.width
@@ -13,10 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Layers
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -44,16 +41,17 @@ import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.RunningSummary
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.PiMenu
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.InsetRow
 import opensec.pibolt.app.ui.projects.ProjectRules
+import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.session.UserItem
 import opensec.pibolt.app.ui.projects.SessionMark
 import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.ui.theme.Pi
-import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Space
 
 /** The live on-device sessions that are working or waiting for an answer, in the order they were opened. */
@@ -64,7 +62,7 @@ fun runningSessions(): Flow<List<LocalSessions.Live>> = LocalSessions.all.flatMa
     } else {
         combine(
             all.values.map { live ->
-                live.controller.state.map { s -> s.isRunning || s.isCompacting || s.dialogs.isNotEmpty() }.distinctUntilChanged().map { live to it }
+                live.controller.state.map(SwitcherRules::inTurn).distinctUntilChanged().map { live to it }
             },
         ) { pairs -> pairs.filter { it.second && !it.first.controller.stopped }.map { it.first } }
     }
@@ -108,13 +106,7 @@ private fun LiveMark(controller: SessionController, busy: Boolean) {
 fun RunningRow(live: LocalSessions.Live, meta: ProjectMeta?, onClick: () -> Unit, modifier: Modifier = Modifier, divider: Boolean = true) {
     val project = meta?.title ?: live.project.name
     val (status, _) = rememberStatus(live.controller)
-    val state = live.controller.state.collectAsStateWithLifecycle()
-    val title by remember(project) {
-        derivedStateOf {
-            val s = state.value
-            ProjectRules.focusTitle(s.sessionName, (s.items.lastOrNull { it is UserItem } as? UserItem)?.text, project)
-        }
-    }
+    val title = rememberAsked(live.controller, project)
     InsetRow(
         title = title,
         meta = "$status · $project",
@@ -124,6 +116,19 @@ fun RunningRow(live: LocalSessions.Live, meta: ProjectMeta?, onClick: () -> Unit
         modifier = modifier,
         leading = { SessionMark(live.controller) },
     )
+}
+
+/** What a live session was asked: its name, else its latest prompt, else [fallback] (its project). */
+@Composable
+private fun rememberAsked(controller: SessionController, fallback: String): String {
+    val state = controller.state.collectAsStateWithLifecycle()
+    val title by remember(fallback) {
+        derivedStateOf {
+            val s = state.value
+            ProjectRules.focusTitle(s.sessionName, (s.items.lastOrNull { it is UserItem } as? UserItem)?.text, fallback)
+        }
+    }
+    return title
 }
 
 /** The live on-device sessions waiting for an answer (a dialog is open), in the order they were opened. */
@@ -138,51 +143,65 @@ fun waitingSessions(): Flow<List<LocalSessions.Live>> = LocalSessions.all.flatMa
     }
 }
 
+/** The words and badge of the top bar's session switcher, from how many other sessions are open and how many run. */
+object SwitcherRules {
+    /** A session in a turn: working, compacting or waiting for an answer. An open, idle session is not running. */
+    fun inTurn(s: SessionState): Boolean = s.isRunning || s.isCompacting || s.dialogs.isNotEmpty()
+
+    /** "Other sessions, 2 running" while any of them is in a turn, else "Other sessions, 1 open". */
+    fun label(open: Int, running: Int): String = if (running > 0) "Other sessions, $running running" else "Other sessions, $open open"
+
+    /** The accent badge counts running sessions only: none while all of them are idle. */
+    fun badge(running: Int): Int? = running.takeIf { it > 0 }
+}
+
 /**
- * The session switcher in a session's top bar: shown only while other sessions are live, with their count; it lists
- * them with what each is doing, and a tap moves to one without stopping any. [onOpen] gets the project's name.
+ * The session switcher in a session's top bar: shown only while other sessions are live; its badge counts the ones in
+ * a turn ([SwitcherRules]). It lists them with what each is doing (several of one project by what each was asked), and
+ * a tap moves to one without stopping any. [onOpen] gets its [LocalSessions.Live.key].
  */
 @Composable
 fun SessionSwitcher(current: SessionController, titles: Map<String, ProjectMeta>, onOpen: (String) -> Unit, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val all by LocalSessions.all.collectAsStateWithLifecycle()
     val others = all.values.filter { it.controller !== current && !it.controller.stopped }
+    val running by remember(others) {
+        if (others.isEmpty()) flowOf(0) else combine(others.map { it.controller.state.map(SwitcherRules::inTurn).distinctUntilChanged() }) { busy -> busy.count { it } }
+    }.collectAsStateWithLifecycle(0)
     if (others.isEmpty()) return
     var open by remember { mutableStateOf(false) }
     Box(modifier) {
-        IconAction(Icons.Rounded.Layers, "Other sessions, ${others.size} running", onClick = { open = true }, tint = colors.ink2)
-        Box(
-            Modifier
-                .align(Alignment.TopEnd)
-                .offset(x = (-8).dp, y = 8.dp)
-                .size(16.dp)
-                .background(colors.accent, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text("${others.size}", style = Pi.type.meta, color = colors.onAccent, maxLines = 1)
+        IconAction(Icons.Rounded.Layers, SwitcherRules.label(others.size, running), onClick = { open = true }, tint = colors.ink2)
+        SwitcherRules.badge(running)?.let { n ->
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .offset(x = (-8).dp, y = 8.dp)
+                    .size(16.dp)
+                    .background(colors.accent, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text("$n", style = Pi.type.meta, color = colors.onAccent, maxLines = 1)
+            }
         }
-        DropdownMenu(
-            expanded = open,
-            onDismissRequest = { open = false },
-            containerColor = colors.surface3,
-            shape = RoundedCornerShape(Radius.md),
-            tonalElevation = 0.dp,
-            shadowElevation = 8.dp,
-            border = BorderStroke(1.dp, colors.lineStrong),
-        ) {
+        PiMenu(expanded = open, onDismiss = { open = false }) {
             for (live in others) {
                 val (status, busy) = rememberStatus(live.controller)
+                val project = titles[live.project.name]?.title ?: live.project.name
+                // Two sessions of one project (one ran when the other opened): each by what it was asked.
+                val shared = all.values.count { it.project == live.project && !it.controller.stopped } > 1
+                val asked = rememberAsked(live.controller, project)
                 DropdownMenuItem(
                     text = {
                         Column(Modifier.widthIn(min = 180.dp, max = 280.dp)) {
-                            Text(titles[live.project.name]?.title ?: live.project.name, style = Pi.type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            Text(status, style = Pi.type.meta, color = colors.ink3, maxLines = 1)
+                            Text(if (shared) asked else project, style = Pi.type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(if (shared) "$status · $project" else status, style = Pi.type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     },
                     leadingIcon = { Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) { LiveMark(live.controller, busy) } },
                     onClick = {
                         open = false
-                        onOpen(live.project.name)
+                        onOpen(live.key)
                     },
                     modifier = Modifier.height(56.dp).padding(vertical = 0.dp),
                 )

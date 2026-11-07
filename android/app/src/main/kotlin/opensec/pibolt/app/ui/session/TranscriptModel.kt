@@ -25,6 +25,8 @@ import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
 import opensec.pibolt.protocol.session.UserItem
+import opensec.pibolt.app.ui.session.web.WebSources
+import opensec.pibolt.app.ui.session.web.WebTools
 
 /**
  * One lazy-list row of the transcript. Keys are stable for the life of the row. Every row is an immutable data class, so
@@ -51,6 +53,7 @@ sealed interface TRow {
         is SubagentStackRow -> 11
         is SubagentNoticeRow -> 12
         is TurnMetaRow -> 13
+        is SourcesRow -> 14
     }
 }
 
@@ -107,6 +110,21 @@ data class ToolRow(val item: ToolItem, override val live: Boolean, val rail: Rai
 data class ToolGroupRow(
     override val key: String,
     val tools: List<ToolItem>,
+    val expanded: Boolean,
+    override val live: Boolean,
+    val rail: Rail? = null,
+) : TRow
+
+/**
+ * Consecutive web steps (pi-web-access's `web_search`, `source_check`, `fetch_content`) as one Sources pill: their
+ * [tools] and what they found ([sources], computed once per change of the tools). [expanded] lists the sources. A
+ * folded turn shows one for all its web steps after the answer.
+ */
+@Immutable
+data class SourcesRow(
+    override val key: String,
+    val tools: List<ToolItem>,
+    val sources: WebSources,
     val expanded: Boolean,
     override val live: Boolean,
     val rail: Rail? = null,
@@ -226,7 +244,24 @@ data class PendingSend(val id: Long, val text: String, val lastUserKey: String?,
 
 /** What the status line says: a label that shimmers, and for a running tool its argument in mono. */
 @Immutable
-data class StatusText(val label: String, val detail: String = "", val path: Boolean = false, val more: Int = 0)
+/** The live status line's words; [mono]: the detail is a command or path (tool steps), else it is prose. */
+data class StatusText(val label: String, val detail: String = "", val path: Boolean = false, val more: Int = 0, val mono: Boolean = false)
+
+/**
+ * Whether the session reasons: not when the thinking level is "off" or the model does not reason. Unknown (no model
+ * or level reported yet) counts as on. When it is off, nothing says "Thinking": an empty reasoning block (some
+ * providers send one anyway) gets no row and the status line says "Working".
+ */
+object ThinkingRules {
+    fun on(level: String?, modelReasons: Boolean?): Boolean = modelReasons != false && level != "off"
+
+    /** [items] without the reasoning blocks that have no text, when thinking is off; else [items] itself. */
+    fun visible(items: List<ChatItem>, on: Boolean): List<ChatItem> =
+        if (on || items.none { it is ThinkingItem && it.text.isBlank() }) items else items.filterNot { it is ThinkingItem && it.text.isBlank() }
+
+    /** True when [item] gets a row. */
+    fun shows(item: ThinkingItem, on: Boolean): Boolean = on || item.text.isNotBlank()
+}
 
 /**
  * Incremental markdown parses per assistant message (a growing message re-parses only its last block), and the
@@ -285,6 +320,16 @@ class MdCache(
         val files = mergeChanges(tools.mapNotNull(::change))
         val value = files to turnSummary(tools, files.size, body.count { it is ThinkingItem })
         folds[turnKey] = body.toList() to value
+        return value
+    }
+
+    private val webSources = HashMap<String, Pair<List<ToolItem>, WebSources>>()
+
+    /** The sources of a run of web steps, parsed again only when one of its tools changed. */
+    fun sources(key: String, tools: List<ToolItem>): WebSources {
+        webSources[key]?.let { (old, value) -> if (old == tools) return value }
+        val value = WebTools.of(tools)
+        webSources[key] = tools to value
         return value
     }
 
@@ -380,7 +425,7 @@ object TranscriptModel {
                 out += TurnBody(md, live, turnKey, foldOpen = foldable, openGroups, agents).build(items, bodyStart, end, lastStep)
             } else {
                 // Folded: only notices, the answer and agent cards (a unit of work of its own, and background ones
-                // outlive the turn that started them).
+                // outlive the turn that started them), then the turn's web sources as one pill.
                 var i = bodyStart
                 while (i < end) {
                     val item = items[i]
@@ -390,6 +435,11 @@ object TranscriptModel {
                     }
                     if (i > lastStep || item is NoticeItem || item is SubagentNoticeItem) addItem(out, item, live, md, agents)
                     i++
+                }
+                val web = items.subList(bodyStart, end).filterIsInstance<ToolItem>().filter(WebTools::isSourceTool)
+                if (web.isNotEmpty()) {
+                    val key = "sources:$turnKey"
+                    out += SourcesRow(key, web, md.sources(key, web), key in openGroups, live)
                 }
             }
             markTitle(out, turnRowsFrom)
@@ -457,6 +507,25 @@ object TranscriptModel {
                 if (item is ToolItem && isUnavailable(item) && laterSuccess(items, i, end)) {
                     // A tool this host lacks, which Pi then worked around: nothing to show.
                     i++
+                    continue
+                }
+                if (item is ToolItem && WebTools.isSourceTool(item)) {
+                    // Consecutive web steps (blank text between them skipped): one Sources pill.
+                    val run = ArrayList<ToolItem>()
+                    var j = i
+                    while (j < end) {
+                        val next = items[j]
+                        if (next is ToolItem && WebTools.isSourceTool(next)) {
+                            run += next
+                        } else if (!(next is AssistantTextItem && next.text.isBlank())) {
+                            break
+                        }
+                        j++
+                    }
+                    val key = "sources:${run[0].key}"
+                    val inRun = i <= lastStep
+                    emit(SourcesRow(key, run, md.sources(key, run), key in openGroups, live), if (inRun) foldSegment else null, if (inRun) foldStagger else null)
+                    i = j
                     continue
                 }
                 if (item is ToolItem && isGroupable(item)) {
@@ -532,6 +601,7 @@ object TranscriptModel {
         is ThinkingRow -> row.copy(rail = rail)
         is ToolRow -> row.copy(rail = rail)
         is ToolGroupRow -> row.copy(rail = rail)
+        is SourcesRow -> row.copy(rail = rail)
         else -> row
     }
 
@@ -652,7 +722,8 @@ object TranscriptModel {
      * The status line's text. A running tool is named ("Run" + `npm test`, "Read" + path); a subagent reads "Agent
      * working" + its task; a send not yet echoed reads "Sending"; otherwise the mode's label.
      */
-    fun statusText(mode: QuadMode, activity: Activity, sending: Boolean): StatusText {
+    /** [thinking]: the session reasons ([ThinkingRules.on]); when not, the idle Think mode reads "Working". */
+    fun statusText(mode: QuadMode, activity: Activity, sending: Boolean, thinking: Boolean = true): StatusText {
         val tool = activity.running
         val more = (activity.runningCount - 1).coerceAtLeast(0)
         return when {
@@ -661,8 +732,9 @@ object TranscriptModel {
                 val label = toolLabel(tool)
                 val detail = label.detail.lineSequence().firstOrNull().orEmpty().trim()
                 val path = label.kind == ToolKind.Read || label.kind == ToolKind.Write || label.kind == ToolKind.Edit || label.kind == ToolKind.List
-                if (mode == QuadMode.Agent) StatusText(mode.label, detail, false, more) else StatusText(label.verb, detail, path, more)
+                if (mode == QuadMode.Agent) StatusText(mode.label, detail, false, more) else StatusText(label.verb, detail, path, more, mono = true)
             }
+            mode == QuadMode.Think && !thinking -> StatusText("Working")
             else -> StatusText(mode.label)
         }
     }

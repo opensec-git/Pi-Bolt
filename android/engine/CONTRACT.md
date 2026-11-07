@@ -66,7 +66,9 @@ dynamic programs. esbuild itself therefore ships in the pack (see esbuild).
   "links": [ { "path": "lib/libc.so.6", "target": "libc_so_6.so" }, { "path": "bin/bash", "target": "libbash_exe.so" } ],
   "files": [ { "path": "etc/ssl/certs/ca-certificates.crt", "asset": "engine/files/etc/ssl/certs/ca-certificates.crt" } ],
   "package": [ "package.json", "theme/dark.json", "..." ],
-  "extensions": [ { "name": "opensec-pi-todo", "version": "2.13.1", "files": [ "package.json", "dist-bun/index.js", "..." ] } ],
+  "extensions": [ { "name": "opensec-pi-todo", "version": "2.13.1", "files": [ "package.json", "dist-bun/index.js", "..." ] },
+                  { "name": "juicesharp-rpiv-ask-user-question", "package": "@juicesharp/rpiv-ask-user-question", "version": "2.15.0",
+                    "files": [ "..." ], "modules": { "asset": "engine/modules/juicesharp-rpiv-ask-user-question.zip", "sha256": "...", "files": 5, "bytes": 24337 } } ],
   "env": { "PATH": "/data/data/in.opensec.pibolt/files/usr/bin:/system/bin", "SHELL": "...", "...": "..." },
   "packFingerprint": "<sha256 of every shipped file and the manifest>" }
 ```
@@ -82,14 +84,18 @@ thousands of files, some in directories the APK build would drop, such as `_pyre
 executables, modules, tree and the libraries only it uses).
 `package[]` lists every file under assets `engine/package/` (relative paths), so the app copies PI_PACKAGE_DIR without
 a recursive `AssetManager.list`. `extensions[]` are the Pi extensions the pack bundles (the repo's `extensions.txt` pins, npm
-integrity checked), each unpacked under assets `engine/extensions/<name>/` with every file listed. `env` holds the variables of step 3 below with PREFIX expanded (same values; the app
+integrity checked, and the third-party ones of `android/engine/npm/extensions.txt`), each unpacked under assets
+`engine/extensions/<name>/` with every file listed (`name` is a directory name: npm's `@scope/pkg` is `scope-pkg`, the
+npm name is `package`). One with runtime dependencies also has `modules`: its `node_modules` tree as one zip asset
+(every dependency's tarball checked against its lockfile's sha512; no install scripts; TypeScript declarations and
+source maps left out). `env` holds the variables of step 3 below with PREFIX expanded (same values; the app
 may apply it as is). `assets/engine/licenses/` holds THIRD_PARTY_NOTICES.md and the licence texts for the About screen
 (not copied anywhere).
 
 ## Runtime setup (app, at each engine start; cheap when unchanged)
 
 1. If `PREFIX/.pack` differs from `packFingerprint` (first run, app update, nativeLibraryDir moved): unpack `trees[]`,
-   recreate the symlink farm (after the trees: some links point into them) and copy `files[]` and `extensions[]` (to `PREFIX/share/pi-extensions/<name>`), add those extension
+   recreate the symlink farm (after the trees: some links point into them) and copy `files[]` and `extensions[]` (to `PREFIX/share/pi-extensions/<name>`, an extension's `modules` zip unpacked into its `node_modules`), add those extension
    directories to `packages` in `HOME/.pi/agent/settings.json` (merged under Pi's lock: other settings and packages
    stay, no duplicates, paths of extensions no longer bundled are dropped), then write the fingerprint. Otherwise skip.
 2. Always: write `PREFIX/etc/resolv.conf` from the active network's DNS servers (rewrite on network change), plus

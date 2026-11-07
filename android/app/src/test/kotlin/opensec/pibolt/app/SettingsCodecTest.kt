@@ -24,8 +24,18 @@ class SettingsCodecTest {
             toolPreviewLines = 24,
             notificationsAsked = true,
             autoUpdateCheck = false,
+            webSearch = false,
         )
         assertEquals(s, SettingsCodec.decode(SettingsCodec.encode(s)))
+    }
+
+    @Test
+    fun webSearchIsOnByDefaultAndForFilesFromBeforeIt() {
+        assertTrue(AppSettings().webSearch)
+        // Settings saved by 0.5.3 have no webSearch field: the web tools are on for them too.
+        assertTrue(SettingsCodec.decode("""{"version":1,"theme":"Paper","autoUpdateCheck":false}""").webSearch)
+        assertEquals(false, SettingsCodec.decode("""{"webSearch":false}""").webSearch)
+        assertTrue(SettingsCodec.decode("""{"webSearch":"no"}""").webSearch)
     }
 
     @Test

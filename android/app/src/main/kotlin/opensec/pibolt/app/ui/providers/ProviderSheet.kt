@@ -375,8 +375,10 @@ private fun CustomStep(auth: ProviderAuth, onBack: () -> Unit, onSaved: (Provide
         saving = true
         scope.launch {
             val result = runCatching {
-                ModelsFile.update(agentDir) { ModelsFile.merge(it, endpoint, keyless = cleanKey == null) }
-                withContext(Dispatchers.IO) { auth.setApiKey(endpoint.id, cleanKey ?: ModelsFile.NO_KEY) }
+                // Another model for a server that already has its key: an empty key field keeps that key.
+                val keepKey = cleanKey == null && endpoint.id in auth.configured.value && ModelsFile.hasSavedKey(ModelsFile.read(agentDir), endpoint.id)
+                ModelsFile.update(agentDir) { ModelsFile.merge(it, endpoint, keyless = cleanKey == null && !keepKey) }
+                if (!keepKey) withContext(Dispatchers.IO) { auth.setApiKey(endpoint.id, cleanKey ?: ModelsFile.NO_KEY) }
                 ProviderCatalog.registerCustom(ModelsFile.custom(agentDir))
             }
             key = ""

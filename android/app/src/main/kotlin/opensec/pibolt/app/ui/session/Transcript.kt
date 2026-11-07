@@ -74,6 +74,7 @@ import opensec.pibolt.app.ui.components.glass
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.markdown.MdBlock
 import opensec.pibolt.app.ui.session.review.TurnReviewEntry
+import opensec.pibolt.app.ui.session.web.SourcesPill
 import opensec.pibolt.app.ui.session.subagent.SubagentCard
 import opensec.pibolt.app.ui.session.subagent.SubagentNoticeRowView
 import opensec.pibolt.app.ui.session.subagent.SubagentStack
@@ -144,7 +145,9 @@ fun Transcript(
             val open = memory.openFolds.filterValues { it }.keys
             val groups = memory.openGroups.filterValues { it }.keys
             // The failed attempts of a retry (and a "Compaction failed" after an overflow) are one error notice.
-            val (items, errors) = ErrorNotices.collapse(s.allItems, s.retry)
+            // With thinking off, an empty reasoning block gets no "Thinking" row.
+            val (all, errors) = ErrorNotices.collapse(s.allItems, s.retry)
+            val items = ThinkingRules.visible(all, ThinkingRules.on(s.thinkingLevel, s.model?.reasoning))
             val list = TranscriptModel.rows(items, liveTurn, open, memory.turnDurations, md, groups, memory.pending.value, memory.aliases, s.subagents).let { list ->
                 if (!recent || liveTurn) list else markLastTurnLive(list)
             }
@@ -398,6 +401,7 @@ private fun markLastTurnLive(rows: List<TRow>): List<TRow> {
                 is ThinkingRow -> r.copy(live = true)
                 is NoticeRow -> r.copy(live = true)
                 is ToolGroupRow -> r.copy(live = true)
+                is SourcesRow -> r.copy(live = true)
                 is SubagentRow -> r.copy(live = true)
                 is SubagentStackRow -> r.copy(live = true)
                 is SubagentNoticeRow -> r.copy(live = true)
@@ -473,6 +477,7 @@ private fun LazyItemScope.RowView(
         is ThinkingRow -> row.rail
         is ToolRow -> row.rail
         is ToolGroupRow -> row.rail
+        is SourcesRow -> row.rail
         else -> null
     }
     val railColor = Pi.colors.line
@@ -549,6 +554,14 @@ private fun LazyItemScope.RowView(
             row,
             onToggle = {
                 if (!row.expanded) memory.openedAt[row.key] = SystemClock.uptimeMillis()
+                memory.openGroups[row.key] = !row.expanded
+                keep()
+            },
+            modifier = base.padding(top = Pi.dims.stepGap).riseIn(row.key, row.live, memory, 6.dp),
+        )
+        is SourcesRow -> SourcesPill(
+            row,
+            onToggle = {
                 memory.openGroups[row.key] = !row.expanded
                 keep()
             },

@@ -16,6 +16,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.rounded.NoteAdd
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.Add
@@ -51,7 +52,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import opensec.pibolt.app.ui.components.ConfirmSheet
-import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.GlassIconButton
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiTextField
 import opensec.pibolt.app.ui.components.PrimaryButton
@@ -59,7 +60,9 @@ import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 import java.io.File
 
 /** What the Files tab asks for: a sheet for an entry, a name prompt, or a delete confirmation. */
@@ -80,8 +83,9 @@ sealed interface FileAction {
 }
 
 /**
- * The Files tab's sticky bar: tappable breadcrumbs (`calc-parser / src / ui`), then New (file or folder) and the
- * sort menu, which also holds "Show hidden files".
+ * The Files tab's sticky glass toolbar: tappable breadcrumbs (`calc-parser › src › ui`, rowMeta; the folder shown in
+ * ink1, the way back in ink2, chevrons ink3), then two 40dp glass buttons: New (file, folder, import) and the sort
+ * menu, which also holds "Show hidden files". 56dp on the canvas, so rows scrolling under it are cut cleanly.
  */
 @Composable
 fun FilesBar(
@@ -104,25 +108,27 @@ fun FilesBar(
     LaunchedEffect(path) { scroll.scrollTo(scroll.maxValue) }
     var sortMenu by remember { mutableStateOf(false) }
     var newMenu by remember { mutableStateOf(false) }
-    Row(modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
-        Row(Modifier.weight(1f).horizontalScroll(scroll).padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+    // A crumb pads 8dp round its text, and a 40dp glass button sits in a 48dp target: both land on the 20dp gutter.
+    Row(modifier.fillMaxWidth().height(56.dp).padding(start = Space.page - Space.sm, end = Space.lg), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.weight(1f).horizontalScroll(scroll), verticalAlignment = Alignment.CenterVertically) {
             crumbs.forEachIndexed { i, (label, target) ->
-                // ink3, not ink4: no text below ink3 (DESIGN.md "Contrast").
-                if (i > 0) Text("/", style = type.monoSmall, color = colors.ink3, modifier = Modifier.padding(horizontal = 2.dp))
+                // ink3, not ink4: no text or glyph that carries meaning below ink3 (DESIGN.md "Contrast").
+                if (i > 0) Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(IconSize.sm))
                 val last = i == crumbs.lastIndex
                 Box(
                     Modifier
                         .heightIn(min = 48.dp)
                         .pressable({ onPath(target) }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, enabled = !last, label = "Go to $label")
-                        .padding(horizontal = 6.dp),
+                        .padding(horizontal = Space.sm),
                     contentAlignment = Alignment.Center,
                 ) {
-                    Text(label, style = type.monoSmall, color = if (last) colors.ink1 else colors.ink2, maxLines = 1)
+                    Text(label, style = type.rowMeta, color = if (last) colors.ink1 else colors.ink2, maxLines = 1)
                 }
             }
         }
+        Spacer(Modifier.width(Space.xs))
         Box {
-            IconAction(Icons.Rounded.Add, "New file or folder", onClick = { newMenu = true })
+            GlassIconButton(Icons.Rounded.Add, "New file or folder", onClick = { newMenu = true }, size = 40.dp)
             WorkspaceMenu(newMenu, { newMenu = false }) {
                 WorkspaceMenuRow("New file", Icons.AutoMirrored.Rounded.NoteAdd, colors.ink1) {
                     newMenu = false
@@ -145,7 +151,7 @@ fun FilesBar(
             }
         }
         Box {
-            IconAction(Icons.AutoMirrored.Rounded.Sort, "Sort and filter", onClick = { sortMenu = true })
+            GlassIconButton(Icons.AutoMirrored.Rounded.Sort, "Sort and filter", onClick = { sortMenu = true }, size = 40.dp)
             WorkspaceMenu(sortMenu, { sortMenu = false }) {
                 for (s in FileSort.entries) {
                     WorkspaceMenuRow("Sort by ${s.label.lowercase()}", if (s == sort) Icons.Rounded.Check else null, colors.ink1) {
@@ -250,9 +256,12 @@ fun NameSheet(title: String, initial: String, action: String, onSubmit: suspend 
     }
 }
 
-/** The sheet for the Files tab's current [action], in [folder] (the folder shown). */
+/**
+ * The sheet for the Files tab's current [action], in [folder] (the folder shown). [onMoved] gets an entry's old name
+ * and its new one (null when deleted), so open editor tabs follow it.
+ */
 @Composable
-fun FileActionSheets(action: FileAction?, folder: File, onAction: (FileAction?) -> Unit, onDone: () -> Unit, onError: (String) -> Unit) {
+fun FileActionSheets(action: FileAction?, folder: File, onAction: (FileAction?) -> Unit, onDone: () -> Unit, onError: (String) -> Unit, onMoved: (from: String, to: String?) -> Unit = { _, _ -> }) {
     val scope = rememberCoroutineScope()
     when (action) {
         null, is FileAction.Export, is FileAction.Share -> Unit
@@ -261,7 +270,13 @@ fun FileActionSheets(action: FileAction?, folder: File, onAction: (FileAction?) 
             title = "Rename",
             initial = action.entry.name,
             action = "Rename",
-            onSubmit = { name -> ProjectFiles.rename(File(folder, action.entry.name), name).fold({ onDone(); null }, { it.message ?: "Could not rename" }) },
+            onSubmit = { name ->
+                ProjectFiles.rename(File(folder, action.entry.name), name).fold({ target ->
+                    onMoved(action.entry.name, target.name)
+                    onDone()
+                    null
+                }, { it.message ?: "Could not rename" })
+            },
             onDismiss = { onAction(null) },
         )
         is FileAction.Create -> NameSheet(
@@ -277,7 +292,9 @@ fun FileActionSheets(action: FileAction?, folder: File, onAction: (FileAction?) 
             confirmLabel = "Delete",
             onConfirm = {
                 scope.launch {
-                    ProjectFiles.delete(File(folder, action.entry.name)).onFailure { onError(it.message ?: "Could not delete") }
+                    ProjectFiles.delete(File(folder, action.entry.name))
+                        .onSuccess { onMoved(action.entry.name, null) }
+                        .onFailure { onError(it.message ?: "Could not delete") }
                     onDone()
                 }
             },

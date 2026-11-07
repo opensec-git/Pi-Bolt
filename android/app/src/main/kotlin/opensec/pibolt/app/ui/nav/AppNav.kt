@@ -239,7 +239,7 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendin
                                 app = app,
                                 name = name,
                                 onBack = { nav.popBackStack(Routes.HOME, inclusive = false) },
-                                onOpenSession = { nav.navigate(Routes.localSession(name)) { launchSingleTop = true } },
+                                onOpenSession = { key -> nav.navigate(Routes.localSession(key)) { launchSingleTop = true } },
                                 onTerminal = { nav.navigate(Routes.terminal(name)) { launchSingleTop = true } },
                                 onSecrets = { nav.navigate(Routes.secrets(name)) { launchSingleTop = true } },
                                 onPreview = { nav.navigate(Routes.preview(it)) { launchSingleTop = true } },

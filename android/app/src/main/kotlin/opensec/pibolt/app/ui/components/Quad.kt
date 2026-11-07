@@ -48,7 +48,7 @@ import kotlin.math.roundToInt
 
 /**
  * The Quad spinner: a 3x3 grid that shows what the agent is doing. Ticks come from the window's shared clock and are
- * read only while drawing. [animate] false (or reduce motion) draws the mode's still frame.
+ * read only while drawing, in the spinner's own layer. [animate] false (or reduce motion) draws the mode's still frame.
  */
 @Composable
 fun QuadSpinner(
@@ -73,6 +73,8 @@ fun QuadSpinner(
         modifier
             .size(size)
             .semantics { contentDescription = mode.label }
+            // Its own layer while it animates: a tick re-records these nine cells, not the card, sheet or bar around it.
+            .then(if (live) Modifier.graphicsLayer() else Modifier)
             .drawBehind {
                 val t = ticket[0]
                 if (live && t >= 0 && clock.canAnimate(t)) {

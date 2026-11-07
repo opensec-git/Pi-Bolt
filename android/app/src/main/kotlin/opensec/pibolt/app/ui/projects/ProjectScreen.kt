@@ -1,7 +1,6 @@
 package opensec.pibolt.app.ui.projects
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -13,8 +12,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.heading
 import opensec.pibolt.app.terminal.Terminals
+import opensec.pibolt.app.secrets.SecretStore
 import opensec.pibolt.app.ui.components.SecondaryButton
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,22 +34,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Key
-import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.PushPin
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -60,7 +56,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalConfiguration
@@ -80,7 +75,6 @@ import opensec.pibolt.app.ui.git.ChangesOverlays
 import opensec.pibolt.app.ui.git.changesItems
 import opensec.pibolt.app.ui.git.rememberChangesUi
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import opensec.pibolt.app.ui.theme.PiMotion
 import androidx.compose.ui.Alignment
@@ -90,6 +84,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -99,23 +94,30 @@ import opensec.pibolt.app.data.ProjectMeta
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.engine.EngineStatus
 import opensec.pibolt.app.engine.SessionSummary
-import opensec.pibolt.app.session.SessionController
-import opensec.pibolt.app.ui.components.IconAction
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.runtime.derivedStateOf
+import opensec.pibolt.app.ui.components.GlassBar
+import opensec.pibolt.app.ui.components.GlassIconButton
+import opensec.pibolt.app.ui.components.InsetSectionHead
+import opensec.pibolt.app.ui.components.glass
+import opensec.pibolt.app.ui.theme.IconSize
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.components.LoadingRow
 import opensec.pibolt.app.ui.components.PiSnackHost
 import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.SharedKeys
 import opensec.pibolt.app.ui.components.SnackKind
 import opensec.pibolt.app.ui.components.StatusBarScrim
-import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.sharedHostBounds
 import opensec.pibolt.app.ui.components.sharedHostElement
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.projects.editor.EditorTabs
+import opensec.pibolt.app.ui.projects.editor.EditorTabsHolder
+import androidx.lifecycle.viewmodel.compose.viewModel
+import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.session.features2.SessionBrowserSheet
 import opensec.pibolt.app.ui.terminal.TerminalPane
 import opensec.pibolt.app.ui.theme.Pi
-import opensec.pibolt.app.ui.theme.Radius
 import java.io.File
 
 /**
@@ -128,7 +130,8 @@ fun ProjectScreen(
     app: PiBoltApp,
     name: String,
     onBack: () -> Unit,
-    onOpenSession: () -> Unit,
+    /** Shows a live session of this project ([LocalSessions.Live.key]). */
+    onOpenSession: (String) -> Unit,
     onTerminal: () -> Unit = {},
     onSecrets: () -> Unit = {},
     onPreview: (Int) -> Unit = {},
@@ -136,7 +139,7 @@ fun ProjectScreen(
 ) {
     val engine = app.engine
     val store = remember { ProjectStore.get(app) }
-    val projects = remember(engine) { Projects(engine, store) }
+    val projects = remember(engine) { Projects(engine, store, SecretStore.get(app)) }
     val colors = Pi.colors
     val type = Pi.type
     val scope = rememberCoroutineScope()
@@ -149,7 +152,9 @@ fun ProjectScreen(
     // This project's own live session (others may run in other projects meanwhile).
     val liveAll by LocalSessions.all.collectAsStateWithLifecycle()
     val live = liveAll[name]
-    val liveHere = live?.takeIf { !it.controller.stopped }
+    // Every live session here (another opens beside a busy one); the front one is the one opened last.
+    val lives = remember(liveAll, name) { liveAll.values.filter { it.project.name == name && !it.controller.stopped } }
+    val liveHere = live?.takeIf { !it.controller.stopped } ?: lives.firstOrNull()
 
     var reload by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { reload++ }
@@ -164,13 +169,19 @@ fun ProjectScreen(
     var path by rememberSaveable { mutableStateOf("") }
     // The file open in the viewer, relative to the project, and the editor's tabs (open files).
     var openFile by rememberSaveable { mutableStateOf<String?>(null) }
-    val tabs = rememberSaveable(name, saver = EditorTabs.saver(name)) { EditorTabs() }
-    val activity = LocalActivity.current
-    DisposableEffect(name) { onDispose { if (activity?.isChangingConfigurations != true) EditorTabs.release(name) } }
+    // Kept by the screen's navigation entry, so unsaved drafts survive "Ask Pi", the terminal, the secrets or a
+    // session opened over the project, and rotation.
+    val tabsHolder = viewModel(key = "editor-tabs:$name") { EditorTabsHolder() }
+    val tabs = rememberSaveable(name, saver = EditorTabs.saver(tabsHolder)) { tabsHolder.tabs ?: EditorTabs().also { tabsHolder.tabs = it } }
+    var leaving by remember { mutableStateOf(false) }
+    // Leaving the project with unsaved edits asks first. Registered before the screen's other back handlers, so those
+    // (a folder up, an open file, a diff) still come first.
+    BackHandler(enabled = tabs.anyDirty && !leaving) { leaving = true }
     var sort by rememberSaveable { mutableStateOf(FileSort.Name) }
     var showHidden by rememberSaveable { mutableStateOf(false) }
     var fileAction by remember { mutableStateOf<FileAction?>(null) }
-    val branch by produceState<String?>(null, dir) { value = ProjectFiles.branch(dir) }
+    // Read again after a switch in the Changes tab, so the header and the session rows name the branch checked out.
+    val branch by produceState<String?>(null, dir, changes.model.status?.branch?.head, changes.model.status?.branch?.oid) { value = ProjectFiles.branch(dir) }
     val folder = remember(dir, path) { if (path.isEmpty()) dir else File(dir, path) }
     val files by produceState<List<FileEntry>?>(null, folder, showFiles, reload) { if (showFiles) value = ProjectFiles.list(folder) }
     val shownFiles = remember(files, sort, showHidden) { files?.let { ProjectFiles.visible(ProjectFiles.order(it, sort), showHidden) } }
@@ -181,15 +192,15 @@ fun ProjectScreen(
 
     fun open(file: String?, fresh: Boolean) {
         if (opening) return
-        val current = liveHere
-        if (!fresh && current != null && file != null && current.sessionFile == file) {
-            onOpenSession()
+        val current = file?.takeIf { !fresh }?.let { LocalSessions.find(name, it) }
+        if (current != null) {
+            onOpenSession(current.key)
             return
         }
         opening = true
         scope.launch {
             LocalSessions.open(engine, store, dir, sessionFile = file, fresh = fresh)
-                .onSuccess { onOpenSession() }
+                .onSuccess { onOpenSession(it.key) }
                 .onFailure { snackbar.show(it.message ?: "Could not open the session", SnackKind.Error) }
             opening = false
         }
@@ -201,7 +212,7 @@ fun ProjectScreen(
         val current = liveHere
         if (current != null) {
             current.drop(text)
-            onOpenSession()
+            onOpenSession(current.key)
             return
         }
         if (opening) return
@@ -211,7 +222,7 @@ fun ProjectScreen(
             LocalSessions.open(engine, store, dir, sessionFile = latest, fresh = latest == null)
                 .onSuccess {
                     it.drop(text)
-                    onOpenSession()
+                    onOpenSession(it.key)
                 }
                 .onFailure { snackbar.show(it.message ?: "Could not open the session", SnackKind.Error) }
             opening = false
@@ -221,10 +232,13 @@ fun ProjectScreen(
     // Files in and out (ui/projects/transfer): SAF pickers, zips, the share sheet; one transfer at a time.
     val context = LocalContext.current
     val transfers = remember { TransferRunner(app.appScope) }
-    // The folder (or project) an export is for, waiting for the export sheet or the "Save to…" document.
-    var exportOf by remember { mutableStateOf<Pair<File, String>?>(null) }
-    var exportAsk by remember { mutableStateOf(false) }
-    var exportSkip by remember { mutableStateOf(emptySet<String>()) }
+    // The folder (or project) an export is for, waiting for the export sheet or the "Save to…" document. Saved, so
+    // the document picked after a rotation or a process death in the system picker still gets the zip.
+    var exportPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var exportLabel by rememberSaveable { mutableStateOf("") }
+    val exportOf = exportPath?.let { File(it) to exportLabel }
+    var exportAsk by rememberSaveable { mutableStateOf(false) }
+    var exportSkip by rememberSaveable { mutableStateOf(ArrayList<String>()) }
     fun failed(message: String) {
         scope.launch { snackbar.show(message, SnackKind.Error) }
     }
@@ -256,17 +270,19 @@ fun ProjectScreen(
     }
     val saveZip = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         val (source, label) = exportOf ?: return@rememberLauncherForActivityResult
-        exportOf = null
+        val skip = exportSkip.toSet()
+        exportPath = null
         if (uri == null) return@rememberLauncherForActivityResult
         transfers.run(
             "Exporting $label",
-            { p -> SafTransfer.exportZip(context, source, uri, label, exportSkip, p) },
+            { p -> SafTransfer.exportZip(context, source, uri, label, skip, p) },
             onDone = { n -> scope.launch { snackbar.show(if (n == 1) "Exported 1 file" else "Exported $n files", SnackKind.Success) } },
             onError = ::failed,
         )
     }
     fun export(source: File, label: String) {
-        exportOf = source to label
+        exportPath = source.path
+        exportLabel = label
         exportAsk = true
     }
     fun shareFile(file: File) {
@@ -285,8 +301,9 @@ fun ProjectScreen(
     // The Changes badge needs the status before its tab is opened, and again after a resume or a file change.
     LaunchedEffect(dir, reload) { if (selected != ProjectTab.Changes) changes.model.refresh() }
     // Only "working or not" from the live session, so streamed frames do not recompose the project screen.
-    val busyFlow = remember(liveHere) {
-        liveHere?.controller?.state?.map { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() }?.distinctUntilChanged() ?: flowOf(false)
+    val busyFlow = remember(lives) {
+        if (lives.isEmpty()) flowOf(false)
+        else combine(lives.map { l -> l.controller.state.map { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() }.distinctUntilChanged() }) { busy -> busy.any { it } }
     }
     val liveBusy by busyFlow.collectAsStateWithLifecycle(false)
     val badges = ProjectBadges(
@@ -306,20 +323,29 @@ fun ProjectScreen(
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
     ) {
         Column(Modifier.fillMaxSize().imePadding()) {
-            if (ProjectNavRules.showChrome(imeVisible, LocalConfiguration.current.screenHeightDp)) ProjectTopBar(
+            // The list tabs open on the project's large title; the bar's compact title fades in once it scrolled away.
+            // The terminal has no large title: its bar always names the project.
+            val shownList = when (selected) {
+                ProjectTab.Sessions -> sessionsList
+                ProjectTab.Files -> filesList
+                ProjectTab.Changes -> changesList
+                ProjectTab.Terminal -> null
+            }
+            val pastTitle by remember(shownList) { derivedStateOf { shownList == null || shownList.firstVisibleItemIndex > 0 } }
+            if (ProjectNavRules.showChrome(imeVisible, LocalConfiguration.current.screenHeightDp)) GlassBar(
                 title = title,
-                name = name,
-                pinned = pm.pinned,
-                branch = branch,
-                onBack = onBack,
+                subtitle = if (shownList == null) branch?.let { "projects/$name · $it" } ?: "projects/$name" else null,
+                titleVisible = pastTitle,
+                titleModifier = if (shownList == null) Modifier.sharedHostElement(SharedKeys.projectName(name)) else Modifier,
+                leading = { GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Projects", onClick = { if (tabs.anyDirty) leaving = true else onBack() }) },
                 actions = {
                     when (selected) {
-                        ProjectTab.Sessions -> IconAction(Icons.Rounded.Search, "Search and manage sessions", onClick = { browse = true }, enabled = !unavailable)
-                        ProjectTab.Terminal -> IconAction(Icons.Rounded.Key, "Project secrets", onClick = onSecrets)
+                        ProjectTab.Sessions -> GlassIconButton(Icons.Rounded.Search, "Search and manage sessions", onClick = { browse = true }, enabled = !unavailable)
+                        ProjectTab.Terminal -> GlassIconButton(Icons.Rounded.Key, "Project secrets", onClick = onSecrets)
                         ProjectTab.Files, ProjectTab.Changes -> Unit
                     }
                     Box {
-                        IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
+                        GlassIconButton(Icons.Rounded.MoreHoriz, "More", onClick = { menu = true })
                         ProjectMenu(
                             menu,
                             pm.pinned,
@@ -334,11 +360,15 @@ fun ProjectScreen(
                     }
                 },
             ) else Spacer(Modifier.statusBarsPadding())
+            val header: @Composable () -> Unit = {
+                ProjectHeader(title = title, name = name, pinned = pm.pinned, branch = branch, titleModifier = Modifier.sharedHostElement(SharedKeys.projectName(name)))
+            }
             Box(Modifier.weight(1f).fillMaxWidth()) {
                 when (selected) {
-                    ProjectTab.Sessions -> LazyColumn(Modifier.fillMaxSize(), state = sessionsList, contentPadding = PaddingValues(bottom = 24.dp)) {
+                    ProjectTab.Sessions -> LazyColumn(Modifier.fillMaxSize(), state = sessionsList, contentPadding = PaddingValues(bottom = Space.xxl)) {
+                        item(key = "head", contentType = "head") { header() }
                         item(key = "new", contentType = "new") {
-                            Column(Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 8.dp)) {
+                            Column(Modifier.padding(horizontal = Space.page, vertical = Space.xs)) {
                                 PrimaryButton(
                                     if (opening) "Opening…" else "New session",
                                     onClick = { open(null, fresh = true) },
@@ -347,7 +377,7 @@ fun ProjectScreen(
                                     modifier = Modifier.fillMaxWidth(),
                                 )
                                 if (unavailable) {
-                                    Text("Sessions can't run on this phone", style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 8.dp))
+                                    Text("Sessions can't run on this phone", style = type.rowMeta, color = colors.ink3, modifier = Modifier.padding(top = Space.sm))
                                 }
                             }
                         }
@@ -358,28 +388,36 @@ fun ProjectScreen(
                                 EmptyCard(Icons.AutoMirrored.Rounded.Chat, "No sessions yet")
                             }
                             else -> {
-                                item(key = "label", contentType = "label") {
-                                    ListHead("Sessions", Modifier.padding(top = 8.dp), sub = list.size.toString())
-                                }
+                                item(key = "label", contentType = "label") { InsetSectionHead("Sessions", count = list.size) }
                                 // The engine's own session file: a new session or a fork is not the file the session was opened with.
                                 val liveFile = liveHere?.controller?.sessionFile ?: liveHere?.sessionFile
                                 itemsIndexed(list, key = { _, it -> it.file }, contentType = { _, _ -> "session" }) { i, s ->
-                                    val isLive = liveHere != null && (if (liveFile != null) liveFile == s.file else s == list.first())
+                                    // Every live session here is marked on its row (one still starting: the newest row).
+                                    val rowLive = lives.firstOrNull { (it.controller.sessionFile ?: it.sessionFile) == s.file }
+                                        ?: liveHere?.takeIf { liveFile == null && s == list.first() }
+                                    val isLive = rowLive != null
                                     SessionRow(
                                         s,
-                                        pos = GroupPos.of(i, list.size),
-                                        live = if (isLive) liveHere?.controller else null,
+                                        live = rowLive?.controller,
                                         unread = !isLive && ProjectRules.unread(s, meta.seen[s.file]),
                                         now = now,
-                                        enabled = !unavailable,
-                                        onClick = { if (isLive) onOpenSession() else open(s.file, fresh = false) },
-                                        modifier = Modifier.animateItem().padding(horizontal = 16.dp),
+                                        where = branch,
+                                        onClick = {
+                                            when {
+                                                unavailable -> scope.launch { snackbar.show("Sessions can't run on this phone", SnackKind.Warning) }
+                                                rowLive != null -> onOpenSession(rowLive.key)
+                                                else -> open(s.file, fresh = false)
+                                            }
+                                        },
+                                        divider = i < list.lastIndex,
+                                        modifier = Modifier.animateItem(),
                                     )
                                 }
                             }
                         }
                     }
-                    ProjectTab.Files -> LazyColumn(Modifier.fillMaxSize(), state = filesList, contentPadding = PaddingValues(bottom = 24.dp)) {
+                    ProjectTab.Files -> LazyColumn(Modifier.fillMaxSize(), state = filesList, contentPadding = PaddingValues(bottom = Space.xxl)) {
+                        item(key = "head", contentType = "head") { header() }
                         stickyHeader(key = "files-bar", contentType = "files-bar") {
                             FilesBar(
                                 root = title,
@@ -391,7 +429,7 @@ fun ProjectScreen(
                                 onHidden = { showHidden = it },
                                 onCreate = { fileAction = FileAction.Create(it) },
                                 onImport = { tree -> if (tree) importTree.launch(null) else importDocs.launch(arrayOf("*/*")) },
-                                modifier = Modifier.background(colors.canvas).padding(horizontal = 4.dp),
+                                modifier = Modifier.background(colors.canvas),
                             )
                         }
                         val entries = shownFiles
@@ -408,21 +446,22 @@ fun ProjectScreen(
                                         else -> null
                                     },
                                 ) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    Row(horizontalArrangement = Arrangement.spacedBy(Space.md)) {
                                         SecondaryButton("New file", onClick = { fileAction = FileAction.Create(false) }, icon = Icons.AutoMirrored.Rounded.NoteAdd, modifier = Modifier.weight(1f))
                                         SecondaryButton("Import", onClick = { importDocs.launch(arrayOf("*/*")) }, icon = Icons.Rounded.FileOpen, modifier = Modifier.weight(1f))
                                     }
                                 }
                             }
-                            else -> items(entries, key = { "f:" + it.name }, contentType = { "file" }) { entry ->
+                            else -> itemsIndexed(entries, key = { _, it -> "f:" + it.name }, contentType = { _, _ -> "file" }) { i, entry ->
                                 FileRow(entry, folder, onClick = {
                                     val rel = if (path.isEmpty()) entry.name else path + "/" + entry.name
                                     if (entry.dir) path = rel else openFile = rel
-                                }, onLongClick = { fileAction = FileAction.Menu(entry) }, modifier = Modifier.animateItem().padding(horizontal = 16.dp))
+                                }, onLongClick = { fileAction = FileAction.Menu(entry) }, divider = i < entries.lastIndex, modifier = Modifier.animateItem())
                             }
                         }
                     }
-                    ProjectTab.Changes -> LazyColumn(Modifier.fillMaxSize(), state = changesList, contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp)) {
+                    ProjectTab.Changes -> LazyColumn(Modifier.fillMaxSize(), state = changesList, contentPadding = PaddingValues(bottom = Space.xxl)) {
+                        item(key = "head", contentType = "head") { header() }
                         changesItems(changes)
                     }
                     ProjectTab.Terminal -> TerminalPane(app, dir, fullScreen = false, onToggleFullScreen = onTerminal, onPreview = onPreview, modifier = Modifier.fillMaxSize())
@@ -455,10 +494,27 @@ fun ProjectScreen(
     }
     // Back inside Files goes up a folder first.
     BackHandler(enabled = showFiles && path.isNotEmpty() && openFile == null) { path = path.substringBeforeLast('/', "") }
+    if (leaving) {
+        val dirty = tabs.tabs.count { it.dirty }
+        ConfirmSheet(
+            title = "Discard unsaved changes?",
+            message = if (dirty == 1) "1 file has edits that are not saved." else "$dirty files have edits that are not saved.",
+            confirmLabel = "Discard",
+            onConfirm = {
+                leaving = false
+                onBack()
+            },
+            onDismiss = { leaving = false },
+        )
+    }
 
     FileActionSheets(
         action = fileAction,
         folder = folder,
+        onMoved = { from, to ->
+            fun rel(n: String) = if (path.isEmpty()) n else "$path/$n"
+            tabs.moved(rel(from), to?.let(::rel))
+        },
         onAction = { a ->
             when (a) {
                 is FileAction.Export -> {
@@ -485,9 +541,9 @@ fun ProjectScreen(
                 title = label,
                 onChoose = { choice ->
                     exportAsk = false
-                    exportSkip = choice.skip
+                    exportSkip = ArrayList(choice.skip)
                     if (choice.share) {
-                        exportOf = null
+                        exportPath = null
                         transfers.run(
                             "Packing $label",
                             { p -> SafTransfer.shareZip(context, source, "$label.zip", label, choice.skip, p) },
@@ -500,7 +556,7 @@ fun ProjectScreen(
                 },
                 onDismiss = {
                     exportAsk = false
-                    exportOf = null
+                    exportPath = null
                 },
             )
         }
@@ -535,117 +591,66 @@ fun ProjectScreen(
 }
 
 /**
- * One saved session, a row of the "Sessions" group ([GroupRow], desktop `.hd-row`): the state slot (the live Quad, an
- * accent dot for new activity, else a quiet dot), the session's name or first prompt (ink2 when nothing is new), then
- * "24 msg · 2h" (meta ink3, tabular). TalkBack reads it in words.
+ * The project's large title at the top of a list tab: the title (largeTitle ink1, the shared element from Home's
+ * project row, a 16dp pin glyph when pinned) over `projects/x` and, in a git repository, the branch glyph and the branch
+ * from `.git/HEAD` (monoMeta ink3).
  */
 @Composable
-private fun SessionRow(s: SessionSummary, pos: GroupPos, live: SessionController?, unread: Boolean, now: Long, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun ProjectHeader(title: String, name: String, pinned: Boolean, branch: String?, titleModifier: Modifier) {
     val colors = Pi.colors
     val type = Pi.type
-    val title = ProjectRules.sessionTitle(s)
-    val spoken = listOfNotNull(
-        title,
-        "open".takeIf { live != null },
-        "new activity".takeIf { unread },
-        (if (s.messageCount == 1) "1 message" else "${s.messageCount} messages").takeIf { s.messageCount > 0 },
-        ProjectRules.ago(s.updatedAt, now),
-    ).joinToString(", ")
-    GroupRow(
-        pos = pos,
-        modifier = modifier,
-        interaction = Modifier
-            .pressable(onClick, shape = groupShape(pos), enabled = enabled, pressedScale = 1f, label = if (live != null) "Open session" else "Resume session")
-            .semantics(mergeDescendants = true) { contentDescription = spoken },
-        lead = {
-            when {
-                live != null -> SessionMark(live)
-                unread -> StateDot(colors.accent)
-                else -> StateDot(null)
-            }
-        },
-    ) {
-        Text(
-            title,
-            style = if (unread) type.bodyStrong else type.body,
-            color = if (unread || live != null) colors.ink1 else colors.ink2,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-        )
-        RowMeta(buildList {
-            if (live != null) add("open")
-            if (s.messageCount > 0) add("${s.messageCount} msg")
-            add(ProjectRules.agoShort(s.updatedAt, now))
-        }.joinToString(" · "))
-    }
-}
-
-/**
- * The project's 56dp bar: back, the title (subhead, the shared element from the project card) over
- * `projects/x · branch` (monoMeta ink3), then the shown tab's own action and the project menu.
- */
-@Composable
-private fun ProjectTopBar(title: String, name: String, pinned: Boolean, branch: String?, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit) {
-    val colors = Pi.colors
-    val type = Pi.type
-    Row(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Projects", onClick = onBack, tint = colors.ink1)
-        Column(Modifier.weight(1f).padding(start = 4.dp, end = 4.dp).semantics(mergeDescendants = true) { heading() }) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    title,
-                    style = type.subhead,
-                    color = colors.ink1,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false).sharedHostElement(SharedKeys.projectName(name)),
-                )
-                if (pinned) {
-                    Spacer(Modifier.width(6.dp))
-                    Icon(Icons.Rounded.PushPin, contentDescription = "Pinned", tint = colors.ink3, modifier = Modifier.size(13.dp))
-                }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("projects/$name", style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f, fill = false))
-                if (branch != null) {
-                    Spacer(Modifier.width(8.dp))
-                    Icon(Icons.AutoMirrored.Rounded.CallSplit, contentDescription = "Branch", tint = colors.ink3, modifier = Modifier.size(12.dp))
-                    Spacer(Modifier.width(3.dp))
-                    Text(branch, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                }
+    Column(Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, top = Space.xs, bottom = Space.md)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                title,
+                style = type.largeTitle,
+                color = colors.ink1,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = titleModifier.weight(1f, fill = false).semantics { heading() },
+            )
+            if (pinned) {
+                Spacer(Modifier.width(Space.sm))
+                Icon(Icons.Rounded.PushPin, contentDescription = "Pinned", tint = colors.ink3, modifier = Modifier.size(IconSize.sm))
             }
         }
-        actions()
+        Spacer(Modifier.height(Space.xxs))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("projects/$name", style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f, fill = false))
+            if (branch != null) {
+                Spacer(Modifier.width(Space.md))
+                Icon(Icons.AutoMirrored.Rounded.CallSplit, contentDescription = "Branch", tint = colors.ink3, modifier = Modifier.size(IconSize.xs))
+                Spacer(Modifier.width(Space.xs))
+                Text(branch, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+            }
+        }
     }
 }
 
 /**
- * The empty state of a project tab: surface1, radius 12, 1dp line; a 20dp glyph (ink3), the title (bodyStrong), one
- * line on what to do (body ink2) and, when given, the actions under it.
+ * The empty state of a workspace view, calm and unboxed at the 20dp gutter: a 24dp glyph (ink2) in a 48dp glass
+ * circle, the title (rowTitle ink1), one line on what to do (rowMeta ink2) and, when given, the actions under it.
  */
 @Composable
 internal fun EmptyCard(icon: ImageVector, title: String, text: String? = null, actions: (@Composable () -> Unit)? = null) {
     val colors = Pi.colors
     val type = Pi.type
-    val shape = RoundedCornerShape(Radius.md)
     Column(
         Modifier
-            .padding(horizontal = 16.dp, vertical = 4.dp)
             .fillMaxWidth()
-            .background(colors.surface1, shape)
-            .border(1.dp, colors.line, shape)
-            .padding(16.dp),
+            .padding(horizontal = Space.page, vertical = Space.lg),
     ) {
-        Icon(icon, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.height(10.dp))
-        Text(title, style = type.bodyStrong, color = colors.ink1)
+        Box(Modifier.size(48.dp).glass(CircleShape, colors), contentAlignment = Alignment.Center) {
+            Icon(icon, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.lg))
+        }
+        Spacer(Modifier.height(Space.lg))
+        Text(title, style = type.rowTitle, color = colors.ink1, modifier = Modifier.semantics { heading() })
         if (text != null) {
-            Spacer(Modifier.height(4.dp))
-            Text(text, style = type.body, color = colors.ink2)
+            Spacer(Modifier.height(Space.xs))
+            Text(text, style = type.rowMeta, color = colors.ink2)
         }
         if (actions != null) {
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(Space.lg))
             actions()
         }
     }

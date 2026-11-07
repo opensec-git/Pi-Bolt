@@ -8,7 +8,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import opensec.pibolt.protocol.ProtocolJson
+import opensec.pibolt.app.cost.SpendLimits
 import opensec.pibolt.protocol.bool
+import opensec.pibolt.protocol.double
 import opensec.pibolt.protocol.int
 import opensec.pibolt.protocol.str
 import java.io.File
@@ -56,8 +58,24 @@ data class AppSettings(
     val notificationsAsked: Boolean = false,
     /** Look for a new version of the app on launch, at most once a day. */
     val autoUpdateCheck: Boolean = true,
+    /**
+     * The bundled web tools (pi-web-access: search through Exa, read pages) in on-device sessions: chats and projects
+     * (engine/ChatSpace.kt). Off: engines start without them.
+     */
+    val webSearch: Boolean = true,
+    /** Voice mode says each reply's summary aloud (off: it is shown only). */
+    val voiceSpeakReplies: Boolean = true,
+    /** Voice mode's speech rate in percent: one of [VOICE_RATE_CHOICES]. */
+    val voiceRate: Int = 100,
+    /** The text-to-speech voice by its engine name; null is the engine's default. */
+    val voiceName: String? = null,
+    /** [voiceName] as the picker named it ("English (United States) 2"), for the Settings row. */
+    val voiceLabel: String? = null,
+    /** Settings > Agent > Spending: limits per session, day and month, and costs on list rows. */
+    val spend: SpendLimits = SpendLimits(),
 ) {
     companion object {
+        val VOICE_RATE_CHOICES = listOf(75, 100, 125, 150, 200)
         val TOOL_PREVIEW_CHOICES = listOf(6, 12, 24)
         const val TEXT_SIZE_MIN = -1
         const val TEXT_SIZE_MAX = 2
@@ -78,6 +96,15 @@ object SettingsCodec {
         put("toolPreviewLines", s.toolPreviewLines)
         put("notificationsAsked", s.notificationsAsked)
         put("autoUpdateCheck", s.autoUpdateCheck)
+        put("webSearch", s.webSearch)
+        put("voiceSpeakReplies", s.voiceSpeakReplies)
+        put("voiceRate", s.voiceRate)
+        s.voiceName?.let { put("voiceName", it) }
+        s.voiceLabel?.let { put("voiceLabel", it) }
+        s.spend.session?.let { put("spendSession", it) }
+        s.spend.day?.let { put("spendDay", it) }
+        s.spend.month?.let { put("spendMonth", it) }
+        put("spendInLists", s.spend.showInLists)
     }.toString()
 
     fun decode(text: String?): AppSettings {
@@ -94,8 +121,22 @@ object SettingsCodec {
             toolPreviewLines = json.int("toolPreviewLines")?.takeIf { it in AppSettings.TOOL_PREVIEW_CHOICES } ?: d.toolPreviewLines,
             notificationsAsked = json.bool("notificationsAsked") ?: d.notificationsAsked,
             autoUpdateCheck = json.bool("autoUpdateCheck") ?: d.autoUpdateCheck,
+            webSearch = json.bool("webSearch") ?: d.webSearch,
+            voiceSpeakReplies = json.bool("voiceSpeakReplies") ?: d.voiceSpeakReplies,
+            voiceRate = json.int("voiceRate")?.takeIf { it in AppSettings.VOICE_RATE_CHOICES } ?: d.voiceRate,
+            voiceName = json.str("voiceName")?.takeIf { it.isNotBlank() },
+            voiceLabel = json.str("voiceLabel")?.takeIf { it.isNotBlank() && !json.str("voiceName").isNullOrBlank() },
+            spend = SpendLimits(
+                session = limit(json.double("spendSession")),
+                day = limit(json.double("spendDay")),
+                month = limit(json.double("spendMonth")),
+                showInLists = json.bool("spendInLists") ?: d.spend.showInLists,
+            ),
         )
     }
+
+    /** A saved limit: positive and finite, else none. */
+    private fun limit(value: Double?): Double? = value?.takeIf { it.isFinite() && it > 0.0 }
 
     private inline fun <reified E : Enum<E>> enumOr(name: String?, fallback: E): E =
         enumValues<E>().firstOrNull { it.name == name } ?: fallback

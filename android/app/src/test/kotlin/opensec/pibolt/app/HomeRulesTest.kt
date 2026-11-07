@@ -1,11 +1,15 @@
 package opensec.pibolt.app
 
 import opensec.pibolt.app.data.Host
+import opensec.pibolt.app.ui.projects.PillPlus
 import opensec.pibolt.app.ui.projects.ProjectRules
+import opensec.pibolt.app.ui.session.SwitcherRules
+import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.app.ui.session.Welcome
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 /** Home's and the empty session's own logic in the redesign. */
@@ -70,5 +74,29 @@ class ComputerRulesTest {
         assertFalse(ProjectRules.pillDefaultsToChat(noProjects = false, lastChatAt = 1_000, lastProjectAt = 2_000))
         assertFalse(ProjectRules.pillDefaultsToChat(noProjects = false, lastChatAt = null, lastProjectAt = 2_000))
         assertFalse(ProjectRules.pillDefaultsToChat(noProjects = false, lastChatAt = 1_000, lastProjectAt = 1_000))
+    }
+
+    @Test
+    fun thePillsPlusOffersChatActionsWithChatPicked() {
+        // Chat: a chat's actions, never project creation; Paste image only while the clipboard holds an image.
+        assertEquals(listOf(PillPlus.Photos, PillPlus.Voice, PillPlus.NewChat), ProjectRules.pillPlus(chat = true, clipboardImage = false))
+        assertEquals(listOf(PillPlus.Photos, PillPlus.PasteImage, PillPlus.Voice, PillPlus.NewChat), ProjectRules.pillPlus(chat = true, clipboardImage = true))
+        // A project: New project (the sheet with Clone and Import), whatever the clipboard holds.
+        assertEquals(listOf(PillPlus.NewProject), ProjectRules.pillPlus(chat = false, clipboardImage = false))
+        assertEquals(listOf(PillPlus.NewProject), ProjectRules.pillPlus(chat = false, clipboardImage = true))
+    }
+
+    @Test
+    fun theSwitcherCountsOnlySessionsInATurnAsRunning() {
+        // One open, idle session: "open", no badge.
+        assertEquals("Other sessions, 1 open", SwitcherRules.label(open = 1, running = 0))
+        assertNull(SwitcherRules.badge(0))
+        // Two open, one working.
+        assertEquals("Other sessions, 1 running", SwitcherRules.label(open = 2, running = 1))
+        assertEquals(1, SwitcherRules.badge(1))
+        // In a turn: running, compacting or waiting for an answer; open and idle is not.
+        assertFalse(SwitcherRules.inTurn(SessionState(hello = true)))
+        assertTrue(SwitcherRules.inTurn(SessionState(isRunning = true)))
+        assertTrue(SwitcherRules.inTurn(SessionState(isCompacting = true)))
     }
 }

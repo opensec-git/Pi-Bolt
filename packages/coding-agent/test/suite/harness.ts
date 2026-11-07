@@ -3,7 +3,7 @@ import { createInMemoryModelRegistry, createModelRegistry, getModelRuntime } fro
  * Local test harness for the new coding-agent test suite.
  */
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
@@ -142,14 +142,10 @@ export interface Harness {
 	cleanup: () => void;
 }
 
-function createTempDir(): string {
-	const tempDir = join(tmpdir(), `pi-suite-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-	mkdirSync(tempDir, { recursive: true });
-	return tempDir;
-}
-
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
-	const tempDir = createTempDir();
+	// A fixed-length name: tests compare runs whose output holds this path, and the faux provider counts tokens from
+	// its length. A random suffix of varying length made those counts differ between otherwise equal runs.
+	const tempDir = mkdtempSync(join(tmpdir(), "pi-suite-"));
 	const fauxProvider: FauxProviderRegistration = registerFauxProvider({
 		provider: options.provider,
 		models: options.models,

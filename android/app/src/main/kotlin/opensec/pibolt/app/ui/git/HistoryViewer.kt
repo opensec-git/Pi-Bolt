@@ -18,7 +18,19 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.rounded.Commit
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import opensec.pibolt.app.ui.components.InsetRow
+import opensec.pibolt.app.ui.components.LineCounts
+import opensec.pibolt.app.ui.components.PageTitle
+import opensec.pibolt.app.ui.components.Tag
+import opensec.pibolt.app.ui.theme.IconSize
+import opensec.pibolt.app.ui.theme.Space
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -72,14 +84,20 @@ fun HistoryViewer(ui: ChangesUi, onClose: () -> Unit) {
     // A failed read is an error with Try again, never an empty history.
     var failed by remember { mutableStateOf<String?>(null) }
     var attempt by remember { mutableStateOf(0) }
+    var loadedVersion by remember { mutableStateOf(-1) }
     LaunchedEffect(page, model.version, attempt) {
         loading = true
         failed = null
         try {
-            val got = model.repo.log(PAGE, skip = page * PAGE)
-            if (page == 0) commits.clear()
-            commits += got
-            end = got.size < PAGE
+            // After a change (a pull, a commit) every page shown so far is read again from the top.
+            val fresh = page == 0 || model.version != loadedVersion
+            val want = if (fresh) (page + 1) * PAGE else PAGE
+            val got = model.source.log(want, skip = if (fresh) 0 else page * PAGE)
+            val next = HistoryPages.merge(if (fresh) emptyList() else commits.toList(), got)
+            commits.clear()
+            commits += next
+            loadedVersion = model.version
+            end = got.size < want
         } catch (e: GitException) {
             if (commits.isEmpty()) failed = e.message ?: "Git could not read the history." else ui.error(e.message ?: "Could not read the history")
             end = true
@@ -88,49 +106,55 @@ fun HistoryViewer(ui: ChangesUi, onClose: () -> Unit) {
     }
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val now = remember(commits.size) { System.currentTimeMillis() }
+    val list = rememberLazyListState()
+    val pastTitle by remember { derivedStateOf { list.firstVisibleItemIndex > 0 } }
+    val branch = model.status?.branch?.head
     Box(Modifier.fillMaxSize().background(colors.canvas)) {
         Column(Modifier.fillMaxSize()) {
-            OverlayBar("History", model.status?.branch?.head, onBack = onClose)
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
+            OverlayBar("History", branch, onBack = onClose, titleVisible = pastTitle)
+            LazyColumn(Modifier.fillMaxSize(), state = list, contentPadding = PaddingValues(bottom = Space.xxl + bottom)) {
+                item(key = "title") { PageTitle("History", meta = branch) }
                 when {
                     failed != null -> item(key = "error") {
-                        ErrorState("Could not read the history", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), message = failed, onRetry = {
+                        ErrorState("Could not read the history", Modifier.padding(horizontal = Space.page, vertical = Space.sm), message = failed, onRetry = {
                             end = false
                             attempt++
                         })
                     }
-                    loading && commits.isEmpty() -> item(key = "loading") { LoadingRow("Loading history…", Modifier.padding(top = 8.dp)) }
+                    loading && commits.isEmpty() -> item(key = "loading") { LoadingRow("Loading history…", Modifier.padding(top = Space.sm)) }
                     commits.isEmpty() -> item(key = "empty") {
-                        Box(Modifier.padding(top = 4.dp)) { EmptyCard(Icons.Rounded.History, "No commits yet") }
+                        EmptyCard(Icons.Rounded.History, "No commits yet")
                     }
                 }
-                items(commits, key = { it.hash }) { c ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .heightIn(min = 64.dp)
-                            .pressable({ open = c.hash }, label = "Open commit ${c.short}")
-                            .padding(horizontal = 20.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Column(Modifier.weight(1f)) {
-                            Text(c.subject.ifBlank { "(no message)" }, style = type.body, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                            Spacer(Modifier.height(2.dp))
-                            val meta = buildList {
-                                add(c.short)
-                                add(c.author)
-                                add(ProjectRules.ago(c.time * 1000, now))
-                                if (c.merge) add("merge")
-                            }
-                            Text(meta.joinToString(" · "), style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            val refs = c.refs.filter { it != "HEAD" }
-                            if (refs.isNotEmpty()) Text(refs.joinToString("  "), style = type.monoMeta, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        }
-                    }
+                itemsIndexed(commits, key = { _, c -> c.hash }) { i, c ->
+                    val refs = c.refs.filter { it != "HEAD" }
+                    InsetRow(
+                        title = c.subject.ifBlank { "(no message)" },
+                        onClick = { open = c.hash },
+                        label = "Open commit ${c.short}",
+                        // In words: the full time ("2 hours ago") and every ref.
+                        modifier = Modifier.semantics(mergeDescendants = true) {
+                            contentDescription = listOfNotNull(c.subject.ifBlank { "No message" }, c.short, c.author, ProjectRules.ago(c.time * 1000, now), refs.joinToString(", ").ifEmpty { null }, "merge".takeIf { c.merge }).joinToString(", ")
+                        },
+                        meta = buildList {
+                            add(c.short)
+                            add(ProjectRules.agoShort(c.time * 1000, now))
+                            add(c.author)
+                            if (c.merge) add("merge")
+                        }.joinToString(" · "),
+                        leading = {
+                            Icon(Icons.Rounded.Commit, contentDescription = null, tint = if (refs.isNotEmpty()) colors.ink2 else colors.ink4, modifier = Modifier.size(IconSize.md))
+                        },
+                        trailing = {
+                            // The first ref names the commit at a glance ("main", "v1.2"); the rest are counted.
+                            if (refs.isNotEmpty()) Tag(refs.first().removePrefix("tag: ") + if (refs.size > 1) " +${refs.size - 1}" else "", Modifier.widthIn(max = 120.dp))
+                        },
+                        divider = i < commits.lastIndex || !end,
+                    )
                 }
                 if (!end && commits.isNotEmpty()) {
                     item(key = "more") {
-                        TextAction(if (loading) "Loading…" else "Load more", onClick = { if (!loading) page++ }, modifier = Modifier.padding(horizontal = 8.dp).heightIn(min = 48.dp))
+                        TextAction(if (loading) "Loading…" else "Load more", onClick = { if (!loading) page++ }, modifier = Modifier.padding(horizontal = Space.sm).heightIn(min = 48.dp), color = colors.ink2)
                     }
                 }
             }
@@ -138,6 +162,18 @@ fun HistoryViewer(ui: ChangesUi, onClose: () -> Unit) {
         open?.let { hash -> CommitViewer(ui, hash, onClose = { open = null }) }
     }
     BackHandler(enabled = open != null) { open = null }
+}
+
+/** Paging of the history (pure, unit-tested). */
+object HistoryPages {
+    /**
+     * [shown] with the page [got] after it, leaving out commits already shown: a commit made meanwhile (Pi, a shell)
+     * shifts git's `--skip` pages, so a page can repeat the end of the one before, and a repeated key crashes the list.
+     */
+    fun merge(shown: List<Commit>, got: List<Commit>): List<Commit> {
+        val seen = shown.mapTo(HashSet()) { it.hash }
+        return shown + got.filter { seen.add(it.hash) }
+    }
 }
 
 /** One commit: subject and body, author and date, the hash to copy, then each changed file (tap to fold its diff). */
@@ -153,7 +189,7 @@ private fun CommitViewer(ui: ChangesUi, hash: String, onClose: () -> Unit) {
     LaunchedEffect(hash, attempt) {
         failed = null
         try {
-            val (c, f) = ui.model.repo.show(hash)
+            val (c, f) = ui.model.source.show(hash)
             commit = c
             files = f
             // Many files: start folded, so the list opens fast.
@@ -171,7 +207,7 @@ private fun CommitViewer(ui: ChangesUi, hash: String, onClose: () -> Unit) {
         val c = commit ?: run {
             val error = failed
             if (error != null) {
-                ErrorState("Could not open the commit", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), message = error, onRetry = { attempt++ })
+                ErrorState("Could not open the commit", Modifier.padding(horizontal = Space.page, vertical = Space.sm), message = error, onRetry = { attempt++ })
             } else {
                 LoadingRow("Loading commit…", Modifier.padding(top = 8.dp))
             }
@@ -179,17 +215,17 @@ private fun CommitViewer(ui: ChangesUi, hash: String, onClose: () -> Unit) {
         }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
             item(key = "head") {
-                Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
-                    Text(c.subject, style = type.subhead, color = colors.ink1)
+                Column(Modifier.padding(start = Space.page, end = Space.page, top = Space.xs, bottom = Space.lg)) {
+                    Text(c.subject, style = type.title, color = colors.ink1, modifier = Modifier.semantics { heading() })
                     if (c.body.isNotBlank()) {
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(Space.sm))
                         Text(c.body, style = type.body, color = colors.ink2)
                     }
-                    Spacer(Modifier.height(10.dp))
+                    Spacer(Modifier.height(Space.md))
                     val date = remember(c.time) { DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(c.time * 1000)) }
-                    Text("${c.author} <${c.email}>", style = type.meta, color = colors.ink3)
-                    Text(date, style = type.meta, color = colors.ink3)
-                    if (c.merge) Text("Merge: the diff is against the first parent", style = type.meta, color = colors.ink3)
+                    Text("${c.author} <${c.email}>", style = type.rowMeta, color = colors.ink3)
+                    Text(date, style = type.rowMeta, color = colors.ink3)
+                    if (c.merge) Text("Merge: the diff is against the first parent", style = type.rowMeta, color = colors.ink3)
                 }
             }
             itemsIndexed(files, key = { i, f -> "$i:${f.path}" }) { i, f ->
@@ -200,7 +236,7 @@ private fun CommitViewer(ui: ChangesUi, hash: String, onClose: () -> Unit) {
                             .fillMaxWidth()
                             .heightIn(min = 48.dp)
                             .pressable({ if (isFolded) folded -= i else folded += i }, label = if (isFolded) "Show the diff of ${f.path}" else "Hide the diff of ${f.path}")
-                            .padding(start = 8.dp, end = 14.dp),
+                            .padding(start = Space.sm, end = Space.lg),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
@@ -212,7 +248,7 @@ private fun CommitViewer(ui: ChangesUi, hash: String, onClose: () -> Unit) {
                         Spacer(Modifier.width(6.dp))
                         Text(f.path, style = type.monoSmall, color = colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f))
                         Spacer(Modifier.width(8.dp))
-                        Counts(f.added, f.removed)
+                        LineCounts(f.added, f.removed)
                     }
                     if (!isFolded) {
                         when {

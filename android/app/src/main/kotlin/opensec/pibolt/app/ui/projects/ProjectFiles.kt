@@ -1,19 +1,9 @@
 package opensec.pibolt.app.ui.projects
 
 import android.graphics.BitmapFactory
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
-import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Folder
@@ -24,28 +14,28 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.data.SafeFiles
-import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.components.InsetRow
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
-import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Tnum
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 /** One directory entry: one stat (type, size and time together), taken off the main thread. */
 @Immutable
@@ -60,6 +50,10 @@ data class FileEntry(val name: String, val dir: Boolean, val size: Long, val mod
         val HIDDEN = setOf(".git", ".hg", ".svn", ".DS_Store")
     }
 }
+
+/** When and how big a file was on disk, to notice that someone else (Pi, a shell) changed it. */
+@Immutable
+data class FileStamp(val modified: Long, val size: Long)
 
 /** Order of the Files tab. Folders always come first. */
 enum class FileSort(val label: String) { Name("Name"), Modified("Last changed"), Size("Size") }
@@ -99,8 +93,12 @@ object ProjectFiles {
         val names = dir.list() ?: return@withContext emptyList()
         order(
             names.map { name ->
-                val attrs = runCatching { Files.readAttributes(File(dir, name).toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS) }.getOrNull()
-                FileEntry(name, attrs?.isDirectory == true, attrs?.size() ?: 0, attrs?.lastModifiedTime()?.toMillis() ?: 0)
+                val path = File(dir, name).toPath()
+                val attrs = runCatching { Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS) }.getOrNull()
+                // A link to a folder (pnpm's node_modules, a shared `docs`) opens as that folder, not as a file that
+                // "no longer exists". Delete still removes only the link (SafeFiles never follows one).
+                val folder = attrs?.isDirectory == true || attrs?.isSymbolicLink == true && Files.isDirectory(path)
+                FileEntry(name, folder, attrs?.size() ?: 0, attrs?.lastModifiedTime()?.toMillis() ?: 0)
             },
         )
     }
@@ -194,18 +192,34 @@ object ProjectFiles {
 
     /**
      * Writes [text] to [file] through a temporary file and a rename, so a failed save never leaves half a file. The
-     * temporary file takes the original's permissions first, so an edited `gradlew` or script stays executable.
+     * temporary file takes the original's permissions first, so an edited `gradlew` or script stays executable. A
+     * symbolic link (`CLAUDE.md -> AGENTS.md`) stays a link: the file it points to is written.
      */
     suspend fun write(file: File, text: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val tmp = File(file.parentFile, ".${file.name}.pibolt-tmp")
+            val target = if (Files.isSymbolicLink(file.toPath())) file.toPath().toRealPath().toFile() else file
+            val tmp = File(target.parentFile, ".${target.name}.pibolt-tmp")
             tmp.writeText(text)
-            if (file.exists()) copyPermissions(file, tmp)
-            if (!tmp.renameTo(file)) {
+            if (target.exists()) copyPermissions(target, tmp)
+            if (!tmp.renameTo(target)) {
                 tmp.delete()
-                file.writeText(text)
+                target.writeText(text)
             }
         }
+    }
+
+    /**
+     * Whether the file changed on disk since it was read as [read]: another time or size, or it is gone. Null [read]
+     * (never stamped) is no change.
+     */
+    fun changedOnDisk(read: FileStamp?, now: FileStamp?): Boolean = read != null && read != now
+
+    /** [file]'s modification time (nanoseconds where the file system has them) and size, or null when it is gone. */
+    suspend fun stamp(file: File): FileStamp? = withContext(Dispatchers.IO) {
+        runCatching {
+            val attrs = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
+            FileStamp(attrs.lastModifiedTime().to(TimeUnit.NANOSECONDS), attrs.size())
+        }.getOrNull()
     }
 
     /** Gives [to] the POSIX permissions of [from]; where those are unsupported, at least its executable bit. */
@@ -266,30 +280,29 @@ object ProjectFiles {
 }
 
 /**
- * 52dp row: a glyph for the type (folder, code, document, image, other), the name, its size (files) or item count
- * (folders, read when shown), and a chevron for folders. Long press opens the file actions.
+ * One entry of the Files tab, an [InsetRow]: a glyph for the type in the leading slot (folder ink2; code, document,
+ * image or other ink3), the name (dot files dimmed), its size (files) or item count (folders, read when shown) at the
+ * end, and a chevron for folders. Long press opens the file actions; TalkBack has them as a named action.
  */
 @Composable
-fun FileRow(entry: FileEntry, parent: File, onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier = Modifier) {
+fun FileRow(entry: FileEntry, parent: File, onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier = Modifier, divider: Boolean = true) {
     val colors = Pi.colors
-    val type = Pi.type
     val count by produceState<Int?>(null, entry, parent) { if (entry.dir) value = ProjectFiles.count(File(parent, entry.name)) }
     val kind = if (entry.dir) null else FileTypes.kind(entry.name)
     val meta = if (entry.dir) count?.let { if (it == 1) "1 item" else "$it items" }.orEmpty() else ProjectFiles.size(entry.size)
-    Row(
-        modifier
-            .fillMaxWidth()
-            .height(52.dp)
-            .pressable(onClick, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, onLongClick = onLongClick, label = if (entry.dir) "Open folder" else "Open file")
-            .semantics {
-                contentDescription = (if (entry.dir) "Folder ${entry.name}" else "${entry.name}, ${FileTypes.label(entry.name)}") + if (meta.isNotEmpty()) ", $meta" else ""
-                // Long press as a named action, so TalkBack users find Rename, Share and Delete.
-                customActions = listOf(CustomAccessibilityAction(if (entry.dir) "Folder actions" else "File actions") { onLongClick(); true })
-            }
-            .padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+    InsetRow(
+        title = entry.name,
+        onClick = onClick,
+        onLongClick = onLongClick,
+        label = if (entry.dir) "Open folder" else "Open file",
+        modifier = modifier.semantics(mergeDescendants = true) {
+            contentDescription = (if (entry.dir) "Folder ${entry.name}" else "${entry.name}, ${FileTypes.label(entry.name)}") + if (meta.isNotEmpty()) ", $meta" else ""
+            // Long press as a named action, so TalkBack users find Rename, Share and Delete.
+            customActions = listOf(CustomAccessibilityAction(if (entry.dir) "Folder actions" else "File actions") { onLongClick(); true })
+        },
+        // A dot file reads one step quieter, about ink3 (DESIGN.md "Contrast").
+        titleModifier = if (entry.dot) Modifier.alpha(DOT_FILE_ALPHA) else Modifier,
+        leading = {
             Icon(
                 when (kind) {
                     null -> Icons.Rounded.Folder
@@ -300,18 +313,14 @@ fun FileRow(entry: FileEntry, parent: File, onClick: () -> Unit, onLongClick: ()
                 },
                 contentDescription = null,
                 tint = if (entry.dir) colors.ink2 else colors.ink3,
-                modifier = Modifier.size(18.dp),
+                modifier = Modifier.size(IconSize.md),
             )
-        }
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(entry.name, style = type.monoSmall, color = if (entry.dot) colors.ink3 else colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
-        }
-        Spacer(Modifier.width(12.dp))
-        Text(meta, style = type.meta, color = colors.ink3, maxLines = 1)
-        if (entry.dir) {
-            Spacer(Modifier.width(4.dp))
-            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = colors.ink4, modifier = Modifier.size(18.dp))
-        }
-    }
+        },
+        trailing = { if (meta.isNotEmpty()) Text(meta, style = Pi.type.rowMeta.copy(fontFeatureSettings = Tnum), color = colors.ink3, maxLines = 1) },
+        chevron = entry.dir,
+        divider = divider,
+    )
 }
+
+/** The alpha of a dot file's name: ink1 at 62% lands on ink3 over the canvas. */
+const val DOT_FILE_ALPHA = 0.62f

@@ -1,7 +1,6 @@
 package opensec.pibolt.app.ui.session
 
 import android.Manifest
-import android.content.ClipboardManager
 import android.net.Uri
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -46,6 +45,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import opensec.pibolt.app.engine.SessionSummary
 import opensec.pibolt.app.session.ForkPoint
+import opensec.pibolt.app.ui.session.ask.AskQuestions
+import opensec.pibolt.app.ui.session.ask.QuestionSheet
 import opensec.pibolt.app.ui.session.features.Builtin
 import opensec.pibolt.app.ui.session.review.LocalTurnReview
 import opensec.pibolt.app.ui.session.review.TurnReviewOverlay
@@ -109,6 +110,7 @@ import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberUpdatedState
 import kotlinx.coroutines.flow.first
@@ -144,14 +146,25 @@ import opensec.pibolt.app.ui.projects.FileViewer
 import opensec.pibolt.app.ui.projects.editor.AskPi
 import opensec.pibolt.app.ui.projects.editor.EditorTabs
 import opensec.pibolt.app.ui.projects.editor.viewerPlace
+import opensec.pibolt.app.ui.session.voice.VoiceModeEffects
 import opensec.pibolt.app.ui.session.voice.VoiceRationale
+import opensec.pibolt.app.ui.session.voice.rememberVoiceMode
 import opensec.pibolt.app.ui.session.voice.rememberVoiceInput
+import opensec.pibolt.app.ui.session.remote.RemoteChangesPill
+import opensec.pibolt.app.ui.session.remote.RemoteReviewOverlays
+import opensec.pibolt.app.ui.session.remote.RemoteView
+import opensec.pibolt.app.ui.session.remote.rememberRemoteReview
 import opensec.pibolt.app.ui.session.review.SessionChangesPill
 import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.session.SessionEffect
+import opensec.pibolt.app.cost.Cost
+import opensec.pibolt.app.cost.Money
 import opensec.pibolt.app.ui.components.ConfirmSheet
+import opensec.pibolt.app.ui.cost.CapNotice
+import opensec.pibolt.app.ui.cost.SpendLimitsSheet
+import opensec.pibolt.app.ui.cost.SpendSheet
 import opensec.pibolt.app.ui.components.PiSnackHost
 import opensec.pibolt.app.ui.components.QuadMath
 import opensec.pibolt.app.ui.components.QuadMode
@@ -177,7 +190,10 @@ class LocalUi(
     /** The project's folder name. */
     val project: String,
     val title: String,
+    /** A new session in the project; beside this one if it is busy (both keep running). */
     val onNewSession: () -> Unit,
+    /** Open a saved session of the project; beside this one if it is busy. Null: this engine switches to it. */
+    val onOpenFile: ((String) -> Unit)? = null,
     /** Restart the engine and reconnect. */
     val onRestart: () -> Unit,
     /** A prompt queued when the session was created ("Clone from git"); returned once. */
@@ -245,10 +261,10 @@ fun SessionScreen(
 }
 
 @Composable
-private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Unit, onOpenSession: (String) -> Unit, onPreview: (Int) -> Unit) {
-    // Each project's screen shows its own live session; the others keep running meanwhile.
+private fun LocalSessionScreen(app: PiBoltApp, key: String, onBack: () -> Unit, onOpenSession: (String) -> Unit, onPreview: (Int) -> Unit) {
+    // Each screen shows one live session ([key]: LocalSessions.Live.key); the others keep running meanwhile.
     val all by LocalSessions.all.collectAsStateWithLifecycle()
-    val live = all[project]
+    val live = all[key]
     if (live == null) {
         LaunchedEffect(Unit) { onBack() }
         return
@@ -256,6 +272,7 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
     LaunchedEffect(live.controller) { app.focus(live.controller) }
     val store = remember { ProjectStore.get(app) }
     val meta by store.state.collectAsStateWithLifecycle()
+    val project = live.project.name
     val title = meta.projects[project]?.title ?: project
     val scope = rememberCoroutineScope()
     val engine = app.engine
@@ -270,7 +287,9 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
             local = LocalUi(
                 project = project,
                 title = title,
-                onNewSession = { scope.launch { LocalSessions.open(engine, store, live.project, fresh = true) } },
+                // Opened beside this session when it is busy: the result may live under another key.
+                onNewSession = { scope.launch { opened(LocalSessions.open(engine, store, live.project, fresh = true), key, live, onOpenSession) } },
+                onOpenFile = { file -> scope.launch { opened(LocalSessions.open(engine, store, live.project, sessionFile = file), key, live, onOpenSession) } },
                 onRestart = {
                     engine.prepare()
                     live.controller.retryNow()
@@ -284,7 +303,14 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
     }
 }
 
-private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget, Export, Resume, Fork, Attach, History, Key, DeleteChat }
+/** After an open from session [from] (shown under [key]): show the result where it lives, or say why it did not open. */
+private fun opened(result: Result<LocalSessions.Live>, key: String, from: LocalSessions.Live, onOpenSession: (String) -> Unit) {
+    result
+        .onSuccess { if (it.key != key) onOpenSession(it.key) }
+        .onFailure { from.controller.showError(it.message ?: "Could not open the session") }
+}
+
+private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget, Export, Resume, Fork, Attach, History, Key, DeleteChat, Spend, SpendLimits }
 
 /**
  * The session screen. It never reads the whole [SessionState] itself: each part derives the few values it shows, so a
@@ -307,7 +333,7 @@ internal fun SessionContent(
     val linkState = controller.link.collectAsStateWithLifecycle()
     val hostName by controller.hostName.collectAsStateWithLifecycle()
     val sessionId by remember { derivedStateOf { state.value.sessionId } }
-    val memory = remember(controller.hostId, sessionId) { SessionMemory.of(controller.hostId, sessionId) }
+    val memory = remember(controller.memoryKey, sessionId) { SessionMemory.of(controller.memoryKey, sessionId) }
     val colors = Pi.colors
     val haptics = Pi.haptics
     val settings = Pi.settings
@@ -320,6 +346,8 @@ internal fun SessionContent(
     var sheet by remember { mutableStateOf(Sheet.None) }
     var remoteSessions by remember { mutableStateOf(false) }
     val service by remember { derivedStateOf { state.value.host?.service == true } }
+    // The computer's working tree, read-only (`host.review`): Changes and Files in More, the "+N −M" pill.
+    val remoteReview = rememberRemoteReview(controller, state)
     val f2 = rememberFeatures2()
     var viewer by remember { mutableStateOf<ViewerContent?>(null) }
     // A file on this phone tapped in a tool card opens in the full file viewer (tabs kept while the screen lives).
@@ -354,7 +382,7 @@ internal fun SessionContent(
             },
             message = { m -> scope.launch { snackbar.show(m) } },
             view = { viewer = it },
-            openSession = { controller.switchSession(it.file) },
+            openSession = { local?.onOpenFile?.invoke(it.file) ?: controller.switchSession(it.file) },
         )
     }
     val pickImport = rememberImportPicker(f2Host)
@@ -375,7 +403,7 @@ internal fun SessionContent(
     // The draft is kept per session across restarts and saved as it changes. [draftOwner] is the session whose draft the
     // composer holds: on a switch (Resume, Fork) the outgoing draft is saved under it and the incoming one is loaded,
     // or the text a fork hands over ([forkDraft]).
-    val draftKey = Drafts.key(controller.hostId, sessionId)
+    val draftKey = Drafts.key(controller.memoryKey, sessionId)
     var draftOwner by rememberSaveable(controller.hostId) { mutableStateOf<String?>(null) }
     var forkDraft by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(draftKey) {
@@ -391,6 +419,10 @@ internal fun SessionContent(
             delay(400)
             if (sessionId != null) drafts.put(draftKey, it)
         }
+    }
+    // Leaving the screen (Back, New chat on a new engine) within the 400 ms above kept the last keystrokes unsaved.
+    DisposableEffect(draftKey) {
+        onDispose { if (sessionId != null && draftOwner == draftKey) drafts.put(draftKey, draft) }
     }
     LaunchedEffect(searching, query) {
         if (!searching || query.isBlank()) {
@@ -423,9 +455,10 @@ internal fun SessionContent(
                     scope.launch { snackbar.show(effect.message, SnackKind.Error) }
                 }
                 is SessionEffect.EditorText -> {
-                    draft = effect.text
+                    // A failed send or the queue given back joins what was typed meanwhile (it used to replace it).
+                    draft = effect.into(draft)
                     // A send that failed comes back to the composer: its "Sending" bubble goes, its images return.
-                    SessionMemory.of(controller.hostId, controller.state.value.sessionId).pending.let { p -> if (p.value?.text == effect.text) p.value = null }
+                    SessionMemory.of(controller.memoryKey, controller.state.value.sessionId).pending.let { p -> if (p.value?.text == effect.text) p.value = null }
                     lastSent?.takeIf { it.first == effect.text && images.isEmpty() }?.let { images.addAll(it.second) }
                 }
             }
@@ -460,6 +493,7 @@ internal fun SessionContent(
 
     val hello by remember { derivedStateOf { state.value.hello } }
     val running by remember { derivedStateOf { state.value.isRunning } }
+    val compacting by remember { derivedStateOf { state.value.isCompacting } }
     val shellRuns by controller.shellRuns.collectAsStateWithLifecycle()
     val connected by remember { derivedStateOf { linkState.value is LinkState.Connected } }
     val enabled = connected && hello
@@ -486,13 +520,14 @@ internal fun SessionContent(
             val m = if (sending) QuadMode.Think else quadMode
             val activity = TranscriptModel.activity(s.items, s.streaming)
             val retry = s.retry
-            val thinkingLive = (s.streaming.lastOrNull() as? ThinkingItem)?.streaming == true
+            val thinks = ThinkingRules.on(s.thinkingLevel, s.model?.reasoning)
+            val thinkingLive = (s.streaming.lastOrNull() as? ThinkingItem)?.let { it.streaming && ThinkingRules.shows(it, thinks) } == true
             val text = when {
                 retry != null -> StatusText("Retrying", "attempt ${retry.attempt} of ${retry.maxAttempts}")
                 s.isCompacting && m == QuadMode.Compact -> StatusText(compactionLabel(s.compactionReason))
                 // The live thinking row already says "Thinking": the status line keeps only the elapsed time.
                 thinkingLive && m == QuadMode.Think && !sending -> StatusText("")
-                else -> TranscriptModel.statusText(m, activity, sending)
+                else -> TranscriptModel.statusText(m, activity, sending, thinking = thinks)
             }
             LiveStatus(visible = s.isRunning || s.isCompacting || sending, mode = if (retry != null) QuadMode.Connect else m, text = text)
         }
@@ -502,7 +537,8 @@ internal fun SessionContent(
     LaunchedEffect(pending) {
         if (pending == null) return@LaunchedEffect
         delay(PendingSend.TIMEOUT_MS)
-        if (memory.pending.value === pending && !state.value.isRunning) memory.pending.value = null
+        // A prompt held for a manual compaction (SessionController.send) is still on its way.
+        if (memory.pending.value === pending && !state.value.isRunning && !state.value.isCompacting) memory.pending.value = null
     }
     val subtitle by remember {
         derivedStateOf {
@@ -521,6 +557,8 @@ internal fun SessionContent(
     val contextWindow by remember { derivedStateOf { state.value.model?.contextWindow } }
     val contextPct = knownTokens?.let { contextPercent(it, contextWindow) }
     val modelLabel by remember { derivedStateOf { state.value.model?.label } }
+    val sessionCost by controller.cost.collectAsStateWithLifecycle()
+    val capCard by controller.capCard.collectAsStateWithLifecycle()
     // The maker's mark for the run-settings chip: "anthropic/claude-…" through OpenRouter is Anthropic's.
     val modelBrand by remember { derivedStateOf { state.value.model?.let { ProviderCatalog.modelBrand(it.id, it.provider) } } }
     val cwd by remember { derivedStateOf { state.value.host?.cwd } }
@@ -555,8 +593,9 @@ internal fun SessionContent(
         // new session, and the send belongs in that session's memory, or its "Sending" row would never resolve.
         val now = controller.state.value
         val running = now.isRunning
-        controller.send(text, behavior, attached.mapNotNull { it.image })
-        SessionMemory.of(controller.hostId, now.sessionId).sent(text, now, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image }, dictated = fromDraft && dictated)
+        // A spending limit holds it back: the limit's card says so (nothing shows as sending).
+        if (!controller.send(text, behavior, attached.mapNotNull { it.image })) return
+        SessionMemory.of(controller.memoryKey, now.sessionId).sent(text, now, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image }, dictated = fromDraft && dictated)
         if (fromDraft) dictated = false
         if (text.isNotBlank()) app.recents.record(recentKey, text)
         lastSent = text to attached
@@ -564,6 +603,19 @@ internal fun SessionContent(
     }
 
     fun noImages(): String = "${modelLabel ?: "This model"} can't read images"
+
+    // Hands-free voice mode (ui/session/voice): what it hears is sent as a dictated message.
+    val voiceMode = rememberVoiceMode(
+        voice,
+        running = { controller.state.value.isRunning },
+        send = { text ->
+            dictated = true
+            send(text, fromDraft = true)
+        },
+        submit = controller::submitAsk,
+        settings = settings,
+        onMessage = { m -> scope.launch { snackbar.show(m) } },
+    )
 
     // "Clone from git" queues the clone prompt: it goes out once the new session can take it.
     if (local != null) {
@@ -771,7 +823,11 @@ internal fun SessionContent(
     fun regenerate(user: UserItem, occurrence: Int) {
         val before = controller.state.value.sessionId
         scope.launch {
+            val lastUser = PendingSend.lastUserKey(controller.state.value.items)
             if (chat && rewind(user.text, occurrence).isSuccess) {
+                // The rewound transcript is only queued (resync): sent against the old one, the "Sending" row took the
+                // answered message as its base and vanished as soon as the rewind showed, before the run started.
+                withTimeoutOrNull(FORK_SWITCH_MS) { controller.state.first { PendingSend.lastUserKey(it.items) != lastUser } }
                 send(user.text)
                 return@launch
             }
@@ -823,16 +879,9 @@ internal fun SessionContent(
         }
     }
 
-    /** An image on the clipboard (copied from a browser, a screenshot, a gallery app), or null. */
-    fun clipboardImage(): Uri? {
-        val cm = context.getSystemService(ClipboardManager::class.java) ?: return null
-        if (cm.primaryClipDescription?.hasMimeType("image/*") != true) return null
-        return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
-    }
-
     /** Ctrl+V or "Paste image": attaches the clipboard's image; false when there is none (text paste goes on). */
     fun pasteImage(): Boolean {
-        val uri = clipboardImage() ?: return false
+        val uri = clipboardImage(context) ?: return false
         when {
             modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
             ImageSizing.slotsLeft(images.size) == 0 -> scope.launch { snackbar.show("Up to ${ImageSizing.MAX_IMAGES} images per message") }
@@ -865,6 +914,11 @@ internal fun SessionContent(
                 val prompt = promptBefore(notice)
                 if (prompt == null || prompt.text.isBlank()) {
                     scope.launch { snackbar.show("Nothing to retry") }
+                } else if (prompt.imageCount > 0) {
+                    // Its images are not kept: sent again, the prompt went without them. The text waits in the composer.
+                    draft = prompt.text
+                    focus.requestFocus()
+                    scope.launch { snackbar.show("Attach the images again, then send") }
                 } else {
                     haptics.send()
                     send(prompt.text)
@@ -912,7 +966,7 @@ internal fun SessionContent(
             val s = state.value
             buildList {
                 // Retries are told by the error notice (with Stop retrying) and the status line, not here.
-                addAll(s.statuses.values.map { it to false })
+                addAll(s.statuses.filterKeys { it != opensec.pibolt.app.engine.BackgroundJobs.STATUS_KEY }.values.map { it to false })
                 s.widgets.values.forEach { lines -> addAll(lines.map { it to false }) }
             }
         }
@@ -923,6 +977,8 @@ internal fun SessionContent(
      * Follow-up while Pi works). A prompt that starts a run hides the keyboard so the reply has room; a steer keeps it.
      */
     fun submit(behavior: StreamingBehavior) {
+        // The mic still listening would put the sent text back with its last words.
+        if (voice.listening) voice.cancel()
         val text = draft.trim()
         val call = if (images.isEmpty()) CommandPalette.parse(text, commands, isLocal, chat) else null
         when {
@@ -933,6 +989,8 @@ internal fun SessionContent(
             text.isEmpty() && images.isEmpty() -> Unit
             images.any { !it.ready } -> Unit
             images.isNotEmpty() && modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
+            // At a spending limit the draft stays, for Continue once on the limit's card.
+            !controller.spendAllows() -> Unit
             else -> {
                 val startsRun = !state.value.isRunning
                 send(text, images.toList(), behavior, fromDraft = true)
@@ -955,19 +1013,24 @@ internal fun SessionContent(
         val windowHeight = maxHeight
         val density = LocalDensity.current
         val imeVisible = WindowInsets.isImeVisible
-        val imeHeight = with(density) { WindowInsets.ime.getBottom(density).toDp() }
-        // Room above the keyboard: under 360dp (landscape with the keyboard up) the composer is one row.
-        val roomAboveIme = windowHeight - imeHeight
+        // Room above the keyboard: under 360dp (landscape with the keyboard up) the composer is one row. The command /
+        // `@` panel shares that room with the status and top bars and the composer: capped so it never pushes the
+        // composer under the keyboard (in landscape a 264dp panel did). Read through a derived state: the keyboard's
+        // height changes every frame of its animation, and reading it here recomposed the whole screen on each.
+        val ime = WindowInsets.ime
+        val statusBars = WindowInsets.statusBars
+        val room by remember(windowHeight, density, ime, statusBars) {
+            derivedStateOf {
+                with(density) { ImeRoom.of(windowHeight, ime.getBottom(density).toDp(), statusBars.getTop(density).toDp()) }
+            }
+        }
         // The bottom stack's budget: with the keyboard up, or in a short window, the todo card, status extras, a waiting
         // question and the queue fold into one row, so the transcript keeps its room and the composer stays on the
         // keyboard. The swap is instant: it follows the keyboard frame by frame.
         val foldStack = imeVisible || windowHeight < 480.dp
-        val oneRowComposer = roomAboveIme < 360.dp
-        val composerLines = if (roomAboveIme < 560.dp) 4 else MAX_LINES
-        // The command / `@` panel shares that room with the status and top bars and the composer: capped so it never
-        // pushes the composer under the keyboard (in landscape a 264dp panel did).
-        val statusTop = with(density) { WindowInsets.statusBars.getTop(density).toDp() }
-        val suggestionsMax = (roomAboveIme - statusTop - 56.dp - if (oneRowComposer) 72.dp else 140.dp).coerceIn(48.dp, SUGGESTIONS_MAX)
+        val oneRowComposer = room.oneRowComposer
+        val composerLines = room.composerLines
+        val suggestionsMax = room.suggestionsMax
         Column(Modifier.fillMaxSize().imePadding()) {
             if (searching) {
                 SearchBar(
@@ -1008,6 +1071,8 @@ internal fun SessionContent(
                 onFork = ::openFork,
                 onClone = controller::cloneSession,
                 onProjects = { remoteSessions = true }.takeIf { local == null && service },
+                onChanges = remoteReview?.let { r -> { r.view = RemoteView.Changes } },
+                onFiles = remoteReview?.let { r -> { r.view = RemoteView.Files } },
                 contextPercent = contextPct,
                 // One spinner at a time: the top bar's Quad steps aside while the live status line is on screen.
                 quadVisible = !(status.value.visible && statusOnScreen),
@@ -1016,6 +1081,9 @@ internal fun SessionContent(
                 chat = chat,
                 onChats = local?.onChats,
                 onDelete = local?.onDelete?.let { { sheet = Sheet.DeleteChat } },
+                cost = Money.label(sessionCost),
+                costSpoken = Money.spoken(sessionCost),
+                onCost = { sheet = Sheet.Spend },
             )
             // Before the first snapshot the loading state already says "Starting…" with its own spinner: the banner
             // would say it twice. It still shows a stopped engine or a lost link (with Restart / Retry).
@@ -1099,12 +1167,27 @@ internal fun SessionContent(
                         StatusExtras(extras)
                         TodoPanel(todos, running, autoCollapse = !running || windowHeight < 560.dp, quiet = status.value.visible && statusOnScreen)
                         if (local != null && parts.preview) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = Space.page))
+                        if (local != null && parts.preview) BackgroundJobsPill(controller.localBackend?.pid, Modifier.padding(horizontal = Space.page))
                         PendingDialogStrip(askingTitle) { memory.hiddenDialog.value = null }
                         QueueStrip(queue, onEdit = controller::clearQueue)
+                    }
+                    capCard?.let { card ->
+                        CapNotice(
+                            card,
+                            onContinue = {
+                                controller.continueOnce()
+                                // The held-back draft goes now; a stopped run picks up where it stopped.
+                                if (draft.isNotBlank() || images.isNotEmpty()) submit(mode) else if (card.stopped) send(CONTINUE_PROMPT)
+                            },
+                            onDismiss = controller::dismissCapCard,
+                            modifier = Modifier.padding(horizontal = Space.page, vertical = Space.xs),
+                        )
                     }
                     Composer(
                         text = draft,
                         onText = {
+                            // Typing while the mic listens: its next result would rebuild the draft over the typed words.
+                            if (voice.listening) voice.cancel()
                             draft = it
                             if (it.isBlank()) dictated = false
                         },
@@ -1140,10 +1223,12 @@ internal fun SessionContent(
                         onAttach = { sheet = Sheet.Attach },
                         onRemoveImage = { id -> images.removeAll { it.id == id } },
                         voice = voice,
-                        changes = if (isLocal) ({ SessionChangesPill(review) }) else null,
+                        voiceMode = voiceMode,
+                        changes = if (isLocal) ({ SessionChangesPill(review) }) else if (remoteReview != null) ({ RemoteChangesPill(remoteReview) }) else null,
                         focusRequester = focus,
-                        // A user `!` command started while Pi is idle stops through abort_bash; the agent through abort.
-                        stoppable = running || shellRuns > 0,
+                        // A user `!` command started while Pi is idle stops through abort_bash; the agent and a
+                        // compaction (manual ones run with Pi idle) through abort.
+                        stoppable = composerStops(running, compacting, shellRuns),
                         onStop = { if (shellRuns > 0) controller.abortBash() else controller.abort() },
                         onModel = { openModels() },
                         compact = oneRowComposer,
@@ -1181,6 +1266,9 @@ internal fun SessionContent(
             content.value?.let { Viewer(it, onClose = { viewer = null }) }
         }
         TurnReviewOverlay(review)
+        remoteReview?.let { r ->
+            RemoteReviewOverlays(app, r, cwd.orEmpty(), running, onAsk = { draft = AskPi.appendTo(draft, it).first })
+        }
         AnimatedVisibility(
             visible = openedFile != null,
             enter = fadeIn(PiMotion.enter(PiMotion.SHEET)) + slideInVertically(PiMotion.enter(PiMotion.SHEET)) { it / 10 },
@@ -1212,7 +1300,21 @@ internal fun SessionContent(
     }
 
     // Pi's dialogs: one at a time. Swiping away hides the sheet; only an explicit answer or Cancel responds.
-    firstDialog?.let { dialog ->
+    // ask_user_question's dialogs are one question card instead (ui/session/ask): its answers go out on Submit.
+    val askOwner = firstDialog?.let { dialog -> remember(dialog.id) { AskQuestions.owner(state.value, dialog) } }
+    if (askOwner != null && firstDialog != null) {
+        val (call, questions) = askOwner
+        if (!controller.askSubmitting(call.toolCallId) && !voiceMode.claims(call.toolCallId)) {
+            key(call.toolCallId) {
+                QuestionSheet(
+                    toolCallId = call.toolCallId,
+                    questions = questions,
+                    first = AskQuestions.stepOf(firstDialog!!, questions)?.question ?: 0,
+                    onSubmit = { controller.submitAsk(it) },
+                )
+            }
+        }
+    } else firstDialog?.let { dialog ->
         val shownAt = remember(dialog.id) { memory.dialogShownAt.getOrPut(dialog.id) { SystemClock.uptimeMillis() } }
         if (memory.hiddenDialog.value != dialog.id) {
             key(dialog.id) {
@@ -1230,12 +1332,14 @@ internal fun SessionContent(
     }
 
     VoiceRationale(voice)
+    VoiceModeEffects(voiceMode, state, status, controller.effects)
 
     if (remoteSessions) RemoteSessionsSheet(controller, onDismiss = { remoteSessions = false })
     when (sheet) {
         Sheet.None -> Unit
         Sheet.Attach -> {
-            val clip = remember { clipboardImage() != null }
+            // The clip's description only: reading the clip itself shows Android's "pasted from your clipboard" toast.
+            val clip = remember { clipboardHasImage(context) }
             ActionsSheet(
                 title = null,
                 actions = listOfNotNull(
@@ -1325,6 +1429,18 @@ internal fun SessionContent(
                 onDismiss = { sheet = Sheet.None },
             )
         }
+        Sheet.Spend -> SpendSheet(
+            app,
+            session = sessionCost,
+            // A project's sessions on this phone, added up (a chat is its own row in the Chats list).
+            project = produceState<Cost?>(null) {
+                value = controller.project?.takeIf { isLocal && !chat }?.let { dir -> withContext(Dispatchers.IO) { runCatching { app.engine.sessions(dir).fold(Cost.NONE) { sum, s -> sum + s.cost } }.getOrNull() } }
+            }.value,
+            onLimits = { sheet = Sheet.SpendLimits },
+            onDismiss = { if (sheet == Sheet.Spend) sheet = Sheet.None },
+            note = "Subagents on the computer aren't counted.".takeIf { !isLocal },
+        )
+        Sheet.SpendLimits -> SpendLimitsSheet(app, onDismiss = { if (sheet == Sheet.SpendLimits) sheet = Sheet.None })
         Sheet.Export -> ActionsSheet(
             title = "Export or share this $noun",
             actions = listOfNotNull(
@@ -1336,7 +1452,7 @@ internal fun SessionContent(
             onDismiss = { sheet = Sheet.None },
         )
         Sheet.Resume -> ResumeSheet(savedSessions, controller.sessionFile, onPick = {
-            controller.switchSession(it.file)
+            local?.onOpenFile?.invoke(it.file) ?: controller.switchSession(it.file)
             sheet = Sheet.None
         }, onDismiss = { sheet = Sheet.None })
         Sheet.Fork -> ForkSheet(forkPoints, onPick = { point ->
@@ -1467,6 +1583,15 @@ internal fun SessionContent(
 
 /** How long Regenerate waits for the fork's session before it sends anyway. */
 private const val FORK_SWITCH_MS = 5_000L
+
+/** What "Continue once" sends after a spending limit stopped a run. */
+private const val CONTINUE_PROMPT = "Continue."
+
+/**
+ * The composer offers Stop: while Pi runs, while a compaction runs (a manual one has Pi idle, and could not be cancelled
+ * as Esc does in the terminal), or while a user `!` command runs.
+ */
+fun composerStops(running: Boolean, compacting: Boolean, shellRuns: Int): Boolean = running || compacting || shellRuns > 0
 
 /** The status line while compacting: why it runs, as the terminal says it. */
 fun compactionLabel(reason: String?): String = when (reason) {

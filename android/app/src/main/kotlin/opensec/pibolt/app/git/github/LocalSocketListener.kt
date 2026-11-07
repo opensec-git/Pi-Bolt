@@ -11,14 +11,15 @@ import java.io.InputStream
 import java.io.OutputStream
 
 /**
- * [GitCredentialBroker]'s listener on Android: a filesystem unix socket at the given path, one daemon thread accepting
- * connections one at a time (a credential answer is a few bytes). A peer that is not this app's uid is dropped.
+ * [GitCredentialBroker]'s listener on Android (and the preview tools' PreviewBroker): a filesystem unix socket at the
+ * given path, one daemon thread ([name]) accepting connections one at a time. A peer that is not this app's uid is
+ * dropped.
  */
 object LocalSocketListener {
-    private const val TAG = "PiBoltGitCred"
+    private const val TAG = "PiBoltSocket"
     private const val READ_TIMEOUT_MS = 5_000
 
-    fun listen(path: File, handle: (InputStream, OutputStream) -> Unit): Closeable {
+    fun listen(path: File, handle: (InputStream, OutputStream) -> Unit, name: String = "git-credentials"): Closeable {
         val bound = LocalSocket(LocalSocket.SOCKET_STREAM)
         bound.bind(LocalSocketAddress(path.path, LocalSocketAddress.Namespace.FILESYSTEM))
         val server = LocalServerSocket(bound.fileDescriptor)
@@ -37,10 +38,10 @@ object LocalSocketListener {
                         handle(it.inputStream, it.outputStream)
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "credential request failed: ${e.javaClass.simpleName}")
+                    Log.w(TAG, "$name request failed: ${e.javaClass.simpleName}")
                 }
             }
-        }, "git-credentials")
+        }, name)
         thread.isDaemon = true
         thread.start()
         return Closeable {

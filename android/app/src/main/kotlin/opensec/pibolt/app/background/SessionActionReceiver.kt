@@ -20,7 +20,7 @@ class SessionActionReceiver : BroadcastReceiver() {
         val notification = intent.getIntExtra(EXTRA_NOTIFICATION, 0)
         val typed = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(SessionActions.REPLY_KEY)?.toString()
         val sessions = app.sessions.value.filter { !it.stopped }
-        val live = sessions.map { SessionActions.Live(it.hostId, it.isLocal, it.state.value.isRunning, it.state.value.dialogs) }
+        val live = sessions.map { SessionActions.Live(it.hostId, it.isLocal, it.state.value.isRunning, it.state.value.dialogs, it.state.value.sessionId) }
         fun session(key: String): SessionController? = sessions.firstOrNull { it.hostId == key }
         when (val route = SessionActions.route(request, typed, live)) {
             is SessionActions.Route.Abort -> route.keys.forEach { session(it)?.abort() }
@@ -33,16 +33,22 @@ class SessionActionReceiver : BroadcastReceiver() {
                 next(app, c, route.dialogId)
             }
             is SessionActions.Route.Prompt -> session(route.key)?.let { c ->
-                c.send(route.text, StreamingBehavior.Steer)
-                // The run starts (or takes the steer); the session notification shows it from here.
-                Notifications.cancel(app, notification)
+                // The run starts (or takes the steer); the session notification shows it from here. Held back by a
+                // spending limit, the session's notification says so instead.
+                if (c.send(route.text, StreamingBehavior.Steer)) Notifications.cancel(app, notification)
             }
-            is SessionActions.Route.Gone -> Notifications.sessionClosed(app, notification)
+            is SessionActions.Route.Gone -> {
+                val c = session(route.key)
+                // A dialog answered in the app (or timed out) on a live session: its next one, or nothing, takes the
+                // notification. Only a reply (or a session that is gone) says so, keeping the reply's text.
+                if (c != null && request !is SessionActions.Request.Reply) next(app, c, answered = "")
+                else Notifications.sessionClosed(app, notification, typed)
+            }
             is SessionActions.Route.Again -> {
                 val c = session(route.key)
                 val dialog = c?.state?.value?.dialogs?.firstOrNull { it.id == route.dialogId }
                 // The same question again, saying why; a reply to a finished run just clears its spinner.
-                if (c != null && dialog != null) Notifications.needsAnswer(app, c.hostId, c.project?.name, c.hostName.value, dialog, why = route.why)
+                if (c != null && dialog != null) Notifications.needsAnswer(app, c, dialog, why = route.why)
                 else Notifications.cancel(app, notification)
             }
         }
@@ -51,7 +57,7 @@ class SessionActionReceiver : BroadcastReceiver() {
     /** After answering [answered]: the session's next open dialog takes the notification, or it goes. */
     private fun next(app: PiBoltApp, c: SessionController, answered: String) {
         val following = c.state.value.dialogs.firstOrNull { it.id != answered }
-        if (following != null) Notifications.needsAnswer(app, c.hostId, c.project?.name, c.hostName.value, following)
+        if (following != null) Notifications.needsAnswer(app, c, following)
         else Notifications.clearNeedsAnswer(app, c.hostId)
     }
 

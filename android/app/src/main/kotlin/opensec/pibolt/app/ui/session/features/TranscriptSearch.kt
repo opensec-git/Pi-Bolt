@@ -6,6 +6,7 @@ import opensec.pibolt.app.ui.session.NoticeRow
 import opensec.pibolt.app.ui.session.TRow
 import opensec.pibolt.app.ui.session.TextRow
 import opensec.pibolt.app.ui.session.ThinkingRow
+import opensec.pibolt.app.ui.session.SourcesRow
 import opensec.pibolt.app.ui.session.ToolGroupRow
 import opensec.pibolt.app.ui.session.ToolRow
 import opensec.pibolt.app.ui.session.UserRow
@@ -87,6 +88,7 @@ object TranscriptSearch {
                 is ToolRow -> row.item.key == hit.itemKey
                 is NoticeRow -> row.item.key == hit.itemKey
                 is ToolGroupRow -> row.tools.any { it.key == hit.itemKey }
+                is SourcesRow -> row.tools.any { it.key == hit.itemKey }
                 else -> false
             }
         }

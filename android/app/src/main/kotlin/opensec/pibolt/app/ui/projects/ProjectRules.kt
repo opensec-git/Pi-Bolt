@@ -93,6 +93,14 @@ object ProjectRules {
         noProjects || (lastChatAt != null && lastChatAt > (lastProjectAt ?: 0L))
 
     /**
+     * What the Home pill's + offers: with Chat picked, a chat's own actions (a photo, the clipboard's image when it holds
+     * one, voice, New chat), each opening a new chat with the draft; with a project, [PillPlus.NewProject] (the sheet
+     * with New project, Clone from git and Import a zip).
+     */
+    fun pillPlus(chat: Boolean, clipboardImage: Boolean): List<PillPlus> =
+        if (chat) listOfNotNull(PillPlus.Photos, PillPlus.PasteImage.takeIf { clipboardImage }, PillPlus.Voice, PillPlus.NewChat) else listOf(PillPlus.NewProject)
+
+    /**
      * The focus card's title for a session: its name, else the first line of its latest prompt, else [fallback] (the
      * project). Blank values count as missing.
      */
@@ -112,18 +120,21 @@ object ProjectRules {
         return letters.uppercase().ifBlank { "?" }
     }
 
-    /** "3 sessions · 2 h ago", "1 session · just now", or "Empty folder" for a project that has never had a session. */
+    /**
+     * "3 sessions · 2h", "1 session · now", or "No sessions yet" for a project that has never had a session. The age is
+     * [agoShort], as on Home's other rows (Recents "notes · 2h", Chats "2h · 4 messages").
+     */
     fun projectMeta(entry: ProjectEntry, now: Long): String =
         projectMetaParts(entry, now).let { (lead, age) -> if (age == null) lead else "$lead · $age" }
 
     /**
      * [projectMeta] in two parts for the card: the part that may be cut ("3 sessions") and the age that never is
-     * ("2 h ago", "opened 3 d ago"), or null when there is no age to show.
+     * ("2h", "opened 3d"), or null when there is no age to show.
      */
     fun projectMetaParts(entry: ProjectEntry, now: Long): Pair<String, String?> {
-        if (entry.sessionCount == 0) return if (entry.meta.lastOpenedAt > 0) "No sessions" to "opened ${ago(entry.meta.lastOpenedAt, now)}" else "No sessions yet" to null
+        if (entry.sessionCount == 0) return if (entry.meta.lastOpenedAt > 0) "No sessions" to "opened ${agoShort(entry.meta.lastOpenedAt, now)}" else "No sessions yet" to null
         val count = if (entry.sessionCount == 1) "1 session" else "${entry.sessionCount} sessions"
-        return count to ago(entry.lastActive, now)
+        return count to agoShort(entry.lastActive, now)
     }
 
     /**
@@ -157,3 +168,6 @@ object ProjectRules {
         }
     }
 }
+
+/** An action behind the Home pill's + ([ProjectRules.pillPlus]). */
+enum class PillPlus { Photos, PasteImage, Voice, NewChat, NewProject }

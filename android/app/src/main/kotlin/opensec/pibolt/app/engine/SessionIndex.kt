@@ -3,6 +3,8 @@ package opensec.pibolt.app.engine
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import opensec.pibolt.app.cost.Charges
+import opensec.pibolt.app.cost.Cost
 import opensec.pibolt.protocol.ProtocolJson
 import opensec.pibolt.protocol.obj
 import opensec.pibolt.protocol.str
@@ -14,11 +16,16 @@ import java.util.concurrent.ConcurrentHashMap
  * `<agentDir>/sessions/--<cwd with the leading separator removed and / \ : as ->--/<timestamp>_<id>.jsonl`.
  *
  * Listing is fast: every line is classified by its first bytes (`{"type":"message"` and so on, as Pi's own listing
- * does), and only the header, `session_info` lines and the first user message are parsed. Results are cached per file
- * by size and modification time.
+ * does), and only the header, `session_info` lines and the first user message are parsed. Usage records (assistant
+ * messages, `usage`, compaction and branch summaries) give the cost from the bytes of their `usage.cost.total`, without
+ * parsing the line. A session's cost includes its subagents' sessions (saved beside it, naming it as their parent).
+ * Results are cached per file by size and modification time.
  */
 class SessionIndex(private val agentDir: File) {
-    private data class Cached(val length: Long, val modified: Long, val summary: SessionSummary?)
+    /** One file: its summary (null for a subagent's or a damaged file), the parent it names, and its own cost. */
+    private class Scan(val summary: SessionSummary?, val parent: String?, val subagent: Boolean, val cost: Cost)
+
+    private data class Cached(val length: Long, val modified: Long, val scan: Scan?)
 
     private val cache = ConcurrentHashMap<String, Cached>()
 
@@ -35,26 +42,48 @@ class SessionIndex(private val agentDir: File) {
     /** The sessions saved directly in [dirs] (a `--session-dir`, such as the chats' [ChatSpace.sessionDir]), newest first. */
     fun listIn(dirs: Collection<File>): List<SessionSummary> {
         val files = dirs.flatMap { dir -> dir.listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }.orEmpty().toList() }
-        return files.mapNotNull(::summary).distinctBy { it.file }.sortedByDescending { it.updatedAt }
+        val scans = files.mapNotNull(::scanned)
+        val children = childCosts(scans)
+        return scans.mapNotNull { scan -> scan.summary?.let { s -> children[s.file]?.let { s.copy(cost = s.cost + it) } ?: s } }
+            .distinctBy { it.file }.sortedByDescending { it.updatedAt }
+    }
+
+    /** What [file] cost: its own records plus those of the subagents' sessions beside it. */
+    fun cost(file: File): Cost {
+        val own = scanned(file)?.cost ?: return Cost.NONE
+        val siblings = file.parentFile?.listFiles { f -> f.isFile && f.name.endsWith(".jsonl") && f.path != file.path }.orEmpty()
+        return own + (childCosts(siblings.mapNotNull(::scanned))[file.path] ?: Cost.NONE)
+    }
+
+    private fun childCosts(scans: List<Scan>): Map<String, Cost> {
+        val out = HashMap<String, Cost>()
+        for (scan in scans) {
+            val parent = scan.parent ?: continue
+            if (scan.subagent) out[parent] = (out[parent] ?: Cost.NONE) + scan.cost
+        }
+        return out
     }
 
     fun newest(project: File): String? = list(project).firstOrNull()?.file
 
-    fun summary(file: File): SessionSummary? {
+    fun summary(file: File): SessionSummary? = scanned(file)?.summary
+
+    private fun scanned(file: File): Scan? {
         val length = file.length()
         val modified = file.lastModified()
-        cache[file.path]?.let { if (it.length == length && it.modified == modified) return it.summary }
-        val summary = runCatching { scan(file, modified) }.getOrNull()
-        cache[file.path] = Cached(length, modified, summary)
-        return summary
+        cache[file.path]?.let { if (it.length == length && it.modified == modified) return it.scan }
+        val scan = runCatching { scan(file, modified) }.getOrNull()
+        cache[file.path] = Cached(length, modified, scan)
+        return scan
     }
 
-    private fun scan(file: File, modified: Long): SessionSummary? {
+    private fun scan(file: File, modified: Long): Scan? {
         var header: JsonObject? = null
         var name: String? = null
         var preview: String? = null
         var messages = 0
         var lineNumber = 0
+        var cost = Cost.NONE
         file.inputStream().buffered(256 * 1024).use { input ->
             forEachLine(input) { line, length ->
                 lineNumber++
@@ -71,13 +100,20 @@ class SessionIndex(private val agentDir: File) {
                         if (preview == null && role == "user") {
                             preview = parse(line, length)?.obj("message")?.let(::textOf)?.let(::shorten)?.takeIf { it.isNotEmpty() }
                         }
+                        if (role == "assistant") costOf(line, length)?.let { cost += Cost(it, 1) }
                     }
+                    "usage", "compaction", "branch_summary" -> costOf(line, length)?.let { cost += Cost(it, 1) }
                     "session_info" -> parse(line, length)?.let { name = it.str("name")?.trim()?.takeIf(String::isNotEmpty) }
                     null -> {
                         // Not in Pi's usual layout: parse it to be sure.
                         val entry = parse(line, length)
                         when (entry?.str("type")) {
-                            "message" -> if (entry.obj("message")?.str("role") != "system") messages++
+                            "message" -> {
+                                val message = entry.obj("message")
+                                if (message?.str("role") != "system") messages++
+                                if (message?.str("role") == "assistant") message.obj("usage")?.let { cost += Cost(Charges.usd(it) ?: 0.0, 1) }
+                            }
+                            "usage", "compaction", "branch_summary" -> entry.obj("usage")?.let { cost += Cost(Charges.usd(it) ?: 0.0, 1) }
                             "session_info" -> name = entry.str("name")?.trim()?.takeIf(String::isNotEmpty)
                         }
                     }
@@ -86,16 +122,19 @@ class SessionIndex(private val agentDir: File) {
             }
         }
         val h = header ?: return null
+        val parent = h.str("parentSession")
         // A subagent's own session (opensec-pi-subagents): part of its parent's run, not a session to list or resume.
-        if (h.str("parentSession") != null && name?.let(SUBAGENT_NAME::matches) == true) return null
-        return SessionSummary(
+        if (parent != null && name?.let(SUBAGENT_NAME::matches) == true) return Scan(null, parent, subagent = true, cost)
+        val summary = SessionSummary(
             file = file.path,
             id = h.str("id") ?: file.nameWithoutExtension.substringAfter('_'),
             name = name,
             preview = preview,
             updatedAt = modified,
             messageCount = messages,
+            cost = cost,
         )
+        return Scan(summary, parent, subagent = false, cost)
     }
 
     private companion object {
@@ -137,6 +176,44 @@ class SessionIndex(private val agentDir: File) {
                 length += rest
             }
             if (length > 0) onLine(line, length)
+        }
+
+        private val COST = "\"cost\":{".toByteArray(Charsets.ISO_8859_1)
+        private val TOTAL = "\"total\":".toByteArray(Charsets.ISO_8859_1)
+
+        /**
+         * The `usage.cost.total` of a record line, from its bytes: the last `"cost":{` (usage follows the content, and
+         * text in content is escaped, so a quote there is `\"`), then its `"total":` number. Null when there is none.
+         */
+        fun costOf(line: ByteArray, length: Int): Double? {
+            val at = lastIndexOf(line, length, COST)
+            if (at < 0) return null
+            val total = indexOf(line, length, TOTAL, at + COST.size)
+            if (total < 0) return null
+            var i = total + TOTAL.size
+            while (i < length && line[i] == ' '.code.toByte()) i++
+            val start = i
+            while (i < length && line[i].toInt().toChar().let { it.isDigit() || it == '.' || it == '-' || it == 'e' || it == 'E' || it == '+' }) i++
+            return String(line, start, i - start, Charsets.ISO_8859_1).toDoubleOrNull()?.takeIf { it.isFinite() && it >= 0.0 }
+        }
+
+        private fun lastIndexOf(line: ByteArray, length: Int, needle: ByteArray): Int {
+            var i = length - needle.size
+            while (i >= 0) {
+                if (matches(line, i, needle)) return i
+                i--
+            }
+            return -1
+        }
+
+        private fun indexOf(line: ByteArray, length: Int, needle: ByteArray, from: Int): Int {
+            for (i in from..length - needle.size) if (matches(line, i, needle)) return i
+            return -1
+        }
+
+        private fun matches(line: ByteArray, at: Int, needle: ByteArray): Boolean {
+            for (j in needle.indices) if (line[at + j] != needle[j]) return false
+            return true
         }
 
         fun parse(line: ByteArray, length: Int): JsonObject? =

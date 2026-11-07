@@ -10,7 +10,13 @@ import opensec.pibolt.app.ui.components.FieldHint
 import opensec.pibolt.app.ui.components.FieldLabel
 import opensec.pibolt.app.ui.components.PiCard
 import opensec.pibolt.app.ui.components.ScreenIntro
-import opensec.pibolt.app.ui.components.ScreenTopBar
+import opensec.pibolt.app.ui.components.GlassBar
+import opensec.pibolt.app.ui.components.GlassIconButton
+import opensec.pibolt.app.ui.components.InsetSectionHead
+import opensec.pibolt.app.ui.components.PageTitle
+import opensec.pibolt.app.ui.theme.Space
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import opensec.pibolt.app.ui.components.SecretField
 import android.view.WindowManager
 import androidx.activity.compose.LocalActivity
@@ -32,7 +38,6 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
@@ -73,7 +78,6 @@ import opensec.pibolt.app.ui.components.PiSnackHost
 import opensec.pibolt.app.ui.components.PiTextField
 import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.SecondaryButton
-import opensec.pibolt.app.ui.components.SectionLabel
 import opensec.pibolt.app.ui.components.SnackKind
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.theme.Pi
@@ -127,16 +131,22 @@ fun SecretsScreen(app: PiBoltApp, project: File, onBack: () -> Unit) {
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     Box(Modifier.fillMaxSize().background(colors.canvas)) {
         val listState = rememberLazyListState()
-        val scrolled by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 } }
+        val pastTitle by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 } }
         Column(Modifier.fillMaxSize()) {
-        ScreenTopBar("Secrets", onBack = onBack, subtitle = project.name, scrolled = scrolled)
+        GlassBar(
+            title = "Secrets",
+            subtitle = project.name,
+            titleVisible = pastTitle,
+            leading = { GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack) },
+        )
         // Edge to edge the window does not resize for the keyboard: the list stops above it, so the form at its end
         // can scroll into view.
         LazyColumn(Modifier.fillMaxSize().imePadding(), state = listState, contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
             item(key = "head") {
                 Column {
+                    PageTitle("Secrets", meta = project.name)
                     ScreenIntro("Encrypted on this phone and kept out of the model's messages. Commands in this project can read them.")
-                    Text("Applies to new terminals and sessions", style = type.meta, color = colors.ink3, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp))
+                    Text("Applies to new terminals and sessions", style = type.rowMeta, color = colors.ink3, modifier = Modifier.padding(start = Space.page, end = Space.page, bottom = Space.md))
                 }
             }
             val list = secrets
@@ -145,13 +155,13 @@ fun SecretsScreen(app: PiBoltApp, project: File, onBack: () -> Unit) {
                     EmptyState(
                         "No secrets yet",
                         icon = Icons.Rounded.Key,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                        modifier = Modifier.padding(horizontal = Space.page, vertical = Space.xs),
                     )
                 }
             }
             if (list != null) {
-                if (list.isNotEmpty()) item(key = "label") { SectionLabel("Variables · ${list.size}", Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
-                items(list, key = { it.name }) { s ->
+                if (list.isNotEmpty()) item(key = "label") { InsetSectionHead("Variables", count = list.size, modifier = Modifier.padding(bottom = Space.xs)) }
+                itemsIndexed(list, key = { _, it -> it.name }) { i, s ->
                     if (editing?.name == s.name) {
                         SecretForm(initial = s, taken = list.map { it.name }.toSet() - s.name, onCancel = { editing = null }, onSave = { name, value ->
                             editing = null
@@ -170,11 +180,12 @@ fun SecretsScreen(app: PiBoltApp, project: File, onBack: () -> Unit) {
                                 editing = s
                             },
                             onDelete = { deleting = s },
+                            divider = i < list.lastIndex,
                         )
                     }
                 }
                 item(key = "add") {
-                    Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
+                    Column(Modifier.padding(horizontal = Space.page, vertical = Space.lg)) {
                         if (adding) {
                             SecretForm(initial = null, taken = list.map { it.name }.toSet(), onCancel = { adding = false }, onSave = { name, value ->
                                 adding = false
@@ -230,18 +241,25 @@ fun SecretsScreen(app: PiBoltApp, project: File, onBack: () -> Unit) {
     }
 }
 
+/**
+ * One variable: the name (mono ink1) over the value masked as eight dots (monoMeta ink3, fixed length) or shown, then
+ * Show / Hide, Edit and Delete; a hairline under it inset to the 20dp gutter, as an [opensec.pibolt.app.ui.components.InsetRow].
+ */
 @Composable
-private fun SecretRow(s: Secret, revealed: Boolean, onReveal: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun SecretRow(s: Secret, revealed: Boolean, onReveal: () -> Unit, onEdit: () -> Unit, onDelete: () -> Unit, divider: Boolean) {
     val colors = Pi.colors
     val type = Pi.type
-    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = 20.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = "${s.name}, " + if (revealed) "value shown" else "value hidden" }) {
-            Text(s.name, style = type.mono, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(if (revealed) s.value else SecretEnv.mask(s.value), style = type.monoMeta, color = colors.ink3, maxLines = if (revealed) 4 else 1, overflow = TextOverflow.Ellipsis)
+    Box(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).padding(start = Space.page, end = Space.xs, top = Space.sm, bottom = Space.sm), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f).semantics(mergeDescendants = true) { contentDescription = "${s.name}, " + if (revealed) "value shown" else "value hidden" }) {
+                Text(s.name, style = type.mono, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (revealed) s.value else SecretEnv.mask(s.value), style = type.monoMeta, color = colors.ink3, maxLines = if (revealed) 4 else 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(top = Space.xxs))
+            }
+            IconAction(if (revealed) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, if (revealed) "Hide ${s.name}" else "Show ${s.name}", onClick = onReveal)
+            IconAction(Icons.Rounded.Edit, "Edit ${s.name}", onClick = onEdit)
+            IconAction(Icons.Rounded.DeleteOutline, "Delete ${s.name}", onClick = onDelete)
         }
-        IconAction(if (revealed) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, if (revealed) "Hide ${s.name}" else "Show ${s.name}", onClick = onReveal)
-        IconAction(Icons.Rounded.Edit, "Edit ${s.name}", onClick = onEdit)
-        IconAction(Icons.Rounded.DeleteOutline, "Delete ${s.name}", onClick = onDelete)
+        if (divider) Box(Modifier.align(Alignment.BottomStart).padding(start = Space.page, end = Space.page).fillMaxWidth().height(1.dp).background(colors.line))
     }
 }
 
@@ -252,7 +270,7 @@ private fun SecretForm(initial: Secret?, taken: Set<String>, onCancel: () -> Uni
     var value by remember { mutableStateOf(initial?.value.orEmpty()) }
     var show by remember { mutableStateOf(false) }
     val problem = SecretEnv.nameProblem(name) ?: if (name in taken) "$name is already set" else null
-    PiCard(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+    PiCard(Modifier.padding(horizontal = Space.lg, vertical = Space.xs)) {
         FieldLabel("Name")
         PiTextField(
             name,
