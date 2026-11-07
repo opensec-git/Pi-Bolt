@@ -77,7 +77,7 @@ object SessionReducer {
         val host = hello.obj("host")
         var state = SessionState(
             hello = true,
-            host = HostInfo(host?.str("name") ?: "Computer", host?.str("version") ?: "", host?.str("cwd") ?: "", service = host?.bool("service") == true),
+            host = HostInfo(host?.str("name") ?: "Computer", host?.str("version") ?: "", host?.str("cwd") ?: "", service = host?.bool("service") == true, parallelSessions = host?.bool("parallelSessions") == true),
         )
         state = applyRpcState(state, hello.obj("state"))
         // A long session sends only its newest messages: say so, or the transcript seems to start midway (or, when one

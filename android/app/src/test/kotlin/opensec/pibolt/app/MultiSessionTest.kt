@@ -1,6 +1,10 @@
 package opensec.pibolt.app
 
 import opensec.pibolt.app.session.LiveRegistry
+import opensec.pibolt.app.session.SessionController
+import opensec.pibolt.app.ui.projects.LocalSessions
+import opensec.pibolt.app.ui.projects.LocalSessions.Placed
+import java.io.File
 import opensec.pibolt.app.session.RunningSummary
 import opensec.pibolt.app.session.RunningSummary.Entry
 import kotlin.test.Test
@@ -88,5 +92,45 @@ class MultiSessionTest {
         assertNotEquals(a, RunningSummary.notificationId("local:/p/a", RunningSummary.ANSWER))
         assertEquals(a, RunningSummary.notificationId("local:/p/a", RunningSummary.SETTLED))
         assertTrue(listOf(a, b).all { it >= 100 }, "clear of the fixed ids")
+    }
+
+    // Two sessions of one project at once (one was busy as the other opened): their own ids, keys and names.
+
+    @Test
+    fun sessionsOfOneProjectHaveTheirOwnIds() {
+        val p = File("/data/data/in.opensec.pibolt/files/projects/app")
+        assertEquals("local:${p.absolutePath}", SessionController.localId(p))
+        assertEquals("local:${p.absolutePath}", SessionController.localId(p, 0))
+        assertEquals("local:${p.absolutePath}#1", SessionController.localId(p, 1))
+        // So their "finished" and "needs an answer" notifications stand side by side, and answers reach the right one.
+        assertNotEquals(
+            RunningSummary.notificationId(SessionController.localId(p), RunningSummary.SETTLED),
+            RunningSummary.notificationId(SessionController.localId(p, 1), RunningSummary.SETTLED),
+        )
+    }
+
+    @Test
+    fun anOpenedSessionTakesTheFrontAndARunningOneMovesAside() {
+        // Nothing live: the project's name.
+        assertEquals("app" to null, LocalSessions.place(emptyMap(), "app", existing = null))
+        // The front one still runs: the new one is the front, the running one moves to app#2.
+        val running = mapOf("app" to Placed("app", stopped = false))
+        assertEquals("app" to "app#2", LocalSessions.place(running, "app", existing = null))
+        // ... or the next free place.
+        assertEquals("app" to "app#3", LocalSessions.place(running + ("app#2" to Placed("app", stopped = false)), "app", existing = null))
+        assertEquals("app" to "app#2", LocalSessions.place(running + ("app#2" to Placed("app", stopped = true)), "app", existing = null))
+        // The front one was replaced (stopped): its place is free.
+        assertEquals("app" to null, LocalSessions.place(mapOf("app" to Placed("app", stopped = true)), "app", existing = null))
+        // A session already live keeps its place.
+        assertEquals("app#2" to null, LocalSessions.place(running + ("app#2" to Placed("app", stopped = false)), "app", existing = "app#2"))
+    }
+
+    @Test
+    fun theNotificationTellsTwoRunsOfOneProjectApart() {
+        assertEquals("app", RunningSummary.name("app", "Fix the login bug", shared = false))
+        assertEquals("app · Fix the login bug", RunningSummary.name("app", "Fix the login bug\nand more", shared = true))
+        assertEquals("app", RunningSummary.name("app", null, shared = true))
+        val long = RunningSummary.name("app", "a".repeat(80), shared = true)
+        assertTrue(long.length <= "app · ".length + 32 && long.endsWith("…"), long)
     }
 }
