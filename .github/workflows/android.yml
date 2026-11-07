@@ -94,6 +94,19 @@ jobs:
             android/gradle/libs.versions.toml
             android/gradle/wrapper/gradle-wrapper.properties
             android/**/*.gradle.kts
+      # libtermux.so is built with the NDK and CMake versions pinned in app/build.gradle.kts (ndkVersion, cmake
+      # version); install them when the runner image does not have them.
+      - name: NDK and CMake
+        run: |
+          ndk=$(sed -n 's/^ *ndkVersion = "\(.*\)"$/\1/p' app/build.gradle.kts)
+          cmake=$(sed -n 's/^ *version = "\(.*\)"$/\1/p' app/build.gradle.kts)
+          test -n "$ndk" && test -n "$cmake"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -f "$ANDROID_HOME/ndk/$ndk/source.properties" ] || { (yes || true) | "$sdkmanager" --install "ndk;$ndk" > /dev/null; }
+          [ -x "$ANDROID_HOME/cmake/$cmake/bin/cmake" ] || { (yes || true) | "$sdkmanager" --install "cmake;$cmake" > /dev/null; }
+          test -f "$ANDROID_HOME/ndk/$ndk/source.properties"
+          test -x "$ANDROID_HOME/cmake/$cmake/bin/cmake"
+          echo "NDK $ndk, CMake $cmake"
       - name: Tests, lint, debug build
         run: ./gradlew :protocol:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
       - name: Release build (unsigned)
@@ -156,6 +169,19 @@ jobs:
             android/gradle/libs.versions.toml
             android/gradle/wrapper/gradle-wrapper.properties
             android/**/*.gradle.kts
+      # libtermux.so is built with the NDK and CMake versions pinned in app/build.gradle.kts (ndkVersion, cmake
+      # version); install them when the runner image does not have them.
+      - name: NDK and CMake
+        run: |
+          ndk=$(sed -n 's/^ *ndkVersion = "\(.*\)"$/\1/p' app/build.gradle.kts)
+          cmake=$(sed -n 's/^ *version = "\(.*\)"$/\1/p' app/build.gradle.kts)
+          test -n "$ndk" && test -n "$cmake"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -f "$ANDROID_HOME/ndk/$ndk/source.properties" ] || { (yes || true) | "$sdkmanager" --install "ndk;$ndk" > /dev/null; }
+          [ -x "$ANDROID_HOME/cmake/$cmake/bin/cmake" ] || { (yes || true) | "$sdkmanager" --install "cmake;$cmake" > /dev/null; }
+          test -f "$ANDROID_HOME/ndk/$ndk/source.properties"
+          test -x "$ANDROID_HOME/cmake/$cmake/bin/cmake"
+          echo "NDK $ndk, CMake $cmake"
       # Gradle and its plugins never see the signing secrets: it builds the unsigned APK, and apksigner signs it in
       # the next step.
       - name: Build the unsigned release

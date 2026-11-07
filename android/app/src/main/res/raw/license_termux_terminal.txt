@@ -3,6 +3,8 @@ https://github.com/termux/termux-app (terminal-emulator/ and terminal-view/)
 
 These two libraries are licensed under the Apache License, Version 2.0 (the rest of the termux-app repository is GPLv3; Pi-Bolt uses only these two libraries).
 They contain code from Terminal Emulator for Android by Jack Palevich, also Apache-2.0.
+Pi-Bolt ships the Java classes of both libraries as published, and builds their native pty helper itself from
+terminal-emulator/src/main/jni/termux.c, vendored unchanged (app/src/main/jni/termux.c), linked for 16 KB pages.
 Copyright the Termux developers and Jack Palevich.
 
 

@@ -1,3 +1,5 @@
+import java.util.concurrent.Callable
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -32,6 +34,8 @@ val enginePack = rootDir.resolve("engine/out")
 android {
     namespace = "opensec.pibolt.app"
     compileSdk = 36
+    // Builds libtermux.so (src/main/jni). Pinned; CI installs this exact version (.github/workflows/android.yml).
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "in.opensec.pibolt"
@@ -44,6 +48,15 @@ android {
         // The engine and its userland are linux-arm64 only.
         ndk {
             abiFilters += "arm64-v8a"
+        }
+    }
+
+    // Termux's pty helper, vendored (Apache-2.0) and linked for 16 KB pages: the AAR's prebuilt one is 4 KB aligned.
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/jni/CMakeLists.txt")
+            // Pinned like the NDK; CI installs it when the runner lacks it.
+            version = "3.22.1"
         }
     }
 
@@ -120,6 +133,19 @@ kotlin {
     }
 }
 
+// Termux's terminal-emulator is used for its Java classes only: its AAR has no resources, and its prebuilt libtermux.so
+// is 4 KB page aligned, so the classes are taken from the (sha256-verified) AAR as a jar and the native library is
+// built from the vendored termux.c (src/main/jni). Nothing of the AAR's jni/ reaches the merge, the APK or lint.
+val termuxEmulatorAar: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isTransitive = false
+    attributes { attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_RUNTIME)) }
+}
+val termuxEmulatorClasses = tasks.register<Copy>("termuxEmulatorClasses") {
+    from(Callable { zipTree(termuxEmulatorAar.singleFile) }) { include("classes.jar") }
+    into(layout.buildDirectory.dir("termux-emulator"))
+}
+
 dependencies {
     implementation(project(":protocol"))
     implementation(libs.kotlinx.coroutines.android)
@@ -132,8 +158,11 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.zxing.core)
     // The terminal: a pty (JNI, libtermux.so) and a VT emulator, and its Android view.
-    implementation(libs.termux.terminal.emulator)
-    implementation(libs.termux.terminal.view)
+    termuxEmulatorAar(libs.termux.terminal.emulator)
+    implementation(files(termuxEmulatorClasses.map { it.destinationDir.resolve("classes.jar") }))
+    implementation(libs.termux.terminal.view) {
+        exclude(group = "com.github.termux.termux-app", module = "terminal-emulator")
+    }
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
