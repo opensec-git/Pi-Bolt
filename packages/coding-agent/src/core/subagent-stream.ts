@@ -412,13 +412,21 @@ class SubagentStream {
 			if (header?.parentSession !== this.parentFile) continue;
 			if (this.file && session.sessionFile !== this.file) continue;
 			if (!this.file && this.owner.taken(session.sessionFile, this)) continue;
-			const firstUser = session.messages.find((message) => message.role === "user");
-			const candidate: Candidate = {
-				name: session.sessionName,
-				firstUser: firstUser ? textOf(firstUser.content) : undefined,
-				created: parseTime(header.timestamp),
-			};
-			if (!matches(this.run, candidate, this.others)) continue;
+			// The session of the file already found is this run's. Otherwise it is matched like a file; after a compaction
+			// its messages no longer hold the first prompt, which its saved file still does.
+			if (!this.file) {
+				const firstUser = session.messages.find((message) => message.role === "user");
+				const candidate: Candidate = {
+					name: session.sessionName,
+					firstUser: firstUser
+						? textOf(firstUser.content)
+						: session.sessionFile
+							? this.owner.header(session.sessionFile)?.firstUser
+							: undefined,
+					created: parseTime(header.timestamp),
+				};
+				if (!matches(this.run, candidate, this.others)) continue;
+			}
 			this.live = session;
 			this.file ??= session.sessionFile;
 			this.unsubscribeLive = session.subscribe((event) => this.onLiveEvent(event));

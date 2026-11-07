@@ -410,7 +410,26 @@ describe("subagent stream binding", () => {
 				.map((message) => JSON.stringify(message.content));
 		const resets = (runId: string) =>
 			sent.filter((message) => message.type === "subagent_entries" && message.runId === runId && message.reset);
-		return { streams, parentFile, call, result, agent, replies, resets, sent };
+		/** An agent's session open in this process, streaming an answer, as the stream sees it. */
+		const live = (file: string, name: string, messages: Message[], created: number) => {
+			const session = {
+				sessionFile: file,
+				sessionName: name,
+				sessionManager: {
+					getHeader: () => ({ parentSession: parentFile, timestamp: new Date(created).toISOString() }),
+				},
+				messages,
+				isStreaming: true,
+				agent: { state: { streamingMessage: { role: "assistant", content: [{ type: "text", text: "partial" }] } } },
+				subscribe: () => () => {},
+			};
+			registerLiveSession(session as never);
+			cleanups.push(() => unregisterLiveSession(session as never));
+		};
+		const isStart = (message: Message) =>
+			message.type === "subagent_events" &&
+			(message.events as Message[]).some((event) => event.type === "message_start");
+		return { streams, call, result, agent, replies, resets, sent, live, isStart };
 	}
 
 	it("does not bind a repeated prompt to an earlier run's agent", async () => {
@@ -456,7 +475,7 @@ describe("subagent stream binding", () => {
 	});
 
 	it("sends the whole saved history before the streaming message's snapshot", async () => {
-		const { streams, parentFile, call, result, agent, sent } = await files();
+		const { streams, call, result, agent, sent, live, isStart } = await files();
 		const t = Date.now() - 60_000;
 		call("run-1", { prompt: "long" }, t);
 		result("run-1", "11111111aaaa");
@@ -470,25 +489,8 @@ describe("subagent stream binding", () => {
 			appendFileSync(file, `${JSON.stringify(line)}\n`);
 		}
 		// The agent's session, open in this process and streaming an answer.
-		const listeners: Array<(event: unknown) => void> = [];
-		const live = {
-			sessionFile: file,
-			sessionName: "general-purpose#11111111",
-			sessionManager: { getHeader: () => ({ parentSession: parentFile, timestamp: new Date(t).toISOString() }) },
-			messages: [{ role: "user", content: "long" }],
-			isStreaming: true,
-			agent: { state: { streamingMessage: { role: "assistant", content: [{ type: "text", text: "partial" }] } } },
-			subscribe: (listener: (event: unknown) => void) => {
-				listeners.push(listener);
-				return () => listeners.splice(listeners.indexOf(listener), 1);
-			},
-		};
-		registerLiveSession(live as never);
-		cleanups.push(() => unregisterLiveSession(live as never));
+		live(file, "general-purpose#11111111", [{ role: "user", content: "long" }], t);
 		streams.subscribe("run-1");
-		const isStart = (message: Message) =>
-			message.type === "subagent_events" &&
-			(message.events as Message[]).some((event) => event.type === "message_start");
 		await until(() => sent.some(isStart));
 		const startAt = sent.findIndex(isStart);
 		const saved = sent
@@ -498,6 +500,25 @@ describe("subagent stream binding", () => {
 			.filter((message) => message.role === "assistant");
 		expect(saved).toHaveLength(3);
 		expect(sent.slice(startAt).some((message) => message.type === "subagent_entries")).toBe(false);
+	});
+
+	it("follows a live agent whose messages no longer hold its first prompt (compacted)", async () => {
+		const { streams, call, agent, sent, live, isStart } = await files();
+		const t = Date.now() - 60_000;
+		const compacted = [{ role: "compactionSummary", summary: "earlier work", tokensBefore: 1 }];
+		// Found by the prompt saved in its file, open before the phone asks.
+		call("run-1", { prompt: "first task" }, t);
+		const first = agent("11111111aaaa", "first task", "one", t + 1_000);
+		live(first, "general-purpose#11111111", compacted, t + 1_000);
+		streams.subscribe("run-1");
+		await until(() => sent.some((message) => message.runId === "run-1" && isStart(message)));
+		// Its file found first, the session opened later.
+		call("run-2", { prompt: "second task" }, t + 10_000);
+		const second = agent("22222222bbbb", "second task", "two", t + 11_000);
+		streams.subscribe("run-2");
+		await until(() => sent.some((message) => message.runId === "run-2" && message.type === "subagent_entries"));
+		live(second, "general-purpose#22222222", compacted, t + 11_000);
+		await until(() => sent.some((message) => message.runId === "run-2" && isStart(message)));
 	});
 
 	it("lets a resumed run share its agent's file with the original run", async () => {
