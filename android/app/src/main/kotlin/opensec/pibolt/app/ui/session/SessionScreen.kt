@@ -568,6 +568,8 @@ private fun SessionContent(
     fun openModels(search: String = "") {
         modelQuery = search
         controller.loadModels()
+        // The model sheet also sets the thinking level (one run-settings chip, one sheet).
+        if (reasons) controller.loadThinkingLevels()
         sheet = Sheet.Model
     }
 
@@ -1019,7 +1021,6 @@ private fun SessionContent(
                         stoppable = running || shellRuns > 0,
                         onStop = { if (shellRuns > 0) controller.abortBash() else controller.abort() },
                         onModel = { openModels() },
-                        onThinking = ::openThinking,
                         compact = oneRowComposer,
                         maxLines = composerLines,
                         history = recentAll[recentKey].orEmpty(),
@@ -1135,10 +1136,18 @@ private fun SessionContent(
             val models by controller.models.collectAsStateWithLifecycle()
             val current by remember { derivedStateOf { state.value.model } }
             val shown = if (isLocal) rememberScopedModels(f2, app.engine.agentDir, models, current) else models
-            ModelSheet(shown, current, onPick = {
-                controller.setModel(it)
-                sheet = Sheet.None
-            }, onDismiss = { sheet = Sheet.None }, initialQuery = modelQuery)
+            val levels by controller.thinkingLevels.collectAsStateWithLifecycle()
+            ModelSheet(
+                shown,
+                current,
+                onPick = {
+                    controller.setModel(it)
+                    sheet = Sheet.None
+                },
+                onDismiss = { sheet = Sheet.None },
+                initialQuery = modelQuery,
+                thinking = ThinkingPick(levels, thinkingLevel, onPick = { controller.setThinkingLevel(it) }).takeIf { reasons },
+            )
         }
         Sheet.Thinking -> {
             val levels by controller.thinkingLevels.collectAsStateWithLifecycle()

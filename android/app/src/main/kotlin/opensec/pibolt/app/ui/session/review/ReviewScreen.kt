@@ -148,7 +148,7 @@ fun TurnReviewScreen(review: TurnReview, turnId: String, onClose: () -> Unit) {
         }
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
-            item(key = "head") { TurnHeader(review, record, locked) }
+            if (record.prompt.isNotBlank() || record.lastUndo != null) item(key = "head") { TurnHeader(review, record, locked) }
             val list = changes
             when {
                 failure != null -> item(key = "failure") { Note(failure.orEmpty()) }
@@ -174,7 +174,32 @@ fun TurnReviewScreen(review: TurnReview, turnId: String, onClose: () -> Unit) {
                     }
                 }
             }
-            item(key = "end") { Spacer(Modifier.navigationBarsPadding()) }
+            item(key = "end") { Spacer(Modifier.height(8.dp)) }
+        }
+        ActionBar(review, record, locked)
+    }
+}
+
+/**
+ * The turn's actions at the bottom, in thumb reach: a 1dp line, then "Restore to before" (secondary) and "Undo this
+ * turn" (primary: it can be redone). While Pi works both are off and a meta line says why.
+ */
+@Composable
+private fun ActionBar(review: TurnReview, record: TurnRecord, locked: Boolean) {
+    val colors = Pi.colors
+    Column(Modifier.fillMaxWidth().background(colors.canvas).navigationBarsPadding()) {
+        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
+        if (review.running) {
+            Text(
+                "Undo is available once Pi finishes the current turn.",
+                style = Pi.type.meta,
+                color = colors.ink3,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp),
+            )
+        }
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SecondaryButton("Restore to before", onClick = { review.restoreBefore(record) }, modifier = Modifier.weight(1f), icon = Icons.Rounded.History, enabled = !locked)
+            PrimaryButton("Undo this turn", onClick = { review.undo(record) }, modifier = Modifier.weight(1f), icon = Icons.AutoMirrored.Rounded.Undo, enabled = !locked)
         }
     }
 }
@@ -186,20 +211,11 @@ private fun TurnHeader(review: TurnReview, record: TurnRecord, locked: Boolean) 
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
         if (record.prompt.isNotBlank()) {
             Text(record.prompt, style = type.body, color = colors.ink2, maxLines = 3, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(12.dp))
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SecondaryButton("Undo this turn", onClick = { review.undo(record) }, modifier = Modifier.weight(1f), icon = Icons.AutoMirrored.Rounded.Undo, enabled = !locked)
-            SecondaryButton("Restore to before", onClick = { review.restoreBefore(record) }, modifier = Modifier.weight(1f), icon = Icons.Rounded.History, enabled = !locked)
-        }
-        if (review.running) {
-            Spacer(Modifier.height(8.dp))
-            Text("Undo is available once Pi finishes the current turn.", style = type.meta, color = colors.ink3)
         }
         record.lastUndo?.let { undo ->
             val n = undo.paths.size
             val shape = RoundedCornerShape(Radius.md)
-            Spacer(Modifier.height(12.dp))
+            if (record.prompt.isNotBlank()) Spacer(Modifier.height(12.dp))
             Row(
                 Modifier.fillMaxWidth().background(colors.surface1, shape).border(1.dp, colors.line, shape).padding(start = 14.dp, end = 4.dp),
                 verticalAlignment = Alignment.CenterVertically,

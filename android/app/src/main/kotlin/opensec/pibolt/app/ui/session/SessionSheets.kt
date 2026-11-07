@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -47,7 +48,10 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import kotlinx.coroutines.delay
 import opensec.pibolt.app.ui.components.CopyButton
@@ -113,7 +117,14 @@ private fun SheetLoading(label: String) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ModelSheet(models: List<ModelInfo>, current: ModelInfo?, onPick: (ModelInfo) -> Unit, onDismiss: () -> Unit, initialQuery: String = "") {
+fun ModelSheet(
+    models: List<ModelInfo>,
+    current: ModelInfo?,
+    onPick: (ModelInfo) -> Unit,
+    onDismiss: () -> Unit,
+    initialQuery: String = "",
+    thinking: ThinkingPick? = null,
+) {
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
     val colors = Pi.colors
@@ -121,6 +132,7 @@ fun ModelSheet(models: List<ModelInfo>, current: ModelInfo?, onPick: (ModelInfo)
     var query by rememberSaveable { mutableStateOf(initialQuery) }
     PiSheet(onDismiss = onDismiss, state = state) {
         SheetHeader("Model")
+        if (thinking != null && thinking.levels.isNotEmpty() && query.isEmpty()) ThinkingLevels(thinking)
         if (models.isEmpty()) {
             SheetLoading("Loading models")
             return@PiSheet
@@ -207,6 +219,65 @@ object ModelGroups {
 }
 
 // Thinking level
+
+/** The thinking levels the model sheet offers above the models ([levels] empty: not loaded yet, or none). */
+class ThinkingPick(val levels: List<String>, val current: String?, val onPick: (String) -> Unit)
+
+/**
+ * "Thinking" in the model sheet: one pill per level (36dp, radius full, 48dp to touch; the current one in accent with
+ * the selected fill), then what the current level means. Picking a level keeps the sheet open: the model is the
+ * sheet's main choice.
+ */
+@Composable
+private fun ThinkingLevels(pick: ThinkingPick) {
+    val colors = Pi.colors
+    val type = Pi.type
+    val haptics = Pi.haptics
+    var chosen by remember(pick.current) { mutableStateOf(pick.current) }
+    Column(Modifier.fillMaxWidth().padding(top = 4.dp, bottom = 8.dp)) {
+        Text("Thinking", style = type.metaStrong, color = colors.ink3, modifier = Modifier.padding(horizontal = 20.dp).semantics { heading() })
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            for (level in pick.levels) {
+                val on = level == chosen
+                val shape = CircleShape
+                val edge by animateColorAsState(if (on) colors.accent else colors.line, PiMotion.effects(), label = "level")
+                Box(
+                    Modifier
+                        .heightIn(min = 48.dp)
+                        .pressable({
+                            haptics.tick()
+                            chosen = level
+                            pick.onPick(level)
+                        }, shape = shape, label = "Thinking ${level.lowercase()}")
+                        .semantics {
+                            role = Role.RadioButton
+                            selected = on
+                        },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Box(
+                        Modifier
+                            .height(36.dp)
+                            .background(if (on) colors.selected else colors.surface2, shape)
+                            .border(if (on) 1.5.dp else 1.dp, edge, shape)
+                            .padding(horizontal = 14.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(level.replaceFirstChar { it.uppercase() }, style = type.label, color = if (on) colors.ink1 else colors.ink2, maxLines = 1)
+                    }
+                }
+            }
+        }
+        levelDescription(chosen.orEmpty())?.let {
+            Text(it, style = type.meta, color = colors.ink3, modifier = Modifier.padding(horizontal = 20.dp))
+        }
+        Box(Modifier.padding(top = 12.dp).fillMaxWidth().height(1.dp).background(colors.line))
+    }
+}
 
 private fun levelDescription(level: String): String? = when (level.lowercase()) {
     "off" -> "No reasoning. Fastest answers."
