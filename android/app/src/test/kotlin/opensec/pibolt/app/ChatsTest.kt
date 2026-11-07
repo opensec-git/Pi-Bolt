@@ -3,15 +3,24 @@ package opensec.pibolt.app
 import opensec.pibolt.app.engine.ChatSpace
 import opensec.pibolt.app.engine.SessionIndex
 import opensec.pibolt.app.ui.chats.ChatList
+import opensec.pibolt.app.ui.chats.ChatModel
 import opensec.pibolt.app.ui.chats.ChatSummary
+import opensec.pibolt.app.ui.chats.ChatWelcome
 import opensec.pibolt.app.ui.session.SessionParts
 import opensec.pibolt.app.ui.session.features.Builtin
 import opensec.pibolt.app.ui.session.features.CommandPalette
 import opensec.pibolt.app.ui.session.features2.SessionBrowse
 import opensec.pibolt.protocol.backend.SessionTarget
+import opensec.pibolt.protocol.rpc.ModelInfo
 import opensec.pibolt.protocol.session.SlashCommand
 import java.io.File
 import java.nio.file.Files
+import java.time.LocalDate
+import java.time.LocalDateTime
+import java.time.Month
+import java.time.ZoneId
+import java.time.format.TextStyle
+import java.util.Locale
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -154,5 +163,77 @@ class ChatsTest {
         assertEquals("focus", CommandPalette.parse("/compact focus", host, local = true, chat = true)?.args)
         // A project session is unchanged.
         assertEquals(Builtin.Shell, CommandPalette.parse("!ls", host, local = true)?.builtin)
+        // A chat's commands speak of chats, a project's of sessions.
+        assertEquals("Start a new chat", entries.first { it.builtin == Builtin.New }.description)
+        assertEquals("Open another chat", entries.first { it.builtin == Builtin.Resume }.description)
+        assertEquals("Start a new session", CommandPalette.entries(host, local = true).first { it.builtin == Builtin.New }.description)
+        assertTrue(entries.none { it.builtin != null && "session" in it.description }, entries.filter { "session" in it.description }.joinToString { it.name })
+    }
+
+    @Test
+    fun aNewChatGreetsByTheTimeOfDay() {
+        assertEquals("Good morning", ChatWelcome.greeting(5))
+        assertEquals("Good morning", ChatWelcome.greeting(11))
+        assertEquals("Good afternoon", ChatWelcome.greeting(12))
+        assertEquals("Good evening", ChatWelcome.greeting(17))
+        assertEquals("Good evening", ChatWelcome.greeting(22))
+        assertEquals("Hello", ChatWelcome.greeting(23))
+        assertEquals("Hello", ChatWelcome.greeting(0))
+    }
+
+    @Test
+    fun chatSuggestionsAreEverydayTopicsThatRotateDaily() {
+        val day = LocalDate.of(2026, 11, 7).toEpochDay()
+        val today = ChatWelcome.pick(day)
+        assertEquals(ChatWelcome.COUNT, today.size)
+        assertEquals(ChatWelcome.COUNT, today.map { it.topic }.toSet().size, "one suggestion per topic")
+        assertEquals(today, ChatWelcome.pick(day), "fixed within a day")
+        assertTrue(ChatWelcome.pick(day + 1) != today, "new ones the next day")
+        // Over a few days every suggestion comes up, and none is about a project.
+        val seen = (0 until ChatWelcome.POOL.size).flatMap { ChatWelcome.pick(day + it) }.toSet()
+        assertEquals(ChatWelcome.POOL.toSet(), seen)
+        for (s in ChatWelcome.POOL) {
+            assertFalse(Regex("(?i)project|file|test|commit|repo").containsMatchIn(s.prompt), s.prompt)
+            // The prompt ends where the user goes on typing.
+            assertTrue(s.prompt.endsWith(" ") || s.prompt.endsWith("\n"), s.prompt)
+        }
+        assertEquals(ChatWelcome.COUNT, ChatWelcome.pick(-3).size)
+    }
+
+    @Test
+    fun theChatsListIsSectionedByDay() {
+        val zone = ZoneId.of("Asia/Kolkata")
+        fun at(y: Int, m: Int, d: Int, h: Int) = LocalDateTime.of(y, m, d, h, 0).atZone(zone).toInstant().toEpochMilli()
+        val now = at(2026, 11, 7, 9)
+        fun chat(name: String, time: Long) = ChatSummary("/$name", name, time, 2)
+        val chats = listOf(
+            chat("a", at(2026, 11, 7, 1)),
+            chat("b", at(2026, 11, 6, 23)),
+            chat("c", at(2026, 11, 3, 12)),
+            chat("d", at(2026, 10, 20, 12)),
+            chat("e", at(2026, 9, 1, 12)),
+            chat("f", at(2025, 12, 31, 12)),
+        )
+        val sections = ChatList.sections(chats, now, zone)
+        assertEquals(listOf("Today", "Yesterday", "Previous 7 days", "Previous 30 days"), sections.take(4).map { it.first })
+        // Older ones by month; this year's months carry no year.
+        assertEquals(Month.SEPTEMBER.getDisplayName(TextStyle.FULL, Locale.getDefault()), sections[4].first)
+        assertEquals(Month.DECEMBER.getDisplayName(TextStyle.FULL, Locale.getDefault()) + " 2025", sections[5].first)
+        assertEquals(chats, sections.flatMap { it.second }, "order and every chat kept")
+        assertTrue(ChatList.sections(emptyList(), now, zone).isEmpty())
+    }
+
+    @Test
+    fun aNewChatStartsOnTheLastChatsModel() {
+        val kimi = ChatModel("opencode-go", "kimi-k3", "max")
+        fun model(provider: String, id: String) = ModelInfo(id, id, provider, reasoning = true, contextWindow = null)
+        // Pi's default after a cold start: switch to the remembered model.
+        assertEquals(kimi, ChatModel.switchTo(kimi, model("fake", "fake-model")))
+        assertEquals(kimi, ChatModel.switchTo(kimi, null))
+        // Already on it (a warm engine kept it), or nothing remembered: no switch.
+        assertNull(ChatModel.switchTo(kimi, model("opencode-go", "kimi-k3")))
+        assertNull(ChatModel.switchTo(null, model("fake", "fake-model")))
+        // The same id from another provider is another model.
+        assertEquals(kimi, ChatModel.switchTo(kimi, model("moonshot", "kimi-k3")))
     }
 }

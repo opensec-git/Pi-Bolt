@@ -116,6 +116,9 @@ import opensec.pibolt.app.ui.components.PiSnackHost
 import opensec.pibolt.app.ui.components.SnackKind
 import opensec.pibolt.app.ui.components.StatusBarScrim
 import opensec.pibolt.app.ui.components.TextAction
+import opensec.pibolt.app.ui.chats.ChatList
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.Forum
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.hosts.HostCard
@@ -304,9 +307,11 @@ fun HomeScreen(
     // Landscape: the side navigation bar and a display cutout keep their side; the canvas still fills the window.
     val listState = rememberLazyListState()
     // The pill composer starts a session in the project worked in last (the newest session's, else the first listed).
-    // "Chat" ([ChatSpace.KEY]) starts a plain chat instead: the default while there is no project.
+    // "Chat" ([ChatSpace.KEY]) starts a plain chat instead: the default with no project, or when a chat was the last
+    // thing worked on (ProjectRules.pillDefaultsToChat).
     var chosen by rememberSaveable { mutableStateOf<String?>(null) }
-    val chatPicked = chosen == ChatSpace.KEY || (chosen == null && list != null && list.isEmpty())
+    val chatPicked = chosen == ChatSpace.KEY ||
+        (chosen == null && list != null && ProjectRules.pillDefaultsToChat(list.isEmpty(), chats.firstOrNull()?.updatedAt, list.maxOfOrNull { it.lastActive }))
     val target = if (chatPicked) null else list?.firstOrNull { it.name == chosen } ?: recent.firstOrNull() ?: list?.firstOrNull()
     // The pill shows once a model is connected and the engine can run; with no project its chip offers to create one.
     val pillShown = !unavailable && authLoaded && configured.isNotEmpty() && list != null
@@ -373,8 +378,8 @@ fun HomeScreen(
     // The Chats row, under Recents, once the folders are read.
     val chatsRow = !unavailable && list != null
     val recentsAt = 1 + listOf(status.needsBanner(), showUpdate, setup, hasProjects).count { it }
-    val projectsAt = recentsAt + (if (running.isNotEmpty() || idleRecent.isNotEmpty() || recentChats.isNotEmpty()) 1 + running.size + idleRecent.size + recentChats.size else 0) +
-        (if (chatsRow) 1 else 0)
+    val projectsAt = recentsAt + (if (running.isNotEmpty() || idleRecent.isNotEmpty()) 1 + running.size + idleRecent.size else 0) +
+        (if (chatsRow) 1 + recentChats.size + (if (chats.size > recentChats.size || chats.isEmpty()) 1 else 0) else 0)
     val computersAt = projectsAt + if (hasProjects) 1 + list.orEmpty().size else 0
     Box(Modifier.fillMaxSize().background(colors.canvas).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))) {
         LazyColumn(
@@ -487,7 +492,7 @@ fun HomeScreen(
                 return liveHere.controller.takeIf { liveFile == null || liveFile == file }
             }
             val idle = idleRecent
-            if (running.isNotEmpty() || idle.isNotEmpty() || recentChats.isNotEmpty()) {
+            if (running.isNotEmpty() || idle.isNotEmpty()) {
                 item(key = "recents-label", contentType = "label") {
                     HomeHead("Recents", Modifier.animateItem().padding(top = Space.lg).entrance(4, play))
                 }
@@ -505,35 +510,71 @@ fun HomeScreen(
                         now = now,
                         onClick = { resume(entry, session.file, live != null) },
                         modifier = Modifier.animateItem(),
-                        divider = entry != idle.last() || recentChats.isNotEmpty(),
+                        divider = entry != idle.last(),
                     )
                 }
-                // Recent chats, marked by the chat glyph and "Chat" on their second line.
-                items(recentChats, key = { "chat:" + it.file }, contentType = { "recent" }) { chat ->
+            }
+            // Chats, a section of their own under Recents: the head opens them all and starts a new one, then the
+            // newest few; with none yet, one row that starts the first.
+            if (chatsRow) {
+                item(key = "chats-label", contentType = "label") {
+                    HomeHead(
+                        "Chats",
+                        Modifier
+                            .animateItem()
+                            .padding(top = if (running.isEmpty() && idle.isEmpty()) Space.lg else Space.xl)
+                            .heightIn(min = 48.dp)
+                            .pressable(onOpenChats, shape = RoundedCornerShape(Radius.md), pressedScale = 1f, role = Role.Button, label = "All chats"),
+                        count = chats.size.takeIf { it > 0 },
+                        end = {
+                            TextAction("New chat", onClick = { openChat(null) }, color = colors.ink1, enabled = !starting)
+                            if (chats.isNotEmpty()) Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(IconSize.md))
+                        },
+                    )
+                }
+                items(recentChats, key = { "chat:" + it.file }, contentType = { "chat" }) { chat ->
                     val working = chatWorking && liveChatController?.sessionFile == chat.file
                     InsetRow(
                         chat.title,
                         onClick = { openChat(chat.file) },
-                        meta = (if (working) "Working · Chat" else "Chat · " + ProjectRules.agoShort(chat.updatedAt, now)),
-                        leading = { Icon(Icons.Rounded.ChatBubbleOutline, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.md)) },
-                        divider = chat != recentChats.last(),
+                        meta = if (working) "Working" else ChatList.meta(chat, now),
+                        leading = {
+                            if (working) {
+                                QuadSpinner(QuadMode.Write, size = IconSize.md, color = colors.tint2)
+                            } else {
+                                Icon(Icons.Rounded.ChatBubbleOutline, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.md))
+                            }
+                        },
+                        divider = chat != recentChats.last() || chats.size > recentChats.size,
+                        current = liveChatController?.sessionFile == chat.file && working,
                         label = "Open chat",
                         modifier = Modifier.animateItem(),
                     )
                 }
-            }
-            if (chatsRow) {
-                item(key = "chats", contentType = "actions") {
-                    InsetRow(
-                        "Chats",
-                        onClick = onOpenChats,
-                        meta = "Ask anything, without a project",
-                        count = chats.size.takeIf { it > 0 },
-                        chevron = true,
-                        divider = false,
-                        leading = { Icon(Icons.Rounded.ChatBubbleOutline, contentDescription = null, tint = colors.tint2, modifier = Modifier.size(IconSize.md)) },
-                        modifier = Modifier.animateItem().padding(top = Space.lg),
-                    )
+                if (chats.size > recentChats.size) {
+                    item(key = "chats-all", contentType = "actions") {
+                        InsetRow(
+                            "All chats",
+                            onClick = onOpenChats,
+                            count = chats.size,
+                            chevron = true,
+                            divider = false,
+                            leading = { Icon(Icons.Rounded.Forum, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.md)) },
+                            modifier = Modifier.animateItem(),
+                        )
+                    }
+                }
+                if (chats.isEmpty()) {
+                    item(key = "chats-empty", contentType = "actions") {
+                        InsetRow(
+                            "Start a chat",
+                            onClick = { openChat(null) },
+                            meta = "Ask anything, without a project",
+                            divider = false,
+                            leading = { Icon(Icons.Rounded.Add, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.md)) },
+                            modifier = Modifier.animateItem(),
+                        )
+                    }
                 }
             }
             if (hasProjects) {
@@ -636,7 +677,7 @@ fun HomeScreen(
                               modifier = Modifier.weight(1f).padding(vertical = Space.sm).semantics { contentDescription = if (chatPicked) "Ask Pi in a new chat" else if (target != null) "Ask Pi in ${target.title}" else "Ask Pi" },
                               decorationBox = { field ->
                                   Box(contentAlignment = Alignment.CenterStart) {
-                                      if (ask.isEmpty()) Text("Ask Pi…", style = type.rowTitle, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                      if (ask.isEmpty()) Text(if (chatPicked) "Ask anything…" else "Ask Pi…", style = type.rowTitle, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                       field()
                                   }
                               },

@@ -24,7 +24,13 @@ sealed interface MdBlock {
      * One list item. [marker] is what is shown: `3.` for ordered items (numbered from the list's start, as CommonMark
      * renumbers `1. 1. 1.`), the source bullet otherwise. [checked] is set for task items.
      */
-    data class ListItem(val ordered: Boolean, val marker: String, val depth: Int, val text: String, val checked: Boolean?) : MdBlock
+    data class ListItem(val ordered: Boolean, val marker: String, val depth: Int, val text: String, val checked: Boolean?, val first: Boolean = false) : MdBlock {
+        /**
+         * A top-level list's first item ([first]: no earlier sibling of the same kind, bullet, number or task). Right
+         * after another list (a model writes bullets, then steps, then tasks) it gets a paragraph's gap, not an item's.
+         */
+        val startsList: Boolean get() = first && depth == 0
+    }
 
     /** A block quote; [text] is its markdown without the `>` markers, rendered as nested blocks. */
     data class Quote(val text: String, val indent: Int = 0) : MdBlock
@@ -46,7 +52,7 @@ enum class TableAlign { None, Start, Center, End }
 
 /** One open list level: where its marker sits, where its content starts, and the number its last item showed. */
 @Immutable
-internal class ListLevel(val markerIndent: Int, val contentCol: Int, val ordered: Boolean, val delimiter: Char, val number: Int) {
+internal class ListLevel(val markerIndent: Int, val contentCol: Int, val ordered: Boolean, val delimiter: Char, val number: Int, val task: Boolean = false) {
     /** A line at least this indented belongs to the item (CommonMark's content column, or 2 past the marker: lenient). */
     val threshold: Int get() = minOf(contentCol, markerIndent + 2)
 }
@@ -295,8 +301,11 @@ object Markdown {
                 text = ""
             }
             val shown = if (m.ordered) "$number${m.delimiter}" else m.bullet
-            add(MdBlock.ListItem(m.ordered, shown, depth, text, checked), i, state)
-            stack = stack + ListLevel(m.indent, m.contentCol, m.ordered, m.delimiter, number)
+            val task = checked != null
+            // The first of its list: no earlier sibling, or one of another kind (a task list after bullets).
+            val first = !(continues && sibling!!.task == task)
+            add(MdBlock.ListItem(m.ordered, shown, depth, text, checked, first), i, state)
+            stack = stack + ListLevel(m.indent, m.contentCol, m.ordered, m.delimiter, number, task)
             return j
         }
 

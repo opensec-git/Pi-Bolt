@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.session
 
+import androidx.compose.ui.graphics.vector.ImageVector
 import java.io.File
 
 /**
@@ -49,8 +50,11 @@ class PromptHistory(private var entries: List<String>) {
     }
 }
 
-/** A suggestion on the empty session: [label] on the chip, [prompt] put in the composer (never sent by itself). */
-data class StarterPrompt(val label: String, val prompt: String)
+/**
+ * A suggestion on the empty session: [label] on the row, [prompt] put in the composer (never sent by itself), and an
+ * optional [icon] before the label (a chat's topics).
+ */
+data class StarterPrompt(val label: String, val prompt: String, val icon: ImageVector? = null)
 
 /**
  * The empty session's order of entrance (assistant-ui's Welcome): the title is step 0, its line step 1, each

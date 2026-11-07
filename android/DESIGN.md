@@ -1283,10 +1283,39 @@ long-press sheets; long output goes to full-screen viewers, never nested scroll 
 ## Chats
 
 Plain chats talk to the model without a project (`engine/ChatSpace.kt`): one app-private folder, their own session
-folder, and an engine with `--no-tools`. The Chats screen follows the kit: two glass buttons (back, +) on a 56dp bar,
-"Chats" in largeTitle, a `GlassSearchField` (a full-radius glass pill, 48dp), then `InsetRow`s with the title and
-"2h · 12 messages"; the live chat sits on the current highlight. A long press offers Rename and Delete (a ConfirmSheet,
-"This can't be undone."). No chats: an `EmptyState` with "New chat". A chat opens on the session screen without the
-project-only parts (`SessionParts.CHAT`: no `@` files, `!` shell, preview chips, project starters, folder or subtitle;
-no checkpoints, so no undo or changes pill). On Home, the pill's chip lists "Chat" first (the default with no project),
-Recents shows the three newest chats with a chat glyph and "Chat · 2h", and a "Chats" row under Recents opens the list.
+folder, and an engine with `--no-tools`. They should feel like ChatGPT's or Claude's app, in the redesign's language.
+
+**Home.** Chats are a section of their own under Recents (Recents holds only project sessions): a `HomeHead` "Chats  3"
+whose end is a "New chat" `TextAction` and a chevron (the head opens the Chats list), the three newest chats as
+`InsetRow`s (chat glyph ink2, title, "2h · 12 messages"; a live chat that is answering leads with a tint2 Quad Write and
+says "Working"), then "All chats  N" (forum glyph, count, chevron) when there are more. With none yet: one row, "Start
+a chat" / "Ask anything, without a project", with a + glyph. The pill's chip lists "Chat" first and defaults to it when
+there is no project or a chat changed after the last project work (`ProjectRules.pillDefaultsToChat`); then the field
+says "Ask anything…".
+
+**The Chats screen.** Two glass buttons (back, +) on a 56dp bar, "Chats" in largeTitle, a `GlassSearchField`, then the
+chats newest first under date heads as ChatGPT's list does ("Today", "Yesterday", "Previous 7 days", "Previous 30 days",
+then the month; `ChatList.sections`), rowMeta ink3 heads, `InsetRow`s with the title and "2h · 12 messages"; the live
+chat sits on the current highlight. A long press offers Rename and Delete (a ConfirmSheet, "This can't be undone.").
+No chats: an `EmptyState` with the chat glyph, "Ask anything, without a project. Your chats show here." and "New chat".
+No match: an `EmptyState` with search-off, never a lone grey line.
+
+**A chat** opens on the session screen without the project-only parts (`SessionParts.CHAT`: no `@` files, `!` shell,
+preview chips, project starters, folder or subtitle; no checkpoints, so no undo or changes pill), and with a chat's own:
+- Top bar: back ("Back"), the chat's title (its name, else its first prompt; tap: chat info), then All chats (forum
+  glyph: back to the Chats list, or the list in the chat's place) and New chat (+) as glass buttons, and More. More
+  reads New chat, All chats, Search this chat, Rename chat, Fork from a message, Duplicate chat, Chat info and usage,
+  Export or share, and Delete chat (danger, confirmed). The context meter shows from 1% ("0%" said nothing on a 1M
+  model).
+- Welcome (`ChatWelcome`): "Good evening" (by the hour) in ink1 over "What's on your mind?" in ink3, both largeTitle;
+  then four everyday suggestions (explain, write, brainstorm, travel, learn, cook, decide, summarise, quiz, polish; one
+  topic each, rotating daily) as `InsetRow`s that lead with their topic's glyph in ink2. A suggestion fills the composer
+  with a prompt that ends where the user goes on typing ("Plan a relaxed three-day trip to "); nothing sends by itself.
+  Recent prompts and Commands follow, as in a project.
+- Transcript (`LocalPlainChat`): no "Finished 4s" line before an answer (Failed and Stopped still show). The reply's
+  second action is Regenerate, not Ask again, and Regenerate and Edit and resend rewind the same chat (Pi's tree,
+  `navigateTree` through the app's helper extension) instead of forking into a new chat that would crowd the list; the
+  old answer stays a branch in /tree. A fork is the fallback.
+- A new chat starts on the model and thinking level last picked in a chat (`ChatModel`; opening an old chat does not
+  change it), not Pi's global default, which belongs to projects.
+- Words: the palette, sheets and messages say "chat" where a project says "session" (`Builtin.inChat`).
