@@ -1,26 +1,32 @@
 package opensec.pibolt.app.ui.settings
 
+import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.runtime.derivedStateOf
+import opensec.pibolt.app.ui.components.ButtonSize
+import opensec.pibolt.app.ui.components.CardSection
+import opensec.pibolt.app.ui.components.EmptyState
+import opensec.pibolt.app.ui.components.LoadingRow
+import opensec.pibolt.app.ui.components.RowDivider
+import opensec.pibolt.app.ui.components.ScreenIntro
+import opensec.pibolt.app.ui.components.ScreenTopBar
+import opensec.pibolt.app.ui.theme.Tnum
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -33,7 +39,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -45,9 +50,7 @@ import opensec.pibolt.app.engine.RuntimeStorage
 import opensec.pibolt.app.engine.RuntimesReport
 import opensec.pibolt.app.engine.formatBytes
 import opensec.pibolt.app.ui.components.ConfirmSheet
-import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.SecondaryButton
-import opensec.pibolt.app.ui.components.SectionLabel
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
 
@@ -70,48 +73,37 @@ fun RuntimesScreen(app: PiBoltApp, onBack: () -> Unit) {
     LaunchedEffect(refresh) { report = withContext(Dispatchers.IO) { app.engine.runtimes() } }
 
     Box(Modifier.fillMaxSize().background(colors.canvas)) {
-        Column(
-            Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .verticalScroll(rememberScrollState())
-                .navigationBarsPadding()
-                .padding(bottom = 32.dp),
-        ) {
-            Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack, tint = colors.ink1)
-            }
-            Text(
-                "Runtimes",
-                style = type.display.copy(fontSize = type.display.fontSize * 1.15f),
-                color = colors.ink1,
-                modifier = Modifier.padding(start = 20.dp, top = 4.dp, bottom = 4.dp).semantics { heading() },
-            )
-            Text(
-                "Included in the app. Pi and your shell commands run them in every project.",
-                style = type.body,
-                color = colors.ink2,
-                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp),
-            )
+        val scroll = rememberScrollState()
+        val scrolled by remember { derivedStateOf { scroll.value > 0 } }
+        Column(Modifier.fillMaxSize()) {
+            ScreenTopBar("Runtimes", onBack = onBack, scrolled = scrolled)
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scroll)
+                    .navigationBarsPadding()
+                    .padding(bottom = 32.dp),
+            ) {
+            ScreenIntro("Included in the app. Pi and your shell commands run them in every project.")
             val current = report
             when {
-                current == null -> Text("Reading…", style = type.meta, color = colors.ink3, modifier = Modifier.padding(horizontal = 20.dp))
-                current.runtimes.isEmpty() -> Text(
-                    "This build of the app has no language runtimes.",
-                    style = type.body,
-                    color = colors.ink3,
-                    modifier = Modifier.padding(horizontal = 20.dp),
+                current == null -> LoadingRow("Measuring the runtimes")
+                current.runtimes.isEmpty() -> EmptyState(
+                    "No language runtimes",
+                    message = "This build of the app ships without Node.js or Python.",
+                    icon = Icons.Rounded.Terminal,
+                    modifier = Modifier.padding(horizontal = 16.dp),
                 )
                 else -> {
-                    Card("Installed") {
+                    CardSection("Installed") {
                         current.runtimes.forEachIndexed { i, runtime ->
-                            if (i > 0) Spacer(Modifier.height(14.dp))
+                            if (i > 0) RowDivider()
                             RuntimeRow(runtime)
                         }
                     }
-                    Card("Packages and caches") {
+                    CardSection("Packages and caches") {
                         current.storage.forEachIndexed { i, item ->
-                            if (i > 0) Spacer(Modifier.height(12.dp))
+                            if (i > 0) RowDivider()
                             StorageRow(item, clearing = clearing == item.kind, failed = failed == item.kind, onClear = { confirm = item })
                         }
                         Text(
@@ -119,10 +111,11 @@ fun RuntimesScreen(app: PiBoltApp, onBack: () -> Unit) {
                                 "(npm uninstall -g, pip uninstall).",
                             style = type.meta,
                             color = colors.ink3,
-                            modifier = Modifier.padding(top = 12.dp),
+                            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
                         )
                     }
                 }
+            }
             }
         }
 
@@ -149,21 +142,6 @@ fun RuntimesScreen(app: PiBoltApp, onBack: () -> Unit) {
 }
 
 @Composable
-private fun Card(title: String, content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)) {
-        SectionLabel(title, Modifier.padding(bottom = 10.dp))
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .background(Pi.colors.surface1, RoundedCornerShape(Radius.lg))
-                .border(1.dp, Pi.colors.line, RoundedCornerShape(Radius.lg))
-                .padding(16.dp),
-            content = content,
-        )
-    }
-}
-
-@Composable
 private fun RuntimeRow(runtime: EngineManifest.Runtime) {
     val colors = Pi.colors
     val type = Pi.type
@@ -173,6 +151,7 @@ private fun RuntimeRow(runtime: EngineManifest.Runtime) {
         Modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
+            .padding(vertical = 12.dp)
             .semantics(mergeDescendants = true) {
                 contentDescription = "${runtime.name} ${runtime.version}" + (if (details.isNotEmpty()) ", $details" else "") +
                     ", $size. Commands: ${runtime.commands.joinToString(", ")}"
@@ -182,7 +161,7 @@ private fun RuntimeRow(runtime: EngineManifest.Runtime) {
             Text(runtime.name, style = type.bodyStrong, color = colors.ink1)
             Spacer(Modifier.width(8.dp))
             Text(runtime.version, style = type.monoMeta, color = colors.ink2, modifier = Modifier.weight(1f))
-            Text(size, style = type.meta.copy(fontFeatureSettings = "tnum"), color = colors.ink3)
+            Text(size, style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3)
         }
         if (details.isNotEmpty()) Text(details, style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 2.dp))
         Row(Modifier.padding(top = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -203,12 +182,12 @@ private fun RuntimeRow(runtime: EngineManifest.Runtime) {
 private fun StorageRow(item: RuntimeStorage, clearing: Boolean, failed: Boolean, onClear: () -> Unit) {
     val colors = Pi.colors
     val type = Pi.type
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 12.dp).semantics(mergeDescendants = true) {}) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(item.kind.label, style = type.bodyStrong, color = colors.ink1)
                 Spacer(Modifier.width(8.dp))
-                Text(formatBytes(item.bytes), style = type.meta.copy(fontFeatureSettings = "tnum"), color = colors.ink3)
+                Text(formatBytes(item.bytes), style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3)
             }
             Text(
                 if (failed) "Some files could not be deleted. Try again when no install is running." else item.kind.detail,
@@ -221,6 +200,7 @@ private fun StorageRow(item: RuntimeStorage, clearing: Boolean, failed: Boolean,
                 if (clearing) "Clearing…" else "Clear",
                 onClick = onClear,
                 enabled = !clearing && item.bytes > 0,
+                size = ButtonSize.Small,
                 modifier = Modifier.semantics { contentDescription = "Clear the ${item.kind.label}" },
             )
         }

@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.packages
 
+import opensec.pibolt.app.ui.components.ErrorState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -108,10 +109,10 @@ fun McpSheet(engine: EngineApi, onReload: (() -> Unit)?, onMessage: (String) -> 
             working?.let { F2Loading(it) }
             val r = report
             when {
-                failure != null -> F2Empty(failure!!)
+                failure != null -> ErrorState("Could not reach the MCP servers", message = failure, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                 r == null -> F2Loading("Connecting to servers")
                 else -> {
-                    if (r.servers.isEmpty()) F2Empty("No MCP servers yet.")
+                    if (r.servers.isEmpty()) F2Empty("No MCP servers yet. Add one to the engine's mcp.json to give Pi its tools.")
                     for (s in r.servers) {
                         val meta = buildList {
                             add(s.state)
@@ -132,7 +133,7 @@ fun McpSheet(engine: EngineApi, onReload: (() -> Unit)?, onMessage: (String) -> 
                     r.note?.let { Text(it, style = Pi.type.meta, color = Pi.colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)) }
                 }
             }
-            F2Section("ADD A SERVER")
+            F2Section("Add a server")
             if (!adding) {
                 SecondaryButton("Add a server", onClick = { adding = true }, icon = Icons.Rounded.Add, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp))
             } else {

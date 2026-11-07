@@ -1,9 +1,20 @@
 package opensec.pibolt.app.ui.secrets
 
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.rounded.Key
+import androidx.compose.runtime.derivedStateOf
+import androidx.compose.ui.text.input.ImeAction
+import opensec.pibolt.app.ui.components.ButtonSize
+import opensec.pibolt.app.ui.components.EmptyState
+import opensec.pibolt.app.ui.components.FieldHint
+import opensec.pibolt.app.ui.components.FieldLabel
+import opensec.pibolt.app.ui.components.PiCard
+import opensec.pibolt.app.ui.components.ScreenIntro
+import opensec.pibolt.app.ui.components.ScreenTopBar
+import opensec.pibolt.app.ui.components.SecretField
 import android.view.WindowManager
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,13 +29,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Description
@@ -47,8 +55,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
-import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -67,11 +73,8 @@ import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.SectionLabel
 import opensec.pibolt.app.ui.components.SnackKind
-import opensec.pibolt.app.ui.components.StatusBarScrim
-import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.theme.Pi
-import opensec.pibolt.app.ui.theme.Radius
 import java.io.File
 
 /**
@@ -121,33 +124,33 @@ fun SecretsScreen(app: PiBoltApp, project: File, onBack: () -> Unit) {
 
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     Box(Modifier.fillMaxSize().background(colors.canvas)) {
-        LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
-            item(key = "top") {
-                Row(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack, tint = colors.ink1)
-                }
-            }
+        val listState = rememberLazyListState()
+        val scrolled by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 } }
+        Column(Modifier.fillMaxSize()) {
+        ScreenTopBar("Secrets", onBack = onBack, subtitle = project.name, scrolled = scrolled)
+        LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
             item(key = "head") {
-                Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 4.dp, bottom = 16.dp)) {
-                    Text("Secrets", style = type.display, color = colors.ink1)
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Environment variables for ${project.name}'s terminals and sessions, such as API keys. Encrypted on this phone and " +
-                            "never put in the model's messages; commands that Pi or you run can read them, like any variable. " +
-                            "Changes apply to new terminals and sessions.",
-                        style = type.body,
-                        color = colors.ink2,
+                Column {
+                    ScreenIntro(
+                        "Environment variables for the terminals and sessions of ${project.name}, such as API keys. Encrypted on this phone and " +
+                            "never put in the model's messages; commands that Pi or you run can read them, like any variable.",
                     )
+                    Text("Changes apply to new terminals and sessions.", style = type.meta, color = colors.ink3, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp))
                 }
             }
             val list = secrets
             if (list != null && list.isEmpty() && !adding) {
                 item(key = "empty") {
-                    Text("No secrets yet.", style = type.body, color = colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
+                    EmptyState(
+                        "No secrets yet",
+                        message = "Add the API keys and tokens your commands need, such as OPENAI_API_KEY.",
+                        icon = Icons.Rounded.Key,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
                 }
             }
             if (list != null) {
-                if (list.isNotEmpty()) item(key = "label") { SectionLabel("Variables", Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) }
+                if (list.isNotEmpty()) item(key = "label") { SectionLabel("Variables · ${list.size}", Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) }
                 items(list, key = { it.name }) { s ->
                     if (editing?.name == s.name) {
                         SecretForm(initial = s, taken = list.map { it.name }.toSet() - s.name, onCancel = { editing = null }, onSave = { name, value ->
@@ -191,7 +194,7 @@ fun SecretsScreen(app: PiBoltApp, project: File, onBack: () -> Unit) {
                 }
             }
         }
-        StatusBarScrim()
+        }
         PiSnackHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
 
@@ -238,50 +241,36 @@ private fun SecretRow(s: Secret, revealed: Boolean, onReveal: () -> Unit, onEdit
         }
         IconAction(if (revealed) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, if (revealed) "Hide ${s.name}" else "Show ${s.name}", onClick = onReveal)
         IconAction(Icons.Rounded.Edit, "Edit ${s.name}", onClick = onEdit)
-        IconAction(Icons.Rounded.DeleteOutline, "Delete ${s.name}", onClick = onDelete, tint = colors.danger)
+        IconAction(Icons.Rounded.DeleteOutline, "Delete ${s.name}", onClick = onDelete)
     }
 }
 
 @Composable
 private fun SecretForm(initial: Secret?, taken: Set<String>, onCancel: () -> Unit, onSave: (String, String) -> Unit) {
-    val colors = Pi.colors
     val type = Pi.type
     var name by remember { mutableStateOf(initial?.name.orEmpty()) }
     var value by remember { mutableStateOf(initial?.value.orEmpty()) }
     var show by remember { mutableStateOf(false) }
     val problem = SecretEnv.nameProblem(name) ?: if (name in taken) "$name is already set" else null
-    val shape = RoundedCornerShape(Radius.md)
-    Column(
-        Modifier.padding(horizontal = 16.dp, vertical = 4.dp).fillMaxWidth().background(colors.surface1, shape).border(1.dp, colors.line, shape).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
+    PiCard(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+        FieldLabel("Name")
         PiTextField(
             name,
             { name = it.trim() },
-            placeholder = "NAME",
+            placeholder = "OPENAI_API_KEY",
             style = type.mono,
             singleLine = true,
             isError = name.isNotEmpty() && problem != null,
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters, autoCorrectEnabled = false, keyboardType = KeyboardType.Ascii),
         )
-        if (name.isNotEmpty() && problem != null) Text(problem, style = type.meta, color = colors.danger)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            PiTextField(
-                value,
-                { value = it },
-                placeholder = "Value",
-                style = type.mono,
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(autoCorrectEnabled = false, keyboardType = KeyboardType.Password),
-                visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
-                modifier = Modifier.weight(1f),
-            )
-            IconAction(if (show) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility, if (show) "Hide the value" else "Show the value", onClick = { show = !show })
-        }
+        FieldHint(if (name.isNotEmpty() && problem != null) problem else "Letters, digits and _", isError = name.isNotEmpty() && problem != null)
+        FieldLabel("Value")
+        SecretField(value, { value = it }, shown = show, onToggleShown = { show = !show }, placeholder = "Value", label = "the value", imeAction = ImeAction.Done, onDone = { if (problem == null) onSave(name, value) })
+        Spacer(Modifier.height(16.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             Spacer(Modifier.weight(1f))
-            TextAction("Cancel", onClick = onCancel)
-            TextAction("Save", onClick = { onSave(name, value) }, enabled = problem == null, color = colors.accent)
+            SecondaryButton("Cancel", onClick = onCancel, size = ButtonSize.Small)
+            PrimaryButton("Save", onClick = { onSave(name, value) }, enabled = problem == null, size = ButtonSize.Small)
         }
     }
 }

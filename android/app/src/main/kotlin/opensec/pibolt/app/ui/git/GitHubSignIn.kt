@@ -1,5 +1,7 @@
 package opensec.pibolt.app.ui.git
 
+import opensec.pibolt.app.ui.components.FieldHint
+import opensec.pibolt.app.ui.components.SecretField
 import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,7 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Key
@@ -33,9 +34,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.input.ImeAction
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -61,8 +59,6 @@ import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.ui.graphics.SolidColor
 
 /**
  * Settings > GitHub. Signed out: "Sign in with GitHub" (device flow, when this build has an OAuth client id) and "Use a
@@ -79,7 +75,7 @@ fun GitHubSection(app: PiBoltApp) {
     when (val s = state) {
         is GitHubState.SignedIn -> {
             val a = s.account
-            Row(Modifier.fillMaxWidth().padding(bottom = 8.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text(a.name?.let { "$it (@${a.login})" } ?: "@${a.login}", style = type.bodyStrong, color = colors.ink1)
                     val how = if (a.kind == TokenKind.Device) "Signed in with GitHub" else "Personal access token"
@@ -93,16 +89,16 @@ fun GitHubSection(app: PiBoltApp) {
                 color = colors.ink3,
                 modifier = Modifier.padding(bottom = 12.dp),
             )
-            SecondaryButton("Sign out", onClick = { signingOut = true }, modifier = Modifier.fillMaxWidth())
+            SecondaryButton("Sign out", onClick = { signingOut = true }, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
         }
         GitHubState.SignedOut -> {
             Text(
                 "Sign in to clone private repositories, push, pull and open pull requests from this phone.",
                 style = type.body,
                 color = colors.ink2,
-                modifier = Modifier.padding(bottom = 12.dp),
+                modifier = Modifier.padding(top = 8.dp, bottom = 12.dp),
             )
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.padding(bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 if (github.deviceFlowAvailable) PrimaryButton("Sign in with GitHub", onClick = { sheet = TokenKind.Device }, modifier = Modifier.fillMaxWidth())
                 SecondaryButton("Use a personal access token", onClick = { sheet = TokenKind.Personal }, icon = Icons.Rounded.Key, modifier = Modifier.fillMaxWidth())
             }
@@ -229,7 +225,7 @@ private fun TokenSheet(app: PiBoltApp, onDismiss: () -> Unit) {
     PiSheet(onDismiss = onDismiss, state = sheetState) {
         SheetHeader(
             "Personal access token",
-            subtitle = "Create a classic token on GitHub with the repo scope (private repositories, push) and workflow (to push CI files), or a fine-grained token with Contents and Pull requests read and write.",
+            subtitle = "Classic token: the repo and workflow scopes. Fine-grained: Contents and Pull requests, read and write.",
         )
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             SecondaryButton(
@@ -238,34 +234,20 @@ private fun TokenSheet(app: PiBoltApp, onDismiss: () -> Unit) {
                 icon = Icons.AutoMirrored.Rounded.OpenInNew,
                 modifier = Modifier.fillMaxWidth(),
             )
-            val shape = RoundedCornerShape(Radius.md)
-            BasicTextField(
+            var shown by remember { mutableStateOf(false) }
+            SecretField(
                 value = token,
                 onValueChange = {
                     token = it
                     error = null
                 },
-                singleLine = true,
-                textStyle = type.mono.copy(color = colors.ink1),
-                cursorBrush = SolidColor(colors.accent),
-                visualTransformation = PasswordVisualTransformation(),
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password, autoCorrectEnabled = false, imeAction = ImeAction.Done),
-                modifier = Modifier.fillMaxWidth().semantics { contentDescription = "GitHub token" },
-                decorationBox = { inner ->
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .background(colors.surface1, shape)
-                            .border(1.dp, if (error != null) colors.danger.copy(alpha = 0.7f) else colors.lineStrong, shape)
-                            .padding(horizontal = 14.dp, vertical = 14.dp),
-                    ) {
-                        if (token.isEmpty()) Text("ghp_… or github_pat_…", style = type.mono, color = colors.ink3)
-                        inner()
-                    }
-                },
+                shown = shown,
+                onToggleShown = { shown = !shown },
+                placeholder = "ghp_… or github_pat_…",
+                label = "GitHub token",
+                isError = error != null,
             )
-            error?.let { Text(it, style = type.meta, color = colors.danger) }
-            Text("Stored encrypted with a key in this phone's Keystore. It is never shown again or written to logs.", style = type.meta, color = colors.ink3)
+            FieldHint(error ?: "Stored encrypted with a key in this phone's Keystore. It is never shown again or written to logs.", isError = error != null)
             PrimaryButton(
                 if (checking) "Checking…" else "Save",
                 onClick = {

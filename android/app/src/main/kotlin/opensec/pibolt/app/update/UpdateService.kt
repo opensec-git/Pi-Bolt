@@ -139,7 +139,7 @@ object UpdateNotifications {
                     .addAction(0, "Cancel", cancel)
             }
             is UpdateJob.Verifying -> builder.setContentTitle("Checking Pi-Bolt ${job.info.version}").setProgress(0, 0, true)
-            else -> builder.setContentTitle("Pi-Bolt update")
+            else -> builder.setContentTitle("Updating Pi-Bolt")
         }
         return builder.build()
     }

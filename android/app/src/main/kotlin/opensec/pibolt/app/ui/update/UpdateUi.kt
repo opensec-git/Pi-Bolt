@@ -1,5 +1,8 @@
 package opensec.pibolt.app.ui.update
 
+import opensec.pibolt.app.ui.components.Notice
+import opensec.pibolt.app.ui.components.SnackKind
+import opensec.pibolt.app.ui.theme.Tnum
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
@@ -10,7 +13,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -42,7 +44,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
@@ -51,6 +52,7 @@ import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.ui.components.PiSheet
+import opensec.pibolt.app.ui.components.ProgressLine
 import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
@@ -161,7 +163,7 @@ private fun UpdateRow(
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f).padding(end = 8.dp)) {
                 Text(title, style = Pi.type.bodyStrong, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                Text(detail, style = Pi.type.meta.copy(fontFeatureSettings = "tnum"), color = if (danger) colors.ink2 else colors.ink3, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                Text(detail, style = Pi.type.meta.copy(fontFeatureSettings = Tnum), color = if (danger) colors.ink2 else colors.ink3, maxLines = 3, overflow = TextOverflow.Ellipsis)
             }
             if (actions != null) Row(verticalAlignment = Alignment.CenterVertically) { actions() }
         }
@@ -169,22 +171,6 @@ private fun UpdateRow(
             Spacer(Modifier.height(10.dp))
             ProgressLine(progress, Modifier.padding(start = 34.dp, end = 12.dp))
         }
-    }
-}
-
-/** A 2dp bar: surface3 track, accent fill. */
-@Composable
-fun ProgressLine(fraction: Float, modifier: Modifier = Modifier) {
-    val colors = Pi.colors
-    val f = fraction.coerceIn(0f, 1f)
-    Box(
-        modifier
-            .fillMaxWidth()
-            .height(2.dp)
-            .background(colors.surface3, RoundedCornerShape(1.dp))
-            .semantics { contentDescription = "${(f * 100).toInt()} percent" },
-    ) {
-        Box(Modifier.fillMaxWidth(f).fillMaxHeight().background(colors.accent, RoundedCornerShape(1.dp)))
     }
 }
 
@@ -319,23 +305,17 @@ private fun InstallSheet(app: PiBoltApp, info: UpdateInfo) {
     }
 }
 
+/** A [Notice] in a sheet: the network, the signature or a warning; [tint] picks the kind. */
 @Composable
 private fun InfoBox(icon: ImageVector, text: String, tint: Color) {
     val colors = Pi.colors
-    val shape = RoundedCornerShape(Radius.md)
-    Row(
-        Modifier
-            .padding(horizontal = 16.dp, vertical = 4.dp)
-            .fillMaxWidth()
-            .background(colors.surface1, shape)
-            .border(1.dp, colors.line, shape)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
-        Spacer(Modifier.width(12.dp))
-        Text(text, style = Pi.type.body, color = if (tint == colors.ink2) colors.ink1 else tint)
+    val kind = when (tint) {
+        colors.success -> SnackKind.Success
+        colors.warning -> SnackKind.Warning
+        colors.danger -> SnackKind.Error
+        else -> SnackKind.Info
     }
+    Notice(text, kind = kind, icon = icon, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
 }
 
 private fun openInstallPermission(context: Context) {

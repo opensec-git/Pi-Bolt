@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.packages
 
+import opensec.pibolt.app.ui.components.ErrorState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -156,8 +157,12 @@ fun PackagesSheet(engine: EngineApi, controller: SessionController?, onReload: (
             when {
                 v == null -> F2Loading("Reading packages")
                 else -> {
-                    F2Section("INSTALLED")
-                    if (v.packages.isEmpty()) F2Empty(v.listError ?: "No packages yet.")
+                    F2Section("Installed")
+                    if (v.listError != null) {
+                        ErrorState("Could not list the packages", message = v.listError, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                    } else if (v.packages.isEmpty()) {
+                        F2Empty("No packages yet.")
+                    }
                     for (pkg in v.packages) {
                         val meta = buildList {
                             add(pkg.kind)
@@ -176,7 +181,7 @@ fun PackagesSheet(engine: EngineApi, controller: SessionController?, onReload: (
                             F2Tag(if (pkg.disabled) "off" else "on", color = if (pkg.disabled) Pi.colors.ink3 else Pi.colors.success, fill = if (pkg.disabled) Pi.colors.surface3 else Pi.colors.successSoft)
                         }
                     }
-                    F2Section("BUILT IN")
+                    F2Section("Built in")
                     for (b in BuiltinExtension.entries) {
                         F2Toggle(b.label, b.description, checked = b.id !in v.disabledBuiltins, enabled = working == null) { on ->
                             edit { PackageList.setBuiltin(it, b.id, on) }
@@ -256,7 +261,7 @@ private fun PackageDetailSheet(
                 }
             }
             F2Toggle("Load this package", if (pkg.disabled) "Off: its extensions, skills and prompts are not loaded" else "Its extensions, skills and prompts load in every session", checked = !pkg.disabled) { onEnabled(it) }
-            F2Section("COMMANDS AND TOOLS")
+            F2Section("Commands and tools")
             val list = provided
             when {
                 list == null -> F2Loading("Asking the session")
