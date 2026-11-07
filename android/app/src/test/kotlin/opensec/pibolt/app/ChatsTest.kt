@@ -108,6 +108,20 @@ class ChatsTest {
         assertFalse(opensec.pibolt.app.engine.LivePolicy.restartsForSettings(quiet.copy(isCompacting = true)))
     }
 
+    @Test
+    fun anEngineStartedWithOtherWebSearchIsStale() {
+        // PR #266 review: an engine busy while Web search changed must not be reused, parked or handed a new session.
+        val policy = opensec.pibolt.app.engine.LivePolicy
+        assertTrue(policy.staleEngine(launchedWith = true, current = false))
+        assertTrue(policy.staleEngine(launchedWith = false, current = true))
+        assertFalse(policy.staleEngine(launchedWith = true, current = true))
+        assertFalse(policy.staleEngine(launchedWith = null, current = false))
+        // Replaced once its turn ends, not during it.
+        val turn = opensec.pibolt.protocol.session.SessionState(hello = true, isRunning = true)
+        assertFalse(policy.restartsForSettings(turn))
+        assertTrue(policy.restartsForSettings(turn.copy(isRunning = false)))
+    }
+
     /**
      * What the engine registered with these flags: the tool lists the model saw in real runs of Pi-Bolt 1.1.2 with the
      * bundled extensions (test/resources/fixtures/engine, recorded with android/e2e's fake model).

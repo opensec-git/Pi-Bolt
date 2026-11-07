@@ -124,6 +124,9 @@ class SessionController private constructor(
     /** Runs on the engine on this phone; every RPC command is available (remote control allows a subset). */
     val isLocal: Boolean = origin is Origin.Local
 
+    /** The engine of a session on this phone (null for a computer's). */
+    val localBackend: LocalBackend? get() = (origin as? Origin.Local)?.backend
+
     /** The project directory of a local session (for a chat: the chats' directory, which is no project). */
     val project: File? = (origin as? Origin.Local)?.project
 

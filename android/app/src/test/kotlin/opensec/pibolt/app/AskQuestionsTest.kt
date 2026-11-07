@@ -3,6 +3,7 @@ package opensec.pibolt.app
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.app.ui.session.ask.AskAnswer
+import opensec.pibolt.app.ui.session.ask.AskOption
 import opensec.pibolt.app.ui.session.ask.AskQuestion
 import opensec.pibolt.app.ui.session.ask.AskQuestions
 import opensec.pibolt.app.ui.session.ask.AskQuestions.Step
@@ -121,6 +122,33 @@ class AskQuestionsTest {
     fun dismissingTheCardDeclinesTheQuestionnaire() {
         val (_, result) = replay("ask-cancel") { id -> AskSubmission(id, questions, List(2) { AskAnswer() }, cancel = true) }
         assertEquals("User declined to answer questions", result)
+    }
+
+    @Test
+    fun aQuestionThatStartsWithAnothersTextIsNotTakenForIt() {
+        // PR #266 review: `[Scope] Deploy?` was matched for `[Scope] Deploy? Which region?`.
+        fun q(text: String, multi: Boolean = false) = AskQuestion(text, "Scope", listOf(AskOption("A", "a"), AskOption("B", "b")), multi)
+        for (order in listOf(listOf(q("Deploy?"), q("Deploy? Which region?", multi = true)), listOf(q("Deploy? Which region?", multi = true), q("Deploy?")))) {
+            val short = order.indexOfFirst { it.question == "Deploy?" }
+            val long = 1 - short
+            val select = DialogRequest("s", DialogKind.Select, "[Scope] Deploy?", options = listOf("1. A — a", "2. B — b", "3. Type something."))
+            val multi = DialogRequest("m", DialogKind.Input, "[Scope] Deploy? Which region?\n\n1. A — a\n2. B — b\n\nEnter the numbers", placeholder = "1,3; custom answer")
+            val typed = DialogRequest("t", DialogKind.Input, "[Scope] Deploy?\n\n1. A — a\n2. B — b\n\nType your answer:")
+            assertEquals(Step.Options(short), AskQuestions.stepOf(select, order))
+            assertEquals(Step.Multi(long), AskQuestions.stepOf(multi, order))
+            assertEquals(Step.Typed(short), AskQuestions.stepOf(typed, order))
+            val answers = MutableList(2) { AskAnswer() }
+            answers[short] = AskAnswer(picked = setOf(1))
+            answers[long] = AskAnswer(picked = setOf(0, 1))
+            val submission = AskSubmission("c", order, answers)
+            assertEquals(AskReply.Value("2. B — b"), AskQuestions.reply(submission, select))
+            assertEquals(AskReply.Value("1,2"), AskQuestions.reply(submission, multi))
+        }
+        // A select with previews: the question ends at the blank line before them.
+        val withPreview = listOf(q("Layout?"), q("Layout? Mobile too?"))
+        assertEquals(0, AskQuestions.questionOf("[Scope] Layout?\n\n--- 1. A preview ---\nx", withPreview))
+        assertEquals(1, AskQuestions.questionOf("[Scope] Layout? Mobile too?", withPreview))
+        assertNull(AskQuestions.questionOf("[Scope] Layout? Desktop?", withPreview))
     }
 
     @Test

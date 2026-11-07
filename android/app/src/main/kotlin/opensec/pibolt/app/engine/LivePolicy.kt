@@ -50,4 +50,10 @@ object LivePolicy {
      * cancelled with the engine).
      */
     fun restartsForSettings(state: SessionState): Boolean = !state.isRunning && !state.isCompacting
+
+    /**
+     * An engine is stale when the setting it read at start ("Web search", [launchedWith]) differs from [current]: it is
+     * then replaced, not reused, parked or handed a new session. An engine not known here (none recorded) is not.
+     */
+    fun staleEngine(launchedWith: Boolean?, current: Boolean): Boolean = launchedWith != null && launchedWith != current
 }

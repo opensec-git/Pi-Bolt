@@ -120,9 +120,7 @@ object AskQuestions {
 
     /** The step [dialog] is, or null when it is no dialog of these questions. */
     fun stepOf(dialog: DialogRequest, questions: List<AskQuestion>): Step? {
-        val index = questions.indexOfFirst { q -> dialog.title.startsWith(titleOf(q)) }.takeIf { it >= 0 }
-            ?: questions.indexOfFirst { q -> squash(dialog.title).startsWith(squash(titleOf(q))) }.takeIf { it >= 0 }
-            ?: return null
+        val index = questionOf(dialog.title, questions) ?: return null
         val q = questions[index]
         return when (dialog.kind) {
             DialogKind.Select -> if (q.multiSelect || dialog.options.size < 2) null else Step.Options(index)
@@ -132,6 +130,22 @@ object AskQuestions {
     }
 
     private fun squash(text: String) = text.replace(Regex("\\s+"), " ").trim()
+
+    /**
+     * The question a walker dialog [title] asks. Its title is `[header] question`, alone (a select) or followed by a
+     * blank line and more (the option list of an input, a select's previews), so a question matches only up to that
+     * boundary: `[Scope] Deploy?` is not the question of `[Scope] Deploy? Which region?`. Of the questions that match
+     * (one whose text goes on with a blank line, e.g. `Deploy?` and `Deploy?\n\nWhich region?`), the longest wins.
+     * Failing that, a whole title equal with whitespace squashed (a host that reflowed it); never a bare prefix.
+     */
+    fun questionOf(title: String, questions: List<AskQuestion>): Int? {
+        fun pick(t: String, titleOf: (AskQuestion) -> String, boundary: (String) -> Boolean): Int? =
+            questions.indices
+                .filter { i -> titleOf(questions[i]).let { q -> t.startsWith(q) && boundary(t.substring(q.length)) } }
+                .maxByOrNull { titleOf(questions[it]).length }
+        return pick(title, ::titleOf) { rest -> rest.isEmpty() || rest.startsWith("\n\n") }
+            ?: pick(squash(title), { squash(titleOf(it)) }) { rest -> rest.isEmpty() }
+    }
 
     /**
      * The reply to [dialog] (a step of [submission]'s questions) from the card's answers; null when the dialog is not
