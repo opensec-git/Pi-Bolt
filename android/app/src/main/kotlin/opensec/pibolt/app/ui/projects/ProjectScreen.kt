@@ -46,7 +46,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -56,7 +55,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.platform.LocalConfiguration
@@ -113,6 +111,9 @@ import opensec.pibolt.app.ui.components.sharedHostBounds
 import opensec.pibolt.app.ui.components.sharedHostElement
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.projects.editor.EditorTabs
+import opensec.pibolt.app.ui.projects.editor.EditorTabsHolder
+import androidx.lifecycle.viewmodel.compose.viewModel
+import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.session.features2.SessionBrowserSheet
 import opensec.pibolt.app.ui.terminal.TerminalPane
 import opensec.pibolt.app.ui.theme.Pi
@@ -167,13 +168,19 @@ fun ProjectScreen(
     var path by rememberSaveable { mutableStateOf("") }
     // The file open in the viewer, relative to the project, and the editor's tabs (open files).
     var openFile by rememberSaveable { mutableStateOf<String?>(null) }
-    val tabs = rememberSaveable(name, saver = EditorTabs.saver(name)) { EditorTabs() }
-    val activity = LocalActivity.current
-    DisposableEffect(name) { onDispose { if (activity?.isChangingConfigurations != true) EditorTabs.release(name) } }
+    // Kept by the screen's navigation entry, so unsaved drafts survive "Ask Pi", the terminal, the secrets or a
+    // session opened over the project, and rotation.
+    val tabsHolder = viewModel(key = "editor-tabs:$name") { EditorTabsHolder() }
+    val tabs = rememberSaveable(name, saver = EditorTabs.saver(tabsHolder)) { tabsHolder.tabs ?: EditorTabs().also { tabsHolder.tabs = it } }
+    var leaving by remember { mutableStateOf(false) }
+    // Leaving the project with unsaved edits asks first. Registered before the screen's other back handlers, so those
+    // (a folder up, an open file, a diff) still come first.
+    BackHandler(enabled = tabs.anyDirty && !leaving) { leaving = true }
     var sort by rememberSaveable { mutableStateOf(FileSort.Name) }
     var showHidden by rememberSaveable { mutableStateOf(false) }
     var fileAction by remember { mutableStateOf<FileAction?>(null) }
-    val branch by produceState<String?>(null, dir) { value = ProjectFiles.branch(dir) }
+    // Read again after a switch in the Changes tab, so the header and the session rows name the branch checked out.
+    val branch by produceState<String?>(null, dir, changes.model.status?.branch?.head, changes.model.status?.branch?.oid) { value = ProjectFiles.branch(dir) }
     val folder = remember(dir, path) { if (path.isEmpty()) dir else File(dir, path) }
     val files by produceState<List<FileEntry>?>(null, folder, showFiles, reload) { if (showFiles) value = ProjectFiles.list(folder) }
     val shownFiles = remember(files, sort, showHidden) { files?.let { ProjectFiles.visible(ProjectFiles.order(it, sort), showHidden) } }
@@ -224,10 +231,13 @@ fun ProjectScreen(
     // Files in and out (ui/projects/transfer): SAF pickers, zips, the share sheet; one transfer at a time.
     val context = LocalContext.current
     val transfers = remember { TransferRunner(app.appScope) }
-    // The folder (or project) an export is for, waiting for the export sheet or the "Save to…" document.
-    var exportOf by remember { mutableStateOf<Pair<File, String>?>(null) }
-    var exportAsk by remember { mutableStateOf(false) }
-    var exportSkip by remember { mutableStateOf(emptySet<String>()) }
+    // The folder (or project) an export is for, waiting for the export sheet or the "Save to…" document. Saved, so
+    // the document picked after a rotation or a process death in the system picker still gets the zip.
+    var exportPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var exportLabel by rememberSaveable { mutableStateOf("") }
+    val exportOf = exportPath?.let { File(it) to exportLabel }
+    var exportAsk by rememberSaveable { mutableStateOf(false) }
+    var exportSkip by rememberSaveable { mutableStateOf(ArrayList<String>()) }
     fun failed(message: String) {
         scope.launch { snackbar.show(message, SnackKind.Error) }
     }
@@ -259,17 +269,19 @@ fun ProjectScreen(
     }
     val saveZip = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         val (source, label) = exportOf ?: return@rememberLauncherForActivityResult
-        exportOf = null
+        val skip = exportSkip.toSet()
+        exportPath = null
         if (uri == null) return@rememberLauncherForActivityResult
         transfers.run(
             "Exporting $label",
-            { p -> SafTransfer.exportZip(context, source, uri, label, exportSkip, p) },
+            { p -> SafTransfer.exportZip(context, source, uri, label, skip, p) },
             onDone = { n -> scope.launch { snackbar.show(if (n == 1) "Exported 1 file" else "Exported $n files", SnackKind.Success) } },
             onError = ::failed,
         )
     }
     fun export(source: File, label: String) {
-        exportOf = source to label
+        exportPath = source.path
+        exportLabel = label
         exportAsk = true
     }
     fun shareFile(file: File) {
@@ -324,7 +336,7 @@ fun ProjectScreen(
                 subtitle = if (shownList == null) branch?.let { "projects/$name · $it" } ?: "projects/$name" else null,
                 titleVisible = pastTitle,
                 titleModifier = if (shownList == null) Modifier.sharedHostElement(SharedKeys.projectName(name)) else Modifier,
-                leading = { GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Projects", onClick = onBack) },
+                leading = { GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Projects", onClick = { if (tabs.anyDirty) leaving = true else onBack() }) },
                 actions = {
                     when (selected) {
                         ProjectTab.Sessions -> GlassIconButton(Icons.Rounded.Search, "Search and manage sessions", onClick = { browse = true }, enabled = !unavailable)
@@ -481,10 +493,27 @@ fun ProjectScreen(
     }
     // Back inside Files goes up a folder first.
     BackHandler(enabled = showFiles && path.isNotEmpty() && openFile == null) { path = path.substringBeforeLast('/', "") }
+    if (leaving) {
+        val dirty = tabs.tabs.count { it.dirty }
+        ConfirmSheet(
+            title = "Discard unsaved changes?",
+            message = if (dirty == 1) "1 file has edits that are not saved." else "$dirty files have edits that are not saved.",
+            confirmLabel = "Discard",
+            onConfirm = {
+                leaving = false
+                onBack()
+            },
+            onDismiss = { leaving = false },
+        )
+    }
 
     FileActionSheets(
         action = fileAction,
         folder = folder,
+        onMoved = { from, to ->
+            fun rel(n: String) = if (path.isEmpty()) n else "$path/$n"
+            tabs.moved(rel(from), to?.let(::rel))
+        },
         onAction = { a ->
             when (a) {
                 is FileAction.Export -> {
@@ -511,9 +540,9 @@ fun ProjectScreen(
                 title = label,
                 onChoose = { choice ->
                     exportAsk = false
-                    exportSkip = choice.skip
+                    exportSkip = ArrayList(choice.skip)
                     if (choice.share) {
-                        exportOf = null
+                        exportPath = null
                         transfers.run(
                             "Packing $label",
                             { p -> SafTransfer.shareZip(context, source, "$label.zip", label, choice.skip, p) },
@@ -526,7 +555,7 @@ fun ProjectScreen(
                 },
                 onDismiss = {
                     exportAsk = false
-                    exportOf = null
+                    exportPath = null
                 },
             )
         }

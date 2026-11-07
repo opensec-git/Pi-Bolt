@@ -107,6 +107,8 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -202,7 +204,21 @@ fun FileViewer(
     val kind = remember(name) { FileTypes.kind(name) }
     val language = remember(name) { if (kind == FileKind.Markdown) "markdown" else FileTypes.language(name) }
 
-    LaunchedEffect(tab) { if (tab.doc == null) tab.doc = if (source != null) source(rel) else ProjectFiles.open(file) }
+    // Read when first shown, and again when the file changed on disk since (Pi or a shell edited it while the tab was
+    // kept): a kept tab must not show, or start an edit from, an old text. A draft being edited is never replaced.
+    // A [source] (a computer's file) is read once per tab.
+    var resumed by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumed++ }
+    LaunchedEffect(tab, resumed) {
+        if (source != null) {
+            if (tab.doc == null) tab.doc = source(rel)
+            return@LaunchedEffect
+        }
+        if (tab.doc != null && (tab.editing || ProjectFiles.stamp(file) == tab.disk)) return@LaunchedEffect
+        val stamp = ProjectFiles.stamp(file)
+        tab.doc = ProjectFiles.open(file)
+        tab.disk = stamp
+    }
     val doc = tab.doc
     val text = (doc as? FileDoc.Text)
     val editing = tab.editing
@@ -216,6 +232,8 @@ fun FileViewer(
     var flashLine by remember { mutableIntStateOf(-1) }
     var saving by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
+    // Save found the file changed on disk since it was read: overwrite only after asking.
+    var overwrite by remember { mutableStateOf(false) }
     var codeView by remember { mutableStateOf<ViewerContent?>(null) }
     var reveal by remember { mutableStateOf<Reveal?>(null) }
     val listState = remember(rel) { LazyListState() }
@@ -273,15 +291,21 @@ fun FileViewer(
         }
     }
 
-    fun save() {
+    fun save(force: Boolean = false) {
         if (!tab.editing || saving) return
         saving = true
         scope.launch {
             val body = tab.value.text
+            if (!force && ProjectFiles.changedOnDisk(tab.disk, ProjectFiles.stamp(file))) {
+                saving = false
+                overwrite = true
+                return@launch
+            }
             ProjectFiles.write(file, body)
                 .onSuccess {
                     tab.saved = body
                     tab.doc = FileDoc.Text(body, null, body.toByteArray().size.toLong())
+                    tab.disk = ProjectFiles.stamp(file)
                     onChanged()
                     snackbar.show("Saved", SnackKind.Success)
                 }
@@ -462,7 +486,7 @@ fun FileViewer(
                         GlassIconButton(Icons.Rounded.Search, "Find in file", onClick = { if (find.open) find.open = false else openFind(replace = false) }, tint = if (find.open) colors.accent else colors.ink1)
                     }
                     if (editing) {
-                        GlassChip(if (saving) "Saving…" else "Save", onClick = ::save, enabled = tab.dirty && !saving, tint = colors.accent)
+                        GlassChip(if (saving) "Saving…" else "Save", onClick = { save() }, enabled = tab.dirty && !saving, tint = colors.accent)
                     } else if (canEdit) {
                         // Editing is the main thing to do with a file: one tap, not a menu entry.
                         GlassIconButton(Icons.Rounded.Edit, "Edit", onClick = { startEdit() })
@@ -581,6 +605,18 @@ fun FileViewer(
             goTo = false
             jump(line)
         }, onDismiss = { goTo = false })
+    }
+    if (overwrite) {
+        ConfirmSheet(
+            title = "$name changed on disk",
+            message = "Something else (Pi or a command) changed or removed it since you opened it. Saving replaces that with your edits.",
+            confirmLabel = "Save anyway",
+            onConfirm = {
+                overwrite = false
+                save(force = true)
+            },
+            onDismiss = { overwrite = false },
+        )
     }
     confirm?.let { (title, then) ->
         ConfirmSheet(

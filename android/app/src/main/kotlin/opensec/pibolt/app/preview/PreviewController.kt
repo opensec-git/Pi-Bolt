@@ -499,6 +499,13 @@ class PreviewController(
             }
         }
 
+        // A single-page app moves with history.pushState (no page load): Back and the address follow it too, so Back
+        // steps back inside the app instead of closing the preview.
+        override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+            if (view !== web) return
+            _page.value = _page.value.copy(url = url ?: _page.value.url, canGoBack = view.canGoBack())
+        }
+
         override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
             if (view !== web) return
             val reason = error.description?.toString().orEmpty()

@@ -35,6 +35,7 @@ import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 /** One directory entry: one stat (type, size and time together), taken off the main thread. */
 @Immutable
@@ -49,6 +50,10 @@ data class FileEntry(val name: String, val dir: Boolean, val size: Long, val mod
         val HIDDEN = setOf(".git", ".hg", ".svn", ".DS_Store")
     }
 }
+
+/** When and how big a file was on disk, to notice that someone else (Pi, a shell) changed it. */
+@Immutable
+data class FileStamp(val modified: Long, val size: Long)
 
 /** Order of the Files tab. Folders always come first. */
 enum class FileSort(val label: String) { Name("Name"), Modified("Last changed"), Size("Size") }
@@ -88,8 +93,12 @@ object ProjectFiles {
         val names = dir.list() ?: return@withContext emptyList()
         order(
             names.map { name ->
-                val attrs = runCatching { Files.readAttributes(File(dir, name).toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS) }.getOrNull()
-                FileEntry(name, attrs?.isDirectory == true, attrs?.size() ?: 0, attrs?.lastModifiedTime()?.toMillis() ?: 0)
+                val path = File(dir, name).toPath()
+                val attrs = runCatching { Files.readAttributes(path, BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS) }.getOrNull()
+                // A link to a folder (pnpm's node_modules, a shared `docs`) opens as that folder, not as a file that
+                // "no longer exists". Delete still removes only the link (SafeFiles never follows one).
+                val folder = attrs?.isDirectory == true || attrs?.isSymbolicLink == true && Files.isDirectory(path)
+                FileEntry(name, folder, attrs?.size() ?: 0, attrs?.lastModifiedTime()?.toMillis() ?: 0)
             },
         )
     }
@@ -183,18 +192,34 @@ object ProjectFiles {
 
     /**
      * Writes [text] to [file] through a temporary file and a rename, so a failed save never leaves half a file. The
-     * temporary file takes the original's permissions first, so an edited `gradlew` or script stays executable.
+     * temporary file takes the original's permissions first, so an edited `gradlew` or script stays executable. A
+     * symbolic link (`CLAUDE.md -> AGENTS.md`) stays a link: the file it points to is written.
      */
     suspend fun write(file: File, text: String): Result<Unit> = withContext(Dispatchers.IO) {
         runCatching {
-            val tmp = File(file.parentFile, ".${file.name}.pibolt-tmp")
+            val target = if (Files.isSymbolicLink(file.toPath())) file.toPath().toRealPath().toFile() else file
+            val tmp = File(target.parentFile, ".${target.name}.pibolt-tmp")
             tmp.writeText(text)
-            if (file.exists()) copyPermissions(file, tmp)
-            if (!tmp.renameTo(file)) {
+            if (target.exists()) copyPermissions(target, tmp)
+            if (!tmp.renameTo(target)) {
                 tmp.delete()
-                file.writeText(text)
+                target.writeText(text)
             }
         }
+    }
+
+    /**
+     * Whether the file changed on disk since it was read as [read]: another time or size, or it is gone. Null [read]
+     * (never stamped) is no change.
+     */
+    fun changedOnDisk(read: FileStamp?, now: FileStamp?): Boolean = read != null && read != now
+
+    /** [file]'s modification time (nanoseconds where the file system has them) and size, or null when it is gone. */
+    suspend fun stamp(file: File): FileStamp? = withContext(Dispatchers.IO) {
+        runCatching {
+            val attrs = Files.readAttributes(file.toPath(), BasicFileAttributes::class.java)
+            FileStamp(attrs.lastModifiedTime().to(TimeUnit.NANOSECONDS), attrs.size())
+        }.getOrNull()
     }
 
     /** Gives [to] the POSIX permissions of [from]; where those are unsupported, at least its executable bit. */

@@ -84,14 +84,20 @@ fun HistoryViewer(ui: ChangesUi, onClose: () -> Unit) {
     // A failed read is an error with Try again, never an empty history.
     var failed by remember { mutableStateOf<String?>(null) }
     var attempt by remember { mutableStateOf(0) }
+    var loadedVersion by remember { mutableStateOf(-1) }
     LaunchedEffect(page, model.version, attempt) {
         loading = true
         failed = null
         try {
-            val got = model.source.log(PAGE, skip = page * PAGE)
-            if (page == 0) commits.clear()
-            commits += got
-            end = got.size < PAGE
+            // After a change (a pull, a commit) every page shown so far is read again from the top.
+            val fresh = page == 0 || model.version != loadedVersion
+            val want = if (fresh) (page + 1) * PAGE else PAGE
+            val got = model.source.log(want, skip = if (fresh) 0 else page * PAGE)
+            val next = HistoryPages.merge(if (fresh) emptyList() else commits.toList(), got)
+            commits.clear()
+            commits += next
+            loadedVersion = model.version
+            end = got.size < want
         } catch (e: GitException) {
             if (commits.isEmpty()) failed = e.message ?: "Git could not read the history." else ui.error(e.message ?: "Could not read the history")
             end = true
@@ -156,6 +162,18 @@ fun HistoryViewer(ui: ChangesUi, onClose: () -> Unit) {
         open?.let { hash -> CommitViewer(ui, hash, onClose = { open = null }) }
     }
     BackHandler(enabled = open != null) { open = null }
+}
+
+/** Paging of the history (pure, unit-tested). */
+object HistoryPages {
+    /**
+     * [shown] with the page [got] after it, leaving out commits already shown: a commit made meanwhile (Pi, a shell)
+     * shifts git's `--skip` pages, so a page can repeat the end of the one before, and a repeated key crashes the list.
+     */
+    fun merge(shown: List<Commit>, got: List<Commit>): List<Commit> {
+        val seen = shown.mapTo(HashSet()) { it.hash }
+        return shown + got.filter { seen.add(it.hash) }
+    }
 }
 
 /** One commit: subject and body, author and date, the hash to copy, then each changed file (tap to fold its diff). */

@@ -125,7 +125,6 @@ import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.engine.EngineStatus
-import opensec.pibolt.app.git.GitRepo
 import opensec.pibolt.app.ui.components.BrandMark
 import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.components.PiSnackHost
@@ -149,6 +148,7 @@ import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import opensec.pibolt.app.ui.session.RunningRow
 import opensec.pibolt.app.ui.session.runningSessions
 import opensec.pibolt.app.ui.projects.NewProjectSheet
+import opensec.pibolt.app.ui.projects.ProjectClone
 import opensec.pibolt.app.ui.projects.ProjectAction
 import opensec.pibolt.app.ui.projects.ProjectActionSheets
 import opensec.pibolt.app.ui.projects.ContinueRow
@@ -783,7 +783,7 @@ fun HomeScreen(
                     onSuccess = { dir ->
                         if (url != null) {
                             cloneProgress = "Cloning…"
-                            val cloned = runCatching { GitRepo.clone(app.git, url, dir) { cloneProgress = it.label } }
+                            val cloned = runCatching { ProjectClone.run(app.git, url, dir) { cloneProgress = it.label } }
                             cloneProgress = null
                             cloned.exceptionOrNull()?.let { e ->
                                 projects.delete(dir.name)
