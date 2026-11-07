@@ -167,10 +167,20 @@ class RpcClient(private val backend: SessionBackend, scope: CoroutineScope) {
 
     // Sessions and shell (a local engine accepts these; remote control refuses them)
 
-    /** `data.cancelled` is true when an extension cancelled it. A `remote_hello` with the new session follows. */
-    suspend fun newSession(parentSession: String? = null) = request("new_session", timeoutMs = 60_000) {
+    /**
+     * `data.cancelled` is true when an extension cancelled it. A `remote_hello` with the new session follows. [cwd]: a
+     * project from [listProjects] (the background service only; default: the open session's folder).
+     */
+    suspend fun newSession(parentSession: String? = null, cwd: String? = null) = request("new_session", timeoutMs = 60_000) {
         parentSession?.let { put("parentSession", it) }
+        cwd?.let { put("cwd", it) }
     }
+
+    /** The background service's projects (`host.service`): [RemoteProject.listFrom] reads the answer. */
+    suspend fun listProjects() = request("list_projects")
+
+    /** The background service's sessions in [cwd] (default: the open session's folder): [RemoteSessionInfo.listFrom]. */
+    suspend fun listSessions(cwd: String? = null) = request("list_sessions") { cwd?.let { put("cwd", it) } }
 
     suspend fun switchSession(sessionPath: String) = request("switch_session", timeoutMs = 60_000) { put("sessionPath", sessionPath) }
 

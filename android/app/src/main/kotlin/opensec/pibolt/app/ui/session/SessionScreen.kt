@@ -300,6 +300,8 @@ internal fun SessionContent(
     var draft by rememberSaveable(controller.hostId) { mutableStateOf("") }
     var mode by rememberSaveable { mutableStateOf(StreamingBehavior.Steer) }
     var sheet by remember { mutableStateOf(Sheet.None) }
+    var remoteSessions by remember { mutableStateOf(false) }
+    val service by remember { derivedStateOf { state.value.host?.service == true } }
     val f2 = rememberFeatures2()
     var viewer by remember { mutableStateOf<ViewerContent?>(null) }
     // A file on this phone tapped in a tool card opens in the full file viewer (tabs kept while the screen lives).
@@ -940,6 +942,7 @@ internal fun SessionContent(
                 onResume = ::openResume,
                 onFork = ::openFork,
                 onClone = controller::cloneSession,
+                onProjects = { remoteSessions = true }.takeIf { local == null && service },
                 contextPercent = contextPct,
                 // One spinner at a time: the top bar's Quad steps aside while the live status line is on screen.
                 quadVisible = !(status.value.visible && statusOnScreen),
@@ -1156,6 +1159,7 @@ internal fun SessionContent(
 
     VoiceRationale(voice)
 
+    if (remoteSessions) RemoteSessionsSheet(controller, onDismiss = { remoteSessions = false })
     when (sheet) {
         Sheet.None -> Unit
         Sheet.Attach -> {

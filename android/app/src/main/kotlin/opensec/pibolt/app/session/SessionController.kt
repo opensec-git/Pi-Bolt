@@ -34,7 +34,10 @@ import opensec.pibolt.protocol.backend.RemoteBackend
 import opensec.pibolt.protocol.backend.RemoteConfig
 import opensec.pibolt.protocol.backend.SessionBackend
 import opensec.pibolt.protocol.rpc.ImageAttachment
+import opensec.pibolt.protocol.RemoteEndpoints
 import opensec.pibolt.protocol.rpc.ModelInfo
+import opensec.pibolt.protocol.rpc.RemoteProject
+import opensec.pibolt.protocol.rpc.RemoteSessionInfo
 import opensec.pibolt.protocol.rpc.RpcClient
 import opensec.pibolt.protocol.rpc.RpcResponse
 import opensec.pibolt.protocol.rpc.StreamingBehavior
@@ -277,6 +280,7 @@ class SessionController private constructor(
                 onConnected(connected)
                 val end = backend.state.first { it is ConnectionState.Disconnected } as ConnectionState.Disconnected
                 if (stopped) return
+                if (end.reason == DisconnectReason.Handoff) _effects.tryEmit(SessionEffect.Notify(HANDOFF_NOTICE, "info"))
                 if (end.reason.retryable || end.reason == DisconnectReason.HostStopped) {
                     // Reconnect at once after a drop; back off only if that fails.
                     _link.value = LinkState.Retrying(end.reason, end.detail, 0)
@@ -331,7 +335,8 @@ class SessionController private constructor(
             "This phone is no longer paired with ${_hostName.value}. Scan a new code from /remote-control to pair again."
         }
         DisconnectReason.HostStopped -> "Remote control stopped on ${_hostName.value}."
-        DisconnectReason.Malformed -> "The computer could not read this app's messages. Update Pi on the computer, or this app."
+        DisconnectReason.Handoff -> HANDOFF_NOTICE
+        DisconnectReason.Malformed -> "The computer could not read this app's messages. Update Pi-Bolt or the app."
         DisconnectReason.RateLimited -> "Too many failed attempts from this network. Wait a minute and retry."
         DisconnectReason.Unreachable -> "Can't reach ${_hostName.value}. Check that /remote-control is running and the phone is on the same network."
         DisconnectReason.HandshakeTimeout -> "The computer took too long to answer."
@@ -442,11 +447,25 @@ class SessionController private constructor(
             }
             "remote_hello" -> {
                 val host = (event["host"] as? JsonObject)
-                if (!isLocal) app.hosts.update(hostId) { it.copy(cwd = host?.str("cwd") ?: it.cwd, version = host?.str("version") ?: it.version) }
+                if (!isLocal) {
+                    app.hosts.update(hostId) {
+                        it.copy(cwd = host?.str("cwd") ?: it.cwd, version = host?.str("version") ?: it.version, service = host?.bool("service") == true)
+                    }
+                }
                 _models.value = emptyList()
                 _thinkingLevels.value = emptyList()
             }
+            RemoteEndpoints.TYPE -> onEndpoints(event)
         }
+    }
+
+    /** `remote_endpoints`: the computer's addresses now (a quick tunnel's new one). Used for reconnects and saved. */
+    private fun onEndpoints(event: JsonObject) {
+        val remote = backend as? RemoteBackend ?: return
+        val endpoints = RemoteEndpoints.from(event, remote.lastEndpoint) ?: return
+        if (endpoints == remote.config.endpoints) return
+        remote.updateEndpoints(endpoints)
+        app.hosts.update(hostId) { it.copy(endpoints = endpoints) }
     }
 
     private fun afterPublish(previous: SessionState, now: SessionState) {
@@ -577,6 +596,21 @@ class SessionController private constructor(
     // A session switch replaces the conversation through a new `remote_hello`, as on a computer.
 
     fun newSession() = sessionCommand("Could not start a new session") { rpc.newSession() }
+
+    // The background service (`host.service`) lists the computer's projects and sessions, and opens any of them.
+
+    suspend fun listProjects(): Result<List<RemoteProject>> {
+        val response = rpc.listProjects()
+        return if (response.success) Result.success(RemoteProject.listFrom(response)) else Result.failure(IllegalStateException(response.error ?: "Could not list projects"))
+    }
+
+    suspend fun listSessions(cwd: String): Result<List<RemoteSessionInfo>> {
+        val response = rpc.listSessions(cwd)
+        return if (response.success) Result.success(RemoteSessionInfo.listFrom(response)) else Result.failure(IllegalStateException(response.error ?: "Could not list sessions"))
+    }
+
+    /** A new session in the computer's project [cwd] (from [listProjects]). */
+    fun newSessionIn(cwd: String) = sessionCommand("Could not start a new session") { rpc.newSession(cwd = cwd) }
 
     /** Open a saved session ([opensec.pibolt.app.engine.EngineApi.sessions]) in this engine. */
     fun switchSession(sessionFile: String) = sessionCommand("Could not open that session") { rpc.switchSession(sessionFile) }
@@ -724,6 +758,7 @@ class SessionController private constructor(
                 put("name", host?.name.orEmpty())
                 put("version", host?.version.orEmpty())
                 put("cwd", host?.cwd.orEmpty())
+                if (host?.service == true) put("service", true)
             })
             put("state", state.dataObject ?: JsonObject(emptyMap()))
             put("messages", messages.dataObject?.arr("messages") ?: JsonArray(emptyList()))
@@ -766,6 +801,9 @@ class SessionController private constructor(
         private const val SUBAGENTS_STATUS = "subagents"
         private const val FRAME_MS = 16L
         const val PERF_TAG = "PiBoltPerf"
+
+        /** Close code 1012: the background service gave the port to `/remote-control` in a terminal on the computer. */
+        const val HANDOFF_NOTICE = "The computer's terminal took over. Reconnecting…"
 
         /** Why a chat refuses a shell command. */
         const val NO_COMMANDS = "Chats can't run commands"

@@ -53,6 +53,7 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.MoreHoriz
@@ -89,6 +90,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import opensec.pibolt.app.session.LinkState
+import opensec.pibolt.app.session.SessionController
+import opensec.pibolt.protocol.backend.DisconnectReason
 import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
@@ -143,6 +146,8 @@ fun SessionTopBar(
     onResume: () -> Unit = {},
     onFork: () -> Unit = {},
     onClone: () -> Unit = {},
+    /** The computer's background service lists its projects and sessions: the menu offers them. */
+    onProjects: (() -> Unit)? = null,
     contextPercent: Int? = null,
     quadVisible: Boolean = true,
     status: String? = null,
@@ -243,6 +248,7 @@ fun SessionTopBar(
                     Item("Session and usage", Icons.Rounded.Info, onInfo)
                     Item("Export or share", Icons.Rounded.IosShare, onExport)
                 } else {
+                    onProjects?.let { Item("Projects and sessions", Icons.Rounded.FolderOpen, it) }
                     Item("Session and usage", Icons.Rounded.Info, onInfo)
                     Item("Export or share", Icons.Rounded.IosShare, onExport)
                     MenuRow("Disconnect", Icons.Rounded.LinkOff, colors.ink1) {
@@ -350,6 +356,7 @@ fun ConnectionBanner(link: LinkState, pairing: Boolean, local: Boolean, onRetry:
 
 @Composable
 private fun retryText(link: LinkState.Retrying): String {
+    if (link.reason == DisconnectReason.Handoff) return SessionController.HANDOFF_NOTICE
     if (link.inMs <= 0) return "Reconnecting…"
     val left by produceState(link.inMs, link) {
         val start = SystemClock.uptimeMillis()
