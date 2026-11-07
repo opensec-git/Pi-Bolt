@@ -145,7 +145,9 @@ import opensec.pibolt.app.ui.projects.FileViewer
 import opensec.pibolt.app.ui.projects.editor.AskPi
 import opensec.pibolt.app.ui.projects.editor.EditorTabs
 import opensec.pibolt.app.ui.projects.editor.viewerPlace
+import opensec.pibolt.app.ui.session.voice.VoiceModeEffects
 import opensec.pibolt.app.ui.session.voice.VoiceRationale
+import opensec.pibolt.app.ui.session.voice.rememberVoiceMode
 import opensec.pibolt.app.ui.session.voice.rememberVoiceInput
 import opensec.pibolt.app.ui.session.review.SessionChangesPill
 import opensec.pibolt.app.data.RecentPrompts
@@ -566,6 +568,19 @@ internal fun SessionContent(
     }
 
     fun noImages(): String = "${modelLabel ?: "This model"} can't read images"
+
+    // Hands-free voice mode (ui/session/voice): what it hears is sent as a dictated message.
+    val voiceMode = rememberVoiceMode(
+        voice,
+        running = { controller.state.value.isRunning },
+        send = { text ->
+            dictated = true
+            send(text, fromDraft = true)
+        },
+        submit = controller::submitAsk,
+        settings = settings,
+        onMessage = { m -> scope.launch { snackbar.show(m) } },
+    )
 
     // "Clone from git" queues the clone prompt: it goes out once the new session can take it.
     if (local != null) {
@@ -1135,6 +1150,7 @@ internal fun SessionContent(
                         onAttach = { sheet = Sheet.Attach },
                         onRemoveImage = { id -> images.removeAll { it.id == id } },
                         voice = voice,
+                        voiceMode = voiceMode,
                         changes = if (isLocal) ({ SessionChangesPill(review) }) else null,
                         focusRequester = focus,
                         // A user `!` command started while Pi is idle stops through abort_bash; the agent through abort.
@@ -1211,7 +1227,7 @@ internal fun SessionContent(
     val askOwner = firstDialog?.let { dialog -> remember(dialog.id) { AskQuestions.owner(state.value, dialog) } }
     if (askOwner != null && firstDialog != null) {
         val (call, questions) = askOwner
-        if (!controller.askSubmitting(call.toolCallId)) {
+        if (!controller.askSubmitting(call.toolCallId) && !voiceMode.claims(call.toolCallId)) {
             key(call.toolCallId) {
                 QuestionSheet(
                     toolCallId = call.toolCallId,
@@ -1239,6 +1255,7 @@ internal fun SessionContent(
     }
 
     VoiceRationale(voice)
+    VoiceModeEffects(voiceMode, state, status, controller.effects)
 
     if (remoteSessions) RemoteSessionsSheet(controller, onDismiss = { remoteSessions = false })
     when (sheet) {
