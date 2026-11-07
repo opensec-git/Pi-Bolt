@@ -154,6 +154,16 @@ if [ "$MODE" != --engine-only ]; then
 		R bash -c "'$d/s4'"
 		chmod -x "$d/s1"
 		if R bash -c "'$d/s1'" 2>/dev/null; then echo "non-executable file ran"; return 1; fi
+		mkfifo "$d/fifo" && chmod +x "$d/fifo"
+		# (Not from bash: on EACCES bash itself reads the file to explain why, which blocks on a FIFO anywhere.)
+		timeout 10 env -i $ENGINE_ENV "$PREFIX/bin/python3" -c "
+import subprocess
+try:
+    subprocess.run(['$d/fifo'])
+    print('a FIFO ran')
+except PermissionError as e:
+    print('a FIFO is refused:', e.strerror)" | tee /tmp/fifo.txt
+		grep -q refused /tmp/fifo.txt
 		R python3 -c "import subprocess; print(subprocess.run(['$d/s2'], capture_output=True, text=True).stdout.strip())"
 		R node -e "console.log(require('child_process').execFileSync('$d/s2').toString().trim())"
 	}

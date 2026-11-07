@@ -14,7 +14,7 @@ android/engine/scripts/source-bundle.sh # -> out/pi-bolt-android-engine-sources.
 ```
 
 Needs Docker on an arm64 host (an Apple Silicon Mac or GitHub's ubuntu-24.04-arm). The first build takes about
-5 minutes (glibc 2 min, curl and git 1 min); stages are cached in `.work/` by a hash of their inputs.
+8 minutes on an M-series Mac (glibc 2 min, userland with curl and git 1.5 min, runtimes with CPython 2 min); stages are cached in `.work/` by a hash of their inputs.
 `PIBOLT_PACK_WORK` and `PIBOLT_PACK_OUT` move the cache and the output (e.g. to an external disk). Gradle picks up
 `out/` when it exists.
 

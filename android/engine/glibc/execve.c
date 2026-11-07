@@ -22,6 +22,7 @@
 #include <limits.h>
 #include <stddef.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <sysdep.h>
 
@@ -66,13 +67,21 @@ remap (const char *path, char *buf)
 }
 
 /* Reads the first bytes of PATH into HDR and tells whether its real path is in the app's data directory.
-   Returns the byte count, or -1 when PATH is not ours to handle (not openable, not in APP_DATA, unreadable).  */
+   Returns the byte count, or -1 when PATH is not ours to handle (not openable, not a regular file, not in APP_DATA,
+   unreadable).  */
 static ssize_t
 probe (const char *path, char *hdr)
 {
-  int fd = INTERNAL_SYSCALL_CALL (openat, AT_FDCWD, path, O_RDONLY | O_CLOEXEC);
+  /* O_NONBLOCK: a FIFO must not block here (the kernel refuses to exec it anyway).  */
+  int fd = INTERNAL_SYSCALL_CALL (openat, AT_FDCWD, path, O_RDONLY | O_CLOEXEC | O_NONBLOCK);
   if (fd < 0)
     return -1;
+  struct stat st;
+  if (INTERNAL_SYSCALL_CALL (fstat, fd, &st) != 0 || !S_ISREG (st.st_mode))
+    {
+      INTERNAL_SYSCALL_CALL (close, fd);
+      return -1;
+    }
   char proc[32] = "/proc/self/fd/";
   char digits[12];
   int nd = 0;
