@@ -20,6 +20,12 @@ import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.data.SettingsStore
 import opensec.pibolt.app.engine.EngineApi
 import opensec.pibolt.app.engine.LocalEngine
+import opensec.pibolt.app.git.GitRunner
+import opensec.pibolt.app.git.ProcessGitRunner
+import opensec.pibolt.app.git.github.GitHub
+import opensec.pibolt.app.git.github.KeystoreBox
+import opensec.pibolt.app.git.github.PrefsKeyValue
+import opensec.pibolt.app.git.github.TokenStore
 import opensec.pibolt.app.session.Notifications
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.update.UpdateManager
@@ -27,6 +33,7 @@ import opensec.pibolt.app.update.UpdateNotifications
 import opensec.pibolt.protocol.Base64Url
 import opensec.pibolt.protocol.PairingPayload
 import opensec.pibolt.protocol.backend.RemoteBackend
+import java.util.concurrent.TimeUnit
 
 class PiBoltApp : Application() {
     lateinit var hosts: HostStore
@@ -42,6 +49,19 @@ class PiBoltApp : Application() {
     val http: OkHttpClient by lazy { RemoteBackend.defaultClient() }
 
     private val localEngine: LocalEngine by lazy { LocalEngine(this) }
+
+    /** GitHub sign-in (token sealed by the Keystore) and REST calls. A new token restarts the idle engine with it. */
+    val github: GitHub by lazy {
+        GitHub(
+            store = TokenStore(PrefsKeyValue(getSharedPreferences("github", MODE_PRIVATE)), KeystoreBox("pibolt-github-token")),
+            http = http.newBuilder().readTimeout(30, TimeUnit.SECONDS).callTimeout(60, TimeUnit.SECONDS).pingInterval(0, TimeUnit.SECONDS).build(),
+            clientId = BuildConfig.GITHUB_CLIENT_ID,
+            onCredentialsChanged = { localEngine.trimMemory("GitHub credentials changed") },
+        )
+    }
+
+    /** The engine's own git, run by the app (Changes, clone), with the engine's environment. */
+    val git: GitRunner by lazy { ProcessGitRunner({ localEngine.gitBinary() }, { localEngine.toolEnvironment() }) }
 
     /** The engine on this phone: projects, local sessions, provider keys. */
     val engine: EngineApi get() = localEngine

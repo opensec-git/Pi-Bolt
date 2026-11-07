@@ -165,6 +165,13 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         return controller
     }
 
+    /** The engine's git (`PREFIX/bin/git`) once the prefix is set up; null where the engine cannot run. */
+    suspend fun gitBinary(): File? = ensureSetup()?.let { File(paths.bin, "git").takeIf(File::exists) }
+
+    /** The environment engine processes get, for tools the app runs itself (git). */
+    suspend fun toolEnvironment(): Map<String, String> =
+        engineEnvironment(paths, System.getenv(), TimeZone.getDefault().id, ensureSetup()?.env.orEmpty(), app.github.gitEnvironment())
+
     /** Saved sessions with at least one message, newest first. Blocking file I/O: call off the main thread. */
     override fun sessions(project: File): List<SessionSummary> = index.list(engineForm(project)).filter { it.messageCount > 0 }
 
@@ -340,7 +347,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         Log.i(TAG, "starting engine ${m.engine} in ${project.name} ${target.cliArgs().joinToString(" ")}")
         ProcessBuilder(command).directory(project).apply {
             val env = environment()
-            val wanted = engineEnvironment(paths, env.toMap(), TimeZone.getDefault().id, m.env)
+            val wanted = engineEnvironment(paths, env.toMap(), TimeZone.getDefault().id, m.env, app.github.gitEnvironment())
             env.clear()
             env.putAll(wanted)
         }.start()
