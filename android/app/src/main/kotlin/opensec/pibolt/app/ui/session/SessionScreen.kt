@@ -1,6 +1,28 @@
 package opensec.pibolt.app.ui.session
 
 import android.Manifest
+import android.content.ClipboardManager
+import android.net.Uri
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material.icons.rounded.AlternateEmail
+import androidx.compose.material.icons.rounded.ContentPaste
+import androidx.compose.material.icons.rounded.History
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.runtime.produceState
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import java.io.File
+import opensec.pibolt.app.ui.providers.ProviderCatalog
+import opensec.pibolt.app.ui.providers.ProviderSheet
+import opensec.pibolt.protocol.session.NoticeItem
+import opensec.pibolt.protocol.session.ThinkingItem
+import opensec.pibolt.protocol.session.TodoStatus
 import android.content.ClipData
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -53,6 +75,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -192,12 +215,13 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
     }
 }
 
-private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget, Export, Resume, Fork }
+private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget, Export, Resume, Fork, Attach, History, Key }
 
 /**
  * The session screen. It never reads the whole [SessionState] itself: each part derives the few values it shows, so a
  * streamed frame recomposes only the transcript's live rows and whatever value actually changed.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack: () -> Unit, onDisconnect: () -> Unit, onForget: () -> Unit, local: LocalUi?) {
     val state: State<SessionState> = controller.state.collectAsStateWithLifecycle()
@@ -339,8 +363,16 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
             val sending = memory.pending.value != null && !s.isRunning
             val m = if (sending) QuadMode.Think else quadMode
             val activity = TranscriptModel.activity(s.items, s.streaming)
-            val text = if (s.isCompacting && m == QuadMode.Compact) StatusText(compactionLabel(s.compactionReason)) else TranscriptModel.statusText(m, activity, sending)
-            LiveStatus(visible = s.isRunning || s.isCompacting || sending, mode = m, text = text)
+            val retry = s.retry
+            val thinkingLive = (s.streaming.lastOrNull() as? ThinkingItem)?.streaming == true
+            val text = when {
+                retry != null -> StatusText("Retrying", "attempt ${retry.attempt} of ${retry.maxAttempts}")
+                s.isCompacting && m == QuadMode.Compact -> StatusText(compactionLabel(s.compactionReason))
+                // The live thinking row already says "Thinking": the status line keeps only the elapsed time.
+                thinkingLive && m == QuadMode.Think && !sending -> StatusText("")
+                else -> TranscriptModel.statusText(m, activity, sending)
+            }
+            LiveStatus(visible = s.isRunning || s.isCompacting || sending, mode = if (retry != null) QuadMode.Connect else m, text = text)
         }
     }
     // A send the host never answers (no echo, no run) stops showing "Sending" after a while.
@@ -353,18 +385,24 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     val subtitle by remember {
         derivedStateOf {
             val s = state.value
-            val parts = buildList {
-                // Folder and context only: the model and thinking level live in the composer chips. On this phone the
-                // title already is the project folder, so only a session name is added.
-                (if (local != null) s.sessionName else s.sessionName ?: s.host?.cwd?.takeIf { it.isNotBlank() }?.let(::baseName))?.let(::add)
-                s.lastUsage?.let { u -> contextPercent(u.totalTokens, s.model?.contextWindow)?.let { add("$it% context") } }
-            }
-            parts.joinToString(" · ")
+            // The session name, or for a computer its folder. The model and thinking level live in the composer chip,
+            // the context in the top bar's meter. On this phone the title already is the project folder.
+            (if (local != null) s.sessionName else s.sessionName ?: s.host?.cwd?.takeIf { it.isNotBlank() }?.let(::baseName)).orEmpty()
         }
     }
+    // Context use: hidden until a turn reports usage, and kept through a turn that reports none (a failed request
+    // reports 0 tokens, which used to reset the meter to 0%).
+    var knownTokens by remember(sessionId) { mutableStateOf<Long?>(null) }
+    LaunchedEffect(state, sessionId) {
+        snapshotFlow { state.value.lastUsage?.totalTokens?.takeIf { it > 0 } }.collect { if (it != null) knownTokens = it }
+    }
+    val contextWindow by remember { derivedStateOf { state.value.model?.contextWindow } }
+    val contextPct = knownTokens?.let { contextPercent(it, contextWindow) }
     val modelLabel by remember { derivedStateOf { state.value.model?.label } }
     val cwd by remember { derivedStateOf { state.value.host?.cwd } }
     val thinkingLevel by remember { derivedStateOf { state.value.thinkingLevel } }
+    // The composer's thinking chip is left out for a model that does not reason.
+    val reasons by remember { derivedStateOf { state.value.model?.reasoning != false } }
     val commands by remember { derivedStateOf { state.value.commands } }
     val palette by remember(local != null) { derivedStateOf { CommandPalette.entries(state.value.commands, local != null) } }
     val queue by remember { derivedStateOf { state.value.queue } }
@@ -374,11 +412,23 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     val empty by remember { derivedStateOf { state.value.hello && state.value.items.isEmpty() && state.value.streaming.isEmpty() && !state.value.isRunning && memory.pending.value == null } }
 
     val modelReadsImages by remember { derivedStateOf { state.value.model?.acceptsImages } }
+    val modelProvider by remember { derivedStateOf { state.value.model?.provider } }
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    // The project's traits for the empty session's suggestions (on-device sessions; read once, on IO).
+    val traits by produceState<ProjectTraits?>(null, controller.project) {
+        value = controller.project?.let { dir -> withContext(Dispatchers.IO) { runCatching { StarterPrompts.traits(dir) }.getOrNull() } }
+    }
+    val branch by produceState<String?>(null, controller.project) {
+        value = controller.project?.let { dir ->
+            withContext(Dispatchers.IO) { runCatching { File(dir, ".git/HEAD").takeIf { it.isFile }?.readText()?.trim()?.removePrefix("ref: refs/heads/") }.getOrNull() }
+        }
+    }
 
     /** Sends [text] as typed (a prompt when idle, else per [mode]) with [attached] images and shows it at once. */
-    fun send(text: String, attached: List<ComposerImage> = emptyList()) {
+    fun send(text: String, attached: List<ComposerImage> = emptyList(), behavior: StreamingBehavior = mode) {
         val running = state.value.isRunning
-        controller.send(text, mode, attached.mapNotNull { it.image })
+        controller.send(text, behavior, attached.mapNotNull { it.image })
         memory.sent(text, state.value, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image })
         if (text.isNotBlank()) app.recents.record(recentKey, text)
         lastSent = text to attached
@@ -449,7 +499,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
             controller.cycleThinking()
                 .onSuccess { level ->
                     haptics.tick()
-                    snackbar.show(level?.let { "Thinking: ${thinkingChipLabel(it)}" } ?: "This model does not reason")
+                    snackbar.show(level?.let { thinkingChipLabel(it) } ?: "This model does not reason")
                 }
                 .onFailure { snackbar.show(it.message ?: "Could not change thinking level", SnackKind.Error) }
         }
@@ -554,7 +604,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         }
     }
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(ImageSizing.MAX_IMAGES)) { uris ->
+    fun addImages(uris: List<Uri>) {
         val room = ImageSizing.slotsLeft(images.size)
         if (uris.size > room) scope.launch { snackbar.show("Up to ${ImageSizing.MAX_IMAGES} images per message") }
         for (uri in uris.take(room)) {
@@ -574,12 +624,66 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
             }
         }
     }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(ImageSizing.MAX_IMAGES)) { addImages(it) }
+
+    /** An image on the clipboard (copied from a browser, a screenshot, a gallery app), or null. */
+    fun clipboardImage(): Uri? {
+        val cm = context.getSystemService(ClipboardManager::class.java) ?: return null
+        if (cm.primaryClipDescription?.hasMimeType("image/*") != true) return null
+        return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
+    }
+
+    /** Ctrl+V or "Paste image": attaches the clipboard's image; false when there is none (text paste goes on). */
+    fun pasteImage(): Boolean {
+        val uri = clipboardImage() ?: return false
+        when {
+            modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
+            ImageSizing.slotsLeft(images.size) == 0 -> scope.launch { snackbar.show("Up to ${ImageSizing.MAX_IMAGES} images per message") }
+            else -> {
+                haptics.tick()
+                addImages(listOf(uri))
+            }
+        }
+        return true
+    }
 
     fun attach() {
         when {
             modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
             ImageSizing.slotsLeft(images.size) == 0 -> scope.launch { snackbar.show("Up to ${ImageSizing.MAX_IMAGES} images per message") }
             else -> picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+        }
+    }
+
+    /** The prompt of the turn that ended in [notice], to send again. */
+    fun promptBefore(notice: NoticeItem): UserItem? {
+        val items = state.value.items
+        val at = items.indexOfFirst { it.key == notice.key }.takeIf { it >= 0 } ?: items.size
+        return items.subList(0, at).lastOrNull { it is UserItem } as? UserItem
+    }
+
+    fun onErrorAction(action: ErrorAction, notice: NoticeItem) {
+        when (action) {
+            ErrorAction.Retry -> {
+                val prompt = promptBefore(notice)
+                if (prompt == null || prompt.text.isBlank()) {
+                    scope.launch { snackbar.show("Nothing to retry") }
+                } else {
+                    haptics.send()
+                    send(prompt.text)
+                }
+            }
+            ErrorAction.SwitchModel -> openModels()
+            ErrorAction.Compact -> {
+                haptics.confirm()
+                controller.compact(null)
+            }
+            ErrorAction.UpdateKey -> sheet = Sheet.Key
+            ErrorAction.NewSession -> local?.onNewSession?.invoke()
+            ErrorAction.Stop -> {
+                haptics.confirm()
+                controller.abort()
+            }
         }
     }
 
@@ -592,19 +696,59 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         derivedStateOf {
             val s = state.value
             buildList {
-                s.retry?.let { add("Retrying ${it.attempt}/${it.maxAttempts}" + (it.error?.let { e -> ": $e" } ?: "") to true) }
+                // Retries are told by the error notice and the status line, not here.
                 addAll(s.statuses.values.map { it to false })
                 s.widgets.values.forEach { lines -> addAll(lines.map { it to false }) }
             }
         }
     }
 
-    Box(
+    /**
+     * The composer's send: an app command runs; otherwise the text and images go out as [behavior] (Steer or
+     * Follow-up while Pi works). A prompt that starts a run hides the keyboard so the reply has room; a steer keeps it.
+     */
+    fun submit(behavior: StreamingBehavior) {
+        val text = draft.trim()
+        val call = if (images.isEmpty()) CommandPalette.parse(text, commands, isLocal) else null
+        when {
+            call != null -> {
+                draft = ""
+                runBuiltin(call)
+            }
+            text.isEmpty() && images.isEmpty() -> Unit
+            images.any { !it.ready } -> Unit
+            images.isNotEmpty() && modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
+            else -> {
+                val startsRun = !state.value.isRunning
+                send(text, images.toList(), behavior)
+                draft = ""
+                images.clear()
+                if (startsRun) {
+                    keyboard?.hide()
+                    focusManager.clearFocus()
+                }
+            }
+        }
+    }
+
+    BoxWithConstraints(
         Modifier
             .fillMaxSize()
             .sharedHostBounds(SharedKeys.card(controller.hostId), card = false)
             .background(colors.canvas),
     ) {
+        val windowHeight = maxHeight
+        val density = LocalDensity.current
+        val imeVisible = WindowInsets.isImeVisible
+        val imeHeight = with(density) { WindowInsets.ime.getBottom(density).toDp() }
+        // Room above the keyboard: under 360dp (landscape with the keyboard up) the composer is one row.
+        val roomAboveIme = windowHeight - imeHeight
+        // The bottom stack's budget: with the keyboard up, or in a short window, the todo card, status extras, a waiting
+        // question and the queue fold into one row, so the transcript keeps its room and the composer stays on the
+        // keyboard. The swap is instant: it follows the keyboard frame by frame.
+        val foldStack = imeVisible || windowHeight < 480.dp
+        val oneRowComposer = roomAboveIme < 360.dp
+        val composerLines = if (roomAboveIme < 560.dp) 4 else MAX_LINES
         Column(Modifier.fillMaxSize().imePadding()) {
             if (searching) {
                 SearchBar(
@@ -632,8 +776,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 link = linkState.value,
                 mode = quadMode,
                 busy = busy,
-                // One spinner at a time: the top bar animates only while the live status line is off screen.
-                spin = busy && !(status.value.visible && statusOnScreen),
+                spin = busy,
                 onBack = onBack,
                 onInfo = ::openStats,
                 onDisconnect = onDisconnect,
@@ -645,6 +788,10 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 onResume = ::openResume,
                 onFork = ::openFork,
                 onClone = controller::cloneSession,
+                contextPercent = contextPct,
+                // One spinner at a time: the top bar's Quad steps aside while the live status line is on screen.
+                quadVisible = !(status.value.visible && statusOnScreen),
+                status = status.value.text.let { t -> listOf(t.label.ifBlank { status.value.mode.label }, t.detail).filter { it.isNotBlank() }.joinToString(" ") },
             )
             ConnectionBanner(linkState.value, controller.pairing, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
             Box(Modifier.weight(1f)) {
@@ -670,80 +817,107 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                             val thumbs = memory.localImages[key].orEmpty()
                             if (thumbs.isNotEmpty()) imageViewer = ViewerImages(memory.localFull[key].orEmpty(), thumbs, index)
                         },
+                        errorContext = ErrorContext(modelLabel, modelProvider?.let(ProviderCatalog::name), local = isLocal, running = running),
+                        onErrorAction = ::onErrorAction,
                     )
                     if (empty) {
                         EmptySession(
-                            cwd = cwd,
-                            commands = commands,
+                            title = if (isLocal) title else cwd?.takeIf { it.isNotBlank() }?.let(::baseName) ?: title,
+                            branch = branch,
+                            starters = if (isLocal) traits?.let { StarterPrompts.pick(it) }.orEmpty() else StarterPrompts.pick(null),
                             recent = recentAll[recentKey].orEmpty().take(RecentPrompts.SHOWN),
-                            onCommand = { fill("/${it.name} ") },
+                            onStarter = { fill(it.prompt) },
                             onRecent = { fill(it) },
+                            onCommands = { fill("/") }.takeIf { palette.isNotEmpty() },
                         )
                     }
                 }
                 PiSnackHost(snackbar, Modifier.align(Alignment.BottomCenter))
             }
-            StatusExtras(extras)
-            TodoPanel(todos, running)
-            val hiddenId = memory.hiddenDialog.value
-            PendingDialogStrip(firstDialog?.takeIf { it.id == hiddenId }?.title?.ifBlank { "Answer needed" }) { memory.hiddenDialog.value = null }
-            QueueStrip(queue, onEdit = controller::clearQueue)
-            Composer(
-                text = draft,
-                onText = { draft = it },
-                enabled = enabled,
-                running = running,
-                mode = mode,
-                onMode = { mode = it },
-                modelLabel = modelLabel,
-                thinkingLevel = thinkingLevel,
-                palette = palette,
-                onPick = { entry ->
-                    val builtin = entry.builtin
-                    if (builtin != null && entry.hint == null) {
-                        draft = ""
-                        runBuiltin(BuiltinCall(builtin, ""))
+            // Past 840dp the bottom stack keeps the transcript's 720dp reading width, centred.
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
+                Column(Modifier.widthIn(max = 720.dp).fillMaxWidth()) {
+                    val hiddenId = memory.hiddenDialog.value
+                    val askingTitle = firstDialog?.takeIf { it.id == hiddenId }?.title?.ifBlank { "Answer needed" }
+                    if (foldStack) {
+                        val tasks = todos.visible
+                        val now = tasks.firstOrNull { it.status == TodoStatus.InProgress } ?: tasks.firstOrNull { it.status == TodoStatus.Pending }
+                        CompactStack(
+                            todoDone = tasks.count { it.status == TodoStatus.Completed },
+                            todoTotal = tasks.size,
+                            todoNow = now?.let { todoText(it, running) },
+                            queued = queue.size,
+                            asking = askingTitle,
+                            extras = extras.size,
+                            onExpand = {
+                                if (askingTitle != null && !imeVisible) {
+                                    memory.hiddenDialog.value = null
+                                } else {
+                                    keyboard?.hide()
+                                    focusManager.clearFocus()
+                                }
+                            },
+                        )
                     } else {
-                        fill(entry.insert)
+                        StatusExtras(extras)
+                        TodoPanel(todos, running, autoCollapse = !running || windowHeight < 560.dp, quiet = status.value.visible && statusOnScreen)
+                        PendingDialogStrip(askingTitle) { memory.hiddenDialog.value = null }
+                        QueueStrip(queue, onEdit = controller::clearQueue)
                     }
-                },
-                files = files.takeIf { isLocal },
-                shell = isLocal,
-                onCycleModel = ::cycleModel,
-                onCycleThinking = ::cycleThinking,
-                onOpenImage = { index ->
-                    val ready = images.filter { it.ready }
-                    val thumbs = ready.mapNotNull { it.thumb }
-                    if (thumbs.isNotEmpty()) imageViewer = ViewerImages(ready.map { it.image }, thumbs, index.coerceIn(0, thumbs.lastIndex))
-                },
-                onSend = {
-                    val text = draft.trim()
-                    val call = if (images.isEmpty()) CommandPalette.parse(text, commands, isLocal) else null
-                    when {
-                        call != null -> {
-                            draft = ""
-                            runBuiltin(call)
-                        }
-                        text.isEmpty() && images.isEmpty() -> Unit
-                        images.any { !it.ready } -> Unit
-                        images.isNotEmpty() && modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
-                        else -> {
-                            send(text, images.toList())
-                            draft = ""
-                            images.clear()
-                        }
-                    }
-                },
-                images = images,
-                attachAllowed = modelReadsImages != false,
-                onAttach = ::attach,
-                onRemoveImage = { id -> images.removeAll { it.id == id } },
-                focusRequester = focus,
-                onStop = controller::abort,
-                onModel = { openModels() },
-                onThinking = ::openThinking,
-            )
-            Spacer(Modifier.navigationBarsPadding().padding(bottom = 8.dp).height(0.dp))
+                    Composer(
+                        text = draft,
+                        onText = { draft = it },
+                        enabled = enabled,
+                        running = running,
+                        mode = mode,
+                        onMode = { mode = it },
+                        modelLabel = modelLabel,
+                        thinkingLevel = thinkingLevel.takeIf { reasons },
+                        palette = palette,
+                        onPick = { entry ->
+                            val builtin = entry.builtin
+                            if (builtin != null && entry.hint == null) {
+                                draft = ""
+                                runBuiltin(BuiltinCall(builtin, ""))
+                            } else {
+                                fill(entry.insert)
+                            }
+                        },
+                        files = files.takeIf { isLocal },
+                        shell = isLocal,
+                        onCycleModel = ::cycleModel,
+                        onCycleThinking = ::cycleThinking,
+                        onOpenImage = { index ->
+                            val ready = images.filter { it.ready }
+                            val thumbs = ready.mapNotNull { it.thumb }
+                            if (thumbs.isNotEmpty()) imageViewer = ViewerImages(ready.map { it.image }, thumbs, index.coerceIn(0, thumbs.lastIndex))
+                        },
+                        onSend = { submit(mode) },
+                        images = images,
+                        attachAllowed = modelReadsImages != false,
+                        onAttach = { sheet = Sheet.Attach },
+                        onRemoveImage = { id -> images.removeAll { it.id == id } },
+                        focusRequester = focus,
+                        onStop = controller::abort,
+                        onModel = { openModels() },
+                        onThinking = ::openThinking,
+                        compact = oneRowComposer,
+                        maxLines = composerLines,
+                        history = recentAll[recentKey].orEmpty(),
+                        onKey = { key ->
+                            when (key) {
+                                ComposerKeys.Action.FollowUp -> submit(StreamingBehavior.FollowUp)
+                                ComposerKeys.Action.OpenModels -> openModels()
+                                ComposerKeys.Action.Search -> searching = true
+                                ComposerKeys.Action.RestoreQueue -> if (!queue.isEmpty) controller.clearQueue()
+                                else -> Unit
+                            }
+                        },
+                        onPasteImage = ::pasteImage,
+                    )
+                }
+            }
+            Spacer(Modifier.navigationBarsPadding().padding(bottom = if (imeVisible) 4.dp else 8.dp).height(0.dp))
         }
 
         AnimatedVisibility(
@@ -782,6 +956,38 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
 
     when (sheet) {
         Sheet.None -> Unit
+        Sheet.Attach -> {
+            val clip = remember { clipboardImage() != null }
+            ActionsSheet(
+                title = null,
+                actions = listOfNotNull(
+                    SheetAction(if (modelReadsImages == false) "Photos (not available for this model)" else "Photos", Icons.Rounded.Image) { attach() },
+                    SheetAction("Paste image", Icons.Rounded.ContentPaste) { pasteImage() }.takeIf { clip },
+                    SheetAction("Mention a file", Icons.Rounded.AlternateEmail) { fill(if (draft.isEmpty() || draft.endsWith(" ")) draft + "@" else "$draft @") }.takeIf { isLocal },
+                    SheetAction("Commands", Icons.Rounded.Code) { fill("/") }.takeIf { palette.isNotEmpty() && draft.isEmpty() },
+                    SheetAction("Prompt history", Icons.Rounded.History) { sheet = Sheet.History },
+                ),
+                onDismiss = { if (sheet == Sheet.Attach) sheet = Sheet.None },
+            )
+        }
+        Sheet.History -> HistorySheet(recentAll[recentKey].orEmpty(), onPick = {
+            sheet = Sheet.None
+            fill(it)
+        }, onDismiss = { sheet = Sheet.None })
+        Sheet.Key -> {
+            val configured by app.engine.auth.configured.collectAsStateWithLifecycle()
+            ProviderSheet(
+                auth = app.engine.auth,
+                configured = configured,
+                firstRun = false,
+                initial = modelProvider?.let(ProviderCatalog::get),
+                onSaved = { p ->
+                    sheet = Sheet.None
+                    scope.launch { snackbar.show("${p.name} key updated. Retry to use it.", SnackKind.Success) }
+                },
+                onDismiss = { sheet = Sheet.None },
+            )
+        }
         Sheet.Model -> {
             val models by controller.models.collectAsStateWithLifecycle()
             val current by remember { derivedStateOf { state.value.model } }
