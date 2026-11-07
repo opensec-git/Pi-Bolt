@@ -235,6 +235,8 @@ private struct CommandHint: View {
     var body: some View {
         HStack(spacing: 10) {
             Text(text).font(Pi.mono).foregroundStyle(Pi.ink1)
+                .lineLimit(1)
+                .fixedSize()
                 .padding(.horizontal, 10).padding(.vertical, 6)
                 .background(RoundedRectangle(cornerRadius: 8).fill(Pi.surface2))
             Text(note).font(.system(size: 14)).foregroundStyle(Pi.ink3)

@@ -150,7 +150,9 @@ struct ToolRow: View {
         for key in ["command", "path", "file_path", "pattern", "url", "query", "description", "prompt"] {
             if let value = args.str(key) { return value.replacingOccurrences(of: "\n", with: " ") }
         }
-        return ""
+        // Another tool: its first string argument, by name.
+        let first = args.objectValue?.keys.sorted().lazy.compactMap { args.str($0) }.first
+        return first?.replacingOccurrences(of: "\n", with: " ") ?? ""
     }
 
     private func duration(_ ms: Int64) -> String {

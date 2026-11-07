@@ -357,3 +357,24 @@ final class Counter: @unchecked Sendable {
     func increment() { lock.withLock { count += 1 } }
     var value: Int { lock.withLock { count } }
 }
+
+struct BackendLifecycleTests {
+    @Test func aShutDownBackendRefusesToConnect() async {
+        let backend = RemoteBackend(config: RemoteConfig(hostKey: KeyPair.generate().publicKey, endpoints: ["ws://127.0.0.1:1/rc"], identity: .generate(), deviceName: "t", appVersion: "0"))
+        backend.shutdown()
+        #expect(!(await backend.connect()))
+        #expect(backend.state == .disconnected(reason: .closed, detail: nil))
+    }
+
+    @Test func aRefusedPortIsUnreachableAndRetryable() async {
+        let backend = RemoteBackend(config: RemoteConfig(hostKey: KeyPair.generate().publicKey, endpoints: ["ws://127.0.0.1:1/rc", "not a url"], identity: .generate(), deviceName: "t", appVersion: "0"))
+        #expect(!(await backend.connect()))
+        guard case let .disconnected(reason, _) = backend.state else {
+            Issue.record("expected disconnected")
+            return
+        }
+        #expect(reason == .unreachable)
+        #expect(reason.retryable)
+        backend.shutdown()
+    }
+}

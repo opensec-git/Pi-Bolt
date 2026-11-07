@@ -94,7 +94,7 @@ final class SessionController {
         guard !stopped else { return }
         stopped = true
         pathMonitor?.cancel()
-        backend.close()
+        backend.shutdown()
         rpc.stop()
         pump?.cancel()
         tasks.forEach { $0.cancel() }
@@ -211,6 +211,7 @@ final class SessionController {
         let endpoints = backend.config.endpoints
         rpc.stop()
         pump?.cancel()
+        backend.shutdown()
         backend = SessionController.makeBackend(app: app, hostId: hostId, endpoints: endpoints, secret: secret)
         rpc = RpcClient(backend: backend)
         pumpEvents()

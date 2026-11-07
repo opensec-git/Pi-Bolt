@@ -7,6 +7,9 @@ struct SessionsSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var projects: [RemoteProject] = []
     @State private var sessions: [String: [RemoteSessionInfo]] = [:]
+    /// Projects whose sessions are shown; each is fetched when it opens.
+    @State private var expanded: Set<String> = []
+    @State private var fetching: Set<String> = []
     @State private var error: String?
     @State private var loading = true
 
@@ -47,7 +50,20 @@ struct SessionsSheet: View {
                 }
                 ForEach(projects) { project in
                     HStack {
-                        Text(project.name).font(.system(size: 15, weight: .medium)).foregroundStyle(Pi.ink3)
+                        Button {
+                            toggle(project)
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold)).foregroundStyle(Pi.ink4)
+                                    .rotationEffect(.degrees(expanded.contains(project.cwd) ? 90 : 0))
+                                Text(project.name).font(.system(size: 15, weight: .medium)).foregroundStyle(Pi.ink2)
+                                Text("\(project.sessions)").font(.system(size: 13)).foregroundStyle(Pi.ink4)
+                                if fetching.contains(project.cwd) { QuadSpinner(size: 11, color: Pi.ink3) }
+                            }
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
                         Spacer()
                         Button {
                             Task {
@@ -58,9 +74,8 @@ struct SessionsSheet: View {
                         }
                         .disabled(!controller.canSwitchNow)
                     }
-                    .padding(.top, 20)
-                    .padding(.bottom, 4)
-                    ForEach(sessions[project.cwd] ?? []) { session in
+                    .padding(.top, 8)
+                    ForEach(expanded.contains(project.cwd) ? sessions[project.cwd] ?? [] : []) { session in
                         Button {
                             Task {
                                 if await controller.switchSession(session.path) { dismiss() }
@@ -111,13 +126,29 @@ struct SessionsSheet: View {
         switch await controller.listProjects() {
         case let .success(list):
             projects = list
-            for project in list.prefix(12) {
-                if case let .success(found) = await controller.listSessions(cwd: project.cwd) {
-                    sessions[project.cwd] = Array(found.prefix(20))
-                }
-            }
+            // The open session's project starts open (the newest one when the computer's folder is not listed).
+            let cwd = controller.state.host?.cwd
+            if let first = list.first(where: { $0.cwd == cwd }) ?? list.first { toggle(first) }
         case let .failure(failure):
             error = failure.message
+        }
+    }
+
+    /// Open or close a project; its sessions (all the computer lists) are fetched the first time it opens.
+    private func toggle(_ project: RemoteProject) {
+        if expanded.contains(project.cwd) {
+            expanded.remove(project.cwd)
+            return
+        }
+        expanded.insert(project.cwd)
+        guard sessions[project.cwd] == nil, !fetching.contains(project.cwd) else { return }
+        fetching.insert(project.cwd)
+        Task {
+            switch await controller.listSessions(cwd: project.cwd) {
+            case let .success(found): sessions[project.cwd] = found
+            case let .failure(failure): controller.toast = Toast(text: failure.message, kind: .error)
+            }
+            fetching.remove(project.cwd)
         }
     }
 }

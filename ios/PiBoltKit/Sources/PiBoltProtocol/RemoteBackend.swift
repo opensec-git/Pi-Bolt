@@ -213,6 +213,7 @@ public final class RemoteBackend: NSObject, URLSessionWebSocketDelegate, @unchec
     private var generation = 0
     private var attempt = 0
     private var _lastEndpoint: String?
+    private var isShutDown = false
 
     /// Every JSON object from the session (events, responses, extension UI requests), in order. One consumer: the
     /// `RpcClient`.
@@ -248,6 +249,10 @@ public final class RemoteBackend: NSObject, URLSessionWebSocketDelegate, @unchec
         await connectLock.lock()
         defer { Task { await connectLock.unlock() } }
         if lock.withLock({ live?.isOpen == true }) { return true }
+        if lock.withLock({ isShutDown }) {
+            stateBox.value = .disconnected(reason: .closed, detail: nil)
+            return false
+        }
         let cfg = config
         let startGeneration = lock.withLock { () -> Int in
             attempt += 1
@@ -261,10 +266,17 @@ public final class RemoteBackend: NSObject, URLSessionWebSocketDelegate, @unchec
                 lastFailure = .disconnected(reason: .unreachable, detail: "\(endpoint) is not a valid address")
                 continue
             }
-            let connection = Connection(backend: self, endpoint: endpoint, url: url, config: cfg)
-            lock.withLock {
+            // Created under the lock: a task from a session that `shutdown()` invalidated would raise.
+            let created = lock.withLock { () -> Connection? in
+                guard !isShutDown else { return nil }
+                let connection = Connection(backend: self, endpoint: endpoint, url: url, config: cfg)
                 pending = connection
                 connections[connection.task.taskIdentifier] = connection
+                return connection
+            }
+            guard let connection = created else {
+                stateBox.value = .disconnected(reason: .closed, detail: nil)
+                return false
             }
             connection.start()
             let result = await connection.handshake.wait(timeout: cfg.timeout(for: endpoint))
@@ -321,6 +333,14 @@ public final class RemoteBackend: NSObject, URLSessionWebSocketDelegate, @unchec
         p?.abandon()
         l?.closeByClient()
         stateBox.value = .disconnected(reason: .closed, detail: nil)
+    }
+
+    /// Close for good: the URLSession (which retains this backend as its delegate) is invalidated, so the backend can be
+    /// released. `connect()` fails afterwards.
+    public func shutdown() {
+        lock.withLock { isShutDown = true }
+        close()
+        session.invalidateAndCancel()
     }
 
     /// Replace the endpoints, for example after `remote_endpoints` or a new pairing code from the same host.
