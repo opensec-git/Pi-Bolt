@@ -11,7 +11,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -45,6 +44,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DeleteOutline
@@ -95,6 +95,7 @@ import opensec.pibolt.app.ui.components.StatusDot
 import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.sharedHostElement
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiColors
 import opensec.pibolt.app.ui.theme.PiMotion
@@ -115,8 +116,8 @@ fun linkColor(link: LinkState?, colors: PiColors): Color = when (link) {
  *
  * The status dot shows on this phone only when the engine is not connected (a green dot that is always on says
  * nothing); remote sessions keep it. [contextPercent] is null until a turn has reported usage. [quadVisible] false
- * hides the Quad (keeping its slot) while the live status line is on screen: one spinner at a time. Idle the slot is
- * blank. [status] is what TalkBack hears for the Quad while [busy]; idle it is silent.
+ * stills the Quad while the live status line is on screen: one spinner at a time. Idle it rests as a still grid.
+ * [status] is what TalkBack hears for the Quad while it animates; otherwise it is silent.
  */
 @Composable
 fun SessionTopBar(
@@ -188,29 +189,30 @@ fun SessionTopBar(
                 Text(subtitle, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = if (dot) 16.dp else 0.dp))
             }
         }
-        // The live Quad sits left of the actions, so its empty slot reads as part of the title's space and Search and
-        // More always stay side by side. It is drawn only when it says something: busy with the status line off
-        // screen (the line owns the one spinner when visible), or a failed link. Idle it is blank, not a still grid.
-        val showQuad = quadVisible && (busy || link is LinkState.Failed)
+        // The Quad sits left of the actions, so Search and More always stay side by side. It animates only while Pi
+        // is busy and the live status line (which owns the one spinner then) is off screen; otherwise it rests as a
+        // still ink3 grid, so the bar keeps its mark and nothing blinks in and out. It is not a control: no press,
+        // no ripple, and TalkBack hears it only while it reports work.
+        val live = quadVisible && busy
+        val failed = link is LinkState.Failed
         Box(
             Modifier
                 .size(40.dp)
-                .graphicsLayer { alpha = if (showQuad) 1f else 0f }
-                .clearAndSetSemantics { if (busy && showQuad && status != null) contentDescription = status },
+                .clearAndSetSemantics { if (live && status != null) contentDescription = status },
             contentAlignment = Alignment.Center,
         ) {
-            if (showQuad) {
-                QuadSpinner(
-                    mode,
-                    size = 16.dp,
-                    color = when {
-                        link is LinkState.Failed -> colors.danger
-                        mode == QuadMode.Wait -> colors.warning
-                        else -> colors.ink1
-                    },
-                    animate = spin,
-                )
-            }
+            QuadSpinner(
+                // At rest one still frame, whatever the mode, so the grid does not change shape while the line works.
+                if (live || failed) mode else QuadMode.Think,
+                size = IconSize.sm,
+                color = when {
+                    failed -> colors.danger
+                    live && mode == QuadMode.Wait -> colors.warning
+                    live -> colors.ink1
+                    else -> colors.ink3
+                },
+                animate = spin && live,
+            )
         }
         switcher()
         IconAction(Icons.Rounded.Search, "Search this session", onClick = onSearch)
@@ -426,13 +428,13 @@ fun EmptySession(
                 }
             }
             if (starters.isNotEmpty()) {
-                StartSection("Start with")
+                StartSection("Start with", Icons.Rounded.AutoAwesome)
                 FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
                     for (s in starters) StarterChip(s.label) { onStarter(s) }
                 }
             }
             if (recent.isNotEmpty()) {
-                StartSection("Recent")
+                StartSection("Recent", Icons.Rounded.History)
                 for (prompt in recent) StartRow(prompt.lineSequence().first(), null, mono = false) { onRecent(prompt) }
             }
             if (onCommands != null) {
@@ -465,8 +467,8 @@ private fun StarterChip(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun StartSection(title: String) {
-    SectionLabel(title, Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 4.dp))
+private fun StartSection(title: String, icon: ImageVector) {
+    SectionLabel(title, Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 4.dp), icon = icon)
 }
 
 /** A 48dp row: label in body ink1 (mono for commands), the description in meta ink3 on the same line. */
@@ -645,10 +647,12 @@ fun QueueStrip(queue: QueueState, onEdit: () -> Unit) {
 private fun QueueRow(steer: Boolean, text: String, modifier: Modifier, onRemove: (() -> Unit)?) {
     val colors = Pi.colors
     val type = Pi.type
-    Row(modifier.fillMaxWidth().height(44.dp).padding(start = 14.dp, end = if (onRemove != null) 0.dp else 14.dp), verticalAlignment = Alignment.CenterVertically) {
+    // 44dp, 48dp with the remove button so its target is whole. The label keeps one line at font scale 1.3 (a fixed
+    // 62dp wrapped "Follow-up").
+    Row(modifier.fillMaxWidth().heightIn(min = if (onRemove != null) 48.dp else 44.dp).padding(start = 14.dp, end = if (onRemove != null) 0.dp else 14.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(2.dp).height(22.dp).background(if (steer) colors.warning else colors.ink4, RoundedCornerShape(1.dp)))
         Spacer(Modifier.width(12.dp))
-        Text(if (steer) "Steer" else "Follow-up", style = type.micro, color = if (steer) colors.warning else colors.ink3, modifier = Modifier.width(62.dp))
+        Text(if (steer) "Steer" else "Follow-up", style = type.micro, color = if (steer) colors.warning else colors.ink3, maxLines = 1, softWrap = false, modifier = Modifier.widthIn(min = 62.dp).padding(end = 4.dp))
         Text(text.replace('\n', ' '), style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (onRemove != null) IconAction(Icons.Rounded.Close, "Remove from queue and edit", onClick = onRemove, size = 18.dp, tint = colors.ink3)
     }

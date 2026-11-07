@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import opensec.pibolt.app.ui.theme.LocalQuadClock
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import kotlin.math.roundToInt
@@ -161,7 +162,7 @@ enum class StepState { Active, Done, Failed, Skipped }
  * (160 ms, scale 0.7 → 1) only in the live turn.
  */
 @Composable
-fun StepSlot(state: StepState, mode: QuadMode, live: Boolean, modifier: Modifier = Modifier, size: Dp = 20.dp, spinnerSize: Dp = 12.dp) {
+fun StepSlot(state: StepState, mode: QuadMode, live: Boolean, modifier: Modifier = Modifier, size: Dp = IconSize.md, spinnerSize: Dp = IconSize.xs) {
     val colors = Pi.colors
     val animate = live && !Pi.reduceMotion
     AnimatedContent(

@@ -7,7 +7,9 @@ import opensec.pibolt.app.data.AccentId
 import opensec.pibolt.app.data.ThemeId
 import opensec.pibolt.app.ui.components.SnackKind
 import opensec.pibolt.app.ui.components.noticeStyle
+import opensec.pibolt.app.ui.session.subagent.SubagentFormat
 import opensec.pibolt.app.ui.theme.PiColors
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -25,6 +27,9 @@ class ContrastTest {
     }
 
     private fun surfaces(c: PiColors) = listOf("canvas" to c.canvas, "surface1" to c.surface1, "surface2" to c.surface2, "surface3" to c.surface3)
+
+    /** The app's own themes, built in full (Palette.kt `full`): each is held to every role check below. */
+    private val own = listOf(ThemeId.Graphite, ThemeId.Paper, ThemeId.Contrast, ThemeId.Lime, ThemeId.Moss)
 
     @Test
     fun textInksPassAaOnEverySurface() {
@@ -76,17 +81,17 @@ class ContrastTest {
 
     @Test
     fun inksKeepTheirOrder() {
-        // ink3 was raised for contrast; it must still read as a step below ink2 in every theme.
+        // ink3 was raised for contrast; it must still read as a step below ink2 in every theme. Order is contrast with the
+        // canvas, so it holds on Paper (dark ink on white) as on the dark themes.
         for (theme in ThemeId.entries) {
             val c = PiColors.of(theme, AccentId.Theme)
-            assertTrue(c.ink1.luminance() > c.ink2.luminance() && c.ink2.luminance() > c.ink3.luminance(), "$theme ink order")
+            assertTrue(contrast(c.ink1, c.canvas) > contrast(c.ink2, c.canvas) && contrast(c.ink2, c.canvas) > contrast(c.ink3, c.canvas), "$theme ink order")
             assertTrue(contrast(c.ink2, c.ink3) >= 1.2, "$theme ink2/ink3 too close")
         }
     }
 
     @Test
     fun nearBlackSurface1StandsOffTheCanvas() {
-        assertEquals(Color(0xFF0D0E10), PiColors.of(ThemeId.Void, AccentId.Theme).surface1)
         assertEquals(Color(0xFF0F0F0F), PiColors.of(ThemeId.Vercel, AccentId.Theme).surface1)
         for (theme in ThemeId.entries) {
             val c = PiColors.of(theme, AccentId.Theme)
@@ -104,6 +109,24 @@ class ContrastTest {
                 for ((name, bg) in surfaces(c).take(3)) {
                     val r = contrast(c.accent, bg)
                     if (r < 4.5) failures += "$theme/$accent accent text on $name: ${"%.2f".format(r)}"
+                }
+            }
+        }
+        assertTrue(failures.isEmpty(), failures.joinToString("\n"))
+    }
+
+    @Test
+    fun subagentTintsPassNonTextContrastOnCardsAndSheets() {
+        // Each agent's Quad is in its own tint (the theme's PiColors.tints): a state glyph, so 3:1 (WCAG 1.4.11) on the cards
+        // (surface1) and sheets (surface2) it sits on, in every theme.
+        val failures = ArrayList<String>()
+        for (theme in ThemeId.entries) {
+            val c = PiColors.of(theme, AccentId.Theme)
+            assertEquals(SubagentFormat.HUE_COUNT, c.tints.size, "$theme tint count")
+            c.tints.forEachIndexed { i, tint ->
+                for ((name, bg) in listOf("surface1" to c.surface1, "surface2" to c.surface2)) {
+                    val r = contrast(tint, bg)
+                    if (r < 3.0) failures += "$theme tint $i on $name: ${"%.2f".format(r)}"
                 }
             }
         }
@@ -135,8 +158,9 @@ class ContrastTest {
 
     @Test
     fun buttonLabelsPass() {
-        // Secondary (ink1 on surface2), danger (danger on dangerSoft over a sheet) and the disabled primary (ink3 on
-        // surface3, which must still be readable: it says what will be possible).
+        // Secondary (ink1 on surface2), danger (danger on dangerSoft over a sheet, which is surface1, or a card) and the
+        // disabled primary (ink3 on surface3, which must still be readable: it says what will be possible). The ghost
+        // button's ink2 label sits on a sheet (surface1) or the canvas.
         val failures = ArrayList<String>()
         for (theme in ThemeId.entries) {
             val c = PiColors.of(theme, AccentId.Theme)
@@ -145,8 +169,181 @@ class ContrastTest {
                 "danger" to contrast(c.danger, c.dangerSoft.compositeOver(c.surface2)),
                 "disabled primary" to contrast(c.ink3, c.surface3),
                 "ghost on sheet" to contrast(c.ink1, c.surface2),
+                "danger on a surface1 sheet" to contrast(c.danger, c.dangerSoft.compositeOver(c.surface1)),
+                "ghost (ink2) on a sheet" to contrast(c.ink2, c.surface1),
+                "ghost (ink2) on canvas" to contrast(c.ink2, c.canvas),
+                "snackbar text on surface2" to contrast(c.ink1, c.surface2),
             )
             for ((name, r) in pairs) if (r < 4.5) failures += "$theme $name: ${"%.2f".format(r)}"
+        }
+        assertTrue(failures.isEmpty(), failures.joinToString("\n"))
+    }
+
+    @Test
+    fun ownThemesRolesPass() {
+        // The default and the app's own themes: each role is checked on every ground it is drawn on, plain and under the
+        // press and selected overlays: body text (ink1) and secondary text (ink2) AA; ink3 at least 3:1 as a glyph on
+        // every ground (its AA as meta text on plain surfaces is textInksPassAaOnEverySurface); the accent as a button
+        // (its label AA, its fill 3:1 against the surface it sits on) and as link text (AA on canvas, cards, sheets);
+        // ink1 on the text-selection highlight AA.
+        val failures = ArrayList<String>()
+        for (theme in own) for (accent in AccentId.entries) {
+            val c = PiColors.of(theme, accent)
+            fun need(role: String, fg: Color, bg: Color, ground: String, min: Double) {
+                val r = contrast(fg, bg)
+                if (r < min) failures += "$theme/$accent $role on $ground: ${"%.2f".format(r)} < $min"
+            }
+            for ((name, bg) in surfaces(c)) {
+                for ((ground, fill) in listOf(name to bg, "$name pressed" to c.press.compositeOver(bg), "$name selected" to c.selected.compositeOver(bg))) {
+                    need("body ink1", c.ink1, fill, ground, 4.5)
+                    need("secondary ink2", c.ink2, fill, ground, 4.5)
+                    need("glyph ink3", c.ink3, fill, ground, 3.0)
+                }
+                need("button fill", c.accent, bg, name, 3.0)
+                need("selected text", c.ink1, c.accent.copy(alpha = 0.32f).compositeOver(bg), "$name selection", 4.5)
+            }
+            need("button label", c.onAccent, c.accent, "accent", 4.5)
+            for ((name, bg) in surfaces(c).take(3)) need("link", c.accent, bg, name, 4.5)
+        }
+        assertTrue(failures.isEmpty(), failures.joinToString("\n"))
+    }
+
+    @Test
+    fun defaultThemeHasNoBlueCast() {
+        // The owner saw the old Graphite (#0B0C0E, ink2 #A3A8B0) as bluish; the default is now Pi-Bolt Desktop's
+        // monochrome palette ("no blue anywhere"). Its greys, and everything drawn from them (lines, overlays, the
+        // scrim, the selection, the comment grey, ANSI blue and cyan), stay neutral: blue never above red, and the
+        // channels at most 4 apart (the desktop's off-blue ANSI cyan #B8C4C4 is the one tinted grey it keeps).
+        val c = PiColors.of(ThemeId.Graphite, AccentId.Theme)
+        val greys = listOf(
+            "canvas" to c.canvas, "surface1" to c.surface1, "surface2" to c.surface2, "surface3" to c.surface3,
+            "ink1" to c.ink1, "ink2" to c.ink2, "ink3" to c.ink3, "ink4" to c.ink4, "comment" to c.syntax.comment,
+            "accent" to c.accent, "onAccent" to c.onAccent,
+            "line" to c.line.compositeOver(c.canvas), "lineStrong" to c.lineStrong.compositeOver(c.surface1),
+            "lineFocus" to c.lineFocus.compositeOver(c.surface1), "press" to c.press.compositeOver(c.surface1),
+            "selected" to c.selected.compositeOver(c.surface2), "scrim" to c.scrim.compositeOver(c.surface2),
+            "selection" to c.accent.copy(alpha = 0.32f).compositeOver(c.surface1),
+            "ansiBlue" to c.ansiBlue, "syntax function" to c.syntax.function, "syntax keyword" to c.syntax.keyword,
+        )
+        val failures = ArrayList<String>()
+        for ((name, color) in greys) {
+            val r = Math.round(color.red * 255)
+            val g = Math.round(color.green * 255)
+            val b = Math.round(color.blue * 255)
+            if (b > r || maxOf(r, g, b) - minOf(r, g, b) > 4) failures += "$name #%02X%02X%02X".format(r, g, b)
+        }
+        // Paper, Contrast and Lime are neutral too: their surfaces and inks carry no tint.
+        for (theme in listOf(ThemeId.Paper, ThemeId.Contrast, ThemeId.Lime)) {
+            val t = PiColors.of(theme, AccentId.Theme)
+            for ((name, color) in listOf(t.canvas, t.surface1, t.surface2, t.surface3, t.ink1, t.ink2, t.ink3, t.ink4, t.syntax.comment).withIndex()) {
+                val r = Math.round(color.red * 255)
+                val g = Math.round(color.green * 255)
+                val b = Math.round(color.blue * 255)
+                if (b > r || maxOf(r, g, b) - minOf(r, g, b) > 4) failures += "$theme grey $name #%02X%02X%02X".format(r, g, b)
+            }
+        }
+        assertTrue(failures.isEmpty(), "greys with a cast:\n" + failures.joinToString("\n"))
+    }
+
+    @Test
+    fun elevationStepsStayDistinct() {
+        // Each surface steps further from the canvas in every theme: lighter on the dark ones, darker on Paper (white
+        // canvas, cards and sheets in soft greys). In the app's own themes each step is a visible one.
+        for (theme in ThemeId.entries) {
+            val c = PiColors.of(theme, AccentId.Theme)
+            val steps = surfaces(c).map { it.second.luminance() }
+            val outward = if (c.isLight) steps.zipWithNext().all { (a, b) -> b < a } else steps.zipWithNext().all { (a, b) -> b > a }
+            assertTrue(outward, "$theme surfaces out of order")
+        }
+        for (theme in own) {
+            for ((lower, upper) in surfaces(PiColors.of(theme, AccentId.Theme)).zipWithNext()) {
+                assertTrue(contrast(upper.second, lower.second) >= 1.05, "$theme ${lower.first} -> ${upper.first} too close")
+            }
+        }
+    }
+
+    @Test
+    fun onlyPaperIsLight() {
+        // Paper drives Material's light scheme and dark system bar icons; every other theme is dark.
+        assertEquals(setOf(ThemeId.Paper), ThemeId.entries.filter { PiColors.of(it, AccentId.Theme).isLight }.toSet())
+    }
+
+    @Test
+    fun contrastThemeIsAaa() {
+        // Contrast is the high-contrast theme: every text ink, status and syntax colour at 7:1 (WCAG AAA) on the canvas,
+        // cards and sheets (inks on menus too), and its lines at 3:1 so a 1dp border alone reads.
+        val c = PiColors.of(ThemeId.Contrast, AccentId.Theme)
+        val failures = ArrayList<String>()
+        for ((name, bg) in surfaces(c)) {
+            for ((ink, fg) in listOf("ink1" to c.ink1, "ink2" to c.ink2, "ink3" to c.ink3)) {
+                val r = contrast(fg, bg)
+                if (r < 7.0) failures += "$ink on $name: ${"%.2f".format(r)}"
+            }
+        }
+        val colours = listOf("success" to c.success, "warning" to c.warning, "danger" to c.danger, "diffAdd" to c.diffAddFg, "diffDel" to c.diffDelFg) +
+            listOf(c.syntax.keyword, c.syntax.type, c.syntax.function, c.syntax.string, c.syntax.number, c.syntax.constant, c.syntax.operator, c.syntax.attribute, c.syntax.tag, c.syntax.regex, c.syntax.escape, c.syntax.variable, c.syntax.comment)
+                .mapIndexed { i, color -> "syntax$i" to color }
+        for ((name, fg) in colours) {
+            for ((ground, bg) in surfaces(c).take(3)) {
+                val r = contrast(fg, bg)
+                if (r < 7.0) failures += "$name on $ground: ${"%.2f".format(r)}"
+            }
+        }
+        for ((name, bg) in surfaces(c).take(3)) {
+            val r = contrast(c.lineStrong.compositeOver(bg), bg)
+            if (r < 3.0) failures += "lineStrong on $name: ${"%.2f".format(r)}"
+        }
+        assertTrue(failures.isEmpty(), failures.joinToString("\n"))
+    }
+
+    @Test
+    fun windowBackgroundIsTheDefaultCanvas() {
+        // The window colour before the first frame (res/values/colors.xml) must be Graphite's canvas, or launch flashes.
+        val xml = File("src/main/res/values/colors.xml").readText()
+        val hex = Regex("""name="splash_bg">#([0-9A-Fa-f]{6})<""").find(xml)?.groupValues?.get(1)
+        assertEquals(PiColors.of(ThemeId.Graphite, AccentId.Theme).canvas, Color(0xFF000000 or hex!!.toLong(16)))
+    }
+
+    @Test
+    fun defaultThemeIsTheDesktopPalette() {
+        // Pi-Bolt Desktop's tokens.css, 1:1 (ink3 raised from #808080 to #858585 for AA on surface3).
+        val c = PiColors.of(ThemeId.Graphite, AccentId.Theme)
+        val expected = listOf(
+            "canvas (--bg)" to (c.canvas to 0xFF000000), "surface1 (--bg-elev)" to (c.surface1 to 0xFF0E0E0E),
+            "surface2 (--bg-elev-2)" to (c.surface2 to 0xFF161616), "surface3 (--bg-elev-3)" to (c.surface3 to 0xFF1D1D1D),
+            "ink1 (--text)" to (c.ink1 to 0xFFEDEDED), "ink2 (--text-2)" to (c.ink2 to 0xFFA1A1A1),
+            "ink3" to (c.ink3 to 0xFF858585), "ink4 (--text-4)" to (c.ink4 to 0xFF595959),
+            "accent (--accent)" to (c.accent to 0xFFFAFAFA), "onAccent (--on-accent)" to (c.onAccent to 0xFF000000),
+            "success (--green)" to (c.success to 0xFF4CC38A), "warning (--amber)" to (c.warning to 0xFFD4A64A),
+            "danger (--red)" to (c.danger to 0xFFEF6461), "diffAddFg" to (c.diffAddFg to 0xFF86DFB0),
+            "diffDelFg" to (c.diffDelFg to 0xFFF5A3A1),
+        )
+        for ((name, pair) in expected) assertEquals(Color(pair.second), pair.first, name)
+        assertEquals(Color.White.copy(alpha = 0.08f), c.line, "line (--border)")
+        assertEquals(Color.White.copy(alpha = 0.14f), c.lineStrong, "lineStrong (--border-strong)")
+        assertEquals(Color.White.copy(alpha = 0.32f), c.lineFocus, "lineFocus (--border-focus)")
+        assertEquals(Color.Black.copy(alpha = 0.5f), c.scrim, "scrim (--scrim)")
+    }
+
+    @Test
+    fun subagentTintsReadInEveryTheme() {
+        // Five tints (apricot, rose, orchid, violet, seafoam) for parallel agents: a tinted Quad needs 3:1 on every
+        // surface, and the avatar initial (the tint on the tint at 16%) AA on the canvas and on cards (surface1), where
+        // agent cards sit. On Claude's lighter surface2 orchid and violet initials drop to 4.1 to 4.3:1.
+        val failures = ArrayList<String>()
+        for (theme in ThemeId.entries) {
+            val c = PiColors.of(theme, AccentId.Theme)
+            assertEquals(5, c.tints.toSet().size, "$theme tints")
+            c.tints.forEachIndexed { i, tint ->
+                for ((name, bg) in surfaces(c)) {
+                    val g = contrast(tint, bg)
+                    if (g < 3.0) failures += "$theme tint$i glyph on $name: ${"%.2f".format(g)}"
+                }
+                for ((name, bg) in surfaces(c).take(2)) {
+                    val r = contrast(tint, tint.copy(alpha = 0.16f).compositeOver(bg))
+                    if (r < 4.5) failures += "$theme tint$i initial over $name: ${"%.2f".format(r)}"
+                }
+            }
         }
         assertTrue(failures.isEmpty(), failures.joinToString("\n"))
     }

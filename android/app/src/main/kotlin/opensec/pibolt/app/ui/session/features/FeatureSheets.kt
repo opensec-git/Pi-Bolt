@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.session.features
 
+import opensec.pibolt.app.ui.session.features2.F2Empty
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -50,9 +51,14 @@ import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.projects.ProjectRules
 import opensec.pibolt.app.ui.session.shortPath
+import opensec.pibolt.app.ui.providers.Brand
+import opensec.pibolt.app.ui.providers.LogoMark
+import opensec.pibolt.app.ui.providers.ProviderCatalog
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.theme.Tnum
 import opensec.pibolt.protocol.rpc.ModelInfo
 import opensec.pibolt.protocol.session.SessionReducer
@@ -146,7 +152,7 @@ fun SessionStatsSheet(
                     )
                 }
             }
-            PickRow("Model", facts.model?.label ?: "—", enabled = facts.connected, onClick = { close(onModel) }, onNext = onCycleModel, nextLabel = "Next model")
+            PickRow("Model", facts.model?.label ?: "—", enabled = facts.connected, onClick = { close(onModel) }, onNext = onCycleModel, nextLabel = "Next model", brand = facts.model?.let { ProviderCatalog.modelBrand(it.id, it.provider) })
             PickRow("Thinking", facts.thinkingLevel?.replaceFirstChar { it.uppercase() } ?: "—", enabled = facts.connected, onClick = { close(onThinking) }, onNext = onCycleThinking, nextLabel = "Next thinking level")
             facts.cwd?.takeIf { it.isNotBlank() }?.let { InfoLine("Folder", shortPath(it), mono = true) }
             facts.version?.takeIf { it.isNotBlank() }?.let { InfoLine("Pi-Bolt", "v$it") }
@@ -204,7 +210,7 @@ private fun Stat(label: String, value: String, modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun PickRow(label: String, value: String, enabled: Boolean, onClick: () -> Unit, onNext: () -> Unit, nextLabel: String) {
+private fun PickRow(label: String, value: String, enabled: Boolean, onClick: () -> Unit, onNext: () -> Unit, nextLabel: String, brand: Brand? = null) {
     val colors = Pi.colors
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(
@@ -216,6 +222,10 @@ private fun PickRow(label: String, value: String, enabled: Boolean, onClick: () 
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(label, style = Pi.type.body, color = colors.ink2, modifier = Modifier.width(88.dp))
+            if (brand != null) {
+                LogoMark(brand, size = IconSize.sm)
+                Spacer(Modifier.width(Space.sm))
+            }
             Text(value, style = Pi.type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
             Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.ink4, modifier = Modifier.size(20.dp))
         }
@@ -242,7 +252,7 @@ fun ResumeSheet(sessions: List<SessionSummary>?, current: String?, onPick: (Sess
         SheetHeader("Resume a session")
         when {
             sessions == null -> Loading("Reading sessions")
-            sessions.isEmpty() -> Empty("No saved sessions in this project yet.")
+            sessions.isEmpty() -> F2Empty("No saved sessions in this project yet.", Icons.AutoMirrored.Rounded.Chat)
             else -> LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
                 items(sessions, key = { it.file }) { s ->
                     val open = s.file == current
@@ -268,7 +278,7 @@ fun ForkSheet(points: List<ForkPoint>?, onPick: (ForkPoint) -> Unit, onDismiss: 
         SheetHeader("Fork from a message", subtitle = "A new session starts before the message you pick; its text comes back to the composer.")
         when {
             points == null -> Loading("Reading messages")
-            points.isEmpty() -> Empty("No message to fork from yet.")
+            points.isEmpty() -> F2Empty("No message to fork from yet. Send a prompt first, then fork from it.", Icons.AutoMirrored.Rounded.CallSplit)
             else -> LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
                 // Newest first: forks usually go back a step or two.
                 items(points.asReversed(), key = { it.entryId }) { p ->
@@ -308,7 +318,3 @@ private fun Loading(label: String) {
     }
 }
 
-@Composable
-private fun Empty(text: String) {
-    Text(text, style = Pi.type.body, color = Pi.colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp))
-}

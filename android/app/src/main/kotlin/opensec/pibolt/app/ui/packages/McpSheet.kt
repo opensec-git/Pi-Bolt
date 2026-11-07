@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.packages
 
+import androidx.compose.material.icons.rounded.Cable
 import opensec.pibolt.app.ui.components.ErrorState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -32,7 +33,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import opensec.pibolt.app.engine.EngineApi
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import opensec.pibolt.app.ui.components.ButtonRow
 import opensec.pibolt.app.ui.components.ConfirmSheet
+import opensec.pibolt.app.ui.components.FieldHint
 import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiTextField
@@ -112,7 +117,7 @@ fun McpSheet(engine: EngineApi, onReload: (() -> Unit)?, onMessage: (String) -> 
                 failure != null -> ErrorState("Could not reach the MCP servers", message = failure, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                 r == null -> F2Loading("Connecting to servers")
                 else -> {
-                    if (r.servers.isEmpty()) F2Empty("No MCP servers yet. Add one to the engine's mcp.json to give Pi its tools.")
+                    if (r.servers.isEmpty()) F2Empty("No MCP servers yet. Add one below to give Pi its tools.", Icons.Rounded.Cable)
                     for (s in r.servers) {
                         val meta = buildList {
                             add(s.state)
@@ -126,40 +131,50 @@ fun McpSheet(engine: EngineApi, onReload: (() -> Unit)?, onMessage: (String) -> 
                             if (s.scope == "global") IconAction(Icons.Rounded.Delete, "Remove ${s.name}", onClick = { removing = s })
                         }
                         if (s.tools.isNotEmpty()) {
-                            Text(s.tools.joinToString(", "), style = Pi.type.monoMeta, color = Pi.colors.ink3, maxLines = 3, modifier = Modifier.padding(start = 52.dp, end = 20.dp, bottom = 6.dp))
+                            Text(s.tools.joinToString(", "), style = Pi.type.monoMeta, color = Pi.colors.ink3, maxLines = 3, modifier = Modifier.padding(start = 54.dp, end = 20.dp, bottom = 6.dp))
                         }
                     }
                     for (e in r.errors) Text(e, style = Pi.type.meta, color = Pi.colors.danger, modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp))
                     r.note?.let { Text(it, style = Pi.type.meta, color = Pi.colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp)) }
                 }
             }
-            F2Section("Add a server")
             if (!adding) {
                 SecondaryButton("Add a server", onClick = { adding = true }, icon = Icons.Rounded.Add, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp))
             } else {
-                PiTextField(name, { name = it }, placeholder = "Name (letters, digits, - and _)", singleLine = true, isError = name.isNotEmpty() && !McpServers.validName(name), modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
+                F2Section("New server")
+                val badName = name.isNotEmpty() && !McpServers.validName(name)
+                PiTextField(name, { name = it }, placeholder = "Name (letters, digits, - and _)", singleLine = true, isError = badName, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).semantics { contentDescription = "Server name" })
+                if (badName) FieldHint("Use letters, digits, - and _ only", isError = true, modifier = Modifier.padding(horizontal = 16.dp))
                 PiTextField(
                     target,
                     { target = it },
                     placeholder = "https://example.com/mcp, or a command",
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp).semantics { contentDescription = "Server address or command" },
                 )
                 if (target.trim().startsWith("http")) {
                     PiTextField(tokenEnv, { tokenEnv = it }, placeholder = "Optional: bearer token environment variable", singleLine = true, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp))
                 }
                 val args = McpServers.addArgs(name, target, tokenEnv)
-                PrimaryButton("Add", onClick = {
-                    args?.let {
-                        run("Adding $name", it, "Added $name") {
-                            adding = false
-                            name = ""
-                            target = ""
-                            tokenEnv = ""
+                ButtonRow(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
+                    SecondaryButton("Cancel", onClick = {
+                        adding = false
+                        name = ""
+                        target = ""
+                        tokenEnv = ""
+                    })
+                    PrimaryButton("Add", onClick = {
+                        args?.let {
+                            run("Adding $name", it, "Added $name") {
+                                adding = false
+                                name = ""
+                                target = ""
+                                tokenEnv = ""
+                            }
                         }
-                    }
-                }, enabled = args != null && working == null, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp))
+                    }, enabled = args != null && working == null)
+                }
             }
             Spacer(Modifier.height(8.dp))
         }

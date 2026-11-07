@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.packages
 
+import androidx.compose.material.icons.rounded.PhoneAndroid
 import opensec.pibolt.app.ui.components.ErrorState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -161,7 +162,7 @@ fun PackagesSheet(engine: EngineApi, controller: SessionController?, onReload: (
                     if (v.listError != null) {
                         ErrorState("Could not list the packages", message = v.listError, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                     } else if (v.packages.isEmpty()) {
-                        F2Empty("No packages yet.")
+                        F2Empty("No packages yet.", Icons.Rounded.Extension)
                     }
                     for (pkg in v.packages) {
                         val meta = buildList {
@@ -265,8 +266,8 @@ private fun PackageDetailSheet(
             val list = provided
             when {
                 list == null -> F2Loading("Asking the session")
-                controller == null -> F2Empty("Open a session on this phone to see what it provides.")
-                list.isEmpty() -> F2Empty(if (pkg.disabled) "Switched off: nothing loaded." else "Nothing loaded from it in this session (reload after installing).")
+                controller == null -> F2Empty("Open a session on this phone to see what it provides.", Icons.Rounded.PhoneAndroid)
+                list.isEmpty() -> F2Empty(if (pkg.disabled) "Switched off: nothing loaded." else "Nothing loaded from it in this session (reload after installing).", Icons.Rounded.Extension)
                 else -> for (p in list) {
                     F2Row(p.name, p.description.ifBlank { null }, Icons.Rounded.Extension, onClick = null, titleMaxLines = 1) {
                         F2Tag(p.kind)

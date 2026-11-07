@@ -13,9 +13,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.heading
 import opensec.pibolt.app.terminal.Terminals
-import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.SecondaryButton
-import opensec.pibolt.app.ui.components.SectionLabel
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,10 +22,13 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -35,6 +36,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -49,7 +51,6 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -79,7 +80,6 @@ import opensec.pibolt.app.ui.git.ChangesOverlays
 import opensec.pibolt.app.ui.git.changesItems
 import opensec.pibolt.app.ui.git.rememberChangesUi
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import opensec.pibolt.app.ui.theme.PiMotion
@@ -101,20 +101,17 @@ import opensec.pibolt.app.engine.EngineStatus
 import opensec.pibolt.app.engine.SessionSummary
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.LoadingRow
 import opensec.pibolt.app.ui.components.PiSnackHost
 import opensec.pibolt.app.ui.components.PrimaryButton
-import opensec.pibolt.app.ui.components.QuadMath
-import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.SharedKeys
 import opensec.pibolt.app.ui.components.SnackKind
 import opensec.pibolt.app.ui.components.StatusBarScrim
 import opensec.pibolt.app.ui.components.pressable
-import opensec.pibolt.app.ui.components.rememberSettledMode
 import opensec.pibolt.app.ui.components.sharedHostBounds
 import opensec.pibolt.app.ui.components.sharedHostElement
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.projects.editor.EditorTabs
-import opensec.pibolt.app.ui.session.TranscriptModel
 import opensec.pibolt.app.ui.session.features2.SessionBrowserSheet
 import opensec.pibolt.app.ui.terminal.TerminalPane
 import opensec.pibolt.app.ui.theme.Pi
@@ -304,7 +301,9 @@ fun ProjectScreen(
         Modifier
             .fillMaxSize()
             .sharedHostBounds(SharedKeys.project(name), card = false)
-            .background(colors.canvas),
+            .background(colors.canvas)
+            // Landscape: the side navigation bar and a display cutout keep their side, for the tabs and the overlays.
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
     ) {
         Column(Modifier.fillMaxSize().imePadding()) {
             if (ProjectNavRules.showChrome(imeVisible, LocalConfiguration.current.screenHeightDp)) ProjectTopBar(
@@ -354,7 +353,7 @@ fun ProjectScreen(
                         }
                         val list = sessions
                         when {
-                            list == null -> item(key = "loading", contentType = "loading") { LoadingRow("Reading sessions") }
+                            list == null -> item(key = "loading", contentType = "loading") { LoadingRow("Reading sessions…") }
                             list.isEmpty() -> item(key = "empty", contentType = "empty") {
                                 EmptyCard(
                                     Icons.AutoMirrored.Rounded.Chat,
@@ -364,20 +363,21 @@ fun ProjectScreen(
                             }
                             else -> {
                                 item(key = "label", contentType = "label") {
-                                    SectionLabel(if (list.size == 1) "1 session" else "${list.size} sessions", Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp))
+                                    ListHead("Sessions", Modifier.padding(top = 8.dp), sub = list.size.toString())
                                 }
                                 // The engine's own session file: a new session or a fork is not the file the session was opened with.
                                 val liveFile = liveHere?.controller?.sessionFile ?: liveHere?.sessionFile
-                                items(list, key = { it.file }, contentType = { "session" }) { s ->
+                                itemsIndexed(list, key = { _, it -> it.file }, contentType = { _, _ -> "session" }) { i, s ->
                                     val isLive = liveHere != null && (if (liveFile != null) liveFile == s.file else s == list.first())
                                     SessionRow(
                                         s,
+                                        pos = GroupPos.of(i, list.size),
                                         live = if (isLive) liveHere?.controller else null,
                                         unread = !isLive && ProjectRules.unread(s, meta.seen[s.file]),
                                         now = now,
                                         enabled = !unavailable,
                                         onClick = { if (isLive) onOpenSession() else open(s.file, fresh = false) },
-                                        modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp),
+                                        modifier = Modifier.animateItem().padding(horizontal = 16.dp),
                                     )
                                 }
                             }
@@ -400,7 +400,7 @@ fun ProjectScreen(
                         }
                         val entries = shownFiles
                         when {
-                            entries == null -> item(key = "files-loading", contentType = "loading") { LoadingRow("Reading the folder") }
+                            entries == null -> item(key = "files-loading", contentType = "loading") { LoadingRow("Reading the folder…") }
                             entries.isEmpty() -> item(key = "files-empty", contentType = "empty") {
                                 val hidden = files.orEmpty().size
                                 EmptyCard(
@@ -538,56 +538,51 @@ fun ProjectScreen(
     )
 }
 
-/** 64dp row: chat glyph (or the live Quad), the session's name or first prompt, "24 messages · 2 h ago". */
+/**
+ * One saved session, a row of the "Sessions" group ([GroupRow], desktop `.hd-row`): the state slot (the live Quad, an
+ * accent dot for new activity, else a quiet dot), the session's name or first prompt (ink2 when nothing is new), then
+ * "24 msg · 2h" (meta ink3, tabular). TalkBack reads it in words.
+ */
 @Composable
-private fun SessionRow(s: SessionSummary, live: SessionController?, unread: Boolean, now: Long, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+private fun SessionRow(s: SessionSummary, pos: GroupPos, live: SessionController?, unread: Boolean, now: Long, enabled: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val type = Pi.type
-    val shape = RoundedCornerShape(Radius.md)
-    Row(
-        modifier
-            .fillMaxWidth()
-            .heightIn(min = 64.dp)
-            .pressable(onClick, shape = shape, enabled = enabled)
-            .background(colors.surface1, shape)
-            .border(1.dp, if (live != null) colors.lineStrong else colors.line, shape)
-            .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+    val title = ProjectRules.sessionTitle(s)
+    val spoken = listOfNotNull(
+        title,
+        "open".takeIf { live != null },
+        "new activity".takeIf { unread },
+        (if (s.messageCount == 1) "1 message" else "${s.messageCount} messages").takeIf { s.messageCount > 0 },
+        ProjectRules.ago(s.updatedAt, now),
+    ).joinToString(", ")
+    GroupRow(
+        pos = pos,
+        modifier = modifier,
+        interaction = Modifier
+            .pressable(onClick, shape = groupShape(pos), enabled = enabled, pressedScale = 1f, label = if (live != null) "Open session" else "Resume session")
+            .semantics(mergeDescendants = true) { contentDescription = spoken },
+        lead = {
             when {
-                live != null -> LiveMark(live)
-                unread -> Box(Modifier.size(8.dp).background(colors.accent, CircleShape).semantics { contentDescription = "New activity" })
-                else -> Icon(Icons.AutoMirrored.Rounded.Chat, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(18.dp))
+                live != null -> SessionMark(live)
+                unread -> StateDot(colors.accent)
+                else -> StateDot(null)
             }
-        }
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
-            Text(ProjectRules.sessionTitle(s), style = if (unread) type.bodyStrong else type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Spacer(Modifier.height(2.dp))
-            val parts = buildList {
-                if (live != null) add("Open")
-                if (s.messageCount > 0) add(if (s.messageCount == 1) "1 message" else "${s.messageCount} messages")
-                add(ProjectRules.ago(s.updatedAt, now))
-            }
-            Text(parts.joinToString(" · "), style = type.meta, color = colors.ink3, maxLines = 1)
-        }
+        },
+    ) {
+        Text(
+            title,
+            style = if (unread) type.bodyStrong else type.body,
+            color = if (unread || live != null) colors.ink1 else colors.ink2,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        RowMeta(buildList {
+            if (live != null) add("open")
+            if (s.messageCount > 0) add("${s.messageCount} msg")
+            add(ProjectRules.agoShort(s.updatedAt, now))
+        }.joinToString(" · "))
     }
-}
-
-@Composable
-private fun LiveMark(live: SessionController) {
-    val colors = Pi.colors
-    val state = live.state.collectAsStateWithLifecycle()
-    val busy by remember { derivedStateOf { state.value.isRunning || state.value.isCompacting || state.value.dialogs.isNotEmpty() } }
-    val raw by remember {
-        derivedStateOf {
-            val st = state.value
-            val a = TranscriptModel.activity(st.items, st.streaming)
-            QuadMath.modeFor(st.dialogs.isNotEmpty(), st.isCompacting, a.subagent, a.toolRunning, a.writing, connected = true)
-        }
-    }
-    QuadSpinner(rememberSettledMode(raw), size = 16.dp, color = if (busy) colors.ink1 else colors.success, animate = busy)
 }
 
 /**
@@ -626,16 +621,6 @@ private fun ProjectTopBar(title: String, name: String, pinned: Boolean, branch: 
             }
         }
         actions()
-    }
-}
-
-/** A list that is still reading from disk: a 16dp Quad Run and what it reads (meta ink3), 48dp. */
-@Composable
-internal fun LoadingRow(text: String) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).padding(horizontal = 20.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically) {
-        QuadSpinner(QuadMode.Run, size = 16.dp, color = Pi.colors.ink3)
-        Spacer(Modifier.width(12.dp))
-        Text("$text…", style = Pi.type.meta, color = Pi.colors.ink3, maxLines = 1)
     }
 }
 

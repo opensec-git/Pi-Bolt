@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.InsertDriveFile
-import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Folder
@@ -28,7 +28,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -279,7 +281,11 @@ fun FileRow(entry: FileEntry, parent: File, onClick: () -> Unit, onLongClick: ()
             .fillMaxWidth()
             .height(52.dp)
             .pressable(onClick, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, onLongClick = onLongClick, label = if (entry.dir) "Open folder" else "Open file")
-            .semantics { contentDescription = (if (entry.dir) "Folder ${entry.name}" else "${entry.name}, ${FileTypes.label(entry.name)}") + if (meta.isNotEmpty()) ", $meta" else "" }
+            .semantics {
+                contentDescription = (if (entry.dir) "Folder ${entry.name}" else "${entry.name}, ${FileTypes.label(entry.name)}") + if (meta.isNotEmpty()) ", $meta" else ""
+                // Long press as a named action, so TalkBack users find Rename, Share and Delete.
+                customActions = listOf(CustomAccessibilityAction(if (entry.dir) "Folder actions" else "File actions") { onLongClick(); true })
+            }
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -305,7 +311,7 @@ fun FileRow(entry: FileEntry, parent: File, onClick: () -> Unit, onLongClick: ()
         Text(meta, style = type.meta, color = colors.ink3, maxLines = 1)
         if (entry.dir) {
             Spacer(Modifier.width(4.dp))
-            Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = colors.ink4, modifier = Modifier.size(18.dp))
+            Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = colors.ink4, modifier = Modifier.size(18.dp))
         }
     }
 }

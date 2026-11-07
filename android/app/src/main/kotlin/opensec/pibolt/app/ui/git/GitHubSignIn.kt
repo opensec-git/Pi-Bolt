@@ -222,6 +222,26 @@ private fun TokenSheet(app: PiBoltApp, onDismiss: () -> Unit) {
     var token by remember { mutableStateOf("") }
     var checking by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
+    fun save() {
+        if (token.isBlank() || checking) return
+        checking = true
+        scope.launch {
+            try {
+                app.github.signIn(token, TokenKind.Personal)
+                token = ""
+                setIdentityIfMissing(app)
+                close(onDismiss)
+            } catch (e: GitHubException) {
+                error = e.message ?: "GitHub did not accept the token"
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                error = "Could not store the token on this phone"
+            } finally {
+                checking = false
+            }
+        }
+    }
     PiSheet(onDismiss = onDismiss, state = sheetState) {
         SheetHeader(
             "Personal access token",
@@ -246,25 +266,12 @@ private fun TokenSheet(app: PiBoltApp, onDismiss: () -> Unit) {
                 placeholder = "ghp_… or github_pat_…",
                 label = "GitHub token",
                 isError = error != null,
+                onDone = ::save,
             )
             FieldHint(error ?: "Stored encrypted with a key in this phone's Keystore. It is never shown again or written to logs.", isError = error != null)
             PrimaryButton(
                 if (checking) "Checking…" else "Save",
-                onClick = {
-                    checking = true
-                    scope.launch {
-                        try {
-                            app.github.signIn(token, TokenKind.Personal)
-                            token = ""
-                            setIdentityIfMissing(app)
-                            close(onDismiss)
-                        } catch (e: GitHubException) {
-                            error = e.message
-                        } finally {
-                            checking = false
-                        }
-                    }
-                },
+                onClick = ::save,
                 enabled = token.isNotBlank() && !checking,
                 modifier = Modifier.fillMaxWidth(),
             )

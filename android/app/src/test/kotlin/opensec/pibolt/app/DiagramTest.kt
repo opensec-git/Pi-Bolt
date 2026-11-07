@@ -193,7 +193,9 @@ class DiagramTest {
                 assertTrue(Regex("#[0-9a-f]{6}").matches(v as String), "$theme $k = $v")
             }
             assertEquals(MermaidTheme.hex(PiColors.of(theme, AccentId.Theme).ink1), vars["primaryTextColor"])
-            assertTrue(MermaidTheme.of(PiColors.of(theme, AccentId.Theme)).json.contains("\"dark\":true"), "$theme is dark")
+            // Mermaid's darkMode follows the canvas: on for the dark themes, off for Paper.
+            val dark = !PiColors.of(theme, AccentId.Theme).isLight
+            assertTrue(MermaidTheme.of(PiColors.of(theme, AccentId.Theme)).json.contains("\"dark\":$dark"), "$theme dark = $dark")
         }
     }
 

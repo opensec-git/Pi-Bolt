@@ -32,7 +32,7 @@ object SettingsIndex {
         SettingEntry("engine-links", SettingsGroup.Agent, "Packages, MCP servers, retry and compaction", "extensions packages npm git mcp servers tools tuning reserve tokens backoff"),
         SettingEntry("github", SettingsGroup.GitHub, "GitHub account", "git push pull clone pull request token sign in login personal access oauth"),
         SettingEntry("runtimes", SettingsGroup.Runtimes, "Runtimes", "node nodejs javascript npm npx python python3 pip packages cache languages"),
-        SettingEntry("theme", SettingsGroup.Appearance, "Theme", "colour color dark graphite void ember claude codex vercel github look"),
+        SettingEntry("theme", SettingsGroup.Appearance, "Theme", "colour color dark light pi-bolt graphite paper white contrast lime moss ember claude codex vercel github look"),
         SettingEntry("accent", SettingsGroup.Appearance, "Accent", "colour color iris glacier ink"),
         SettingEntry("text-size", SettingsGroup.Appearance, "Text size", "font larger smaller zoom"),
         SettingEntry("density", SettingsGroup.Appearance, "Density", "compact comfortable spacing"),
@@ -44,7 +44,7 @@ object SettingsIndex {
         SettingEntry("device-key", SettingsGroup.Security, "Device key", "remote control pairing reset revoke computer"),
         SettingEntry("version", SettingsGroup.About, "Version", "about phone device"),
         SettingEntry("updates", SettingsGroup.About, "Updates", "update check for updates automatically install download new version"),
-        SettingEntry("licences", SettingsGroup.About, "Licences", "licence license font inter jetbrains mono open source"),
+        SettingEntry("licences", SettingsGroup.About, "Licences", "licence license font inter jetbrains mono mermaid termux terminal apache mit open source logo icons lobe"),
     )
 
     /** The ids to show for [query]; null shows everything (a blank query). */

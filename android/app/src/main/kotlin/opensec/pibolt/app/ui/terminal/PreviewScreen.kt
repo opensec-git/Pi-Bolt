@@ -10,6 +10,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -17,6 +18,11 @@ import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,11 +35,11 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -45,6 +51,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
 import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.ProgressLine
 import opensec.pibolt.app.ui.theme.Pi
 
 /** Whether the preview may load [url]: plain http to this phone's loopback only (localhost or 127.0.0.1, any port). */
@@ -67,6 +74,8 @@ fun PreviewScreen(port: Int, onBack: () -> Unit) {
     val start = "http://localhost:$port/"
     var url by remember { mutableStateOf(start) }
     var loading by remember { mutableStateOf(true) }
+    // The page's load progress from WebView (0 to 100), for a determinate line: never an indeterminate animation.
+    var progress by remember { mutableIntStateOf(0) }
     var canGoBack by remember { mutableStateOf(false) }
     // The dev server did not answer (stopped, still starting, wrong port): our own card instead of WebView's page.
     var failed by remember { mutableStateOf<String?>(null) }
@@ -78,6 +87,11 @@ fun PreviewScreen(port: Int, onBack: () -> Unit) {
             settings.allowContentAccess = false
             settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
             settings.setGeolocationEnabled(false)
+            webChromeClient = object : WebChromeClient() {
+                override fun onProgressChanged(view: WebView, newProgress: Int) {
+                    progress = newProgress
+                }
+            }
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     val target = request.url.toString()
@@ -119,7 +133,7 @@ fun PreviewScreen(port: Int, onBack: () -> Unit) {
     }
     BackHandler(enabled = canGoBack) { web.goBack() }
 
-    Column(Modifier.fillMaxSize().background(colors.canvas)) {
+    Column(Modifier.fillMaxSize().background(colors.canvas).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))) {
         Row(Modifier.fillMaxWidth().statusBarsPadding().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Close the preview", onClick = onBack, tint = colors.ink1)
             Text(
@@ -134,7 +148,7 @@ fun PreviewScreen(port: Int, onBack: () -> Unit) {
             IconAction(Icons.AutoMirrored.Rounded.OpenInNew, "Open in browser", onClick = { openOutside(context, url) })
         }
         Box(Modifier.fillMaxWidth().height(2.dp)) {
-            if (loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = colors.accent, trackColor = colors.surface2)
+            if (loading) ProgressLine(progress / 100f)
         }
         Box(Modifier.weight(1f).fillMaxWidth().navigationBarsPadding()) {
             AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())

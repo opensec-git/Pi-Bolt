@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -112,7 +113,13 @@ fun ProjectNavBar(selected: ProjectTab, badges: ProjectBadges, onSelect: (Projec
     val colors = Pi.colors
     Column(modifier.fillMaxWidth().background(colors.surface1)) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
-        Row(Modifier.fillMaxWidth().navigationBarsPadding().height(64.dp), horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+        // A minimum height, so labels at a large font scale grow the bar instead of being cut; one selectable group, so
+        // TalkBack reads "Tab, 2 of 4".
+        Row(
+            Modifier.fillMaxWidth().navigationBarsPadding().heightIn(min = 64.dp).selectableGroup(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             for (tab in ProjectTab.entries) {
                 NavItem(
                     tab = tab,
@@ -137,6 +144,7 @@ private fun NavItem(tab: ProjectTab, on: Boolean, badge: String?, dot: Boolean, 
     Column(
         modifier
             .heightIn(min = 56.dp)
+            .padding(vertical = 4.dp)
             .pressable(
                 {
                     if (!on) haptics.tick()

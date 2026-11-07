@@ -16,6 +16,10 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,6 +33,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Settings
@@ -56,6 +61,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import java.io.File
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -70,12 +76,12 @@ import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.engine.EngineStatus
 import opensec.pibolt.app.git.GitRepo
 import opensec.pibolt.app.ui.components.BrandMark
+import opensec.pibolt.app.ui.components.ButtonRow
 import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.PiSnackHost
 import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.SecondaryButton
-import opensec.pibolt.app.ui.components.SectionLabel
 import opensec.pibolt.app.ui.components.SnackKind
 import opensec.pibolt.app.ui.components.StatusBarScrim
 import opensec.pibolt.app.ui.components.TextAction
@@ -90,6 +96,8 @@ import opensec.pibolt.app.ui.projects.NewProjectSheet
 import opensec.pibolt.app.ui.projects.ProjectAction
 import opensec.pibolt.app.ui.projects.ProjectActionSheets
 import opensec.pibolt.app.ui.projects.ContinueRow
+import opensec.pibolt.app.ui.projects.GroupPos
+import opensec.pibolt.app.ui.projects.ListHead
 import opensec.pibolt.app.ui.projects.ProjectCard
 import opensec.pibolt.app.ui.projects.ProjectEntry
 import opensec.pibolt.app.ui.projects.ProjectRules
@@ -99,6 +107,7 @@ import opensec.pibolt.app.ui.providers.ProviderSheet
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Tnum
 import opensec.pibolt.app.ui.update.UpdateCard
 import opensec.pibolt.app.update.UpdateJob
 import opensec.pibolt.app.update.UpdateRules
@@ -232,14 +241,15 @@ fun HomeScreen(
     val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     val hasBottomBar = !unavailable && !list.isNullOrEmpty() && configured.isNotEmpty()
 
-    Box(Modifier.fillMaxSize().background(colors.canvas)) {
+    // Landscape: the side navigation bar and a display cutout keep their side; the canvas still fills the window.
+    Box(Modifier.fillMaxSize().background(colors.canvas).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))) {
         LazyColumn(
             contentPadding = PaddingValues(bottom = (if (hasBottomBar) 104.dp else 24.dp) + bottomInset),
             modifier = Modifier.fillMaxSize(),
         ) {
             item(key = "header", contentType = "header") {
                 // A compact 56dp bar: the mark and the name, settings on the right.
-                Row(Modifier.statusBarsPadding().fillMaxWidth().height(56.dp).padding(start = 18.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.statusBarsPadding().fillMaxWidth().height(56.dp).padding(start = 16.dp, end = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     BrandMark(size = 24.dp, play = false)
                     Spacer(Modifier.width(10.dp))
                     Text("Pi-Bolt", style = type.title, color = colors.ink1, modifier = Modifier.weight(1f).semantics { heading() })
@@ -271,7 +281,7 @@ fun HomeScreen(
             }
             if (running.isNotEmpty()) {
                 item(key = "running-label", contentType = "label") {
-                    SectionLabel("Running", Modifier.animateItem().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp))
+                    ListHead("Running", Modifier.animateItem().padding(top = 12.dp), sub = running.size.toString())
                 }
                 items(running, key = { "r:" + it.project.name }, contentType = { "running" }) { live ->
                     RunningRow(live, meta.projects[live.project.name], onClick = { onOpenLocalSession(live.project.name) }, modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp))
@@ -279,41 +289,43 @@ fun HomeScreen(
             }
             if (!unavailable && recent.isNotEmpty()) {
                 item(key = "continue-label", contentType = "label") {
-                    SectionLabel("Continue", Modifier.animateItem().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp))
+                    ListHead("Continue", Modifier.animateItem().padding(top = 12.dp))
                 }
-                items(recent, key = { "c:" + it.name }, contentType = { "continue" }) { entry ->
-                    val session = entry.lastSession ?: return@items
+                itemsIndexed(recent, key = { _, it -> "c:" + it.name }, contentType = { _, _ -> "continue" }) { i, entry ->
+                    val session = entry.lastSession ?: return@itemsIndexed
                     val liveHere = liveAll[entry.name]?.takeIf { !it.controller.stopped }
                     val liveFile = liveHere?.let { it.controller.sessionFile ?: it.sessionFile }
                     val isLive = liveHere != null && (liveFile == null || liveFile == session.file)
                     ContinueRow(
                         entry = entry,
                         session = session,
+                        pos = GroupPos.of(i, recent.size),
                         live = if (isLive) liveHere?.controller else null,
                         unread = !isLive && ProjectRules.unread(session, meta.seen[session.file]),
                         now = now,
                         onClick = { resume(entry, session.file, isLive) },
-                        modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp),
+                        modifier = Modifier.animateItem().padding(horizontal = 16.dp),
                     )
                 }
             }
             if (!unavailable && !list.isNullOrEmpty()) {
                 item(key = "projects-label", contentType = "label") {
-                    SectionLabel("Projects", Modifier.animateItem().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp))
+                    ListHead("Projects", Modifier.animateItem().padding(top = 12.dp), sub = list.size.toString())
                 }
             }
             if (!unavailable) {
                 when {
                     list == null || list.isEmpty() -> Unit
-                    else -> items(list, key = { "p:" + it.name }, contentType = { "project" }) { entry ->
+                    else -> itemsIndexed(list, key = { _, it -> "p:" + it.name }, contentType = { _, _ -> "project" }) { i, entry ->
                         ProjectCard(
                             entry = entry,
+                            pos = GroupPos.of(i, list.size),
                             live = liveAll[entry.name]?.takeIf { !it.controller.stopped }?.controller,
                             now = now,
                             onClick = { onOpenProject(entry) },
                             onPin = { store.setPinned(entry.name, it) },
                             onAction = { action = it },
-                            modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 5.dp),
+                            modifier = Modifier.animateItem().padding(horizontal = 16.dp),
                         )
                     }
                 }
@@ -335,7 +347,7 @@ fun HomeScreen(
                         now = now,
                         onClick = { if (live != null) onResumeHost() else onOpenHost(host) },
                         onForget = { forgetting = host },
-                        modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 5.dp),
+                        modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp),
                     )
                 }
                 item(key = "computers-actions", contentType = "actions") {
@@ -346,9 +358,9 @@ fun HomeScreen(
                             color = colors.ink3,
                             modifier = Modifier.padding(start = 4.dp, end = 4.dp, bottom = 10.dp),
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            SecondaryButton("Scan code", onClick = onScan, icon = Icons.Rounded.QrCodeScanner, modifier = Modifier.weight(1f))
-                            SecondaryButton("Paste link", onClick = { showPaste = true }, icon = Icons.Rounded.ContentPaste, modifier = Modifier.weight(1f))
+                        ButtonRow {
+                            SecondaryButton("Paste link", onClick = { showPaste = true }, icon = Icons.Rounded.ContentPaste)
+                            SecondaryButton("Scan code", onClick = onScan, icon = Icons.Rounded.QrCodeScanner)
                         }
                     }
                 }
@@ -473,29 +485,25 @@ fun HomeScreen(
     }
 }
 
-/** "Computers · 2" with a chevron; folds the remote-control section. */
+/** "Computers  2" with a chevron, styled like the other section heads ([ListHead]); folds the remote-control section. */
 @Composable
 private fun ComputersHeader(count: Int, open: Boolean, onToggle: () -> Unit, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val turn by animateFloatAsState(if (open) 180f else 0f, PiMotion.inPlace(PiMotion.QUICK), label = "computers-chevron")
     Row(
         modifier
-            .padding(start = 12.dp, end = 12.dp, top = 20.dp, bottom = 4.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 12.dp)
             .fillMaxWidth()
-            .height(44.dp)
+            .heightIn(min = 48.dp)
+            .semantics { stateDescription = if (open) "Expanded" else "Collapsed" }
             .pressable(onToggle, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, role = Role.Button, label = if (open) "Hide computers" else "Show computers")
-            .padding(horizontal = 4.dp),
+            .padding(start = 8.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("Computers", style = Pi.type.metaStrong, color = colors.ink3)
+        Text("Computers", style = Pi.type.metaStrong, color = colors.ink2, modifier = Modifier.semantics { heading() })
         if (count > 0) {
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "$count",
-                style = Pi.type.meta,
-                color = colors.ink2,
-                modifier = Modifier.background(colors.surface2, RoundedCornerShape(Radius.sm)).padding(horizontal = 7.dp, vertical = 1.dp),
-            )
+            Spacer(Modifier.width(10.dp))
+            Text("$count", style = Pi.type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3)
         }
         Spacer(Modifier.weight(1f))
         Icon(Icons.Rounded.ExpandMore, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(20.dp).graphicsLayer { rotationZ = turn })

@@ -25,7 +25,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
 
@@ -50,7 +52,7 @@ fun snackKindOf(notifyType: String): SnackKind = when (notifyType.lowercase()) {
     else -> SnackKind.Info
 }
 
-/** Snackbars: surface3, radius 12, a line, kind-coloured icon. */
+/** Snackbars: the menu layer (surface2) with a lineStrong ring, radius md, a kind-coloured icon. */
 @Composable
 fun PiSnackHost(state: SnackbarHostState, modifier: Modifier = Modifier) {
     SnackbarHost(state, modifier) { data -> PiSnack(data) }
@@ -72,14 +74,14 @@ private fun PiSnack(data: SnackbarData) {
             .padding(horizontal = 16.dp, vertical = 8.dp)
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .background(colors.surface3, shape)
+            .background(colors.surface2, shape)
             .border(1.dp, colors.lineStrong, shape)
             .padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(18.dp))
+        Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(IconSize.md))
         Spacer(Modifier.width(12.dp))
-        Text(data.visuals.message, style = Pi.type.body, color = colors.ink1, modifier = Modifier.weight(1f).padding(end = 8.dp), maxLines = 4)
+        Text(data.visuals.message, style = Pi.type.body, color = colors.ink1, modifier = Modifier.weight(1f).padding(end = 8.dp), maxLines = 4, overflow = TextOverflow.Ellipsis)
         data.visuals.actionLabel?.let { TextAction(it, onClick = { data.performAction() }, color = colors.ink1) }
     }
 }

@@ -13,30 +13,96 @@ import kotlin.math.abs
 
 /** Text and colour choices of subagent cards and the detail screen. Pure, so they are unit tested. */
 object SubagentFormat {
-    /**
-     * Avatar tints (ARGB): muted hues of the syntax palette and the accent options, none of them a status colour.
-     * Built-in types keep theirs; other types are hashed.
-     */
-    val TINTS = longArrayOf(
-        0xFF7CC4F0, // glacier
-        0xFFA99CFF, // iris
-        0xFF9ED3C6, // mint
-        0xFFE5A97E, // peach
-        0xFFC9B8F0, // lilac
-    )
+    /** How many subagent tints the theme has (`PiColors.tints`, Pi-Bolt Desktop's five): colour slots wrap at it. */
+    const val HUE_COUNT = 5
 
-    fun tintIndex(type: String): Int = when (type.lowercase()) {
-        "explore" -> 0
-        "plan" -> 1
-        "general-purpose", "general" -> 2
-        else -> Math.floorMod(type.lowercase().hashCode(), TINTS.size)
+    /** The colour slot of the run [key]: its order among the session's runs ([keys], first seen first), wrapped. */
+    fun hueSlot(key: String, keys: Iterable<String>): Int {
+        val i = keys.indexOf(key)
+        return if (i < 0) Math.floorMod(key.hashCode(), HUE_COUNT) else i % HUE_COUNT
     }
-
-    /** The avatar letter: the type's first letter or digit. */
-    fun initial(type: String): String = type.firstOrNull { it.isLetterOrDigit() }?.uppercaseChar()?.toString() ?: "A"
 
     /** "Explore", "General-purpose": types read capitalised. */
     fun typeLabel(type: String): String = type.ifBlank { "Agent" }.replaceFirstChar { it.uppercaseChar() }
+
+    /**
+     * The run's name: the task title the model gave the call ("Find the auth flow"), else its prompt's first line (cut
+     * at 60 characters), else the type.
+     */
+    fun title(run: Subagent): String {
+        run.description.trim().takeIf { it.isNotEmpty() }?.let { return capitalise(it) }
+        val prompt = firstLine(run.prompt)?.let(::plain)?.takeIf { it.isNotEmpty() }
+        if (prompt != null) return capitalise(if (prompt.length > 60) prompt.take(59).trimEnd() + "…" else prompt)
+        return typeLabel(run.type)
+    }
+
+    /**
+     * True for the extension's tool line ("reading…", "running command, searching 2 patterns…", a custom tool's name)
+     * and the app's own ("reading src/a.ts", "thinking…"); false for the start of the agent's reply, which the
+     * extension sends in the same field.
+     */
+    fun isToolActivity(activity: String): Boolean = toolVerb.containsMatchIn(activity) || toolList.matches(activity)
+
+    private val toolVerb = Regex("""^(reading|running|editing|writing|searching|finding|listing|thinking|queued)\b""")
+    private val toolList = Regex("""^[a-z][a-z0-9_.:-]*( \d+ (files|patterns))?(, [a-z][a-z0-9_.:-]*( [a-z]+)*( \d+ (files|patterns))?)*…$""")
+
+    /**
+     * The activity a card works from: the line read from the run's session file ([fromFile], from
+     * [opensec.pibolt.protocol.session.SubagentReducer.activityOf], which names the file or command) while both it and
+     * the extension's report are a tool, else the report.
+     */
+    fun liveActivity(reported: String?, fromFile: String?): String? {
+        val file = fromFile?.takeIf { it.isNotBlank() && !it.startsWith("thinking") } ?: return reported
+        return when {
+            reported == null -> file
+            isToolActivity(reported) && !reported.startsWith("thinking") -> file
+            else -> reported
+        }
+    }
+
+    /**
+     * What a card says the run does, without its narration: the tool it runs ("Reading src/auth.ts"), "Writing…" while
+     * it writes text (the extension sends the start of the reply in the same field), "Thinking…"; done, its metrics;
+     * queued, failed and stopped say so. The narration stays on the agent's own screen.
+     */
+    fun toolActivity(run: Subagent): String {
+        val reported = run.activity?.replace("`", "")?.replace("**", "")?.trim()?.takeIf { it.isNotEmpty() }
+        return when (run.status) {
+            SubagentStatus.Queued -> activityLine(run)
+            SubagentStatus.Running -> when {
+                reported == null -> if (run.background) "Working in the background" else "Starting…"
+                isToolActivity(reported) -> capitalise(reported)
+                else -> "Writing…"
+            }
+            SubagentStatus.Done -> metrics(run)
+            SubagentStatus.Failed -> run.error?.let(::firstLine)?.let { "Failed: $it" } ?: "Failed"
+            SubagentStatus.Stopped -> run.error?.let(::firstLine) ?: "Stopped"
+        }
+    }
+
+    /** A card's second line: the type, then [toolActivity] ("Explore · Reading src/auth.ts"; "Explore · background · …"). */
+    fun cardMeta(run: Subagent): String = listOfNotNull(
+        typeLabel(run.type).takeIf { title(run) != it },
+        "background".takeIf { run.background },
+        toolActivity(run),
+    ).joinToString(" · ")
+
+    /** What an agent's glyph shows. Starting: the call is made, its session not running yet (amber, breathing). */
+    enum class AgentState { Starting, Queued, Running, Done, Failed, Stopped }
+
+    fun stateOf(run: Subagent): AgentState = when (run.status) {
+        SubagentStatus.Queued -> if (run.activity?.startsWith("queued") == true) AgentState.Queued else AgentState.Starting
+        SubagentStatus.Running -> AgentState.Running
+        SubagentStatus.Done -> AgentState.Done
+        SubagentStatus.Failed -> AgentState.Failed
+        SubagentStatus.Stopped -> AgentState.Stopped
+    }
+
+    /** One state for a stack: running while any runs, then starting, queued, failed, stopped, else done. */
+    fun stackState(runs: List<Subagent>): AgentState {
+        val states = runs.map(::stateOf)
+        return listOf(AgentState.Running, AgentState.Starting, AgentState.Queued, AgentState.Failed, AgentState.Stopped).firstOrNull { it in states } ?: AgentState.Done
+    }
 
     /** The agent id as the card shows it: its first 8 characters (the extension names its session that way). */
     fun shortId(agentId: String): String = agentId.take(8)
@@ -103,13 +169,13 @@ object SubagentFormat {
         else -> " finished"
     }
 
-    /** TalkBack text of a card. */
+    /** TalkBack text of a card: "Find the auth flow, Explore agent, running, Reading src/auth.ts". */
     fun spoken(run: Subagent): String = listOfNotNull(
+        title(run).takeIf { it != typeLabel(run.type) },
         "${typeLabel(run.type)} agent",
-        run.description.takeIf { it.isNotBlank() },
         if (run.background) "background" else null,
         statusWord(run.status),
-        activityLine(run).takeIf { run.isActive },
+        toolActivity(run).takeIf { run.isActive },
     ).joinToString(", ")
 
     fun statusWord(status: SubagentStatus): String = when (status) {
@@ -163,29 +229,6 @@ object SubagentFormat {
         run.isActive && run.background -> if (run.agentId != null) Reach.Steer else Reach.None
         run.isActive -> Reach.StopOnly
         else -> Reach.Resume
-    }
-
-    /**
-     * An answer's start as one paragraph for the card: headings end with a colon, list items keep a bullet, code
-     * fences are dropped. At most [lines] source lines and [chars] characters.
-     */
-    fun answerPreview(text: String, lines: Int = 5, chars: Int = 320): String {
-        var fenced = false
-        val prose = text.lineSequence().map { it.trim() }.filter { line ->
-            if (line.startsWith("```")) {
-                fenced = !fenced
-                false
-            } else {
-                !fenced && line.isNotEmpty()
-            }
-        }
-        return prose.take(lines).map { line ->
-            when {
-                Regex("""^#{1,6}\s""").containsMatchIn(line) -> plain(line).let { if (it.lastOrNull()?.let(Char::isLetterOrDigit) == true) "$it:" else it }
-                Regex("""^([-*+]|\d+[.)])\s""").containsMatchIn(line) -> "• " + plain(line.replace(Regex("""^\d+[.)]\s+"""), ""))
-                else -> plain(line)
-            }
-        }.joinToString(" ").take(chars)
     }
 
     private fun firstLine(text: String?): String? = text?.trim()?.lineSequence()?.firstOrNull { it.isNotBlank() }?.trim()

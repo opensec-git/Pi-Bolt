@@ -16,6 +16,7 @@ import opensec.pibolt.protocol.session.ChatItem
 import opensec.pibolt.protocol.session.NoticeItem
 import opensec.pibolt.protocol.session.NoticeKind
 import opensec.pibolt.protocol.session.SessionReducer
+import opensec.pibolt.app.ui.session.subagent.SubagentFormat
 import opensec.pibolt.protocol.session.Subagent
 import opensec.pibolt.protocol.session.SubagentNoticeItem
 import opensec.pibolt.protocol.session.SubagentReducer
@@ -116,18 +117,19 @@ data class NoticeRow(val item: NoticeItem, override val live: Boolean) : TRow {
 
 /**
  * A subagent's card: an `Agent` call and its run ([Subagent], without its transcript so rows compare cheaply). [run]
- * is a stand-in built from the call while the model still writes it.
+ * is a stand-in built from the call while the model still writes it. [slot] picks its Quad colour
+ * ([opensec.pibolt.app.ui.session.subagent.SubagentFormat.hueSlot]); stacks and notices carry one per run.
  */
 @Immutable
-data class SubagentRow(override val key: String, val run: Subagent, override val live: Boolean) : TRow
+data class SubagentRow(override val key: String, val run: Subagent, override val live: Boolean, val slot: Int = 0) : TRow
 
 /** Consecutive `Agent` calls (parallel agents) as one stack: "3 agents running"; [expanded] shows each card. */
 @Immutable
-data class SubagentStackRow(override val key: String, val runs: List<Subagent>, val expanded: Boolean, override val live: Boolean) : TRow
+data class SubagentStackRow(override val key: String, val runs: List<Subagent>, val expanded: Boolean, override val live: Boolean, val slots: List<Int> = emptyList()) : TRow
 
 /** Background subagents ended: a line for each run the notification names ([runs] holds those still known). */
 @Immutable
-data class SubagentNoticeRow(val item: SubagentNoticeItem, val runs: List<Subagent>, override val live: Boolean) : TRow {
+data class SubagentNoticeRow(val item: SubagentNoticeItem, val runs: List<Subagent>, override val live: Boolean, val slots: List<Int> = emptyList()) : TRow {
     override val key: String get() = item.key
 }
 
@@ -496,10 +498,21 @@ object TranscriptModel {
     private class Agents(val runs: Map<String, Subagent>, val enabled: Boolean, val openGroups: Set<String>) {
         fun card(item: ToolItem): Boolean = enabled && SubagentReducer.isAgentCall(item.name)
 
-        /** The run of [item] without its transcript; a stand-in from the call while it is still written. */
-        fun run(item: ToolItem): Subagent {
-            val run = runs[item.toolCallId] ?: return standIn(item)
-            return if (run.transcript == null) run else run.copy(transcript = null)
+        private val order by lazy { runs.keys.toList() }
+
+        /** The colour slot of the run [key]: its order among the session's runs. */
+        fun slot(key: String): Int = SubagentFormat.hueSlot(key, order)
+
+        /**
+         * The run of [item] without its transcript; a stand-in from the call while it is still written. A running
+         * agent's activity names its file or command from the transcript when there is one ([SubagentFormat.liveActivity]).
+         */
+        fun run(item: ToolItem): Subagent = strip(runs[item.toolCallId] ?: return standIn(item))
+
+        fun strip(run: Subagent): Subagent {
+            val t = run.transcript ?: return run
+            val file = if (run.isActive && t.items.isNotEmpty()) SubagentReducer.activityOf(t.items) else null
+            return run.copy(transcript = null, activity = SubagentFormat.liveActivity(run.activity, file))
         }
 
         /**
@@ -519,10 +532,10 @@ object TranscriptModel {
                 j++
             }
             if (calls.size == 1) {
-                out += SubagentRow(calls[0].key, run(calls[0]), live)
+                out += SubagentRow(calls[0].key, run(calls[0]), live, slot(calls[0].toolCallId))
             } else {
                 val key = "agents:${calls[0].key}"
-                out += SubagentStackRow(key, calls.map(::run), key in openGroups, live)
+                out += SubagentStackRow(key, calls.map(::run), key in openGroups, live, calls.map { slot(it.toolCallId) })
             }
             return j
         }
@@ -550,9 +563,12 @@ object TranscriptModel {
                 }
             }
             is ThinkingItem -> out += ThinkingRow(item, live)
-            is ToolItem -> out += if (agents != null && agents.card(item)) SubagentRow(item.key, agents.run(item), live) else ToolRow(item, live)
+            is ToolItem -> out += if (agents != null && agents.card(item)) SubagentRow(item.key, agents.run(item), live, agents.slot(item.toolCallId)) else ToolRow(item, live)
             is NoticeItem -> out += NoticeRow(item, live)
-            is SubagentNoticeItem -> out += SubagentNoticeRow(item, item.runKeys.mapNotNull { key -> agents?.runs?.get(key)?.let { if (it.transcript == null) it else it.copy(transcript = null) } }, live)
+            is SubagentNoticeItem -> {
+                val known = if (agents == null) emptyList() else item.runKeys.mapNotNull { key -> agents.runs[key]?.let(agents::strip) }
+                out += SubagentNoticeRow(item, known, live, known.map { agents?.slot(it.key) ?: 0 })
+            }
         }
     }
 

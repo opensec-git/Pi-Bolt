@@ -166,7 +166,8 @@ object SessionAlerts {
             .setPublicVersion(
                 NotificationCompat.Builder(context, CHANNEL_ALERTS)
                     .setSmallIcon(R.drawable.ic_stat_bolt)
-                    .setContentTitle("Background agent finished")
+                    // The title names no task, so it is safe on the lock screen, and it stays true for a stop or a group.
+                    .setContentTitle(title)
                     .setContentText("Unlock to see it")
                     .build(),
             )

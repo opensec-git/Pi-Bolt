@@ -55,13 +55,17 @@ fun F2Toggle(title: String, meta: String?, checked: Boolean, enabled: Boolean = 
 @Composable
 fun F2Loading(label: String) = LoadingRow(label, Modifier.padding(vertical = Space.lg))
 
-/** Nothing to list: an [EmptyState] card; the first sentence is its title, the rest the explanation. */
+/**
+ * Nothing to list: an [EmptyState] card with an optional glyph ([icon], what is missing); the first sentence is its
+ * title, the rest the explanation.
+ */
 @Composable
-fun F2Empty(text: String) {
+fun F2Empty(text: String, icon: ImageVector? = null) {
     val cut = text.indexOf(". ").takeIf { it in 1 until text.length - 2 }
     EmptyState(
         title = if (cut != null) text.substring(0, cut + 1) else text,
         message = cut?.let { text.substring(it + 2) },
+        icon = icon,
         modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.sm),
     )
 }

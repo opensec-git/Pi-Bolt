@@ -115,6 +115,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.LoadingRow
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiSnackHost
 import opensec.pibolt.app.ui.components.PiTextField
@@ -485,7 +486,7 @@ fun FileViewer(
                         if (it) find.open = false
                     },
                     modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
-                    height = 40.dp,
+                    height = 48.dp,
                 )
             }
             if (find.open && text != null && !showRendered) {
@@ -495,7 +496,7 @@ fun FileViewer(
             Column(Modifier.weight(1f).fillMaxWidth().then(if (editing) Modifier.imePadding() else Modifier)) {
                 Box(Modifier.weight(1f).fillMaxWidth()) {
                     when (doc) {
-                        null -> Unit
+                        null -> LoadingRow("Opening $name…", Modifier.padding(top = 8.dp))
                         is FileDoc.Unreadable -> Note(doc.reason, null, null)
                         is FileDoc.Binary -> Note("Binary file", "${FileTypes.label(name)} · ${ProjectFiles.size(doc.size)}. Pi-Bolt can't show it; share it to open it in another app.") {
                             SecondaryButton("Share", onClick = ::share, icon = Icons.Rounded.Share)
@@ -634,7 +635,9 @@ private fun EditorBar(tab: EditorTab, plain: Boolean, onIndent: () -> Unit, onGo
     val canRedo = tab.historyVersion.let { tab.history.canRedo }
     val v = tab.value
     val (line, col) = remember(v.text, v.selection.start) { EditorInput.lineCol(v.text, v.selection.start) }
-    Column(Modifier.fillMaxWidth().background(colors.surface1)) {
+    // The bar's fill runs under the navigation bar; its keys sit above it. With the keyboard up the parent's ime
+    // padding has consumed that inset, so the bar sits right on the keyboard.
+    Column(Modifier.fillMaxWidth().background(colors.surface1).navigationBarsPadding()) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
         Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             IconAction(Icons.AutoMirrored.Rounded.Undo, "Undo", onClick = { tab.undo() }, enabled = canUndo)

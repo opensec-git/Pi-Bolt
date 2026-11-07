@@ -8,6 +8,7 @@ import opensec.pibolt.app.data.SettingsCodec
 import opensec.pibolt.app.data.ThemeId
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 
 class SettingsCodecTest {
     @Test
@@ -45,6 +46,26 @@ class SettingsCodecTest {
         assertEquals(12, s.toolPreviewLines)
         assertEquals(true, s.haptics)
         assertEquals(AppSettings.TEXT_SIZE_MIN, SettingsCodec.decode("""{"textSize":-5}""").textSize)
+    }
+
+    @Test
+    fun theRemovedVoidThemeMovesToTheDefault() {
+        // Void was removed in 0.5.2 (the default is black now); a saved Void choice becomes Pi-Bolt (id Graphite) and the
+        // other settings in the file survive.
+        val s = SettingsCodec.decode("""{"theme":"Void","accent":"Iris","textSize":1}""")
+        assertEquals(ThemeId.Graphite, s.theme)
+        assertEquals("Pi-Bolt", s.theme.label)
+        assertEquals(AccentId.Iris, s.accent)
+        assertEquals(1, s.textSize)
+        assertTrue(ThemeId.entries.none { it.name == "Void" })
+        assertEquals(ThemeId.Graphite, SettingsCodec.decode(SettingsCodec.encode(s)).theme)
+    }
+
+    @Test
+    fun theNewThemesRoundTrip() {
+        for (theme in listOf(ThemeId.Paper, ThemeId.Contrast, ThemeId.Lime, ThemeId.Moss)) {
+            assertEquals(theme, SettingsCodec.decode(SettingsCodec.encode(AppSettings(theme = theme))).theme)
+        }
     }
 
     @Test

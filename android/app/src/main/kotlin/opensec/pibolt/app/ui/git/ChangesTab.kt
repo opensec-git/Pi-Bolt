@@ -22,7 +22,6 @@ import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import opensec.pibolt.app.ui.projects.EmptyCard
-import opensec.pibolt.app.ui.projects.LoadingRow
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.History
 import androidx.compose.material.icons.rounded.Remove
@@ -57,6 +56,7 @@ import opensec.pibolt.app.git.github.GitHubState
 import opensec.pibolt.app.engine.EngineStatus
 import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.LoadingRow
 import opensec.pibolt.app.ui.components.PiTextField
 import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.QuadMode
@@ -163,7 +163,7 @@ fun LazyListScope.changesItems(ui: ChangesUi) {
     val model = ui.model
     val repo = model.isRepo
     if (repo == null) {
-        item(key = "git-loading", contentType = "loading") { LoadingRow("Reading git status") }
+        item(key = "git-loading", contentType = "loading") { LoadingRow("Reading git status…") }
         return
     }
     if (!repo) {
@@ -172,7 +172,7 @@ fun LazyListScope.changesItems(ui: ChangesUi) {
     }
     val status = model.status
     if (status == null) {
-        item(key = "git-loading", contentType = "loading") { LoadingRow("Reading git status") }
+        item(key = "git-loading", contentType = "loading") { LoadingRow("Reading git status…") }
         return
     }
     item(key = "git-branch", contentType = "git-card") { BranchCard(ui) }

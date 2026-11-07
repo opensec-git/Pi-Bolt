@@ -1,5 +1,7 @@
 package opensec.pibolt.app
 
+import androidx.compose.ui.unit.dp
+import opensec.pibolt.app.ui.theme.PiDims
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertTrue
@@ -46,13 +48,11 @@ class DesignRulesTest {
             "Quad, not Material progress",
             Regex("""(?<![\w.])(CircularProgressIndicator|LinearProgressIndicator)\("""),
             "use QuadSpinner, LoadingRow or ProgressLine",
-            setOf("terminal/PreviewScreen.kt"),
         ),
         Rule(
             "the app's snackbars",
             Regex("""(?<![\w.])Snackbar\(|Toast\.makeText"""),
             "use PiSnackHost and SnackbarHostState.show",
-            setOf("settings/AgentSection.kt"),
         ),
         Rule(
             "tabular figures through the token",
@@ -69,13 +69,13 @@ class DesignRulesTest {
             "radii from the tokens",
             Regex("""RoundedCornerShape\(([3-9]|[1-9][0-9])(\.[0-9]+)?\.dp"""),
             "use Radius.xs / sm / md / lg / xl (0 to 2dp hairlines are fine)",
-            setOf("projects/ProjectCard.kt", "session/SessionSheets.kt", "session/SessionChrome.kt", "session/Composer.kt", "session/subagent/SubagentCard.kt"),
+            setOf("session/SessionChrome.kt"),
         ),
         Rule(
             "durations from PiMotion",
             Regex("""tween\(([1-9][0-9]*)[,)]"""),
             "use PiMotion.TAP / QUICK / STANDARD / SHEET / SETTLE / GLYPH / FADE / PULSE / SWEEP",
-            setOf("session/subagent/", "session/Composer.kt", "markdown/"),
+            setOf("session/subagent/", "markdown/"),
         ),
     )
 
@@ -128,5 +128,14 @@ class DesignRulesTest {
             }
         }
         assertTrue(failures.isEmpty(), failures.joinToString("\n"))
+    }
+
+    @Test
+    fun densityTokensKeepTouchTargets() {
+        // An option row is one touch target, so Compact density may tighten it only down to 48dp (it was 46dp).
+        for (compact in listOf(false, true)) {
+            assertTrue(PiDims(compact).optionRow >= 48.dp, "optionRow (compact = $compact) under 48dp")
+            assertTrue(PiDims(compact).homeRow >= 48.dp, "homeRow (compact = $compact) under 48dp")
+        }
     }
 }

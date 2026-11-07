@@ -27,7 +27,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -128,7 +130,9 @@ fun SecretsScreen(app: PiBoltApp, project: File, onBack: () -> Unit) {
         val scrolled by remember { derivedStateOf { listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0 } }
         Column(Modifier.fillMaxSize()) {
         ScreenTopBar("Secrets", onBack = onBack, subtitle = project.name, scrolled = scrolled)
-        LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
+        // Edge to edge the window does not resize for the keyboard: the list stops above it, so the form at its end
+        // can scroll into view.
+        LazyColumn(Modifier.fillMaxSize().imePadding(), state = listState, contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
             item(key = "head") {
                 Column {
                     ScreenIntro(
@@ -195,7 +199,7 @@ fun SecretsScreen(app: PiBoltApp, project: File, onBack: () -> Unit) {
             }
         }
         }
-        PiSnackHost(snackbar, Modifier.align(Alignment.BottomCenter))
+        PiSnackHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding())
     }
 
     deleting?.let { s ->
@@ -267,7 +271,7 @@ private fun SecretForm(initial: Secret?, taken: Set<String>, onCancel: () -> Uni
         FieldLabel("Value")
         SecretField(value, { value = it }, shown = show, onToggleShown = { show = !show }, placeholder = "Value", label = "the value", imeAction = ImeAction.Done, onDone = { if (problem == null) onSave(name, value) })
         Spacer(Modifier.height(16.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Spacer(Modifier.weight(1f))
             SecondaryButton("Cancel", onClick = onCancel, size = ButtonSize.Small)
             PrimaryButton("Save", onClick = { onSave(name, value) }, enabled = problem == null, size = ButtonSize.Small)

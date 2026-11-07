@@ -12,6 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -35,6 +36,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toDrawable
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
@@ -50,20 +52,26 @@ import opensec.pibolt.app.ui.components.QuadMath
 /** Sizes that change with the density setting. */
 @Immutable
 data class PiDims(val compact: Boolean) {
-    val hostCard: Dp get() = if (compact) 64.dp else 72.dp
-    val optionRow: Dp get() = if (compact) 46.dp else 52.dp
+    /** The minimum height of a list row on Home and in a project (grouped rows, computer cards); text can grow it. */
+    val homeRow: Dp get() = if (compact) 48.dp else 56.dp
+    // Never under 48dp: an option row is one touch target.
+    val optionRow: Dp get() = if (compact) 48.dp else 52.dp
     val turnGap: Dp get() = if (compact) 14.dp else 20.dp
     val stepGap: Dp get() = if (compact) 4.dp else 6.dp
     val gutter: Dp get() = 16.dp
 }
 
-/** Corner radii (DESIGN.md "Space, shape, size"): xs tags, sm chips, md cards and rows, lg groups and composer, xl sheets. */
+/**
+ * Corner radii (DESIGN.md "Space, shape, size"), Pi-Bolt Desktop's 4 / 6 / 10 / 14 by role: xs tags and inline code
+ * (--radius-xs), sm chips and small buttons (--radius-sm), md cards, menus, snackbars and rows (--radius-lg), lg the
+ * composer, user bubble and groups (--radius-xl), xl sheets (a dialog's --radius-xl).
+ */
 object Radius {
     val xs = 4.dp
-    val sm = 8.dp
-    val md = 12.dp
-    val lg = 18.dp
-    val xl = 28.dp
+    val sm = 6.dp
+    val md = 10.dp
+    val lg = 14.dp
+    val xl = 14.dp
 }
 
 /** The spacing scale. Side gutter is [lg] (16dp); sheets and headers inset their text by [xl] (20dp). */
@@ -153,11 +161,18 @@ fun PiBoltTheme(settings: AppSettings, content: @Composable () -> Unit) {
     RunQuadClock(clock)
 
     SideEffect {
-        (view.context as? Activity)?.window?.setBackgroundDrawable(colors.canvas.toArgb().toDrawable())
+        val window = (view.context as? Activity)?.window ?: return@SideEffect
+        window.setBackgroundDrawable(colors.canvas.toArgb().toDrawable())
+        // Dark icons on a light theme (Paper), light icons on every dark one.
+        WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = colors.isLight
+            isAppearanceLightNavigationBars = colors.isLight
+        }
     }
 
     val scheme = remember(colors) {
-        darkColorScheme(
+        // Start from Material's light or dark scheme so roles not set here have the right polarity.
+        (if (colors.isLight) lightColorScheme() else darkColorScheme()).copy(
             primary = colors.accent,
             onPrimary = colors.onAccent,
             primaryContainer = colors.surface3,

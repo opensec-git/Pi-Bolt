@@ -91,6 +91,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
@@ -481,6 +482,8 @@ private fun SessionContent(
     val contextWindow by remember { derivedStateOf { state.value.model?.contextWindow } }
     val contextPct = knownTokens?.let { contextPercent(it, contextWindow) }
     val modelLabel by remember { derivedStateOf { state.value.model?.label } }
+    // The maker's mark for the run-settings chip: "anthropic/claude-…" through OpenRouter is Anthropic's.
+    val modelBrand by remember { derivedStateOf { state.value.model?.let { ProviderCatalog.modelBrand(it.id, it.provider) } } }
     val cwd by remember { derivedStateOf { state.value.host?.cwd } }
     val thinkingLevel by remember { derivedStateOf { state.value.thinkingLevel } }
     // The composer's thinking chip is left out for a model that does not reason.
@@ -861,6 +864,10 @@ private fun SessionContent(
         val foldStack = imeVisible || windowHeight < 480.dp
         val oneRowComposer = roomAboveIme < 360.dp
         val composerLines = if (roomAboveIme < 560.dp) 4 else MAX_LINES
+        // The command / `@` panel shares that room with the status and top bars and the composer: capped so it never
+        // pushes the composer under the keyboard (in landscape a 264dp panel did).
+        val statusTop = with(density) { WindowInsets.statusBars.getTop(density).toDp() }
+        val suggestionsMax = (roomAboveIme - statusTop - 56.dp - if (oneRowComposer) 72.dp else 140.dp).coerceIn(48.dp, SUGGESTIONS_MAX)
         Column(Modifier.fillMaxSize().imePadding()) {
             if (searching) {
                 SearchBar(
@@ -994,6 +1001,7 @@ private fun SessionContent(
                         mode = mode,
                         onMode = { mode = it },
                         modelLabel = modelLabel,
+                        modelBrand = modelBrand,
                         thinkingLevel = thinkingLevel.takeIf { reasons },
                         palette = palette,
                         onPick = { entry ->
@@ -1027,6 +1035,7 @@ private fun SessionContent(
                         onModel = { openModels() },
                         compact = oneRowComposer,
                         maxLines = composerLines,
+                        suggestionsMaxHeight = suggestionsMax,
                         history = recentAll[recentKey].orEmpty(),
                         onKey = { key ->
                             when (key) {
