@@ -52,6 +52,9 @@ https://github.com/opensec-git/Pi-Bolt/issues.
 | util-linux libuuid | `uuid` module | BSD-3-Clause |
 | OpenSec Subagents for Pi (opensec-pi-subagents, from npm) | the engine's `subagent` tool; based on tintinweb/pi-subagents | Apache-2.0 (`extensions/opensec-pi-subagents/LICENSE`, `NOTICE`) |
 | OpenSec Todo for Pi (opensec-pi-todo, from npm) | the engine's `todo` tool; based on juicesharp/rpiv-todo | Apache-2.0 (`extensions/opensec-pi-todo/LICENSE`, `NOTICE`) |
+| Pi Web Access (pi-web-access 0.44.0 by Nico Bailon, from npm) | the engine's `web_search`, `fetch_content`, `get_search_content` and `source_check` tools | MIT (`extensions/pi-web-access/LICENSE`) |
+| pi-web-access's 210 runtime dependencies (from npm, pinned in `android/engine/npm/pi-web-access.lock.json`): the Model Context Protocol SDK, Mozilla Readability, defuddle, linkedom, turndown, unpdf, undici, zod and their dependencies | web search (Exa's MCP endpoint), page reading and PDF text | MIT (176), BSD-2-Clause (19), ISC (12), BSD-3-Clause (2), Apache-2.0 (1: @mozilla/readability); each package's licence under `extensions/pi-web-access/node_modules/`, the list in `extensions/pi-web-access/DEPENDENCIES.txt` |
+| rpiv-ask-user-question (@juicesharp/rpiv-ask-user-question 2.15.0) and its dependency @juicesharp/rpiv-config 2.15.0, by juicesharp, from npm | the engine's `ask_user_question` tool | MIT (`extensions/juicesharp-rpiv-ask-user-question/LICENSE`) |
 
 ## glibc is modified
 
