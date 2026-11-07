@@ -10,6 +10,9 @@ import opensec.pibolt.app.background.WakePolicy
 import opensec.pibolt.app.background.WakePolicy.Decision
 import opensec.pibolt.app.background.WakePolicy.Work
 import opensec.pibolt.app.session.RunningSummary
+import opensec.pibolt.app.session.KeepAlive
+import opensec.pibolt.app.engine.BackgroundJobs
+import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.session.DialogKind
 import opensec.pibolt.protocol.session.DialogRequest
 import java.io.File
@@ -328,6 +331,57 @@ class BackgroundRunTest {
         assertEquals("feature/...", assertIs<SessionActions.Answering.Typed>(SessionActions.answering(input)).label)
         val long = pick.copy(options = listOf("Keep the current implementation", "Rewrite"))
         assertIs<SessionActions.Answering.Typed>(SessionActions.answering(long), "a long option does not fit a button")
+    }
+
+    // The foreground service that keeps the network with the app away (KeepAlive)
+
+    @Test
+    fun everyKindOfWorkStartsTheService() {
+        val idle = SessionState(hello = true)
+        assertFalse(KeepAlive.busy(idle))
+        // Only turns and dialogs started it: a manual compaction lost its model request once the user left (Android 15+
+        // cuts an app's network about 5 seconds after it leaves without a foreground service).
+        assertTrue(KeepAlive.starts(idle, idle.copy(isCompacting = true, compactionReason = "manual")), "a manual /compact")
+        assertTrue(KeepAlive.starts(idle, idle.copy(isRunning = true)), "a turn")
+        assertTrue(KeepAlive.starts(idle, idle.copy(dialogs = listOf(confirm))), "a dialog")
+        assertTrue(KeepAlive.starts(idle, idle.copy(statuses = mapOf(BackgroundJobs.STATUS_KEY to "1 job"))), "background jobs")
+        assertTrue(KeepAlive.starts(idle, idle.copy(statuses = mapOf(KeepAlive.SUBAGENTS_STATUS to "1 agent"))), "background agents")
+        // Already busy: no second start; a status that is not work starts nothing.
+        assertFalse(KeepAlive.starts(idle.copy(isRunning = true), idle.copy(isRunning = true, isCompacting = true)))
+        assertFalse(KeepAlive.starts(idle, idle.copy(statuses = mapOf("todo" to "2/5"))))
+    }
+
+    @Test
+    fun theServiceCountsWhatItsNotificationShowsAsBusy() {
+        // KeepAlive.busy starts the service and RunningSummary.busy keeps it: work one counts and the other not would
+        // start the service only for it to stop itself at once, or never start it for work it would keep.
+        val idle = SessionState(hello = true)
+        val states = listOf(
+            idle,
+            idle.copy(isRunning = true),
+            idle.copy(isCompacting = true),
+            idle.copy(dialogs = listOf(confirm)),
+            idle.copy(statuses = mapOf(BackgroundJobs.STATUS_KEY to "1 job")),
+            idle.copy(statuses = mapOf(KeepAlive.SUBAGENTS_STATUS to "1 agent")),
+        )
+        for (s in states) {
+            val entry = RunningSummary.Entry(
+                name = "p", local = true, running = s.isRunning, waiting = s.dialogs.isNotEmpty(), compacting = s.isCompacting, connected = true,
+                subagents = KeepAlive.subagents(s), jobs = BackgroundJobs.STATUS_KEY in s.statuses,
+            )
+            assertEquals(entry.busy, KeepAlive.busy(s), "$s")
+        }
+    }
+
+    @Test
+    fun aSentPromptHoldsTheServiceUntilItsTurnShows() {
+        // Pi answers `prompt` once it accepted it; the turn's agent_start may still be behind that answer.
+        assertTrue(KeepAlive.waitsForTurn("started", running = false))
+        assertFalse(KeepAlive.waitsForTurn("started", running = true))
+        // Queued behind a running turn, or handled by an extension command: no turn to wait for.
+        assertFalse(KeepAlive.waitsForTurn("queued", running = false))
+        assertFalse(KeepAlive.waitsForTurn("handled", running = false))
+        assertFalse(KeepAlive.waitsForTurn(null, running = false))
     }
 
     @Test
