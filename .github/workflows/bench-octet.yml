@@ -1,0 +1,184 @@
+name: bench-octet
+
+# Pi-Bolt 1.1.2 against octet 0.10.3 (github.com/skaft-software/octet), on GitHub's Linux x86-64, Linux ARM64 and Windows x64
+# runners, with the tools and counts of the OpenCode comparison in docs/BENCHMARKS.md (the macOS run was on the local M5):
+#   pi-bolt  pi-bolt-<platform> of the bolt-v1.1.2 release (SHA256SUMS, and on Linux its signature by keys/release.pub)
+#   octet    octet 0.10.3 as released (OCTET_SHA256SUMS); octet publishes no Linux ARM64 build, so there it is built from the
+#            v0.10.3 tag with its release workflow's command and compiler (cargo build --release --locked, Rust 1.97.1)
+# bench/octet.sh runs octet from Pi's arguments on Linux; on Windows the tools start it directly (harness.octet_argv), with its
+# settings in the runner's profile (PIBOLT_BENCH_OCTET_PROFILE=1), since octet reads them from there whatever HOME says.
+# bench/pig_verify.py first shows how the work differs (octet's read returns 500 lines where Pi's returns 50 KB).
+on:
+  workflow_dispatch:
+  push:
+    branches: ["bench/octet-*"]
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  PIBOLT_TAG: bolt-v1.1.2
+  OCTET_TAG: v0.10.3
+  OCTET_VERSION: "0.10.3"
+
+jobs:
+  linux:
+    name: Bench on ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64
+            runner: ubuntu-24.04
+            plat: linux-x64
+            octet: x86_64-unknown-linux-gnu
+            build_octet: false
+          - name: Linux ARM64
+            runner: ubuntu-24.04-arm
+            plat: linux-arm64
+            octet: aarch64-unknown-linux-gnu
+            build_octet: true
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: octet source
+        if: matrix.build_octet
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: skaft-software/octet
+          ref: ${{ env.OCTET_TAG }}
+          path: .work/octet-src
+          persist-credentials: false
+      # (The revision octet's release workflow pins: it installs Rust 1.97.1.)
+      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5
+        if: matrix.build_octet
+        with:
+          targets: ${{ matrix.octet }}
+      - name: Builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLAT: ${{ matrix.plat }}
+          OCTET_TARGET: ${{ matrix.octet }}
+          BUILD_OCTET: ${{ matrix.build_octet }}
+        run: |
+          set -euo pipefail
+          mkdir -p results .work out
+          gh release download "$PIBOLT_TAG" --repo "$GITHUB_REPOSITORY" --pattern "pi-bolt-$PLAT.tar.xz" --pattern SHA256SUMS \
+            --pattern SHA256SUMS.sig --dir .work/pb-dl
+          openssl pkeyutl -verify -pubin -inkey keys/release.pub -rawin -in .work/pb-dl/SHA256SUMS -sigfile .work/pb-dl/SHA256SUMS.sig
+          (cd .work/pb-dl && grep -E " pi-bolt-$PLAT\.tar\.xz\$" SHA256SUMS | sha256sum -c -)
+          mkdir -p out/pi-bolt && tar -C out/pi-bolt --strip-components=1 -xJf ".work/pb-dl/pi-bolt-$PLAT.tar.xz"
+          if [ "$BUILD_OCTET" = true ]; then
+            rustc --version
+            [ "$(rustc --version | awk '{print $2}')" = "1.97.1" ]
+            (cd .work/octet-src && cargo build --release --locked --target "$OCTET_TARGET" -p octet-coding-agent --bins)
+            mkdir -p out/octet && cp ".work/octet-src/target/$OCTET_TARGET/release/octet" out/octet/
+            octet_from="built from the $OCTET_TAG tag ($(git -C .work/octet-src rev-parse HEAD)) by cargo build --release --locked, $(rustc --version)"
+          else
+            a="octet-$OCTET_VERSION-$OCTET_TARGET.tar.gz"
+            gh release download "$OCTET_TAG" --repo skaft-software/octet --pattern "$a" --pattern OCTET_SHA256SUMS --dir .work/octet-dl
+            (cd .work/octet-dl && grep -E "  \./$a\$" OCTET_SHA256SUMS | sha256sum -c -)
+            mkdir -p .work/octet-x && tar -C .work/octet-x -xzf ".work/octet-dl/$a"
+            mkdir -p out/octet && cp "$(find .work/octet-x -type f -name octet | head -n 1)" out/octet/
+            octet_from="$a of the $OCTET_TAG release (OCTET_SHA256SUMS verified)"
+          fi
+          {
+            echo "pi-bolt: pi-bolt-$PLAT.tar.xz of $PIBOLT_TAG (SHA256SUMS signature and sum verified): $(out/pi-bolt/pi --version </dev/null)"
+            echo "octet: $octet_from: $(out/octet/octet --version </dev/null)"
+            echo "runner: ${{ matrix.runner }} ($(uname -srm)), $(nproc) CPUs; $(grep -m1 'model name' /proc/cpuinfo || lscpu | grep -m1 'Model name')"
+            echo "python: $(python3 --version)"
+          } | tee -a results/environment.txt
+      - name: Same work
+        run: |
+          python3 bench/pig_verify.py --build pi-bolt=out/pi-bolt/pi --build "octet=env OCTET_BIN=$PWD/out/octet/octet bench/octet.sh" \
+            | tee results/verify.txt || true
+      - name: Suites
+        run: |
+          B=(--build pi-bolt=out/pi-bolt/pi --build "octet=env OCTET_BIN=$PWD/out/octet/octet bench/octet.sh")
+          run() { name=$1; out=$2; shift 2; echo "## $name" | tee -a results/all.txt; "$@" 2>&1 | grep -vE 'round [0-9]+/' | tee -a results/all.txt "results/$out" || echo "$name failed" | tee -a results/all.txt; }
+          run benchmark benchmark.txt python3 bench/benchmark.py --runs 21 --warmup 3 --scenarios startup,headless,interactive "${B[@]}" --out results/benchmark.jsonl
+          for i in 1 2 3; do run "long_session $i" "long-$i.txt" python3 bench/long_session.py --prompts 75 --every 25 "${B[@]}" --out results/long.jsonl; done
+          for i in 1 2; do run "large_write $i" "large_write-$i.txt" python3 bench/large_write.py "${B[@]}"; done
+          for i in 1 2; do run "long_answer $i" "long_answer-$i.txt" python3 bench/long_answer.py "${B[@]}"; done
+          { echo '```'; cat results/environment.txt results/all.txt; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: bench-octet-${{ matrix.plat }}
+          path: results
+          retention-days: 30
+
+  windows:
+    name: Bench on Windows x64
+    runs-on: windows-2025
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: powershell
+    env:
+      PIBOLT_BENCH_OCTET_PROFILE: "1"
+      # (octet's bash tool on Git's bash, as Pi-Bolt's; octet's default on Windows is PowerShell.)
+      OCTET_SHELL_PATH: C:\Program Files\Git\bin\bash.exe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Continue'
+          New-Item -ItemType Directory -Force results, .work | Out-Null
+          gh release download $env:PIBOLT_TAG --repo $env:GITHUB_REPOSITORY --pattern pi-bolt-win32-x64.zip --pattern SHA256SUMS --dir .work\pb-dl --clobber
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $sum = (Get-FileHash .work\pb-dl\pi-bolt-win32-x64.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ((Get-Content -LiteralPath .work\pb-dl\SHA256SUMS) -notcontains "$sum  pi-bolt-win32-x64.zip") { throw "pi-bolt-win32-x64.zip is not the one SHA256SUMS lists" }
+          Expand-Archive .work\pb-dl\pi-bolt-win32-x64.zip -DestinationPath .work\pb-dl -Force
+          Move-Item .work\pb-dl\pi-bolt-win32-x64 .work\pi-bolt
+          $a = "octet-$env:OCTET_VERSION-x86_64-pc-windows-msvc.zip"
+          gh release download $env:OCTET_TAG --repo skaft-software/octet --pattern $a --pattern OCTET_SHA256SUMS --dir .work\octet-dl --clobber
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $sum = (Get-FileHash ".work\octet-dl\$a" -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ((Get-Content -LiteralPath .work\octet-dl\OCTET_SHA256SUMS) -notcontains "$sum  ./$a") { throw "$a is not the one OCTET_SHA256SUMS lists" }
+          Expand-Archive ".work\octet-dl\$a" -DestinationPath .work\octet-x -Force
+          New-Item -ItemType Directory -Force .work\octet | Out-Null
+          Copy-Item (Get-ChildItem .work\octet-x -Recurse -Filter octet.exe | Select-Object -First 1).FullName .work\octet\octet.exe
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $nt = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+          $lines = @(
+            "pi-bolt: pi-bolt-win32-x64.zip of $env:PIBOLT_TAG (checked against its SHA256SUMS): $(& .work\pi-bolt\pi-bolt.exe --version | Select-Object -First 1)",
+            "octet: $a of the $env:OCTET_TAG release (checked against OCTET_SHA256SUMS), started directly, bash tool on $env:OCTET_SHELL_PATH: $(& .work\octet\octet.exe --version | Select-Object -First 1)",
+            "runner: windows-2025, $($cpu.Name.Trim()), $($cpu.NumberOfCores) cores, $($cpu.NumberOfLogicalProcessors) threads; $((Get-CimInstance Win32_OperatingSystem).Caption) build $($nt.CurrentBuild).$($nt.UBR)"
+          )
+          $lines
+          [IO.File]::WriteAllLines("$PWD\results\environment.txt", [string[]]$lines)
+      - name: Suites
+        run: |
+          $env:PYTHONUTF8 = '1'
+          $ErrorActionPreference = 'Continue'
+          $B = @('--build', "pi-bolt=$PWD\.work\pi-bolt\pi-bolt.exe", '--build', "octet=$PWD\.work\octet\octet.exe")
+          function Run($name, $file, [string[]]$cmd) {
+            "## $name" | Add-Content -Encoding utf8 results\all.txt
+            $out = & python @cmd 2>&1 | ForEach-Object { "$_" } | Where-Object { $_ -notmatch 'round [0-9]+/' }
+            if ($LASTEXITCODE -ne 0) { $out += "$name failed (exit $LASTEXITCODE)" }
+            $out
+            [IO.File]::WriteAllLines("$PWD\results\$file", [string[]]@($out))
+            $out | Add-Content -Encoding utf8 results\all.txt
+          }
+          Run verify verify.txt (@('bench\pig_verify.py') + $B)
+          Run benchmark benchmark.txt (@('bench\benchmark.py', '--runs', '21', '--warmup', '3', '--scenarios', 'startup,headless,interactive', '--out', 'results\benchmark.jsonl') + $B)
+          foreach ($i in 1, 2, 3) { Run "long_session $i" "long-$i.txt" (@('bench\long_session.py', '--prompts', '75', '--every', '25', '--out', 'results\long.jsonl') + $B) }
+          foreach ($i in 1, 2) { Run "large_write $i" "large_write-$i.txt" (@('bench\large_write.py') + $B) }
+          foreach ($i in 1, 2) { Run "long_answer $i" "long_answer-$i.txt" (@('bench\long_answer.py') + $B) }
+          $summary = @('```') + (Get-Content results\environment.txt) + (Get-Content results\all.txt | Where-Object { $_ -notmatch '^\{' }) + @('```')
+          $summary | Add-Content -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: bench-octet-win32-x64
+          path: results
+          retention-days: 30

@@ -47,6 +47,43 @@ def done(prompt: int) -> str:
     are on the screen too, and are written again when the screen is redrawn."""
     return f"{DONE} (prompt {prompt})."
 MODEL_ARGS = ["--model", "fake/fake-model"]
+
+
+def is_octet(argv) -> bool:
+    """octet (github.com/skaft-software/octet): bench/octet.sh on Linux and macOS, the executable itself on Windows."""
+    return any(Path(a).name in ("octet", "octet.exe", "octet.sh") for a in argv)
+
+
+def octet_argv(argv: list[str]) -> list[str]:
+    """Pi's arguments as octet takes them, for octet started directly (on Windows, where a wrapper cannot hand its process over
+    and would be the process measured). Its model is custom/<provider>/<model>, and it takes --no-session only with -p."""
+    i = next((i for i, a in enumerate(argv) if "=" not in a and Path(a).name in ("octet", "octet.exe")), None)
+    if i is None:
+        return list(argv)
+    args, out = iter(argv[i + 1:]), list(argv[:i + 1])
+    for a in args:
+        if a == "--model":
+            out += ["--model", "custom/" + next(args)]
+        elif a != "--no-session" or "-p" in argv:
+            out.append(a)
+    return out
+
+
+def write_octet_config(d: Path, port: int):
+    """octet's settings (`d` is its ~/.octet) for the fake model: a custom provider for it, automatic compaction and cache
+    warming off, so that a long session sends the whole conversation and nothing else, as Pi does."""
+    model = {"api_name": "fake-model", "display_name": "fake-model", "context_window": 100000000, "max_output_tokens": 8192,
+             "tools": True, "parallel_tool_calls": True, "vision": False, "structured_output": False, "reasoning": False}
+    (d / "credentials").mkdir(parents=True, exist_ok=True)
+    custom = d / "credentials" / "custom.json"
+    custom.write_text(json.dumps({"version": 1, "providers": {"fake": {
+        "label": "Fake", "base_url": f"http://127.0.0.1:{port}/v1/", "auth": {"kind": "none"}, "auto_discover": False,
+        "models": [model]}}}))
+    custom.chmod(0o600)
+    (d / "config.toml").write_text('model = "custom/fake/fake-model"\ncache_warming = "off"\nreload = false\ntheme = "dark"\n\n'
+                                   '[compaction]\nmode = "disabled"\n')
+
+
 # What Pi shows for a prompt submitted while it is still starting (the prompt stays in the editor).
 STARTUP_IN_PROGRESS = b"Startup is still in progress"
 ANSI = re.compile(rb"\x1b\[[0-9;?<>=]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[=>78]|\x1b[()][A-Z0-9]")
@@ -146,6 +183,11 @@ def pi_home(port: int):
     (home / "auth.json").write_text("{}")
     # (OMP, the oh-my-pi fork, reads models.yml; JSON is YAML.)
     (home / "models.yml").write_text((home / "models.json").read_text())
+    # (octet reads ~/.octet: bench/octet.sh points HOME at octet-home. On Windows octet takes the profile folder from the system,
+    # not from HOME or USERPROFILE: with PIBOLT_BENCH_OCTET_PROFILE=1, on a CI runner that is thrown away, the files go there.)
+    write_octet_config(home / "octet-home" / ".octet", port)
+    if WINDOWS and os.environ.get("PIBOLT_BENCH_OCTET_PROFILE") == "1":
+        write_octet_config(Path.home() / ".octet", port)
     try:
         yield home
     finally:
@@ -171,6 +213,8 @@ def pi_env(home: Path, extra: dict | None = None) -> dict:
                 "TERM": "xterm-256color"})
     # (PiG, the Go port, reads its own names for the same settings.)
     env.update({"PIG_HOME": str(home), "PIG_CODING_AGENT_DIR": str(home), "PIG_OFFLINE": "1"})
+    # (And octet: no model discovery or metadata refresh.)
+    env.update({"OCTET_OFFLINE": "true"})
     env.update(extra or {})
     return env
 
@@ -295,7 +339,9 @@ class WinTty:
     """Tty's counterpart on Windows: Pi in a ConPTY, in a Job object. quit() returns (status, winproc.Usage)."""
 
     def __init__(self, argv, env, cwd, cols=120, rows=40, stderr=None):
-        self.console = winproc.ConPty(argv, env, cwd, cols, rows, stderr=stderr)
+        self.console = winproc.ConPty(octet_argv(argv), env, cwd, cols, rows, stderr=stderr)
+        # (octet has /exit, not /quit.)
+        self.quit_command = b"/exit" if is_octet(argv) else b"/quit"
         self.pid = self.console.proc.pid
         self.buf = b""
 
@@ -324,7 +370,7 @@ class WinTty:
     screen_text = lambda self, *a: Tty.screen_text(self, *a)  # noqa: E731
 
     def quit(self, timeout=10):
-        self.send(b"/quit\r")
+        self.send(self.quit_command + b"\r")
         end = time.perf_counter() + timeout
         status = None
         while time.perf_counter() < end:
@@ -349,6 +395,7 @@ class Tty:
 
     def __init__(self, argv, env, cwd, cols=120, rows=40, stderr=None):
         self.slow_quit = any(a.endswith("opencode.sh") for a in argv)
+        self.quit_command = b"/exit" if is_octet(argv) else b"/quit"
         self.pid, self.fd = pty.fork()
         if self.pid == 0:
             os.chdir(cwd)
@@ -423,7 +470,7 @@ class Tty:
                 self.pump(0.02)
             self.send(b"\r")
         else:
-            self.send(b"/quit\r")
+            self.send(self.quit_command + b"\r")
         end = time.perf_counter() + timeout
         while time.perf_counter() < end:
             self.pump(0.02)

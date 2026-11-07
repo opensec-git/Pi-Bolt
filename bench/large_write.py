@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from harness import FIXTURES, MODEL_ARGS, WINDOWS, fake_model, parse_builds, pi_env, pi_home, pinned
+from harness import FIXTURES, MODEL_ARGS, WINDOWS, fake_model, octet_argv, parse_builds, pi_env, pi_home, pinned
 
 if WINDOWS:
     import winproc
@@ -37,7 +37,7 @@ def main():
                     began = time.perf_counter()
                     if WINDOWS:
                         # (In a Job object: what Pi starts is counted with it, as RUSAGE_CHILDREN counts it on Linux.)
-                        out, measured = winproc.run(argv, env, cwd, timeout=a.timeout)
+                        out, measured = winproc.run(octet_argv(argv), env, cwd, timeout=a.timeout)
                         returncode, cpu = measured["exit"], measured["job_cpu_ms"] / 1e3
                     else:
                         p = subprocess.Popen(pinned(argv, a.cpus), cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,

@@ -55,7 +55,7 @@ def windows_io(res):
 
 def run_plain(build, args, env, cwd, cpus):
     if WINDOWS:
-        out, res = winproc.run([*build.argv, *args], env, cwd)
+        out, res = winproc.run(harness.octet_argv([*build.argv, *args]), env, cwd)
         return out, {"ok": res["exit"] == 0, "wall_ms": res["wall_ms"], "cpu_ms": res["cpu_ms"], "job_cpu_ms": res["job_cpu_ms"],
                      **windows_memory(res), **windows_io(res)}
     t0 = time.perf_counter()
