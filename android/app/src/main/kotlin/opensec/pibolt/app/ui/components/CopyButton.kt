@@ -111,3 +111,35 @@ fun CopyButton(
         }
     }
 }
+
+/**
+ * [CopyButton] for a glass top bar: a [GlassIconButton] whose copy glyph becomes a success check for
+ * [COPIED_FEEDBACK_MS], with the same haptic and TalkBack announcement ("Copied").
+ */
+@Composable
+fun GlassCopyButton(text: () -> String, modifier: Modifier = Modifier, clipLabel: String = "Pi-Bolt", description: String = "Copy") {
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
+    val haptics = Pi.haptics
+    val colors = Pi.colors
+    var copiedAt by remember { mutableIntStateOf(0) }
+    val copied = copiedAt > 0
+    LaunchedEffect(copiedAt) {
+        if (copiedAt > 0) {
+            delay(COPIED_FEEDBACK_MS)
+            copiedAt = 0
+        }
+    }
+    GlassIconButton(
+        if (copied) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
+        if (copied) "Copied" else description,
+        onClick = {
+            val value = text()
+            scope.launch { clipboard.setClipEntry(ClipEntry(ClipData.newPlainText(clipLabel, value))) }
+            haptics.confirm()
+            copiedAt += 1
+        },
+        modifier = modifier.semantics { liveRegion = LiveRegionMode.Polite },
+        tint = if (copied) colors.success else colors.ink1,
+    )
+}

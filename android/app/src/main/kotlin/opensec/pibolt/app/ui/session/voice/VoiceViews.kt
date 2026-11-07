@@ -49,7 +49,7 @@ import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Space
 
 /**
- * The pill's mic: a 36dp circle in a 48dp target, like the kit's `ComposerCircle` (surface3, an ink2 MicNone) at
+ * The pill's mic: a 36dp circle in a 48dp target, the kit's `ComposerCircle` look (the selected overlay, an ink1 MicNone) at
  * rest; while it dictates in place the circle turns accent with an onAccent Mic (no pulse), and TalkBack hears
  * "Listening". The surface's own listening shows on the surface, not here.
  */
@@ -57,7 +57,7 @@ import opensec.pibolt.app.ui.theme.Space
 fun VoiceMic(voice: VoiceInput, enabled: Boolean, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val on = voice.listening && !voice.surface
-    val fill by animateColorAsState(if (on) colors.accent else colors.surface3, PiMotion.effects(), label = "mic")
+    val fill by animateColorAsState(if (on) colors.accent else colors.selected, PiMotion.effects(), label = "mic")
     val description = if (on) "Stop dictation" else "Dictate"
     Box(modifier.size(ComposerLayout.TARGET), contentAlignment = Alignment.Center) {
         Box(
@@ -77,8 +77,8 @@ fun VoiceMic(voice: VoiceInput, enabled: Boolean, modifier: Modifier = Modifier)
                 contentDescription = null,
                 tint = when {
                     on -> colors.onAccent
-                    enabled -> colors.ink2
-                    else -> colors.ink2.copy(alpha = 0.4f)
+                    enabled -> colors.ink1
+                    else -> colors.ink1.copy(alpha = 0.4f)
                 },
                 modifier = Modifier.size(IconSize.md),
             )

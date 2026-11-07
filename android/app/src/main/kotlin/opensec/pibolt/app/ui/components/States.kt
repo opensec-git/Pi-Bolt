@@ -5,7 +5,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -32,6 +31,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -43,8 +43,9 @@ import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Space
 
 /**
- * Nothing to show yet: an optional 32dp glyph in a 56dp surface2 disc, the title (bodyStrong ink1), one or two lines
- * of explanation (body ink2) and at most one action, centred, inside a surface1 card. Never a lone grey sentence.
+ * Nothing to show yet, in the redesign's calm unboxed form (the workspace's empty views match it): an optional 22dp
+ * glyph (ink2) in a 48dp glass circle, the title (rowTitle ink1, a heading), one or two lines of explanation (rowMeta
+ * ink2) and at most one action, centred. Never a lone grey sentence.
  */
 @Composable
 fun EmptyState(
@@ -55,23 +56,21 @@ fun EmptyState(
     action: (@Composable () -> Unit)? = null,
 ) {
     val colors = Pi.colors
-    PiCard(modifier, radius = Radius.md, padding = PaddingValues(horizontal = Space.xl, vertical = Space.xxl)) {
-        Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
-            if (icon != null) {
-                Box(Modifier.size(56.dp).background(colors.surface2, CircleShape), contentAlignment = Alignment.Center) {
-                    Icon(icon, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.hero - 6.dp))
-                }
-                Spacer(Modifier.height(Space.md))
+    Column(modifier.fillMaxWidth().padding(horizontal = Space.xl, vertical = Space.xl), horizontalAlignment = Alignment.CenterHorizontally) {
+        if (icon != null) {
+            Box(Modifier.size(48.dp).glass(CircleShape, colors), contentAlignment = Alignment.Center) {
+                Icon(icon, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.lg))
             }
-            Text(title, style = Pi.type.bodyStrong, color = colors.ink1, textAlign = TextAlign.Center)
-            if (!message.isNullOrBlank()) {
-                Spacer(Modifier.height(Space.xs))
-                Text(message, style = Pi.type.body, color = colors.ink2, textAlign = TextAlign.Center)
-            }
-            if (action != null) {
-                Spacer(Modifier.height(Space.lg))
-                action()
-            }
+            Spacer(Modifier.height(Space.lg))
+        }
+        Text(title, style = Pi.type.rowTitle, color = colors.ink1, textAlign = TextAlign.Center, modifier = Modifier.semantics { heading() })
+        if (!message.isNullOrBlank()) {
+            Spacer(Modifier.height(Space.xs))
+            Text(message, style = Pi.type.rowMeta, color = colors.ink2, textAlign = TextAlign.Center)
+        }
+        if (action != null) {
+            Spacer(Modifier.height(Space.lg))
+            action()
         }
     }
 }
