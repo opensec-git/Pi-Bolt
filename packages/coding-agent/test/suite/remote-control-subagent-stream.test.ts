@@ -6,7 +6,13 @@ import { fauxAssistantMessage, fauxText, fauxThinking, fauxToolCall } from "@ear
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../../src/core/session-manager.ts";
-import { capMessage, findRun, SUBAGENT_STREAM_FEATURE, SubagentStreams } from "../../src/core/subagent-stream.ts";
+import {
+	capMessage,
+	capUpdate,
+	findRun,
+	SUBAGENT_STREAM_FEATURE,
+	SubagentStreams,
+} from "../../src/core/subagent-stream.ts";
 import { generateKeyPair } from "../../src/remote-control/noise.ts";
 import { RemoteControlServer } from "../../src/remote-control/server.ts";
 import { RemoteControlStore } from "../../src/remote-control/store.ts";
@@ -440,5 +446,34 @@ describe("subagent stream helpers", () => {
 		expect(Buffer.byteLength(JSON.stringify(capMessage(manyBlocks, max)))).toBeLessThanOrEqual(max);
 		const wide = { role: "user", content: "\u0001".repeat(300_000) };
 		expect(Buffer.byteLength(JSON.stringify(capMessage(wide, max)))).toBeLessThanOrEqual(max);
+	});
+
+	it("bounds a streamed tool call update with many large arguments by bytes", () => {
+		const max = 256 * 1024;
+		const toolCall = {
+			type: "toolCall",
+			id: "t1",
+			name: "write",
+			arguments: Object.fromEntries(Array.from({ length: 300 }, (_, i) => [`a${i}`, "x".repeat(140_000)])),
+		};
+		const update = {
+			type: "message_update",
+			usage: { input: 1, output: 2 },
+			assistantMessageEvent: { type: "toolcall_end", contentIndex: 0, toolCall },
+		};
+		const capped = capUpdate(update, max);
+		expect(Buffer.byteLength(JSON.stringify(capped))).toBeLessThanOrEqual(max);
+		expect((capped.assistantMessageEvent as Message).toolCall).toMatchObject({
+			type: "toolCall",
+			id: "t1",
+			name: "write",
+		});
+		const wideDelta = {
+			type: "message_update",
+			assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "\u0001".repeat(300_000) },
+		};
+		expect(Buffer.byteLength(JSON.stringify(capUpdate(wideDelta, max)))).toBeLessThanOrEqual(max);
+		const small = { type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "hi" } };
+		expect(capUpdate(small, max)).toBe(small);
 	});
 });

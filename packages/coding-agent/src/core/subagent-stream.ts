@@ -255,14 +255,32 @@ export function capMessage(message: Json, maxBytes: number): Json {
 	return small;
 }
 
-/** A `message_update` event in at most about [maxBytes] of JSON: a large tool call or final message in it is cut. */
-function capUpdate(event: Json, maxBytes: number): Json {
+/** [value] in at most [maxBytes] of JSON: as it is when it fits, else cut (an array or object as its JSON). */
+function fitJson(value: unknown, maxBytes: number): unknown {
+	if (jsonBytes(value) <= maxBytes) return value;
+	const capped = capValue(value, Math.floor(maxBytes / 2));
+	if (jsonBytes(capped) <= maxBytes) return capped;
+	const text = typeof value === "string" ? value : (JSON.stringify(value) ?? "");
+	// JSON takes at most 6 bytes per UTF-16 unit (`\uXXXX`).
+	return cut(text, Math.max(0, Math.floor((maxBytes - 2) / 6) - CUT_NOTE.length));
+}
+
+/**
+ * A `message_update` event in at most about [maxBytes] of JSON. Its large parts (a delta, a block's content, a tool
+ * call's arguments, a final message or error) get a fifth each; one of them is large at a time.
+ */
+export function capUpdate(event: Json, maxBytes: number): Json {
 	if (jsonBytes(event) <= maxBytes || !isRecord(event.assistantMessageEvent)) return event;
-	const half = Math.floor(maxBytes / 2);
+	const share = Math.floor(maxBytes / 5);
 	const inner: Json = { ...event.assistantMessageEvent };
-	for (const key of ["delta", "content"]) if (typeof inner[key] === "string") inner[key] = cut(inner[key], half);
-	if (isRecord(inner.toolCall)) inner.toolCall = capBlock(inner.toolCall, half);
-	for (const key of ["message", "error"]) if (isRecord(inner[key])) inner[key] = capMessage(inner[key], half);
+	for (const key of ["delta", "content"]) if (inner[key] !== undefined) inner[key] = fitJson(inner[key], share);
+	if (isRecord(inner.toolCall)) {
+		const call: Json = {};
+		for (const [key, value] of Object.entries(inner.toolCall))
+			call[key] = fitJson(value, key === "arguments" ? share : 1024);
+		inner.toolCall = call;
+	}
+	for (const key of ["message", "error"]) if (isRecord(inner[key])) inner[key] = capMessage(inner[key], share);
 	return { ...event, assistantMessageEvent: inner };
 }
 
@@ -530,7 +548,7 @@ class SubagentStream {
 					type: event.type,
 					toolCallId: event.toolCallId,
 					toolName: event.toolName,
-					args: capValue(event.args, Math.floor(this.owner.limits.maxMessageBytes / 2)),
+					args: fitJson(event.args, Math.floor(this.owner.limits.maxMessageBytes / 2)),
 				});
 				return;
 			case "tool_execution_end":
