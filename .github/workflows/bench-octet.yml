@@ -53,11 +53,14 @@ jobs:
           ref: ${{ env.OCTET_TAG }}
           path: .work/octet-src
           persist-credentials: false
-      # (The revision octet's release workflow pins: it installs Rust 1.97.1.)
-      - uses: dtolnay/rust-toolchain@032958afbdc797a9164d3bc0b56325c1308924a5
+      # (The compiler octet's release workflow uses, by the runner's rustup: this repository allows only GitHub's actions.)
+      - name: Rust 1.97.1
         if: matrix.build_octet
-        with:
-          targets: ${{ matrix.octet }}
+        env:
+          OCTET_TARGET: ${{ matrix.octet }}
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --target "$OCTET_TARGET"
+          rustup default 1.97.1
       - name: Builds
         env:
           GH_TOKEN: ${{ github.token }}
