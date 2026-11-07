@@ -77,8 +77,15 @@ import kotlinx.serialization.json.buildJsonObject
 sealed interface SessionEffect {
     data class Notify(val message: String, val kind: String) : SessionEffect
 
-    /** Put text into the composer (extension `set_editor_text`, a failed send, or a cleared queue). */
-    data class EditorText(val text: String) : SessionEffect
+    /**
+     * Put text into the composer: an extension's `set_editor_text` replaces the draft; a failed send or a cleared queue
+     * ([restore]) gives text back without losing what was typed since, as the terminal does: [into].
+     */
+    data class EditorText(val text: String, val restore: Boolean = false) : SessionEffect {
+        /** The composer's text after this effect, from [draft]. */
+        fun into(draft: String): String =
+            if (!restore || draft.isBlank() || draft.trim() == text.trim()) text else listOf(text, draft).filter { it.isNotBlank() }.joinToString("\n\n")
+    }
 
     data class Error(val message: String) : SessionEffect
 }
@@ -677,15 +684,18 @@ class SessionController private constructor(
      */
     fun send(text: String, behavior: StreamingBehavior, images: List<ImageAttachment> = emptyList()): Boolean {
         if (!spendAllows()) return false
-        val running = _state.value.isRunning
         sentAt = SystemClock.elapsedRealtime()
         scope.launch {
+            // Pi refuses a prompt while a manual compaction runs ("Wait for compaction to finish and retry"); the terminal
+            // holds it until the compaction ends, and so does this.
+            if (holdsForCompaction(_state.value)) withTimeoutOrNull(COMPACTION_HOLD_MS) { _state.first { !holdsForCompaction(it) } }
+            val running = _state.value.isRunning
             // The turn's start state is recorded before the agent can edit (a steer joins a running turn instead).
             if (!running) checkpoints?.prepareStart()
             // An extension command answers only when it finishes, after its dialogs: nothing waits on this.
             val response = rpc.prompt(text, images, streamingBehavior = if (running) behavior else null)
             if (!response.success && !stopped) {
-                _effects.tryEmit(SessionEffect.EditorText(text))
+                _effects.tryEmit(SessionEffect.EditorText(text, restore = true))
                 _effects.tryEmit(SessionEffect.Error(response.error ?: "Not sent"))
             }
         }
@@ -710,7 +720,7 @@ class SessionController private constructor(
             if (response.success) {
                 val (steering, followUp) = response.clearedQueue()
                 val text = (steering + followUp).joinToString("\n\n")
-                if (text.isNotBlank()) _effects.tryEmit(SessionEffect.EditorText(text))
+                if (text.isNotBlank()) _effects.tryEmit(SessionEffect.EditorText(text, restore = true))
             } else {
                 _effects.tryEmit(SessionEffect.Error(response.error ?: "Could not clear the queue"))
             }
@@ -764,8 +774,11 @@ class SessionController private constructor(
     fun setThinkingLevel(level: String) {
         scope.launch {
             val response = rpc.setThinkingLevel(level)
-            if (response.success) mutate { it.copy(thinkingLevel = level) }
-            else _effects.tryEmit(SessionEffect.Error(response.error ?: "Could not change thinking level"))
+            if (response.success) {
+                mutate { it.copy(thinkingLevel = level) }
+                // Pi clamps a level the model lacks ("/thinking xhigh" on a model up to high): show the level it set.
+                refreshState()
+            } else _effects.tryEmit(SessionEffect.Error(response.error ?: "Could not change thinking level"))
         }
     }
 
@@ -1007,6 +1020,15 @@ class SessionController private constructor(
 
         /** Close code 1012: the background service gave the port to `/remote-control` in a terminal on the computer. */
         const val HANDOFF_NOTICE = "The computer's terminal took over. Reconnecting…"
+
+        /** The longest a prompt waits for a manual compaction ([holdsForCompaction]): the compact request's own timeout. */
+        private const val COMPACTION_HOLD_MS = 600_000L
+
+        /**
+         * A prompt sent now waits for the compaction to end: a manual one (or one whose reason a resync lost). Pi takes a
+         * prompt during an automatic compaction (it queues it), but refuses one during `compact`.
+         */
+        fun holdsForCompaction(state: SessionState): Boolean = state.isCompacting && state.compactionReason != "threshold" && state.compactionReason != "overflow"
 
         /** Why a chat refuses a shell command. */
         const val NO_COMMANDS = "Chats can't run commands"

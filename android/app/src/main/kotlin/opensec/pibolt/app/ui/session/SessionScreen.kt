@@ -449,7 +449,8 @@ internal fun SessionContent(
                     scope.launch { snackbar.show(effect.message, SnackKind.Error) }
                 }
                 is SessionEffect.EditorText -> {
-                    draft = effect.text
+                    // A failed send or the queue given back joins what was typed meanwhile (it used to replace it).
+                    draft = effect.into(draft)
                     // A send that failed comes back to the composer: its "Sending" bubble goes, its images return.
                     SessionMemory.of(controller.memoryKey, controller.state.value.sessionId).pending.let { p -> if (p.value?.text == effect.text) p.value = null }
                     lastSent?.takeIf { it.first == effect.text && images.isEmpty() }?.let { images.addAll(it.second) }
@@ -486,6 +487,7 @@ internal fun SessionContent(
 
     val hello by remember { derivedStateOf { state.value.hello } }
     val running by remember { derivedStateOf { state.value.isRunning } }
+    val compacting by remember { derivedStateOf { state.value.isCompacting } }
     val shellRuns by controller.shellRuns.collectAsStateWithLifecycle()
     val connected by remember { derivedStateOf { linkState.value is LinkState.Connected } }
     val enabled = connected && hello
@@ -529,7 +531,8 @@ internal fun SessionContent(
     LaunchedEffect(pending) {
         if (pending == null) return@LaunchedEffect
         delay(PendingSend.TIMEOUT_MS)
-        if (memory.pending.value === pending && !state.value.isRunning) memory.pending.value = null
+        // A prompt held for a manual compaction (SessionController.send) is still on its way.
+        if (memory.pending.value === pending && !state.value.isRunning && !state.value.isCompacting) memory.pending.value = null
     }
     val subtitle by remember {
         derivedStateOf {
@@ -905,6 +908,11 @@ internal fun SessionContent(
                 val prompt = promptBefore(notice)
                 if (prompt == null || prompt.text.isBlank()) {
                     scope.launch { snackbar.show("Nothing to retry") }
+                } else if (prompt.imageCount > 0) {
+                    // Its images are not kept: sent again, the prompt went without them. The text waits in the composer.
+                    draft = prompt.text
+                    focus.requestFocus()
+                    scope.launch { snackbar.show("Attach the images again, then send") }
                 } else {
                     haptics.send()
                     send(prompt.text)
@@ -963,6 +971,8 @@ internal fun SessionContent(
      * Follow-up while Pi works). A prompt that starts a run hides the keyboard so the reply has room; a steer keeps it.
      */
     fun submit(behavior: StreamingBehavior) {
+        // The mic still listening would put the sent text back with its last words.
+        if (voice.listening) voice.cancel()
         val text = draft.trim()
         val call = if (images.isEmpty()) CommandPalette.parse(text, commands, isLocal, chat) else null
         when {
@@ -1167,6 +1177,8 @@ internal fun SessionContent(
                     Composer(
                         text = draft,
                         onText = {
+                            // Typing while the mic listens: its next result would rebuild the draft over the typed words.
+                            if (voice.listening) voice.cancel()
                             draft = it
                             if (it.isBlank()) dictated = false
                         },
@@ -1205,8 +1217,9 @@ internal fun SessionContent(
                         voiceMode = voiceMode,
                         changes = if (isLocal) ({ SessionChangesPill(review) }) else null,
                         focusRequester = focus,
-                        // A user `!` command started while Pi is idle stops through abort_bash; the agent through abort.
-                        stoppable = running || shellRuns > 0,
+                        // A user `!` command started while Pi is idle stops through abort_bash; the agent and a
+                        // compaction (manual ones run with Pi idle) through abort.
+                        stoppable = composerStops(running, compacting, shellRuns),
                         onStop = { if (shellRuns > 0) controller.abortBash() else controller.abort() },
                         onModel = { openModels() },
                         compact = oneRowComposer,
@@ -1313,7 +1326,8 @@ internal fun SessionContent(
     when (sheet) {
         Sheet.None -> Unit
         Sheet.Attach -> {
-            val clip = remember { clipboardImage(context) != null }
+            // The clip's description only: reading the clip itself shows Android's "pasted from your clipboard" toast.
+            val clip = remember { clipboardHasImage(context) }
             ActionsSheet(
                 title = null,
                 actions = listOfNotNull(
@@ -1561,6 +1575,11 @@ private const val FORK_SWITCH_MS = 5_000L
 /** What "Continue once" sends after a spending limit stopped a run. */
 private const val CONTINUE_PROMPT = "Continue."
 
+/**
+ * The composer offers Stop: while Pi runs, while a compaction runs (a manual one has Pi idle, and could not be cancelled
+ * as Esc does in the terminal), or while a user `!` command runs.
+ */
+fun composerStops(running: Boolean, compacting: Boolean, shellRuns: Int): Boolean = running || compacting || shellRuns > 0
 
 /** The status line while compacting: why it runs, as the terminal says it. */
 fun compactionLabel(reason: String?): String = when (reason) {

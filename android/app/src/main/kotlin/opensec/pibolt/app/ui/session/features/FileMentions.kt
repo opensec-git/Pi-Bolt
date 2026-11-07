@@ -93,7 +93,11 @@ class ProjectFileIndex(private val root: File?) {
     suspend fun load() {
         if (root == null || loading || files.value != null) return
         loading = true
-        files.value = withContext(Dispatchers.IO) { runCatching { FileMentions.walk(root) }.getOrDefault(emptyList()) }
-        loading = false
+        // A cancelled first load (the `@` typed away before the walk ended) left [loading] set: no later `@` loaded again.
+        try {
+            files.value = withContext(Dispatchers.IO) { runCatching { FileMentions.walk(root) }.getOrDefault(emptyList()) }
+        } finally {
+            loading = false
+        }
     }
 }

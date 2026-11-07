@@ -27,7 +27,8 @@ object SessionReducer {
     fun reduce(state: SessionState, event: JsonObject): SessionState = when (event.type) {
         "remote_hello" -> SubagentReducer.keep(state, keepTodos(state, fromHello(event)))
         // A new run: the completed rows of the previous one leave the todo panel.
-        "agent_start" -> state.copy(isRunning = true, todos = hideCompleted(state.todos))
+        // A retried request starts a run: its backoff is over ("Retrying" stayed over the new reply until it ended).
+        "agent_start" -> state.copy(isRunning = true, retry = null, todos = hideCompleted(state.todos))
         "agent_settled" -> settle(state)
         "message_start" -> messageStart(state, event)
         "message_update" -> messageUpdate(state, event)
@@ -491,6 +492,7 @@ object SessionReducer {
         val result = event.obj("result")
         val key = "m${s.seq}"
         val next = s.copy(seq = s.seq + 1)
+        val overflow = event.str("reason") == "overflow"
         return when {
             result != null -> next.copy(
                 items = next.items + NoticeItem(
@@ -500,8 +502,10 @@ object SessionReducer {
                     result.str("summary").orEmpty(),
                 ),
             )
-            event.bool("aborted") == true -> next.copy(items = next.items + NoticeItem(key, NoticeKind.Aborted, "Compaction aborted"))
-            event.str("errorMessage") != null -> next.copy(items = next.items + NoticeItem(key, NoticeKind.Error, "Compaction failed", event.str("errorMessage")!!))
+            // Only an overflow compaction ends the turn: a manual or threshold one failing ("Nothing to compact") is no
+            // model error, and showed as one (with Retry, which sent the last prompt again) and marked the turn failed.
+            event.bool("aborted") == true -> next.copy(items = next.items + NoticeItem(key, if (overflow) NoticeKind.Aborted else NoticeKind.Info, "Compaction aborted"))
+            event.str("errorMessage") != null -> next.copy(items = next.items + NoticeItem(key, if (overflow) NoticeKind.Error else NoticeKind.Info, "Compaction failed", event.str("errorMessage")!!))
             else -> s
         }
     }

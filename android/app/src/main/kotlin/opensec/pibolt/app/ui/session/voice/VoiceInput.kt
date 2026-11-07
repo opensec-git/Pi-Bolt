@@ -111,6 +111,17 @@ class VoiceInput internal constructor(
 
     internal fun release() = session.release()
 
+    /**
+     * Stops dictating at once and drops the words still on their way: the composer's text was sent or edited by hand,
+     * and a late result rebuilt the draft from the text the dictation started with (the sent prompt came back, typed
+     * words were erased).
+     */
+    fun cancel() {
+        session.release()
+        state = VoiceState.Idle
+        level = 0f
+    }
+
     internal fun requestPermission() = askPermission()
 
     private fun begin() = withMic { start() }
