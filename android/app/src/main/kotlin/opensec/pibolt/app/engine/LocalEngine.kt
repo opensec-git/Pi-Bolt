@@ -515,6 +515,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
             val full = prefix.ensure(m)
             dns.start()
             AppExtension.install(paths.agentDir)
+            BackgroundJobs.install(paths.agentDir, app.assets)
             PreviewExtension.install(paths.agentDir) { app.assets.open(PreviewExtension.ASSET) }
             val how = if (full) "installed (kept ${prefix.kept.size} unchanged trees)" else "up to date"
             Log.i(TAG, "prepare: prefix $how, ${SystemClock.elapsedRealtime() - started} ms (engine ${m.engine}, glibc ${m.glibc})")

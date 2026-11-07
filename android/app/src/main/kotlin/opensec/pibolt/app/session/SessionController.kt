@@ -336,11 +336,11 @@ class SessionController private constructor(
 
     /** A turn, a compaction, an open dialog or background subagents: never stopped to make room or free memory. */
     val isBusy: Boolean
-        get() = _state.value.let { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() || SUBAGENTS_STATUS in it.statuses }
+        get() = _state.value.let { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() || SUBAGENTS_STATUS in it.statuses || opensec.pibolt.app.engine.BackgroundJobs.STATUS_KEY in it.statuses }
 
     /** Connected, and nothing runs: no turn, compaction, open dialog or background subagent. */
     val isIdle: Boolean
-        get() = _state.value.let { !it.isRunning && !it.isCompacting && it.dialogs.isEmpty() && SUBAGENTS_STATUS !in it.statuses } &&
+        get() = _state.value.let { !it.isRunning && !it.isCompacting && it.dialogs.isEmpty() && SUBAGENTS_STATUS !in it.statuses && opensec.pibolt.app.engine.BackgroundJobs.STATUS_KEY !in it.statuses } &&
             _link.value is LinkState.Connected
 
     fun retryNow() {

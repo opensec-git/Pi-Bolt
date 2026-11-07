@@ -17,9 +17,11 @@ object RunningSummary {
         val subagents: Boolean = false,
         /** A `!` command runs. */
         val shell: Boolean = false,
+        /** Background shell jobs run (BackgroundJobs). */
+        val jobs: Boolean = false,
     ) {
         /** Keeps the service (and so the process and its engines) up. */
-        val busy: Boolean get() = running || waiting || compacting || subagents || shell
+        val busy: Boolean get() = running || waiting || compacting || subagents || shell || jobs
 
         val status: String
             get() = when {
@@ -29,6 +31,7 @@ object RunningSummary {
                 running -> "Working"
                 subagents -> "Background agents working"
                 shell -> "Running a command"
+                jobs -> "Background jobs running"
                 else -> "Working"
             }
     }
