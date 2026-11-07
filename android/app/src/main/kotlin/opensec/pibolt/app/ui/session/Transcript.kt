@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
@@ -65,8 +67,15 @@ import opensec.pibolt.app.ui.theme.LocalPiType
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.PiType
+import opensec.pibolt.protocol.session.NoticeItem
 import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.session.ToolStatus
+
+/**
+ * True while the live status line is on screen. It owns the one animated spinner then: step rows, the todo row and
+ * the top bar show still frames. Read the value in the draw or layout phase where possible.
+ */
+val LocalStatusOnScreen = compositionLocalOf<State<Boolean>> { mutableStateOf(false) }
 
 /** Live status for the transcript's bottom line. */
 @Immutable
@@ -75,7 +84,7 @@ data class LiveStatus(val visible: Boolean, val mode: QuadMode, val text: Status
 /**
  * The conversation. A reversed LazyColumn whose index 0 is the live status line: while the reader is at the bottom,
  * new rows and a growing reply stay pinned there; once they scroll up the view stays put and a round scroll button
- * appears at the end edge (with a dot when there is unseen content). A send always jumps to the bottom. Each markdown
+ * appears centred above the composer (with a dot when there is unseen content). A send always jumps to the bottom. Each markdown
  * block is its own row with a stable key, so streaming re-lays out only the block being written.
  */
 @Composable
@@ -90,6 +99,8 @@ fun Transcript(
     onStatusOnScreen: (Boolean) -> Unit = {},
     jump: SearchJump? = null,
     onImage: (String, Int) -> Unit = { _, _ -> },
+    errorContext: ErrorContext = ErrorContext(null, null, local = false, running = false),
+    onErrorAction: (ErrorAction, NoticeItem) -> Unit = { _, _ -> },
 ) {
     val settings = Pi.settings
     val parseScope = rememberCoroutineScope()
@@ -101,7 +112,7 @@ fun Transcript(
         delay(1200)
         settledTick++
     }
-    val rows by remember {
+    val built by remember {
         derivedStateOf {
             val s = state.value
             md.version.intValue
@@ -109,11 +120,15 @@ fun Transcript(
             val recent = settledTick >= 0 && memory.settledAt.longValue > 0 && SystemClock.uptimeMillis() - memory.settledAt.longValue < 1200
             val open = memory.openFolds.filterValues { it }.keys
             val groups = memory.openGroups.filterValues { it }.keys
-            TranscriptModel.rows(s.allItems, liveTurn, open, memory.turnDurations, md, groups, memory.pending.value, memory.aliases, s.subagents).let { list ->
-                if (!recent || liveTurn) list else markLastTurnLive(list)
+            // The failed attempts of a retry (and a "Compaction failed" after an overflow) are one error notice.
+            val (items, errors) = ErrorNotices.collapse(s.allItems, s.retry)
+            TranscriptModel.rows(items, liveTurn, open, memory.turnDurations, md, groups, memory.pending.value, memory.aliases, s.subagents).let { list ->
+                (if (!recent || liveTurn) list else markLastTurnLive(list)) to errors
             }
         }
     }
+    val rows by remember { derivedStateOf { built.first } }
+    val errorGroups by remember { derivedStateOf { built.second } }
     val unique = remember(rows.size, rows.firstOrNull()?.key, rows.lastOrNull()?.key) { TranscriptModel.keysUnique(rows) }
     if (!memory.primed && state.value.hello) {
         rows.forEach { memory.seen.add(it.key) }
@@ -136,8 +151,12 @@ fun Transcript(
             lastKey = key
         }
     }
+    val statusOnScreen = remember { mutableStateOf(false) }
     LaunchedEffect(list) {
-        snapshotFlow { list.layoutInfo.visibleItemsInfo.any { it.key == "status" } }.collect { onStatusOnScreen(it) }
+        snapshotFlow { list.layoutInfo.visibleItemsInfo.any { it.key == "status" } }.collect {
+            statusOnScreen.value = it
+            onStatusOnScreen(it)
+        }
     }
     LaunchedEffect(list) {
         // Every send from this phone jumps to the bottom, wherever the reader was.
@@ -187,12 +206,16 @@ fun Transcript(
     val baseType = Pi.type
     val type = remember(baseType, settings.textSize) { baseType.scaled(PiType.factorFor(settings.textSize)) }
 
-    CompositionLocalProvider(LocalDensity provides capped, LocalPiType provides type) {
-        Box(modifier.fillMaxSize()) {
+    val canvas = Pi.colors.canvas
+    CompositionLocalProvider(LocalDensity provides capped, LocalPiType provides type, LocalStatusOnScreen provides statusOnScreen) {
+        BoxWithConstraints(modifier.fillMaxSize()) {
+            // Past 840dp (landscape phones, tablets, foldables) the text keeps a 720dp reading width, centred; the
+            // list itself stays full width so it scrolls from anywhere.
+            val gutter = if (maxWidth > 840.dp) ((maxWidth - 720.dp) / 2).coerceAtLeast(16.dp) else 16.dp
             LazyColumn(
                 state = list,
                 reverseLayout = true,
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 4.dp),
+                contentPadding = PaddingValues(start = gutter, end = gutter, top = 12.dp + TOP_FADE, bottom = 4.dp + BOTTOM_FADE),
                 modifier = Modifier.fillMaxSize(),
             ) {
                 item(key = "status", contentType = "status") {
@@ -208,17 +231,34 @@ fun Transcript(
                     val index = n - 1 - i
                     val row = rows[index]
                     val previous = rows.getOrNull(index - 1)
-                    RowView(row, previous, memory, settings.toolPreviewLines, settings.thinkingExpanded, onOpen, onActions, onAskAgain, reduced, onImage) {
-                        keepInPlace(if (unique) row.key else "row$i")
+                    if (row is NoticeRow && ErrorNotices.isProviderError(row.item)) {
+                        ErrorNoticeView(
+                            row.item,
+                            errorGroups[row.item.key],
+                            errorContext,
+                            onAction = { onErrorAction(it, row.item) },
+                            modifier = if (row.live && !reduced) Modifier.animateItem(fadeInSpec = PiMotion.enter(PiMotion.STANDARD), placementSpec = null, fadeOutSpec = PiMotion.leave(PiMotion.STANDARD)) else Modifier,
+                        )
+                    } else {
+                        RowView(row, previous, memory, settings.toolPreviewLines, settings.thinkingExpanded, onOpen, onActions, onAskAgain, reduced, onImage) {
+                            keepInPlace(if (unique) row.key else "row$i")
+                        }
                     }
                 }
             }
-            // Rows slide under a short canvas fade instead of being cut at the top bar.
+            // Rows slide under canvas fades instead of being cut by the top bar and the composer.
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(12.dp)
-                    .background(Brush.verticalGradient(0f to Pi.colors.canvas, 1f to Pi.colors.canvas.copy(alpha = 0f))),
+                    .height(TOP_FADE)
+                    .background(Brush.verticalGradient(0f to canvas, 1f to canvas.copy(alpha = 0f))),
+            )
+            Box(
+                Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(BOTTOM_FADE)
+                    .background(Brush.verticalGradient(0f to canvas.copy(alpha = 0f), 1f to canvas)),
             )
             AnimatedVisibility(
                 visible = showPill,
@@ -236,7 +276,8 @@ fun Transcript(
                         scaleOut(PiMotion.leave(PiMotion.QUICK), targetScale = 0.95f) +
                         slideOutVertically(PiMotion.leave(PiMotion.QUICK)) { with(density) { 16.dp.roundToPx() } }
                 },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 12.dp, bottom = 12.dp),
+                // Centred above the composer, out of the text column's end edge where it covered table cells and code.
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 8.dp),
             ) {
                 ScrollButton(unseen) {
                     scope.launch {
@@ -248,6 +289,10 @@ fun Transcript(
         }
     }
 }
+
+/** Canvas fades over the list's top and bottom edges. */
+private val TOP_FADE = 24.dp
+private val BOTTOM_FADE = 16.dp
 
 private fun markLastTurnLive(rows: List<TRow>): List<TRow> {
     val lastUser = rows.indexOfLast { it is UserRow }
@@ -273,7 +318,7 @@ private fun markLastTurnLive(rows: List<TRow>): List<TRow> {
 }
 
 /**
- * Scroll to the latest: a 40dp round button (surface3, 1dp lineStrong, arrow) at the end edge, 48dp to touch. An
+ * Scroll to the latest: a 40dp round button (surface3, 1dp lineStrong, arrow) centred above the composer, 48dp to touch. An
  * accent dot at its top-end marks unseen content; it pulses twice when it appears (static under reduce motion).
  */
 @Composable
