@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.home
 
+import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import opensec.pibolt.app.ui.projects.transfer.SafTransfer
@@ -313,6 +314,9 @@ fun HomeScreen(
     val needsModel = !unavailable && authLoaded && configured.isEmpty()
     val setup = !unavailable && metaLoaded && authLoaded && list != null && (needsModel || list.isEmpty())
     val hasProjects = !unavailable && !list.isNullOrEmpty()
+    // Home is usable once the projects and the key and meta state are read: the startup's "fully drawn" (logcat
+    // "Fully drawn", Macrobenchmark's timeToFullDisplay).
+    ReportDrawnWhen { list != null && metaLoaded && authLoaded }
 
     // Landscape: the side navigation bar and a display cutout keep their side; the canvas still fills the window.
     val listState = rememberLazyListState()
