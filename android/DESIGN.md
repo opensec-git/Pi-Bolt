@@ -361,8 +361,9 @@ alpha). No overshoot except sheet drag release.
 - `GlassIconButton`: a 44dp glass circle in a 48dp target, a 22dp ink1 glyph (back, more, search, +); press 0.96.
 - `GlassPill`: a floating glass pill, 40dp (48dp target), 16dp sides ("View changes +2 −2").
 - `StatusTile`: one tile of a 2x2 grid; radius tile (16), surface1 + 1dp line (lineStrong when active), 104dp; a 20dp
-  glyph top-left in its own colour, the label (rowMeta ink1) and its count (rowMeta ink3, tnum) bottom-left; read as
-  "label, count".
+  glyph top-left in its own colour, the label (rowMeta ink1, two lines before an ellipsis at a large font scale) and its
+  count (rowMeta ink3, tnum, on the label's last line) bottom-left; read as "label, count". A row of tiles shares one
+  height.
 - `InsetRow`: the plain list row: no card, 14dp vertical padding, at least 56dp; an optional 24dp leading slot (outline
   glyph ink2, a Quad), the title (rowTitle ink1), an optional meta line (rowMeta ink3), then count (ink3), unread dot
   (8dp accent) and chevron (ink3); a 1dp hairline under it inset from the text start to the 20dp gutter; `current` sets

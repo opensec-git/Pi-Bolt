@@ -1,5 +1,7 @@
 package opensec.pibolt.app.ui.session
 
+import androidx.compose.material.icons.rounded.History
+import opensec.pibolt.app.ui.components.EmptyState
 import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
@@ -569,7 +571,7 @@ fun HistorySheet(prompts: List<String>, onPick: (String) -> Unit, onDismiss: () 
     PiSheet(onDismiss = onDismiss, state = state) {
         SheetHeader("Prompt history")
         if (prompts.isEmpty()) {
-            Text("No prompts yet", style = Pi.type.body, color = colors.ink3, modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp))
+            EmptyState("No prompts yet", message = "Prompts you send show here.", icon = Icons.Rounded.History)
         }
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 480.dp)) {
             items(prompts) { prompt ->
