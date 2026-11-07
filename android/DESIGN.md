@@ -204,10 +204,12 @@ with the mark, then:
   folders were read (a few ms, off the main thread), so the computers section never jumps.
 
 **New project sheet.** Title, one line, a segmented "Empty folder | Clone from git". Clone shows the repository URL
-(monoSmall, URI keyboard, no autocorrect) with "Pi runs git clone in the new folder"; the URL names the folder until
-the name is edited. Name field, then `projects/<name>` (monoMeta ink3) or the error in danger. Cancel and Create/Clone.
-Creating opens a new session in the folder; for a clone the first prompt asks Pi to `git clone <url> .` and is sent as
-soon as the session can take it. URLs with shell syntax are refused; names may not contain slashes, start with a dot
+(monoSmall, URI keyboard, no autocorrect) and, when signed in to GitHub, "Choose from GitHub" (accent text action) that
+opens the repository picker: a search field, then 56dp rows (full name in body ink1, description meta ink3, a lock
+glyph for private ones), 100 per page with "Load more". The URL names the folder until the name is edited. Name field,
+then `projects/<name>` (monoMeta ink3) or the error in danger. Cancel and Create/Clone. The app clones with the
+engine's git (the hint line shows its progress, "Receiving objects · 45%"); a failed clone removes the folder and shows
+the explained error. Then a new session opens in the folder and asks Pi for a short overview. URLs with shell syntax are refused; names may not contain slashes, start with a dot
 or collide (case-insensitive) with another project.
 
 **Rename and delete.** Rename changes the title shown in the app only ("The folder stays projects/x"): Pi files its
@@ -217,7 +219,7 @@ sessions by path, so the folder never moves. Delete is a confirmation sheet that
 **Project.** Shared bounds from the project card (title as a shared element, like host card to session). Back,
 overflow (Pin, Rename, Delete), the title in display, the folder chip (`projects/x`, monoMeta ink2 on surface1, radius
 8) and, inside a git repository, the branch from `.git/HEAD` (branch glyph + monoMeta ink3). New session (primary,
-full width), then a segmented "Sessions · N | Files".
+full width), then a segmented "Sessions · N | Files | Changes".
 - Sessions: 64dp cards (surface1, line, radius 12): chat glyph ink3 (the live session: its Quad, lineStrong border,
   "Open" first in the meta line), the session name or first prompt (body ink1), "24 messages · 2 h ago" (meta ink3).
   Tap resumes; the live one resumes without reopening.
@@ -225,6 +227,29 @@ full width), then a segmented "Sessions · N | Files".
   52dp rows: folder or file glyph, the name in monoSmall (dot files ink3), size or "N items" (meta ink3) at the end.
   Folders first, then files, by name. Tapping a file opens the full-screen viewer (first 512 KB; binary files say so).
   Back goes up a folder before it leaves the screen.
+- Changes (git, through the engine's own git off the main thread with timeouts): outside a repository a card offers
+  "Initialise git". Inside: the branch card (surface1, radius 12): branch glyph, the branch in bodyStrong and
+  "origin/main · 2 to push · 1 to pull" in meta ink3, tap for the Branches sheet; while an operation runs, a 16dp Run
+  Quad and git's progress in meta ink2; then Pull, Push (text actions), "Pull request" (accent, GitHub remotes when
+  signed in) and History. Sections "Conflicts", "Staged · N" (Unstage all) and "Changes · N" (Stage all) list 56dp file
+  rows: the change letter in a 20dp surface2 tile (added/untracked success, deleted/conflict danger, renamed warning,
+  modified ink2; TalkBack reads the word), the file name in body over its folder in monoMeta ink3, and a 48dp + / −
+  button to stage or unstage. Tap opens the diff; long press asks to discard (ConfirmSheet, danger; untracked files are
+  deleted). The commit card: message field (2 to 8 lines), "Ask Pi" (secondary, sparkle glyph: Pi drafts from the
+  staged diff in the project's session and the answer fills the field) and Commit (primary). Without a git identity
+  the commit opens "Who is committing?" (name, email; prefilled with the GitHub name and no-reply address).
+- Diff viewer: full screen (fade and 10% rise, sheet duration). Bar: back, file name over its path, Stage or Unstage
+  and, unstaged, Discard. Each hunk is a card: its `@@` header (monoMeta ink3 on surface2) with Stage hunk / Unstage
+  hunk and, unstaged, a discard glyph (confirmed), then the rows renderer (DiffBlock: two gutters, sign column, solid
+  and hatched bars, syntax colours, word marks). Binary files, renames without changes and very large diffs say so.
+- History: full screen list of 64dp rows (subject in body, "abc1234 · author · 2 h ago" meta ink3, refs monoMeta ink2),
+  100 at a time. A commit opens its subject (subhead), body, author, date and a copy-hash button, then a card per file
+  (path in monoSmall, +/− counts) that folds its diff (folded first when more than three files).
+- Branches sheet: a new-branch field (mono, validated like `git check-ref-format`) with Create, then "On this phone"
+  (current first, success check) and "On the remote" (switching creates a tracking branch).
+- Pull request sheet: title, description (Markdown), "Merge into" chips (the repository's default branch first),
+  "Ask Pi" (Pi drafts title and body from the branch's commits) and Create (pushes first when needed). Done, it shows
+  "Pull request #12", the link in accent mono, Copy and "Open on GitHub".
 
 **Provider sheet (first run and Add provider).** Opens by itself once, 450 ms after the first frame of Home, when no
 provider has a key. Eyebrow "Welcome to Pi-Bolt" (first run only), "Connect a model", one line saying the key stays on
@@ -234,6 +259,14 @@ back, badge, provider name (title), what happens to the key, the key field (mono
 autocorrect; Paste when empty, Show/Hide when filled), a lock line "Stored on this device only" (or the error in
 danger), "Get a key at console.anthropic.com" (accent, opens the browser), Cancel and Save key. The key lives only in
 the sheet's memory (never saved instance state), is cleared after saving and never logged.
+
+**Settings > GitHub.** Signed out: one line on what it enables, "Sign in with GitHub" (primary; only when the build has
+an OAuth client id) and "Use a personal access token" (secondary, key glyph). Device flow sheet: the user code in
+display mono on a surface1 well (TalkBack spells it), Copy, "Open github.com/login/device" (primary), then a 16dp Wait
+Quad and "Waiting for you to approve on GitHub"; errors in danger with Try again. Token sheet: what scopes to pick, a
+link to create one, a masked mono field, the storage line (Keystore, never shown again, never logged) and Save, which
+checks the token against GitHub first. Signed in: name and @login, how and which scopes, a line on where it is used,
+Sign out (confirmed).
 
 **Settings > Model providers** comes first: configured providers (badge, name, "Key stored on this phone", a delete
 action that asks first and says the key is not revoked at the provider) and Add provider.

@@ -15,10 +15,10 @@ rpc-extension-ui.md, remote-control.md) and src/modes/interactive.
 
 | | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| done | 39 | 46 | 29 | 114 |
+| done | 40 | 50 | 29 | 119 |
 | partial | 0 | 1 | 4 | 5 |
 | missing | 0 | 1 | 6 | 7 |
-| **Total** | 39 | 48 | 39 | 126 |
+| **Total** | 40 | 52 | 39 | 131 |
 
 Not counted: 12 `n/a` rows (terminal-only features). Before this branch the same rows stood at 53 done, 15 partial and
 55 missing: it moved 37 rows (25 missing to done, 11 partial to done, 1 missing to partial) and closed every P0 gap.
@@ -229,6 +229,11 @@ Tree navigation, labels and the tool list go through a small helper extension th
 | Keep running in the background | — | done: foreground service while a turn runs | device | P0 |
 | Projects (create, clone, rename, pin, delete) | — | done | device | P0 |
 | Browse project files | — | done: Files tab and viewer | device | P1 |
+| Git changes (status, diffs, stage files or hunks, discard, commit) | git in Pi's bash | done: project Changes tab with the engine's git; "Ask Pi" drafts the message | device | P0 |
+| Git branches and history | git in Pi's bash | done: switch and create branches, log with commit details and diffs | device | P1 |
+| GitHub sign-in | — | done: OAuth device flow (when the build has a client id) or a personal access token, sealed by the Keystore | device | P1 |
+| Push, pull, clone private repositories | git in Pi's bash | done: with progress and plain errors; clone picks from the user's GitHub repositories; Pi's own git uses the account too | device | P1 |
+| Pull requests | `gh pr create` | done: title, body (Pi can draft), base branch, then the link | device | P1 |
 | TalkBack labels and 48 dp targets | — | done for the new controls | both | P0 |
 
 ## What remains

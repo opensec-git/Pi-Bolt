@@ -50,6 +50,9 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import opensec.pibolt.app.ui.components.Segmented
+import opensec.pibolt.app.ui.git.ChangesOverlays
+import opensec.pibolt.app.ui.git.changesItems
+import opensec.pibolt.app.ui.git.rememberChangesUi
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.semantics.contentDescription
@@ -115,7 +118,10 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
     val sessions by produceState<List<SessionSummary>?>(null, reload, live) { value = projects.sessions(dir) }
     var menu by remember { mutableStateOf(false) }
     var action by remember { mutableStateOf<ProjectAction?>(null) }
-    var showFiles by rememberSaveable { mutableStateOf(false) }
+    // 0 sessions, 1 files, 2 changes (git).
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    val showFiles = tab == 1
+    val changes = rememberChangesUi(app, dir, store, snackbar)
     // Folder shown in Files, relative to the project ("" is its root).
     var path by rememberSaveable { mutableStateOf("") }
     // The file open in the viewer, relative to the project.
@@ -226,9 +232,9 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
             }
             item(key = "tabs", contentType = "tabs") {
                 Segmented(
-                    options = listOf(false to (sessions?.size?.let { "Sessions · $it" } ?: "Sessions"), true to "Files"),
-                    selected = showFiles,
-                    onSelect = { showFiles = it },
+                    options = listOf(0 to (sessions?.size?.let { "Sessions · $it" } ?: "Sessions"), 1 to "Files", 2 to "Changes"),
+                    selected = tab,
+                    onSelect = { tab = it },
                     modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 10.dp),
                     height = 40.dp,
                 )
@@ -263,7 +269,8 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
                 }
             }
             val list = sessions
-            if (list != null && !showFiles) {
+            if (tab == 2) changesItems(changes)
+            if (list != null && tab == 0) {
                 if (list.isEmpty()) {
                     item(key = "empty", contentType = "empty") {
                         val shape = RoundedCornerShape(Radius.md)
@@ -309,6 +316,7 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
             openFile?.let { shown.value = it }
             shown.value?.let { rel -> FileViewer(dir, rel, onClose = { openFile = null }, onChanged = { reload++ }) }
         }
+        ChangesOverlays(changes, visible = tab == 2)
     }
     // Back inside Files goes up a folder first.
     BackHandler(enabled = showFiles && path.isNotEmpty() && openFile == null) { path = path.substringBeforeLast('/', "") }

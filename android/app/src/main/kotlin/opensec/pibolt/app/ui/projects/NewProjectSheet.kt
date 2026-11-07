@@ -38,6 +38,11 @@ import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiTextField
 import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.SecondaryButton
+import opensec.pibolt.app.ui.components.TextAction
+import opensec.pibolt.app.git.github.GitHub
+import opensec.pibolt.app.git.github.GitHubState
+import opensec.pibolt.app.ui.git.RepoPickerSheet
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import opensec.pibolt.app.ui.components.Segmented
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.theme.Pi
@@ -45,12 +50,20 @@ import opensec.pibolt.app.ui.theme.PiMotion
 
 /**
  * New project: an empty folder with a name, or "Clone from git" (the URL names the folder until the user edits the
- * name; Pi runs the clone in the new folder because git lives in the engine). [onCreate] gets the name and the URL
- * (null for an empty folder) and returns an error to show, or null when it worked.
+ * name; the app clones with the engine's git, showing [progress]). Signed in to [github], a repository can be picked
+ * from the user's list. [onCreate] gets the name and the URL (null for an empty folder) and returns an error to show,
+ * or null when it worked.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun NewProjectSheet(existing: List<String>, startWithClone: Boolean, onCreate: suspend (name: String, cloneUrl: String?) -> String?, onDismiss: () -> Unit) {
+fun NewProjectSheet(
+    existing: List<String>,
+    startWithClone: Boolean,
+    onCreate: suspend (name: String, cloneUrl: String?) -> String?,
+    onDismiss: () -> Unit,
+    github: GitHub? = null,
+    progress: String? = null,
+) {
     val colors = Pi.colors
     val type = Pi.type
     val haptics = Pi.haptics
@@ -64,6 +77,8 @@ fun NewProjectSheet(existing: List<String>, startWithClone: Boolean, onCreate: s
     var failure by remember { mutableStateOf<String?>(null) }
     var submit by remember { mutableIntStateOf(0) }
     val focus = remember { FocusRequester() }
+    var picking by remember { mutableStateOf(false) }
+    val signedIn = github?.state?.collectAsStateWithLifecycle()?.value is GitHubState.SignedIn
 
     val urlOk = !clone || ProjectRules.isGitUrl(url)
     val nameError = ProjectRules.nameError(name, existing)
@@ -122,7 +137,18 @@ fun NewProjectSheet(existing: List<String>, startWithClone: Boolean, onCreate: s
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, autoCorrectEnabled = false, imeAction = ImeAction.Next),
                     modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp).then(if (clone) Modifier.focusRequester(focus) else Modifier),
                 )
-                Hint(if (showUrlError) "Use an https://, ssh:// or git@host:path URL" else "Pi runs git clone in the new folder", showUrlError)
+                if (signedIn) {
+                    TextAction("Choose from GitHub", onClick = { picking = true }, color = colors.accent, modifier = Modifier.padding(horizontal = 8.dp).heightIn(min = 48.dp))
+                }
+                Hint(
+                    when {
+                        showUrlError -> "Use an https://, ssh:// or git@host:path URL"
+                        busy && progress != null -> progress
+                        signedIn -> "Cloned on this phone with your GitHub account"
+                        else -> "Cloned on this phone. Private GitHub repositories need GitHub sign-in in Settings."
+                    },
+                    showUrlError,
+                )
             }
         }
         Label("Name")
@@ -153,6 +179,7 @@ fun NewProjectSheet(existing: List<String>, startWithClone: Boolean, onCreate: s
             SecondaryButton("Cancel", onClick = { close(onDismiss) }, modifier = Modifier.weight(1f))
             PrimaryButton(
                 when {
+                    busy && clone -> "Cloning…"
                     busy -> "Creating…"
                     clone -> "Clone"
                     else -> "Create"
@@ -163,6 +190,14 @@ fun NewProjectSheet(existing: List<String>, startWithClone: Boolean, onCreate: s
             )
         }
         Spacer(Modifier.height(8.dp))
+    }
+    if (picking && github != null) {
+        RepoPickerSheet(github, onPick = { repo ->
+            picking = false
+            url = repo.cloneUrl
+            failure = null
+            if (!nameEdited) name = ProjectRules.repoName(repo.cloneUrl)
+        }, onDismiss = { picking = false })
     }
 }
 

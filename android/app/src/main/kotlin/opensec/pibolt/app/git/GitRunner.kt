@@ -46,9 +46,10 @@ object GitRunners {
  */
 class ProcessGitRunner(private val git: suspend () -> File?, private val environment: suspend () -> Map<String, String>) : GitRunner {
     override suspend fun run(cwd: File, args: List<String>, timeoutMs: Long, stdin: String?, onProgress: ((String) -> Unit)?): GitResult {
-        val binary = git() ?: throw GitException("Git is not available until the engine is set up")
-        val env = environment()
         return withContext(Dispatchers.IO) {
+            // Both may set up the engine prefix (disk work) the first time, so they run on IO too.
+            val binary = git() ?: throw GitException("Git is not available until the engine is set up")
+            val env = environment()
             val process = try {
                 ProcessBuilder(listOf(binary.path) + args).directory(cwd).apply {
                     val e = environment()
@@ -86,7 +87,8 @@ class ProcessGitRunner(private val git: suspend () -> File?, private val environ
             outThread.join(2_000)
             errThread.join(2_000)
             val errText = synchronized(err) { err.toString() }
-            if (!finished) GitResult(-1, out.toString(Charsets.UTF_8), errText, timedOut = true) else GitResult(process.exitValue(), out.toString(Charsets.UTF_8), errText)
+            val outText = String(out.toByteArray(), Charsets.UTF_8)
+            if (!finished) GitResult(-1, outText, errText, timedOut = true) else GitResult(process.exitValue(), outText, errText)
         }
     }
 

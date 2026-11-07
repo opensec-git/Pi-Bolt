@@ -172,6 +172,6 @@ object UnifiedDiffParser {
             bytes.write(c.toString().toByteArray())
             i++
         }
-        return bytes.toString(Charsets.UTF_8)
+        return String(bytes.toByteArray(), Charsets.UTF_8)
     }
 }
