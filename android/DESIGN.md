@@ -13,12 +13,12 @@ line; no shadows.
 | Role | Graphite (default) | Void (AMOLED) | Ember (warm) | Claude | Codex | Vercel | GitHub |
 |---|---|---|---|---|---|---|---|
 | canvas | `#0B0C0E` | `#000000` | `#15130F` | `#1F1E1D` | `#0D0D0D` | `#000000` | `#0D1117` |
-| surface1 (cards, composer) | `#121417` | `#08090A` | `#1C1A16` | `#262624` | `#171717` | `#0A0A0A` | `#151B23` |
+| surface1 (cards, composer) | `#121417` | `#0D0E10` | `#1C1A16` | `#262624` | `#171717` | `#0F0F0F` | `#151B23` |
 | surface2 (bubbles, sheets) | `#191C20` | `#101113` | `#24211C` | `#30302E` | `#212121` | `#111111` | `#1C2128` |
 | surface3 (pressed, menus) | `#21252A` | `#17191C` | `#2C2822` | `#3A3936` | `#2A2A2A` | `#1A1A1A` | `#262C36` |
 | ink1 (text) | `#E8EAED` | `#E8EAED` | `#EFE9DD` | `#F5F4EE` | `#ECECEC` | `#EDEDED` | `#F0F6FC` |
 | ink2 (secondary) | `#A3A8B0` | `#A3A8B0` | `#B9B1A3` | `#C3C0B6` | `#B4B4B4` | `#A1A1A1` | `#B7BDC8` |
-| ink3 (meta, lowest text) | `#7D838C` | `#7D838C` | `#8E877B` | `#9C9A92` | `#8F8F8F` | `#8F8F8F` | `#9198A1` |
+| ink3 (meta, lowest text) | `#878D96` | `#7D838C` | `#979084` | `#A6A49C` | `#929292` | `#8F8F8F` | `#9198A1` |
 | ink4 (rules, never text) | `#4C5158` | `#4C5158` | `#5A554D` | `#5E5D59` | `#545454` | `#454545` | `#3D444D` |
 | line / lineStrong | ink1 @ 9% / 16% | ink1 @ 11% / 19% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 12% / 20% | ink1 @ 10% / 18% |
 | scrim | black @ 56% | black @ 70% | black @ 56% | black @ 60% | black @ 60% | black @ 70% | black @ 60% |
@@ -32,9 +32,13 @@ GitHub blue `#4493F8` / `#0D1117`, ink1 / canvas for the others), **Ink** (accen
 **Iris** `#A99CFF` / `#120F2A`, **Glacier** `#7CC4F0` / `#06202E`. Accent marks the primary button, send button, focus ring, selection, links and
 the working hairline. Never status.
 
-Brand `#FFD84D` (voltage yellow): only on the app mark (launcher, splash, empty state).
+Brand: the Pi-Bolt logo's colours, only on the app mark (launcher, splash, Home, empty state). The mark is the logo's
+bolt (`ic_pibolt_logo`, cropped from docs/images/logo.svg): an upper blade in yellow (`#F7C04A` lit face, `#E9A42C`
+shaded face) and a lower blade in blue (`#4C96EA` lit, `#2A78D6` shaded). Yellow and blue are both brand colours and
+never stand for state or action. `PiColors.brand` (`#FFD84D`) is the single-colour fallback where the logo can't be drawn.
 
-Status (all themes): success `#5FD39A`, warning `#E8B04B` (needs you, steer), danger `#F2706B`; soft fills @ 14%.
+Status (all themes): success `#5FD39A`, warning `#E8B04B` (needs you, steer), danger `#F2706B` (Claude: `#FF8681`, its
+lighter canvas needs it); soft fills @ 14% (Claude's danger fill @ 12%).
 Diff: add bg success @ 11% / fg `#9BE6BF`, delete bg danger @ 11% / fg `#F7A9A5`; changed words in paired lines
 success / danger @ 22%. Add and delete never differ by hue alone: a `+` / `−` sign column, a solid 3dp gutter bar
 (success @ 60%) for additions and a hatched one (2dp stripes every 4dp, danger @ 70%) for deletions. Context rows
@@ -61,8 +65,18 @@ green, GitHub uses its dark "prettylights" roles. Only `text`, `log` and `output
 | variable | `#F08E9A` | `#8DB8A8` | `#9DBAE8` | `#FF9F6B` | `#FFA657` |
 | comment | `#858B94` | ink3 | ink3 | ink3 | ink3 |
 
-Every text token passes WCAG AA (4.5:1) on canvas and surface2 in all seven themes (syntax colours on surface1 too,
-`SyntaxColorsTest`); ink4 is decorative only.
+Contrast (WCAG 2.1, checked by `ContrastTest` for every theme and accent):
+- ink1, ink2 and ink3 pass AA (4.5:1) on canvas, surface1, surface2 and surface3. ink3 is the lowest text and was
+  raised where it missed AA on surface2 or surface3 (Graphite `#7D838C` → `#878D96`, Ember `#8E877B` → `#979084`,
+  Claude `#9C9A92` → `#A6A49C`, Codex `#8F8F8F` → `#929292`). ink3 on surface3 (menus, snackbars, inline code) now
+  measures 4.61 to 5.38:1; it was 4.03 to 4.44 in Graphite, Ember, Claude and Codex.
+- Rule: no text below ink3, and no ink4 text anywhere. On surface3 prefer ink2 for anything longer than a meta line.
+- Status colours pass on canvas, surface1 and surface2; danger passes on dangerSoft over cards and sheets (the danger
+  button), which is why Claude has its own danger.
+- onAccent passes on accent for every accent in every theme.
+- Void and Vercel cards (surface1) are one step lighter (`#0D0E10`, `#0F0F0F`) so they stand off the pure-black canvas.
+- Syntax colours pass on canvas, surface1 and surface2 (`SyntaxColorsTest`). Lines (1.2 to 1.3:1) are decoration: a
+  1dp line is never the only cue that something is interactive without a fill or label.
 
 ## Type
 
@@ -124,8 +138,8 @@ tool args → Write; not connected → Connect; else Think. List rows debounce m
 line switches at once. A finished step crossfades its spinner into a check (ink3) or cross (danger) over 160 ms,
 scale 0.7→1, live turn only.
 
-The app mark is built from Quad cells in brand yellow (new mark, not the desktop's bolt pattern): cells enter in a
-diagonal stagger (30 ms per diagonal, 280 ms fade + scale 0.6→1), then one Think ripple.
+The app mark (`BrandMark`) is the logo's yellow-and-blue bolt (see Colour), not a Quad: it enters once per launch
+and place (fade, scale 0.82→1 and a 6dp rise over the sheet duration); never while reduced motion is on.
 
 ## Motion
 
@@ -484,18 +498,30 @@ messages. Pi has no RPC to read or steer a subagent: steering and resuming go th
 - TalkBack: a card is one node ("Explore agent, Find the parser code, running, Reading 3 files…") with the click label
   "Open agent".
 
-**Settings.**
-- Appearance: theme tiles (seven swatches, four a row, drawn with each theme's canvas, surface and ink lines; selected = 1.5dp accent
-  ring), accent circles, text size slider with a live prose preview, density (Comfortable / Compact).
-- Motion and feedback: Reduce motion (Follow system / On), Haptics.
-- Session: show thinking expanded, tool output preview lines (6 / 12 / 24).
-- Pi on this phone: steering and follow-up delivery (One at a time / All at once), the thinking level new sessions
-  start with (six segments), Auto-compact and Auto-retry toggles, and the default model (the last one picked, as in
-  the terminal). They are the engine's own settings (`agent/settings.json`, other keys kept) and reach the open
-  on-device session at once over RPC.
-- Notifications: permission state with a button to the system settings.
+**Settings.** A pinned 56dp bar (back, "Settings" in title; a 1dp line under it once the page scrolls), then a
+search field ("Search settings") that narrows the page to matching settings: every query word must appear in the
+group, the label or its keywords (`SettingsIndex`, so "font" finds Text size and "vibrate" finds Haptics); "No setting
+matches" otherwise. Groups, in order, each a SectionLabel over a surface1 card (radius 18):
+- Model providers: configured providers by display name (`ProviderCatalog`), Add provider.
+- Pi on this phone: Default model (a 56dp row: the model and provider; it opens the model picker with the models of
+  the open on-device session, and says to open a session when none is), thinking level for new sessions, steering
+  and follow-up delivery (One at a time / All at once), Auto-compact, Auto-retry with the retry count (1 / 3 / 5 / 10),
+  Skill commands, Block images. They are the engine's own settings (`agent/settings.json`, other keys kept); the
+  queue, compaction and retry switches reach the open on-device session at once over RPC, the rest apply from the next
+  session.
+- Appearance: theme tiles (seven, four a row, each drawn in its own theme: canvas, user bubble, prose with an inline
+  code chip, a code card in the theme's syntax colours, the composer with the accent send button; selected = 1.5dp
+  accent ring; the near-black themes show their canvas hex under the name in monoMeta ink3), accent circles ("Theme"
+  is a split disc: the theme's own accent beside surface3), text size ("Text size" with its value in label ink2 beside
+  it, A-glyph steps and a live prose preview), density (Comfortable / Compact).
+- Motion and haptics: Reduce motion (Follow system / On), Haptics.
+- Session display: show thinking expanded, tool output preview lines (6 / 12 / 24).
+- Notifications: one 56dp row, "Notifications" with "Allowed" (meta success) or "Off" (meta warning); tapping opens
+  the system page.
+- Security: device key, Reset device key.
 - About: app version, device name, the update status and its action (see Updates), "Check for updates automatically",
   licences (Inter, JetBrains Mono: OFL).
+Segmented controls in Settings are 48dp tall.
 Changes apply live, without recreating the activity, and persist in a small JSON file (read synchronously at
 startup so the first frame has the right theme).
 
