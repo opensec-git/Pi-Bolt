@@ -9,7 +9,8 @@ sealed interface ChatItem {
     val key: String
 }
 
-data class UserItem(override val key: String, val text: String, val imageCount: Int = 0) : ChatItem
+/** A user message; [timestamp] is the message's own (Pi's `timestamp`, ms), which ties it to its turn checkpoints. */
+data class UserItem(override val key: String, val text: String, val imageCount: Int = 0, val timestamp: Long? = null) : ChatItem
 
 data class AssistantTextItem(override val key: String, val text: String, val streaming: Boolean) : ChatItem
 

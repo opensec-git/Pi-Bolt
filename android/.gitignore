@@ -1,6 +1,8 @@
 .gradle/
 .kotlin/
 build/
+# CMake/NDK intermediates of the native build (app/src/main/jni).
+.cxx/
 local.properties
 *.keystore
 *.jks

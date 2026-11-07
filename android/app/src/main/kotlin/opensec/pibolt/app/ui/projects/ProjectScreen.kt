@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Key
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.PushPin
@@ -33,6 +35,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -43,6 +46,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import opensec.pibolt.app.ui.projects.transfer.ExportSheet
+import opensec.pibolt.app.ui.projects.transfer.SafTransfer
+import opensec.pibolt.app.ui.projects.transfer.TransferBar
+import opensec.pibolt.app.ui.projects.transfer.TransferRunner
+import opensec.pibolt.app.ui.session.features.ShareFiles
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -50,6 +62,9 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import opensec.pibolt.app.ui.components.Segmented
+import opensec.pibolt.app.ui.git.ChangesOverlays
+import opensec.pibolt.app.ui.git.changesItems
+import opensec.pibolt.app.ui.git.rememberChangesUi
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.semantics.contentDescription
@@ -82,8 +97,10 @@ import opensec.pibolt.app.ui.components.rememberSettledMode
 import opensec.pibolt.app.ui.components.sharedHostBounds
 import opensec.pibolt.app.ui.components.sharedHostElement
 import opensec.pibolt.app.ui.components.show
+import opensec.pibolt.app.ui.projects.editor.EditorTabs
 import opensec.pibolt.app.ui.session.TranscriptModel
 import opensec.pibolt.app.ui.session.features2.SessionBrowserSheet
+import opensec.pibolt.app.ui.terminal.TerminalPane
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
 import java.io.File
@@ -94,7 +111,16 @@ import java.io.File
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSession: () -> Unit) {
+fun ProjectScreen(
+    app: PiBoltApp,
+    name: String,
+    onBack: () -> Unit,
+    onOpenSession: () -> Unit,
+    onTerminal: () -> Unit = {},
+    onSecrets: () -> Unit = {},
+    onPreview: (Int) -> Unit = {},
+    onRuntimes: () -> Unit = {},
+) {
     val engine = app.engine
     val store = remember { ProjectStore.get(app) }
     val projects = remember(engine) { Projects(engine, store) }
@@ -107,19 +133,28 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
     val pm = meta.projects[name] ?: ProjectMeta()
     val title = pm.title ?: name
     val status by engine.status.collectAsStateWithLifecycle()
-    val live by LocalSessions.current.collectAsStateWithLifecycle()
-    val liveHere = live?.takeIf { it.project.name == name && !it.controller.stopped }
+    // This project's own live session (others may run in other projects meanwhile).
+    val liveAll by LocalSessions.all.collectAsStateWithLifecycle()
+    val live = liveAll[name]
+    val liveHere = live?.takeIf { !it.controller.stopped }
 
     var reload by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { reload++ }
     val sessions by produceState<List<SessionSummary>?>(null, reload, live) { value = projects.sessions(dir) }
     var menu by remember { mutableStateOf(false) }
     var action by remember { mutableStateOf<ProjectAction?>(null) }
-    var showFiles by rememberSaveable { mutableStateOf(false) }
+    // 0 sessions, 1 files, 2 changes (git), 3 terminal.
+    var tab by rememberSaveable { mutableIntStateOf(0) }
+    val showFiles = tab == 1
+    val showTerminal = tab == 3
+    val changes = rememberChangesUi(app, dir, store, snackbar)
     // Folder shown in Files, relative to the project ("" is its root).
     var path by rememberSaveable { mutableStateOf("") }
-    // The file open in the viewer, relative to the project.
+    // The file open in the viewer, relative to the project, and the editor's tabs (open files).
     var openFile by rememberSaveable { mutableStateOf<String?>(null) }
+    val tabs = rememberSaveable(name, saver = EditorTabs.saver(name)) { EditorTabs() }
+    val activity = LocalActivity.current
+    DisposableEffect(name) { onDispose { if (activity?.isChangingConfigurations != true) EditorTabs.release(name) } }
     var sort by rememberSaveable { mutableStateOf(FileSort.Name) }
     var showHidden by rememberSaveable { mutableStateOf(false) }
     var fileAction by remember { mutableStateOf<FileAction?>(null) }
@@ -148,6 +183,87 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
         }
     }
 
+    // "Ask Pi" in the editor: the text goes into the composer of this project's session (the live one, else the
+    // latest, else a new one), which then opens.
+    fun ask(text: String) {
+        val current = liveHere
+        if (current != null) {
+            current.drop(text)
+            onOpenSession()
+            return
+        }
+        if (opening) return
+        opening = true
+        scope.launch {
+            val latest = sessions?.firstOrNull()?.file
+            LocalSessions.open(engine, store, dir, sessionFile = latest, fresh = latest == null)
+                .onSuccess {
+                    it.drop(text)
+                    onOpenSession()
+                }
+                .onFailure { snackbar.show(it.message ?: "Could not open the session", SnackKind.Error) }
+            opening = false
+        }
+    }
+
+    // Files in and out (ui/projects/transfer): SAF pickers, zips, the share sheet; one transfer at a time.
+    val context = LocalContext.current
+    val transfers = remember { TransferRunner(app.appScope) }
+    // The folder (or project) an export is for, waiting for the export sheet or the "Save to…" document.
+    var exportOf by remember { mutableStateOf<Pair<File, String>?>(null) }
+    var exportAsk by remember { mutableStateOf(false) }
+    var exportSkip by remember { mutableStateOf(emptySet<String>()) }
+    fun failed(message: String) {
+        scope.launch { snackbar.show(message, SnackKind.Error) }
+    }
+    val importDocs = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        val into = folder
+        transfers.run(
+            if (uris.size == 1) "Importing 1 file" else "Importing ${uris.size} files",
+            { p -> SafTransfer.importDocuments(context, uris, into, p) },
+            onDone = { names ->
+                reload++
+                scope.launch { snackbar.show(if (names.size == 1) "Imported ${names[0]}" else "Imported ${names.size} files", SnackKind.Success) }
+            },
+            onError = ::failed,
+        )
+    }
+    val importTree = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val into = folder
+        transfers.run(
+            "Importing a folder",
+            { p -> SafTransfer.importTree(context, uri, into, p) },
+            onDone = { n ->
+                reload++
+                scope.launch { snackbar.show("Imported $n", SnackKind.Success) }
+            },
+            onError = ::failed,
+        )
+    }
+    val saveZip = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        val (source, label) = exportOf ?: return@rememberLauncherForActivityResult
+        exportOf = null
+        if (uri == null) return@rememberLauncherForActivityResult
+        transfers.run(
+            "Exporting $label",
+            { p -> SafTransfer.exportZip(context, source, uri, label, exportSkip, p) },
+            onDone = { n -> scope.launch { snackbar.show(if (n == 1) "Exported 1 file" else "Exported $n files", SnackKind.Success) } },
+            onError = ::failed,
+        )
+    }
+    fun export(source: File, label: String) {
+        exportOf = source to label
+        exportAsk = true
+    }
+    fun shareFile(file: File) {
+        scope.launch {
+            runCatching { ShareFiles.share(context, ShareFiles.copy(context, file, file.name), FileTypes.mime(file.name), file.name) }
+                .onFailure { failed("Could not share this file") }
+        }
+    }
+
     val entry = ProjectEntry(name, dir.absolutePath, pm, sessions?.firstOrNull(), sessions?.size ?: 0)
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
 
@@ -163,6 +279,7 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
                     IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Projects", onClick = onBack, tint = colors.ink1)
                     Spacer(Modifier.weight(1f))
                     // Sort, filter, search inside messages, rename and delete (features2).
+                    IconAction(Icons.Rounded.Key, "Project secrets", onClick = onSecrets)
                     IconAction(Icons.Rounded.Search, "Search and manage sessions", onClick = { browse = true }, enabled = !unavailable)
                     Box {
                         IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
@@ -173,6 +290,8 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
                             onPin = { store.setPinned(name, it) },
                             onRename = { action = ProjectAction.Rename(entry) },
                             onDelete = { action = ProjectAction.Delete(entry) },
+                            onExport = { export(dir, name) },
+                            onRuntimes = onRuntimes,
                         )
                     }
                 }
@@ -226,9 +345,9 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
             }
             item(key = "tabs", contentType = "tabs") {
                 Segmented(
-                    options = listOf(false to (sessions?.size?.let { "Sessions · $it" } ?: "Sessions"), true to "Files"),
-                    selected = showFiles,
-                    onSelect = { showFiles = it },
+                    options = listOf(0 to (sessions?.size?.let { "Sessions · $it" } ?: "Sessions"), 1 to "Files", 2 to "Changes", 3 to "Terminal"),
+                    selected = tab,
+                    onSelect = { tab = it },
                     modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 10.dp),
                     height = 40.dp,
                 )
@@ -244,6 +363,7 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
                         onSort = { sort = it },
                         onHidden = { showHidden = it },
                         onCreate = { fileAction = FileAction.Create(it) },
+                        onImport = { tree -> if (tree) importTree.launch(null) else importDocs.launch(arrayOf("*/*")) },
                         modifier = Modifier.background(colors.canvas).padding(horizontal = 4.dp),
                     )
                 }
@@ -263,7 +383,13 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
                 }
             }
             val list = sessions
-            if (list != null && !showFiles) {
+            if (tab == 2) changesItems(changes)
+            if (showTerminal) {
+                item(key = "terminal", contentType = "terminal") {
+                    TerminalPane(app, dir, fullScreen = false, onToggleFullScreen = onTerminal, onPreview = onPreview, modifier = Modifier.fillParentMaxHeight(0.86f).fillMaxWidth())
+                }
+            }
+            if (list != null && tab == 0) {
                 if (list.isEmpty()) {
                     item(key = "empty", contentType = "empty") {
                         val shape = RoundedCornerShape(Radius.md)
@@ -298,7 +424,10 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
             }
         }
         StatusBarScrim()
-        PiSnackHost(snackbar, Modifier.align(Alignment.BottomCenter))
+        Column(Modifier.align(Alignment.BottomCenter).navigationBarsPadding()) {
+            TransferBar(transfers)
+            PiSnackHost(snackbar)
+        }
 
         AnimatedVisibility(
             visible = openFile != null,
@@ -307,8 +436,11 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
         ) {
             val shown = remember { mutableStateOf(openFile) }
             openFile?.let { shown.value = it }
-            shown.value?.let { rel -> FileViewer(dir, rel, onClose = { openFile = null }, onChanged = { reload++ }) }
+            shown.value?.let { rel ->
+                FileViewer(dir, tabs, rel, onSelect = { openFile = it }, onClose = { openFile = null }, onChanged = { reload++ }, onAsk = ::ask)
+            }
         }
+        ChangesOverlays(changes, visible = tab == 2)
     }
     // Back inside Files goes up a folder first.
     BackHandler(enabled = showFiles && path.isNotEmpty() && openFile == null) { path = path.substringBeforeLast('/', "") }
@@ -316,13 +448,52 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
     FileActionSheets(
         action = fileAction,
         folder = folder,
-        onAction = { fileAction = it },
+        onAction = { a ->
+            when (a) {
+                is FileAction.Export -> {
+                    fileAction = null
+                    export(File(folder, a.entry.name), a.entry.name)
+                }
+                is FileAction.Share -> {
+                    fileAction = null
+                    shareFile(File(folder, a.entry.name))
+                }
+                else -> fileAction = a
+            }
+        },
         onDone = {
             fileAction = null
             reload++
         },
         onError = { scope.launch { snackbar.show(it, SnackKind.Error) } },
     )
+
+    if (exportAsk) {
+        exportOf?.let { (source, label) ->
+            ExportSheet(
+                title = label,
+                onChoose = { choice ->
+                    exportAsk = false
+                    exportSkip = choice.skip
+                    if (choice.share) {
+                        exportOf = null
+                        transfers.run(
+                            "Packing $label",
+                            { p -> SafTransfer.shareZip(context, source, "$label.zip", label, choice.skip, p) },
+                            onDone = {},
+                            onError = ::failed,
+                        )
+                    } else {
+                        saveZip.launch("$label.zip")
+                    }
+                },
+                onDismiss = {
+                    exportAsk = false
+                    exportOf = null
+                },
+            )
+        }
+    }
 
     if (browse) {
         SessionBrowserSheet(

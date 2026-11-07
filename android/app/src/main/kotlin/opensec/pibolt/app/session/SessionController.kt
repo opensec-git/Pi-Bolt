@@ -23,6 +23,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.checkpoints.TurnCheckpoints
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.protocol.Base64Url
 import opensec.pibolt.protocol.backend.ConnectionState
@@ -106,7 +107,7 @@ class SessionController private constructor(
         class Remote(val endpoints: List<String>, val pairSecret: ByteArray?, val fallbackSecret: ByteArray?) : Origin
 
         /** [release] gets the backend back when the session stops, and whether the engine was idle then. */
-        class Local(val project: File, val backend: LocalBackend, val release: (LocalBackend, Boolean) -> Unit) : Origin
+        class Local(val project: File, val backend: LocalBackend, val release: (LocalBackend, Boolean) -> Unit, val checkpoints: TurnCheckpoints?) : Origin
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -118,6 +119,9 @@ class SessionController private constructor(
 
     /** The project directory of a local session. */
     val project: File? = (origin as? Origin.Local)?.project
+
+    /** Snapshots of the project per turn, for review and undo (on this phone only: remote files are on the computer). */
+    val checkpoints: TurnCheckpoints? = (origin as? Origin.Local)?.checkpoints
 
     /** The session file the local engine has open, from its last state. */
     val sessionFile: String? get() = (origin as? Origin.Local)?.backend?.sessionFile
@@ -189,6 +193,10 @@ class SessionController private constructor(
         scope.launch { connectLoop() }
         pumpEvents()
         subagentTail?.start(scope)
+        checkpoints?.let {
+            it.onNotice = { message -> _effects.tryEmit(SessionEffect.Notify(message, "warning")) }
+            it.start()
+        }
     }
 
     /** Keep reading subagent [key]'s session file while its detail screen is open, also after it finished. */
@@ -196,9 +204,15 @@ class SessionController private constructor(
         subagentTail?.watch(key, on)
     }
 
-    fun stop() {
+    /**
+     * Ends this session. A local engine that is idle is kept for a later open of the same session unless
+     * [keepEngine] is false (memory pressure).
+     */
+    fun stop(keepEngine: Boolean = true) {
         if (stopped) return
         stopped = true
+        checkpoints?.close()
+        app.sessionStopped(this)
         when (origin) {
             is Origin.Remote -> {
                 backend.close()
@@ -209,13 +223,17 @@ class SessionController private constructor(
                 // An idle engine can serve the next open of this project (the engine decides); stop reading it first.
                 // Not idle while the subagents extension runs background agents (its "subagents" status): a parked
                 // engine would keep them running unseen, and their completion would start a new turn of a closed session.
-                val idle = isIdle
+                val idle = isIdle && keepEngine
                 rpc.stop()
                 scope.cancel()
                 origin.release(origin.backend, idle)
             }
         }
     }
+
+    /** A turn, a compaction, an open dialog or background subagents: never stopped to make room or free memory. */
+    val isBusy: Boolean
+        get() = _state.value.let { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() || SUBAGENTS_STATUS in it.statuses }
 
     /** Connected, and nothing runs: no turn, compaction, open dialog or background subagent. */
     val isIdle: Boolean
@@ -402,18 +420,19 @@ class SessionController private constructor(
     }
 
     private fun sideEffects(before: SessionState, event: JsonObject) {
+        checkpoints?.onEvent(event, before.sessionId)
         when (event.type) {
             "extension_ui_request" -> when (event.str("method")) {
                 "notify" -> _effects.tryEmit(SessionEffect.Notify(event.str("message").orEmpty(), event.str("notifyType") ?: "info"))
                 "set_editor_text" -> _effects.tryEmit(SessionEffect.EditorText(event.str("text").orEmpty()))
                 "select", "confirm", "input", "editor" -> if (!app.isForeground) {
-                    Notifications.needsAnswer(app, _hostName.value, event.str("title").orEmpty())
+                    Notifications.needsAnswer(app, hostId, project?.name, _hostName.value, event.str("title").orEmpty())
                 }
             }
             "agent_settled" -> {
                 if (!app.isForeground && before.isRunning) {
                     val last = (before.allItems.lastOrNull { it is AssistantTextItem } as? AssistantTextItem)?.text.orEmpty()
-                    Notifications.settled(app, _hostName.value, last, aborted = event.bool("aborted") == true)
+                    Notifications.settled(app, hostId, project?.name, _hostName.value, last, aborted = event.bool("aborted") == true)
                 }
                 scope.launch { refreshState() }
             }
@@ -438,7 +457,7 @@ class SessionController private constructor(
         }
         val needsService = now.isRunning || now.dialogs.isNotEmpty()
         if (needsService && !(previous.isRunning || previous.dialogs.isNotEmpty())) SessionService.ensureRunning(app)
-        if (previous.dialogs.isNotEmpty() && now.dialogs.isEmpty()) Notifications.clearNeedsAnswer(app)
+        if (previous.dialogs.isNotEmpty() && now.dialogs.isEmpty()) Notifications.clearNeedsAnswer(app, hostId)
     }
 
     private fun mutate(change: (SessionState) -> SessionState) {
@@ -457,6 +476,8 @@ class SessionController private constructor(
         val running = _state.value.isRunning
         sentAt = SystemClock.elapsedRealtime()
         scope.launch {
+            // The turn's start state is recorded before the agent can edit (a steer joins a running turn instead).
+            if (!running) checkpoints?.prepareStart()
             // An extension command answers only when it finishes, after its dialogs: nothing waits on this.
             val response = rpc.prompt(text, images, streamingBehavior = if (running) behavior else null)
             if (!response.success && !stopped) {
@@ -737,8 +758,8 @@ class SessionController private constructor(
         const val PERF_TAG = "PiBoltPerf"
 
         /** A session with the engine on this phone, in [project]. [release] takes the backend back when it stops. */
-        fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit) =
-            SessionController(app, localId(project), project.name, Origin.Local(project, backend, release))
+        fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit, checkpoints: TurnCheckpoints? = null) =
+            SessionController(app, localId(project), project.name, Origin.Local(project, backend, release, checkpoints))
 
         /** [hostId] of a local session: per project, so drafts and recent prompts stay with it. */
         fun localId(project: File): String = "local:${project.absolutePath}"

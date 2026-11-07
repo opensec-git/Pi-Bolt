@@ -142,6 +142,8 @@ fun SessionTopBar(
     contextPercent: Int? = null,
     quadVisible: Boolean = true,
     status: String? = null,
+    /** The other live sessions (RunningSessions.SessionSwitcher); draws nothing while there are none. */
+    switcher: @Composable () -> Unit = {},
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -186,6 +188,7 @@ fun SessionTopBar(
                 Text(subtitle, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = if (dot) 16.dp else 0.dp))
             }
         }
+        switcher()
         IconAction(Icons.Rounded.Search, "Search this session", onClick = onSearch)
         Box(
             Modifier

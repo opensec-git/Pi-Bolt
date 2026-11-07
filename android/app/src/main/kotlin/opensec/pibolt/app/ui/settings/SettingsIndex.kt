@@ -4,6 +4,8 @@ package opensec.pibolt.app.ui.settings
 enum class SettingsGroup(val title: String) {
     Providers("Model providers"),
     Agent("Pi on this phone"),
+    GitHub("GitHub"),
+    Runtimes("Runtimes"),
     Appearance("Appearance"),
     Motion("Motion and haptics"),
     SessionDisplay("Session display"),
@@ -28,6 +30,8 @@ object SettingsIndex {
         SettingEntry("skills", SettingsGroup.Agent, "Skill commands", "skills slash commands /skill"),
         SettingEntry("images", SettingsGroup.Agent, "Block images", "pictures photos attachments vision privacy"),
         SettingEntry("engine-links", SettingsGroup.Agent, "Packages, MCP servers, retry and compaction", "extensions packages npm git mcp servers tools tuning reserve tokens backoff"),
+        SettingEntry("github", SettingsGroup.GitHub, "GitHub account", "git push pull clone pull request token sign in login personal access oauth"),
+        SettingEntry("runtimes", SettingsGroup.Runtimes, "Runtimes", "node nodejs javascript npm npx python python3 pip packages cache languages"),
         SettingEntry("theme", SettingsGroup.Appearance, "Theme", "colour color dark graphite void ember claude codex vercel github look"),
         SettingEntry("accent", SettingsGroup.Appearance, "Accent", "colour color iris glacier ink"),
         SettingEntry("text-size", SettingsGroup.Appearance, "Text size", "font larger smaller zoom"),

@@ -3,64 +3,55 @@ package opensec.pibolt.app
 import androidx.compose.runtime.saveable.SaverScope
 import androidx.compose.ui.text.input.TextFieldValue
 import kotlinx.coroutines.runBlocking
-import opensec.pibolt.app.ui.projects.FileEdit
 import opensec.pibolt.app.ui.projects.ProjectFiles
+import opensec.pibolt.app.ui.projects.editor.EditorTabs
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotSame
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
-class FileEditTest {
+class EditorRecreationTest {
     private val scope = object : SaverScope {
         override fun canBeSaved(value: Any) = true
     }
 
-    // PR #258 review: a rotation while editing restored `editing` but not the draft, so Save could write an empty file.
+    // PR #258 review: a rotation while editing lost the unsaved draft.
     @Test
-    fun draftSurvivesActivityRecreation() {
-        val saver = FileEdit.saver("/p/a.kt")
-        val edit = FileEdit()
-        edit.start("fun a() = 1\n")
-        edit.draft = TextFieldValue("fun a() = 2\n")
+    fun draftsSurviveActivityRecreation() {
+        val saver = EditorTabs.saver("demo")
+        val tabs = EditorTabs()
+        val tab = tabs.open("src/a.kt")
+        tab.startEditing("fun a() = 1\n")
+        tab.value = TextFieldValue("fun a() = 2\n")
 
-        val saved = with(saver) { scope.save(edit) }
-        assertEquals("/p/a.kt", saved, "only the key goes into the Bundle")
-        val restored = saver.restore(saved!!)!!
+        val saved = with(saver) { scope.save(tabs) }!!
+        assertEquals(listOf("src/a.kt"), saved, "only the paths go into the Bundle")
+        val restored = saver.restore(saved)!!
 
-        assertSame(edit, restored)
-        assertTrue(restored.editing)
-        assertEquals("fun a() = 2\n", restored.draft.text)
-        assertTrue(restored.dirty)
+        assertSame(tabs, restored)
+        val back = restored.find("src/a.kt")!!
+        assertTrue(back.editing)
+        assertEquals("fun a() = 2\n", back.value.text)
+        assertTrue(back.dirty)
     }
 
     @Test
-    fun afterProcessDeathOrReleaseEditingStartsOver() {
-        val saver = FileEdit.saver("/p/b.kt")
-        val edit = FileEdit()
-        edit.start("x")
-        edit.draft = TextFieldValue("y")
-        val saved = with(saver) { scope.save(edit) }!!
-        FileEdit.release("/p/b.kt")
+    fun afterProcessDeathOrReleaseTabsReopenFromPaths() {
+        val saver = EditorTabs.saver("other")
+        val tabs = EditorTabs()
+        tabs.open("b.kt").startEditing("x")
+        val saved = with(saver) { scope.save(tabs) }!!
+        EditorTabs.release("other")
 
         val restored = saver.restore(saved)!!
-        assertFalse(restored.editing, "no draft to show, so not editing (Save stays unavailable)")
-        assertFalse(restored.dirty)
-    }
-
-    @Test
-    fun dirtyComparesWithTheTextEditingStartedFrom() {
-        val edit = FileEdit()
-        assertFalse(edit.dirty)
-        edit.start("a")
-        assertFalse(edit.dirty)
-        edit.draft = TextFieldValue("ab")
-        assertTrue(edit.dirty)
-        edit.stop()
-        assertFalse(edit.editing)
-        assertFalse(edit.dirty)
+        assertNotSame(tabs, restored)
+        val back = restored.find("b.kt")!!
+        assertFalse(back.editing, "no draft to show, so not editing")
+        assertFalse(back.dirty)
     }
 
     // PR #258 review: saving through a temporary file and a rename dropped the executable bit of gradlew and scripts.

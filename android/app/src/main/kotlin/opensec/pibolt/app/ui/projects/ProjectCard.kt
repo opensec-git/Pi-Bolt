@@ -17,10 +17,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.PushPin
+import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.PushPin
+import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
@@ -215,7 +217,16 @@ fun ContinueRow(entry: ProjectEntry, session: SessionSummary, live: SessionContr
 }
 
 @Composable
-fun ProjectMenu(expanded: Boolean, pinned: Boolean, onDismiss: () -> Unit, onPin: (Boolean) -> Unit, onRename: () -> Unit, onDelete: () -> Unit) {
+fun ProjectMenu(
+    expanded: Boolean,
+    pinned: Boolean,
+    onDismiss: () -> Unit,
+    onPin: (Boolean) -> Unit,
+    onRename: () -> Unit,
+    onDelete: () -> Unit,
+    onExport: (() -> Unit)? = null,
+    onRuntimes: (() -> Unit)? = null,
+) {
     val colors = Pi.colors
     DropdownMenu(
         expanded = expanded,
@@ -233,6 +244,18 @@ fun ProjectMenu(expanded: Boolean, pinned: Boolean, onDismiss: () -> Unit, onPin
         MenuItem("Rename", Icons.Rounded.DriveFileRenameOutline, colors.ink1) {
             onDismiss()
             onRename()
+        }
+        onExport?.let { export ->
+            MenuItem("Export as zip", Icons.Rounded.Archive, colors.ink1) {
+                onDismiss()
+                export()
+            }
+        }
+        onRuntimes?.let { open ->
+            MenuItem("Runtimes", Icons.Rounded.Terminal, colors.ink1) {
+                onDismiss()
+                open()
+            }
         }
         MenuItem("Delete", Icons.Rounded.DeleteOutline, colors.danger) {
             onDismiss()

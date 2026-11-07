@@ -30,6 +30,11 @@ concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# The GitHub OAuth App client id for device-flow sign-in (android/README.md, "GitHub"): a repository variable, not a
+# secret (client ids are public). Empty or unset builds an app that offers only personal access tokens.
+env:
+  PIBOLT_GITHUB_CLIENT_ID: ${{ vars.PIBOLT_GITHUB_CLIENT_ID }}
+
 defaults:
   run:
     working-directory: android
@@ -38,7 +43,8 @@ jobs:
   pack:
     name: Engine pack (linux-arm64)
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 45
+    # glibc, curl and git, CPython from source; verify-pack.sh installs npm and pip packages over HTTPS.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,7 +56,7 @@ jobs:
           restore-keys: engine-dl-
       - name: Build the pack
         run: engine/build-pack.sh
-      - name: Run the pack the way the app does (Alpine container, real prefix)
+      - name: Run the pack the way the app does (Alpine container, real prefix; node, npm, python3, pip)
         run: engine/scripts/verify-pack.sh
       - name: Corresponding source of the GPL/LGPL parts
         if: ${{ startsWith(github.ref, 'refs/tags/android-v') }}
@@ -94,6 +100,19 @@ jobs:
             android/gradle/libs.versions.toml
             android/gradle/wrapper/gradle-wrapper.properties
             android/**/*.gradle.kts
+      # libtermux.so is built with the NDK and CMake versions pinned in app/build.gradle.kts (ndkVersion, cmake
+      # version); install them when the runner image does not have them.
+      - name: NDK and CMake
+        run: |
+          ndk=$(sed -n 's/^ *ndkVersion = "\(.*\)"$/\1/p' app/build.gradle.kts)
+          cmake=$(sed -n 's/^ *version = "\(.*\)"$/\1/p' app/build.gradle.kts)
+          test -n "$ndk" && test -n "$cmake"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -f "$ANDROID_HOME/ndk/$ndk/source.properties" ] || { (yes || true) | "$sdkmanager" --install "ndk;$ndk" > /dev/null; }
+          [ -x "$ANDROID_HOME/cmake/$cmake/bin/cmake" ] || { (yes || true) | "$sdkmanager" --install "cmake;$cmake" > /dev/null; }
+          test -f "$ANDROID_HOME/ndk/$ndk/source.properties"
+          test -x "$ANDROID_HOME/cmake/$cmake/bin/cmake"
+          echo "NDK $ndk, CMake $cmake"
       - name: Tests, lint, debug build
         run: ./gradlew :protocol:test :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
       - name: Release build (unsigned)
@@ -156,6 +175,19 @@ jobs:
             android/gradle/libs.versions.toml
             android/gradle/wrapper/gradle-wrapper.properties
             android/**/*.gradle.kts
+      # libtermux.so is built with the NDK and CMake versions pinned in app/build.gradle.kts (ndkVersion, cmake
+      # version); install them when the runner image does not have them.
+      - name: NDK and CMake
+        run: |
+          ndk=$(sed -n 's/^ *ndkVersion = "\(.*\)"$/\1/p' app/build.gradle.kts)
+          cmake=$(sed -n 's/^ *version = "\(.*\)"$/\1/p' app/build.gradle.kts)
+          test -n "$ndk" && test -n "$cmake"
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -f "$ANDROID_HOME/ndk/$ndk/source.properties" ] || { (yes || true) | "$sdkmanager" --install "ndk;$ndk" > /dev/null; }
+          [ -x "$ANDROID_HOME/cmake/$cmake/bin/cmake" ] || { (yes || true) | "$sdkmanager" --install "cmake;$cmake" > /dev/null; }
+          test -f "$ANDROID_HOME/ndk/$ndk/source.properties"
+          test -x "$ANDROID_HOME/cmake/$cmake/bin/cmake"
+          echo "NDK $ndk, CMake $cmake"
       # Gradle and its plugins never see the signing secrets: it builds the unsigned APK, and apksigner signs it in
       # the next step.
       - name: Build the unsigned release

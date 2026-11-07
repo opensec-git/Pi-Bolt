@@ -8,3 +8,5 @@
 -keepclassmembers class opensec.pibolt.app.ui.diagram.DiagramBridge {
     @android.webkit.JavascriptInterface <methods>;
 }
+# Termux terminal-emulator: libtermux.so binds JNI by class and method name.
+-keep class com.termux.terminal.JNI { *; }

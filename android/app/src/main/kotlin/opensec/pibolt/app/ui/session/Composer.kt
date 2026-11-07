@@ -150,6 +150,8 @@ fun Composer(
     onKey: (ComposerKeys.Action) -> Unit = {},
     /** Ctrl+V: true when the screen took an image from the clipboard (the text paste is then skipped). */
     onPasteImage: () -> Boolean = { false },
+    /** A mic for dictation, shown beside Send (ui/session/voice). */
+    voice: (@Composable () -> Unit)? = null,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -305,6 +307,7 @@ fun Composer(
                 if (compact) attach()
                 textField(Modifier.weight(1f))
                 if (compact) {
+                    voice?.invoke()
                     if (running && hasContent) SteerChip(mode, onMode)
                     if (stoppable && hasContent) StopButton(onStop)
                     SendButton(sendMode, sendEnabled, onSend, onStop, ring = stoppable && !hasContent)
@@ -338,6 +341,7 @@ fun Composer(
                             }
                         }
                     }
+                    voice?.invoke()
                     // While a steer is typed Send takes the button: Stop stays one tap away beside it.
                     if (stoppable && hasContent) StopButton(onStop)
                     SendButton(sendMode, sendEnabled, onSend, onStop, ring = stoppable && !hasContent)

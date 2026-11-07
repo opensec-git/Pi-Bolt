@@ -1,5 +1,11 @@
 package opensec.pibolt.app.ui.home
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import opensec.pibolt.app.ui.projects.transfer.SafTransfer
+import opensec.pibolt.app.ui.projects.transfer.TransferBar
+import opensec.pibolt.app.ui.projects.transfer.TransferRunner
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -62,6 +68,7 @@ import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.engine.EngineStatus
+import opensec.pibolt.app.git.GitRepo
 import opensec.pibolt.app.ui.components.BrandMark
 import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.components.IconAction
@@ -77,6 +84,8 @@ import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.hosts.HostCard
 import opensec.pibolt.app.ui.hosts.PasteSheet
 import opensec.pibolt.app.ui.projects.LocalSessions
+import opensec.pibolt.app.ui.session.RunningRow
+import opensec.pibolt.app.ui.session.runningSessions
 import opensec.pibolt.app.ui.projects.NewProjectSheet
 import opensec.pibolt.app.ui.projects.ProjectAction
 import opensec.pibolt.app.ui.projects.ProjectActionSheets
@@ -126,13 +135,31 @@ fun HomeScreen(
     val meta by store.state.collectAsStateWithLifecycle()
     val metaLoaded by store.loaded.collectAsStateWithLifecycle()
     val hosts by app.hosts.hosts.collectAsStateWithLifecycle()
-    val remote by app.session.collectAsStateWithLifecycle()
+    val remote by app.remote.collectAsStateWithLifecycle()
     val local by LocalSessions.current.collectAsStateWithLifecycle()
+    // Sessions working now, in every project: each keeps its engine while the user is elsewhere.
+    val running by remember { runningSessions() }.collectAsStateWithLifecycle(emptyList())
+    val liveAll by LocalSessions.all.collectAsStateWithLifecycle()
     val update by app.updates.state.collectAsStateWithLifecycle()
     val showUpdate = update.job != UpdateJob.Idle || (update.decision as? UpdateRules.Decision.Available)?.snoozed == false
     val unavailable = status is EngineStatus.Unavailable
 
     var reload by remember { mutableIntStateOf(0) }
+    // "Import a zip" in the new-project sheet: the archive becomes a project, which then opens.
+    val context = LocalContext.current
+    val transfers = remember { TransferRunner(app.appScope) }
+    val importZip = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        transfers.run(
+            "Importing the zip",
+            { p -> SafTransfer.importZipAsProject(context, uri, engine.projectsDir, p) },
+            onDone = { name ->
+                reload++
+                onOpenProject(ProjectEntry(name, File(engine.projectsDir, name).absolutePath, store.meta(name), null, 0))
+            },
+            onError = { m -> scope.launch { snackbar.show(m, SnackKind.Error) } },
+        )
+    }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { reload++ }
     LaunchedEffect(Unit) { engine.prepare() }
     // Folders and sessions from disk (IO); meta (pins, titles) is applied below in memory.
@@ -172,6 +199,7 @@ fun HomeScreen(
     var computersOpen by rememberSaveable { mutableStateOf<Boolean?>(null) }
     val showComputers = computersOpen ?: (unavailable || (list != null && list.isEmpty() && hosts.isNotEmpty()) || remote?.stopped == false)
     var newProject by remember { mutableStateOf<Boolean?>(null) }
+    var cloneProgress by remember { mutableStateOf<String?>(null) }
     var action by remember { mutableStateOf<ProjectAction?>(null) }
     var showPaste by remember { mutableStateOf(false) }
     var forgetting by remember { mutableStateOf<Host?>(null) }
@@ -238,13 +266,21 @@ fun HomeScreen(
                     )
                 }
             }
+            if (running.isNotEmpty()) {
+                item(key = "running-label", contentType = "label") {
+                    SectionLabel("Running", Modifier.animateItem().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp))
+                }
+                items(running, key = { "r:" + it.project.name }, contentType = { "running" }) { live ->
+                    RunningRow(live, meta.projects[live.project.name], onClick = { onOpenLocalSession(live.project.name) }, modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp))
+                }
+            }
             if (!unavailable && recent.isNotEmpty()) {
                 item(key = "continue-label", contentType = "label") {
                     SectionLabel("Continue", Modifier.animateItem().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp))
                 }
                 items(recent, key = { "c:" + it.name }, contentType = { "continue" }) { entry ->
                     val session = entry.lastSession ?: return@items
-                    val liveHere = local?.takeIf { it.project.name == entry.name && !it.controller.stopped }
+                    val liveHere = liveAll[entry.name]?.takeIf { !it.controller.stopped }
                     val liveFile = liveHere?.let { it.controller.sessionFile ?: it.sessionFile }
                     val isLive = liveHere != null && (liveFile == null || liveFile == session.file)
                     ContinueRow(
@@ -269,7 +305,7 @@ fun HomeScreen(
                     else -> items(list, key = { "p:" + it.name }, contentType = { "project" }) { entry ->
                         ProjectCard(
                             entry = entry,
-                            live = local?.takeIf { it.project.name == entry.name && !it.controller.stopped }?.controller,
+                            live = liveAll[entry.name]?.takeIf { !it.controller.stopped }?.controller,
                             now = now,
                             onClick = { onOpenProject(entry) },
                             onPin = { store.setPinned(entry.name, it) },
@@ -323,6 +359,7 @@ fun HomeScreen(
                 .fillMaxWidth()
                 .background(Brush.verticalGradient(0f to colors.canvas.copy(alpha = 0f), 0.3f to colors.canvas)),
         ) {
+            TransferBar(transfers, if (hasBottomBar) Modifier else Modifier.navigationBarsPadding())
             PiSnackHost(snackbar, if (hasBottomBar) Modifier else Modifier.navigationBarsPadding())
             if (hasBottomBar) {
                 PrimaryButton(
@@ -340,9 +377,20 @@ fun HomeScreen(
         NewProjectSheet(
             existing = names,
             startWithClone = clone,
+            github = app.github,
+            progress = cloneProgress,
             onCreate = { name, url ->
                 projects.create(name).fold(
                     onSuccess = { dir ->
+                        if (url != null) {
+                            cloneProgress = "Cloning…"
+                            val cloned = runCatching { GitRepo.clone(app.git, url, dir) { cloneProgress = it.label } }
+                            cloneProgress = null
+                            cloned.exceptionOrNull()?.let { e ->
+                                projects.delete(dir.name)
+                                return@NewProjectSheet e.message ?: "Could not clone the repository"
+                            }
+                        }
                         LocalSessions.open(engine, store, dir, fresh = true, firstPrompt = url?.let(ProjectRules::clonePrompt)).fold(
                             onSuccess = {
                                 reload++
@@ -359,6 +407,10 @@ fun HomeScreen(
                 )
             },
             onDismiss = { newProject = null },
+            onImportZip = {
+                newProject = null
+                importZip.launch(arrayOf("application/zip", "application/x-zip-compressed"))
+            },
         )
     }
 

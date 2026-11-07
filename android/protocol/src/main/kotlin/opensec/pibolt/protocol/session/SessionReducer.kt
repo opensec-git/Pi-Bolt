@@ -199,7 +199,7 @@ object SessionReducer {
         return when (message.str("role")) {
             "user" -> {
                 val (text, images) = contentText(message["content"])
-                if (text.isBlank() && images == 0) s else s.copy(items = s.items + UserItem(k, text, images))
+                if (text.isBlank() && images == 0) s else s.copy(items = s.items + UserItem(k, text, images, message.long("timestamp")))
             }
             "assistant" -> {
                 val items = s.items.toMutableList()

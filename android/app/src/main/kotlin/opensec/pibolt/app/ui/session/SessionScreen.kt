@@ -39,11 +39,16 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.engine.SessionSummary
 import opensec.pibolt.app.session.ForkPoint
 import opensec.pibolt.app.ui.session.features.Builtin
+import opensec.pibolt.app.ui.session.review.LocalTurnReview
+import opensec.pibolt.app.ui.session.review.TurnReviewOverlay
+import opensec.pibolt.app.ui.session.review.rememberTurnReview
 import opensec.pibolt.app.ui.session.features2.F2Sheet
 import opensec.pibolt.app.ui.session.features2.Features2
 import opensec.pibolt.app.ui.session.features2.Features2Host
@@ -98,6 +103,7 @@ import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
@@ -122,8 +128,14 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.ui.terminal.PreviewChipRow
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.ui.projects.LocalSessions
+import opensec.pibolt.app.ui.projects.FileViewer
+import opensec.pibolt.app.ui.projects.editor.AskPi
+import opensec.pibolt.app.ui.projects.editor.EditorTabs
+import opensec.pibolt.app.ui.projects.editor.viewerPlace
+import opensec.pibolt.app.ui.session.voice.VoiceButton
 import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
@@ -157,21 +169,36 @@ class LocalUi(
     val onRestart: () -> Unit,
     /** A prompt queued when the session was created ("Clone from git"); returned once. */
     val takeFirstPrompt: () -> String?,
+    /** Open a dev server's preview (the "Preview: localhost:3000" chip). */
+    val onPreview: (Int) -> Unit = {},
+    /** Text and images waiting for the composer ("Ask Pi" in the editor, shares from other apps). */
+    val composerDrop: MutableStateFlow<LocalSessions.ComposerDrop?>? = null,
 )
 
-/** The remote session ([local] null) or the on-device one in project [local]. */
+/**
+ * The remote session ([local] null) or the on-device one in project [local]. [onOpenSession] shows another live
+ * on-device session (the switcher), by project name; this one keeps running.
+ */
 @Composable
-fun SessionScreen(app: PiBoltApp, onBack: () -> Unit, onForgotten: () -> Unit, local: String? = null) {
+fun SessionScreen(
+    app: PiBoltApp,
+    onBack: () -> Unit,
+    onForgotten: () -> Unit,
+    local: String? = null,
+    onOpenSession: (String) -> Unit = {},
+    onPreview: (Int) -> Unit = {},
+) {
     if (local != null) {
-        LocalSessionScreen(app, local, onBack)
+        LocalSessionScreen(app, local, onBack, onOpenSession, onPreview)
         return
     }
-    val controller by app.session.collectAsStateWithLifecycle()
+    val controller by app.remote.collectAsStateWithLifecycle()
     val c = controller
     if (c == null) {
         LaunchedEffect(Unit) { onBack() }
         return
     }
+    LaunchedEffect(c) { app.focus(c) }
     SessionContent(
         app = app,
         controller = c,
@@ -185,17 +212,20 @@ fun SessionScreen(app: PiBoltApp, onBack: () -> Unit, onForgotten: () -> Unit, l
             onForgotten()
         },
         local = null,
+        onOpenSession = onOpenSession,
     )
 }
 
 @Composable
-private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Unit) {
-    val current by LocalSessions.current.collectAsStateWithLifecycle()
-    val live = current?.takeIf { it.project.name == project }
+private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Unit, onOpenSession: (String) -> Unit, onPreview: (Int) -> Unit) {
+    // Each project's screen shows its own live session; the others keep running meanwhile.
+    val all by LocalSessions.all.collectAsStateWithLifecycle()
+    val live = all[project]
     if (live == null) {
         LaunchedEffect(Unit) { onBack() }
         return
     }
+    LaunchedEffect(live.controller) { app.focus(live.controller) }
     val store = remember { ProjectStore.get(app) }
     val meta by store.state.collectAsStateWithLifecycle()
     val title = meta.projects[project]?.title ?: project
@@ -218,7 +248,10 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
                     live.controller.retryNow()
                 },
                 takeFirstPrompt = { live.firstPrompt.also { live.firstPrompt = null } },
+                onPreview = onPreview,
+                composerDrop = live.composerDrop,
             ),
+            onOpenSession = onOpenSession,
         )
     }
 }
@@ -231,8 +264,18 @@ private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget,
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack: () -> Unit, onDisconnect: () -> Unit, onForget: () -> Unit, local: LocalUi?) {
+private fun SessionContent(
+    app: PiBoltApp,
+    controller: SessionController,
+    onBack: () -> Unit,
+    onDisconnect: () -> Unit,
+    onForget: () -> Unit,
+    local: LocalUi?,
+    onOpenSession: (String) -> Unit,
+) {
     val state: State<SessionState> = controller.state.collectAsStateWithLifecycle()
+    val projectStore = remember { ProjectStore.get(app) }
+    val projectMeta = projectStore.state.collectAsStateWithLifecycle().value.projects
     val linkState = controller.link.collectAsStateWithLifecycle()
     val hostName by controller.hostName.collectAsStateWithLifecycle()
     val sessionId by remember { derivedStateOf { state.value.sessionId } }
@@ -249,6 +292,9 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
     var sheet by remember { mutableStateOf(Sheet.None) }
     val f2 = rememberFeatures2()
     var viewer by remember { mutableStateOf<ViewerContent?>(null) }
+    // A file on this phone tapped in a tool card opens in the full file viewer (tabs kept while the screen lives).
+    var openedFile by remember { mutableStateOf<File?>(null) }
+    val fileTabs = remember { EditorTabs() }
     var actionsFor by remember { mutableStateOf<TRow?>(null) }
     var statusOnScreen by remember { mutableStateOf(false) }
     val images = remember(controller.hostId) { mutableStateListOf<ComposerImage>() }
@@ -508,6 +554,8 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         }
     }
 
+    val review = rememberTurnReview(controller.checkpoints, state, message = { m, kind -> scope.launch { snackbar.show(m, kind) } }, forkAt = ::fork)
+
     fun openStats() {
         sheet = Sheet.Info
         statsLoading = true
@@ -674,6 +722,18 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         }
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(ImageSizing.MAX_IMAGES)) { addImages(it) }
+
+    // What the editor or another app left for the composer, once this session's draft is loaded (it would be
+    // overwritten otherwise), and later drops while the screen stays open.
+    LaunchedEffect(draftOwner) {
+        val inbox = local?.composerDrop ?: return@LaunchedEffect
+        if (draftOwner == null) return@LaunchedEffect
+        inbox.filterNotNull().collect { d ->
+            inbox.value = null
+            d.text?.let { draft = AskPi.appendTo(draft, it).first }
+            if (d.images.isNotEmpty()) addImages(d.images)
+        }
+    }
 
     /** An image on the clipboard (copied from a browser, a screenshot, a gallery app), or null. */
     fun clipboardImage(): Uri? {
@@ -842,35 +902,39 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 // One spinner at a time: the top bar's Quad steps aside while the live status line is on screen.
                 quadVisible = !(status.value.visible && statusOnScreen),
                 status = status.value.text.let { t -> listOf(t.label.ifBlank { status.value.mode.label }, t.detail).filter { it.isNotBlank() }.joinToString(" ") },
+                switcher = { SessionSwitcher(controller, projectMeta, onOpen = onOpenSession) },
             )
             ConnectionBanner(linkState.value, controller.pairing, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
             Box(Modifier.weight(1f)) {
                 if (!hello) {
                     LoadingState(title, linkState.value, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
                 } else {
-                    Transcript(
-                        state = state,
-                        memory = memory,
-                        status = status,
-                        onOpen = { viewer = it },
-                        onActions = {
-                            if (it !is ActionsRow) haptics.longPress()
-                            actionsFor = it
-                        },
-                        onAskAgain = {
-                            haptics.send()
-                            send(it)
-                        },
-                        onStatusOnScreen = { statusOnScreen = it },
-                        jump = jump,
-                        onImage = { key, index ->
-                            val thumbs = memory.localImages[key].orEmpty()
-                            if (thumbs.isNotEmpty()) imageViewer = ViewerImages(memory.localFull[key].orEmpty(), thumbs, index)
-                        },
-                        onToolImages = { imageViewer = it },
-                        errorContext = ErrorContext(modelLabel, modelProvider?.let(ProviderCatalog::name), local = isLocal, running = running),
-                        onErrorAction = ::onErrorAction,
-                    )
+                    CompositionLocalProvider(LocalTurnReview provides review) {
+                        Transcript(
+                            state = state,
+                            memory = memory,
+                            status = status,
+                            onOpen = { viewer = it },
+                            onActions = {
+                                if (it !is ActionsRow) haptics.longPress()
+                                actionsFor = it
+                            },
+                            onAskAgain = {
+                                haptics.send()
+                                send(it)
+                            },
+                            onStatusOnScreen = { statusOnScreen = it },
+                            jump = jump,
+                            onImage = { key, index ->
+                                val thumbs = memory.localImages[key].orEmpty()
+                                if (thumbs.isNotEmpty()) imageViewer = ViewerImages(memory.localFull[key].orEmpty(), thumbs, index)
+                            },
+                            onToolImages = { imageViewer = it },
+                            errorContext = ErrorContext(modelLabel, modelProvider?.let(ProviderCatalog::name), local = isLocal, running = running),
+                            onErrorAction = ::onErrorAction,
+                            onOpenLocalFile = { openedFile = it },
+                        )
+                    }
                     if (empty) {
                         EmptySession(
                             title = if (isLocal) title else cwd?.takeIf { it.isNotBlank() }?.let(::baseName) ?: title,
@@ -912,6 +976,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                     } else {
                         StatusExtras(extras)
                         TodoPanel(todos, running, autoCollapse = !running || windowHeight < 560.dp, quiet = status.value.visible && statusOnScreen)
+                        if (local != null) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = 12.dp))
                         PendingDialogStrip(askingTitle) { memory.hiddenDialog.value = null }
                         QueueStrip(queue, onEdit = controller::clearQueue)
                     }
@@ -948,6 +1013,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                         attachAllowed = modelReadsImages != false,
                         onAttach = { sheet = Sheet.Attach },
                         onRemoveImage = { id -> images.removeAll { it.id == id } },
+                        voice = { VoiceButton(draft, onDraft = { draft = it }, enabled = enabled, onMessage = { m -> scope.launch { snackbar.show(m) } }) },
                         focusRequester = focus,
                         // A user `!` command started while Pi is idle stops through abort_bash; the agent through abort.
                         stoppable = running || shellRuns > 0,
@@ -981,6 +1047,30 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
             val content = remember { mutableStateOf(viewer) }
             viewer?.let { content.value = it }
             content.value?.let { Viewer(it, onClose = { viewer = null }) }
+        }
+        TurnReviewOverlay(review)
+        AnimatedVisibility(
+            visible = openedFile != null,
+            enter = fadeIn(PiMotion.enter(PiMotion.SHEET)) + slideInVertically(PiMotion.enter(PiMotion.SHEET)) { it / 10 },
+            exit = fadeOut(PiMotion.leave(PiMotion.SHEET)) + scaleOut(PiMotion.leave(PiMotion.SHEET), targetScale = 0.94f),
+        ) {
+            val shown = remember { mutableStateOf(openedFile) }
+            openedFile?.let { shown.value = it }
+            shown.value?.let { f ->
+                val (root, rel) = remember(f) { viewerPlace(f, state.value.host?.cwd) }
+                FileViewer(
+                    root,
+                    fileTabs,
+                    rel,
+                    onSelect = { openedFile = File(root, it) },
+                    onClose = { openedFile = null },
+                    onChanged = {},
+                    onAsk = {
+                        draft = AskPi.appendTo(draft, it).first
+                        openedFile = null
+                    },
+                )
+            }
         }
         AnimatedVisibility(visible = imageViewer != null, enter = fadeIn(PiMotion.enter(PiMotion.SHEET)), exit = fadeOut(PiMotion.leave(PiMotion.SHEET))) {
             val shown = remember { mutableStateOf(imageViewer) }

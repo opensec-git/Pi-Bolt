@@ -1,6 +1,6 @@
 # Pi-Bolt Android: feature parity with the terminal
 
-Every user-facing feature of Pi-Bolt's terminal UI (TUI) and RPC, and its state in the Android app as of 0.4.0.
+Every user-facing feature of Pi-Bolt's terminal UI (TUI) and RPC, and its state in the Android app as of 0.5.0.
 
 - **State**: `done` (works on a phone as in the terminal, or better), `partial` (some of it, or only on-device or only
   remote), `missing`, `n/a` (has no meaning on a phone; not counted below).
@@ -15,10 +15,10 @@ rpc-extension-ui.md, remote-control.md) and src/modes/interactive.
 
 | | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| done | 39 | 46 | 29 | 114 |
+| done | 41 | 63 | 31 | 135 |
 | partial | 0 | 1 | 4 | 5 |
 | missing | 0 | 1 | 6 | 7 |
-| **Total** | 39 | 48 | 39 | 126 |
+| **Total** | 41 | 65 | 41 | 147 |
 
 Not counted: 12 `n/a` rows (terminal-only features). Before this branch the same rows stood at 53 done, 15 partial and
 55 missing: it moved 37 rows (25 missing to done, 11 partial to done, 1 missing to partial) and closed every P0 gap.
@@ -37,6 +37,10 @@ retry and compaction numbers (`/tuning`, Settings); "Stop retrying"; `/import`, 
 templates browser (`/skills`); notifications that open their exact session, and one when a background agent finishes.
 Tree navigation, labels and the tool list go through a small helper extension the app writes to
 `~/.pi/agent/extensions/pibolt-app.js` (RPC has no command for them).
+
+Built in the undo branch (3 new rows): per-turn checkpoints in a shadow git repository outside the project, "Review
+changes" with per-file diffs, undo of a turn or a file with per-file choices for files changed since, restore to
+before a turn with a conversation fork, and redo of any restore. On this phone only (remote files are on the computer).
 
 ## Prompting and the composer
 
@@ -156,6 +160,14 @@ Tree navigation, labels and the tool list go through a small helper extension th
 | Edit and resend | `/fork` | done: "Edit and resend" | device | P1 |
 | Share a message | — | done: Android share sheet | both | P1 |
 
+## Review and undo (checkpoints)
+
+| Feature | Terminal | App | Where | Pri |
+|---|---|---|---|---|
+| Review what a turn changed | — | done: "Review changes (3 files, +40 −12)" under the turn, per-file diffs from snapshots | device | P1 |
+| Undo a turn or one file | — | done: Undo this turn / per file; files changed since ask Keep or Restore; Redo | device | P0 |
+| Restore to before a turn | `/fork` (conversation only) | done: files back to the turn's start, then the conversation forks there | device | P1 |
+
 ## Export and share
 
 | Feature | Terminal | App | Where | Pri |
@@ -227,8 +239,26 @@ Tree navigation, labels and the tool list go through a small helper extension th
 | Several computers, forget, revoke | `/remote-control devices` | done | remote | P1 |
 | Background notifications (done, needs answer) | — | done: tapping one opens that exact session; also "background agent finished" | both | P0 |
 | Keep running in the background | — | done: foreground service while a turn runs | device | P0 |
+| Several sessions at once | several terminals | done: up to three on this phone (one per project, each with its own engine) plus remote control; Running on Home, a switcher in the session bar; at the cap an idle session makes room, a busy one is never stopped | device | P1 |
 | Projects (create, clone, rename, pin, delete) | — | done | device | P0 |
 | Browse project files | — | done: Files tab and viewer | device | P1 |
+| Git changes (status, diffs, stage files or hunks, discard, commit) | git in Pi's bash | done: project Changes tab with the engine's git; "Ask Pi" drafts the message | device | P0 |
+| Git branches and history | git in Pi's bash | done: switch and create branches, log with commit details and diffs | device | P1 |
+| GitHub sign-in | — | done: OAuth device flow (when the build has a client id) or a personal access token, sealed by the Keystore | device | P1 |
+| Push, pull, clone private repositories | git in Pi's bash | done: with progress and plain errors; clone picks from the user's GitHub repositories; Pi's own git uses the account too | device | P1 |
+| Pull requests | `gh pr create` | done: title, body (Pi can draft), base branch, then the link | device | P1 |
+| Interactive terminal | `!` runs one command | done: bash on a pty in the project (engine environment, secrets), tabs, full screen, extra keys, copy and paste, font size, scrollback; keeps running in the background | device | P1 |
+| Dev-server preview | — | done: "Preview: localhost:N" chip in the terminal and the session, in-app browser limited to localhost | device | P1 |
+| Project secrets (.env) | — | done: Keystore-encrypted, masked, injected into the project's terminals and engines (not the model's messages), optional .env | device | P1 |
+| Edit project files | `edit` tool | done (0.5.0): tabs with unsaved dots; highlighting while typing (incremental, off the main thread); find and replace with regex groups, case, whole word, undo; go to line; auto-indent, bracket pairs, soft wrap; read-only over 1 MB | device | P1 |
+| Ask Pi about a file or selection | `@file` | done (0.5.0): the viewer puts an `@mention` and the selected lines into the project's composer | device | P1 |
+| Editor keyboard shortcuts | — | done (0.5.0): Ctrl+S, Ctrl+F, Ctrl+H, Ctrl+G, Ctrl+Z, Ctrl+Shift+Z / Ctrl+Y, Ctrl+W, Ctrl+Tab, F3 | device | P2 |
+| Files in and out | — | done (0.5.0): import files or a folder (SAF), a zip as a new project; export a project or folder as a zip (Save to… or Share); share a file; streamed, cancellable, zip-slip safe | device | P1 |
+| Share into Pi-Bolt | — | done (0.5.0): files, images and text from other apps: attach to a project's composer, import, or a zip as a project | device | P1 |
+| Voice input | — | done (0.5.0): composer mic, Android speech recognition (on-device when available), live partial text | both | P1 |
+| Files on tool cards | — | done (0.5.0): a path on this phone opens in the file viewer and editor | device | P1 |
+| Language runtimes: `node`, `npm`, `npx`, `python3`, `pip` | your system's | done: Node.js 22 LTS and Python 3.14 in the APK, in Pi's bash, `!` commands and the terminal (all with the engine's environment); npm/pip installs over HTTPS | device | P1 |
+| Runtimes screen (versions, sizes, npm/pip caches) | — | done: Settings > Runtimes, project menu | device | P2 |
 | TalkBack labels and 48 dp targets | — | done for the new controls | both | P0 |
 
 ## What remains

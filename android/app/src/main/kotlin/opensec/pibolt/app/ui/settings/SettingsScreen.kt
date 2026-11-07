@@ -37,6 +37,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -55,6 +56,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.ui.git.GitHubSection
 import opensec.pibolt.app.R
 import opensec.pibolt.app.data.AccentId
 import opensec.pibolt.app.data.AppSettings
@@ -78,7 +80,7 @@ import opensec.pibolt.app.ui.theme.Radius
  * search field that narrows the groups to matching settings ([SettingsIndex]), then the groups in [SettingsGroup] order.
  */
 @Composable
-fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
+fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
     val settings = Pi.settings
     val colors = Pi.colors
     val type = Pi.type
@@ -138,6 +140,19 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
 
                 if (SettingsGroup.Agent in groups) {
                     Section(SettingsGroup.Agent.title) { AgentSection(app, show) }
+                }
+
+                if (SettingsGroup.GitHub in groups) {
+                    Section(SettingsGroup.GitHub.title) { GitHubSection(app) }
+                }
+
+                if (SettingsGroup.Runtimes in groups) {
+                    Section(SettingsGroup.Runtimes.title) {
+                        val shipped by produceState<String?>(null) {
+                            value = withContext(Dispatchers.IO) { app.engine.runtimes().runtimes.joinToString(" · ") { "${it.name} ${it.version}" } }
+                        }
+                        NavRow("Runtimes", shipped?.ifEmpty { "None in this build" } ?: "Reading…", onClick = onRuntimes)
+                    }
                 }
 
                 if (SettingsGroup.Appearance in groups) {
@@ -302,6 +317,9 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
                             })
                             NavRow("Mermaid licence", "MIT, with the projects it bundles", onClick = {
                                 scope.launch { licence = ViewerContent("Mermaid", "MIT, with the projects it bundles", readRaw(context, R.raw.license_mermaid), wrap = true) }
+                            })
+                            NavRow("Termux terminal licence", "Apache License 2.0", onClick = {
+                                scope.launch { licence = ViewerContent("Termux terminal", "Apache License 2.0", readRaw(context, R.raw.license_termux_terminal), wrap = true) }
                             })
                         }
                     }

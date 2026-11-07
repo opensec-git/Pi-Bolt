@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
@@ -68,6 +69,7 @@ import kotlinx.coroutines.launch
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.markdown.MdBlock
+import opensec.pibolt.app.ui.session.review.TurnReviewEntry
 import opensec.pibolt.app.ui.session.subagent.SubagentCard
 import opensec.pibolt.app.ui.session.subagent.SubagentNoticeRowView
 import opensec.pibolt.app.ui.session.subagent.SubagentStack
@@ -110,6 +112,8 @@ fun Transcript(
     onToolImages: (ViewerImages) -> Unit = {},
     errorContext: ErrorContext = ErrorContext(null, null, local = false, running = false),
     onErrorAction: (ErrorAction, NoticeItem) -> Unit = { _, _ -> },
+    /** A file on this phone tapped in a tool card: the screen opens it in the full file viewer; null shows it as text. */
+    onOpenLocalFile: ((File) -> Unit)? = null,
 ) {
     val settings = Pi.settings
     val parseScope = rememberCoroutineScope()
@@ -220,6 +224,7 @@ fun Transcript(
     }
     val currentOpen by rememberUpdatedState(onOpen)
     val currentImages by rememberUpdatedState(onToolImages)
+    val currentLocalFile by rememberUpdatedState(onOpenLocalFile)
     // A path in a tool card opens the file: read from this phone when the session's folder is here (on-device Pi),
     // else a note that the file lives on the host.
     val openFile: (String) -> Unit = remember(scope) {
@@ -228,9 +233,14 @@ fun Transcript(
                 val root = state.value.host?.cwd
                 val file = if (path.startsWith("/")) File(path) else root?.let { File(it, path) }
                 val readable = file != null && withContext(Dispatchers.IO) { file.isFile && file.canRead() }
-                currentOpen(
-                    if (readable) fileView(file, path) else ViewerContent(baseName(path), path, "This file is on the computer running Pi, not on this phone."),
-                )
+                val local = currentLocalFile
+                if (readable && local != null) {
+                    local(file)
+                } else {
+                    currentOpen(
+                        if (readable) fileView(file, path) else ViewerContent(baseName(path), path, "This file is on the computer running Pi, not on this phone."),
+                    )
+                }
             }
         }
     }
@@ -563,16 +573,18 @@ private fun LazyItemScope.RowView(
                 modifier = base.riseIn(row.key, row.live, memory, 6.dp),
             )
         }
-        is FoldRow -> FoldRowView(
-            row,
-            onToggle = {
-                if (!row.expanded) memory.openedAt[row.turnKey] = SystemClock.uptimeMillis()
-                memory.openFolds[row.turnKey] = !row.expanded
-                keep()
-            },
-            onOpenFile = { onOpen(ViewerContent("Diff", it.path, it.diff, diff = true)) },
-            modifier = base,
-        )
+        is FoldRow -> Column(base) {
+            FoldRowView(
+                row,
+                onToggle = {
+                    if (!row.expanded) memory.openedAt[row.turnKey] = SystemClock.uptimeMillis()
+                    memory.openFolds[row.turnKey] = !row.expanded
+                    keep()
+                },
+                onOpenFile = { onOpen(ViewerContent("Diff", it.path, it.diff, diff = true)) },
+            )
+            TurnReviewEntry(row.turnKey, editedFiles = row.files.isNotEmpty())
+        }
         is ActionsRow -> ReplyActions(row, memory, onAskAgain = onAskAgain, onMore = { onActions(row) }, modifier = base)
         is SubagentRow -> SubagentCard(row, modifier = base.padding(top = Pi.dims.stepGap + 2.dp, bottom = 2.dp).riseIn(row.key, row.live, memory, 6.dp))
         is SubagentStackRow -> SubagentStack(

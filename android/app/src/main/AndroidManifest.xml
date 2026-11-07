@@ -14,8 +14,19 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
+    <!-- Dictation in the composer (Android's SpeechRecognizer); asked for on the first tap of the mic only. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+
+    <!-- Android 11+ package visibility: the speech recognition service the mic uses. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
 
     <application
         android:name=".PiBoltApp"
@@ -46,6 +57,17 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="pibolt" android:host="pair" />
             </intent-filter>
+            <!-- Files, images and text shared from other apps: imported into a project or put in its composer. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="*/*" />
+            </intent-filter>
         </activity>
 
         <!-- The diagram renderer's WebView (ui/diagram) sends no usage metrics to Google. -->
@@ -71,6 +93,14 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Runs the user's coding agent on the device while it works on a prompt in the background" />
+        </service>
+        <service
+            android:name=".terminal.TerminalService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the user's interactive terminal shells (and the dev servers and builds they started) running in the background" />
         </service>
         <service
             android:name=".update.UpdateService"

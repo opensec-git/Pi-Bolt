@@ -57,19 +57,26 @@ import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.home.HomeScreen
+import opensec.pibolt.app.ui.projects.transfer.ShareInHost
+import opensec.pibolt.app.ui.projects.transfer.SharedContent
 import opensec.pibolt.app.ui.projects.ProjectScreen
 import opensec.pibolt.app.ui.scan.ScanScreen
+import opensec.pibolt.app.ui.secrets.SecretsScreen
 import opensec.pibolt.app.ui.session.SessionScreen
 import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import opensec.pibolt.app.ui.session.subagent.LocalSubagentNav
 import opensec.pibolt.app.ui.session.subagent.SubagentNav
 import opensec.pibolt.app.ui.session.subagent.SubagentOverlay
+import opensec.pibolt.app.ui.settings.RuntimesScreen
 import opensec.pibolt.app.ui.settings.SettingsScreen
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.terminal.PreviewScreen
+import opensec.pibolt.app.ui.terminal.TerminalScreen
 import opensec.pibolt.app.ui.update.UpdateSheets
 import opensec.pibolt.protocol.PairingPayload
+import java.io.File
 
 object Routes {
     const val HOME = "home"
@@ -78,22 +85,32 @@ object Routes {
     const val SCAN = "scan"
     const val SESSION = "session"
     const val SETTINGS = "settings"
+    const val TERMINAL = "terminal/{name}"
+    const val SECRETS = "secrets/{name}"
+    const val PREVIEW = "preview/{port}"
+    const val RUNTIMES = "runtimes"
 
     fun project(name: String) = "project/" + Uri.encode(name)
 
     fun localSession(name: String) = "local/" + Uri.encode(name)
+
+    fun terminal(name: String) = "terminal/" + Uri.encode(name)
+
+    fun secrets(name: String) = "secrets/" + Uri.encode(name)
+
+    fun preview(port: Int) = "preview/$port"
 }
 
 private typealias Enter = AnimatedContentTransitionScope<NavBackStackEntry>.() -> EnterTransition
 private typealias Exit = AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition
 
 @Composable
-fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
+fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendingShare: SharedContent? = null, consumeShare: () -> Unit = {}) {
     val nav = rememberNavController()
     var linkError by remember { mutableStateOf<String?>(null) }
     // A link from outside the app (a browser, a chat) pairs only after the user confirms it in the app.
     var linkToConfirm by remember { mutableStateOf<PairingPayload?>(null) }
-    val liveSession by app.session.collectAsState()
+    val liveSession by app.remote.collectAsState()
 
     fun usePairing(text: String): String? {
         val payload = try {
@@ -211,6 +228,10 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
                                 name = name,
                                 onBack = { nav.popBackStack(Routes.HOME, inclusive = false) },
                                 onOpenSession = { nav.navigate(Routes.localSession(name)) { launchSingleTop = true } },
+                                onTerminal = { nav.navigate(Routes.terminal(name)) { launchSingleTop = true } },
+                                onSecrets = { nav.navigate(Routes.secrets(name)) { launchSingleTop = true } },
+                                onPreview = { nav.navigate(Routes.preview(it)) { launchSingleTop = true } },
+                                onRuntimes = { nav.navigate(Routes.RUNTIMES) { launchSingleTop = true } },
                             )
                         }
                     }
@@ -222,8 +243,31 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
                                 onBack = { if (!nav.popBackStack()) nav.navigate(Routes.HOME) },
                                 onForgotten = { nav.popBackStack(Routes.HOME, inclusive = false) },
                                 local = name,
+                                // The switcher: the other session takes this screen's place; both keep running.
+                                onOpenSession = { other ->
+                                    nav.navigate(Routes.localSession(other)) {
+                                        popUpTo(Routes.LOCAL_SESSION) { inclusive = true }
+                                        launchSingleTop = true
+                                    }
+                                },
+                                onPreview = { nav.navigate(Routes.preview(it)) { launchSingleTop = true } },
                             )
                         }
+                    }
+                    composable(Routes.TERMINAL, arguments = listOf(navArgument("name") { type = NavType.StringType })) { entry ->
+                        val name = entry.arguments?.getString("name").orEmpty()
+                        TerminalScreen(
+                            app = app,
+                            project = File(app.engine.projectsDir, name),
+                            onBack = { nav.popBackStack() },
+                            onPreview = { nav.navigate(Routes.preview(it)) { launchSingleTop = true } },
+                        )
+                    }
+                    composable(Routes.SECRETS, arguments = listOf(navArgument("name") { type = NavType.StringType })) { entry ->
+                        SecretsScreen(app = app, project = File(app.engine.projectsDir, entry.arguments?.getString("name").orEmpty()), onBack = { nav.popBackStack() })
+                    }
+                    composable(Routes.PREVIEW, arguments = listOf(navArgument("port") { type = NavType.IntType })) { entry ->
+                        PreviewScreen(port = entry.arguments?.getInt("port") ?: 0, onBack = { nav.popBackStack() })
                     }
                     composable(Routes.SCAN) {
                         CompositionLocalProvider(LocalNavScope provides this) {
@@ -239,12 +283,18 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
                                 app = app,
                                 onBack = { nav.popBackStack(Routes.HOME, inclusive = false) },
                                 onForgotten = { nav.popBackStack(Routes.HOME, inclusive = false) },
+                                onOpenSession = { other -> nav.navigate(Routes.localSession(other)) { launchSingleTop = true } },
                             )
                         }
                     }
                     composable(Routes.SETTINGS) {
                         CompositionLocalProvider(LocalNavScope provides this) {
-                            SettingsScreen(app = app, onBack = { nav.popBackStack() })
+                            SettingsScreen(app = app, onBack = { nav.popBackStack() }, onRuntimes = { nav.navigate(Routes.RUNTIMES) { launchSingleTop = true } })
+                        }
+                    }
+                    composable(Routes.RUNTIMES) {
+                        CompositionLocalProvider(LocalNavScope provides this) {
+                            RuntimesScreen(app = app, onBack = { nav.popBackStack() })
                         }
                     }
                 }
@@ -257,6 +307,14 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
         app,
         onLocal = { nav.navigate(Routes.localSession(it)) { launchSingleTop = true } },
         onRemote = { nav.navigate(Routes.SESSION) { launchSingleTop = true } },
+    )
+    // Content shared from another app: a sheet picks what to do and where (ui/projects/transfer).
+    ShareInHost(
+        app,
+        pendingShare,
+        onConsumed = consumeShare,
+        onProject = { nav.navigate(Routes.project(it)) { launchSingleTop = true } },
+        onSession = { nav.navigate(Routes.localSession(it)) { launchSingleTop = true } },
     )
 
     UpdateSheets(app)

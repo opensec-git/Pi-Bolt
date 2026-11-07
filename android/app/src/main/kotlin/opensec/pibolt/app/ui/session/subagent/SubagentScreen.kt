@@ -87,7 +87,6 @@ import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.ShimmerText
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.markdown.MdBlock
-import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.ui.session.ActionsRow
 import opensec.pibolt.app.ui.session.FoldRow
 import opensec.pibolt.app.ui.session.FoldRowView
@@ -162,11 +161,10 @@ val LocalSubagentNav = staticCompositionLocalOf<SubagentNav?> { null }
  */
 @Composable
 fun SubagentOverlay(app: PiBoltApp, nav: SubagentNav) {
-    val remote by app.session.collectAsStateWithLifecycle()
-    val local by LocalSessions.current.collectAsStateWithLifecycle()
+    val sessions by app.sessions.collectAsStateWithLifecycle()
     val key = nav.openKey
-    val controller = remember(key, remote, local) {
-        key?.let { k -> listOfNotNull(remote, local?.controller).firstOrNull { k in it.state.value.subagents } }
+    val controller = remember(key, sessions) {
+        key?.let { k -> sessions.firstOrNull { k in it.state.value.subagents } }
     }
     LaunchedEffect(key, controller) {
         if (key != null && controller == null) nav.close()

@@ -204,10 +204,12 @@ with the mark, then:
   folders were read (a few ms, off the main thread), so the computers section never jumps.
 
 **New project sheet.** Title, one line, a segmented "Empty folder | Clone from git". Clone shows the repository URL
-(monoSmall, URI keyboard, no autocorrect) with "Pi runs git clone in the new folder"; the URL names the folder until
-the name is edited. Name field, then `projects/<name>` (monoMeta ink3) or the error in danger. Cancel and Create/Clone.
-Creating opens a new session in the folder; for a clone the first prompt asks Pi to `git clone <url> .` and is sent as
-soon as the session can take it. URLs with shell syntax are refused; names may not contain slashes, start with a dot
+(monoSmall, URI keyboard, no autocorrect) and, when signed in to GitHub, "Choose from GitHub" (accent text action) that
+opens the repository picker: a search field, then 56dp rows (full name in body ink1, description meta ink3, a lock
+glyph for private ones), 100 per page with "Load more". The URL names the folder until the name is edited. Name field,
+then `projects/<name>` (monoMeta ink3) or the error in danger. Cancel and Create/Clone. The app clones with the
+engine's git (the hint line shows its progress, "Receiving objects · 45%"); a failed clone removes the folder and shows
+the explained error. Then a new session opens in the folder and asks Pi for a short overview. URLs with shell syntax are refused; names may not contain slashes, start with a dot
 or collide (case-insensitive) with another project.
 
 **Rename and delete.** Rename changes the title shown in the app only ("The folder stays projects/x"): Pi files its
@@ -217,7 +219,7 @@ sessions by path, so the folder never moves. Delete is a confirmation sheet that
 **Project.** Shared bounds from the project card (title as a shared element, like host card to session). Back,
 overflow (Pin, Rename, Delete), the title in display, the folder chip (`projects/x`, monoMeta ink2 on surface1, radius
 8) and, inside a git repository, the branch from `.git/HEAD` (branch glyph + monoMeta ink3). New session (primary,
-full width), then a segmented "Sessions · N | Files".
+full width), then a segmented "Sessions · N | Files | Changes | Terminal".
 - Sessions: 64dp cards (surface1, line, radius 12): chat glyph ink3 (the live session: its Quad, lineStrong border,
   "Open" first in the meta line), the session name or first prompt (body ink1), "24 messages · 2 h ago" (meta ink3).
   Tap resumes; the live one resumes without reopening.
@@ -225,6 +227,82 @@ full width), then a segmented "Sessions · N | Files".
   52dp rows: folder or file glyph, the name in monoSmall (dot files ink3), size or "N items" (meta ink3) at the end.
   Folders first, then files, by name. Tapping a file opens the full-screen viewer (first 512 KB; binary files say so).
   Back goes up a folder before it leaves the screen.
+  The "+" menu also imports: "Import files…" (ACTION_OPEN_DOCUMENT, several) and "Import a folder…"
+  (ACTION_OPEN_DOCUMENT_TREE) into the folder shown; names that exist get " (2)". A folder's long-press sheet has
+  "Export as zip", a file's "Share"; the project's ⋮ menu has "Export as zip". The export sheet: "Leave out .git and
+  dependencies" (a 56dp checkbox row, on by default), then Share (secondary) and Save to… (primary, ACTION_CREATE_DOCUMENT).
+  A transfer shows a card above the bottom edge (surface2, lineStrong, radius 12): "Importing 3 files · 40%"
+  (bodyStrong), "2 files · 1.2 MB of 3 MB · src/a.kt" (monoMeta ink3), Cancel (danger text action) and a 3dp accent
+  progress line on surface3 (no fill when the total is unknown: never an indeterminate animation). Progress updates
+  at most every 100 ms. New project has "Import a zip as a project…" (accent text action) under its buttons.
+- Changes (git, through the engine's own git off the main thread with timeouts): outside a repository a card offers
+  "Initialise git". Inside: the branch card (surface1, radius 12): branch glyph, the branch in bodyStrong and
+  "origin/main · 2 to push · 1 to pull" in meta ink3, tap for the Branches sheet; while an operation runs, a 16dp Run
+  Quad and git's progress in meta ink2; then Pull, Push (text actions), "Pull request" (accent, GitHub remotes when
+  signed in) and History. Sections "Conflicts", "Staged · N" (Unstage all) and "Changes · N" (Stage all) list 56dp file
+  rows: the change letter in a 20dp surface2 tile (added/untracked success, deleted/conflict danger, renamed warning,
+  modified ink2; TalkBack reads the word), the file name in body over its folder in monoMeta ink3, and a 48dp + / −
+  button to stage or unstage. Tap opens the diff; long press asks to discard (ConfirmSheet, danger; untracked files are
+  deleted). The commit card: message field (2 to 8 lines), "Ask Pi" (secondary, sparkle glyph: Pi drafts from the
+  staged diff in the project's session and the answer fills the field) and Commit (primary). Without a git identity
+  the commit opens "Who is committing?" (name, email; prefilled with the GitHub name and no-reply address).
+- Diff viewer: full screen (fade and 10% rise, sheet duration). Bar: back, file name over its path, Stage or Unstage
+  and, unstaged, Discard. Each hunk is a card: its `@@` header (monoMeta ink3 on surface2) with Stage hunk / Unstage
+  hunk and, unstaged, a discard glyph (confirmed), then the rows renderer (DiffBlock: two gutters, sign column, solid
+  and hatched bars, syntax colours, word marks). Binary files, renames without changes and very large diffs say so.
+- History: full screen list of 64dp rows (subject in body, "abc1234 · author · 2 h ago" meta ink3, refs monoMeta ink2),
+  100 at a time. A commit opens its subject (subhead), body, author, date and a copy-hash button, then a card per file
+  (path in monoSmall, +/− counts) that folds its diff (folded first when more than three files).
+- Branches sheet: a new-branch field (mono, validated like `git check-ref-format`) with Create, then "On this phone"
+  (current first, success check) and "On the remote" (switching creates a tracking branch).
+- Pull request sheet: title, description (Markdown), "Merge into" chips (the repository's default branch first),
+  "Ask Pi" (Pi drafts title and body from the branch's commits) and Create (pushes first when needed). Done, it shows
+  "Pull request #12", the link in accent mono, Copy and "Open on GitHub".
+- Terminal (fourth segment; a key action in the top bar opens Secrets): see Terminal below, at 86% of the screen's
+  height inside the page (drags scroll the terminal's scrollback, not the page).
+
+**Terminal.** Termux's TerminalView in JetBrains Mono on canvas: text ink1, cursor accent, the 16 base colours mapped
+to tokens as in tool output (red danger, green success, blue the syntax function colour...), no cursor blink. A 48dp
+bar: tab chips (36dp, radius 8, surface2 + lineStrong when selected, line otherwise; "1 · title" in label, ink3 when
+the shell ended; a 16dp close glyph), + (new terminal), Paste, smaller and larger text (8 to 28 sp, also by pinch),
+full screen / leave full screen. Under it the Preview chips. The extra-keys row (surface1, 48dp keys, monoMeta ink1 or
+a 20dp arrow glyph): Esc, Tab, Ctrl, Alt, the four arrows, |, ~, /, -; Ctrl and Alt fill with accent (onAccent text)
+while on and apply to the next key only. Long press selects text (Termux's floating Copy / Paste bar); tap shows the
+keyboard (character input, no suggestions). An ended shell says "[Process completed - press Enter]"; Enter closes the
+tab. No tab yet: "A shell in this project", one line, Start a terminal (primary). Full screen: the same pane above
+the keyboard, status and navigation bars padded. Shells keep running off screen; a low-importance "N terminals
+running" notification (Close all) holds them in the background.
+
+**Preview.** Chips "Preview: localhost:5173" (label ink1 on successSoft, success @ 40% line, radius 8, 48dp touch) in
+the terminal and above the composer of an on-device session, while a dev server listens. The preview screen: back,
+the URL (monoMeta ink2, middle ellipsis), Reload, Open in browser; a 2dp accent progress line while loading; the page
+in a WebView (http://localhost and 127.0.0.1 only; tapped links elsewhere open in the browser).
+
+**Secrets.** Back, "Secrets" in display, one paragraph on where values go (engine and terminal environment, never the
+model's messages). 64dp rows: the name in mono ink1, the value masked as eight dots (monoMeta ink3, fixed length),
+Show / Hide, Edit, Delete (danger). Add secret (primary) opens a form card (surface1, line, radius 12): NAME (mono,
+validated: letters, digits, _, not the engine's own variables), Value (masked while typing, eye toggle), Cancel / Save.
+Write .env file (secondary) confirms first: values land in plain text in the project and git would commit them; .env
+is added to .gitignore in git projects. The window is FLAG_SECURE on this screen.
+
+**File viewer and editor.** Full screen over the project (or the session, for a file on a tool card). Top bar: ✕,
+the name and "path · type · N lines · read-only · unsaved" (monoMeta; warning when unsaved), Find, Wrap (viewing) or
+Save (editing, accent text action), ⋮ (Edit, Ask Pi about the selection / this file, Go to line, Copy path, Copy
+text, Share). Open files are tabs once there are two: a 48dp strip, each tab 40dp (radius 8; surface2 when shown),
+a 7dp warning dot when unsaved, the name (monoSmall, at most 160dp) and a ✕ (48dp target). Find bar: the query
+(mono), "3 of 12" (meta, live region), ↑ ↓ ✕, then 48dp text toggles "Aa" (match case), "ab" underlined (whole
+word), ".*" (regex) in accent with a 18% accent fill when on (TalkBack: switches), and ⇄ for Replace: a second row
+with the replacement and "Replace" / "All" (accent text actions); a bad regex or group shows in danger meta below.
+Matches are accent 22%, the current one 50%. Editing: the same monoSmall text, colours as in code blocks (updated
+as you type), the bracket pair at the cursor on surface3, a 48dp bar over the keyboard (surface1, top line): Undo,
+Redo, Insert indent, Go to line, "Ln 12, Col 4" (monoMeta ink3; "No colours over 400 KB" first for big files).
+Files over 1 MB open read-only. Leaving or closing a tab with unsaved edits asks first ("Discard").
+
+**Share into Pi-Bolt.** Another app's share sheet lists Pi-Bolt for files, images and text. A sheet: "Share to
+Pi-Bolt" with "2 images" / "1 file" / "Text"; a segmented choice when there is more than one (Attach to chat |
+Import files, New project | Import files, Import files | Add to chat), the projects as 52dp radio rows (folder glyph,
+title, accent check), then the primary action. Attach and Add to chat open the project's session with the images in
+the tray or the text in the composer.
 
 **Provider sheet (first run and Add provider).** Opens by itself once, 450 ms after the first frame of Home, when no
 provider has a key. Eyebrow "Welcome to Pi-Bolt" (first run only), "Connect a model", one line saying the key stays on
@@ -234,6 +312,14 @@ back, badge, provider name (title), what happens to the key, the key field (mono
 autocorrect; Paste when empty, Show/Hide when filled), a lock line "Stored on this device only" (or the error in
 danger), "Get a key at console.anthropic.com" (accent, opens the browser), Cancel and Save key. The key lives only in
 the sheet's memory (never saved instance state), is cleared after saving and never logged.
+
+**Settings > GitHub.** Signed out: one line on what it enables, "Sign in with GitHub" (primary; only when the build has
+an OAuth client id) and "Use a personal access token" (secondary, key glyph). Device flow sheet: the user code in
+display mono on a surface1 well (TalkBack spells it), Copy, "Open github.com/login/device" (primary), then a 16dp Wait
+Quad and "Waiting for you to approve on GitHub"; errors in danger with Try again. Token sheet: what scopes to pick, a
+link to create one, a masked mono field, the storage line (Keystore, never shown again, never logged) and Save, which
+checks the token against GitHub first. Signed in: name and @login, how and which scopes, a line on where it is used,
+Sign out (confirmed).
 
 **Settings > Model providers** comes first: configured providers (badge, name, "Key stored on this phone", a delete
 action that asks first and says the key is not revoked at the provider) and Add provider.
@@ -346,6 +432,10 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
     success, −n danger, tnum; at most 3, then "+k more"); a chip opens that file's diff. An opened fold draws a 1dp
     line rail at the slot centre through its steps (broken 4dp around each glyph, ending at the last one) and indents
     the prose between steps to the step text.
+  - under that fold, in a session on this phone: "Review changes (3 files, +40 −12)" (difference glyph 16dp ink3,
+    label ink2, counts success / danger tnum, " · undone" in ink3 after an undo; 48dp tall), only for turns whose
+    checkpoints show changed files. Over remote control the newest turn that edited files says instead, in meta ink3,
+    that review and undo work in sessions on this phone (the files are on the computer).
   - under the last finished reply: Copy (check + "Copied"), Ask again (sends the same prompt as a new turn; Pi has
     no regenerate; hidden for prompts with images) and More (Select text, View as Markdown, Share), 40dp tall,
     aligned with the prose. Fades in 150 ms after the turn settles; never animates in history.
@@ -406,6 +496,29 @@ runs it at once; others fill `/name ` and wait. Picks tick (haptic).
 - Hardware keyboards: Ctrl+Enter sends, Esc stops a run (empty field), Ctrl+P next model, Shift+Tab next thinking
   level. Enter adds a line, as Android keyboards expect.
 
+**Review changes.** A full screen over the session, like the viewer (sheet motion, predictive back): Close, "Changes"
+and "3 files · +40 −12" (meta ink3, tnum), a 1dp line. Then the prompt (body ink2, three lines), "Undo this turn" and
+"Restore to before" (secondary buttons with undo and history glyphs; off while Pi works, with a meta line saying
+so), and after an undo a surface1 card "Undid 3 files of this turn." with Redo (accent). Each file: a 1dp line, a
+56dp row (chevron, the name in mono meta ink1 over its folder in meta ink3, "new" success or "deleted" danger, +n
+success −n danger tnum or "binary", and a 48dp undo button for that file); the first four files start open. An open
+file shows its unified diff with the tool rows' renderer (gutter numbers, changed words, the file's syntax colours) on
+surface1, one lazy row each, at most 1500 rows. The diff is between the turn's two snapshots: the start when the user
+message reached the engine, the end when the agent settled (a steer ends one turn and starts the next).
+- Undo restores the files the turn changed to the start snapshot. Files no longer as the turn left them (a later turn
+  or the user changed them) open a sheet "Changed since": per file a 48dp Keep / Restore segmented control (Keep is
+  the default), "k other files go back as they are", Cancel and "Undo n files". Otherwise it runs at once and a
+  success snackbar says "Undid 3 files".
+- "Restore to before" always asks: the files that differ from the start snapshot (later turns too; the user's own
+  edits are the Keep / Restore rows), then "Restore and fork" restores them and forks the conversation at the message,
+  which returns to the composer as "Edit and resend" does.
+- Every restore first snapshots the project, so it can be undone: Redo puts the files back (same sheet when they
+  changed since). A file over 5 MB is never in a snapshot, so a restore never deletes one ("too large to restore").
+- Snapshots live outside the project, in `HOME/.pi/agent/checkpoints/<hash>.git` (a shadow git repository run with
+  the pack's git; the project's own `.git` is untouched), honour .gitignore, skip node_modules-like folders and files
+  over 5 MB, and keep the last 50 turns of the last 14 days. They run on a background queue; a failure is one warning
+  snackbar ("Checkpoints paused: ...") until a snapshot works again.
+
 **Session sheet.** Opened from the title or "Session and usage": the context card (label, "30.0% of 200k" in meta
 tnum, a 6dp bar on surface3, ink2, warning over 70%, danger over 90%, animated in place; then the terminal footer's
 line `↑50k ↓10k R40k W5.0k $0.450` in mono meta ink3), a totals card (input, output, cost; cache read, cache write,
@@ -427,6 +540,10 @@ as Markdown, Share. More under the last reply offers the same.
 **Export.** "Export or share" (or `/export`): Share as Markdown (a `.md` file through the share sheet), Copy as
 Markdown, and on this phone Share session file (the JSONL) and Share as HTML (`export_html`). Files are written to
 `cache/exports` and shared through a FileProvider.
+
+**Dictation.** A 48dp mic beside Send: MicNone ink2 on a 34dp surface1 disc; listening is an accent disc with an
+onAccent Mic (static, no pulse) and TalkBack's state "Listening". The first tap explains the microphone in a sheet
+("Continue"), then Android asks; partial words appear in the draft as they are heard.
 
 **Image viewer.** A tap on an image in a user message or the composer tray opens it full screen on black: swipe
 between images, pinch or double-tap (2.5x) to zoom up to 6x, drag to pan a zoomed image (kept on screen), Back or ✕
@@ -527,6 +644,7 @@ matches" otherwise. Groups, in order, each a SectionLabel over a surface1 card (
   Skill commands, Block images. They are the engine's own settings (`agent/settings.json`, other keys kept); the
   queue, compaction and retry switches reach the open on-device session at once over RPC, the rest apply from the next
   session.
+- Runtimes: the shipped runtimes on one line ("Node.js 22.23.4 · Python 3.14.10") and a row to the Runtimes screen.
 - Appearance: theme tiles (seven, four a row, each drawn in its own theme: canvas, user bubble, prose with an inline
   code chip, a code card in the theme's syntax colours, the composer with the accent send button; selected = 1.5dp
   accent ring; the near-black themes show their canvas hex under the name in monoMeta ink3), accent circles ("Theme"
@@ -538,10 +656,22 @@ matches" otherwise. Groups, in order, each a SectionLabel over a surface1 card (
   the system page.
 - Security: device key, Reset device key.
 - About: app version, device name, the update status and its action (see Updates), "Check for updates automatically",
-  licences (Inter, JetBrains Mono: OFL).
+  licences (Inter, JetBrains Mono: OFL; Termux terminal libraries: Apache-2.0).
 Segmented controls in Settings are 48dp tall.
 Changes apply live, without recreating the activity, and persist in a small JSON file (read synchronously at
 startup so the first frame has the right theme).
+
+**Runtimes** (Settings > Runtimes, and "Runtimes" in a project's menu).
+- Header like Settings (back, display title), then one line: the runtimes come with the app and run in every project.
+- Installed: one card row per runtime: name in bodyStrong, version in monoMeta ink2, installed size right-aligned in
+  meta ink3 (tabular figures); below, what comes with it ("npm 10.9.4", "pip 25.2") in meta ink3, then its commands as
+  mono chips (surface2, 1dp line, Radius.sm). No Install/Remove: the runtimes are part of the APK (android/engine/CONTRACT.md).
+- Packages and caches: npm cache and pip cache with their size and a secondary "Clear" (disabled at 0 B; "Clearing…"
+  while it runs; a ConfirmSheet first, naming the size), then npm global packages and pip packages with their size
+  only (removed with npm uninstall -g / pip uninstall). A failed clear says so in danger under the row.
+- Sizes are measured on IO when the screen opens and after a clear; nothing animates while idle.
+- TalkBack: a runtime is one node ("Node.js 22.23.4, npm 10.9.4, 150 MB. Commands: node, npm, npx"); each Clear is
+  labelled "Clear the npm cache"; the title is a heading. Every row is at least 48 dp tall.
 
 ## Updates
 

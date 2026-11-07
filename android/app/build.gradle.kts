@@ -1,6 +1,7 @@
 import java.net.URI
 import java.security.MessageDigest
 import java.util.Base64
+import java.util.concurrent.Callable
 
 plugins {
     alias(libs.plugins.android.application)
@@ -26,6 +27,13 @@ val appVersionCode: Int = appVersion.split(".").map { it.takeWhile(Char::isDigit
 // pi-bolt.opensec.in/android.json and GitHub release downloads; these fields are empty there.
 val updateManifestOverride: String = providers.environmentVariable("PIBOLT_UPDATE_MANIFEST_URL").orNull.orEmpty()
 val updateApkPrefixOverride: String = providers.environmentVariable("PIBOLT_UPDATE_APK_PREFIX").orNull.orEmpty()
+
+// GitHub sign-in through the OAuth device flow needs the client id of a GitHub OAuth App with Device Flow enabled
+// (android/README.md, "GitHub"). From the Gradle property `pibolt.githubClientId` or PIBOLT_GITHUB_CLIENT_ID; empty by
+// default, and then the app offers a personal access token instead. A client id is public (not a secret).
+val githubClientId: String = (providers.gradleProperty("pibolt.githubClientId").orNull ?: providers.environmentVariable("PIBOLT_GITHUB_CLIENT_ID").orNull)
+    .orEmpty().trim()
+    .also { require(it.all { c -> c.isLetterOrDigit() || c == '.' || c == '_' || c == '-' }) { "pibolt.githubClientId has unexpected characters" } }
 
 fun quoted(value: String): String = "\"" + value.replace("\\", "\\\\").replace("\"", "\\\"") + "\""
 
@@ -110,6 +118,8 @@ androidComponents {
 android {
     namespace = "opensec.pibolt.app"
     compileSdk = 36
+    // Builds libtermux.so (src/main/jni). Pinned; CI installs this exact version (.github/workflows/android.yml).
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "in.opensec.pibolt"
@@ -119,9 +129,19 @@ android {
         versionName = appVersion
         buildConfigField("String", "UPDATE_MANIFEST_OVERRIDE", "\"\"")
         buildConfigField("String", "UPDATE_APK_PREFIX_OVERRIDE", "\"\"")
+        buildConfigField("String", "GITHUB_CLIENT_ID", quoted(githubClientId))
         // The engine and its userland are linux-arm64 only.
         ndk {
             abiFilters += "arm64-v8a"
+        }
+    }
+
+    // Termux's pty helper, vendored (Apache-2.0) and linked for 16 KB pages: the AAR's prebuilt one is 4 KB aligned.
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/jni/CMakeLists.txt")
+            // Pinned like the NDK; CI installs it when the runner lacks it.
+            version = "3.22.1"
         }
     }
 
@@ -198,6 +218,19 @@ kotlin {
     }
 }
 
+// Termux's terminal-emulator is used for its Java classes only: its AAR has no resources, and its prebuilt libtermux.so
+// is 4 KB page aligned, so the classes are taken from the (sha256-verified) AAR as a jar and the native library is
+// built from the vendored termux.c (src/main/jni). Nothing of the AAR's jni/ reaches the merge, the APK or lint.
+val termuxEmulatorAar: Configuration by configurations.creating {
+    isCanBeConsumed = false
+    isTransitive = false
+    attributes { attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.JAVA_RUNTIME)) }
+}
+val termuxEmulatorClasses = tasks.register<Copy>("termuxEmulatorClasses") {
+    from(Callable { zipTree(termuxEmulatorAar.singleFile) }) { include("classes.jar") }
+    into(layout.buildDirectory.dir("termux-emulator"))
+}
+
 dependencies {
     implementation(project(":protocol"))
     implementation(libs.kotlinx.coroutines.android)
@@ -211,6 +244,12 @@ dependencies {
     implementation(libs.zxing.core)
     // WebViewAssetLoader for the offscreen diagram renderer (ui/diagram).
     implementation(libs.androidx.webkit)
+    // The terminal: a pty (JNI, libtermux.so) and a VT emulator, and its Android view.
+    termuxEmulatorAar(libs.termux.terminal.emulator)
+    implementation(files(termuxEmulatorClasses.map { it.destinationDir.resolve("classes.jar") }))
+    implementation(libs.termux.terminal.view) {
+        exclude(group = "com.github.termux.termux-app", module = "terminal-emulator")
+    }
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
@@ -225,4 +264,5 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
+    testImplementation(libs.okhttp.mockwebserver)
 }

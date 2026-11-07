@@ -116,7 +116,7 @@ object Features2 {
         val project = controller.project ?: return Result.failure(IllegalStateException("Only sessions on this phone can reload"))
         val file = controller.sessionFile
         controller.stop()
-        (app.engine as? LocalEngine)?.trimMemory("reload")
+        (app.engine as? LocalEngine)?.stopIdleEngines("reload")
         return LocalSessions.open(app.engine, ProjectStore.get(app), project, sessionFile = file).map { }
     }
 
