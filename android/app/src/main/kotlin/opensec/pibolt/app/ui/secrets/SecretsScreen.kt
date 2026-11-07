@@ -113,7 +113,7 @@ fun SecretsScreen(app: PiBoltApp, project: File, onBack: () -> Unit) {
             result.onSuccess {
                 secrets = it
                 // Idle engines were started with the old values: the next session starts with the new ones.
-                (app.engine as? LocalEngine)?.trimMemory("project secrets changed")
+                (app.engine as? LocalEngine)?.stopIdleEngines("project secrets changed")
                 snackbar.show(message, SnackKind.Success)
             }.onFailure { snackbar.show("Could not save the secrets", SnackKind.Error) }
         }

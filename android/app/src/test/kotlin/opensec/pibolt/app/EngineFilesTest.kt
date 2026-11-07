@@ -19,6 +19,7 @@ import opensec.pibolt.app.engine.SessionIndex
 import opensec.pibolt.app.engine.engineEnvironment
 import opensec.pibolt.app.engine.engineUnavailableReason
 import opensec.pibolt.app.engine.resolvConf
+import opensec.pibolt.app.terminal.shellEnvironment
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileNotFoundException
@@ -138,6 +139,22 @@ class EngineFilesTest {
         assertEquals(File(p.prefix, "etc/ssl/certs/ca-certificates.crt").path, withPack["SSL_CERT_FILE"])
         assertEquals(File(p.bin, "bash").path, withPack["SHELL"])
         assertEquals("/x/bash", engineEnvironment(p, emptyMap(), "UTC", mapOf("SHELL" to "/x/bash"))["SHELL"])
+    }
+
+    @Test
+    fun theTerminalShellGetsTheRuntimesPathTheGitHubHelperAndSecretsThatCannotOverrideThem() {
+        val p = paths()
+        val git = mapOf("GIT_CONFIG_COUNT" to "2", "PIBOLT_GITHUB_TOKEN" to "gho_x")
+        val engine = engineEnvironment(p, emptyMap(), "UTC", mapOf("PATH" to "${p.prefix.path}/bin:/system/bin"), git)
+        val secrets = mapOf("API_KEY" to "k", "PATH" to "/evil", "PYTHONUSERBASE" to "/evil", "GIT_CONFIG_COUNT" to "0", "PIBOLT_GITHUB_TOKEN" to "stolen")
+        val shell = shellEnvironment(engine, secrets)
+        // node, npm, python3 and pip in PREFIX/bin; npm -g and pip install commands in HOME/.local/bin, first.
+        assertEquals("${p.userBase.path}/bin:${p.prefix.path}/bin:/system/bin", shell["PATH"])
+        assertEquals(p.userBase.path, shell["PYTHONUSERBASE"])
+        assertEquals("2", shell["GIT_CONFIG_COUNT"])
+        assertEquals("gho_x", shell["PIBOLT_GITHUB_TOKEN"])
+        assertEquals("k", shell["API_KEY"])
+        assertEquals("xterm-256color", shell["TERM"])
     }
 
     @Test

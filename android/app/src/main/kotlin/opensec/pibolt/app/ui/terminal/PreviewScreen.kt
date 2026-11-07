@@ -5,6 +5,7 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -87,6 +88,13 @@ fun PreviewScreen(port: Int, onBack: () -> Unit) {
                 override fun onPageFinished(view: WebView, pageUrl: String?) {
                     loading = false
                     canGoBack = view.canGoBack()
+                }
+
+                // A dev server's page that crashes or exhausts the WebView renderer must not take the app (its live
+                // sessions and terminals) down with it: leave the preview instead.
+                override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                    onBack()
+                    return true
                 }
             }
             loadUrl(start)
