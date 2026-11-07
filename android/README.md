@@ -74,14 +74,26 @@ comparing builds; take absolute numbers on a phone.
 
 ### Frame timing
 
-`e2e/frames.sh` measures the installed debug build on a phone, scenario by scenario (Home, a project's tabs, a
+`e2e/frames.sh` measures the installed build on a phone, scenario by scenario (Home, a project's tabs, a
 160-message transcript, a streamed reply, the keyboard and palette, a sheet, subagent cards, the Sources pill, the
 question card), and prints each one's janky frames and p50/p90/p99 frame times. Its header lists what it needs. A
-debug build is several times slower than the release build: compare builds of the same kind.
+debug build is several times slower than the release build: compare builds of the same kind, and take numbers from
+`benchmarkRelease` (R8, not debuggable, profileable, signed with the debug key so it installs over a debug build and
+keeps its data). It has no `run-as`: set the phone up once with the debug build, then install it over that.
 
 ```bash
 SERIAL=<serial> e2e/frames.sh                 # every scenario
 SERIAL=<serial> e2e/frames.sh stream composer # some
+./gradlew :app:assembleBenchmarkRelease
+adb install -r app/build/outputs/apk/benchmarkRelease/app-benchmarkRelease.apk
+SERIAL=<serial> FAKE_PORT=<the fake provider's port> e2e/frames.sh
+```
+
+Where the main thread's time goes: `nonMinifiedRelease` (as fast, with readable names) and simpleperf, while a
+scenario runs.
+
+```bash
+adb shell simpleperf record --app in.opensec.pibolt -g --duration 10 -o /data/local/tmp/pb.data
 ```
 
 Why a frame is slow: a Perfetto trace of the app's own sections (recompose, measure, draw) while a scenario runs.

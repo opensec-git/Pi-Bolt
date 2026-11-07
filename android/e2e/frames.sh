@@ -5,11 +5,13 @@
 #
 #   SERIAL=<adb serial> ./frames.sh [scenario ...]
 #
-# It measures the build that is installed (a debug build: it uses run-as); it installs nothing and clears no data. The
-# app must already use the e2e fake provider (models.json's "fake" provider, as perf.sh sets it up): the fake model
-# (fake-model-ext.mjs) is started on that provider's port and reached through `adb reverse`. A "smooth-bench" project
-# with a long session is added (gen-long-session.mjs); remove it with REMOVE_BENCH=1. The Sources scenario needs the
-# phone's network (pi-web-access searches for real).
+# It measures the build that is installed; it installs nothing and clears no data. A debug build is set up through
+# run-as; a non-debuggable one (benchmarkRelease) is not: set the phone up with the debug build first, then install it
+# over that and pass the fake provider's port as FAKE_PORT. The app must already use the e2e fake provider
+# (models.json's "fake" provider, as perf.sh sets it up): the fake model (fake-model-ext.mjs) is started on that
+# provider's port and reached through `adb reverse`. A "smooth-bench" project with a long session is added
+# (gen-long-session.mjs); remove it with REMOVE_BENCH=1. The Sources scenario needs the phone's network (pi-web-access
+# searches for real).
 #
 # Each scenario resets `dumpsys gfxinfo`, runs, and records:
 #   janky   frames that missed their deadline ("Janky frames"; the display's own refresh rate, 120 Hz on many phones)
@@ -17,6 +19,8 @@
 #           never report a frame's GPU fence, and those frames land there; their count is printed as "+N unfenced".
 # Raw `framestats` dumps stay next to frames.txt. Before every input the app must have the focus; else the script
 # relaunches it and skips the step. Touch nothing else on the phone while it runs.
+# FAKE_PORT as given (lib.sh fills in a default).
+GIVEN_PORT=${FAKE_PORT:-}
 . "$(dirname "$0")/lib.sh"
 AREA=frames
 OUT_DIR="$E2E_OUT/$SERIAL/frames"
@@ -67,22 +71,27 @@ record() {
 }
 
 # --- setup -----------------------------------------------------------------------------------------------------
-port=$(run_as "cat $AGENT_REL/models.json" | tr -d '\r' | sed -n 's/.*"baseUrl":"http:\/\/127.0.0.1:\([0-9]*\)\/v1".*/\1/p' | head -1)
-[ -n "$port" ] || { echo "models.json has no fake provider on 127.0.0.1: set the app up as perf.sh does" >&2; exit 3; }
+if adb_ shell dumpsys package "$PKG" | grep -q 'flags=\[.*DEBUGGABLE'; then DEBUGGABLE=1; else DEBUGGABLE=0; fi
+if [ "$DEBUGGABLE" = 1 ]; then
+	port=$(run_as "cat $AGENT_REL/models.json" | tr -d '\r' | sed -n 's/.*"baseUrl":"http:\/\/127.0.0.1:\([0-9]*\)\/v1".*/\1/p' | head -1)
+else
+	port=$GIVEN_PORT
+fi
+[ -n "$port" ] || { echo "no fake provider port: set the app up as perf.sh does (a non-debuggable build needs FAKE_PORT)" >&2; exit 3; }
 FAKE_PORT=$port
 fake_model_start || exit 3
 adb_ reverse "tcp:$FAKE_PORT" "tcp:$FAKE_PORT" >/dev/null
 cleanup() {
 	fake_model_stop
 	adb_ reverse --remove "tcp:$FAKE_PORT" >/dev/null 2>&1
-	if [ "${REMOVE_BENCH:-0}" = 1 ]; then
+	if [ "${REMOVE_BENCH:-0}" = 1 ] && [ "$DEBUGGABLE" = 1 ]; then
 		run_as "rm -rf files/home/projects/smooth-bench '$AGENT_REL/sessions/--data-data-$PKG-files-home-projects-smooth-bench--'"
 	fi
 }
 trap cleanup EXIT
 cwd="$DATA/files/home/projects/smooth-bench"
 sessions="$AGENT_REL/sessions/--$(printf '%s' "${cwd#/}" | tr '/' '-')--"
-if ! dev_exists "$sessions/2026-01-01T00-00-00-000Z_long.jsonl"; then
+if [ "$DEBUGGABLE" = 1 ] && ! dev_exists "$sessions/2026-01-01T00-00-00-000Z_long.jsonl"; then
 	node "$SUITE/gen-long-session.mjs" "$cwd" 40 "$OUT_DIR/long.jsonl"
 	run_as "mkdir -p files/home/projects/smooth-bench && echo '# smooth bench' > files/home/projects/smooth-bench/README.md"
 	# Through stdin: the file (100 KB) is too long for dev_write's command line.
