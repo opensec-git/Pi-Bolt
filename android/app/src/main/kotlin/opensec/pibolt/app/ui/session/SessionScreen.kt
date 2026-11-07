@@ -44,6 +44,9 @@ import kotlinx.coroutines.withContext
 import opensec.pibolt.app.engine.SessionSummary
 import opensec.pibolt.app.session.ForkPoint
 import opensec.pibolt.app.ui.session.features.Builtin
+import opensec.pibolt.app.ui.session.review.LocalTurnReview
+import opensec.pibolt.app.ui.session.review.TurnReviewOverlay
+import opensec.pibolt.app.ui.session.review.rememberTurnReview
 import opensec.pibolt.app.ui.session.features2.F2Sheet
 import opensec.pibolt.app.ui.session.features2.Features2
 import opensec.pibolt.app.ui.session.features2.Features2Host
@@ -98,6 +101,7 @@ import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.TextFields
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.State
 import androidx.compose.runtime.derivedStateOf
@@ -508,6 +512,8 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
         }
     }
 
+    val review = rememberTurnReview(controller.checkpoints, state, message = { m, kind -> scope.launch { snackbar.show(m, kind) } }, forkAt = ::fork)
+
     fun openStats() {
         sheet = Sheet.Info
         statsLoading = true
@@ -848,29 +854,31 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 if (!hello) {
                     LoadingState(title, linkState.value, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
                 } else {
-                    Transcript(
-                        state = state,
-                        memory = memory,
-                        status = status,
-                        onOpen = { viewer = it },
-                        onActions = {
-                            if (it !is ActionsRow) haptics.longPress()
-                            actionsFor = it
-                        },
-                        onAskAgain = {
-                            haptics.send()
-                            send(it)
-                        },
-                        onStatusOnScreen = { statusOnScreen = it },
-                        jump = jump,
-                        onImage = { key, index ->
-                            val thumbs = memory.localImages[key].orEmpty()
-                            if (thumbs.isNotEmpty()) imageViewer = ViewerImages(memory.localFull[key].orEmpty(), thumbs, index)
-                        },
-                        onToolImages = { imageViewer = it },
-                        errorContext = ErrorContext(modelLabel, modelProvider?.let(ProviderCatalog::name), local = isLocal, running = running),
-                        onErrorAction = ::onErrorAction,
-                    )
+                    CompositionLocalProvider(LocalTurnReview provides review) {
+                        Transcript(
+                            state = state,
+                            memory = memory,
+                            status = status,
+                            onOpen = { viewer = it },
+                            onActions = {
+                                if (it !is ActionsRow) haptics.longPress()
+                                actionsFor = it
+                            },
+                            onAskAgain = {
+                                haptics.send()
+                                send(it)
+                            },
+                            onStatusOnScreen = { statusOnScreen = it },
+                            jump = jump,
+                            onImage = { key, index ->
+                                val thumbs = memory.localImages[key].orEmpty()
+                                if (thumbs.isNotEmpty()) imageViewer = ViewerImages(memory.localFull[key].orEmpty(), thumbs, index)
+                            },
+                            onToolImages = { imageViewer = it },
+                            errorContext = ErrorContext(modelLabel, modelProvider?.let(ProviderCatalog::name), local = isLocal, running = running),
+                            onErrorAction = ::onErrorAction,
+                        )
+                    }
                     if (empty) {
                         EmptySession(
                             title = if (isLocal) title else cwd?.takeIf { it.isNotBlank() }?.let(::baseName) ?: title,
@@ -982,6 +990,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
             viewer?.let { content.value = it }
             content.value?.let { Viewer(it, onClose = { viewer = null }) }
         }
+        TurnReviewOverlay(review)
         AnimatedVisibility(visible = imageViewer != null, enter = fadeIn(PiMotion.enter(PiMotion.SHEET)), exit = fadeOut(PiMotion.leave(PiMotion.SHEET))) {
             val shown = remember { mutableStateOf(imageViewer) }
             imageViewer?.let { shown.value = it }
