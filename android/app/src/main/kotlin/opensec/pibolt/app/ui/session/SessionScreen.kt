@@ -53,6 +53,7 @@ import opensec.pibolt.app.ui.session.review.rememberTurnReview
 import opensec.pibolt.app.ui.session.features2.F2Sheet
 import opensec.pibolt.protocol.str
 import opensec.pibolt.app.ui.session.features2.AppExtension
+import opensec.pibolt.app.ui.session.tree.SessionTree
 import opensec.pibolt.app.ui.session.features2.Features2
 import opensec.pibolt.app.ui.session.features2.Features2Host
 import opensec.pibolt.app.ui.session.features2.Features2Sheets
@@ -584,13 +585,20 @@ internal fun SessionContent(
      * [occurrence]-th user message [text] in the same file (Pi's session tree, `navigateTree`; the old answer stays a
      * branch, reachable from /tree), instead of forking into a new chat that would crowd the Chats list. Returns the
      * message's text.
+     *
+     * The target is found on the active branch (`get_entries`, [SessionTree.rewindTarget]), counting copies of [text]
+     * back from the newest as the transcript shows them: `get_fork_messages` also lists the prompts of branches an
+     * earlier regenerate left, so counting there picked an older copy.
      */
     suspend fun rewind(text: String, occurrence: Int): Result<String> {
-        val point = controller.forkPoints().filter { it.text.trim() == text.trim() }.getOrNull(occurrence)
+        val shown = state.value.items.filterIsInstance<UserItem>().count { it.text.trim() == text.trim() }
+        val fromEnd = shown - 1 - occurrence
+        val entries = controller.request("get_entries", timeoutMs = 60_000)
+        val id = SessionTree.rewindTarget(entries.dataObject?.takeIf { entries.success }, text, fromEnd).takeIf { fromEnd >= 0 }
             ?: return Result.failure(IllegalStateException("That message can't be edited"))
-        return AppExtension.run(controller, File(context.cacheDir, "pibolt-app"), "goto", point.entryId).map { r ->
+        return AppExtension.run(controller, File(context.cacheDir, "pibolt-app"), "goto", id).map { r ->
             controller.resync()
-            r.str("editorText")?.takeIf { it.isNotBlank() } ?: point.text
+            r.str("editorText")?.takeIf { it.isNotBlank() } ?: text
         }
     }
 

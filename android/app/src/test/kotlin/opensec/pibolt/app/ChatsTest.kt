@@ -12,6 +12,9 @@ import opensec.pibolt.app.ui.session.features.CommandPalette
 import opensec.pibolt.app.ui.session.features2.SessionBrowse
 import opensec.pibolt.protocol.backend.SessionTarget
 import opensec.pibolt.protocol.rpc.ModelInfo
+import opensec.pibolt.protocol.ProtocolJson
+import opensec.pibolt.app.ui.session.tree.SessionTree
+import kotlinx.serialization.json.JsonObject
 import opensec.pibolt.protocol.session.SlashCommand
 import java.io.File
 import java.nio.file.Files
@@ -235,5 +238,34 @@ class ChatsTest {
         assertNull(ChatModel.switchTo(null, model("fake", "fake-model")))
         // The same id from another provider is another model.
         assertEquals(kimi, ChatModel.switchTo(kimi, model("moonshot", "kimi-k3")))
+    }
+
+    @Test
+    fun reusingAnEmptyChatCarriesTheModelWithoutWaitingForASwitch() {
+        // The engine handed back the live chat, already new, ready and empty: nothing to leave, the carry runs at once.
+        assertNull(ChatModel.leaving("s1", reused = true, readyEmpty = true))
+        // The live engine moves on to a new session (same controller, the old one had messages): wait to leave s1.
+        assertEquals("s1", ChatModel.leaving("s1", reused = true, readyEmpty = false))
+        // Another engine (a parked or new one): wait for it to leave nothing it shares with s1.
+        assertEquals("s1", ChatModel.leaving("s1", reused = false, readyEmpty = true))
+        assertNull(ChatModel.leaving(null, reused = false, readyEmpty = false))
+    }
+
+    @Test
+    fun regenerateFindsItsPromptOnTheActiveBranch() {
+        // Send "hello" (u1), regenerate it (the chat rewinds before u1 and sends it again: u2, a branch beside u1), then
+        // send "hello" again (u3). The transcript shows u2 and u3; Pi's fork list also has u1, on the abandoned branch.
+        fun user(id: String, parent: String?) =
+            """{"type":"message","id":"$id","parentId":${parent?.let { "\"$it\"" } ?: "null"},"message":{"role":"user","content":[{"type":"text","text":"hello"}]}}"""
+        fun reply(id: String, parent: String) = """{"type":"message","id":"$id","parentId":"$parent","message":{"role":"assistant","content":[{"type":"text","text":"Hi!"}]}}"""
+        val entries = listOf(user("u1", null), reply("a1", "u1"), user("u2", null), reply("a2", "u2"), user("u3", "a2"), reply("a3", "u3"))
+        val data = ProtocolJson.parseToJsonElement("""{"entries":[${entries.joinToString(",")}],"leafId":"a3"}""") as JsonObject
+        // Regenerating the second visible "hello" (the newest copy) targets u3, not u2 (what counting u1 picked).
+        assertEquals("u3", SessionTree.rewindTarget(data, "hello", fromEnd = 0))
+        // The first visible one is u2; u1 is on no visible branch.
+        assertEquals("u2", SessionTree.rewindTarget(data, " hello ", fromEnd = 1))
+        assertNull(SessionTree.rewindTarget(data, "hello", fromEnd = 2))
+        assertNull(SessionTree.rewindTarget(data, "goodbye", fromEnd = 0))
+        assertNull(SessionTree.rewindTarget(null, "hello", fromEnd = 0))
     }
 }

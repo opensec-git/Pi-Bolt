@@ -139,6 +139,13 @@ object ChatWelcome {
 @Immutable
 data class ChatModel(val provider: String, val id: String, val thinking: String?) {
     companion object {
+        /**
+         * The session a new chat's model carry waits to leave: [before] (the live chat the engine moves on from), or
+         * null when the engine handed back that same chat ([reused]) because it was already new, ready and empty
+         * ([readyEmpty]); waiting for a switch that never comes would hold the first prompt for the whole timeout.
+         */
+        fun leaving(before: String?, reused: Boolean, readyEmpty: Boolean): String? = if (reused && readyEmpty) null else before
+
         /** The model a chat on [current] should switch to: [remembered], or null when it already runs it (or none). */
         fun switchTo(remembered: ChatModel?, current: ModelInfo?): ChatModel? =
             remembered?.takeIf { current == null || it.provider != current.provider || it.id != current.id }
@@ -221,7 +228,8 @@ object Chats {
     suspend fun resume(engine: EngineApi, file: String): Result<LocalSessions.Live> = open(engine, file, null)
 
     private suspend fun open(engine: EngineApi, file: String?, firstPrompt: String?): Result<LocalSessions.Live> {
-        val before = _current.value?.controller?.takeIf { !it.stopped }?.state?.value?.sessionId
+        val previous = _current.value?.controller?.takeIf { !it.stopped }
+        val before = previous?.state?.value?.sessionId
         // Read before the new chat reports its own (default) model, which [follow] would remember instead.
         val carry = if (file == null) remembered() else null
         val result = withContext(Dispatchers.IO) { runCatching { engine.openChat(file) } }
@@ -232,9 +240,11 @@ object Chats {
                 withTimeoutOrNull(SWITCH_TIMEOUT_MS) { controller.state.first { it.hello && it.sessionId != before && it.items.isEmpty() } }
                     ?: throw IllegalStateException("The new chat did not open")
             }
-            // A first prompt (sent from Home) waits for the model, so it goes to the one the user chose.
+            // A first prompt (sent from Home) waits for the model, so it goes to the one the user chose. The engine may hand
+            // back the live chat itself when it is already new and empty: then there is no session to leave.
+            val leaving = ChatModel.leaving(before, reused = controller === previous, controller.state.value.let { it.hello && it.items.isEmpty() && it.sessionId == before })
             if (carry != null) {
-                if (firstPrompt != null) carryModel(controller, carry, before) else scope?.launch { carryModel(controller, carry, before) }
+                if (firstPrompt != null) carryModel(controller, carry, leaving) else scope?.launch { carryModel(controller, carry, leaving) }
             }
             LocalSessions.Live(engine.chatDir, controller, file).also {
                 it.firstPrompt = firstPrompt
