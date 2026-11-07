@@ -9,8 +9,12 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.animation.core.Animatable
 import androidx.compose.foundation.background
+import androidx.compose.material3.Text
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.Row
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.compose.foundation.layout.Box
@@ -56,7 +60,6 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -94,7 +97,7 @@ data class LiveStatus(val visible: Boolean, val mode: QuadMode, val text: Status
 /**
  * The conversation. A reversed LazyColumn whose index 0 is the live status line: while the reader is at the bottom,
  * new rows and a growing reply stay pinned there; once they scroll up the view stays put and a round scroll button
- * appears centred above the composer (with a dot when there is unseen content). A send always jumps to the bottom. Each markdown
+ * appears centred above the composer ("New messages" when there is unseen content). A send always jumps to the bottom. Each markdown
  * block is its own row with a stable key, so streaming re-lays out only the block being written.
  */
 @Composable
@@ -402,49 +405,36 @@ private fun markLastTurnLive(rows: List<TRow>): List<TRow> {
 }
 
 /**
- * Scroll to the latest: a 40dp round button (surface3, 1dp lineStrong, arrow) centred above the composer, 48dp to touch. An
- * accent dot at its top-end marks unseen content; it pulses twice when it appears (static under reduce motion).
+ * Back to the latest, centred above the composer: a 36dp round button (surface3, 1dp lineStrong, arrow 18dp ink1) in a
+ * 4dp ring of canvas, so text passing under it is cut cleanly (as on the desktop). When content arrived while the
+ * reader was away it widens into a pill that says so, "New messages" (assistant-ui's pattern). 48dp to touch.
  */
 @Composable
 private fun ScrollButton(unseen: Boolean, onClick: () -> Unit) {
     val colors = Pi.colors
     val reduced = Pi.reduceMotion
-    val pulse = remember { Animatable(1f) }
-    LaunchedEffect(unseen) {
-        if (unseen && !reduced) {
-            repeat(2) {
-                pulse.animateTo(1.3f, PiMotion.inPlace(300))
-                pulse.animateTo(1f, PiMotion.inPlace(300))
-            }
-        }
-    }
     Box(
         Modifier
-            .size(48.dp)
-            .pressable(onClick, shape = CircleShape, pressedScale = 0.92f, label = if (unseen) "Scroll to new messages" else "Scroll to latest"),
+            .heightIn(min = 48.dp)
+            .pressable(onClick, shape = CircleShape, pressedScale = 0.95f, label = if (unseen) "Scroll to new messages" else "Scroll to latest"),
         contentAlignment = Alignment.Center,
     ) {
-        Box(
+        Row(
             Modifier
-                .size(40.dp)
+                .then(if (reduced) Modifier else Modifier.animateContentSize(PiMotion.inPlace(PiMotion.QUICK)))
+                .background(colors.canvas, CircleShape)
+                .padding(4.dp)
+                .height(36.dp)
                 .background(colors.surface3, CircleShape)
-                .border(1.dp, colors.lineStrong, CircleShape),
-            contentAlignment = Alignment.Center,
+                .border(1.dp, colors.lineStrong, CircleShape)
+                .padding(horizontal = if (unseen) 14.dp else 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Rounded.ArrowDownward, contentDescription = null, tint = colors.ink1, modifier = Modifier.size(20.dp))
-        }
-        if (unseen) {
-            Box(
-                Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 6.dp, end = 6.dp)
-                    .size(8.dp)
-                    .graphicsLayer {
-                        scaleX = pulse.value
-                        scaleY = pulse.value
-                    }
-                    .background(colors.accent, CircleShape),
-            )
+            Icon(Icons.Rounded.ArrowDownward, contentDescription = null, tint = colors.ink1, modifier = Modifier.size(18.dp))
+            if (unseen) {
+                Spacer(Modifier.width(6.dp))
+                Text("New messages", style = Pi.type.metaStrong, color = colors.ink1, maxLines = 1)
+            }
         }
     }
 }

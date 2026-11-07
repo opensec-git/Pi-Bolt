@@ -111,7 +111,7 @@ on top.
 Spacing 2, 4, 8, 12, 16, 20, 24, 32, 40 dp (`Space.xxs … x4`). Side gutter 16; sheet and header text inset 20; gap
 between turns 20; between steps 6.
 Radii: xs 4 (inline code, tags), sm 8 (chips), md 12 (cards, code blocks, option rows), lg 18 (user bubble,
-composer), xl 28 (sheet top corners), full (send button, pills). User bubble: 18 with the bottom-end corner 6.
+composer), xl 28 (sheet top corners), full (send button, pills). User bubble: 18 with the bottom-end corner 4.
 Touch targets at least 48dp. Every timeline row has a 20dp leading slot (spinner or glyph) and a 12dp gap.
 Icons: one family, Material Rounded (`Icons.Rounded`, `Icons.AutoMirrored.Rounded`). Sizes (`IconSize`): 14 beside
 meta text, 16 beside labels and in small buttons, 20 leading glyphs in rows, notices and buttons, 22 toolbar
@@ -122,7 +122,9 @@ Strokes: 1dp lines, 1.5dp focus ring, 2dp queue bars, 3dp diff gutter.
 
 A Canvas-drawn 3x3 grid that shows what the agent is doing. Grid spans 11 units (`u = size / 11`): cell 3u,
 gap 1u, corner radius 0.7u. Floor alpha 0.16 for outer cells, 0.34 for the centre, so the shape always reads.
-Sizes: 12dp inline, 16dp status line and top bar, 20dp list slot, 44dp connecting and empty-state hero.
+Sizes, on the icon tokens, one per place: 14dp (`IconSize.xs`) in a timeline row's 20dp slot and inline in headers,
+16dp (`sm`) in the status line and top bars, 20dp (`md`) in a card's or list's leading slot, 44dp connecting and
+empty-state hero. Subagents follow the same places (see Subagents).
 
 One shared clock per window (`withFrameNanos`, quantised to 50 ms = 20 fps), read only in the draw phase so ticks
 invalidate draw, not composition. The clock pauses when the app is not started or no spinner is attached; at most 8
@@ -176,10 +178,11 @@ alpha). No overshoot except sheet drag release.
 - Live turn only: the user bubble rises 10dp and fades in; new steps rise 6dp. History and restored sessions never
   animate. Streaming text is updated at most once per frame and newly revealed text fades in over 120 ms; a 6x12dp
   ink3 block pulses at the end of the live paragraph (900 ms) instead of a caret.
-- Auto-scroll sticks to the bottom only while the user is there; otherwise a 40dp round scroll button (surface3, 1dp
-  lineStrong, arrow 20dp ink1, 48dp touch) appears at the end edge, 16dp in from the side and bottom, out of the
-  reading column. Enter: rise 16dp, scale 0.95→1, fade, quick; exit 0.7x. Unseen content adds an 8dp accent dot at
-  its top-end that pulses twice (scale 1↔1.3, 300 ms each way). Every send jumps to the bottom. The live status line
+- Auto-scroll sticks to the bottom only while the user is there; otherwise a scroll button appears centred above the
+  composer, 8dp up: a 36dp round button (surface3, 1dp lineStrong, arrow 18dp ink1) in a 4dp ring of canvas so text
+  passing under it is cut cleanly (the desktop's), 48dp touch. When content arrived while the reader was away it
+  widens (quick, in place) into a pill, arrow + "New messages" (metaStrong ink1). Enter: rise 16dp, scale 0.95→1,
+  fade, quick; exit 0.7x. Every send jumps to the bottom. The live status line
   keeps its 32dp height while hidden so the list does not jump.
 - Labels such as "Thinking", "Running", "Writing" shimmer: ink2 base, a band of ink1 through 9 eased alpha stops per
   side (0, .04, .17, .33, .5, .67, .83, .96, 1), band max(96dp, 0.6 × label width), a constant 200dp/s with a 100 ms
@@ -502,24 +505,30 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
 - Subtitle under the name: model · thinking level · context %, tap → Session info sheet (model, thinking, context
   ring, tokens, cost, compaction button).
 - Transcript (LazyColumn, stable keys and contentType per block; only the last block changes while streaming):
-  - user: right, max 84% width, surface2, radius 18/6, padding 12x16, prose. Images sent from this phone show as
+  - user: right, max 80% width, a subtle bubble as on the desktop: surface2 with a 1dp line, radius 18 with the
+    bottom-end corner 4 (xs), padding 10x14, prose. Images sent from this phone show as
     56dp thumbnails above the text (kept in memory for the session); images without a local copy read as a compact
     "2 images" chip (surface3, radius 4, image glyph, meta ink2).
   - assistant: full width on canvas, prose, no bubble; paragraphs 12dp apart; ink3 list markers.
   - user, sending: an idle prompt shows at once as its bubble at 60% with "Sending" (meta ink3) under it, and the
     status line shows Quad Think + "Sending". The host's echo takes over the row in place (no second rise); a failed
     send removes it and returns the text to the composer. Slash commands are not shown early.
-  - thinking: row "Thinking" (Quad Think 12dp + shimmer) live, "Thought for 8s" after; collapsed by default; body
+  - thinking: row "Thinking" (Quad Think 14dp + shimmer, the chevron right after the label) live, "Thought for 8s"
+    (the chevron in the slot) after; collapsed by default; body
     thinking style with a 1dp rail; live body is a 5-line window pinned to the newest text that glides up (120 ms,
     in place) as lines arrive, with a 24dp top fade.
-  - tool row: 20dp slot (Run/Write spinner → result glyph), verb (label ink2: "Run" while active, "Ran", "Read",
+  - tool row (assistant-ui's one collapsed line): 20dp slot (Run/Write spinner 14dp → result glyph), verb (label ink2,
+    danger when the step failed: "Run" while active, "Ran", "Read",
     "Edited", "Wrote", "Searched", "Found", "Listed" once done), argument (mono ink3, middle ellipsis for paths; a read
     carries its range, `src/app.ts:10-80`), right meta (+n success, −n danger, a failing bash exit "exit 1" in danger,
     "no results" ink3 for an empty search or listing, a duration only from 1 s, tnum; while running, the elapsed time
     from 1 s: "4s", "1m 3s", ticking once a second). A tool the host lacks reads as one meta ink3 line ("List isn't
     available here", no danger glyph) and is hidden once a later step succeeds. Images in a result (`content` items
     of type image) show as 120dp thumbnails under the row, open or not; a tap opens the image viewer.
-  - tool cards (tap a row): one Copy at most, and a footer only when something is cut: "Show all N lines" opens the
+  - tool cards (tap a row) hang under the row's text (32dp in, `STEP_TEXT_START`, so an opened fold's rail runs
+    past them, as the desktop's `.tool-detail`); a failed step's card has a danger @ 32% outline. A path in a card
+    header takes all the room up to the header's trailing meta. One Copy at most, and a footer only when something is
+    cut: "Show all N lines" opens the
     rest in place (up to 400 lines), past that "Open output / file / diff" goes to the full-screen viewer.
     - bash: `$` (success, danger on a failing exit), command, exit badge, Copy (the output). The output is a terminal
       on the canvas: SGR colours mapped to tokens (red danger, green success, yellow warning, blue/magenta/cyan the
@@ -542,16 +551,16 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
     `steer_subagent`, `get_subagent_result` and `SubagentWorkflow` stay step rows: "Steer agent", "Agent result",
     "Workflow" + the workflow's name.
   - `todo` steps read as one line: "Todo  Added: Write tests", "Done: …", "Started: …", "Cleared the list".
-  - code blocks: surface1, radius 12, 1dp line. Header 40dp: code glyph 14dp ink3, then the filename (monoSmall
-    ink1, middle ellipsis) from the fence info string (`ts title="src/a.ts"`, `ts:src/a.ts`, `src/a.ts`) or the
-    language (monoMeta ink3; shell aliases show as `shell`; untagged code shows the language detected from its first
-    lines, else `code`); right side line numbers (toggle, 3+ lines), Wrap (only when a line overflows or wrap is
-    on), Open (folded or 40+ lines) and the shared Copy button (check + "Copied", 1500 ms). Code Mono 12.5/19, 10dp
+  - code blocks: surface1, radius 12, 1dp line. Header 40dp, as on the desktop: the language (monoMeta ink3; shell
+    aliases show as `shell`; untagged code shows the language detected from its first lines, else `code`), then
+    " · " and the filename (monoMeta ink1, middle ellipsis) when the fence info string names one (`ts title="src/a.ts"`,
+    `ts:src/a.ts`, `src/a.ts`); at the end icon actions: line numbers (toggle, 3+ lines), Wrap (only when a line
+    overflows or wrap is on), Open (folded or 40+ lines) and Copy (icon only; a check while copied, 1500 ms). Code Mono 12.5/19, 10dp
     vertical padding; line numbers from 3 lines on, Mono 11.5 ink3 right-aligned, then a 1dp line rule and 10dp to
     the code. No wrap by default: one horizontal scroll with 20dp edge fades into surface1.
     Over 20 lines the block folds to 14 with a 40dp bottom fade and a 44dp footer ("Show all 84 lines" + chevron)
     that expands in place up to 150 lines ("Show less" scrolls the header back into view) and opens the viewer
-    beyond ("Open all 1,240 lines"). Streaming: the header shows Quad Write 12dp + a ticking line count, the code
+    beyond ("Open all 1,240 lines"). Streaming: the header shows Quad Write 14dp + a ticking line count, the code
     end pulses like prose, and a block past 20 lines shows its last 14 lines at a fixed height under a 32dp top
     fade; on close it crossfades (quick) to the folded start at the same height. Only complete lines are
     highlighted, each once: the tokenizer resumes from the previous line's state (open comments, strings,
@@ -608,7 +617,8 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
   - live status line: Quad 16dp + shimmer label + elapsed timer. A running tool is named: the verb shimmers and its
     command or path follows in mono small ink3 ("Run  npm test"; a subagent reads "Agent working" + its task;
     parallel tools add "+n"); text changes crossfade (quick).
-  - errors and notices: radius 12 outline in danger/warning @ 40%, text buttons.
+  - errors and notices: a hairline, not a filled slab (the desktop's): radius 12, 1dp outline in danger / warning @
+    32%, a 20dp glyph in the kind colour, the title bodyStrong ink1, text buttons.
 - Todo panel above the queue strip (see Todo panel below).
 - Queue strip above the composer: 44dp rows with a 2dp bar (warning = steer, ink4 = follow-up), swipe to remove.
 - Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–6 lines; bar: attach (+,
@@ -633,9 +643,11 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
 - Connection banner under the top bar: Quad Connect + "Reconnecting in 3s" countdown + Retry; slides down/up. Not
   while the session first connects: the centred loading state (Quad Connect 44dp, "Starting Pi-Bolt in x") says that
   alone, so one spinner and one sentence show at a time.
-- Top bar actions, left to right: the Quad slot (40dp), the session switcher, Search (48dp), overflow. The Quad is
-  drawn only while Pi is busy and the live status line is off screen (or the link failed); otherwise its slot is
-  blank space beside the title, never a still grid, so Search and overflow always sit together. Overflow on a computer: Session and usage, Export or share,
+- Top bar actions, left to right: the Quad slot (40dp, Quad 16dp), the session switcher, Search (48dp), overflow. The
+  Quad animates (ink1, warning while Pi asks) only while Pi is busy and the live status line is off screen; otherwise
+  it rests as one still ink3 frame (danger when the link failed), so the bar keeps its mark and nothing blinks in and
+  out. It is not a control: no press, no ripple, and TalkBack hears it only while it reports work. Search and
+  overflow always sit together. Overflow on a computer: Session and usage, Export or share,
   Disconnect, Forget computer.
 - On this phone (a project's session): the title is the project's name and the subtitle drops the folder (session
   name and context only); back reads "Project". Overflow: New session, Resume a session, Fork from a message,
@@ -708,7 +720,9 @@ hit shows under it (meta ink2, two lines). Every message, reasoning block, tool 
 a folded turn opens the fold, one in a "Read 3 files" group opens the group, then the row scrolls to a third of the
 screen. Hits start at the newest. Back closes.
 
-**Message actions.** Long press on a user message: Copy, Send again, Edit and resend (on this phone: forks before
+**Message actions.** Messages take a long press only (`Modifier.longPress`: the long-press haptic, and TalkBack
+offers "Message actions" as a long-click action instead of announcing each paragraph as a button); taps reach links.
+Long press on a user message: Copy, Send again, Edit and resend (on this phone: forks before
 the message and returns its text), Edit in composer, Select text, Share. On a reply block: Copy (plain text, without
 Markdown), Copy as Markdown, Regenerate (on this phone: forks before the prompt and sends it again), Select text, View
 as Markdown, Share. More under the last reply offers the same.
@@ -742,7 +756,7 @@ history and from live `tool_execution_end`).
   progress ring (ink4 track, success arc of done/total, settle), "Todos" (label ink1), "2/5" (meta ink3, tnum),
   a chevron (ink3) that turns in a graphicsLayer. Tapping collapses the card to the heading, which then names the
   current task (meta ink2).
-- Rows 32dp: 20dp glyph slot, 12dp gap, body text. Pending: 12dp ring ink3, text ink2. In progress: Quad Think 12dp
+- Rows 32dp: 20dp glyph slot, 12dp gap, body text. Pending: 12dp ring ink3, text ink2. In progress: Quad Think 14dp
   ink1 and the task's activeForm ("Writing tests") while the agent runs; idle, a half-filled ring ink2 and the
   subject; text ink1. Completed: check success, text ink3 with strikethrough. Glyph swaps crossfade (quick, scale
   0.7→1), text colour changes in place; none of it under reduce motion.
@@ -775,34 +789,42 @@ Subagent session files (a `parentSession` header and that name) are not listed o
 Remote control gets the events only: progress of foreground runs, the start and end of background runs, never their
 messages. Pi has no RPC to read or steer a subagent: steering and resuming go through a prompt to Pi.
 
-- Card (surface1, radius 12, 1dp line; lineStrong while active): 32dp avatar (the type's initial in its tint on the
-  tint @ 16%, radius 30%; tints glacier `#7CC4F0` Explore, iris `#A99CFF` Plan, mint `#9ED3C6` general-purpose, peach
-  `#E5A97E` and lilac `#C9B8F0` hashed for others: never a status colour), the type (label ink1), a "background · id"
-  pill (micro, surface3) for background runs, the task (meta ink2), the run time (meta ink3 tnum, ticking once a
-  second while it runs, the final time after). Then the activity line: a 20dp-high slot under the avatar with Quad
-  Agent 12dp in the tint (still Quad Think ink3 while queued; check success, cross danger, stop ink3 after, swapped
-  with a 160 ms scale 0.7→1 in the live turn) and the activity (meta ink3, one line) that crossfades (quick, 4dp rise)
-  at most every 450 ms, so a streaming reply does not flicker. Then the metrics ("4 tools · 12.3k tokens · turn 2",
-  meta ink3 tnum). While it runs a 2dp band in the tint sweeps the top edge (1400 ms) and every line keeps one line,
-  so the card never changes height. Done, the activity gives way to the answer's first lines as one paragraph (headings end
-  with a colon, list items keep a bullet; up to 3 lines, ink2; the error in danger); a finished run counts "5 turns" and the card grows to them with the settle spring (`animateContentSize`). Tap opens the agent; press
-  scale 0.98.
+- Each agent has its own colour, Pi-Bolt Desktop's five subagent tints (`SubagentFormat.HUES`: apricot `#FEA668`,
+  rose `#FF8FB4`, orchid `#E08EE5`, violet `#B696F7`, seafoam `#5CD5C7`; each 3:1 or more on surface1 and surface2 in
+  every theme, `ContrastTest`), given by its order among the session's runs (`hueSlot`), never by its type: two
+  general-purpose agents differ. No letters or avatars.
+- State glyph (`AgentGlyph`), as on the desktop: starting (the call made, its session not running yet) a Quad Wait
+  breathing in warning; running Quad Agent in the agent's tint; queued for a slot a still ink3 Quad; then a check
+  (ink3), a cross (danger) or a dash (ink3). Colour is for the running agent and for failure only. The swap scales in
+  from 0.7 over the glyph duration in the live turn. Sizes on the icon tokens (`AgentGlyphSize`, the rest glyph one
+  step larger since a Material glyph draws inside padding): Card slot 22 / Quad 20 / glyph 22 (an agent's own
+  two-line block), Row 20 / 14 / 16 (one-line timeline rows), Bar 20 / 16 / 20 (top bars, live lines).
+- Card (surface1, radius 12, 1dp line; lineStrong while active, 14x12dp padding): the glyph, then the agent's name
+  (label ink1: the task title the model gave the call, else its prompt's first line, else the type) over one meta
+  line, the type and what it does now: "Explore · Reading src/auth.ts" (meta ink3; "background" when it is one; the
+  error in danger; done, its metrics "4 tools · 12.3k tokens · 5 turns"), and the run time at the end (meta ink3
+  tnum, ticking once a second). No narration: the extension sends the start of the agent's reply in the same field
+  as its tool line, so the card names the tool ("Reading…", with the file or command from the agent's session file
+  when there is one) and reads "Writing…" while it writes text; the reply itself is on the agent's screen. The meta
+  line crossfades (quick, 4dp rise) at most every 450 ms. The card keeps one height from start to end; while it runs
+  a 2dp band in its tint sweeps the top edge (sweep). Tap opens the agent; press scale 0.98.
 - Stack: two or more consecutive `Agent` calls (one message's parallel calls). Closed: one card with a 48dp header
-  (up to 3 avatars, 22dp, overlapping by 8dp with a 2dp ring; "3 agents running", "1 of 3 agents running", "3 agents
-  done", "3 agents · 1 failed"; the longest run time; chevron) over one 48dp line per agent (glyph, type, crossfading
-  activity or task, time; tap opens it). Open (header tap): the header, then each agent's card 8dp apart; the switch
-  resizes with the settle spring. The open state lives with the tool groups'.
+  (the group's state, still, in a Card slot so it lines up; "3 agents running", "1 of 3 agents running", "3 agents
+  done", "3 agents · 1 failed" in label ink2; the longest run time; chevron) over each agent in its two lines (56dp
+  rows, its glyph in its tint; tap opens it). Open (header tap): the header, then each agent's card 8dp apart; the
+  switch resizes with the settle spring. The open state lives with the tool groups'.
 - A finished turn folds its steps but not its agent cards: each is a unit of work of its own, and background runs
   outlive the turn.
-  A background run's end shows where the notification lands: a step line "Explore finished" + task + time, tapping
-  opens the agent.
+  A background run's end shows where the notification lands: a step line with its glyph (Row size), its name, "Explore
+  finished" (meta ink3) and its time; tapping opens the agent.
 - Detail screen (over the whole app; the session screen stays composed below, so its scroll position, draft and
   images are as they were): enters like a screen (24dp slide + fade, sheet), predictive back scales it to 0.9. Top bar:
-  back, 28dp avatar, type (subhead) and task (meta ink3), Copy answer once there is one. A 36dp strip: glyph, state,
-  run time, metrics; the model, "background" and the agent id under it (monoMeta ink3). The transcript is the main one's
+  back, the agent's glyph (Bar size, in its tint; animated only while the live line is off screen), its name (subhead)
+  over "Explore agent" (meta ink3), Copy answer once there is one. A 36dp strip: state, run time, metrics; the model,
+  "background" and the agent id under it (monoMeta ink3). The transcript is the main one's
   rows (user bubble for its prompt, thinking, tool rows and cards, prose, notices) built by `TranscriptModel` with every
   turn open by default and `Agent` calls as plain rows. Reversed list with a 32dp live line at index 0 (Quad Agent 16dp
-  in the tint, the activity in shimmer, the run time; kept while done so nothing jumps); it follows the newest row only
+  in the agent's tint, the activity in shimmer, including what it writes, the run time; kept while done so nothing jumps); it follows the newest row only
   while the reader is at the bottom, else the 40dp jump button with the unseen dot. Each agent keeps its list position
   and toggles for the app's life. Over remote control (or when its file was not saved) it shows the prompt and the
   answer with one info line saying why.
@@ -812,8 +834,8 @@ messages. Pi has no RPC to read or steer a subagent: steering and resuming go th
   call: a message would reach Pi only after it returns), so the bar says so and offers Stop (surface3 pill; a first tap
   arms "Stop turn?" in danger for 3 s, the second aborts Pi's turn, which stops the agent). A green line confirms a send
   for 3.5 s.
-- TalkBack: a card is one node ("Explore agent, Find the parser code, running, Reading 3 files…") with the click label
-  "Open agent".
+- TalkBack: a card is one node ("Find the parser code, Explore agent, running, Reading src/parser.ts") with the click
+  label "Open agent".
 
 **Settings.** `ScreenTopBar` "Settings" (a 1dp line under it once the page scrolls), then a
 search field ("Search settings") that narrows the page to matching settings: every query word must appear in the
@@ -900,7 +922,7 @@ state, ER, gantt, pie and mind maps are checked; the other Mermaid types work th
   screen.
 - Streaming: each change to the source waits 300 ms for the next (a fence known to be closed draws at once), so a
   diagram appears when the model pauses or the fence closes, never per token. Until then a 160dp skeleton (Quad Write
-  20dp ink3, "Drawing diagram"), or the previous drawing with a Quad Write 12dp in the header. An error in a fence
+  20dp ink3, "Drawing diagram"), or the previous drawing with a Quad Write 14dp in the header. An error in a fence
   that is still open is not shown.
 - Error: the source as a normal code block, then "Diagram could not be drawn: <Mermaid's first error line>" (meta
   ink3, a 14dp danger error glyph).

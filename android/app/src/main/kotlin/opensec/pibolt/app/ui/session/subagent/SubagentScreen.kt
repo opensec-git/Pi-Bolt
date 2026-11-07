@@ -64,6 +64,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
@@ -194,6 +196,8 @@ private fun SubagentScreen(controller: SessionController, key: String, nav: Suba
     val state: State<SessionState> = controller.state.collectAsStateWithLifecycle()
     val runState = remember(key) { derivedStateOf { state.value.subagents[key] } }
     val run = runState.value ?: return
+    val slot by remember(key) { derivedStateOf { SubagentFormat.hueSlot(key, state.value.subagents.keys) } }
+    val hue = agentHue(slot)
     val connected by remember { derivedStateOf { controller.link.value is LinkState.Connected } }
     val linkState = controller.link.collectAsStateWithLifecycle()
     val memory = remember(key) { nav.memory(key) }
@@ -236,11 +240,13 @@ private fun SubagentScreen(controller: SessionController, key: String, nav: Suba
             .background(colors.canvas),
     ) {
         Column(Modifier.fillMaxSize().statusBarsPadding().imePadding()) {
-            TopBar(run, onClose)
+            // The header's Quad animates only while the live line (which owns the spinner) is off screen.
+            val liveOnScreen by remember(list) { derivedStateOf { list.layoutInfo.visibleItemsInfo.any { it.key == "live" } } }
+            TopBar(run, hue, spin = !liveOnScreen, onClose)
             StatusStrip(run)
             Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
             Box(Modifier.weight(1f)) {
-                Body(runState, controller.readsSubagentFiles, memory, list, onOpen = { viewer = it })
+                Body(runState, hue, controller.readsSubagentFiles, memory, list, onOpen = { viewer = it })
             }
             Actions(run, enabled = connected && linkState.value is LinkState.Connected, controller)
             Spacer(Modifier.navigationBarsPadding().padding(bottom = 4.dp))
@@ -258,16 +264,17 @@ private fun SubagentScreen(controller: SessionController, key: String, nav: Suba
 }
 
 @Composable
-private fun TopBar(run: Subagent, onClose: () -> Unit) {
+private fun TopBar(run: Subagent, hue: Color, spin: Boolean, onClose: () -> Unit) {
     val colors = Pi.colors
     val type = Pi.type
     Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onClose, tint = colors.ink1)
-        AgentAvatar(run.type, size = 28.dp)
+        // The agent's state in its own colour, as on its card; part of the title, not a control.
+        Box(Modifier.clearAndSetSemantics { }) { AgentGlyph(SubagentFormat.stateOf(run), hue, live = true, size = AgentGlyphSize.Bar, spin = spin) }
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f)) {
-            Text(SubagentFormat.typeLabel(run.type), style = type.subhead, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(run.description.ifBlank { "Subagent" }, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(SubagentFormat.title(run), style = type.subhead, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(SubagentFormat.typeLabel(run.type) + " agent", style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         val answer = run.result?.takeIf { !run.isActive && it.isNotBlank() }
         if (answer != null) CopyButton({ answer }, label = false, clipLabel = "Agent answer", description = "Copy answer")
@@ -283,8 +290,6 @@ private fun StatusStrip(run: Subagent) {
         Modifier.fillMaxWidth().height(36.dp).padding(horizontal = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) { RunGlyph(run, live = true) }
-        Spacer(Modifier.width(8.dp))
         Text(SubagentFormat.statusWord(run.status).replaceFirstChar { it.uppercaseChar() }, style = type.label, color = colors.ink2, maxLines = 1)
         Text("  ·  ", style = type.meta, color = colors.ink3)
         RunTime(run)
@@ -298,7 +303,7 @@ private fun StatusStrip(run: Subagent) {
             style = type.monoMeta,
             color = colors.ink3,
             maxLines = 1,
-            modifier = Modifier.padding(start = 44.dp, end = 16.dp, bottom = 8.dp),
+            modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
         )
     }
 }
@@ -307,6 +312,7 @@ private fun StatusStrip(run: Subagent) {
 @Composable
 private fun Body(
     runState: State<Subagent?>,
+    hue: Color,
     readsFiles: Boolean,
     memory: SessionMemory,
     list: LazyListState,
@@ -373,7 +379,7 @@ private fun Body(
                 modifier = Modifier.fillMaxSize(),
             ) {
                 item(key = "live", contentType = "live") {
-                    runState.value?.let { LiveLine(it, Modifier.padding(top = 6.dp)) }
+                    runState.value?.let { LiveLine(it, hue, Modifier.padding(top = 6.dp)) }
                 }
                 val n = rows.size
                 items(count = n, key = { i -> rows[n - 1 - i].key }, contentType = { i -> rows[n - 1 - i]::class.simpleName }) { i ->
@@ -422,13 +428,13 @@ private fun Note(text: String) {
  * Keeps its 32dp while the agent is done so the list does not jump.
  */
 @Composable
-private fun LiveLine(run: Subagent, modifier: Modifier = Modifier) {
+private fun LiveLine(run: Subagent, hue: Color, modifier: Modifier = Modifier) {
     val visible = run.isActive
     val alpha by animateFloatAsState(if (visible) 1f else 0f, if (visible) PiMotion.enter(PiMotion.STANDARD) else PiMotion.leave(PiMotion.QUICK), label = "live")
     Row(modifier.fillMaxWidth().height(32.dp).graphicsLayer { this.alpha = alpha }, verticalAlignment = Alignment.CenterVertically) {
         if (visible || alpha > 0f) {
             Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
-                QuadSpinner(QuadMode.Agent, size = 16.dp, color = tintOf(run.type), animate = visible)
+                QuadSpinner(QuadMode.Agent, size = AgentGlyphSize.Bar.quad, color = hue, animate = visible)
             }
             Spacer(Modifier.width(12.dp))
             Crossfade(

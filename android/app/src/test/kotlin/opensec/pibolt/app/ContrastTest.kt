@@ -7,6 +7,7 @@ import opensec.pibolt.app.data.AccentId
 import opensec.pibolt.app.data.ThemeId
 import opensec.pibolt.app.ui.components.SnackKind
 import opensec.pibolt.app.ui.components.noticeStyle
+import opensec.pibolt.app.ui.session.subagent.SubagentFormat
 import opensec.pibolt.app.ui.theme.PiColors
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -104,6 +105,23 @@ class ContrastTest {
                 for ((name, bg) in surfaces(c).take(3)) {
                     val r = contrast(c.accent, bg)
                     if (r < 4.5) failures += "$theme/$accent accent text on $name: ${"%.2f".format(r)}"
+                }
+            }
+        }
+        assertTrue(failures.isEmpty(), failures.joinToString("\n"))
+    }
+
+    @Test
+    fun subagentTintsPassNonTextContrastOnCardsAndSheets() {
+        // Each agent's Quad is in its own tint (SubagentFormat.HUES): a state glyph, so 3:1 (WCAG 1.4.11) on the cards
+        // (surface1) and sheets (surface2) it sits on, in every theme.
+        val failures = ArrayList<String>()
+        for (theme in ThemeId.entries) {
+            val c = PiColors.of(theme, AccentId.Theme)
+            SubagentFormat.HUES.forEachIndexed { i, argb ->
+                for ((name, bg) in listOf("surface1" to c.surface1, "surface2" to c.surface2)) {
+                    val r = contrast(Color(argb), bg)
+                    if (r < 3.0) failures += "$theme tint $i on $name: ${"%.2f".format(r)}"
                 }
             }
         }

@@ -57,6 +57,7 @@ import androidx.compose.ui.unit.dp
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
@@ -272,7 +273,7 @@ private fun TodoRow(task: TodoTask, running: Boolean, quiet: Boolean) {
                 when (g) {
                     Glyph.Pending -> StatusCircle(filled = false)
                     Glyph.Paused -> StatusCircle(filled = true, ink = if (running) colors.ink1 else colors.ink2)
-                    Glyph.Working -> QuadSpinner(QuadMode.Think, size = 12.dp, color = colors.ink1)
+                    Glyph.Working -> QuadSpinner(QuadMode.Think, size = IconSize.xs, color = colors.ink1)
                     Glyph.Done -> Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.success, modifier = Modifier.size(16.dp))
                 }
             }

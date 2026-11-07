@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.dp
 import opensec.pibolt.app.ui.components.CopyButton
 import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
@@ -74,13 +75,13 @@ fun ErrorNoticeView(
         modifier
             .padding(top = 8.dp)
             .fillMaxWidth()
-            .background(colors.dangerSoft, shape)
-            .border(1.dp, colors.danger.copy(alpha = 0.4f), shape)
+            // A hairline in the status colour, not a filled slab (as on the desktop): the glyph and line say "error".
+            .border(1.dp, colors.danger.copy(alpha = 0.32f), shape)
             .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(end = 8.dp)) {
-            Icon(if (retry != null) Icons.Rounded.Schedule else Icons.Rounded.ErrorOutline, contentDescription = null, tint = colors.danger, modifier = Modifier.size(18.dp))
-            Spacer(Modifier.width(10.dp))
+            Icon(if (retry != null) Icons.Rounded.Schedule else Icons.Rounded.ErrorOutline, contentDescription = null, tint = colors.danger, modifier = Modifier.size(IconSize.md))
+            Spacer(Modifier.width(8.dp))
             Text(
                 ErrorText.title(error, context.model, context.provider),
                 style = type.bodyStrong,

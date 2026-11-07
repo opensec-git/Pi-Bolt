@@ -55,6 +55,7 @@ import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.session.Viewer
 import opensec.pibolt.app.ui.session.ViewerContent
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
@@ -174,7 +175,7 @@ private fun DiagramCard(kind: String, image: DiagramImage?, updating: Boolean, c
                 modifier = Modifier.weight(1f),
             )
             if (updating || image == null) {
-                QuadSpinner(QuadMode.Write, size = 12.dp, color = colors.ink2)
+                QuadSpinner(QuadMode.Write, size = IconSize.xs, color = colors.ink2)
                 Spacer(Modifier.width(10.dp))
             }
             if (image != null) {

@@ -27,16 +27,14 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.StopCircle
+import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -57,11 +55,9 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
@@ -72,137 +68,87 @@ import opensec.pibolt.app.ui.session.SubagentNoticeRow
 import opensec.pibolt.app.ui.session.SubagentRow
 import opensec.pibolt.app.ui.session.SubagentStackRow
 import opensec.pibolt.app.ui.session.formatStepElapsed
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Tnum
 import opensec.pibolt.protocol.session.Subagent
 import opensec.pibolt.protocol.session.SubagentStatus
+import opensec.pibolt.app.ui.session.subagent.SubagentFormat.AgentState
 
-/** The avatar colour of an agent type. */
-fun tintOf(type: String): Color = Color(SubagentFormat.TINTS[SubagentFormat.tintIndex(type)])
+/** The Quad colour of the run in colour [slot] ([SubagentFormat.hueSlot]). */
+fun agentHue(slot: Int): Color = Color(SubagentFormat.HUES[Math.floorMod(slot, SubagentFormat.HUES.size)])
 
-/** The agent type's initial on a tinted tile (tint at 16%), radius 30% of [size]. */
-@Composable
-fun AgentAvatar(type: String, modifier: Modifier = Modifier, size: Dp = 32.dp) {
-    val tint = tintOf(type)
-    Box(
-        modifier
-            .size(size)
-            .background(tint.copy(alpha = 0.16f), RoundedCornerShape(size * 0.3f)),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            SubagentFormat.initial(type),
-            style = Pi.type.label.copy(fontWeight = FontWeight.SemiBold, fontSize = (size.value * 0.42f).sp, lineHeight = (size.value * 0.5f).sp),
-            color = tint,
-        )
-    }
+/**
+ * The state glyph's sizes in each place, on the icon tokens: [slot] it sits in, the running [quad] and the rest [glyph]
+ * (a Material glyph draws inside padding, so it is one step larger than the grid to read the same size).
+ */
+internal enum class AgentGlyphSize(val slot: Dp, val quad: Dp, val glyph: Dp) {
+    /** An agent's own two-line block: a card, a line of a stack. */
+    Card(IconSize.lg, IconSize.md, IconSize.lg),
+
+    /** A one-line timeline row: an ended background run, a stack's header. */
+    Row(IconSize.md, IconSize.xs, IconSize.sm),
+
+    /** A top bar and a live line. */
+    Bar(IconSize.md, IconSize.sm, IconSize.md),
 }
 
 /**
- * A subagent's card in the transcript. Running, it keeps a fixed height: header (avatar, type, task, ticking time), the
- * activity line (Quad Agent in the agent's tint, text that crossfades at most every 450 ms) and the metrics line, with
- * a 2dp sweep along its top edge. Done, the activity line gives way to the start of the answer and the card grows to
- * it with a spring. Tapping opens the agent's transcript.
+ * A subagent's card in the transcript: its state glyph (a Quad in the agent's own colour while it runs; check, cross
+ * or dash after), its name (the task title) over the type and the tool it runs now ("Explore · Reading src/auth.ts"),
+ * and the run time. No narration: what the agent writes shows on its own screen, which a tap opens. The card keeps
+ * its height from start to end; a 2dp band in the agent's colour sweeps its top edge while it runs.
  */
 @Composable
 fun SubagentCard(row: SubagentRow, modifier: Modifier = Modifier) {
     val nav = LocalSubagentNav.current
     val key = row.run.key
-    AgentCard(row.run, row.live, onOpen = nav?.let { n -> { n.open(key) } }, modifier = modifier)
+    AgentCard(row.run, agentHue(row.slot), row.live, onOpen = nav?.let { n -> { n.open(key) } }, modifier = modifier)
 }
 
 @Composable
-internal fun AgentCard(run: Subagent, live: Boolean, onOpen: (() -> Unit)?, modifier: Modifier = Modifier) {
+internal fun AgentCard(run: Subagent, hue: Color, live: Boolean, onOpen: (() -> Unit)?, modifier: Modifier = Modifier) {
     val colors = Pi.colors
-    val type = Pi.type
     val shape = RoundedCornerShape(Radius.md)
     val active = run.isActive
     val border by animateColorAsState(if (active) colors.lineStrong else colors.line, PiMotion.effects(), label = "cardLine")
-    Column(
+    AgentLines(
+        run,
+        hue,
+        live,
         modifier
             .fillMaxWidth()
-            .semantics(mergeDescendants = true) { contentDescription = SubagentFormat.spoken(run) }
             .then(if (onOpen != null) Modifier.pressable(onOpen, shape = shape, pressedScale = 0.98f, label = "Open agent") else Modifier.clip(shape))
             .background(colors.surface1)
             .border(1.dp, border, shape)
-            .then(if (active) Modifier.sweep(tintOf(run.type)) else Modifier)
-            .animateContentSize(PiMotion.settle())
-            .padding(start = 12.dp, end = 14.dp, top = 12.dp, bottom = 12.dp),
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            AgentAvatar(run.type)
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(SubagentFormat.typeLabel(run.type), style = type.label, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
-                    if (run.background) {
-                        Spacer(Modifier.width(8.dp))
-                        BackgroundTag(run.agentId)
-                    }
-                }
-                Text(
-                    run.description.ifBlank { run.prompt.lineSequence().firstOrNull().orEmpty() }.ifBlank { "Subagent" },
-                    style = type.meta,
-                    color = colors.ink2,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Spacer(Modifier.width(8.dp))
-            RunTime(run)
-        }
-        Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.Top) {
-            Box(Modifier.width(32.dp).height(18.dp), contentAlignment = Alignment.Center) { RunGlyph(run, live) }
-            Spacer(Modifier.width(12.dp))
-            ActivityText(
-                text = if (active) SubagentFormat.activityLine(run) else answerPreview(run),
-                color = when (run.status) {
-                    SubagentStatus.Failed -> colors.danger
-                    SubagentStatus.Done -> colors.ink2
-                    else -> colors.ink3
-                },
-                maxLines = if (active) 1 else 3,
-                animate = live,
-                modifier = Modifier.weight(1f),
-            )
-        }
-        Spacer(Modifier.height(4.dp))
-        Text(
-            SubagentFormat.metrics(run),
-            style = type.meta.copy(fontFeatureSettings = Tnum),
-            color = colors.ink3,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(start = 44.dp),
-        )
-    }
+            .then(if (active) Modifier.sweep(hue) else Modifier)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+    )
 }
 
-/** The answer's first lines as plain text (the card shows up to 3), or the status line when there is none. */
-private fun answerPreview(run: Subagent): String {
-    if (run.status != SubagentStatus.Done) return SubagentFormat.activityLine(run)
-    return SubagentFormat.answerPreview(run.result.orEmpty()).ifBlank { "Done" }
-}
-
-/** "background · 1a2b3c4d": surface3 pill, micro ink2, the id in mono. */
+/**
+ * One agent in two lines: glyph, name (label ink1) over "type · tool" (meta ink3; a failure in danger), run time at the
+ * end. TalkBack reads it as one node.
+ */
 @Composable
-private fun BackgroundTag(agentId: String?) {
+private fun AgentLines(run: Subagent, hue: Color, live: Boolean, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val type = Pi.type
-    Row(
-        Modifier
-            .background(colors.surface3, CircleShape)
-            .padding(horizontal = 7.dp, vertical = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text("background", style = type.micro, color = colors.ink2, maxLines = 1)
-        if (agentId != null) {
-            Text(" · ", style = type.micro, color = colors.ink3, maxLines = 1)
-            Text(SubagentFormat.shortId(agentId), style = type.micro.copy(fontFamily = type.monoMeta.fontFamily), color = colors.ink3, maxLines = 1)
+    Row(modifier.semantics(mergeDescendants = true) { contentDescription = SubagentFormat.spoken(run) }, verticalAlignment = Alignment.CenterVertically) {
+        AgentGlyph(SubagentFormat.stateOf(run), hue, live, AgentGlyphSize.Card)
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(SubagentFormat.title(run), style = type.label, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            ActivityText(
+                text = SubagentFormat.cardMeta(run),
+                color = if (run.status == SubagentStatus.Failed) colors.danger else colors.ink3,
+                animate = live,
+            )
         }
+        Spacer(Modifier.width(8.dp))
+        RunTime(run)
     }
 }
 
@@ -224,53 +170,49 @@ internal fun RunTime(run: Subagent, modifier: Modifier = Modifier) {
     }
 }
 
-private enum class Glyph { Running, Queued, Done, Failed, Stopped }
-
-private fun glyphOf(status: SubagentStatus) = when (status) {
-    SubagentStatus.Queued -> Glyph.Queued
-    SubagentStatus.Running -> Glyph.Running
-    SubagentStatus.Done -> Glyph.Done
-    SubagentStatus.Failed -> Glyph.Failed
-    SubagentStatus.Stopped -> Glyph.Stopped
-}
-
 /**
- * The run's state: Quad Agent in the agent's tint while it runs, a still Quad while queued, then a check (success),
- * cross (danger) or stop glyph. The swap scales in from 0.7 over 160 ms in the live turn only.
+ * A run's state at [size], as on the desktop: while it starts, a Quad breathing in amber; running, Quad Agent in the
+ * agent's own [hue] (a still frame when [spin] is false, or under reduce motion); queued for a slot, a still grey Quad;
+ * then a grey check, a cross in danger or a grey dash. Colour is for the running agent and for failure only. The swap
+ * scales in from 0.7 (glyph duration) in the live turn only.
  */
 @Composable
-internal fun RunGlyph(run: Subagent, live: Boolean, size: Dp = 14.dp) {
+internal fun AgentGlyph(state: AgentState, hue: Color, live: Boolean, size: AgentGlyphSize, spin: Boolean = true) {
     val colors = Pi.colors
-    val tint = tintOf(run.type)
     val animate = live && !Pi.reduceMotion
     AnimatedContent(
-        targetState = glyphOf(run.status),
+        targetState = state,
         transitionSpec = {
             if (animate) {
-                (fadeIn(tween(160, easing = PiMotion.InPlace)) + scaleIn(tween(160, easing = PiMotion.InPlace), initialScale = 0.7f)) togetherWith fadeOut(tween(110))
+                (fadeIn(tween(PiMotion.GLYPH, easing = PiMotion.InPlace)) + scaleIn(tween(PiMotion.GLYPH, easing = PiMotion.InPlace), initialScale = 0.7f)) togetherWith
+                    fadeOut(tween(PiMotion.exit(PiMotion.GLYPH)))
             } else {
                 fadeIn(tween(0)) togetherWith fadeOut(tween(0))
             }
         },
         contentAlignment = Alignment.Center,
+        modifier = Modifier.size(size.slot),
         label = "agentGlyph",
     ) { g ->
-        when (g) {
-            Glyph.Running -> QuadSpinner(QuadMode.Agent, size = 12.dp, color = tint)
-            Glyph.Queued -> QuadSpinner(QuadMode.Think, size = 12.dp, color = colors.ink3, animate = false)
-            Glyph.Done -> Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.success, modifier = Modifier.size(size + 2.dp))
-            Glyph.Failed -> Icon(Icons.Rounded.Close, contentDescription = null, tint = colors.danger, modifier = Modifier.size(size + 2.dp))
-            Glyph.Stopped -> Icon(Icons.Rounded.StopCircle, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(size + 2.dp))
+        Box(Modifier.size(size.slot), contentAlignment = Alignment.Center) {
+            when (g) {
+                AgentState.Starting -> QuadSpinner(QuadMode.Wait, size = size.quad, color = colors.warning, animate = spin)
+                AgentState.Running -> QuadSpinner(QuadMode.Agent, size = size.quad, color = hue, animate = spin)
+                AgentState.Queued -> QuadSpinner(QuadMode.Think, size = size.quad, color = colors.ink3, animate = false)
+                AgentState.Done -> Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(size.glyph))
+                AgentState.Failed -> Icon(Icons.Rounded.Close, contentDescription = null, tint = colors.danger, modifier = Modifier.size(size.glyph))
+                AgentState.Stopped -> Icon(Icons.Rounded.Remove, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(size.glyph))
+            }
         }
     }
 }
 
 /**
- * One line of activity that crossfades (fade + 4dp rise, quick) when it changes, at most once per [THROTTLE_MS] so a
+ * One line of activity (one line, ellipsised) that crossfades (fade + 4dp rise, quick) when it changes, at most once per [THROTTLE_MS] so a
  * streaming reply does not flicker. Its height never animates here: the card's spring does that.
  */
 @Composable
-internal fun ActivityText(text: String, color: Color, maxLines: Int, animate: Boolean, modifier: Modifier = Modifier) {
+internal fun ActivityText(text: String, color: Color, animate: Boolean, modifier: Modifier = Modifier) {
     val shown = rememberThrottled(text, THROTTLE_MS)
     val moving = animate && !Pi.reduceMotion
     val style = Pi.type.meta
@@ -297,7 +239,7 @@ internal fun ActivityText(text: String, color: Color, maxLines: Int, animate: Bo
         modifier = modifier,
         label = "activity",
     ) { (_, t) ->
-        Text(t, style = style, color = color, maxLines = maxLines, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
+        Text(t, style = style, color = color, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.fillMaxWidth())
     }
 }
 
@@ -318,11 +260,11 @@ private fun rememberThrottled(value: String, ms: Long): String {
     return shown
 }
 
-/** A 2dp band in [color] sweeping the top edge while the run is active (1400 ms; none under reduce motion). */
+/** A 2dp band in [color] sweeping the top edge while the run is active (sweep duration; none under reduce motion). */
 @Composable
 internal fun Modifier.sweep(color: Color): Modifier {
     if (Pi.reduceMotion) return this
-    val t = rememberInfiniteTransition(label = "agentSweep").animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = PiMotion.InPlace), RepeatMode.Restart), label = "x")
+    val t = rememberInfiniteTransition(label = "agentSweep").animateFloat(0f, 1f, infiniteRepeatable(tween(PiMotion.SWEEP, easing = PiMotion.InPlace), RepeatMode.Restart), label = "x")
     return drawBehind {
         val band = size.width * 0.35f
         val x = -band + (size.width + band) * t.value
@@ -335,9 +277,9 @@ internal fun Modifier.sweep(color: Color): Modifier {
 }
 
 /**
- * Parallel agents as one stack. Closed: a card with "3 agents running", the avatars, the longest run time and one
- * 48dp line per agent (glyph, type, crossfading activity, time); tapping a line opens that agent. Open: the header,
- * then each agent's full card. The switch resizes with the card spring.
+ * Parallel agents as one stack. Closed: a card with "3 agents running", the group's state, the longest run time and
+ * each agent in two lines (its glyph in its own colour, name, type and tool, time); tapping a line opens that agent.
+ * Open: the header, then each agent's card. The switch resizes with the card spring.
  */
 @Composable
 fun SubagentStack(row: SubagentStackRow, onToggle: () -> Unit, modifier: Modifier = Modifier) {
@@ -347,6 +289,7 @@ fun SubagentStack(row: SubagentStackRow, onToggle: () -> Unit, modifier: Modifie
     val active = runs.any { it.isActive }
     val shape = RoundedCornerShape(Radius.md)
     val border by animateColorAsState(if (active) colors.lineStrong else colors.line, PiMotion.effects(), label = "stackLine")
+    fun hue(i: Int) = agentHue(row.slots.getOrElse(i) { i })
     Column(modifier.fillMaxWidth().animateContentSize(PiMotion.settle())) {
         if (!row.expanded) {
             Column(
@@ -357,25 +300,37 @@ fun SubagentStack(row: SubagentStackRow, onToggle: () -> Unit, modifier: Modifie
                     .border(1.dp, border, shape)
                     .then(if (active) Modifier.sweep(colors.ink3) else Modifier),
             ) {
-                StackHeader(runs, expanded = false, onToggle = onToggle)
+                StackHeader(runs, row.live, expanded = false, onToggle = onToggle)
                 Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
                 Column(Modifier.padding(vertical = 4.dp)) {
-                    for (run in runs) {
-                        CompactRow(run, row.live, onOpen = nav?.let { n -> { n.open(run.key) } })
+                    runs.forEachIndexed { i, run ->
+                        val open = nav?.let { n -> { n.open(run.key) } }
+                        AgentLines(
+                            run,
+                            hue(i),
+                            row.live,
+                            Modifier
+                                .fillMaxWidth()
+                                // Each line opens its agent, so it is at least a 56dp target.
+                                .heightIn(min = 56.dp)
+                                .then(if (open != null) Modifier.pressable(open, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "Open agent") else Modifier)
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                        )
                     }
                 }
             }
         } else {
-            StackHeader(runs, expanded = true, onToggle = onToggle)
+            StackHeader(runs, row.live, expanded = true, onToggle = onToggle)
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                for (run in runs) AgentCard(run, row.live, onOpen = nav?.let { n -> { n.open(run.key) } })
+                runs.forEachIndexed { i, run -> AgentCard(run, hue(i), row.live, onOpen = nav?.let { n -> { n.open(run.key) } }) }
             }
         }
     }
 }
 
+/** The stack's 48dp header: the group's state (still; each agent's line carries the motion), title, time, chevron. */
 @Composable
-private fun StackHeader(runs: List<Subagent>, expanded: Boolean, onToggle: () -> Unit) {
+private fun StackHeader(runs: List<Subagent>, live: Boolean, expanded: Boolean, onToggle: () -> Unit) {
     val colors = Pi.colors
     val type = Pi.type
     val title = SubagentFormat.stackTitle(runs)
@@ -385,12 +340,15 @@ private fun StackHeader(runs: List<Subagent>, expanded: Boolean, onToggle: () ->
             .heightIn(min = 48.dp)
             .pressable(onToggle, shape = RoundedCornerShape(Radius.md), pressedScale = 1f, label = if (expanded) "Show as a list" else "Show each agent")
             .semantics(mergeDescendants = true) { contentDescription = title }
-            .padding(start = 12.dp, end = 10.dp),
+            .padding(start = 14.dp, end = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AvatarStack(runs.map { it.type })
+        // In a Card-size slot so its centre lines up with the agents' glyphs below.
+        Box(Modifier.size(AgentGlyphSize.Card.slot), contentAlignment = Alignment.Center) {
+            AgentGlyph(SubagentFormat.stackState(runs), colors.ink2, live, AgentGlyphSize.Row, spin = false)
+        }
         Spacer(Modifier.width(12.dp))
-        Text(title, style = type.label, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        Text(title, style = type.label, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         // The longest of the runs: the one that started first.
         runs.firstOrNull { it.isActive }?.let { RunTime(it) } ?: runs.maxByOrNull { it.durationMs ?: 0 }?.let { RunTime(it) }
         Spacer(Modifier.width(6.dp))
@@ -398,57 +356,9 @@ private fun StackHeader(runs: List<Subagent>, expanded: Boolean, onToggle: () ->
     }
 }
 
-/** Up to three 22dp avatars, 18dp apart (they overlap), each with a 2dp ring in the card colour. */
-@Composable
-private fun AvatarStack(types: List<String>) {
-    val shown = types.take(3)
-    val ring = Pi.colors.surface1
-    Box(Modifier.width((26 + (shown.size - 1) * 18).dp).height(26.dp), contentAlignment = Alignment.CenterStart) {
-        shown.forEachIndexed { i, t ->
-            Box(
-                Modifier
-                    .offset(x = (i * 18).dp)
-                    .size(26.dp)
-                    .background(ring, RoundedCornerShape(9.dp))
-                    .padding(2.dp),
-            ) { AgentAvatar(t, size = 22.dp) }
-        }
-    }
-}
-
-@Composable
-private fun CompactRow(run: Subagent, live: Boolean, onOpen: (() -> Unit)?) {
-    val colors = Pi.colors
-    val type = Pi.type
-    Row(
-        Modifier
-            .fillMaxWidth()
-            // Each line opens its agent, so it is a full 48dp touch target.
-            .height(48.dp)
-            .semantics(mergeDescendants = true) { contentDescription = SubagentFormat.spoken(run) }
-            .then(if (onOpen != null) Modifier.pressable(onOpen, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "Open agent") else Modifier)
-            .padding(start = 12.dp, end = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.width(26.dp), contentAlignment = Alignment.Center) { RunGlyph(run, live) }
-        Spacer(Modifier.width(12.dp))
-        Text(SubagentFormat.typeLabel(run.type), style = type.label, color = colors.ink2, maxLines = 1)
-        Spacer(Modifier.width(8.dp))
-        ActivityText(
-            text = if (run.isActive) SubagentFormat.activityLine(run) else run.description.ifBlank { SubagentFormat.activityLine(run) },
-            color = if (run.status == SubagentStatus.Failed) colors.danger else colors.ink3,
-            maxLines = 1,
-            animate = live,
-            modifier = Modifier.weight(1f),
-        )
-        Spacer(Modifier.width(8.dp))
-        RunTime(run)
-    }
-}
-
 /**
- * Background agents ended (the extension's notification): one step line each, "Explore finished" + its task + its
- * time; tapping opens the agent.
+ * Background agents ended (the extension's notification): one step line each, the agent's name, "Explore finished"
+ * and its time; tapping opens the agent.
  */
 @Composable
 fun SubagentNoticeRowView(row: SubagentNoticeRow, modifier: Modifier = Modifier) {
@@ -457,18 +367,18 @@ fun SubagentNoticeRowView(row: SubagentNoticeRow, modifier: Modifier = Modifier)
     val type = Pi.type
     Column(modifier.padding(top = 4.dp)) {
         if (row.runs.isEmpty()) {
-            StepHeader(onClick = null, slot = { Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp)) }) {
+            StepHeader(onClick = null, slot = { Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(IconSize.sm)) }) {
                 Text(if (row.item.agentIds.size > 1) "${row.item.agentIds.size} background agents finished" else "Background agent finished", style = type.label, color = colors.ink2)
             }
         }
-        for (run in row.runs) {
+        row.runs.forEachIndexed { i, run ->
             StepHeader(
                 onClick = nav?.let { n -> { n.open(run.key) } },
-                slot = { RunGlyph(run, live = false) },
+                slot = { AgentGlyph(SubagentFormat.stateOf(run), agentHue(row.slots.getOrElse(i) { i }), live = false, size = AgentGlyphSize.Row) },
             ) {
-                Text(SubagentFormat.endedTitle(run), style = type.label, color = colors.ink2, maxLines = 1)
+                Text(SubagentFormat.title(run), style = type.label, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 Spacer(Modifier.width(8.dp))
-                Text(run.description, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text(SubagentFormat.endedTitle(run), style = type.meta, color = colors.ink3, maxLines = 1, modifier = Modifier.weight(1f))
                 Spacer(Modifier.width(8.dp))
                 RunTime(run)
                 Spacer(Modifier.width(4.dp))

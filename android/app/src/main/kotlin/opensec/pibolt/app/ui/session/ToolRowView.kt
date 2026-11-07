@@ -35,6 +35,8 @@ import androidx.compose.material.icons.rounded.UnfoldMore
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -150,7 +152,9 @@ fun ToolRowView(
     }
     Column(modifier.fillMaxWidth()) {
         StepHeader(onClick = onToggle, onLongClick = onLongPress, slot = { StepSlot(stepState(item), mode, live) }) {
-            Text(if (item.isActive) label.verb else label.past, style = type.label, color = colors.ink2, maxLines = 1)
+            // A failed step says so in its verb too, as on the desktop (the cross alone is easy to miss in a long turn).
+            val failed = stepState(item) == StepState.Failed
+            Text(if (item.isActive) label.verb else label.past, style = type.label, color = if (failed) colors.danger else colors.ink2, maxLines = 1)
             Spacer(Modifier.width(8.dp))
             val isPath = label.kind == ToolKind.Read || label.kind == ToolKind.Write || label.kind == ToolKind.Edit
             // The open card's header carries the command or path, so the row does not repeat it.
@@ -205,7 +209,7 @@ fun ToolRowView(
                     color = if (item.isError) colors.danger else colors.ink3,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(start = 32.dp, end = 8.dp, bottom = 4.dp),
+                    modifier = Modifier.padding(start = STEP_TEXT_START, end = 8.dp, bottom = 4.dp),
                 )
             }
         }
@@ -215,19 +219,28 @@ fun ToolRowView(
             enter = expandVertically(PiMotion.inPlace(), expandFrom = Alignment.Top) + fadeIn(PiMotion.inPlace(PiMotion.QUICK)),
             exit = shrinkVertically(PiMotion.leave(PiMotion.STANDARD), shrinkTowards = Alignment.Top) + fadeOut(PiMotion.leave(PiMotion.QUICK)),
         ) {
-            Box(Modifier.padding(top = 2.dp, bottom = 8.dp)) {
-                when {
-                    diff != null -> DiffCard(item, label, diff, previewLines, onOpen, onOpenFile)
-                    written != null -> FileCard(item, label, written, 1, previewLines, onOpen, onOpenFile)
-                    label.kind == ToolKind.Bash -> BashCard(item, label, previewLines, onOpen)
-                    label.kind == ToolKind.Read && !item.isError && item.images.isEmpty() -> FileCard(item, label, readText(item.result ?: item.output), startLineOf(item), previewLines, onOpen, onOpenFile)
-                    (label.kind == ToolKind.Search || label.kind == ToolKind.List) && !item.isError -> MatchesCard(item, label, previewLines, onOpen)
-                    else -> OutputCard(item, label, previewLines, onOpen)
+            // The card hangs under the step's text, right of the slot column, so an opened fold's rail runs past it.
+            Box(Modifier.padding(start = STEP_TEXT_START, top = 2.dp, bottom = 8.dp)) {
+                CompositionLocalProvider(LocalCardFailed provides (stepState(item) == StepState.Failed)) {
+                    when {
+                        diff != null -> DiffCard(item, label, diff, previewLines, onOpen, onOpenFile)
+                        written != null -> FileCard(item, label, written, 1, previewLines, onOpen, onOpenFile)
+                        label.kind == ToolKind.Bash -> BashCard(item, label, previewLines, onOpen)
+                        label.kind == ToolKind.Read && !item.isError && item.images.isEmpty() -> FileCard(item, label, readText(item.result ?: item.output), startLineOf(item), previewLines, onOpen, onOpenFile)
+                        (label.kind == ToolKind.Search || label.kind == ToolKind.List) && !item.isError -> MatchesCard(item, label, previewLines, onOpen)
+                        else -> OutputCard(item, label, previewLines, onOpen)
+                    }
                 }
             }
         }
     }
 }
+
+/** Where a step's text starts: the 20dp slot and its 12dp gap. Cards and lines that belong to a step start here. */
+val STEP_TEXT_START = 32.dp
+
+/** True inside the card of a failed step: its outline turns danger. */
+private val LocalCardFailed = staticCompositionLocalOf { false }
 
 /** "+12 −3" in success and danger, tabular. */
 @Composable
@@ -241,16 +254,18 @@ private fun ChangeCounts(added: Int, removed: Int) {
     }
 }
 
+/** A tool card: surface1, radius md, 1dp line (danger at 32% for a failed step, a hairline rather than a fill). */
 @Composable
 private fun CardFrame(content: @Composable () -> Unit) {
     val colors = Pi.colors
     val shape = RoundedCornerShape(Radius.md)
+    val failed = LocalCardFailed.current
     Column(
         Modifier
             .fillMaxWidth()
             .clip(shape)
             .background(colors.surface1)
-            .border(1.dp, colors.line, shape),
+            .border(1.dp, if (failed) colors.danger.copy(alpha = 0.32f) else colors.line, shape),
     ) { content() }
 }
 
@@ -460,7 +475,10 @@ private fun Modifier.cardTopFade(color: Color): Modifier = drawWithContent {
     drawRect(Brush.verticalGradient(0f to color, 1f to Color.Transparent, startY = 0f, endY = h), size = Size(size.width, h))
 }
 
-/** A path in a card header: mono ink1; a tap opens the file when [onOpenFile] is set. */
+/**
+ * A path in a card header: mono ink1, start-ellipsised, taking the room up to the header's trailing meta (two weighted
+ * children would split it and cut the path at half the card); a tap opens the file when [onOpenFile] is set.
+ */
 @Composable
 private fun RowScope.PathChip(path: String, onOpenFile: ((String) -> Unit)?) {
     val colors = Pi.colors
@@ -471,7 +489,7 @@ private fun RowScope.PathChip(path: String, onOpenFile: ((String) -> Unit)?) {
         maxLines = 1,
         overflow = TextOverflow.StartEllipsis,
         modifier = Modifier
-            .weight(1f, fill = false)
+            .weight(1f)
             .then(
                 if (onOpenFile != null) {
                     Modifier
@@ -517,7 +535,6 @@ private fun FileCard(
     CardFrame {
         CardHeader {
             PathChip(path, onOpenFile)
-            Spacer(Modifier.weight(1f))
             if (total > 0) {
                 Spacer(Modifier.width(8.dp))
                 val range = "L$startLine–${startLine + total - 1}"
@@ -684,7 +701,6 @@ private fun DiffCard(
     CardFrame {
         CardHeader(end = 2.dp) {
             PathChip(path, onOpenFile)
-            Spacer(Modifier.weight(1f))
             Spacer(Modifier.width(8.dp))
             ChangeCounts(stats.added, stats.removed)
             IconAction(Icons.Rounded.OpenInFull, "Open diff", onClick = open, size = 16.dp, tint = colors.ink3)
@@ -703,7 +719,7 @@ private fun ToolImages(images: List<ImageAttachment>, onOpen: ((List<ImageAttach
     Row(
         Modifier
             .fillMaxWidth()
-            .padding(start = 32.dp, top = 2.dp, bottom = 6.dp)
+            .padding(start = STEP_TEXT_START, top = 2.dp, bottom = 6.dp)
             .horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
