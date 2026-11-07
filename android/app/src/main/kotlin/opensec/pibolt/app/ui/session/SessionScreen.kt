@@ -1,7 +1,6 @@
 package opensec.pibolt.app.ui.session
 
 import android.Manifest
-import android.content.ClipboardManager
 import android.net.Uri
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
@@ -488,13 +487,14 @@ internal fun SessionContent(
             val m = if (sending) QuadMode.Think else quadMode
             val activity = TranscriptModel.activity(s.items, s.streaming)
             val retry = s.retry
-            val thinkingLive = (s.streaming.lastOrNull() as? ThinkingItem)?.streaming == true
+            val thinks = ThinkingRules.on(s.thinkingLevel, s.model?.reasoning)
+            val thinkingLive = (s.streaming.lastOrNull() as? ThinkingItem)?.let { it.streaming && ThinkingRules.shows(it, thinks) } == true
             val text = when {
                 retry != null -> StatusText("Retrying", "attempt ${retry.attempt} of ${retry.maxAttempts}")
                 s.isCompacting && m == QuadMode.Compact -> StatusText(compactionLabel(s.compactionReason))
                 // The live thinking row already says "Thinking": the status line keeps only the elapsed time.
                 thinkingLive && m == QuadMode.Think && !sending -> StatusText("")
-                else -> TranscriptModel.statusText(m, activity, sending)
+                else -> TranscriptModel.statusText(m, activity, sending, thinking = thinks)
             }
             LiveStatus(visible = s.isRunning || s.isCompacting || sending, mode = if (retry != null) QuadMode.Connect else m, text = text)
         }
@@ -825,16 +825,9 @@ internal fun SessionContent(
         }
     }
 
-    /** An image on the clipboard (copied from a browser, a screenshot, a gallery app), or null. */
-    fun clipboardImage(): Uri? {
-        val cm = context.getSystemService(ClipboardManager::class.java) ?: return null
-        if (cm.primaryClipDescription?.hasMimeType("image/*") != true) return null
-        return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
-    }
-
     /** Ctrl+V or "Paste image": attaches the clipboard's image; false when there is none (text paste goes on). */
     fun pasteImage(): Boolean {
-        val uri = clipboardImage() ?: return false
+        val uri = clipboardImage(context) ?: return false
         when {
             modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
             ImageSizing.slotsLeft(images.size) == 0 -> scope.launch { snackbar.show("Up to ${ImageSizing.MAX_IMAGES} images per message") }
@@ -1251,7 +1244,7 @@ internal fun SessionContent(
     when (sheet) {
         Sheet.None -> Unit
         Sheet.Attach -> {
-            val clip = remember { clipboardImage() != null }
+            val clip = remember { clipboardImage(context) != null }
             ActionsSheet(
                 title = null,
                 actions = listOfNotNull(

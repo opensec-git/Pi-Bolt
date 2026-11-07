@@ -244,7 +244,24 @@ data class PendingSend(val id: Long, val text: String, val lastUserKey: String?,
 
 /** What the status line says: a label that shimmers, and for a running tool its argument in mono. */
 @Immutable
-data class StatusText(val label: String, val detail: String = "", val path: Boolean = false, val more: Int = 0)
+/** The live status line's words; [mono]: the detail is a command or path (tool steps), else it is prose. */
+data class StatusText(val label: String, val detail: String = "", val path: Boolean = false, val more: Int = 0, val mono: Boolean = false)
+
+/**
+ * Whether the session reasons: not when the thinking level is "off" or the model does not reason. Unknown (no model
+ * or level reported yet) counts as on. When it is off, nothing says "Thinking": an empty reasoning block (some
+ * providers send one anyway) gets no row and the status line says "Working".
+ */
+object ThinkingRules {
+    fun on(level: String?, modelReasons: Boolean?): Boolean = modelReasons != false && level != "off"
+
+    /** [items] without the reasoning blocks that have no text, when thinking is off; else [items] itself. */
+    fun visible(items: List<ChatItem>, on: Boolean): List<ChatItem> =
+        if (on || items.none { it is ThinkingItem && it.text.isBlank() }) items else items.filterNot { it is ThinkingItem && it.text.isBlank() }
+
+    /** True when [item] gets a row. */
+    fun shows(item: ThinkingItem, on: Boolean): Boolean = on || item.text.isNotBlank()
+}
 
 /**
  * Incremental markdown parses per assistant message (a growing message re-parses only its last block), and the
@@ -705,7 +722,8 @@ object TranscriptModel {
      * The status line's text. A running tool is named ("Run" + `npm test`, "Read" + path); a subagent reads "Agent
      * working" + its task; a send not yet echoed reads "Sending"; otherwise the mode's label.
      */
-    fun statusText(mode: QuadMode, activity: Activity, sending: Boolean): StatusText {
+    /** [thinking]: the session reasons ([ThinkingRules.on]); when not, the idle Think mode reads "Working". */
+    fun statusText(mode: QuadMode, activity: Activity, sending: Boolean, thinking: Boolean = true): StatusText {
         val tool = activity.running
         val more = (activity.runningCount - 1).coerceAtLeast(0)
         return when {
@@ -714,8 +732,9 @@ object TranscriptModel {
                 val label = toolLabel(tool)
                 val detail = label.detail.lineSequence().firstOrNull().orEmpty().trim()
                 val path = label.kind == ToolKind.Read || label.kind == ToolKind.Write || label.kind == ToolKind.Edit || label.kind == ToolKind.List
-                if (mode == QuadMode.Agent) StatusText(mode.label, detail, false, more) else StatusText(label.verb, detail, path, more)
+                if (mode == QuadMode.Agent) StatusText(mode.label, detail, false, more) else StatusText(label.verb, detail, path, more, mono = true)
             }
+            mode == QuadMode.Think && !thinking -> StatusText("Working")
             else -> StatusText(mode.label)
         }
     }

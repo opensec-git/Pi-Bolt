@@ -93,6 +93,14 @@ object ProjectRules {
         noProjects || (lastChatAt != null && lastChatAt > (lastProjectAt ?: 0L))
 
     /**
+     * What the Home pill's + offers: with Chat picked, a chat's own actions (a photo, the clipboard's image when it holds
+     * one, voice, New chat), each opening a new chat with the draft; with a project, [PillPlus.NewProject] (the sheet
+     * with New project, Clone from git and Import a zip).
+     */
+    fun pillPlus(chat: Boolean, clipboardImage: Boolean): List<PillPlus> =
+        if (chat) listOfNotNull(PillPlus.Photos, PillPlus.PasteImage.takeIf { clipboardImage }, PillPlus.Voice, PillPlus.NewChat) else listOf(PillPlus.NewProject)
+
+    /**
      * The focus card's title for a session: its name, else the first line of its latest prompt, else [fallback] (the
      * project). Blank values count as missing.
      */
@@ -157,3 +165,6 @@ object ProjectRules {
         }
     }
 }
+
+/** An action behind the Home pill's + ([ProjectRules.pillPlus]). */
+enum class PillPlus { Photos, PasteImage, Voice, NewChat, NewProject }

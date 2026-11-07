@@ -85,7 +85,6 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import androidx.compose.material.icons.rounded.Archive
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.foundation.layout.widthIn
@@ -105,6 +104,17 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.foundation.layout.width
 import opensec.pibolt.app.ui.components.GlassPill
 import opensec.pibolt.app.ui.components.ComposerCircle
+import opensec.pibolt.app.ui.components.PiMenu
+import opensec.pibolt.app.ui.components.PiMenuItem
+import opensec.pibolt.app.ui.projects.PillPlus
+import opensec.pibolt.app.ui.session.ImageSizing
+import opensec.pibolt.app.ui.session.clipboardHasImage
+import opensec.pibolt.app.ui.session.clipboardImage
+import android.net.Uri
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.compose.material.icons.rounded.ContentPaste
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Mic
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.data.ProjectStore
@@ -326,6 +336,28 @@ fun HomeScreen(
     fun voice() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         runCatching { speech.launch(intent) }.onFailure { scope.launch { snackbar.show("Voice input isn't available on this phone", SnackKind.Error) } }
+    }
+    /**
+     * The + of the pill with Chat picked: a new chat opens with the draft and [images] waiting in its composer
+     * (nothing is sent).
+     */
+    fun newChatWith(images: List<Uri>) {
+        if (starting) return
+        starting = true
+        val text = ask.trim().takeIf { it.isNotEmpty() }
+        scope.launch {
+            Chats.start(engine)
+                .onSuccess { live ->
+                    if (text != null || images.isNotEmpty()) live.drop(text, images)
+                    ask = ""
+                    onOpenChat()
+                }
+                .onFailure { snackbar.show(it.message ?: "The chat didn't open", SnackKind.Error) }
+            starting = false
+        }
+    }
+    val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(ImageSizing.MAX_IMAGES)) { uris ->
+        if (uris.isNotEmpty()) newChatWith(uris)
     }
     fun openChat(file: String?) {
         if (starting) return
@@ -642,7 +674,8 @@ fun HomeScreen(
             PiSnackHost(snackbar, if (pillShown) Modifier else Modifier.navigationBarsPadding())
             if (pillShown) {
                 // The persistent pill, with the project it starts in as a chip above it (left edges aligned, 8dp
-                // apart): + (New project), the field, and the primary circle (voice while empty, Send with text).
+                // apart): + (New project; with Chat picked, a chat's actions), the field, and the primary circle
+                // (voice while empty, Send with text).
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -663,7 +696,44 @@ fun HomeScreen(
                       // The chip's 48dp target leaves 4dp under its 40dp face: 4dp more makes the 8dp gap.
                       Spacer(Modifier.height(Space.xs))
                       PillComposerShell(
-                          leading = { ComposerCircle(Icons.Rounded.Add, "New project", onClick = { newProject = false }) },
+                          leading = {
+                              // Chat picked: a chat's actions (photo, pasted image, voice, New chat); a project: New project.
+                              var plusOpen by remember { mutableStateOf(false) }
+                              var actions by remember { mutableStateOf(emptyList<PillPlus>()) }
+                              Box {
+                                  ComposerCircle(Icons.Rounded.Add, if (chatPicked) "Add to a new chat" else "New project", enabled = !starting, onClick = {
+                                      if (chatPicked) {
+                                          actions = ProjectRules.pillPlus(chat = true, clipboardImage = clipboardHasImage(context))
+                                          plusOpen = true
+                                      } else {
+                                          newProject = false
+                                      }
+                                  })
+                                  PiMenu(plusOpen && chatPicked, onDismiss = { plusOpen = false }) {
+                                      for (a in actions) {
+                                          when (a) {
+                                              PillPlus.Photos -> PiMenuItem("Photos", icon = Icons.Rounded.Image, onClick = {
+                                                  plusOpen = false
+                                                  photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                              })
+                                              PillPlus.PasteImage -> PiMenuItem("Paste image", icon = Icons.Rounded.ContentPaste, onClick = {
+                                                  plusOpen = false
+                                                  clipboardImage(context)?.let { newChatWith(listOf(it)) }
+                                              })
+                                              PillPlus.Voice -> PiMenuItem("Voice", icon = Icons.Rounded.Mic, onClick = {
+                                                  plusOpen = false
+                                                  voice()
+                                              })
+                                              PillPlus.NewChat -> PiMenuItem("New chat", icon = Icons.Rounded.ChatBubbleOutline, onClick = {
+                                                  plusOpen = false
+                                                  newChatWith(emptyList())
+                                              })
+                                              PillPlus.NewProject -> Unit
+                                          }
+                                      }
+                                  }
+                              }
+                          },
                           trailing = {
                               ComposerPrimary(hasText = ask.isNotBlank(), onSend = ::startSession, onVoice = ::voice, enabled = !starting)
                           },
@@ -862,8 +932,8 @@ private fun HomeListSheet(which: HomeList, lives: List<LocalSessions.Live>, titl
 
 /**
  * The pill's project, a glass chip above the pill: a folder glyph, the project's name (label ink1, at most 220dp) and
- * a chevron; [chat] shows a chat glyph and "Chat" (a plain chat, without a project). Its menu lists Chat first, the
- * projects, and New project.
+ * a chevron; [chat] shows a chat glyph and "Chat" (a plain chat, without a project). Its menu ([PiMenu]) lists Chat
+ * first (chat glyph), the projects (folder glyphs), and New project; a check marks the current one.
  */
 @Composable
 private fun ProjectChip(title: String?, chat: Boolean, projects: List<ProjectEntry>, onPick: (ProjectEntry) -> Unit, onChat: () -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier) {
@@ -880,21 +950,21 @@ private fun ProjectChip(title: String?, chat: Boolean, projects: List<ProjectEnt
             Text(shown ?: "New project", style = Pi.type.label, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
             if (shown != null) Icon(Icons.Rounded.ExpandMore, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(IconSize.sm))
         }
-        WorkspaceMenu(open, onDismiss = { open = false }) {
-            WorkspaceMenuRow(ChatSpace.NAME, if (chat) Icons.Rounded.Check else null, colors.ink1) {
+        PiMenu(open, onDismiss = { open = false }) {
+            PiMenuItem(ChatSpace.NAME, icon = Icons.Rounded.ChatBubbleOutline, checked = chat, onClick = {
                 open = false
                 onChat()
-            }
+            })
             for (p in projects) {
-                WorkspaceMenuRow(p.title, if (!chat && p.title == title) Icons.Rounded.Check else null, colors.ink1) {
+                PiMenuItem(p.title, icon = Icons.Rounded.FolderOpen, checked = !chat && p.title == title, onClick = {
                     open = false
                     onPick(p)
-                }
+                })
             }
-            WorkspaceMenuRow("New project", Icons.Rounded.Add, colors.ink1) {
+            PiMenuItem("New project", icon = Icons.Rounded.CreateNewFolder, onClick = {
                 open = false
                 onNew()
-            }
+            })
         }
     }
 }
