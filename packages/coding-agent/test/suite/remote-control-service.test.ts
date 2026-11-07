@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -233,6 +233,24 @@ describe("remote control background service", () => {
 		const unknownFile = await phone.request({ type: "switch_session", sessionPath: "/etc/passwd" });
 		expect(unknownFile).toMatchObject({ success: false, error: "No such session on this computer" });
 	});
+
+	it.each([false, true])(
+		"serves the read-only review commands in the open session's folder (readSecretFiles: %s)",
+		async (readSecretFiles) => {
+			const { agentDir, newer } = await setup({ settings: { readSecretFiles } });
+			writeFileSync(join(newer, "notes.md"), "# notes\n");
+			writeFileSync(join(newer, ".env"), "TOKEN=1\n");
+			const { phone } = await pairPhone(agentDir);
+			expect(helloOf(phone)?.host).toMatchObject({ cwd: newer, service: true, review: true });
+			const listing = await phone.request({ type: "rc_list_dir" });
+			const names = (listing.data as { entries: Array<{ name: string }> }).entries.map((entry) => entry.name);
+			expect(names).toEqual(expect.arrayContaining([".env", "notes.md"]));
+			const notes = await phone.request({ type: "rc_read_file", path: "notes.md" });
+			expect(notes).toMatchObject({ success: true, data: { content: "# notes\n" } });
+			const secret = await phone.request({ type: "rc_read_file", path: ".env" });
+			expect(secret.success).toBe(readSecretFiles);
+		},
+	);
 
 	it("refuses phones that are not paired and drops one revoked meanwhile, even while it sends nothing", async () => {
 		const { agentDir } = await setup({ host: { pollMs: 50 } });

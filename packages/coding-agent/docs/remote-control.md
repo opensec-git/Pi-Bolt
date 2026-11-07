@@ -2,7 +2,8 @@
 
 `/remote-control` lets a phone running the Pi-Bolt Android app attach to the session in this terminal. The phone shows
 the live session (messages, thinking, tool calls and their output as they stream) and can send prompts, steer, queue
-follow-ups, abort, switch model or thinking level, and answer the dialogs Pi raises.
+follow-ups, abort, switch model or thinking level, and answer the dialogs Pi raises. It can also [review](#review) the
+session's folder read-only: git status, diffs, history, and the files themselves.
 
 Nothing of this loads until the command runs. Without `/remote-control`, Pi behaves exactly as before. To reach the
 computer with no terminal open, install the [background service](#background-service).
@@ -33,6 +34,7 @@ each time it starts, so a phone away from home needs the new QR code after a res
 | `remoteControl.tunnel` | `"quick"` | `"quick"` for a random `*.trycloudflare.com` address, `{ "name": "<tunnel>", "hostname": "<host>" }` for a named tunnel you configured with `cloudflared tunnel create` and a DNS route, or `"off"` for the local network only unless you run `/remote-control tunnel`. |
 | `remoteControl.cloudflared` | `"cloudflared"` | Path to the `cloudflared` executable. |
 | `remoteControl.askCloudflared` | `true` | Offer to install `cloudflared` when it is missing; "Don't ask again" sets it to `false`. |
+| `remoteControl.readSecretFiles` | `false` | Let phones read files that look like secrets when [reviewing](#review) (`.env*`, keys, `.git/`, ...). |
 | `remoteControl.service.tunnel` | the `remoteControl.tunnel` value | The [background service](#background-service)'s tunnel: `"quick"`, a named tunnel as above, or `"off"` for the local network and Tailscale only. `pi-bolt service install --no-tunnel` sets `"off"`. |
 
 ### Install cloudflared
@@ -129,9 +131,91 @@ that terminal lets go. Two copies of the service for one agent directory do not 
 - Paired phones are listed in `~/.pi/agent/remote-control/devices.json` by their public key. Only listed phones get past
   the handshake. `/remote-control devices` revokes a phone; it is disconnected at once.
 - A paired phone can do what you can do by typing into Pi: Pi's tools run with your permissions. Revoke phones you lose.
+- The [review commands](#review) only read. They see the session's folder and nothing outside it, cap what they send,
+  run no shell, and refuse files that look like secrets unless `remoteControl.readSecretFiles` is set.
 - The background service's control channel (`pi-bolt service status`, `pair`, and the terminal handoff) is a Unix
   socket in `~/.pi/agent/remote-control` (mode 0600, in a 0700 folder), or a named pipe on Windows. Every request
   carries the token from `service.token` (mode 0600), so only your user account gets an answer.
+
+## Review
+
+A phone can review the session's working tree without changing it: the app's Changes and Files views for a computer.
+Both `/remote-control` and the background service answer these commands, and say so with `host.review: true` in
+`remote_hello`. An app shows its review views only when the host sets it, so older apps and hosts keep working.
+
+The commands are read-only. None stages, commits, edits, or runs a shell:
+
+- **One folder.** Every path is relative to the open session's cwd and uses `/`. An absolute path, or any `..`
+  segment, is refused. So is a path that leads outside the cwd through a symlink: the path is resolved (for a missing
+  file, its nearest existing parent) and must stay inside the cwd's real path. When the cwd is a subfolder of a
+  repository, status, diffs and history cover that subfolder only, with paths relative to it.
+- **Secret files.** `rc_read_file` and `rc_git_diff` refuse paths that usually hold secrets. A commit shown with
+  `rc_git_show` leaves those files out of its patch and names them in `withheld`. Matched case-insensitively:
+  - names starting with `.env` (`.env`, `.env.local`, `.envrc`);
+  - SSH keys: `id_` followed by a name without an extension, or with `.pub` (`id_rsa`, `id_ed25519.pub`);
+  - `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `*.kdbx`, `*.ppk`;
+  - `.netrc`, `_netrc`, `.npmrc`, `.pypirc`, `.pgpass`, `.git-credentials`, `credentials`, `credentials.json`,
+    `auth.json`;
+  - anything inside `.git`, `.ssh`, `.gnupg` or `.aws`.
+
+  Setting `remoteControl.readSecretFiles` to `true` turns this off. Listings and status still show these files'
+  names.
+- **Caps.** A diff or commit patch stops at 2 MiB, cut at a line end; a file read at 1 MiB, cut at a character
+  boundary (`truncated: true`). A listing holds at most 5000 entries, status at most 5000, a log page at most 200
+  commits. At most 4 review commands run at once; more are refused until one finishes.
+- **git.** The `git` on `PATH`, run with an argument list (no shell) in the cwd and stopped after 15 seconds. Every run
+  passes `--no-pager --literal-pathspecs -c core.quotePath=false -c color.ui=false -c core.fsmonitor=false
+  -c log.showSignature=false`; diffs add `--no-ext-diff --no-textconv`, so the repository's own diff, textconv and
+  fsmonitor programs never run. `GIT_OPTIONAL_LOCKS=0` keeps status from rewriting the index, and
+  `GIT_TERMINAL_PROMPT=0` keeps git from asking for anything. A commit hash must be 4 to 64 lowercase hex characters
+  and follows `--end-of-options`.
+
+Each command takes an `id` and gets a `response` like any other. A refused or failed command has `success: false` and
+an `error` to show. Before the background service has a session open, every review command fails with
+`No session is open yet`.
+
+| `type` | Fields | `data` of the response |
+|---|---|---|
+| `rc_git_status` | | `{ repo, branch, entries, total, truncated }`, below. Outside a git working tree: `{ repo: false, branch: null, entries: [], total: { added: 0, removed: 0 }, truncated: false }`. |
+| `rc_git_diff` | `path`; `staged?` (default `false`); `origPath?`, the source of a staged rename | `{ path, staged, untracked, diff, truncated }`. `diff` is the unified diff (`git diff`), empty when nothing changed. Unstaged is the worktree against the index; `staged` the index against `HEAD`, with rename detection. An untracked file (`untracked: true`) diffs against `/dev/null`, so every line reads as added. Fails outside a repository. |
+| `rc_git_log` | `limit?` (1 to 200, default 50); `skip?` (default 0) | `{ repo, commits: Commit[], more }`, newest first. `more` is true when older commits follow. A repository without commits gives `commits: []`. |
+| `rc_git_show` | `hash`: 4 to 64 lowercase hex characters | `{ commit: Commit \| null, diff, truncated, withheld: string[] }`. `diff` is the patch against the first parent. |
+| `rc_list_dir` | `path?` (default the cwd, `""`) | `{ path, entries: DirEntry[], truncated }`, sorted by name, `.git` included. |
+| `rc_read_file` | `path` | `{ path, size, mtime, binary, truncated, content? }`. `size` is the file's full size in bytes, `mtime` Unix milliseconds. `content` is UTF-8 text and is left out for a binary file (a NUL byte in the first 8000 bytes). |
+
+`rc_git_status` data:
+
+```json
+{
+  "repo": true,
+  "branch": { "head": "main", "oid": "4f1c…", "upstream": "origin/main", "ahead": 1, "behind": 0 },
+  "entries": [
+    { "path": "src/app.ts", "index": null, "worktree": "M", "kind": "modified", "conflicted": false,
+      "staged": null, "unstaged": { "added": 3, "removed": 1 } },
+    { "path": "docs/new.md", "origPath": "docs/old.md", "index": "R", "worktree": null, "kind": "renamed",
+      "conflicted": false, "staged": { "added": 1, "removed": 0 }, "unstaged": null }
+  ],
+  "total": { "added": 4, "removed": 1 },
+  "truncated": false
+}
+```
+
+- `branch.head` is null when `HEAD` is detached, `branch.oid` before the first commit, `branch.upstream` without one.
+- `index` is the staged change and `worktree` the unstaged one, each a porcelain letter or null: `M` modified, `A`
+  added, `D` deleted, `R` renamed, `C` copied, `T` type changed, `?` untracked (worktree only), `U` conflict (both).
+- `kind` sums the entry up: `modified`, `added`, `deleted`, `renamed`, `copied`, `typechange`, `untracked` or
+  `conflicted`.
+- `staged` and `unstaged` are the side's line counts from `git diff --numstat`, null when git counts none (no change
+  on that side, a binary file, an untracked file). `total` adds them all up; as on the phone, untracked files do not
+  count until they are added.
+
+`Commit`: `{ hash, short, parents: string[], author, email, time, subject, body, refs: string[] }`. `time` is the
+author time in Unix seconds, `body` the message after the subject, trimmed, and `refs` the names pointing at it
+(`HEAD -> main`, `origin/main`, `tag: v1.0`).
+
+`DirEntry`: `{ name, kind, size, mtime, symlink?, outside? }`. `kind` is `"file"`, `"dir"` or `"other"`. A symlink
+has `symlink: true` and the `kind`, `size` and `mtime` of its target; one whose target is outside the cwd also has
+`outside: true` and `kind: "other"`, and opening it is refused.
 
 ## Protocol
 
@@ -188,7 +272,7 @@ Host to client:
 
 | `type` | Meaning |
 |---|---|
-| `remote_hello` | `{ protocol: 1, host: { name, version, cwd, service? }, state: RpcSessionState, messages: AgentMessage[], streamingMessage?: AgentMessage, dialogs: extension_ui_request[], commands: RpcSlashCommand[], omittedMessages: number }`. It stays under 24 MiB: a longer session sends only its newest messages, and `omittedMessages` counts the older ones left out. Sent on connect and again whenever the TUI switches to another session (`/new`, `/resume`, `/fork`): the client replaces everything it shows. `host.service` is `true` from the background service, which also answers the service commands below. |
+| `remote_hello` | `{ protocol: 1, host: { name, version, cwd, service?, review? }, state: RpcSessionState, messages: AgentMessage[], streamingMessage?: AgentMessage, dialogs: extension_ui_request[], commands: RpcSlashCommand[], omittedMessages: number }`. It stays under 24 MiB: a longer session sends only its newest messages, and `omittedMessages` counts the older ones left out. Sent on connect and again whenever the TUI switches to another session (`/new`, `/resume`, `/fork`): the client replaces everything it shows. `host.service` is `true` from the background service, which also answers the service commands below. `host.review` is `true` from hosts that answer the [review commands](#review); older hosts leave it out. |
 | `remote_endpoints` | `{ endpoints: string[] }`: every address the host listens on now, in the order of the pairing code's `e` (LAN, Tailscale, then the tunnel). Sent after `remote_hello` on connect, and again whenever the list changes (a quick tunnel's new address, another network). No `id`; clients that do not know it ignore it. |
 | session events | Exactly the RPC/JSON event stream ([JSON Event Stream](json.md)): `agent_start`, `message_start`, `message_update` (deltas), `message_end`, `tool_execution_start/update/end`, `queue_update`, `compaction_start/end`, `auto_retry_start/end`, `agent_end`, `agent_settled`, ... Clients ignore types they do not know. |
 | `response` | Answer to a client command, as in [RPC Commands](rpc-commands.md). |
@@ -198,7 +282,8 @@ Host to client:
 Client to host: `remote_ready` once, first; then RPC commands with an `id` for correlation, and `extension_ui_response`. Accepted commands: `prompt`,
 `steer`, `follow_up`, `abort`, `clear_queue`, `get_state`, `get_messages`, `get_available_models`, `set_model`,
 `cycle_model`, `get_available_thinking_levels`, `set_thinking_level`, `cycle_thinking_level`, `compact`, `abort_retry`,
-`get_session_stats`, `get_commands`, `get_last_assistant_text`, `set_session_name`. Any other type gets
+`get_session_stats`, `get_commands`, `get_last_assistant_text`, `set_session_name`, and the [review commands](#review)
+when `host.review` is true. Any other type gets
 `{ type: "response", success: false, error: "Not available over remote control" }`.
 
 The background service (`host.service: true`) also answers these. They work before a session is open:
