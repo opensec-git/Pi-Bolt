@@ -69,7 +69,6 @@ class DesignRulesTest {
             "radii from the tokens",
             Regex("""RoundedCornerShape\(([3-9]|[1-9][0-9])(\.[0-9]+)?\.dp"""),
             "use Radius.xs / sm / md / lg / xl (0 to 2dp hairlines are fine)",
-            setOf("session/SessionChrome.kt"),
         ),
         Rule(
             "durations from PiMotion",

@@ -6,9 +6,12 @@ import androidx.compose.ui.graphics.luminance
 import opensec.pibolt.app.data.AccentId
 import opensec.pibolt.app.data.ThemeId
 
+/** The text selection's fill: the accent at this alpha (ink1 stays AA on it over every surface, ContrastTest). */
+const val SELECTION_ALPHA = 0.28f
+
 /**
  * Every colour the app draws. Text uses ink1…ink3 (ink4 is decorative only), colour is reserved for state, and the
- * accent marks what can be acted on. The default theme (Graphite, labelled Pi-Bolt) is Pi-Bolt Desktop's palette. Every
+ * accent marks what can be acted on. The default theme (Graphite, labelled Pi-Bolt) is a warm charcoal. Every
  * text ink passes WCAG AA (4.5:1) on canvas and on surface1 to surface3 in every theme (ContrastTest). See
  * android/DESIGN.md.
  */
@@ -84,7 +87,7 @@ data class PiColors(
 
         fun of(theme: ThemeId, accent: AccentId): PiColors {
             val base = when (theme) {
-                ThemeId.Graphite -> desktop()
+                ThemeId.Graphite -> warm()
                 ThemeId.Paper -> paper()
                 ThemeId.Contrast -> contrast()
                 ThemeId.Lime -> lime()
@@ -197,17 +200,18 @@ data class PiColors(
         }
 
         /**
-         * Pi-Bolt Desktop's palette (pi-bolt-desktop `src/styles/tokens.css`), 1:1: a pure black canvas, one neutral
-         * grey scale, hairlines and overlays as white alphas, white as the only accent, green, amber and red for state
-         * only, and no blue anywhere (ANSI blue and cyan are kept off-blue too). One change: ink3 is `#858585`, not
-         * `#808080`, so it passes AA on surface3 (4.57:1; `#808080` measures 4.27).
+         * Pi-Bolt, the default: warm charcoal. A charcoal canvas (#1C1B19) with surfaces a warm step above it, quiet
+         * warm-grey ink, hairlines and overlays as white alphas, the warm white ink as the only accent, green, amber
+         * and red for state only, and no blue. The inks are lifted from the reference's #A8A6A1 / #77756F so ink2
+         * passes AA on a pressed menu row (4.56:1) and ink3 on surface3 (4.62:1).
          */
-        private fun desktop() = full(
-            surfaces = listOf(0xFF000000, 0xFF0E0E0E, 0xFF161616, 0xFF1D1D1D),
-            inks = listOf(0xFFEDEDED, 0xFFA1A1A1, 0xFF858585, 0xFF595959),
-            overlay = Color.White, line = 0.08f, lineStrong = 0.14f, lineFocus = 0.32f, press = 0.085f, selected = 0.10f, scrim = 0.50f,
-            accent = 0xFFFAFAFA, onAccent = 0xFF000000,
-            status = listOf(0xFF4CC38A, 0xFFD4A64A, 0xFFEF6461), soft = 0.12f,
+        private fun warm() = full(
+            surfaces = listOf(0xFF1C1B19, 0xFF232220, 0xFF2A2926, 0xFF32312E),
+            inks = listOf(0xFFECEBE8, 0xFFB3B1AB, 0xFF9C9A94, 0xFF5E5C57),
+            overlay = Color.White, line = 0.07f, lineStrong = 0.12f, lineFocus = 0.30f, press = 0.07f, selected = 0.09f, scrim = 0.50f,
+            accent = 0xFFECEBE8, onAccent = 0xFF1C1B19,
+            // Danger is lifted from the desktop's #EF6461 so it stays AA on its own 12% fill over the warm sheets.
+            status = listOf(0xFF4CC38A, 0xFFD4A64A, 0xFFF4817D), soft = 0.12f,
             diff = listOf(0xFF86DFB0, 0xFFF5A3A1), diffBg = 0.09f,
             syntax = SyntaxColors.Desktop,
             ansi = listOf(0xFFC9C9C9, 0xFFD7A6C8, 0xFFB8C4C4),
