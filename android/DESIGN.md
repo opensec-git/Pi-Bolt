@@ -115,8 +115,34 @@ composer), xl 28 (sheet top corners), full (send button, pills). User bubble: 18
 Touch targets at least 48dp. Every timeline row has a 20dp leading slot (spinner or glyph) and a 12dp gap.
 Icons: one family, Material Rounded (`Icons.Rounded`, `Icons.AutoMirrored.Rounded`). Sizes (`IconSize`): 14 beside
 meta text, 16 beside labels and in small buttons, 20 leading glyphs in rows, notices and buttons, 22 toolbar
-actions (`IconAction`), 32 hero glyphs of empty and permission states.
+actions (`IconAction`), 32 hero glyphs of empty and permission states. A row, menu item, sheet action, Settings group
+and empty state leads with a glyph when the glyph names the thing faster than its words (a key for providers, a
+history clock for recent prompts, search-off for "no match"); a row whose group heading already carries the same
+glyph does not repeat it. Leading glyphs in rows are ink3 (`ListRow`), in menus ink1 or the row's state colour.
+Logos: see Logos below; they are the only non-Rounded marks.
 Strokes: 1dp lines, 1.5dp focus ring, 2dp queue bars, 3dp diff gutter.
+
+## Logos
+
+Providers and model makers show their mark, as Pi-Bolt Desktop does (`src/lib/modelLogos.tsx`): monochrome only,
+tinted with the theme's ink, never a brand colour, so every theme and accent keeps one palette and passes contrast.
+- Source: Lobe Icons (`@lobehub/icons-static-svg`, MIT; the `<name>.svg` monochrome marks), converted to
+  `res/drawable/ic_provider_<slug>.xml` by `android/tools/provider-logos.mjs` (pinned version and sha512, strict
+  converter: paths only). Never edit the drawables by hand; add a brand to the script's list and to `Brand`
+  (`ui/providers/ProviderLogos.kt`), then rerun it. Licence: Settings > About > Open-source licences > Lobe Icons.
+- Which mark: `ProviderLogos.forProvider(id)` (Pi's provider ids, then the longest known hyphen prefix:
+  `qwen-token-plan-cn` is Qwen), `forEndpoint` for custom endpoints (the base URL: a known API host, Ollama's 11434 or
+  LM Studio's 1234, a server named in the host or name; never a guess from the id) and `maker(modelId)` for models
+  (the family name first, `claude`, `gpt`/`o3`, `gemini`, `llama`, `qwen`…, earliest in the id; then the
+  organisation, `meta-llama/…`, Bedrock's `us.anthropic.…`). A model with no known maker takes its provider's mark;
+  an unknown provider or custom endpoint the server glyph (`Dns`). Claude models carry Claude's mark and the Anthropic
+  provider Anthropic's; Gemma takes Google's "G", Gemini and the Google provider Gemini's; xAI is Grok's mark.
+- Where and how big (`LogoMark`, `ProviderBadge`): the composer's run-settings chip, 14dp ink1 before the model name;
+  model sheet rows, 16dp ink2 (the current model ink1); provider rows (Settings > Model providers, the provider
+  sheet, custom endpoints), 16dp ink2 centred in the 20dp glyph slot, no tile; the key step's title, 20dp ink1; the
+  session sheet's Model row and Settings' Default model, 16 and 20dp ink2. Always decorative for TalkBack: the name
+  beside it is read.
+- Layers some marks draw at partial alpha (Azure, LM Studio) are decoration; each mark's main shape is full ink.
 
 ## The Quad spinner
 
@@ -233,7 +259,8 @@ end, 48dp. `RowDivider`: 1dp line between rows of a card. Row titles are never b
 **Cards and groups.** `PiCard`: surface1, 1dp line, radius md, 16dp padding: a surface step plus a line, never a
 shadow. `CardSection`: a `SectionLabel` (metaStrong ink3, sentence case, never capitals) over a radius-md card with
 16dp sides and 8dp top and bottom; controls inside start with a `ControlLabel` (body ink1, value in meta ink3).
-`Tag`: micro on surface3, radius xs, for a source or state; TalkBack reads its text once.
+`Tag`: micro on surface3, radius xs, for a source or state; TalkBack reads its text once. A `SectionLabel` (and so a
+`CardSection`) may lead with a 14dp ink3 glyph: Settings' groups do, as the desktop's settings sections.
 
 **Screens.** A pushed screen starts with `ScreenTopBar`: 56dp under the status bar, back, the title in title style
 (a heading) with an optional meta line, actions at the end, a 1dp line once the content scrolls. `ScreenIntro` is
@@ -461,9 +488,9 @@ the tray or the text in the composer.
 
 **Provider sheet (first run and Add provider).** Opens by itself once, 450 ms after the first frame of Home, when no
 provider has a key. Eyebrow "Welcome to Pi-Bolt" (first run only), "Connect a model", one line saying the key stays on
-the phone. Search field, then 60dp provider rows (28dp initial badge surface3 radius 7, name body, note meta ink3,
-"✓ Added" for configured ones); "Later" (first run). Picking one slides to the key step (standard, enter easing):
-back, badge, provider name (title), what happens to the key, the key field (`SecretField`: mono, obscured, Password
+the phone. Search field, then 60dp provider rows (the provider's mark 16dp ink2 in the 20dp slot, name body, note
+meta ink3, "✓ Added" for configured ones; the custom endpoint row the server glyph); "Later" (first run). Picking one
+slides to the key step (standard, enter easing): back, the mark 20dp ink1, provider name (title), what happens to the key, the key field (`SecretField`: mono, obscured, Password
 keyboard, no autocorrect; Paste when empty, Show/Hide when filled), a lock line "Stored on this device only" (or the error in
 danger), "Get a key at console.anthropic.com" (accent, opens the browser), Cancel and Save key. The key lives only in
 the sheet's memory (never saved instance state), is cleared after saving and never logged.
@@ -482,7 +509,7 @@ the error in its place) and Save, which
 checks the token against GitHub first (the keyboard's Done does the same). Signed in: name and @login, how and which scopes, a line on where it is used,
 Sign out (confirmed).
 
-**Settings > Model providers** comes first: configured providers (badge, name, "Key stored on this phone", a delete
+**Settings > Model providers** comes first: configured providers (mark, name, "Key stored on this phone", a delete
 action that asks first and says the key is not revoked at the provider) and Add provider.
 
 **Pair confirmation.** A sheet (not an AlertDialog) for links opened from outside the app: `SheetHeader` "Pair with
@@ -623,7 +650,7 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
 - Queue strip above the composer: 44dp rows with a 2dp bar (warning = steer, ink4 = follow-up), swipe to remove.
 - Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–6 lines; bar: attach (+,
   48dp; ink4 and a "<model> can't read images" snackbar when the model's `input` lacks "image"), one run-settings chip
-  ("Sonnet 4.5 · High": the model in label ink2, middle-truncated past 180dp, then " · High" in label ink3; the level is
+  ("Sonnet 4.5 · High": the model maker's mark 14dp ink1 6dp before it (see Logos), the model in label ink2, middle-truncated past 180dp, then " · High" in label ink3; the level is
   left out when thinking is off or the model does not reason; TalkBack "Model: Sonnet 4.5, thinking high"), send (40dp
   accent circle). The chip opens the model sheet, whose "Thinking" row (36dp level pills, radius full, the current one
   accent 1.5dp on the selected fill, the level's meaning under it in meta ink3) sets the level without closing it. Attached images (Photo Picker, images only, at most 4) sit in a tray above the
@@ -638,7 +665,8 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
 - Empty session: the mark, "New session" and the folder tag, then "Commands" (the host's slash commands, mono name
   + description in meta ink3, the first 6 then "Show all N commands"; tap puts "/name " in the composer and focuses
   it) and "Recent" (the last 5 distinct prompts this phone sent to this computer; tap fills the composer). 48dp rows,
-  SectionLabel headings, nothing sends by itself. Recent prompts persist per computer (20 at most) in
+  SectionLabel headings (the starters' "Start with" leads with the sparkle glyph, "Recent" with the history glyph),
+  nothing sends by itself. Recent prompts persist per computer (20 at most) in
   `recent-prompts.json`.
 - Connection banner under the top bar: Quad Connect + "Reconnecting in 3s" countdown + Retry; slides down/up. Not
   while the session first connects: the centred loading state (Quad Connect 44dp, "Starting Pi-Bolt in x") says that
@@ -655,8 +683,10 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
   soft, power glyph). Long press on a user message adds "Fork from here": Pi forks the session at that message and
   its text comes back to the composer to edit and send. Recent prompts are kept per project.
 - Sheets (ModalBottomSheet, predictive back): model picker (the Thinking pills when the model reasons, then search,
-  "Current" then one group per provider under a meta-strong heading, 60dp rows with provider initial; `/model text`
-  opens it filtered),
+  "Current" then one group per maker, as the desktop's picker ("Anthropic" holds Claude from Anthropic, OpenRouter and
+  Bedrock; a model without a known maker goes under its provider's name), under a meta-strong heading; 60dp rows with
+  the maker's mark, the name and "OpenRouter · 200k context · reasoning" (the provider first); search matches the
+  maker and provider names too; no match is an EmptyState with the search-off glyph; `/model text` opens it filtered),
   thinking level (52dp option rows with a description), Pi's dialogs (Quad Wait eyebrow "Pi is asking", title,
   message in a command well when it looks like a command (surface1, radius 12, the cwd in mono meta ink3 with Copy,
   then `$` in success and the command in mono), options as 52dp rows, primary button; swipe or scrim tap
@@ -840,13 +870,14 @@ messages. Pi has no RPC to read or steer a subagent: steering and resuming go th
 **Settings.** `ScreenTopBar` "Settings" (a 1dp line under it once the page scrolls), then a
 search field ("Search settings") that narrows the page to matching settings: every query word must appear in the
 group, the label or its keywords (`SettingsIndex`, so "font" finds Text size and "vibrate" finds Haptics); "No setting
-matches" otherwise. Groups, in order, each a `CardSection`; rows are `ListRow` / `SwitchRow` / `ValueRow` in body
+matches" otherwise. Groups, in order, each a `CardSection` with its glyph (key, phone, code, terminal, palette,
+vibration, view-agenda, bell, shield, info); rows are `ListRow` / `SwitchRow` / `ValueRow` in body
 weight with `RowDivider`s, controls start with a `ControlLabel`:
 - Model providers: configured providers by display name (`ProviderCatalog`), Add provider.
 - Messages from the engine links (packages, MCP, tuning) are snackbars on the Settings screen, never Toasts. The MCP
   sheet's "Add a server" opens a "New server" form (name with its rule as an error hint, address or command, optional
   token variable) with Cancel and Add.
-- Pi on this phone: Default model (a 56dp row: the model and provider; it opens the model picker with the models of
+- Pi on this phone: Default model (a 56dp row led by the model's mark, the sparkle glyph while automatic: the model and provider; it opens the model picker with the models of
   the open on-device session, and says to open a session when none is), thinking level for new sessions, steering
   and follow-up delivery (One at a time / All at once), Auto-compact, Auto-retry with the retry count (1 / 3 / 5 / 10),
   Skill commands, Block images. They are the engine's own settings (`agent/settings.json`, other keys kept); the
@@ -867,8 +898,10 @@ weight with `RowDivider`s, controls start with a `ControlLabel`:
 - Security: device key (mono), what it is for, then "Reset device key" as a row with a danger refresh glyph that
   opens the confirm sheet (no standing red button).
 - About: app version, device name, the update status and its action (see Updates), "Check for updates automatically",
-  and one "Open-source licences" row that opens a sheet of the four (Inter, JetBrains Mono: OFL; Mermaid: MIT;
-  Termux terminal libraries: Apache-2.0); a pick opens the text in the viewer.
+  and one "Open-source licences" row (document glyph) that opens a sheet of the five (Inter, JetBrains Mono: OFL;
+  Mermaid: MIT; Termux terminal libraries: Apache-2.0; Lobe Icons, the provider and model logos: MIT); a pick opens
+  the text in the viewer. Packages and extensions, MCP servers, and Retry and compaction lead with the extension,
+  cable and tune glyphs.
 Segmented controls in Settings are 48dp tall.
 Changes apply live, without recreating the activity, and persist in a small JSON file (read synchronously at
 startup so the first frame has the right theme).

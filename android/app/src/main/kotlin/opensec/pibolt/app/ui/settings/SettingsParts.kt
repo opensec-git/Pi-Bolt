@@ -22,6 +22,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Code
+import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Key
+import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.Shield
+import androidx.compose.material.icons.rounded.Terminal
+import androidx.compose.material.icons.rounded.Vibration
+import androidx.compose.material.icons.rounded.ViewAgenda
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.core.app.NotificationManagerCompat
@@ -47,9 +59,23 @@ import opensec.pibolt.app.ui.update.updateStatus
 import opensec.pibolt.app.update.UpdateJob
 import opensec.pibolt.app.update.UpdateRules
 
-/** A group: its label above a radius-lg surface1 card ([CardSection]). */
+/** A group: its glyph and label above a radius-lg surface1 card ([CardSection]). */
 @Composable
-internal fun Section(title: String, content: @Composable ColumnScope.() -> Unit) = CardSection(title, content = content)
+internal fun Section(group: SettingsGroup, content: @Composable ColumnScope.() -> Unit) = CardSection(group.title, icon = groupIcon(group), content = content)
+
+/** Each Settings group's 14dp glyph, as the desktop's settings sections carry one. */
+internal fun groupIcon(group: SettingsGroup): ImageVector = when (group) {
+    SettingsGroup.Providers -> Icons.Rounded.Key
+    SettingsGroup.Agent -> Icons.Rounded.PhoneAndroid
+    SettingsGroup.GitHub -> Icons.Rounded.Code
+    SettingsGroup.Runtimes -> Icons.Rounded.Terminal
+    SettingsGroup.Appearance -> Icons.Rounded.Palette
+    SettingsGroup.Motion -> Icons.Rounded.Vibration
+    SettingsGroup.SessionDisplay -> Icons.Rounded.ViewAgenda
+    SettingsGroup.Notifications -> Icons.Rounded.Notifications
+    SettingsGroup.Security -> Icons.Rounded.Shield
+    SettingsGroup.About -> Icons.Rounded.Info
+}
 
 /** A control's heading inside a group card. */
 @Composable
@@ -63,13 +89,29 @@ internal fun LabelWithValue(text: String, value: String) = ControlLabel(text, va
 internal fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) =
     SwitchRow(title, checked, onChange, meta = subtitle, padding = RowInsetCard)
 
-/** A 56dp row that opens something: label, a value in meta beneath, and a chevron (or open-in-new for [external]). */
+/**
+ * A 56dp row that opens something: an optional 20dp leading [icon] (ink3) or [leading] slot (a provider's mark), the
+ * label, a value in meta beneath, and a chevron (or open-in-new for [external]).
+ */
 @Composable
-internal fun NavRow(label: String, value: String?, onClick: () -> Unit, valueColor: Color = Pi.colors.ink3, external: Boolean = false, enabled: Boolean = true) =
+internal fun NavRow(
+    label: String,
+    value: String?,
+    onClick: () -> Unit,
+    valueColor: Color = Pi.colors.ink3,
+    external: Boolean = false,
+    enabled: Boolean = true,
+    icon: ImageVector? = null,
+    iconTint: Color = Pi.colors.ink3,
+    leading: (@Composable () -> Unit)? = null,
+) =
     ListRow(
         label,
         meta = value,
         metaColor = valueColor,
+        icon = icon,
+        iconTint = iconTint,
+        leading = leading,
         onClick = onClick,
         enabled = enabled,
         end = if (external) RowEnd.External else RowEnd.Chevron,

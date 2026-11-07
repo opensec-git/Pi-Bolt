@@ -26,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Search
+import androidx.compose.material.icons.rounded.SearchOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -64,8 +65,14 @@ import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.rememberSheetCloser
+import opensec.pibolt.app.ui.providers.LogoMark
+import opensec.pibolt.app.ui.session.features2.F2Empty
+import opensec.pibolt.app.ui.providers.ProviderCatalog
+import opensec.pibolt.app.ui.providers.ProviderLogos
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Tnum
 import opensec.pibolt.protocol.rpc.ModelInfo
@@ -143,7 +150,7 @@ fun ModelSheet(
         }
         val shown = remember(ordered, query) {
             val q = query.trim().lowercase()
-            if (q.isEmpty()) ordered else ordered.filter { q in it.label.lowercase() || q in it.id.lowercase() || q in it.provider.lowercase() }
+            if (q.isEmpty()) ordered else ordered.filter { q in it.label.lowercase() || q in it.id.lowercase() || q in it.provider.lowercase() || q in ModelGroups.title(it).lowercase() || q in ProviderCatalog.name(it.provider).lowercase() }
         }
         if (models.size > 6 || query.isNotEmpty()) {
             PiTextField(
@@ -157,7 +164,8 @@ fun ModelSheet(
             )
         }
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 560.dp)) {
-            // By provider, each under its name; the current model first under "Current".
+            // By maker, as Pi-Bolt Desktop's picker: "Anthropic" holds Claude from Anthropic, OpenRouter and Bedrock alike;
+            // each row names its provider. The current model comes first under "Current".
             val sections = ModelGroups.of(shown, current)
             for ((title, group) in sections) {
                 if (sections.size > 1) {
@@ -178,15 +186,14 @@ fun ModelSheet(
                         .padding(horizontal = 20.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Box(Modifier.size(24.dp).background(colors.surface3, RoundedCornerShape(6.dp)), contentAlignment = Alignment.Center) {
-                        Text(model.provider.take(1).uppercase().ifBlank { "?" }, style = Pi.type.micro, color = colors.ink2)
-                    }
-                    Spacer(Modifier.width(14.dp))
+                    // The maker's mark, 16dp: ink2, the current model's ink1 (Pi-Bolt Desktop's picker rows).
+                    LogoMark(ProviderCatalog.modelBrand(model.id, model.provider), size = IconSize.sm, tint = if (selected) colors.ink1 else colors.ink2)
+                    Spacer(Modifier.width(Space.md + 2.dp))
                     Column(Modifier.weight(1f)) {
                         Text(model.label, style = Pi.type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(
                             listOfNotNull(
-                                model.provider.ifBlank { null },
+                                model.provider.ifBlank { null }?.let(ProviderCatalog::name),
                                 model.contextWindow?.let { "${SessionReducer.formatTokens(it)} context" },
                                 "reasoning".takeIf { model.reasoning },
                             ).joinToString(" · "),
@@ -201,19 +208,28 @@ fun ModelSheet(
             }
             }
             if (shown.isEmpty()) {
-                item { Text("No model matches “$query”.", style = Pi.type.body, color = colors.ink3, modifier = Modifier.padding(20.dp)) }
+                item { F2Empty("No model matches “${query.trim()}”. Try the provider's or the maker's name.", Icons.Rounded.SearchOff) }
             }
         }
     }
 }
 
-/** Models grouped for the picker: "Current" first, then each provider (sorted), keeping the order within a group. */
+/**
+ * Models grouped for the picker: "Current" first, then one group per maker (Pi-Bolt Desktop's families: "Anthropic",
+ * "Google", "Qwen"…; a model without a known maker goes under its provider's name), groups sorted by title, keeping
+ * the order within a group.
+ */
 object ModelGroups {
+    const val CURRENT = "Current"
+
+    fun title(m: ModelInfo): String =
+        ProviderLogos.maker(m.id)?.title ?: m.provider.ifBlank { null }?.let(ProviderCatalog::name) ?: "Other"
+
     fun of(models: List<ModelInfo>, current: ModelInfo?): List<Pair<String, List<ModelInfo>>> {
         val isCurrent = { m: ModelInfo -> current != null && m.id == current.id && m.provider == current.provider }
         val out = ArrayList<Pair<String, List<ModelInfo>>>()
-        models.filter(isCurrent).takeIf { it.isNotEmpty() }?.let { out += "Current" to it }
-        models.filterNot(isCurrent).groupBy { it.provider.ifBlank { "Other" } }.toSortedMap(String.CASE_INSENSITIVE_ORDER).forEach { (provider, list) -> out += provider to list }
+        models.filter(isCurrent).takeIf { it.isNotEmpty() }?.let { out += CURRENT to it }
+        models.filterNot(isCurrent).groupBy(::title).toSortedMap(String.CASE_INSENSITIVE_ORDER).forEach { (title, list) -> out += title to list }
         return out
     }
 }

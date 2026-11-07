@@ -44,7 +44,7 @@ object SettingsIndex {
         SettingEntry("device-key", SettingsGroup.Security, "Device key", "remote control pairing reset revoke computer"),
         SettingEntry("version", SettingsGroup.About, "Version", "about phone device"),
         SettingEntry("updates", SettingsGroup.About, "Updates", "update check for updates automatically install download new version"),
-        SettingEntry("licences", SettingsGroup.About, "Licences", "licence license font inter jetbrains mono mermaid termux terminal apache mit open source"),
+        SettingEntry("licences", SettingsGroup.About, "Licences", "licence license font inter jetbrains mono mermaid termux terminal apache mit open source logo icons lobe"),
     )
 
     /** The ids to show for [query]; null shows everything (a blank query). */

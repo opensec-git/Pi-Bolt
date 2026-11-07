@@ -7,6 +7,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import opensec.pibolt.app.engine.CustomEndpoint
 import opensec.pibolt.app.engine.CustomProvider
 import opensec.pibolt.app.engine.ModelsFile
+import opensec.pibolt.app.ui.providers.Brand
 import opensec.pibolt.app.ui.providers.ProviderCatalog
 import opensec.pibolt.protocol.ProtocolJson
 import java.io.File
@@ -129,16 +130,15 @@ class ModelsFileTest {
     }
 
     @Test
-    fun catalogBadgesAreUniqueAndNamesAreHuman() {
-        val badges = ProviderCatalog.all.map { it.badge }
-        assertEquals(badges.size, badges.toSet().size, "duplicate badge in $badges")
-        assertTrue(badges.all { it.length == 2 })
-        assertEquals(listOf("An", "Op", "Gm", "OR"), ProviderCatalog.popular.map { it.badge })
+    fun catalogMarksAndNamesAreHuman() {
+        // Each provider shows its own mark (ProviderLogosTest); only OpenCode's two plans share one.
+        val marks = ProviderCatalog.all.groupBy { it.brand }.filterValues { it.size > 1 }.mapValues { (_, ps) -> ps.map { it.id } }
+        assertEquals(mapOf(Brand.OpenCode to listOf("opencode", "opencode-go")), marks)
+        assertEquals(listOf(Brand.Anthropic, Brand.OpenAI, Brand.Gemini, Brand.OpenRouter), ProviderCatalog.popular.map { it.brand })
         assertEquals(ProviderCatalog.all.size, ProviderCatalog.popular.size + ProviderCatalog.more.size)
         assertEquals("Fake", ProviderCatalog.name("fake"))
         assertEquals("Amazon bedrock", ProviderCatalog.name("amazon-bedrock"))
-        assertEquals("Fa", ProviderCatalog.badge("fake"))
-        assertEquals("CE", ProviderCatalog.badgeFor("Custom endpoint"))
+        assertEquals(Brand.Generic, ProviderCatalog.brand("fake"))
         ProviderCatalog.registerCustom(listOf(CustomProvider("custom-h-1", null, "http://my.host:1/v1", listOf("m")), CustomProvider("n", "Box", "http://b/v1", listOf("m"))))
         assertEquals("my.host", ProviderCatalog.name("custom-h-1"))
         assertEquals("Box", ProviderCatalog.name("n"))

@@ -78,9 +78,13 @@ import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.Chip
 import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.providers.Brand
+import opensec.pibolt.app.ui.providers.LogoMark
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.protocol.rpc.StreamingBehavior
 import opensec.pibolt.app.ui.session.features.CommandList
 import opensec.pibolt.app.ui.session.features.CommandPalette
@@ -138,6 +142,8 @@ fun Composer(
     onCycleThinking: () -> Unit = {},
     /** Something [onStop] can stop: an agent run, or a user shell command started while Pi is idle. */
     stoppable: Boolean = running,
+    /** The model maker's mark before the model name in the run-settings chip; null draws none (no model yet). */
+    modelBrand: Brand? = null,
     /** One row (attach, field, send) and at most 3 lines: a short window or the keyboard leaves little room. */
     compact: Boolean = false,
     /** Lines the field grows to before it scrolls. */
@@ -332,6 +338,12 @@ fun Composer(
                             longClickLabel = "Next model",
                             modifier = Modifier.weight(1f, fill = false).semantics { contentDescription = chip.description },
                         ) {
+                            // The maker's mark, 14dp in ink1 (Pi-Bolt Desktop's model pill), 6dp before the name
+                            // (the chip's 2dp spacing on both sides of a 2dp spacer).
+                            if (modelBrand != null) {
+                                LogoMark(modelBrand, size = IconSize.xs, tint = colors.ink1)
+                                Spacer(Modifier.width(Space.xxs))
+                            }
                             Text(chip.model, style = type.label, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false).widthIn(max = 180.dp))
                             if (chip.level != null) Text(" · " + chip.level, style = type.label, color = colors.ink3, maxLines = 1, softWrap = false)
                             Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))

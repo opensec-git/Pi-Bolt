@@ -257,13 +257,24 @@ class SessionFeaturesTest {
     }
 
     @Test
-    fun modelsGroupByProviderWithTheCurrentFirst() {
+    fun modelsGroupByMakerWithTheCurrentFirst() {
         fun m(provider: String, id: String) = ModelInfo(id, id, provider, reasoning = false, contextWindow = null)
-        val models = listOf(m("openai", "gpt"), m("anthropic", "sonnet"), m("anthropic", "opus"), m("Zeta", "z"))
+        val models = listOf(
+            m("openai", "gpt"),
+            m("anthropic", "sonnet"),
+            m("anthropic", "opus"),
+            m("openrouter", "anthropic/claude-sonnet-4.5"),
+            m("google", "gemini-2.5-pro"),
+            m("openrouter", "google/gemma-3-27b-it"),
+            m("zeta-labs", "z"),
+        )
         val groups = ModelGroups.of(models, m("anthropic", "opus"))
-        assertEquals(listOf("Current", "anthropic", "openai", "Zeta"), groups.map { it.first })
-        assertEquals(listOf("sonnet"), groups[1].second.map { it.id })
-        assertEquals(listOf("anthropic", "openai", "Zeta"), ModelGroups.of(models, null).map { it.first })
+        assertEquals(listOf("Current", "Anthropic", "Google", "OpenAI", "Zeta labs"), groups.map { it.first })
+        // Claude through OpenRouter sits with Anthropic's own; Gemma with Gemini under Google.
+        assertEquals(listOf("sonnet", "anthropic/claude-sonnet-4.5"), groups[1].second.map { it.id })
+        assertEquals(listOf("gemini-2.5-pro", "google/gemma-3-27b-it"), groups[2].second.map { it.id })
+        assertEquals(listOf("Anthropic", "Google", "OpenAI", "Zeta labs"), ModelGroups.of(models, null).map { it.first })
+        assertEquals("Other", ModelGroups.title(m("", "mystery")))
     }
 
     @Test
