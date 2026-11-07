@@ -8,7 +8,8 @@ import java.io.File
  */
 class GitRepo(private val runner: GitRunner, val dir: File) {
     private suspend fun git(vararg args: String, stdin: String? = null, timeoutMs: Long = GitRunners.LOCAL_TIMEOUT_MS, okExits: Set<Int> = setOf(0), progress: ((GitProgress) -> Unit)? = null): GitResult {
-        val all = listOf("-c", "core.quotePath=false", "-c", "color.ui=false", "-c", "core.pager=cat") + args
+        // Paths come from status and the file list: `[id].txt` must not match `i.txt` and `d.txt` as a glob.
+        val all = listOf("--literal-pathspecs", "-c", "core.quotePath=false", "-c", "color.ui=false", "-c", "core.pager=cat") + args
         val onLine: ((String) -> Unit)? = progress?.let { p -> { line: String -> GitProgress.parse(line)?.let(p) } }
         val r = runner.run(dir, all, timeoutMs, stdin, onLine)
         if (r.timedOut) throw GitException("Git took too long and was stopped", r.err)
@@ -104,7 +105,7 @@ class GitRepo(private val runner: GitRunner, val dir: File) {
 
     /** Switches to [branch]; a remote branch gets a local tracking branch of the same name. */
     suspend fun switchTo(branch: Branch) {
-        if (branch.remote) git("switch", "--track", "-c", branch.localName, branch.name) else git("switch", branch.name)
+        if (branch.remote) git("switch", "--track", "-c", branch.localName, "--end-of-options", branch.name) else git("switch", "--end-of-options", branch.name)
     }
 
     suspend fun createBranch(name: String) {
@@ -119,8 +120,9 @@ class GitRepo(private val runner: GitRunner, val dir: File) {
 
     /** One commit with its diff against its first parent. */
     suspend fun show(hash: String): Pair<Commit?, List<FileDiff>> {
-        val head = GitLogFormat.parseLog(git("show", "-s", GitLogFormat.LOG, hash).out).firstOrNull()
-        val patch = git("show", "--format=", "--patch", "-M", "--no-ext-diff", "--diff-merges=first-parent", hash).out
+        if (!GitLogFormat.isHash(hash)) throw GitException("Not a commit hash", hash)
+        val head = GitLogFormat.parseLog(git("show", "-s", GitLogFormat.LOG, "--end-of-options", hash).out).firstOrNull()
+        val patch = git("show", "--format=", "--patch", "-M", "--no-ext-diff", "--diff-merges=first-parent", "--end-of-options", hash).out
         return head to UnifiedDiffParser.parse(patch)
     }
 

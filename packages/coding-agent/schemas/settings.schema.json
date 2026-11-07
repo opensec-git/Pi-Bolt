@@ -93,6 +93,10 @@
               "const": "quick"
             },
             {
+              "type": "string",
+              "const": "off"
+            },
+            {
               "type": "object",
               "required": [
                 "name",
@@ -115,6 +119,10 @@
         "cloudflared": {
           "type": "string",
           "description": "Path to the cloudflared executable."
+        },
+        "askCloudflared": {
+          "type": "boolean",
+          "description": "Offer to install cloudflared when /remote-control finds none (false after \"Don't ask again\")."
         }
       },
       "additionalProperties": false,

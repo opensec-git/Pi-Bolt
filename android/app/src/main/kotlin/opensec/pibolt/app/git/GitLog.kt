@@ -50,11 +50,17 @@ object GitLogFormat {
     /** `--format=` for [parseBranches] (for-each-ref). */
     const val BRANCHES = "--format=%(refname)%1f%(HEAD)%1f%(upstream:short)%1f%(upstream:track,nobracket)%1f%(committerdate:unix)%1f%(contents:subject)%1e"
 
+    private val HASH = Regex("[0-9a-f]{4,64}")
+
+    /** True for a full or abbreviated object name: never an option or a ref expression. */
+    fun isHash(s: String): Boolean = HASH.matches(s)
+
+    // Separator bytes in a commit message can fake a record: one whose hash is not a hash is dropped.
     fun parseLog(raw: String): List<Commit> = raw.split(RS).mapNotNull { rec ->
         val r = rec.trimStart('\n')
         if (r.isBlank()) return@mapNotNull null
         val f = r.split(US, limit = 9)
-        if (f.size < 8) return@mapNotNull null
+        if (f.size < 8 || !isHash(f[0]) || !isHash(f[1])) return@mapNotNull null
         Commit(
             hash = f[0],
             short = f[1],

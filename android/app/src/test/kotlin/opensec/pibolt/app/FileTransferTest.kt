@@ -16,6 +16,7 @@ import opensec.pibolt.app.ui.session.voice.VoiceDraft
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Rule
@@ -24,6 +25,7 @@ import org.junit.rules.TemporaryFolder
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
@@ -183,6 +185,11 @@ class FileTransferTest {
         assertEquals("dir (2)", ZipTransfer.uniqueName("dir") { it in taken })
         assertEquals("b.txt", ZipTransfer.uniqueName("b.txt") { it in taken })
         assertEquals(".env (2)", ZipTransfer.uniqueName(".env") { it == ".env" })
+        // A dot-leading archive name gave a hidden project name no suffix could free: import spun forever.
+        assertEquals("env", ZipTransfer.projectName(".env.zip"))
+        assertEquals("Imported project", ZipTransfer.projectName("...zip"))
+        assertEquals("env", ZipTransfer.uniqueName(ZipTransfer.projectName(".env.zip")) { it.startsWith(".") })
+        assertThrows(IOException::class.java) { ZipTransfer.uniqueName("x") { true } }
     }
 
     // ---- Share-intent routing
