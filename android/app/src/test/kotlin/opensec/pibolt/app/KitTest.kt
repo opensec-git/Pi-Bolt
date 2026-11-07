@@ -1,5 +1,6 @@
 package opensec.pibolt.app
 
+import opensec.pibolt.app.ui.components.ComposerPrimaryMode
 import opensec.pibolt.app.ui.components.DotWaveMath
 import opensec.pibolt.app.ui.theme.PiMotion
 import kotlin.test.Test
@@ -45,5 +46,16 @@ class KitTest {
         assertEquals(5, DotWaveMath.litDots(9, 0.5f))
         assertEquals(50, DotWaveMath.columns(300f))
         assertEquals(1, DotWaveMath.columns(0f))
+    }
+}
+
+class ComposerPrimaryTest {
+    @Test
+    fun theCircleIsSendWithTextStopWhileRunningVoiceWhenEmpty() {
+        assertEquals(ComposerPrimaryMode.Send, ComposerPrimaryMode.of(hasText = true, running = true, canStop = true, canVoice = true))
+        assertEquals(ComposerPrimaryMode.Stop, ComposerPrimaryMode.of(hasText = false, running = true, canStop = true, canVoice = true))
+        assertEquals(ComposerPrimaryMode.Voice, ComposerPrimaryMode.of(hasText = false, running = true, canStop = false, canVoice = true))
+        assertEquals(ComposerPrimaryMode.Voice, ComposerPrimaryMode.of(hasText = false, running = false, canStop = true, canVoice = true))
+        assertEquals(ComposerPrimaryMode.SendDisabled, ComposerPrimaryMode.of(hasText = false, running = false, canStop = false, canVoice = false))
     }
 }

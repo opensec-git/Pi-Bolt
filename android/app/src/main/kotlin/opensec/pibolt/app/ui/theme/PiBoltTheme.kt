@@ -81,6 +81,9 @@ object Radius {
 
     /** The pill composer: a full round at its one-line height (56dp), kept as the field grows. */
     val pill = 28.dp
+
+    /** Rich media in the transcript: images, preview cards. */
+    val media = 12.dp
 }
 
 /** The spacing scale. Side gutter is [lg] (16dp); sheets and headers inset their text by [xl] (20dp). */

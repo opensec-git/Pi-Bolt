@@ -43,6 +43,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -258,49 +260,96 @@ fun PillComposerShell(modifier: Modifier = Modifier, leading: @Composable RowSco
     }
 }
 
-/** A 36dp circle inside the pill (+, mic): surface3 with the ink overlay on press, a 20dp ink2 glyph, a 48dp target. */
+/**
+ * A 36dp circle inside the pill (+, mic): the selected overlay (ink1 at 9 to 11%) and a 20dp ink1 glyph, in a 48dp
+ * target. [active] (the mic while listening) fills it with the accent and turns the glyph onAccent; TalkBack hears
+ * "Listening".
+ */
 @Composable
-fun ComposerCircle(icon: ImageVector, description: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true) {
+fun ComposerCircle(icon: ImageVector, description: String, onClick: () -> Unit, modifier: Modifier = Modifier, enabled: Boolean = true, active: Boolean = false) {
     val colors = Pi.colors
     Box(modifier.size(48.dp), contentAlignment = Alignment.Center) {
         Box(
             Modifier
                 .size(36.dp)
                 .pressable(onClick, shape = CircleShape, enabled = enabled, pressedScale = SOFT_PRESS, label = description)
-                .background(colors.surface3, CircleShape),
+                .semantics { if (active) stateDescription = "Listening" }
+                .background(if (active) colors.accent else colors.selected, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(icon, contentDescription = description, tint = if (enabled) colors.ink2 else colors.ink2.copy(alpha = 0.4f), modifier = Modifier.size(IconSize.md))
+            val tint = if (active) colors.onAccent else colors.ink1
+            Icon(icon, contentDescription = description, tint = if (enabled) tint else tint.copy(alpha = 0.4f), modifier = Modifier.size(IconSize.md))
         }
     }
 }
 
 /**
- * The pill's primary circle: 36dp accent (white in the default) with an onAccent glyph. While the field is empty
- * ([hasText] false) it is the voice button (a waveform glyph, [onVoice]); with text it is Send (an arrow, [onSend]). The
- * glyph swap crossfades. Without [onVoice] an empty field shows Send at 18%, disabled.
+ * The pill's primary circle, one 36dp slot in a 48dp target:
+ * - with text, Send: the accent (white in the default) with an onAccent arrow, [onSend];
+ * - empty while Pi works and [onStop] is given, Stop: a surface3 disc with a 1dp lineStrong ring and a 12dp ink1
+ *   square;
+ * - empty otherwise, voice input: the accent with a waveform glyph, [onVoice]; without [onVoice], Send at 18%,
+ *   disabled.
+ * The glyph swap crossfades.
  */
 @Composable
-fun ComposerPrimary(hasText: Boolean, onSend: () -> Unit, modifier: Modifier = Modifier, onVoice: (() -> Unit)? = null, enabled: Boolean = true) {
+fun ComposerPrimary(
+    hasText: Boolean,
+    onSend: () -> Unit,
+    modifier: Modifier = Modifier,
+    onVoice: (() -> Unit)? = null,
+    enabled: Boolean = true,
+    running: Boolean = false,
+    onStop: (() -> Unit)? = null,
+) {
     val colors = Pi.colors
-    val voice = !hasText && onVoice != null
-    val active = enabled && (hasText || voice)
+    val mode = ComposerPrimaryMode.of(hasText, running, onStop != null, onVoice != null)
+    val active = enabled && mode != ComposerPrimaryMode.SendDisabled
+    val label = when (mode) {
+        ComposerPrimaryMode.Stop -> "Stop"
+        ComposerPrimaryMode.Voice -> "Voice input"
+        else -> "Send"
+    }
+    val action: () -> Unit = when (mode) {
+        ComposerPrimaryMode.Stop -> onStop ?: {}
+        ComposerPrimaryMode.Voice -> onVoice ?: {}
+        else -> onSend
+    }
     Box(modifier.size(48.dp), contentAlignment = Alignment.Center) {
         Box(
             Modifier
                 .size(36.dp)
-                .pressable(if (voice) onVoice!! else onSend, shape = CircleShape, enabled = active, pressedScale = 0.92f, role = Role.Button, label = if (voice) "Voice input" else "Send")
-                .background(if (active) colors.accent else colors.accent.copy(alpha = 0.18f), CircleShape),
+                .pressable(action, shape = CircleShape, enabled = active, pressedScale = 0.92f, role = Role.Button, label = label)
+                .then(
+                    if (mode == ComposerPrimaryMode.Stop) {
+                        Modifier.background(colors.surface3, CircleShape).border(1.dp, colors.lineStrong, CircleShape)
+                    } else {
+                        Modifier.background(if (active) colors.accent else colors.accent.copy(alpha = 0.18f), CircleShape)
+                    },
+                ),
             contentAlignment = Alignment.Center,
         ) {
-            Crossfade(voice, label = "primary-glyph") { v ->
-                Icon(
-                    if (v) Icons.Rounded.GraphicEq else Icons.Rounded.ArrowUpward,
-                    contentDescription = if (v) "Voice input" else "Send",
-                    tint = colors.onAccent,
-                    modifier = Modifier.size(IconSize.md),
-                )
+            Crossfade(mode, label = "primary-glyph") { m ->
+                when (m) {
+                    ComposerPrimaryMode.Stop -> Box(Modifier.size(12.dp).background(colors.ink1, RoundedCornerShape(2.dp)).semantics { contentDescription = "Stop" })
+                    ComposerPrimaryMode.Voice -> Icon(Icons.Rounded.GraphicEq, contentDescription = "Voice input", tint = colors.onAccent, modifier = Modifier.size(IconSize.md))
+                    else -> Icon(Icons.Rounded.ArrowUpward, contentDescription = "Send", tint = colors.onAccent, modifier = Modifier.size(IconSize.md))
+                }
             }
+        }
+    }
+}
+
+/** What the pill's primary circle is, from the field and the run. */
+enum class ComposerPrimaryMode {
+    Send, SendDisabled, Stop, Voice;
+
+    companion object {
+        fun of(hasText: Boolean, running: Boolean, canStop: Boolean, canVoice: Boolean): ComposerPrimaryMode = when {
+            hasText -> Send
+            running && canStop -> Stop
+            canVoice -> Voice
+            else -> SendDisabled
         }
     }
 }
