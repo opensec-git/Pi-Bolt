@@ -9,6 +9,10 @@
 - Remote control offers read-only review of the session's folder: git status with line counts, diffs, history and commits, folder listings and file contents (`rc_git_status`, `rc_git_diff`, `rc_git_log`, `rc_git_show`, `rc_list_dir`, `rc_read_file`). Both `/remote-control` and `pi-bolt service` serve them and announce it with `host.review: true` in `remote_hello`. Paths stay inside the cwd after resolving symlinks, output is capped, and files that look like secrets (`.env*`, keys, `.git/`) are refused unless `remoteControl.readSecretFiles` is set. See [Review](docs/remote-control.md#review)
 - Remote control and RPC mode stream a subagent's own conversation while a client shows it: `subagent_subscribe { runId }` (the id of the `Agent` call) sends the subagent's saved messages (`subagent_entries`) and, while its session runs in this process, its streaming thinking, text and tool starts (`subagent_events`); `subagent_unsubscribe` stops it. Read-only, capped per message and per client, and advertised as `features: ["subagent_stream"]` in `remote_hello`. See [Subagent streams](docs/remote-control.md#subagent-streams)
 
+### Changed
+
+- Compiled binaries load jiti's Babel transform only when an extension file is not in jiti's cache yet. A start with extensions installed used to evaluate it every time: `pi -p` with one npm extension takes 12% fewer instructions, the TUI reaches its first frame with 19% fewer, and the process uses 4-6 MB less memory
+
 ### Fixed
 
 - The background service no longer aborts a running turn when a phone opens another session or starts a new one. It keeps up to 3 sessions open, each with its own runtime: a session in a turn keeps running in the background, and opening it again shows it as it is. With all 3 running, the phone is told to stop one or wait. `remote_hello.host.parallelSessions` says the service does this, and `list_sessions` marks sessions as `open` and `running`
