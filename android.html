@@ -153,16 +153,16 @@
 <main class="frame">
   <div class="hero">
     <div>
-      <span class="micro accent bracket" id="badge">Pi-Bolt for Android · 0.5.3</span>
+      <span class="micro accent bracket" id="badge">Pi-Bolt for Android · 0.2.0</span>
       <h1>Pi-Bolt,<br>in your <span class="pix">pocket.</span></h1>
       <p class="lede">The Pi coding agent runs on the phone itself: projects with their files, bash, git, ripgrep and fd,
         your own model provider keys, sessions you can resume and fork. No computer, no Termux. And when you are at your
         desk, the same app remote-controls Pi-Bolt on your computer, paired by QR code and end to end encrypted.</p>
       <div class="get">
-        <a class="btn primary big" id="download" href="https://github.com/opensec-git/Pi-Bolt/releases/download/android-v0.5.3/pi-bolt-android-0.5.3.apk" download><span>Download the APK</span><i aria-hidden="true">↓</i></a>
+        <a class="btn primary big" id="download" href="https://github.com/opensec-git/Pi-Bolt/releases/download/android-v0.2.0/pi-bolt-android-0.2.0.apk" download><span>Download the APK</span><i aria-hidden="true">↓</i></a>
         <a class="link" href="#install">How to install <span aria-hidden="true">→</span></a>
       </div>
-      <div class="meta" id="meta">Version 0.5.3 · about 168 MB · Android 8.0 or later, 64-bit ARM</div>
+      <div class="meta" id="meta">Version 0.2.0 · about 110 MB · Android 8.0 or later, 64-bit ARM</div>
       <p class="status" id="status" role="status" hidden></p>
     </div>
 
@@ -200,7 +200,7 @@
       <div><span class="micro">Signing certificate SHA-256</span><div class="v" id="cert">f752464c8b6d5906d7fd467346b89316518e3ddfe77843f66b1fa673818a2c90</div>
         <p>Every update is signed with this certificate; Android refuses an update signed with any other.</p></div>
       <div><span class="micro">Needs</span><p>Android 8.0 or later on a 64-bit ARM phone, about 400 MB free, and a key from a model provider. Remote control also needs a Pi-Bolt with the <code>/remote-control</code> command on the computer.</p></div>
-      <div><span class="micro">Built by</span><p>GitHub Actions from the <a href="https://github.com/opensec-git/Pi-Bolt/tree/pi-bolt/android">android/</a> sources, release <a id="release" href="https://github.com/opensec-git/Pi-Bolt/releases/tag/android-v0.5.3">android-v0.5.3</a>. The engine pack and its licences: <a href="https://github.com/opensec-git/Pi-Bolt/tree/pi-bolt/android/engine">android/engine</a>; remote control: <a href="https://github.com/opensec-git/Pi-Bolt/blob/pi-bolt/packages/coding-agent/docs/remote-control.md">protocol and security</a>.</p></div>
+      <div><span class="micro">Built by</span><p>GitHub Actions from the <a href="https://github.com/opensec-git/Pi-Bolt/tree/pi-bolt/android">android/</a> sources, release <a id="release" href="https://github.com/opensec-git/Pi-Bolt/releases/tag/android-v0.2.0">android-v0.2.0</a>. The engine pack and its licences: <a href="https://github.com/opensec-git/Pi-Bolt/tree/pi-bolt/android/engine">android/engine</a>; remote control: <a href="https://github.com/opensec-git/Pi-Bolt/blob/pi-bolt/packages/coding-agent/docs/remote-control.md">protocol and security</a>.</p></div>
     </div>
   </section>
 
@@ -229,9 +229,7 @@
     link.textContent = "android-v" + release.version;
   }
 
-  // On a phone this page is the download link: start it once (not again on reload or back), and only with the newest
-  // release from android.json, so a slow network never gets the older APK named in the HTML. Chrome may ignore a
-  // download that no tap started; the status line then points at the button, which always works.
+  // On a phone this page is the download link: start it once, without looping on reload or back.
   function autoDownload() {
     if (!isAndroid) return;
     try {
@@ -239,32 +237,22 @@
       sessionStorage.setItem("pibolt-apk-started", "1");
     } catch (e) {}
     var status = document.getElementById("status");
-    status.textContent = "Your download should start now. If it does not, tap Download the APK. Then open the file to install it.";
+    status.textContent = "Your download is starting. If it does not, tap Download the APK. Then open the file to install it.";
     status.hidden = false;
-    setTimeout(function () { location.href = document.getElementById("download").href; }, 400);
+    setTimeout(function () { location.href = document.getElementById("download").href; }, 700);
   }
 
-  function showTapHint() {
-    if (!isAndroid) return;
-    var status = document.getElementById("status");
-    status.textContent = "Tap Download the APK to get the app, then open the file to install it.";
-    status.hidden = false;
-  }
-
-  var controller = window.AbortController ? new AbortController() : null;
-  var timer = setTimeout(function () { if (controller) controller.abort(); }, 10000);
-  fetch("android.json", { cache: "no-cache", signal: controller ? controller.signal : undefined })
+  var done = false;
+  function go() { if (!done) { done = true; autoDownload(); } }
+  // Wait briefly for android.json so a phone gets the newest version, never longer than a second.
+  setTimeout(go, 1000);
+  fetch("android.json", { cache: "no-cache" })
     .then(function (response) { return response.ok ? response.json() : null; })
     .then(function (release) {
-      clearTimeout(timer);
-      if (release && /^https:\/\/github\.com\/opensec-git\/Pi-Bolt\/releases\/download\//.test(release.apk)) {
-        apply(release);
-        autoDownload();
-      } else {
-        showTapHint();
-      }
+      if (release && /^https:\/\/github\.com\/opensec-git\/Pi-Bolt\/releases\/download\//.test(release.apk)) apply(release);
     })
-    .catch(showTapHint);
+    .catch(function () {})
+    .then(go);
 </script>
 </body>
 </html>
