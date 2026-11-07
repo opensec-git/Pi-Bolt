@@ -5,6 +5,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import kotlinx.coroutines.runBlocking
 import opensec.pibolt.app.ui.projects.ProjectFiles
 import opensec.pibolt.app.ui.projects.editor.EditorTabs
+import opensec.pibolt.app.ui.projects.editor.EditorTabsHolder
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 import kotlin.test.Test
@@ -22,8 +23,9 @@ class EditorRecreationTest {
     // PR #258 review: a rotation while editing lost the unsaved draft.
     @Test
     fun draftsSurviveActivityRecreation() {
-        val saver = EditorTabs.saver("demo")
-        val tabs = EditorTabs()
+        val holder = EditorTabsHolder()
+        val saver = EditorTabs.saver(holder)
+        val tabs = EditorTabs().also { holder.tabs = it }
         val tab = tabs.open("src/a.kt")
         tab.startEditing("fun a() = 1\n")
         tab.value = TextFieldValue("fun a() = 2\n")
@@ -39,16 +41,36 @@ class EditorRecreationTest {
         assertTrue(back.dirty)
     }
 
+    // Bug wave 0.6.0: "Ask Pi about the selection" (or the terminal, the secrets, a session) opened over the project and
+    // the way back lost the draft: the screen left composition, saved its tabs, then released them as if closed for good.
     @Test
-    fun afterProcessDeathOrReleaseTabsReopenFromPaths() {
-        val saver = EditorTabs.saver("other")
+    fun draftsSurviveASessionOpenedOverTheProject() {
+        val holder = EditorTabsHolder()
+        val tabs = EditorTabs().also { holder.tabs = it }
+        tabs.open("notes.md").apply {
+            startEditing("a")
+            value = TextFieldValue("ab")
+        }
+        // The screen leaves composition (its state is saved), then comes back from the back stack.
+        val saved = with(EditorTabs.saver(holder)) { scope.save(tabs) }!!
+        val back = EditorTabs.saver(holder).restore(saved)!!
+
+        assertSame(tabs, back)
+        assertEquals("ab", back.find("notes.md")!!.value.text)
+        assertTrue(back.find("notes.md")!!.dirty)
+    }
+
+    @Test
+    fun afterProcessDeathTabsReopenFromPaths() {
         val tabs = EditorTabs()
         tabs.open("b.kt").startEditing("x")
-        val saved = with(saver) { scope.save(tabs) }!!
-        EditorTabs.release("other")
+        val saved = with(EditorTabs.saver(EditorTabsHolder().also { it.tabs = tabs })) { scope.save(tabs) }!!
 
-        val restored = saver.restore(saved)!!
+        // A new process: a new holder, nothing kept in memory.
+        val holder = EditorTabsHolder()
+        val restored = EditorTabs.saver(holder).restore(saved)!!
         assertNotSame(tabs, restored)
+        assertSame(restored, holder.tabs)
         val back = restored.find("b.kt")!!
         assertFalse(back.editing, "no draft to show, so not editing")
         assertFalse(back.dirty)

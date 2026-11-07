@@ -38,6 +38,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
@@ -91,6 +93,22 @@ sealed interface GitOverlay {
     data class Diff(val path: String, val staged: Boolean) : GitOverlay
 
     data object History : GitOverlay
+
+    companion object {
+        /** The overlay as a string for the saved state ("h", "s:path", "u:path"), so it stays open across rotation. */
+        fun encode(o: GitOverlay?): String = when (o) {
+            null -> ""
+            History -> "h"
+            is Diff -> (if (o.staged) "s:" else "u:") + o.path
+        }
+
+        fun decode(s: String): GitOverlay? = when {
+            s == "h" -> History
+            s.startsWith("s:") -> Diff(s.substring(2), staged = true)
+            s.startsWith("u:") -> Diff(s.substring(2), staged = false)
+            else -> null
+        }
+    }
 }
 
 sealed interface GitSheet {
@@ -103,13 +121,28 @@ sealed interface GitSheet {
     data class Discard(val entry: StatusEntry, val staged: Boolean) : GitSheet
 }
 
-/** The Changes tab's UI state on top of [ChangesModel]: the commit message, Pi's draft, open sheets and overlays. */
+/**
+ * The Changes tab's UI state on top of [ChangesModel]: the commit message, Pi's draft, open sheets and overlays. The
+ * message and the overlay live in [saved] state, so a rotation keeps the message being written and the diff open.
+ */
 @Stable
-class ChangesUi(val app: PiBoltApp, val model: ChangesModel, val store: ProjectStore, private val scope: CoroutineScope, private val snack: (String, SnackKind) -> Unit) {
-    var message by mutableStateOf("")
+class ChangesUi(
+    val app: PiBoltApp,
+    val model: ChangesModel,
+    val store: ProjectStore,
+    private val scope: CoroutineScope,
+    private val snack: (String, SnackKind) -> Unit,
+    messageState: MutableState<String> = mutableStateOf(""),
+    private val overlayState: MutableState<String> = mutableStateOf(""),
+) {
+    var message by messageState
     var drafting by mutableStateOf(false)
         private set
-    var overlay by mutableStateOf<GitOverlay?>(null)
+    var overlay: GitOverlay?
+        get() = GitOverlay.decode(overlayState.value)
+        set(value) {
+            overlayState.value = GitOverlay.encode(value)
+        }
     var sheet by mutableStateOf<GitSheet?>(null)
 
     fun error(text: String) = snack(text, SnackKind.Error)
@@ -162,10 +195,12 @@ class ChangesUi(val app: PiBoltApp, val model: ChangesModel, val store: ProjectS
 @Composable
 fun rememberChangesUi(app: PiBoltApp, dir: File, store: ProjectStore, snackbar: SnackbarHostState): ChangesUi {
     val scope = rememberCoroutineScope()
+    val message = rememberSaveable(dir) { mutableStateOf("") }
+    val overlay = rememberSaveable(dir) { mutableStateOf("") }
     return remember(dir) {
         val snack: (String, SnackKind) -> Unit = { text, kind -> scope.launch { snackbar.show(text, kind) } }
         val model = ChangesModel(app.git, dir, scope) { snack(it, SnackKind.Error) }
-        ChangesUi(app, model, store, scope, snack)
+        ChangesUi(app, model, store, scope, snack, message, overlay)
     }
 }
 

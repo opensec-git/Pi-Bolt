@@ -59,9 +59,10 @@ class TerminalService : Service() {
         fun update(context: Context) {
             val app = context.applicationContext
             if (Terminals.anyRunning) {
-                // From the background Android may refuse; the shells then live as long as the process does.
-                running = runCatching { ContextCompat.startForegroundService(app, Intent(app, TerminalService::class.java)) }.isSuccess
-            } else if (running) {
+                // From the background Android may refuse a refresh; the service started earlier still runs then.
+                running = runCatching { ContextCompat.startForegroundService(app, Intent(app, TerminalService::class.java)) }.isSuccess || running
+            } else {
+                // Always: a refused refresh must not leave the notification up after the last shell ended.
                 running = false
                 app.stopService(Intent(app, TerminalService::class.java))
             }

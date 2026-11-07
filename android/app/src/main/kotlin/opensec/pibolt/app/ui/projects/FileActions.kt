@@ -256,9 +256,12 @@ fun NameSheet(title: String, initial: String, action: String, onSubmit: suspend 
     }
 }
 
-/** The sheet for the Files tab's current [action], in [folder] (the folder shown). */
+/**
+ * The sheet for the Files tab's current [action], in [folder] (the folder shown). [onMoved] gets an entry's old name
+ * and its new one (null when deleted), so open editor tabs follow it.
+ */
 @Composable
-fun FileActionSheets(action: FileAction?, folder: File, onAction: (FileAction?) -> Unit, onDone: () -> Unit, onError: (String) -> Unit) {
+fun FileActionSheets(action: FileAction?, folder: File, onAction: (FileAction?) -> Unit, onDone: () -> Unit, onError: (String) -> Unit, onMoved: (from: String, to: String?) -> Unit = { _, _ -> }) {
     val scope = rememberCoroutineScope()
     when (action) {
         null, is FileAction.Export, is FileAction.Share -> Unit
@@ -267,7 +270,13 @@ fun FileActionSheets(action: FileAction?, folder: File, onAction: (FileAction?) 
             title = "Rename",
             initial = action.entry.name,
             action = "Rename",
-            onSubmit = { name -> ProjectFiles.rename(File(folder, action.entry.name), name).fold({ onDone(); null }, { it.message ?: "Could not rename" }) },
+            onSubmit = { name ->
+                ProjectFiles.rename(File(folder, action.entry.name), name).fold({ target ->
+                    onMoved(action.entry.name, target.name)
+                    onDone()
+                    null
+                }, { it.message ?: "Could not rename" })
+            },
             onDismiss = { onAction(null) },
         )
         is FileAction.Create -> NameSheet(
@@ -283,7 +292,9 @@ fun FileActionSheets(action: FileAction?, folder: File, onAction: (FileAction?) 
             confirmLabel = "Delete",
             onConfirm = {
                 scope.launch {
-                    ProjectFiles.delete(File(folder, action.entry.name)).onFailure { onError(it.message ?: "Could not delete") }
+                    ProjectFiles.delete(File(folder, action.entry.name))
+                        .onSuccess { onMoved(action.entry.name, null) }
+                        .onFailure { onError(it.message ?: "Could not delete") }
                     onDone()
                 }
             },
