@@ -1,6 +1,5 @@
 package opensec.pibolt.app.ui.settings
 
-import android.widget.Toast
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,7 +14,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +22,7 @@ import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.data.AgentDefaults
 import opensec.pibolt.app.data.AgentSettingsFile
 import opensec.pibolt.app.data.QueueMode
+import opensec.pibolt.app.ui.components.LoadingRow
 import opensec.pibolt.app.ui.components.Segmented
 import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.ui.providers.ProviderCatalog
@@ -40,7 +39,7 @@ import java.io.File
  * apply from the next session.
  */
 @Composable
-internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean) {
+internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean, onMessage: (String) -> Unit) {
     val colors = Pi.colors
     val type = Pi.type
     val scope = rememberCoroutineScope()
@@ -50,7 +49,7 @@ internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean) {
     var picking by remember { mutableStateOf(false) }
     val current = defaults ?: loaded
     if (current == null) {
-        Text("Reading settings…", style = type.meta, color = colors.ink3)
+        LoadingRow("Reading settings")
         return
     }
     fun update(change: (AgentDefaults) -> AgentDefaults) {
@@ -146,8 +145,7 @@ internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean) {
     }
     if (show("engine-links")) {
         Spacer(Modifier.height(8.dp))
-        val context = LocalContext.current
-        AgentLinks(app) { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+        AgentLinks(app, onMessage)
     }
 }
 

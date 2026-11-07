@@ -200,44 +200,56 @@ alpha). No overshoot except sheet drag release.
 `ui/components` is the kit; screens compose it and never restyle it. `DesignRulesTest` checks the rules below on the
 UI sources (with a reviewed exception list that may only shrink) and `ContrastTest` their colour pairs.
 
-**Buttons.** All pills, label SemiBold, optional leading icon; press = ink overlay and 0.97 scale.
+**Buttons.** As on Pi-Bolt Desktop: radius-sm rectangles, the label in label weight (500), optional leading icon 6dp
+before it; press = ink overlay and 0.97 scale. A label that does not fit on one line wraps to two, centred, never cut.
 
 | Kind | Fill / text | Use |
 |---|---|---|
 | `PrimaryButton` | accent / onAccent (disabled: surface3 / ink3) | the one next step of a screen or sheet |
-| `SecondaryButton` | surface2 + 1dp line / ink1 | the alternatives, Cancel |
-| `GhostButton` | none / ink1 | a quiet third choice in a button row |
+| `SecondaryButton` | surface2 + 1dp lineStrong ring / ink1 | the alternatives, Cancel |
+| `GhostButton` | none / ink2 | a quiet third choice in a button row |
 | `DangerButton` | dangerSoft / danger | only the step that destroys (confirm sheets) |
 | `TextAction` | none / ink1 or accent, label weight | actions inside rows, notices and fields |
 | `IconAction` | 48dp, 22dp glyph ink2 | toolbars and row ends; always a content description |
 
-Sizes (`ButtonSize`): Large 52dp (default; screens and sheets), Small 40dp inside cards and rows ("Clear", "Save" in
-an inline form), still a 48dp target. Disabled secondary, ghost and danger buttons show content and line at 40%.
-Button rows: Cancel (secondary) first, the action last, equal weights, 12dp apart. A standing destructive action on a
-screen is a row in danger glyph that opens a `ConfirmSheet`, never a red button.
+Sizes (`ButtonSize`): Large 48dp (default; screens and sheets; padding 16), Small 36dp inside cards and rows ("Clear",
+"Save" in an inline form; padding 12), still a 48dp target. Disabled secondary, ghost and danger buttons show content
+and line at 40%; the disabled primary is surface3 / ink3.
+Button rows are `ButtonRow`: Cancel (secondary) first, the action last, equal widths, 12dp apart, inset 20dp in sheets.
+When any label would not fit its half on one line (font scale 1.3 on a 360dp phone), the row stacks full width with
+the action on top. A standing destructive action on a screen is a row in danger glyph that opens a `ConfirmSheet`,
+never a red button.
 
 **Rows.** `ListRow`: optional 20dp glyph (ink3) or leading slot, the title in body ink1, a meta line (meta ink3, or a
-state colour), then trailing content or `RowEnd.Chevron` / `RowEnd.External`; at least 56dp, the whole row is the
+state colour), then trailing content or `RowEnd.Chevron` (auto-mirrored, so it points the reading way in RTL) / `RowEnd.External`; at least 56dp, the whole row is the
 target, no press scale. In sheets rows bring the 20dp inset (`RowInsetSheet`); inside a card they take the card's
-padding (`RowInsetCard`, rounded press). `SwitchRow` is the same row with `PiSwitch` (accent track on, surface3 with
-a lineStrong ring off), read as one switch. `ValueRow`: a read-only fact, label body ink2 and value body ink1 at the
+padding (`RowInsetCard`, rounded press). `SwitchRow` is the same row with `PiSwitch` (accent track and onAccent
+thumb on; surface3 with a lineStrong ring and an ink2 thumb off), read as one switch with its On / Off state. `ValueRow`: a read-only fact, label body ink2 and value body ink1 at the
 end, 48dp. `RowDivider`: 1dp line between rows of a card. Row titles are never bodyStrong: weight is for headings.
 
 **Cards and groups.** `PiCard`: surface1, 1dp line, radius md, 16dp padding: a surface step plus a line, never a
-shadow. `CardSection`: a `SectionLabel` (metaStrong ink3, sentence case, never capitals) over a radius-lg card with
+shadow. `CardSection`: a `SectionLabel` (metaStrong ink3, sentence case, never capitals) over a radius-md card with
 16dp sides and 8dp top and bottom; controls inside start with a `ControlLabel` (body ink1, value in meta ink3).
-`Tag`: micro on surface3, radius xs, for a source or state.
+`Tag`: micro on surface3, radius xs, for a source or state; TalkBack reads its text once.
 
 **Screens.** A pushed screen starts with `ScreenTopBar`: 56dp under the status bar, back, the title in title style
 (a heading) with an optional meta line, actions at the end, a 1dp line once the content scrolls. `ScreenIntro` is
 its one paragraph (body ink2). Display type is for empty-state heroes and Project/Home titles only.
 
-**Sheets and dialogs.** `PiSheet` (surface2, radius xl top, the theme scrim, predictive back) with `SheetHeader`
-(title, body ink2 subtitle) for everything modal; `ConfirmSheet` for consequential yes/no. No `AlertDialog`.
+**Elevation** (the desktop app's model): one surface per layer and a 1dp alpha ring for its edge, no shadows. Canvas;
+cards and sheets surface1 with line (cards) or lineStrong (sheets); snackbars surface2 with lineStrong; pressed and
+selected fills surface3.
+
+**Sheets and dialogs.** `PiSheet` (the dialog layer: surface1 with a 1dp lineStrong ring down the sides and round the
+radius-xl top corners, the theme scrim, predictive back) with `SheetHeader` (title as a heading, body ink2 subtitle)
+for everything modal; `ConfirmSheet` for consequential yes/no. No `AlertDialog`. The drag handle (36x4 ink4, 10dp
+above and 6dp below) is the kit's own, so TalkBack reads it as "Drag handle" with a Close action. ModalBottomSheet lifts
+the whole sheet above the keyboard; `PiSheet` also stops it below the status bar, so a tall sheet's list shrinks and
+scrolls instead of running under the clock. Fields and cards in a sheet sit 16dp in, text and button rows 20dp.
 Menus are DropdownMenus on surface3 with a lineStrong ring and radius md.
 
-**Feedback.** Snackbars (`PiSnackHost`, `show(kind)`): surface3, radius md, lineStrong, a kind glyph, ink1 text and
-an ink1 action. `Notice` is the inline and banner form: radius md, 20dp glyph in the kind colour, optional title
+**Feedback.** Snackbars (`PiSnackHost`, `show(kind)`): surface2, radius md, lineStrong ring, a 20dp kind glyph, ink1
+text (four lines at most) and an ink1 action; a host sits above the navigation bar and the keyboard. `Notice` is the inline and banner form: radius md, 20dp glyph in the kind colour, optional title
 (bodyStrong), text ink1 (ink2 under a title) and text actions under it; info and success on surface1 with a line,
 warning and danger on their soft fill with a 40% line. Text is never in the status colour. No Toasts.
 
@@ -247,13 +259,16 @@ a 16dp Quad Think and the label (body ink3), polite live region; never a Materia
 `Notice` with the reason and "Try again" when it may help; an error never looks like an empty list.
 `ProgressLine`: 2dp, surface3 track, accent fill, determinate only.
 
-**Fields.** `PiTextField` (surface1, radius md, lineStrong turning into the focus line, danger on error) for text;
+**Fields.** `PiTextField` (surface1, radius sm like the buttons, lineStrong turning into the focus line, danger on
+error) for text;
 `SecretField` for keys, tokens and secret values (mono, obscured, Password keyboard without suggestions, Paste while
 empty, Show / Hide once filled, 52dp). `FieldLabel` above (metaStrong ink2), `FieldHint` below (meta ink3, the error
-in danger). Secret values live in plain `remember`, never saved state, and are cleared after use.
+in danger, announced politely). A field's keyboard action does what the sheet's primary button does (Go pastes a
+pairing link, Done saves a token). Secret values live in plain `remember`, never saved state, and are cleared after use.
 
-**Segmented and tabs.** `Segmented` / `SegmentedSlots`: surface1 track with a line, the selected segment surface3
-sliding (quick, in place), label ink1 on / ink3 off, role Tab; 48dp in Settings and forms, 36dp only in dense bars.
+**Segmented and tabs.** `Segmented` / `SegmentedSlots`: surface1 track with a line and 2dp inset, the selected segment
+surface3 with a lineStrong ring sliding (quick, in place), label ink1 on / ink3 off, role Tab with its Selected state in
+a selectable group; 48dp in Settings and forms, 36dp only in dense bars.
 
 ## Screens
 
@@ -276,7 +291,9 @@ with the mark, then:
   project (primary) and Clone from git (secondary).
 - "Computers · N" header (metaStrong ink3, "Remote control" meta and a chevron that turns 180° in a graphicsLayer):
   folded by default once projects exist, open when there are none, when the engine is unavailable or a computer
-  session is live. Open: host cards as before, a one-line hint, Scan QR code and Paste link (secondary, side by side).
+  session is live. The header is 48dp tall and TalkBack reads it as Expanded / Collapsed. Open: host cards (at least
+  72dp; they grow at large font sizes instead of clipping their third line), a one-line hint, Paste link and Scan code
+  (secondary, a `ButtonRow`: side by side, stacked with Scan on top when the labels do not fit).
 - Bottom: "New project" (accent, primary, full width) on a canvas fade. Nothing below the title is placed until the
   folders were read (a few ms, off the main thread), so the computers section never jumps.
 
@@ -421,13 +438,18 @@ keyboard, no autocorrect; Paste when empty, Show/Hide when filled), a lock line 
 danger), "Get a key at console.anthropic.com" (accent, opens the browser), Cancel and Save key. The key lives only in
 the sheet's memory (never saved instance state), is cleared after saving and never logged.
 
+**Setup card (Home, first run).** "Set up Pi-Bolt", two numbered steps as on the desktop onboarding: the current step
+a 28dp accent disc with its number in onAccent, a finished one surface3 with an ink1 check, a later one a lineStrong
+ring with the number in ink3 (green stays for state, not progress). Then the next step's primary button and the
+others as a `ButtonRow`.
+
 **Settings > GitHub.** Signed out: one line on what it enables, "Sign in with GitHub" (primary; only when the build has
 an OAuth client id) and "Use a personal access token" (secondary, key glyph). Device flow sheet: the user code in
 display mono on a surface1 well (TalkBack spells it), Copy, "Open github.com/login/device" (primary), then a 16dp Wait
 Quad and "Waiting for you to approve on GitHub"; errors in danger with Try again. Token sheet: what scopes to pick, a
 link to create one, a `SecretField`, the storage line as its `FieldHint` (Keystore, never shown again, never logged;
 the error in its place) and Save, which
-checks the token against GitHub first. Signed in: name and @login, how and which scopes, a line on where it is used,
+checks the token against GitHub first (the keyboard's Done does the same). Signed in: name and @login, how and which scopes, a line on where it is used,
 Sign out (confirmed).
 
 **Settings > Model providers** comes first: configured providers (badge, name, "Key stored on this phone", a delete
@@ -436,13 +458,16 @@ action that asks first and says the key is not revoked at the provider) and Add 
 **Pair confirmation.** A sheet (not an AlertDialog) for links opened from outside the app: `SheetHeader` "Pair with
 <host>?" and "Only continue if you just ran /remote-control on this computer", "Address(es)" over a `PiCard` of the
 endpoints (monoMeta ink2), a warning `Notice` when it ends the current session, Cancel and Pair / Connect. Scanning
-and pasting stay one-step.
+and pasting stay one-step. The paste sheet: the link field (monoSmall, URI keyboard; Go connects), its error as a
+`FieldHint`, "Paste from clipboard", Cancel and Connect.
 
 **Scan.** Full-bleed camera, canvas-tinted scrim with a 260dp rounded window, corner brackets that settle in on open.
 At the top, on a canvas fade: back, "Scan the pairing code" (title) and "Run /remote-control on your computer" (meta
 ink2). At the bottom a status pill (surface2 @ 92%, radius lg): Quad Connect + "Looking for a code", the reason in ink1
-when a code is refused, a check and "Code read. Connecting…" with a success haptic. "Paste link instead" (secondary)
-under it.
+when a code is refused, a check and "Code read. Connecting…" with a success haptic; TalkBack hears each change (polite
+live region). "Paste link instead" (secondary) under it. Landscape: the pill and the button move to a 320dp column at
+the end side and the window (at most 260dp, never under the title) centres in the rest. Camera refused: "Allow camera"
+asks again; once Android stops asking, "Open settings" opens the app's system page and the camera starts on return.
 
 **Session.**
 - Top bar 56dp: back, computer name (subhead) with the session's cwd basename beneath (meta, mono), Quad 16dp in the
@@ -769,6 +794,9 @@ group, the label or its keywords (`SettingsIndex`, so "font" finds Text size and
 matches" otherwise. Groups, in order, each a `CardSection`; rows are `ListRow` / `SwitchRow` / `ValueRow` in body
 weight with `RowDivider`s, controls start with a `ControlLabel`:
 - Model providers: configured providers by display name (`ProviderCatalog`), Add provider.
+- Messages from the engine links (packages, MCP, tuning) are snackbars on the Settings screen, never Toasts. The MCP
+  sheet's "Add a server" opens a "New server" form (name with its rule as an error hint, address or command, optional
+  token variable) with Cancel and Add.
 - Pi on this phone: Default model (a 56dp row: the model and provider; it opens the model picker with the models of
   the open on-device session, and says to open a session when none is), thinking level for new sessions, steering
   and follow-up delivery (One at a time / All at once), Auto-compact, Auto-retry with the retry count (1 / 3 / 5 / 10),
@@ -778,8 +806,10 @@ weight with `RowDivider`s, controls start with a `ControlLabel`:
 - Runtimes: the shipped runtimes on one line ("Node.js 22.23.4 · Python 3.14.10") and a row to the Runtimes screen.
 - Appearance: theme tiles (seven, four a row, each drawn in its own theme: canvas, user bubble, prose with an inline
   code chip, a code card in the theme's syntax colours, the composer with the accent send button; selected = 1.5dp
-  accent ring; the near-black themes show their canvas hex under the name in monoMeta ink3), accent circles ("Theme"
-  is a split disc: the theme's own accent beside surface3), text size ("Text size" with its value in label ink2 beside
+  accent ring; the near-black themes show their canvas hex under the name in monoMeta ink3; the preview's code card
+  has the same inset on every side; TalkBack reads each tile as "<name> theme", a radio button with its Selected
+  state, and the captions are not read again), accent circles ("Theme"
+  is a split disc: the theme's own accent beside surface3; read as "Iris accent", selected or not), text size ("Text size" with its value in label ink2 beside
   it, A-glyph steps and a live prose preview), density (Comfortable / Compact).
 - Motion and haptics: Reduce motion (Follow system / On), Haptics.
 - Session display: show thinking expanded, tool output preview lines (6 / 12 / 24).
@@ -816,7 +846,8 @@ plain GET with no identifiers. The APK URL must be under `github.com/opensec-git
   About > "Check for updates". About shows "Up to date (0.2.1)" or "0.2.2 is available · 109 MB", then "Checked 3 min
   ago".
 - Home card (64dp, surface1, radius 12, after the engine banner): system-update glyph, "Pi-Bolt 0.2.2 is available",
-  the size (meta ink3), Later (ink2, snoozes that version only) and Update (accent). The same card then shows the job:
+  the size (meta ink3), then Later (ink2, snoozes that version only) and Update (accent) end-aligned under the text, so
+  the title keeps its width at large font sizes (a single action stays at the row's end). The same card then shows the job:
   Quad Write + "54 MB of 109 MB · 49%" and a 2dp accent bar (Cancel); Quad Connect + "Waiting for network" when the
   connection drops; Quad Run "Checking"; a success shield and Install; danger soft fill with the reason on failure.
 - Download sheet first: the size and the network it would use (Wi-Fi in ink2; mobile data or metered in warning).

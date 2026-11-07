@@ -35,6 +35,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import opensec.pibolt.app.data.AccentId
@@ -80,16 +84,21 @@ private fun ThemeTile(theme: ThemeId, accent: AccentId, selected: Boolean, onCli
             Modifier
                 .fillMaxWidth()
                 .aspectRatio(0.78f)
-                .pressable(onClick, shape = shape, role = Role.RadioButton, label = theme.label)
+                .semantics {
+                    contentDescription = "${theme.label} theme"
+                    this.selected = selected
+                }
+                .pressable(onClick, shape = shape, role = Role.RadioButton, label = "Use ${theme.label}")
                 .border(if (selected) 1.5.dp else 1.dp, ring, shape)
                 .padding(if (selected) 3.dp else 0.dp),
         ) {
             Canvas(Modifier.fillMaxSize()) { drawThemePreview(c, (Radius.md - if (selected) 3.dp else 0.dp).toPx().coerceAtLeast(4f)) }
         }
         Spacer(Modifier.height(8.dp))
-        Text(theme.label, style = Pi.type.meta, color = if (selected) current.ink1 else current.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        // The tile itself carries the name for TalkBack; the captions are for the eye.
+        Text(theme.label, style = Pi.type.meta, color = if (selected) current.ink1 else current.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.clearAndSetSemantics {})
         if (theme in NEAR_BLACK) {
-            Text(hex(c), style = Pi.type.monoMeta, color = current.ink3, maxLines = 1)
+            Text(hex(c), style = Pi.type.monoMeta, color = current.ink3, maxLines = 1, softWrap = false, modifier = Modifier.clearAndSetSemantics {})
         }
     }
 }
@@ -113,15 +122,20 @@ private fun DrawScope.drawThemePreview(c: PiColors, radius: Float) {
     drawRoundRect(c.surface3, Offset(pad + w * 0.38f, prose - bar * 0.6f), Size(w * 0.30f, bar * 2.2f), CornerRadius(3.dp.toPx()))
     pill(c.ink1.copy(alpha = 0.8f), pad + w * 0.42f, prose, w * 0.22f)
     // A code card: keyword, function and string in the theme's syntax colours.
+    // Two code lines centred in the card, with the same inset on every side.
     val card = h * 0.43f
-    drawRoundRect(c.surface1, Offset(pad * 0.7f, card), Size(w - pad * 1.4f, h * 0.20f), CornerRadius(5.dp.toPx()))
-    val code1 = card + h * 0.05f
-    pill(c.syntax.keyword, pad, code1, w * 0.16f)
-    pill(c.syntax.function, pad + w * 0.20f, code1, w * 0.24f)
-    pill(c.syntax.string, pad + w * 0.48f, code1, w * 0.30f)
+    val cardH = h * 0.20f
+    val cardX = pad * 0.7f
+    drawRoundRect(c.surface1, Offset(cardX, card), Size(w - pad * 1.4f, cardH), CornerRadius(5.dp.toPx()))
+    drawRoundRect(c.line, Offset(cardX, card), Size(w - pad * 1.4f, cardH), CornerRadius(5.dp.toPx()), style = Stroke(1.dp.toPx()))
+    val code1 = card + (cardH - bar * 3f) / 2
+    val x0 = cardX + w * 0.06f
+    pill(c.syntax.keyword, x0, code1, w * 0.14f)
+    pill(c.syntax.function, x0 + w * 0.18f, code1, w * 0.22f)
+    pill(c.syntax.string, x0 + w * 0.44f, code1, w * 0.26f)
     val code2 = code1 + bar * 2f
-    pill(c.syntax.type, pad + w * 0.08f, code2, w * 0.18f)
-    pill(c.syntax.number, pad + w * 0.30f, code2, w * 0.12f)
+    pill(c.syntax.type, x0 + w * 0.08f, code2, w * 0.18f)
+    pill(c.syntax.number, x0 + w * 0.30f, code2, w * 0.12f)
     // Composer and the accent send button.
     val composerTop = h * 0.76f
     val composerH = h * 0.16f
@@ -131,7 +145,7 @@ private fun DrawScope.drawThemePreview(c: PiColors, radius: Float) {
     drawCircle(c.accent, dot / 2, Offset(w - pad * 0.7f - dot * 0.9f, composerTop + composerH / 2))
 }
 
-/** An accent choice. "Theme" is a split disc: the theme's own accent beside its canvas, since it follows the theme. */
+/** An accent choice. "Theme" is a split disc: the theme's own accent beside surface3, since it follows the theme. */
 @Composable
 fun AccentDot(accent: AccentId, theme: ThemeId, selected: Boolean, onClick: () -> Unit) {
     val current = Pi.colors
@@ -141,7 +155,11 @@ fun AccentDot(accent: AccentId, theme: ThemeId, selected: Boolean, onClick: () -
         Box(
             Modifier
                 .size(48.dp)
-                .pressable(onClick, shape = CircleShape, pressedScale = 0.92f, role = Role.RadioButton, label = if (accent == AccentId.Theme) "Theme accent" else accent.label)
+                .semantics {
+                    contentDescription = if (accent == AccentId.Theme) "Theme's own accent" else "${accent.label} accent"
+                    this.selected = selected
+                }
+                .pressable(onClick, shape = CircleShape, pressedScale = 0.92f, role = Role.RadioButton, label = "Use ${accent.label}")
                 .border(1.5.dp, ring, CircleShape)
                 .padding(5.dp),
             contentAlignment = Alignment.Center,
@@ -171,6 +189,6 @@ fun AccentDot(accent: AccentId, theme: ThemeId, selected: Boolean, onClick: () -
             }
         }
         Spacer(Modifier.height(6.dp))
-        Text(accent.label, style = Pi.type.meta, color = if (selected) current.ink1 else current.ink2)
+        Text(accent.label, style = Pi.type.meta, color = if (selected) current.ink1 else current.ink2, maxLines = 1, modifier = Modifier.clearAndSetSemantics {})
     }
 }

@@ -1,8 +1,22 @@
 package opensec.pibolt.app.ui.scan
 
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import androidx.activity.compose.LocalActivity
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.core.app.ActivityCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Radius
 import android.Manifest
@@ -104,21 +118,32 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
     var granted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
-    var asked by remember { mutableStateOf(false) }
+    // Saved, so a rotation does not ask again. A refusal with no rationale to show means Android no longer shows its
+    // dialog (refused twice, or "Don't ask again"): the button then opens the app's system page instead.
+    var asked by rememberSaveable { mutableStateOf(false) }
+    var blocked by rememberSaveable { mutableStateOf(false) }
+    val activity = LocalActivity.current
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         granted = it
+        blocked = !it && activity?.let { a -> !ActivityCompat.shouldShowRequestPermissionRationale(a, Manifest.permission.CAMERA) } == true
         asked = true
+    }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        granted = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
     }
     var message by remember { mutableStateOf<String?>(null) }
     var accepted by remember { mutableStateOf(false) }
     var showPaste by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
-        if (!granted) launcher.launch(Manifest.permission.CAMERA)
+        if (!granted && !asked) launcher.launch(Manifest.permission.CAMERA)
         onDispose { }
     }
 
-    Box(Modifier.fillMaxSize().background(colors.canvas)) {
+    BoxWithConstraints(Modifier.fillMaxSize().background(colors.canvas)) {
+        // Landscape: the window sits in the space left of the controls, which move to the end side.
+        val wide = maxWidth > maxHeight
+        val controlsWidth = 320.dp
         if (granted) {
             CameraPreview(onText = { text ->
                 if (!PairingPayload.looksLikePairing(text)) {
@@ -137,7 +162,7 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
                     error == null
                 }
             })
-            ScanOverlay(accepted)
+            ScanOverlay(accepted, endReserve = if (wide) controlsWidth else 0.dp)
         } else {
             Column(
                 Modifier.fillMaxSize().padding(32.dp),
@@ -148,7 +173,7 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
                     Icon(Icons.Rounded.NoPhotography, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.hero))
                 }
                 Spacer(Modifier.height(20.dp))
-                Text("Camera access needed", style = type.title, color = colors.ink1)
+                Text("Camera access needed", style = type.title, color = colors.ink1, modifier = Modifier.semantics { heading() })
                 Spacer(Modifier.height(8.dp))
                 Text(
                     "Pi-Bolt uses the camera only to read the pairing code. You can also paste the link from /\u2060remote-control copy.",
@@ -158,7 +183,13 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
                 )
                 if (asked) {
                     Spacer(Modifier.height(24.dp))
-                    PrimaryButton("Allow camera", onClick = { launcher.launch(Manifest.permission.CAMERA) })
+                    if (blocked) {
+                        PrimaryButton("Open settings", onClick = { openAppSettings(context) })
+                        Spacer(Modifier.height(8.dp))
+                        Text("Allow the camera under Permissions, then come back.", style = type.meta, color = colors.ink3, textAlign = TextAlign.Center)
+                    } else {
+                        PrimaryButton("Allow camera", onClick = { launcher.launch(Manifest.permission.CAMERA) })
+                    }
                 }
             }
         }
@@ -182,18 +213,19 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
 
         Column(
             Modifier
-                .align(Alignment.BottomCenter)
+                .align(if (wide) Alignment.BottomEnd else Alignment.BottomCenter)
                 .navigationBarsPadding()
                 .padding(horizontal = 20.dp, vertical = 16.dp)
-                .fillMaxWidth(),
+                .then(if (wide) Modifier.width(controlsWidth - 40.dp) else Modifier.fillMaxWidth()),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             if (granted) {
                 Row(
                     Modifier
                         .background(colors.surface2.copy(alpha = 0.92f), RoundedCornerShape(Radius.lg))
-                        .border(1.dp, colors.line, RoundedCornerShape(Radius.lg))
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                        .border(1.dp, colors.lineStrong, RoundedCornerShape(Radius.lg))
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                        .semantics(mergeDescendants = true) { liveRegion = LiveRegionMode.Polite },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     AnimatedContent(
@@ -236,9 +268,13 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
     }
 }
 
-/** Canvas-tinted scrim with a 260dp window; the corner brackets settle in when the screen opens. */
+/**
+ * Canvas-tinted scrim with a 260dp window (smaller when the screen is short); the corner brackets settle in when the
+ * screen opens. [endReserve] is the width the controls take at the end side in landscape: the window centres in the
+ * rest, under the title bar.
+ */
 @Composable
-private fun ScanOverlay(accepted: Boolean) {
+private fun ScanOverlay(accepted: Boolean, endReserve: Dp) {
     val colors = Pi.colors
     val reduced = Pi.reduceMotion
     val settle = remember { Animatable(if (reduced) 1f else 0f) }
@@ -249,8 +285,20 @@ private fun ScanOverlay(accepted: Boolean) {
             .fillMaxSize()
             .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen },
     ) {
-        val side = WINDOW.toPx()
-        val topLeft = Offset((size.width - side) / 2, (size.height - side) / 2.3f)
+        val reserve = endReserve.toPx()
+        val area = size.width - reserve
+        val side: Float
+        val topLeft: Offset
+        if (reserve > 0f) {
+            // Landscape: below the title (about 88dp with the status bar), above the bottom edge.
+            val top = 88.dp.toPx()
+            side = minOf(WINDOW.toPx(), size.height - top - 16.dp.toPx(), area - 32.dp.toPx()).coerceAtLeast(120.dp.toPx())
+            val x = if (layoutDirection == LayoutDirection.Rtl) reserve + (area - side) / 2 else (area - side) / 2
+            topLeft = Offset(x, top + (size.height - top - side) / 2)
+        } else {
+            side = WINDOW.toPx()
+            topLeft = Offset((size.width - side) / 2, (size.height - side) / 2.3f)
+        }
         val radius = 28.dp.toPx()
         drawRect(colors.canvas.copy(alpha = 0.72f))
         drawRoundRect(Color.Transparent, topLeft, Size(side, side), CornerRadius(radius), blendMode = BlendMode.Clear)
@@ -346,4 +394,10 @@ private class QrDecoder {
             reader.reset()
         }
     }
+}
+
+private fun openAppSettings(context: Context) {
+    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", context.packageName, null))
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    runCatching { context.startActivity(intent) }
 }

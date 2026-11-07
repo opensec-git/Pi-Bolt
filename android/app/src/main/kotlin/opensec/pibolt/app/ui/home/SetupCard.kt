@@ -29,6 +29,7 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import opensec.pibolt.app.ui.components.ButtonRow
 import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.theme.Pi
@@ -77,15 +78,14 @@ fun SetupCard(modelName: String?, onConnect: () -> Unit, onNewProject: () -> Uni
         Spacer(Modifier.height(16.dp))
         if (!connected) {
             PrimaryButton("Connect a model", onClick = onConnect, icon = Icons.Rounded.Key, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(10.dp))
-            Row {
-                SecondaryButton("New project", onClick = onNewProject, modifier = Modifier.weight(1f))
-                Spacer(Modifier.width(10.dp))
-                SecondaryButton("Clone from git", onClick = onClone, modifier = Modifier.weight(1f))
+            Spacer(Modifier.height(12.dp))
+            ButtonRow {
+                SecondaryButton("New project", onClick = onNewProject)
+                SecondaryButton("Clone from git", onClick = onClone)
             }
         } else {
             PrimaryButton("New project", onClick = onNewProject, icon = Icons.Rounded.Add, modifier = Modifier.fillMaxWidth())
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             SecondaryButton("Clone from git", onClick = onClone, modifier = Modifier.fillMaxWidth())
         }
     }
@@ -108,23 +108,25 @@ private fun SetupStep(number: Int, label: String, detail: String, done: Boolean,
             .clearAndSetSemantics { contentDescription = "Step $number, $label, $state. $detail" },
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        // As in the desktop onboarding: the current step is the accent disc, a finished one surface3 with a check in
+        // ink1, a later one only a ring. Green stays for state, not progress.
         Box(
             Modifier
                 .size(28.dp)
-                .background(if (done) colors.successSoft else if (current) colors.surface3 else colors.surface2, CircleShape)
-                .border(1.dp, if (current) colors.lineStrong else colors.line, CircleShape),
+                .background(if (current) colors.accent else if (done) colors.surface3 else colors.surface1, CircleShape)
+                .then(if (!current && !done) Modifier.border(1.dp, colors.lineStrong, CircleShape) else Modifier),
             contentAlignment = Alignment.Center,
         ) {
             if (done) {
-                Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.success, modifier = Modifier.size(16.dp))
+                Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.ink1, modifier = Modifier.size(16.dp))
             } else {
-                Text(number.toString(), style = type.label, color = if (current) colors.ink1 else colors.ink2)
+                Text(number.toString(), style = type.label, color = if (current) colors.onAccent else colors.ink3)
             }
         }
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
-            Text(label, style = type.bodyStrong, color = if (done) colors.ink2 else colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(detail, style = type.meta, color = if (done) colors.success else colors.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(label, style = type.bodyStrong, color = if (done || current) colors.ink1 else colors.ink2, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(detail, style = type.meta, color = if (done) colors.ink2 else colors.ink3, maxLines = 2, overflow = TextOverflow.Ellipsis)
         }
     }
 }

@@ -52,7 +52,6 @@ class DesignRulesTest {
             "the app's snackbars",
             Regex("""(?<![\w.])Snackbar\(|Toast\.makeText"""),
             "use PiSnackHost and SnackbarHostState.show",
-            setOf("settings/AgentSection.kt"),
         ),
         Rule(
             "tabular figures through the token",

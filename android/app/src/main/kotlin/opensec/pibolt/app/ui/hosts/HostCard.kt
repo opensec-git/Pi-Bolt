@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -92,7 +93,8 @@ fun HostCard(host: Host, live: SessionController?, now: Long, onClick: () -> Uni
     Row(
         modifier
             .fillMaxWidth()
-            .height(Pi.dims.hostCard)
+            // At least the card height: at font scale 1.3 the three lines need a few dp more.
+            .heightIn(min = Pi.dims.hostCard)
             .sharedHostBounds(SharedKeys.card(host.id), card = true)
             .pressable(onClick, shape = shape, onLongClick = { menu = true }, label = "Open computer")
             .semantics { customActions = listOf(CustomAccessibilityAction("Forget computer") { menu = true; true }) }

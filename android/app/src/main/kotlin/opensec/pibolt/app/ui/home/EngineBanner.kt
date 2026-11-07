@@ -2,7 +2,6 @@ package opensec.pibolt.app.ui.home
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -28,6 +27,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import opensec.pibolt.app.engine.EngineStatus
+import opensec.pibolt.app.ui.components.ButtonRow
 import opensec.pibolt.app.ui.components.CopyButton
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PrimaryButton
@@ -131,13 +131,9 @@ fun EngineDetailsSheet(status: EngineStatus, onRetry: () -> Unit, onDismiss: () 
             }
         }
         Spacer(Modifier.height(12.dp))
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (status is EngineStatus.Failed && status.canRetry) {
-                SecondaryButton("Close", onClick = { close(onDismiss) }, modifier = Modifier.weight(1f))
-                PrimaryButton("Retry", onClick = { close(onRetry) }, modifier = Modifier.weight(1f))
-            } else {
-                SecondaryButton("Close", onClick = { close(onDismiss) }, modifier = Modifier.weight(1f))
-            }
+        ButtonRow(Modifier.padding(horizontal = 20.dp)) {
+            SecondaryButton("Close", onClick = { close(onDismiss) })
+            if (status is EngineStatus.Failed && status.canRetry) PrimaryButton("Retry", onClick = { close(onRetry) })
         }
     }
 }

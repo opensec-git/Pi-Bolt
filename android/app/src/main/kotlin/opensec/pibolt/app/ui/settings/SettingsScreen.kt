@@ -61,7 +61,10 @@ import opensec.pibolt.app.data.AccentId
 import opensec.pibolt.app.data.AppSettings
 import opensec.pibolt.app.data.Density
 import opensec.pibolt.app.data.ReduceMotion
+import androidx.compose.material3.SnackbarHostState
 import opensec.pibolt.app.ui.components.ConfirmSheet
+import opensec.pibolt.app.ui.components.PiSnackHost
+import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.components.ListRow
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.RowDivider
@@ -101,6 +104,8 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
     val show: (String) -> Boolean = { id -> visible == null || id in visible }
     val scroll = rememberScrollState()
     val scrolled by remember { derivedStateOf { scroll.value > 0 } }
+    val snackbar = remember { SnackbarHostState() }
+    val message: (String) -> Unit = { text -> scope.launch { snackbar.show(text) } }
     fun update(change: (AppSettings) -> AppSettings) = app.settings.update(change)
 
     Box(Modifier.fillMaxSize().background(colors.canvas)) {
@@ -141,7 +146,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                 }
 
                 if (SettingsGroup.Agent in groups) {
-                    Section(SettingsGroup.Agent.title) { AgentSection(app, show) }
+                    Section(SettingsGroup.Agent.title) { AgentSection(app, show, message) }
                 }
 
                 if (SettingsGroup.GitHub in groups) {
@@ -335,6 +340,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
             licence?.let { shown.value = it }
             shown.value?.let { Viewer(it, onClose = { licence = null }) }
         }
+        PiSnackHost(snackbar, Modifier.align(Alignment.BottomCenter).navigationBarsPadding().imePadding())
     }
     if (licences) {
         LicencesSheet(

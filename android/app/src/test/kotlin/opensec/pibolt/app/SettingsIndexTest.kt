@@ -22,6 +22,9 @@ class SettingsIndexTest {
         assertTrue("default-model" in SettingsIndex.visible("default model")!!)
         assertTrue("providers" in SettingsIndex.visible("api key")!!)
         assertEquals(setOf("runtimes"), SettingsIndex.visible("python"))
+        // The licences row names Mermaid and Termux, so a search for them finds it.
+        assertEquals(setOf("licences"), SettingsIndex.visible("mermaid"))
+        assertEquals(setOf("licences"), SettingsIndex.visible("termux"))
     }
 
     @Test
