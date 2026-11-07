@@ -17,6 +17,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -323,7 +325,10 @@ private fun TabChip(tab: TerminalTab, selected: Boolean, onSelect: () -> Unit, o
     )
 }
 
-/** Esc, Tab, Ctrl, Alt, the arrows and the shell characters a phone keyboard hides. 48dp keys. */
+/**
+ * Esc, Tab, Ctrl, Alt, the arrows and the shell characters a phone keyboard hides. Keys are at least 48dp wide: where
+ * all twelve fit (landscape, tablets) they share the width, so the row has no dead end; on a phone it scrolls.
+ */
 @Composable
 private fun ExtraKeys(view: TerminalView?, ctrl: MutableState<Boolean>, alt: MutableState<Boolean>) {
     val colors = Pi.colors
@@ -340,37 +345,46 @@ private fun ExtraKeys(view: TerminalView?, ctrl: MutableState<Boolean>, alt: Mut
         ctrl.value = false
         alt.value = false
     }
-    Row(
-        Modifier.fillMaxWidth().background(colors.surface1).horizontalScroll(rememberScrollState()).padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        ExtraKey("Esc", "Escape") { key(KeyEvent.KEYCODE_ESCAPE) }
-        ExtraKey("Tab", "Tab") { key(KeyEvent.KEYCODE_TAB) }
-        ExtraKey("Ctrl", "Control", toggled = ctrl.value) { ctrl.value = !ctrl.value }
-        ExtraKey("Alt", "Alt", toggled = alt.value) { alt.value = !alt.value }
-        ExtraKey(icon = Icons.AutoMirrored.Rounded.KeyboardArrowLeft, description = "Left") { key(KeyEvent.KEYCODE_DPAD_LEFT) }
-        ExtraKey(icon = Icons.Rounded.KeyboardArrowUp, description = "Up") { key(KeyEvent.KEYCODE_DPAD_UP) }
-        ExtraKey(icon = Icons.Rounded.KeyboardArrowDown, description = "Down") { key(KeyEvent.KEYCODE_DPAD_DOWN) }
-        ExtraKey(icon = Icons.AutoMirrored.Rounded.KeyboardArrowRight, description = "Right") { key(KeyEvent.KEYCODE_DPAD_RIGHT) }
-        ExtraKey("|", "Pipe") { char('|') }
-        ExtraKey("~", "Tilde") { char('~') }
-        ExtraKey("/", "Slash") { char('/') }
-        ExtraKey("-", "Dash") { char('-') }
+    BoxWithConstraints(Modifier.fillMaxWidth().background(colors.surface1)) {
+        val fits = maxWidth >= KEY_MIN * EXTRA_KEYS + 8.dp
+        Row(
+            Modifier.fillMaxWidth().then(if (fits) Modifier else Modifier.horizontalScroll(rememberScrollState())).padding(horizontal = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            val k = if (fits) Modifier.weight(1f) else Modifier
+            ExtraKey("Esc", "Escape", k) { key(KeyEvent.KEYCODE_ESCAPE) }
+            ExtraKey("Tab", "Tab", k) { key(KeyEvent.KEYCODE_TAB) }
+            ExtraKey("Ctrl", "Control", k, toggled = ctrl.value) { ctrl.value = !ctrl.value }
+            ExtraKey("Alt", "Alt", k, toggled = alt.value) { alt.value = !alt.value }
+            ExtraKey(null, "Left", k, icon = Icons.AutoMirrored.Rounded.KeyboardArrowLeft) { key(KeyEvent.KEYCODE_DPAD_LEFT) }
+            ExtraKey(null, "Up", k, icon = Icons.Rounded.KeyboardArrowUp) { key(KeyEvent.KEYCODE_DPAD_UP) }
+            ExtraKey(null, "Down", k, icon = Icons.Rounded.KeyboardArrowDown) { key(KeyEvent.KEYCODE_DPAD_DOWN) }
+            ExtraKey(null, "Right", k, icon = Icons.AutoMirrored.Rounded.KeyboardArrowRight) { key(KeyEvent.KEYCODE_DPAD_RIGHT) }
+            ExtraKey("|", "Pipe", k) { char('|') }
+            ExtraKey("~", "Tilde", k) { char('~') }
+            ExtraKey("/", "Slash", k) { char('/') }
+            ExtraKey("-", "Dash", k) { char('-') }
+        }
     }
 }
 
+private const val EXTRA_KEYS = 12
+private val KEY_MIN = 48.dp
+
+/** One key: the whole 48dp cell is the target; the 40dp key face (accent while a modifier is on) sits inside it. */
 @Composable
-private fun ExtraKey(text: String? = null, description: String, icon: ImageVector? = null, toggled: Boolean? = null, onClick: () -> Unit) {
+private fun ExtraKey(text: String?, description: String, modifier: Modifier = Modifier, icon: ImageVector? = null, toggled: Boolean? = null, onClick: () -> Unit) {
     val colors = Pi.colors
     val shape = RoundedCornerShape(Radius.sm)
     val fill by animateColorAsState(if (toggled == true) colors.accent else Color.Transparent, PiMotion.effects(), label = "key")
     val ink = if (toggled == true) colors.onAccent else colors.ink1
     Box(
-        Modifier
-            .size(width = 48.dp, height = 48.dp)
+        modifier
+            .widthIn(min = KEY_MIN)
+            .height(KEY_MIN)
+            .pressable(onClick, shape = shape, label = description)
             .padding(4.dp)
             .background(fill, shape)
-            .pressable(onClick, shape = shape, label = description)
             .semantics {
                 contentDescription = description
                 role = Role.Button

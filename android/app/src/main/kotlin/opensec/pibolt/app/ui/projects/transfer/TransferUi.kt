@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
@@ -26,6 +27,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
@@ -123,13 +126,19 @@ fun TransferBar(runner: TransferRunner, modifier: Modifier = Modifier) {
                 .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 10.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f).semantics { liveRegion = LiveRegionMode.Polite }) {
+                Column(Modifier.weight(1f)) {
+                    // TalkBack announces the transfer once (its label is the live region); the percent and the file
+                    // change ten times a second, so they are read on focus and from the progress line, not announced.
                     Text(
                         t.label + (fraction?.let { " · ${(it * 100).roundToInt()}%" } ?: ""),
                         style = type.bodyStrong,
                         color = colors.ink1,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clearAndSetSemantics {
+                            contentDescription = t.label
+                            liveRegion = LiveRegionMode.Polite
+                        },
                     )
                     val detail = buildList {
                         if (p.files > 0) add(if (p.files == 1) "1 file" else "${p.files} files")
@@ -138,7 +147,7 @@ fun TransferBar(runner: TransferRunner, modifier: Modifier = Modifier) {
                     }.joinToString(" · ")
                     Text(detail, style = type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
                 }
-                TextAction("Cancel", onClick = runner::cancel, color = colors.danger)
+                TextAction("Cancel", onClick = runner::cancel, color = colors.danger, modifier = Modifier.heightIn(min = 48.dp))
             }
             Spacer(Modifier.height(6.dp))
             Box(

@@ -96,10 +96,34 @@ object ProjectRules {
     }
 
     /** "3 sessions · 2 h ago", "1 session · just now", or "Empty folder" for a project that has never had a session. */
-    fun projectMeta(entry: ProjectEntry, now: Long): String {
-        if (entry.sessionCount == 0) return if (entry.meta.lastOpenedAt > 0) "No sessions · opened ${ago(entry.meta.lastOpenedAt, now)}" else "No sessions yet"
+    fun projectMeta(entry: ProjectEntry, now: Long): String =
+        projectMetaParts(entry, now).let { (lead, age) -> if (age == null) lead else "$lead · $age" }
+
+    /**
+     * [projectMeta] in two parts for the card: the part that may be cut ("3 sessions") and the age that never is
+     * ("2 h ago", "opened 3 d ago"), or null when there is no age to show.
+     */
+    fun projectMetaParts(entry: ProjectEntry, now: Long): Pair<String, String?> {
+        if (entry.sessionCount == 0) return if (entry.meta.lastOpenedAt > 0) "No sessions" to "opened ${ago(entry.meta.lastOpenedAt, now)}" else "No sessions yet" to null
         val count = if (entry.sessionCount == 1) "1 session" else "${entry.sessionCount} sessions"
-        return "$count · ${ago(entry.lastActive, now)}"
+        return count to ago(entry.lastActive, now)
+    }
+
+    /**
+     * The short time at a list row's end (Pi-Bolt Desktop's `relShort`): "now", "5m", "3h", "2d", "3w", "4mo". TalkBack
+     * reads [ago] instead.
+     */
+    fun agoShort(at: Long, now: Long): String {
+        if (at <= 0) return "–"
+        val s = ((now - at) / 1000).coerceAtLeast(0)
+        return when {
+            s < 60 -> "now"
+            s < 3600 -> "${s / 60}m"
+            s < 86_400 -> "${s / 3600}h"
+            s < 7 * 86_400 -> "${s / 86_400}d"
+            s < 60 * 86_400 -> "${s / (7 * 86_400)}w"
+            else -> "${s / (30 * 86_400)}mo"
+        }
     }
 
     /** "just now", "5 min ago", "3 h ago", "2 d ago", then a date-free "5 wk ago" / "3 mo ago". */

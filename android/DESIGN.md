@@ -279,17 +279,28 @@ with the mark, then:
   (surface1, phone-off glyph, the reason, Details). 64dp min, radius 12. Tapping it opens the details sheet: what
   happened, the raw detail in a mono well (surface1, radius 12, Copy), Close and Retry when a retry may help.
 - "Connect a model" card when no provider has a key and the first-run sheet was already closed (key glyph, Add key).
-- "Running": the on-device sessions working or waiting for an answer now, in any project (56dp rows: the live Quad,
-  the project, what it does). "Continue": up to 3 projects' newest sessions (64dp rows, one tap resumes), the open
-  idle session first; a project already under Running is not repeated here.
-- "Projects" (on this phone): project cards, 72dp like host cards (surface1, line, radius 12): a 40dp tile (surface2, radius 10,
-  folder glyph ink2; the live session's Quad 20dp with an 8dp status pip, success or warning, while one is open), the
-  title (bodyStrong; a 13dp pin glyph when pinned), then the last session's name or first prompt (meta ink3, ellipsized)
-  and " · 3 min ago" that never truncates. Overflow and long press: Pin to top, Rename, Delete (danger). Order: pinned,
-  then most recently active, then title.
-- No projects: a surface1 card (radius 18) with the mark, "Code on this phone", one line on what a project is, New
-  project (primary) and Clone from git (secondary).
-- "Computers · N" header (metaStrong ink3, "Remote control" meta and a chevron that turns 180° in a graphicsLayer):
+- Density and rows follow Pi-Bolt Desktop's Home and sidebar (`home.css`, `sidebar.css`), made for touch. Section
+  heads (`ListHead`, desktop `.hd-head`): the title in metaStrong ink2 (a heading), a count in meta ink3 (tnum), 36dp,
+  text 20dp in. Every Home row has one height token, `PiDims.homeRow` (56dp, 48 compact), as a minimum: text at a
+  large font scale grows the row instead of being cut.
+- "Running" (desktop "Now"): the on-device sessions working or waiting for an answer now, in any project, each its own
+  card (surface1, radius 12, lineStrong; warning @ 40% while it waits): the project (body ink1), then its Quad 12dp
+  and what it does (meta ink2). 8dp apart.
+- "Continue" (desktop "Recent") and "Projects" are grouped lists: one surface1 card (radius 12, 1dp line) whose rows
+  are split by a 1dp line (`GroupRow` + `groupCell`: the first row rounds the top, the last the bottom, a row never
+  draws its bottom edge, so dividers never double). A row: 16dp in, a 20dp state slot, 12dp, the title, the trailing
+  meta (meta ink3, tnum, never truncated).
+  - Continue: up to 3 projects' newest sessions, the open idle session first; a project already under Running is not
+    repeated. Slot: the live Quad, an 8dp accent dot for new activity, else a 6dp ink4 dot (decoration). Title ink2,
+    ink1 (bodyStrong when unread) when something is new or open, as on the desktop sidebar; the project in meta ink3
+    after it (it gives way first, at most a third); the short time ("now", "5m", "3h", "2d", "3w", "4mo").
+  - Projects: slot the folder glyph ink3 (the live session's Quad while one is open); the title in body ink1 (a 13dp
+    pin glyph when pinned); the short time of its last activity, "open" (ink2) while its session is open, or "new".
+    TalkBack reads the whole line ("calc-parser, pinned, 3 sessions · 2 h ago"). Long press (and a TalkBack action):
+    Pin to top, Rename, Delete (danger). Order: pinned, then most recently active, then title.
+- No model or no project yet: the setup card (surface1, radius 18): "Set up Pi-Bolt", two numbered 56dp steps (connect
+  a model, create a project); only the next step is the primary button.
+- "Computers  N" header (styled as a section head, metaStrong ink2 and the count in meta ink3, 48dp, a chevron that turns 180° in a graphicsLayer):
   folded by default once projects exist, open when there are none, when the engine is unavailable or a computer
   session is live. The header is 48dp tall and TalkBack reads it as Expanded / Collapsed. Open: host cards (at least
   72dp; they grow at large font sizes instead of clipping their third line), a one-line hint, Paste link and Scan code
@@ -297,7 +308,7 @@ with the mark, then:
 - Bottom: "New project" (accent, primary, full width) on a canvas fade. Nothing below the title is placed until the
   folders were read (a few ms, off the main thread), so the computers section never jumps.
 
-**New project sheet.** Title, one line, a segmented "Empty folder | Clone from git". Clone shows the repository URL
+**New project sheet.** Title, one line, a 48dp segmented "Empty folder | Clone from git". Clone shows the repository URL
 (monoSmall, URI keyboard, no autocorrect) and, when signed in to GitHub, "Choose from GitHub" (accent text action) that
 opens the repository picker: a search field, then 56dp rows (full name in body ink1, description meta ink3, a lock
 glyph for private ones), 100 per page with "Load more". The URL names the folder until the name is edited. Name field,
@@ -313,11 +324,14 @@ sessions by path, so the folder never moves. Delete is a confirmation sheet that
 **Project.** One workspace with four places, Sessions, Files, Changes and Terminal, under one top bar and over one
 bottom bar, so the project reads as a single tool rather than four screens. Shared bounds from the project card (title
 as a shared element, like host card to session).
+- Landscape: Home, the project (with its overlays), the preview and the full-screen terminal keep the side navigation
+  bar and a display cutout's side (`safeDrawing`, horizontal); the canvas still fills the window.
 - Top bar 56dp: back ("Projects"), the title (subhead ink1, a 13dp pin glyph when pinned) over `projects/x` and, in a
   git repository, the branch glyph + the branch from `.git/HEAD` (monoMeta ink3); then the shown tab's own action
   (Sessions: search and manage sessions; Terminal: Secrets) and ⋮ (Pin, Rename, Export as zip, Secrets, Runtimes,
   Delete in danger). Nothing else sits above a tab's content, so each tab starts 56dp under the status bar.
-- Bottom bar (`ProjectNavBar`): surface1, a 1dp line above, 64dp plus the navigation bar. Four equal items: a 22dp
+- Bottom bar (`ProjectNavBar`): surface1, a 1dp line above, at least 64dp (it grows with large text) plus the
+  navigation bar; the four tabs are one selectable group, so TalkBack reads "Tab, 2 of 4". Four equal items: a 22dp
   glyph (filled when selected, outlined otherwise; the terminal glyph for Terminal) in a 56x30 pill (surface3 when
   selected, crossfading), the label under it (metaStrong ink1 selected, meta ink3 otherwise). Changes carries the
   number of changed paths (micro onAccent on accent, at least 16dp wide, "99+" past 99, ringed in surface1); Sessions
@@ -328,16 +342,20 @@ as a shared element, like host card to session).
   and while a full-screen view (file, diff, history) covers the project. In a window under 480dp tall (landscape) the
   top bar also steps aside while the keyboard is up, so the terminal keeps its lines.
 - Each tab keeps its own scroll position; the shown tab survives rotation and process death.
-- Empty and loading states share one pattern: an `EmptyCard` (surface1, line, radius 12, 16dp padding; a 20dp ink3
-  glyph, the title in bodyStrong, one line in body ink2, then its actions) and a `LoadingRow` (16dp Quad Run ink3 +
-  "Reading sessions…" in meta ink3, 48dp) while a list is read from disk.
-- Sessions: New session (primary, full width) first, then "6 sessions" (SectionLabel) over the rows; without any,
-  "No sessions yet" (EmptyCard, chat glyph). Rows: 64dp cards (surface1, line, radius 12): chat glyph ink3 (the live session: its Quad, lineStrong border,
-  "Open" first in the meta line), the session name or first prompt (body ink1), "24 messages · 2 h ago" (meta ink3).
-  Tap resumes; the live one resumes without reopening.
+- Empty, loading and error states share one pattern: an `EmptyCard` (surface1, line, radius 12, 16dp padding; a 20dp
+  ink3 glyph, the title in bodyStrong, one line in body ink2, then its actions), the kit's `LoadingRow` ("Reading
+  sessions…") while a list, a file, a diff or the history is read, and the kit's `ErrorState` (with Try again) when a
+  read fails: an error never looks like an empty list, and no view is ever blank while it loads.
+- Sessions: New session (primary, full width) first, then the "Sessions  6" head over a grouped list of `GroupRow`s
+  (desktop `.hd-row`): the live Quad, an accent dot for new activity or a quiet ink4 dot; the session name or first
+  prompt (ink2, ink1 when new or open); "open · 24 msg · 2h" (meta ink3, tnum). Without any, "No sessions yet"
+  (EmptyCard, chat glyph). Tap resumes; the live one resumes without reopening. The search sheet stacks its two
+  48dp segmented controls (Names | Messages, then the sort) so neither clips at 360dp and font scale 1.3.
 - Files: one folder at a time, under a sticky breadcrumb bar (+ for new file, folder and import; sort and hidden
   files). An empty folder is an EmptyCard ("No files yet" at the root, "This folder is empty" inside, or the count of
-  hidden files) with New file and Import (secondary, side by side); 52dp rows: folder or file glyph, the name in monoSmall (dot files ink3), size or "N items" (meta ink3) at the end.
+  hidden files) with New file and Import (secondary, side by side); 52dp rows: folder or file glyph, the name in monoSmall (dot files ink3), size or "N items" (meta ink3) at the end,
+  an auto-mirrored chevron for folders; long press is also a TalkBack action ("File actions"). Breadcrumb separators
+  are ink3 (no ink4 text).
   Folders first, then files, by name. Tapping a file opens the full-screen viewer (first 512 KB; binary files say so).
   Back goes up a folder before it leaves the screen.
   The "+" menu also imports: "Import files…" (ACTION_OPEN_DOCUMENT, several) and "Import a folder…"
@@ -345,7 +363,8 @@ as a shared element, like host card to session).
   "Export as zip", a file's "Share"; the project's ⋮ menu has "Export as zip". The export sheet: "Leave out .git and
   dependencies" (a 56dp checkbox row, on by default), then Share (secondary) and Save to… (primary, ACTION_CREATE_DOCUMENT).
   A transfer shows a card above the bottom edge (surface2, lineStrong, radius 12): "Importing 3 files · 40%"
-  (bodyStrong), "2 files · 1.2 MB of 3 MB · src/a.kt" (monoMeta ink3), Cancel (danger text action) and a 3dp accent
+  (bodyStrong; TalkBack announces only the label, once), "2 files · 1.2 MB of 3 MB · src/a.kt" (monoMeta ink3),
+  Cancel (danger text action, 48dp) and a 3dp accent
   progress line on surface3 (no fill when the total is unknown: never an indeterminate animation). Progress updates
   at most every 100 ms. New project has "Import a zip as a project…" (accent text action) under its buttons.
 - Changes (git, through the engine's own git off the main thread with timeouts): outside a repository a card offers
@@ -353,8 +372,8 @@ as a shared element, like host card to session).
   "origin/main · 2 to push · 1 to pull" in meta ink3, tap for the Branches sheet; while an operation runs, a 16dp Run
   Quad and git's progress in meta ink2; then Pull, Push (text actions), "Pull request" (accent, GitHub remotes when
   signed in) and History. Sections "Conflicts", "Staged · N" (Unstage all) and "Changes · N" (Stage all) list 56dp file
-  rows: the change letter in a 20dp surface2 tile (added/untracked success, deleted/conflict danger, renamed warning,
-  modified ink2; TalkBack reads the word), the file name in body over its folder in monoMeta ink3, and a 48dp + / −
+  rows: the change letter in a 20dp slot, mono SemiBold with no tile, as the desktop's `.gx-st` (added/untracked
+  success, deleted/conflict danger, modified warning, renamed ink2; TalkBack reads the word), the file name in body over its folder in monoMeta ink3, and a 48dp + / −
   button to stage or unstage. Tap opens the diff; long press asks to discard (ConfirmSheet, danger; untracked files are
   deleted). The commit card comes right under the branch card as soon as something is staged (and stays while a
   message is written), so committing never needs a scroll past the file list: "Commit 2 files" (bodyStrong), the
@@ -363,12 +382,16 @@ as a shared element, like host card to session).
   "Changes · N" says how to stage. Clean: "No changes" (EmptyCard, check glyph); outside a repository "Not a git
   repository" (EmptyCard, branch glyph) with Initialise git; "Reading git status…" (LoadingRow) until git answers. Without a git identity
   the commit opens "Who is committing?" (name, email; prefilled with the GitHub name and no-reply address).
-- Diff viewer: full screen (fade and 10% rise, sheet duration). Bar: back, file name over its path, Stage or Unstage
+- Closing: a full-screen view over the workspace (file viewer, diff, history) closes with ✕ ("Close"); a step inside
+  one (a commit opened from the history) goes back with ← ("Back to history"). `OverlayBar(back = …)` holds the rule.
+- Diff viewer: full screen (fade and 10% rise, sheet duration). Bar: ✕, file name over its path, Stage or Unstage
   and, unstaged, Discard. Each hunk is a card: its `@@` header (monoMeta ink3 on surface2) with Stage hunk / Unstage
   hunk and, unstaged, a discard glyph (confirmed), then the rows renderer (DiffBlock: two gutters, sign column, solid
-  and hatched bars, syntax colours, word marks). Binary files, renames without changes and very large diffs say so.
-- History: full screen list of 64dp rows (subject in body, "abc1234 · author · 2 h ago" meta ink3, refs monoMeta ink2),
-  100 at a time. A commit opens its subject (subhead), body, author, date and a copy-hash button, then a card per file
+  and hatched bars, syntax colours, word marks). Binary files, renames without changes and a file with no changes left are EmptyCards; very large diffs say so;
+  "Reading the diff…" while git answers, a failed read an ErrorState.
+- History: full screen (✕), "Reading the history…" first, "No commits yet" as an EmptyCard, a failed read an
+  ErrorState with Try again; a list of 64dp rows (subject in body, "abc1234 · author · 2 h ago" meta ink3, refs monoMeta ink2),
+  100 at a time. A commit (←, back to the list) opens its subject (subhead), body, author, date and a copy-hash button, then a card per file
   (path in monoSmall, +/− counts) that folds its diff (folded first when more than three files).
 - Branches sheet: a new-branch field (mono, validated like `git check-ref-format`) with Create, then "On this phone"
   (current first, success check) and "On the remote" (switching creates a tracking branch).
@@ -380,11 +403,12 @@ as a shared element, like host card to session).
 
 **Terminal.** Termux's TerminalView in JetBrains Mono on canvas: text ink1, cursor accent, the 16 base colours mapped
 to tokens as in tool output (red danger, green success, blue the syntax function colour...), no cursor blink. A 48dp
-bar: tab chips (`WorkspaceTab`, the editor's too: 36dp drawn in a 48dp row, radius 8, surface2 + lineStrong when
-selected, line otherwise; "1 · title" in monoSmall, ink3 when the shell ended; a 16dp close glyph with a 48dp target),
+bar: tab chips (`WorkspaceTab`, the editor's too, as the desktop's `.term-tab`: 36dp drawn in a 48dp row, radius 8,
+surface2 + a 1dp line when shown, no fill or border otherwise; "1 · title" in monoSmall, ink1 shown, ink3 otherwise and
+when the shell ended; a 16dp close glyph with a 48dp target; the shown tab scrolls itself into view),
 + (new terminal), Paste, Text size (one menu: Larger, Smaller, "13 sp · pinch the terminal too"; 8 to 28 sp, also by
-pinch), full screen / leave full screen. Under it the Preview chips. The extra-keys row (surface1, 48dp keys, monoMeta ink1 or
-a 20dp arrow glyph): Esc, Tab, Ctrl, Alt, the four arrows, |, ~, /, -; Ctrl and Alt fill with accent (onAccent text)
+pinch), full screen / leave full screen. Under it the Preview chips. The extra-keys row (surface1; each key a 48dp target with a 40dp face, monoMeta ink1 or
+a 20dp arrow glyph; the keys share the width where all twelve fit, landscape and tablets, and scroll on a phone): Esc, Tab, Ctrl, Alt, the four arrows, |, ~, /, -; Ctrl and Alt fill with accent (onAccent text)
 while on and apply to the next key only. Long press selects text (Termux's floating Copy / Paste bar); tap shows the
 keyboard (character input, no suggestions). An ended shell says "[Process completed - press Enter]"; Enter closes the
 tab. No tab yet: "A shell in this project" (EmptyCard, terminal glyph), one line, Start a terminal (primary). Full screen: the same pane above
@@ -393,7 +417,8 @@ running" notification (Close all) holds them in the background.
 
 **Preview.** Chips "Preview: localhost:5173" (label ink1 on successSoft, success @ 40% line, radius 8, 48dp touch) in
 the terminal and above the composer of an on-device session, while a dev server listens. The preview screen: back,
-the URL (monoMeta ink2, middle ellipsis), Reload, Open in browser; a 2dp accent progress line while loading; the page
+the URL (monoMeta ink2, middle ellipsis), Reload, Open in browser; a 2dp `ProgressLine` while loading, filled from
+WebView's own progress (determinate, never an indeterminate bar); the page
 in a WebView (http://localhost and 127.0.0.1 only; tapped links elsewhere open in the browser). When the dev server does not
 answer (stopped, still starting), an EmptyCard over the page says so ("Nothing answers on localhost:5173", what to
 check, the WebView's reason) with Reload (primary) instead of WebView's own error page.
@@ -421,7 +446,9 @@ with the replacement and "Replace" / "All" (accent text actions); a bad regex or
 Matches are accent 22%, the current one 50%. Editing: the same monoSmall text, colours as in code blocks (updated
 as you type), the bracket pair at the cursor on surface3, a 48dp bar over the keyboard (surface1, top line): Undo,
 Redo, Insert indent, Go to line, "Ln 12, Col 4" (monoMeta ink3; "No colours over 400 KB" first for big files).
-Files over 1 MB open read-only. Leaving or closing a tab with unsaved edits asks first ("Discard").
+Files over 1 MB open read-only. Leaving or closing a tab with unsaved edits asks first ("Discard"). The editing bar's
+fill runs under the navigation bar with its keys above it, and sits on the keyboard when it is up. "Opening x…"
+(LoadingRow) while a file loads. Markdown's Rendered | Source is a 48dp segmented control.
 
 **Share into Pi-Bolt.** Another app's share sheet lists Pi-Bolt for files, images and text. A sheet: "Share to
 Pi-Bolt" with "2 images" / "1 file" / "Text"; a segmented choice when there is more than one (Attach to chat |

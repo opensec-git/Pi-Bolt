@@ -1,6 +1,10 @@
 package opensec.pibolt.app.ui.projects
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.material3.Icon
 import androidx.compose.material3.DropdownMenuItem
@@ -44,10 +48,11 @@ import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
 
 /**
- * One tab of the workspace's tab strips (open files in the editor, shells in the terminal): 36dp drawn inside a
- * 48dp row, radius 8, surface2 and a lineStrong border when shown, a line border otherwise. A 7dp warning dot when
- * [dirty], the name in monoSmall (ink1 shown, ink2 otherwise, ink3 when [ended]; at most 160dp) and a 16dp close
- * glyph. The name and the close button each have a 48dp-tall target.
+ * One tab of the workspace's tab strips (open files in the editor, shells in the terminal), as Pi-Bolt Desktop's
+ * `.term-tab`: 36dp drawn inside a 48dp row, radius 8; the shown tab is surface2 with a 1dp line, the others have no
+ * fill or border. A 7dp warning dot when [dirty], the name in monoSmall (ink1 shown, ink3 otherwise and for an
+ * ended shell; at most 160dp) and a 16dp close glyph. The name and the close button each have a 48dp-tall target. The
+ * shown tab scrolls itself into view (a file opened from Files, a new shell), so it is never off the strip's edge.
  */
 @Composable
 fun WorkspaceTab(
@@ -63,10 +68,13 @@ fun WorkspaceTab(
 ) {
     val colors = Pi.colors
     val fill by animateColorAsState(if (selected) colors.surface2 else Color.Transparent, PiMotion.effects(), label = "tab-fill")
-    val edge = if (selected) colors.lineStrong else colors.line
+    val edge by animateColorAsState(if (selected) colors.line else Color.Transparent, PiMotion.effects(), label = "tab-edge")
+    val inView = remember { BringIntoViewRequester() }
+    LaunchedEffect(selected) { if (selected) runCatching { inView.bringIntoView() } }
     Row(
         modifier
             .height(48.dp)
+            .bringIntoViewRequester(inView)
             .drawBehind {
                 val inset = 6.dp.toPx()
                 val r = CornerRadius(Radius.sm.toPx())
@@ -96,11 +104,7 @@ fun WorkspaceTab(
                 Text(
                     name,
                     style = Pi.type.monoSmall,
-                    color = when {
-                        ended -> colors.ink3
-                        selected -> colors.ink1
-                        else -> colors.ink2
-                    },
+                    color = if (selected && !ended) colors.ink1 else colors.ink3,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.widthIn(max = 160.dp),

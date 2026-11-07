@@ -50,7 +50,8 @@ import opensec.pibolt.app.ui.components.QuadMath
 /** Sizes that change with the density setting. */
 @Immutable
 data class PiDims(val compact: Boolean) {
-    val hostCard: Dp get() = if (compact) 64.dp else 72.dp
+    /** The minimum height of a list row on Home and in a project (grouped rows, computer cards); text can grow it. */
+    val homeRow: Dp get() = if (compact) 48.dp else 56.dp
     val optionRow: Dp get() = if (compact) 46.dp else 52.dp
     val turnGap: Dp get() = if (compact) 14.dp else 20.dp
     val stepGap: Dp get() = if (compact) 4.dp else 6.dp

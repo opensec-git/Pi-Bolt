@@ -5,6 +5,7 @@ import opensec.pibolt.app.data.ProjectsCodec
 import opensec.pibolt.app.data.ProjectsFile
 import opensec.pibolt.app.engine.SessionIndex
 import opensec.pibolt.app.engine.SessionSummary
+import opensec.pibolt.app.ui.projects.GroupPos
 import opensec.pibolt.app.ui.projects.ProjectEntry
 import opensec.pibolt.app.ui.projects.ProjectRules
 import java.io.File
@@ -66,6 +67,43 @@ class ContinueTest {
         val now = 10L * 3_600_000
         assertEquals("No sessions yet", ProjectRules.projectMeta(project("c", null), now))
         assertEquals("1 session · 2 h ago", ProjectRules.projectMeta(project("a", now - 2 * 3_600_000), now))
+    }
+
+    @Test
+    fun shortTimesForRowEnds() {
+        val now = 400L * 86_400_000
+        fun at(seconds: Long) = ProjectRules.agoShort(now - seconds * 1000, now)
+        assertEquals("now", at(5))
+        assertEquals("5m", at(5 * 60))
+        assertEquals("3h", at(3 * 3600))
+        assertEquals("2d", at(2 * 86_400))
+        assertEquals("3w", at(21 * 86_400))
+        assertEquals("4mo", at(120 * 86_400))
+        assertEquals("–", ProjectRules.agoShort(0, now), "never")
+        assertEquals("now", ProjectRules.agoShort(now + 5_000, now), "a clock a little ahead")
+    }
+
+    @Test
+    fun groupedRowsKnowTheirPlace() {
+        assertEquals(GroupPos.Only, GroupPos.of(0, 1))
+        assertEquals(listOf(GroupPos.First, GroupPos.Middle, GroupPos.Last), (0 until 3).map { GroupPos.of(it, 3) })
+        assertEquals(listOf(GroupPos.First, GroupPos.Last), (0 until 2).map { GroupPos.of(it, 2) })
+        // Rounded top on the first, bottom on the last; only a single row is both.
+        assertTrue(GroupPos.Only.first && GroupPos.Only.last)
+        assertTrue(GroupPos.First.first && !GroupPos.First.last)
+        assertTrue(!GroupPos.Middle.first && !GroupPos.Middle.last)
+        assertTrue(!GroupPos.Last.first && GroupPos.Last.last)
+    }
+
+    @Test
+    fun projectMetaSplitsSoTheAgeNeverTruncates() {
+        val now = 30L * 86_400_000
+        // The card ellipsizes the first part only; the age is a separate text.
+        assertEquals("1 session" to "2 h ago", ProjectRules.projectMetaParts(project("a", now - 2 * 3_600_000), now))
+        assertEquals("No sessions yet" to null, ProjectRules.projectMetaParts(project("c", null), now))
+        val opened = project("o", null).let { it.copy(meta = it.meta.copy(lastOpenedAt = now - 3 * 86_400_000L)) }
+        assertEquals("No sessions" to "opened 3 d ago", ProjectRules.projectMetaParts(opened, now))
+        assertEquals("No sessions · opened 3 d ago", ProjectRules.projectMeta(opened, now))
     }
 
     @Test

@@ -1,6 +1,5 @@
 package opensec.pibolt.app.ui.session.features2
 
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -11,7 +10,7 @@ import androidx.compose.material.icons.automirrored.rounded.Chat
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.OpenInNew
+import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -103,22 +102,21 @@ fun SessionBrowserSheet(
             leading = { Icon(Icons.Rounded.Search, contentDescription = null, tint = Pi.colors.ink3) },
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
         )
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-            Segmented(
-                options = listOf(false to "Names", true to "Messages"),
-                selected = inside,
-                onSelect = { inside = it },
-                modifier = Modifier.weight(1f).padding(end = 8.dp),
-                height = 40.dp,
-            )
-            Segmented(
-                options = SessionSort.entries.map { it to it.label },
-                selected = sort,
-                onSelect = { sort = it },
-                modifier = Modifier.weight(1.4f),
-                height = 40.dp,
-            )
-        }
+        // Two rows, not one: side by side at 360dp, "Messages" lost its last letters at font scale 1.3. 48dp, as forms.
+        Segmented(
+            options = listOf(false to "Names", true to "Messages"),
+            selected = inside,
+            onSelect = { inside = it },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            height = 48.dp,
+        )
+        Segmented(
+            options = SessionSort.entries.map { it to it.label },
+            selected = sort,
+            onSelect = { sort = it },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+            height = 48.dp,
+        )
         val list = all
         when {
             list == null -> F2Loading("Reading sessions")
@@ -176,7 +174,7 @@ fun SessionBrowserSheet(
         ActionsSheet(
             title = ProjectRules.sessionTitle(s.summary),
             actions = listOfNotNull(
-                SheetAction("Open", Icons.Rounded.OpenInNew) { close { onOpen(s.summary) } }.takeIf { !open },
+                SheetAction("Open", Icons.AutoMirrored.Rounded.OpenInNew) { close { onOpen(s.summary) } }.takeIf { !open },
                 SheetAction("Rename", Icons.Rounded.DriveFileRenameOutline) { renaming = s },
                 SheetAction("Delete", Icons.Rounded.Delete) { deleting = s }.takeIf { !open },
             ),

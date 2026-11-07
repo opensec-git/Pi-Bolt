@@ -115,7 +115,7 @@ fun NewProjectSheet(
                 failure = null
             },
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            height = 40.dp,
+            height = 48.dp,
         )
         AnimatedVisibility(
             visible = clone,

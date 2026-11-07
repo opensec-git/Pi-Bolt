@@ -22,6 +22,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.History
+import opensec.pibolt.app.ui.components.ErrorState
+import opensec.pibolt.app.ui.components.LoadingRow
+import opensec.pibolt.app.ui.projects.EmptyCard
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -65,15 +69,19 @@ fun HistoryViewer(ui: ChangesUi, onClose: () -> Unit) {
     var loading by remember { mutableStateOf(false) }
     var page by remember { mutableStateOf(0) }
     var open by rememberSaveable { mutableStateOf<String?>(null) }
-    LaunchedEffect(page, model.version) {
+    // A failed read is an error with Try again, never an empty history.
+    var failed by remember { mutableStateOf<String?>(null) }
+    var attempt by remember { mutableStateOf(0) }
+    LaunchedEffect(page, model.version, attempt) {
         loading = true
+        failed = null
         try {
             val got = model.repo.log(PAGE, skip = page * PAGE)
             if (page == 0) commits.clear()
             commits += got
             end = got.size < PAGE
         } catch (e: GitException) {
-            ui.error(e.message ?: "Could not read the history")
+            if (commits.isEmpty()) failed = e.message ?: "Git could not read the history." else ui.error(e.message ?: "Could not read the history")
             end = true
         }
         loading = false
@@ -84,7 +92,18 @@ fun HistoryViewer(ui: ChangesUi, onClose: () -> Unit) {
         Column(Modifier.fillMaxSize()) {
             OverlayBar("History", model.status?.branch?.head, onBack = onClose)
             LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
-                if (!loading && commits.isEmpty()) item(key = "empty") { Note("No commits yet.") }
+                when {
+                    failed != null -> item(key = "error") {
+                        ErrorState("Could not read the history", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), message = failed, onRetry = {
+                            end = false
+                            attempt++
+                        })
+                    }
+                    loading && commits.isEmpty() -> item(key = "loading") { LoadingRow("Reading the history…", Modifier.padding(top = 8.dp)) }
+                    commits.isEmpty() -> item(key = "empty") {
+                        Box(Modifier.padding(top = 4.dp)) { EmptyCard(Icons.Rounded.History, "No commits yet", "Stage files in Changes and commit them; they show up here.") }
+                    }
+                }
                 items(commits, key = { it.hash }) { c ->
                     Row(
                         Modifier
@@ -129,7 +148,10 @@ private fun CommitViewer(ui: ChangesUi, hash: String, onClose: () -> Unit) {
     var commit by remember(hash) { mutableStateOf<Commit?>(null) }
     var files by remember(hash) { mutableStateOf<List<FileDiff>>(emptyList()) }
     val folded = remember(hash) { mutableStateListOf<Int>() }
-    LaunchedEffect(hash) {
+    var failed by remember(hash) { mutableStateOf<String?>(null) }
+    var attempt by remember(hash) { mutableStateOf(0) }
+    LaunchedEffect(hash, attempt) {
+        failed = null
         try {
             val (c, f) = ui.model.repo.show(hash)
             commit = c
@@ -137,15 +159,24 @@ private fun CommitViewer(ui: ChangesUi, hash: String, onClose: () -> Unit) {
             // Many files: start folded, so the list opens fast.
             if (f.size > 3) folded += f.indices
         } catch (e: GitException) {
-            ui.error(e.message ?: "Could not open the commit")
+            failed = e.message ?: "Git could not read this commit."
         }
     }
     val bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
     Column(Modifier.fillMaxSize().background(colors.canvas)) {
-        OverlayBar(commit?.subject ?: "Commit", hash.take(12), onBack = onClose) {
+        // A step inside the history: back, not close.
+        OverlayBar(commit?.subject ?: "Commit", hash.take(12), onBack = onClose, back = true, backLabel = "Back to history") {
             CopyButton(text = { hash }, label = false, description = "Copy the commit hash")
         }
-        val c = commit ?: return@Column
+        val c = commit ?: run {
+            val error = failed
+            if (error != null) {
+                ErrorState("Could not open the commit", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), message = error, onRetry = { attempt++ })
+            } else {
+                LoadingRow("Reading the commit…", Modifier.padding(top = 8.dp))
+            }
+            return@Column
+        }
         LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
             item(key = "head") {
                 Column(Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) {
