@@ -4,3 +4,5 @@
 -dontwarn okhttp3.internal.platform.**
 -dontwarn org.conscrypt.**
 -dontwarn org.openjsse.**
+# Termux terminal-emulator: libtermux.so binds JNI by class and method name.
+-keep class com.termux.terminal.JNI { *; }

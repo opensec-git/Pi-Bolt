@@ -5,6 +5,8 @@
     <string name="channel_session_desc">Keeps the connection while Pi works in the background</string>
     <string name="channel_alerts">Session updates</string>
     <string name="channel_alerts_desc">Pi finished, or needs an answer</string>
+    <string name="channel_terminal">Terminals</string>
+    <string name="channel_terminal_desc">Keeps your terminal shells running in the background</string>
     <string name="channel_updates">App updates</string>
     <string name="channel_updates_desc">Downloading a new version of Pi-Bolt</string>
 </resources>

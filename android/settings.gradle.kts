@@ -23,6 +23,12 @@ dependencyResolutionManagement {
             }
         }
         mavenCentral()
+        // Termux's terminal-emulator and terminal-view (Apache-2.0), built by JitPack from the termux-app release tag.
+        // Only that group resolves here, and gradle/verification-metadata.xml pins each file's sha256.
+        exclusiveContent {
+            forRepository { maven("https://jitpack.io") { name = "JitPack" } }
+            filter { includeGroup("com.github.termux.termux-app") }
+        }
     }
 }
 

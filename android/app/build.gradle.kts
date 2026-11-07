@@ -131,6 +131,9 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
     implementation(libs.zxing.core)
+    // The terminal: a pty (JNI, libtermux.so) and a VT emulator, and its Android view.
+    implementation(libs.termux.terminal.emulator)
+    implementation(libs.termux.terminal.view)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)

@@ -300,6 +300,9 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit) {
                             NavRow("JetBrains Mono licence", "SIL Open Font License 1.1", onClick = {
                                 scope.launch { licence = ViewerContent("JetBrains Mono", "SIL Open Font License 1.1", readRaw(context, R.raw.license_jetbrains_mono), wrap = true) }
                             })
+                            NavRow("Termux terminal licence", "Apache License 2.0", onClick = {
+                                scope.launch { licence = ViewerContent("Termux terminal", "Apache License 2.0", readRaw(context, R.raw.license_termux_terminal), wrap = true) }
+                            })
                         }
                     }
                 }
