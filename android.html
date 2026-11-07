@@ -161,7 +161,7 @@
         your own model provider keys, sessions you can resume and fork. No computer, no Termux. And when you are at your
         desk, the same app remote-controls Pi-Bolt on your computer, paired by QR code and end to end encrypted.</p>
       <div class="get">
-        <a class="btn primary big" id="download" href="https://github.com/opensec-git/Pi-Bolt/releases/download/android-v0.6.0/pi-bolt-android-0.6.0.apk" download><span>Download the APK</span><i aria-hidden="true">↓</i></a>
+        <a class="btn primary big" id="download" href="https://github.com/opensec-git/Pi-Bolt/releases/download/android-v0.6.0/pi-bolt-android-0.6.0.apk"><span>Download the APK</span><i aria-hidden="true">↓</i></a>
         <a class="link" href="#install">How to install <span aria-hidden="true">→</span></a>
       </div>
       <div class="meta" id="meta">Version 0.6.0 · about 180 MB · Android 8.0 or later, 64-bit ARM</div>
@@ -261,7 +261,7 @@
       sessionStorage.setItem("pibolt-apk-started", "1");
     } catch (e) {}
     var status = document.getElementById("status");
-    status.textContent = "Your download should start now. If it does not, tap Download the APK. Then open the file to install it.";
+    status.textContent = "Your download should start now. When Chrome asks whether to keep the file, tap Download anyway. If nothing starts, tap Download the APK. Then open the file to install it.";
     status.hidden = false;
     setTimeout(function () { location.href = document.getElementById("download").href; }, 400);
   }
@@ -269,20 +269,22 @@
   function showTapHint() {
     if (!isAndroid || inApp) return;
     var status = document.getElementById("status");
-    status.textContent = "Tap Download the APK to get the app, then open the file to install it.";
+    status.textContent = "Tap Download the APK to get the app (when Chrome asks, tap Download anyway), then open the file to install it.";
     status.hidden = false;
   }
 
   if (inApp) showInApp();
-  var controller = window.AbortController ? new AbortController() : null;
-  var timer = setTimeout(function () { if (controller) controller.abort(); }, 10000);
-  fetch("android.json", { cache: "no-cache", signal: controller ? controller.signal : undefined })
+  // A slow android.json still updates the button and details when it arrives; only the automatic download is skipped
+  // after 10 s, since the visitor may have tapped by then.
+  var late = false;
+  var timer = setTimeout(function () { late = true; showTapHint(); }, 10000);
+  fetch("android.json", { cache: "no-cache" })
     .then(function (response) { return response.ok ? response.json() : null; })
     .then(function (release) {
       clearTimeout(timer);
       if (release && /^https:\/\/github\.com\/opensec-git\/Pi-Bolt\/releases\/download\//.test(release.apk)) {
         apply(release);
-        autoDownload();
+        if (!late) autoDownload();
       } else {
         showTapHint();
       }
