@@ -174,7 +174,10 @@ fun HomeScreen(
         }
     }
 
-    val recent = remember(list, local) { list?.let { ProjectRules.continueList(it, local?.takeIf { l -> !l.controller.stopped }?.project?.name) }.orEmpty() }
+    val runningNames = remember(running) { running.map { it.project.name }.toSet() }
+    val recent = remember(list, local, runningNames) {
+        list?.let { ProjectRules.continueList(it, local?.takeIf { l -> !l.controller.stopped }?.project?.name, running = runningNames) }.orEmpty()
+    }
     // Coming back to Home from a session: what it shows now has been seen. A run that is still going and writes
     // later turns the session unread, so it gets a dot once it finishes here or in the background.
     LaunchedEffect(Unit) {
