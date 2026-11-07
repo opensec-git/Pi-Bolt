@@ -47,11 +47,16 @@ type Json = Record<string, unknown>;
 /** What a subagent run is, from the parent's `Agent` call and its result. */
 interface RunInfo {
 	prompt: string;
+	/** From `resume`, or from the result once it names one. Without it the run is matched by its prompt. */
 	agentId?: string;
+	/** When the `Agent` call's message was made (Unix ms): the run's own agent session is created later. */
+	since?: number;
 }
 
 interface Header {
 	parent?: string;
+	/** When the session was created (Unix ms). */
+	created?: number;
 	name?: string;
 	firstUser?: string;
 }
@@ -69,32 +74,68 @@ function textOf(content: unknown): string {
 		.join("\n");
 }
 
-/** The `Agent` call `runId` of the parent's messages: its prompt, and its agent id once its result names one. */
-export function findRun(messages: readonly unknown[], runId: string): RunInfo | undefined {
-	let run: RunInfo | undefined;
+/** Every `Agent` call of the parent's messages by its id: its prompt, and its agent id once its result names one. */
+function findRuns(messages: readonly unknown[]): Map<string, RunInfo> {
+	const runs = new Map<string, RunInfo>();
 	for (const message of messages) {
 		if (!isRecord(message)) continue;
 		if (message.role === "assistant" && Array.isArray(message.content)) {
 			for (const block of message.content) {
-				if (!isRecord(block) || block.type !== "toolCall" || block.id !== runId) continue;
+				if (!isRecord(block) || block.type !== "toolCall" || typeof block.id !== "string") continue;
 				if (typeof block.name !== "string" || block.name.toLowerCase() !== "agent") continue;
 				const args = isRecord(block.arguments) ? block.arguments : {};
 				const resume = typeof args.resume === "string" && args.resume.trim() ? args.resume.trim() : undefined;
-				run = { prompt: typeof args.prompt === "string" ? args.prompt : "", agentId: resume };
+				runs.set(block.id, {
+					prompt: typeof args.prompt === "string" ? args.prompt : "",
+					agentId: resume,
+					since: typeof message.timestamp === "number" ? message.timestamp : undefined,
+				});
 			}
-		} else if (run && message.role === "toolResult" && message.toolCallId === runId && isRecord(message.details)) {
+		} else if (message.role === "toolResult" && typeof message.toolCallId === "string" && isRecord(message.details)) {
+			const run = runs.get(message.toolCallId);
 			const agentId = message.details.agentId;
-			if (typeof agentId === "string" && agentId) run.agentId = agentId;
+			if (run && typeof agentId === "string" && agentId) run.agentId = agentId;
 		}
 	}
-	return run;
+	return runs;
 }
 
-/** True when a session named [name] whose first prompt is [firstUser] is the agent of [run]. */
-function matches(run: RunInfo, name: string | undefined, firstUser: string | undefined): boolean {
-	if (run.agentId) return name?.endsWith(`#${run.agentId.slice(0, 8)}`) === true;
+/** The `Agent` call `runId` of the parent's messages: its prompt, and its agent id once its result names one. */
+export function findRun(messages: readonly unknown[], runId: string): RunInfo | undefined {
+	return findRuns(messages).get(runId);
+}
+
+/** The agents of the other runs, by the 8 characters their sessions' names end with: they are not this run's. */
+function otherAgents(runs: ReadonlyMap<string, RunInfo>, runId: string): Set<string> {
+	const agents = new Set<string>();
+	for (const [id, run] of runs) if (id !== runId && run.agentId) agents.add(run.agentId.slice(0, 8));
+	return agents;
+}
+
+/** A session that may be the agent of a run: its name, first prompt and creation time. */
+interface Candidate {
+	name?: string;
+	firstUser?: string;
+	created?: number;
+}
+
+/**
+ * True when [candidate] is the agent of [run]. With an agent id that is exact. By prompt alone it is a guess, so a
+ * session made before the call, or named for another run's agent ([others]), is not taken: a repeated prompt does not
+ * bind to an earlier run's agent.
+ */
+function matches(run: RunInfo, candidate: Candidate, others: ReadonlySet<string>): boolean {
+	if (run.agentId) return candidate.name?.endsWith(`#${run.agentId.slice(0, 8)}`) === true;
 	const prompt = run.prompt.trim();
-	return prompt.length > 0 && firstUser?.trimEnd().endsWith(prompt) === true;
+	if (!prompt || candidate.firstUser?.trimEnd().endsWith(prompt) !== true) return false;
+	if (run.since !== undefined && candidate.created !== undefined && candidate.created < run.since) return false;
+	const hash = candidate.name?.lastIndexOf("#") ?? -1;
+	return !(candidate.name && hash >= 0 && others.has(candidate.name.slice(hash + 1, hash + 9)));
+}
+
+function parseTime(value: unknown): number | undefined {
+	const time = typeof value === "string" ? Date.parse(value) : Number.NaN;
+	return Number.isFinite(time) ? time : undefined;
 }
 
 function readHeader(file: string): Header | undefined {
@@ -114,7 +155,10 @@ function readHeader(file: string): Header | undefined {
 			}
 			if (!isRecord(entry)) continue;
 			if (entry.type === "session") {
-				header = { parent: typeof entry.parentSession === "string" ? entry.parentSession : undefined };
+				header = {
+					parent: typeof entry.parentSession === "string" ? entry.parentSession : undefined,
+					created: parseTime(entry.timestamp),
+				};
 			} else if (header && entry.type === "session_info" && typeof entry.name === "string") {
 				header.name = entry.name;
 			} else if (header && entry.type === "message" && isRecord(entry.message) && entry.message.role === "user") {
@@ -149,12 +193,42 @@ function cut(text: string, max: number): string {
 	return text.length > max ? text.slice(0, Math.max(0, max)) + CUT_NOTE : text;
 }
 
+function jsonBytes(value: unknown): number {
+	return Buffer.byteLength(JSON.stringify(value) ?? "");
+}
+
+/** [value] in about [max] characters: a long string is cut, and a large array or object becomes its JSON, cut. */
+function capValue(value: unknown, max: number): unknown {
+	if (typeof value === "string") return cut(value, max);
+	if (typeof value !== "object" || value === null) return value;
+	const json = JSON.stringify(value);
+	return json.length > max ? cut(json, max) : value;
+}
+
+/** A content block in about [share] characters: text, thinking and each tool argument cut, an image dropped. */
+function capBlock(block: unknown, share: number): unknown {
+	if (!isRecord(block)) return capValue(block, share);
+	if (block.type === "text" && typeof block.text === "string") return { ...block, text: cut(block.text, share) };
+	if (block.type === "thinking" && typeof block.thinking === "string") {
+		return { ...block, thinking: cut(block.thinking, share) };
+	}
+	if (block.type === "image") return { type: "text", text: "(image)" };
+	if (block.type === "toolCall") {
+		if (!isRecord(block.arguments)) return { ...block, arguments: capValue(block.arguments, share) };
+		const args: Json = {};
+		for (const [key, value] of Object.entries(block.arguments)) args[key] = capValue(value, share);
+		return { ...block, arguments: args };
+	}
+	return block;
+}
+
 /**
- * [message] as at most [maxBytes] of JSON (roughly): long text, thinking and tool arguments are cut, images and
- * `details` dropped. Messages that fit are returned unchanged.
+ * [message] as at most [maxBytes] of JSON: long text, thinking and tool arguments (nested values too) are cut, images
+ * and `details` dropped. When that is not enough (many blocks or argument keys, wide characters), only the message's
+ * small top-level fields and its text are kept, cut to fit. Messages that fit are returned unchanged.
  */
 export function capMessage(message: Json, maxBytes: number): Json {
-	if (Buffer.byteLength(JSON.stringify(message)) <= maxBytes) return message;
+	if (jsonBytes(message) <= maxBytes) return message;
 	const capped: Json = { ...message };
 	delete capped.details;
 	const content = message.content;
@@ -162,32 +236,43 @@ export function capMessage(message: Json, maxBytes: number): Json {
 		capped.content = cut(content, Math.floor(maxBytes / 2));
 	} else if (Array.isArray(content)) {
 		const share = Math.max(1024, Math.floor(maxBytes / 2 / Math.max(1, content.length)));
-		capped.content = content.map((block) => {
-			if (!isRecord(block)) return block;
-			if (block.type === "text" && typeof block.text === "string") return { ...block, text: cut(block.text, share) };
-			if (block.type === "thinking" && typeof block.thinking === "string") {
-				return { ...block, thinking: cut(block.thinking, share) };
-			}
-			if (block.type === "image") return { type: "text", text: "(image)" };
-			if (block.type === "toolCall" && isRecord(block.arguments)) {
-				const args: Json = {};
-				for (const [key, value] of Object.entries(block.arguments)) {
-					args[key] = typeof value === "string" ? cut(value, share) : value;
-				}
-				return { ...block, arguments: args };
-			}
-			return block;
-		});
+		capped.content = content.map((block) => capBlock(block, share));
 	}
 	if (typeof message.summary === "string") capped.summary = cut(message.summary, Math.floor(maxBytes / 2));
-	return capped;
+	if (jsonBytes(capped) <= maxBytes) return capped;
+	const small: Json = {};
+	for (const [key, value] of Object.entries(capped)) {
+		if (key === "content" || key === "summary") continue;
+		if (typeof value === "string") small[key] = cut(value, 256);
+		else if (typeof value === "number" || typeof value === "boolean") small[key] = value;
+		else if (isRecord(value) && JSON.stringify(value).length <= 1024) small[key] = value;
+	}
+	const text = typeof message.summary === "string" ? message.summary : textOf(content);
+	// JSON takes at most 6 bytes per UTF-16 unit (`\uXXXX`).
+	const room = Math.max(0, Math.floor((maxBytes - jsonBytes(small) - 64) / 6) - CUT_NOTE.length);
+	if (typeof message.summary === "string") small.summary = cut(text, room);
+	else small.content = typeof content === "string" ? cut(text, room) : [{ type: "text", text: cut(text, room) }];
+	return small;
+}
+
+/** A `message_update` event in at most about [maxBytes] of JSON: a large tool call or final message in it is cut. */
+function capUpdate(event: Json, maxBytes: number): Json {
+	if (jsonBytes(event) <= maxBytes || !isRecord(event.assistantMessageEvent)) return event;
+	const half = Math.floor(maxBytes / 2);
+	const inner: Json = { ...event.assistantMessageEvent };
+	for (const key of ["delta", "content"]) if (typeof inner[key] === "string") inner[key] = cut(inner[key], half);
+	if (isRecord(inner.toolCall)) inner.toolCall = capBlock(inner.toolCall, half);
+	for (const key of ["message", "error"]) if (isRecord(inner[key])) inner[key] = capMessage(inner[key], half);
+	return { ...event, assistantMessageEvent: inner };
 }
 
 /** One client's view of one subagent run. */
 class SubagentStream {
 	readonly runId: string;
 	private readonly owner: SubagentStreams;
-	private readonly run: RunInfo;
+	private run: RunInfo;
+	/** See `otherAgents`. */
+	private others: Set<string>;
 	private readonly parentFile: string | undefined;
 	private file: string | undefined;
 	private live: AgentSession | undefined;
@@ -198,14 +283,22 @@ class SubagentStream {
 	private sentMessages = 0;
 	private resetPending = true;
 	private lastScan = 0;
+	private lastRefresh = 0;
 	private events: unknown[] = [];
 	private eventTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly timer: ReturnType<typeof setInterval>;
 
-	constructor(owner: SubagentStreams, runId: string, run: RunInfo, parentFile: string | undefined) {
+	constructor(
+		owner: SubagentStreams,
+		runId: string,
+		run: RunInfo,
+		others: Set<string>,
+		parentFile: string | undefined,
+	) {
 		this.owner = owner;
 		this.runId = runId;
 		this.run = run;
+		this.others = others;
 		this.parentFile = parentFile;
 		this.timer = setInterval(() => this.poll(), owner.pollMs);
 		this.timer.unref?.();
@@ -215,6 +308,11 @@ class SubagentStream {
 	/** The file this stream reads, once found. */
 	get boundFile(): string | undefined {
 		return this.file;
+	}
+
+	/** True when the run's agent id is known, so its session is found by name and not guessed from the prompt. */
+	get identified(): boolean {
+		return this.run.agentId !== undefined;
 	}
 
 	stop(): void {
@@ -228,6 +326,7 @@ class SubagentStream {
 
 	poll(): void {
 		try {
+			this.refresh();
 			this.bindLive();
 			if (!this.file && !this.live) this.scan();
 			if (this.file) this.readFile();
@@ -235,6 +334,39 @@ class SubagentStream {
 		} catch {
 			// A file removed or unreadable for a moment: the next poll tries again.
 		}
+	}
+
+	/**
+	 * While the run is matched by its prompt, reads the parent's messages again (once a second): when the result names
+	 * the agent and the session found by prompt is another agent's, the stream lets go of it and finds the right one.
+	 */
+	private refresh(): void {
+		if (this.run.agentId) return;
+		const now = Date.now();
+		if (now - this.lastRefresh < SCAN_MS) return;
+		this.lastRefresh = now;
+		const runs = this.owner.runs(this.parentFile);
+		const run = runs?.get(this.runId);
+		if (!runs || !run) return;
+		this.run = run;
+		this.others = otherAgents(runs, this.runId);
+		if (!run.agentId || !this.file) return;
+		const name = this.live ? this.live.sessionName : this.owner.header(this.file)?.name;
+		if (name !== undefined && !matches(run, { name }, this.others)) this.unbind();
+	}
+
+	/** Forgets the session found so far; the next batch the phone gets starts over (`reset`). */
+	private unbind(): void {
+		this.unsubscribeLive?.();
+		this.unsubscribeLive = undefined;
+		this.live = undefined;
+		this.file = undefined;
+		this.offset = 0;
+		this.rest = Buffer.alloc(0);
+		this.sentMessages = 0;
+		this.resetPending = true;
+		this.lastScan = 0;
+		this.events = [];
 	}
 
 	/** The agent's session open in this process, if it is: its streaming message comes from its events. */
@@ -246,12 +378,19 @@ class SubagentStream {
 			this.live = undefined;
 		}
 		if (this.live || !this.parentFile) return;
-		for (const session of open) {
-			if (session.sessionManager.getHeader()?.parentSession !== this.parentFile) continue;
+		// Newest first: of two sessions with the same prompt, the later one is the later run's.
+		for (const session of open.reverse()) {
+			const header = session.sessionManager.getHeader();
+			if (header?.parentSession !== this.parentFile) continue;
 			if (this.file && session.sessionFile !== this.file) continue;
 			if (!this.file && this.owner.taken(session.sessionFile, this)) continue;
 			const firstUser = session.messages.find((message) => message.role === "user");
-			if (!matches(this.run, session.sessionName, firstUser ? textOf(firstUser.content) : undefined)) continue;
+			const candidate: Candidate = {
+				name: session.sessionName,
+				firstUser: firstUser ? textOf(firstUser.content) : undefined,
+				created: parseTime(header.timestamp),
+			};
+			if (!matches(this.run, candidate, this.others)) continue;
 			this.live = session;
 			this.file ??= session.sessionFile;
 			this.unsubscribeLive = session.subscribe((event) => this.onLiveEvent(event));
@@ -281,7 +420,7 @@ class SubagentStream {
 		for (const { path } of candidates) {
 			const header = this.owner.header(path);
 			if (!header || header.parent !== this.parentFile) continue;
-			if (matches(this.run, header.name, header.firstUser)) {
+			if (matches(this.run, header, this.others)) {
 				this.file = path;
 				return;
 			}
@@ -384,14 +523,14 @@ class SubagentStream {
 				return;
 			case "message_update":
 				if (event.message.role !== "assistant") return;
-				this.queueEvent(toJsonEvent(event));
+				this.queueEvent(capUpdate(toJsonEvent(event) as unknown as Json, this.owner.limits.maxMessageBytes));
 				return;
 			case "tool_execution_start":
 				this.queueEvent({
 					type: event.type,
 					toolCallId: event.toolCallId,
 					toolName: event.toolName,
-					args: event.args,
+					args: capValue(event.args, Math.floor(this.owner.limits.maxMessageBytes / 2)),
 				});
 				return;
 			case "tool_execution_end":
@@ -456,12 +595,19 @@ export class SubagentStreams {
 		if (this.streams.has(runId)) return;
 		const session = this.options.getSession();
 		if (!session) throw new Error("No session is open yet");
-		const run = findRun(session.messages, runId);
+		const runs = findRuns(session.messages);
+		const run = runs.get(runId);
 		if (!run) throw new Error(`No subagent run ${runId} in this session`);
 		if (this.streams.size >= this.limits.maxStreams) {
 			throw new Error(`At most ${this.limits.maxStreams} subagent streams at once`);
 		}
-		this.streams.set(runId, new SubagentStream(this, runId, run, session.sessionFile));
+		this.streams.set(runId, new SubagentStream(this, runId, run, otherAgents(runs, runId), session.sessionFile));
+	}
+
+	/** The `Agent` runs of the session phones see now, when it is still the one saved in [parentFile]. */
+	runs(parentFile: string | undefined): Map<string, RunInfo> | undefined {
+		const session = this.options.getSession();
+		return session && session.sessionFile === parentFile ? findRuns(session.messages) : undefined;
 	}
 
 	unsubscribe(runId: unknown): boolean {
@@ -484,9 +630,12 @@ export class SubagentStreams {
 		this.options.send(message);
 	}
 
-	/** True when [file] is read by another stream of this client (two runs with the same prompt). */
+	/**
+	 * True when [file] is read by another stream of this client, so a run matched by its prompt leaves it alone (two
+	 * runs with the same prompt). A run whose agent id is known may share it: a resumed run reads its agent's file too.
+	 */
 	taken(file: string | undefined, by: SubagentStream): boolean {
-		if (!file) return false;
+		if (!file || by.identified) return false;
 		for (const stream of this.streams.values()) if (stream !== by && stream.boundFile === file) return true;
 		return false;
 	}

@@ -1,4 +1,4 @@
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
@@ -249,6 +249,132 @@ describe("remote control subagent streams", () => {
 	});
 });
 
+describe("subagent stream binding", () => {
+	const cleanups: Array<() => unknown> = [];
+
+	afterEach(async () => {
+		while (cleanups.length > 0) await cleanups.pop()?.();
+	});
+
+	/** A parent session with no live children: its runs are pushed as messages, its agents written as files. */
+	async function files() {
+		const dir = mkdtempSync(join(tmpdir(), "pi-subagent-binding-"));
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+		const sessionDir = join(dir, "sessions");
+		mkdirSync(sessionDir);
+		const parent = await createHarness({ sessionManager: SessionManager.create(dir, sessionDir) });
+		cleanups.push(() => parent.cleanup());
+		const parentFile = parent.session.sessionFile as string;
+		const sent: Message[] = [];
+		const streams = new SubagentStreams({
+			getSession: () => parent.session,
+			send: (message) => sent.push(message as Message),
+			pollMs: 20,
+		});
+		cleanups.push(() => streams.clear());
+		const call = (runId: string, args: Message, timestamp?: number) =>
+			parent.session.messages.push({
+				role: "assistant",
+				content: [{ type: "toolCall", id: runId, name: "Agent", arguments: args }],
+				...(timestamp === undefined ? {} : { timestamp }),
+			} as never);
+		const result = (runId: string, agentId: string) =>
+			parent.session.messages.push({
+				role: "toolResult",
+				toolCallId: runId,
+				toolName: "Agent",
+				content: [],
+				details: { agentId },
+			} as never);
+		/** An agent's session file, made at [created] and last written at [mtime] (Unix ms). */
+		const agent = (agentId: string, prompt: string, reply: string, created: number, mtime = created) => {
+			const file = join(sessionDir, `${agentId}.jsonl`);
+			const lines = [
+				{
+					type: "session",
+					id: agentId,
+					timestamp: new Date(created).toISOString(),
+					cwd: dir,
+					parentSession: parentFile,
+				},
+				{ type: "session_info", name: `general-purpose#${agentId.slice(0, 8)}` },
+				{ type: "message", message: { role: "user", content: prompt, timestamp: created } },
+				{
+					type: "message",
+					message: { role: "assistant", content: [{ type: "text", text: reply }], timestamp: created },
+				},
+			];
+			writeFileSync(file, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`);
+			utimesSync(file, mtime / 1000, mtime / 1000);
+			return file;
+		};
+		const replies = (runId: string) =>
+			sent
+				.filter((message) => message.type === "subagent_entries" && message.runId === runId)
+				.flatMap((message) => message.messages as Message[])
+				.filter((message) => message.role === "assistant")
+				.map((message) => JSON.stringify(message.content));
+		const resets = (runId: string) =>
+			sent.filter((message) => message.type === "subagent_entries" && message.runId === runId && message.reset);
+		return { streams, call, result, agent, replies, resets };
+	}
+
+	it("does not bind a repeated prompt to an earlier run's agent", async () => {
+		const { streams, call, result, agent, replies } = await files();
+		const t = Date.now() - 60_000;
+		call("run-1", { prompt: "same" }, t);
+		result("run-1", "11111111aaaa");
+		call("run-2", { prompt: "same" }, t + 10_000);
+		// The earlier agent was written last, so it is the newest file.
+		agent("11111111aaaa", "same", "first reply", t + 1_000, t + 30_000);
+		agent("22222222bbbb", "same", "second reply", t + 11_000, t + 20_000);
+		streams.subscribe("run-2");
+		await until(() => replies("run-2").length > 0);
+		expect(replies("run-2").join()).toContain("second reply");
+		expect(replies("run-2").join()).not.toContain("first reply");
+	});
+
+	it("skips an agent made before the call even when the earlier run's result is gone (compacted)", async () => {
+		const { streams, call, agent, replies } = await files();
+		const t = Date.now() - 60_000;
+		call("run-2", { prompt: "same" }, t + 10_000);
+		agent("11111111aaaa", "same", "first reply", t + 1_000, t + 30_000);
+		agent("22222222bbbb", "same", "second reply", t + 11_000, t + 20_000);
+		streams.subscribe("run-2");
+		await until(() => replies("run-2").length > 0);
+		expect(replies("run-2")).toEqual([expect.stringContaining("second reply")]);
+	});
+
+	it("lets go of a session found by prompt once the result names another agent", async () => {
+		const { streams, call, result, agent, replies, resets } = await files();
+		const t = Date.now() - 60_000;
+		// Two calls with the same prompt in one message: only the result tells them apart.
+		call("run-a", { prompt: "same" }, t);
+		call("run-b", { prompt: "same" }, t);
+		agent("aaaaaaaa1111", "same", "reply a", t + 1_000, t + 30_000);
+		agent("bbbbbbbb2222", "same", "reply b", t + 1_000, t + 20_000);
+		streams.subscribe("run-b");
+		await until(() => replies("run-b").length > 0);
+		expect(replies("run-b")).toEqual([expect.stringContaining("reply a")]);
+		result("run-b", "bbbbbbbb2222");
+		await until(() => replies("run-b").some((reply) => reply.includes("reply b")));
+		expect(resets("run-b")).toHaveLength(2);
+	});
+
+	it("lets a resumed run share its agent's file with the original run", async () => {
+		const { streams, call, result, agent, replies } = await files();
+		const t = Date.now() - 60_000;
+		call("run-1", { prompt: "first" }, t);
+		result("run-1", "11111111aaaa");
+		call("run-2", { prompt: "more", resume: "11111111aaaa" }, t + 10_000);
+		agent("11111111aaaa", "first", "shared reply", t + 1_000);
+		streams.subscribe("run-1");
+		streams.subscribe("run-2");
+		await until(() => replies("run-1").length > 0 && replies("run-2").length > 0);
+		expect(replies("run-2")).toEqual(replies("run-1"));
+	});
+});
+
 describe("subagent stream helpers", () => {
 	it("finds an Agent call's prompt and the agent id of its result", () => {
 		const messages = [
@@ -280,5 +406,39 @@ describe("subagent stream helpers", () => {
 		expect(JSON.stringify(capped).length).toBeLessThan(8 * 1024);
 		expect(capped.details).toBeUndefined();
 		expect((capped.content as Array<{ type: string }>).map((block) => block.type)).toEqual(["text", "text"]);
+	});
+
+	it("bounds nested tool arguments, many blocks and wide characters by bytes", () => {
+		const max = 256 * 1024;
+		const nested = {
+			role: "assistant",
+			content: [
+				{ type: "toolCall", id: "t1", name: "write", arguments: { files: [{ text: "x".repeat(400_000) }] } },
+			],
+		};
+		const cappedNested = capMessage(nested, max);
+		expect(Buffer.byteLength(JSON.stringify(cappedNested))).toBeLessThanOrEqual(max);
+		expect((cappedNested.content as Message[])[0]).toMatchObject({ type: "toolCall", id: "t1", name: "write" });
+		const manyKeys = {
+			role: "assistant",
+			content: [
+				{
+					type: "toolCall",
+					id: "t2",
+					name: "edit",
+					arguments: Object.fromEntries(
+						Array.from({ length: 20_000 }, (_, i) => [`k${i}`, { v: "y".repeat(20) }]),
+					),
+				},
+			],
+		};
+		expect(Buffer.byteLength(JSON.stringify(capMessage(manyKeys, max)))).toBeLessThanOrEqual(max);
+		const manyBlocks = {
+			role: "assistant",
+			content: Array.from({ length: 1000 }, () => ({ type: "text", text: "z".repeat(2000) })),
+		};
+		expect(Buffer.byteLength(JSON.stringify(capMessage(manyBlocks, max)))).toBeLessThanOrEqual(max);
+		const wide = { role: "user", content: "\u0001".repeat(300_000) };
+		expect(Buffer.byteLength(JSON.stringify(capMessage(wide, max)))).toBeLessThanOrEqual(max);
 	});
 });

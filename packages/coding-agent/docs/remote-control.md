@@ -236,5 +236,8 @@ The host then sends, until the client unsubscribes, disconnects or gets a new `r
 | `subagent_events` | `{ runId, events }`: while the agent's session runs in this process, its assistant message as it streams (`message_start`, `message_update` deltas as in the event stream, `message_end`) and `tool_execution_start` / `tool_execution_end` (`{ toolCallId, toolName, args }`, `{ toolCallId, toolName, isError }`), sent in batches about every 80 ms. A client that joins mid-message gets a `message_start` with what is written so far. The finished message also arrives in `subagent_entries`. |
 
 The run is found by the `Agent` call's agent id (from its result, or `resume`) or by its prompt, among sessions whose
-header names the parent's file in `parentSession`. Streams are read-only. A message larger than 256 KiB of JSON is cut
-(long text, thinking and tool arguments shortened, images and `details` dropped).
+header names the parent's file in `parentSession`. Matching by prompt skips sessions made before the call and sessions
+of other runs' agents, takes the newest, and is checked again once the result names the agent: a wrong guess is dropped
+and the stream starts over with `reset: true`. Runs with a known agent id may share a file (a resumed run and the
+original). Streams are read-only. A message or event larger than 256 KiB of JSON is cut (long text, thinking and tool
+arguments, nested values too, shortened; images and `details` dropped; when still too large, only its text is kept).
