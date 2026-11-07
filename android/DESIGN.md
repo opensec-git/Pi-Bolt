@@ -336,9 +336,36 @@ history and from live `tool_execution_end`).
 - Motion and feedback: Reduce motion (Follow system / On), Haptics.
 - Session: show thinking expanded, tool output preview lines (6 / 12 / 24).
 - Notifications: permission state with a button to the system settings.
-- About: app version, device name, licences (Inter, JetBrains Mono: OFL).
+- About: app version, device name, the update status and its action (see Updates), "Check for updates automatically",
+  licences (Inter, JetBrains Mono: OFL).
 Changes apply live, without recreating the activity, and persist in a small JSON file (read synchronously at
 startup so the first frame has the right theme).
+
+## Updates
+
+The app is sideloaded, so it updates itself from GitHub releases. Source of truth: `pi-bolt.opensec.in/android.json`
+(written by the Android release workflow), or GitHub's newest `android-v*` release when the site is down. Both are a
+plain GET with no identifiers. The APK URL must be under `github.com/opensec-git/Pi-Bolt/releases/download/`.
+- Check: on launch at most once a day (on IO, "Check for updates automatically", on by default) and from Settings >
+  About > "Check for updates". About shows "Up to date (0.2.1)" or "0.2.2 is available · 109 MB", then "Checked 3 min
+  ago".
+- Home card (64dp, surface1, radius 12, after the engine banner): system-update glyph, "Pi-Bolt 0.2.2 is available",
+  the size (meta ink3), Later (ink2, snoozes that version only) and Update (accent). The same card then shows the job:
+  Quad Write + "54 MB of 109 MB · 49%" and a 2dp accent bar (Cancel); Quad Connect + "Waiting for network" when the
+  connection drops; Quad Run "Checking"; a success shield and Install; danger soft fill with the reason on failure.
+- Download sheet first: the size and the network it would use (Wi-Fi in ink2; mobile data or metered in warning).
+  The download runs in a dataSync foreground service with a progress notification (Cancel), to the cache, and resumes
+  with an HTTP Range request. Finished in the background, it posts "Pi-Bolt 0.2.2 is ready to install"; back in the
+  app, the install sheet opens.
+- Verify before installing, deleting the file on any failure: SHA-256 equals android.json's; the archive's signing
+  certificate equals android.json's `certSha256` and the installed app's own; same package name; higher versionCode.
+  Messages say what failed ("This update is not signed by OpenSec; not installed.").
+- Install sheet: "Signed by OpenSec · checksum matches" (success), "Pi is working; updating stops it." (warning) while
+  a turn runs, and when "Install unknown apps" is off, one line on why plus "Open settings"; returning with it allowed
+  continues by itself. The file is hashed again and handed to Android's installer (ACTION_INSTALL_PACKAGE through a
+  FileProvider), which always asks to confirm and then offers Open: Android stops the app to replace it and blocks a
+  package-installer session or a MY_PACKAGE_REPLACED receiver from reopening it. Back in the app without an update
+  (cancelled), the card offers Install again. The first launch of the new version says "Updated to 0.2.2" once.
 
 ## Not carried over from the desktop app
 
