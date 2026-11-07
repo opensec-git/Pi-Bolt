@@ -232,6 +232,55 @@ describe("remote control subagent streams", () => {
 		expect(streamMessages(phone, "run-1")).toHaveLength(before);
 	});
 
+	it("sends message_start as it was when it happened, not as the provider changed it later", async () => {
+		const { parent, connect, release, child } = await setup();
+		const phone = await connect();
+		const done = parent.session.prompt("go");
+		await until(() => child()?.session.messages.some((message) => message.role === "user") === true);
+		await phone.request({ type: "subagent_subscribe", runId: "run-1" });
+		await phone.waitFor((message) => message.type === "subagent_entries" && message.runId === "run-1");
+		// Providers append to the streaming message's content in place while a batch waits to be sent.
+		child()?.session.subscribe((event) => {
+			if (event.type === "message_start" && event.message.role === "assistant") {
+				(event.message.content as unknown[]).push({ type: "text", text: "APPENDED LATER" });
+			}
+		});
+		release();
+		await until(() => events(phone, "run-1").some((event) => event.type === "message_start"));
+		await done;
+		const start = events(phone, "run-1").find((event) => event.type === "message_start")?.message as Message;
+		expect(JSON.stringify(start)).not.toContain("APPENDED LATER");
+	});
+
+	it("does not listen again when a stream stops right after a message ends", async () => {
+		const { parent, release, child } = await setup();
+		const done = parent.session.prompt("go");
+		await until(() => child()?.session.messages.some((message) => message.role === "user") === true);
+		const sent: Message[] = [];
+		const streams = new SubagentStreams({
+			getSession: () => parent.session,
+			send: (message) => sent.push(message as Message),
+			pollMs: 20,
+			eventBatchMs: 10,
+		});
+		cleanups.push(() => streams.clear());
+		streams.subscribe("run-1");
+		await until(() => sent.length > 0);
+		// Stops the stream between its message_end listener and the poll that listener deferred.
+		child()?.session.subscribe((event) => {
+			if (event.type === "message_end" && event.message.role === "assistant") streams.unsubscribe("run-1");
+		});
+		release();
+		await done;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		const before = sent.length;
+		child()?.setResponses([fauxAssistantMessage("more")]);
+		await child()?.session.prompt("again");
+		await new Promise((resolve) => setTimeout(resolve, 200));
+		expect(streams.size).toBe(0);
+		expect(sent).toHaveLength(before);
+	});
+
 	it("caps streams per phone", async () => {
 		const { parent, release } = await setup();
 		release();

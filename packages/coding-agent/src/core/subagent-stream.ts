@@ -300,6 +300,8 @@ class SubagentStream {
 	/** For a live session without a file: messages already sent. */
 	private sentMessages = 0;
 	private resetPending = true;
+	/** Set by `stop()`: a poll deferred before it does nothing, so a stopped stream never listens again. */
+	private stopped = false;
 	private lastScan = 0;
 	private lastRefresh = 0;
 	private events: unknown[] = [];
@@ -334,6 +336,7 @@ class SubagentStream {
 	}
 
 	stop(): void {
+		this.stopped = true;
 		clearInterval(this.timer);
 		if (this.eventTimer) clearTimeout(this.eventTimer);
 		this.eventTimer = undefined;
@@ -343,6 +346,7 @@ class SubagentStream {
 	}
 
 	poll(): void {
+		if (this.stopped) return;
 		try {
 			this.refresh();
 			this.bindLive();
@@ -565,7 +569,10 @@ class SubagentStream {
 	}
 
 	private queueEvent(event: unknown): void {
-		this.events.push(event);
+		if (this.stopped) return;
+		// A copy now: providers keep appending to the streaming message's content while the batch waits, and the
+		// phone would get text in `message_start` that the following deltas add again.
+		this.events.push(JSON.parse(JSON.stringify(event)));
 		if (this.eventTimer) return;
 		this.eventTimer = setTimeout(() => {
 			this.eventTimer = undefined;
