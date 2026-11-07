@@ -118,6 +118,13 @@ fun PreviewScreen(port: Int, onBack: () -> Unit) {
                     canGoBack = view.canGoBack()
                 }
 
+                // A single-page app moves with history.pushState (no page load): Back and the address follow it too,
+                // so Back steps back inside the app instead of closing the preview.
+                override fun doUpdateVisitedHistory(view: WebView, historyUrl: String?, isReload: Boolean) {
+                    historyUrl?.let { url = it }
+                    canGoBack = view.canGoBack()
+                }
+
                 // A dev server's page that crashes or exhausts the WebView renderer must not take the app (its live
                 // sessions and terminals) down with it: leave the preview instead.
                 override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {

@@ -2,6 +2,7 @@ package opensec.pibolt.app.ui.projects
 
 import android.net.Uri
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -14,6 +15,9 @@ import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.data.SafeFiles
 import opensec.pibolt.app.engine.EngineApi
 import opensec.pibolt.app.engine.SessionSummary
+import opensec.pibolt.app.git.GitProgress
+import opensec.pibolt.app.git.GitRepo
+import opensec.pibolt.app.git.GitRunner
 import opensec.pibolt.app.session.SessionController
 import java.io.File
 
@@ -61,6 +65,22 @@ class Projects(private val engine: EngineApi, private val store: ProjectStore) {
     /** Files in the folder (not counting `.git`), for the delete confirmation. Stops counting at [cap]. */
     suspend fun fileCount(name: String, cap: Int = 10_000): Int = withContext(Dispatchers.IO) {
         SafeFiles.countFiles(File(engine.projectsDir, name), cap, skipDir = ".git")
+    }
+}
+
+/** Cloning into a new project folder. */
+object ProjectClone {
+    /**
+     * Clones [url] into the new, empty [dir]. When the clone fails, or is cancelled (the sheet swiped away or the
+     * screen rotated while it ran), the half-cloned folder is removed: never a broken project left in the list.
+     */
+    suspend fun run(runner: GitRunner, url: String, dir: File, progress: (GitProgress) -> Unit) {
+        try {
+            GitRepo.clone(runner, url, dir, progress)
+        } catch (e: Throwable) {
+            withContext(NonCancellable + Dispatchers.IO) { SafeFiles.deleteTree(dir) }
+            throw e
+        }
     }
 }
 
