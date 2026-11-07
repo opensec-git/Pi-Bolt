@@ -22,7 +22,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.launch
 import opensec.pibolt.app.MainActivity
@@ -32,9 +32,9 @@ import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Keeps the process (and so the connection, or the local engine process) alive while the agent runs or a dialog waits,
- * when the app is in the background. Stops itself once the session is idle. Without it a backgrounded app is cached and
- * frozen, and the engine with it.
+ * Keeps the process (and so the connections, and every local engine process) alive while any session works or waits for
+ * an answer, when the app is in the background. One foreground notification sums them up ([RunningSummary]); it stops
+ * itself once none is busy. Without it a backgrounded app is cached and frozen, and the engines with it.
  */
 class SessionService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -45,18 +45,14 @@ class SessionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val app = application as PiBoltApp
         val started = runCatching {
-            val live = app.session.value
-            // A local run is work on this phone (the engine process lives as long as this service keeps the app up);
-            // a remote one relays messages from a computer.
-            val type = when {
-                Build.VERSION.SDK_INT < 34 -> 0
-                live?.isLocal == true -> ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
-                else -> ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
-            }
+            // Local runs are work on this phone (the engine processes live as long as this service keeps the app up);
+            // a remote one relays messages from a computer. Both types are declared: sessions of either kind may join.
+            val type = if (Build.VERSION.SDK_INT < 34) 0 else ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
+            val summary = RunningSummary.of(entries(app.sessions.value), getString(R.string.app_name))
             ServiceCompat.startForeground(
                 this,
                 Notifications.ONGOING_ID,
-                Notifications.ongoing(this, live?.hostName?.value ?: getString(R.string.app_name), if (live?.isLocal == true) "Running" else "Connected"),
+                Notifications.ongoing(this, summary?.title ?: getString(R.string.app_name), summary?.text ?: "Working", summary?.lines.orEmpty()),
                 type,
             )
         }.isSuccess
@@ -65,29 +61,35 @@ class SessionService : Service() {
             return START_NOT_STICKY
         }
         scope.launch {
-            app.session.flatMapLatest { controller ->
-                controller ?: return@flatMapLatest emptyFlow()
-                combine(controller.state, controller.link, controller.hostName) { s, link, name -> Triple(s, link, name) }
-            }.collect { (s, link, name) ->
-                val busy = s.isRunning || s.dialogs.isNotEmpty()
-                if (!busy || link is LinkState.Failed) {
+            app.sessions.flatMapLatest { list ->
+                if (list.isEmpty()) {
+                    flowOf(emptyList())
+                } else {
+                    combine(list.map { c -> combine(c.state, c.link, c.hostName) { _, _, _ -> c } }) { entries(it.toList()) }
+                }
+            }.collect { entries ->
+                val summary = RunningSummary.of(entries, getString(R.string.app_name))
+                if (summary == null) {
                     stop()
                     return@collect
                 }
-                val local = app.session.value?.isLocal == true
-                val text = when {
-                    link !is LinkState.Connected -> if (local) "Restarting the engine…" else "Reconnecting…"
-                    s.dialogs.isNotEmpty() -> "Waiting for your answer"
-                    s.isCompacting -> "Compacting context"
-                    else -> "Working"
-                }
-                Notifications.update(this@SessionService, Notifications.ONGOING_ID, Notifications.ongoing(this@SessionService, name, text))
+                Notifications.update(this@SessionService, Notifications.ONGOING_ID, Notifications.ongoing(this@SessionService, summary.title, summary.text, summary.lines))
             }
         }
-        scope.launch {
-            app.session.collect { if (it == null) stop() }
-        }
         return START_NOT_STICKY
+    }
+
+    /** The sessions as the notification sees them; one whose link failed for good no longer counts as working. */
+    private fun entries(sessions: List<SessionController>): List<RunningSummary.Entry> = sessions.filter { !it.stopped && it.link.value !is LinkState.Failed }.map {
+        val s = it.state.value
+        RunningSummary.Entry(
+            name = it.hostName.value,
+            local = it.isLocal,
+            running = s.isRunning,
+            waiting = s.dialogs.isNotEmpty(),
+            compacting = s.isCompacting,
+            connected = it.link.value is LinkState.Connected,
+        )
     }
 
     private fun stop() {
@@ -116,8 +118,6 @@ class SessionService : Service() {
 
 object Notifications {
     const val ONGOING_ID = 1
-    private const val SETTLED_ID = 2
-    private const val ANSWER_ID = 3
     private const val CHANNEL_SESSION = "session"
     private const val CHANNEL_ALERTS = "alerts"
 
@@ -139,19 +139,25 @@ object Notifications {
         )
     }
 
-    private fun openApp(context: Context): PendingIntent = PendingIntent.getActivity(
+    private fun openApp(context: Context, project: String? = null, requestCode: Int = 0): PendingIntent = PendingIntent.getActivity(
         context,
-        0,
-        // Carries the live session, so a tap opens that exact session (features2.SessionAlerts).
-        SessionAlerts.openIntent(context),
+        requestCode,
+        // Carries the session, so a tap opens that exact one (features2.SessionAlerts); without one, the session in focus.
+        if (project != null) {
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .putExtra(SessionAlerts.EXTRA_PROJECT, project)
+        } else {
+            SessionAlerts.openIntent(context)
+        },
         PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
 
-    fun ongoing(context: Context, host: String, text: String): Notification =
+    fun ongoing(context: Context, host: String, text: String, lines: List<String> = emptyList()): Notification =
         NotificationCompat.Builder(context, CHANNEL_SESSION)
             .setSmallIcon(R.drawable.ic_stat_bolt)
             .setContentTitle(host)
             .setContentText(text)
+            .apply { if (lines.isNotEmpty()) setStyle(NotificationCompat.InboxStyle().also { style -> lines.forEach(style::addLine) }) }
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setSilent(true)
@@ -161,35 +167,38 @@ object Notifications {
             .privateOnLockScreen(context, "Pi is working")
             .build()
 
-    fun settled(context: Context, host: String, lastText: String, aborted: Boolean) {
+    /** A session finished while the app was away. [key]: its hostId (one notification per session); [project]: its project. */
+    fun settled(context: Context, key: String, project: String?, host: String, lastText: String, aborted: Boolean) {
+        val id = RunningSummary.notificationId(key, RunningSummary.SETTLED)
         val title = if (aborted) "Pi stopped on $host" else "Pi finished on $host"
         val text = lastText.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(200) ?: "Tap to see the result"
         post(
             context,
-            SETTLED_ID,
+            id,
             NotificationCompat.Builder(context, CHANNEL_ALERTS)
                 .setSmallIcon(R.drawable.ic_stat_bolt)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(lastText.take(1000).ifBlank { text }))
                 .setAutoCancel(true)
-                .setContentIntent(openApp(context))
+                .setContentIntent(openApp(context, project, id))
                 .privateOnLockScreen(context, if (aborted) "Pi stopped" else "Pi finished")
                 .build(),
         )
     }
 
-    fun needsAnswer(context: Context, host: String, title: String) {
+    fun needsAnswer(context: Context, key: String, project: String?, host: String, title: String) {
+        val id = RunningSummary.notificationId(key, RunningSummary.ANSWER)
         post(
             context,
-            ANSWER_ID,
+            id,
             NotificationCompat.Builder(context, CHANNEL_ALERTS)
                 .setSmallIcon(R.drawable.ic_stat_bolt)
                 .setContentTitle("Pi needs an answer on $host")
                 .setContentText(title.ifBlank { "Tap to answer" })
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setAutoCancel(true)
-                .setContentIntent(openApp(context))
+                .setContentIntent(openApp(context, project, id))
                 .privateOnLockScreen(context, "Pi needs an answer")
                 .build(),
         )
@@ -210,8 +219,8 @@ object Notifications {
         )
     }
 
-    fun clearNeedsAnswer(context: Context) {
-        NotificationManagerCompat.from(context).cancel(ANSWER_ID)
+    fun clearNeedsAnswer(context: Context, key: String) {
+        NotificationManagerCompat.from(context).cancel(RunningSummary.notificationId(key, RunningSummary.ANSWER))
     }
 
     fun update(context: Context, id: Int, notification: Notification) = post(context, id, notification)

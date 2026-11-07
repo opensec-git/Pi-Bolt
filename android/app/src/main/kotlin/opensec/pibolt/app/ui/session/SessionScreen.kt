@@ -159,19 +159,23 @@ class LocalUi(
     val takeFirstPrompt: () -> String?,
 )
 
-/** The remote session ([local] null) or the on-device one in project [local]. */
+/**
+ * The remote session ([local] null) or the on-device one in project [local]. [onOpenSession] shows another live
+ * on-device session (the switcher), by project name; this one keeps running.
+ */
 @Composable
-fun SessionScreen(app: PiBoltApp, onBack: () -> Unit, onForgotten: () -> Unit, local: String? = null) {
+fun SessionScreen(app: PiBoltApp, onBack: () -> Unit, onForgotten: () -> Unit, local: String? = null, onOpenSession: (String) -> Unit = {}) {
     if (local != null) {
-        LocalSessionScreen(app, local, onBack)
+        LocalSessionScreen(app, local, onBack, onOpenSession)
         return
     }
-    val controller by app.session.collectAsStateWithLifecycle()
+    val controller by app.remote.collectAsStateWithLifecycle()
     val c = controller
     if (c == null) {
         LaunchedEffect(Unit) { onBack() }
         return
     }
+    LaunchedEffect(c) { app.focus(c) }
     SessionContent(
         app = app,
         controller = c,
@@ -185,17 +189,20 @@ fun SessionScreen(app: PiBoltApp, onBack: () -> Unit, onForgotten: () -> Unit, l
             onForgotten()
         },
         local = null,
+        onOpenSession = onOpenSession,
     )
 }
 
 @Composable
-private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Unit) {
-    val current by LocalSessions.current.collectAsStateWithLifecycle()
-    val live = current?.takeIf { it.project.name == project }
+private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Unit, onOpenSession: (String) -> Unit) {
+    // Each project's screen shows its own live session; the others keep running meanwhile.
+    val all by LocalSessions.all.collectAsStateWithLifecycle()
+    val live = all[project]
     if (live == null) {
         LaunchedEffect(Unit) { onBack() }
         return
     }
+    LaunchedEffect(live.controller) { app.focus(live.controller) }
     val store = remember { ProjectStore.get(app) }
     val meta by store.state.collectAsStateWithLifecycle()
     val title = meta.projects[project]?.title ?: project
@@ -219,6 +226,7 @@ private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Un
                 },
                 takeFirstPrompt = { live.firstPrompt.also { live.firstPrompt = null } },
             ),
+            onOpenSession = onOpenSession,
         )
     }
 }
@@ -231,8 +239,18 @@ private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget,
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack: () -> Unit, onDisconnect: () -> Unit, onForget: () -> Unit, local: LocalUi?) {
+private fun SessionContent(
+    app: PiBoltApp,
+    controller: SessionController,
+    onBack: () -> Unit,
+    onDisconnect: () -> Unit,
+    onForget: () -> Unit,
+    local: LocalUi?,
+    onOpenSession: (String) -> Unit,
+) {
     val state: State<SessionState> = controller.state.collectAsStateWithLifecycle()
+    val projectStore = remember { ProjectStore.get(app) }
+    val projectMeta = projectStore.state.collectAsStateWithLifecycle().value.projects
     val linkState = controller.link.collectAsStateWithLifecycle()
     val hostName by controller.hostName.collectAsStateWithLifecycle()
     val sessionId by remember { derivedStateOf { state.value.sessionId } }
@@ -842,6 +860,7 @@ private fun SessionContent(app: PiBoltApp, controller: SessionController, onBack
                 // One spinner at a time: the top bar's Quad steps aside while the live status line is on screen.
                 quadVisible = !(status.value.visible && statusOnScreen),
                 status = status.value.text.let { t -> listOf(t.label.ifBlank { status.value.mode.label }, t.detail).filter { it.isNotBlank() }.joinToString(" ") },
+                switcher = { SessionSwitcher(controller, projectMeta, onOpen = onOpenSession) },
             )
             ConnectionBanner(linkState.value, controller.pairing, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
             Box(Modifier.weight(1f)) {

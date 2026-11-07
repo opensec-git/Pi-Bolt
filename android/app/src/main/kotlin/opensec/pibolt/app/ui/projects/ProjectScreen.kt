@@ -107,8 +107,10 @@ fun ProjectScreen(app: PiBoltApp, name: String, onBack: () -> Unit, onOpenSessio
     val pm = meta.projects[name] ?: ProjectMeta()
     val title = pm.title ?: name
     val status by engine.status.collectAsStateWithLifecycle()
-    val live by LocalSessions.current.collectAsStateWithLifecycle()
-    val liveHere = live?.takeIf { it.project.name == name && !it.controller.stopped }
+    // This project's own live session (others may run in other projects meanwhile).
+    val liveAll by LocalSessions.all.collectAsStateWithLifecycle()
+    val live = liveAll[name]
+    val liveHere = live?.takeIf { !it.controller.stopped }
 
     var reload by remember { mutableIntStateOf(0) }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { reload++ }

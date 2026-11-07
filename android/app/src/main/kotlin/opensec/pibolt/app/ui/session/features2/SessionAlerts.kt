@@ -18,7 +18,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -92,11 +93,11 @@ object SessionAlerts {
             val t = target ?: return@LaunchedEffect
             _pending.value = null
             when (t) {
-                Target.Remote -> if (app.session.value?.let { !it.isLocal && !it.stopped } == true) onRemote()
+                Target.Remote -> if (app.remote.value?.stopped == false) onRemote()
                 is Target.Local -> {
-                    val live = LocalSessions.current.value
-                    val here = live != null && !live.controller.stopped && live.project.name == t.project
-                    if (here && (t.sessionFile == null || live.controller.sessionFile == t.sessionFile)) {
+                    // Several sessions run at once: the project's own live session, whichever is in focus.
+                    val live = LocalSessions.get(t.project)
+                    if (live != null && (t.sessionFile == null || live.controller.sessionFile == t.sessionFile)) {
                         onLocal(t.project)
                         return@LaunchedEffect
                     }
@@ -109,15 +110,23 @@ object SessionAlerts {
         }
     }
 
-    /** Watches the live session for background agents that finish while no screen is visible. Call once. */
+    /** Watches every live session for background agents that finish while no screen is visible. Call once. */
     @OptIn(ExperimentalCoroutinesApi::class)
     fun watchBackgroundAgents(app: PiBoltApp) {
         app.appScope.launch {
             var known = emptyMap<String, SubagentStatus>()
-            app.session.flatMapLatest { c ->
-                known = emptyMap()
-                c?.state?.map { s -> s.subagents.values.filter { it.background }.associate { it.key to (it.status to (it.description.ifBlank { it.type })) } }
-                    ?.distinctUntilChanged() ?: emptyFlow()
+            app.sessions.flatMapLatest { list ->
+                if (list.isEmpty()) {
+                    flowOf(emptyMap())
+                } else {
+                    // Keys carry the session (hostId), so runs of two sessions never mix.
+                    combine(
+                        list.map { c ->
+                            c.state.map { s -> s.subagents.values.filter { it.background }.associate { c.hostId + "/" + it.key to (it.status to (it.description.ifBlank { it.type })) } }
+                                .distinctUntilChanged()
+                        },
+                    ) { maps -> maps.fold(emptyMap<String, Pair<SubagentStatus, String>>()) { all, m -> all + m } }
+                }
             }.collect { now ->
                 val finished = now.filter { (key, v) -> !v.first.isActive && known[key]?.isActive == true }
                 known = now.mapValues { it.value.first }

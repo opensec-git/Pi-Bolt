@@ -4,7 +4,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.data.SafeFiles
 import opensec.pibolt.app.engine.EngineApi
@@ -60,8 +63,9 @@ class Projects(private val engine: EngineApi, private val store: ProjectStore) {
 }
 
 /**
- * The on-device session the UI opened, with the project it belongs to. A process-wide holder (the engine runs one
- * session at a time): the project list reads it for its running indicator, the session screen for its controller.
+ * The on-device sessions the UI opened, by project (several run at once, one per project): Home's "Running" section and
+ * the project list read them, each project's session screen its own controller. [current] is the one opened or shown
+ * last. A process-wide holder kept in step with [PiBoltApp.sessions] ([follow]).
  */
 object LocalSessions {
     class Live(val project: File, val controller: SessionController, val sessionFile: String?) {
@@ -73,6 +77,27 @@ object LocalSessions {
     private val _current = MutableStateFlow<Live?>(null)
     val current: StateFlow<Live?> = _current.asStateFlow()
 
+    private val _all = MutableStateFlow<Map<String, Live>>(emptyMap())
+
+    /** Live sessions by project name, in the order they were opened. */
+    val all: StateFlow<Map<String, Live>> = _all.asStateFlow()
+
+    /** The live session of [project], if any. */
+    fun get(project: String): Live? = _all.value[project]?.takeIf { !it.controller.stopped }
+
+    /** Keeps [all] and [current] in step with the app's live sessions (one that stops leaves). Call once. */
+    fun follow(app: PiBoltApp) {
+        app.appScope.launch {
+            combine(app.sessions, app.session) { list, focused -> list to focused }.collect { (list, focused) ->
+                synchronized(this@LocalSessions) {
+                    _all.value = _all.value.filterValues { live -> list.any { it === live.controller } }
+                    val shown = _all.value.values.firstOrNull { it.controller === focused }
+                    _current.value = shown ?: _current.value?.takeIf { live -> list.any { it === live.controller } }
+                }
+            }
+        }
+    }
+
     /** Opens (or resumes) a session through the engine, off the main thread, and makes it the live one. */
     suspend fun open(engine: EngineApi, store: ProjectStore, project: File, sessionFile: String? = null, fresh: Boolean = false, firstPrompt: String? = null): Result<Live> {
         val result = withContext(Dispatchers.IO) { runCatching { engine.open(project, sessionFile, fresh) } }
@@ -81,19 +106,23 @@ object LocalSessions {
             sessionFile?.let { store.seen(it) }
             Live(project, controller, sessionFile).also {
                 it.firstPrompt = firstPrompt
-                _current.value = it
+                synchronized(this) {
+                    _all.value = (_all.value - project.name) + (project.name to it)
+                    _current.value = it
+                }
             }
         }
     }
 
-    fun isLive(project: String): Boolean = _current.value?.let { it.project.name == project && !it.controller.stopped } == true
+    fun isLive(project: String): Boolean = get(project) != null
 
     /** The project was deleted or renamed away: drop its session. */
     fun close(project: String) {
-        val live = _current.value ?: return
-        if (live.project.name == project) {
-            live.controller.stop()
-            _current.value = null
+        val live = _all.value[project] ?: return
+        live.controller.stop()
+        synchronized(this) {
+            _all.value = _all.value - project
+            if (_current.value === live) _current.value = null
         }
     }
 }

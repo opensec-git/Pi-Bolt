@@ -77,6 +77,8 @@ import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.hosts.HostCard
 import opensec.pibolt.app.ui.hosts.PasteSheet
 import opensec.pibolt.app.ui.projects.LocalSessions
+import opensec.pibolt.app.ui.session.RunningRow
+import opensec.pibolt.app.ui.session.runningSessions
 import opensec.pibolt.app.ui.projects.NewProjectSheet
 import opensec.pibolt.app.ui.projects.ProjectAction
 import opensec.pibolt.app.ui.projects.ProjectActionSheets
@@ -126,8 +128,11 @@ fun HomeScreen(
     val meta by store.state.collectAsStateWithLifecycle()
     val metaLoaded by store.loaded.collectAsStateWithLifecycle()
     val hosts by app.hosts.hosts.collectAsStateWithLifecycle()
-    val remote by app.session.collectAsStateWithLifecycle()
+    val remote by app.remote.collectAsStateWithLifecycle()
     val local by LocalSessions.current.collectAsStateWithLifecycle()
+    // Sessions working now, in every project: each keeps its engine while the user is elsewhere.
+    val running by remember { runningSessions() }.collectAsStateWithLifecycle(emptyList())
+    val liveAll by LocalSessions.all.collectAsStateWithLifecycle()
     val update by app.updates.state.collectAsStateWithLifecycle()
     val showUpdate = update.job != UpdateJob.Idle || (update.decision as? UpdateRules.Decision.Available)?.snoozed == false
     val unavailable = status is EngineStatus.Unavailable
@@ -238,13 +243,21 @@ fun HomeScreen(
                     )
                 }
             }
+            if (running.isNotEmpty()) {
+                item(key = "running-label", contentType = "label") {
+                    SectionLabel("Running", Modifier.animateItem().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp))
+                }
+                items(running, key = { "r:" + it.project.name }, contentType = { "running" }) { live ->
+                    RunningRow(live, meta.projects[live.project.name], onClick = { onOpenLocalSession(live.project.name) }, modifier = Modifier.animateItem().padding(horizontal = 16.dp, vertical = 4.dp))
+                }
+            }
             if (!unavailable && recent.isNotEmpty()) {
                 item(key = "continue-label", contentType = "label") {
                     SectionLabel("Continue", Modifier.animateItem().padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 8.dp))
                 }
                 items(recent, key = { "c:" + it.name }, contentType = { "continue" }) { entry ->
                     val session = entry.lastSession ?: return@items
-                    val liveHere = local?.takeIf { it.project.name == entry.name && !it.controller.stopped }
+                    val liveHere = liveAll[entry.name]?.takeIf { !it.controller.stopped }
                     val liveFile = liveHere?.let { it.controller.sessionFile ?: it.sessionFile }
                     val isLive = liveHere != null && (liveFile == null || liveFile == session.file)
                     ContinueRow(
@@ -269,7 +282,7 @@ fun HomeScreen(
                     else -> items(list, key = { "p:" + it.name }, contentType = { "project" }) { entry ->
                         ProjectCard(
                             entry = entry,
-                            live = local?.takeIf { it.project.name == entry.name && !it.controller.stopped }?.controller,
+                            live = liveAll[entry.name]?.takeIf { !it.controller.stopped }?.controller,
                             now = now,
                             onClick = { onOpenProject(entry) },
                             onPin = { store.setPinned(entry.name, it) },

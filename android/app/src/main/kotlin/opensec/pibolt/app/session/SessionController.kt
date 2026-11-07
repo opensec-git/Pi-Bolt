@@ -196,9 +196,14 @@ class SessionController private constructor(
         subagentTail?.watch(key, on)
     }
 
-    fun stop() {
+    /**
+     * Ends this session. A local engine that is idle is kept for a later open of the same session unless
+     * [keepEngine] is false (memory pressure).
+     */
+    fun stop(keepEngine: Boolean = true) {
         if (stopped) return
         stopped = true
+        app.sessionStopped(this)
         when (origin) {
             is Origin.Remote -> {
                 backend.close()
@@ -209,13 +214,17 @@ class SessionController private constructor(
                 // An idle engine can serve the next open of this project (the engine decides); stop reading it first.
                 // Not idle while the subagents extension runs background agents (its "subagents" status): a parked
                 // engine would keep them running unseen, and their completion would start a new turn of a closed session.
-                val idle = isIdle
+                val idle = isIdle && keepEngine
                 rpc.stop()
                 scope.cancel()
                 origin.release(origin.backend, idle)
             }
         }
     }
+
+    /** A turn, a compaction, an open dialog or background subagents: never stopped to make room or free memory. */
+    val isBusy: Boolean
+        get() = _state.value.let { it.isRunning || it.isCompacting || it.dialogs.isNotEmpty() || SUBAGENTS_STATUS in it.statuses }
 
     /** Connected, and nothing runs: no turn, compaction, open dialog or background subagent. */
     val isIdle: Boolean
@@ -407,13 +416,13 @@ class SessionController private constructor(
                 "notify" -> _effects.tryEmit(SessionEffect.Notify(event.str("message").orEmpty(), event.str("notifyType") ?: "info"))
                 "set_editor_text" -> _effects.tryEmit(SessionEffect.EditorText(event.str("text").orEmpty()))
                 "select", "confirm", "input", "editor" -> if (!app.isForeground) {
-                    Notifications.needsAnswer(app, _hostName.value, event.str("title").orEmpty())
+                    Notifications.needsAnswer(app, hostId, project?.name, _hostName.value, event.str("title").orEmpty())
                 }
             }
             "agent_settled" -> {
                 if (!app.isForeground && before.isRunning) {
                     val last = (before.allItems.lastOrNull { it is AssistantTextItem } as? AssistantTextItem)?.text.orEmpty()
-                    Notifications.settled(app, _hostName.value, last, aborted = event.bool("aborted") == true)
+                    Notifications.settled(app, hostId, project?.name, _hostName.value, last, aborted = event.bool("aborted") == true)
                 }
                 scope.launch { refreshState() }
             }
@@ -438,7 +447,7 @@ class SessionController private constructor(
         }
         val needsService = now.isRunning || now.dialogs.isNotEmpty()
         if (needsService && !(previous.isRunning || previous.dialogs.isNotEmpty())) SessionService.ensureRunning(app)
-        if (previous.dialogs.isNotEmpty() && now.dialogs.isEmpty()) Notifications.clearNeedsAnswer(app)
+        if (previous.dialogs.isNotEmpty() && now.dialogs.isEmpty()) Notifications.clearNeedsAnswer(app, hostId)
     }
 
     private fun mutate(change: (SessionState) -> SessionState) {

@@ -93,7 +93,7 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
     var linkError by remember { mutableStateOf<String?>(null) }
     // A link from outside the app (a browser, a chat) pairs only after the user confirms it in the app.
     var linkToConfirm by remember { mutableStateOf<PairingPayload?>(null) }
-    val liveSession by app.session.collectAsState()
+    val liveSession by app.remote.collectAsState()
 
     fun usePairing(text: String): String? {
         val payload = try {
@@ -222,6 +222,13 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
                                 onBack = { if (!nav.popBackStack()) nav.navigate(Routes.HOME) },
                                 onForgotten = { nav.popBackStack(Routes.HOME, inclusive = false) },
                                 local = name,
+                                // The switcher: the other session takes this screen's place; both keep running.
+                                onOpenSession = { other ->
+                                    nav.navigate(Routes.localSession(other)) {
+                                        popUpTo(Routes.LOCAL_SESSION) { inclusive = true }
+                                        launchSingleTop = true
+                                    }
+                                },
                             )
                         }
                     }
@@ -239,6 +246,7 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
                                 app = app,
                                 onBack = { nav.popBackStack(Routes.HOME, inclusive = false) },
                                 onForgotten = { nav.popBackStack(Routes.HOME, inclusive = false) },
+                                onOpenSession = { other -> nav.navigate(Routes.localSession(other)) { launchSingleTop = true } },
                             )
                         }
                     }
