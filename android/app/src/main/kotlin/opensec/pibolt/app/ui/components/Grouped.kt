@@ -111,7 +111,7 @@ fun LargeTitlePage(
     Box(modifier.fillMaxSize().background(colors.canvas)) {
         Column(Modifier.fillMaxSize()) {
             Column(Modifier.fillMaxWidth().background(colors.canvas).statusBarsPadding()) {
-                Box(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = Space.sm)) {
+                Box(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = GlassBarInset)) {
                     GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, backLabel, onClick = onBack, modifier = Modifier.align(Alignment.CenterStart))
                     Text(
                         title,
