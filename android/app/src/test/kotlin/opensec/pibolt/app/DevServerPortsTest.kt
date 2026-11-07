@@ -68,6 +68,15 @@ class DevServerPortsTest {
     }
 
     @Test
+    fun deniedTablesAreReadOnce() {
+        var reads = 0
+        val ports = DevServerPorts(uid = 1, readTable = { reads++; null }, hasChildProcesses = { true }, probe = { it == 5173 })
+        repeat(3) { assertEquals(listOf(5173), ports.scan()) }
+        // Both tables once; SELinux logs a denial for each try, every 3 s while the chip shows.
+        assertEquals(2, reads)
+    }
+
+    @Test
     fun findsPortsInDevServerOutput() {
         val vite = "  VITE v5.4.0  ready in 312 ms\n\n  ➜  Local:   http://localhost:5173/\n  ➜  Network: use --host to expose\n"
         assertEquals(listOf(5173), DevServerPorts.portsMentioned(vite))
