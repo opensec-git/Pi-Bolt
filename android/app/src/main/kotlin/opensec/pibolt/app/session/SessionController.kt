@@ -170,6 +170,13 @@ class SessionController private constructor(
 
     private var usedFallback = false
 
+    /** Perf log (tag [PERF_TAG]): when this controller started, and when the last prompt was sent (0: none waiting). */
+    private val createdAt = SystemClock.elapsedRealtime()
+
+    @Volatile
+    private var sentAt = 0L
+    private var readyLogged = false
+
     fun start() {
         scope.launch { reduceLoop() }
         scope.launch { connectLoop() }
@@ -409,6 +416,15 @@ class SessionController private constructor(
     }
 
     private fun afterPublish(previous: SessionState, now: SessionState) {
+        if (!readyLogged && now.hello) {
+            readyLogged = true
+            Log.i(PERF_TAG, "session ready ${SystemClock.elapsedRealtime() - createdAt} ms (${now.items.size} items)")
+        }
+        val sent = sentAt
+        if (sent != 0L && now.streaming.isNotEmpty()) {
+            sentAt = 0L
+            Log.i(PERF_TAG, "first token ${SystemClock.elapsedRealtime() - sent} ms")
+        }
         val needsService = now.isRunning || now.dialogs.isNotEmpty()
         if (needsService && !(previous.isRunning || previous.dialogs.isNotEmpty())) SessionService.ensureRunning(app)
         if (previous.dialogs.isNotEmpty() && now.dialogs.isEmpty()) Notifications.clearNeedsAnswer(app)
@@ -428,6 +444,7 @@ class SessionController private constructor(
     /** Send a prompt. While the agent runs, [behavior] says whether it steers or waits as a follow-up. */
     fun send(text: String, behavior: StreamingBehavior, images: List<ImageAttachment> = emptyList()) {
         val running = _state.value.isRunning
+        sentAt = SystemClock.elapsedRealtime()
         scope.launch {
             // An extension command answers only when it finishes, after its dialogs: nothing waits on this.
             val response = rpc.prompt(text, images, streamingBehavior = if (running) behavior else null)
@@ -673,6 +690,7 @@ class SessionController private constructor(
         /** Status key of the bundled subagents extension, set while background agents run or wait. */
         private const val SUBAGENTS_STATUS = "subagents"
         private const val FRAME_MS = 16L
+        const val PERF_TAG = "PiBoltPerf"
 
         /** A session with the engine on this phone, in [project]. [release] takes the backend back when it stops. */
         fun local(app: PiBoltApp, project: File, backend: LocalBackend, release: (LocalBackend, Boolean) -> Unit) =

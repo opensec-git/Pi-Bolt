@@ -193,10 +193,27 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     /** No activity is visible. The spare stops after a while unless the app comes back. */
     fun onBackground() {
         inBackground = true
+        stopSpareIn(BACKGROUND_IDLE_MS, "idle in the background")
+    }
+
+    /** The system asked for memory while the app is in the background: stop the spare after [TRIM_GRACE_MS]. */
+    fun trimSoon(reason: String) {
+        if (!inBackground) return trimMemory(reason)
+        stopSpareIn(TRIM_GRACE_MS, reason)
+    }
+
+    /** When the scheduled stop runs (elapsedRealtime); a later request never postpones an earlier stop. */
+    @Volatile
+    private var stopAt = 0L
+
+    private fun stopSpareIn(ms: Long, reason: String) {
+        val at = SystemClock.elapsedRealtime() + ms
+        if (backgroundJob?.isActive == true && stopAt <= at) return
+        stopAt = at
         backgroundJob?.cancel()
         backgroundJob = scope.launch {
-            delay(BACKGROUND_IDLE_MS)
-            trimMemory("idle in the background")
+            delay(ms)
+            trimMemory(reason)
         }
     }
 
@@ -415,6 +432,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         private const val KEY_LAST_PROJECT = "lastProject"
         private const val OPEN_TIMEOUT_MS = 180_000L
         private const val BACKGROUND_IDLE_MS = 5 * 60_000L
+        private const val TRIM_GRACE_MS = 60_000L
 
         /** `Date.toISOString()`: always milliseconds, always Z. */
         private val ISO_MILLIS: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)

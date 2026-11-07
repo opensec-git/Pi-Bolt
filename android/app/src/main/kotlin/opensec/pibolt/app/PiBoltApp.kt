@@ -149,8 +149,22 @@ class PiBoltApp : Application() {
 
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
-        // The idle warm engine is the first thing to give back when the system runs short.
-        if (level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND) localEngine.trimMemory("trim level $level")
+        // The idle warm engine is the first thing to give back when the system runs short. TRIM_MEMORY_BACKGROUND alone
+        // arrives soon after every trip out of the app (API 34+ sends nothing stronger): stopping the spare at once made
+        // the next open after a quick look at another app a cold start. It stops a minute later unless the app is back.
+        @Suppress("DEPRECATION")
+        when {
+            level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL ->
+                localEngine.trimMemory("trim level $level")
+            level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> localEngine.trimSoon("trim level $level")
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onLowMemory() {
+        @Suppress("DEPRECATION")
+        super.onLowMemory()
+        localEngine.trimMemory("low memory")
     }
 
     /** Make [controller] the live session, stopping the previous one. */
