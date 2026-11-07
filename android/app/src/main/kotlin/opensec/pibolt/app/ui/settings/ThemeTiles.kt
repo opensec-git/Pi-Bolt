@@ -48,7 +48,7 @@ import opensec.pibolt.app.ui.theme.Radius
 private const val THEME_TILES_PER_ROW = 4
 
 /** Near-black themes look alike at tile size; their canvas hex goes under the name. */
-private val NEAR_BLACK = setOf(ThemeId.Graphite, ThemeId.Void, ThemeId.Codex, ThemeId.Vercel)
+private val NEAR_BLACK = setOf(ThemeId.Graphite, ThemeId.Contrast, ThemeId.Codex, ThemeId.Vercel)
 
 /** Four tiles a row; an incomplete last row keeps the tile width. */
 @Composable
@@ -115,6 +115,8 @@ private fun DrawScope.drawThemePreview(c: PiColors, radius: Float) {
     // A code card: keyword, function and string in the theme's syntax colours.
     val card = h * 0.43f
     drawRoundRect(c.surface1, Offset(pad * 0.7f, card), Size(w - pad * 1.4f, h * 0.20f), CornerRadius(5.dp.toPx()))
+    // Its 1dp line, as on a real code block: on a light canvas the card is a faint step without it.
+    drawRoundRect(c.line, Offset(pad * 0.7f, card), Size(w - pad * 1.4f, h * 0.20f), CornerRadius(5.dp.toPx()), style = Stroke(1.dp.toPx()))
     val code1 = card + h * 0.05f
     pill(c.syntax.keyword, pad, code1, w * 0.16f)
     pill(c.syntax.function, pad + w * 0.20f, code1, w * 0.24f)

@@ -28,7 +28,7 @@ class MainActivity : ComponentActivity() {
     private var pendingShare by mutableStateOf<SharedContent?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Dark only: light system bar icons on every theme.
+        // Light system bar icons to start (the default theme is dark); PiBoltTheme switches them for Paper.
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),

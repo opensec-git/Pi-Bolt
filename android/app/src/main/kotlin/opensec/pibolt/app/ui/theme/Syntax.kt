@@ -23,7 +23,7 @@ data class SyntaxColors(
     val regex: Color,
     val escape: Color,
     val variable: Color,
-    /** Comments: the theme's ink3 (a neutral grey for the shared Pi palette), italic. */
+    /** Comments: the theme's ink3 (a neutral grey for the Pi palette), italic. */
     val comment: Color,
     /** Keywords and constants in a heavier weight where their colour alone is close to the text (Desktop). */
     val keywordWeight: FontWeight? = null,
@@ -51,7 +51,77 @@ data class SyntaxColors(
             keywordWeight = FontWeight.Medium,
         )
 
-        /** Void and Codex: pastels on neutral greys; the comment grey is neutral too (no blue cast). */
+        /** Paper: the desktop's light highlight.js theme, deepened where a colour missed AA on surface2. */
+        val Paper = SyntaxColors(
+            keyword = Color(0xFF000000),
+            type = Color(0xFF7D600F),
+            function = Color(0xFF171717),
+            string = Color(0xFF2F7A3E),
+            number = Color(0xFFA5571A),
+            constant = Color(0xFF000000),
+            operator = Color(0xFF5A5A5A),
+            attribute = Color(0xFF404040),
+            tag = Color(0xFF5A5A5A),
+            regex = Color(0xFF2F7A3E),
+            escape = Color(0xFFA5571A),
+            variable = Color(0xFF404040),
+            comment = Color(0xFF666666),
+            keywordWeight = FontWeight.Medium,
+        )
+
+        /** Contrast: white keywords a weight up and bright, clear hues, every one at 7:1 (AAA) on cards and sheets. */
+        val Contrast = SyntaxColors(
+            keyword = Color(0xFFFFFFFF),
+            type = Color(0xFFFFE08A),
+            function = Color(0xFFFFFFFF),
+            string = Color(0xFF9FF0C0),
+            number = Color(0xFFFFB98A),
+            constant = Color(0xFFFFB98A),
+            operator = Color(0xFFDADADA),
+            attribute = Color(0xFFE0E0E0),
+            tag = Color(0xFFFFE08A),
+            regex = Color(0xFF9FF0C0),
+            escape = Color(0xFFFFB98A),
+            variable = Color(0xFFF0C8E8),
+            comment = Color(0xFFB8B8B8),
+            keywordWeight = FontWeight.SemiBold,
+        )
+
+        /** Lime: soft lavender, apricot, mint and coral; lime stays the accent and never appears in code. */
+        val Lime = SyntaxColors(
+            keyword = Color(0xFFC3B1F5),
+            type = Color(0xFFF2C48D),
+            function = Color(0xFFE8E8E8),
+            string = Color(0xFFA6DCC3),
+            number = Color(0xFFF5A7A0),
+            constant = Color(0xFFF5A7A0),
+            operator = Color(0xFFB8B8B8),
+            attribute = Color(0xFFC3B1F5),
+            tag = Color(0xFFF2C48D),
+            regex = Color(0xFFA6DCC3),
+            escape = Color(0xFFF2C48D),
+            variable = Color(0xFFF5A7A0),
+            comment = Color(0xFF9A9A9A),
+        )
+
+        /** Moss: earthy, a forest floor. Ochre keywords, straw types, lichen calls, moss strings, clay numbers. */
+        val Moss = SyntaxColors(
+            keyword = Color(0xFFD6A86C),
+            type = Color(0xFFE3CF8C),
+            function = Color(0xFF9FC7B8),
+            string = Color(0xFFB9D38A),
+            number = Color(0xFFE59A7A),
+            constant = Color(0xFFE59A7A),
+            operator = Color(0xFFA9B4A5),
+            attribute = Color(0xFFC4B48A),
+            tag = Color(0xFFD6A86C),
+            regex = Color(0xFF8FC7B0),
+            escape = Color(0xFFE3CF8C),
+            variable = Color(0xFFD9A3A0),
+            comment = Color(0xFF8D998A),
+        )
+
+        /** Codex: pastels on neutral greys; the comment grey is neutral too (no blue cast). */
         val Pi = SyntaxColors(
             keyword = Color(0xFFC9A0F5),
             type = Color(0xFFE8C67E),
@@ -138,7 +208,11 @@ data class SyntaxColors(
 
         fun of(theme: ThemeId): SyntaxColors = when (theme) {
             ThemeId.Graphite -> Desktop
-            ThemeId.Void, ThemeId.Codex -> Pi
+            ThemeId.Paper -> Paper
+            ThemeId.Contrast -> Contrast
+            ThemeId.Lime -> Lime
+            ThemeId.Moss -> Moss
+            ThemeId.Codex -> Pi
             ThemeId.Ember -> Ember
             ThemeId.Claude -> Claude
             ThemeId.Vercel -> Vercel

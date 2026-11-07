@@ -1,6 +1,6 @@
 # Pi-Bolt Android: design language
 
-Dark only. Ink-first hierarchy: text in four grey levels does the work, colour is reserved for state (success,
+Dark first, with one light theme (Paper). Ink-first hierarchy: text in four grey levels does the work, colour is reserved for state (success,
 warning, danger, diff), and one accent marks what you can act on. Motion is quiet and purposeful: only the live turn
 animates, history never does. Everything that moves respects "Reduce motion".
 
@@ -10,20 +10,53 @@ One `PiColors` set per theme, provided through `LocalPiColors` and mapped onto M
 (`surfaceTint = Transparent`, tonal elevation 0) so stock components match. Elevation = a surface step plus a 1dp
 line; no shadows.
 
-| Role | Pi-Bolt (default, id `Graphite`) | Void (AMOLED) | Ember (warm) | Claude | Codex | Vercel | GitHub |
-|---|---|---|---|---|---|---|---|
-| canvas | `#000000` | `#000000` | `#15130F` | `#1F1E1D` | `#0D0D0D` | `#000000` | `#0D1117` |
-| surface1 (cards, composer) | `#0E0E0E` | `#0D0E10` | `#1C1A16` | `#262624` | `#171717` | `#0F0F0F` | `#151B23` |
-| surface2 (bubbles, sheets) | `#161616` | `#101113` | `#24211C` | `#30302E` | `#212121` | `#111111` | `#1C2128` |
-| surface3 (pressed, menus) | `#1D1D1D` | `#17191C` | `#2C2822` | `#3A3936` | `#2A2A2A` | `#1A1A1A` | `#262C36` |
-| ink1 (text) | `#EDEDED` | `#E8EAED` | `#EFE9DD` | `#F5F4EE` | `#ECECEC` | `#EDEDED` | `#F0F6FC` |
-| ink2 (secondary) | `#A1A1A1` | `#A3A8B0` | `#B9B1A3` | `#C3C0B6` | `#B4B4B4` | `#A1A1A1` | `#B7BDC8` |
-| ink3 (meta, lowest text) | `#858585` | `#7D838C` | `#979084` | `#A6A49C` | `#929292` | `#8F8F8F` | `#9198A1` |
-| ink4 (rules, never text) | `#595959` | `#4C5158` | `#5A554D` | `#5E5D59` | `#545454` | `#454545` | `#3D444D` |
-| line / lineStrong | white @ 8% / 14% | ink1 @ 11% / 19% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 12% / 20% | ink1 @ 10% / 18% |
-| scrim | black @ 50% | black @ 70% | black @ 56% | black @ 60% | black @ 60% | black @ 70% | black @ 60% |
+| Role | Pi-Bolt (default, id `Graphite`) | Ember (warm) | Claude | Codex | Vercel | GitHub |
+|---|---|---|---|---|---|---|
+| canvas | `#000000` | `#15130F` | `#1F1E1D` | `#0D0D0D` | `#000000` | `#0D1117` |
+| surface1 (cards, composer) | `#0E0E0E` | `#1C1A16` | `#262624` | `#171717` | `#0F0F0F` | `#151B23` |
+| surface2 (bubbles, sheets) | `#161616` | `#24211C` | `#30302E` | `#212121` | `#111111` | `#1C2128` |
+| surface3 (pressed, menus) | `#1D1D1D` | `#2C2822` | `#3A3936` | `#2A2A2A` | `#1A1A1A` | `#262C36` |
+| ink1 (text) | `#EDEDED` | `#EFE9DD` | `#F5F4EE` | `#ECECEC` | `#EDEDED` | `#F0F6FC` |
+| ink2 (secondary) | `#A1A1A1` | `#B9B1A3` | `#C3C0B6` | `#B4B4B4` | `#A1A1A1` | `#B7BDC8` |
+| ink3 (meta, lowest text) | `#858585` | `#979084` | `#A6A49C` | `#929292` | `#8F8F8F` | `#9198A1` |
+| ink4 (rules, never text) | `#595959` | `#5A554D` | `#5E5D59` | `#545454` | `#454545` | `#3D444D` |
+| line / lineStrong | white @ 8% / 14% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 12% / 20% | ink1 @ 10% / 18% |
+| scrim | black @ 50% | black @ 56% | black @ 60% | black @ 60% | black @ 70% | black @ 60% |
 
-Claude, Codex, Vercel and GitHub are palettes in the spirit of those products' dark modes, not their assets.
+Claude, Codex, Vercel and GitHub are palettes in the spirit of those products' dark modes, not their assets. Void
+(a black AMOLED theme with the old blue-grey inks) was removed in 0.5.2, since the default is now black; a saved Void
+choice loads as Pi-Bolt (`SettingsCodec` falls back on unknown names).
+
+The app's own themes besides the default, each built in full by `Palette.kt`'s `full()` (surfaces, inks, lines and
+overlays, accent, status, diff, syntax, ANSI, tints), and each held to the role checks below:
+
+| Role | Paper (light) | Contrast (high contrast) | Lime (soft dark) | Moss (forest dark) |
+|---|---|---|---|---|
+| canvas | `#FFFFFF` | `#000000` | `#1A1A1A` | `#0C100D` |
+| surface1 / 2 / 3 | `#F7F7F7` / `#F0F0F0` / `#E8E8E8` | `#0A0A0A` / `#141414` / `#1F1F1F` | `#202020` / `#272727` / `#2D2D2D` | `#121814` / `#19201B` / `#212A23` |
+| ink1 / 2 / 3 / 4 | `#171717` / `#525252` / `#666666` / `#949494` | `#FFFFFF` / `#DADADA` / `#B8B8B8` / `#7A7A7A` | `#F0F0F0` / `#B8B8B8` / `#9A9A9A` / `#5C5C5C` | `#E4EBE1` / `#A9B4A5` / `#8D998A` / `#4F5A4D` |
+| lines, overlays | black @ 8 / 14 / 35%, press 6%, selected 8% | white @ 22 / 36 / 75%, press 12%, selected 16% | white @ 9 / 15 / 36%, 7%, 10% | ink1 @ 10 / 17 / 40%, 7%, 11% |
+| scrim | black @ 24% | black @ 75% | black @ 60% | black @ 60% |
+| accent / onAccent | `#0A0A0A` / `#FFFFFF` | `#FFFFFF` / `#000000` | OpenSec lime `#BAFC6B` / `#16210A` | fern `#B4D39A` / `#0C100D` |
+| success / warning / danger | `#11733F` / `#8A6410` / `#B83430`, soft 9% | `#6EE7A8` / `#FFCB5C` / `#FF8A85`, soft 16% | `#5FD39A` / `#E8B04B` / `#FF8681`, soft 12% | `#5FD39A` / `#E8B04B` / `#F2706B`, soft 14% |
+| diff fg (bg) | `#116B40` / `#A2302C` (8%) | `#B4F5D2` / `#FFC2BF` (16%) | `#9BE6BF` / `#F7A9A5` (11%) | `#9BE6BF` / `#F7A9A5` (11%) |
+| ANSI blue / magenta / cyan | `#4D4D4D` / `#8C3A73` / `#39605F` | `#E0E0E0` / `#F0B8E0` / `#C8E8E8` | `#C4C9D4` / `#D7A6C8` / `#A6DCC3` | `#8FB3C7` / `#C9A3C8` / `#8FC7B0` |
+| tints | the light set (below) | the shared set | the shared set | the shared set |
+
+- **Paper** is the desktop's light mode (`tokens.css` light tokens and its light highlight.js colours). Surfaces step
+  down from white, because white is the top. Status, type and the tints are deepened until they read as text on its
+  sheets: the desktop's green `#16834F`, amber `#A77B12` and red `#C93B37` measure 4.2, 3.4 and 4.4:1 on surface2.
+  It is the one light theme (`PiColors.isLight`): Material's light scheme, dark status and navigation bar icons,
+  Mermaid with `darkMode` off. The window colour before the first frame stays the default's black.
+- **Contrast** is high-contrast mono, for bright light or low vision. Every text ink, status, diff and syntax colour
+  is at 7:1 (AAA) on canvas, cards and sheets. lineStrong is 3:1, so a border alone reads. Keywords are SemiBold.
+- **Lime** is a soft neutral dark, lighter than Codex, with the OpenSec brand lime as its accent only. Lime never
+  appears in code or state. Its danger is Claude's lighter `#FF8681`, so a danger button passes on its sheets.
+- **Moss** is a green-black forest dark: lichen-grey ink, a soft fern accent (yellow-green, apart from the mint
+  success) and earthy code colours.
+
+On a light theme the Iris and Glacier accents take deep variants of the same hue (`#5B4BD1`, `#0B6E9E`, white on
+them). The pastels would not read as links on white.
 
 **Pi-Bolt (the default)** is Pi-Bolt Desktop's palette (`pi-bolt-desktop/src/styles/tokens.css`), mapped 1:1, with
 one change. It is monochrome: a pure black canvas, one neutral grey scale, white as the only accent, green, amber and
@@ -63,6 +96,9 @@ passes 3:1 as a glyph on every surface, and AA as an initial on its own 16% fill
 | tint3 | violet | 0.74 0.14 298 | `#B696F7` |
 | tint4 | seafoam | 0.80 0.11 185 | `#5CD5C7` |
 
+Paper uses `LightTints`: the same hues at lightness 0.50 (seafoam 0.47, chroma 0.09), which are `#994A00`,
+`#A33460`, `#8E3B94`, `#6F4BAC` and `#006B61`. The desktop's light tints (L 0.54 to 0.60) are 3.1 to 4.3:1 as an initial.
+
 Overlays: press = ink1 @ 7%, selected = ink1 @ 11%, focus line = ink1 @ 40% (Pi-Bolt: white @ 8.5%, 10%, 32%).
 
 Accent (independent of theme): **Theme** (default: the theme's own accent: Pi-Bolt white `#FAFAFA` / `#000000`, Claude coral `#E08566` / `#1F1E1D` (lifted
@@ -89,8 +125,10 @@ function (calls and declarations), string, number, constant (`true`, `null`, ALL
 (`$x`, `@x`), comments italic; punctuation ink2, base text ink1, the shell `$` prompt success SemiBold, diff lines in
 the diff colours. Pi-Bolt uses the desktop's monochrome highlight.js theme: white keywords and constants in Medium
 weight (`keywordWeight`), near-white calls, sand types, green strings, orange numbers, greys for the rest, no blue.
-Void and Codex share the "Pi" palette (violet keywords, yellow types, blue calls, green strings, orange numbers, a
-neutral comment grey); Ember is warm and earthy, Claude coral / sand / sage, Vercel pink / purple / blue /
+Codex uses the "Pi" palette (violet keywords, yellow types, blue calls, green strings, orange numbers, a neutral
+comment grey); Paper is the desktop's light highlight.js colours, deepened for AA; Contrast is bright hues at 7:1 with
+SemiBold keywords; Lime is lavender / apricot / mint / coral (no lime in code); Moss is ochre / straw / lichen / moss /
+clay; Ember is warm and earthy, Claude coral / sand / sage, Vercel pink / purple / blue /
 green, GitHub uses its dark "prettylights" roles. Only `text`, `log` and `output` fences stay plain.
 
 | Role | Pi-Bolt | Pi | Ember | Claude | Vercel | GitHub |
@@ -107,6 +145,17 @@ green, GitHub uses its dark "prettylights" roles. Only `text`, `log` and `output
 | variable | `#C4C4C4` | `#F08E9A` | `#8DB8A8` | `#9DBAE8` | `#FF9F6B` | `#FFA657` |
 | comment | ink3 | `#8F8E8C` | ink3 | ink3 | ink3 | ink3 |
 
+| Role | Paper | Contrast | Lime | Moss |
+|---|---|---|---|---|
+| keyword / constant | `#000000` Medium | `#FFFFFF` SemiBold / `#FFB98A` | `#C3B1F5` / `#F5A7A0` | `#D6A86C` / `#E59A7A` |
+| type | `#7D600F` | `#FFE08A` | `#F2C48D` | `#E3CF8C` |
+| function | `#171717` | `#FFFFFF` | `#E8E8E8` | `#9FC7B8` |
+| string / regex | `#2F7A3E` | `#9FF0C0` | `#A6DCC3` | `#B9D38A` / `#8FC7B0` |
+| number / escape | `#A5571A` | `#FFB98A` | `#F5A7A0` / `#F2C48D` | `#E59A7A` / `#E3CF8C` |
+| operator, tag | `#5A5A5A` | `#DADADA` / `#FFE08A` | ink2 / `#F2C48D` | ink2 / `#D6A86C` |
+| attribute, variable | `#404040` | `#E0E0E0` / `#F0C8E8` | `#C3B1F5` / `#F5A7A0` | `#C4B48A` / `#D9A3A0` |
+| comment | ink3 | ink3 | ink3 | ink3 |
+
 Contrast (WCAG 2.1, checked by `ContrastTest` for every theme and accent):
 - ink1, ink2 and ink3 pass AA (4.5:1) on canvas, surface1, surface2 and surface3. ink3 is the lowest text and was
   raised where it missed AA on surface2 or surface3 (old Graphite `#7D838C` → `#878D96`, Pi-Bolt `#808080` →
@@ -119,13 +168,15 @@ Contrast (WCAG 2.1, checked by `ContrastTest` for every theme and accent):
   surface1 and surface2. Snackbar actions sit on surface3, so they are ink1, not accent.
 - A Notice's text (ink1, ink2 under a title) passes on its fill over canvas, cards and sheets; its glyph passes 3:1.
 - Button labels pass: secondary ink1 on surface2, danger on dangerSoft, the disabled primary's ink3 on surface3.
-- Void and Vercel cards (surface1) are one step lighter (`#0D0E10`, `#0F0F0F`) so they stand off the pure-black canvas.
-- The default theme is checked by role in every accent (`defaultThemeRolesPass`): ink1 and ink2 AA on each surface,
+- Vercel cards (surface1) are one step lighter (`#0F0F0F`) so they stand off the pure-black canvas.
+- The app's own themes (Pi-Bolt, Paper, Contrast, Lime, Moss) are checked by role in every accent (`ownThemesRolesPass`): ink1 and ink2 AA on each surface,
   plain, pressed and selected; ink3 at least 3:1 as a glyph on all of those; the accent's label AA on it, its fill 3:1
   against the surface (a button's shape) and AA as link text; ink1 AA on the text selection. `defaultThemeHasNoBlueCast`
   keeps the default's greys and everything drawn from them neutral, `defaultThemeIsTheDesktopPalette` pins the
-  desktop values, `subagentTintsReadInEveryTheme` checks the tints, `elevationStepsStayDistinct` keeps canvas < surface1
-  < surface2 < surface3 in every theme (each Graphite step at least 1.05:1), and the window colour must be the canvas.
+  desktop values, `subagentTintsReadInEveryTheme` checks the tints, `elevationStepsStayDistinct` keeps each surface a step further
+  from the canvas in every theme (lighter on dark themes, darker on Paper; each step of the own themes at least
+  1.05:1), `onlyPaperIsLight` pins the one light theme, `contrastThemeIsAaa` holds Contrast to 7:1, and the window
+  colour must be the default canvas. Paper, Contrast and Lime greys carry no tint either.
 - Syntax colours pass on canvas, surface1 and surface2 (`SyntaxColorsTest`). Lines (1.2 to 1.3:1) are decoration: a
   1dp line is never the only cue that something is interactive without a fill or label.
 
@@ -839,9 +890,10 @@ weight with `RowDivider`s, controls start with a `ControlLabel`:
   queue, compaction and retry switches reach the open on-device session at once over RPC, the rest apply from the next
   session.
 - Runtimes: the shipped runtimes on one line ("Node.js 22.23.4 · Python 3.14.10") and a row to the Runtimes screen.
-- Appearance: theme tiles (seven, four a row, each drawn in its own theme: canvas, user bubble, prose with an inline
+- Appearance: theme tiles (ten, four a row: Pi-Bolt, Paper, Contrast, Lime, Moss, Ember, Claude, Codex, Vercel, GitHub; each drawn in its own theme: canvas, user bubble, prose with an inline
   code chip, a code card in the theme's syntax colours, the composer with the accent send button; selected = 1.5dp
-  accent ring; the near-black themes show their canvas hex under the name in monoMeta ink3), accent circles ("Theme"
+  accent ring; the code card has its 1dp line, which keeps it visible on Paper; the near-black themes (Pi-Bolt,
+  Contrast, Codex, Vercel) show their canvas hex under the name in monoMeta ink3), accent circles ("Theme"
   is a split disc: the theme's own accent beside surface3), text size ("Text size" with its value in label ink2 beside
   it, A-glyph steps and a live prose preview), density (Comfortable / Compact).
 - Motion and haptics: Reduce motion (Follow system / On), Haptics.
@@ -912,7 +964,7 @@ state, ER, gantt, pie and mind maps are checked; the other Mermaid types work th
 - Theme: Mermaid's base theme from the palette: nodes surface3 with a solid border (ink1 @ 26% over surface3), text
   ink1, edges ink2, clusters surface2, notes warning @ 16%. Charts use a fixed categorical set (types, strings,
   numbers, seafoam, success, warning, violet, rose (the tint tokens), danger, diff fgs, ink2), full strength for pie slices and dimmed to
-  42% over surface2 where text sits on them. Every theme is dark; `darkMode` follows the canvas luminance.
+  42% over surface2 where text sits on them. `darkMode` follows the canvas luminance (off for Paper).
 - Full screen (a dialog on canvas): pinch zoom 1x (fit) to 8x around the fingers, pan, double-tap to 2.5x or back,
   Fit, Share as PNG (FileProvider, cache/diagrams/ only) and Save as PNG (the system file picker, no permission). It
   shows the inline bitmap at once and swaps in one drawn at twice the screen density.

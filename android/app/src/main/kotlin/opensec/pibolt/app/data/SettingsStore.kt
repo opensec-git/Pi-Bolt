@@ -14,11 +14,18 @@ import opensec.pibolt.protocol.str
 import java.io.File
 import java.util.concurrent.Executors
 
-/** Dark themes. Claude, Codex, Vercel and GitHub are palettes in the spirit of those products' dark modes. */
+/**
+ * Themes, stored by name. Pi-Bolt (id Graphite), Paper (light), Contrast, Lime and Moss are the app's own; Claude, Codex,
+ * Vercel and GitHub are palettes in the spirit of those products' dark modes. A removed theme's name (Tide, Void) is
+ * unknown to [SettingsCodec], so it falls back to the default.
+ */
 enum class ThemeId(val label: String) {
     /** The default: Pi-Bolt Desktop's palette. The id stays Graphite so saved settings keep it. */
     Graphite("Pi-Bolt"),
-    Void("Void"),
+    Paper("Paper"),
+    Contrast("Contrast"),
+    Lime("Lime"),
+    Moss("Moss"),
     Ember("Ember"),
     Claude("Claude"),
     Codex("Codex"),
