@@ -101,7 +101,18 @@ device_prepare() {
 install_apk() {
 	[ -f "$APK" ] || { echo "APK not found: $APK" >&2; return 1; }
 	log "installing $(basename "$APK") ($E2E_ENGINE engine)"
-	adb_ install -r -g "$APK" >/dev/null || return 1
+	local out
+	if ! out=$(adb_ install -r -g "$APK" 2>&1); then
+		# A release build or a newer version is installed (other signer, or a higher versionCode): replace it.
+		case "$out" in
+		*INSTALL_FAILED_VERSION_DOWNGRADE* | *INSTALL_FAILED_UPDATE_INCOMPATIBLE* | *signatures\ do\ not\ match*)
+			log "replacing the installed $PKG ($(printf '%s' "$out" | grep -o 'INSTALL_FAILED_[A-Z_]*' | head -1))"
+			adb_ uninstall "$PKG" >/dev/null 2>&1
+			adb_ install -r -g "$APK" >/dev/null || return 1
+			;;
+		*) printf '%s\n' "$out" >&2; return 1 ;;
+		esac
+	fi
 	# adb installs of a debug APK skip dex verification; the first start then verifies every dex file on the main
 	# thread inside bindApplication, which on a loaded host exceeds the startup deadline (an ANR "failed to complete
 	# startup"). Verify ahead of time instead.
