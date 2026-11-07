@@ -1,6 +1,6 @@
 # Pi-Bolt Android: feature parity with the terminal
 
-Every user-facing feature of Pi-Bolt's terminal UI (TUI) and RPC, and its state in the Android app as of 0.3.0.
+Every user-facing feature of Pi-Bolt's terminal UI (TUI) and RPC, and its state in the Android app as of 0.4.0.
 
 - **State**: `done` (works on a phone as in the terminal, or better), `partial` (some of it, or only on-device or only
   remote), `missing`, `n/a` (has no meaning on a phone; not counted below).
@@ -15,10 +15,10 @@ rpc-extension-ui.md, remote-control.md) and src/modes/interactive.
 
 | | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| done | 39 | 45 | 11 | 95 |
-| partial | 0 | 1 | 3 | 4 |
-| missing | 0 | 2 | 22 | 24 |
-| **Total** | 39 | 48 | 36 | 123 |
+| done | 39 | 46 | 29 | 114 |
+| partial | 0 | 1 | 4 | 5 |
+| missing | 0 | 1 | 6 | 7 |
+| **Total** | 39 | 48 | 39 | 126 |
 
 Not counted: 12 `n/a` rows (terminal-only features). Before this branch the same rows stood at 53 done, 15 partial and
 55 missing: it moved 37 rows (25 missing to done, 11 partial to done, 1 missing to partial) and closed every P0 gap.
@@ -29,6 +29,14 @@ sheet); models grouped by provider; session statistics sheet with the footer's c
 search with jump to match; message actions (copy plain or Markdown, send again, edit and resend, regenerate, share);
 resume, fork and duplicate from the session; export or share as Markdown, JSONL or HTML; image viewer (zoom, save,
 share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts; on-device agent settings.
+
+Built in the features2 branch (16 P2 rows missing to done, 1 to partial, 3 new rows): session tree (`/tree`: branches,
+go back, labels); session list with sort, name filter, search inside messages, rename and delete; packages manager
+(`/packages`, Settings); MCP servers (`/mcp-servers`, Settings); project trust (`/trust`); `/reload`; `/scoped-models`;
+retry and compaction numbers (`/tuning`, Settings); "Stop retrying"; `/import`, `/share`, `/bug`; skills and prompt
+templates browser (`/skills`); notifications that open their exact session, and one when a background agent finishes.
+Tree navigation, labels and the tool list go through a small helper extension the app writes to
+`~/.pi/agent/extensions/pibolt-app.js` (RPC has no command for them).
 
 ## Prompting and the composer
 
@@ -71,7 +79,7 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 | Thinking level picker | `/thinking` | done: levels the model supports | both | P0 |
 | `/thinking <level>` | `/thinking high` | done | both | P1 |
 | Cycle thinking level | Shift+Tab | done: long-press the thinking chip, Next in Session, Shift+Tab | both | P1 |
-| Scoped models for cycling | `/scoped-models` | missing | device | P2 |
+| Scoped models for cycling | `/scoped-models` | done: `/scoped-models` writes `enabledModels`; the picker shows only those | device | P2 |
 | Save default model / thinking | Ctrl+S in selectors | partial: the last model picked becomes the default (as in Pi); thinking default in Settings | device | P1 |
 | Provider sign-in (API key) | `/login` | done: Settings, Model providers | device | P0 |
 | Provider sign-in (OAuth) | `/login` | missing | device | P1 |
@@ -87,14 +95,16 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 | Rename session | `/name` | done: menu, `/name <name>`, Session sheet | both | P1 |
 | Fork from an earlier message | `/fork` | done: `/fork` sheet, "Edit and resend" on a message | device | P1 |
 | Duplicate session | `/clone` | done: menu, `/clone` | device | P2 |
-| Session tree navigation | `/tree`, double Esc | missing | device | P2 |
-| Tree labels, filters | `/tree` keys | missing | device | P2 |
+| Session tree navigation | `/tree`, double Esc | done: `/tree` sheet, forks indented, active path marked; continue from any entry (a prompt returns to the composer) | device | P2 |
+| Tree labels, filters | `/tree` keys | done: label / unlabel an entry; Messages, Prompts, Labeled, Everything | device | P2 |
 | Session info and statistics | `/session` | done: Session sheet (`get_session_stats`) | both | P0 |
 | Context usage in the footer | footer | done: top-bar context meter (kept through failed turns), context bar in Session | both | P0 |
 | Tokens in/out, cache, cost | footer | done: footer line and totals in Session | both | P0 |
-| Delete a session | session picker Ctrl+D | missing (projects delete all their sessions) | device | P2 |
-| Session list sort / named filter | Ctrl+S / Ctrl+N | missing | device | P2 |
-| Import a JSONL session | `/import` | missing | device | P2 |
+| Delete a session | session picker Ctrl+D | done: sessions sheet (`/resume`, search on the project screen), with confirmation; not the open one | device | P2 |
+| Rename a saved session | session picker | done: sessions sheet (a `session_info` entry, as `/name` writes) | device | P2 |
+| Session list sort / named filter | Ctrl+S / Ctrl+N | done: recent, name or size; filter by name or first prompt | device | P2 |
+| Search all sessions by text | — | done: "Messages" in the sessions sheet: matches per session with a snippet | device | P2 |
+| Import a JSONL session | `/import` | done: `/import` opens the Android file picker; the file is copied into the project (id kept) and opened | device | P2 |
 | Switch sessions from another project | `/resume` all | partial: per project, from Home | device | P2 |
 | Quit | `/quit` | n/a (back / Home) | — | — |
 
@@ -107,7 +117,7 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 | Compaction summary in the transcript | summary block | done: expandable notice with the summary | both | P0 |
 | Branch summary | summary block | done | both | P2 |
 | Auto-compaction on/off | settings | done: Settings, Pi on this phone | device | P1 |
-| Compaction thresholds (reserve, keep recent) | settings.json | missing | device | P2 |
+| Compaction thresholds (reserve, keep recent) | settings.json | done: `/tuning`, Settings → Retry and compaction (threshold %, reserve, keep recent) | device | P2 |
 
 ## Transcript
 
@@ -127,12 +137,12 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 | Scroll to bottom, follow output | Ctrl+End | done: scroll button with unseen dot | both | P0 |
 | Select and copy text | selection | done: "Select text" | both | P0 |
 | Images in user messages | inline | done: thumbnails, full-screen viewer (zoom, save, share) | both | P1 |
-| Images in tool results | inline | missing: shown as "[1 image]" | both | P1 |
+| Images in tool results | inline | done: thumbnails on the tool card, full-screen viewer | both | P1 |
 | Todo list | extension | done: todo panel | both | P1 |
 | Subagent progress | extension | done (subagent work in 0.3.0) | both | P1 |
 | Extension notices / custom messages | — | done | both | P1 |
 | Errors and retries | status | done: one notice per failed turn with a human title, the status code, attempts and Retry / Switch model / Compact / Update key | both | P0 |
-| Stop an automatic retry | `abort_retry` | missing (Stop aborts the run) | both | P2 |
+| Stop an automatic retry | `abort_retry` | done: the error notice reads "Retrying 2 of 3" with "Stop retrying" (`abort_retry`) | both | P2 |
 | Cache-miss notices | `showCacheMissNotices` | missing | both | P2 |
 
 ## Message actions
@@ -153,8 +163,8 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 | Export as HTML | `/export` | done: shared through Android | device | P1 |
 | Export as JSONL | `/export x.jsonl` | done: the session file, shared | device | P1 |
 | Export as Markdown | — | done: share or copy (remote too) | both | P1 |
-| Share as gist / Radius link | `/share` | missing | device | P2 |
-| Bug report | `/bug` | missing | device | P2 |
+| Share as gist / Radius link | `/share` | partial: `/share` opens the share sheet (Markdown, JSONL, HTML); no gist upload | device | P2 |
+| Bug report | `/bug` | done: `/bug [text]`: description plus app, engine, device, model and engine log, shared through Android | both | P2 |
 
 ## Extensions and dialogs
 
@@ -165,10 +175,11 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 | Status line and widgets | `setStatus`, `setWidget` | done: lines above the composer | both | P1 |
 | Put text in the editor | `set_editor_text` | done | both | P1 |
 | Bundled extensions (todo, subagents) | packages | done | device | P1 |
-| Install / manage packages | `pi install`, settings | missing | device | P2 |
-| MCP servers | `/mcp` | missing | device | P2 |
-| Reload resources | `/reload` | missing | device | P2 |
-| Project trust | `/trust` | missing | device | P2 |
+| Install / manage packages | `pi install`, settings | done: `/packages`, Settings: bundled todo and subagents, npm/git install, switch off, remove, each package's commands and tools; built-in extensions on/off | device | P2 |
+| MCP servers | `/mcp` | done: `/mcp-servers`, Settings: state and tools per server (`pi mcp list`), add by URL or command, remove | device | P2 |
+| Reload resources | `/reload` | done: `/reload` restarts the engine in the same session (also re-reads trust, packages, MCP) | device | P2 |
+| Project trust | `/trust` | done: `/trust`: what needs trust, saved decision, trust / don't / clear, default for all projects | device | P2 |
+| Skills and prompt templates browser | — | done: `/skills`: read a skill or template, "Use" puts it in the composer | both | P2 |
 | Custom TUI components | `ctx.ui.custom` | n/a | — | — |
 
 ## Settings (docs/settings.md)
@@ -179,13 +190,13 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 | Follow-up mode | `followUpMode` | done | device | P1 |
 | Default thinking level | `defaultThinkingLevel` | done | device | P1 |
 | Auto-retry | `retry.enabled` | done | device | P2 |
-| Retry counts and delays | `retry.*` | missing | device | P2 |
+| Retry counts and delays | `retry.*` | done: `/tuning`, Settings → Retry and compaction | device | P2 |
 | Hide thinking blocks | `hideThinkingBlock` | done: thinking shown collapsed by default | both | P1 |
 | Block images | `images.blockImages` | missing | device | P2 |
 | Theme | `/theme` | done: seven app themes, accents, text size, density | both | P0 |
 | Reduce motion | — | done | both | P1 |
 | Skill commands on/off | `enableSkillCommands` | missing | device | P2 |
-| Enabled models | `enabledModels` | missing | device | P2 |
+| Enabled models | `enabledModels` | done: `/scoped-models` | device | P2 |
 | HTTP proxy, timeouts, transport | `httpProxy`, … | missing | device | P2 |
 | Shell path and prefix | `shellPath`, … | n/a (bundled shell) | — | — |
 | Terminal display options | `tuiMode`, `terminal.*`, `editorPaddingX`, … | n/a | — | — |
@@ -214,7 +225,7 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 | Pair with a computer (QR, paste) | `/remote-control` | done | remote | P0 |
 | Reconnect after drops | — | done | remote | P0 |
 | Several computers, forget, revoke | `/remote-control devices` | done | remote | P1 |
-| Background notifications (done, needs answer) | — | done | both | P0 |
+| Background notifications (done, needs answer) | — | done: tapping one opens that exact session; also "background agent finished" | both | P0 |
 | Keep running in the background | — | done: foreground service while a turn runs | device | P0 |
 | Projects (create, clone, rename, pin, delete) | — | done | device | P0 |
 | Browse project files | — | done: Files tab and viewer | device | P1 |
@@ -224,6 +235,6 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 
 - **P1** (2 missing, 2 partial): OAuth sign-in; images in tool results; prompt history in the composer (Up/Down; today
   only the empty session lists recent prompts); choosing the default model in Settings (today the last model picked).
-- **P2**: session tree (`/tree`) and labels; delete a single session; session sort and filters; `/import`; `/share`
-  and `/bug`; scoped and enabled models; MCP, packages, reload and trust; retry and compaction tuning; block images;
-  cache-miss notices; jump between prompts; stop an automatic retry; paste images; the missing hardware shortcuts.
+- **P2**: `/share` as a gist link; block images; cache-miss notices; skill commands on/off; HTTP proxy and timeouts;
+  jump between prompts; cycle model backwards; paste images; the missing hardware shortcuts. "Retry now" (skip the
+  retry delay) has no RPC command; Stop retrying is there.

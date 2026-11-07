@@ -60,6 +60,7 @@ import opensec.pibolt.app.ui.home.HomeScreen
 import opensec.pibolt.app.ui.projects.ProjectScreen
 import opensec.pibolt.app.ui.scan.ScanScreen
 import opensec.pibolt.app.ui.session.SessionScreen
+import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import opensec.pibolt.app.ui.session.subagent.LocalSubagentNav
 import opensec.pibolt.app.ui.session.subagent.SubagentNav
 import opensec.pibolt.app.ui.session.subagent.SubagentOverlay
@@ -251,6 +252,12 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
         }
         SubagentOverlay(app, subagents)
     }
+    // A tapped session notification opens that session.
+    SessionAlerts.Navigate(
+        app,
+        onLocal = { nav.navigate(Routes.localSession(it)) { launchSingleTop = true } },
+        onRemote = { nav.navigate(Routes.SESSION) { launchSingleTop = true } },
+    )
 
     UpdateSheets(app)
 }

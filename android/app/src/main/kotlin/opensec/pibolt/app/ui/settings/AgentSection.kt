@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.settings
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -14,6 +15,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +28,7 @@ import opensec.pibolt.app.ui.components.Segmented
 import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.ui.providers.ProviderCatalog
 import opensec.pibolt.app.ui.session.ModelSheet
+import opensec.pibolt.app.ui.session.features2.AgentLinks
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.protocol.rpc.ModelInfo
 import java.io.File
@@ -140,6 +143,11 @@ internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean) {
     }
     if (show("images")) {
         ToggleRow("Block images", "Never send images to a model. From the next session", current.blockImages) { on -> update { it.copy(blockImages = on) } }
+    }
+    if (show("engine-links")) {
+        Spacer(Modifier.height(8.dp))
+        val context = LocalContext.current
+        AgentLinks(app) { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     }
 }
 

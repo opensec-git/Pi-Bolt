@@ -22,6 +22,7 @@ import opensec.pibolt.app.engine.EngineApi
 import opensec.pibolt.app.engine.LocalEngine
 import opensec.pibolt.app.session.Notifications
 import opensec.pibolt.app.session.SessionController
+import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import opensec.pibolt.app.update.UpdateManager
 import opensec.pibolt.app.update.UpdateNotifications
 import opensec.pibolt.protocol.Base64Url
@@ -73,6 +74,7 @@ class PiBoltApp : Application() {
         identity = DeviceIdentity(this)
         updates = UpdateManager(this)
         Notifications.createChannels(this)
+        SessionAlerts.watchBackgroundAgents(this)
         UpdateNotifications.createChannel(this)
         localEngine.prefetch()
         // Ready the engine (prefix check, spare process) before any screen asks for it. All of it runs on Dispatchers.IO.

@@ -27,6 +27,7 @@ object SettingsIndex {
         SettingEntry("retry", SettingsGroup.Agent, "Auto-retry", "overloaded rate limit retries errors"),
         SettingEntry("skills", SettingsGroup.Agent, "Skill commands", "skills slash commands /skill"),
         SettingEntry("images", SettingsGroup.Agent, "Block images", "pictures photos attachments vision privacy"),
+        SettingEntry("engine-links", SettingsGroup.Agent, "Packages, MCP servers, retry and compaction", "extensions packages npm git mcp servers tools tuning reserve tokens backoff"),
         SettingEntry("theme", SettingsGroup.Appearance, "Theme", "colour color dark graphite void ember claude codex vercel github look"),
         SettingEntry("accent", SettingsGroup.Appearance, "Accent", "colour color iris glacier ink"),
         SettingEntry("text-size", SettingsGroup.Appearance, "Text size", "font larger smaller zoom"),
