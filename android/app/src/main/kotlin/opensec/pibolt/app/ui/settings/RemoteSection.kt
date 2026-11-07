@@ -83,6 +83,7 @@ internal fun RemoteSection(
                     DateUtils.getRelativeTimeSpanString(at, n, DateUtils.MINUTE_IN_MILLIS, DateUtils.FORMAT_ABBREV_RELATIVE).toString()
                 },
                 metaMaxLines = 1,
+                value = if (host.service) "Service" else null,
                 onClick = { if (live != null) onResumeHost() else onOpenHost(host) },
                 onLongClick = { forgetting = host },
                 label = "Connect",
