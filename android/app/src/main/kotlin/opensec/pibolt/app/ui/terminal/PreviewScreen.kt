@@ -1,5 +1,9 @@
 package opensec.pibolt.app.ui.terminal
 
+import opensec.pibolt.app.ui.projects.EmptyCard
+import opensec.pibolt.app.ui.components.PrimaryButton
+import androidx.compose.material.icons.rounded.CloudOff
+import android.webkit.WebResourceError
 import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Context
@@ -64,6 +68,8 @@ fun PreviewScreen(port: Int, onBack: () -> Unit) {
     var url by remember { mutableStateOf(start) }
     var loading by remember { mutableStateOf(true) }
     var canGoBack by remember { mutableStateOf(false) }
+    // The dev server did not answer (stopped, still starting, wrong port): our own card instead of WebView's page.
+    var failed by remember { mutableStateOf<String?>(null) }
     val web = remember {
         WebView(context).apply {
             settings.javaScriptEnabled = true
@@ -80,8 +86,13 @@ fun PreviewScreen(port: Int, onBack: () -> Unit) {
                     return true
                 }
 
+                override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
+                    if (request.isForMainFrame) failed = error.description?.toString().orEmpty()
+                }
+
                 override fun onPageStarted(view: WebView, pageUrl: String?, favicon: Bitmap?) {
                     loading = true
+                    failed = null
                     pageUrl?.let { url = it }
                 }
 
@@ -125,7 +136,21 @@ fun PreviewScreen(port: Int, onBack: () -> Unit) {
         Box(Modifier.fillMaxWidth().height(2.dp)) {
             if (loading) LinearProgressIndicator(Modifier.fillMaxWidth(), color = colors.accent, trackColor = colors.surface2)
         }
-        AndroidView(factory = { web }, modifier = Modifier.weight(1f).fillMaxWidth().navigationBarsPadding())
+        Box(Modifier.weight(1f).fillMaxWidth().navigationBarsPadding()) {
+            AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
+            failed?.let { reason ->
+                Column(Modifier.fillMaxSize().background(colors.canvas).padding(top = 8.dp)) {
+                    EmptyCard(
+                        Icons.Rounded.CloudOff,
+                        "Nothing answers on localhost:$port",
+                        "The dev server may have stopped or still be starting. Check its terminal, then reload." +
+                            if (reason.isNotBlank()) " ($reason)" else "",
+                    ) {
+                        PrimaryButton("Reload", onClick = { web.reload() }, icon = Icons.Rounded.Refresh, modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            }
+        }
     }
 }
 

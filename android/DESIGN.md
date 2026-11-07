@@ -303,7 +303,9 @@ running" notification (Close all) holds them in the background.
 **Preview.** Chips "Preview: localhost:5173" (label ink1 on successSoft, success @ 40% line, radius 8, 48dp touch) in
 the terminal and above the composer of an on-device session, while a dev server listens. The preview screen: back,
 the URL (monoMeta ink2, middle ellipsis), Reload, Open in browser; a 2dp accent progress line while loading; the page
-in a WebView (http://localhost and 127.0.0.1 only; tapped links elsewhere open in the browser).
+in a WebView (http://localhost and 127.0.0.1 only; tapped links elsewhere open in the browser). When the dev server does not
+answer (stopped, still starting), an EmptyCard over the page says so ("Nothing answers on localhost:5173", what to
+check, the WebView's reason) with Reload (primary) instead of WebView's own error page.
 
 **Secrets.** Back, "Secrets" in display, one paragraph on where values go (engine and terminal environment, never the
 model's messages). 64dp rows: the name in mono ink1, the value masked as eight dots (monoMeta ink3, fixed length),
