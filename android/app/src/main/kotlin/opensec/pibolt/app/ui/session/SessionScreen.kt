@@ -906,7 +906,11 @@ private fun SessionContent(
                 status = status.value.text.let { t -> listOf(t.label.ifBlank { status.value.mode.label }, t.detail).filter { it.isNotBlank() }.joinToString(" ") },
                 switcher = { SessionSwitcher(controller, projectMeta, onOpen = onOpenSession) },
             )
-            ConnectionBanner(linkState.value, controller.pairing, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
+            // Before the first snapshot the loading state already says "Starting…" with its own spinner: the banner
+            // would say it twice. It still shows a stopped engine or a lost link (with Restart / Retry).
+            if (hello || linkState.value !is LinkState.Connecting) {
+                ConnectionBanner(linkState.value, controller.pairing, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)
+            }
             Box(Modifier.weight(1f)) {
                 if (!hello) {
                     LoadingState(title, linkState.value, local = local != null, onRetry = local?.onRestart ?: controller::retryNow)

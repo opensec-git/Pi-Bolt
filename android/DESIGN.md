@@ -465,7 +465,9 @@ a Quad Connect while searching, success haptic and a check when a code is read. 
   it) and "Recent" (the last 5 distinct prompts this phone sent to this computer; tap fills the composer). 48dp rows,
   SectionLabel headings, nothing sends by itself. Recent prompts persist per computer (20 at most) in
   `recent-prompts.json`.
-- Connection banner under the top bar: Quad Connect + "Reconnecting in 3s" countdown + Retry; slides down/up.
+- Connection banner under the top bar: Quad Connect + "Reconnecting in 3s" countdown + Retry; slides down/up. Not
+  while the session first connects: the centred loading state (Quad Connect 44dp, "Starting Pi-Bolt in x") says that
+  alone, so one spinner and one sentence show at a time.
 - Top bar actions, left to right: the Quad slot (40dp), the session switcher, Search (48dp), overflow. The Quad is
   drawn only while Pi is busy and the live status line is off screen (or the link failed); otherwise its slot is
   blank space beside the title, never a still grid, so Search and overflow always sit together. Overflow on a computer: Session and usage, Export or share,
