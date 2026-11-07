@@ -280,6 +280,33 @@ describe("remote control review", () => {
 		expect(await ok(phone, { type: "rc_git_diff", path: "a.txt" })).toMatchObject({ path: "a.txt" });
 	});
 
+	it("shows a submodule as commit ids even when the repository asks for its full diff", async () => {
+		const repo = makeRepo();
+		const module = join(repo, "module");
+		mkdirSync(module);
+		git(module, "init", "-q", "-b", "main");
+		writeFileSync(join(module, ".env"), "TOKEN=module-old\n");
+		git(module, "add", ".env");
+		git(module, "commit", "-q", "-m", "one");
+		// The nested repository is added as a gitlink, like a submodule.
+		git(repo, "update-index", "--add", "--cacheinfo", `160000,${git(module, "rev-parse", "HEAD").trim()},module`);
+		git(repo, "commit", "-q", "-m", "add module");
+		git(repo, "config", "diff.submodule", "diff");
+		writeFileSync(join(module, ".env"), "TOKEN=module-new\n");
+		git(module, "commit", "-q", "-am", "two");
+		const { phone } = await connect(repo);
+		const unstaged = await ok(phone, { type: "rc_git_diff", path: "module" });
+		expect(unstaged.diff).toContain("Subproject commit");
+		expect(unstaged.diff).not.toContain("TOKEN");
+		git(repo, "add", "module");
+		const staged = await ok(phone, { type: "rc_git_diff", path: "module", staged: true });
+		expect(staged.diff).not.toContain("TOKEN");
+		git(repo, "commit", "-q", "-m", "bump module");
+		const shown = await ok(phone, { type: "rc_git_show", hash: git(repo, "rev-parse", "HEAD").trim() });
+		expect(shown.diff).toContain("Subproject commit");
+		expect(shown.diff).not.toContain("TOKEN");
+	});
+
 	it("refuses a folder as the source of a staged rename", async () => {
 		const repo = makeRepo();
 		mkdirSync(join(repo, "config"));

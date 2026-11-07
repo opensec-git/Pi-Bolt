@@ -167,10 +167,11 @@ The commands are read-only. None stages, commits, edits, or runs a shell:
   commits. At most 4 review commands run at once; more are refused until one finishes.
 - **git.** The `git` on `PATH`, run with an argument list (no shell) in the cwd and stopped after 15 seconds. Every run
   passes `--no-pager --literal-pathspecs -c core.quotePath=false -c color.ui=false -c core.fsmonitor=false
-  -c log.showSignature=false`; diffs add `--no-ext-diff --no-textconv`, so the repository's own diff, textconv and
-  fsmonitor programs never run. `GIT_OPTIONAL_LOCKS=0` keeps status from rewriting the index, and
-  `GIT_TERMINAL_PROMPT=0` keeps git from asking for anything. A commit hash must be 4 to 64 lowercase hex characters
-  and name a commit (a tag is peeled to its commit; a blob or tree is refused).
+  -c log.showSignature=false -c diff.submodule=short`; diffs add `--no-ext-diff --no-textconv --submodule=short`, so
+  the repository's own diff, textconv and fsmonitor programs never run and a submodule shows only its commit ids.
+  `GIT_OPTIONAL_LOCKS=0` keeps status from rewriting the index, and `GIT_TERMINAL_PROMPT=0` keeps git from asking for
+  anything. A commit hash must be 4 to 64 lowercase hex characters and name a commit (a tag is peeled to its commit; a
+  blob or tree is refused).
 
 Each command takes an `id` and gets a `response` like any other. A refused or failed command has `success: false` and
 an `error` to show. Before the background service has a session open, every review command fails with

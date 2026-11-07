@@ -142,6 +142,9 @@ const SAFE_GIT_FLAGS = [
 	"diff.noprefix=false",
 	"-c",
 	"diff.mnemonicPrefix=false",
+	// `diff.submodule=diff` would put a submodule's own file changes in a patch, past the secret checks.
+	"-c",
+	"diff.submodule=short",
 ];
 
 /** `--format=` of log and show: hash, short hash, parents, author, email, time, refs, subject, body. */
@@ -598,7 +601,13 @@ class Review {
 			);
 		} else {
 			const paths = orig && isStaged ? [orig.rel, target.rel] : [target.rel];
-			const flags = [...(isStaged ? ["--cached", "-M"] : []), "--no-ext-diff", "--no-textconv", "--relative"];
+			const flags = [
+				...(isStaged ? ["--cached", "-M"] : []),
+				"--no-ext-diff",
+				"--no-textconv",
+				"--submodule=short",
+				"--relative",
+			];
 			// A folder path matches every file below it, past the secret check: the diff may hold only the named files,
 			// both sides of a rename included (`origPath: "config"` would match a rename from `config/.env`).
 			const names = await this.gitOk(["diff", "--name-status", "-z", ...flags, "--", ...paths], STATUS_BYTES);
@@ -644,7 +653,14 @@ class Review {
 		if (verified.code !== 0 || !HASH.test(oid)) throw new ReviewError(`${hash} is not a commit`);
 		const head = await this.gitOk(["show", "-s", LOG_FORMAT, "--end-of-options", oid], 4 * 1024 * 1024);
 		const commit = parseLog(head.stdout.toString("utf8"))[0] ?? null;
-		const scope = ["--diff-merges=first-parent", "-M", "--relative", "--no-ext-diff", "--no-textconv"];
+		const scope = [
+			"--diff-merges=first-parent",
+			"-M",
+			"--relative",
+			"--no-ext-diff",
+			"--no-textconv",
+			"--submodule=short",
+		];
 		const names = await this.gitOk(
 			["show", "--format=", "--name-status", "-z", ...scope, "--end-of-options", oid],
 			STATUS_BYTES,
