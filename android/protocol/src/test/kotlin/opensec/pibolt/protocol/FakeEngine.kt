@@ -65,13 +65,19 @@ fun main(args: Array<String>) {
         exitProcess(it)
     }
     val sessionArg = args.indexOf("--session").takeIf { it >= 0 }?.let { args[it + 1] }
+    val continueFile = System.getenv("FAKE_CONTINUE_FILE") ?: "/fake/continued.jsonl"
     when {
+        // The app resolves "continue" to the newest session itself and opens it with --session.
+        sessionArg != null && sessionArg == continueFile -> {
+            sessionFile = sessionArg
+            messages = mutableListOf(text("user", "hello"), text("assistant", "hi"))
+        }
         sessionArg != null -> {
             sessionFile = sessionArg
             messages = mutableListOf(text("user", "resumed"), text("assistant", "welcome back"))
         }
         "--continue" in args -> {
-            sessionFile = System.getenv("FAKE_CONTINUE_FILE") ?: "/fake/continued.jsonl"
+            sessionFile = continueFile
             messages = mutableListOf(text("user", "hello"), text("assistant", "hi"))
         }
         else -> fresh()

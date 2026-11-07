@@ -97,8 +97,11 @@ class SessionIndex(private val agentDir: File) {
         const val ROLE = "\"message\":{\"role\":\""
         const val PREVIEW_CHARS = 160
 
-        /** The name the subagents extension gives an agent's session: "<type>#<first 8 characters of its id>". */
-        val SUBAGENT_NAME = Regex("""^\S+#[0-9a-f]{8}$""")
+        /**
+         * The name the subagents extension gives an agent's session: "<agent name>#<first 8 characters of its id>". A
+         * custom agent's name may have spaces ("Code Reviewer#1669f14e").
+         */
+        val SUBAGENT_NAME = Regex("""^.+#[0-9a-f]{8}$""")
 
         /** Calls [onLine] with each LF-terminated line (CR stripped) as bytes of a reused buffer, until it returns false. */
         fun forEachLine(input: java.io.InputStream, onLine: (ByteArray, Int) -> Boolean) {
