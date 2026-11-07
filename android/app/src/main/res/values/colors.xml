@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- The default theme's canvas (Pi-Bolt, pure black): the window behind the first frame (the app is dark only). -->
-    <color name="splash_bg">#000000</color>
+    <color name="splash_bg">#1C1B19</color>
 </resources>

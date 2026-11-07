@@ -12,15 +12,15 @@ line; no shadows.
 
 | Role | Pi-Bolt (default, id `Graphite`) | Ember (warm) | Claude | Codex | Vercel | GitHub |
 |---|---|---|---|---|---|---|
-| canvas | `#000000` | `#15130F` | `#1F1E1D` | `#0D0D0D` | `#000000` | `#0D1117` |
-| surface1 (cards, composer) | `#0E0E0E` | `#1C1A16` | `#262624` | `#171717` | `#0F0F0F` | `#151B23` |
-| surface2 (bubbles, sheets) | `#161616` | `#24211C` | `#30302E` | `#212121` | `#111111` | `#1C2128` |
-| surface3 (pressed, menus) | `#1D1D1D` | `#2C2822` | `#3A3936` | `#2A2A2A` | `#1A1A1A` | `#262C36` |
-| ink1 (text) | `#EDEDED` | `#EFE9DD` | `#F5F4EE` | `#ECECEC` | `#EDEDED` | `#F0F6FC` |
-| ink2 (secondary) | `#A1A1A1` | `#B9B1A3` | `#C3C0B6` | `#B4B4B4` | `#A1A1A1` | `#B7BDC8` |
-| ink3 (meta, lowest text) | `#858585` | `#979084` | `#A6A49C` | `#929292` | `#8F8F8F` | `#9198A1` |
-| ink4 (rules, never text) | `#595959` | `#5A554D` | `#5E5D59` | `#545454` | `#454545` | `#3D444D` |
-| line / lineStrong | white @ 8% / 14% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 12% / 20% | ink1 @ 10% / 18% |
+| canvas | `#1C1B19` | `#15130F` | `#1F1E1D` | `#0D0D0D` | `#000000` | `#0D1117` |
+| surface1 (cards, composer) | `#232220` | `#1C1A16` | `#262624` | `#171717` | `#0F0F0F` | `#151B23` |
+| surface2 (bubbles, sheets) | `#2A2926` | `#24211C` | `#30302E` | `#212121` | `#111111` | `#1C2128` |
+| surface3 (pressed, menus) | `#32312E` | `#2C2822` | `#3A3936` | `#2A2A2A` | `#1A1A1A` | `#262C36` |
+| ink1 (text) | `#ECEBE8` | `#EFE9DD` | `#F5F4EE` | `#ECECEC` | `#EDEDED` | `#F0F6FC` |
+| ink2 (secondary) | `#B3B1AB` | `#B9B1A3` | `#C3C0B6` | `#B4B4B4` | `#A1A1A1` | `#B7BDC8` |
+| ink3 (meta, lowest text) | `#9C9A94` | `#979084` | `#A6A49C` | `#929292` | `#8F8F8F` | `#9198A1` |
+| ink4 (rules, never text) | `#5E5C57` | `#5A554D` | `#5E5D59` | `#545454` | `#454545` | `#3D444D` |
+| line / lineStrong | white @ 7% / 12% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 10% / 17% | ink1 @ 12% / 20% | ink1 @ 10% / 18% |
 | scrim | black @ 50% | black @ 56% | black @ 60% | black @ 60% | black @ 70% | black @ 60% |
 
 Claude, Codex, Vercel and GitHub are palettes in the spirit of those products' dark modes, not their assets. Void
@@ -58,30 +58,32 @@ overlays, accent, status, diff, syntax, ANSI, tints), and each held to the role 
 On a light theme the Iris and Glacier accents take deep variants of the same hue (`#5B4BD1`, `#0B6E9E`, white on
 them). The pastels would not read as links on white.
 
-**Pi-Bolt (the default)** is Pi-Bolt Desktop's palette (`pi-bolt-desktop/src/styles/tokens.css`), mapped 1:1, with
-one change. It is monochrome: a pure black canvas, one neutral grey scale, white as the only accent, green, amber and
-red for state only, and no blue anywhere. The enum id stays `Graphite`, so saved settings keep the default; only its
-label changed to "Pi-Bolt".
+**Pi-Bolt (the default)** is a warm charcoal (the owner's 2026-11-07 references, `~/pbw/research/UI-REFERENCES.md`):
+a charcoal canvas with surfaces a warm step above it, quiet warm-grey ink, hairlines and overlays as white alphas, the
+warm white ink as the only accent, green, amber and red for state only, and no blue. The enum id stays `Graphite`, so
+saved settings keep the default; its label is "Pi-Bolt". True black stays available as Contrast and Vercel.
 
-| Android | Desktop token | Value |
-|---|---|---|
-| canvas, surface1, surface2, surface3 | `--bg`, `--bg-elev`, `--bg-elev-2`, `--bg-elev-3` | `#000000`, `#0E0E0E`, `#161616`, `#1D1D1D` |
-| ink1, ink2, ink3, ink4 | `--text`, `--text-2`, `--text-3`, `--text-4` | `#EDEDED`, `#A1A1A1`, `#858585`, `#595959` |
-| line, lineStrong, lineFocus | `--border`, `--border-strong`, `--border-focus` | white @ 8%, 14%, 32% |
-| press, selected | `--bg-active`, `--accent-soft` | white @ 8.5%, 10% |
-| scrim | `--scrim` | black @ 50% |
-| accent, onAccent | `--accent`, `--on-accent` | `#FAFAFA`, `#000000` |
-| success, warning, danger (soft @ 12%) | `--green`, `--amber`, `--red` | `#4CC38A`, `#D4A64A`, `#EF6461` |
-| diff add / delete bg, fg | `--diff-add-*`, `--diff-del-*` | success / danger @ 9%, `#86DFB0`, `#F5A3A1` |
-| ansiBlue, ansiMagenta, ansiCyan | `--ansi-b`, `--ansi-m`, `--ansi-c` | `#C9C9C9`, `#D7A6C8`, `#B8C4C4` |
-| tint0 to tint4 | `--tint-0` to `--tint-4` | see Subagent tints |
+| Role | Value |
+|---|---|
+| canvas, surface1, surface2, surface3 | `#1C1B19`, `#232220`, `#2A2926`, `#32312E` |
+| ink1, ink2, ink3, ink4 | `#ECEBE8`, `#B3B1AB`, `#9C9A94`, `#5E5C57` |
+| line, lineStrong, lineFocus | white @ 7%, 12%, 30% |
+| press, selected | white @ 7%, 9% |
+| scrim | black @ 50% |
+| accent, onAccent | `#ECEBE8`, `#1C1B19` |
+| success, warning, danger (soft @ 12%) | `#4CC38A`, `#D4A64A`, `#F4817D` |
+| diff add / delete fg | `#86DFB0`, `#F5A3A1` |
+| syntax | the desktop's monochrome highlight.js set, its greys warmed: comment `#9C9A94`, operator and tag `#B3B1AB` |
 
-The one change is ink3: `#858585` instead of `#808080`. `#808080` measures 4.27:1 on surface3, below AA; `#858585`
-measures 4.57:1.
+The references' inks (`#A8A6A1`, `#77756F`) are lifted: ink2 to `#B3B1AB` so it stays AA on a pressed menu row (4.56:1),
+ink3 to `#9C9A94` so it stays AA on surface3 (4.62:1). Danger is lifted from the desktop's `#EF6461` to `#F4817D`, AA
+on its 12% fill over sheets (4.69:1 on surface2). The text selection is the accent at 28% (`SELECTION_ALPHA`, every
+theme): at 32% ink1 measured 4.34:1 on a warm surface3. The splash (`splash_bg`) is the canvas.
 
-Before 0.5.2 the default was a blue-grey Graphite. Its hue was 255 to 264 and its chroma reached 0.015, so the
-owner saw it as bluish. Old values: canvas `#0B0C0E`, surfaces `#121417` / `#191C20` / `#21252A`, ink `#E8EAED` /
-`#A3A8B0` / `#878D96` / `#4C5158`, accent ink1, and the Pi syntax palette with a blue-grey comment `#858B94`.
+Before the redesign the default was Pi-Bolt Desktop's pure black (`#000000`, `#0E0E0E` / `#161616` / `#1D1D1D`, ink
+`#EDEDED` / `#A1A1A1` / `#858585` / `#595959`, white accent); before 0.5.2 a blue-grey Graphite (`#0B0C0E`, ink2 `#A3A8B0`).
+`defaultThemeHasNoBlueCast` lets the default's greys lean warm but never cool (blue ≤ green ≤ red, channels at most 10
+apart).
 
 **Subagent tints** (`PiColors.tint0` to `tint4`, `tints[n % 5]`) are the desktop's `--tint-0` to `--tint-4`,
 converted from OKLCH to sRGB. They have the same lightness and chroma, with hues kept clear of the status colours,
@@ -172,8 +174,8 @@ Contrast (WCAG 2.1, checked by `ContrastTest` for every theme and accent):
 - The app's own themes (Pi-Bolt, Paper, Contrast, Lime, Moss) are checked by role in every accent (`ownThemesRolesPass`): ink1 and ink2 AA on each surface,
   plain, pressed and selected; ink3 at least 3:1 as a glyph on all of those; the accent's label AA on it, its fill 3:1
   against the surface (a button's shape) and AA as link text; ink1 AA on the text selection. `defaultThemeHasNoBlueCast`
-  keeps the default's greys and everything drawn from them neutral, `defaultThemeIsTheDesktopPalette` pins the
-  desktop values, `subagentTintsReadInEveryTheme` checks the tints, `elevationStepsStayDistinct` keeps each surface a step further
+  keeps the default's greys and everything drawn from them free of a cool cast, `defaultThemeIsTheWarmCharcoal` pins
+  its values, `subagentTintsReadInEveryTheme` checks the tints, `elevationStepsStayDistinct` keeps each surface a step further
   from the canvas in every theme (lighter on dark themes, darker on Paper; each step of the own themes at least
   1.05:1), `onlyPaperIsLight` pins the one light theme, `contrastThemeIsAaa` holds Contrast to 7:1, and the window
   colour must be the default canvas. Paper, Contrast and Lime greys carry no tint either.
@@ -201,13 +203,17 @@ Inter (UI, prose) and JetBrains Mono (code, paths, terminal), both OFL, bundled 
 | monoSmall | 12.5 / 18 | 400 | diffs, tool cards; code blocks use 12.5 / 19 |
 | monoMeta | 12 / 17 | 400 | paths, hashes, hex values and other mono meta lines |
 | thinking | 14.5 / 22 | 400 ink3 | reasoning text |
+| largeTitle | 28 / 34 | 600, -0.01em | the redesign's screen titles |
+| rowTitle | 17 / 24 | 400 | the redesign's list rows, the composer pill |
+| rowMeta | 15 / 20 | 400 | the line under a row title, tile labels and counts |
 
 System font scale is respected; the transcript is capped at 1.3x, and the Text size setting (-1 … +2 steps) applies
 on top.
 
 ## Space, shape, size
 
-Spacing 2, 4, 8, 12, 16, 20, 24, 32, 40 dp (`Space.xxs … x4`): the desktop's 4px rhythm (`--sp-0` to `--sp-8`, plus 40). Side gutter 16; sheet and header text inset 20; gap
+Spacing 2, 4, 8, 12, 16, 20, 24, 32, 40 dp (`Space.xxs … x4`): the desktop's 4px rhythm (`--sp-0` to `--sp-8`, plus 40).
+The redesign's side gutter is 20 (`Space.page`); elsewhere it is still 16; sheet and header text inset 20; gap
 between turns 20; between steps 6.
 Radii are the desktop's 4 / 6 / 10 / 14, assigned by role:
 - xs 4: inline code, tags (`--radius-xs`).
@@ -217,6 +223,9 @@ Radii are the desktop's 4 / 6 / 10 / 14, assigned by role:
 - lg 14: user bubble, composer, setting groups (`--radius-xl`, the desktop's composer and bubble).
 - xl 14: sheet top corners (`--radius-xl`, the desktop's dialog).
 - full: send button, pills.
+- tile 16: status tiles, media cards (the redesign).
+- bubble 22: the user bubble (the redesign).
+- pill 28: the pill composer, a full round at its 56dp one-line height, kept as it grows.
 
 Before 0.5.2 the values were 4 / 8 / 12 / 18 / 28. The desktop's user bubble is 14 with its bottom-end corner at
 4 (`--radius-xs`).
@@ -339,7 +348,31 @@ alpha). No overshoot except sheet drag release.
 
 ## Components
 
-`ui/components` is the kit; screens compose it and never restyle it. `DesignRulesTest` checks the rules below on the
+`ui/components` is the kit; screens compose it and never restyle it.
+
+**The redesign kit** (`components/Glass.kt`, 2026-11-07), after the owner's references:
+- `Modifier.glass(shape, colors)`: a vertical gradient (a touch of ink over surface2 at the top, the canvas on Paper,
+  surface2 at the bottom), a 1dp lineStrong ring and a 1dp inner highlight (ink1 @ 8%, fading to the sides) along the
+  top. No shadows.
+- `GlassIconButton`: a 44dp glass circle in a 48dp target, a 22dp ink1 glyph (back, more, search, +); press 0.96.
+- `GlassPill`: a floating glass pill, 40dp (48dp target), 16dp sides ("View changes +2 −2").
+- `StatusTile`: one tile of a 2x2 grid; radius tile (16), surface1 + 1dp line (lineStrong when active), 104dp; a 20dp
+  glyph top-left in its own colour, the label (rowMeta ink1) and its count (rowMeta ink3, tnum) bottom-left; read as
+  "label, count".
+- `InsetRow`: the plain list row: no card, 14dp vertical padding, at least 56dp; an optional 24dp leading slot (outline
+  glyph ink2, a Quad), the title (rowTitle ink1), an optional meta line (rowMeta ink3), then count (ink3), unread dot
+  (8dp accent) and chevron (ink3); a 1dp hairline under it inset from the text start to the 20dp gutter; `current` sets
+  it on a soft radius-md surface2 highlight. Never a letter tile.
+- `PillComposerShell`: the pill composer: radius pill (28), glass, 56dp at least, 4dp inside; `ComposerCircle` (a 36dp
+  surface3 circle, 20dp ink2 glyph, for + and the mic) and `ComposerPrimary` (a 36dp accent circle: a waveform glyph
+  that starts voice input while the field is empty, an arrow that sends once there is text; the swap crossfades) in
+  48dp targets on one centre line.
+- `DotWave`: the dot-matrix waveform of voice input: 9 rows of 2.5dp dots every 6dp, each column lit in a band around
+  the centre whose height follows the audio level (0..1) times two slow travelling sines (`DotWaveMath`); 14% floor,
+  faded edges; still under reduce motion.
+- `WorkingLine`: a 14dp Quad and the shimmering label ("Working"), for live lines and rows.
+- Tokens: type `largeTitle`, `rowTitle`, `rowMeta`; `Space.page` 20; `Radius.tile`, `bubble`, `pill`; `SOFT_PRESS`
+  0.96; `PiMotion.stagger(step)` (120 ms + 70 ms per step, 8 steps at most) for staggered entrances. `DesignRulesTest` checks the rules below on the
 UI sources (with a reviewed exception list that may only shrink) and `ContrastTest` their colour pairs.
 
 **Buttons.** As on Pi-Bolt Desktop: radius-sm rectangles, the label in label weight (500), optional leading icon 6dp

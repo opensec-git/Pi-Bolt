@@ -72,6 +72,15 @@ object Radius {
     val md = 10.dp
     val lg = 14.dp
     val xl = 14.dp
+
+    /** Status tiles and the redesign's media cards. */
+    val tile = 16.dp
+
+    /** The user's message bubble in the redesign. */
+    val bubble = 22.dp
+
+    /** The pill composer: a full round at its one-line height (56dp), kept as the field grows. */
+    val pill = 28.dp
 }
 
 /** The spacing scale. Side gutter is [lg] (16dp); sheets and headers inset their text by [xl] (20dp). */
@@ -85,6 +94,9 @@ object Space {
     val xxl = 24.dp
     val x3 = 32.dp
     val x4 = 40.dp
+
+    /** The redesign's side gutter: lists, tiles and the composer pill sit this far from the window's edges. */
+    val page = 20.dp
 }
 
 /**
@@ -235,7 +247,7 @@ fun PiBoltTheme(settings: AppSettings, content: @Composable () -> Unit) {
             extraLarge = RoundedCornerShape(Radius.xl),
         )
     }
-    val selection = remember(colors) { TextSelectionColors(handleColor = colors.accent, backgroundColor = colors.accent.copy(alpha = 0.32f)) }
+    val selection = remember(colors) { TextSelectionColors(handleColor = colors.accent, backgroundColor = colors.accent.copy(alpha = SELECTION_ALPHA)) }
 
     CompositionLocalProvider(
         LocalPiColors provides colors,

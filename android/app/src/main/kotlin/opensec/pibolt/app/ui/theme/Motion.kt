@@ -44,6 +44,17 @@ object PiMotion {
     /** Anything small leaving (--dur-exit). */
     const val EXIT = 110
 
+    /** A welcome's staggered entrance (assistant-ui's): the first element waits this long… */
+    const val STAGGER = 120
+
+    /** …and each later one this much more, up to [STAGGER_MAX_STEPS] steps, so the last never lags far behind. */
+    const val STAGGER_STEP = 70
+
+    const val STAGGER_MAX_STEPS = 8
+
+    /** The delay of the [step]th element of a staggered entrance: 120 + step × 70 ms, capped at 8 steps. */
+    fun stagger(step: Int): Int = STAGGER + step.coerceIn(0, STAGGER_MAX_STEPS) * STAGGER_STEP
+
     fun exit(enterMs: Int): Int = if (enterMs >= SHEET) enterMs * 7 / 10 else minOf(enterMs, EXIT)
 
     /** Things arriving (--ease-out). */
