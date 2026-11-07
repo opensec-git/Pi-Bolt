@@ -222,6 +222,13 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
                                 onBack = { if (!nav.popBackStack()) nav.navigate(Routes.HOME) },
                                 onForgotten = { nav.popBackStack(Routes.HOME, inclusive = false) },
                                 local = name,
+                                // The switcher: the other session takes this screen's place; both keep running.
+                                onOpenSession = { other ->
+                                    nav.navigate(Routes.localSession(other)) {
+                                        popUpTo(Routes.LOCAL_SESSION) { inclusive = true }
+                                        launchSingleTop = true
+                                    }
+                                },
                             )
                         }
                     }
@@ -239,6 +246,7 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
                                 app = app,
                                 onBack = { nav.popBackStack(Routes.HOME, inclusive = false) },
                                 onForgotten = { nav.popBackStack(Routes.HOME, inclusive = false) },
+                                onOpenSession = { other -> nav.navigate(Routes.localSession(other)) { launchSingleTop = true } },
                             )
                         }
                     }
