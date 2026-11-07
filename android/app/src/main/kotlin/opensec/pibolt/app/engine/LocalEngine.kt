@@ -102,8 +102,8 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     private val idle = IdlePool<LocalBackend>(maxParked = 1) { it.sessionFile }
 
     /**
-     * The last chat's engine, parked for the next chat open. Kept apart from [idle]: a chat engine runs without tools
-     * and must never serve a project, nor a project's engine a chat.
+     * The last chat's engine, parked for the next chat open. Kept apart from [idle]: a chat engine runs with the chats'
+     * tools only (no shell, no files) and must never serve a project, nor a project's engine a chat.
      */
     private val chatIdle = IdlePool<LocalBackend>(maxParked = 1) { it.sessionFile }
 
@@ -145,7 +145,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     override fun open(project: File, sessionFile: String?, fresh: Boolean): SessionController {
         val started = SystemClock.elapsedRealtime()
         val dir = engineForm(project)
-        // The chats' directory is no project: its engines run without tools.
+        // The chats' directory is no project: its engines run with the chats' tools only.
         if (isChat(dir.path)) return openChat(sessionFile.takeUnless { fresh })
         val target = when {
             sessionFile != null -> SessionTarget.Resume(sessionFile)
@@ -360,6 +360,18 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         if (stopped.isNotEmpty()) Log.i(TAG, "stopping ${stopped.size} idle engines ($reason)")
     }
 
+    /**
+     * A setting that engines read at their start changed ("Web search": their tool flags, ChatSpace): the idle engines
+     * stop, and so do the live on-device sessions that are idle, so the next open, or New chat in an open chat, starts
+     * an engine with the new flags. A busy session keeps its engine until it ends.
+     */
+    fun restartForSettings(reason: String) {
+        stopIdleEngines(reason)
+        val idleLive = localSessions().filter { it.isIdle }
+        for (session in idleLive) session.stop(keepEngine = false)
+        if (idleLive.isNotEmpty()) Log.i(TAG, "stopped ${idleLive.size} idle sessions ($reason)")
+    }
+
     private fun stopIdle(backend: LocalBackend) {
         forget(backend)
         backend.close()
@@ -544,8 +556,9 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         val project = File(cwd)
         project.mkdirs()
         if (!project.isDirectory) throw EngineStartException("Cannot create the project folder $cwd")
-        // In the chats' directory: no tools, the chats' session folder and prompt (ChatSpace).
-        val command = listOf(paths.engine.path) + ChatSpace.engineArgs(target, cwd, paths.home, paths.agentDir)
+        // In the chats' directory: the chats' tools, session folder and prompt; the web tools only while "Web search" is
+        // on (ChatSpace). The setting changing stops the idle engines (stopIdleEngines), so none starts with a stale one.
+        val command = listOf(paths.engine.path) + ChatSpace.engineArgs(target, cwd, paths.home, paths.agentDir, app.settings.settings.value.webSearch)
         Log.i(TAG, "starting engine ${m.engine} in ${project.name} ${target.cliArgs().joinToString(" ")}${if (isChat(cwd)) " (chat)" else ""}")
         ProcessBuilder(command).directory(project).apply {
             val env = environment()

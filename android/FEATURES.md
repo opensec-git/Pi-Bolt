@@ -187,6 +187,8 @@ before a turn with a conversation fork, and redo of any restore. On this phone o
 | Status line and widgets | `setStatus`, `setWidget` | done: lines above the composer | both | P1 |
 | Put text in the editor | `set_editor_text` | done | both | P1 |
 | Bundled extensions (todo, subagents) | packages | done | device | P1 |
+| Web search (bundled pi-web-access: `web_search`, `fetch_content`, `get_search_content`, `source_check`) | package | done (0.5.4): chats and projects, Settings > Agent > Web search (on; off leaves the tools out); a Sources pill per run of web steps with site favicons | device | P1 |
+| Structured questions (bundled rpiv-ask-user-question: `ask_user_question`) | package (TUI questionnaire) | done (0.5.4): one native question card ("1 of 3", radio or checkboxes, Type something, Back / Next / Submit) answering the extension's RPC dialogs; dismiss declines | device | P1 |
 | Install / manage packages | `pi install`, settings | done: `/packages`, Settings: bundled todo and subagents, npm/git install, switch off, remove, each package's commands and tools; built-in extensions on/off | device | P2 |
 | MCP servers | `/mcp` | done: `/mcp-servers`, Settings: state and tools per server (`pi mcp list`), add by URL or command, remove | device | P2 |
 | Reload resources | `/reload` | done: `/reload` restarts the engine in the same session (also re-reads trust, packages, MCP) | device | P2 |

@@ -270,6 +270,7 @@ fun SettingsScreen(
             } else {
                 val c = p.current
                 val rows = buildList<SettingsRow> {
+                    if (show("web-search")) add(webSearchRow(app, settings.webSearch, tint))
                     if (show("steering")) add { d -> GroupRow("Steering", icon = Icons.Rounded.Explore, iconTint = tint, value = c.steeringMode.label, onClick = { choice = Choice.Steering }, divider = d) }
                     if (show("follow-up")) add { d -> GroupRow("Follow-up", icon = Icons.AutoMirrored.Rounded.Reply, iconTint = tint, value = c.followUpMode.label, onClick = { choice = Choice.FollowUp }, divider = d) }
                     if (show("compaction")) add { d ->

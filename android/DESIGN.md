@@ -1283,7 +1283,9 @@ long-press sheets; long output goes to full-screen viewers, never nested scroll 
 ## Chats
 
 Plain chats talk to the model without a project (`engine/ChatSpace.kt`): one app-private folder, their own session
-folder, and an engine with `--no-tools`. They should feel like ChatGPT's or Claude's app, in the redesign's language.
+folder, and an engine limited to the web and question tools (`--tools web_search,fetch_content,get_search_content,
+ask_user_question --no-mcp`; only `ask_user_question` with Settings > Agent > Web search off): no shell, no files and no
+MCP server. They should feel like ChatGPT's or Claude's app, in the redesign's language.
 
 **Home.** Chats are a section of their own under Recents (Recents holds only project sessions): a `HomeHead` "Chats  3"
 whose end is a "New chat" `TextAction` and a chevron (the head opens the Chats list), the three newest chats as
@@ -1319,3 +1321,49 @@ preview chips, project starters, folder or subtitle; no checkpoints, so no undo 
 - A new chat starts on the model and thinking level last picked in a chat (`ChatModel`; opening an old chat does not
   change it), not Pi's global default, which belongs to projects.
 - Words: the palette, sheets and messages say "chat" where a project says "session" (`Builtin.inChat`).
+
+## Sources (web search)
+
+The bundled pi-web-access tools (`web_search`, `source_check`, `fetch_content`) never show as tool rows: each run of
+consecutive web steps is one Sources pill (`ui/session/web/SourcesPill.kt`), on the step rail inside an opened fold
+like any step, and a folded turn shows one pill for all its web steps after the answer. `get_search_content` stays a
+plain row ("Read results").
+- **Pill:** the timeline's 20dp slot (a Run Quad while searching or reading, else the Rounded Public globe in ink3),
+  12dp, then a `glass` capsule, 40dp in a 48dp target: up to three overlapping 24dp favicon circles, each on a 1.5dp
+  ring of the canvas so they separate, overlapping by 9dp, the first on top; "Sources" (label ink1), the count (label
+  ink3, tnum) and an ExpandMore chevron that turns 180° (quick, in place). Read as "Sources, 5, show".
+- **Before the first result:** "Searching the web" shimmering, then the query in meta ink3. A search that failed with
+  nothing found reads its reason in ink2 beside the globe.
+- **List** (tap): a surface1 card, radius tile, 1dp line, under the pill from the text start; rows at least 52dp: a
+  20dp favicon, the page title (body ink1, one line) over the domain (meta ink3, without "www."; "· reading", "·
+  couldn't read"), and Open in browser (`IconAction`, OpenInNew 18dp). The whole row opens the page too.
+- **Motion, live turn only:** each favicon pops in as its results arrive: scale 0.6 to 1 and fade, standard, enter
+  easing, 70ms apart (`PiMotion.STAGGER_STEP`, eight steps at most). A page being read (`fetch_content`) wears a 1.5dp
+  ink2 arc of 110° that turns once per `SWEEP`; when the read ends the arc fades out (settle); a page that could not be
+  read dims to 40%. History never animates; reduce motion draws the arc still and nothing pops.
+- **Favicons** (`FaviconRules`, `Favicons`): from the site itself, `https://<host>/favicon.ico`, else the first
+  `<link rel="icon">` of its home page (first 64KB); never a Google or DuckDuckGo favicon service. https only, public
+  host names only (no IP, localhost or LAN names), 256KB at most, decoded to 64px. Memory (64) and disk cache
+  (`cacheDir/favicons`, sha256 of the host, 4MB, least recently used out first; a host without one is retried after
+  3 days), all off the main thread. Without one: the Rounded Public glyph on surface3, never a letter tile.
+
+## Question card (ask_user_question)
+
+`ask_user_question` (rpiv-ask-user-question) walks its questions with Pi's select and input dialogs; the app shows
+them as one card instead (`ui/session/ask/QuestionSheet.kt`, a `PiSheet`), built from the call's arguments. Other
+extensions' dialogs keep the generic sheet.
+- The Wait Quad and "Pi is asking" (metaStrong warning), "1 of 3" (meta ink3, tnum) at the end, and a bar of 3dp
+  segments (accent up to the current question, surface3 after).
+- The header chip (`Tag`, ink1), "Choose any" (meta ink3) on a multi-select question, the question in rowTitle (a
+  heading), then the options: radius tile rows at least `optionRow` tall, a 20dp radio or checkbox glyph (accent when
+  on, ink3 off), the label (rowTitle ink1) over its description (rowMeta ink3), selected: the selected fill and a 1.5dp
+  accent ring. An option's preview shows under it when picked (monoSmall on surface2). A "Type something" field ends
+  the card, always in view under the options (which scroll when long): for one choice it replaces the option, for
+  several it adds to them.
+- Back (secondary; Cancel on the first question) and Next / Submit (primary, enabled once the question is answered; a
+  multi-select one may stay empty). Questions crossfade (quick).
+- Nothing is sent until Submit; then the walker's dialogs are answered from the card as they arrive (option line, or
+  the "Type something." row and the text; for several: `1,3; text`). Dismissing the sheet (swipe, scrim, Cancel)
+  declines the whole questionnaire, as the extension's own dismiss does.
+- Turning Web search on or off stops the idle engines and the idle sessions on the phone (`restartForSettings`), so
+  New chat in an open chat gets the new tools too; a busy session keeps its engine until it ends.

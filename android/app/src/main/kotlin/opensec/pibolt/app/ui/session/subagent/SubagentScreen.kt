@@ -104,6 +104,8 @@ import opensec.pibolt.app.ui.session.TurnMetaRow
 import opensec.pibolt.app.ui.session.TurnMetaRowView
 import opensec.pibolt.app.ui.session.ThinkingRow
 import opensec.pibolt.app.ui.session.ThinkingRowView
+import opensec.pibolt.app.ui.session.SourcesRow
+import opensec.pibolt.app.ui.session.web.SourcesPill
 import opensec.pibolt.app.ui.session.ToolGroupRow
 import opensec.pibolt.app.ui.session.ToolGroupRowView
 import opensec.pibolt.app.ui.session.ToolRow
@@ -471,6 +473,7 @@ private fun LazyItemScope.DetailRow(
         is ThinkingRow -> row.rail
         is ToolRow -> row.rail
         is ToolGroupRow -> row.rail
+        is SourcesRow -> row.rail
         else -> null
     }
     val base = if (rail == null) animated else animated.stepRail(rail, Pi.colors.line, if (row is TextRow) null else stepGlyphY(Pi.dims.stepGap)).staggerIn(row.key, rail, memory)
@@ -539,6 +542,7 @@ private fun LazyItemScope.DetailRow(
             modifier = base,
         )
         is TurnMetaRow -> TurnMetaRowView(row, modifier = base)
+        is SourcesRow -> SourcesPill(row, onToggle = { memory.openGroups[row.key] = !row.expanded }, modifier = base.padding(top = Pi.dims.stepGap + 2.dp, bottom = 2.dp))
         else -> Unit
     }
 }

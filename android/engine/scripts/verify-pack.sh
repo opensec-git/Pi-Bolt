@@ -28,6 +28,15 @@ for l in m["links"]:
 for f in m["files"]:
     p = f"{prefix}/{f['path']}"
     print(f"mkdir -p {q(p.rsplit('/', 1)[0])} && cp /apk-assets/{q(f['asset'])} {q(p)}")
+# Bundled extensions: their files, their node_modules zip, and the settings.json packages entries (EnginePrefix).
+exts = []
+for e in m.get("extensions", []):
+    p = f"{prefix}/share/pi-extensions/{e['name']}"
+    print(f"rm -rf {q(p)} && mkdir -p {q(p)} && cp -r /apk-assets/engine/extensions/{q(e['name'])}/. {q(p)}/")
+    if "modules" in e:
+        print(f"mkdir -p {q(p)}/node_modules && unzip -q -o /apk-assets/{q(e['modules']['asset'])} -d {q(p)}/node_modules")
+    exts.append(p)
+print('mkdir -p "$HOMEDIR/.pi/agent" && printf %s ' + q(json.dumps({"packages": exts})) + ' > "$HOMEDIR/.pi/agent/settings.json"')
 print(f"echo {q(m['packFingerprint'])} > {q(prefix)}/.pack")
 print("ENGINE_ENV='" + " ".join(f"{k}={v}" for k, v in sorted(m["env"].items())) + "'")
 EOF

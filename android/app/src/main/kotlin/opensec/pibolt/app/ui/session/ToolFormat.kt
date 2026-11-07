@@ -6,6 +6,9 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonObject
 import opensec.pibolt.protocol.arr
 import opensec.pibolt.protocol.int
+import opensec.pibolt.app.engine.ChatSpace.ASK_TOOL
+import opensec.pibolt.app.ui.session.ask.AskQuestions
+import opensec.pibolt.app.ui.session.web.WebTools
 import opensec.pibolt.protocol.session.SessionReducer.TODO_TOOL
 import opensec.pibolt.protocol.session.SubagentReducer
 import opensec.pibolt.protocol.session.ToolItem
@@ -15,7 +18,7 @@ import opensec.pibolt.protocol.toDisplayString
 import java.util.Locale
 
 /** What kind of step a tool is; picks the expanded card. */
-enum class ToolKind { Bash, Read, Write, Edit, Search, List, Todo, Other }
+enum class ToolKind { Bash, Read, Write, Edit, Search, List, Todo, Web, Ask, Other }
 
 /**
  * How a step reads: [verb] while it runs ("Run", "Edit"), [past] once it finished ("Ran", "Edited"), and its argument.
@@ -57,6 +60,12 @@ fun toolLabel(item: ToolItem): ToolLabel {
         "steer_subagent" -> ToolLabel(ToolKind.Other, "Steer agent", listOfNotNull(arg("agent_id"), arg("message")?.let(::firstLine)).joinToString(": "))
         "subagentworkflow" -> ToolLabel(ToolKind.Other, "Workflow", workflowName(item))
         TODO_TOOL -> ToolLabel(ToolKind.Todo, "Todo", todoSummary(item) { arg(it) })
+        // The bundled pi-web-access and rpiv-ask-user-question (engine/ChatSpace.kt).
+        "web_search" -> ToolLabel(ToolKind.Web, "Search the web", WebTools.queriesOf(item).joinToString(" · ").ifBlank { arg("query").orEmpty() }, "Searched the web")
+        "source_check" -> ToolLabel(ToolKind.Web, "Check sources", firstLine(arg("claim")), "Checked sources")
+        "fetch_content" -> ToolLabel(ToolKind.Web, "Read", WebTools.fetchUrls(item).joinToString(", ").ifBlank { arg("url").orEmpty() }, "Read")
+        "get_search_content" -> ToolLabel(ToolKind.Web, "Read results", arg("query", "url").orEmpty(), "Read results")
+        ASK_TOOL -> ToolLabel(ToolKind.Ask, "Ask", AskQuestions.parse(item.args)?.firstOrNull()?.question?.let(::firstLine).orEmpty(), "Asked")
         else -> {
             val first = args?.entries?.firstOrNull { (it.value as? JsonPrimitive)?.isString == true }?.let { (it.value as JsonPrimitive).content }
             ToolLabel(ToolKind.Other, name, (first ?: arg("command", "path", "pattern", "query", "url")).orEmpty().lineSequence().firstOrNull().orEmpty())
@@ -516,12 +525,16 @@ fun turnSummary(tools: List<ToolItem>, files: Int, thoughts: Int): String {
     var commands = 0
     var searches = 0
     var agents = 0
+    var webSearches = 0
+    val pages = HashSet<String>()
     val readPaths = HashSet<String>()
     for (t in tools) {
         if (isUnavailable(t)) continue
         val label = toolLabel(t)
         when {
             isSubagentTool(t.name) -> agents++
+            t.name == WebTools.SEARCH || t.name == WebTools.SOURCE_CHECK -> webSearches++
+            t.name == WebTools.FETCH -> pages += WebTools.fetchUrls(t)
             label.kind == ToolKind.Bash -> commands++
             label.kind == ToolKind.Read -> readPaths += label.detail.substringBefore(':')
             label.kind == ToolKind.Search || label.kind == ToolKind.List -> searches++
@@ -534,6 +547,8 @@ fun turnSummary(tools: List<ToolItem>, files: Int, thoughts: Int): String {
         if (commands > 0) add("ran " + count(commands, "command", "commands"))
         if (readPaths.isNotEmpty()) add("read " + count(readPaths.size, "file", "files"))
         if (searches > 0) add(count(searches, "search", "searches"))
+        if (webSearches > 0) add(if (webSearches == 1) "searched the web" else "searched the web $webSearches times")
+        if (pages.isNotEmpty()) add("read " + count(pages.size, "page", "pages"))
         if (agents > 0) add(count(agents, "agent", "agents"))
     }.take(3)
     if (parts.isEmpty()) {

@@ -45,6 +45,9 @@ import opensec.pibolt.protocol.rpc.clearedQueue
 import opensec.pibolt.protocol.rpc.thinkingLevels
 import opensec.pibolt.protocol.session.AssistantTextItem
 import opensec.pibolt.protocol.session.SessionReducer
+import opensec.pibolt.app.ui.session.ask.AskReply
+import opensec.pibolt.app.ui.session.ask.AskResponder
+import opensec.pibolt.app.ui.session.ask.AskSubmission
 import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.arr
 import opensec.pibolt.protocol.bool
@@ -173,6 +176,9 @@ class SessionController private constructor(
     }
 
     private val inputs = Channel<Input>(Channel.UNLIMITED)
+
+    /** The question card's answers on their way to `ask_user_question`'s dialogs (ui/session/ask). */
+    private val ask = AskResponder()
     private val retrySignal = Channel<Unit>(Channel.CONFLATED)
 
     /** On this phone, subagents' session files are readable: their messages stream into [SessionState.subagents]. */
@@ -481,6 +487,24 @@ class SessionController private constructor(
         val needsService = now.isRunning || now.dialogs.isNotEmpty()
         if (needsService && !(previous.isRunning || previous.dialogs.isNotEmpty())) SessionService.ensureRunning(app)
         if (previous.dialogs.isNotEmpty() && now.dialogs.isEmpty()) Notifications.clearNeedsAnswer(app, hostId)
+        if (now.dialogs !== previous.dialogs || ask.submission != null) answerAsk(now)
+    }
+
+    /** True while [toolCallId]'s card answers are being sent (its dialogs are answered as they come, not shown). */
+    fun askSubmitting(toolCallId: String): Boolean = ask.submitting(toolCallId)
+
+    /** Submit (or, with `cancel`, dismiss) the question card: its dialogs are answered from [submission] from now on. */
+    fun submitAsk(submission: AskSubmission) {
+        ask.submit(submission)
+        answerAsk(_state.value)
+    }
+
+    private fun answerAsk(state: SessionState) {
+        val (id, reply) = ask.next(state) ?: return
+        when (reply) {
+            is AskReply.Value -> answer(id, reply.value)
+            AskReply.Cancel -> cancelDialog(id)
+        }
     }
 
     private fun mutate(change: (SessionState) -> SessionState) {

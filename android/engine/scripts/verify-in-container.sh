@@ -71,6 +71,20 @@ check "rpc get_state + bash" t_rpc
 echo "time: $(($(ms) - t0)) ms (includes a fixed 6 s wait before stdin closes)"
 grep -o '"output":"[^"]*"' /tmp/rpc.txt | head -3
 
+# The bundled extensions load (manifest extensions[], settings.json packages): pi-web-access registers /websearch, and
+# nothing fails to load. (Their tools only show in a prompt's tool list: android/e2e covers those.)
+t_extensions() {
+	{
+		printf '%s\n' '{"id":"1","type":"get_commands"}'
+		sleep 8
+	} | timeout 60 env -i $ENGINE_ENV HOME="$HOMEDIR" TZ=UTC PI_PACKAGE_DIR="$PKGDIR" "$NLD/libpibolt.so" \
+		--mode rpc --no-session >/tmp/ext.txt 2>/tmp/ext.err
+	grep -o '"name":"[^"]*","description":"[^"]\{0,40\}' /tmp/ext.txt | head -20
+	cat /tmp/ext.err | head -20
+	! grep -qi 'failed to load' /tmp/ext.txt /tmp/ext.err && grep -q '"name":"websearch"' /tmp/ext.txt
+}
+check "bundled extensions load (subagents, todo, web access, ask_user_question)" t_extensions
+
 if [ "$MODE" != --engine-only ]; then
 	check "bash -c" E bash -c 'echo "bash $BASH_VERSION"; set -o pipefail; printf "a\nb\n" | wc -l; [[ $(echo x) == x ]] && echo ok'
 	check "sh is bash" E sh -c 'echo "$BASH_VERSION"'

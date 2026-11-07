@@ -1,0 +1,7 @@
+# Third-party Pi extensions the engine pack bundles with their runtime dependencies (scripts/assemble.py,
+# scripts/npm_extensions.py): the npm package, its version and that version's npm integrity
+# (`npm view NAME@VERSION dist.integrity`). Each has a lockfile of its runtime dependencies, <name>.lock.json
+# (scope "@a/b" written "a-b"), written by scripts/lock-npm-extensions.sh. Versions: the newest published at least
+# 14 days before the pin; the lockfiles resolve every dependency the same way (`npm install --before`).
+pi-web-access 0.44.0 sha512-8YK2Nb0P7ezRL0FS7P1cPYu7gDUOuhXWA3FOBev0bKsuPtG2QrDVm2GriKBgZI1Sq7SC8QRsfVFYYP8huUEo8w==
+@juicesharp/rpiv-ask-user-question 2.15.0 sha512-Gm6de5IZF52BaSeh9dnDqJBn821Z5XfJkCmhkCmqTzvNv3SCpSv1mA4Gj5VBcfrSe+xTtWSVQzJwIqJFQHH3Lg==

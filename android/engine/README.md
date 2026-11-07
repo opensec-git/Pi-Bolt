@@ -25,6 +25,8 @@ Needs Docker on an arm64 host (an Apple Silicon Mac or GitHub's ubuntu-24.04-arm
 |---|---|
 | `versions.env` | pins: engine release + sha256, glibc + Termux commit, curl, git, Node.js, CPython, esbuild + Go |
 | `../../extensions.txt` | pins of the bundled Pi extensions (opensec-pi-subagents, opensec-pi-todo): npm version + integrity |
+| `npm/extensions.txt`, `npm/<name>.lock.json` | third-party Pi extensions bundled with their runtime dependencies (pi-web-access, @juicesharp/rpiv-ask-user-question): npm version + integrity, and a lockfile of every dependency (version, registry tarball, sha512) from `scripts/lock-npm-extensions.sh` |
+| `scripts/npm_extensions.py` | assembles those: tarballs checked against their integrity, the package under `assets/engine/extensions/<name>/`, its `node_modules` as `assets/engine/modules/<name>.zip`; no install scripts run (one that has them is refused), no npm |
 | `userland/packages.txt`, `userland/debs.lock` | Debian packages and their pinned versions + sha256 (`scripts/lock-debs.sh` refreshes) |
 | `userland/busybox-skip.txt` | busybox applets that get no link |
 | `docker/Dockerfile` | the builder (Debian trixie) |
@@ -42,4 +44,8 @@ Needs Docker on an arm64 host (an Apple Silicon Mac or GitHub's ubuntu-24.04-arm
 - Debian packages (security updates): `scripts/lock-debs.sh`, rebuild, verify.
 - esbuild: `ESBUILD_*` and `GO_*` (the Go version in the release's `go.version`), then check and regenerate the patch
   (CONTRACT.md, esbuild, "Updating").
+- Third-party extensions (`npm/extensions.txt`): pick the newest version published at least 14 days ago
+  (`npm view NAME time --json`), set its version and `npm view NAME@VERSION dist.integrity`, then run
+  `scripts/lock-npm-extensions.sh` (dependencies resolved as of 14 days ago; it refuses install scripts) and review the
+  lockfile diff like code. A scoped name `@a/b` is the directory and lockfile name `a-b`.
 - Any change gives a new `packFingerprint`, so the app rebuilds its symlink farm after the update.
