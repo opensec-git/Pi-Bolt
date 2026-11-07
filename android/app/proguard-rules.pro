@@ -4,3 +4,7 @@
 -dontwarn okhttp3.internal.platform.**
 -dontwarn org.conscrypt.**
 -dontwarn org.openjsse.**
+# The diagram renderer's only JavaScript bridge (ui/diagram/MermaidRenderer.kt).
+-keepclassmembers class opensec.pibolt.app.ui.diagram.DiagramBridge {
+    @android.webkit.JavascriptInterface <methods>;
+}
