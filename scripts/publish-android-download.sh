@@ -61,6 +61,29 @@ if sha:
 json.dump(request, sys.stdout)
 PY
 gh api -X PUT "repos/$REPO/contents/android.json" --input "$WORK/request.json" --jq .commit.sha >/dev/null
+# android.html names a release too, as its fallback while android.json loads: point it at this one.
+PAGE_SHA="$(gh api "repos/$REPO/contents/android.html?ref=gh-pages" --jq .sha 2>/dev/null || true)"
+if [[ -n "$PAGE_SHA" ]]; then
+	gh api "repos/$REPO/contents/android.html?ref=gh-pages" --jq .content | base64 --decode > "$WORK/android.html"
+	python3 - "$WORK/android.html" "$WORK/android.json" "$PAGE_SHA" > "$WORK/page-request.json" <<'PY'
+import base64, json, re, sys
+page, release_path, sha = sys.argv[1:]
+html = open(page, encoding="utf-8").read()
+release = json.load(open(release_path))
+version = release["version"]
+mb = round(release["size"] / 1048576)
+new = re.sub(r"releases/download/android-v[0-9.]+/pi-bolt-android-[0-9.]+\.apk", f"releases/download/android-v{version}/pi-bolt-android-{version}.apk", html)
+new = re.sub(r"releases/tag/android-v[0-9.]+\">android-v[0-9.]+", f"releases/tag/android-v{version}\">android-v{version}", new)
+new = re.sub(r"Pi-Bolt for Android · [0-9.]+", f"Pi-Bolt for Android · {version}", new)
+new = re.sub(r"Version [0-9.]+ · about [0-9]+ MB", f"Version {version} · about {mb} MB", new)
+if new != html:
+    json.dump({"branch": "gh-pages", "message": f"chore(pages): Android page falls back to {version}",
+               "content": base64.b64encode(new.encode("utf-8")).decode(), "sha": sha}, sys.stdout)
+PY
+	if [[ -s "$WORK/page-request.json" ]]; then
+		gh api -X PUT "repos/$REPO/contents/android.html" --input "$WORK/page-request.json" --jq .commit.sha >/dev/null || warn "could not update android.html's fallback release"
+	fi
+fi
 # A commit made with a workflow's GITHUB_TOKEN does not start a Pages build by itself: request one.
 gh api -X POST "repos/$REPO/pages/builds" --jq .status >/dev/null 2>&1 || warn "could not request a GitHub Pages build; the site updates with the next one"
 log "pi-bolt.opensec.in/android now offers Android app $VERSION"
