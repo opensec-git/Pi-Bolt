@@ -1,8 +1,8 @@
 {
-  "version": "0.5.2",
-  "apk": "https://github.com/opensec-git/Pi-Bolt/releases/download/android-v0.5.2/pi-bolt-android-0.5.2.apk",
-  "page": "https://github.com/opensec-git/Pi-Bolt/releases/tag/android-v0.5.2",
-  "size": 176276535,
-  "sha256": "7acc58cc33a61ed832bc76c3d922f62a2b476682a2878d9bd3ff2e2f0e6cbd23",
+  "version": "0.5.3",
+  "apk": "https://github.com/opensec-git/Pi-Bolt/releases/download/android-v0.5.3/pi-bolt-android-0.5.3.apk",
+  "page": "https://github.com/opensec-git/Pi-Bolt/releases/tag/android-v0.5.3",
+  "size": 176366647,
+  "sha256": "6cb553c11410f475d3f437729c11218c55a99d567738ab8bd4c7b6763ec65be8",
   "certSha256": "f752464c8b6d5906d7fd467346b89316518e3ddfe77843f66b1fa673818a2c90"
 }
