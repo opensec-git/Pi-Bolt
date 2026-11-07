@@ -96,6 +96,22 @@ class ChatsTest {
     }
 
     @Test
+    fun theSavedSystemPromptIsNotAMessage() {
+        // The engine saves the system prompt as a role "system" message: 3 prompts read "7 messages" on the Xiaomi.
+        val index = SessionIndex(agentDir)
+        val system = """{"type":"message","id":"s1","message":{"role":"system","content":"","sections":{"preamble":"You are Pi"}}}"""
+        val file = session(ChatSpace.sessionDir(agentDir), "c1", ChatSpace.dir(home).path, 2_000_000, system, user("trip ideas"), assistant("Sure"))
+        assertEquals(2, assertNotNull(index.summary(file)).messageCount)
+        // Off Pi's usual layout (parsed in full), the same.
+        val spaced = system.replace("{\"type\"", "{ \"type\"")
+        val other = session(ChatSpace.sessionDir(agentDir), "c2", ChatSpace.dir(home).path, 2_000_000, spaced, user("hi"))
+        assertEquals(1, assertNotNull(index.summary(other)).messageCount)
+        // Only the system prompt: no conversation, so not listed.
+        session(ChatSpace.sessionDir(agentDir), "c3", ChatSpace.dir(home).path, 2_000_000, system)
+        assertEquals(0, index.listIn(listOf(ChatSpace.sessionDir(agentDir))).first { it.id == "c3" }.messageCount)
+    }
+
+    @Test
     fun chatRowsAndSearch() {
         val now = 10 * 3_600_000L
         val a = ChatSummary("/a", "Trip ideas for Lisbon", now - 2 * 3_600_000L, 12)
