@@ -64,6 +64,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
@@ -716,6 +717,8 @@ private fun Modifier.workingHairline(active: Boolean, color: Color): Modifier {
     val shown by animateFloatAsState(if (active) 1f else 0f, tween(PiMotion.QUICK), label = "hairline")
     if (!active && shown == 0f) return this
     val x = rememberInfiniteTransition(label = "hairline").animateFloat(0f, 1f, infiniteRepeatable(tween(PiMotion.SWEEP, easing = PiMotion.InPlace), RepeatMode.Restart), label = "x")
+    // The pill itself goes in a layer of its own (the trailing graphicsLayer): each frame of the sweep then re-records
+    // only this band, not the field, chips and buttons under it.
     return drawWithContent {
         drawContent()
         val inset = Radius.pill.toPx()
@@ -730,5 +733,5 @@ private fun Modifier.workingHairline(active: Boolean, color: Color): Modifier {
             cornerRadius = CornerRadius(0.5f),
             alpha = shown,
         )
-    }
+    }.graphicsLayer()
 }
