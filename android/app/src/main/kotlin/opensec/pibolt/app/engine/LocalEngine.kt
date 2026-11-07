@@ -78,7 +78,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         nativeLibDir = File(app.applicationInfo.nativeLibraryDir),
     )
     private val index = SessionIndex(paths.agentDir)
-    private val dns = NetworkDns(app, paths.etc, scope)
+    private val dns = NetworkDns(app, paths.etc)
     private val reaper = ProcessReaper()
 
     private val _status = MutableStateFlow<EngineStatus>(EngineStatus.Idle)
@@ -284,7 +284,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
 
     /** The environment engine processes get, for tools the app runs itself (git). */
     suspend fun toolEnvironment(): Map<String, String> =
-        engineEnvironment(paths, System.getenv(), TimeZone.getDefault().id, ensureSetup()?.env.orEmpty(), app.github.gitEnvironment())
+        engineEnvironment(paths, System.getenv(), timeZone(), ensureSetup()?.env.orEmpty(), app.github.gitEnvironment())
 
     /**
      * Turn checkpoints of [project]: a shadow repository under the agent dir, run with the pack's git and the engine's
@@ -328,7 +328,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         val process = runCatching {
             ProcessBuilder(listOf(paths.engine.path) + args).directory(dir).apply {
                 val env = environment()
-                val wanted = engineEnvironment(paths, env.toMap(), TimeZone.getDefault().id, m.env) + ("NO_COLOR" to "1")
+                val wanted = engineEnvironment(paths, env.toMap(), timeZone(), m.env) + ("NO_COLOR" to "1")
                 env.clear()
                 env.putAll(wanted)
             }.redirectInput(ProcessBuilder.Redirect.from(File("/dev/null"))).start()
@@ -490,12 +490,14 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         _status.value = EngineStatus.Preparing("Setting up the engine")
         try {
             val full = EnginePrefix(paths, AndroidAssets(app.assets)).ensure(m)
+            // Leftovers of a previous app process (its engines are gone with it).
+            runCatching { reaper.reapOrphans() }
             dns.start()
             AppExtension.install(paths.agentDir)
             Log.i(TAG, "prepare: prefix ${if (full) "installed" else "up to date"}, ${SystemClock.elapsedRealtime() - started} ms (engine ${m.engine}, glibc ${m.glibc})")
         } catch (e: Exception) {
             Log.e(TAG, "prefix setup failed", e)
-            _status.value = EngineStatus.Failed("Could not set up the engine", e.toString(), canRetry = true)
+            _status.value = EngineStatus.Failed(setupFailure(e), e.toString(), canRetry = true)
             return null
         }
         manifest = m
@@ -594,13 +596,21 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         // setting when this engine was made, [launchedWith]) is on (ChatSpace).
         val command = listOf(paths.engine.path) + ChatSpace.engineArgs(target, cwd, paths.home, paths.agentDir, webSearch)
         Log.i(TAG, "starting engine ${m.engine} in ${project.name} ${target.cliArgs().joinToString(" ")}${if (isChat(cwd)) " (chat)" else ""}")
-        return ProcessBuilder(command).directory(project).apply {
-            val env = environment()
-            val wanted = engineEnvironment(paths, env.toMap(), TimeZone.getDefault().id, m.env, app.github.gitEnvironment())
-            env.clear()
-            // The project's secrets as variables (never in the model's messages).
-            env.putAll(SecretEnv.inject(wanted, SecretStore.get(app).environment(project)))
-        }.start()
+        // Marks this engine's processes, so what it leaves running is stopped after it, and only then (ProcessReaper).
+        val token = reaper.track()
+        try {
+            return ProcessBuilder(command).directory(project).apply {
+                val env = environment()
+                val wanted = engineEnvironment(paths, env.toMap(), timeZone(), m.env, app.github.gitEnvironment())
+                env.clear()
+                // The project's secrets as variables (never in the model's messages).
+                env.putAll(SecretEnv.inject(wanted, SecretStore.get(app).environment(project)))
+                env[ProcessReaper.ENV] = token
+            }.start().also { reaper.attach(token, it) }
+        } catch (e: Exception) {
+            reaper.untrack(token)
+            throw e
+        }
     }
 
     /**
@@ -624,6 +634,19 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         emptySessions += file.path
         file.path
     }.onFailure { Log.w(TAG, "could not create a session file in $cwd: $it") }.getOrNull()
+
+    @Volatile
+    private var zoneWritten: String? = null
+
+    /**
+     * The phone's time zone for an engine's TZ, its file written to the prefix first (ZoneInfo: the pack has no tz
+     * database, and glibc and Python would use UTC without it). Blocking file I/O.
+     */
+    private fun timeZone(): String {
+        val id = TimeZone.getDefault().id
+        if (zoneWritten != id && ZoneInfo.ensure(paths.zoneinfo, id)) zoneWritten = id
+        return id
+    }
 
     /** Empty session files this engine made that no engine has open and that never got a message. */
     private fun deleteUnusedEmptySessions() {
