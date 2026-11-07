@@ -137,19 +137,19 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                 }
 
                 if (SettingsGroup.Providers in groups) {
-                    Section(SettingsGroup.Providers.title) { ProvidersSection(app) }
+                    Section(SettingsGroup.Providers) { ProvidersSection(app) }
                 }
 
                 if (SettingsGroup.Agent in groups) {
-                    Section(SettingsGroup.Agent.title) { AgentSection(app, show) }
+                    Section(SettingsGroup.Agent) { AgentSection(app, show) }
                 }
 
                 if (SettingsGroup.GitHub in groups) {
-                    Section(SettingsGroup.GitHub.title) { GitHubSection(app) }
+                    Section(SettingsGroup.GitHub) { GitHubSection(app) }
                 }
 
                 if (SettingsGroup.Runtimes in groups) {
-                    Section(SettingsGroup.Runtimes.title) {
+                    Section(SettingsGroup.Runtimes) {
                         val shipped by produceState<String?>(null) {
                             value = withContext(Dispatchers.IO) { app.engine.runtimes().runtimes.joinToString(" · ") { "${it.name} ${it.version}" } }
                         }
@@ -158,7 +158,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                 }
 
                 if (SettingsGroup.Appearance in groups) {
-                    Section(SettingsGroup.Appearance.title) {
+                    Section(SettingsGroup.Appearance) {
                         if (show("theme")) {
                             Label("Theme")
                             ThemeGrid(settings.theme, settings.accent, onSelect = { theme -> update { it.copy(theme = theme) } })
@@ -219,7 +219,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                 }
 
                 if (SettingsGroup.Motion in groups) {
-                    Section(SettingsGroup.Motion.title) {
+                    Section(SettingsGroup.Motion) {
                         if (show("reduce-motion")) {
                             Label("Reduce motion")
                             Segmented(
@@ -243,7 +243,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                 }
 
                 if (SettingsGroup.SessionDisplay in groups) {
-                    Section(SettingsGroup.SessionDisplay.title) {
+                    Section(SettingsGroup.SessionDisplay) {
                         if (show("thinking-expanded")) {
                             ToggleRow("Show thinking expanded", "Open the model's reasoning by default", settings.thinkingExpanded) { on -> update { it.copy(thinkingExpanded = on) } }
                             Spacer(Modifier.height(12.dp))
@@ -262,11 +262,11 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                 }
 
                 if (SettingsGroup.Notifications in groups) {
-                    Section(SettingsGroup.Notifications.title) { NotificationsRow() }
+                    Section(SettingsGroup.Notifications) { NotificationsRow() }
                 }
 
                 if (SettingsGroup.Security in groups) {
-                    Section(SettingsGroup.Security.title) {
+                    Section(SettingsGroup.Security) {
                         var keyId by remember { mutableStateOf(app.deviceKeyId()) }
                         var oldKeyId by remember { mutableStateOf<String?>(null) }
                         var confirmReset by remember { mutableStateOf(false) }
@@ -311,7 +311,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                 }
 
                 if (SettingsGroup.About in groups) {
-                    Section(SettingsGroup.About.title) {
+                    Section(SettingsGroup.About) {
                         if (show("version")) {
                             InfoLine("Version", app.appVersion)
                             InfoLine("This phone", app.deviceName)
@@ -319,7 +319,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                         if (show("updates")) UpdateBlock(app, settings.autoUpdateCheck) { on -> update { it.copy(autoUpdateCheck = on) } }
                         if (show("licences")) {
                             RowDivider()
-                            NavRow("Open-source licences", "Inter, JetBrains Mono, Mermaid, Termux terminal", onClick = { licences = true })
+                            NavRow("Open-source licences", "Inter, JetBrains Mono, Mermaid, Termux terminal, Lobe Icons", onClick = { licences = true }, icon = Icons.Rounded.Description)
                         }
                     }
                 }
@@ -367,6 +367,7 @@ private val LICENCES = listOf(
     Triple("JetBrains Mono", "SIL Open Font License 1.1", R.raw.license_jetbrains_mono),
     Triple("Mermaid", "MIT, with the projects it bundles", R.raw.license_mermaid),
     Triple("Termux terminal", "Apache License 2.0", R.raw.license_termux_terminal),
+    Triple("Lobe Icons", "MIT: provider and model logos", R.raw.license_lobe_icons),
 )
 
 private fun textSizeLabel(step: Int) = when (step) {

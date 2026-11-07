@@ -15,9 +15,10 @@ data class ProviderInfo(
     val keyUrl: String?,
     /** The key's usual prefix, shown as a placeholder hint. */
     val keyHint: String = "",
-    /** Two letters for the badge, unique in the catalog (four providers start with "O"). */
-    val badge: String = ProviderCatalog.badgeFor(name),
-)
+) {
+    /** The provider's mark (see [ProviderLogos]). */
+    val brand: Brand get() = ProviderCatalog.brand(id)
+}
 
 /**
  * Providers that work with a pasted API key, most used first. Ids and names follow packages/ai/src/env-api-keys.ts
@@ -26,27 +27,27 @@ data class ProviderInfo(
  */
 object ProviderCatalog {
     val all: List<ProviderInfo> = listOf(
-        ProviderInfo("anthropic", "Anthropic", "Claude models", "https://console.anthropic.com/settings/keys", "sk-ant-…", badge = "An"),
-        ProviderInfo("openai", "OpenAI", "GPT models", "https://platform.openai.com/api-keys", "sk-…", badge = "Op"),
-        ProviderInfo("google", "Google Gemini", "Gemini models", "https://aistudio.google.com/apikey", "AIza…", badge = "Gm"),
-        ProviderInfo("openrouter", "OpenRouter", "Many providers through one key", "https://openrouter.ai/keys", "sk-or-…", badge = "OR"),
-        ProviderInfo("deepseek", "DeepSeek", "DeepSeek models", "https://platform.deepseek.com/api_keys", "sk-…", badge = "DS"),
-        ProviderInfo("opencode", "OpenCode Zen", "Curated coding models", "https://opencode.ai/auth", badge = "OZ"),
-        ProviderInfo("opencode-go", "OpenCode Go", "Low-cost coding models", "https://opencode.ai/auth", badge = "OG"),
-        ProviderInfo("groq", "Groq", "Fast open models", "https://console.groq.com/keys", "gsk_…", badge = "Gq"),
-        ProviderInfo("xai", "xAI", "Grok models", "https://console.x.ai", "xai-…", badge = "xA"),
-        ProviderInfo("mistral", "Mistral", "Mistral and Codestral", "https://console.mistral.ai/api-keys", badge = "Mi"),
-        ProviderInfo("cerebras", "Cerebras", "Fast open models", "https://cloud.cerebras.ai", "csk-…", badge = "Cb"),
-        ProviderInfo("moonshotai", "Moonshot AI", "Kimi models", "https://platform.moonshot.ai/console/api-keys", "sk-…", badge = "Ms"),
-        ProviderInfo("kimi-coding", "Kimi For Coding", "Kimi coding plan", "https://www.kimi.com/coding", badge = "Ki"),
-        ProviderInfo("zai", "Z.ai Coding Plan", "GLM models", "https://z.ai/manage-apikey/apikey-list", badge = "Za"),
-        ProviderInfo("minimax", "MiniMax", "MiniMax models", "https://www.minimax.io/platform", badge = "MM"),
-        ProviderInfo("vercel-ai-gateway", "Vercel AI Gateway", "Many providers through one key", "https://vercel.com/ai-gateway", badge = "Vc"),
-        ProviderInfo("huggingface", "Hugging Face", "Inference providers", "https://huggingface.co/settings/tokens", "hf_…", badge = "HF"),
-        ProviderInfo("fireworks", "Fireworks", "Open models", "https://fireworks.ai/account/api-keys", "fw_…", badge = "Fw"),
-        ProviderInfo("together", "Together AI", "Open models", "https://api.together.ai/settings/api-keys", badge = "To"),
-        ProviderInfo("nvidia", "NVIDIA NIM", "Hosted NIM models", "https://build.nvidia.com", "nvapi-…", badge = "NV"),
-        ProviderInfo("baseten", "Baseten", "Hosted open models", "https://app.baseten.co/settings/api_keys", badge = "Bt"),
+        ProviderInfo("anthropic", "Anthropic", "Claude models", "https://console.anthropic.com/settings/keys", "sk-ant-…"),
+        ProviderInfo("openai", "OpenAI", "GPT models", "https://platform.openai.com/api-keys", "sk-…"),
+        ProviderInfo("google", "Google Gemini", "Gemini models", "https://aistudio.google.com/apikey", "AIza…"),
+        ProviderInfo("openrouter", "OpenRouter", "Many providers through one key", "https://openrouter.ai/keys", "sk-or-…"),
+        ProviderInfo("deepseek", "DeepSeek", "DeepSeek models", "https://platform.deepseek.com/api_keys", "sk-…"),
+        ProviderInfo("opencode", "OpenCode Zen", "Curated coding models", "https://opencode.ai/auth"),
+        ProviderInfo("opencode-go", "OpenCode Go", "Low-cost coding models", "https://opencode.ai/auth"),
+        ProviderInfo("groq", "Groq", "Fast open models", "https://console.groq.com/keys", "gsk_…"),
+        ProviderInfo("xai", "xAI", "Grok models", "https://console.x.ai", "xai-…"),
+        ProviderInfo("mistral", "Mistral", "Mistral and Codestral", "https://console.mistral.ai/api-keys"),
+        ProviderInfo("cerebras", "Cerebras", "Fast open models", "https://cloud.cerebras.ai", "csk-…"),
+        ProviderInfo("moonshotai", "Moonshot AI", "Kimi models", "https://platform.moonshot.ai/console/api-keys", "sk-…"),
+        ProviderInfo("kimi-coding", "Kimi For Coding", "Kimi coding plan", "https://www.kimi.com/coding"),
+        ProviderInfo("zai", "Z.ai Coding Plan", "GLM models", "https://z.ai/manage-apikey/apikey-list"),
+        ProviderInfo("minimax", "MiniMax", "MiniMax models", "https://www.minimax.io/platform"),
+        ProviderInfo("vercel-ai-gateway", "Vercel AI Gateway", "Many providers through one key", "https://vercel.com/ai-gateway"),
+        ProviderInfo("huggingface", "Hugging Face", "Inference providers", "https://huggingface.co/settings/tokens", "hf_…"),
+        ProviderInfo("fireworks", "Fireworks", "Open models", "https://fireworks.ai/account/api-keys", "fw_…"),
+        ProviderInfo("together", "Together AI", "Open models", "https://api.together.ai/settings/api-keys"),
+        ProviderInfo("nvidia", "NVIDIA NIM", "Hosted NIM models", "https://build.nvidia.com", "nvapi-…"),
+        ProviderInfo("baseten", "Baseten", "Hosted open models", "https://app.baseten.co/settings/api_keys"),
     )
 
     /** Shown first in the picker, in this order. */
@@ -62,12 +63,23 @@ object ProviderCatalog {
     @Volatile
     private var customNames: Map<String, String> = emptyMap()
 
+    /** The custom endpoints' marks, from their base URLs (see [ProviderLogos.forEndpoint]). */
+    @Volatile
+    private var customBrands: Map<String, Brand> = emptyMap()
+
     fun get(id: String): ProviderInfo? = byId[id]
 
     /** Remembers the display names of custom endpoints: their `name`, else their host. */
     fun registerCustom(providers: List<CustomProvider>) {
         customNames = providers.associate { p -> p.id to (p.name ?: hostOf(p.baseUrl) ?: p.id) }
+        customBrands = providers.associate { p -> p.id to ProviderLogos.forEndpoint(p.id, p.name, p.baseUrl) }
     }
+
+    /** The mark for any provider id: a custom endpoint's from its server, else [ProviderLogos.forProvider]. */
+    fun brand(id: String?): Brand = id?.let { customBrands[it] } ?: ProviderLogos.forProvider(id)
+
+    /** The mark for a model: its maker, else its provider's ([ProviderLogos.forModel]). */
+    fun modelBrand(modelId: String?, provider: String?): Brand = ProviderLogos.forModel(modelId, brand(provider))
 
     /**
      * Display name for any provider id, including ones set up outside this app: the catalog name, a custom endpoint's
@@ -75,21 +87,9 @@ object ProviderCatalog {
      */
     fun name(id: String): String = byId[id]?.name ?: customNames[id] ?: humanize(id)
 
-    fun badge(id: String): String = byId[id]?.badge ?: badgeFor(name(id))
-
     /** "fake" is "Fake", "amazon-bedrock" is "Amazon bedrock". */
     fun humanize(id: String): String =
         id.replace('-', ' ').replace('_', ' ').trim().replaceFirstChar { it.titlecase() }.ifEmpty { id }
-
-    /** Two letters from a name: the initials of its first two words, else its first two letters. */
-    fun badgeFor(name: String): String {
-        val words = name.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }
-        return when {
-            words.isEmpty() -> "?"
-            words.size >= 2 -> (words[0].take(1) + words[1].take(1)).uppercase()
-            else -> words[0].take(1).uppercase() + words[0].drop(1).take(1).lowercase()
-        }
-    }
 
     fun hostOf(url: String): String? = runCatching { URI(url.trim()).host }.getOrNull()?.takeIf { it.isNotBlank() }
 

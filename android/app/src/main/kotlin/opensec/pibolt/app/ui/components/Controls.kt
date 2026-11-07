@@ -49,6 +49,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
@@ -59,6 +61,7 @@ import androidx.compose.ui.unit.dp
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.IconSize
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.theme.Radius
 
 /**
@@ -324,10 +327,21 @@ fun <T> SegmentedSlots(
     }
 }
 
-/** Section heading in lists and settings. */
+/**
+ * Section heading in lists and settings: metaStrong ink3, with an optional 14dp [icon] in ink3 before it (Settings'
+ * groups, as the desktop's settings sections), then read as one heading.
+ */
 @Composable
-fun SectionLabel(text: String, modifier: Modifier = Modifier) {
-    Text(text, style = Pi.type.metaStrong, color = Pi.colors.ink3, modifier = modifier.padding(horizontal = 4.dp))
+fun SectionLabel(text: String, modifier: Modifier = Modifier, icon: ImageVector? = null) {
+    if (icon == null) {
+        Text(text, style = Pi.type.metaStrong, color = Pi.colors.ink3, modifier = modifier.padding(horizontal = 4.dp))
+        return
+    }
+    Row(modifier.padding(horizontal = 4.dp).semantics(mergeDescendants = true) { heading() }, verticalAlignment = Alignment.CenterVertically) {
+        Icon(icon, contentDescription = null, tint = Pi.colors.ink3, modifier = Modifier.size(IconSize.xs))
+        Spacer(Modifier.width(Space.sm))
+        Text(text, style = Pi.type.metaStrong, color = Pi.colors.ink3)
+    }
 }
 
 /** Text field: surface1, radius 12, 1dp lineStrong that turns into the focus line. */

@@ -481,6 +481,8 @@ private fun SessionContent(
     val contextWindow by remember { derivedStateOf { state.value.model?.contextWindow } }
     val contextPct = knownTokens?.let { contextPercent(it, contextWindow) }
     val modelLabel by remember { derivedStateOf { state.value.model?.label } }
+    // The maker's mark for the run-settings chip: "anthropic/claude-…" through OpenRouter is Anthropic's.
+    val modelBrand by remember { derivedStateOf { state.value.model?.let { ProviderCatalog.modelBrand(it.id, it.provider) } } }
     val cwd by remember { derivedStateOf { state.value.host?.cwd } }
     val thinkingLevel by remember { derivedStateOf { state.value.thinkingLevel } }
     // The composer's thinking chip is left out for a model that does not reason.
@@ -994,6 +996,7 @@ private fun SessionContent(
                         mode = mode,
                         onMode = { mode = it },
                         modelLabel = modelLabel,
+                        modelBrand = modelBrand,
                         thinkingLevel = thinkingLevel.takeIf { reasons },
                         palette = palette,
                         onPick = { entry ->

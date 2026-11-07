@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.session.features2
 
+import androidx.compose.material.icons.rounded.Description
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -99,7 +100,10 @@ fun SkillsSheet(controller: SessionController, onInsert: (String) -> Unit, onVie
         val list = items?.filter { it.source == kind && (query.isBlank() || query.lowercase() in (it.name + " " + it.description).lowercase()) }
         when {
             list == null -> F2Loading("Reading skills")
-            list.isEmpty() -> F2Empty(if (kind == "skill") "No skills. Add them under ~/.pi/agent/skills or a project's .pi/skills, or install a package." else "No prompt templates. Add .md files under ~/.pi/agent/prompts or a project's .pi/prompts.")
+            list.isEmpty() -> F2Empty(
+                if (kind == "skill") "No skills. Add them under ~/.pi/agent/skills or a project's .pi/skills, or install a package." else "No prompt templates. Add .md files under ~/.pi/agent/prompts or a project's .pi/prompts.",
+                if (kind == "skill") Icons.Rounded.AutoAwesome else Icons.Rounded.Description,
+            )
             else -> LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
                 items(list, key = { it.source + ":" + it.name }) { r ->
                     F2Row(

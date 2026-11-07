@@ -198,13 +198,13 @@ fun PiCard(
 }
 
 /**
- * A titled group (Settings, Runtimes): a [SectionLabel] over a radius-lg card. Rows inside use [RowInsetCard], with
+ * A titled group (Settings, Runtimes): a [SectionLabel] (with an optional 14dp glyph) over a radius-lg card. Rows inside use [RowInsetCard], with
  * the card's 16dp side padding and 8dp top and bottom (rows bring their own height; text blocks add 4dp more).
  */
 @Composable
-fun CardSection(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
+fun CardSection(title: String, modifier: Modifier = Modifier, icon: ImageVector? = null, content: @Composable ColumnScope.() -> Unit) {
     Column(modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.sm + 2.dp)) {
-        SectionLabel(title, Modifier.padding(bottom = Space.sm))
+        SectionLabel(title, Modifier.padding(bottom = Space.sm), icon = icon)
         PiCard(radius = Radius.lg, padding = PaddingValues(horizontal = Space.lg, vertical = Space.sm), content = content)
     }
 }

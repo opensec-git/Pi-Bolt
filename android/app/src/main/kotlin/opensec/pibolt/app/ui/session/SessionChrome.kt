@@ -45,6 +45,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DeleteOutline
@@ -426,13 +427,13 @@ fun EmptySession(
                 }
             }
             if (starters.isNotEmpty()) {
-                StartSection("Start with")
+                StartSection("Start with", Icons.Rounded.AutoAwesome)
                 FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(0.dp)) {
                     for (s in starters) StarterChip(s.label) { onStarter(s) }
                 }
             }
             if (recent.isNotEmpty()) {
-                StartSection("Recent")
+                StartSection("Recent", Icons.Rounded.History)
                 for (prompt in recent) StartRow(prompt.lineSequence().first(), null, mono = false) { onRecent(prompt) }
             }
             if (onCommands != null) {
@@ -465,8 +466,8 @@ private fun StarterChip(label: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun StartSection(title: String) {
-    SectionLabel(title, Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 4.dp))
+private fun StartSection(title: String, icon: ImageVector) {
+    SectionLabel(title, Modifier.fillMaxWidth().padding(top = 24.dp, bottom = 4.dp), icon = icon)
 }
 
 /** A 48dp row: label in body ink1 (mono for commands), the description in meta ink3 on the same line. */

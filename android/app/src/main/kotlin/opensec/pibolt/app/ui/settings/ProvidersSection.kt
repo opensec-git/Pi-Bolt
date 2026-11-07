@@ -41,7 +41,7 @@ import opensec.pibolt.app.ui.providers.ProviderSheet
 import opensec.pibolt.app.ui.theme.Pi
 
 /**
- * Settings > Model providers: the providers with a stored credential, by their human name and two-letter badge.
+ * Settings > Model providers: the providers with a stored credential, by their human name and mark.
  * Custom endpoints (models.json) show their host and model; removing one also removes its models.json entry.
  */
 @Composable
@@ -83,7 +83,7 @@ fun ProvidersSection(app: PiBoltApp) {
                     Modifier.fillMaxWidth().height(56.dp).semantics(mergeDescendants = true) { contentDescription = "$name, $subtitle" },
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    ProviderBadge(ProviderCatalog.badge(id))
+                    ProviderBadge(ProviderCatalog.brand(id))
                     Spacer(Modifier.width(14.dp))
                     Column(Modifier.weight(1f)) {
                         Text(name, style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)

@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.packages
 
+import androidx.compose.material.icons.rounded.Cable
 import opensec.pibolt.app.ui.components.ErrorState
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -112,7 +113,7 @@ fun McpSheet(engine: EngineApi, onReload: (() -> Unit)?, onMessage: (String) -> 
                 failure != null -> ErrorState("Could not reach the MCP servers", message = failure, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                 r == null -> F2Loading("Connecting to servers")
                 else -> {
-                    if (r.servers.isEmpty()) F2Empty("No MCP servers yet. Add one to the engine's mcp.json to give Pi its tools.")
+                    if (r.servers.isEmpty()) F2Empty("No MCP servers yet. Add one to the engine's mcp.json to give Pi its tools.", Icons.Rounded.Cable)
                     for (s in r.servers) {
                         val meta = buildList {
                             add(s.state)

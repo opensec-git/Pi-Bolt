@@ -10,9 +10,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -31,7 +29,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
 import androidx.compose.material.icons.rounded.Check
-import androidx.compose.material.icons.rounded.Dns
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,8 +49,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -74,6 +69,7 @@ import opensec.pibolt.app.ui.components.SectionLabel
 import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.rememberSheetCloser
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
@@ -212,9 +208,7 @@ private fun CustomRow(title: String, note: String, onClick: () -> Unit) {
             .padding(horizontal = 20.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(Modifier.size(32.dp).background(colors.surface3, RoundedCornerShape(Radius.sm)), contentAlignment = Alignment.Center) {
-            Icon(Icons.Rounded.Dns, contentDescription = null, tint = colors.ink1, modifier = Modifier.size(18.dp))
-        }
+        ProviderBadge(Brand.Generic)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(title, style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -223,7 +217,7 @@ private fun CustomRow(title: String, note: String, onClick: () -> Unit) {
     }
 }
 
-/** 60dp row: provider badge, name with a note beneath, "Added" for configured ones. */
+/** 60dp row: provider mark, name with a note beneath, "Added" for configured ones. */
 @Composable
 fun ProviderRow(p: ProviderInfo, added: Boolean, onClick: () -> Unit, trailing: (@Composable () -> Unit)? = null) {
     val colors = Pi.colors
@@ -236,7 +230,7 @@ fun ProviderRow(p: ProviderInfo, added: Boolean, onClick: () -> Unit, trailing: 
             .padding(start = 20.dp, end = if (trailing != null) 4.dp else 20.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ProviderBadge(p.badge)
+        ProviderBadge(p.brand)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f)) {
             Text(p.name, style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -248,14 +242,6 @@ fun ProviderRow(p: ProviderInfo, added: Boolean, onClick: () -> Unit, trailing: 
             Text("Added", style = type.meta, color = colors.ink2)
         }
         trailing?.invoke()
-    }
-}
-
-/** 32dp square with the provider's two-letter badge (see [ProviderCatalog.badge]); decorative for TalkBack. */
-@Composable
-fun ProviderBadge(badge: String) {
-    Box(Modifier.size(32.dp).background(Pi.colors.surface3, RoundedCornerShape(Radius.sm)).clearAndSetSemantics {}, contentAlignment = Alignment.Center) {
-        Text(badge.ifBlank { "?" }, style = Pi.type.label.copy(fontWeight = FontWeight.SemiBold), color = Pi.colors.ink1, maxLines = 1)
     }
 }
 
@@ -304,7 +290,7 @@ private fun KeyStep(provider: ProviderInfo, auth: ProviderAuth, onBack: (() -> U
                 }, tint = colors.ink1)
                 Spacer(Modifier.width(4.dp))
             }
-            ProviderBadge(provider.badge)
+            LogoMark(provider.brand, size = IconSize.md, tint = colors.ink1)
             Spacer(Modifier.width(12.dp))
             Text(provider.name, style = type.title, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }

@@ -26,7 +26,12 @@ import opensec.pibolt.app.data.AgentSettingsFile
 import opensec.pibolt.app.data.QueueMode
 import opensec.pibolt.app.ui.components.Segmented
 import opensec.pibolt.app.ui.projects.LocalSessions
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.AutoAwesome
+import opensec.pibolt.app.ui.providers.Brand
+import opensec.pibolt.app.ui.providers.LogoMark
 import opensec.pibolt.app.ui.providers.ProviderCatalog
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.session.ModelSheet
 import opensec.pibolt.app.ui.session.features2.AgentLinks
 import opensec.pibolt.app.ui.theme.Pi
@@ -79,6 +84,9 @@ internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean) {
             } + if (controller == null) "\nOpen a session on this phone to choose from its models" else "",
             onClick = { picking = true },
             enabled = controller != null,
+            // The model's mark; automatic (no default yet) reads as the sparkle glyph.
+            icon = Icons.Rounded.AutoAwesome,
+            leading = defaultModelBrand(match, chosen)?.let { brand -> { LogoMark(brand, size = IconSize.md) } },
         )
         Spacer(Modifier.height(8.dp))
         if (picking && controller != null) {
@@ -149,6 +157,14 @@ internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean) {
         val context = LocalContext.current
         AgentLinks(app) { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     }
+}
+
+/** The default model's mark: the listed model's, else from the saved "provider/model" id; null when automatic. */
+private fun defaultModelBrand(match: ModelInfo?, chosen: String?): Brand? = when {
+    match != null -> ProviderCatalog.modelBrand(match.id, match.provider)
+    chosen != null && '/' in chosen -> ProviderCatalog.modelBrand(chosen.substringAfter('/'), chosen.substringBefore('/'))
+    chosen != null -> ProviderCatalog.modelBrand(chosen, null)
+    else -> null
 }
 
 /** "anthropic/claude-sonnet-4" as "claude-sonnet-4 · Anthropic". */

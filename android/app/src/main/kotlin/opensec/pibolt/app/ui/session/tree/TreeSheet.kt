@@ -1,5 +1,7 @@
 package opensec.pibolt.app.ui.session.tree
 
+import androidx.compose.material.icons.rounded.AccountTree
+import androidx.compose.material.icons.automirrored.rounded.Label
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
@@ -100,7 +102,7 @@ fun TreeSheet(
         )
         when {
             data == null -> F2Loading("Reading the tree")
-            rows.isEmpty() -> F2Empty(if (filter == TreeFilter.Labeled) "No labels yet. Long-press an entry to label it." else "Nothing here yet.")
+            rows.isEmpty() -> F2Empty(if (filter == TreeFilter.Labeled) "No labels yet. Long-press an entry to label it." else "Nothing here yet.", if (filter == TreeFilter.Labeled) Icons.AutoMirrored.Rounded.Label else Icons.Rounded.AccountTree)
             else -> {
                 val list = rememberLazyListState()
                 // Open at the leaf: where the reader is.
