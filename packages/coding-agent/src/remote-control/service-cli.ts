@@ -32,6 +32,8 @@ import {
 	systemdUserUnit,
 	WINDOWS_TASK_NAME,
 	windowsTaskFile,
+	windowsTaskScript,
+	windowsTaskScriptPath,
 	windowsTaskXml,
 } from "./service-files.ts";
 import { describeTunnel, type ServiceStatus, servicePort, serviceTunnelSetting } from "./service-host.ts";
@@ -185,6 +187,8 @@ export function serviceProgram(): string[] {
 interface ServiceManager {
 	name: string;
 	file: string;
+	/** Everything [write] writes ([file] and, on Windows, the task's script). */
+	files: string[];
 	write(spec: ServiceSpec): void;
 	start(): Promise<void>;
 	stop(): Promise<void>;
@@ -202,15 +206,16 @@ function serviceManager(system: ServiceSystem, agentDir: string): ServiceManager
 		}
 		return result;
 	};
-	const writeFile = (content: string | Buffer) => {
-		mkdirSync(dirname(file), { recursive: true });
-		writeFileSync(file, content, { mode: 0o644 });
+	const writeFile = (content: string | Buffer, path = file) => {
+		mkdirSync(dirname(path), { recursive: true });
+		writeFileSync(path, content, { mode: 0o644 });
 	};
 	if (platform === "darwin") {
 		const target = `gui/${system.uid}/${LAUNCH_AGENT_LABEL}`;
 		return {
 			name: `LaunchAgent ${LAUNCH_AGENT_LABEL}`,
 			file,
+			files: [file],
 			write: (spec) => writeFile(launchAgentPlist(spec)),
 			start: async () => {
 				// Loaded already (an earlier install): replaced by this file. bootout returns before the job is gone, and
@@ -239,6 +244,7 @@ function serviceManager(system: ServiceSystem, agentDir: string): ServiceManager
 		return {
 			name: `systemd user unit ${SYSTEMD_UNIT}`,
 			file,
+			files: [file],
 			write: (spec) => writeFile(systemdUserUnit(spec)),
 			start: async () => {
 				await must("systemctl", ["--user", "daemon-reload"]);
@@ -256,19 +262,26 @@ function serviceManager(system: ServiceSystem, agentDir: string): ServiceManager
 		};
 	}
 	if (platform === "win32") {
+		const script = windowsTaskScriptPath(file);
+		const system32 = `${system.env.SystemRoot ?? "C:\\Windows"}\\System32`;
 		return {
 			name: `scheduled task "${WINDOWS_TASK_NAME}"`,
 			file,
-			write: (spec) =>
+			files: [file, script],
+			write: (spec) => {
+				writeFile(windowsTaskScript(spec), script);
 				writeFile(
 					windowsTaskFile(
 						windowsTaskXml({
-							...spec,
 							userId: system.windowsUser,
-							conhost: `${system.env.SystemRoot ?? "C:\\Windows"}\\System32\\conhost.exe`,
+							conhost: `${system32}\\conhost.exe`,
+							shell: `${system32}\\cmd.exe`,
+							script,
+							home: spec.home,
 						}),
 					),
-				),
+				);
+			},
 			start: async () => {
 				await must("schtasks", ["/Create", "/TN", WINDOWS_TASK_NAME, "/XML", file, "/F"]);
 				await system.run("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]);
@@ -360,7 +373,13 @@ async function uninstall(agentDir: string, system: ServiceSystem, out: (line: st
 	const manager = serviceManager(system, agentDir);
 	await manager.stop();
 	const paths = serviceLogPaths(agentDir);
-	const files = [manager.file, paths.log, paths.previous, paths.stderr, controlPaths(agentDir, system.platform).token];
+	const files = [
+		...manager.files,
+		paths.log,
+		paths.previous,
+		paths.stderr,
+		controlPaths(agentDir, system.platform).token,
+	];
 	const removed = files.filter((file) => existsSync(file));
 	for (const file of removed) rmSync(file, { force: true });
 	out(

@@ -23,14 +23,22 @@ export interface ServiceSpec {
 	stderrPath: string;
 }
 
-export interface WindowsTaskSpec extends ServiceSpec {
+export interface WindowsTaskSpec {
 	/** `DOMAIN\user`: the task runs for this user only, when they log on. */
 	userId: string;
 	/** `conhost.exe`, which runs the service without a console window (`--headless`). */
 	conhost: string;
+	/** `cmd.exe`, which runs [script]. */
+	shell: string;
+	/** The script [windowsTaskScript] wrote: a task cannot set environment variables itself. */
+	script: string;
+	home: string;
 }
 
-/** The service file's path for this platform. On Windows the task's XML is kept in the agent directory. */
+/**
+ * The service file's path for this platform. On Windows the task's XML is kept in the agent directory, with the script
+ * the task runs next to it ([windowsTaskScriptPath]).
+ */
 export function serviceFilePath(
 	platform: ServicePlatform,
 	home: string,
@@ -45,6 +53,11 @@ export function serviceFilePath(
 	// (Joined in the agent directory's own style, so each platform's install also runs in tests on another OS.)
 	const path = /^[A-Za-z]:[\\/]|^\\\\/.test(agentDir) ? win32 : posix;
 	return path.join(agentDir, "remote-control", "service-task.xml");
+}
+
+/** The script the Windows task runs, next to its XML. */
+export function windowsTaskScriptPath(taskXmlPath: string): string {
+	return taskXmlPath.replace(/\.xml$/, ".cmd");
 }
 
 function xml(text: string): string {
@@ -145,7 +158,8 @@ export function windowsQuote(arg: string): string {
  * a time limit, and again after a failure.
  */
 export function windowsTaskXml(spec: WindowsTaskSpec): string {
-	const args = ["--headless", ...spec.program].map(windowsQuote).join(" ");
+	// (`call`: cmd /c strips the quotes of a command line that starts with one.)
+	const args = ["--headless", spec.shell, "/d", "/v:off", "/c", "call", spec.script].map(windowsQuote).join(" ");
 	return `<?xml version="1.0" encoding="UTF-16"?>
 <Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
   <RegistrationInfo>
@@ -186,6 +200,30 @@ export function windowsTaskXml(spec: WindowsTaskSpec): string {
   </Actions>
 </Task>
 `;
+}
+
+/** A value inside double quotes in a batch file: `%` doubled; a quote or line break cannot be written. */
+function batchQuote(value: string): string {
+	if (/["\r\n]/.test(value))
+		throw new Error(`Cannot write to the Windows task's script (a quote or line break): ${value}`);
+	return `"${value.replace(/%/g, "%%")}"`;
+}
+
+/**
+ * The batch script the Windows task runs: it sets the service's environment (PATH, Pi's directory variables), which a
+ * task cannot carry, then runs the service in the home folder. CRLF lines, UTF-8 (`chcp 65001` before any path).
+ */
+export function windowsTaskScript(spec: ServiceSpec): string {
+	return [
+		"@echo off",
+		"rem Pi-Bolt remote control: written by pi-bolt service install, removed by pi-bolt service uninstall.",
+		"chcp 65001 >nul",
+		...Object.entries(spec.env).map(([key, value]) => `set ${batchQuote(`${key}=${value}`)}`),
+		`cd /d ${batchQuote(spec.home)}`,
+		spec.program.map(batchQuote).join(" "),
+		"exit /b %ERRORLEVEL%",
+		"",
+	].join("\r\n");
 }
 
 /** The task XML as schtasks reads it: UTF-16 LE with a byte order mark. */

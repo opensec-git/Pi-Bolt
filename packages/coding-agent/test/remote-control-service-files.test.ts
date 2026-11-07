@@ -14,6 +14,8 @@ import {
 	WINDOWS_TASK_NAME,
 	windowsQuote,
 	windowsTaskFile,
+	windowsTaskScript,
+	windowsTaskScriptPath,
 	windowsTaskXml,
 } from "../src/remote-control/service-files.ts";
 
@@ -77,12 +79,13 @@ describe("service files", () => {
 	});
 
 	describe("Windows scheduled task", () => {
+		const script = "C:\\Users\\Me\\.pi\\agent\\remote-control\\service-task.cmd";
 		const xml = windowsTaskXml({
-			...spec,
-			program: ["C:\\Users\\Me\\Pi Bolt\\pi-bolt.exe", "service", "run"],
-			home: "C:\\Users\\Me",
 			userId: "PC\\Me",
 			conhost: "C:\\Windows\\System32\\conhost.exe",
+			shell: "C:\\Windows\\System32\\cmd.exe",
+			script,
+			home: "C:\\Users\\Me",
 		});
 
 		it("starts at this user's logon with their own rights, with no console window and no time limit", () => {
@@ -90,9 +93,11 @@ describe("service files", () => {
 			expect(xml).toContain("<LogonType>InteractiveToken</LogonType>");
 			expect(xml).toContain("<RunLevel>LeastPrivilege</RunLevel>");
 			expect(xml).toContain("<Command>C:\\Windows\\System32\\conhost.exe</Command>");
+			// The task runs the script that sets the environment; `call` keeps cmd /c from stripping the quotes.
 			expect(xml).toContain(
-				"<Arguments>--headless &quot;C:\\Users\\Me\\Pi Bolt\\pi-bolt.exe&quot; service run</Arguments>",
+				`<Arguments>--headless C:\\Windows\\System32\\cmd.exe /d /v:off /c call ${script}</Arguments>`,
 			);
+			expect(xml).toContain("<WorkingDirectory>C:\\Users\\Me</WorkingDirectory>");
 			expect(xml).toContain("<ExecutionTimeLimit>PT0S</ExecutionTimeLimit>");
 			expect(xml).toContain("<RestartOnFailure>");
 			expect(xml).toContain(`<URI>\\${WINDOWS_TASK_NAME}</URI>`);
@@ -105,6 +110,32 @@ describe("service files", () => {
 			const text = file.subarray(2).toString("utf16le");
 			expect(text.startsWith('<?xml version="1.0" encoding="UTF-16"?>\r\n')).toBe(true);
 			expect(text.replace(/\r\n/g, "\n")).toBe(xml);
+		});
+
+		it("runs the service from a script that sets its environment: PATH and Pi's directories", () => {
+			const text = windowsTaskScript({
+				program: ["C:\\Users\\Me\\Pi Bolt\\pi-bolt.exe", "service", "run"],
+				env: {
+					PATH: "C:\\Windows\\System32;C:\\Tools & Co\\100%",
+					PI_CODING_AGENT_DIR: "D:\\pi agent",
+					PI_CODING_AGENT_SESSION_DIR: "D:\\sessions",
+				},
+				home: "C:\\Users\\Me",
+				stderrPath: "unused",
+			});
+			expect(text.split("\r\n")).toEqual([
+				"@echo off",
+				"rem Pi-Bolt remote control: written by pi-bolt service install, removed by pi-bolt service uninstall.",
+				"chcp 65001 >nul",
+				'set "PATH=C:\\Windows\\System32;C:\\Tools & Co\\100%%"',
+				'set "PI_CODING_AGENT_DIR=D:\\pi agent"',
+				'set "PI_CODING_AGENT_SESSION_DIR=D:\\sessions"',
+				'cd /d "C:\\Users\\Me"',
+				'"C:\\Users\\Me\\Pi Bolt\\pi-bolt.exe" "service" "run"',
+				"exit /b %ERRORLEVEL%",
+				"",
+			]);
+			expect(() => windowsTaskScript({ ...spec, env: { PATH: 'C:\\a"b' } })).toThrow("a quote or line break");
 		});
 
 		it("quotes command-line arguments as CommandLineToArgvW reads them", () => {
@@ -148,7 +179,7 @@ describe("pi-bolt service install and uninstall", () => {
 		const system: Partial<ServiceSystem> = {
 			platform,
 			home,
-			env: { PATH: "/usr/bin:/bin", SystemRoot: "C:\\Windows" },
+			env: { PATH: "/usr/bin:/bin", SystemRoot: "C:\\Windows", PI_CODING_AGENT_DIR: agentDir },
 			uid: 501,
 			windowsUser: "PC\\Me",
 			isTTY: false,
@@ -215,6 +246,13 @@ describe("pi-bolt service install and uninstall", () => {
 		const { agentDir, commands, run } = setup("win32");
 		expect(await run(["install"])).toBe(0);
 		const xmlFile = serviceFilePath("win32", "", agentDir);
+		const scriptFile = windowsTaskScriptPath(xmlFile);
+		// The shell's PATH and agent directory reach the task through its script.
+		const script = readFileSync(scriptFile, "utf8");
+		expect(script).toContain('set "PATH=/usr/bin:/bin"\r\n');
+		expect(script).toContain(`set "PI_CODING_AGENT_DIR=${agentDir}"\r\n`);
+		expect(script).toContain('"/opt/pi-bolt/pi" "service" "run"\r\n');
+		expect(readFileSync(xmlFile).subarray(2).toString("utf16le")).toContain(`/c call ${scriptFile}</Arguments>`);
 		expect(commands).toEqual([
 			`schtasks /Create /TN ${WINDOWS_TASK_NAME} /XML ${xmlFile} /F`,
 			`schtasks /End /TN ${WINDOWS_TASK_NAME}`,
@@ -229,6 +267,7 @@ describe("pi-bolt service install and uninstall", () => {
 			`schtasks /Delete /TN ${WINDOWS_TASK_NAME} /F`,
 		]);
 		expect(existsSync(xmlFile)).toBe(false);
+		expect(existsSync(scriptFile)).toBe(false);
 	});
 
 	it("--no-tunnel sets remoteControl.service.tunnel to off; uninstall leaves settings alone", async () => {

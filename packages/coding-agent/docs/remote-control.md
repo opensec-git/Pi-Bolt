@@ -62,9 +62,9 @@ What `install` writes. It all goes in your user account's own folders, and none 
 |---|---|---|
 | macOS | LaunchAgent `in.opensec.pi-bolt.remote-control`: starts at login (`RunAtLoad`), and starts again unless it exited cleanly (`KeepAlive` / `SuccessfulExit`). | `~/Library/LaunchAgents/in.opensec.pi-bolt.remote-control.plist` |
 | Linux | systemd user unit `pi-bolt-remote-control.service` (`systemctl --user`): starts with your session (`default.target`), with `Restart=on-failure`. | `~/.config/systemd/user/pi-bolt-remote-control.service` (or under `$XDG_CONFIG_HOME`) |
-| Windows | Scheduled task `Pi-Bolt Remote Control`: starts at your logon with your rights (`InteractiveToken`, `LeastPrivilege`). It runs through `conhost.exe --headless`, so no console window opens, and it starts again up to 3 times after a failure. | `~/.pi/agent/remote-control/service-task.xml` (what `schtasks /Create /XML` registered) |
+| Windows | Scheduled task `Pi-Bolt Remote Control`: starts at your logon with your rights (`InteractiveToken`, `LeastPrivilege`). It runs through `conhost.exe --headless`, so no console window opens, and it starts again up to 3 times after a failure. | `~/.pi/agent/remote-control/service-task.xml` (what `schtasks /Create /XML` registered) and `service-task.cmd`, the script the task runs: a task cannot set environment variables, so the script sets them and starts the service |
 
-The service file holds the command, which is the `pi-bolt` executable followed by `service run`. It also holds `PATH`,
+The service file (on Windows, the task's script) holds the command, which is the `pi-bolt` executable followed by `service run`. It also holds `PATH`,
 plus `PI_CODING_AGENT_DIR` and `PI_CODING_AGENT_SESSION_DIR` when your shell sets them. While it runs, the service writes
 the following in `~/.pi/agent/remote-control/`:
 
