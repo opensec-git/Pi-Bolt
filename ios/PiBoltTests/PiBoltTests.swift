@@ -106,3 +106,16 @@ struct LiveSessionTests {
         app.closeSession()
     }
 }
+
+/// The transcript's inline markdown on iOS itself (the package tests run on macOS, whose parser can differ): reply
+/// links other than http, https and mailto are text (PR #274 review: a code span inside a link kept it live).
+struct ReplyLinkTests {
+    @Test(arguments: ["[`run`](shortcuts://run-shortcut?name=x)", "[**call**](tel:5551234)", "<pibolt://pair#eyJ2IjoxfQ>", "[go][r]\n\n[r]: sms:5551234"])
+    func refusedSchemesAreNotLinks(payload: String) {
+        #expect(inline(payload).runs.allSatisfy { $0.link == nil })
+    }
+
+    @Test func webLinksStay() {
+        #expect(inline("[`docs`](https://example.com)").runs.contains { $0.link != nil })
+    }
+}

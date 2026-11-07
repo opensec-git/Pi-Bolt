@@ -17,21 +17,13 @@ struct MarkdownView: View {
     }
 }
 
-/// Inline markdown (bold, italics, code spans, links); plain text when it does not parse.
+/// Inline markdown of reply text: `Markdown.inline` parses it and keeps only web and mail links live (`SafeLinks`);
+/// code spans are styled here.
 func inline(_ text: String) -> AttributedString {
-    var options = AttributedString.MarkdownParsingOptions()
-    options.interpretedSyntax = .inlineOnlyPreservingWhitespace
-    options.failurePolicy = .returnPartiallyParsedIfPossible
-    guard var parsed = try? AttributedString(markdown: text, options: options) else { return AttributedString(text) }
-    for run in parsed.runs {
-        if run.inlinePresentationIntent?.contains(.code) == true {
-            parsed[run.range].font = .system(size: 15, design: .monospaced)
-            parsed[run.range].backgroundColor = Pi.surface2
-        } else if let link = run.link, !["http", "https", "mailto"].contains(link.scheme?.lowercased() ?? "") {
-            // Reply text is not trusted: only web and mail links are live, as on Android. A tel:, shortcuts: or the
-            // app's own pibolt:// link stays plain text.
-            parsed[run.range].link = nil
-        }
+    var parsed = Markdown.inline(text)
+    for run in parsed.runs where run.inlinePresentationIntent?.contains(.code) == true {
+        parsed[run.range].font = .system(size: 15, design: .monospaced)
+        parsed[run.range].backgroundColor = Pi.surface2
     }
     return parsed
 }

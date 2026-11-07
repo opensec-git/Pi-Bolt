@@ -1,3 +1,4 @@
+import PiBoltMarkdown
 import PiBoltProtocol
 import SwiftUI
 
@@ -12,6 +13,8 @@ struct PiBoltApp: App {
                 .environment(model)
                 .preferredColorScheme(.dark)
                 .tint(Pi.accent)
+                // Every link a view opens goes through the allowlist too, whatever made it a link.
+                .environment(\.openURL, OpenURLAction { SafeLinks.isAllowed($0) ? .systemAction : .discarded })
                 // A pibolt://pair#… link from the camera app, a browser or another app.
                 .onOpenURL { model.receive(link: $0.absoluteString) }
         }
