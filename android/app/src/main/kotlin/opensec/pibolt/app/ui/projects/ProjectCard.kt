@@ -230,54 +230,36 @@ fun ProjectMenu(
     onSecrets: (() -> Unit)? = null,
 ) {
     val colors = Pi.colors
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss,
-        containerColor = colors.surface3,
-        shape = RoundedCornerShape(Radius.md),
-        tonalElevation = 0.dp,
-        shadowElevation = 8.dp,
-        border = BorderStroke(1.dp, colors.lineStrong),
-    ) {
-        MenuItem(if (pinned) "Unpin" else "Pin to top", if (pinned) Icons.Outlined.PushPin else Icons.Rounded.PushPin, colors.ink1) {
+    WorkspaceMenu(expanded, onDismiss) {
+        WorkspaceMenuRow(if (pinned) "Unpin" else "Pin to top", if (pinned) Icons.Outlined.PushPin else Icons.Rounded.PushPin, colors.ink1) {
             onDismiss()
             onPin(!pinned)
         }
-        MenuItem("Rename", Icons.Rounded.DriveFileRenameOutline, colors.ink1) {
+        WorkspaceMenuRow("Rename", Icons.Rounded.DriveFileRenameOutline, colors.ink1) {
             onDismiss()
             onRename()
         }
         onExport?.let { export ->
-            MenuItem("Export as zip", Icons.Rounded.Archive, colors.ink1) {
+            WorkspaceMenuRow("Export as zip", Icons.Rounded.Archive, colors.ink1) {
                 onDismiss()
                 export()
             }
         }
         onSecrets?.let { open ->
-            MenuItem("Secrets", Icons.Rounded.Key, colors.ink1) {
+            WorkspaceMenuRow("Secrets", Icons.Rounded.Key, colors.ink1) {
                 onDismiss()
                 open()
             }
         }
         onRuntimes?.let { open ->
-            MenuItem("Runtimes", Icons.Rounded.Terminal, colors.ink1) {
+            WorkspaceMenuRow("Runtimes", Icons.Rounded.Terminal, colors.ink1) {
                 onDismiss()
                 open()
             }
         }
-        MenuItem("Delete", Icons.Rounded.DeleteOutline, colors.danger) {
+        WorkspaceMenuRow("Delete", Icons.Rounded.DeleteOutline, colors.danger) {
             onDismiss()
             onDelete()
         }
     }
-}
-
-@Composable
-private fun MenuItem(text: String, icon: ImageVector, color: Color, onClick: () -> Unit) {
-    DropdownMenuItem(
-        text = { Text(text, style = Pi.type.body, color = color) },
-        leadingIcon = { Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(20.dp)) },
-        onClick = onClick,
-        modifier = Modifier.width(200.dp),
-    )
 }

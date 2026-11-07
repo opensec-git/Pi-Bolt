@@ -125,21 +125,21 @@ fun FilesBar(
         }
         Box {
             IconAction(Icons.Rounded.Add, "New file or folder", onClick = { newMenu = true })
-            Menu(newMenu, { newMenu = false }) {
-                MenuRow("New file", Icons.AutoMirrored.Rounded.NoteAdd, colors.ink1) {
+            WorkspaceMenu(newMenu, { newMenu = false }) {
+                WorkspaceMenuRow("New file", Icons.AutoMirrored.Rounded.NoteAdd, colors.ink1) {
                     newMenu = false
                     onCreate(false)
                 }
-                MenuRow("New folder", Icons.Rounded.CreateNewFolder, colors.ink1) {
+                WorkspaceMenuRow("New folder", Icons.Rounded.CreateNewFolder, colors.ink1) {
                     newMenu = false
                     onCreate(true)
                 }
                 onImport?.let { import ->
-                    MenuRow("Import files…", Icons.Rounded.FileOpen, colors.ink1) {
+                    WorkspaceMenuRow("Import files…", Icons.Rounded.FileOpen, colors.ink1) {
                         newMenu = false
                         import(false)
                     }
-                    MenuRow("Import a folder…", Icons.Rounded.DriveFolderUpload, colors.ink1) {
+                    WorkspaceMenuRow("Import a folder…", Icons.Rounded.DriveFolderUpload, colors.ink1) {
                         newMenu = false
                         import(true)
                     }
@@ -148,44 +148,20 @@ fun FilesBar(
         }
         Box {
             IconAction(Icons.AutoMirrored.Rounded.Sort, "Sort and filter", onClick = { sortMenu = true })
-            Menu(sortMenu, { sortMenu = false }) {
+            WorkspaceMenu(sortMenu, { sortMenu = false }) {
                 for (s in FileSort.entries) {
-                    MenuRow("Sort by ${s.label.lowercase()}", if (s == sort) Icons.Rounded.Check else null, colors.ink1) {
+                    WorkspaceMenuRow("Sort by ${s.label.lowercase()}", if (s == sort) Icons.Rounded.Check else null, colors.ink1) {
                         sortMenu = false
                         onSort(s)
                     }
                 }
-                MenuRow("Show hidden files", if (showHidden) Icons.Rounded.Check else Icons.Rounded.Visibility, colors.ink1) {
+                WorkspaceMenuRow("Show hidden files", if (showHidden) Icons.Rounded.Check else Icons.Rounded.Visibility, colors.ink1) {
                     sortMenu = false
                     onHidden(!showHidden)
                 }
             }
         }
     }
-}
-
-@Composable
-private fun Menu(expanded: Boolean, onDismiss: () -> Unit, content: @Composable () -> Unit) {
-    val colors = Pi.colors
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss,
-        containerColor = colors.surface3,
-        shape = RoundedCornerShape(Radius.md),
-        tonalElevation = 0.dp,
-        shadowElevation = 8.dp,
-        border = BorderStroke(1.dp, colors.lineStrong),
-    ) { content() }
-}
-
-@Composable
-private fun MenuRow(text: String, icon: ImageVector?, color: Color, onClick: () -> Unit) {
-    DropdownMenuItem(
-        text = { Text(text, style = Pi.type.body, color = color) },
-        leadingIcon = { Box(Modifier.size(20.dp)) { icon?.let { Icon(it, contentDescription = null, tint = color, modifier = Modifier.size(20.dp)) } } },
-        onClick = onClick,
-        modifier = Modifier.width(220.dp).heightIn(min = 48.dp),
-    )
 }
 
 /** Long press on a file or folder: Rename, Delete, and New file / New folder in the folder shown. */

@@ -215,16 +215,12 @@ object ChangesRules {
 
 @Composable
 private fun NotARepo(ui: ChangesUi) {
-    val type = Pi.type
-    val colors = Pi.colors
-    GitCard {
-        Column(Modifier.padding(16.dp)) {
-            Text("Not a git repository", style = type.bodyStrong, color = colors.ink1)
-            Spacer(Modifier.height(4.dp))
-            Text("Start tracking this project's changes with git, or clone a repository into a new project from Home.", style = type.body, color = colors.ink2)
-            Spacer(Modifier.height(12.dp))
-            SecondaryButton(if (ui.model.busy != null) "Setting up…" else "Initialise git", onClick = { ui.model.run("Initialising") { init() } }, enabled = ui.model.busy == null, modifier = Modifier.fillMaxWidth())
-        }
+    EmptyCard(
+        Icons.AutoMirrored.Rounded.CallSplit,
+        "Not a git repository",
+        "Track this project's changes with git to review, commit and push them here.",
+    ) {
+        SecondaryButton(if (ui.model.busy != null) "Setting up…" else "Initialise git", onClick = { ui.model.run("Initialising") { init() } }, enabled = ui.model.busy == null, modifier = Modifier.fillMaxWidth())
     }
 }
 

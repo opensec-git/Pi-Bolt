@@ -611,35 +611,21 @@ private fun matchesByLine(matches: List<TextMatch>, lines: List<IntRange>): Map<
     return out
 }
 
-/** Open files as tabs: name, a dot when unsaved, and a close button; the shown one is underlined in the accent. */
+/** Open files as tabs ([WorkspaceTab]): a dot when unsaved, the name and a close button. */
 @Composable
 private fun TabStrip(tabs: EditorTabs, shown: String, onSelect: (String) -> Unit, onClose: (EditorTab) -> Unit) {
-    val colors = Pi.colors
-    val scroll = rememberScrollState()
-    Row(Modifier.fillMaxWidth().height(48.dp).horizontalScroll(scroll).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(48.dp).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         for (t in tabs.tabs) {
-            val selected = t.rel == shown
-            val dirty = t.dirty
-            Row(
-                Modifier
-                    .height(40.dp)
-                    .background(if (selected) colors.surface2 else colors.canvas, RoundedCornerShape(Radius.sm))
-                    .pressable({ onSelect(t.rel) }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "Show ${t.name}")
-                    .semantics {
-                        this.selected = selected
-                        contentDescription = t.name + if (dirty) ", unsaved" else ""
-                    }
-                    .padding(start = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (dirty) {
-                    Box(Modifier.size(7.dp).background(colors.warning, CircleShape))
-                    Spacer(Modifier.width(6.dp))
-                }
-                Text(t.name, style = Pi.type.monoSmall, color = if (selected) colors.ink1 else colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 160.dp))
-                IconAction(Icons.Rounded.Close, "Close ${t.name}", onClick = { onClose(t) }, size = 16.dp, tint = colors.ink3)
-            }
-            Spacer(Modifier.width(4.dp))
+            WorkspaceTab(
+                name = t.name,
+                selected = t.rel == shown,
+                onSelect = { onSelect(t.rel) },
+                onClose = { onClose(t) },
+                description = t.name + if (t.dirty) ", unsaved" else "",
+                closeDescription = "Close ${t.name}",
+                dirty = t.dirty,
+            )
+            Spacer(Modifier.width(6.dp))
         }
     }
 }
@@ -686,26 +672,12 @@ private class MenuEntry(val label: String, val icon: ImageVector, val onClick: (
 
 @Composable
 private fun ViewerMenu(expanded: Boolean, onDismiss: () -> Unit, items: List<MenuEntry>) {
-    val colors = Pi.colors
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss,
-        containerColor = colors.surface3,
-        shape = RoundedCornerShape(Radius.md),
-        tonalElevation = 0.dp,
-        shadowElevation = 8.dp,
-        border = BorderStroke(1.dp, colors.lineStrong),
-    ) {
+    WorkspaceMenu(expanded, onDismiss) {
         for (item in items) {
-            DropdownMenuItem(
-                text = { Text(item.label, style = Pi.type.body, color = colors.ink1) },
-                leadingIcon = { Icon(item.icon, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(20.dp)) },
-                onClick = {
-                    onDismiss()
-                    item.onClick()
-                },
-                modifier = Modifier.width(200.dp).heightIn(min = 48.dp),
-            )
+            WorkspaceMenuRow(item.label, item.icon, Pi.colors.ink1) {
+                onDismiss()
+                item.onClick()
+            }
         }
     }
 }
