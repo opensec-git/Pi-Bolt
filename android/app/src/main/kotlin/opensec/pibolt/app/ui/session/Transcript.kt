@@ -44,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.rememberUpdatedState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import opensec.pibolt.app.ui.projects.FileDoc
 import opensec.pibolt.app.ui.projects.ProjectFiles
 import opensec.pibolt.app.ui.session.features.ViewerImages
 import opensec.pibolt.protocol.rpc.ImageAttachment
@@ -228,7 +229,7 @@ fun Transcript(
                 val file = if (path.startsWith("/")) File(path) else root?.let { File(it, path) }
                 val readable = file != null && withContext(Dispatchers.IO) { file.isFile && file.canRead() }
                 currentOpen(
-                    if (readable) ProjectFiles.view(file, path) else ViewerContent(baseName(path), path, "This file is on the computer running Pi, not on this phone."),
+                    if (readable) fileView(file, path) else ViewerContent(baseName(path), path, "This file is on the computer running Pi, not on this phone."),
                 )
             }
         }
@@ -326,6 +327,17 @@ fun Transcript(
             }
         }
     }
+}
+
+/** A tool card's file as viewer text: the first page of a text file ([ProjectFiles.open]), else what it is. */
+private suspend fun fileView(file: File, path: String): ViewerContent {
+    val text = when (val doc = ProjectFiles.open(file)) {
+        is FileDoc.Text -> if (doc.complete) doc.text else doc.text + "\n\n… the first ${ProjectFiles.size(doc.next ?: doc.size)} of ${ProjectFiles.size(doc.size)}"
+        is FileDoc.Image -> "Image, ${doc.width} × ${doc.height}, ${ProjectFiles.size(doc.size)}."
+        is FileDoc.Binary -> "Binary file, ${ProjectFiles.size(doc.size)}."
+        is FileDoc.Unreadable -> doc.reason
+    }
+    return ViewerContent(file.name, path, text)
 }
 
 /** The transcript's rows, whether their keys are unique (the list needs unique keys) and the collapsed error groups. */

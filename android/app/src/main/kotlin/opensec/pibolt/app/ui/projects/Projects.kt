@@ -78,6 +78,7 @@ object LocalSessions {
         val result = withContext(Dispatchers.IO) { runCatching { engine.open(project, sessionFile, fresh) } }
         return result.map { controller ->
             store.opened(project.name)
+            sessionFile?.let { store.seen(it) }
             Live(project, controller, sessionFile).also {
                 it.firstPrompt = firstPrompt
                 _current.value = it
