@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.session
 
+import opensec.pibolt.app.ui.session.subagent.SubagentFormat
 import androidx.compose.runtime.Immutable
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonObject
@@ -102,7 +103,8 @@ fun subagentProgress(item: ToolItem): String? {
     val tools = d.int("toolUses") ?: 0
     val turns = d.int("turnCount") ?: 0
     return listOfNotNull(
-        d.str("activity")?.let(::firstLine)?.takeIf { it.isNotBlank() },
+        // The extension sends the start of the agent's reply in the same field: name the tool, not the narration.
+        d.str("activity")?.let(::firstLine)?.takeIf { it.isNotBlank() }?.let { if (SubagentFormat.isToolActivity(it)) it else "writing…" },
         tools.takeIf { it > 0 }?.let { if (it == 1) "1 tool use" else "$it tool uses" },
         turns.takeIf { it > 1 }?.let { "turn $it" },
     ).joinToString(" · ").ifBlank { null }

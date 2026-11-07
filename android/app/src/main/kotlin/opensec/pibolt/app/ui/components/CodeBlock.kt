@@ -81,6 +81,7 @@ import opensec.pibolt.app.ui.markdown.highlightedCached
 import opensec.pibolt.app.ui.markdown.rememberHighlighted
 import opensec.pibolt.app.ui.session.DiffLine
 import opensec.pibolt.app.ui.session.diffStats
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiColors
 import opensec.pibolt.app.ui.theme.PiMotion
@@ -303,7 +304,7 @@ private fun CodeHeader(
         ) { done ->
             Row(Modifier.height(40.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (!done) {
-                    QuadSpinner(QuadMode.Write, size = 12.dp, color = colors.ink2)
+                    QuadSpinner(QuadMode.Write, size = IconSize.xs, color = colors.ink2)
                     Spacer(Modifier.width(6.dp))
                     Text(
                         "${CodeFold.count(lines)} ${if (lines == 1) "line" else "lines"}",

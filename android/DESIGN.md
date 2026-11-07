@@ -122,7 +122,9 @@ Strokes: 1dp lines, 1.5dp focus ring, 2dp queue bars, 3dp diff gutter.
 
 A Canvas-drawn 3x3 grid that shows what the agent is doing. Grid spans 11 units (`u = size / 11`): cell 3u,
 gap 1u, corner radius 0.7u. Floor alpha 0.16 for outer cells, 0.34 for the centre, so the shape always reads.
-Sizes: 12dp inline, 16dp status line and top bar, 20dp list slot, 44dp connecting and empty-state hero.
+Sizes, on the icon tokens, one per place: 14dp (`IconSize.xs`) in a timeline row's 20dp slot and inline in headers,
+16dp (`sm`) in the status line and top bars, 20dp (`md`) in a card's or list's leading slot, 44dp connecting and
+empty-state hero. Subagents follow the same places (see Subagents).
 
 One shared clock per window (`withFrameNanos`, quantised to 50 ms = 20 fps), read only in the draw phase so ticks
 invalidate draw, not composition. The clock pauses when the app is not started or no spinner is attached; at most 8
@@ -581,9 +583,11 @@ under it.
 - Connection banner under the top bar: Quad Connect + "Reconnecting in 3s" countdown + Retry; slides down/up. Not
   while the session first connects: the centred loading state (Quad Connect 44dp, "Starting Pi-Bolt in x") says that
   alone, so one spinner and one sentence show at a time.
-- Top bar actions, left to right: the Quad slot (40dp), the session switcher, Search (48dp), overflow. The Quad is
-  drawn only while Pi is busy and the live status line is off screen (or the link failed); otherwise its slot is
-  blank space beside the title, never a still grid, so Search and overflow always sit together. Overflow on a computer: Session and usage, Export or share,
+- Top bar actions, left to right: the Quad slot (40dp, Quad 16dp), the session switcher, Search (48dp), overflow. The
+  Quad animates (ink1, warning while Pi asks) only while Pi is busy and the live status line is off screen; otherwise
+  it rests as one still ink3 frame (danger when the link failed), so the bar keeps its mark and nothing blinks in and
+  out. It is not a control: no press, no ripple, and TalkBack hears it only while it reports work. Search and
+  overflow always sit together. Overflow on a computer: Session and usage, Export or share,
   Disconnect, Forget computer.
 - On this phone (a project's session): the title is the project's name and the subtitle drops the folder (session
   name and context only); back reads "Project". Overflow: New session, Resume a session, Fork from a message,
@@ -723,34 +727,42 @@ Subagent session files (a `parentSession` header and that name) are not listed o
 Remote control gets the events only: progress of foreground runs, the start and end of background runs, never their
 messages. Pi has no RPC to read or steer a subagent: steering and resuming go through a prompt to Pi.
 
-- Card (surface1, radius 12, 1dp line; lineStrong while active): 32dp avatar (the type's initial in its tint on the
-  tint @ 16%, radius 30%; tints glacier `#7CC4F0` Explore, iris `#A99CFF` Plan, mint `#9ED3C6` general-purpose, peach
-  `#E5A97E` and lilac `#C9B8F0` hashed for others: never a status colour), the type (label ink1), a "background · id"
-  pill (micro, surface3) for background runs, the task (meta ink2), the run time (meta ink3 tnum, ticking once a
-  second while it runs, the final time after). Then the activity line: a 20dp-high slot under the avatar with Quad
-  Agent 12dp in the tint (still Quad Think ink3 while queued; check success, cross danger, stop ink3 after, swapped
-  with a 160 ms scale 0.7→1 in the live turn) and the activity (meta ink3, one line) that crossfades (quick, 4dp rise)
-  at most every 450 ms, so a streaming reply does not flicker. Then the metrics ("4 tools · 12.3k tokens · turn 2",
-  meta ink3 tnum). While it runs a 2dp band in the tint sweeps the top edge (1400 ms) and every line keeps one line,
-  so the card never changes height. Done, the activity gives way to the answer's first lines as one paragraph (headings end
-  with a colon, list items keep a bullet; up to 3 lines, ink2; the error in danger); a finished run counts "5 turns" and the card grows to them with the settle spring (`animateContentSize`). Tap opens the agent; press
-  scale 0.98.
+- Each agent has its own colour, Pi-Bolt Desktop's five subagent tints (`SubagentFormat.HUES`: apricot `#FEA668`,
+  rose `#FF8FB4`, orchid `#E08EE5`, violet `#B696F7`, seafoam `#5CD5C7`; each 3:1 or more on surface1 and surface2 in
+  every theme, `ContrastTest`), given by its order among the session's runs (`hueSlot`), never by its type: two
+  general-purpose agents differ. No letters or avatars.
+- State glyph (`AgentGlyph`), as on the desktop: starting (the call made, its session not running yet) a Quad Wait
+  breathing in warning; running Quad Agent in the agent's tint; queued for a slot a still ink3 Quad; then a check
+  (ink3), a cross (danger) or a dash (ink3). Colour is for the running agent and for failure only. The swap scales in
+  from 0.7 over the glyph duration in the live turn. Sizes on the icon tokens (`AgentGlyphSize`, the rest glyph one
+  step larger since a Material glyph draws inside padding): Card slot 22 / Quad 20 / glyph 22 (an agent's own
+  two-line block), Row 20 / 14 / 16 (one-line timeline rows), Bar 20 / 16 / 20 (top bars, live lines).
+- Card (surface1, radius 12, 1dp line; lineStrong while active, 14x12dp padding): the glyph, then the agent's name
+  (label ink1: the task title the model gave the call, else its prompt's first line, else the type) over one meta
+  line, the type and what it does now: "Explore · Reading src/auth.ts" (meta ink3; "background" when it is one; the
+  error in danger; done, its metrics "4 tools · 12.3k tokens · 5 turns"), and the run time at the end (meta ink3
+  tnum, ticking once a second). No narration: the extension sends the start of the agent's reply in the same field
+  as its tool line, so the card names the tool ("Reading…", with the file or command from the agent's session file
+  when there is one) and reads "Writing…" while it writes text; the reply itself is on the agent's screen. The meta
+  line crossfades (quick, 4dp rise) at most every 450 ms. The card keeps one height from start to end; while it runs
+  a 2dp band in its tint sweeps the top edge (sweep). Tap opens the agent; press scale 0.98.
 - Stack: two or more consecutive `Agent` calls (one message's parallel calls). Closed: one card with a 48dp header
-  (up to 3 avatars, 22dp, overlapping by 8dp with a 2dp ring; "3 agents running", "1 of 3 agents running", "3 agents
-  done", "3 agents · 1 failed"; the longest run time; chevron) over one 48dp line per agent (glyph, type, crossfading
-  activity or task, time; tap opens it). Open (header tap): the header, then each agent's card 8dp apart; the switch
-  resizes with the settle spring. The open state lives with the tool groups'.
+  (the group's state, still, in a Card slot so it lines up; "3 agents running", "1 of 3 agents running", "3 agents
+  done", "3 agents · 1 failed" in label ink2; the longest run time; chevron) over each agent in its two lines (56dp
+  rows, its glyph in its tint; tap opens it). Open (header tap): the header, then each agent's card 8dp apart; the
+  switch resizes with the settle spring. The open state lives with the tool groups'.
 - A finished turn folds its steps but not its agent cards: each is a unit of work of its own, and background runs
   outlive the turn.
-  A background run's end shows where the notification lands: a step line "Explore finished" + task + time, tapping
-  opens the agent.
+  A background run's end shows where the notification lands: a step line with its glyph (Row size), its name, "Explore
+  finished" (meta ink3) and its time; tapping opens the agent.
 - Detail screen (over the whole app; the session screen stays composed below, so its scroll position, draft and
   images are as they were): enters like a screen (24dp slide + fade, sheet), predictive back scales it to 0.9. Top bar:
-  back, 28dp avatar, type (subhead) and task (meta ink3), Copy answer once there is one. A 36dp strip: glyph, state,
-  run time, metrics; the model, "background" and the agent id under it (monoMeta ink3). The transcript is the main one's
+  back, the agent's glyph (Bar size, in its tint; animated only while the live line is off screen), its name (subhead)
+  over "Explore agent" (meta ink3), Copy answer once there is one. A 36dp strip: state, run time, metrics; the model,
+  "background" and the agent id under it (monoMeta ink3). The transcript is the main one's
   rows (user bubble for its prompt, thinking, tool rows and cards, prose, notices) built by `TranscriptModel` with every
   turn open by default and `Agent` calls as plain rows. Reversed list with a 32dp live line at index 0 (Quad Agent 16dp
-  in the tint, the activity in shimmer, the run time; kept while done so nothing jumps); it follows the newest row only
+  in the agent's tint, the activity in shimmer, including what it writes, the run time; kept while done so nothing jumps); it follows the newest row only
   while the reader is at the bottom, else the 40dp jump button with the unseen dot. Each agent keeps its list position
   and toggles for the app's life. Over remote control (or when its file was not saved) it shows the prompt and the
   answer with one info line saying why.
@@ -760,8 +772,8 @@ messages. Pi has no RPC to read or steer a subagent: steering and resuming go th
   call: a message would reach Pi only after it returns), so the bar says so and offers Stop (surface3 pill; a first tap
   arms "Stop turn?" in danger for 3 s, the second aborts Pi's turn, which stops the agent). A green line confirms a send
   for 3.5 s.
-- TalkBack: a card is one node ("Explore agent, Find the parser code, running, Reading 3 files…") with the click label
-  "Open agent".
+- TalkBack: a card is one node ("Find the parser code, Explore agent, running, Reading src/parser.ts") with the click
+  label "Open agent".
 
 **Settings.** `ScreenTopBar` "Settings" (a 1dp line under it once the page scrolls), then a
 search field ("Search settings") that narrows the page to matching settings: every query word must appear in the

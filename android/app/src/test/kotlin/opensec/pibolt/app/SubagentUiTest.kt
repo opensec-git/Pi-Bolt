@@ -107,17 +107,52 @@ class SubagentUiTest {
         assertEquals("9.1s", SubagentFormat.finalDuration(run("g", SubagentStatus.Done).copy(durationMs = 9100)))
         assertNull(SubagentFormat.finalDuration(run("h").copy(durationMs = 9100)))
         assertEquals("Explore finished", SubagentFormat.endedTitle(run("i", SubagentStatus.Done)))
-        assertEquals("E", SubagentFormat.initial("explore"))
         assertEquals("General-purpose", SubagentFormat.typeLabel("general-purpose"))
-        assertEquals(SubagentFormat.tintIndex("Explore"), SubagentFormat.tintIndex("explore"))
     }
 
     @Test
-    fun answerPreviewReadsAsOneParagraph() {
-        assertEquals(
-            "Build audit: All 8 groups pass. • No pins missing • Lockfile in sync",
-            SubagentFormat.answerPreview("## Build audit\n\nAll **8** groups pass.\n\n- No pins missing\n1. Lockfile in sync\n```\ncode\n```"),
-        )
+    fun cardsNameTheAgentAndItsToolNotItsNarration() {
+        // The name is the task title, else the prompt's first line, else the type.
+        assertEquals("Find the auth flow", SubagentFormat.title(run("a").copy(type = "Explore", description = "find the auth flow")))
+        assertEquals("Look at src", SubagentFormat.title(run("b").copy(type = "general-purpose", description = "", prompt = "look at **src**\nmore")))
+        assertEquals("General-purpose", SubagentFormat.title(run("c").copy(type = "general-purpose", description = "")))
+        // The extension's tool lines and the app's own pass; the start of the agent's reply does not.
+        assertTrue(SubagentFormat.isToolActivity("reading…"))
+        assertTrue(SubagentFormat.isToolActivity("running command, searching 2 patterns…"))
+        assertTrue(SubagentFormat.isToolActivity("web_search…"))
+        assertTrue(SubagentFormat.isToolActivity("reading src/auth.ts"))
+        assertTrue(!SubagentFormat.isToolActivity("Let me look at the auth flow first…"))
+        val explore = run("d").copy(type = "Explore", description = "Find the auth flow")
+        assertEquals("Explore · Reading src/auth.ts", SubagentFormat.cardMeta(explore.copy(activity = "reading src/auth.ts")))
+        assertEquals("Explore · Writing…", SubagentFormat.cardMeta(explore.copy(activity = "I found the login handler in")))
+        assertEquals("Explore · Thinking…", SubagentFormat.cardMeta(explore.copy(activity = "thinking…")))
+        assertEquals("Explore · 4 tools · 5 turns", SubagentFormat.cardMeta(explore.copy(status = SubagentStatus.Done, toolUses = 4, turns = 5)))
+        assertEquals("Explore · Failed: boom", SubagentFormat.cardMeta(explore.copy(status = SubagentStatus.Failed, error = "boom")))
+        // The session file names the file; a reply being written keeps the report.
+        assertEquals("reading src/auth.ts", SubagentFormat.liveActivity("reading…", "reading src/auth.ts"))
+        assertEquals("Now I", SubagentFormat.liveActivity("Now I", "reading src/auth.ts"))
+        assertEquals("reading…", SubagentFormat.liveActivity("reading…", "thinking…"))
+        assertEquals("Find the auth flow, Explore agent, running, Reading src/auth.ts", SubagentFormat.spoken(explore.copy(activity = "reading src/auth.ts")))
+    }
+
+    @Test
+    fun agentStatesAndColours() {
+        assertEquals(SubagentFormat.AgentState.Starting, SubagentFormat.stateOf(run("a", SubagentStatus.Queued)))
+        assertEquals(SubagentFormat.AgentState.Queued, SubagentFormat.stateOf(run("a", SubagentStatus.Queued).copy(activity = "queued — waiting for a foreground slot")))
+        assertEquals(SubagentFormat.AgentState.Running, SubagentFormat.stackState(listOf(run("a", SubagentStatus.Done), run("b"))))
+        assertEquals(SubagentFormat.AgentState.Failed, SubagentFormat.stackState(listOf(run("a", SubagentStatus.Done), run("b", SubagentStatus.Failed))))
+        assertEquals(SubagentFormat.AgentState.Done, SubagentFormat.stackState(listOf(run("a", SubagentStatus.Done))))
+        // Colours follow the order of the runs, not their type: parallel agents of one type differ.
+        val keys = listOf("k0", "k1", "k2", "k3", "k4", "k5")
+        assertEquals(listOf(0, 1, 2, 3, 4, 0), keys.map { SubagentFormat.hueSlot(it, keys) })
+        val runs = mapOf("x" to run("x").copy(type = "general-purpose"), "y" to run("y").copy(type = "general-purpose"))
+        val items = listOf(UserItem("u", "go"), agent("x"), agent("y"))
+        val stack = TranscriptModel.rows(items, liveTurn = true, expanded = emptySet(), durations = emptyMap(), md = MdCache(), subagents = runs).filterIsInstance<SubagentStackRow>().single()
+        assertEquals(listOf(0, 1), stack.slots)
+    }
+
+    @Test
+    fun sameLineAndMetrics() {
         assertTrue(SubagentFormat.sameLine("Now", "Now I search"))
         assertTrue(!SubagentFormat.sameLine("Now I search", "Running ls…"))
         assertEquals("4 tools · 5 turns", SubagentFormat.metrics(run("a", SubagentStatus.Done).copy(toolUses = 4, turns = 5)))

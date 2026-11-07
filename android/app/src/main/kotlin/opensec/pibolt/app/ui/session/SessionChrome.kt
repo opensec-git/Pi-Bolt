@@ -95,6 +95,7 @@ import opensec.pibolt.app.ui.components.StatusDot
 import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.sharedHostElement
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiColors
 import opensec.pibolt.app.ui.theme.PiMotion
@@ -115,8 +116,8 @@ fun linkColor(link: LinkState?, colors: PiColors): Color = when (link) {
  *
  * The status dot shows on this phone only when the engine is not connected (a green dot that is always on says
  * nothing); remote sessions keep it. [contextPercent] is null until a turn has reported usage. [quadVisible] false
- * hides the Quad (keeping its slot) while the live status line is on screen: one spinner at a time. Idle the slot is
- * blank. [status] is what TalkBack hears for the Quad while [busy]; idle it is silent.
+ * stills the Quad while the live status line is on screen: one spinner at a time. Idle it rests as a still grid.
+ * [status] is what TalkBack hears for the Quad while it animates; otherwise it is silent.
  */
 @Composable
 fun SessionTopBar(
@@ -188,29 +189,30 @@ fun SessionTopBar(
                 Text(subtitle, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(start = if (dot) 16.dp else 0.dp))
             }
         }
-        // The live Quad sits left of the actions, so its empty slot reads as part of the title's space and Search and
-        // More always stay side by side. It is drawn only when it says something: busy with the status line off
-        // screen (the line owns the one spinner when visible), or a failed link. Idle it is blank, not a still grid.
-        val showQuad = quadVisible && (busy || link is LinkState.Failed)
+        // The Quad sits left of the actions, so Search and More always stay side by side. It animates only while Pi
+        // is busy and the live status line (which owns the one spinner then) is off screen; otherwise it rests as a
+        // still ink3 grid, so the bar keeps its mark and nothing blinks in and out. It is not a control: no press,
+        // no ripple, and TalkBack hears it only while it reports work.
+        val live = quadVisible && busy
+        val failed = link is LinkState.Failed
         Box(
             Modifier
                 .size(40.dp)
-                .graphicsLayer { alpha = if (showQuad) 1f else 0f }
-                .clearAndSetSemantics { if (busy && showQuad && status != null) contentDescription = status },
+                .clearAndSetSemantics { if (live && status != null) contentDescription = status },
             contentAlignment = Alignment.Center,
         ) {
-            if (showQuad) {
-                QuadSpinner(
-                    mode,
-                    size = 16.dp,
-                    color = when {
-                        link is LinkState.Failed -> colors.danger
-                        mode == QuadMode.Wait -> colors.warning
-                        else -> colors.ink1
-                    },
-                    animate = spin,
-                )
-            }
+            QuadSpinner(
+                // At rest one still frame, whatever the mode, so the grid does not change shape while the line works.
+                if (live || failed) mode else QuadMode.Think,
+                size = IconSize.sm,
+                color = when {
+                    failed -> colors.danger
+                    live && mode == QuadMode.Wait -> colors.warning
+                    live -> colors.ink1
+                    else -> colors.ink3
+                },
+                animate = spin && live,
+            )
         }
         switcher()
         IconAction(Icons.Rounded.Search, "Search this session", onClick = onSearch)

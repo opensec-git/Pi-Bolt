@@ -80,6 +80,7 @@ import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.markdown.MdBlock
 import opensec.pibolt.app.ui.markdown.MdBlockView
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
@@ -226,7 +227,7 @@ fun ThinkingRowView(item: ThinkingItem, live: Boolean, expanded: Boolean, durati
         StepHeader(
             onClick = onToggle,
             slot = {
-                if (streaming) QuadSpinner(QuadMode.Think, size = 12.dp, color = colors.ink2) else Chevron(expanded)
+                if (streaming) QuadSpinner(QuadMode.Think, size = IconSize.xs, color = colors.ink2) else Chevron(expanded)
             },
         ) {
             if (streaming) ShimmerText(label, type.label) else Text(label, style = type.label, color = colors.ink3)
