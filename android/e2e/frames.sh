@@ -115,7 +115,8 @@ home_() {
 }
 open_bench() {
 	home_ || return 1
-	tap_on "text=Projects" "desc~=Projects," || return 1
+	tap_on "desc~=Projects," "text=Projects" || return 1
+	sleep 0.8
 	tap_on "text=smooth-bench" || return 1
 	sleep 1.5
 }
