@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.terminal
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -169,6 +170,7 @@ fun TerminalPane(
 }
 
 /** The tab's TerminalView. A new view (rotation, a new screen) attaches to the same session; the shell never notices. */
+@SuppressLint("ClickableViewAccessibility")
 @Composable
 private fun TerminalSurface(
     app: PiBoltApp,
@@ -187,7 +189,8 @@ private fun TerminalSurface(
     AndroidView(
         factory = { context ->
             TerminalView(context, null).apply {
-                // Drags scroll the terminal's scrollback, never a scrolling screen around it.
+                // Drags scroll the terminal's scrollback, never a scrolling screen around it. The listener only
+                // claims the gesture and returns false: TerminalView's own onTouchEvent handles taps and clicks.
                 setOnTouchListener { v, e ->
                     if (e.actionMasked == MotionEvent.ACTION_DOWN) v.parent?.requestDisallowInterceptTouchEvent(true)
                     false

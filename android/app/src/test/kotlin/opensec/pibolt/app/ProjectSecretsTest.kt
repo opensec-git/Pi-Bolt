@@ -68,6 +68,21 @@ class ProjectSecretsTest {
     }
 
     @Test
+    fun anEngineServesAnotherProjectOnlyWhenNeitherHasSecrets() = withDirs { store, projects ->
+        val secrets = ProjectSecrets(store, box)
+        val plain = File(projects, "plain").apply { mkdirs() }
+        val other = File(projects, "other").apply { mkdirs() }
+        val keyed = File(projects, "keyed").apply { mkdirs() }
+        secrets.put(keyed, "TOKEN", "t")
+        assertTrue(secrets.engineFits(null, keyed))
+        assertTrue(secrets.engineFits(plain.path, other))
+        assertTrue(secrets.engineFits(keyed.path, keyed))
+        // A spare started in a project with secrets would carry them elsewhere; one started elsewhere lacks them.
+        assertFalse(secrets.engineFits(keyed.path, plain))
+        assertFalse(secrets.engineFits(plain.path, keyed))
+    }
+
+    @Test
     fun theUserAndEnginePathsNameTheSameProject() {
         assertEquals("/data/data/in.opensec.pibolt/files/home/projects/app", ProjectSecrets.keyOf(File("/data/user/0/in.opensec.pibolt/files/home/projects/app/")))
         assertEquals("/data/data/in.opensec.pibolt/files/home/projects/app", ProjectSecrets.keyOf(File("/data/data/in.opensec.pibolt/files/home/projects/./app")))

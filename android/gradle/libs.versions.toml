@@ -19,7 +19,8 @@ benchmark = "1.5.0"
 profileinstaller = "1.4.1"
 uiautomator = "2.4.1"
 androidxTestJunit = "1.3.0"
-# termux-app release tag; the AARs are sha256-pinned in gradle/verification-metadata.xml.
+# termux-app release tag; the AARs are sha256-pinned in gradle/verification-metadata.xml. Its libtermux.so has 4 KB
+# LOAD alignment (lint Aligned16KB); on 16 KB page devices it needs a rebuild of termux.c with -z max-page-size=16384.
 termux = "v0.118.3"
 
 [libraries]

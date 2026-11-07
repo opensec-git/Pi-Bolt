@@ -5,7 +5,6 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.net.Uri
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
@@ -39,12 +38,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.net.toUri
 import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.theme.Pi
 
 /** Whether the preview may load [url]: plain http to this phone's loopback only (localhost or 127.0.0.1, any port). */
 fun previewAllowed(url: String?): Boolean {
-    val uri = runCatching { Uri.parse(url ?: return false) }.getOrNull() ?: return false
+    val uri = runCatching { (url ?: return false).toUri() }.getOrNull() ?: return false
     return uri.scheme == "http" && (uri.host == "localhost" || uri.host == "127.0.0.1")
 }
 
@@ -123,7 +123,7 @@ fun PreviewScreen(port: Int, onBack: () -> Unit) {
 
 private fun openOutside(context: Context, url: String) {
     try {
-        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        context.startActivity(Intent(Intent.ACTION_VIEW, url.toUri()).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (_: ActivityNotFoundException) {
         // No browser installed: nothing to open.
     }

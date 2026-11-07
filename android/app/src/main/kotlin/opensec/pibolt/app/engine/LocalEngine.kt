@@ -151,7 +151,8 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         // over (the live one is parked for the way back); else the live engine moves over RPC (a busy one is never stopped
         // for this: Pi ends its turn in order).
         val taken = (if (live == null || live.isIdle) idle.take(want, exactOnly = live != null) else null)?.let { t ->
-            if (secretsFit(t.engine.engineCwd, dir)) return@let t
+            // Secrets are in an engine's environment from its start: one from another project is not moved here.
+            if (SecretStore.get(app).engineFits(t.engine.engineCwd, dir)) return@let t
             forget(t.engine)
             t.engine.close()
             null
@@ -414,13 +415,6 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
             // The project's secrets as variables (never in the model's messages).
             env.putAll(SecretEnv.inject(wanted, SecretStore.get(app).environment(project)))
         }.start()
-    }
-
-    /** An engine started in [from] has that project's secrets in its environment: it serves [to] only when they agree. */
-    private fun secretsFit(from: String?, to: File): Boolean {
-        if (from == null || from == to.path) return true
-        val secrets = SecretStore.get(app)
-        return !secrets.hasAny(File(from)) && !secrets.hasAny(to)
     }
 
     /**

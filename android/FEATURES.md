@@ -15,10 +15,10 @@ rpc-extension-ui.md, remote-control.md) and src/modes/interactive.
 
 | | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| done | 39 | 46 | 29 | 114 |
+| done | 39 | 49 | 29 | 117 |
 | partial | 0 | 1 | 4 | 5 |
 | missing | 0 | 1 | 6 | 7 |
-| **Total** | 39 | 48 | 39 | 126 |
+| **Total** | 39 | 51 | 39 | 129 |
 
 Not counted: 12 `n/a` rows (terminal-only features). Before this branch the same rows stood at 53 done, 15 partial and
 55 missing: it moved 37 rows (25 missing to done, 11 partial to done, 1 missing to partial) and closed every P0 gap.
@@ -229,6 +229,9 @@ Tree navigation, labels and the tool list go through a small helper extension th
 | Keep running in the background | — | done: foreground service while a turn runs | device | P0 |
 | Projects (create, clone, rename, pin, delete) | — | done | device | P0 |
 | Browse project files | — | done: Files tab and viewer | device | P1 |
+| Interactive terminal | `!` runs one command | done: bash on a pty in the project (engine environment, secrets), tabs, full screen, extra keys, copy and paste, font size, scrollback; keeps running in the background | device | P1 |
+| Dev-server preview | — | done: "Preview: localhost:N" chip in the terminal and the session, in-app browser limited to localhost | device | P1 |
+| Project secrets (.env) | — | done: Keystore-encrypted, masked, injected into the project's terminals and engines (not the model's messages), optional .env | device | P1 |
 | TalkBack labels and 48 dp targets | — | done for the new controls | both | P0 |
 
 ## What remains

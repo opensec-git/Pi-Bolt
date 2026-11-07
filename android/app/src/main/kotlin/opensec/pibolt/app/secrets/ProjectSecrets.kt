@@ -66,6 +66,12 @@ class ProjectSecrets(private val dir: File, private val box: SecretBox) {
     fun environment(project: File): Map<String, String> =
         if (!hasAny(project)) emptyMap() else runCatching { read(project) }.getOrDefault(emptyList()).associate { it.name to it.value }
 
+    /**
+     * Whether an engine started in [from] may serve a session in [to]: its environment holds [from]'s secrets from
+     * its start, so only when it is the same project or neither project has any.
+     */
+    fun engineFits(from: String?, to: File): Boolean = from == null || keyOf(File(from)) == keyOf(to) || (!hasAny(File(from)) && !hasAny(to))
+
     private fun fileFor(project: File) = File(dir, sha256(keyOf(project)) + ".bin")
 
     companion object {
@@ -78,7 +84,11 @@ class ProjectSecrets(private val dir: File, private val box: SecretBox) {
             return if (path.startsWith(USER0)) DATA + path.removePrefix(USER0) else path
         }
 
+        // The two spellings of user 0's data directory, as in EnginePaths.
+        @Suppress("SdCardPath")
         private const val USER0 = "/data/user/0/"
+
+        @Suppress("SdCardPath")
         private const val DATA = "/data/data/"
 
         private fun sha256(text: String): String =
