@@ -31,7 +31,10 @@ object BackgroundSetup {
         /** The user restricted the app's background use (Settings, Battery): foreground services may not start. */
         val restricted: Boolean,
         val notifications: Boolean,
+        /** The vendor's switches still to check, without [battery]. */
         val steps: List<OemSetup.Step>,
+        /** The vendor's screen that stands in for Android's battery optimization request ([OemSetup.batteryStep]). */
+        val battery: OemSetup.Step? = null,
     ) {
         val ready: Boolean get() = unrestricted && !restricted
     }
@@ -40,13 +43,30 @@ object BackgroundSetup {
         val pkg = context.packageName
         val power = context.getSystemService(PowerManager::class.java)
         val activity = context.getSystemService(ActivityManager::class.java)
+        val steps = OemSetup.steps(OemSetup.vendor(Build.MANUFACTURER.orEmpty(), Build.BRAND.orEmpty()), pkg, label(context))
+        val battery = if (steps.isEmpty()) null else OemSetup.batteryStep(steps, handlers(context, askBattery(context)))
         return State(
             unrestricted = runCatching { power.isIgnoringBatteryOptimizations(pkg) }.getOrDefault(false),
             restricted = Build.VERSION.SDK_INT >= 28 && runCatching { activity.isBackgroundRestricted }.getOrDefault(false),
             notifications = NotificationManagerCompat.from(context).areNotificationsEnabled(),
-            steps = OemSetup.steps(OemSetup.vendor(Build.MANUFACTURER.orEmpty(), Build.BRAND.orEmpty()), pkg, label(context)),
+            steps = steps - setOfNotNull(battery),
+            battery = battery,
         )
     }
+
+    /** Android's battery optimization request for this app (see [openBattery] on why a sideloaded APK may ask). */
+    @SuppressLint("BatteryLife")
+    private fun askBattery(context: Context) = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, ("package:" + context.packageName).toUri())
+
+    /** The (package, class) of every activity that handles [intent]; their packages must be in the manifest's <queries>. */
+    private fun handlers(context: Context, intent: Intent): List<Pair<String, String>> = runCatching {
+        if (Build.VERSION.SDK_INT >= 33) {
+            context.packageManager.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0))
+        } else {
+            @Suppress("DEPRECATION")
+            context.packageManager.queryIntentActivities(intent, 0)
+        }
+    }.getOrDefault(emptyList()).mapNotNull { it.activityInfo?.let { a -> a.packageName to a.name } }
 
     private fun label(context: Context): String = runCatching { context.applicationInfo.loadLabel(context.packageManager).toString() }.getOrDefault("Pi-Bolt")
 
@@ -106,12 +126,14 @@ object BackgroundSetup {
     /**
      * Asks Android to stop optimizing the app's battery use (its system dialog), or, once exempt, opens the list where
      * it can be undone. A sideloaded APK may ask directly (Play policy limits this to some app kinds; it is not on Play).
+     * Where the vendor answers the request with its own screen ([State.battery], MIUI's per-app battery saver), that
+     * screen opens directly, either way: on MIUI the request and the list both show a "Complete action using" chooser.
      */
     @SuppressLint("BatteryLife")
-    fun openBattery(context: Context, unrestricted: Boolean) {
-        val ask = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, ("package:" + context.packageName).toUri())
+    fun openBattery(context: Context, state: State) {
+        if (state.battery != null) return open(context, state.battery)
         val list = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-        val first = if (unrestricted) list else ask
+        val first = if (state.unrestricted) list else askBattery(context)
         if (!start(context, first) && !start(context, list)) openAppDetails(context)
     }
 

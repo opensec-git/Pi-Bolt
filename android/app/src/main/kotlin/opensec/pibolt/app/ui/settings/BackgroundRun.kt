@@ -92,10 +92,14 @@ private fun BackgroundRunSheet(onDismiss: () -> Unit, prompt: Boolean = false) {
         Spacer(Modifier.height(4.dp))
         SetupRow(
             "Battery optimization",
-            if (state.unrestricted) "Off" else "On · Android may pause Pi",
+            when {
+                state.unrestricted -> "Off"
+                state.battery != null -> "On · " + state.battery.hint
+                else -> "On · Android may pause Pi"
+            },
             if (state.unrestricted) colors.success else colors.warning,
             Icons.Rounded.BatteryFull,
-        ) { BackgroundSetup.openBattery(context, state.unrestricted) }
+        ) { BackgroundSetup.openBattery(context, state) }
         if (state.restricted) {
             SetupRow("Background use", "Restricted · Allow it under Battery", colors.danger, Icons.Rounded.Block) { BackgroundSetup.openAppDetails(context) }
         }
