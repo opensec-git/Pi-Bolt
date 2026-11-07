@@ -647,21 +647,45 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
   - errors and notices: a hairline, not a filled slab (the desktop's): radius 12, 1dp outline in danger / warning @
     32%, a 20dp glyph in the kind colour, the title bodyStrong ink1, text buttons.
 - Todo panel above the queue strip (see Todo panel below).
-- Queue strip above the composer: 44dp rows with a 2dp bar (warning = steer, ink4 = follow-up), swipe to remove.
-- Composer: surface1, radius 18, 1dp lineStrong (focus line when focused), 16sp text, 1–6 lines; bar: attach (+,
-  48dp; ink4 and a "<model> can't read images" snackbar when the model's `input` lacks "image"), one run-settings chip
-  ("Sonnet 4.5 · High": the model maker's mark 14dp ink1 6dp before it (see Logos), the model in label ink2, middle-truncated past 180dp, then " · High" in label ink3; the level is
-  left out when thinking is off or the model does not reason; TalkBack "Model: Sonnet 4.5, thinking high"), send (40dp
-  accent circle). The chip opens the model sheet, whose "Thinking" row (36dp level pills, radius full, the current one
-  accent 1.5dp on the selected fill, the level's meaning under it in meta ink3) sets the level without closing it. Attached images (Photo Picker, images only, at most 4) sit in a tray above the
-  text: 56dp thumbnails, radius 8, 1dp line, a Quad Write while each encodes, a 20dp ✕ (scrim, lineStrong ring, 48dp
-  touch) at the top-end corner. Encoding runs off the main thread: long edge at most 2000 px, JPEG 85 (PNG only when
-  transparent and under 1.5 MB), refused over Pi's 4.5 MiB base64 limit. Send works with images and no text. While the agent works: send becomes Stop (surface3 circle, rounded square
-  glyph) when the field is empty, and a "Steer | Follow-up" segmented control appears while typing. The palette and
-  `@` mentions open above the field (see Command palette below). A thumbnail in the tray opens the image viewer. The
-  run-settings chip cycles the model on long press (click label "Next model", a tick and a snackbar naming it);
-  Shift+Tab cycles the thinking level. IME insets animate with the keyboard. The draft is kept per session (computer or
-  project, and Pi session) across restarts.
+- Queue strip above the composer: 44dp rows (48dp with the remove button) with a 2dp bar (warning = steer, ink4 =
+  follow-up), the label on one line at least 62dp wide, swipe to remove.
+- Composer (after the desktop composer and assistant-ui): one card, surface1, radius lg, a 1dp lineStrong edge that
+  becomes the focus line; body text (15/22) in ink1, its placeholder in the same style in ink3 (one line, ellipsized),
+  accent cursor and selection. As on the desktop the bar is always there, whatever the draft (empty, one line or
+  more), so the model stays in view; the field keeps one place in the composition in both forms, so switching never
+  drops focus or the keyboard:
+  - Field on top (16dp sides, 14dp top, 4dp bottom, grows to 6 lines, 4 in a short window, then scrolls) and the bar:
+    + as a ghost button on the left, the run-settings chip, then the mic (a ghost) just before Stop and Send on the
+    right.
+  - Under 360dp of room above the keyboard (landscape) one row: +, the field (at most 3 lines), the mic, the Steer
+    chip while a steer is typed, Stop, Send. The field's top and bottom padding is (48dp − line) / 2, so one line is
+    centred on the buttons and the last of several stays on that centre (also at font scale 1.3). In a window under
+    420dp wide the + steps aside while a steer is typed (never the mic, which may be listening).
+  Geometry (`ComposerLayout`): every button is a 48dp target on one centre line. Send, Stop and the listening mic are
+  one 32dp disc (the desktop's 30px, assistant-ui's 32px); the button row sits 2dp inside the card, so the send disc
+  is 10dp from the end and the bottom edge alike (it was 10dp and 4dp). + and the mic at rest: a 20dp ink3 glyph, no
+  fill (ghosts, 40% when disabled). Send: the accent circle (white in the default theme) with a 20dp onAccent arrow
+  nudged 0.5dp down (its head carries most of the ink); disabled, the same circle at 18%. Stop: a surface3 disc with
+  a 1dp lineStrong ring and a 10dp ink1 square (the rounded Stop glyph), in Send's slot when the field is empty and
+  beside it while a steer is typed; the same disc in both places. The mode swap crossfades centred in the disc.
+  The run-settings chip ("Sonnet 4.5 · High": the model maker's mark 14dp ink1 6dp before it (see Logos), the model in label ink2, middle-truncated past 180dp, then " · High" in
+  label ink3; the level is left out when thinking is off or the model does not reason; TalkBack "Model: Sonnet 4.5,
+  thinking high") opens the model sheet, whose "Thinking" row (36dp level pills, radius full, the current one accent
+  1.5dp on the selected fill, the level's meaning under it in meta ink3) sets the level without closing it; long press
+  cycles the model (click label "Next model", a tick and a snackbar naming it); Shift+Tab cycles the thinking level.
+  While a steer is typed the "Steer | Follow-up" chip takes the run-settings chip's slot (at 360dp the model chip had
+  about 30dp left beside Stop and Send; the top bar's subtitle still names the model).
+  The + opens the attach sheet (Photos, Mention a file, Commands); when the model's `input` lacks "image" its Photos
+  row says so and picking one shows a "<model> can't read images" snackbar. Attached images (Photo Picker, images
+  only, at most 4) sit in a tray above the text: 56dp thumbnails, radius 8, 1dp line, a Quad Write while each encodes
+  ("Image 2, preparing" to TalkBack; "Image 2 of 3" once ready), a 20dp ✕ (scrim, lineStrong ring) centred 4dp inside
+  each thumbnail's top-end corner, its 48dp target centred on it ("Remove image 2"), so it covers only the corner
+  quarter of the thumbnail (it covered half, and taps meant to open an image removed it); 76dp per item. Encoding
+  runs off the main thread: long edge at most 2000 px, JPEG 85 (PNG only when transparent and under 1.5 MB), refused
+  over Pi's 4.5 MiB base64 limit. Send works with images and no text. A thumbnail opens the image viewer.
+  While the agent works a 1dp accent band (40%, inset 16dp) sweeps the card's top edge. The palette and `@` mentions
+  open above the card (see Command palette below). IME insets animate with the keyboard. The draft is kept per
+  session (computer or project, and Pi session) across restarts.
 - Empty session: the mark, "New session" and the folder tag, then "Commands" (the host's slash commands, mono name
   + description in meta ink3, the first 6 then "Show all N commands"; tap puts "/name " in the composer and focuses
   it) and "Recent" (the last 5 distinct prompts this phone sent to this computer; tap fills the composer). 48dp rows,
@@ -693,8 +717,9 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
   does not answer: an explicit Cancel does; countdown chip when the dialog has a timeout; haptic on appear).
 - Snackbars for notify: surface3, radius 12, line, above the composer, kind-coloured icon.
 
-**Command palette.** Typing `/` opens a panel above the composer (surface2, radius 12, 1dp line, at most 264dp,
-scrolls): 48dp rows with the command in mono small ink1, its argument hint in mono meta ink3, the description in meta
+**Command palette.** Typing `/` opens a panel above the composer (surface2, radius 12, 1dp line, at most 264dp and
+never more than the room between the top bar and the composer above the keyboard, so it cannot push the composer
+under the keyboard in landscape; scrolls): 48dp rows with the command in mono small ink1, its argument hint in mono meta ink3, the description in meta
 ink3 under it and a source badge at the end (micro, surface3, radius 4: `app`, `extension`, `prompt`, `skill`).
 Matching is fuzzy (prefix, then word starts, then scattered letters), by name and then by description; a space closes
 the panel and a usage line takes its place (`/compact [instructions]`, mono meta ink3). The app's own commands are
@@ -710,7 +735,10 @@ runs it at once; others fill `/name ` and wait. Picks tick (haptic).
   quiet line above the field says which. The run shows at once as a Run step (its output streams in) and stays
   visible after the answer instead of folding with the agent's steps.
 - Hardware keyboards: Ctrl+Enter sends, Esc stops a run (empty field), Ctrl+P next model, Shift+Tab next thinking
-  level. Enter adds a line, as Android keyboards expect.
+  level. Enter adds a line, as Android keyboards expect. While the panel is open Up / Down move a highlight (the
+  selected overlay, kept in view) instead of walking the prompt history, Tab picks the highlighted row (the first
+  before any arrow), Enter picks once an arrow chose a row (a soft keyboard's Enter is a key event too, so before that
+  it still adds a line), and Esc closes the panel until the text changes. The panel shrinks away with its last rows.
 
 **Review changes.** A full screen over the session, like the viewer (sheet motion, predictive back): Close, "Changes"
 and "3 files · +40 −12" (meta ink3, tnum), a 1dp line. Then the prompt (body ink2, three lines) and, after an undo, a
@@ -767,8 +795,9 @@ read the session tree" (bodyStrong ink1), Pi's message (meta ink3, four lines) a
 Markdown, and on this phone Share session file (the JSONL) and Share as HTML (`export_html`). Files are written to
 `cache/exports` and shared through a FileProvider.
 
-**Dictation.** A 48dp mic beside Send: MicNone ink2 on a 34dp surface1 disc; listening is an accent disc with an
-onAccent Mic (static, no pulse) and TalkBack's state "Listening". The first tap explains the microphone in a sheet
+**Dictation.** A 48dp mic just before Send, as on the desktop: a 20dp MicNone ink3 ghost; listening is the composer's
+32dp accent disc with an onAccent Mic (static, no pulse), on Send's centre line, and TalkBack's state "Listening". It
+keeps its state when the composer switches to the landscape row and back (movable content). The first tap explains the microphone in a sheet
 ("Continue"), then Android asks; partial words appear in the draft as they are heard.
 
 **Image viewer.** A tap on an image in a user message or the composer tray opens it full screen on black: swipe

@@ -33,18 +33,21 @@ import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
 import androidx.core.content.ContextCompat
 import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.session.ComposerLayout
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 
 /**
  * The composer's mic: tap to dictate, tap again (or stop talking) to finish. Speech goes through Android's
  * SpeechRecognizer, on the device when the phone has an on-device recogniser (Android 12+), else the default service
  * with EXTRA_PREFER_OFFLINE. Partial results appear in the draft as they come ([VoiceDraft]); the final result replaces
- * them. RECORD_AUDIO is asked for on the first tap only, after a sheet that says why. Listening shows as an accent disc
- * (no animation) and TalkBack hears "Listening".
+ * them. RECORD_AUDIO is asked for on the first tap only, after a sheet that says why. At rest it is a ghost button (an
+ * ink3 glyph, no fill) just before Send, as on the desktop; listening is the composer's 32dp disc in accent (no animation), the same diameter and
+ * centre line as Send ([ComposerLayout]), and TalkBack hears "Listening".
  */
 @Composable
 fun VoiceButton(draft: String, onDraft: (String) -> Unit, enabled: Boolean, onMessage: (String) -> Unit, modifier: Modifier = Modifier) {
@@ -77,7 +80,7 @@ fun VoiceButton(draft: String, onDraft: (String) -> Unit, enabled: Boolean, onMe
     val description = if (listening) "Stop dictation" else "Dictate"
     Box(
         modifier
-            .size(48.dp)
+            .size(ComposerLayout.TARGET)
             .pressable(
                 onClick = {
                     when {
@@ -99,7 +102,7 @@ fun VoiceButton(draft: String, onDraft: (String) -> Unit, enabled: Boolean, onMe
         contentAlignment = Alignment.Center,
     ) {
         Box(
-            Modifier.size(34.dp).background(if (listening) colors.accent else colors.surface1, CircleShape),
+            Modifier.size(ComposerLayout.DISC).background(if (listening) colors.accent else Color.Transparent, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
             Icon(
@@ -107,10 +110,10 @@ fun VoiceButton(draft: String, onDraft: (String) -> Unit, enabled: Boolean, onMe
                 contentDescription = description,
                 tint = when {
                     listening -> colors.onAccent
-                    enabled -> colors.ink2
-                    else -> colors.ink4
+                    enabled -> colors.ink3
+                    else -> colors.ink3.copy(alpha = 0.4f)
                 },
-                modifier = Modifier.size(22.dp),
+                modifier = Modifier.size(IconSize.md),
             )
         }
     }

@@ -67,7 +67,6 @@ import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.theme.Radius
-import opensec.pibolt.app.ui.theme.Space
 
 /**
  * Press feedback without ripple: an ink overlay fades in over [PiMotion.TAP] and the element scales to [pressedScale].

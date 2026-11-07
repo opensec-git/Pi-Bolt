@@ -647,10 +647,12 @@ fun QueueStrip(queue: QueueState, onEdit: () -> Unit) {
 private fun QueueRow(steer: Boolean, text: String, modifier: Modifier, onRemove: (() -> Unit)?) {
     val colors = Pi.colors
     val type = Pi.type
-    Row(modifier.fillMaxWidth().height(44.dp).padding(start = 14.dp, end = if (onRemove != null) 0.dp else 14.dp), verticalAlignment = Alignment.CenterVertically) {
+    // 44dp, 48dp with the remove button so its target is whole. The label keeps one line at font scale 1.3 (a fixed
+    // 62dp wrapped "Follow-up").
+    Row(modifier.fillMaxWidth().heightIn(min = if (onRemove != null) 48.dp else 44.dp).padding(start = 14.dp, end = if (onRemove != null) 0.dp else 14.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(2.dp).height(22.dp).background(if (steer) colors.warning else colors.ink4, RoundedCornerShape(1.dp)))
         Spacer(Modifier.width(12.dp))
-        Text(if (steer) "Steer" else "Follow-up", style = type.micro, color = if (steer) colors.warning else colors.ink3, modifier = Modifier.width(62.dp))
+        Text(if (steer) "Steer" else "Follow-up", style = type.micro, color = if (steer) colors.warning else colors.ink3, maxLines = 1, softWrap = false, modifier = Modifier.widthIn(min = 62.dp).padding(end = 4.dp))
         Text(text.replace('\n', ' '), style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
         if (onRemove != null) IconAction(Icons.Rounded.Close, "Remove from queue and edit", onClick = onRemove, size = 18.dp, tint = colors.ink3)
     }
