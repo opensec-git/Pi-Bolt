@@ -63,6 +63,7 @@ import opensec.pibolt.app.git.github.GitHubRemote
 import opensec.pibolt.app.git.github.GitHubState
 import opensec.pibolt.app.engine.EngineStatus
 import opensec.pibolt.app.ui.components.ConfirmSheet
+import opensec.pibolt.app.ui.components.ErrorState
 import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.LoadingRow
 import opensec.pibolt.app.ui.components.PiTextField
@@ -177,6 +178,13 @@ fun rememberChangesUi(app: PiBoltApp, dir: File, store: ProjectStore, snackbar: 
 fun LazyListScope.changesItems(ui: ChangesUi) {
     val model = ui.model
     val repo = model.isRepo
+    val failed = model.failed
+    if (failed != null && model.status == null) {
+        item(key = "git-failed", contentType = "git-note") {
+            ErrorState("Could not read the changes", Modifier.padding(horizontal = Space.page, vertical = Space.sm), message = failed, onRetry = model::refresh)
+        }
+        return
+    }
     if (repo == null) {
         item(key = "git-loading", contentType = "loading") { LoadingRow("Loading changes…") }
         return
@@ -193,24 +201,24 @@ fun LazyListScope.changesItems(ui: ChangesUi) {
     item(key = "git-branch", contentType = "git-card") { BranchHeader(ui) }
     val staged = status.staged
     val unstaged = status.unstaged
-    if (ChangesRules.showCommit(staged.size, ui.message)) item(key = "git-commit", contentType = "git-card") { CommitBox(ui, staged.size) }
+    if (!model.readOnly && ChangesRules.showCommit(staged.size, ui.message)) item(key = "git-commit", contentType = "git-card") { CommitBox(ui, staged.size) }
     if (status.conflicts.isNotEmpty()) {
         item(key = "git-h-conflicts", contentType = "git-head") { InsetSectionHead("Conflicts", count = status.conflicts.size) }
         itemsIndexed(status.conflicts, key = { _, it -> "gc:" + it.path }, contentType = { _, _ -> "git-file" }) { i, e -> FileRow(ui, e, staged = false, divider = i < status.conflicts.lastIndex) }
     }
     if (staged.isNotEmpty()) {
         item(key = "git-h-staged", contentType = "git-head") {
-            InsetSectionHead("Staged", count = staged.size, action = {
+            InsetSectionHead("Staged", count = staged.size, action = if (model.readOnly) null else ({
                 TextAction("Unstage all", onClick = { model.run("Unstaging") { unstage(staged.map { it.path }, status.branch.initial) } }, modifier = Modifier.heightIn(min = 48.dp), color = Pi.colors.ink2, enabled = model.busy == null)
-            })
+            }))
         }
         itemsIndexed(staged, key = { _, it -> "gs:" + it.path }, contentType = { _, _ -> "git-file" }) { i, e -> FileRow(ui, e, staged = true, divider = i < staged.lastIndex) }
     }
     if (unstaged.isNotEmpty()) {
         item(key = "git-h-changes", contentType = "git-head") {
-            InsetSectionHead("Changes", count = unstaged.size, action = {
+            InsetSectionHead("Changes", count = unstaged.size, action = if (model.readOnly) null else ({
                 TextAction("Stage all", onClick = { model.run("Staging") { stage(unstaged.map { it.path }) } }, modifier = Modifier.heightIn(min = 48.dp), color = Pi.colors.ink2, enabled = model.busy == null)
-            })
+            }))
         }
         itemsIndexed(unstaged, key = { _, it -> "gu:" + it.path }, contentType = { _, _ -> "git-file" }) { i, e -> FileRow(ui, e, staged = false, divider = i < unstaged.lastIndex) }
     }
@@ -242,6 +250,10 @@ object ChangesRules {
 
 @Composable
 private fun NotARepo(ui: ChangesUi) {
+    if (ui.model.readOnly) {
+        EmptyCard(Icons.AutoMirrored.Rounded.CallSplit, "Not a git repository", "The session's folder on the computer has no git history")
+        return
+    }
     EmptyCard(Icons.AutoMirrored.Rounded.CallSplit, "Not a git repository") {
         SecondaryButton(if (ui.model.busy != null) "Setting up…" else "Initialise git", onClick = { ui.model.run("Initialising") { init() } }, enabled = ui.model.busy == null, modifier = Modifier.fillMaxWidth())
     }
@@ -269,7 +281,7 @@ private fun BranchHeader(ui: ChangesUi) {
                 .fillMaxWidth()
                 .padding(horizontal = Space.sm)
                 .heightIn(min = 64.dp)
-                .pressable({ ui.sheet = GitSheet.Branches }, shape = RoundedCornerShape(Radius.md), pressedScale = 1f, label = "Change branch")
+                .then(if (model.readOnly) Modifier else Modifier.pressable({ ui.sheet = GitSheet.Branches }, shape = RoundedCornerShape(Radius.md), pressedScale = 1f, label = "Change branch"))
                 .padding(horizontal = Space.page - Space.sm, vertical = Space.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -278,10 +290,12 @@ private fun BranchHeader(ui: ChangesUi) {
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(b.head ?: "Detached at ${b.oid?.take(7).orEmpty()}", style = type.rowTitle, color = colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis, modifier = Modifier.weight(1f, fill = false))
-                    Spacer(Modifier.width(Space.xs))
-                    Icon(Icons.Rounded.UnfoldMore, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(IconSize.sm))
+                    if (!model.readOnly) {
+                        Spacer(Modifier.width(Space.xs))
+                        Icon(Icons.Rounded.UnfoldMore, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(IconSize.sm))
+                    }
                 }
-                Text(ChangesRules.tracking(b.upstream, model.remote != null, b.ahead, b.behind), style = type.rowMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(ChangesRules.tracking(b.upstream, model.remote != null || model.readOnly, b.ahead, b.behind), style = type.rowMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             if (total.added > 0 || total.removed > 0) {
                 Spacer(Modifier.width(Space.sm))
@@ -303,15 +317,18 @@ private fun BranchHeader(ui: ChangesUi) {
             horizontalArrangement = Arrangement.spacedBy(Space.sm),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            GlassChip("Pull", onClick = ui::pull, icon = Icons.Rounded.ArrowDownward, enabled = busy == null && hasRemote && b.upstream != null)
-            GlassChip("Push", onClick = ui::push, icon = Icons.Rounded.ArrowUpward, enabled = busy == null && hasRemote && !b.detached && !b.initial)
+            if (!model.readOnly) {
+                GlassChip("Pull", onClick = ui::pull, icon = Icons.Rounded.ArrowDownward, enabled = busy == null && hasRemote && b.upstream != null)
+                GlassChip("Push", onClick = ui::push, icon = Icons.Rounded.ArrowUpward, enabled = busy == null && hasRemote && !b.detached && !b.initial)
+            }
             val onGitHub = model.remote?.let { GitHubRemote.parse(it) } != null
-            if (onGitHub && !b.detached && !b.initial) {
+            if (!model.readOnly && onGitHub && !b.detached && !b.initial) {
                 GlassChip("Pull request", onClick = { ui.sheet = GitSheet.PullRequest }, icon = Icons.AutoMirrored.Rounded.CallMerge, enabled = busy == null && github is GitHubState.SignedIn)
             }
             GlassChip("History", onClick = { ui.overlay = GitOverlay.History }, icon = Icons.Rounded.History)
         }
         val hint = when {
+            model.readOnly -> null
             !hasRemote -> "No remote. Ask Pi to add one."
             github !is GitHubState.SignedIn && model.remote?.let { GitHubRemote.parse(it) } != null -> "Sign in to GitHub in Settings to push and open pull requests."
             else -> null
@@ -335,7 +352,7 @@ private fun FileRow(ui: ChangesUi, entry: StatusEntry, staged: Boolean, divider:
     InsetRow(
         title = name,
         onClick = { ui.overlay = GitOverlay.Diff(entry.path, staged) },
-        onLongClick = if (!entry.conflicted) ({ ui.sheet = GitSheet.Discard(entry, staged) }) else null,
+        onLongClick = if (!entry.conflicted && !model.readOnly) ({ ui.sheet = GitSheet.Discard(entry, staged) }) else null,
         label = "Show the diff of ${entry.path}",
         meta = if (entry.origPath != null && staged) "from ${entry.origPath}" else folder.ifEmpty { "/" },
         leading = { ChangeBadge(change) },
@@ -343,6 +360,7 @@ private fun FileRow(ui: ChangesUi, entry: StatusEntry, staged: Boolean, divider:
         trailing = {
             if (counts != null) LineCounts(counts.added, counts.removed, Modifier.padding(end = Space.xs))
             when {
+                model.readOnly -> Unit
                 entry.conflicted -> IconAction(Icons.Rounded.Add, "Mark ${entry.path} resolved", onClick = { model.run("Staging") { stage(listOf(entry.path)) } }, enabled = model.busy == null)
                 staged -> IconAction(Icons.Rounded.Remove, "Unstage ${entry.path}", onClick = { model.run("Unstaging") { unstage(listOf(entry.path), initial) } }, enabled = model.busy == null)
                 else -> IconAction(Icons.Rounded.Add, "Stage ${entry.path}", onClick = { model.run("Staging") { stage(listOf(entry.path)) } }, enabled = model.busy == null)

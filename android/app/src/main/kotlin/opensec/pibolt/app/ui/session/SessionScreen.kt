@@ -147,6 +147,10 @@ import opensec.pibolt.app.ui.projects.editor.EditorTabs
 import opensec.pibolt.app.ui.projects.editor.viewerPlace
 import opensec.pibolt.app.ui.session.voice.VoiceRationale
 import opensec.pibolt.app.ui.session.voice.rememberVoiceInput
+import opensec.pibolt.app.ui.session.remote.RemoteChangesPill
+import opensec.pibolt.app.ui.session.remote.RemoteReviewOverlays
+import opensec.pibolt.app.ui.session.remote.RemoteView
+import opensec.pibolt.app.ui.session.remote.rememberRemoteReview
 import opensec.pibolt.app.ui.session.review.SessionChangesPill
 import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
@@ -321,6 +325,8 @@ internal fun SessionContent(
     var sheet by remember { mutableStateOf(Sheet.None) }
     var remoteSessions by remember { mutableStateOf(false) }
     val service by remember { derivedStateOf { state.value.host?.service == true } }
+    // The computer's working tree, read-only (`host.review`): Changes and Files in More, the "+N −M" pill.
+    val remoteReview = rememberRemoteReview(controller, state)
     val f2 = rememberFeatures2()
     var viewer by remember { mutableStateOf<ViewerContent?>(null) }
     // A file on this phone tapped in a tool card opens in the full file viewer (tabs kept while the screen lives).
@@ -1003,6 +1009,8 @@ internal fun SessionContent(
                 onFork = ::openFork,
                 onClone = controller::cloneSession,
                 onProjects = { remoteSessions = true }.takeIf { local == null && service },
+                onChanges = remoteReview?.let { r -> { r.view = RemoteView.Changes } },
+                onFiles = remoteReview?.let { r -> { r.view = RemoteView.Files } },
                 contextPercent = contextPct,
                 // One spinner at a time: the top bar's Quad steps aside while the live status line is on screen.
                 quadVisible = !(status.value.visible && statusOnScreen),
@@ -1135,7 +1143,7 @@ internal fun SessionContent(
                         onAttach = { sheet = Sheet.Attach },
                         onRemoveImage = { id -> images.removeAll { it.id == id } },
                         voice = voice,
-                        changes = if (isLocal) ({ SessionChangesPill(review) }) else null,
+                        changes = if (isLocal) ({ SessionChangesPill(review) }) else if (remoteReview != null) ({ RemoteChangesPill(remoteReview) }) else null,
                         focusRequester = focus,
                         // A user `!` command started while Pi is idle stops through abort_bash; the agent through abort.
                         stoppable = running || shellRuns > 0,
@@ -1176,6 +1184,9 @@ internal fun SessionContent(
             content.value?.let { Viewer(it, onClose = { viewer = null }) }
         }
         TurnReviewOverlay(review)
+        remoteReview?.let { r ->
+            RemoteReviewOverlays(app, r, cwd.orEmpty(), running, onAsk = { draft = AskPi.appendTo(draft, it).first })
+        }
         AnimatedVisibility(
             visible = openedFile != null,
             enter = fadeIn(PiMotion.enter(PiMotion.SHEET)) + slideInVertically(PiMotion.enter(PiMotion.SHEET)) { it / 10 },

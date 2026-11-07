@@ -239,6 +239,7 @@ before a turn with a conversation fork, and redo of any restore. On this phone o
 | Pair with a computer (QR, paste) | `/remote-control` | done | remote | P0 |
 | Reconnect after drops | — | done | remote | P0 |
 | Several computers, forget, revoke | `/remote-control devices` | done | remote | P1 |
+| Review the computer's changes and files | `git`, editors on the computer | done (0.6.0): with a Pi-Bolt that offers it (`host.review`), More has Changes (status, diffs, history and commits) and Files (folders, the file viewer, Ask Pi), read-only, and the composer shows the working tree's "+N −M" pill; secret files stay on the computer | remote | P1 |
 | Background notifications (done, needs answer) | — | done: tapping one opens that exact session; also "background agent finished" | both | P0 |
 | Keep running in the background | — | done: foreground service while a turn, a compaction, background agents or a `!` command runs; a partial wake lock while local work runs (2 h cap without progress); Stop and Open on its notification; answers and replies from notifications; Run in background setup (battery optimization, OEM autostart) | device | P0 |
 | Several sessions at once | several terminals | done: up to three on this phone (one per project, each with its own engine) plus remote control; Running on Home, a switcher in the session bar; at the cap an idle session makes room, a busy one is never stopped | device | P1 |

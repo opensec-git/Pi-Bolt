@@ -77,7 +77,7 @@ fun DiffViewer(ui: ChangesUi, path: String, staged: Boolean, onClose: () -> Unit
             return@LaunchedEffect
         }
         diff = try {
-            model.repo.diff(e, staged)
+            model.source.diff(e, staged)
         } catch (ex: GitException) {
             ui.error(ex.message ?: "Could not read the diff")
             null
@@ -91,7 +91,7 @@ fun DiffViewer(ui: ChangesUi, path: String, staged: Boolean, onClose: () -> Unit
 
     Column(Modifier.fillMaxSize().background(colors.canvas)) {
         OverlayBar(splitPath(path).first, path, onBack = onClose) {
-            if (entry != null && !entry.conflicted) {
+            if (entry != null && !entry.conflicted && !model.readOnly) {
                 if (staged) {
                     GlassChip("Unstage", onClick = { model.run("Unstaging") { unstage(listOf(path), initial) } }, icon = Icons.Rounded.Remove, enabled = idle)
                 } else {
@@ -127,11 +127,11 @@ fun DiffViewer(ui: ChangesUi, path: String, staged: Boolean, onClose: () -> Unit
                         hunk = hunk,
                         language = language,
                         action = when {
-                            entry.untracked || entry.conflicted || d.hunks.size < 1 -> null
+                            model.readOnly || entry.untracked || entry.conflicted || d.hunks.size < 1 -> null
                             staged -> "Unstage hunk" to { model.run("Unstaging") { unstageHunk(d, i) } }
                             else -> "Stage hunk" to { model.run("Staging") { stageHunk(d, i) } }
                         },
-                        onDiscard = if (!staged && !entry.untracked && !entry.conflicted) ({ discardHunk = i }) else null,
+                        onDiscard = if (!model.readOnly && !staged && !entry.untracked && !entry.conflicted) ({ discardHunk = i }) else null,
                         enabled = idle,
                     )
                 }

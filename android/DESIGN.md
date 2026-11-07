@@ -933,7 +933,10 @@ opens the app's system page and the camera starts on return.
   "Other sessions, 1 open"; `SwitcherRules`), Search and More (glass). The Quad
   is not a control: no press, and TalkBack hears what it reports. Search and
   overflow always sit together. Overflow on a computer: Session and usage, Export or share,
-  Disconnect, Forget computer.
+  Disconnect, Forget computer. With a Pi-Bolt that offers review (`host.review`), Changes and Files follow Projects
+  and sessions: the project's Changes and Files views, full screen and read-only, over the computer's working tree (no
+  staging, commit, branch, push or edit; Refresh in the bar). The working tree's "Changes +N −M" pill in the
+  composer's slim row opens Changes too (ui/session/remote).
 - On this phone (a project's session): the title is the project's name and the subtitle drops the folder (session
   name and context only); back reads "Project". Overflow: New session, Resume a session, Fork from a message,
   Duplicate session, Rename session, Session and usage, Export or share (no Disconnect or Forget computer). The banner reads "Starting Pi-Bolt…" (Quad Connect) and "Engine stopped" with Restart (danger

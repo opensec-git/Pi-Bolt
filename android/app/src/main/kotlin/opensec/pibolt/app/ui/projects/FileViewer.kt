@@ -172,6 +172,9 @@ private const val MAX_LINE = 2_000
  * a guard for unsaved changes (tabs with unsaved edits show a dot). Files over 1 MB (or not loaded whole) are
  * read-only. "Ask Pi" hands the file, or the selected lines, to [onAsk] for the project's composer. Hardware keys:
  * [EditorShortcuts]. Images show zoomable; binary files say so and offer Share. [onChanged] runs after a save.
+ *
+ * With [source] the files are read through it instead of from [root] (a computer's, over remote control): nothing can
+ * be edited, saved or shared, and a file the source cut short says so instead of offering Load more.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -183,6 +186,7 @@ fun FileViewer(
     onClose: () -> Unit,
     onChanged: () -> Unit,
     onAsk: (String) -> Unit,
+    source: (suspend (String) -> FileDoc)? = null,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -198,7 +202,7 @@ fun FileViewer(
     val kind = remember(name) { FileTypes.kind(name) }
     val language = remember(name) { if (kind == FileKind.Markdown) "markdown" else FileTypes.language(name) }
 
-    LaunchedEffect(tab) { if (tab.doc == null) tab.doc = ProjectFiles.open(file) }
+    LaunchedEffect(tab) { if (tab.doc == null) tab.doc = if (source != null) source(rel) else ProjectFiles.open(file) }
     val doc = tab.doc
     val text = (doc as? FileDoc.Text)
     val editing = tab.editing
@@ -220,7 +224,7 @@ fun FileViewer(
 
     val showRendered = kind == FileKind.Markdown && rendered && !editing
     val lines = remember(text?.text) { text?.let { FileSearch.lines(it.text) }.orEmpty() }
-    val canEdit = text != null && text.complete && text.size <= ProjectFiles.MAX_EDIT
+    val canEdit = source == null && text != null && text.complete && text.size <= ProjectFiles.MAX_EDIT
     val readOnly = text != null && !canEdit
     val searched = if (editing) tab.value.text else text?.text
 
@@ -444,6 +448,7 @@ fun FileViewer(
                     is FileDoc.Binary -> add(ProjectFiles.size(doc.size))
                     else -> Unit
                 }
+                if (source != null && text?.next != null) add("first ${ProjectFiles.size(text.next)} shown")
                 if (readOnly) add("read-only")
                 if (tab.dirty) add("unsaved")
             }.joinToString(" · ")
@@ -474,7 +479,7 @@ fun FileViewer(
                                 if (text != null && !showRendered) add(MenuEntry(if (wrap) "Do not wrap lines" else "Wrap lines", Icons.AutoMirrored.Rounded.WrapText) { wrap = !wrap })
                                 add(MenuEntry("Copy path", Icons.Rounded.ContentCopy) { copy("Path", rel, "Path copied") })
                                 if (text != null && !editing) add(MenuEntry("Copy text", Icons.Rounded.ContentCopy) { copy(name, text.text, "Text copied") })
-                                add(MenuEntry("Share", Icons.Rounded.Share) { share() })
+                                if (source == null) add(MenuEntry("Share", Icons.Rounded.Share) { share() })
                             },
                         )
                     }
@@ -505,13 +510,17 @@ fun FileViewer(
                     when (doc) {
                         null -> LoadingRow("Opening $name…", Modifier.padding(top = 8.dp))
                         is FileDoc.Unreadable -> Note(doc.reason, null, null)
-                        is FileDoc.Binary -> Note("Binary file", "${FileTypes.label(name)} · ${ProjectFiles.size(doc.size)}. Share it to open in another app.") {
-                            SecondaryButton("Share", onClick = ::share, icon = Icons.Rounded.Share)
+                        is FileDoc.Binary -> if (source != null) {
+                            Note("Binary file", "${FileTypes.label(name)} · ${ProjectFiles.size(doc.size)}. It stays on the computer.", null)
+                        } else {
+                            Note("Binary file", "${FileTypes.label(name)} · ${ProjectFiles.size(doc.size)}. Share it to open in another app.") {
+                                SecondaryButton("Share", onClick = ::share, icon = Icons.Rounded.Share)
+                            }
                         }
                         is FileDoc.Image -> ZoomImage(doc, "$name, ${doc.width} by ${doc.height} pixels")
                         is FileDoc.Text -> when {
                             editing -> CodeEditor(tab, language, wrap, matches, find.current, reveal, editorFocus)
-                            showRendered -> RenderedMarkdown(doc.text, more = doc.next != null, loadingMore = loadingMore, footer = moreLabel(doc), onMore = {
+                            showRendered -> RenderedMarkdown(doc.text, more = doc.next != null && source == null, loadingMore = loadingMore, footer = moreLabel(doc), onMore = {
                                 loadingMore = true
                                 scope.launch {
                                     tab.doc = ProjectFiles.more(file, doc)
@@ -527,7 +536,7 @@ fun FileViewer(
                                 current = find.current,
                                 flashLine = flashLine,
                                 state = listState,
-                                footer = if (doc.next != null) moreLabel(doc) else null,
+                                footer = if (doc.next != null && source == null) moreLabel(doc) else null,
                                 loadingMore = loadingMore,
                                 onMore = {
                                     loadingMore = true

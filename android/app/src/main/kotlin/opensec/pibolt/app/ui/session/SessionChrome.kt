@@ -53,6 +53,8 @@ import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DriveFileRenameOutline
 import androidx.compose.material.icons.rounded.PowerSettingsNew
 import androidx.compose.material.icons.rounded.ErrorOutline
+import androidx.compose.material.icons.rounded.Difference
+import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
@@ -153,6 +155,9 @@ fun SessionTopBar(
     onClone: () -> Unit = {},
     /** The computer's background service lists its projects and sessions: the menu offers them. */
     onProjects: (() -> Unit)? = null,
+    /** The computer reviews its working tree read-only (`host.review`): the menu offers its Changes and Files. */
+    onChanges: (() -> Unit)? = null,
+    onFiles: (() -> Unit)? = null,
     contextPercent: Int? = null,
     quadVisible: Boolean = true,
     status: String? = null,
@@ -278,6 +283,8 @@ fun SessionTopBar(
                     Item("Export or share", Icons.Rounded.IosShare, onExport)
                 } else {
                     onProjects?.let { Item("Projects and sessions", Icons.Rounded.FolderOpen, it) }
+                    onChanges?.let { Item("Changes", Icons.Rounded.Difference, it) }
+                    onFiles?.let { Item("Files", Icons.Rounded.Folder, it) }
                     Item("Session and usage", Icons.Rounded.Info, onInfo)
                     Item("Export or share", Icons.Rounded.IosShare, onExport)
                     MenuRow("Disconnect", Icons.Rounded.LinkOff, colors.ink1) {

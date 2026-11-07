@@ -88,7 +88,7 @@ fun HistoryViewer(ui: ChangesUi, onClose: () -> Unit) {
         loading = true
         failed = null
         try {
-            val got = model.repo.log(PAGE, skip = page * PAGE)
+            val got = model.source.log(PAGE, skip = page * PAGE)
             if (page == 0) commits.clear()
             commits += got
             end = got.size < PAGE
@@ -171,7 +171,7 @@ private fun CommitViewer(ui: ChangesUi, hash: String, onClose: () -> Unit) {
     LaunchedEffect(hash, attempt) {
         failed = null
         try {
-            val (c, f) = ui.model.repo.show(hash)
+            val (c, f) = ui.model.source.show(hash)
             commit = c
             files = f
             // Many files: start folded, so the list opens fast.

@@ -50,8 +50,11 @@ data class NoticeItem(override val key: String, val kind: NoticeKind, val title:
  */
 data class SubagentNoticeItem(override val key: String, val agentIds: List<String>, val text: String, val runKeys: List<String> = emptyList()) : ChatItem
 
-/** [service]: the computer's background service answers (`host.service`), so it can list and open its projects' sessions. */
-data class HostInfo(val name: String, val version: String, val cwd: String, val service: Boolean = false)
+/**
+ * [service]: the computer's background service answers (`host.service`), so it can list and open its projects' sessions.
+ * [review]: the host answers the read-only review commands (`host.review`: `rc_git_*`, `rc_list_dir`, `rc_read_file`).
+ */
+data class HostInfo(val name: String, val version: String, val cwd: String, val service: Boolean = false, val review: Boolean = false)
 
 /** A command from `get_commands`. [argumentHint] is shown while typing its arguments (hosts that send one). */
 data class SlashCommand(val name: String, val description: String?, val source: String, val argumentHint: String? = null)

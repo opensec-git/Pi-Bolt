@@ -77,7 +77,7 @@ object SessionReducer {
         val host = hello.obj("host")
         var state = SessionState(
             hello = true,
-            host = HostInfo(host?.str("name") ?: "Computer", host?.str("version") ?: "", host?.str("cwd") ?: "", service = host?.bool("service") == true),
+            host = HostInfo(host?.str("name") ?: "Computer", host?.str("version") ?: "", host?.str("cwd") ?: "", service = host?.bool("service") == true, review = host?.bool("review") == true),
         )
         state = applyRpcState(state, hello.obj("state"))
         for (message in hello.arr("messages").orEmpty()) {
