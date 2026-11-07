@@ -26,7 +26,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -56,7 +57,6 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.rounded.Add
@@ -65,10 +65,23 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.material.icons.rounded.UnfoldMore
+import androidx.compose.material.icons.rounded.Stop
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.runtime.movableContentOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Constraints
+import opensec.pibolt.app.ui.theme.IconSize
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.text.TextRange
@@ -103,12 +116,15 @@ import androidx.compose.ui.input.key.type
 private enum class SendMode { Send, Stop }
 
 /**
- * The composer: surface1, radius 18, 1dp line that becomes the focus line, a tray of attached images, 1–8 lines of
- * text, then a bar with attach, the model and thinking chips and the send button. While the agent works the send
- * button turns into Stop when the field is empty, and a Steer | Follow-up control appears while typing.
+ * The composer, after the desktop composer and assistant-ui: one rounded card (surface1, radius lg, a 1dp lineStrong
+ * edge that becomes the focus line) with a tray of attached images, the field, and a bar: + and the mic as ghost
+ * buttons on the left, the run-settings chip, then Send (the accent circle) or Stop in the same slot on the right. A
+ * one-line draft collapses the card to one row (+, mic, field, Send). Every button is a 48dp target on one centre line
+ * ([ComposerLayout]). While the agent works Send turns into Stop when the field is empty, and a Steer | Follow-up chip
+ * takes the run-settings chip's place while typing.
  *
- * [attachAllowed] false greys the attach button (the model cannot read images); a tap still calls [onAttach] so the
- * screen can say why.
+ * [attachAllowed] false only changes the + button's description: its sheet also mentions files and commands, and its
+ * Photos row says why images are off.
  */
 @Composable
 fun Composer(
@@ -150,6 +166,8 @@ fun Composer(
     onPasteImage: () -> Boolean = { false },
     /** A mic for dictation, shown beside Send (ui/session/voice). */
     voice: (@Composable () -> Unit)? = null,
+    /** The slash-command and `@` panel's height cap: the screen lowers it so the composer stays above the keyboard. */
+    suggestionsMaxHeight: Dp = SUGGESTIONS_MAX,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -171,23 +189,37 @@ fun Composer(
     val allFiles = files?.files?.value
     val mentionPaths = remember(mention?.query, allFiles) { allFiles?.let { list -> mention?.let { FileMentions.rank(it.query, list) } } }
     val shellMode = shell && text.startsWith("!")
+    // Esc closes the panel for the text it was open on; typing on opens it again.
+    var dismissedFor by remember { mutableStateOf<String?>(null) }
+    val suggesting = (commands.isNotEmpty() || mention != null) && dismissedFor != value.text
+    val suggestionCount = if (mention != null) mentionPaths?.size ?: 0 else commands.size
+    // The row Up / Down moved to (hardware keyboards); -1 until an arrow is pressed, so a soft keyboard's Enter still
+    // adds a line. It starts over whenever the list changes.
+    var highlight by remember(commands, mentionPaths) { mutableIntStateOf(-1) }
+    fun pickCommand(entry: PaletteEntry) {
+        haptics.tick()
+        onPick(entry)
+    }
+    fun pickPath(path: String) {
+        val token = mention ?: return
+        haptics.tick()
+        val (next, cursor) = FileMentions.insert(value.text, token, path)
+        field = TextFieldValue(next, TextRange(cursor))
+        onText(next)
+    }
+    // What the panel showed last, so it shrinks away with its rows instead of collapsing empty in one frame.
+    val shown = remember { ShownSuggestions() }
+    if (suggesting) shown.set(mention, mentionPaths, commands)
     Column(modifier.fillMaxWidth().padding(horizontal = 12.dp)) {
         AnimatedVisibility(
-            visible = commands.isNotEmpty() || mention != null,
+            visible = suggesting,
             enter = expandVertically(PiMotion.enter(PiMotion.STANDARD)) + fadeIn(PiMotion.enter(PiMotion.QUICK)),
             exit = shrinkVertically(PiMotion.leave(PiMotion.STANDARD)) + fadeOut(PiMotion.leave(PiMotion.QUICK)),
         ) {
+            val token = shown.mention
             when {
-                mention != null -> MentionList(mentionPaths, mention.query, onPick = { path ->
-                    haptics.tick()
-                    val (next, cursor) = FileMentions.insert(value.text, mention, path)
-                    field = TextFieldValue(next, TextRange(cursor))
-                    onText(next)
-                })
-                commands.isNotEmpty() -> CommandList(commands, onPick = {
-                    haptics.tick()
-                    onPick(it)
-                })
+                token != null -> MentionList(shown.paths, token.query, onPick = { if (suggesting) pickPath(it) }, highlighted = highlight, maxHeight = suggestionsMaxHeight)
+                shown.commands.isNotEmpty() -> CommandList(shown.commands, onPick = { if (suggesting) pickCommand(it) }, highlighted = highlight, maxHeight = suggestionsMaxHeight)
             }
         }
         when {
@@ -201,17 +233,48 @@ fun Composer(
         browse.update(history)
         val interaction = remember { MutableInteractionSource() }
         val focused by interaction.collectIsFocusedAsState()
-        val border by animateColorAsState(if (focused) colors.lineFocus else colors.line, PiMotion.effects(), label = "composer")
+        val border by animateColorAsState(if (focused) colors.lineFocus else colors.lineStrong, PiMotion.effects(), label = "composer")
         val shape = RoundedCornerShape(Radius.lg)
+        val density = LocalDensity.current
+        // One style for the text and its placeholder (15/22, as assistant-ui), so the placeholder sits exactly where the
+        // first typed line does. It used prose's 25sp line while the text used 23.1sp: the two sat 1dp apart.
+        val fieldStyle = type.body.copy(color = colors.ink1)
+        // The one-row form centres one line on the buttons' 48dp target; with more lines the last one stays there. A
+        // fixed 12dp put the line 3dp low at font scale 1.3.
+        val linePad = ComposerLayout.fieldPad(with(density) { fieldStyle.lineHeight.toDp() })
+        val sendMode = if (stoppable && !hasContent) SendMode.Stop else SendMode.Send
+        val sendEnabled = enabled && if (hasContent) !encoding else stoppable
+        val steering = running && hasContent
+        val stopBeside = stoppable && hasContent
+        // A one-line draft collapses the card to one row (+, mic, the field, Send), as assistant-ui does; the bar with
+        // the run-settings chip comes back once the draft wraps, images are attached or a steer is typed. The test is
+        // made at the one-row field's width in both forms, so the switch never flips back and forth.
+        var cardWidth by remember { mutableIntStateOf(0) }
+        val measurer = rememberTextMeasurer()
+        val oneRowButtons = 2 + (if (voice != null) 1 else 0) + (if (stopBeside) 1 else 0)
+        val oneRowField = with(density) { (cardWidth.toDp() - ComposerLayout.rowWidth(oneRowButtons)).roundToPx() }
+        val oneLine = remember(text, oneRowField, fieldStyle) {
+            ComposerLayout.fitsOneLine(text) { measurer.measure(it, fieldStyle, constraints = Constraints(maxWidth = oneRowField.coerceAtLeast(1))).lineCount }
+        }
+        // Before the card is measured, an empty draft is one row already, so the screen does not open with the bar.
+        val oneRow = compact || (images.isEmpty() && !steering && if (cardWidth > 0) oneLine else text.isEmpty())
+        // At 360dp the landscape-keyboard row has no room for the field beside +, mic, Steer, Stop and Send: the +
+        // steps aside while a steer is typed (not the mic, which may be listening).
+        val narrow = with(density) { LocalWindowInfo.current.containerSize.width.toDp() } < ComposerLayout.NARROW
+        val showAttach = ComposerLayout.showAttach(compact, narrow, steering)
+        // The mic keeps its state (a dictation in progress) when it moves between the row and the bar.
+        val currentVoice by rememberUpdatedState(voice)
+        val mic = remember { movableContentOf { currentVoice?.invoke() } }
         Column(
             Modifier
                 .fillMaxWidth()
+                .onSizeChanged { cardWidth = it.width }
                 .background(colors.surface1, shape)
                 .border(1.dp, border, shape)
                 .workingHairline(running && !reduced, colors.accent)
                 .animateContentSize(PiMotion.inPlace(PiMotion.QUICK)),
         ) {
-            if (images.isNotEmpty()) ImageTray(images, onRemoveImage, onOpenImage)
+            if (images.isNotEmpty()) ImageTray(images, onRemoveImage, onOpenImage, start = 12.dp)
             val textField = @Composable { fieldModifier: Modifier -> BasicTextField(
                 value = value,
                 onValueChange = {
@@ -222,7 +285,7 @@ fun Composer(
                     }
                 },
                 enabled = enabled,
-                textStyle = type.prose.copy(color = colors.ink1, lineHeight = type.body.lineHeight * 1.05f),
+                textStyle = fieldStyle,
                 cursorBrush = SolidColor(colors.accent),
                 maxLines = if (compact) maxLines.coerceAtMost(3) else maxLines,
                 interactionSource = interaction,
@@ -233,6 +296,7 @@ fun Composer(
                         // Hardware keyboards, as in the terminal (FEATURES.md): Ctrl+Enter sends, Alt+Enter queues a
                         // follow-up, Esc stops, Up / Down walk the prompt history, Ctrl+P / Shift+Tab cycle model and
                         // thinking, Ctrl+L opens the model picker, Ctrl+Shift+F searches, Alt+Up restores the queue.
+                        // While the command or `@` panel is open, Up / Down / Tab / Esc work in it.
                         if (e.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                         val cursor = value.selection.start
                         val action = ComposerKeys.action(
@@ -242,6 +306,8 @@ fun Composer(
                             running = stoppable,
                             hasContent = hasContent,
                             alt = e.isAltPressed,
+                            suggesting = suggesting,
+                            highlighted = highlight >= 0,
                             firstLine = value.selection.collapsed && PromptHistory.onFirstLine(value.text, cursor),
                             lastLine = value.selection.collapsed && PromptHistory.onLastLine(value.text, cursor),
                         )
@@ -263,12 +329,30 @@ fun Composer(
                             ComposerKeys.Action.Paste -> if (!onPasteImage()) return@onPreviewKeyEvent false
                             ComposerKeys.Action.FollowUp -> if (enabled && !encoding) onKey(action)
                             ComposerKeys.Action.OpenModels, ComposerKeys.Action.Search, ComposerKeys.Action.RestoreQueue -> onKey(action)
+                            ComposerKeys.Action.SuggestPrevious, ComposerKeys.Action.SuggestNext -> {
+                                if (suggestionCount == 0) return@onPreviewKeyEvent false
+                                highlight = ComposerLayout.moveHighlight(highlight, if (action == ComposerKeys.Action.SuggestNext) 1 else -1, suggestionCount)
+                            }
+                            ComposerKeys.Action.SuggestPick -> {
+                                val at = highlight.coerceAtLeast(0)
+                                if (mention != null) {
+                                    pickPath(mentionPaths?.getOrNull(at) ?: return@onPreviewKeyEvent false)
+                                } else {
+                                    pickCommand(commands.getOrNull(at) ?: return@onPreviewKeyEvent false)
+                                }
+                            }
+                            ComposerKeys.Action.SuggestDismiss -> dismissedFor = value.text
                             null -> return@onPreviewKeyEvent false
                         }
                         true
                     },
                 decorationBox = { inner ->
-                    Box(Modifier.fillMaxWidth().padding(start = if (compact) 4.dp else 16.dp, end = if (compact) 4.dp else 16.dp, top = 12.dp, bottom = if (compact) 12.dp else 6.dp)) {
+                    val pad = if (oneRow) {
+                        PaddingValues(start = ComposerLayout.ROW_FIELD_SIDE, end = ComposerLayout.ROW_FIELD_SIDE, top = linePad, bottom = linePad)
+                    } else {
+                        PaddingValues(start = 16.dp, end = 16.dp, top = 14.dp, bottom = 4.dp)
+                    }
+                    Box(Modifier.fillMaxWidth().padding(pad)) {
                         if (text.isEmpty()) {
                             Text(
                                 when {
@@ -278,54 +362,63 @@ fun Composer(
                                     running -> "Queue a follow-up…"
                                     else -> "Message Pi…"
                                 },
-                                style = type.prose,
+                                style = fieldStyle,
                                 color = colors.ink3,
                                 maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                         inner()
                     }
                 },
             ) }
-            val sendMode = if (stoppable && !hasContent) SendMode.Stop else SendMode.Send
-            val sendEnabled = enabled && if (hasContent) !encoding else stoppable
+            // + and the mic: ghost buttons (ink3 glyph, no fill) in 48dp targets, on the left.
             val attach = @Composable {
                 IconAction(
                     Icons.Rounded.Add,
                     description = if (attachAllowed) "Attach images and more" else "Attach images and more (images not available for this model)",
                     onClick = onAttach,
                     enabled = enabled,
-                    tint = colors.ink2,
-                    size = 22.dp,
+                    tint = colors.ink3,
+                    size = IconSize.md,
                 )
             }
-            // The field keeps one place in the composition in both forms, so switching to the one-row form (the
-            // keyboard opening in landscape) never drops its focus and the keyboard with it.
-            Row(Modifier.fillMaxWidth().padding(start = if (compact) 2.dp else 0.dp, end = if (compact) 6.dp else 0.dp), verticalAlignment = Alignment.Bottom) {
-                if (compact) attach()
+            // The field keeps one place in the composition in both forms, so collapsing or expanding the card (or the
+            // keyboard opening in landscape) never drops its focus and the keyboard with it. Every button is a 48dp
+            // target on one centre line; the row sits EDGE inside the card, so the 32dp send disc is 10dp from the end
+            // and the bottom edges alike, as on the desktop (it was 10dp from the end and 4dp from the bottom).
+            Row(
+                Modifier.fillMaxWidth().padding(end = if (oneRow) ComposerLayout.EDGE else 0.dp, top = if (oneRow) ComposerLayout.EDGE else 0.dp, bottom = if (oneRow) ComposerLayout.EDGE else 0.dp),
+                verticalAlignment = Alignment.Bottom,
+            ) {
+                if (oneRow) {
+                    if (showAttach) attach()
+                    mic()
+                }
                 textField(Modifier.weight(1f))
-                if (compact) {
-                    voice?.invoke()
-                    if (running && hasContent) SteerChip(mode, onMode)
-                    if (stoppable && hasContent) StopButton(onStop)
-                    SendButton(sendMode, sendEnabled, onSend, onStop, ring = stoppable && !hasContent)
+                if (oneRow) {
+                    if (compact && steering) SteerChip(mode, onMode)
+                    if (stopBeside) StopButton(onStop)
+                    SendButton(sendMode, sendEnabled, onSend, onStop)
                 }
             }
-            if (!compact) {
+            if (!oneRow) {
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .height(48.dp)
-                        .padding(start = 2.dp, end = 6.dp),
+                        .padding(end = ComposerLayout.EDGE, bottom = ComposerLayout.EDGE)
+                        .heightIn(min = ComposerLayout.TARGET),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     attach()
+                    mic()
                     // One run-settings chip, "Sonnet 4.5 · High": the model gives way first, the level never wraps.
                     // Tap opens one sheet for both; long press is the next model. While a steer is typed the
-                    // Steer / Follow-up chip sits at the end, next to send.
+                    // Steer / Follow-up chip takes its slot: beside Stop and Send at 360dp the model chip had about
+                    // 30dp left, and the top bar's subtitle still names the model.
                     Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                         val chip = ModelChipText.of(modelLabel, thinkingLevel)
-                        Chip(
+                        if (steering) SteerChip(mode, onMode) else Chip(
                             onClick = onModel,
                             enabled = enabled,
                             onLongClick = onCycleModel,
@@ -336,29 +429,26 @@ fun Composer(
                             if (chip.level != null) Text(" · " + chip.level, style = type.label, color = colors.ink3, maxLines = 1, softWrap = false)
                             Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(16.dp))
                         }
-                        if (running && hasContent) {
-                            Spacer(Modifier.weight(1f, fill = true))
-                            SteerChip(mode, onMode)
-                        }
                     }
-                    voice?.invoke()
                     // While a steer is typed Send takes the button: Stop stays one tap away beside it.
-                    if (stoppable && hasContent) StopButton(onStop)
-                    SendButton(sendMode, sendEnabled, onSend, onStop, ring = stoppable && !hasContent)
+                    if (stopBeside) StopButton(onStop)
+                    SendButton(sendMode, sendEnabled, onSend, onStop)
                 }
             }
         }
     }
 }
 
-/** Stop while the field has text: a 32dp surface3 disc with an ink1 square, 48dp to touch. */
+/**
+ * Stop beside Send while the field has text. The same disc as Send ([StopDisc]), so Stop keeps its size and look when
+ * it moves out of the send slot as typing starts.
+ */
 @Composable
 private fun StopButton(onStop: () -> Unit) {
-    val colors = Pi.colors
     val haptics = Pi.haptics
     Box(
         Modifier
-            .size(48.dp)
+            .size(ComposerLayout.TARGET)
             .pressable({
                 haptics.confirm()
                 onStop()
@@ -366,15 +456,27 @@ private fun StopButton(onStop: () -> Unit) {
             .semantics { contentDescription = "Stop" },
         contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.size(32.dp).background(colors.surface3, CircleShape).border(1.dp, colors.ink3, CircleShape), contentAlignment = Alignment.Center) {
-            Box(Modifier.size(10.dp).background(colors.ink1, RoundedCornerShape(2.dp)))
-        }
+        StopDisc()
     }
 }
 
+/** Stop's look in both places, as on the desktop: a 32dp surface3 disc with a 1dp lineStrong ring and a 10dp ink1 square. */
+@Composable
+private fun StopDisc() {
+    val colors = Pi.colors
+    Box(Modifier.size(ComposerLayout.DISC).background(colors.surface3, CircleShape).border(1.dp, colors.lineStrong, CircleShape), contentAlignment = Alignment.Center) {
+        StopGlyph()
+    }
+}
+
+@Composable
+private fun StopGlyph() {
+    Icon(Icons.Rounded.Stop, contentDescription = null, tint = Pi.colors.ink1, modifier = Modifier.size(IconSize.md))
+}
+
 /**
- * Steer or Follow-up for what is typed while Pi works: a 32dp chip next to send (warning dot for Steer, ink4 dot for
- * Follow-up). Tap toggles it with a tick.
+ * Steer or Follow-up for what is typed while Pi works: a 32dp chip in the run-settings chip's slot (warning dot for
+ * Steer, ink4 dot for Follow-up; in the landscape-keyboard row, before Stop). Tap toggles it with a tick.
  */
 @Composable
 private fun SteerChip(mode: StreamingBehavior, onMode: (StreamingBehavior) -> Unit) {
@@ -399,29 +501,31 @@ private fun SteerChip(mode: StreamingBehavior, onMode: (StreamingBehavior) -> Un
 }
 
 /**
- * Attached images above the text: 56dp rounded thumbnails, a Quad while each encodes, and a remove ✕ at the top-end
- * corner (20dp visual, 48dp to touch, overlapping the thumbnail).
+ * Attached images above the text: 56dp rounded thumbnails, a Quad while each encodes, and a remove ✕ (20dp visual)
+ * centred 4dp inside each thumbnail's top-end corner. Its 48dp target is centred on the ✕, so it covers only the
+ * corner quarter of the thumbnail (before, it covered half of it and most taps meant to open an image removed it).
  */
 @Composable
-private fun ImageTray(images: List<ComposerImage>, onRemove: (Long) -> Unit, onOpen: (Int) -> Unit) {
+private fun ImageTray(images: List<ComposerImage>, onRemove: (Long) -> Unit, onOpen: (Int) -> Unit, start: Dp) {
     val colors = Pi.colors
     val shape = RoundedCornerShape(Radius.sm)
     Row(
         Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(start = 12.dp, end = 12.dp, top = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+            .padding(start = start, end = 12.dp),
     ) {
         images.forEachIndexed { index, image ->
             key(image.id) {
-                Box(Modifier.size(64.dp)) {
+                // 56dp thumbnail + 20dp for the remove target's overhang: the ✕ centre is 4dp inside the corner.
+                Box(Modifier.size(TRAY_ITEM)) {
                     Box(
                         Modifier
                             .align(Alignment.BottomStart)
-                            .size(56.dp)
+                            .size(TRAY_THUMB)
                             .clip(shape)
-                            .pressable({ if (image.ready) onOpen(index) }, shape = shape, label = "Open image ${index + 1}")
+                            .pressable({ if (image.ready) onOpen(index) }, shape = shape, enabled = image.ready, label = "Open image")
+                            .semantics { contentDescription = if (image.ready) "Image ${index + 1} of ${images.size}" else "Image ${index + 1}, preparing" }
                             .background(colors.surface2)
                             .border(1.dp, colors.line, shape),
                         contentAlignment = Alignment.Center,
@@ -436,9 +540,10 @@ private fun ImageTray(images: List<ComposerImage>, onRemove: (Long) -> Unit, onO
                     Box(
                         Modifier
                             .align(Alignment.TopEnd)
-                            .size(48.dp)
-                            .pressable({ onRemove(image.id) }, shape = CircleShape, pressedScale = 0.92f, label = "Remove image"),
-                        contentAlignment = Alignment.TopEnd,
+                            .size(ComposerLayout.TARGET)
+                            .pressable({ onRemove(image.id) }, shape = CircleShape, pressedScale = 0.92f, label = "Remove")
+                            .semantics { contentDescription = "Remove image ${index + 1}" },
+                        contentAlignment = Alignment.Center,
                     ) {
                         Box(
                             Modifier
@@ -447,7 +552,7 @@ private fun ImageTray(images: List<ComposerImage>, onRemove: (Long) -> Unit, onO
                                 .border(1.dp, colors.lineStrong, CircleShape),
                             contentAlignment = Alignment.Center,
                         ) {
-                            Icon(Icons.Rounded.Close, contentDescription = null, tint = colors.ink1, modifier = Modifier.size(14.dp))
+                            Icon(Icons.Rounded.Close, contentDescription = null, tint = colors.ink1, modifier = Modifier.size(IconSize.xs))
                         }
                     }
                 }
@@ -456,16 +561,90 @@ private fun ImageTray(images: List<ComposerImage>, onRemove: (Long) -> Unit, onO
     }
 }
 
+private val TRAY_THUMB = 56.dp
+private val TRAY_ITEM = 76.dp
+
+/** The slash-command and `@` panel's tallest height (about five rows). */
+val SUGGESTIONS_MAX = 264.dp
+
+/**
+ * The composer's geometry, after the desktop composer and assistant-ui: every button is a [TARGET] on one centre line;
+ * Send, Stop and the mic's listening state share one [DISC]. Pure, so it is unit-tested.
+ */
+object ComposerLayout {
+    /** Touch target of every composer button. */
+    val TARGET = 48.dp
+
+    /** Send, Stop and the listening mic: the desktop's 30px circle, assistant-ui's 32px. */
+    val DISC = 32.dp
+
+    /**
+     * Padding between the card's edge and the end and bottom of its button row. With the target's own
+     * (48 - 32) / 2 = 8dp, the send disc sits 10dp from the end and the bottom edge alike (the desktop bar's 10px).
+     */
+    val EDGE = 2.dp
+
+    /** The one-row field's side padding, between the buttons' targets and the text. */
+    val ROW_FIELD_SIDE = 4.dp
+
+    /** Windows narrower than this cannot fit the field beside +, mic, Steer, Stop and Send in the one-row form. */
+    val NARROW = 420.dp
+
+    /**
+     * Top and bottom padding of the one-row field: (48 - line) / 2, at least 4dp. One line of [lineHeight] is then
+     * centred on the buttons' target, and with more lines the last one stays on it.
+     */
+    fun fieldPad(lineHeight: Dp): Dp = ((TARGET - lineHeight) / 2).coerceAtLeast(4.dp)
+
+    /** What the one-row form's [buttons] and paddings take from the card's width (2dp for the cursor). */
+    fun rowWidth(buttons: Int): Dp = TARGET * buttons + EDGE + ROW_FIELD_SIDE * 2 + 2.dp
+
+    /** Whether [text] stays on one line; [lines] counts the lines it takes at the one-row field's width. */
+    fun fitsOneLine(text: String, lines: (String) -> Int): Boolean = when {
+        text.isEmpty() -> true
+        '\n' in text -> false
+        else -> lines(text) <= 1
+    }
+
+    /** The + shows unless the landscape-keyboard row in a narrow window needs its room for Steer and Stop. */
+    fun showAttach(compact: Boolean, narrow: Boolean, steering: Boolean): Boolean = !(compact && narrow && steering)
+
+    /** The suggestion row after [delta] arrow presses from [current] (-1: none yet), wrapping round [count] rows. */
+    fun moveHighlight(current: Int, delta: Int, count: Int): Int {
+        if (count <= 0) return -1
+        if (current < 0) return if (delta > 0) 0 else count - 1
+        return Math.floorMod(current + delta, count)
+    }
+}
+
+/** What the suggestion panel showed last (plain fields: written in composition, read while it animates away). */
+private class ShownSuggestions {
+    var mention: FileMentions.Token? = null
+        private set
+    var paths: List<String>? = null
+        private set
+    var commands: List<PaletteEntry> = emptyList()
+        private set
+
+    fun set(mention: FileMentions.Token?, paths: List<String>?, commands: List<PaletteEntry>) {
+        this.mention = mention
+        this.paths = paths
+        this.commands = commands
+    }
+}
+
 /** Lines the composer grows to before it scrolls. */
 const val MAX_LINES = 6
 
 /** Hardware-keyboard shortcuts of the composer. */
 object ComposerKeys {
-    enum class Action { Send, FollowUp, Stop, CycleModel, CycleThinking, OpenModels, Search, RestoreQueue, HistoryOlder, HistoryNewer, Paste }
+    enum class Action { Send, FollowUp, Stop, CycleModel, CycleThinking, OpenModels, Search, RestoreQueue, HistoryOlder, HistoryNewer, Paste, SuggestPrevious, SuggestNext, SuggestPick, SuggestDismiss }
 
     /**
      * [firstLine] / [lastLine]: the cursor (no selection) is on the field's first / last line, so Up / Down walk the
-     * prompt history instead of moving the cursor.
+     * prompt history instead of moving the cursor. [suggesting]: the slash-command or `@` panel is open, so Up / Down
+     * move through it, Tab picks, Esc closes it, and Enter picks once an arrow chose a row ([highlighted]); before that
+     * Enter still adds a line (a soft keyboard's Enter arrives as a key too).
      */
     fun action(
         key: Key,
@@ -476,11 +655,18 @@ object ComposerKeys {
         alt: Boolean = false,
         firstLine: Boolean = false,
         lastLine: Boolean = false,
+        suggesting: Boolean = false,
+        highlighted: Boolean = false,
     ): Action? {
         val enter = key == Key.Enter || key == Key.NumPadEnter
+        val plain = !ctrl && !alt && !shift
         return when {
             enter && ctrl -> Action.Send
             enter && alt && !shift -> Action.FollowUp
+            suggesting && plain && key == Key.DirectionUp -> Action.SuggestPrevious
+            suggesting && plain && key == Key.DirectionDown -> Action.SuggestNext
+            suggesting && plain && (key == Key.Tab || (enter && highlighted)) -> Action.SuggestPick
+            suggesting && key == Key.Escape -> Action.SuggestDismiss
             key == Key.Escape && running && !hasContent -> Action.Stop
             key == Key.P && ctrl && !shift -> Action.CycleModel
             key == Key.Tab && shift -> Action.CycleThinking
@@ -524,37 +710,22 @@ data class ModelChipText(val model: String, val level: String?, val description:
 }
 
 /**
- * Send / Stop, 40dp in a 48dp target. Send enabled: accent fill, onAccent arrow. Disabled: no fill, a 1dp lineStrong
- * ring and an ink4 arrow, so it never reads as pressable in a coloured accent. Stop: surface3 fill with an ink1
- * square; [ring] adds a 1dp ink3 ring so Stop is easy to find mid-run.
+ * Send / Stop in the end slot, as on the desktop: a 32dp disc in a 48dp target ([ComposerLayout]). Send is the accent
+ * circle (white in the default theme) with an onAccent arrow; disabled, the same circle at 18%. Stop: [StopDisc], the
+ * same diameter in the same place.
  */
 @Composable
-private fun SendButton(mode: SendMode, enabled: Boolean, onSend: () -> Unit, onStop: () -> Unit, ring: Boolean = false) {
+private fun SendButton(mode: SendMode, enabled: Boolean, onSend: () -> Unit, onStop: () -> Unit) {
     val colors = Pi.colors
     val haptics = Pi.haptics
     val stop = mode == SendMode.Stop
-    val container by animateColorAsState(
-        when {
-            stop -> colors.surface3
-            enabled -> colors.accent
-            else -> colors.accent.copy(alpha = 0f)
-        },
-        PiMotion.effects(),
-        label = "send",
-    )
-    val edge by animateColorAsState(
-        when {
-            stop -> if (ring) colors.ink3 else colors.surface3
-            enabled -> colors.accent
-            else -> colors.lineStrong
-        },
-        PiMotion.effects(),
-        label = "sendEdge",
-    )
+    val container by animateColorAsState(if (stop) colors.surface3 else colors.accent, PiMotion.effects(), label = "send")
+    val edge by animateColorAsState(if (stop) colors.lineStrong else colors.accent, PiMotion.effects(), label = "sendEdge")
+    val alpha by animateFloatAsState(if (stop || enabled) 1f else DISABLED_SEND, PiMotion.effects(), label = "sendAlpha")
     val label = if (stop) "Stop" else "Send"
     Box(
         Modifier
-            .size(48.dp)
+            .size(ComposerLayout.TARGET)
             .pressable(
                 onClick = {
                     if (stop) {
@@ -573,40 +744,58 @@ private fun SendButton(mode: SendMode, enabled: Boolean, onSend: () -> Unit, onS
             .semantics { contentDescription = label },
         contentAlignment = Alignment.Center,
     ) {
-        Box(Modifier.size(40.dp).background(container, CircleShape).border(1.dp, edge, CircleShape), contentAlignment = Alignment.Center) {
+        Box(
+            Modifier
+                .size(ComposerLayout.DISC)
+                .graphicsLayer { this.alpha = alpha }
+                .background(container, CircleShape)
+                .border(1.dp, edge, CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            // Centred in the disc for the whole swap: AnimatedContent aligns to the top start by default, so the
+            // glyphs slid off-centre while the two sizes crossfaded.
             AnimatedContent(
                 targetState = mode,
                 transitionSpec = {
                     (fadeIn(tween(PiMotion.TAP)) + scaleIn(PiMotion.fast(), initialScale = 0.6f)) togetherWith
                         (fadeOut(tween(PiMotion.TAP)) + scaleOut(tween(PiMotion.TAP), targetScale = 0.6f))
                 },
+                contentAlignment = Alignment.Center,
                 label = "sendMode",
             ) { m ->
                 if (m == SendMode.Stop) {
-                    Box(Modifier.size(12.dp).background(colors.ink1, RoundedCornerShape(3.dp)))
+                    StopGlyph()
                 } else {
-                    Icon(Icons.Rounded.ArrowUpward, contentDescription = null, tint = if (enabled) colors.onAccent else colors.ink4, modifier = Modifier.size(20.dp))
+                    // The arrow's bounds are centred, but its head carries most of the ink, so it reads high: 0.5dp
+                    // down puts its visual centre on the disc's.
+                    Icon(Icons.Rounded.ArrowUpward, contentDescription = null, tint = colors.onAccent, modifier = Modifier.offset(y = ARROW_NUDGE).size(IconSize.md))
                 }
             }
         }
     }
 }
 
+/** The disabled send circle's opacity (the desktop's 0.18). */
+private const val DISABLED_SEND = 0.18f
+
+private val ARROW_NUDGE = 0.5.dp
+
 /** A 1dp accent band sweeping the composer's top edge while the agent works. */
 @Composable
 private fun Modifier.workingHairline(active: Boolean, color: Color): Modifier {
     val shown by animateFloatAsState(if (active) 1f else 0f, tween(PiMotion.QUICK), label = "hairline")
     if (!active && shown == 0f) return this
-    val x = rememberInfiniteTransition(label = "hairline").animateFloat(0f, 1f, infiniteRepeatable(tween(1400, easing = PiMotion.InPlace), RepeatMode.Restart), label = "x")
+    val x = rememberInfiniteTransition(label = "hairline").animateFloat(0f, 1f, infiniteRepeatable(tween(PiMotion.SWEEP, easing = PiMotion.InPlace), RepeatMode.Restart), label = "x")
     return drawWithContent {
         drawContent()
-        val band = size.width * 0.35f
+        val band = size.width * 0.4f
         val left = -band + (size.width + band) * x.value
-        val r = Radius.lg.toPx()
+        // Inset 16dp, as on the desktop, so the band stays inside the rounded border.
+        val inset = 16.dp.toPx()
         drawRoundRect(
             Brush.horizontalGradient(0f to Color.Transparent, 0.5f to color, 1f to Color.Transparent, startX = left, endX = left + band),
-            topLeft = Offset(r * 0.6f, 0f),
-            size = Size(size.width - r * 1.2f, 1.dp.toPx()),
+            topLeft = Offset(inset, 0f),
+            size = Size(size.width - inset * 2, 1.dp.toPx()),
             cornerRadius = CornerRadius(0.5f),
             alpha = shown,
         )

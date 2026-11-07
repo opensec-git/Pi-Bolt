@@ -69,13 +69,13 @@ class DesignRulesTest {
             "radii from the tokens",
             Regex("""RoundedCornerShape\(([3-9]|[1-9][0-9])(\.[0-9]+)?\.dp"""),
             "use Radius.xs / sm / md / lg / xl (0 to 2dp hairlines are fine)",
-            setOf("projects/ProjectCard.kt", "session/SessionSheets.kt", "session/SessionChrome.kt", "session/Composer.kt", "session/subagent/SubagentCard.kt"),
+            setOf("projects/ProjectCard.kt", "session/SessionSheets.kt", "session/SessionChrome.kt", "session/subagent/SubagentCard.kt"),
         ),
         Rule(
             "durations from PiMotion",
             Regex("""tween\(([1-9][0-9]*)[,)]"""),
             "use PiMotion.TAP / QUICK / STANDARD / SHEET / SETTLE / GLYPH / FADE / PULSE / SWEEP",
-            setOf("session/subagent/", "session/Composer.kt", "markdown/"),
+            setOf("session/subagent/", "markdown/"),
         ),
     )
 
