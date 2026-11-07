@@ -119,16 +119,16 @@ object SessionAlerts {
                         }
                     }
                     is Target.Local -> {
-                        // Several sessions run at once: the project's own live session, whichever is in focus.
-                        val live = LocalSessions.get(t.project)
-                        if (live != null && (t.sessionFile == null || live.controller.sessionFile == t.sessionFile)) {
-                            onLocal(t.project)
+                        // Several sessions run at once, also in one project: the live session the alert is about.
+                        val live = t.sessionFile?.let { LocalSessions.find(t.project, it) } ?: LocalSessions.get(t.project)?.takeIf { t.sessionFile == null }
+                        if (live != null) {
+                            onLocal(live.key)
                             return@drain
                         }
                         val dir = File(app.engine.projectsDir, t.project)
                         if (!dir.isDirectory) return@drain
                         LocalSessions.open(app.engine, ProjectStore.get(app), dir, sessionFile = t.sessionFile?.takeIf { File(it).isFile })
-                            .onSuccess { onLocal(t.project) }
+                            .onSuccess { onLocal(it.key) }
                     }
                 }
             }

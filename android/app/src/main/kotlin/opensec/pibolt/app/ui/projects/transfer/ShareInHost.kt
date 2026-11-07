@@ -72,7 +72,7 @@ fun ShareInHost(app: PiBoltApp, pending: SharedContent?, onConsumed: () -> Unit,
                             }
                         }
                     live.drop(text, images)
-                    onSession(name)
+                    onSession(live.key)
                 }
             }
             ShareAction.ImportFiles -> {

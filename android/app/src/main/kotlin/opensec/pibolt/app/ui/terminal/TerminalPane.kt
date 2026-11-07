@@ -54,6 +54,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -408,14 +409,19 @@ private fun ExtraKey(text: String?, description: String, modifier: Modifier = Mo
 
 /**
  * "Preview · localhost:5173" for the dev servers listening now (nothing when none): glass pills, each with an 8dp
- * success dot for "it answers", a tap opens the preview.
+ * success dot for "it answers", a tap opens the preview. While Pi's preview tools drive the page, "Pi is using the
+ * preview" comes first; a tap opens the preview to watch.
  */
 @Composable
 fun PreviewChipRow(onPreview: (Int) -> Unit, modifier: Modifier = Modifier) {
     val ports by Terminals.ports.collectAsStateWithLifecycle()
-    if (ports.isEmpty()) return
+    val preview = (LocalContext.current.applicationContext as PiBoltApp).preview
+    val driving by preview.driving.collectAsStateWithLifecycle()
+    val drivenPort = driving?.port
+    if (ports.isEmpty() && drivenPort == null) return
     val colors = Pi.colors
     Row(modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(Space.sm), verticalAlignment = Alignment.CenterVertically) {
+        if (drivenPort != null) PiDrivingPill(onClick = { onPreview(drivenPort) })
         for (port in ports.take(4)) {
             GlassPill(onClick = { onPreview(port) }, label = "Preview localhost:$port") {
                 Box(Modifier.size(8.dp).background(colors.success, CircleShape))

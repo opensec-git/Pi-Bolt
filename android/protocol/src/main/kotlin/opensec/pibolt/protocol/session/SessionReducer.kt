@@ -77,9 +77,15 @@ object SessionReducer {
         val host = hello.obj("host")
         var state = SessionState(
             hello = true,
-            host = HostInfo(host?.str("name") ?: "Computer", host?.str("version") ?: "", host?.str("cwd") ?: "", service = host?.bool("service") == true),
+            host = HostInfo(host?.str("name") ?: "Computer", host?.str("version") ?: "", host?.str("cwd") ?: "", service = host?.bool("service") == true, parallelSessions = host?.bool("parallelSessions") == true),
         )
         state = applyRpcState(state, hello.obj("state"))
+        // A long session sends only its newest messages: say so, or the transcript seems to start midway (or, when one
+        // huge message alone fills the budget, the session looks empty).
+        val omitted = hello.long("omittedMessages") ?: 0
+        if (omitted > 0) {
+            state = state.notice(NoticeKind.Info, "Earlier messages are on the computer", "$omitted older ${if (omitted == 1L) "message is" else "messages are"} not shown here.")
+        }
         for (message in hello.arr("messages").orEmpty()) {
             val m = message as? JsonObject ?: continue
             // Each prompt in the history started a run, which hid the completed todos of the run before.
@@ -95,6 +101,30 @@ object SessionReducer {
             commands = hello.arr("commands").orEmpty().mapNotNull { (it as? JsonObject)?.let(::commandFrom) },
         )
         return state
+    }
+
+    /**
+     * What happened while the link was down, as the events that would have announced it: a reconnect's `remote_hello`
+     * shows the result but sends none of them. An `agent_settled` when the run [before] showed has ended in the same
+     * session, and each dialog the snapshot opens that [before] did not have. Empty for the first snapshot or another
+     * session's (a session switch is no run ending).
+     */
+    fun missedWhileAway(before: SessionState, hello: JsonObject): List<JsonObject> {
+        if (!before.hello) return emptyList()
+        val state = hello.obj("state")
+        val sessionId = state?.str("sessionId")
+        if (sessionId == null || sessionId != before.sessionId) return emptyList()
+        val missed = ArrayList<JsonObject>()
+        if (before.isRunning && state?.bool("isStreaming") == false) {
+            missed += JsonObject(mapOf("type" to JsonPrimitive("agent_settled")))
+        }
+        val known = before.dialogs.mapTo(HashSet()) { it.id }
+        for (dialog in hello.arr("dialogs").orEmpty()) {
+            val d = dialog as? JsonObject ?: continue
+            val id = d.str("id") ?: continue
+            if (id !in known && dialogFrom(d) != null) missed += JsonObject(d + ("type" to JsonPrimitive("extension_ui_request")))
+        }
+        return missed
     }
 
     /**

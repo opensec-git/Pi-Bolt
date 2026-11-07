@@ -267,14 +267,14 @@ fun HomeScreen(
     var resuming by remember { mutableStateOf(false) }
     fun resume(entry: ProjectEntry, file: String, isLive: Boolean) {
         if (isLive) {
-            onOpenLocalSession(entry.name)
+            onOpenLocalSession(LocalSessions.find(entry.name, file)?.key ?: entry.name)
             return
         }
         if (resuming) return
         resuming = true
         scope.launch {
             LocalSessions.open(engine, store, File(entry.path), sessionFile = file)
-                .onSuccess { onOpenLocalSession(entry.name) }
+                .onSuccess { onOpenLocalSession(it.key) }
                 .onFailure { snackbar.show(it.message ?: "Could not open the session", SnackKind.Error) }
             resuming = false
         }
@@ -405,7 +405,7 @@ fun HomeScreen(
             LocalSessions.open(engine, store, File(project.path), fresh = true, firstPrompt = text)
                 .onSuccess {
                     ask = ""
-                    onOpenLocalSession(project.name)
+                    onOpenLocalSession(it.key)
                 }
                 .onFailure { snackbar.show(it.message ?: "The session didn't open", SnackKind.Error) }
             starting = false
@@ -530,6 +530,7 @@ fun HomeScreen(
                 }
             }
             fun liveFor(entry: ProjectEntry, file: String): SessionController? {
+                LocalSessions.find(entry.name, file)?.let { return it.controller }
                 val liveHere = liveAll[entry.name]?.takeIf { !it.controller.stopped } ?: return null
                 val liveFile = liveHere.controller.sessionFile ?: liveHere.sessionFile
                 return liveHere.controller.takeIf { liveFile == null || liveFile == file }
@@ -539,8 +540,8 @@ fun HomeScreen(
                 item(key = "recents-label", contentType = "label") {
                     HomeHead("Recents", Modifier.animateItem().padding(top = Space.lg).entrance(4, play))
                 }
-                items(running, key = { "r:" + it.project.name }, contentType = { "recent" }) { live ->
-                    RunningRow(live, meta.projects[live.project.name], onClick = { onOpenLocalSession(live.project.name) }, modifier = Modifier.animateItem(), divider = live != running.last() || idle.isNotEmpty())
+                items(running, key = { "r:" + it.key }, contentType = { "recent" }) { live ->
+                    RunningRow(live, meta.projects[live.project.name], onClick = { onOpenLocalSession(live.key) }, modifier = Modifier.animateItem(), divider = live != running.last() || idle.isNotEmpty())
                 }
                 items(idle, key = { "c:" + it.name }, contentType = { "recent" }) { entry ->
                     val session = entry.lastSession ?: return@items
@@ -792,7 +793,7 @@ fun HomeScreen(
                         LocalSessions.open(engine, store, dir, fresh = true, firstPrompt = url?.let(ProjectRules::clonePrompt)).fold(
                             onSuccess = {
                                 reload++
-                                onOpenLocalSession(dir.name)
+                                onOpenLocalSession(it.key)
                                 null
                             },
                             onFailure = {
@@ -874,7 +875,7 @@ fun HomeScreen(
             which = which,
             lives = if (which == HomeList.Working) running.filter { it !in waiting } else waiting,
             titles = meta.projects,
-            onOpenLive = { onOpenLocalSession(it.project.name) },
+            onOpenLive = { onOpenLocalSession(it.key) },
             onDismiss = { sheetList = null },
         )
     }
@@ -931,7 +932,7 @@ private fun HomeListSheet(which: HomeList, lives: List<LocalSessions.Live>, titl
     PiSheet(onDismiss = onDismiss, state = state) {
         SheetHeader(which.title)
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
-            items(lives, key = { it.project.name }) { live ->
+            items(lives, key = { it.key }) { live ->
                 RunningRow(live, titles[live.project.name], onClick = { close { onDismiss(); onOpenLive(live) } }, divider = live != lives.last())
             }
         }

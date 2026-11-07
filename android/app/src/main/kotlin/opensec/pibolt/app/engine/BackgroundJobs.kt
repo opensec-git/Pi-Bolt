@@ -14,7 +14,7 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 
 /**
- * Background shell jobs (the app's `pibolt-bg` extension, assets/pibolt-bg.js): the tools `bash_background`,
+ * Background shell jobs (the app's `pibolt-bg` extension, assets/extensions/pibolt-bg.js): the tools `bash_background`,
  * `bash_output`, `bash_kill` and `bash_jobs` in project sessions. Chats never get them (ChatSpace's `--tools`
  * allowlist). The extension mirrors its jobs to `$TMPDIR/pibolt-bg/<engine pid>/jobs.json` (logs beside it, `<id>.log`)
  * and sets the extension status [STATUS_KEY] while any runs, which keeps the session busy (SessionController) and the
@@ -56,7 +56,7 @@ object BackgroundJobs {
 
     /** Writes the extension to `<agentDir>/extensions/` if missing or older (its first line). Blocking. */
     fun install(agentDir: File, assets: AssetManager): Boolean = runCatching {
-        val source = assets.open(FILE).use { it.reader().readText() }
+        val source = assets.open("extensions/$FILE").use { it.reader().readText() }
         val dir = File(agentDir, "extensions").apply { mkdirs() }
         val file = File(dir, FILE)
         if (file.isFile && file.bufferedReader().use { it.readLine() } == source.lineSequence().first()) return true

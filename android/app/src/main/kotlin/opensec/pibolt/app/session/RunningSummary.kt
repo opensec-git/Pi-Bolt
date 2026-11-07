@@ -38,6 +38,18 @@ object RunningSummary {
 
     data class Summary(val title: String, val text: String, val lines: List<String>)
 
+    /**
+     * A session's name in the notification: its project ([host]), and when another live session shares the project
+     * ([shared]), what it was asked ([asked], shortened), so two runs in one project read apart.
+     */
+    fun name(host: String, asked: String?, shared: Boolean): String {
+        val what = asked?.lineSequence()?.map { it.trim() }?.firstOrNull { it.isNotEmpty() } ?: return host
+        if (!shared) return host
+        return "$host · " + if (what.length > ASKED_CHARS) what.take(ASKED_CHARS - 1).trimEnd() + "…" else what
+    }
+
+    private const val ASKED_CHARS = 32
+
     /** Notification kinds that exist once per session. */
     const val SETTLED = 0
     const val ANSWER = 1

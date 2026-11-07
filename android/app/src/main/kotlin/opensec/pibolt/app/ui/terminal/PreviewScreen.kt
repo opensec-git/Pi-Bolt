@@ -3,18 +3,9 @@ package opensec.pibolt.app.ui.terminal
 import opensec.pibolt.app.ui.projects.EmptyCard
 import opensec.pibolt.app.ui.components.PrimaryButton
 import androidx.compose.material.icons.rounded.CloudOff
-import android.webkit.WebResourceError
-import android.annotation.SuppressLint
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
-import android.graphics.Bitmap
-import android.webkit.RenderProcessGoneDetail
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -37,10 +28,18 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.size
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import android.view.ViewGroup
+import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.preview.PreviewController
+import opensec.pibolt.app.preview.PreviewOrigins
+import opensec.pibolt.app.ui.components.GlassPill
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -57,84 +56,29 @@ import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.components.ProgressLine
 import opensec.pibolt.app.ui.theme.Pi
 
-/** Whether the preview may load [url]: plain http to this phone's loopback only (localhost or 127.0.0.1, any port). */
-fun previewAllowed(url: String?): Boolean {
-    val uri = runCatching { (url ?: return false).toUri() }.getOrNull() ?: return false
-    return uri.scheme == "http" && (uri.host == "localhost" || uri.host == "127.0.0.1")
-}
-
 /**
- * The dev app in an in-app browser: a WebView restricted to http://localhost and 127.0.0.1, JavaScript on (dev apps
- * need it), no file or content access. Reload and "Open in browser" in the bar. A tapped link elsewhere opens in the
- * phone's browser; other navigations away from localhost are blocked.
+ * The dev app in an in-app browser: the shared preview WebView ([PreviewController]), restricted to http://localhost
+ * and 127.0.0.1, JavaScript on (dev apps need it), no file or content access. Pi's preview tools drive the same page,
+ * so the user sees what Pi sees; "Pi is using the preview" shows while they do. Reload and "Open in browser" in the bar.
+ * A tapped link elsewhere opens in the phone's browser; other navigations away from localhost are blocked.
  */
-@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun PreviewScreen(port: Int, onBack: () -> Unit) {
     val colors = Pi.colors
     val type = Pi.type
     val context = LocalContext.current
+    val preview = (context.applicationContext as PiBoltApp).preview
     val start = "http://localhost:$port/"
-    var url by remember { mutableStateOf(start) }
-    var loading by remember { mutableStateOf(true) }
-    // The page's load progress from WebView (0 to 100), for a determinate line: never an indeterminate animation.
-    var progress by remember { mutableIntStateOf(0) }
-    var canGoBack by remember { mutableStateOf(false) }
-    // The dev server did not answer (stopped, still starting, wrong port): our own card instead of WebView's page.
-    var failed by remember { mutableStateOf<String?>(null) }
-    val web = remember {
-        WebView(context).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.allowFileAccess = false
-            settings.allowContentAccess = false
-            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            settings.setGeolocationEnabled(false)
-            webChromeClient = object : WebChromeClient() {
-                override fun onProgressChanged(view: WebView, newProgress: Int) {
-                    progress = newProgress
-                }
-            }
-            webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                    val target = request.url.toString()
-                    if (previewAllowed(target)) return false
-                    if (request.hasGesture() && request.isForMainFrame) openOutside(context, target)
-                    return true
-                }
-
-                override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                    if (request.isForMainFrame) failed = error.description?.toString().orEmpty()
-                }
-
-                override fun onPageStarted(view: WebView, pageUrl: String?, favicon: Bitmap?) {
-                    loading = true
-                    failed = null
-                    pageUrl?.let { url = it }
-                }
-
-                override fun onPageFinished(view: WebView, pageUrl: String?) {
-                    loading = false
-                    canGoBack = view.canGoBack()
-                }
-
-                // A dev server's page that crashes or exhausts the WebView renderer must not take the app (its live
-                // sessions and terminals) down with it: leave the preview instead.
-                override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                    onBack()
-                    return true
-                }
-            }
-            loadUrl(start)
-        }
-    }
+    val page by preview.page.collectAsStateWithLifecycle()
+    val driving by preview.driving.collectAsStateWithLifecycle()
+    val web = remember(port) { preview.show(port) }
     DisposableEffect(web) {
-        onDispose {
-            web.stopLoading()
-            web.destroy()
-        }
+        onDispose { preview.hide() }
     }
-    BackHandler(enabled = canGoBack) { web.goBack() }
+    // The renderer crashed or was killed: leave the preview (the app and its sessions stay up).
+    LaunchedEffect(preview) { preview.gone.collect { onBack() } }
+    BackHandler(enabled = page.canGoBack) { preview.goBack() }
+    val url = page.url ?: start
 
     Column(Modifier.fillMaxSize().background(colors.canvas).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))) {
         // The glass bar: close, the address in a glass capsule (monoMeta ink2, middle ellipsis), Reload and Open in browser.
@@ -153,28 +97,45 @@ fun PreviewScreen(port: Int, onBack: () -> Unit) {
                 }
             },
             actions = {
-                GlassIconButton(Icons.Rounded.Refresh, "Reload", onClick = { web.reload() })
+                GlassIconButton(Icons.Rounded.Refresh, "Reload", onClick = { preview.reload() })
                 GlassIconButton(Icons.AutoMirrored.Rounded.OpenInNew, "Open in browser", onClick = { openOutside(context, url) })
             },
         )
         Box(Modifier.fillMaxWidth().height(2.dp)) {
-            if (loading) ProgressLine(progress / 100f)
+            if (page.loading) ProgressLine(page.progress / 100f)
         }
         Box(Modifier.weight(1f).fillMaxWidth().navigationBarsPadding()) {
-            AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
-            failed?.let { reason ->
+            AndroidView(
+                factory = {
+                    (web.parent as? ViewGroup)?.removeView(web)
+                    web
+                },
+                modifier = Modifier.fillMaxSize(),
+            )
+            page.failed?.let { reason ->
                 Column(Modifier.fillMaxSize().background(colors.canvas).padding(top = Space.sm)) {
                     EmptyCard(
                         Icons.Rounded.CloudOff,
-                        "Nothing answers on localhost:$port",
+                        "Nothing answers on localhost:${PreviewOrigins.portOf(url) ?: port}",
                         "Check the dev server's terminal, then reload." +
                             if (reason.isNotBlank()) " ($reason)" else "",
                     ) {
-                        PrimaryButton("Reload", onClick = { web.reload() }, icon = Icons.Rounded.Refresh, modifier = Modifier.fillMaxWidth())
+                        PrimaryButton("Reload", onClick = { preview.reload() }, icon = Icons.Rounded.Refresh, modifier = Modifier.fillMaxWidth())
                     }
                 }
             }
+            if (driving != null) PiDrivingPill(Modifier.align(Alignment.BottomCenter).padding(bottom = Space.lg))
         }
+    }
+}
+
+/** "Pi is using the preview": shown while Pi's preview tools drive the page (and a few seconds after). */
+@Composable
+fun PiDrivingPill(modifier: Modifier = Modifier, onClick: (() -> Unit)? = null) {
+    val colors = Pi.colors
+    GlassPill(modifier = modifier.semantics { liveRegion = LiveRegionMode.Polite }, onClick = onClick, label = onClick?.let { "Watch Pi in the preview" }) {
+        Box(Modifier.size(8.dp).background(colors.accent, CircleShape))
+        Text("Pi is using the preview", style = Pi.type.label, color = colors.ink1, maxLines = 1)
     }
 }
 

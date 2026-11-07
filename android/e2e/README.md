@@ -43,6 +43,7 @@ On a 16 GB Mac, start at most three emulators and wait for the load average to s
 | `projects.sh` | create, rename, pin, reopen after restart, delete with confirmation |
 | `files.sh` | Files tab: listing, folders, text and binary viewer, a file Pi writes |
 | `extensions.sh` | bundled extensions: `todo` tool and todo panel, foreground `Agent` card, no engine processes left after close |
+| `frames.sh` | frame timing per scenario on a phone (not pass/fail; measures the installed build, see its header) |
 
 ## Files
 
@@ -50,7 +51,9 @@ On a 16 GB Mac, start at most three emulators and wait for the load average to s
   environment variables (`SERIAL`, `APK`, `E2E_OUT`, `E2E_ENGINE`, `E2E_INSTALL`, `FAKE_PORT`, `FAKE_MODEL`, timeouts).
 - `ui.mjs`: queries a `uiautomator` dump (`text=`, `text~=`, `desc=`, `desc~=`, `any=`, `re=`).
 - `fake-model-scripted.mjs`: the fake model. Keywords such as `e2e-ls` trigger a scripted bash tool call.
-- `fake-model-ext.mjs`: adds `todo` and `Agent` scripts for `extensions.sh`.
+- `fake-model-ext.mjs`: adds `todo` and `Agent` scripts for `extensions.sh`, and `smooth-md` / `smooth-agents` for
+  `frames.sh`.
+- `gen-long-session.mjs`: a 40-turn session with code, tables, mermaid and tool steps for `frames.sh`.
 - `fake-model-todo.mjs`: multi-step todo and Explore-agent scripts for manual UI checks.
 - `emulators.sh`: create, start and stop the headless emulators.
 

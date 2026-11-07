@@ -26,6 +26,7 @@ import opensec.pibolt.app.background.BackgroundSetup
 import opensec.pibolt.app.background.WakePolicy
 import opensec.pibolt.app.engine.BackgroundJobs
 import opensec.pibolt.protocol.session.SessionState
+import opensec.pibolt.protocol.session.UserItem
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -65,7 +66,7 @@ class SessionService : Service() {
             // a remote one relays messages from a computer. Both types are declared: sessions of either kind may join.
             val type = if (Build.VERSION.SDK_INT < 34) 0 else ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE or ServiceInfo.FOREGROUND_SERVICE_TYPE_REMOTE_MESSAGING
             val live = live(app.sessions.value)
-            val summary = RunningSummary.of(live.map(::entry), getString(R.string.app_name))
+            val summary = RunningSummary.of(live.map { entry(it, live) }, getString(R.string.app_name))
             ServiceCompat.startForeground(
                 this,
                 Notifications.ONGOING_ID,
@@ -99,7 +100,7 @@ class SessionService : Service() {
         val nowWorking = WakePolicy.working(live.map(::work))
         applyLocks(nowWorking)
         if (nowWorking && !app.isForeground) BackgroundSetup.noteBackgroundRun(this)
-        val summary = RunningSummary.of(live.map(::entry), getString(R.string.app_name))
+        val summary = RunningSummary.of(live.map { entry(it, live) }, getString(R.string.app_name))
         if (summary == null) {
             stop()
             return
@@ -127,11 +128,13 @@ class SessionService : Service() {
 
     private fun subagents(s: SessionState): Boolean = SUBAGENTS_STATUS in s.statuses || s.subagents.values.any { it.background && it.isActive }
 
-    /** A session as the notification sees it. */
-    private fun entry(c: SessionController): RunningSummary.Entry {
+    /** A session as the notification sees it; [live]: every live session, to tell two of one project apart. */
+    private fun entry(c: SessionController, live: List<SessionController>): RunningSummary.Entry {
         val s = c.state.value
+        val shared = c.isLocal && live.count { it.isLocal && it.project == c.project } > 1
+        val asked = s.sessionName ?: (s.items.lastOrNull { it is UserItem } as? UserItem)?.text
         return RunningSummary.Entry(
-            name = c.hostName.value,
+            name = RunningSummary.name(c.hostName.value, asked, shared),
             local = c.isLocal,
             running = s.isRunning,
             waiting = s.dialogs.isNotEmpty(),
