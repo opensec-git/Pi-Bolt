@@ -18,11 +18,8 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.Chat
 import androidx.compose.material.icons.automirrored.rounded.Chat
-import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.rounded.Difference
-import androidx.compose.material.icons.outlined.Difference
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.Terminal
 import androidx.compose.material3.Icon
@@ -43,6 +40,7 @@ import opensec.pibolt.app.git.GitStatus
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
+import opensec.pibolt.app.ui.theme.Radius
 
 /** The four places of a project. [index] is what the screen saves across rotation and process death. */
 enum class ProjectTab(val index: Int, val label: String) {
@@ -144,7 +142,7 @@ private fun NavItem(tab: ProjectTab, on: Boolean, badge: String?, dot: Boolean, 
                     if (!on) haptics.tick()
                     onClick()
                 },
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(Radius.md),
                 pressedScale = 1f,
                 role = Role.Tab,
                 label = tab.label,
@@ -158,7 +156,7 @@ private fun NavItem(tab: ProjectTab, on: Boolean, badge: String?, dot: Boolean, 
     ) {
         Box(contentAlignment = Alignment.Center) {
             Box(Modifier.size(width = 56.dp, height = 30.dp).background(pill, CircleShape), contentAlignment = Alignment.Center) {
-                Icon(tab.icon(on), contentDescription = null, tint = ink, modifier = Modifier.size(22.dp))
+                Icon(tab.icon, contentDescription = null, tint = ink, modifier = Modifier.size(22.dp))
             }
             if (badge != null) {
                 Text(
@@ -193,9 +191,10 @@ private fun NavItem(tab: ProjectTab, on: Boolean, badge: String?, dot: Boolean, 
     }
 }
 
-private fun ProjectTab.icon(on: Boolean): ImageVector = when (this) {
-    ProjectTab.Sessions -> if (on) Icons.AutoMirrored.Rounded.Chat else Icons.AutoMirrored.Outlined.Chat
-    ProjectTab.Files -> if (on) Icons.Rounded.Folder else Icons.Outlined.Folder
-    ProjectTab.Changes -> if (on) Icons.Rounded.Difference else Icons.Outlined.Difference
+// One icon family (DESIGN.md): the selected tab is told by its pill and ink, not a filled glyph.
+private val ProjectTab.icon: ImageVector get() = when (this) {
+    ProjectTab.Sessions -> Icons.AutoMirrored.Rounded.Chat
+    ProjectTab.Files -> Icons.Rounded.Folder
+    ProjectTab.Changes -> Icons.Rounded.Difference
     ProjectTab.Terminal -> Icons.Rounded.Terminal
 }
