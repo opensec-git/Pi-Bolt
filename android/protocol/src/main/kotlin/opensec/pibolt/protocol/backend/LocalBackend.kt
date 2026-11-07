@@ -188,6 +188,9 @@ class LocalBackend(
 
     val isAlive: Boolean get() = engine?.alive == true
 
+    /** The directory the engine works in for its current session (a switch to another project's session moves it). */
+    val engineCwd: String? get() = engine?.cwd
+
     /** The engine process id, for diagnostics. */
     val pid: Long? get() = engine?.pid
 

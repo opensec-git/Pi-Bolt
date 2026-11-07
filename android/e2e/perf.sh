@@ -19,6 +19,19 @@ NUM="$OUT_DIR/numbers.txt"
 ROUNDS="${ROUNDS:-5}"
 DATA=/data/data/$PKG
 note() { printf '%s\n' "$*" | tee -a "$NUM" >&2; }
+IDLE_S="${IDLE_S:-60}"
+
+# A real phone: the fake model through adb reverse, and user 0 for pm/am (a work profile makes them pick user 10).
+case "$SERIAL" in
+emulator-*) PHONE= ;;
+*)
+	PHONE=1
+	adb_ reverse "tcp:$FAKE_PORT" "tcp:$FAKE_PORT" >/dev/null
+	install_apk() { log "installing $(basename "$APK")"; adb_ install -r -g --user 0 "$APK" >/dev/null && grant_permissions; }
+	clear_data() { adb_ shell pm clear --user 0 "$PKG" >/dev/null; grant_permissions; run_as "mkdir -p files" >/dev/null; }
+	launch_app() { adb_ shell am start --user 0 -W -n "$PKG/$ACTIVITY" >/dev/null; WAIT=30 wait_for "${APP_SCREENS[@]}" >/dev/null; }
+	;;
+esac
 
 device_prepare
 [ "${SKIP_INSTALL:-0}" = 1 ] || E2E_INSTALL=1 install_apk || exit 3
@@ -46,7 +59,7 @@ sleep 15
 if [ -n "${RELEASE_APK:-}" ]; then
 	stop_app
 	log "installing the release build over the debug one"
-	adb_ install -r "$RELEASE_APK" >/dev/null || exit 3
+	adb_ install -r ${PHONE:+--user 0} "$RELEASE_APK" >/dev/null || exit 3
 	launch_app
 	sleep 15
 fi
@@ -59,7 +72,7 @@ for i in $(seq "$ROUNDS"); do
 	sleep 2
 	adb_ logcat -c
 	t0=$(python3 -c 'import time; print(int(time.time()*1000))')
-	total=$(adb_ shell am start -W -n "$PKG/$ACTIVITY" | tr -d '\r' | sed -n 's/^TotalTime: //p')
+	total=$(adb_ shell am start ${PHONE:+--user 0} -W -n "$PKG/$ACTIVITY" | tr -d '\r' | sed -n 's/^TotalTime: //p')
 	WAIT=20 wait_for "text=perf-big" >/dev/null
 	t1=$(python3 -c 'import time; print(int(time.time()*1000))')
 	sleep 12
@@ -109,7 +122,7 @@ for i in $(seq "$ROUNDS"); do
 	adb_ shell input keyevent KEYCODE_HOME
 	sleep 60
 	adb_ logcat -c
-	adb_ shell am start -n "$PKG/$ACTIVITY" >/dev/null
+	adb_ shell am start ${PHONE:+--user 0} -n "$PKG/$ACTIVITY" >/dev/null
 	sleep 1
 	open_saved perf-big
 	note "open_after_background_60s $(open_timing)"
@@ -165,11 +178,11 @@ idle_check() {
 	a=$(switches "$pid")
 	ea=0
 	for e in $engines; do ea=$((ea + $(switches "$e"))); done
-	sleep 60
+	sleep "$IDLE_S"
 	b=$(switches "$pid")
 	eb=0
 	for e in $engines; do eb=$((eb + $(switches "$e"))); done
-	note "idle_wakeups_60s_$label app $((b - a)) engines $((eb - ea)) ($(echo $engines | wc -w | tr -d ' ') engines)"
+	note "idle_wakeups_${IDLE_S}s_$label app $((b - a)) engines $((eb - ea)) ($(echo $engines | wc -w | tr -d ' ') engines)"
 }
 hide_keyboard
 idle_check session_screen

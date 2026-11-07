@@ -202,14 +202,18 @@ class SessionController private constructor(
                 // An idle engine can serve the next open of this project (the engine decides); stop reading it first.
                 // Not idle while the subagents extension runs background agents (its "subagents" status): a parked
                 // engine would keep them running unseen, and their completion would start a new turn of a closed session.
-                val idle = _state.value.let { !it.isRunning && !it.isCompacting && it.dialogs.isEmpty() && SUBAGENTS_STATUS !in it.statuses } &&
-                    _link.value is LinkState.Connected
+                val idle = isIdle
                 rpc.stop()
                 scope.cancel()
                 origin.release(origin.backend, idle)
             }
         }
     }
+
+    /** Connected, and nothing runs: no turn, compaction, open dialog or background subagent. */
+    val isIdle: Boolean
+        get() = _state.value.let { !it.isRunning && !it.isCompacting && it.dialogs.isEmpty() && SUBAGENTS_STATUS !in it.statuses } &&
+            _link.value is LinkState.Connected
 
     fun retryNow() {
         retrySignal.trySend(Unit)
