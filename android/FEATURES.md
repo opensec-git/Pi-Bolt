@@ -15,9 +15,9 @@ rpc-extension-ui.md, remote-control.md) and src/modes/interactive.
 
 | | P0 | P1 | P2 | Total |
 |---|---|---|---|---|
-| done | 39 | 44 | 6 | 89 |
-| partial | 0 | 2 | 3 | 5 |
-| missing | 0 | 2 | 27 | 29 |
+| done | 39 | 45 | 11 | 95 |
+| partial | 0 | 1 | 3 | 4 |
+| missing | 0 | 2 | 22 | 24 |
 | **Total** | 39 | 48 | 36 | 123 |
 
 Not counted: 12 `n/a` rows (terminal-only features). Before this branch the same rows stood at 53 done, 15 partial and
@@ -37,12 +37,12 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 | Send a prompt | Enter | done | both | P0 |
 | Multi-line input | Shift+Enter | done: the composer grows to 6 lines, then scrolls | both | P0 |
 | Steer while Pi works | Enter while running | done: Steer / Follow-up switch | both | P0 |
-| Follow-up while Pi works | Alt+Enter | done: Steer / Follow-up switch (no hardware key) | both | P0 |
+| Follow-up while Pi works | Alt+Enter | done: Steer / Follow-up chip next to send, Alt+Enter | both | P0 |
 | Stop the run | Esc | done: Stop button, Esc on a hardware keyboard | both | P0 |
 | Queue view (steering and follow-ups) | above the editor | done: queue strip, steer/follow-up marked | both | P0 |
-| Restore queued messages to the editor | Alt+Up | done: Edit / swipe returns them to the composer | both | P1 |
+| Restore queued messages to the editor | Alt+Up | done: Edit / swipe returns them to the composer, Alt+Up | both | P1 |
 | Attach images | Ctrl+V paste, drag | done: photo picker, up to 4, resized | both | P0 |
-| Paste an image from the clipboard | Ctrl+V | missing | both | P2 |
+| Paste an image from the clipboard | Ctrl+V | done: Ctrl+V, or "Paste image" in the + sheet | both | P2 |
 | Slash command menu | `/` | done: fuzzy palette, built-ins + extension, prompt and skill commands with source badges | both | P0 |
 | Argument hints | menu | done for built-ins; host commands when the host sends `argumentHint` | both | P1 |
 | Prompt templates (`/name`) | `/` | done (expanded by Pi) | both | P0 |
@@ -51,7 +51,7 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 | `@` file mention | `@` | done: fuzzy over the project's files and folders | device | P1 |
 | `!command` shell | `!` | done: runs in the project, output streams into a step | device | P1 |
 | `!!command` (out of context) | `!!` | done | device | P2 |
-| Prompt history | Up / Down | partial: recent prompts on the empty session; no in-composer history | both | P1 |
+| Prompt history | Up / Down | done: Up / Down in the composer, "Prompt history" sheet, recent prompts on the empty session | both | P1 |
 | Draft kept per session | editor buffer | done: saved per session across restarts | both | P1 |
 | Send shortcut | Enter | done: Ctrl+Enter on a hardware keyboard | both | P1 |
 | Haptics on send, stop, answers, errors | — | done | both | P1 |
@@ -90,7 +90,7 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 | Session tree navigation | `/tree`, double Esc | missing | device | P2 |
 | Tree labels, filters | `/tree` keys | missing | device | P2 |
 | Session info and statistics | `/session` | done: Session sheet (`get_session_stats`) | both | P0 |
-| Context usage in the footer | footer | done: top-bar subtitle, context bar in Session | both | P0 |
+| Context usage in the footer | footer | done: top-bar context meter (kept through failed turns), context bar in Session | both | P0 |
 | Tokens in/out, cache, cost | footer | done: footer line and totals in Session | both | P0 |
 | Delete a session | session picker Ctrl+D | missing (projects delete all their sessions) | device | P2 |
 | Session list sort / named filter | Ctrl+S / Ctrl+N | missing | device | P2 |
@@ -131,7 +131,7 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 | Todo list | extension | done: todo panel | both | P1 |
 | Subagent progress | extension | done (subagent work in 0.3.0) | both | P1 |
 | Extension notices / custom messages | — | done | both | P1 |
-| Errors and retries | status | done: notices, "Retrying 1/3" | both | P0 |
+| Errors and retries | status | done: one notice per failed turn with a human title, the status code, attempts and Retry / Switch model / Compact / Update key | both | P0 |
 | Stop an automatic retry | `abort_retry` | missing (Stop aborts the run) | both | P2 |
 | Cache-miss notices | `showCacheMissNotices` | missing | both | P2 |
 
@@ -201,10 +201,10 @@ share); auto-compaction status; per-session drafts; hardware-keyboard shortcuts;
 | Stop | Esc | done | both | P1 |
 | Next model | Ctrl+P | done | both | P2 |
 | Next thinking level | Shift+Tab | done | both | P2 |
-| Follow-up | Alt+Enter | missing | both | P2 |
-| Restore queue | Alt+Up | missing | both | P2 |
-| Open model picker | Ctrl+L | missing | both | P2 |
-| Search | Ctrl+Shift+F | missing | both | P2 |
+| Follow-up | Alt+Enter | done | both | P2 |
+| Restore queue | Alt+Up | done | both | P2 |
+| Open model picker | Ctrl+L | done | both | P2 |
+| Search | Ctrl+Shift+F | done | both | P2 |
 | Custom keybindings | keybindings.json | n/a | — | — |
 
 ## Remote control and the phone

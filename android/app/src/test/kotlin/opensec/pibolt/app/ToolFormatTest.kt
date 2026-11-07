@@ -85,7 +85,7 @@ class ToolFormatTest {
         assertEquals(100, contextPercent(300_000, 200_000))
         assertNull(contextPercent(10, null))
         assertEquals("Thinking off", thinkingChipLabel("off"))
-        assertEquals("High", thinkingChipLabel("high"))
+        assertEquals("Thinking: high", thinkingChipLabel("high"))
     }
 
     @Test

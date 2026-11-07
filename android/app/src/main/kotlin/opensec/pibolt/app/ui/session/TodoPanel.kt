@@ -33,6 +33,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -45,6 +46,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -107,9 +109,13 @@ fun todoText(task: TodoTask, running: Boolean): String =
 /**
  * The todo list above the composer: "Todos (done/total)" with a progress ring, then a row per task. The heading
  * collapses the panel to itself (the current task then follows the count). It appears and leaves with the list.
+ *
+ * [autoCollapse] (idle, or a short window) shows the collapsed form until the user taps the heading; a change of it
+ * drops that choice again. [quiet] (the live status line is on screen and owns the one spinner) draws the task in
+ * progress as a still half ring instead of a Quad.
  */
 @Composable
-fun TodoPanel(todos: TodoState, running: Boolean) {
+fun TodoPanel(todos: TodoState, running: Boolean, autoCollapse: Boolean = false, quiet: Boolean = false) {
     val colors = Pi.colors
     // The last non-empty list, so the panel keeps its rows while it leaves.
     val shown = remember { mutableStateOf(todos) }
@@ -119,7 +125,10 @@ fun TodoPanel(todos: TodoState, running: Boolean) {
         enter = expandVertically(PiMotion.enter(PiMotion.STANDARD)) + fadeIn(PiMotion.enter(PiMotion.QUICK)),
         exit = shrinkVertically(PiMotion.leave(PiMotion.STANDARD)) + fadeOut(PiMotion.leave(PiMotion.QUICK)),
     ) {
-        var collapsed by rememberSaveable { mutableStateOf(false) }
+        // The user's own choice (true = collapsed); null follows [autoCollapse].
+        var choice by rememberSaveable { mutableStateOf<Boolean?>(null) }
+        LaunchedEffect(autoCollapse) { choice = null }
+        val collapsed = choice ?: autoCollapse
         val tasks = shown.value.visible
         val done = tasks.count { it.status == TodoStatus.Completed }
         val current = tasks.firstOrNull { it.status == TodoStatus.InProgress } ?: tasks.firstOrNull { it.status == TodoStatus.Pending }
@@ -135,14 +144,14 @@ fun TodoPanel(todos: TodoState, running: Boolean) {
                 .border(1.dp, colors.line, shape)
                 .animateContentSize(if (reduced) snap() else PiMotion.inPlace()),
         ) {
-            TodoHeading(done, tasks.size, if (collapsed) current?.let { todoText(it, running) } else null, collapsed) { collapsed = !collapsed }
+            TodoHeading(done, tasks.size, if (collapsed) current?.let { todoText(it, running) } else null, collapsed) { choice = !collapsed }
             AnimatedVisibility(
                 visible = !collapsed,
                 enter = expandVertically(PiMotion.inPlace(), expandFrom = Alignment.Top) + fadeIn(PiMotion.inPlace(PiMotion.QUICK)),
                 exit = shrinkVertically(PiMotion.leave(PiMotion.STANDARD), shrinkTowards = Alignment.Top) + fadeOut(PiMotion.leave(PiMotion.QUICK)),
             ) {
                 Column(Modifier.padding(bottom = 8.dp)) {
-                    for (task in layout.rows) key(task.id) { TodoRow(task, running) }
+                    for (task in layout.rows) key(task.id) { TodoRow(task, running, quiet) }
                     if (layout.hidden > 0) {
                         Text(
                             todoOverflow(layout),
@@ -214,12 +223,12 @@ private enum class Glyph { Pending, Working, Paused, Done }
 
 /** One task: 20dp glyph slot, 12dp gap, the text. Not interactive, so 32dp tall. */
 @Composable
-private fun TodoRow(task: TodoTask, running: Boolean) {
+private fun TodoRow(task: TodoTask, running: Boolean, quiet: Boolean) {
     val colors = Pi.colors
     val reduced = Pi.reduceMotion
     val glyph = when (task.status) {
         TodoStatus.Pending -> Glyph.Pending
-        TodoStatus.InProgress -> if (running) Glyph.Working else Glyph.Paused
+        TodoStatus.InProgress -> if (running && !quiet) Glyph.Working else Glyph.Paused
         TodoStatus.Completed -> Glyph.Done
     }
     val text = todoText(task, running)
@@ -262,7 +271,7 @@ private fun TodoRow(task: TodoTask, running: Boolean) {
             Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) {
                 when (g) {
                     Glyph.Pending -> StatusCircle(filled = false)
-                    Glyph.Paused -> StatusCircle(filled = true)
+                    Glyph.Paused -> StatusCircle(filled = true, ink = if (running) colors.ink1 else colors.ink2)
                     Glyph.Working -> QuadSpinner(QuadMode.Think, size = 12.dp, color = colors.ink1)
                     Glyph.Done -> Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.success, modifier = Modifier.size(16.dp))
                 }
@@ -282,8 +291,7 @@ private fun TodoRow(task: TodoTask, running: Boolean) {
 
 /** A 12dp ring for a pending task (ink3); [filled] fills its left half for one in progress while the agent is idle. */
 @Composable
-private fun StatusCircle(filled: Boolean) {
-    val ink = if (filled) Pi.colors.ink2 else Pi.colors.ink3
+private fun StatusCircle(filled: Boolean, ink: Color = if (filled) Pi.colors.ink2 else Pi.colors.ink3) {
     Canvas(Modifier.size(12.dp)) {
         val stroke = 1.5.dp.toPx()
         drawCircle(ink, radius = (size.minDimension - stroke) / 2, style = Stroke(stroke))

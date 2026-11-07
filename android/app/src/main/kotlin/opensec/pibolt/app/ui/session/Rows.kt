@@ -655,7 +655,7 @@ fun StatusLine(visible: Boolean, mode: QuadMode, text: StatusText, startedAt: Lo
                 }
             }
             if (startedAt > 0) {
-                Text("  ·  ", style = type.label, color = colors.ink4)
+                if (text.label.isNotEmpty()) Text("  ·  ", style = type.label, color = colors.ink4)
                 Elapsed(startedAt)
             }
         }
