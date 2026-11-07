@@ -23,6 +23,8 @@ const dir = join(root, String(process.pid));
 let jobs = [];
 let nextId = 1;
 let lastCtx;
+// Pi loads the extension again on every session switch; the module (and so this listener) stays one.
+let exitHooked = false;
 
 function alive(pid) {
 	try {
@@ -172,12 +174,15 @@ function text(t, details, isError = false) {
 }
 
 export default function (pi) {
-	process.on("exit", () => {
-		stopAll();
-		try {
-			rmSync(dir, { recursive: true, force: true });
-		} catch {}
-	});
+	if (!exitHooked) {
+		exitHooked = true;
+		process.on("exit", () => {
+			stopAll();
+			try {
+				rmSync(dir, { recursive: true, force: true });
+			} catch {}
+		});
+	}
 
 	pi.on("session_start", (_event, ctx) => {
 		lastCtx = ctx;

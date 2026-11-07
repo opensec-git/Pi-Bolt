@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -80,6 +81,7 @@ fun BackgroundJobsPill(enginePid: Long?, modifier: Modifier = Modifier) {
     if (open) BackgroundJobsSheet(jobs, tails, now, onDismiss = { open = false })
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BackgroundJobsSheet(jobs: List<BackgroundJobs.Job>, tails: Map<Int, String>, now: Long, onDismiss: () -> Unit) {
     val colors = Pi.colors

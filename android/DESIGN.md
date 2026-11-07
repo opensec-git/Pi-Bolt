@@ -1391,6 +1391,17 @@ plain row ("Read results").
   lineStrong ring, so black marks (GitHub) stay visible. Without one: the Rounded Public glyph on surface3, never a
   letter tile.
 
+## Background jobs (bash_background)
+
+The app's `pibolt-bg` extension runs shell commands in the background for the agent (`engine/BackgroundJobs.kt`,
+`ui/session/BackgroundJobsUi.kt`). In a project session with jobs, a `GlassPill` sits under the Preview chips: an 8dp
+dot (success while any job runs, else ink3) and "Background · 2 running · 1 ended" (label ink1). Tap opens a `PiSheet`
+"Background": running jobs first, newest first; each row a status dot (success running, ink3 done, danger failed),
+"#id name" (bodyStrong ink1, one line) over "Running · 3m 4s" (label ink2), Log and Stop (`GhostButton` Small, Stop
+in danger, "Stopping" while it waits), then the last six output lines (monoSmall ink2). Log opens the full log in the
+same sheet (monoSmall, scrolled to the end, back arrow). Read every 2 s, every second while the sheet is open. The
+extension's status line (`bg-jobs`) is not shown as a status line: the pill tells it.
+
 ## Question card (ask_user_question)
 
 `ask_user_question` (rpiv-ask-user-question) walks its questions with Pi's select and input dialogs; the app shows
