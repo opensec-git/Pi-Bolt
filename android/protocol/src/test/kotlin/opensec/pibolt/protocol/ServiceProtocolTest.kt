@@ -88,6 +88,18 @@ class ServiceProtocolTest {
     }
 
     @Test
+    fun helloCarriesTheParallelSessionsCapability() {
+        // A service that keeps one runtime per session: switching never stops a running one.
+        val parallel = SessionReducer.reduce(SessionState(), json("""{"type":"remote_hello","protocol":1,"host":{"name":"m","version":"1.1.5","cwd":"/w","service":true,"parallelSessions":true},"state":{},"messages":[],"dialogs":[],"commands":[]}"""))
+        assertTrue(parallel.host!!.parallelSessions)
+        // An older service (or a terminal) says nothing: the app refuses to switch it mid-turn.
+        val old = SessionReducer.reduce(SessionState(), json("""{"type":"remote_hello","protocol":1,"host":{"name":"m","version":"1.1.4","cwd":"/w","service":true},"state":{},"messages":[],"dialogs":[],"commands":[]}"""))
+        assertFalse(old.host!!.parallelSessions)
+        val odd = SessionReducer.reduce(SessionState(), json("""{"type":"remote_hello","protocol":1,"host":{"name":"m","parallelSessions":"yes"},"state":{},"messages":[],"dialogs":[],"commands":[]}"""))
+        assertFalse(odd.host!!.parallelSessions)
+    }
+
+    @Test
     fun closeCode1012IsAHandoffWorthRetryingAtOnce() {
         assertEquals(DisconnectReason.Handoff, DisconnectReason.fromCloseCode(1012))
         assertTrue(DisconnectReason.Handoff.retryable)
@@ -147,6 +159,8 @@ class ServiceProtocolTest {
         assertEquals(12, sessions[0].messageCount)
         assertEquals("hello", sessions[1].title)
         assertNull(sessions[1].name)
+        // An older service sends no running/open flags.
+        assertFalse(sessions[0].running || sessions[0].open)
         assertEquals("/Users/me/app", backend.sent.last().str("cwd"))
 
         assertTrue(rpc.newSession(cwd = "/Users/me/app").success)
@@ -159,6 +173,13 @@ class ServiceProtocolTest {
         rpc.listSessions()
         assertFalse("cwd" in backend.sent.last())
         rpc.stop()
+    }
+
+    @Test
+    fun sessionsSayWhichRunOnTheComputer() {
+        val response = RpcResponse("list_sessions", true, json("""{"sessions":[{"path":"/s/a.jsonl","id":"a","cwd":"/w","preview":"x","updatedAt":"","messageCount":2,"running":true,"open":true},{"path":"/s/b.jsonl","id":"b","cwd":"/w","preview":"y","updatedAt":"","messageCount":1,"open":true},{"path":"/s/c.jsonl","id":"c","cwd":"/w","preview":"z","updatedAt":"","messageCount":1,"running":"yes"}]}"""), null)
+        val sessions = RemoteSessionInfo.listFrom(response)
+        assertEquals(listOf(true to true, false to true, false to false), sessions.map { it.running to it.open })
     }
 
     @Test

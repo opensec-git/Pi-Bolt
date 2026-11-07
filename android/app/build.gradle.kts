@@ -211,6 +211,18 @@ android {
     }
 }
 
+composeCompiler {
+    // :protocol's immutable data classes (and File, JsonObject) as stable: see the file's header.
+    stabilityConfigurationFiles.add(layout.projectDirectory.file("compose-stability.conf"))
+    // Compose compiler reports, for smoothness work (android/README.md, "Frame timing"):
+    // ./gradlew :app:compileReleaseKotlin -Ppibolt.composeReports=true writes each class's stability and each
+    // composable's skippability to app/build/compose-reports, and the totals to app/build/compose-metrics.
+    if (providers.gradleProperty("pibolt.composeReports").orNull == "true") {
+        reportsDestination = layout.buildDirectory.dir("compose-reports")
+        metricsDestination = layout.buildDirectory.dir("compose-metrics")
+    }
+}
+
 kotlin {
     jvmToolchain(21)
     compilerOptions {

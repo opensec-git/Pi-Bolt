@@ -60,6 +60,9 @@ class ProjectSecrets(private val dir: File, private val box: SecretBox) {
     @Synchronized
     fun remove(project: File, name: String) = write(project, read(project).filterNot { it.name == name })
 
+    /** The project was deleted: its secrets go too, so a new project at the same path starts without them. */
+    fun forget(project: File) = write(project, emptyList())
+
     fun hasAny(project: File): Boolean = fileFor(project).isFile
 
     /** The variables to add to a process started for [project]; empty when it has none or its file cannot be opened. */

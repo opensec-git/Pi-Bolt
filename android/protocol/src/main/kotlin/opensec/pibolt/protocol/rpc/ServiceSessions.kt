@@ -2,6 +2,7 @@ package opensec.pibolt.protocol.rpc
 
 import kotlinx.serialization.json.JsonObject
 import opensec.pibolt.protocol.arr
+import opensec.pibolt.protocol.bool
 import opensec.pibolt.protocol.long
 import opensec.pibolt.protocol.str
 import java.time.Instant
@@ -26,7 +27,10 @@ data class RemoteProject(val cwd: String, val name: String, val sessions: Int, v
     }
 }
 
-/** A saved session on the computer, from `list_sessions`. [path] is what `switch_session` takes. */
+/**
+ * A saved session on the computer, from `list_sessions`. [path] is what `switch_session` takes. A service with
+ * `host.parallelSessions` says which sessions have a runtime open ([open]) and which of those work now ([running]).
+ */
 data class RemoteSessionInfo(
     val path: String,
     val id: String,
@@ -35,6 +39,8 @@ data class RemoteSessionInfo(
     val preview: String,
     val updatedAt: String,
     val messageCount: Int,
+    val running: Boolean = false,
+    val open: Boolean = false,
 ) {
     /** What a list shows: the session's name, else its first message, else its id. */
     val title: String get() = name?.takeIf { it.isNotBlank() } ?: preview.takeIf { it.isNotBlank() } ?: id
@@ -55,6 +61,8 @@ data class RemoteSessionInfo(
                     preview = o.str("preview").orEmpty(),
                     updatedAt = o.str("updatedAt").orEmpty(),
                     messageCount = o.long("messageCount")?.toInt() ?: 0,
+                    running = o.bool("running") == true,
+                    open = o.bool("open") == true,
                 )
             }
     }

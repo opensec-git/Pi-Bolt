@@ -1,6 +1,8 @@
 package opensec.pibolt.app.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -78,6 +80,15 @@ data class AgentDefaults(
             return JsonObject(out)
         }
 
+        /**
+         * [json] without its default model when that model is [provider]'s (the provider was removed: Pi would start with
+         * another model anyway, and Settings would still name the removed one). Null when nothing changes.
+         */
+        fun withoutDefaultFrom(json: JsonObject?, provider: String): JsonObject? {
+            if (json == null || json.str("defaultProvider") != provider) return null
+            return JsonObject(json - "defaultProvider" - "defaultModel")
+        }
+
         private fun nested(existing: JsonObject?, key: String, value: Boolean): JsonObject = nested(existing, key, JsonPrimitive(value))
 
         private fun nested(existing: JsonObject?, key: String, value: JsonPrimitive): JsonObject =
@@ -99,8 +110,17 @@ enum class QueueMode(val wire: String, val label: String) {
 class AgentSettingsFile(private val file: File) {
     suspend fun read(): AgentDefaults = withContext(Dispatchers.IO) { AgentDefaults.from(load()) }
 
-    suspend fun write(defaults: AgentDefaults) = withContext(Dispatchers.IO) {
-        val text = pretty.encodeToString(JsonObject.serializer(), AgentDefaults.merge(load(), defaults))
+    // One read-merge-write at a time, in call order (the lock is taken before the switch to IO, and a Mutex is fair):
+    // two switches flipped in quick succession wrote the same .tmp file at once, and the older change could land last.
+    suspend fun write(defaults: AgentDefaults) = LOCK.withLock { withContext(Dispatchers.IO) { save(AgentDefaults.merge(load(), defaults)) } }
+
+    /** Drops the default model when it is [provider]'s (Settings > Providers removed it). */
+    suspend fun forgetDefaultModelOf(provider: String) = LOCK.withLock {
+        withContext(Dispatchers.IO) { AgentDefaults.withoutDefaultFrom(load(), provider)?.let(::save) }
+    }
+
+    private fun save(json: JsonObject) {
+        val text = pretty.encodeToString(JsonObject.serializer(), json)
         file.parentFile?.mkdirs()
         val tmp = File(file.parentFile, file.name + ".tmp")
         tmp.writeText(text + "\n")
@@ -111,6 +131,11 @@ class AgentSettingsFile(private val file: File) {
     }
 
     private val pretty = Json { prettyPrint = true }
+
+    private companion object {
+        /** Every [AgentSettingsFile] writes the one agent/settings.json. */
+        val LOCK = Mutex()
+    }
 
     private fun load(): JsonObject? = runCatching { if (file.isFile) ProtocolJson.parseToJsonElement(file.readText()) as? JsonObject else null }.getOrNull()
 }

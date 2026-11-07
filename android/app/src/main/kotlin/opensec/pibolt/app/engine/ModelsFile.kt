@@ -80,6 +80,15 @@ object ModelsFile {
         return JsonObject(out)
     }
 
+    /**
+     * True when the provider [id] is already in [root] with a real key (its key in auth.json, so no placeholder here).
+     * Adding another model to it with the key field left empty keeps that key instead of replacing it with [NO_KEY].
+     */
+    fun hasSavedKey(root: JsonObject, id: String): Boolean {
+        val provider = (root["providers"] as? JsonObject)?.get(id) as? JsonObject ?: return false
+        return (provider["apiKey"] as? JsonPrimitive)?.content != NO_KEY
+    }
+
     /** [root] without the provider [id]; everything else stays. */
     fun remove(root: JsonObject, id: String): JsonObject {
         val providers = root["providers"] as? JsonObject ?: return root

@@ -53,7 +53,11 @@ data class Subagent(
     val isActive: Boolean get() = status.isActive
 }
 
-/** A subagent's conversation as read from its session [file]: rows like the main transcript's, and their key counter. */
+/**
+ * A subagent's conversation as read from its session [file]: rows like the main transcript's, and their key counter.
+ * [stream] / [live]: the message it writes now, while the computer (or this phone's engine) streams it
+ * (`subagent_events`); its rows ([live]) follow [items] until the finished message arrives and takes their keys.
+ */
 data class SubagentTranscript(
     val file: String,
     val items: List<ChatItem> = emptyList(),
@@ -62,4 +66,11 @@ data class SubagentTranscript(
     val tokens: Long = 0,
     val assistantMessages: Int = 0,
     val firstAt: Long? = null,
-)
+    val stream: StreamingMessage? = null,
+    val live: List<ChatItem> = emptyList(),
+    /** Counter of streamed messages: their keys (`live<n>`) never meet the file's (`m<n>`). */
+    val liveSeq: Long = 0,
+) {
+    /** The rows to show: the finished ones, then the message being written. */
+    val allItems: List<ChatItem> get() = if (live.isEmpty()) items else items + live
+}

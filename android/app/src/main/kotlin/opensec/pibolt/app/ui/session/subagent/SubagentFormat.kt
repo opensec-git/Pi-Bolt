@@ -43,7 +43,10 @@ object SubagentFormat {
      */
     fun isToolActivity(activity: String): Boolean = toolVerb.containsMatchIn(activity) || toolList.matches(activity)
 
-    private val toolVerb = Regex("""^(reading|running|editing|writing|searching|finding|listing|thinking|queued)\b""")
+    private val toolVerb = Regex("""^(reading|running|editing|writing|searching|finding|listing|thinking|working|queued)\b""")
+
+    /** The app's own lines that name no tool: the extension's report says more. */
+    private fun vague(activity: String): Boolean = activity.startsWith("thinking") || activity.startsWith("working") || activity.startsWith("writing")
     private val toolList = Regex("""^[a-z][a-z0-9_.:-]*( \d+ (files|patterns))?(, [a-z][a-z0-9_.:-]*( [a-z]+)*( \d+ (files|patterns))?)*…$""")
 
     /**
@@ -52,10 +55,10 @@ object SubagentFormat {
      * the extension's report are a tool, else the report.
      */
     fun liveActivity(reported: String?, fromFile: String?): String? {
-        val file = fromFile?.takeIf { it.isNotBlank() && !it.startsWith("thinking") } ?: return reported
+        val file = fromFile?.takeIf { it.isNotBlank() && !vague(it) } ?: return reported
         return when {
             reported == null -> file
-            isToolActivity(reported) && !reported.startsWith("thinking") -> file
+            isToolActivity(reported) && !vague(reported) -> file
             else -> reported
         }
     }
@@ -117,6 +120,41 @@ object SubagentFormat {
         SubagentStatus.Done -> firstLine(run.result)?.let(::plain) ?: "Done"
         SubagentStatus.Failed -> run.error?.let(::firstLine)?.let { "Failed: $it" } ?: firstLine(run.result) ?: "Failed"
         SubagentStatus.Stopped -> run.error?.let(::firstLine) ?: "Stopped"
+    }
+
+    /**
+     * The detail screen's live line. While the run is live it never reads as stuck: what it does now ("Reading
+     * src/a.ts", "Thinking…", "Writing…"), else "Working…". When it ends: "Finished", "Failed: …" or "Stopped".
+     */
+    fun liveLine(run: Subagent): String = when (run.status) {
+        SubagentStatus.Queued -> activityLine(run)
+        SubagentStatus.Running -> run.activity?.replace("`", "")?.replace("**", "")?.trim()?.takeIf { it.isNotEmpty() }?.let(::capitalise) ?: "Working…"
+        SubagentStatus.Done -> "Finished"
+        SubagentStatus.Failed -> run.error?.let(::firstLine)?.let { "Failed: $it" } ?: "Failed"
+        SubagentStatus.Stopped -> run.error?.let(::firstLine)?.let { "Stopped: $it" } ?: "Stopped"
+    }
+
+    /** Where the detail screen's messages come from. */
+    enum class Source {
+        /** This phone reads the agent's session file (and its engine may stream the message it writes). */
+        Device,
+
+        /** The computer streams them while the screen is open (`subagent_subscribe`). */
+        Stream,
+
+        /** The computer cannot stream them (before Pi-Bolt 1.1.5): only the prompt, progress and answer. */
+        Unavailable,
+    }
+
+    /**
+     * The note above the messages, or null: the old computer's limit; while nothing has arrived yet, that it loads;
+     * a finished run without a readable file, that only the prompt and answer are shown.
+     */
+    fun note(run: Subagent, source: Source): String? = when {
+        source == Source.Unavailable -> "Live view needs Pi-Bolt 1.1.5 on the computer"
+        run.transcript?.allItems.isNullOrEmpty() && run.isActive -> "Loading messages…"
+        run.transcript?.items.isNullOrEmpty() && !run.isActive -> "Messages weren't saved. Showing the prompt and answer."
+        else -> null
     }
 
     /** "4 tools · 12.3k tokens · turn 2/10"; "No tools yet" before the first. */
@@ -191,7 +229,8 @@ object SubagentFormat {
      * it (the prompt, the answer or the error).
      */
     fun detailItems(run: Subagent): List<ChatItem> {
-        run.transcript?.items?.takeIf { it.isNotEmpty() }?.let { return it }
+        // The message being streamed shows only while the run is live (a stream cut off by its end goes with it).
+        run.transcript?.let { t -> (if (run.isActive) t.allItems else t.items).takeIf { it.isNotEmpty() } }?.let { return it }
         return buildList {
             if (run.prompt.isNotBlank()) add(UserItem("prompt:${run.key}", run.prompt))
             if (!run.isActive) {

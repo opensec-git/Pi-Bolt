@@ -177,8 +177,8 @@ The fragment (`#...`) is never sent anywhere; the app parses it locally.
    starting at 0, as in the Noise spec). The plaintext is `flag || data`: flag `0x00` marks the last chunk of a
    message, `0x01` a chunk with more to follow. Chunks carry at most 65000 data bytes. The concatenated data of a
    message is one UTF-8 JSON object.
-4. Close codes: 4400 malformed handshake or decryption failure, 4403 not authorized, 4408 no handshake message within 3 seconds of connecting, or no `remote_ready` within 3 seconds of frame 2 (both count as failed handshakes), 4429 too many failed handshakes from this address; an address may have at most 3 connections in their handshake at once, 1001 host stopping, 1012 the background service handed the port to a terminal or took it back (reconnect at once, to the same addresses).
-5. Keepalive: the host sends WebSocket pings every 20 seconds and drops a client that misses two; clients may ping too.
+4. Close codes: 4400 malformed handshake or decryption failure, 4403 not authorized, 4408 no handshake message within 3 seconds of connecting, or no `remote_ready` within 3 seconds of frame 2 (both count as failed handshakes), 4429 too many failed handshakes from this address; an address may have at most 3 connections in their handshake at once, 1001 host stopping, 1012 the background service handed the port to a terminal or took it back (reconnect at once, to the same addresses), 1000 replaced: the same device completed a newer handshake (after `remote_ready`), so the host closed its older connection (a client does not reconnect on it; it already uses the newer one).
+5. Keepalive: the host sends WebSocket pings every 20 seconds and drops a client that has not answered the previous one (20 to 40 seconds after it went silent); clients may ping too.
 
 ### Messages
 
@@ -188,7 +188,7 @@ Host to client:
 
 | `type` | Meaning |
 |---|---|
-| `remote_hello` | `{ protocol: 1, host: { name, version, cwd, service? }, state: RpcSessionState, messages: AgentMessage[], streamingMessage?: AgentMessage, dialogs: extension_ui_request[], commands: RpcSlashCommand[], omittedMessages: number, features: string[] }`. `features` names the optional parts of the protocol this host answers (`"subagent_stream"`: [Subagent streams](#subagent-streams)); hosts before it send none. It stays under 24 MiB: a longer session sends only its newest messages, and `omittedMessages` counts the older ones left out. Sent on connect and again whenever the TUI switches to another session (`/new`, `/resume`, `/fork`): the client replaces everything it shows. `host.service` is `true` from the background service, which also answers the service commands below. |
+| `remote_hello` | `{ protocol: 1, host: { name, version, cwd, service?, parallelSessions? }, state: RpcSessionState, messages: AgentMessage[], streamingMessage?: AgentMessage, dialogs: extension_ui_request[], commands: RpcSlashCommand[], omittedMessages: number, features: string[] }`. `features` names the optional parts of the protocol this host answers (`"subagent_stream"`: [Subagent streams](#subagent-streams)); hosts before it send none. It stays under 24 MiB: a longer session sends only its newest messages, and `omittedMessages` counts the older ones left out. Sent on connect and again whenever the TUI switches to another session (`/new`, `/resume`, `/fork`): the client replaces everything it shows. `host.service` is `true` from the background service, which also answers the service commands below; `host.parallelSessions` is `true` from a service that keeps a running session going when the phone opens another (below). |
 | `remote_endpoints` | `{ endpoints: string[] }`: every address the host listens on now, in the order of the pairing code's `e` (LAN, Tailscale, then the tunnel). Sent after `remote_hello` on connect, and again whenever the list changes (a quick tunnel's new address, another network). No `id`; clients that do not know it ignore it. |
 | session events | Exactly the RPC/JSON event stream ([JSON Event Stream](json.md)): `agent_start`, `message_start`, `message_update` (deltas), `message_end`, `tool_execution_start/update/end`, `queue_update`, `compaction_start/end`, `auto_retry_start/end`, `agent_end`, `agent_settled`, ... Clients ignore types they do not know. |
 | `response` | Answer to a client command, as in [RPC Commands](rpc-commands.md). |
@@ -206,9 +206,16 @@ The background service (`host.service: true`) also answers these. They work befo
 | `type` | Fields | `data` of the response |
 |---|---|---|
 | `list_projects` | | `{ projects: [{ cwd, name, sessions, updatedAt }] }`: folders with Pi-Bolt sessions that still exist, newest first (at most 100). |
-| `list_sessions` | `cwd?` (default: the open session's folder) | `{ sessions: [{ path, id, cwd, name?, preview, updatedAt, messageCount }] }`, newest first (at most 100). `preview` is the first message, shortened. |
+| `list_sessions` | `cwd?` (default: the open session's folder) | `{ sessions: [{ path, id, cwd, name?, preview, updatedAt, messageCount, open?, running? }] }`, newest first (at most 100). `preview` is the first message, shortened. `open: true`: the service has it open; `running: true`: it runs a turn or a compaction now. |
 | `switch_session` | `sessionPath`: a `path` from `list_sessions` | `{ cancelled }`, then a new `remote_hello`. Any other file is refused. |
 | `new_session` | `cwd?`: a `cwd` from `list_projects` (default: the open session's folder); `parentSession?` | `{ cancelled }`, then a new `remote_hello`. A folder Pi-Bolt has no sessions in is refused. |
+
+`switch_session` and `new_session` never abort a turn (`host.parallelSessions`). The service keeps up to 3 sessions
+open, each with its own runtime, and phones see one of them. An idle session moves to the new one, as `/resume` and
+`/new` do in a terminal. A session that runs a turn keeps running in the background, and `switch_session` to it shows
+it again as it is. To make room, an idle background session closes, the least recently used first. When all 3 are
+running, the command fails with `3 sessions are running on this computer. Stop one, or wait.` A background session
+closes after 15 idle minutes. A background session's dialogs still reach the phones.
 
 For an extension command (`/name ...`), the `prompt` response arrives only when the command finishes; its dialogs
 arrive meanwhile as `extension_ui_request`, so clients must not wait for the response before showing them.

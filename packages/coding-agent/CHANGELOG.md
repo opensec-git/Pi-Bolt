@@ -8,6 +8,10 @@
 - Remote control sends phones the host's current addresses (`remote_endpoints`) when they connect and when the addresses change, so a quick tunnel's new address reaches a phone without a new QR code. Older apps ignore the message
 - Remote control and RPC mode stream a subagent's own conversation while a client shows it: `subagent_subscribe { runId }` (the id of the `Agent` call) sends the subagent's saved messages (`subagent_entries`) and, while its session runs in this process, its streaming thinking, text and tool starts (`subagent_events`); `subagent_unsubscribe` stops it. Read-only, capped per message and per client, and advertised as `features: ["subagent_stream"]` in `remote_hello`. See [Subagent streams](docs/remote-control.md#subagent-streams)
 
+### Fixed
+
+- The background service no longer aborts a running turn when a phone opens another session or starts a new one. It keeps up to 3 sessions open, each with its own runtime: a session in a turn keeps running in the background, and opening it again shows it as it is. With all 3 running, the phone is told to stop one or wait. `remote_hello.host.parallelSessions` says the service does this, and `list_sessions` marks sessions as `open` and `running`
+
 ## [1.5.0] - 2026-11-02
 
 ### New Features

@@ -76,7 +76,7 @@ internal fun RemoteSection(
             val live: SessionController? = remote?.takeIf { it.hostId == host.id && !it.stopped }
             val link = live?.link?.collectAsStateWithLifecycle()?.value
             GroupRow(
-                host.name,
+                host.displayName,
                 icon = Icons.Rounded.DesktopWindows,
                 iconTint = if (link is LinkState.Connected) colors.success else colors.tint1,
                 meta = RemoteRows.status(host, link, now) { at, n ->
@@ -123,7 +123,7 @@ internal fun RemoteSection(
     }
     forgetting?.let { host ->
         ConfirmSheet(
-            title = "Forget ${host.name}?",
+            title = "Forget ${host.displayName}?",
             message = "This phone stops connecting to it. To also revoke this phone on the computer, run /\u2060remote-control devices there.",
             confirmLabel = "Forget",
             onConfirm = {

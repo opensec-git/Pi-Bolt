@@ -13,6 +13,8 @@ import opensec.pibolt.app.ui.session.PendingSend
 import opensec.pibolt.app.ui.session.PendingUserRow
 import opensec.pibolt.app.ui.session.StatusText
 import opensec.pibolt.app.ui.session.TextRow
+import opensec.pibolt.app.ui.session.ThinkingRow
+import opensec.pibolt.app.ui.session.ThinkingRules
 import opensec.pibolt.app.ui.session.ToolGroupRow
 import opensec.pibolt.app.ui.session.ToolRow
 import opensec.pibolt.app.ui.session.TranscriptModel
@@ -25,6 +27,7 @@ import opensec.pibolt.app.ui.session.mergeChanges
 import opensec.pibolt.app.ui.session.previewStart
 import opensec.pibolt.protocol.session.AssistantTextItem
 import opensec.pibolt.protocol.session.ChatItem
+import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
 import opensec.pibolt.protocol.session.UserItem
@@ -51,10 +54,10 @@ class ChatComponentsTest {
     fun statusLineNamesTheRunningTool() {
         val bash = tool("b", "bash", ToolStatus.Running, "command" to "npm test\necho done")
         val activity = TranscriptModel.activity(listOf(UserItem("u", "go"), bash), emptyList())
-        assertEquals(StatusText("Run", "npm test", path = false), TranscriptModel.statusText(QuadMode.Run, activity, sending = false))
+        assertEquals(StatusText("Run", "npm test", path = false, mono = true), TranscriptModel.statusText(QuadMode.Run, activity, sending = false))
 
         val reading = TranscriptModel.activity(listOf(UserItem("u", "go"), read("r", "src/a.kt", ToolStatus.Running)), emptyList())
-        assertEquals(StatusText("Read", "src/a.kt", path = true), TranscriptModel.statusText(QuadMode.Run, reading, sending = false))
+        assertEquals(StatusText("Read", "src/a.kt", path = true, mono = true), TranscriptModel.statusText(QuadMode.Run, reading, sending = false))
     }
 
     @Test
@@ -65,12 +68,49 @@ class ChatComponentsTest {
         val text = TranscriptModel.statusText(QuadMode.Agent, activity, sending = false)
         assertEquals("Agent working", text.label)
         assertEquals("Find the flaky test", text.detail)
+        // An agent's task is prose: not in mono.
+        assertFalse(text.mono)
         assertEquals(1, text.more)
 
         assertEquals(StatusText("Sending"), TranscriptModel.statusText(QuadMode.Think, TranscriptModel.Activity(false, false, false), sending = true))
         assertEquals(StatusText("Writing"), TranscriptModel.statusText(QuadMode.Write, TranscriptModel.Activity(false, false, true), sending = false))
         // A tool that is not running (only its arguments stream) leaves the mode's label.
         assertEquals(StatusText("Thinking"), TranscriptModel.statusText(QuadMode.Think, activity.copy(running = null, runningCount = 0), sending = false))
+    }
+
+    @Test
+    fun withThinkingOffTheStatusLineSaysWorking() {
+        val idle = TranscriptModel.Activity(false, false, false)
+        assertEquals(StatusText("Working"), TranscriptModel.statusText(QuadMode.Think, idle, sending = false, thinking = false))
+        // Other modes keep their words; sending still says so.
+        assertEquals(StatusText("Writing"), TranscriptModel.statusText(QuadMode.Write, idle.copy(writing = true), sending = false, thinking = false))
+        assertEquals(StatusText("Sending"), TranscriptModel.statusText(QuadMode.Think, idle, sending = true, thinking = false))
+    }
+
+    @Test
+    fun thinkingIsOffForLevelOffOrAModelThatDoesNotReason() {
+        assertTrue(ThinkingRules.on("medium", modelReasons = true))
+        // Not reported yet: on.
+        assertTrue(ThinkingRules.on(null, modelReasons = null))
+        assertFalse(ThinkingRules.on("off", modelReasons = true))
+        assertFalse(ThinkingRules.on("high", modelReasons = false))
+        assertFalse(ThinkingRules.on(null, modelReasons = false))
+    }
+
+    @Test
+    fun withThinkingOffAnEmptyReasoningBlockGetsNoRow() {
+        val empty = ThinkingItem("th1", "", streaming = true)
+        val redacted = ThinkingItem("th2", " ", streaming = false, redacted = true)
+        val real = ThinkingItem("th3", "Check the guard first", streaming = false)
+        val items = listOf(UserItem("u", "go"), empty, redacted, real, AssistantTextItem("a", "Done", streaming = false))
+        assertEquals(listOf(UserItem("u", "go"), real, AssistantTextItem("a", "Done", streaming = false)), ThinkingRules.visible(items, on = false))
+        // On: every block keeps its row (the same list, no copy).
+        assertTrue(ThinkingRules.visible(items, on = true) === items)
+        assertFalse(ThinkingRules.shows(empty, on = false))
+        assertTrue(ThinkingRules.shows(real, on = false))
+        assertTrue(ThinkingRules.shows(empty, on = true))
+        // The transcript then has no thinking row for it.
+        assertTrue(rows(ThinkingRules.visible(listOf(UserItem("u", "go"), empty), on = false), live = true).none { it is ThinkingRow })
     }
 
     // Elapsed time
