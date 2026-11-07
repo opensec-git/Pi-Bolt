@@ -52,7 +52,7 @@ import opensec.pibolt.app.ui.theme.Radius
 private const val THEME_TILES_PER_ROW = 4
 
 /** Near-black themes look alike at tile size; their canvas hex goes under the name. */
-private val NEAR_BLACK = setOf(ThemeId.Graphite, ThemeId.Void, ThemeId.Codex, ThemeId.Vercel)
+private val NEAR_BLACK = setOf(ThemeId.Graphite, ThemeId.Contrast, ThemeId.Codex, ThemeId.Vercel)
 
 /** Four tiles a row; an incomplete last row keeps the tile width. */
 @Composable

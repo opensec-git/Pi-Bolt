@@ -13,24 +13,13 @@ import kotlin.math.abs
 
 /** Text and colour choices of subagent cards and the detail screen. Pure, so they are unit tested. */
 object SubagentFormat {
-    /**
-     * The agents' Quad tints (ARGB), Pi-Bolt Desktop's `--tint-0..4` (oklch 0.74 to 0.8 lightness, hues kept clear of
-     * the status colours): apricot, rose, orchid, violet, seafoam. Each passes 3:1 on surface1 and surface2 in every
-     * theme (`ContrastTest`). An agent's tint comes from its place among the session's runs ([hueSlot]), never from its
-     * type, so two general-purpose agents differ. Kept here until the theme carries them as tokens.
-     */
-    val HUES = longArrayOf(
-        0xFFFEA668, // apricot, oklch(0.8 0.13 55)
-        0xFFFF8FB4, // rose, oklch(0.78 0.14 0)
-        0xFFE08EE5, // orchid, oklch(0.76 0.15 325)
-        0xFFB696F7, // violet, oklch(0.74 0.14 298)
-        0xFF5CD5C7, // seafoam, oklch(0.8 0.11 185)
-    )
+    /** How many subagent tints the theme has (`PiColors.tints`, Pi-Bolt Desktop's five): colour slots wrap at it. */
+    const val HUE_COUNT = 5
 
     /** The colour slot of the run [key]: its order among the session's runs ([keys], first seen first), wrapped. */
     fun hueSlot(key: String, keys: Iterable<String>): Int {
         val i = keys.indexOf(key)
-        return if (i < 0) Math.floorMod(key.hashCode(), HUES.size) else i % HUES.size
+        return if (i < 0) Math.floorMod(key.hashCode(), HUE_COUNT) else i % HUE_COUNT
     }
 
     /** "Explore", "General-purpose": types read capitalised. */

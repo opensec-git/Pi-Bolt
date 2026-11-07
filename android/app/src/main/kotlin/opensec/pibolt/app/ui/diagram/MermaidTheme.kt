@@ -20,10 +20,6 @@ class MermaidTheme private constructor(val json: String, val background: Int) {
     override fun hashCode(): Int = json.hashCode()
 
     companion object {
-        private val Glacier = Color(0xFF7CC4F0)
-        private val Iris = Color(0xFFA99CFF)
-        private val Rose = Color(0xFFF0A6CA)
-
         fun of(colors: PiColors): MermaidTheme {
             val vars = variables(colors)
             val dark = colors.canvas.luminance() < 0.5f
@@ -33,7 +29,7 @@ class MermaidTheme private constructor(val json: String, val background: Int) {
         /** Every value is `#rrggbb` except the font, sizes, `dropShadow` and `useGradient`. */
         fun variables(c: PiColors): Map<String, Any> {
             val border = lerp(c.surface3, c.ink1, 0.26f)
-            val categorical = listOf(c.synType, c.synString, c.synNumber, Glacier, c.success, c.warning, Iris, Rose, c.danger, c.diffAddFg, c.diffDelFg, c.ink2)
+            val categorical = listOf(c.synType, c.synString, c.synNumber, c.tint4, c.success, c.warning, c.tint3, c.tint1, c.danger, c.diffAddFg, c.diffDelFg, c.ink2)
             val dim = categorical.map { lerp(c.surface2, it, 0.42f) }
             val v = LinkedHashMap<String, Any>()
             fun put(key: String, color: Color) {

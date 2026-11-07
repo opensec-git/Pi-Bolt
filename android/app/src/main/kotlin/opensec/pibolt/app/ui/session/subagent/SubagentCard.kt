@@ -70,6 +70,7 @@ import opensec.pibolt.app.ui.session.SubagentStackRow
 import opensec.pibolt.app.ui.session.formatStepElapsed
 import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
+import opensec.pibolt.app.ui.theme.PiColors
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.ui.theme.Tnum
@@ -78,7 +79,8 @@ import opensec.pibolt.protocol.session.SubagentStatus
 import opensec.pibolt.app.ui.session.subagent.SubagentFormat.AgentState
 
 /** The Quad colour of the run in colour [slot] ([SubagentFormat.hueSlot]). */
-fun agentHue(slot: Int): Color = Color(SubagentFormat.HUES[Math.floorMod(slot, SubagentFormat.HUES.size)])
+/** The run in colour [slot]: the theme's subagent tints (Pi-Bolt Desktop's --tint-0..4), wrapped. */
+fun agentHue(slot: Int, colors: PiColors): Color = colors.tints[Math.floorMod(slot, colors.tints.size)]
 
 /**
  * The state glyph's sizes in each place, on the icon tokens: [slot] it sits in, the running [quad] and the rest [glyph]
@@ -105,7 +107,7 @@ internal enum class AgentGlyphSize(val slot: Dp, val quad: Dp, val glyph: Dp) {
 fun SubagentCard(row: SubagentRow, modifier: Modifier = Modifier) {
     val nav = LocalSubagentNav.current
     val key = row.run.key
-    AgentCard(row.run, agentHue(row.slot), row.live, onOpen = nav?.let { n -> { n.open(key) } }, modifier = modifier)
+    AgentCard(row.run, agentHue(row.slot, Pi.colors), row.live, onOpen = nav?.let { n -> { n.open(key) } }, modifier = modifier)
 }
 
 @Composable
@@ -289,7 +291,7 @@ fun SubagentStack(row: SubagentStackRow, onToggle: () -> Unit, modifier: Modifie
     val active = runs.any { it.isActive }
     val shape = RoundedCornerShape(Radius.md)
     val border by animateColorAsState(if (active) colors.lineStrong else colors.line, PiMotion.effects(), label = "stackLine")
-    fun hue(i: Int) = agentHue(row.slots.getOrElse(i) { i })
+    fun hue(i: Int) = agentHue(row.slots.getOrElse(i) { i }, colors)
     Column(modifier.fillMaxWidth().animateContentSize(PiMotion.settle())) {
         if (!row.expanded) {
             Column(
@@ -374,7 +376,7 @@ fun SubagentNoticeRowView(row: SubagentNoticeRow, modifier: Modifier = Modifier)
         row.runs.forEachIndexed { i, run ->
             StepHeader(
                 onClick = nav?.let { n -> { n.open(run.key) } },
-                slot = { AgentGlyph(SubagentFormat.stateOf(run), agentHue(row.slots.getOrElse(i) { i }), live = false, size = AgentGlyphSize.Row) },
+                slot = { AgentGlyph(SubagentFormat.stateOf(run), agentHue(row.slots.getOrElse(i) { i }, colors), live = false, size = AgentGlyphSize.Row) },
             ) {
                 Text(SubagentFormat.title(run), style = type.label, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
                 Spacer(Modifier.width(8.dp))

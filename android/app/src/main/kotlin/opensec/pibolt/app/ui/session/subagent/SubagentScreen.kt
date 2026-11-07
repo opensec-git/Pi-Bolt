@@ -197,7 +197,7 @@ private fun SubagentScreen(controller: SessionController, key: String, nav: Suba
     val runState = remember(key) { derivedStateOf { state.value.subagents[key] } }
     val run = runState.value ?: return
     val slot by remember(key) { derivedStateOf { SubagentFormat.hueSlot(key, state.value.subagents.keys) } }
-    val hue = agentHue(slot)
+    val hue = agentHue(slot, colors)
     val connected by remember { derivedStateOf { controller.link.value is LinkState.Connected } }
     val linkState = controller.link.collectAsStateWithLifecycle()
     val memory = remember(key) { nav.memory(key) }
