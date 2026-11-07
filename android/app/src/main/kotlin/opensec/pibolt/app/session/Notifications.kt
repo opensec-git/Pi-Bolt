@@ -65,6 +65,8 @@ object Notifications {
         if (chat) {
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 .putExtra(SessionAlerts.EXTRA_CHAT, true)
+                // The chat it describes, so the alert still resumes it after the process restarted or another chat opened.
+                .apply { sessionFile?.let { putExtra(SessionAlerts.EXTRA_SESSION, it) } }
         } else if (project != null) {
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 .putExtra(SessionAlerts.EXTRA_PROJECT, project)
@@ -83,7 +85,7 @@ object Notifications {
         val (name, extras) = SessionActions.encode(request)
         val intent = Intent(context, SessionActionReceiver::class.java).setAction(name).putExtra(SessionActionReceiver.EXTRA_NOTIFICATION, notificationId)
         extras.forEach { (k, v) -> intent.putExtra(k, v) }
-        val mutability = if (typed && Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
+        val mutability = SessionActions.mutability(typed, Build.VERSION.SDK_INT)
         return PendingIntent.getBroadcast(context, SessionActions.requestCode(notificationId, slot), intent, mutability or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 

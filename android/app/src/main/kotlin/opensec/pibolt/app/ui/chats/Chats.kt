@@ -91,11 +91,12 @@ object Chats {
     private suspend fun open(engine: EngineApi, file: String?, firstPrompt: String?): Result<LocalSessions.Live> {
         val before = _current.value?.controller?.takeIf { !it.stopped }?.state?.value?.sessionId
         val result = withContext(Dispatchers.IO) { runCatching { engine.openChat(file) } }
-        return result.map { controller ->
+        return result.mapCatching { controller ->
             // The live chat moves to a new session over RPC: a prompt waits for the new session's snapshot, or it would
-            // go to the chat it is leaving.
+            // go to the chat it is leaving. If the switch does not arrive (failed, cancelled, too slow), the open fails.
             if (firstPrompt != null && before != null && controller.state.value.let { it.sessionId == before && it.items.isNotEmpty() }) {
                 withTimeoutOrNull(SWITCH_TIMEOUT_MS) { controller.state.first { it.hello && it.sessionId != before && it.items.isEmpty() } }
+                    ?: throw IllegalStateException("The new chat did not open")
             }
             LocalSessions.Live(engine.chatDir, controller, file).also {
                 it.firstPrompt = firstPrompt

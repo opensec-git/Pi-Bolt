@@ -2,6 +2,7 @@ package opensec.pibolt.app
 
 import opensec.pibolt.app.background.OemSetup
 import opensec.pibolt.app.background.OemSetup.Vendor
+import android.app.PendingIntent
 import opensec.pibolt.app.background.SessionActions
 import opensec.pibolt.app.background.SessionActions.Request
 import opensec.pibolt.app.background.SessionActions.Route
@@ -263,5 +264,15 @@ class BackgroundRunTest {
         assertEquals("feature/...", assertIs<SessionActions.Answering.Typed>(SessionActions.answering(input)).label)
         val long = pick.copy(options = listOf("Keep the current implementation", "Rewrite"))
         assertIs<SessionActions.Answering.Typed>(SessionActions.answering(long), "a long option does not fit a button")
+    }
+
+    @Test
+    fun typedActionsStayMutableOnEveryApi() {
+        // Codex on #263: FLAG_IMMUTABLE on API 26-30 dropped the inline reply's text.
+        assertEquals(0, SessionActions.mutability(typed = true, sdk = 26))
+        assertEquals(0, SessionActions.mutability(typed = true, sdk = 30))
+        assertEquals(PendingIntent.FLAG_MUTABLE, SessionActions.mutability(typed = true, sdk = 31))
+        assertEquals(PendingIntent.FLAG_IMMUTABLE, SessionActions.mutability(typed = false, sdk = 26))
+        assertEquals(PendingIntent.FLAG_IMMUTABLE, SessionActions.mutability(typed = false, sdk = 36))
     }
 }

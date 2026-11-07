@@ -1,5 +1,6 @@
 package opensec.pibolt.app.background
 
+import android.app.PendingIntent
 import opensec.pibolt.protocol.session.DialogKind
 import opensec.pibolt.protocol.session.DialogRequest
 
@@ -17,6 +18,17 @@ object SessionActions {
     const val EXTRA_DIALOG = "opensec.pibolt.session.dialog"
     const val EXTRA_VALUE = "opensec.pibolt.session.value"
     const val EXTRA_YES = "opensec.pibolt.session.yes"
+
+    /**
+     * The PendingIntent mutability of an action on API [sdk]. A [typed] (inline reply) action must let the system add
+     * the reply: mutable from API 31, and no flag before it (FLAG_IMMUTABLE there drops the typed text). A button is
+     * immutable.
+     */
+    fun mutability(typed: Boolean, sdk: Int): Int = when {
+        !typed -> PendingIntent.FLAG_IMMUTABLE
+        sdk >= 31 -> PendingIntent.FLAG_MUTABLE
+        else -> 0
+    }
 
     /** The RemoteInput result key of every inline reply. */
     const val REPLY_KEY = "opensec.pibolt.session.reply"
