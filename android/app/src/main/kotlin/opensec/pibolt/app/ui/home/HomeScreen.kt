@@ -121,6 +121,12 @@ import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.hosts.HostCard
 import opensec.pibolt.app.ui.hosts.PasteSheet
 import opensec.pibolt.app.ui.projects.LocalSessions
+import opensec.pibolt.app.ui.chats.Chats
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
+import opensec.pibolt.app.engine.ChatSpace
+import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import opensec.pibolt.app.ui.session.RunningRow
 import opensec.pibolt.app.ui.session.runningSessions
 import opensec.pibolt.app.ui.projects.NewProjectSheet
@@ -163,6 +169,8 @@ fun HomeScreen(
     onScan: () -> Unit,
     onSettings: () -> Unit,
     onPairingText: (String) -> String?,
+    onOpenChats: () -> Unit = {},
+    onOpenChat: () -> Unit = {},
 ) {
     val engine = app.engine
     val store = remember { ProjectStore.get(app) }
@@ -204,7 +212,17 @@ fun HomeScreen(
             onError = { m -> scope.launch { snackbar.show(m, SnackKind.Error) } },
         )
     }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { reload++ }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        reload++
+        Chats.refresh()
+    }
+    // Plain chats (ui/chats): the newest in Recents, all of them behind the Chats row.
+    val chats by remember(engine) { Chats.list(engine) }.collectAsStateWithLifecycle(emptyList())
+    val liveChat by Chats.current.collectAsStateWithLifecycle()
+    val liveChatController = liveChat?.controller?.takeIf { !it.stopped }
+    val chatWorking by remember(liveChatController) {
+        liveChatController?.state?.map { it.isRunning }?.distinctUntilChanged() ?: flowOf(false)
+    }.collectAsStateWithLifecycle(false)
     LaunchedEffect(Unit) { engine.prepare() }
     // Folders and sessions from disk (IO); meta (pins, titles) is applied below in memory.
     val raw by produceState<List<ProjectEntry>?>(null, reload, local, status is EngineStatus.Ready) { value = projects.list() }
@@ -286,8 +304,10 @@ fun HomeScreen(
     // Landscape: the side navigation bar and a display cutout keep their side; the canvas still fills the window.
     val listState = rememberLazyListState()
     // The pill composer starts a session in the project worked in last (the newest session's, else the first listed).
+    // "Chat" ([ChatSpace.KEY]) starts a plain chat instead: the default while there is no project.
     var chosen by rememberSaveable { mutableStateOf<String?>(null) }
-    val target = list?.firstOrNull { it.name == chosen } ?: recent.firstOrNull() ?: list?.firstOrNull()
+    val chatPicked = chosen == ChatSpace.KEY || (chosen == null && list != null && list.isEmpty())
+    val target = if (chatPicked) null else list?.firstOrNull { it.name == chosen } ?: recent.firstOrNull() ?: list?.firstOrNull()
     // The pill shows once a model is connected and the engine can run; with no project its chip offers to create one.
     val pillShown = !unavailable && authLoaded && configured.isNotEmpty() && list != null
     var ask by rememberSaveable { mutableStateOf("") }
@@ -302,7 +322,32 @@ fun HomeScreen(
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         runCatching { speech.launch(intent) }.onFailure { scope.launch { snackbar.show("Voice input isn't available on this phone", SnackKind.Error) } }
     }
+    fun openChat(file: String?) {
+        if (starting) return
+        starting = true
+        scope.launch {
+            (if (file == null) Chats.start(engine) else Chats.resume(engine, file))
+                .onSuccess { onOpenChat() }
+                .onFailure { snackbar.show(it.message ?: "The chat didn't open", SnackKind.Error) }
+            starting = false
+        }
+    }
     fun startSession() {
+        if (chatPicked) {
+            val text = ask.trim()
+            if (text.isEmpty() || starting) return
+            starting = true
+            scope.launch {
+                Chats.start(engine, firstPrompt = text)
+                    .onSuccess {
+                        ask = ""
+                        onOpenChat()
+                    }
+                    .onFailure { snackbar.show(it.message ?: "The chat didn't open", SnackKind.Error) }
+                starting = false
+            }
+            return
+        }
         val project = target ?: run {
             newProject = false
             return
@@ -324,8 +369,12 @@ fun HomeScreen(
     val play = remember { !reduceMotion && HomeEntrance.claim() }
     // Where the tiles scroll to: the indices of the section heads, from the same conditions that build the list.
     val idleRecent = if (unavailable) emptyList() else recent
+    val recentChats = if (unavailable) emptyList() else chats.take(RECENT_CHATS)
+    // The Chats row, under Recents, once the folders are read.
+    val chatsRow = !unavailable && list != null
     val recentsAt = 1 + listOf(status.needsBanner(), showUpdate, setup, hasProjects).count { it }
-    val projectsAt = recentsAt + if (running.isNotEmpty() || idleRecent.isNotEmpty()) 1 + running.size + idleRecent.size else 0
+    val projectsAt = recentsAt + (if (running.isNotEmpty() || idleRecent.isNotEmpty() || recentChats.isNotEmpty()) 1 + running.size + idleRecent.size + recentChats.size else 0) +
+        (if (chatsRow) 1 else 0)
     val computersAt = projectsAt + if (hasProjects) 1 + list.orEmpty().size else 0
     Box(Modifier.fillMaxSize().background(colors.canvas).windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal))) {
         LazyColumn(
@@ -438,7 +487,7 @@ fun HomeScreen(
                 return liveHere.controller.takeIf { liveFile == null || liveFile == file }
             }
             val idle = idleRecent
-            if (running.isNotEmpty() || idle.isNotEmpty()) {
+            if (running.isNotEmpty() || idle.isNotEmpty() || recentChats.isNotEmpty()) {
                 item(key = "recents-label", contentType = "label") {
                     HomeHead("Recents", Modifier.animateItem().padding(top = Space.lg).entrance(4, play))
                 }
@@ -456,7 +505,34 @@ fun HomeScreen(
                         now = now,
                         onClick = { resume(entry, session.file, live != null) },
                         modifier = Modifier.animateItem(),
-                        divider = entry != idle.last(),
+                        divider = entry != idle.last() || recentChats.isNotEmpty(),
+                    )
+                }
+                // Recent chats, marked by the chat glyph and "Chat" on their second line.
+                items(recentChats, key = { "chat:" + it.file }, contentType = { "recent" }) { chat ->
+                    val working = chatWorking && liveChatController?.sessionFile == chat.file
+                    InsetRow(
+                        chat.title,
+                        onClick = { openChat(chat.file) },
+                        meta = (if (working) "Working · Chat" else "Chat · " + ProjectRules.agoShort(chat.updatedAt, now)),
+                        leading = { Icon(Icons.Rounded.ChatBubbleOutline, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.md)) },
+                        divider = chat != recentChats.last(),
+                        label = "Open chat",
+                        modifier = Modifier.animateItem(),
+                    )
+                }
+            }
+            if (chatsRow) {
+                item(key = "chats", contentType = "actions") {
+                    InsetRow(
+                        "Chats",
+                        onClick = onOpenChats,
+                        meta = "Ask anything, without a project",
+                        count = chats.size.takeIf { it > 0 },
+                        chevron = true,
+                        divider = false,
+                        leading = { Icon(Icons.Rounded.ChatBubbleOutline, contentDescription = null, tint = colors.tint2, modifier = Modifier.size(IconSize.md)) },
+                        modifier = Modifier.animateItem().padding(top = Space.lg),
                     )
                 }
             }
@@ -535,7 +611,14 @@ fun HomeScreen(
                     contentAlignment = Alignment.Center,
                 ) {
                     Column(Modifier.widthIn(max = HOME_MAX_WIDTH).fillMaxWidth()) {
-                      ProjectChip(title = target?.title, projects = list.orEmpty(), onPick = { chosen = it.name }, onNew = { newProject = false })
+                      ProjectChip(
+                          title = target?.title,
+                          chat = chatPicked,
+                          projects = list.orEmpty(),
+                          onPick = { chosen = it.name },
+                          onChat = { chosen = ChatSpace.KEY },
+                          onNew = { newProject = false },
+                      )
                       // The chip's 48dp target leaves 4dp under its 40dp face: 4dp more makes the 8dp gap.
                       Spacer(Modifier.height(Space.xs))
                       PillComposerShell(
@@ -550,7 +633,7 @@ fun HomeScreen(
                               textStyle = type.rowTitle.copy(color = colors.ink1),
                               cursorBrush = SolidColor(colors.accent),
                               maxLines = 4,
-                              modifier = Modifier.weight(1f).padding(vertical = Space.sm).semantics { contentDescription = if (target != null) "Ask Pi in ${target.title}" else "Ask Pi" },
+                              modifier = Modifier.weight(1f).padding(vertical = Space.sm).semantics { contentDescription = if (chatPicked) "Ask Pi in a new chat" else if (target != null) "Ask Pi in ${target.title}" else "Ask Pi" },
                               decorationBox = { field ->
                                   Box(contentAlignment = Alignment.CenterStart) {
                                       if (ask.isEmpty()) Text("Ask Pi…", style = type.rowTitle, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -738,26 +821,31 @@ private fun HomeListSheet(which: HomeList, lives: List<LocalSessions.Live>, titl
 
 /**
  * The pill's project, a glass chip above the pill: a folder glyph, the project's name (label ink1, at most 220dp) and
- * a chevron; its menu lists the projects and New project. With no project yet it reads "New project" and opens that
- * sheet.
+ * a chevron; [chat] shows a chat glyph and "Chat" (a plain chat, without a project). Its menu lists Chat first, the
+ * projects, and New project.
  */
 @Composable
-private fun ProjectChip(title: String?, projects: List<ProjectEntry>, onPick: (ProjectEntry) -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier) {
+private fun ProjectChip(title: String?, chat: Boolean, projects: List<ProjectEntry>, onPick: (ProjectEntry) -> Unit, onChat: () -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     var open by remember { mutableStateOf(false) }
+    val shown = if (chat) ChatSpace.NAME else title
     Box(modifier) {
         GlassPill(
-            onClick = { if (title == null) onNew() else open = true },
-            label = if (title == null) "New project" else "Change project",
-            modifier = Modifier.semantics { contentDescription = if (title == null) "New project" else "Project: $title" },
+            onClick = { if (shown == null) onNew() else open = true },
+            label = if (shown == null) "New project" else "Change project",
+            modifier = Modifier.semantics { contentDescription = if (chat) "Chat, no project" else if (title == null) "New project" else "Project: $title" },
         ) {
-            Icon(if (title == null) Icons.Rounded.Add else Icons.Rounded.FolderOpen, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.sm))
-            Text(title ?: "New project", style = Pi.type.label, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
-            if (title != null) Icon(Icons.Rounded.ExpandMore, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(IconSize.sm))
+            Icon(if (chat) Icons.Rounded.ChatBubbleOutline else if (title == null) Icons.Rounded.Add else Icons.Rounded.FolderOpen, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.sm))
+            Text(shown ?: "New project", style = Pi.type.label, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
+            if (shown != null) Icon(Icons.Rounded.ExpandMore, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(IconSize.sm))
         }
         WorkspaceMenu(open, onDismiss = { open = false }) {
+            WorkspaceMenuRow(ChatSpace.NAME, if (chat) Icons.Rounded.Check else null, colors.ink1) {
+                open = false
+                onChat()
+            }
             for (p in projects) {
-                WorkspaceMenuRow(p.title, if (p.title == title) Icons.Rounded.Check else null, colors.ink1) {
+                WorkspaceMenuRow(p.title, if (!chat && p.title == title) Icons.Rounded.Check else null, colors.ink1) {
                     open = false
                     onPick(p)
                 }
@@ -769,6 +857,9 @@ private fun ProjectChip(title: String?, projects: List<ProjectEntry>, onPick: (P
         }
     }
 }
+
+/** Chats shown in Recents; the rest are behind the Chats row. */
+private const val RECENT_CHATS = 3
 
 /** Home's widest column: a wide window (landscape, a tablet) centres Home at this width. */
 private val HOME_MAX_WIDTH = 760.dp

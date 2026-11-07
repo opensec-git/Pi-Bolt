@@ -29,6 +29,11 @@ class SessionIndex(private val agentDir: File) {
     fun list(project: File): List<SessionSummary> {
         val dirs = linkedSetOf(sessionDir(project.absolutePath))
         runCatching { project.canonicalPath }.getOrNull()?.let { dirs += sessionDir(it) }
+        return listIn(dirs)
+    }
+
+    /** The sessions saved directly in [dirs] (a `--session-dir`, such as the chats' [ChatSpace.sessionDir]), newest first. */
+    fun listIn(dirs: Collection<File>): List<SessionSummary> {
         val files = dirs.flatMap { dir -> dir.listFiles { f -> f.isFile && f.name.endsWith(".jsonl") }.orEmpty().toList() }
         return files.mapNotNull(::summary).distinctBy { it.file }.sortedByDescending { it.updatedAt }
     }

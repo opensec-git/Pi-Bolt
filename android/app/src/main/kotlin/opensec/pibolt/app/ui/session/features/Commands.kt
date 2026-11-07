@@ -6,9 +6,9 @@ import opensec.pibolt.protocol.session.SlashCommand
 /**
  * The app's own slash commands: the terminal's built-ins that make sense on a phone. The host never sees these; the
  * composer runs them here (a sheet, an RPC command). [localOnly] ones need the engine on this phone (remote control
- * refuses session commands).
+ * refuses session commands). [projectOnly] ones need a project or tools, which a plain chat (engine.ChatSpace) has not.
  */
-enum class Builtin(val command: String, val description: String, val hint: String? = null, val localOnly: Boolean = false) {
+enum class Builtin(val command: String, val description: String, val hint: String? = null, val localOnly: Boolean = false, val projectOnly: Boolean = false) {
     New("new", "Start a new session", localOnly = true),
     Resume("resume", "Open another session of this project", localOnly = true),
     Fork("fork", "New session from an earlier message", localOnly = true),
@@ -21,16 +21,16 @@ enum class Builtin(val command: String, val description: String, val hint: Strin
     Copy("copy", "Copy the last reply"),
     Export("export", "Share the session as Markdown, JSONL or HTML"),
     Search("search", "Search the transcript", "[text]"),
-    Shell("!", "Run a shell command (!! keeps output out of context)", "<command>", localOnly = true),
+    Shell("!", "Run a shell command (!! keeps output out of context)", "<command>", localOnly = true, projectOnly = true),
     Tree("tree", "Go back, switch or label branches", localOnly = true),
-    Skills("skills", "Browse skills and prompt templates"),
-    Packages("packages", "Install, switch off or remove packages", localOnly = true),
-    Mcp("mcp-servers", "Add, check or remove MCP servers", localOnly = true),
-    Trust("trust", "Trust this project's .pi resources", localOnly = true),
+    Skills("skills", "Browse skills and prompt templates", projectOnly = true),
+    Packages("packages", "Install, switch off or remove packages", localOnly = true, projectOnly = true),
+    Mcp("mcp-servers", "Add, check or remove MCP servers", localOnly = true, projectOnly = true),
+    Trust("trust", "Trust this project's .pi resources", localOnly = true, projectOnly = true),
     Reload("reload", "Restart the engine to reload extensions, skills and settings", localOnly = true),
     ScopedModels("scoped-models", "Choose the models in the picker", localOnly = true),
     Tuning("tuning", "Retry and compaction settings", localOnly = true),
-    Import("import", "Import a session file (JSONL)", localOnly = true),
+    Import("import", "Import a session file (JSONL)", localOnly = true, projectOnly = true),
     Share("share", "Share this session"),
     Bug("bug", "Report a bug", "[description]"),
 }
@@ -54,14 +54,15 @@ object CommandPalette {
 
     /**
      * Built-ins this session can run, then the host's commands (extensions, prompt templates, skills). A host command
-     * with a built-in's name wins: it is what the terminal would run.
+     * with a built-in's name wins: it is what the terminal would run. A [chat] lists no project-only built-in and, of
+     * the host's commands, only prompt templates: extension commands and skills may need tools a chat has not.
      */
-    fun entries(host: List<SlashCommand>, local: Boolean): List<PaletteEntry> {
+    fun entries(host: List<SlashCommand>, local: Boolean, chat: Boolean = false): List<PaletteEntry> {
         val hostNames = host.mapTo(HashSet()) { it.name }
-        val builtins = Builtin.entries.filter { (local || !it.localOnly) && it.command !in hostNames }
+        val builtins = Builtin.entries.filter { (local || !it.localOnly) && !(chat && it.projectOnly) && it.command !in hostNames }
             .map { PaletteEntry(it.command, it.description, CommandSource.App, it.hint, it) }
         // The app's own helper extension (features2.AppExtension) is not for people.
-        val fromHost = host.filterNot { it.name == "pibolt-app" || it.name.startsWith("pibolt-app:") }.map { c ->
+        val fromHost = host.filterNot { it.name == "pibolt-app" || it.name.startsWith("pibolt-app:") || (chat && sourceOf(it.source) != CommandSource.Prompt) }.map { c ->
             PaletteEntry(c.name, c.description?.takeIf { it.isNotBlank() }.orEmpty(), sourceOf(c.source), c.argumentHint)
         }
         return builtins + fromHost
@@ -102,12 +103,12 @@ object CommandPalette {
 
     /**
      * The built-in [text] calls, or null when it is a prompt for the host. `!cmd` and `!!cmd` are the shell; a host
-     * command of the same name shadows a built-in.
+     * command of the same name shadows a built-in. A [chat] has no shell (`!` is text) nor other project-only built-ins.
      */
-    fun parse(text: String, host: List<SlashCommand>, local: Boolean): BuiltinCall? {
+    fun parse(text: String, host: List<SlashCommand>, local: Boolean, chat: Boolean = false): BuiltinCall? {
         val t = text.trim()
         if (t.startsWith("!")) {
-            if (!local) return null
+            if (!local || chat) return null
             return BuiltinCall(Builtin.Shell, t.drop(1))
         }
         if (!t.startsWith("/")) return null
@@ -116,6 +117,7 @@ object CommandPalette {
         if (host.any { it.name == name }) return null
         val builtin = Builtin.entries.firstOrNull { it.command == name && it != Builtin.Shell } ?: return null
         if (builtin.localOnly && !local) return null
+        if (builtin.projectOnly && chat) return null
         return BuiltinCall(builtin, t.substring(end).trim())
     }
 }

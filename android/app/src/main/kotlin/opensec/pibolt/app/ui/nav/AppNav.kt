@@ -57,6 +57,8 @@ import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PrimaryButton
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.rememberSheetCloser
+import opensec.pibolt.app.ui.chats.ChatSessionScreen
+import opensec.pibolt.app.ui.chats.ChatsScreen
 import opensec.pibolt.app.ui.home.HomeScreen
 import opensec.pibolt.app.ui.projects.transfer.ShareInHost
 import opensec.pibolt.app.ui.projects.transfer.SharedContent
@@ -93,6 +95,10 @@ object Routes {
     const val PREVIEW = "preview/{port}"
     const val RUNTIMES = "runtimes"
     const val PROVIDERS = "providers"
+
+    /** Plain chats (ui/chats): the list, and the live chat. */
+    const val CHATS = "chats"
+    const val CHAT = "chat"
 
     fun project(name: String) = "project/" + Uri.encode(name)
 
@@ -221,6 +227,8 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendin
                                 onScan = { nav.navigate(Routes.SCAN) { launchSingleTop = true } },
                                 onSettings = { nav.navigate(Routes.SETTINGS) { launchSingleTop = true } },
                                 onPairingText = { usePairing(it) },
+                                onOpenChats = { nav.navigate(Routes.CHATS) { launchSingleTop = true } },
+                                onOpenChat = { nav.navigate(Routes.CHAT) { launchSingleTop = true } },
                             )
                         }
                     }
@@ -291,6 +299,24 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendin
                             )
                         }
                     }
+                    composable(Routes.CHATS) {
+                        CompositionLocalProvider(LocalNavScope provides this) {
+                            ChatsScreen(
+                                app = app,
+                                onBack = { nav.popBackStack() },
+                                onOpenChat = { nav.navigate(Routes.CHAT) { launchSingleTop = true } },
+                            )
+                        }
+                    }
+                    composable(Routes.CHAT) {
+                        CompositionLocalProvider(LocalNavScope provides this) {
+                            ChatSessionScreen(
+                                app = app,
+                                onBack = { if (!nav.popBackStack()) nav.navigate(Routes.HOME) },
+                                onOpenSession = { other -> nav.navigate(Routes.localSession(other)) { launchSingleTop = true } },
+                            )
+                        }
+                    }
                     composable(Routes.SETTINGS) {
                         CompositionLocalProvider(LocalNavScope provides this) {
                             SettingsScreen(
@@ -326,6 +352,7 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendin
         app,
         onLocal = { nav.navigate(Routes.localSession(it)) { launchSingleTop = true } },
         onRemote = { nav.navigate(Routes.SESSION) { launchSingleTop = true } },
+        onChat = { nav.navigate(Routes.CHAT) { launchSingleTop = true } },
     )
     // Content shared from another app: a sheet picks what to do and where (ui/projects/transfer).
     ShareInHost(

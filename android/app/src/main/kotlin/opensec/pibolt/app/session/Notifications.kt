@@ -58,11 +58,14 @@ object Notifications {
         }
     }
 
-    private fun openApp(context: Context, project: String? = null, sessionFile: String? = null, requestCode: Int = 0): PendingIntent = PendingIntent.getActivity(
+    private fun openApp(context: Context, project: String? = null, sessionFile: String? = null, requestCode: Int = 0, chat: Boolean = false): PendingIntent = PendingIntent.getActivity(
         context,
         requestCode,
         // Carries the session, so a tap opens that exact one (features2.SessionAlerts); without one, the session in focus.
-        if (project != null) {
+        if (chat) {
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .putExtra(SessionAlerts.EXTRA_CHAT, true)
+        } else if (project != null) {
             Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
                 .putExtra(SessionAlerts.EXTRA_PROJECT, project)
                 .apply { sessionFile?.let { putExtra(SessionAlerts.EXTRA_SESSION, it) } }
@@ -124,7 +127,7 @@ object Notifications {
         (context.applicationContext as? PiBoltApp)?.sessions?.value?.firstOrNull { it.hostId == key }?.sessionFile
 
     /** A session finished while the app was away. [key]: its hostId (one notification per session); [project]: its project. */
-    fun settled(context: Context, key: String, project: String?, host: String, lastText: String, aborted: Boolean) {
+    fun settled(context: Context, key: String, project: String?, host: String, lastText: String, aborted: Boolean, chat: Boolean = false) {
         val id = RunningSummary.notificationId(key, RunningSummary.SETTLED)
         val title = if (aborted) "Pi stopped on $host" else "Pi finished on $host"
         val text = lastText.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(200) ?: "Tap to see the result"
@@ -139,7 +142,7 @@ object Notifications {
                 .setStyle(NotificationCompat.BigTextStyle().bigText(lastText.take(1000).ifBlank { text }))
                 .setCategory(NotificationCompat.CATEGORY_MESSAGE)
                 .setAutoCancel(true)
-                .setContentIntent(openApp(context, project, sessionFile(context, key), id))
+                .setContentIntent(openApp(context, project, sessionFile(context, key), id, chat))
                 .addAction(reply("Reply", "Message Pi", action(context, id, 0, SessionActions.Request.Reply(key), typed = true)))
                 .privateOnLockScreen(context, if (aborted) "Pi stopped" else "Pi finished")
                 .build(),
@@ -150,7 +153,7 @@ object Notifications {
      * Session [key] waits for [dialog]: a heads-up with the answer in it (option buttons, Yes and No, or an inline
      * reply). [why]: the last reply was not usable, said in place of the message.
      */
-    fun needsAnswer(context: Context, key: String, project: String?, host: String, dialog: DialogRequest, why: String? = null) {
+    fun needsAnswer(context: Context, key: String, project: String?, host: String, dialog: DialogRequest, why: String? = null, chat: Boolean = false) {
         val id = RunningSummary.notificationId(key, RunningSummary.ANSWER)
         val text = why ?: dialog.title.ifBlank { "Tap to answer" }
         val detail = listOfNotNull(why, dialog.title.takeIf { it.isNotBlank() }, dialog.message?.takeIf { it.isNotBlank() }).joinToString("\n")
@@ -164,7 +167,7 @@ object Notifications {
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setOnlyAlertOnce(why != null)
             .setAutoCancel(true)
-            .setContentIntent(openApp(context, project, sessionFile(context, key), id))
+            .setContentIntent(openApp(context, project, sessionFile(context, key), id, chat))
             .privateOnLockScreen(context, "Pi needs an answer")
         when (val answering = SessionActions.answering(dialog)) {
             SessionActions.Answering.YesNo -> {

@@ -26,7 +26,19 @@ interface EngineApi {
      */
     fun open(project: File, sessionFile: String? = null, fresh: Boolean = false): SessionController
 
-    /** Saved Pi sessions for [project], newest first (read from the agent dir; no engine needed). */
+    /** The working directory of plain chats ([ChatSpace]): never a project. */
+    val chatDir: File
+
+    /**
+     * Opens a plain chat ([ChatSpace]: no project, no tools): resumes [sessionFile] when given (a path from [chats]),
+     * otherwise starts a new chat. One chat is live at a time; it moves to the wanted one.
+     */
+    fun openChat(sessionFile: String? = null): SessionController
+
+    /** Saved chats with at least one message, newest first. Blocking file I/O: call off the main thread. */
+    fun chats(): List<SessionSummary>
+
+    /** Saved Pi sessions for [project], newest first (read from the agent dir; no engine needed). For [chatDir]: [chats]. */
     fun sessions(project: File): List<SessionSummary>
 
     /** Deletes every saved session of [project], including empty ones [sessions] does not list, and their folder. */
