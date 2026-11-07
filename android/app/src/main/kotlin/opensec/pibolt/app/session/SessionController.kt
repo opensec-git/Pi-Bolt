@@ -1,5 +1,7 @@
 package opensec.pibolt.app.session
 
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -207,6 +209,10 @@ class SessionController private constructor(
     fun start() {
         scope.launch { reduceLoop() }
         scope.launch { connectLoop() }
+        if (origin is Origin.Remote) {
+            val cm = connectivity
+            networkRegistered = cm != null && runCatching { cm.registerDefaultNetworkCallback(networkCallback) }.isSuccess
+        }
         pumpEvents()
         subagentTail?.start(scope)
         checkpoints?.let {
@@ -231,6 +237,7 @@ class SessionController private constructor(
         app.sessionStopped(this)
         when (origin) {
             is Origin.Remote -> {
+                if (networkRegistered) runCatching { connectivity?.unregisterNetworkCallback(networkCallback) }
                 backend.close()
                 rpc.stop()
                 scope.cancel()
@@ -258,6 +265,19 @@ class SessionController private constructor(
 
     fun retryNow() {
         retrySignal.trySend(Unit)
+    }
+
+    private val connectivity: ConnectivityManager? by lazy { app.getSystemService(ConnectivityManager::class.java) }
+    private var networkRegistered = false
+
+    /**
+     * A computer's session waiting out its backoff (up to 30 s) retries as soon as a network comes up: back in Wi-Fi
+     * range, mobile data after Wi-Fi, out of airplane mode.
+     */
+    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            if (_link.value is LinkState.Retrying) retryNow()
+        }
     }
 
     private fun newBackend(endpoints: List<String>, secret: ByteArray?) = RemoteBackend(
@@ -463,6 +483,15 @@ class SessionController private constructor(
                 }
                 _models.value = emptyList()
                 _thinkingLevels.value = emptyList()
+                // A reconnect after the run ended or a dialog opened: the "finished" and "needs an answer" alerts of the
+                // events the drop swallowed, with the snapshot's own text.
+                if (!isLocal) {
+                    val missed = SessionReducer.missedWhileAway(before, event)
+                    if (missed.isNotEmpty()) {
+                        val after = SessionReducer.reduce(before, event).copy(isRunning = true)
+                        missed.forEach { sideEffects(after, it) }
+                    }
+                }
             }
             RemoteEndpoints.TYPE -> onEndpoints(event)
         }
