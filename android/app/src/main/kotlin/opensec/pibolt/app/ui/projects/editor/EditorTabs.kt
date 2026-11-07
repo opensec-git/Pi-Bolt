@@ -10,16 +10,22 @@ import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.lifecycle.ViewModel
 import opensec.pibolt.app.ui.projects.FileDoc
+import opensec.pibolt.app.ui.projects.FileStamp
 import java.io.File
 
 /**
- * One open file of the editor: what was read ([doc]), the text on disk ([saved], set when editing starts), the text
- * being edited ([value]) and its undo history. Lives in [EditorTabs], so switching tabs keeps unsaved edits.
+ * One open file of the editor: what was read ([doc]) and the file's [disk] stamp then, the text on disk ([saved], set
+ * when editing starts), the text being edited ([value]) and its undo history. Lives in [EditorTabs], so switching tabs
+ * keeps unsaved edits.
  */
 @Stable
 class EditorTab(val rel: String) {
     var doc by mutableStateOf<FileDoc?>(null)
+
+    /** The file's stamp when [doc] was read or last saved: a different one on disk means someone else changed it. */
+    var disk: FileStamp? = null
     var editing by mutableStateOf(false)
     var saved by mutableStateOf<String?>(null)
     var value by mutableStateOf(TextFieldValue(""))
@@ -60,6 +66,15 @@ class EditorTab(val rel: String) {
         true
     } ?: false
 
+    /** This tab under the path [to] (its file was renamed): the same text, draft and stamp; the undo history restarts. */
+    fun movedTo(to: String): EditorTab = EditorTab(to).also { t ->
+        t.doc = doc
+        t.disk = disk
+        t.saved = saved
+        t.value = value
+        t.editing = editing
+    }
+
     /** Replaces `[start, end)` with [text] as one undo step and selects [select] (default: the cursor after it). */
     fun replace(start: Int, end: Int, text: String, select: TextRange? = null) {
         val before = value
@@ -72,9 +87,10 @@ class EditorTab(val rel: String) {
 }
 
 /**
- * The project's open files, in order, and the one shown. Opening a file that is open selects its tab. A configuration
- * change (rotation, theme) keeps the tabs themselves, unsaved drafts included ([saver]); after process death only the
- * paths come back (an unsaved draft does not outlive the process).
+ * The project's open files, in order, and the one shown. Opening a file that is open selects its tab. While the project
+ * screen is on the back stack (a session, the terminal or the secrets opened over it) and across a configuration change
+ * (rotation, theme), the tabs themselves stay, unsaved drafts included ([EditorTabsHolder], [saver]); after process
+ * death only the paths come back (an unsaved draft does not outlive the process).
  */
 @Stable
 class EditorTabs(initial: List<String> = emptyList()) {
@@ -104,38 +120,44 @@ class EditorTabs(initial: List<String> = emptyList()) {
         return tabs[((i + step) % tabs.size + tabs.size) % tabs.size]
     }
 
-    /** A file was renamed or deleted in the Files tab: its tab (or the tabs inside a folder) follow or close. */
+    /**
+     * A file was renamed or deleted in the Files tab: its tab (or the tabs inside a folder) follow, keeping an unsaved
+     * draft, or close. A tab left on the old path would show the old text and its Save would write the old file again.
+     */
     fun moved(from: String, to: String?) {
+        if (from == to) return
         val affected = tabs.filter { it.rel == from || it.rel.startsWith("$from/") }
         for (t in affected) {
             val i = tabs.indexOf(t)
-            if (to == null) tabs.removeAt(i) else tabs[i] = EditorTab(to + t.rel.removePrefix(from))
+            if (to == null) tabs.removeAt(i) else tabs[i] = t.movedTo(to + t.rel.removePrefix(from))
         }
     }
 
     val anyDirty: Boolean get() = tabs.any { it.dirty }
 
     companion object {
-        private val retained = HashMap<String, EditorTabs>()
-
         /**
-         * Saves the paths in the saved-state Bundle (a 1 MB draft would overflow it) and keeps the tabs under [key] in
-         * memory, so a configuration change hands back the same tabs with their drafts and undo history; after process
-         * death the tabs reopen from the paths, not editing.
+         * Saves the paths in the saved-state Bundle (a 1 MB draft would overflow it) and keeps the tabs in [holder], so
+         * coming back to the screen (from the back stack or after a configuration change) hands back the same tabs with
+         * their drafts and undo history; after process death the holder is new and the tabs reopen from the paths, not
+         * editing.
          */
-        fun saver(key: String): Saver<EditorTabs, Any> = listSaver(
+        fun saver(holder: EditorTabsHolder): Saver<EditorTabs, Any> = listSaver(
             save = { t ->
-                retained[key] = t
+                holder.tabs = t
                 t.tabs.map { it.rel }
             },
-            restore = { retained.remove(key) ?: EditorTabs(it) },
+            restore = { paths -> holder.tabs ?: EditorTabs(paths).also { holder.tabs = it } },
         )
-
-        /** Forgets [key]'s kept tabs: the screen closed for good, not for a configuration change. */
-        fun release(key: String) {
-            retained.remove(key)
-        }
     }
+}
+
+/**
+ * Keeps a project screen's [EditorTabs] for as long as the screen's navigation entry lives: while a session, the
+ * terminal or the secrets cover it, and across configuration changes; cleared when the project screen is closed.
+ */
+class EditorTabsHolder : ViewModel() {
+    var tabs: EditorTabs? = null
 }
 
 /**

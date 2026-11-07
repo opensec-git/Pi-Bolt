@@ -35,7 +35,6 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -54,7 +53,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.automirrored.rounded.FormatIndentIncrease
-import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.VerticalAlignCenter
@@ -108,13 +107,22 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.ui.components.ConfirmSheet
+import androidx.compose.foundation.shape.CircleShape
+import opensec.pibolt.app.ui.components.GlassBar
+import opensec.pibolt.app.ui.components.GlassChip
+import opensec.pibolt.app.ui.components.GlassIconButton
 import opensec.pibolt.app.ui.components.IconAction
+import opensec.pibolt.app.ui.components.glass
+import opensec.pibolt.app.ui.theme.IconSize
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.components.LoadingRow
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiSnackHost
@@ -166,6 +174,9 @@ private const val MAX_LINE = 2_000
  * a guard for unsaved changes (tabs with unsaved edits show a dot). Files over 1 MB (or not loaded whole) are
  * read-only. "Ask Pi" hands the file, or the selected lines, to [onAsk] for the project's composer. Hardware keys:
  * [EditorShortcuts]. Images show zoomable; binary files say so and offer Share. [onChanged] runs after a save.
+ *
+ * With [source] the files are read through it instead of from [root] (a computer's, over remote control): nothing can
+ * be edited, saved or shared, and a file the source cut short says so instead of offering Load more.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -177,6 +188,7 @@ fun FileViewer(
     onClose: () -> Unit,
     onChanged: () -> Unit,
     onAsk: (String) -> Unit,
+    source: (suspend (String) -> FileDoc)? = null,
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -192,7 +204,21 @@ fun FileViewer(
     val kind = remember(name) { FileTypes.kind(name) }
     val language = remember(name) { if (kind == FileKind.Markdown) "markdown" else FileTypes.language(name) }
 
-    LaunchedEffect(tab) { if (tab.doc == null) tab.doc = ProjectFiles.open(file) }
+    // Read when first shown, and again when the file changed on disk since (Pi or a shell edited it while the tab was
+    // kept): a kept tab must not show, or start an edit from, an old text. A draft being edited is never replaced.
+    // A [source] (a computer's file) is read once per tab.
+    var resumed by remember { mutableIntStateOf(0) }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { resumed++ }
+    LaunchedEffect(tab, resumed) {
+        if (source != null) {
+            if (tab.doc == null) tab.doc = source(rel)
+            return@LaunchedEffect
+        }
+        if (tab.doc != null && (tab.editing || ProjectFiles.stamp(file) == tab.disk)) return@LaunchedEffect
+        val stamp = ProjectFiles.stamp(file)
+        tab.doc = ProjectFiles.open(file)
+        tab.disk = stamp
+    }
     val doc = tab.doc
     val text = (doc as? FileDoc.Text)
     val editing = tab.editing
@@ -206,6 +232,8 @@ fun FileViewer(
     var flashLine by remember { mutableIntStateOf(-1) }
     var saving by remember { mutableStateOf(false) }
     var confirm by remember { mutableStateOf<Pair<String, () -> Unit>?>(null) }
+    // Save found the file changed on disk since it was read: overwrite only after asking.
+    var overwrite by remember { mutableStateOf(false) }
     var codeView by remember { mutableStateOf<ViewerContent?>(null) }
     var reveal by remember { mutableStateOf<Reveal?>(null) }
     val listState = remember(rel) { LazyListState() }
@@ -214,7 +242,7 @@ fun FileViewer(
 
     val showRendered = kind == FileKind.Markdown && rendered && !editing
     val lines = remember(text?.text) { text?.let { FileSearch.lines(it.text) }.orEmpty() }
-    val canEdit = text != null && text.complete && text.size <= ProjectFiles.MAX_EDIT
+    val canEdit = source == null && text != null && text.complete && text.size <= ProjectFiles.MAX_EDIT
     val readOnly = text != null && !canEdit
     val searched = if (editing) tab.value.text else text?.text
 
@@ -263,15 +291,21 @@ fun FileViewer(
         }
     }
 
-    fun save() {
+    fun save(force: Boolean = false) {
         if (!tab.editing || saving) return
         saving = true
         scope.launch {
             val body = tab.value.text
+            if (!force && ProjectFiles.changedOnDisk(tab.disk, ProjectFiles.stamp(file))) {
+                saving = false
+                overwrite = true
+                return@launch
+            }
             ProjectFiles.write(file, body)
                 .onSuccess {
                     tab.saved = body
                     tab.doc = FileDoc.Text(body, null, body.toByteArray().size.toLong())
+                    tab.disk = ProjectFiles.stamp(file)
                     onChanged()
                     snackbar.show("Saved", SnackKind.Success)
                 }
@@ -427,52 +461,54 @@ fun FileViewer(
             .focusRequester(rootFocus)
             .focusable(),
     ) {
-        Column(Modifier.fillMaxSize().statusBarsPadding()) {
-            // Top bar.
-            Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconAction(Icons.Rounded.Close, if (editing) "Stop editing" else "Close", onClick = { if (editing) leaveEdit() else onClose() }, tint = colors.ink1)
-                Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
-                    Text(if (editing) "Editing $name" else name, style = type.subhead, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    val sub = buildList {
-                        add(rel)
-                        add(FileTypes.label(name))
-                        when (doc) {
-                            is FileDoc.Text -> if (doc.complete) add(if (lines.size == 1) "1 line" else "${lines.size} lines") else add(ProjectFiles.size(doc.size))
-                            is FileDoc.Image -> add("${doc.width} × ${doc.height}")
-                            is FileDoc.Binary -> add(ProjectFiles.size(doc.size))
-                            else -> Unit
-                        }
-                        if (readOnly) add("read-only")
-                        if (tab.dirty) add("unsaved")
-                    }.joinToString(" · ")
-                    Text(sub, style = type.monoMeta, color = if (tab.dirty) colors.warning else colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
+        Column(Modifier.fillMaxSize()) {
+            // The glass bar: close, the name over "path · type · lines", then Find, Edit (or Save) and More.
+            val sub = buildList {
+                add(rel)
+                add(FileTypes.label(name))
+                when (doc) {
+                    is FileDoc.Text -> if (doc.complete) add(if (lines.size == 1) "1 line" else "${lines.size} lines") else add(ProjectFiles.size(doc.size))
+                    is FileDoc.Image -> add("${doc.width} × ${doc.height}")
+                    is FileDoc.Binary -> add(ProjectFiles.size(doc.size))
+                    else -> Unit
                 }
-                if (text != null) {
-                    IconAction(Icons.Rounded.Search, "Find in file", onClick = { if (find.open) find.open = false else openFind(replace = false) }, tint = if (find.open) colors.accent else colors.ink2)
-                }
-                if (editing) {
-                    TextAction(if (saving) "Saving…" else "Save", onClick = ::save, color = colors.accent, enabled = tab.dirty && !saving)
-                } else if (canEdit) {
-                    // Editing is the main thing to do with a file: one tap, not a menu entry.
-                    IconAction(Icons.Rounded.Edit, "Edit", onClick = { startEdit() })
-                }
-                Box {
-                    IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
-                    ViewerMenu(
-                        expanded = menu,
-                        onDismiss = { menu = false },
-                        items = buildList {
-                            if (editing && !tab.value.selection.collapsed) add(MenuEntry("Ask Pi about the selection", Icons.Rounded.AutoAwesome) { ask(selection = true) })
-                            add(MenuEntry("Ask Pi about this file", Icons.Rounded.AutoAwesome) { ask(selection = false) })
-                            if (text != null && !showRendered) add(MenuEntry("Go to line", Icons.Rounded.VerticalAlignCenter) { goTo = true })
-                            if (text != null && !showRendered) add(MenuEntry(if (wrap) "Do not wrap lines" else "Wrap lines", Icons.AutoMirrored.Rounded.WrapText) { wrap = !wrap })
-                            add(MenuEntry("Copy path", Icons.Rounded.ContentCopy) { copy("Path", rel, "Path copied") })
-                            if (text != null && !editing) add(MenuEntry("Copy text", Icons.Rounded.ContentCopy) { copy(name, text.text, "Text copied") })
-                            add(MenuEntry("Share", Icons.Rounded.Share) { share() })
-                        },
-                    )
-                }
-            }
+                if (source != null && text?.next != null) add("first ${ProjectFiles.size(text.next)} shown")
+                if (readOnly) add("read-only")
+                if (tab.dirty) add("unsaved")
+            }.joinToString(" · ")
+            GlassBar(
+                title = if (editing) "Editing $name" else name,
+                subtitle = sub,
+                subtitleColor = if (tab.dirty) colors.warning else colors.ink3,
+                leading = { GlassIconButton(Icons.Rounded.Close, if (editing) "Stop editing" else "Close", onClick = { if (editing) leaveEdit() else onClose() }) },
+                actions = {
+                    if (text != null) {
+                        GlassIconButton(Icons.Rounded.Search, "Find in file", onClick = { if (find.open) find.open = false else openFind(replace = false) }, tint = if (find.open) colors.accent else colors.ink1)
+                    }
+                    if (editing) {
+                        GlassChip(if (saving) "Saving…" else "Save", onClick = { save() }, enabled = tab.dirty && !saving, tint = colors.accent)
+                    } else if (canEdit) {
+                        // Editing is the main thing to do with a file: one tap, not a menu entry.
+                        GlassIconButton(Icons.Rounded.Edit, "Edit", onClick = { startEdit() })
+                    }
+                    Box {
+                        GlassIconButton(Icons.Rounded.MoreHoriz, "More", onClick = { menu = true })
+                        ViewerMenu(
+                            expanded = menu,
+                            onDismiss = { menu = false },
+                            items = buildList {
+                                if (editing && !tab.value.selection.collapsed) add(MenuEntry("Ask Pi about the selection", Icons.Rounded.AutoAwesome) { ask(selection = true) })
+                                add(MenuEntry("Ask Pi about this file", Icons.Rounded.AutoAwesome) { ask(selection = false) })
+                                if (text != null && !showRendered) add(MenuEntry("Go to line", Icons.Rounded.VerticalAlignCenter) { goTo = true })
+                                if (text != null && !showRendered) add(MenuEntry(if (wrap) "Do not wrap lines" else "Wrap lines", Icons.AutoMirrored.Rounded.WrapText) { wrap = !wrap })
+                                add(MenuEntry("Copy path", Icons.Rounded.ContentCopy) { copy("Path", rel, "Path copied") })
+                                if (text != null && !editing) add(MenuEntry("Copy text", Icons.Rounded.ContentCopy) { copy(name, text.text, "Text copied") })
+                                if (source == null) add(MenuEntry("Share", Icons.Rounded.Share) { share() })
+                            },
+                        )
+                    }
+                },
+            )
             // Landscape with the keyboard up: the strip gives its 48dp to the text (tabs come back with the keyboard down).
             if (tabs.tabs.size > 1 && ProjectNavRules.showChrome(WindowInsets.isImeVisible, LocalConfiguration.current.screenHeightDp)) {
                 TabStrip(tabs, rel, onSelect = onSelect, onClose = ::closeTab)
@@ -485,7 +521,7 @@ fun FileViewer(
                         rendered = it
                         if (it) find.open = false
                     },
-                    modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(start = Space.page, end = Space.page, bottom = Space.sm),
                     height = 48.dp,
                 )
             }
@@ -498,13 +534,17 @@ fun FileViewer(
                     when (doc) {
                         null -> LoadingRow("Opening $name…", Modifier.padding(top = 8.dp))
                         is FileDoc.Unreadable -> Note(doc.reason, null, null)
-                        is FileDoc.Binary -> Note("Binary file", "${FileTypes.label(name)} · ${ProjectFiles.size(doc.size)}. Share it to open in another app.") {
-                            SecondaryButton("Share", onClick = ::share, icon = Icons.Rounded.Share)
+                        is FileDoc.Binary -> if (source != null) {
+                            Note("Binary file", "${FileTypes.label(name)} · ${ProjectFiles.size(doc.size)}. It stays on the computer.", null)
+                        } else {
+                            Note("Binary file", "${FileTypes.label(name)} · ${ProjectFiles.size(doc.size)}. Share it to open in another app.") {
+                                SecondaryButton("Share", onClick = ::share, icon = Icons.Rounded.Share)
+                            }
                         }
                         is FileDoc.Image -> ZoomImage(doc, "$name, ${doc.width} by ${doc.height} pixels")
                         is FileDoc.Text -> when {
                             editing -> CodeEditor(tab, language, wrap, matches, find.current, reveal, editorFocus)
-                            showRendered -> RenderedMarkdown(doc.text, more = doc.next != null, loadingMore = loadingMore, footer = moreLabel(doc), onMore = {
+                            showRendered -> RenderedMarkdown(doc.text, more = doc.next != null && source == null, loadingMore = loadingMore, footer = moreLabel(doc), onMore = {
                                 loadingMore = true
                                 scope.launch {
                                     tab.doc = ProjectFiles.more(file, doc)
@@ -520,7 +560,7 @@ fun FileViewer(
                                 current = find.current,
                                 flashLine = flashLine,
                                 state = listState,
-                                footer = if (doc.next != null) moreLabel(doc) else null,
+                                footer = if (doc.next != null && source == null) moreLabel(doc) else null,
                                 loadingMore = loadingMore,
                                 onMore = {
                                     loadingMore = true
@@ -566,6 +606,18 @@ fun FileViewer(
             jump(line)
         }, onDismiss = { goTo = false })
     }
+    if (overwrite) {
+        ConfirmSheet(
+            title = "$name changed on disk",
+            message = "Something else (Pi or a command) changed or removed it since you opened it. Saving replaces that with your edits.",
+            confirmLabel = "Save anyway",
+            onConfirm = {
+                overwrite = false
+                save(force = true)
+            },
+            onDismiss = { overwrite = false },
+        )
+    }
     confirm?.let { (title, then) ->
         ConfirmSheet(
             title = title,
@@ -607,7 +659,7 @@ private fun matchesByLine(matches: List<TextMatch>, lines: List<IntRange>): Map<
 /** Open files as tabs ([WorkspaceTab]): a dot when unsaved, the name and a close button. */
 @Composable
 private fun TabStrip(tabs: EditorTabs, shown: String, onSelect: (String) -> Unit, onClose: (EditorTab) -> Unit) {
-    Row(Modifier.fillMaxWidth().height(48.dp).horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(48.dp).horizontalScroll(rememberScrollState()).padding(horizontal = Space.page - Space.xs), verticalAlignment = Alignment.CenterVertically) {
         for (t in tabs.tabs) {
             WorkspaceTab(
                 name = t.name,
@@ -796,8 +848,10 @@ private fun Note(title: String, detail: String?, action: (@Composable () -> Unit
         verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Icon(Icons.AutoMirrored.Rounded.InsertDriveFile, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(40.dp))
-        Spacer(Modifier.height(16.dp))
+        Box(Modifier.size(56.dp).glass(CircleShape, colors), contentAlignment = Alignment.Center) {
+            Icon(Icons.AutoMirrored.Rounded.InsertDriveFile, contentDescription = null, tint = colors.ink2, modifier = Modifier.size(IconSize.lg))
+        }
+        Spacer(Modifier.height(Space.lg))
         Text(title, style = Pi.type.title, color = colors.ink1, textAlign = TextAlign.Center)
         detail?.let {
             Spacer(Modifier.height(6.dp))

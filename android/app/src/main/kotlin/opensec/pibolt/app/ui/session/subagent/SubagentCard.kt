@@ -53,6 +53,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -262,7 +263,11 @@ private fun rememberThrottled(value: String, ms: Long): String {
     return shown
 }
 
-/** A 2dp band in [color] sweeping the top edge while the run is active (sweep duration; none under reduce motion). */
+/**
+ * A 2dp band in [color] sweeping the top edge while the run is active (sweep duration; none under reduce motion). The
+ * card's content goes in a layer of its own (the trailing graphicsLayer), so each frame of the sweep re-records only the
+ * band, not the card's text and glyphs.
+ */
 @Composable
 internal fun Modifier.sweep(color: Color): Modifier {
     if (Pi.reduceMotion) return this
@@ -275,7 +280,7 @@ internal fun Modifier.sweep(color: Color): Modifier {
             topLeft = Offset(0f, 0f),
             size = Size(size.width, 2.dp.toPx()),
         )
-    }
+    }.graphicsLayer()
 }
 
 /**

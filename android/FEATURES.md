@@ -189,6 +189,7 @@ before a turn with a conversation fork, and redo of any restore. On this phone o
 | Bundled extensions (todo, subagents) | packages | done | device | P1 |
 | Web search (bundled pi-web-access: `web_search`, `fetch_content`, `get_search_content`, `source_check`) | package | done (0.5.4): chats and projects, Settings > Agent > Web search (on; off leaves the tools out); a Sources pill per run of web steps with site favicons | device | P1 |
 | Structured questions (bundled rpiv-ask-user-question: `ask_user_question`) | package (TUI questionnaire) | done (0.5.4): one native question card ("1 of 3", radio or checkboxes, Type something, Back / Next / Submit) answering the extension's RPC dialogs; dismiss declines | device | P1 |
+| Background shell jobs (app extension pibolt-bg: `bash_background`, `bash_output`, `bash_kill`, `bash_jobs`) | — (Pi's `bash` blocks) | done (0.6.0): project sessions only (chats have no shell); each job in its own process group, log + 1 MB ring buffer, 32 KB per read, at most 5 running; ends with the session and the engine; Background pill and sheet (last lines, full log, Stop); running jobs keep the session busy and the notification up; printed ports feed the Preview chip | device | P1 |
 | Install / manage packages | `pi install`, settings | done: `/packages`, Settings: bundled todo and subagents, npm/git install, switch off, remove, each package's commands and tools; built-in extensions on/off | device | P2 |
 | MCP servers | `/mcp` | done: `/mcp-servers`, Settings: state and tools per server (`pi mcp list`), add by URL or command, remove | device | P2 |
 | Reload resources | `/reload` | done: `/reload` restarts the engine in the same session (also re-reads trust, packages, MCP) | device | P2 |
@@ -239,6 +240,7 @@ before a turn with a conversation fork, and redo of any restore. On this phone o
 | Pair with a computer (QR, paste) | `/remote-control` | done | remote | P0 |
 | Reconnect after drops | — | done | remote | P0 |
 | Several computers, forget, revoke | `/remote-control devices` | done | remote | P1 |
+| Review the computer's changes and files | `git`, editors on the computer | done (0.6.0): with a Pi-Bolt that offers it (`host.review`), More has Changes (status, diffs, history and commits) and Files (folders, the file viewer, Ask Pi), read-only, and the composer shows the working tree's "+N −M" pill; secret files stay on the computer | remote | P1 |
 | Background notifications (done, needs answer) | — | done: tapping one opens that exact session; also "background agent finished" | both | P0 |
 | Keep running in the background | — | done: foreground service while a turn, a compaction, background agents or a `!` command runs; a partial wake lock while local work runs (2 h cap without progress); Stop and Open on its notification; answers and replies from notifications; Run in background setup (battery optimization, OEM autostart) | device | P0 |
 | Several sessions at once | several terminals | done: up to three on this phone (one per project, each with its own engine) plus remote control; Running on Home, a switcher in the session bar; at the cap an idle session makes room, a busy one is never stopped | device | P1 |
@@ -251,6 +253,7 @@ before a turn with a conversation fork, and redo of any restore. On this phone o
 | Pull requests | `gh pr create` | done: title, body (Pi can draft), base branch, then the link | device | P1 |
 | Interactive terminal | `!` runs one command | done: bash on a pty in the project (engine environment, secrets), tabs, full screen, extra keys, copy and paste, font size, scrollback; keeps running in the background | device | P1 |
 | Dev-server preview | — | done: "Preview: localhost:N" chip in the terminal and the session, in-app browser limited to localhost | device | P1 |
+| Pi sees its own preview | — | done (0.6.0): project sessions on the phone get `preview_open`, `preview_screenshot` (a PNG of at most 1280 px, shown in the transcript), `preview_console` (console, uncaught errors with stacks, failed requests), `preview_click`, `preview_type`, `preview_scroll` and `preview_eval`, driving the same WebView the user sees ("Pi is using the preview"); only detected dev-server ports on localhost; never in chats | device | P1 |
 | Project secrets (.env) | — | done: Keystore-encrypted, masked, injected into the project's terminals and engines (not the model's messages), optional .env | device | P1 |
 | Edit project files | `edit` tool | done (0.5.0): tabs with unsaved dots; highlighting while typing (incremental, off the main thread); find and replace with regex groups, case, whole word, undo; go to line; auto-indent, bracket pairs, soft wrap; read-only over 1 MB | device | P1 |
 | Ask Pi about a file or selection | `@file` | done (0.5.0): the viewer puts an `@mention` and the selected lines into the project's composer | device | P1 |
@@ -258,6 +261,7 @@ before a turn with a conversation fork, and redo of any restore. On this phone o
 | Files in and out | — | done (0.5.0): import files or a folder (SAF), a zip as a new project; export a project or folder as a zip (Save to… or Share); share a file; streamed, cancellable, zip-slip safe | device | P1 |
 | Share into Pi-Bolt | — | done (0.5.0): files, images and text from other apps: attach to a project's composer, import, or a zip as a project | device | P1 |
 | Voice input | — | done (0.5.0): composer mic, Android speech recognition (on-device when available), live partial text | both | P1 |
+| Hands-free voice mode | — | done (0.6.0): listen, send on end of speech, "Working" with the Quad and the tool, a spoken 2-3 sentence summary of the reply (Android TextToSpeech, no extra model call), listen again; question cards read out and answered by voice; mute, barge-in where the phone cancels echo, pauses for calls and other audio; speech rate and voice in Settings | both | P2 |
 | Files on tool cards | — | done (0.5.0): a path on this phone opens in the file viewer and editor | device | P1 |
 | Language runtimes: `node`, `npm`, `npx`, `python3`, `pip` | your system's | done: Node.js 22 LTS and Python 3.14 in the APK, in Pi's bash, `!` commands and the terminal (all with the engine's environment); npm/pip installs over HTTPS | device | P1 |
 | Runtimes screen (versions, sizes, npm/pip caches) | — | done: Settings > Runtimes, project menu | device | P2 |

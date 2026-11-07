@@ -61,9 +61,11 @@ class GitHubApi(
     /** The token's user and its OAuth scopes (`X-OAuth-Scopes`; empty for fine-grained tokens). */
     suspend fun user(withToken: String? = null): Pair<GitHubAccountInfo, List<String>> {
         val (json, headers) = call("GET", "/user", null, withToken)
-        val o = json.jsonObject
+        // A proxy or captive portal can answer 200 with other JSON: no account, not a crash or an empty login.
+        val o = json as? JsonObject ?: throw GitHubException("GitHub sent an unexpected answer.", 200)
+        val login = o.str("login")?.takeIf { it.isNotBlank() } ?: throw GitHubException("GitHub sent an unexpected answer.", 200)
         val scopes = headers["x-oauth-scopes"].orEmpty().split(',').map { it.trim() }.filter { it.isNotEmpty() }
-        return GitHubAccountInfo(o.str("login").orEmpty(), o.str("name"), o.long("id") ?: 0) to scopes
+        return GitHubAccountInfo(login, o.str("name"), o.long("id") ?: 0) to scopes
     }
 
     /** The user's repositories, most recently pushed first, [perPage] per [page] (1-based). */

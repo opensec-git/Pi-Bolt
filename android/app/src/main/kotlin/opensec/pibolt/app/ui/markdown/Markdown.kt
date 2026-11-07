@@ -85,9 +85,16 @@ object Markdown {
     private val summary = Regex("^ {0,3}<summary>(.*)</summary>\\s*$", RegexOption.IGNORE_CASE)
     private val htmlComment = Regex("^ {0,3}<!--")
 
+    /**
+     * A fence line that really opens one: a backtick fence's info string has no backtick (CommonMark), so a one-line
+     * "```npm install```" is a code span in a paragraph, not a fence that swallowed the rest of the message.
+     */
+    private fun opensFence(m: MatchResult): Boolean = m.groupValues[2][0] != '`' || '`' !in m.groupValues[4]
+
     /** Shown while a large text is parsed off the main thread: its first lines as plain paragraphs. */
     fun placeholder(text: String): MdDoc {
-        val head = text.take(4_000).substringBeforeLast('\n')
+        // Never half an emoji: a cut inside a surrogate pair left a lone high surrogate on screen.
+        val head = text.take(4_000).let { if (it.isNotEmpty() && it.last().isHighSurrogate()) it.dropLast(1) else it }.substringBeforeLast('\n')
         return MdDoc(text, listOf(MdBlock.Paragraph(head)), intArrayOf(0))
     }
 
@@ -326,7 +333,7 @@ object Markdown {
 
         /** True when [t] (trimmed at the start) begins a block that ends a paragraph. */
         private fun interrupts(t: String, paragraph: Boolean): Boolean {
-            if (t.startsWith("```") || t.startsWith("~~~")) return true
+            if ((t.startsWith("```") || t.startsWith("~~~")) && fence.matchEntire(t)?.let(::opensFence) == true) return true
             if (t.startsWith("#") && heading.matches(t)) return true
             if (t.startsWith(">")) return true
             if (t.startsWith("$$") || isMathBracket(t) || mathEnv.containsMatchIn(t)) return true
@@ -349,7 +356,7 @@ object Markdown {
             val cols = minOf(indentOf(lines[i]), strip)
             val t = line.trimStart()
 
-            fence.matchEntire(line)?.let { m ->
+            fence.matchEntire(line)?.takeIf(::opensFence)?.let { m ->
                 val fenceIndent = m.groupValues[1].length
                 val mark = m.groupValues[2]
                 val body = StringBuilder()

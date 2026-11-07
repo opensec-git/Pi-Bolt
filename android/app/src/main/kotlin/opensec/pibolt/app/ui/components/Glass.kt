@@ -40,7 +40,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.CustomAccessibilityAction
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -155,8 +157,9 @@ fun StatusTile(label: String, count: Int?, onClick: () -> Unit, modifier: Modifi
     ) {
         Box(Modifier.size(IconSize.md), contentAlignment = Alignment.Center, content = glyph)
         Spacer(Modifier.weight(1f).heightIn(min = Space.md))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(label, style = type.rowMeta, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        Row(verticalAlignment = Alignment.Bottom) {
+            // Two lines before an ellipsis: "Waiting for you" fits a half-width tile at font scale 1.3 that way.
+            Text(label, style = type.rowMeta, color = colors.ink1, maxLines = 2, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
             if (count != null) {
                 Spacer(Modifier.width(Space.sm))
                 Text(count.toString(), style = type.rowMeta.copy(fontFeatureSettings = Tnum), color = colors.ink3, maxLines = 1)
@@ -289,7 +292,7 @@ fun ComposerCircle(icon: ImageVector, description: String, onClick: () -> Unit, 
  * - empty while Pi works and [onStop] is given, Stop: a surface3 disc with a 1dp lineStrong ring and a 12dp ink1
  *   square;
  * - empty otherwise, voice input: the accent with a waveform glyph, [onVoice]; without [onVoice], Send at 18%,
- *   disabled.
+ *   disabled. A long press there ([onVoiceLong], also a TalkBack action "Voice mode") starts voice mode.
  * The glyph swap crossfades.
  */
 @Composable
@@ -301,9 +304,11 @@ fun ComposerPrimary(
     enabled: Boolean = true,
     running: Boolean = false,
     onStop: (() -> Unit)? = null,
+    onVoiceLong: (() -> Unit)? = null,
 ) {
     val colors = Pi.colors
     val mode = ComposerPrimaryMode.of(hasText, running, onStop != null, onVoice != null)
+    val long = onVoiceLong?.takeIf { mode == ComposerPrimaryMode.Voice && enabled }
     val active = enabled && mode != ComposerPrimaryMode.SendDisabled
     val label = when (mode) {
         ComposerPrimaryMode.Stop -> "Stop"
@@ -319,7 +324,8 @@ fun ComposerPrimary(
         Box(
             Modifier
                 .size(36.dp)
-                .pressable(action, shape = CircleShape, enabled = active, pressedScale = 0.92f, role = Role.Button, label = label)
+                .pressable(action, shape = CircleShape, enabled = active, pressedScale = 0.92f, onLongClick = long, role = Role.Button, label = label)
+                .then(if (long != null) Modifier.semantics { customActions = listOf(CustomAccessibilityAction("Voice mode") { long(); true }) } else Modifier)
                 .then(
                     if (mode == ComposerPrimaryMode.Stop) {
                         Modifier.background(colors.surface3, CircleShape).border(1.dp, colors.lineStrong, CircleShape)

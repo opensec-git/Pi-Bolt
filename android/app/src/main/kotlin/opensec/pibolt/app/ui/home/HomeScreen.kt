@@ -1,5 +1,10 @@
 package opensec.pibolt.app.ui.home
 
+import androidx.activity.compose.ReportDrawnWhen
+import androidx.compose.material.icons.rounded.NotificationsNone
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.ui.graphics.vector.ImageVector
+import opensec.pibolt.app.ui.components.EmptyState
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import opensec.pibolt.app.ui.projects.transfer.SafTransfer
@@ -85,7 +90,6 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import androidx.compose.material.icons.rounded.Archive
-import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.foundation.layout.widthIn
@@ -97,6 +101,7 @@ import opensec.pibolt.app.ui.projects.WorkspaceMenuRow
 import opensec.pibolt.app.ui.hosts.AddComputerSheet
 import opensec.pibolt.app.ui.hosts.ManageComputerSheet
 import opensec.pibolt.app.data.ProjectMeta
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.BoxWithConstraints
 import android.content.Intent
@@ -105,11 +110,21 @@ import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.foundation.layout.width
 import opensec.pibolt.app.ui.components.GlassPill
 import opensec.pibolt.app.ui.components.ComposerCircle
+import opensec.pibolt.app.ui.components.PiMenu
+import opensec.pibolt.app.ui.components.PiMenuItem
+import opensec.pibolt.app.ui.projects.PillPlus
+import opensec.pibolt.app.ui.session.ImageSizing
+import opensec.pibolt.app.ui.session.clipboardHasImage
+import opensec.pibolt.app.ui.session.clipboardImage
+import android.net.Uri
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.compose.material.icons.rounded.ContentPaste
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Mic
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.engine.EngineStatus
-import opensec.pibolt.app.git.GitRepo
 import opensec.pibolt.app.ui.components.BrandMark
 import opensec.pibolt.app.ui.components.ConfirmSheet
 import opensec.pibolt.app.ui.components.PiSnackHost
@@ -120,6 +135,9 @@ import opensec.pibolt.app.ui.chats.ChatList
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.Forum
 import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.cost.SpendLimitsSheet
+import opensec.pibolt.app.ui.cost.SpendSheet
+import opensec.pibolt.app.ui.cost.rememberTodayLine
 import opensec.pibolt.app.ui.components.show
 import opensec.pibolt.app.ui.hosts.HostCard
 import opensec.pibolt.app.ui.hosts.PasteSheet
@@ -133,10 +151,12 @@ import androidx.compose.material.icons.rounded.ChatBubbleOutline
 import opensec.pibolt.app.ui.session.RunningRow
 import opensec.pibolt.app.ui.session.runningSessions
 import opensec.pibolt.app.ui.projects.NewProjectSheet
+import opensec.pibolt.app.ui.projects.ProjectClone
 import opensec.pibolt.app.ui.projects.ProjectAction
 import opensec.pibolt.app.ui.projects.ProjectActionSheets
 import opensec.pibolt.app.ui.projects.ContinueRow
 import androidx.compose.foundation.layout.height
+import opensec.pibolt.app.secrets.SecretStore
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.ui.projects.HomeHead
 import androidx.compose.material.icons.rounded.Add
@@ -150,6 +170,7 @@ import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Tnum
 import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.update.UpdateCard
 import opensec.pibolt.app.update.UpdateJob
@@ -177,7 +198,7 @@ fun HomeScreen(
 ) {
     val engine = app.engine
     val store = remember { ProjectStore.get(app) }
-    val projects = remember(engine) { Projects(engine, store) }
+    val projects = remember(engine) { Projects(engine, store, SecretStore.get(app)) }
     val colors = Pi.colors
     val type = Pi.type
     val scope = rememberCoroutineScope()
@@ -251,14 +272,14 @@ fun HomeScreen(
     var resuming by remember { mutableStateOf(false) }
     fun resume(entry: ProjectEntry, file: String, isLive: Boolean) {
         if (isLive) {
-            onOpenLocalSession(entry.name)
+            onOpenLocalSession(LocalSessions.find(entry.name, file)?.key ?: entry.name)
             return
         }
         if (resuming) return
         resuming = true
         scope.launch {
             LocalSessions.open(engine, store, File(entry.path), sessionFile = file)
-                .onSuccess { onOpenLocalSession(entry.name) }
+                .onSuccess { onOpenLocalSession(it.key) }
                 .onFailure { snackbar.show(it.message ?: "Could not open the session", SnackKind.Error) }
             resuming = false
         }
@@ -274,6 +295,8 @@ fun HomeScreen(
     var details by remember { mutableStateOf(false) }
     var addProvider by remember { mutableStateOf(false) }
     var plusMenu by remember { mutableStateOf(false) }
+    var spendSheet by remember { mutableStateOf(false) }
+    var spendLimits by remember { mutableStateOf(false) }
     var sheetList by remember { mutableStateOf<HomeList?>(null) }
     var addComputer by remember { mutableStateOf(false) }
     var managing by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -303,6 +326,9 @@ fun HomeScreen(
     val needsModel = !unavailable && authLoaded && configured.isEmpty()
     val setup = !unavailable && metaLoaded && authLoaded && list != null && (needsModel || list.isEmpty())
     val hasProjects = !unavailable && !list.isNullOrEmpty()
+    // Home is usable once the projects and the key and meta state are read: the startup's "fully drawn" (logcat
+    // "Fully drawn", Macrobenchmark's timeToFullDisplay).
+    ReportDrawnWhen { list != null && metaLoaded && authLoaded }
 
     // Landscape: the side navigation bar and a display cutout keep their side; the canvas still fills the window.
     val listState = rememberLazyListState()
@@ -326,6 +352,28 @@ fun HomeScreen(
     fun voice() {
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
         runCatching { speech.launch(intent) }.onFailure { scope.launch { snackbar.show("Voice input isn't available on this phone", SnackKind.Error) } }
+    }
+    /**
+     * The + of the pill with Chat picked: a new chat opens with the draft and [images] waiting in its composer
+     * (nothing is sent).
+     */
+    fun newChatWith(images: List<Uri>) {
+        if (starting) return
+        starting = true
+        val text = ask.trim().takeIf { it.isNotEmpty() }
+        scope.launch {
+            Chats.start(engine)
+                .onSuccess { live ->
+                    if (text != null || images.isNotEmpty()) live.drop(text, images)
+                    ask = ""
+                    onOpenChat()
+                }
+                .onFailure { snackbar.show(it.message ?: "The chat didn't open", SnackKind.Error) }
+            starting = false
+        }
+    }
+    val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(ImageSizing.MAX_IMAGES)) { uris ->
+        if (uris.isNotEmpty()) newChatWith(uris)
     }
     fun openChat(file: String?) {
         if (starting) return
@@ -364,7 +412,7 @@ fun HomeScreen(
             LocalSessions.open(engine, store, File(project.path), fresh = true, firstPrompt = text)
                 .onSuccess {
                     ask = ""
-                    onOpenLocalSession(project.name)
+                    onOpenLocalSession(it.key)
                 }
                 .onFailure { snackbar.show(it.message ?: "The session didn't open", SnackKind.Error) }
             starting = false
@@ -377,7 +425,8 @@ fun HomeScreen(
     val recentChats = if (unavailable) emptyList() else chats.take(RECENT_CHATS)
     // The Chats row, under Recents, once the folders are read.
     val chatsRow = !unavailable && list != null
-    val recentsAt = 1 + listOf(status.needsBanner(), showUpdate, setup, hasProjects).count { it }
+    // 2: the header and today's spending line (an empty item when nothing was spent).
+    val recentsAt = 2 + listOf(status.needsBanner(), showUpdate, setup, hasProjects).count { it }
     val projectsAt = recentsAt + (if (running.isNotEmpty() || idleRecent.isNotEmpty()) 1 + running.size + idleRecent.size else 0) +
         (if (chatsRow) 1 + recentChats.size + (if (chats.size > recentChats.size || chats.isEmpty()) 1 else 0) else 0)
     val computersAt = projectsAt + if (hasProjects) 1 + list.orEmpty().size else 0
@@ -392,9 +441,10 @@ fun HomeScreen(
         ) {
             item(key = "header", contentType = "header") {
                 // The brand is the title: the bare bolt at the title's cap height and "Pi-Bolt" in largeTitle, with
-                // Settings and + as glass buttons on the same centre line.
+                // Settings and + as glass buttons on the same centre line. Today's spending, when there is any, follows.
+                val spent = rememberTodayLine(app) != null
                 Row(
-                    Modifier.statusBarsPadding().fillMaxWidth().heightIn(min = 72.dp).padding(start = Space.page, end = Space.page - Space.xxs, top = Space.sm, bottom = Space.md),
+                    Modifier.statusBarsPadding().fillMaxWidth().heightIn(min = if (spent) 56.dp else 72.dp).padding(start = Space.page, end = Space.page - Space.xxs, top = Space.sm, bottom = if (spent) 0.dp else Space.md),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     BrandMark(size = 26.dp, play = false, modifier = Modifier.clearAndSetSemantics { })
@@ -416,6 +466,21 @@ fun HomeScreen(
                         }
                     }
                 }
+            }
+            // Today's spending: a quiet meta line under "Pi-Bolt" once Pi used anything today; a tap opens the details.
+            item(key = "today", contentType = "today") {
+                val today = rememberTodayLine(app) ?: return@item
+                Text(
+                    today,
+                    style = type.rowMeta.copy(fontFeatureSettings = Tnum),
+                    color = colors.ink3,
+                    maxLines = 1,
+                    modifier = Modifier
+                        // Past the 26dp mark and its gap, less this line's own press padding.
+                        .padding(start = Space.page + 26.dp + Space.sm - Space.xs, bottom = Space.xs)
+                        .pressable({ spendSheet = true }, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "Spending")
+                        .padding(Space.xs),
+                )
             }
             if (status.needsBanner()) {
                 item(key = "engine", contentType = "engine") {
@@ -441,7 +506,8 @@ fun HomeScreen(
             }
             if (hasProjects) {
                 item(key = "tiles", contentType = "tiles") {
-                    val working = running.size - waiting.size
+                    // Two flows: for a frame one may still hold a session the other dropped (never -1).
+                    val working = running.count { it !in waiting }
                     // The 2x2 status grid from real state (one row of four in a wide window); each tile opens its
                     // list (Projects scrolls to its section).
                     // One tint per tile, every glyph 20dp: the Quads move only while their count is not zero.
@@ -478,8 +544,9 @@ fun HomeScreen(
                         val perRow = if (maxWidth >= 600.dp) 4 else 2
                         Column(verticalArrangement = Arrangement.spacedBy(Space.md)) {
                             for (row in tiles.chunked(perRow)) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(Space.md)) {
-                                    for (tile in row) tile(Modifier.weight(1f))
+                                // One height per row, so a label that wraps at a large font scale keeps the pair even.
+                                Row(Modifier.height(IntrinsicSize.Min), horizontalArrangement = Arrangement.spacedBy(Space.md)) {
+                                    for (tile in row) tile(Modifier.weight(1f).fillMaxHeight())
                                 }
                             }
                         }
@@ -487,6 +554,7 @@ fun HomeScreen(
                 }
             }
             fun liveFor(entry: ProjectEntry, file: String): SessionController? {
+                LocalSessions.find(entry.name, file)?.let { return it.controller }
                 val liveHere = liveAll[entry.name]?.takeIf { !it.controller.stopped } ?: return null
                 val liveFile = liveHere.controller.sessionFile ?: liveHere.sessionFile
                 return liveHere.controller.takeIf { liveFile == null || liveFile == file }
@@ -496,8 +564,8 @@ fun HomeScreen(
                 item(key = "recents-label", contentType = "label") {
                     HomeHead("Recents", Modifier.animateItem().padding(top = Space.lg).entrance(4, play))
                 }
-                items(running, key = { "r:" + it.project.name }, contentType = { "recent" }) { live ->
-                    RunningRow(live, meta.projects[live.project.name], onClick = { onOpenLocalSession(live.project.name) }, modifier = Modifier.animateItem(), divider = live != running.last() || idle.isNotEmpty())
+                items(running, key = { "r:" + it.key }, contentType = { "recent" }) { live ->
+                    RunningRow(live, meta.projects[live.project.name], onClick = { onOpenLocalSession(live.key) }, modifier = Modifier.animateItem(), divider = live != running.last() || idle.isNotEmpty())
                 }
                 items(idle, key = { "c:" + it.name }, contentType = { "recent" }) { entry ->
                     val session = entry.lastSession ?: return@items
@@ -537,7 +605,7 @@ fun HomeScreen(
                     InsetRow(
                         chat.title,
                         onClick = { openChat(chat.file) },
-                        meta = if (working) "Working" else ChatList.meta(chat, now),
+                        meta = if (working) "Working" else ChatList.meta(chat, now, Pi.settings.spend.showInLists),
                         leading = {
                             if (working) {
                                 QuadSpinner(QuadMode.Write, size = IconSize.md, color = colors.tint2)
@@ -642,7 +710,8 @@ fun HomeScreen(
             PiSnackHost(snackbar, if (pillShown) Modifier else Modifier.navigationBarsPadding())
             if (pillShown) {
                 // The persistent pill, with the project it starts in as a chip above it (left edges aligned, 8dp
-                // apart): + (New project), the field, and the primary circle (voice while empty, Send with text).
+                // apart): + (New project; with Chat picked, a chat's actions), the field, and the primary circle
+                // (voice while empty, Send with text).
                 Box(
                     Modifier
                         .fillMaxWidth()
@@ -663,7 +732,44 @@ fun HomeScreen(
                       // The chip's 48dp target leaves 4dp under its 40dp face: 4dp more makes the 8dp gap.
                       Spacer(Modifier.height(Space.xs))
                       PillComposerShell(
-                          leading = { ComposerCircle(Icons.Rounded.Add, "New project", onClick = { newProject = false }) },
+                          leading = {
+                              // Chat picked: a chat's actions (photo, pasted image, voice, New chat); a project: New project.
+                              var plusOpen by remember { mutableStateOf(false) }
+                              var actions by remember { mutableStateOf(emptyList<PillPlus>()) }
+                              Box {
+                                  ComposerCircle(Icons.Rounded.Add, if (chatPicked) "Add to a new chat" else "New project", enabled = !starting, onClick = {
+                                      if (chatPicked) {
+                                          actions = ProjectRules.pillPlus(chat = true, clipboardImage = clipboardHasImage(context))
+                                          plusOpen = true
+                                      } else {
+                                          newProject = false
+                                      }
+                                  })
+                                  PiMenu(plusOpen && chatPicked, onDismiss = { plusOpen = false }) {
+                                      for (a in actions) {
+                                          when (a) {
+                                              PillPlus.Photos -> PiMenuItem("Photos", icon = Icons.Rounded.Image, onClick = {
+                                                  plusOpen = false
+                                                  photos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                              })
+                                              PillPlus.PasteImage -> PiMenuItem("Paste image", icon = Icons.Rounded.ContentPaste, onClick = {
+                                                  plusOpen = false
+                                                  clipboardImage(context)?.let { newChatWith(listOf(it)) }
+                                              })
+                                              PillPlus.Voice -> PiMenuItem("Voice", icon = Icons.Rounded.Mic, onClick = {
+                                                  plusOpen = false
+                                                  voice()
+                                              })
+                                              PillPlus.NewChat -> PiMenuItem("New chat", icon = Icons.Rounded.ChatBubbleOutline, onClick = {
+                                                  plusOpen = false
+                                                  newChatWith(emptyList())
+                                              })
+                                              PillPlus.NewProject -> Unit
+                                          }
+                                      }
+                                  }
+                              }
+                          },
                           trailing = {
                               ComposerPrimary(hasText = ask.isNotBlank(), onSend = ::startSession, onVoice = ::voice, enabled = !starting)
                           },
@@ -701,7 +807,7 @@ fun HomeScreen(
                     onSuccess = { dir ->
                         if (url != null) {
                             cloneProgress = "Cloning…"
-                            val cloned = runCatching { GitRepo.clone(app.git, url, dir) { cloneProgress = it.label } }
+                            val cloned = runCatching { ProjectClone.run(app.git, url, dir) { cloneProgress = it.label } }
                             cloneProgress = null
                             cloned.exceptionOrNull()?.let { e ->
                                 projects.delete(dir.name)
@@ -711,7 +817,7 @@ fun HomeScreen(
                         LocalSessions.open(engine, store, dir, fresh = true, firstPrompt = url?.let(ProjectRules::clonePrompt)).fold(
                             onSuccess = {
                                 reload++
-                                onOpenLocalSession(dir.name)
+                                onOpenLocalSession(it.key)
                                 null
                             },
                             onFailure = {
@@ -742,6 +848,8 @@ fun HomeScreen(
     )
 
     if (details) EngineDetailsSheet(status, onRetry = engine::prepare, onDismiss = { details = false })
+    if (spendSheet) SpendSheet(app, session = null, onLimits = { spendSheet = false; spendLimits = true }, onDismiss = { spendSheet = false })
+    if (spendLimits) SpendLimitsSheet(app, onDismiss = { spendLimits = false })
 
     if (onboarding || addProvider) {
         ProviderSheet(
@@ -793,7 +901,7 @@ fun HomeScreen(
             which = which,
             lives = if (which == HomeList.Working) running.filter { it !in waiting } else waiting,
             titles = meta.projects,
-            onOpenLive = { onOpenLocalSession(it.project.name) },
+            onOpenLive = { onOpenLocalSession(it.key) },
             onDismiss = { sheetList = null },
         )
     }
@@ -836,34 +944,33 @@ private fun ComputersHeader(count: Int, open: Boolean, onToggle: () -> Unit, onA
 }
 
 /** The lists the status tiles open. */
-enum class HomeList(val title: String, val empty: String) {
-    Working("Working", "Nothing is running."),
-    Waiting("Waiting for you", "No questions waiting."),
+enum class HomeList(val title: String, val empty: String, val icon: ImageVector) {
+    Working("Working", "Nothing is running", Icons.Rounded.PlayArrow),
+    Waiting("Waiting for you", "No questions waiting", Icons.Rounded.NotificationsNone),
 }
 
-/** A tile's list in a sheet: the live sessions working, or waiting for an answer. One short line when there are none. */
+/** A tile's list in a sheet: the live sessions working, or waiting for an answer; an [EmptyState] when there are none. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun HomeListSheet(which: HomeList, lives: List<LocalSessions.Live>, titles: Map<String, ProjectMeta>, onOpenLive: (LocalSessions.Live) -> Unit, onDismiss: () -> Unit) {
-    val colors = Pi.colors
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
     PiSheet(onDismiss = onDismiss, state = state) {
         SheetHeader(which.title)
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
-            items(lives, key = { it.project.name }) { live ->
+            items(lives, key = { it.key }) { live ->
                 RunningRow(live, titles[live.project.name], onClick = { close { onDismiss(); onOpenLive(live) } }, divider = live != lives.last())
             }
         }
-        if (lives.isEmpty()) Text(which.empty, style = Pi.type.rowMeta, color = colors.ink3, modifier = Modifier.padding(horizontal = Space.page, vertical = Space.lg))
+        if (lives.isEmpty()) EmptyState(which.empty, icon = which.icon)
         Spacer(Modifier.navigationBarsPadding().height(Space.lg))
     }
 }
 
 /**
  * The pill's project, a glass chip above the pill: a folder glyph, the project's name (label ink1, at most 220dp) and
- * a chevron; [chat] shows a chat glyph and "Chat" (a plain chat, without a project). Its menu lists Chat first, the
- * projects, and New project.
+ * a chevron; [chat] shows a chat glyph and "Chat" (a plain chat, without a project). Its menu ([PiMenu]) lists Chat
+ * first (chat glyph), the projects (folder glyphs), and New project; a check marks the current one.
  */
 @Composable
 private fun ProjectChip(title: String?, chat: Boolean, projects: List<ProjectEntry>, onPick: (ProjectEntry) -> Unit, onChat: () -> Unit, onNew: () -> Unit, modifier: Modifier = Modifier) {
@@ -880,21 +987,21 @@ private fun ProjectChip(title: String?, chat: Boolean, projects: List<ProjectEnt
             Text(shown ?: "New project", style = Pi.type.label, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.widthIn(max = 220.dp))
             if (shown != null) Icon(Icons.Rounded.ExpandMore, contentDescription = null, tint = colors.ink3, modifier = Modifier.size(IconSize.sm))
         }
-        WorkspaceMenu(open, onDismiss = { open = false }) {
-            WorkspaceMenuRow(ChatSpace.NAME, if (chat) Icons.Rounded.Check else null, colors.ink1) {
+        PiMenu(open, onDismiss = { open = false }) {
+            PiMenuItem(ChatSpace.NAME, icon = Icons.Rounded.ChatBubbleOutline, checked = chat, onClick = {
                 open = false
                 onChat()
-            }
+            })
             for (p in projects) {
-                WorkspaceMenuRow(p.title, if (!chat && p.title == title) Icons.Rounded.Check else null, colors.ink1) {
+                PiMenuItem(p.title, icon = Icons.Rounded.FolderOpen, checked = !chat && p.title == title, onClick = {
                     open = false
                     onPick(p)
-                }
+                })
             }
-            WorkspaceMenuRow("New project", Icons.Rounded.Add, colors.ink1) {
+            PiMenuItem("New project", icon = Icons.Rounded.CreateNewFolder, onClick = {
                 open = false
                 onNew()
-            }
+            })
         }
     }
 }

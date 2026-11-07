@@ -6,7 +6,6 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -39,10 +38,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import opensec.pibolt.app.ui.components.TextAction
+import opensec.pibolt.app.ui.components.glass
 import opensec.pibolt.app.ui.projects.ProjectFiles
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 import kotlin.math.roundToInt
 
 /** One running transfer: what it does ("Importing 3 files") and how far it is. */
@@ -99,7 +100,11 @@ class TransferRunner(private val scope: CoroutineScope) {
     }
 }
 
-/** A card above the bottom edge while a transfer runs: what it does, the file, a progress line and Cancel. */
+/**
+ * A floating glass card above the bottom edge while a transfer runs (radius tile, 20dp from the sides): what it does
+ * (rowTitle ink1, the percent after it), the files, bytes and current file (monoMeta ink3), Cancel (danger text
+ * action) and a 3dp progress line (accent on surface3; no fill when the total is unknown).
+ */
 @Composable
 fun TransferBar(runner: TransferRunner, modifier: Modifier = Modifier) {
     val colors = Pi.colors
@@ -116,14 +121,13 @@ fun TransferBar(runner: TransferRunner, modifier: Modifier = Modifier) {
         val t = last.value ?: return@AnimatedVisibility
         val p = t.progress
         val fraction = p.fraction
-        val shape = RoundedCornerShape(Radius.md)
+        val shape = RoundedCornerShape(Radius.tile)
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp)
-                .background(colors.surface2, shape)
-                .border(1.dp, colors.lineStrong, shape)
-                .padding(start = 16.dp, end = 4.dp, top = 6.dp, bottom = 10.dp),
+                .padding(horizontal = Space.page, vertical = Space.sm)
+                .glass(shape, colors)
+                .padding(start = Space.lg, end = Space.xs, top = Space.sm, bottom = Space.md),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -131,7 +135,7 @@ fun TransferBar(runner: TransferRunner, modifier: Modifier = Modifier) {
                     // change ten times a second, so they are read on focus and from the progress line, not announced.
                     Text(
                         t.label + (fraction?.let { " · ${(it * 100).roundToInt()}%" } ?: ""),
-                        style = type.bodyStrong,
+                        style = type.rowTitle,
                         color = colors.ink1,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -149,10 +153,10 @@ fun TransferBar(runner: TransferRunner, modifier: Modifier = Modifier) {
                 }
                 TextAction("Cancel", onClick = runner::cancel, color = colors.danger, modifier = Modifier.heightIn(min = 48.dp))
             }
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(Space.sm))
             Box(
                 Modifier
-                    .padding(end = 12.dp)
+                    .padding(end = Space.md)
                     .fillMaxWidth()
                     .height(3.dp)
                     .background(colors.surface3, RoundedCornerShape(2.dp))

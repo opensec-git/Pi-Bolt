@@ -39,6 +39,7 @@ import androidx.compose.material.icons.rounded.Public
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.State
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -199,11 +200,12 @@ fun SourceIcon(source: WebSource, size: Dp, popIn: Boolean = false, order: Int =
     val fetching = source.state == SourceState.Fetching
     val arc by animateFloatAsState(if (fetching) 1f else 0f, PiMotion.inPlace(PiMotion.SETTLE), label = "arc")
     val dim by animateFloatAsState(if (source.state == SourceState.Failed) 0.4f else 1f, PiMotion.inPlace(PiMotion.STANDARD), label = "dim")
-    val spin = if (arc > 0f && !reduced) {
+    // The angle is read while drawing the arc: a page being read redraws its ring each frame without recomposing.
+    val spin: State<Float>? = if (arc > 0f && !reduced) {
         val t = rememberInfiniteTransition(label = "reading")
-        t.animateFloat(0f, 360f, infiniteRepeatable(tween(PiMotion.SWEEP, easing = LinearEasing), RepeatMode.Restart), label = "spin").value
+        t.animateFloat(0f, 360f, infiniteRepeatable(tween(PiMotion.SWEEP, easing = LinearEasing), RepeatMode.Restart), label = "spin")
     } else {
-        0f
+        null
     }
     Box(
         Modifier.size(size).graphicsLayer {
@@ -234,7 +236,7 @@ fun SourceIcon(source: WebSource, size: Dp, popIn: Boolean = false, order: Int =
                 val inset = stroke / 2
                 drawArc(
                     color = tint.copy(alpha = 0.85f * arc),
-                    startAngle = spin - 90f,
+                    startAngle = (spin?.value ?: 0f) - 90f,
                     sweepAngle = 110f,
                     useCenter = false,
                     topLeft = Offset(inset, inset),

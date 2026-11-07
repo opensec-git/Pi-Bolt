@@ -1,6 +1,8 @@
 package opensec.pibolt.app.ui.session
 
+import android.content.ClipboardManager
 import android.content.ContentResolver
+import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
@@ -78,6 +80,20 @@ sealed interface Encoded {
     data class Ok(val image: ImageAttachment, val thumb: ImageBitmap) : Encoded
 
     data class Failed(val message: String) : Encoded
+}
+
+/**
+ * True when the clipboard holds an image (copied from a browser, a screenshot, a gallery app). Reads only the clip's
+ * description, so Android does not report a paste.
+ */
+fun clipboardHasImage(context: Context): Boolean =
+    context.getSystemService(ClipboardManager::class.java)?.primaryClipDescription?.hasMimeType("image/*") == true
+
+/** The clipboard's image, or null. */
+fun clipboardImage(context: Context): Uri? {
+    if (!clipboardHasImage(context)) return null
+    val cm = context.getSystemService(ClipboardManager::class.java) ?: return null
+    return cm.primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.uri
 }
 
 /**

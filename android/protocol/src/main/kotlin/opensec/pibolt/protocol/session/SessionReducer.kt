@@ -27,7 +27,8 @@ object SessionReducer {
     fun reduce(state: SessionState, event: JsonObject): SessionState = when (event.type) {
         "remote_hello" -> SubagentReducer.keep(state, keepTodos(state, fromHello(event)))
         // A new run: the completed rows of the previous one leave the todo panel.
-        "agent_start" -> state.copy(isRunning = true, todos = hideCompleted(state.todos))
+        // A retried request starts a run: its backoff is over ("Retrying" stayed over the new reply until it ended).
+        "agent_start" -> state.copy(isRunning = true, retry = null, todos = hideCompleted(state.todos))
         "agent_settled" -> settle(state)
         "message_start" -> messageStart(state, event)
         "message_update" -> messageUpdate(state, event)
@@ -56,7 +57,8 @@ object SessionReducer {
         "extension_ui_dismissed" -> event.str("id")?.let { id -> state.copy(dialogs = state.dialogs.filterNot { it.id == id }) } ?: state
         "extension_error" -> state.notice(NoticeKind.Error, "Extension error", event.str("error") ?: "")
         "bash_execution_update" -> shellOutput(state, event.str("delta").orEmpty())
-        SubagentReducer.TRANSCRIPT_EVENT -> SubagentReducer.transcript(state, event)
+        SubagentReducer.TRANSCRIPT_EVENT, SubagentReducer.ENTRIES_EVENT -> SubagentReducer.transcript(state, event)
+        SubagentReducer.EVENTS_EVENT -> SubagentReducer.events(state, event)
         else -> state
     }
 
@@ -77,9 +79,23 @@ object SessionReducer {
         val host = hello.obj("host")
         var state = SessionState(
             hello = true,
-            host = HostInfo(host?.str("name") ?: "Computer", host?.str("version") ?: "", host?.str("cwd") ?: "", service = host?.bool("service") == true),
+            host = HostInfo(
+                host?.str("name") ?: "Computer",
+                host?.str("version") ?: "",
+                host?.str("cwd") ?: "",
+                service = host?.bool("service") == true,
+                parallelSessions = host?.bool("parallelSessions") == true,
+                review = host?.bool("review") == true,
+                features = hello.arr("features").orEmpty().mapNotNullTo(HashSet()) { (it as? JsonPrimitive)?.content },
+            ),
         )
         state = applyRpcState(state, hello.obj("state"))
+        // A long session sends only its newest messages: say so, or the transcript seems to start midway (or, when one
+        // huge message alone fills the budget, the session looks empty).
+        val omitted = hello.long("omittedMessages") ?: 0
+        if (omitted > 0) {
+            state = state.notice(NoticeKind.Info, "Earlier messages are on the computer", "$omitted older ${if (omitted == 1L) "message is" else "messages are"} not shown here.")
+        }
         for (message in hello.arr("messages").orEmpty()) {
             val m = message as? JsonObject ?: continue
             // Each prompt in the history started a run, which hid the completed todos of the run before.
@@ -95,6 +111,30 @@ object SessionReducer {
             commands = hello.arr("commands").orEmpty().mapNotNull { (it as? JsonObject)?.let(::commandFrom) },
         )
         return state
+    }
+
+    /**
+     * What happened while the link was down, as the events that would have announced it: a reconnect's `remote_hello`
+     * shows the result but sends none of them. An `agent_settled` when the run [before] showed has ended in the same
+     * session, and each dialog the snapshot opens that [before] did not have. Empty for the first snapshot or another
+     * session's (a session switch is no run ending).
+     */
+    fun missedWhileAway(before: SessionState, hello: JsonObject): List<JsonObject> {
+        if (!before.hello) return emptyList()
+        val state = hello.obj("state")
+        val sessionId = state?.str("sessionId")
+        if (sessionId == null || sessionId != before.sessionId) return emptyList()
+        val missed = ArrayList<JsonObject>()
+        if (before.isRunning && state?.bool("isStreaming") == false) {
+            missed += JsonObject(mapOf("type" to JsonPrimitive("agent_settled")))
+        }
+        val known = before.dialogs.mapTo(HashSet()) { it.id }
+        for (dialog in hello.arr("dialogs").orEmpty()) {
+            val d = dialog as? JsonObject ?: continue
+            val id = d.str("id") ?: continue
+            if (id !in known && dialogFrom(d) != null) missed += JsonObject(d + ("type" to JsonPrimitive("extension_ui_request")))
+        }
+        return missed
     }
 
     /**
@@ -124,14 +164,14 @@ object SessionReducer {
         return if (message.str("role") == "assistant") startStream(state, message) else state
     }
 
-    private fun startStream(state: SessionState, message: JsonObject): SessionState {
-        val key = "m${state.seq}"
+    /** [key]: the stream's row key (a subagent's live message uses its own key space); default `m<seq>`. */
+    internal fun startStream(state: SessionState, message: JsonObject, key: String = "m${state.seq}"): SessionState {
         val blocks = message.arr("content").orEmpty().mapIndexed { i, block -> blockItem(key, i, block as? JsonObject, streaming = true) }
         val stream = StreamingMessage(key, blocks)
         return state.copy(seq = state.seq + 1, stream = stream, streaming = blocks.filterNotNull())
     }
 
-    private fun messageUpdate(state: SessionState, event: JsonObject): SessionState {
+    internal fun messageUpdate(state: SessionState, event: JsonObject): SessionState {
         val delta = event.obj("assistantMessageEvent") ?: return state
         var s = state
         if (s.stream == null) s = startStream(s, JsonObject(emptyMap()))
@@ -453,6 +493,7 @@ object SessionReducer {
         val result = event.obj("result")
         val key = "m${s.seq}"
         val next = s.copy(seq = s.seq + 1)
+        val overflow = event.str("reason") == "overflow"
         return when {
             result != null -> next.copy(
                 items = next.items + NoticeItem(
@@ -462,8 +503,10 @@ object SessionReducer {
                     result.str("summary").orEmpty(),
                 ),
             )
-            event.bool("aborted") == true -> next.copy(items = next.items + NoticeItem(key, NoticeKind.Aborted, "Compaction aborted"))
-            event.str("errorMessage") != null -> next.copy(items = next.items + NoticeItem(key, NoticeKind.Error, "Compaction failed", event.str("errorMessage")!!))
+            // Only an overflow compaction ends the turn: a manual or threshold one failing ("Nothing to compact") is no
+            // model error, and showed as one (with Retry, which sent the last prompt again) and marked the turn failed.
+            event.bool("aborted") == true -> next.copy(items = next.items + NoticeItem(key, if (overflow) NoticeKind.Aborted else NoticeKind.Info, "Compaction aborted"))
+            event.str("errorMessage") != null -> next.copy(items = next.items + NoticeItem(key, if (overflow) NoticeKind.Error else NoticeKind.Info, "Compaction failed", event.str("errorMessage")!!))
             else -> s
         }
     }

@@ -13,10 +13,12 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import opensec.pibolt.app.data.ProjectStore
 import opensec.pibolt.app.engine.EngineApi
+import opensec.pibolt.app.git.DiffStats
 import opensec.pibolt.app.git.GitException
 import opensec.pibolt.app.git.GitProgress
 import opensec.pibolt.app.git.GitRepo
 import opensec.pibolt.app.git.GitRunner
+import opensec.pibolt.app.git.GitSource
 import opensec.pibolt.app.git.GitStatus
 import opensec.pibolt.app.git.github.GitHubException
 import opensec.pibolt.app.session.LinkState
@@ -28,10 +30,19 @@ import java.io.File
 /**
  * The Changes tab's state for one project: git status, the running operation and its progress. Every git call runs
  * through [GitRepo] (IO dispatcher, timeouts); one operation at a time, and each one refreshes the status after.
+ *
+ * With another [source] (a computer's working tree over remote control) the model is [readOnly]: it reads status,
+ * diffs and history, and [run] does nothing.
  */
 @Stable
-class ChangesModel(runner: GitRunner, val dir: File, private val scope: CoroutineScope, private val onError: (String) -> Unit) {
-    val repo = GitRepo(runner, dir)
+class ChangesModel(val source: GitSource, val dir: File, private val scope: CoroutineScope, private val onError: (String) -> Unit) {
+    constructor(runner: GitRunner, dir: File, scope: CoroutineScope, onError: (String) -> Unit) : this(GitRepo(runner, dir), dir, scope, onError)
+
+    /** No staging, committing, branches or remotes: the views show only what [source] reads. */
+    val readOnly: Boolean = source !is GitRepo
+
+    /** This phone's repository, for the operations; only a model that is not [readOnly] has one. */
+    val repo: GitRepo get() = source as? GitRepo ?: throw GitException("Read-only")
 
     /** Null until the first check. */
     var isRepo by mutableStateOf<Boolean?>(null)
@@ -47,6 +58,10 @@ class ChangesModel(runner: GitRunner, val dir: File, private val scope: Coroutin
     var remote by mutableStateOf<String?>(null)
         private set
 
+    /** Line counts of the staged and unstaged changes, for the "+N −M" summary and the file rows. */
+    var stats by mutableStateOf(DiffStats.EMPTY)
+        private set
+
     /** Bumped after every change so open diffs and the history reload. */
     var version by mutableStateOf(0)
         private set
@@ -57,20 +72,35 @@ class ChangesModel(runner: GitRunner, val dir: File, private val scope: Coroutin
         scope.launch { load() }
     }
 
+    /** A read-only source that could not be read (the computer did not answer): the tab says so, with Try again. */
+    var failed by mutableStateOf<String?>(null)
+        private set
+
     private suspend fun load() {
-        val repoHere = File(dir, ".git").exists() || repo.isRepo()
+        val repoHere = try {
+            (!readOnly && File(dir, ".git").exists()) || source.isRepo()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failed = e.message ?: "Could not read the changes"
+            return
+        }
+        failed = null
         isRepo = repoHere
         if (!repoHere) {
             status = null
+            stats = DiffStats.EMPTY
             return
         }
-        runCatching { repo.status() }.onSuccess { status = it }.onFailure { if (it !is CancellationException) onError(it.message ?: "git status failed") }
-        remote = runCatching { repo.remoteUrl() }.getOrNull()
+        runCatching { source.status() }.onSuccess { status = it }.onFailure { if (it !is CancellationException) onError(it.message ?: "git status failed") }
+        // Counts are a summary: only read when something changed, and a failure leaves them out quietly.
+        stats = if (status?.clean == false) runCatching { source.diffStats() }.getOrDefault(DiffStats.EMPTY) else DiffStats.EMPTY
+        remote = runCatching { source.remoteUrl() }.getOrNull()
     }
 
     /** Runs [block] unless something else runs; reports failures with their explained message, then refreshes. */
     fun run(label: String, onDone: () -> Unit = {}, block: suspend GitRepo.(progress: (GitProgress) -> Unit) -> Unit) {
-        if (job?.isActive == true) return
+        if (readOnly || job?.isActive == true) return
         busy = label
         progress = null
         job = scope.launch {

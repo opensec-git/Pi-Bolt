@@ -380,7 +380,7 @@ class EngineFilesTest {
         assertEquals(
             EngineManifest.Extension(
                 "juicesharp-rpiv-ask-user-question", "2.15.0", listOf("package.json", "index.ts"),
-                "engine/modules/juicesharp-rpiv-ask-user-question.zip", "@juicesharp/rpiv-ask-user-question",
+                "engine/modules/juicesharp-rpiv-ask-user-question.zip", "@juicesharp/rpiv-ask-user-question", modulesSha256 = "x",
             ),
             m.extensions[0],
         )
@@ -441,7 +441,7 @@ class EngineFilesTest {
     @Test
     fun manifestParsesTreesAndRuntimes() {
         val m = EngineManifest.parse(runtimesJson)
-        assertEquals(listOf(EngineManifest.Tree("lib/python3.14", "engine/trees/python.zip", listOf("bin-ish/run.py"))), m.trees)
+        assertEquals(listOf(EngineManifest.Tree("lib/python3.14", "engine/trees/python.zip", listOf("bin-ish/run.py"), sha256 = "x")), m.trees)
         assertEquals(listOf("node", "python"), m.runtimes.map { it.id })
         assertEquals(EngineManifest.Runtime("node", "Node.js", "22.23.4", listOf("node", "npm", "npx"), 150_000_000, mapOf("npm" to "10.9.4")), m.runtimes[0])
         assertFailsWith<IllegalArgumentException> { EngineManifest.parse(runtimesJson.replace("\"lib/python3.14\"", "\"../python\"")) }
@@ -478,9 +478,99 @@ class EngineFilesTest {
         // A zip entry outside the tree is refused, and the setup is not marked done.
         val evil = BytesAssets(mapOf("engine/files/ca-certificates.crt" to "C".toByteArray(), "engine/trees/python.zip" to zip("../../escape.txt" to "x")))
         val moved = paths(File(root, "nlib2"))
-        assertFailsWith<IllegalArgumentException> { EnginePrefix(moved, evil).ensure(m) }
+        // (Another zip than the one unpacked: an unchanged one would be kept.)
+        val evilManifest = EngineManifest.parse(runtimesJson.replace("\"sha256\": \"x\"", "\"sha256\": \"evil\""))
+        assertFailsWith<IllegalArgumentException> { EnginePrefix(moved, evil).ensure(evilManifest) }
         assertFalse(File(p.prefix, "escape.txt").exists())
         assertFalse(moved.stamp.exists())
+    }
+
+    /** A pack with the python tree and an extension with node_modules, the zips' sha256 as given. */
+    private fun keptManifest(treeSha: String, modulesSha: String) = EngineManifest.parse(
+        runtimesJson.replace("\"sha256\": \"x\"", "\"sha256\": \"$treeSha\"").replace(
+            "\"env\":",
+            """"extensions": [ { "name": "web", "version": "1", "files": [ "index.ts" ],
+                 "modules": { "asset": "engine/modules/web.zip", "sha256": "$modulesSha", "files": 1, "bytes": 1 } } ], "env":""",
+        ),
+    )
+
+    @Test
+    fun anAppUpdateWithTheSamePackKeepsTheUnpackedTreesAndRenewsTheLinks() {
+        val p = paths()
+        val assets = BytesAssets(
+            mapOf(
+                "engine/files/ca-certificates.crt" to "CERTS".toByteArray(),
+                "engine/trees/python.zip" to zip("os.py" to "import sys", "bin-ish/run.py" to "#!x"),
+                "engine/extensions/web/index.ts" to "export default 1".toByteArray(),
+                "engine/modules/web.zip" to zip("dep/index.js" to "v1"),
+            ),
+        )
+        val first = EnginePrefix(p, assets)
+        assertTrue(first.ensure(keptManifest("t1", "m1")))
+        assertEquals(emptyList(), first.kept)
+        val lib = File(p.prefix, "lib/python3.14")
+        val modules = File(p.extensionsDir, "web/node_modules")
+        // Written while it runs: bytecode caches, an extension's own state. Kept with the tree they belong to.
+        File(lib, "__pycache__/os.pyc").apply { parentFile.mkdirs(); writeText("cache") }
+        File(modules, "dep/.cache").writeText("state")
+        File(p.extensionsDir, "web/old.ts").writeText("an older version's file")
+
+        // The update moves nativeLibraryDir; the zips are the same.
+        val moved = paths(File(root, "nlib2"))
+        val second = EnginePrefix(moved, assets)
+        assertTrue(second.ensure(keptManifest("t1", "m1")))
+        assertEquals(listOf("lib/python3.14", "share/pi-extensions/web/node_modules"), second.kept)
+        assertEquals("cache", File(lib, "__pycache__/os.pyc").readText())
+        assertEquals("state", File(modules, "dep/.cache").readText())
+        assertTrue(File(lib, "bin-ish/run.py").canExecute())
+        assertEquals(
+            File(root, "nlib2/lib_ssl_cpython_314_aarch64_linux_gnu_so.so").toPath(),
+            Files.readSymbolicLink(File(lib, "lib-dynload/_ssl.cpython-314-aarch64-linux-gnu.so").toPath()),
+        )
+        // The extension's own files are copied again, as on every pack change.
+        assertFalse(File(p.extensionsDir, "web/old.ts").exists())
+        assertEquals("export default 1", File(p.extensionsDir, "web/index.ts").readText())
+        assertFalse(File(p.prefix, ".unpack").exists())
+
+        // A changed zip is unpacked again, and what was in the old tree goes.
+        val third = EnginePrefix(paths(File(root, "nlib3")), assets)
+        assertTrue(third.ensure(keptManifest("t2", "m2")))
+        assertEquals(emptyList(), third.kept)
+        assertFalse(File(lib, "__pycache__").exists())
+        assertFalse(File(modules, "dep/.cache").exists())
+        assertEquals("v1", File(modules, "dep/index.js").readText())
+
+        // An unpack without its marker (cut short, or removed) is never kept.
+        File(lib, EnginePrefix.UNPACKED).delete()
+        File(modules, EnginePrefix.UNPACKED).delete()
+        val fourth = EnginePrefix(paths(File(root, "nlib4")), assets)
+        assertTrue(fourth.ensure(keptManifest("t2", "m2")))
+        assertEquals(emptyList(), fourth.kept)
+        assertEquals("import sys", File(lib, "os.py").readText())
+
+        // A pack without the sha256 (older) keeps nothing.
+        val fifth = EnginePrefix(paths(File(root, "nlib5")), assets)
+        assertTrue(fifth.ensure(EngineManifest.parse(runtimesJson.replace("\"sha256\": \"x\", ", ""))))
+        assertEquals(emptyList(), fifth.kept)
+    }
+
+    @Test
+    fun manyEntriesUnpackCompletelyAcrossWorkers() {
+        val entries = (0 until 1000).map { i -> "d${i % 37}/sub${i % 5}/f$i.js" to "content $i" }.toTypedArray()
+        val assets = BytesAssets(
+            mapOf(
+                "engine/files/ca-certificates.crt" to "CERTS".toByteArray(),
+                "engine/trees/python.zip" to zip(*entries),
+                "engine/extensions/web/index.ts" to "x".toByteArray(),
+                "engine/modules/web.zip" to zip(*entries.take(300).toTypedArray()),
+            ),
+        )
+        for (workers in listOf(1, 4)) {
+            val p = EnginePaths(File(root, "usr$workers"), File(root, "data$workers"), File(root, "nlib"))
+            assertTrue(EnginePrefix(p, assets, workers).ensure(keptManifest("t", "m")))
+            for ((name, text) in entries) assertEquals(text, File(p.prefix, "lib/python3.14/$name").readText())
+            for ((name, text) in entries.take(300)) assertEquals(text, File(p.extensionsDir, "web/node_modules/$name").readText())
+        }
     }
 
     @Test

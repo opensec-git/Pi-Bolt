@@ -145,4 +145,20 @@ class ModelsFileTest {
         ProviderCatalog.registerCustom(emptyList())
         assertFalse(ProviderCatalog.name("n") == "Box")
     }
+
+    @Test
+    fun aSecondModelForAServerWithAKeyKeepsThatKey() {
+        // The first model was added with a key (auth.json holds it, models.json has no apiKey); a second model for the
+        // same server with the optional key left empty must not swap the real key for the placeholder.
+        val withKey = ModelsFile.merge(ModelsFile.parse(null), ollama, keyless = false)
+        assertTrue(ModelsFile.hasSavedKey(withKey, ollama.id))
+        val second = ModelsFile.merge(withKey, ollama.copy(modelId = "llama3.1:8b"), keyless = !ModelsFile.hasSavedKey(withKey, ollama.id))
+        assertNull(second.provider(ollama.id)["apiKey"])
+        assertEquals(listOf("qwen2.5-coder:7b", "llama3.1:8b"), second.modelIds(ollama.id))
+
+        // A keyless server stays keyless; an unknown one has no saved key.
+        val keyless = ModelsFile.merge(ModelsFile.parse(null), ollama, keyless = true)
+        assertFalse(ModelsFile.hasSavedKey(keyless, ollama.id))
+        assertFalse(ModelsFile.hasSavedKey(keyless, "custom-other"))
+    }
 }

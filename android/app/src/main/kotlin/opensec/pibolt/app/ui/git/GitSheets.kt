@@ -17,9 +17,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.CallSplit
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -53,16 +54,18 @@ import opensec.pibolt.app.git.github.GitHubException
 import opensec.pibolt.app.git.github.GitHubRemote
 import opensec.pibolt.app.git.github.PullRequest
 import opensec.pibolt.app.ui.components.CopyButton
+import opensec.pibolt.app.ui.components.InsetRow
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PiTextField
 import opensec.pibolt.app.ui.components.PrimaryButton
+import opensec.pibolt.app.ui.components.SOFT_PRESS
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.SectionLabel
 import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.pressable
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.theme.Pi
-import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.IconSize
 
 /** Local branches (current first), then remote ones; tap switches, the field on top creates and switches. */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -122,25 +125,20 @@ fun BranchSheet(ui: ChangesUi, onDismiss: () -> Unit) {
     }
 }
 
+/** A branch, an [InsetRow]: the branch glyph, the name, its tracking and last subject; the current one highlighted with a check. */
 @Composable
 private fun BranchRow(b: Branch, onClick: () -> Unit) {
     val colors = Pi.colors
-    val type = Pi.type
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .heightIn(min = 56.dp)
-            .pressable(onClick, label = if (b.current) "Current branch ${b.name}" else "Switch to ${b.name}")
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(b.name, style = type.mono, color = colors.ink1, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
-            val meta = listOfNotNull(b.track.takeIf { it.isNotBlank() }, b.subject.takeIf { it.isNotBlank() })
-            if (meta.isNotEmpty()) Text(meta.joinToString(" · "), style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        if (b.current) Icon(Icons.Rounded.Check, contentDescription = "Current", tint = colors.success, modifier = Modifier.size(20.dp))
-    }
+    val meta = listOfNotNull(b.track.takeIf { it.isNotBlank() }, b.subject.takeIf { it.isNotBlank() })
+    InsetRow(
+        title = b.name,
+        onClick = onClick,
+        label = if (b.current) "Current branch ${b.name}" else "Switch to ${b.name}",
+        meta = meta.takeIf { it.isNotEmpty() }?.joinToString(" · "),
+        leading = { Icon(Icons.AutoMirrored.Rounded.CallSplit, contentDescription = null, tint = if (b.current) colors.ink1 else colors.ink3, modifier = Modifier.size(IconSize.md)) },
+        current = b.current,
+        trailing = { if (b.current) Icon(Icons.Rounded.Check, contentDescription = "Current", tint = colors.success, modifier = Modifier.size(IconSize.md)) },
+    )
 }
 
 /** Name and email for commits, once (global git config). Prefilled from the GitHub account when signed in. */
@@ -285,15 +283,15 @@ fun PullRequestSheet(ui: ChangesUi, onDismiss: () -> Unit) {
 @Composable
 private fun BaseChip(name: String, selected: Boolean, onClick: () -> Unit) {
     val colors = Pi.colors
-    val shape = RoundedCornerShape(Radius.sm)
+    val shape = CircleShape
     Row(
         Modifier
             .heightIn(min = 48.dp)
-            .pressable(onClick, shape = shape, label = "Merge into $name")
+            .pressable(onClick, shape = shape, pressedScale = SOFT_PRESS, label = "Merge into $name")
             .padding(vertical = 8.dp)
             .background(if (selected) colors.selected else colors.surface1, shape)
             .border(1.dp, if (selected) colors.lineFocus else colors.line, shape)
-            .padding(horizontal = 12.dp, vertical = 6.dp),
+            .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (selected) {
