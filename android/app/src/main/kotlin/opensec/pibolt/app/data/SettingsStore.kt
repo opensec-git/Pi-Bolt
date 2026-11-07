@@ -56,6 +56,11 @@ data class AppSettings(
     val notificationsAsked: Boolean = false,
     /** Look for a new version of the app on launch, at most once a day. */
     val autoUpdateCheck: Boolean = true,
+    /**
+     * The bundled web tools (pi-web-access: search through Exa, read pages) in on-device sessions: chats and projects
+     * (engine/ChatSpace.kt). Off: engines start without them.
+     */
+    val webSearch: Boolean = true,
 ) {
     companion object {
         val TOOL_PREVIEW_CHOICES = listOf(6, 12, 24)
@@ -78,6 +83,7 @@ object SettingsCodec {
         put("toolPreviewLines", s.toolPreviewLines)
         put("notificationsAsked", s.notificationsAsked)
         put("autoUpdateCheck", s.autoUpdateCheck)
+        put("webSearch", s.webSearch)
     }.toString()
 
     fun decode(text: String?): AppSettings {
@@ -94,6 +100,7 @@ object SettingsCodec {
             toolPreviewLines = json.int("toolPreviewLines")?.takeIf { it in AppSettings.TOOL_PREVIEW_CHOICES } ?: d.toolPreviewLines,
             notificationsAsked = json.bool("notificationsAsked") ?: d.notificationsAsked,
             autoUpdateCheck = json.bool("autoUpdateCheck") ?: d.autoUpdateCheck,
+            webSearch = json.bool("webSearch") ?: d.webSearch,
         )
     }
 

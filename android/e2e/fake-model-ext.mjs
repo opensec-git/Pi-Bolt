@@ -1,6 +1,7 @@
 // fake-model-ext.mjs: fake-model-scripted.mjs plus extension tool scripts (extensions.sh): e2e-todo-create,
 // e2e-todo-update, e2e-todo-done, e2e-todo-list (`todo`), e2e-agent (foreground `Agent`), e2e-bgagent (slow background
-// `Agent`). See TOOL_SCRIPTS.
+// `Agent`), e2e-web-search, e2e-web-multi, e2e-web-fetch (pi-web-access; real network), e2e-ask (`ask_user_question`, a
+// single and a multi-select question). See TOOL_SCRIPTS.
 // Fake OpenAI-compatible chat completions server for the Android on-device E2E suite.
 // The basic fake model (default, "tool" and "slow" replies) plus a scripted mode:
 //
@@ -46,6 +47,34 @@ const TOOL_SCRIPTS = {
 	"e2e-bgagent": [
 		"Agent",
 		{ subagent_type: "general-purpose", description: "E2E slow background subagent", prompt: "e2e-slowtask: count slowly", run_in_background: true },
+	],
+	"e2e-web-search": ["web_search", { query: "Pi coding agent terminal" }],
+	"e2e-web-multi": ["web_search", { queries: ["kotlin coroutines flow", "jetpack compose animation"] }],
+	"e2e-web-fetch": ["fetch_content", { urls: ["https://kotlinlang.org/docs/coroutines-flow.html", "https://nonexistent.invalid/x"] }],
+	"e2e-ask": [
+		"ask_user_question",
+		{
+			questions: [
+				{
+					question: "Which database should we use?",
+					header: "Database",
+					options: [
+						{ label: "Postgres", description: "Relational, mature" },
+						{ label: "SQLite", description: "Embedded, simple" },
+					],
+				},
+				{
+					question: "Which features do you want?",
+					header: "Features",
+					multiSelect: true,
+					options: [
+						{ label: "Auth", description: "Sign in" },
+						{ label: "Search", description: "Full text" },
+						{ label: "Export", description: "CSV" },
+					],
+				},
+			],
+		},
 	],
 	"e2e-agent": [
 		"Agent",
