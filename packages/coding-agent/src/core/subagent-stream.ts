@@ -456,8 +456,29 @@ class SubagentStream {
 		}
 	}
 
-	/** Joined while a message streams: starts the phone's copy from what it has so far. */
+	/** Joined while tools run or a message streams: starts the phone's copy from what is happening now. */
 	private sendSnapshot(): void {
+		// Tools running now (their starts came before the phone had caught up), with the name and arguments of their call.
+		const running = this.live?.agent.state.pendingToolCalls;
+		if (this.live && running && running.size > 0) {
+			const calls = new Map<string, Json>();
+			for (const message of this.live.messages) {
+				if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+				for (const block of message.content as unknown[]) {
+					if (isRecord(block) && block.type === "toolCall" && typeof block.id === "string")
+						calls.set(block.id, block);
+				}
+			}
+			for (const toolCallId of running) {
+				const call = calls.get(toolCallId);
+				this.queueEvent({
+					type: "tool_execution_start",
+					toolCallId,
+					toolName: typeof call?.name === "string" ? call.name : "",
+					args: fitJson(call?.arguments ?? {}, Math.floor(this.owner.limits.maxMessageBytes / 2)),
+				});
+			}
+		}
 		const streaming = this.live?.agent.state.streamingMessage;
 		if (this.live?.isStreaming && streaming?.role === "assistant") {
 			this.queueEvent({

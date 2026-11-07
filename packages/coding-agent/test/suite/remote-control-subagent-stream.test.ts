@@ -411,7 +411,13 @@ describe("subagent stream binding", () => {
 		const resets = (runId: string) =>
 			sent.filter((message) => message.type === "subagent_entries" && message.runId === runId && message.reset);
 		/** An agent's session open in this process, streaming an answer, as the stream sees it. */
-		const live = (file: string, name: string, messages: Message[], created: number) => {
+		const live = (
+			file: string,
+			name: string,
+			messages: Message[],
+			created: number,
+			state: { streaming?: boolean; pendingToolCalls?: string[] } = {},
+		) => {
 			const listeners: Array<(event: unknown) => void> = [];
 			const session = {
 				sessionFile: file,
@@ -421,7 +427,15 @@ describe("subagent stream binding", () => {
 				},
 				messages,
 				isStreaming: true,
-				agent: { state: { streamingMessage: { role: "assistant", content: [{ type: "text", text: "partial" }] } } },
+				agent: {
+					state: {
+						streamingMessage:
+							state.streaming === false
+								? undefined
+								: { role: "assistant", content: [{ type: "text", text: "partial" }] },
+						pendingToolCalls: new Set(state.pendingToolCalls ?? []),
+					},
+				},
 				subscribe: (listener: (event: unknown) => void) => {
 					listeners.push(listener);
 					return () => listeners.splice(listeners.indexOf(listener), 1);
@@ -618,6 +632,38 @@ describe("subagent stream binding", () => {
 			(batch.events as Message[]).map((event) => String((event.assistantMessageEvent as Message).delta)[0]),
 		);
 		expect(order).toEqual(Array.from({ length: 140 }, (_, i) => String(i % 10)));
+	});
+
+	it("tells a phone that joins while a tool runs that it is running", async () => {
+		const { streams, call, result, agent, sent, live } = await files();
+		const t = Date.now() - 60_000;
+		call("run-1", { prompt: "task" }, t);
+		result("run-1", "11111111aaaa");
+		const file = agent("11111111aaaa", "task", "earlier", t + 1_000);
+		const answer = {
+			role: "assistant",
+			content: [{ type: "toolCall", id: "tool-1", name: "bash", arguments: { command: "sleep 60" } }],
+		};
+		appendFileSync(file, `${JSON.stringify({ type: "message", message: answer })}\n`);
+		live(file, "general-purpose#11111111", [{ role: "user", content: "task" }, answer], t, {
+			streaming: false,
+			pendingToolCalls: ["tool-1"],
+		});
+		streams.subscribe("run-1");
+		const started = () =>
+			sent
+				.flatMap((message) => (message.type === "subagent_events" ? (message.events as Message[]) : []))
+				.find((event) => event.type === "tool_execution_start");
+		await until(() => started() !== undefined);
+		expect(started()).toEqual({
+			type: "tool_execution_start",
+			toolCallId: "tool-1",
+			toolName: "bash",
+			args: { command: "sleep 60" },
+		});
+		expect(
+			sent.some((message) => (message.events as Message[] | undefined)?.some((e) => e.type === "message_start")),
+		).toBe(false);
 	});
 
 	it("lets a resumed run share its agent's file with the original run", async () => {
