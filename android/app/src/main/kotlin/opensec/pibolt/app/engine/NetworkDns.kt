@@ -6,8 +6,6 @@ import android.net.LinkProperties
 import android.net.Network
 import android.os.Build
 import android.util.Log
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.launch
 import java.io.File
 
 /**
@@ -17,7 +15,7 @@ import java.io.File
  *
  * Private DNS (DNS over TLS) is not used by glibc: queries go to the network's plain resolvers.
  */
-class NetworkDns(context: Context, private val etc: File, private val scope: CoroutineScope) {
+class NetworkDns(context: Context, private val etc: File) {
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val resolv = File(etc, "resolv.conf")
 
@@ -29,7 +27,9 @@ class NetworkDns(context: Context, private val etc: File, private val scope: Cor
 
     private val callback = object : ConnectivityManager.NetworkCallback() {
         override fun onLinkPropertiesChanged(network: Network, linkProperties: LinkProperties) {
-            scope.launch { write(linkProperties) }
+            // In order, on the callback's own thread (one small file): two quick changes (Wi-Fi to mobile data) written
+            // from parallel coroutines could land the old network's servers last, and DNS would fail until the next change.
+            write(linkProperties)
         }
     }
 
