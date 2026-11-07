@@ -85,9 +85,9 @@ object AppExtension {
             val message = "/$HIDDEN_COMMAND ${out.absolutePath} $action $args".trimEnd()
             val response = controller.request("prompt", timeoutMs = 60_000) { put("message", message) }
             if (!response.success) return Result.failure(IllegalStateException(response.error ?: "The engine refused the command"))
-            if (!out.isFile) return Result.failure(IllegalStateException("The app helper is not loaded in this session yet. Reload the session and try again."))
+            if (!out.isFile) return Result.failure(IllegalStateException("Reload the session and try again."))
             val json = ProtocolJson.parseToJsonElement(out.readText()) as? JsonObject
-                ?: return Result.failure(IllegalStateException("The app helper gave no answer"))
+                ?: return Result.failure(IllegalStateException("No answer from the session"))
             if (json.bool("ok") != true) return Result.failure(IllegalStateException(json.str("error") ?: "The command failed"))
             return Result.success(json)
         } finally {

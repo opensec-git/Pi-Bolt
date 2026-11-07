@@ -22,7 +22,7 @@ object SettingsIndex {
     val entries: List<SettingEntry> = listOf(
         SettingEntry("providers", SettingsGroup.Providers, "Model providers", "api key login sign in anthropic openai gemini openrouter account remove add"),
         SettingEntry("default-model", SettingsGroup.Agent, "Default model", "model start new session provider"),
-        SettingEntry("thinking", SettingsGroup.Agent, "Thinking level for new sessions", "reasoning effort think"),
+        SettingEntry("thinking", SettingsGroup.Agent, "Default thinking level", "reasoning effort think new sessions"),
         SettingEntry("steering", SettingsGroup.Agent, "Steering messages", "queue steer while working"),
         SettingEntry("follow-up", SettingsGroup.Agent, "Follow-up messages", "queue after finishes"),
         SettingEntry("compaction", SettingsGroup.Agent, "Auto-compact", "context summarise summary full compaction"),
@@ -38,7 +38,7 @@ object SettingsIndex {
         SettingEntry("density", SettingsGroup.Appearance, "Density", "compact comfortable spacing"),
         SettingEntry("reduce-motion", SettingsGroup.Motion, "Reduce motion", "animations animation accessibility"),
         SettingEntry("haptics", SettingsGroup.Motion, "Haptics", "vibration vibrate feedback"),
-        SettingEntry("thinking-expanded", SettingsGroup.SessionDisplay, "Show thinking expanded", "reasoning collapse"),
+        SettingEntry("thinking-expanded", SettingsGroup.SessionDisplay, "Expand thinking", "reasoning collapse show expanded"),
         SettingEntry("tool-preview", SettingsGroup.SessionDisplay, "Tool output preview", "lines output tools"),
         SettingEntry("notifications", SettingsGroup.Notifications, "Notifications", "alerts finished background permission"),
         SettingEntry("device-key", SettingsGroup.Security, "Device key", "remote control pairing reset revoke computer"),

@@ -153,7 +153,7 @@ private fun PickStep(configured: Set<String>, firstRun: Boolean, onPick: (Provid
             Text("Connect a model", style = type.title, color = colors.ink1)
             Spacer(Modifier.height(6.dp))
             Text(
-                "Pi-Bolt runs on this phone and calls the model with your API key. The key stays on this device.",
+                "Your API key stays on this phone.",
                 style = type.body,
                 color = colors.ink2,
             )
@@ -184,8 +184,8 @@ private fun PickStep(configured: Set<String>, firstRun: Boolean, onPick: (Provid
             }
             item(key = "custom", contentType = "custom") {
                 CustomRow(
-                    title = if (shown.isEmpty()) "Use a custom endpoint" else "Custom endpoint (OpenAI-compatible)",
-                    note = if (shown.isEmpty()) "No provider matches “${query.trim()}”. Connect an OpenAI-compatible server instead." else "Ollama, LM Studio, vLLM or a proxy",
+                    title = "Custom endpoint",
+                    note = if (shown.isEmpty()) "No provider matches “${query.trim()}”" else "OpenAI-compatible: Ollama, LM Studio, vLLM",
                     onClick = onCustom,
                 )
             }
@@ -297,12 +297,7 @@ private fun KeyStep(provider: ProviderInfo, auth: ProviderAuth, onBack: (() -> U
             Spacer(Modifier.width(12.dp))
             Text(provider.name, style = type.title, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Text(
-            "Paste your ${provider.name} API key.",
-            style = type.body,
-            color = colors.ink2,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
-        )
+        Spacer(Modifier.height(12.dp))
         SecretField(
             value = key,
             onValueChange = {
@@ -438,7 +433,7 @@ private fun CustomStep(auth: ProviderAuth, onBack: () -> Unit, onSaved: (Provide
             Text("Custom endpoint", style = type.title, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Text(
-            "Any server that speaks the OpenAI chat completions API: Ollama, LM Studio, vLLM or a proxy.",
+            "Any OpenAI-compatible server, such as Ollama, LM Studio or vLLM.",
             style = type.body,
             color = colors.ink2,
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
@@ -502,7 +497,7 @@ private fun CustomStep(auth: ProviderAuth, onBack: () -> Unit, onSaved: (Provide
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
                 Column(Modifier.padding(horizontal = 16.dp)) {
-                    FieldHint(error ?: "A key stays on this phone and is sent only to this server.", isError = error != null)
+                    FieldHint(error ?: "The key stays on this phone and is sent only to this server.", isError = error != null)
                     FieldLabel("Name (optional)")
                     PiTextField(
                         value = name,

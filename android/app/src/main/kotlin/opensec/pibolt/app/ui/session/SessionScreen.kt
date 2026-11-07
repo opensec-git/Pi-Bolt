@@ -1240,7 +1240,7 @@ private fun SessionContent(
         )
         Sheet.Compact -> TextPromptSheet(
             title = "Compact context",
-            message = "Pi summarises the conversation so far to free context.",
+            message = "Summarises the conversation to free context.",
             initial = "",
             placeholder = "Optional: what to focus the summary on",
             confirm = "Compact",
@@ -1252,7 +1252,7 @@ private fun SessionContent(
         )
         Sheet.Forget -> ConfirmSheet(
             title = "Forget $hostName?",
-            message = "This phone stops connecting to it. To also revoke this phone on the computer, run /\u2060remote-control devices there.",
+            message = "To revoke this phone on the computer too, run /\u2060remote-control devices there.",
             confirmLabel = "Forget",
             onConfirm = {
                 sheet = Sheet.None

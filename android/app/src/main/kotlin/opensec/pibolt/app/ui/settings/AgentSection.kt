@@ -54,7 +54,7 @@ internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean, onMessage: 
     var picking by remember { mutableStateOf(false) }
     val current = defaults ?: loaded
     if (current == null) {
-        LoadingRow("Reading settings")
+        LoadingRow("Loading settings")
         return
     }
     fun update(change: (AgentDefaults) -> AgentDefaults) {
@@ -79,8 +79,8 @@ internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean, onMessage: 
             value = when {
                 match != null -> "${match.label} · ${ProviderCatalog.name(match.provider)}"
                 chosen != null -> modelLabel(chosen)
-                else -> "Automatic: the first model with a key"
-            } + if (controller == null) "\nOpen a session on this phone to choose from its models" else "",
+                else -> "Automatic"
+            } + if (controller == null) "\nOpen a session on this phone to choose" else "",
             onClick = { picking = true },
             enabled = controller != null,
             // The model's mark; automatic (no default yet) reads as the sparkle glyph.
@@ -96,7 +96,7 @@ internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean, onMessage: 
         }
     }
     if (show("thinking")) {
-        Label("Thinking level for new sessions")
+        Label("Default thinking level")
         Segmented(
             options = AgentDefaults.THINKING_LEVELS.map { it to thinkingShort(it) },
             selected = current.defaultThinking.takeIf { it in AgentDefaults.THINKING_LEVELS } ?: "medium",
@@ -115,7 +115,7 @@ internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean, onMessage: 
             modifier = Modifier.fillMaxWidth(),
             height = 48.dp,
         )
-        Text("Sent while Pi works; delivered after its current step.", style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 6.dp, bottom = 16.dp))
+        Text("Delivered after Pi's current step", style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 6.dp, bottom = 16.dp))
     }
     if (show("follow-up")) {
         Label("Follow-up messages")
@@ -126,13 +126,13 @@ internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean, onMessage: 
             modifier = Modifier.fillMaxWidth(),
             height = 48.dp,
         )
-        Text("Queued until Pi finishes, then sent.", style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
+        Text("Sent when Pi finishes", style = type.meta, color = colors.ink3, modifier = Modifier.padding(top = 6.dp, bottom = 8.dp))
     }
     if (show("compaction")) {
-        ToggleRow("Auto-compact", "Summarise older messages when the context is nearly full", current.autoCompaction) { on -> update { it.copy(autoCompaction = on) } }
+        ToggleRow("Auto-compact", "When the context is nearly full", current.autoCompaction) { on -> update { it.copy(autoCompaction = on) } }
     }
     if (show("retry")) {
-        ToggleRow("Auto-retry", "Retry when the provider is overloaded or rate-limited", current.autoRetry) { on -> update { it.copy(autoRetry = on) } }
+        ToggleRow("Auto-retry", "On overload or rate limits", current.autoRetry) { on -> update { it.copy(autoRetry = on) } }
         if (current.autoRetry) {
             LabelWithValue("Retries", if (current.maxRetries == 1) "1 attempt" else "${current.maxRetries} attempts")
             Segmented(
@@ -146,10 +146,10 @@ internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean, onMessage: 
         }
     }
     if (show("skills")) {
-        ToggleRow("Skill commands", "List skills as /skill:name commands. From the next session", current.skillCommands) { on -> update { it.copy(skillCommands = on) } }
+        ToggleRow("Skill commands", "/skill:name · applies to new sessions", current.skillCommands) { on -> update { it.copy(skillCommands = on) } }
     }
     if (show("images")) {
-        ToggleRow("Block images", "Never send images to a model. From the next session", current.blockImages) { on -> update { it.copy(blockImages = on) } }
+        ToggleRow("Block images", "Applies to new sessions", current.blockImages) { on -> update { it.copy(blockImages = on) } }
     }
     if (show("engine-links")) {
         Spacer(Modifier.height(8.dp))

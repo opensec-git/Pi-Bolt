@@ -7,7 +7,6 @@ import opensec.pibolt.app.ui.components.CardSection
 import opensec.pibolt.app.ui.components.EmptyState
 import opensec.pibolt.app.ui.components.LoadingRow
 import opensec.pibolt.app.ui.components.RowDivider
-import opensec.pibolt.app.ui.components.ScreenIntro
 import opensec.pibolt.app.ui.components.ScreenTopBar
 import opensec.pibolt.app.ui.theme.Tnum
 import androidx.compose.foundation.background
@@ -19,6 +18,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -63,7 +63,6 @@ import opensec.pibolt.app.ui.theme.Radius
 @Composable
 fun RuntimesScreen(app: PiBoltApp, onBack: () -> Unit) {
     val colors = Pi.colors
-    val type = Pi.type
     val scope = rememberCoroutineScope()
     var report by remember { mutableStateOf<RuntimesReport?>(null) }
     var refresh by remember { mutableIntStateOf(0) }
@@ -84,13 +83,11 @@ fun RuntimesScreen(app: PiBoltApp, onBack: () -> Unit) {
                     .navigationBarsPadding()
                     .padding(bottom = 32.dp),
             ) {
-            ScreenIntro("Included in the app. Pi and your shell commands run them in every project.")
             val current = report
             when {
-                current == null -> LoadingRow("Measuring the runtimes")
+                current == null -> LoadingRow("Loading runtimes")
                 current.runtimes.isEmpty() -> EmptyState(
-                    "No language runtimes",
-                    message = "This build of the app ships without Node.js or Python.",
+                    "No runtimes in this build",
                     icon = Icons.Rounded.Terminal,
                     modifier = Modifier.padding(horizontal = 16.dp),
                 )
@@ -106,13 +103,7 @@ fun RuntimesScreen(app: PiBoltApp, onBack: () -> Unit) {
                             if (i > 0) RowDivider()
                             StorageRow(item, clearing = clearing == item.kind, failed = failed == item.kind, onClear = { confirm = item })
                         }
-                        Text(
-                            "Caches only speed up the next install; clearing them is always safe. Packages stay until you uninstall them " +
-                                "(npm uninstall -g, pip uninstall).",
-                            style = type.meta,
-                            color = colors.ink3,
-                            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-                        )
+                        Spacer(Modifier.height(4.dp))
                     }
                 }
             }
@@ -122,7 +113,7 @@ fun RuntimesScreen(app: PiBoltApp, onBack: () -> Unit) {
         confirm?.let { item ->
             ConfirmSheet(
                 title = "Clear the ${item.kind.label}?",
-                message = "Deletes ${formatBytes(item.bytes)} of downloads. The next install downloads them again.",
+                message = "Frees ${formatBytes(item.bytes)}. Packages download again when needed.",
                 confirmLabel = "Clear",
                 onConfirm = {
                     confirm = null
@@ -190,7 +181,7 @@ private fun StorageRow(item: RuntimeStorage, clearing: Boolean, failed: Boolean,
                 Text(formatBytes(item.bytes), style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3)
             }
             Text(
-                if (failed) "Some files could not be deleted. Try again when no install is running." else item.kind.detail,
+                if (failed) "Some files couldn't be deleted. Try again when no install is running." else item.kind.detail,
                 style = type.meta,
                 color = if (failed) colors.danger else colors.ink3,
             )

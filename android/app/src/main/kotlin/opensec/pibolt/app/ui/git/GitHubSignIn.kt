@@ -84,7 +84,7 @@ fun GitHubSection(app: PiBoltApp) {
                 }
             }
             Text(
-                "git push, pull and clone to github.com use this account, in the Changes tab and in Pi's own git commands (new sessions).",
+                "Used for git on github.com, in Changes and in new sessions.",
                 style = type.meta,
                 color = colors.ink3,
                 modifier = Modifier.padding(bottom = 12.dp),
@@ -93,7 +93,7 @@ fun GitHubSection(app: PiBoltApp) {
         }
         GitHubState.SignedOut -> {
             Text(
-                "Sign in to clone private repositories, push, pull and open pull requests from this phone.",
+                "Needed for private repositories, push and pull requests.",
                 style = type.body,
                 color = colors.ink2,
                 modifier = Modifier.padding(top = 8.dp, bottom = 12.dp),
@@ -268,7 +268,7 @@ private fun TokenSheet(app: PiBoltApp, onDismiss: () -> Unit) {
                 isError = error != null,
                 onDone = ::save,
             )
-            FieldHint(error ?: "Stored encrypted with a key in this phone's Keystore. It is never shown again or written to logs.", isError = error != null)
+            FieldHint(error ?: "Encrypted on this phone. Never shown again or logged.", isError = error != null)
             PrimaryButton(
                 if (checking) "Checking…" else "Save",
                 onClick = ::save,

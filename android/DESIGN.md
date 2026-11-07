@@ -451,7 +451,7 @@ with the mark, then:
 - Bottom: "New project" (accent, primary, full width) on a canvas fade. Nothing below the title is placed until the
   folders were read (a few ms, off the main thread), so the computers section never jumps.
 
-**New project sheet.** Title, one line, a 48dp segmented "Empty folder | Clone from git". Clone shows the repository URL
+**New project sheet.** Title, then a 48dp segmented "Empty folder | Clone from git". Clone shows the repository URL
 (monoSmall, URI keyboard, no autocorrect) and, when signed in to GitHub, "Choose from GitHub" (accent text action) that
 opens the repository picker: a search field, then 56dp rows (full name in body ink1, description meta ink3, a lock
 glyph for private ones), 100 per page with "Load more". The URL names the folder until the name is edited. Name field,
@@ -521,9 +521,9 @@ as a shared element, like host card to session).
   deleted). The commit card comes right under the branch card as soon as something is staged (and stays while a
   message is written), so committing never needs a scroll past the file list: "Commit 2 files" (bodyStrong), the
   message field (2 to 8 lines), "Ask Pi" (secondary, sparkle glyph: Pi drafts from the staged diff in the project's
-  session and the answer fills the field) and Commit (primary). With changes but nothing staged, a meta ink3 line under
-  "Changes · N" says how to stage. Clean: "No changes" (EmptyCard, check glyph); outside a repository "Not a git
-  repository" (EmptyCard, branch glyph) with Initialise git; "Reading git status…" (LoadingRow) until git answers. Without a git identity
+  session and the answer fills the field) and Commit (primary). Clean: "No changes" (EmptyCard, check glyph, title
+  only); outside a repository "Not a git repository" (EmptyCard, branch glyph) with Initialise git; "Loading changes…"
+  (LoadingRow) until git answers. Without a git identity
   the commit opens "Who is committing?" (name, email; prefilled with the GitHub name and no-reply address).
 - Closing: a full-screen view over the workspace (file viewer, diff, history) closes with ✕ ("Close"); a step inside
   one (a commit opened from the history) goes back with ← ("Back to history"). `OverlayBar(back = …)` holds the rule.
@@ -531,8 +531,8 @@ as a shared element, like host card to session).
   and, unstaged, Discard. Each hunk is a card: its `@@` header (monoMeta ink3 on surface2) with Stage hunk / Unstage
   hunk and, unstaged, a discard glyph (confirmed), then the rows renderer (DiffBlock: two gutters, sign column, solid
   and hatched bars, syntax colours, word marks). Binary files, renames without changes and a file with no changes left are EmptyCards; very large diffs say so;
-  "Reading the diff…" while git answers, a failed read an ErrorState.
-- History: full screen (✕), "Reading the history…" first, "No commits yet" as an EmptyCard, a failed read an
+  "Loading diff…" while git answers, a failed read an ErrorState.
+- History: full screen (✕), "Loading history…" first, "No commits yet" as an EmptyCard, a failed read an
   ErrorState with Try again; a list of 64dp rows (subject in body, "abc1234 · author · 2 h ago" meta ink3, refs monoMeta ink2),
   100 at a time. A commit (←, back to the list) opens its subject (subhead), body, author, date and a copy-hash button, then a card per file
   (path in monoSmall, +/− counts) that folds its diff (folded first when more than three files).
@@ -549,12 +549,12 @@ to tokens as in tool output (red danger, green success, blue / magenta / cyan `a
 bar: tab chips (`WorkspaceTab`, the editor's too, as the desktop's `.term-tab`: 36dp drawn in a 48dp row, radius 8,
 surface2 + a 1dp line when shown, no fill or border otherwise; "1 · title" in monoSmall, ink1 shown, ink3 otherwise and
 when the shell ended; a 16dp close glyph with a 48dp target; the shown tab scrolls itself into view),
-+ (new terminal), Paste, Text size (one menu: Larger, Smaller, "13 sp · pinch the terminal too"; 8 to 28 sp, also by
++ (new terminal), Paste, Text size (one menu: Larger, Smaller, "13 sp · or pinch"; 8 to 28 sp, also by
 pinch), full screen / leave full screen. Under it the Preview chips. The extra-keys row (surface1; each key a 48dp target with a 40dp face, monoMeta ink1 or
 a 20dp arrow glyph; the keys share the width where all twelve fit, landscape and tablets, and scroll on a phone): Esc, Tab, Ctrl, Alt, the four arrows, |, ~, /, -; Ctrl and Alt fill with accent (onAccent text)
 while on and apply to the next key only. Long press selects text (Termux's floating Copy / Paste bar); tap shows the
 keyboard (character input, no suggestions). An ended shell says "[Process completed - press Enter]"; Enter closes the
-tab. No tab yet: "A shell in this project" (EmptyCard, terminal glyph), one line, Start a terminal (primary). Full screen: the same pane above
+tab. No tab yet: "A shell in this project" (EmptyCard, terminal glyph), "bash with git, curl and rg", Start a terminal (primary). Full screen: the same pane above
 the keyboard, status and navigation bars padded. Shells keep running off screen; a low-importance "N terminals
 running" notification (Close all) holds them in the background.
 
@@ -566,9 +566,9 @@ in a WebView (http://localhost and 127.0.0.1 only; tapped links elsewhere open i
 answer (stopped, still starting), an EmptyCard over the page says so ("Nothing answers on localhost:5173", what to
 check, the WebView's reason) with Reload (primary) instead of WebView's own error page.
 
-**Secrets.** `ScreenTopBar` "Secrets" with the project's name as its meta line, a `ScreenIntro` on where values go
-(engine and terminal environment, never the model's messages) and "Changes apply to new terminals and sessions"
-(meta ink3). None yet: an `EmptyState` (key glyph, "No secrets yet", an example name). Then "Variables · N" and 64dp
+**Secrets.** `ScreenTopBar` "Secrets" with the project's name as its meta line, a `ScreenIntro` ("Encrypted on this
+phone and kept out of the model's messages. Commands in this project can read them.") and "Applies to new terminals
+and sessions" (meta ink3). None yet: an `EmptyState` (key glyph, "No secrets yet"). Then "Variables · N" and 64dp
 rows: the name in mono ink1, the value masked as eight dots (monoMeta ink3, fixed length), Show / Hide, Edit, Delete
 (ink3 glyph; the confirm sheet carries the danger). Add secret (primary) opens a `PiCard` form: Name (`FieldLabel`,
 mono, validated: letters, digits, _, not the engine's own variables, the rule or the error in `FieldHint`), Value
@@ -626,7 +626,7 @@ Sign out (confirmed).
 action that asks first and says the key is not revoked at the provider) and Add provider.
 
 **Pair confirmation.** A sheet (not an AlertDialog) for links opened from outside the app: `SheetHeader` "Pair with
-<host>?" and "Only continue if you just ran /remote-control on this computer", "Address(es)" over a `PiCard` of the
+<host>?" and "Opened from a link. Continue only if you just ran /remote-control on this computer.", "Address(es)" over a `PiCard` of the
 endpoints (monoMeta ink2), a warning `Notice` when it ends the current session, Cancel and Pair / Connect. Scanning
 and pasting stay one-step. The paste sheet: the link field (monoSmall, URI keyboard; Go connects), its error as a
 `FieldHint`, "Paste from clipboard", Cancel and Connect.
@@ -749,7 +749,7 @@ asks again; once Android stops asking, "Open settings" opens the app's system pa
   - under that fold, in a session on this phone: "Review changes (3 files, +40 −12)" (difference glyph 16dp ink3,
     label ink2, counts success / danger tnum, " · undone" in ink3 after an undo; 48dp tall), only for turns whose
     checkpoints show changed files. Over remote control the newest turn that edited files says instead, in meta ink3,
-    that review and undo work in sessions on this phone (the files are on the computer).
+    "Review and undo are available in sessions on this phone".
   - under the last finished reply: three icons, ink2 16-18dp, each in a 48dp target, no labels (one calm toolbar):
     Copy (a success check while copied), Ask again (sends the same prompt as a new turn; Pi has no regenerate; hidden
     for prompts with images) and More (Select text, View as Markdown, Share), 40dp tall, the copy glyph aligned with
@@ -898,9 +898,9 @@ the message and returns its text), Edit in composer, Select text, Share. On a re
 Markdown), Copy as Markdown, Regenerate (on this phone: forks before the prompt and sends it again), Select text, View
 as Markdown, Share. More under the last reply offers the same.
 
-**Session tree** (`/tree`). A sheet: "Session tree" with "One branch…" or "2 forks. The marked path is what Pi sees."
-(meta ink3), the Messages | Prompts | Labeled | Everything filter, then the entries (forks indented, the active path
-marked). Loading reads "Reading the tree" (Quad Think). A failed read (or a reply without data) is an error, never an
+**Session tree** (`/tree`). A sheet: "Session tree" with "2 forks · Pi sees the marked path" (meta ink3; no subtitle
+with one branch), the Messages | Prompts | Labeled | Everything filter, then the entries (forks indented, the active
+path marked). Loading reads "Loading tree" (Quad Think). A failed read (or a reply without data) is an error, never an
 empty list: no subtitle, no filter, a dangerSoft card (radius md, danger @ 40% line) with the error glyph, "Could not
 read the session tree" (bodyStrong ink1), Pi's message (meta ink3, four lines) and Retry (accent).
 
@@ -1020,7 +1020,7 @@ weight with `RowDivider`s, controls start with a `ControlLabel`:
   sheet's "Add a server" opens a "New server" form (name with its rule as an error hint, address or command, optional
   token variable) with Cancel and Add.
 - Pi on this phone: Default model (a 56dp row led by the model's mark, the sparkle glyph while automatic: the model and provider; it opens the model picker with the models of
-  the open on-device session, and says to open a session when none is), thinking level for new sessions, steering
+  the open on-device session, and says to open a session when none is), default thinking level, steering
   and follow-up delivery (One at a time / All at once), Auto-compact, Auto-retry with the retry count (1 / 3 / 5 / 10),
   Skill commands, Block images. They are the engine's own settings (`agent/settings.json`, other keys kept); the
   queue, compaction and retry switches reach the open on-device session at once over RPC, the rest apply from the next
@@ -1034,29 +1034,30 @@ weight with `RowDivider`s, controls start with a `ControlLabel`:
   is a split disc: the theme's own accent beside surface3; read as "Iris accent", selected or not), text size ("Text size" with its value in label ink2 beside
   it, A-glyph steps and a live prose preview), density (Comfortable / Compact).
 - Motion and haptics: Reduce motion (Follow system / On), Haptics.
-- Session display: show thinking expanded, tool output preview lines (6 / 12 / 24).
+- Session display: Expand thinking, tool output preview lines (6 / 12 / 24).
 - Notifications: one 56dp row, "Notifications" with "Allowed" (meta success) or "Off" (meta warning); tapping opens
   the system page.
-- Security: device key (mono), what it is for, then "Reset device key" as a row with a danger refresh glyph that
-  opens the confirm sheet (no standing red button).
+- Security: device key (mono), then "Reset device key" ("Every computer must pair again") as a row with a danger
+  refresh glyph that opens the confirm sheet (no standing red button). After a reset, the old key shows in ink3 with one
+  success line: pair each computer again, then revoke the old key there.
 - About: app version, device name, the update status and its action (see Updates), "Check for updates automatically",
   and one "Open-source licences" row (document glyph) that opens a sheet of the five (Inter, JetBrains Mono: OFL;
   Mermaid: MIT; Termux terminal libraries: Apache-2.0; Lobe Icons, the provider and model logos: MIT); a pick opens
-  the text in the viewer. Packages and extensions, MCP servers, and Retry and compaction lead with the extension,
+  the text in the viewer. Packages, MCP servers, and Retry and compaction lead with the extension,
   cable and tune glyphs.
 Segmented controls in Settings are 48dp tall.
 Changes apply live, without recreating the activity, and persist in a small JSON file (read synchronously at
 startup so the first frame has the right theme).
 
 **Runtimes** (Settings > Runtimes, and "Runtimes" in a project's menu).
-- `ScreenTopBar` "Runtimes" like Settings, then a `ScreenIntro`: the runtimes come with the app and run in every
-  project. While measuring: a `LoadingRow`; a build without runtimes: an `EmptyState`.
+- `ScreenTopBar` "Runtimes" like Settings. While measuring: a `LoadingRow`; a build without runtimes: an `EmptyState`.
 - Installed: one card row per runtime: name in bodyStrong, version in monoMeta ink2, installed size right-aligned in
   meta ink3 (tabular figures); below, what comes with it ("npm 10.9.4", "pip 25.2") in meta ink3, then its commands as
   mono chips (surface2, 1dp line, Radius.sm). No Install/Remove: the runtimes are part of the APK (android/engine/CONTRACT.md).
 - Packages and caches: npm cache and pip cache with their size and a small secondary "Clear" (disabled at 0 B; "Clearing…"
   while it runs; a ConfirmSheet first, naming the size), then npm global packages and pip packages with their size
-  only (removed with npm uninstall -g / pip uninstall). A failed clear says so in danger under the row.
+  only. Each row's meta line is short: "Safe to clear" for the caches, "npm install -g" / "pip install --user" for the
+  packages. A failed clear says so in danger under the row.
 - Sizes are measured on IO when the screen opens and after a clear; nothing animates while idle.
 - TalkBack: a runtime is one node ("Node.js 22.23.4, npm 10.9.4, 150 MB. Commands: node, npm, npx"); each Clear is
   labelled "Clear the npm cache"; the title is a heading. Every row is at least 48 dp tall.
@@ -1142,6 +1143,24 @@ renderer exists. The app has no other WebView, and this one is kept minimal:
   ignores ids the app is not waiting for and caps the PNG (64 MB of base64, 24 M pixels).
 - A dead renderer process (`onRenderProcessGone`) drops the WebView and fails its requests; the app keeps running and
   the next diagram starts a new one.
+
+## Copy
+
+Short, confident, sentence case; no exclamation marks, no emoji. No sentence explains how the app works inside, why a
+design is the way it is, or what is obvious on screen. A settings row is a title plus at most one short meta line that
+carries a value or a consequence ("Applies to new sessions"). An empty state is one line plus its action; an error says
+what happened and what to do. Safety, consent, permission and privacy lines stay, kept short and true.
+
+One name per concept:
+- **Pi** the agent; **Pi-Bolt** the app; **this phone** the device; **computer** the paired machine (never desktop,
+  host or Mac); **remote control**, **pair**, **pairing code** / **pairing link**.
+- **project**, **session**, **provider**, **model**, **API key**, **custom endpoint** (an OpenAI-compatible server),
+  **engine** (only where the user acts on it: "Restart the engine").
+- **steer** / **follow-up**; **compact** (the context); **fork**, **branch**, **label**; **undo**, **put back**,
+  **restore**; **secrets**; **packages**, **skills**, **prompt templates**, **MCP servers**; **sign in** (verb) /
+  **sign-in** (noun).
+- Fixed phrases: "Loading…" or "Loading <thing>" (never Reading or Measuring), "Reload the session to apply changes", "Applies to new sessions",
+  "switch model", "This can't be undone." (destructive confirmations).
 
 ## Not carried over from the desktop app
 

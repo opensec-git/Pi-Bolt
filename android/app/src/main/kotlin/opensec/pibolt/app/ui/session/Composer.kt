@@ -226,7 +226,7 @@ fun Composer(
         }
         when {
             shellMode -> ComposerHint(
-                if (text.startsWith("!!")) "Shell: runs in the project; the output stays out of Pi's context" else "Shell: runs in the project; the output goes to Pi with your next message",
+                if (text.startsWith("!!")) "Shell · output stays out of Pi's context" else "Shell · output goes to Pi with your next message",
                 mono = false,
             )
             usage != null && commands.isEmpty() -> ComposerHint("${usage.label} ${usage.hint}", mono = true)
@@ -365,7 +365,7 @@ fun Composer(
             val attach = @Composable {
                 IconAction(
                     Icons.Rounded.Add,
-                    description = if (attachAllowed) "Attach images and more" else "Attach images and more (images not available for this model)",
+                    description = if (attachAllowed) "Attach images and more" else "Attach files (this model can't read images)",
                     onClick = onAttach,
                     enabled = enabled,
                     tint = colors.ink3,

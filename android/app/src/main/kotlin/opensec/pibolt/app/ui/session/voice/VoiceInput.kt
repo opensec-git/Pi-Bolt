@@ -73,7 +73,7 @@ fun VoiceButton(draft: String, onDraft: (String) -> Unit, enabled: Boolean, onMe
     }
 
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) start() else say("Pi-Bolt needs the microphone for dictation. You can allow it in Android's app settings.")
+        if (granted) start() else say("Microphone access is off. Allow it in Android's app settings.")
     }
 
     val listening = state == VoiceState.Listening || state == VoiceState.Starting
@@ -121,7 +121,7 @@ fun VoiceButton(draft: String, onDraft: (String) -> Unit, enabled: Boolean, onMe
     if (rationale) {
         ConfirmSheet(
             title = "Dictate with the microphone?",
-            message = "Pi-Bolt listens only while the mic is on and turns your speech into text in the composer, on the phone when it can. Android asks for microphone access next.",
+            message = "Pi-Bolt listens only while the mic is on and turns speech into text, on the phone when it can. Android asks for access next.",
             confirmLabel = "Continue",
             destructive = false,
             onConfirm = {

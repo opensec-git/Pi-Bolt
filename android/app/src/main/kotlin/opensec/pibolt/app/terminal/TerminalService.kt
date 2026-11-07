@@ -90,7 +90,7 @@ class TerminalService : Service() {
             return NotificationCompat.Builder(context, CHANNEL)
                 .setSmallIcon(R.drawable.ic_stat_bolt)
                 .setContentTitle(if (count == 1) "1 terminal running" else "$count terminals running")
-                .setContentText("They keep running in the background until you close them")
+                .setContentText("Running in the background")
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setContentIntent(open)

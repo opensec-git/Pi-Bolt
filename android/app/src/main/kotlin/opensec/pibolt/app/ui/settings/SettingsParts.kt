@@ -86,7 +86,7 @@ internal fun Label(text: String) = ControlLabel(text)
 internal fun LabelWithValue(text: String, value: String) = ControlLabel(text, value = value)
 
 @Composable
-internal fun ToggleRow(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) =
+internal fun ToggleRow(title: String, subtitle: String?, checked: Boolean, onChange: (Boolean) -> Unit) =
     SwitchRow(title, checked, onChange, meta = subtitle, padding = RowInsetCard)
 
 /**
@@ -135,7 +135,7 @@ internal fun NotificationsRow() {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { allowed = NotificationManagerCompat.from(context).areNotificationsEnabled() }
     NavRow(
         label = "Notifications",
-        value = if (allowed) "Allowed · when Pi finishes or needs an answer" else "Off · Pi can't tell you when it finishes",
+        value = if (allowed) "Allowed" else "Off · no alert when Pi finishes",
         valueColor = if (allowed) colors.success else colors.warning,
         onClick = { openNotificationSettings(context) },
         external = true,
@@ -187,5 +187,5 @@ internal fun UpdateBlock(app: PiBoltApp, autoCheck: Boolean, onAutoCheck: (Boole
         else -> SecondaryButton("Check for updates", onClick = updates::checkNow, enabled = !state.checking, modifier = Modifier.fillMaxWidth())
     }
     Spacer(Modifier.height(8.dp))
-    ToggleRow("Check for updates automatically", "Once a day when the app opens: a plain request, no identifiers", autoCheck, onAutoCheck)
+    ToggleRow("Check for updates automatically", "Once a day · sends no identifiers", autoCheck, onAutoCheck)
 }

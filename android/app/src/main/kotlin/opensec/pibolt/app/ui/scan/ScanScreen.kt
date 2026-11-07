@@ -176,7 +176,7 @@ fun ScanScreen(onBack: () -> Unit, onCode: (String) -> String?) {
                 Text("Camera access needed", style = type.title, color = colors.ink1, modifier = Modifier.semantics { heading() })
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Pi-Bolt uses the camera only to read the pairing code. You can also paste the link from /\u2060remote-control copy.",
+                    "Used only to read the pairing code. Or paste the link from /\u2060remote-control copy.",
                     style = type.body,
                     color = colors.ink2,
                     textAlign = TextAlign.Center,

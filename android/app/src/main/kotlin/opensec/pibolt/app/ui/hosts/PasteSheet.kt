@@ -54,7 +54,7 @@ fun PasteSheet(onDismiss: () -> Unit, onSubmit: (String) -> String?) {
         if (e != null) haptics.reject() else haptics.confirm()
     }
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Paste pairing link", subtitle = "Run /\u2060remote-control copy on the computer, then paste the pibolt://pair link here.")
+        SheetHeader("Paste pairing link", subtitle = "Run /\u2060remote-control copy on the computer, then paste the link.")
         PiTextField(
             value = text,
             onValueChange = {

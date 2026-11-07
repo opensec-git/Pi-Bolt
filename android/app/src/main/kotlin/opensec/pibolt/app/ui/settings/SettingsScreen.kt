@@ -132,7 +132,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                 if (query.isNotEmpty()) {
                     Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            if (groups.isEmpty()) "No setting matches “${query.trim()}”" else "Showing matches for “${query.trim()}”",
+                            if (groups.isEmpty()) "No setting matches “${query.trim()}”" else "Matches for “${query.trim()}”",
                             style = type.meta,
                             color = colors.ink3,
                             modifier = Modifier.weight(1f),
@@ -158,7 +158,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                         val shipped by produceState<String?>(null) {
                             value = withContext(Dispatchers.IO) { app.engine.runtimes().runtimes.joinToString(" · ") { "${it.name} ${it.version}" } }
                         }
-                        NavRow("Runtimes", shipped?.ifEmpty { "None in this build" } ?: "Reading…", onClick = onRuntimes)
+                        NavRow("Runtimes", shipped?.ifEmpty { "None in this build" } ?: "Loading…", onClick = onRuntimes)
                     }
                 }
 
@@ -234,15 +234,10 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                                 modifier = Modifier.fillMaxWidth(),
                                 height = 48.dp,
                             )
-                            Text(
-                                "Follow system uses Android's “Remove animations” setting. Reduced motion keeps spinners still and turns transitions into short fades.",
-                                style = type.meta,
-                                color = colors.ink3,
-                                modifier = Modifier.padding(top = 8.dp, bottom = 8.dp),
-                            )
+                            Spacer(Modifier.height(8.dp))
                         }
                         if (show("haptics")) {
-                            ToggleRow("Haptics", "Taps for send, stop, answers and errors", settings.haptics) { on -> update { it.copy(haptics = on) } }
+                            ToggleRow("Haptics", null, settings.haptics) { on -> update { it.copy(haptics = on) } }
                         }
                     }
                 }
@@ -250,7 +245,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                 if (SettingsGroup.SessionDisplay in groups) {
                     Section(SettingsGroup.SessionDisplay) {
                         if (show("thinking-expanded")) {
-                            ToggleRow("Show thinking expanded", "Open the model's reasoning by default", settings.thinkingExpanded) { on -> update { it.copy(thinkingExpanded = on) } }
+                            ToggleRow("Expand thinking", null, settings.thinkingExpanded) { on -> update { it.copy(thinkingExpanded = on) } }
                             Spacer(Modifier.height(12.dp))
                         }
                         if (show("tool-preview")) {
@@ -278,20 +273,19 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                         // Key ids are shown in mono only: in the UI font "l" and "I" look alike.
                         KeyLine("Device key", keyId, colors.ink1)
                         oldKeyId?.let { KeyLine("Old key", it, colors.ink3) }
-                        Text(
-                            if (oldKeyId != null) {
-                                "New key created. Pair again with /remote-control on each computer, then revoke the old key there with /remote-control devices."
-                            } else {
-                                "Computers list this phone by this key in /remote-control devices. Resetting makes a new key: every computer has to pair again."
-                            },
-                            style = type.meta,
-                            color = if (oldKeyId != null) colors.success else colors.ink3,
-                            modifier = Modifier.padding(top = 4.dp, bottom = 12.dp),
-                        )
+                        if (oldKeyId != null) {
+                            Text(
+                                "New key created. Pair each computer again, then revoke the old key there with /remote-control devices.",
+                                style = type.meta,
+                                color = colors.success,
+                                modifier = Modifier.padding(top = 4.dp),
+                            )
+                        }
+                        Spacer(Modifier.height(12.dp))
                         RowDivider()
                         ListRow(
                             "Reset device key",
-                            meta = "Makes a new key; every computer has to pair again",
+                            meta = "Every computer must pair again",
                             icon = Icons.Rounded.Refresh,
                             iconTint = colors.danger,
                             onClick = { confirmReset = true },
@@ -300,9 +294,8 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                         if (confirmReset) {
                             ConfirmSheet(
                                 title = "Reset this phone's key?",
-                                message = "Every paired computer will refuse this phone, so they are removed here and the current session ends. " +
-                                    "Pair each computer again with a new QR code, then revoke the old key on it with /remote-control devices. " +
-                                    "Settings keeps showing the old key until then.",
+                                message = "Paired computers are removed and the current session ends. " +
+                                    "Pair each one again, then revoke the old key there with /remote-control devices.",
                                 confirmLabel = "Reset key",
                                 onConfirm = {
                                     confirmReset = false
@@ -324,7 +317,7 @@ fun SettingsScreen(app: PiBoltApp, onBack: () -> Unit, onRuntimes: () -> Unit) {
                         if (show("updates")) UpdateBlock(app, settings.autoUpdateCheck) { on -> update { it.copy(autoUpdateCheck = on) } }
                         if (show("licences")) {
                             RowDivider()
-                            NavRow("Open-source licences", "Inter, JetBrains Mono, Mermaid, Termux terminal, Lobe Icons", onClick = { licences = true }, icon = Icons.Rounded.Description)
+                            NavRow("Open-source licences", null, onClick = { licences = true }, icon = Icons.Rounded.Description)
                         }
                     }
                 }
@@ -360,7 +353,7 @@ private fun LicencesSheet(onPick: (name: String, kind: String, raw: Int) -> Unit
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Open-source licences", subtitle = "Pi-Bolt ships these projects with the app.")
+        SheetHeader("Open-source licences")
         Spacer(Modifier.height(8.dp))
         for ((name, kind, raw) in LICENCES) {
             ListRow(name, meta = kind, icon = Icons.Rounded.Description, end = RowEnd.Chevron, onClick = { close { onPick(name, kind, raw) } })
@@ -373,7 +366,7 @@ private val LICENCES = listOf(
     Triple("JetBrains Mono", "SIL Open Font License 1.1", R.raw.license_jetbrains_mono),
     Triple("Mermaid", "MIT, with the projects it bundles", R.raw.license_mermaid),
     Triple("Termux terminal", "Apache License 2.0", R.raw.license_termux_terminal),
-    Triple("Lobe Icons", "MIT: provider and model logos", R.raw.license_lobe_icons),
+    Triple("Lobe Icons", "MIT", R.raw.license_lobe_icons),
 )
 
 private fun textSizeLabel(step: Int) = when (step) {

@@ -64,7 +64,7 @@ fun ProvidersSection(app: PiBoltApp) {
 
     if (ids.isEmpty()) {
         Text(
-            "No provider yet. Add an API key so Pi can call a model from this phone.",
+            "No providers yet",
             style = type.body,
             color = colors.ink2,
             modifier = Modifier.padding(top = 8.dp, bottom = 12.dp),
@@ -108,9 +108,9 @@ fun ProvidersSection(app: PiBoltApp) {
         ConfirmSheet(
             title = "Remove $name?",
             message = if (isCustom) {
-                "Pi on this phone stops using this endpoint. Its entry is removed from models.json and its key from auth.json here."
+                "This server's models and key are removed from this phone."
             } else {
-                "Pi on this phone stops using $name until you add a key again. The key is deleted from auth.json here; it is not revoked at $name."
+                "The key is deleted from this phone. It stays valid at $name until you revoke it there."
             },
             confirmLabel = "Remove",
             onConfirm = {

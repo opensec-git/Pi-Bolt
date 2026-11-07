@@ -335,8 +335,7 @@ private fun PairConfirmSheet(payload: PairingPayload, known: Boolean, endsSessio
     PiSheet(onDismiss = onCancel, state = state) {
         SheetHeader(
             if (known) "Connect to ${payload.hostName}?" else "Pair with ${payload.hostName}?",
-            subtitle = "A link opened Pi-Bolt to " + (if (known) "connect to a paired computer." else "pair this phone with a computer.") +
-                " Only continue if you just ran /\u2060remote-control on this computer.",
+            subtitle = "Opened from a link. Continue only if you just ran /\u2060remote-control on this computer.",
         )
         Column(Modifier.padding(horizontal = 16.dp)) {
             Spacer(Modifier.height(8.dp))

@@ -101,12 +101,12 @@ fun McpSheet(engine: EngineApi, onReload: (() -> Unit)?, onMessage: (String) -> 
     }
 
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("MCP servers", subtitle = "Tools from Model Context Protocol servers, for every session on this phone.")
+        SheetHeader("MCP servers", subtitle = "For every session on this phone")
         Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState())) {
             if (changed && onReload != null) {
                 F2Well {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text("Reload the session to connect the changes.", style = Pi.type.body, color = Pi.colors.ink1, modifier = Modifier.weight(1f))
+                        Text("Reload the session to apply changes", style = Pi.type.body, color = Pi.colors.ink1, modifier = Modifier.weight(1f))
                         SecondaryButton("Reload", onClick = { close(onReload) })
                     }
                 }
@@ -117,7 +117,7 @@ fun McpSheet(engine: EngineApi, onReload: (() -> Unit)?, onMessage: (String) -> 
                 failure != null -> ErrorState("Could not reach the MCP servers", message = failure, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
                 r == null -> F2Loading("Connecting to servers")
                 else -> {
-                    if (r.servers.isEmpty()) F2Empty("No MCP servers yet. Add one below to give Pi its tools.", Icons.Rounded.Cable)
+                    if (r.servers.isEmpty()) F2Empty("No MCP servers yet", Icons.Rounded.Cable)
                     for (s in r.servers) {
                         val meta = buildList {
                             add(s.state)
@@ -182,7 +182,7 @@ fun McpSheet(engine: EngineApi, onReload: (() -> Unit)?, onMessage: (String) -> 
     removing?.let { s ->
         ConfirmSheet(
             title = "Remove ${s.name}?",
-            message = "Pi drops it from mcp.json. Its sign-in, if any, is kept.",
+            message = "Its sign-in, if any, is kept.",
             confirmLabel = "Remove",
             onConfirm = {
                 removing = null

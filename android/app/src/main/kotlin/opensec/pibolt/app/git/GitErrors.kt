@@ -27,7 +27,7 @@ object GitErrors {
         val e = err.lowercase()
         return when {
             "could not read username" in e || "authentication failed" in e || "terminal prompts disabled" in e || "invalid username or password" in e ->
-                "GitHub did not accept the credentials. Sign in to GitHub in Settings (or check the token's access)."
+                "GitHub did not accept the credentials. Sign in again in Settings."
             "permission to" in e && "denied" in e || "the requested url returned error: 403" in e ->
                 "Your GitHub account can't push to this repository. The token needs the repo scope and write access."
             "workflow" in e && "scope" in e ->

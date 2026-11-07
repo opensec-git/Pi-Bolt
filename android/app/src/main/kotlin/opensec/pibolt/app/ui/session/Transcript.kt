@@ -241,7 +241,7 @@ fun Transcript(
                     local(file)
                 } else {
                     currentOpen(
-                        if (readable) fileView(file, path) else ViewerContent(baseName(path), path, "This file is on the computer running Pi, not on this phone."),
+                        if (readable) fileView(file, path) else ViewerContent(baseName(path), path, "This file is on the computer, not this phone."),
                     )
                 }
             }

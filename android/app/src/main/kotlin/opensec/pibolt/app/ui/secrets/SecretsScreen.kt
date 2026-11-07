@@ -135,11 +135,8 @@ fun SecretsScreen(app: PiBoltApp, project: File, onBack: () -> Unit) {
         LazyColumn(Modifier.fillMaxSize().imePadding(), state = listState, contentPadding = PaddingValues(bottom = 24.dp + bottom)) {
             item(key = "head") {
                 Column {
-                    ScreenIntro(
-                        "Environment variables for the terminals and sessions of ${project.name}, such as API keys. Encrypted on this phone and " +
-                            "never put in the model's messages; commands that Pi or you run can read them, like any variable.",
-                    )
-                    Text("Changes apply to new terminals and sessions.", style = type.meta, color = colors.ink3, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp))
+                    ScreenIntro("Encrypted on this phone and kept out of the model's messages. Commands in this project can read them.")
+                    Text("Applies to new terminals and sessions", style = type.meta, color = colors.ink3, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 12.dp))
                 }
             }
             val list = secrets
@@ -147,7 +144,6 @@ fun SecretsScreen(app: PiBoltApp, project: File, onBack: () -> Unit) {
                 item(key = "empty") {
                     EmptyState(
                         "No secrets yet",
-                        message = "Add the API keys and tokens your commands need, such as OPENAI_API_KEY.",
                         icon = Icons.Rounded.Key,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     )
@@ -217,8 +213,8 @@ fun SecretsScreen(app: PiBoltApp, project: File, onBack: () -> Unit) {
     if (writeEnv) {
         ConfirmSheet(
             title = "Write .env to the project?",
-            message = "Every value lands in plain text in ${project.name}/.env, where tools, Pi and anything in the project can read it, " +
-                "and git would commit it. Pi-Bolt adds .env to .gitignore when the project uses git.",
+            message = "Values are saved in plain text in ${project.name}/.env, where anything in the project can read them. " +
+                "Pi-Bolt adds .env to .gitignore if the project uses git.",
             confirmLabel = "Write .env",
             onConfirm = {
                 writeEnv = false

@@ -163,7 +163,7 @@ fun LazyListScope.changesItems(ui: ChangesUi) {
     val model = ui.model
     val repo = model.isRepo
     if (repo == null) {
-        item(key = "git-loading", contentType = "loading") { LoadingRow("Reading git status…") }
+        item(key = "git-loading", contentType = "loading") { LoadingRow("Loading changes…") }
         return
     }
     if (!repo) {
@@ -172,7 +172,7 @@ fun LazyListScope.changesItems(ui: ChangesUi) {
     }
     val status = model.status
     if (status == null) {
-        item(key = "git-loading", contentType = "loading") { LoadingRow("Reading git status…") }
+        item(key = "git-loading", contentType = "loading") { LoadingRow("Loading changes…") }
         return
     }
     item(key = "git-branch", contentType = "git-card") { BranchCard(ui) }
@@ -193,16 +193,11 @@ fun LazyListScope.changesItems(ui: ChangesUi) {
         item(key = "git-h-changes", contentType = "git-head") {
             Header("Changes · ${unstaged.size}", "Stage all") { model.run("Staging") { stage(unstaged.map { it.path }) } }
         }
-        if (staged.isEmpty()) {
-            item(key = "git-hint", contentType = "git-note") {
-                Text("Stage the files to commit with +, or Stage all.", style = Pi.type.meta, color = Pi.colors.ink3, modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 4.dp))
-            }
-        }
         items(unstaged, key = { "gu:" + it.path }, contentType = { "git-file" }) { FileRow(ui, it, staged = false) }
     }
     if (status.clean) {
         item(key = "git-clean", contentType = "git-note") {
-            EmptyCard(Icons.Rounded.Check, "No changes", "Everything is committed. Edits by you or Pi show up here to review and commit.")
+            EmptyCard(Icons.Rounded.Check, "No changes")
         }
     }
 }
@@ -215,11 +210,7 @@ object ChangesRules {
 
 @Composable
 private fun NotARepo(ui: ChangesUi) {
-    EmptyCard(
-        Icons.AutoMirrored.Rounded.CallSplit,
-        "Not a git repository",
-        "Track this project's changes with git to review, commit and push them here.",
-    ) {
+    EmptyCard(Icons.AutoMirrored.Rounded.CallSplit, "Not a git repository") {
         SecondaryButton(if (ui.model.busy != null) "Setting up…" else "Initialise git", onClick = { ui.model.run("Initialising") { init() } }, enabled = ui.model.busy == null, modifier = Modifier.fillMaxWidth())
     }
 }
@@ -274,9 +265,9 @@ private fun BranchCard(ui: ChangesUi) {
             IconAction(Icons.Rounded.History, "History", onClick = { ui.overlay = GitOverlay.History })
         }
         Row(Modifier.padding(start = 16.dp, end = 16.dp, bottom = 10.dp)) {
-            if (!hasRemote) Text("Add a remote (ask Pi) to push and pull.", style = type.meta, color = colors.ink3)
+            if (!hasRemote) Text("No remote. Ask Pi to add one.", style = type.meta, color = colors.ink3)
             else if (github !is GitHubState.SignedIn && model.remote?.let { GitHubRemote.parse(it) } != null) {
-                Text("Sign in to GitHub in Settings to push, pull private repositories and open pull requests.", style = type.meta, color = colors.ink3)
+                Text("Sign in to GitHub in Settings to push and open pull requests.", style = type.meta, color = colors.ink3)
             }
         }
     }
@@ -398,9 +389,9 @@ fun ChangesOverlays(ui: ChangesUi, visible: Boolean) {
         is GitSheet.Discard -> ConfirmSheet(
             title = if (s.entry.untracked) "Delete ${splitPath(s.entry.path).first}?" else "Discard changes?",
             message = when {
-                s.entry.untracked -> "${s.entry.path} is not tracked by git: it is deleted and can't be restored."
-                s.staged -> "${s.entry.path} goes back to its last committed version, staged changes included. This can't be undone."
-                else -> "The unstaged changes to ${s.entry.path} are thrown away. This can't be undone."
+                s.entry.untracked -> "${s.entry.path} is untracked, so it can't be restored."
+                s.staged -> "${s.entry.path} goes back to its last commit, staged changes included. This can't be undone."
+                else -> "Unstaged changes to ${s.entry.path} are discarded. This can't be undone."
             },
             confirmLabel = if (s.entry.untracked) "Delete" else "Discard",
             onConfirm = {

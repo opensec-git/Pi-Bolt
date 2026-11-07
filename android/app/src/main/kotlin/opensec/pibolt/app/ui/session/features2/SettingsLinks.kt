@@ -29,7 +29,7 @@ fun AgentLinks(app: PiBoltApp, onMessage: (String) -> Unit) {
     var open by remember { mutableStateOf(F2Sheet.None) }
     val live by LocalSessions.current.collectAsState()
     val controller = live?.controller?.takeIf { !it.stopped }
-    Link("Packages and extensions", Icons.Rounded.Extension) { open = F2Sheet.Packages }
+    Link("Packages", Icons.Rounded.Extension) { open = F2Sheet.Packages }
     Link("MCP servers", Icons.Rounded.Cable) { open = F2Sheet.Mcp }
     Link("Retry and compaction", Icons.Rounded.Tune) { open = F2Sheet.Tuning }
     val close = { open = F2Sheet.None }

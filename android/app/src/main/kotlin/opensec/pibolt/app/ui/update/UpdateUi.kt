@@ -207,7 +207,7 @@ fun updateStatus(state: UpdateState): Pair<String, String?> {
 private fun piWorking(app: PiBoltApp): String? {
     if (app.sessions.value.any { it.isLocal && !it.stopped && it.state.value.isRunning }) return "Pi is working; updating stops it."
     val remote = app.remote.value?.takeIf { !it.stopped }
-    if (remote?.state?.value?.isRunning == true) return "Pi is working on ${remote.hostName.value}; updating disconnects this phone, the computer keeps going."
+    if (remote?.state?.value?.isRunning == true) return "Pi is working on ${remote.hostName.value}. Updating disconnects this phone; the computer keeps going."
     return null
 }
 
@@ -226,7 +226,6 @@ fun UpdateSheets(app: PiBoltApp) {
 @Composable
 private fun DownloadSheet(app: PiBoltApp, info: UpdateInfo) {
     val colors = Pi.colors
-    val type = Pi.type
     val updates = app.updates
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
@@ -235,29 +234,20 @@ private fun DownloadSheet(app: PiBoltApp, info: UpdateInfo) {
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { network = updates.network() }
     val size = UpdateRules.formatSize(info.size)
     PiSheet(onDismiss = updates::dismissPrompt, state = state) {
-        SheetHeader(
-            "Update to Pi-Bolt ${info.version}",
-            subtitle = "Pi-Bolt downloads it from GitHub, checks that OpenSec signed it, then Android asks you to install it.",
-        )
+        SheetHeader("Update to Pi-Bolt ${info.version}")
         Spacer(Modifier.height(8.dp))
         val (icon, text, tint) = when (network) {
             NetworkKind.Wifi -> Triple(Icons.Rounded.Wifi, "$size over Wi-Fi", colors.ink2)
             NetworkKind.MeteredWifi -> Triple(Icons.Rounded.Wifi, "$size over a metered Wi-Fi network", colors.warning)
             NetworkKind.Mobile -> Triple(Icons.Rounded.SignalCellularAlt, "$size over mobile data", colors.warning)
             NetworkKind.MeteredOther -> Triple(Icons.Rounded.SignalCellularAlt, "$size over a metered network", colors.warning)
-            NetworkKind.None -> Triple(Icons.Rounded.CloudOff, "$size · no connection now; it starts when you are back online", colors.warning)
+            NetworkKind.None -> Triple(Icons.Rounded.CloudOff, "$size · starts when you're back online", colors.warning)
             NetworkKind.Unknown -> Triple(Icons.Rounded.Wifi, "$size download", colors.ink2)
         }
         InfoBox(icon, text, tint)
         if (info.page?.startsWith("https://github.com/opensec-git/Pi-Bolt/releases/") == true) {
             TextAction("Release notes", onClick = { runCatching { uri.openUri(info.page) } }, color = colors.accent, modifier = Modifier.padding(start = 8.dp))
         }
-        Text(
-            "It keeps downloading if you leave the app; the notification shows progress.",
-            style = type.meta,
-            color = colors.ink3,
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
-        )
         Spacer(Modifier.height(12.dp))
         ButtonRow(Modifier.padding(horizontal = 20.dp)) {
             SecondaryButton("Cancel", onClick = { close(updates::dismissPrompt) })
@@ -287,14 +277,14 @@ private fun InstallSheet(app: PiBoltApp, info: UpdateInfo) {
         }
     }
     PiSheet(onDismiss = updates::dismissPrompt, state = state) {
-        SheetHeader("Install Pi-Bolt ${info.version}", subtitle = "Android asks you to confirm, then offers to open the new version.")
+        SheetHeader("Install Pi-Bolt ${info.version}")
         Spacer(Modifier.height(8.dp))
         InfoBox(Icons.Rounded.GppGood, "Signed by OpenSec · checksum matches", colors.success)
         if (working != null) InfoBox(Icons.Rounded.WarningAmber, working, colors.warning)
         if (!allowed) {
             InfoBox(
                 Icons.Rounded.SystemUpdate,
-                "Android needs your permission once: turn on “Allow from this source” for Pi-Bolt, then come back here.",
+                "Turn on “Allow from this source” for Pi-Bolt, then come back.",
                 colors.ink2,
             )
         }

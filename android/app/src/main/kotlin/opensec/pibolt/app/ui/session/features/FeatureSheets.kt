@@ -123,7 +123,7 @@ fun SessionStatsSheet(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         QuadSpinner(QuadMode.Think, size = 12.dp, color = colors.ink3)
                         Spacer(Modifier.width(8.dp))
-                        Text("Reading statistics", style = type.meta, color = colors.ink3)
+                        Text("Loading…", style = type.meta, color = colors.ink3)
                     }
                 }
             }
@@ -251,8 +251,8 @@ fun ResumeSheet(sessions: List<SessionSummary>?, current: String?, onPick: (Sess
     PiSheet(onDismiss = onDismiss, state = state) {
         SheetHeader("Resume a session")
         when {
-            sessions == null -> Loading("Reading sessions")
-            sessions.isEmpty() -> F2Empty("No saved sessions in this project yet.", Icons.AutoMirrored.Rounded.Chat)
+            sessions == null -> Loading("Loading sessions")
+            sessions.isEmpty() -> F2Empty("No saved sessions yet", Icons.AutoMirrored.Rounded.Chat)
             else -> LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
                 items(sessions, key = { it.file }) { s ->
                     val open = s.file == current
@@ -275,10 +275,10 @@ fun ForkSheet(points: List<ForkPoint>?, onPick: (ForkPoint) -> Unit, onDismiss: 
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("Fork from a message", subtitle = "A new session starts before the message you pick; its text comes back to the composer.")
+        SheetHeader("Fork from a message", subtitle = "Starts a new session before the message you pick")
         when {
-            points == null -> Loading("Reading messages")
-            points.isEmpty() -> F2Empty("No message to fork from yet. Send a prompt first, then fork from it.", Icons.AutoMirrored.Rounded.CallSplit)
+            points == null -> Loading("Loading messages")
+            points.isEmpty() -> F2Empty("No messages to fork from yet", Icons.AutoMirrored.Rounded.CallSplit)
             else -> LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
                 // Newest first: forks usually go back a step or two.
                 items(points.asReversed(), key = { it.entryId }) { p ->
