@@ -27,6 +27,7 @@ import opensec.pibolt.app.ui.session.features2.AppExtension
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.cost.Cost
 import opensec.pibolt.app.checkpoints.Git
 import opensec.pibolt.app.checkpoints.ShadowRepo
 import opensec.pibolt.app.checkpoints.TurnCheckpoints
@@ -328,6 +329,8 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         return index.list(form).filter { it.messageCount > 0 }
     }
 
+    override fun sessionCost(sessionFile: String): Cost = index.cost(File(sessionFile))
+
     override fun chats(): List<SessionSummary> = index.listIn(listOf(ChatSpace.sessionDir(paths.agentDir))).filter { it.messageCount > 0 }
 
     private fun isChat(cwd: String): Boolean = ChatSpace.isChat(cwd, paths.home)
@@ -512,6 +515,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
             val full = prefix.ensure(m)
             dns.start()
             AppExtension.install(paths.agentDir)
+            BackgroundJobs.install(paths.agentDir, app.assets)
             PreviewExtension.install(paths.agentDir) { app.assets.open(PreviewExtension.ASSET) }
             val how = if (full) "installed (kept ${prefix.kept.size} unchanged trees)" else "up to date"
             Log.i(TAG, "prepare: prefix $how, ${SystemClock.elapsedRealtime() - started} ms (engine ${m.engine}, glibc ${m.glibc})")

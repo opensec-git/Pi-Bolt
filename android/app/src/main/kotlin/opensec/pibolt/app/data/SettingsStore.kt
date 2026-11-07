@@ -8,7 +8,9 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import opensec.pibolt.protocol.ProtocolJson
+import opensec.pibolt.app.cost.SpendLimits
 import opensec.pibolt.protocol.bool
+import opensec.pibolt.protocol.double
 import opensec.pibolt.protocol.int
 import opensec.pibolt.protocol.str
 import java.io.File
@@ -69,6 +71,8 @@ data class AppSettings(
     val voiceName: String? = null,
     /** [voiceName] as the picker named it ("English (United States) 2"), for the Settings row. */
     val voiceLabel: String? = null,
+    /** Settings > Agent > Spending: limits per session, day and month, and costs on list rows. */
+    val spend: SpendLimits = SpendLimits(),
 ) {
     companion object {
         val VOICE_RATE_CHOICES = listOf(75, 100, 125, 150, 200)
@@ -97,6 +101,10 @@ object SettingsCodec {
         put("voiceRate", s.voiceRate)
         s.voiceName?.let { put("voiceName", it) }
         s.voiceLabel?.let { put("voiceLabel", it) }
+        s.spend.session?.let { put("spendSession", it) }
+        s.spend.day?.let { put("spendDay", it) }
+        s.spend.month?.let { put("spendMonth", it) }
+        put("spendInLists", s.spend.showInLists)
     }.toString()
 
     fun decode(text: String?): AppSettings {
@@ -118,8 +126,17 @@ object SettingsCodec {
             voiceRate = json.int("voiceRate")?.takeIf { it in AppSettings.VOICE_RATE_CHOICES } ?: d.voiceRate,
             voiceName = json.str("voiceName")?.takeIf { it.isNotBlank() },
             voiceLabel = json.str("voiceLabel")?.takeIf { it.isNotBlank() && !json.str("voiceName").isNullOrBlank() },
+            spend = SpendLimits(
+                session = limit(json.double("spendSession")),
+                day = limit(json.double("spendDay")),
+                month = limit(json.double("spendMonth")),
+                showInLists = json.bool("spendInLists") ?: d.spend.showInLists,
+            ),
         )
     }
+
+    /** A saved limit: positive and finite, else none. */
+    private fun limit(value: Double?): Double? = value?.takeIf { it.isFinite() && it > 0.0 }
 
     private inline fun <reified E : Enum<E>> enumOr(name: String?, fallback: E): E =
         enumValues<E>().firstOrNull { it.name == name } ?: fallback

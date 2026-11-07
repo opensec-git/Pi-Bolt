@@ -161,7 +161,7 @@ fun ChatsScreen(app: PiBoltApp, onBack: () -> Unit, onOpenChat: () -> Unit) {
                                 itemsIndexed(inSection, key = { _, c -> c.file }, contentType = { _, _ -> "chat" }) { i, chat ->
                                     InsetRow(
                                         title = chat.title,
-                                        meta = ChatList.meta(chat, now),
+                                        meta = ChatList.meta(chat, now, Pi.settings.spend.showInLists),
                                         onClick = { open(chat.file) },
                                         onLongClick = {
                                             haptics.longPress()

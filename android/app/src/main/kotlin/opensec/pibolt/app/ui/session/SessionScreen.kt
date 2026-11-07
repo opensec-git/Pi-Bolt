@@ -159,7 +159,12 @@ import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.session.SessionEffect
+import opensec.pibolt.app.cost.Cost
+import opensec.pibolt.app.cost.Money
 import opensec.pibolt.app.ui.components.ConfirmSheet
+import opensec.pibolt.app.ui.cost.CapNotice
+import opensec.pibolt.app.ui.cost.SpendLimitsSheet
+import opensec.pibolt.app.ui.cost.SpendSheet
 import opensec.pibolt.app.ui.components.PiSnackHost
 import opensec.pibolt.app.ui.components.QuadMath
 import opensec.pibolt.app.ui.components.QuadMode
@@ -305,7 +310,7 @@ private fun opened(result: Result<LocalSessions.Live>, key: String, from: LocalS
         .onFailure { from.controller.showError(it.message ?: "Could not open the session") }
 }
 
-private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget, Export, Resume, Fork, Attach, History, Key, DeleteChat }
+private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget, Export, Resume, Fork, Attach, History, Key, DeleteChat, Spend, SpendLimits }
 
 /**
  * The session screen. It never reads the whole [SessionState] itself: each part derives the few values it shows, so a
@@ -450,7 +455,8 @@ internal fun SessionContent(
                     scope.launch { snackbar.show(effect.message, SnackKind.Error) }
                 }
                 is SessionEffect.EditorText -> {
-                    draft = effect.text
+                    // A failed send or the queue given back joins what was typed meanwhile (it used to replace it).
+                    draft = effect.into(draft)
                     // A send that failed comes back to the composer: its "Sending" bubble goes, its images return.
                     SessionMemory.of(controller.memoryKey, controller.state.value.sessionId).pending.let { p -> if (p.value?.text == effect.text) p.value = null }
                     lastSent?.takeIf { it.first == effect.text && images.isEmpty() }?.let { images.addAll(it.second) }
@@ -487,6 +493,7 @@ internal fun SessionContent(
 
     val hello by remember { derivedStateOf { state.value.hello } }
     val running by remember { derivedStateOf { state.value.isRunning } }
+    val compacting by remember { derivedStateOf { state.value.isCompacting } }
     val shellRuns by controller.shellRuns.collectAsStateWithLifecycle()
     val connected by remember { derivedStateOf { linkState.value is LinkState.Connected } }
     val enabled = connected && hello
@@ -530,7 +537,8 @@ internal fun SessionContent(
     LaunchedEffect(pending) {
         if (pending == null) return@LaunchedEffect
         delay(PendingSend.TIMEOUT_MS)
-        if (memory.pending.value === pending && !state.value.isRunning) memory.pending.value = null
+        // A prompt held for a manual compaction (SessionController.send) is still on its way.
+        if (memory.pending.value === pending && !state.value.isRunning && !state.value.isCompacting) memory.pending.value = null
     }
     val subtitle by remember {
         derivedStateOf {
@@ -549,6 +557,8 @@ internal fun SessionContent(
     val contextWindow by remember { derivedStateOf { state.value.model?.contextWindow } }
     val contextPct = knownTokens?.let { contextPercent(it, contextWindow) }
     val modelLabel by remember { derivedStateOf { state.value.model?.label } }
+    val sessionCost by controller.cost.collectAsStateWithLifecycle()
+    val capCard by controller.capCard.collectAsStateWithLifecycle()
     // The maker's mark for the run-settings chip: "anthropic/claude-…" through OpenRouter is Anthropic's.
     val modelBrand by remember { derivedStateOf { state.value.model?.let { ProviderCatalog.modelBrand(it.id, it.provider) } } }
     val cwd by remember { derivedStateOf { state.value.host?.cwd } }
@@ -583,7 +593,8 @@ internal fun SessionContent(
         // new session, and the send belongs in that session's memory, or its "Sending" row would never resolve.
         val now = controller.state.value
         val running = now.isRunning
-        controller.send(text, behavior, attached.mapNotNull { it.image })
+        // A spending limit holds it back: the limit's card says so (nothing shows as sending).
+        if (!controller.send(text, behavior, attached.mapNotNull { it.image })) return
         SessionMemory.of(controller.memoryKey, now.sessionId).sent(text, now, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image }, dictated = fromDraft && dictated)
         if (fromDraft) dictated = false
         if (text.isNotBlank()) app.recents.record(recentKey, text)
@@ -903,6 +914,11 @@ internal fun SessionContent(
                 val prompt = promptBefore(notice)
                 if (prompt == null || prompt.text.isBlank()) {
                     scope.launch { snackbar.show("Nothing to retry") }
+                } else if (prompt.imageCount > 0) {
+                    // Its images are not kept: sent again, the prompt went without them. The text waits in the composer.
+                    draft = prompt.text
+                    focus.requestFocus()
+                    scope.launch { snackbar.show("Attach the images again, then send") }
                 } else {
                     haptics.send()
                     send(prompt.text)
@@ -950,7 +966,7 @@ internal fun SessionContent(
             val s = state.value
             buildList {
                 // Retries are told by the error notice (with Stop retrying) and the status line, not here.
-                addAll(s.statuses.values.map { it to false })
+                addAll(s.statuses.filterKeys { it != opensec.pibolt.app.engine.BackgroundJobs.STATUS_KEY }.values.map { it to false })
                 s.widgets.values.forEach { lines -> addAll(lines.map { it to false }) }
             }
         }
@@ -961,6 +977,8 @@ internal fun SessionContent(
      * Follow-up while Pi works). A prompt that starts a run hides the keyboard so the reply has room; a steer keeps it.
      */
     fun submit(behavior: StreamingBehavior) {
+        // The mic still listening would put the sent text back with its last words.
+        if (voice.listening) voice.cancel()
         val text = draft.trim()
         val call = if (images.isEmpty()) CommandPalette.parse(text, commands, isLocal, chat) else null
         when {
@@ -971,6 +989,8 @@ internal fun SessionContent(
             text.isEmpty() && images.isEmpty() -> Unit
             images.any { !it.ready } -> Unit
             images.isNotEmpty() && modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
+            // At a spending limit the draft stays, for Continue once on the limit's card.
+            !controller.spendAllows() -> Unit
             else -> {
                 val startsRun = !state.value.isRunning
                 send(text, images.toList(), behavior, fromDraft = true)
@@ -1061,6 +1081,9 @@ internal fun SessionContent(
                 chat = chat,
                 onChats = local?.onChats,
                 onDelete = local?.onDelete?.let { { sheet = Sheet.DeleteChat } },
+                cost = Money.label(sessionCost),
+                costSpoken = Money.spoken(sessionCost),
+                onCost = { sheet = Sheet.Spend },
             )
             // Before the first snapshot the loading state already says "Starting…" with its own spinner: the banner
             // would say it twice. It still shows a stopped engine or a lost link (with Restart / Retry).
@@ -1144,12 +1167,27 @@ internal fun SessionContent(
                         StatusExtras(extras)
                         TodoPanel(todos, running, autoCollapse = !running || windowHeight < 560.dp, quiet = status.value.visible && statusOnScreen)
                         if (local != null && parts.preview) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = Space.page))
+                        if (local != null && parts.preview) BackgroundJobsPill(controller.localBackend?.pid, Modifier.padding(horizontal = Space.page))
                         PendingDialogStrip(askingTitle) { memory.hiddenDialog.value = null }
                         QueueStrip(queue, onEdit = controller::clearQueue)
+                    }
+                    capCard?.let { card ->
+                        CapNotice(
+                            card,
+                            onContinue = {
+                                controller.continueOnce()
+                                // The held-back draft goes now; a stopped run picks up where it stopped.
+                                if (draft.isNotBlank() || images.isNotEmpty()) submit(mode) else if (card.stopped) send(CONTINUE_PROMPT)
+                            },
+                            onDismiss = controller::dismissCapCard,
+                            modifier = Modifier.padding(horizontal = Space.page, vertical = Space.xs),
+                        )
                     }
                     Composer(
                         text = draft,
                         onText = {
+                            // Typing while the mic listens: its next result would rebuild the draft over the typed words.
+                            if (voice.listening) voice.cancel()
                             draft = it
                             if (it.isBlank()) dictated = false
                         },
@@ -1188,8 +1226,9 @@ internal fun SessionContent(
                         voiceMode = voiceMode,
                         changes = if (isLocal) ({ SessionChangesPill(review) }) else if (remoteReview != null) ({ RemoteChangesPill(remoteReview) }) else null,
                         focusRequester = focus,
-                        // A user `!` command started while Pi is idle stops through abort_bash; the agent through abort.
-                        stoppable = running || shellRuns > 0,
+                        // A user `!` command started while Pi is idle stops through abort_bash; the agent and a
+                        // compaction (manual ones run with Pi idle) through abort.
+                        stoppable = composerStops(running, compacting, shellRuns),
                         onStop = { if (shellRuns > 0) controller.abortBash() else controller.abort() },
                         onModel = { openModels() },
                         compact = oneRowComposer,
@@ -1299,7 +1338,8 @@ internal fun SessionContent(
     when (sheet) {
         Sheet.None -> Unit
         Sheet.Attach -> {
-            val clip = remember { clipboardImage(context) != null }
+            // The clip's description only: reading the clip itself shows Android's "pasted from your clipboard" toast.
+            val clip = remember { clipboardHasImage(context) }
             ActionsSheet(
                 title = null,
                 actions = listOfNotNull(
@@ -1389,6 +1429,18 @@ internal fun SessionContent(
                 onDismiss = { sheet = Sheet.None },
             )
         }
+        Sheet.Spend -> SpendSheet(
+            app,
+            session = sessionCost,
+            // A project's sessions on this phone, added up (a chat is its own row in the Chats list).
+            project = produceState<Cost?>(null) {
+                value = controller.project?.takeIf { isLocal && !chat }?.let { dir -> withContext(Dispatchers.IO) { runCatching { app.engine.sessions(dir).fold(Cost.NONE) { sum, s -> sum + s.cost } }.getOrNull() } }
+            }.value,
+            onLimits = { sheet = Sheet.SpendLimits },
+            onDismiss = { if (sheet == Sheet.Spend) sheet = Sheet.None },
+            note = "Subagents on the computer aren't counted.".takeIf { !isLocal },
+        )
+        Sheet.SpendLimits -> SpendLimitsSheet(app, onDismiss = { if (sheet == Sheet.SpendLimits) sheet = Sheet.None })
         Sheet.Export -> ActionsSheet(
             title = "Export or share this $noun",
             actions = listOfNotNull(
@@ -1531,6 +1583,15 @@ internal fun SessionContent(
 
 /** How long Regenerate waits for the fork's session before it sends anyway. */
 private const val FORK_SWITCH_MS = 5_000L
+
+/** What "Continue once" sends after a spending limit stopped a run. */
+private const val CONTINUE_PROMPT = "Continue."
+
+/**
+ * The composer offers Stop: while Pi runs, while a compaction runs (a manual one has Pi idle, and could not be cancelled
+ * as Esc does in the terminal), or while a user `!` command runs.
+ */
+fun composerStops(running: Boolean, compacting: Boolean, shellRuns: Int): Boolean = running || compacting || shellRuns > 0
 
 /** The status line while compacting: why it runs, as the terminal says it. */
 fun compactionLabel(reason: String?): String = when (reason) {

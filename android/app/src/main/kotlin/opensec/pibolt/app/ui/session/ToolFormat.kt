@@ -30,6 +30,10 @@ data class ToolLabel(val kind: ToolKind, val verb: String, val detail: String, v
 
 private val partialField = Regex("\"(command|path|file_path|pattern|query|url|description|prompt|subagent_type|subject|agent_id|message|action|status)\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)")
 
+/** "#2" for a background-job tool's `id` (a number, or a numeric string). */
+private fun jobRef(item: ToolItem): String =
+    (item.args?.get("id") as? JsonPrimitive)?.content?.let { "#$it" } ?: Regex(""""id"\s*:\s*"?(\d+)""").find(item.argsText)?.let { "#${it.groupValues[1]}" }.orEmpty()
+
 fun toolLabel(item: ToolItem): ToolLabel {
     val args = item.args
     fun arg(vararg names: String): String? {
@@ -49,6 +53,11 @@ fun toolLabel(item: ToolItem): ToolLabel {
         "grep" -> ToolLabel(ToolKind.Search, "Search", listOfNotNull(arg("pattern"), arg("path")?.let { "in $it" }).joinToString(" "), "Searched")
         "find", "glob" -> ToolLabel(ToolKind.Search, "Find", listOfNotNull(arg("pattern"), arg("path")?.let { "in $it" }).joinToString(" "), "Found")
         "ls" -> ToolLabel(ToolKind.List, "List", arg("path") ?: ".", "Listed")
+        // The app's background jobs (engine/BackgroundJobs.kt): job ids are numbers.
+        "bash_background" -> ToolLabel(ToolKind.Bash, "Start in the background", arg("name")?.takeIf { it.isNotBlank() } ?: firstLine(arg("command")), "Started in the background")
+        "bash_output" -> ToolLabel(ToolKind.Bash, "Read output", jobRef(item), "Read output")
+        "bash_kill" -> ToolLabel(ToolKind.Bash, "Stop job", jobRef(item), "Stopped job")
+        "bash_jobs" -> ToolLabel(ToolKind.Bash, "List background jobs", "", "Listed background jobs")
         // The subagents extension (opensec-pi-subagents): the agent type, then its task.
         "agent" -> when {
             args?.str("resume") != null -> ToolLabel(ToolKind.Other, "Resume agent", firstLine(arg("prompt")).ifBlank { args.str("resume").orEmpty() })

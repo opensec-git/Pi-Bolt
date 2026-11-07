@@ -17,7 +17,9 @@ import opensec.pibolt.protocol.str
  * - its final result: the answer, or for a background start the agent id;
  * - `subagent-notification` messages when background runs end (status, metrics, a preview of the answer);
  * - `get_subagent_result` results (the full answer of a background run, once Pi fetches it);
- * - on this phone, the subagent's own session file, read by the app and applied as `subagent_transcript` events.
+ * - on this phone, the subagent's own session file, read by the app and applied as `subagent_transcript` events;
+ * - from a computer with the `subagent_stream` feature (or an engine that answers `subagent_subscribe`), while a run's
+ *   screen is open: its saved messages (`subagent_entries`) and its streaming message (`subagent_events`).
  *
  * The extension's TUI widget is a component, so over RPC it arrives empty: none of this comes from it.
  */
@@ -27,6 +29,12 @@ object SubagentReducer {
 
     /** An app-made event: messages of a subagent's session file. See [transcript]. */
     const val TRANSCRIPT_EVENT = "subagent_transcript"
+
+    /** From the computer: messages of a subagent's session file, as [TRANSCRIPT_EVENT] with `runId` for `key`. */
+    const val ENTRIES_EVENT = "subagent_entries"
+
+    /** From the computer: a subagent's streaming message and tool starts (`events`). See [events]. */
+    const val EVENTS_EVENT = "subagent_events"
 
     fun isAgentCall(name: String?): Boolean = name.equals("agent", ignoreCase = true)
 
@@ -184,34 +192,93 @@ object SubagentReducer {
     }
 
     /**
-     * Messages of a subagent's session file, read by the app: `{"type":"subagent_transcript","key":…,"file":…,
-     * "messages":[…],"reset":true}`. [reset] (or another file) starts the transcript over. A run that reports no
-     * progress of its own (a background run) takes its activity and metrics from these messages.
+     * Messages of a subagent's session file: `{"type":"subagent_transcript","key":…,"file":…,"messages":[…],"reset":true}`
+     * (read by the app) or `subagent_entries` with `runId` (from the computer). [reset] (or another file) starts the
+     * transcript over; the message being streamed stays. A finished assistant message takes the streamed one's keys,
+     * so its rows stay in place. A run that reports no progress of its own (a background run) takes its activity and
+     * metrics from these messages.
      */
     fun transcript(state: SessionState, event: JsonObject): SessionState {
-        val key = event.str("key") ?: return state
-        val file = event.str("file") ?: return state
+        val key = event.str("key") ?: event.str("runId") ?: return state
         val old = state.subagents[key] ?: return state
-        val base = old.transcript?.takeIf { it.file == file && event.bool("reset") != true } ?: SubagentTranscript(file)
+        val file = event.str("file") ?: old.transcript?.file ?: ""
+        val previous = old.transcript
+        val base = previous?.takeIf { it.file == file && event.bool("reset") != true }
+            ?: SubagentTranscript(file, stream = previous?.stream, live = previous?.live.orEmpty(), liveSeq = previous?.liveSeq ?: 0)
         var scratch = SessionState(items = base.items, seq = base.seq)
         var tokens = base.tokens
         var assistants = base.assistantMessages
         var firstAt = base.firstAt
+        var stream = base.stream
+        var live = base.live
         for (element in event.arr("messages").orEmpty()) {
             val message = element as? JsonObject ?: continue
             if (firstAt == null) firstAt = message.long("timestamp")
+            var commitKey: String? = null
             if (message.str("role") == "assistant") {
                 assistants++
                 message.obj("usage")?.let { u -> tokens += (u.long("input") ?: 0) + (u.long("output") ?: 0) + (u.long("cacheWrite") ?: 0) }
+                commitKey = stream?.key
+                stream = null
+                live = emptyList()
             }
-            scratch = SessionReducer.commitMessage(scratch, message, key = null)
+            scratch = SessionReducer.commitMessage(scratch, message, key = commitKey)
         }
-        val transcript = SubagentTranscript(file, scratch.items, scratch.seq, tokens, assistants, firstAt)
-        var run = old.copy(transcript = transcript, startedAt = old.startedAt ?: firstAt)
+        val transcript = SubagentTranscript(file, scratch.items, scratch.seq, tokens, assistants, firstAt, stream, live, base.liveSeq)
+        return withTranscript(state, old, transcript)
+    }
+
+    /**
+     * `subagent_events`: `{"runId":…,"events":[…]}`, the subagent's assistant message while it streams (`message_start`,
+     * `message_update`; `message_end` is left to the saved message, see [transcript]) and `tool_execution_start` (its
+     * call runs). Applied to [SubagentTranscript.live], apart from the saved rows.
+     */
+    fun events(state: SessionState, event: JsonObject): SessionState {
+        val key = event.str("runId") ?: return state
+        val old = state.subagents[key] ?: return state
+        var t = old.transcript ?: SubagentTranscript(file = "")
+        for (element in event.arr("events").orEmpty()) {
+            val e = element as? JsonObject ?: continue
+            when (e.str("type")) {
+                "message_start" -> {
+                    val message = e.obj("message") ?: continue
+                    if (message.str("role") != "assistant") continue
+                    val s = SessionReducer.startStream(SessionState(), message, key = "live${t.liveSeq}")
+                    t = t.copy(stream = s.stream, live = s.streaming, liveSeq = t.liveSeq + 1)
+                }
+                "message_update" -> {
+                    var s = SessionState(stream = t.stream, streaming = t.live)
+                    var seq = t.liveSeq
+                    if (s.stream == null) {
+                        s = SessionReducer.startStream(s, JsonObject(emptyMap()), key = "live$seq")
+                        seq++
+                    }
+                    s = SessionReducer.messageUpdate(s, e)
+                    t = t.copy(stream = s.stream, live = s.streaming, liveSeq = seq)
+                }
+                "tool_execution_start" -> {
+                    val id = e.str("toolCallId") ?: continue
+                    t = t.copy(
+                        items = t.items.map { item ->
+                            if (item is ToolItem && item.toolCallId == id && (item.status == ToolStatus.Pending || item.status == ToolStatus.Streaming)) {
+                                item.copy(status = ToolStatus.Running)
+                            } else {
+                                item
+                            }
+                        },
+                    )
+                }
+            }
+        }
+        return withTranscript(state, old, t)
+    }
+
+    private fun withTranscript(state: SessionState, old: Subagent, transcript: SubagentTranscript): SessionState {
+        var run = old.copy(transcript = transcript, startedAt = old.startedAt ?: transcript.firstAt)
         val finished = transcript.items.count { it is ToolItem && !it.isActive }
-        run = run.copy(toolUses = maxOf(run.toolUses, finished), turns = maxOf(run.turns, assistants))
-        if (run.background || run.tokens == null) run = run.copy(tokens = tokens.takeIf { it > 0 }?.let(SessionReducer::formatTokens) ?: run.tokens)
-        if (run.isActive && run.background) run = run.copy(status = SubagentStatus.Running, activity = activityOf(transcript.items))
+        run = run.copy(toolUses = maxOf(run.toolUses, finished), turns = maxOf(run.turns, transcript.assistantMessages))
+        if (run.background || run.tokens == null) run = run.copy(tokens = transcript.tokens.takeIf { it > 0 }?.let(SessionReducer::formatTokens) ?: run.tokens)
+        if (run.isActive && run.background) run = run.copy(status = SubagentStatus.Running, activity = activityOf(transcript.allItems))
         if (!run.isActive && !run.resultComplete) {
             (transcript.items.lastOrNull { it is AssistantTextItem } as? AssistantTextItem)?.text?.trim()?.takeIf { it.isNotEmpty() }?.let {
                 run = run.copy(result = it, resultComplete = true)
@@ -285,7 +352,10 @@ object SubagentReducer {
         "ls" to "listing",
     )
 
-    /** What a subagent does, from the end of its transcript: its open tool calls, else thinking. */
+    /**
+     * What a subagent does, from the end of its transcript: its open tool calls; the message it streams (thinking or
+     * writing); else "working…" (between messages: the model is on its next one).
+     */
     fun activityOf(items: List<ChatItem>): String {
         val open = ArrayList<ToolItem>()
         for (i in items.indices.reversed()) {
@@ -296,7 +366,13 @@ object SubagentReducer {
                 break
             }
         }
-        if (open.isEmpty()) return "thinking…"
+        if (open.isEmpty()) {
+            return when (val last = items.lastOrNull()) {
+                is ThinkingItem -> if (last.streaming) "thinking…" else "working…"
+                is AssistantTextItem -> if (last.streaming) "writing…" else "working…"
+                else -> "working…"
+            }
+        }
         if (open.size > 1) {
             val names = open.map { it.name.lowercase() }.distinct()
             val verb = toolVerbs[names.singleOrNull()] ?: "running"

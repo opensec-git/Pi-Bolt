@@ -166,6 +166,10 @@ fun SessionTopBar(
     chat: Boolean = false,
     onChats: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
+    /** This session's cost ("$0.42", "—"); null before any use. A tap opens [onCost], the spending sheet. */
+    cost: String? = null,
+    costSpoken: String? = null,
+    onCost: () -> Unit = {},
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -205,6 +209,19 @@ fun SessionTopBar(
                 if (contextPercent != null && contextPercent > 0) {
                     Spacer(Modifier.width(10.dp))
                     ContextMeter(contextPercent)
+                }
+                if (cost != null) {
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        cost,
+                        style = type.meta.copy(fontFeatureSettings = Tnum),
+                        color = colors.ink3,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .pressable(onCost, shape = RoundedCornerShape(Radius.sm), pressedScale = 1f, label = "Spending")
+                            .clearAndSetSemantics { contentDescription = "Session cost ${costSpoken ?: cost}" }
+                            .padding(horizontal = 6.dp, vertical = 4.dp),
+                    )
                 }
             }
             if (subtitle.isNotBlank()) {

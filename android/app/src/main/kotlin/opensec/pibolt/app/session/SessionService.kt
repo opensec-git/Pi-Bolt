@@ -24,6 +24,7 @@ import opensec.pibolt.app.R
 import opensec.pibolt.app.background.AgentLocks
 import opensec.pibolt.app.background.BackgroundSetup
 import opensec.pibolt.app.background.WakePolicy
+import opensec.pibolt.app.engine.BackgroundJobs
 import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.session.UserItem
 import java.util.concurrent.atomic.AtomicBoolean
@@ -141,6 +142,7 @@ class SessionService : Service() {
             connected = c.link.value is LinkState.Connected,
             subagents = subagents(s),
             shell = c.shellRuns.value > 0,
+            jobs = BackgroundJobs.STATUS_KEY in s.statuses,
         )
     }
 
@@ -152,7 +154,7 @@ class SessionService : Service() {
             running = s.isRunning,
             waiting = s.dialogs.isNotEmpty(),
             compacting = s.isCompacting,
-            subagents = subagents(s),
+            subagents = subagents(s) || BackgroundJobs.STATUS_KEY in s.statuses,
             shell = c.shellRuns.value > 0,
         )
     }

@@ -55,6 +55,7 @@ data class SubagentNoticeItem(override val key: String, val agentIds: List<Strin
  * [parallelSessions]: that service keeps one runtime per open session (`host.parallelSessions`), so switching or starting
  * a session never stops a running one; an older service has one runtime, and the phone refuses to switch it mid-turn.
  * [review]: the host answers the read-only review commands (`host.review`: `rc_git_*`, `rc_list_dir`, `rc_read_file`).
+ * [features]: optional protocol parts the computer answers (`remote_hello.features`), such as [SUBAGENT_STREAM_FEATURE].
  */
 data class HostInfo(
     val name: String,
@@ -63,7 +64,13 @@ data class HostInfo(
     val service: Boolean = false,
     val parallelSessions: Boolean = false,
     val review: Boolean = false,
-)
+    val features: Set<String> = emptySet(),
+) {
+    /** The computer streams a subagent's own conversation on request (`subagent_subscribe`, Pi-Bolt 1.1.5 and later). */
+    val streamsSubagents: Boolean get() = SUBAGENT_STREAM_FEATURE in features
+}
+
+const val SUBAGENT_STREAM_FEATURE = "subagent_stream"
 
 /** A command from `get_commands`. [argumentHint] is shown while typing its arguments (hosts that send one). */
 data class SlashCommand(val name: String, val description: String?, val source: String, val argumentHint: String? = null)
