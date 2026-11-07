@@ -30,6 +30,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -48,9 +49,13 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -60,6 +65,7 @@ import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
 import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 
 /**
  * Press feedback without ripple: an ink overlay fades in over [PiMotion.TAP] and the element scales to [pressedScale].
@@ -105,12 +111,12 @@ fun Modifier.pressable(
 }
 
 /**
- * Button heights. [Large] (52dp) is the default: sheet and screen actions. [Small] (40dp visual) sits inside rows and
- * cards ("Clear", "Retry"); its touch target is still 48dp.
+ * Button heights. [Large] (48dp) is the default: sheet and screen actions. [Small] (36dp visual) sits inside rows and
+ * cards ("Clear", "Retry"); its touch target is still 48dp. As on the desktop app, buttons are radius-sm rectangles.
  */
 enum class ButtonSize(val height: Dp, val padding: Dp, val icon: Dp) {
-    Large(52.dp, 20.dp, IconSize.md),
-    Small(40.dp, 14.dp, IconSize.sm),
+    Large(48.dp, 16.dp, IconSize.md),
+    Small(36.dp, 12.dp, IconSize.sm),
 }
 
 /** Primary action: accent fill, pill. One per screen or sheet. */
@@ -124,16 +130,16 @@ fun PrimaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
     }
 }
 
-/** Secondary action: surface2 with a line, pill. */
+/** Secondary action: surface2 with a lineStrong ring. */
 @Composable
 fun SecondaryButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, enabled: Boolean = true, size: ButtonSize = ButtonSize.Large) {
     val colors = Pi.colors
-    ButtonBase(text, onClick, modifier, icon, enabled, colors.surface2, colors.ink1, colors.line, size)
+    ButtonBase(text, onClick, modifier, icon, enabled, colors.surface2, colors.ink1, colors.lineStrong, size)
 }
 
-/** Ghost action: no fill or line, ink1 label. The quiet third choice in a button row ("Later", "Not now"). */
+/** Ghost action: no fill or line, ink2 label. The quiet third choice in a button row ("Later", "Not now"). */
 @Composable
-fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, enabled: Boolean = true, color: Color = Pi.colors.ink1, size: ButtonSize = ButtonSize.Large) {
+fun GhostButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifier, icon: ImageVector? = null, enabled: Boolean = true, color: Color = Pi.colors.ink2, size: ButtonSize = ButtonSize.Large) {
     ButtonBase(text, onClick, modifier, icon, enabled, Color.Transparent, color, null, size)
 }
 
@@ -145,9 +151,10 @@ fun DangerButton(text: String, onClick: () -> Unit, modifier: Modifier = Modifie
 }
 
 /**
- * Every button: a pill of [size]'s height (a small one keeps a 48dp touch target), label SemiBold, optional leading
- * icon. Press: ink overlay and 0.97 scale. Disabled: content and line at 40% (the primary button switches to surface3
- * and ink3 instead, so a disabled one never reads as the accent action).
+ * Every button: a radius-sm rectangle of [size]'s height (a small one keeps a 48dp touch target), the label in label
+ * weight, optional leading icon 6dp before it. A label too long for one line wraps to two, centred, instead of being
+ * cut (font scale 1.3 on a 360dp phone). Press: ink overlay and 0.97 scale. Disabled: content and line at 40% (the
+ * primary button switches to surface3 and ink3 instead, so a disabled one never reads as the accent action).
  */
 @Composable
 private fun ButtonBase(
@@ -162,7 +169,7 @@ private fun ButtonBase(
     size: ButtonSize,
     dim: Boolean = true,
 ) {
-    val shape = CircleShape
+    val shape = RoundedCornerShape(Radius.sm)
     val tint = if (enabled || !dim) content else content.copy(alpha = content.alpha * 0.4f)
     Row(
         modifier
@@ -171,15 +178,48 @@ private fun ButtonBase(
             .pressable(onClick, shape = shape, enabled = enabled)
             .background(container, shape)
             .then(if (border != null) Modifier.border(1.dp, if (enabled) border else border.copy(alpha = border.alpha * 0.4f), shape) else Modifier)
-            .padding(horizontal = size.padding),
+            .padding(horizontal = size.padding, vertical = Space.xs),
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (icon != null) {
             Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(size.icon))
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(6.dp))
         }
-        Text(text, style = Pi.type.label.copy(fontWeight = FontWeight.SemiBold), color = tint, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(text, style = Pi.type.label, color = tint, maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+    }
+}
+
+/**
+ * A sheet's or card's button row: the buttons side by side with equal widths, [gap] apart, while every label fits on
+ * one line; otherwise stacked full width with the last button (the action) on top. Pass Cancel first, the action
+ * last. The buttons take their width from the row, so they need no weight.
+ */
+@Composable
+fun ButtonRow(modifier: Modifier = Modifier, gap: Dp = Space.md, content: @Composable () -> Unit) {
+    Layout(content, modifier.fillMaxWidth()) { measurables, constraints ->
+        val space = gap.roundToPx()
+        val n = measurables.size
+        if (n == 0) return@Layout layout(constraints.minWidth, 0) {}
+        val width = constraints.maxWidth
+        val slot = buttonSlot(width, n, space)
+        if (buttonsFitSideBySide(measurables.map { it.maxIntrinsicWidth(Constraints.Infinity) }, width, space)) {
+            val placeables = measurables.map { it.measure(Constraints.fixedWidth(slot)) }
+            val height = placeables.maxOf { it.height }
+            layout(width, height) {
+                placeables.forEachIndexed { i, p -> p.placeRelative(i * (slot + space), (height - p.height) / 2) }
+            }
+        } else {
+            val placeables = measurables.map { it.measure(Constraints.fixedWidth(width)) }.reversed()
+            val height = placeables.sumOf { it.height } + space * (n - 1)
+            layout(width, height) {
+                var y = 0
+                for (p in placeables) {
+                    p.placeRelative(0, y)
+                    y += p.height + space
+                }
+            }
+        }
     }
 }
 
@@ -208,6 +248,15 @@ fun IconAction(icon: ImageVector, description: String, onClick: () -> Unit, modi
     ) {
         Icon(icon, contentDescription = description, tint = if (enabled) tint else tint.copy(alpha = 0.4f), modifier = Modifier.size(size))
     }
+}
+
+/** The width of each of [count] equal buttons across [width] with [gap] between them. */
+internal fun buttonSlot(width: Int, count: Int, gap: Int): Int = if (count <= 0) 0 else ((width - gap * (count - 1)) / count).coerceAtLeast(0)
+
+/** True when every button's one-line width ([natural]) fits its equal share of [width]; else [ButtonRow] stacks. */
+internal fun buttonsFitSideBySide(natural: List<Int>, width: Int, gap: Int): Boolean {
+    val slot = buttonSlot(width, natural.size, gap)
+    return natural.all { it <= slot }
 }
 
 /** Composer and filter chip: 32dp, radius 8, surface2. [onLongClick] (with [longClickLabel] for TalkBack) is optional. */
@@ -265,7 +314,10 @@ fun StatusDot(color: Color, modifier: Modifier = Modifier, size: Dp = 8.dp) {
     )
 }
 
-/** Two or three options in one control; the selected segment is surface3 and slides between positions. */
+/**
+ * Two or more options in one control; the selected segment is surface3 with a lineStrong ring and slides between
+ * positions. TalkBack reads each as a tab with its Selected state.
+ */
 @Composable
 fun <T> Segmented(options: List<Pair<T, String>>, selected: T, onSelect: (T) -> Unit, modifier: Modifier = Modifier, height: Dp = 36.dp) {
     val colors = Pi.colors
@@ -294,7 +346,8 @@ fun <T> SegmentedSlots(
             .height(height)
             .background(colors.surface1, shape)
             .border(1.dp, colors.line, shape)
-            .padding(3.dp),
+            .padding(Space.xxs)
+            .selectableGroup(),
     ) {
         val segment = maxWidth / options.size
         val x by animateDpAsState(segment * index, if (Pi.reduceMotion) tween(0) else PiMotion.inPlace(PiMotion.QUICK), label = "segment")
@@ -303,7 +356,8 @@ fun <T> SegmentedSlots(
                 .offset { IntOffset(x.roundToPx(), 0) }
                 .width(segment)
                 .fillMaxHeight()
-                .background(colors.surface3, RoundedCornerShape(Radius.sm)),
+                .background(colors.surface3, RoundedCornerShape(Radius.sm))
+                .border(1.dp, colors.lineStrong, RoundedCornerShape(Radius.sm)),
         )
         Row(Modifier.fillMaxWidth().fillMaxHeight()) {
             options.forEachIndexed { i, value ->
@@ -311,6 +365,7 @@ fun <T> SegmentedSlots(
                     Modifier
                         .weight(1f)
                         .fillMaxHeight()
+                        .semantics { this.selected = i == index }
                         .pressable({
                             if (value != selected) haptics.tick()
                             onSelect(value)
@@ -330,7 +385,7 @@ fun SectionLabel(text: String, modifier: Modifier = Modifier) {
     Text(text, style = Pi.type.metaStrong, color = Pi.colors.ink3, modifier = modifier.padding(horizontal = 4.dp))
 }
 
-/** Text field: surface1, radius 12, 1dp lineStrong that turns into the focus line. */
+/** Text field: surface1, radius sm, 1dp lineStrong that turns into the focus line. */
 @Composable
 fun PiTextField(
     value: String,
@@ -359,7 +414,7 @@ fun PiTextField(
         PiMotion.effects(),
         label = "field",
     )
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(Radius.sm)
     BasicTextField(
         value = value,
         onValueChange = onValueChange,

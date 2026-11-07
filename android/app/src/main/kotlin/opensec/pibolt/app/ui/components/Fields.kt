@@ -24,7 +24,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.password
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.ImeAction
@@ -51,14 +53,14 @@ fun FieldHint(text: String, modifier: Modifier = Modifier, isError: Boolean = fa
         text,
         style = Pi.type.meta,
         color = if (isError) Pi.colors.danger else Pi.colors.ink3,
-        modifier = modifier.padding(start = Space.xs, top = Space.xs),
+        modifier = modifier.padding(start = Space.xs, top = Space.xs).semantics { if (isError) liveRegion = LiveRegionMode.Polite },
     )
 }
 
 /**
  * A secret (API key, token, variable value): mono, obscured by default, Password keyboard without autocorrect or
  * suggestions. The end slot is Paste while empty (when [onPaste] is given) and Show / Hide once filled. Same frame as
- * [PiTextField] (surface1, radius md, lineStrong that turns into the focus line, danger on error), 52dp tall.
+ * [PiTextField] (surface1, radius sm, lineStrong that turns into the focus line, danger on error), 52dp tall.
  * Callers keep the value in plain `remember`, never saved instance state, and clear it after use.
  */
 @Composable
@@ -87,7 +89,7 @@ fun SecretField(
         PiMotion.effects(),
         label = "secret-field",
     )
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(Radius.sm)
     val style = Pi.type.mono
     BasicTextField(
         value = value,
