@@ -155,7 +155,12 @@ import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.session.SessionEffect
+import opensec.pibolt.app.cost.Cost
+import opensec.pibolt.app.cost.Money
 import opensec.pibolt.app.ui.components.ConfirmSheet
+import opensec.pibolt.app.ui.cost.CapNotice
+import opensec.pibolt.app.ui.cost.SpendLimitsSheet
+import opensec.pibolt.app.ui.cost.SpendSheet
 import opensec.pibolt.app.ui.components.PiSnackHost
 import opensec.pibolt.app.ui.components.QuadMath
 import opensec.pibolt.app.ui.components.QuadMode
@@ -301,7 +306,7 @@ private fun opened(result: Result<LocalSessions.Live>, key: String, from: LocalS
         .onFailure { from.controller.showError(it.message ?: "Could not open the session") }
 }
 
-private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget, Export, Resume, Fork, Attach, History, Key, DeleteChat }
+private enum class Sheet { None, Model, Thinking, Info, Rename, Compact, Forget, Export, Resume, Fork, Attach, History, Key, DeleteChat, Spend, SpendLimits }
 
 /**
  * The session screen. It never reads the whole [SessionState] itself: each part derives the few values it shows, so a
@@ -543,6 +548,8 @@ internal fun SessionContent(
     val contextWindow by remember { derivedStateOf { state.value.model?.contextWindow } }
     val contextPct = knownTokens?.let { contextPercent(it, contextWindow) }
     val modelLabel by remember { derivedStateOf { state.value.model?.label } }
+    val sessionCost by controller.cost.collectAsStateWithLifecycle()
+    val capCard by controller.capCard.collectAsStateWithLifecycle()
     // The maker's mark for the run-settings chip: "anthropic/claude-…" through OpenRouter is Anthropic's.
     val modelBrand by remember { derivedStateOf { state.value.model?.let { ProviderCatalog.modelBrand(it.id, it.provider) } } }
     val cwd by remember { derivedStateOf { state.value.host?.cwd } }
@@ -577,7 +584,8 @@ internal fun SessionContent(
         // new session, and the send belongs in that session's memory, or its "Sending" row would never resolve.
         val now = controller.state.value
         val running = now.isRunning
-        controller.send(text, behavior, attached.mapNotNull { it.image })
+        // A spending limit holds it back: the limit's card says so (nothing shows as sending).
+        if (!controller.send(text, behavior, attached.mapNotNull { it.image })) return
         SessionMemory.of(controller.memoryKey, now.sessionId).sent(text, now, running, attached.mapNotNull { it.thumb }, attached.mapNotNull { it.image }, dictated = fromDraft && dictated)
         if (fromDraft) dictated = false
         if (text.isNotBlank()) app.recents.record(recentKey, text)
@@ -965,6 +973,8 @@ internal fun SessionContent(
             text.isEmpty() && images.isEmpty() -> Unit
             images.any { !it.ready } -> Unit
             images.isNotEmpty() && modelReadsImages == false -> scope.launch { snackbar.show(noImages()) }
+            // At a spending limit the draft stays, for Continue once on the limit's card.
+            !controller.spendAllows() -> Unit
             else -> {
                 val startsRun = !state.value.isRunning
                 send(text, images.toList(), behavior, fromDraft = true)
@@ -1053,6 +1063,9 @@ internal fun SessionContent(
                 chat = chat,
                 onChats = local?.onChats,
                 onDelete = local?.onDelete?.let { { sheet = Sheet.DeleteChat } },
+                cost = Money.label(sessionCost),
+                costSpoken = Money.spoken(sessionCost),
+                onCost = { sheet = Sheet.Spend },
             )
             // Before the first snapshot the loading state already says "Starting…" with its own spinner: the banner
             // would say it twice. It still shows a stopped engine or a lost link (with Restart / Retry).
@@ -1138,6 +1151,18 @@ internal fun SessionContent(
                         if (local != null && parts.preview) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = Space.page))
                         PendingDialogStrip(askingTitle) { memory.hiddenDialog.value = null }
                         QueueStrip(queue, onEdit = controller::clearQueue)
+                    }
+                    capCard?.let { card ->
+                        CapNotice(
+                            card,
+                            onContinue = {
+                                controller.continueOnce()
+                                // The held-back draft goes now; a stopped run picks up where it stopped.
+                                if (draft.isNotBlank() || images.isNotEmpty()) submit(mode) else if (card.stopped) send(CONTINUE_PROMPT)
+                            },
+                            onDismiss = controller::dismissCapCard,
+                            modifier = Modifier.padding(horizontal = Space.page, vertical = Space.xs),
+                        )
                     }
                     Composer(
                         text = draft,
@@ -1378,6 +1403,18 @@ internal fun SessionContent(
                 onDismiss = { sheet = Sheet.None },
             )
         }
+        Sheet.Spend -> SpendSheet(
+            app,
+            session = sessionCost,
+            // A project's sessions on this phone, added up (a chat is its own row in the Chats list).
+            project = produceState<Cost?>(null) {
+                value = controller.project?.takeIf { isLocal && !chat }?.let { dir -> withContext(Dispatchers.IO) { runCatching { app.engine.sessions(dir).fold(Cost.NONE) { sum, s -> sum + s.cost } }.getOrNull() } }
+            }.value,
+            onLimits = { sheet = Sheet.SpendLimits },
+            onDismiss = { if (sheet == Sheet.Spend) sheet = Sheet.None },
+            note = "Subagents on the computer aren't counted.".takeIf { !isLocal },
+        )
+        Sheet.SpendLimits -> SpendLimitsSheet(app, onDismiss = { if (sheet == Sheet.SpendLimits) sheet = Sheet.None })
         Sheet.Export -> ActionsSheet(
             title = "Export or share this $noun",
             actions = listOfNotNull(
@@ -1520,6 +1557,10 @@ internal fun SessionContent(
 
 /** How long Regenerate waits for the fork's session before it sends anyway. */
 private const val FORK_SWITCH_MS = 5_000L
+
+/** What "Continue once" sends after a spending limit stopped a run. */
+private const val CONTINUE_PROMPT = "Continue."
+
 
 /** The status line while compacting: why it runs, as the terminal says it. */
 fun compactionLabel(reason: String?): String = when (reason) {

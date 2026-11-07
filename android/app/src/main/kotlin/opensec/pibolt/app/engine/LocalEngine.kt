@@ -27,6 +27,7 @@ import opensec.pibolt.app.ui.session.features2.AppExtension
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.cost.Cost
 import opensec.pibolt.app.checkpoints.Git
 import opensec.pibolt.app.checkpoints.ShadowRepo
 import opensec.pibolt.app.checkpoints.TurnCheckpoints
@@ -327,6 +328,8 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         if (isChat(form.path)) return chats()
         return index.list(form).filter { it.messageCount > 0 }
     }
+
+    override fun sessionCost(sessionFile: String): Cost = index.cost(File(sessionFile))
 
     override fun chats(): List<SessionSummary> = index.listIn(listOf(ChatSpace.sessionDir(paths.agentDir))).filter { it.messageCount > 0 }
 

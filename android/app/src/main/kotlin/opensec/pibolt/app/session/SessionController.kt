@@ -20,12 +20,17 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.checkpoints.TurnCheckpoints
+import opensec.pibolt.app.cost.CapCard
+import opensec.pibolt.app.cost.Cost
+import opensec.pibolt.app.cost.SessionSpending
+import opensec.pibolt.app.cost.SpendCaps
 import opensec.pibolt.app.data.Host
 import opensec.pibolt.app.engine.ChatSpace
 import opensec.pibolt.app.engine.LivePolicy
@@ -54,6 +59,7 @@ import opensec.pibolt.app.ui.session.ask.AskSubmission
 import opensec.pibolt.protocol.session.SessionState
 import opensec.pibolt.protocol.arr
 import opensec.pibolt.protocol.bool
+import opensec.pibolt.protocol.obj
 import opensec.pibolt.protocol.str
 import opensec.pibolt.protocol.type
 import java.io.File
@@ -199,6 +205,15 @@ class SessionController private constructor(
     /** On this phone, subagents' session files are readable: their messages stream into [SessionState.subagents]. */
     private val subagentTail: SubagentTail? =
         if (origin is Origin.Local) SubagentTail(state, { sessionFile }) { inputs.trySend(Input.Event(it)) } else null
+
+    /** This session's cost, its share of the day's and month's spending, and the limits (cost/). */
+    private val spending = SessionSpending(app.spend, { app.settings.settings.value.spend }, hostId)
+
+    /** What this session cost so far, its subagents included (on this phone). */
+    val cost: StateFlow<Cost> get() = spending.cost
+
+    /** A spending limit held a prompt back or stopped a run: the card the session shows. */
+    val capCard: StateFlow<CapCard?> get() = spending.card
 
     /** True when a subagent's own messages can be shown (a session on this phone); remote control sends only progress. */
     val readsSubagentFiles: Boolean get() = subagentTail != null
@@ -469,6 +484,10 @@ class SessionController private constructor(
 
     private fun sideEffects(before: SessionState, event: JsonObject) {
         checkpoints?.onEvent(event, before.sessionId)
+        val spent = spending.onEvent(before, event)
+        if (spent.abort) abort()
+        spent.warning?.let { _effects.tryEmit(SessionEffect.Notify(it, "warning")) }
+        if (spent.snapshot) readCost(event.obj("state")?.str("sessionFile"))
         when (event.type) {
             "extension_ui_request" -> when (event.str("method")) {
                 "notify" -> _effects.tryEmit(SessionEffect.Notify(event.str("message").orEmpty(), event.str("notifyType") ?: "info"))
@@ -480,7 +499,8 @@ class SessionController private constructor(
             "agent_settled" -> {
                 if (!app.isForeground && before.isRunning) {
                     val last = (before.allItems.lastOrNull { it is AssistantTextItem } as? AssistantTextItem)?.text.orEmpty()
-                    Notifications.settled(app, hostId, Notifications.projectOf(project, isChat), _hostName.value, last, aborted = event.bool("aborted") == true, chat = isChat, sessionId = before.sessionId)
+                    val capped = spending.card.value?.takeIf { it.stopped }?.let { SpendCaps.reached(it.kind, it.limit) }
+                    Notifications.settled(app, hostId, Notifications.projectOf(project, isChat), _hostName.value, last, aborted = event.bool("aborted") == true, chat = isChat, sessionId = before.sessionId, capped = capped)
                 }
                 scope.launch { refreshState() }
             }
@@ -514,6 +534,41 @@ class SessionController private constructor(
         if (endpoints == remote.config.endpoints) return
         remote.updateEndpoints(endpoints)
         app.hosts.update(hostId) { it.copy(endpoints = endpoints) }
+    }
+
+    /**
+     * Reads the session's own total (its file and its subagents' on this phone, `get_session_stats` from a computer):
+     * it has what the snapshot's context does not (compacted turns, summaries, finished subagents). [file]: the session
+     * file a snapshot named, else the engine's current one.
+     */
+    private fun readCost(file: String?) {
+        val mark = spending.mark()
+        scope.launch {
+            val total = if (isLocal) {
+                val f = file ?: sessionFile ?: return@launch
+                withContext(Dispatchers.IO) { runCatching { app.engine.sessionCost(f) }.getOrNull() }
+            } else {
+                sessionStats().getOrNull()?.let { Cost(it.cost, it.assistantMessages.toInt()) }
+            }
+            total?.let { spending.rebase(it, mark) }
+        }
+    }
+
+    /** "Continue once" on the limit's card: the next run goes to its end. */
+    fun continueOnce() = spending.continueOnce()
+
+    fun dismissCapCard() = spending.dismissCard()
+
+    /**
+     * False when a spending limit holds prompts back: the card says so, and a prompt sent from a notification while the
+     * app is away is answered by one.
+     */
+    fun spendAllows(): Boolean {
+        if (spending.maySend()) return true
+        if (!app.isForeground) {
+            spending.card.value?.let { Notifications.settled(app, hostId, Notifications.projectOf(project, isChat), _hostName.value, "", aborted = true, chat = isChat, sessionId = _state.value.sessionId, capped = SpendCaps.reached(it.kind, it.limit)) }
+        }
+        return false
     }
 
     private fun afterPublish(previous: SessionState, now: SessionState) {
@@ -560,8 +615,12 @@ class SessionController private constructor(
 
     // Commands
 
-    /** Send a prompt. While the agent runs, [behavior] says whether it steers or waits as a follow-up. */
-    fun send(text: String, behavior: StreamingBehavior, images: List<ImageAttachment> = emptyList()) {
+    /**
+     * Send a prompt. While the agent runs, [behavior] says whether it steers or waits as a follow-up. False when a
+     * spending limit held it back ([spendAllows]).
+     */
+    fun send(text: String, behavior: StreamingBehavior, images: List<ImageAttachment> = emptyList()): Boolean {
+        if (!spendAllows()) return false
         val running = _state.value.isRunning
         sentAt = SystemClock.elapsedRealtime()
         scope.launch {
@@ -574,6 +633,7 @@ class SessionController private constructor(
                 _effects.tryEmit(SessionEffect.Error(response.error ?: "Not sent"))
             }
         }
+        return true
     }
 
     /** Shows [message] as an error on this session's screen (an open beside it that failed). */

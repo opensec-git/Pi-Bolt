@@ -11,9 +11,11 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import opensec.pibolt.app.cost.Money
 import opensec.pibolt.app.engine.SessionSummary
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.ui.components.InsetRow
+import opensec.pibolt.app.ui.cost.SpendText
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.theme.IconSize
@@ -65,6 +67,8 @@ object SessionRowRules {
  */
 @Composable
 fun SessionRow(s: SessionSummary, live: SessionController?, unread: Boolean, now: Long, where: String?, onClick: () -> Unit, modifier: Modifier = Modifier, divider: Boolean = true) {
+    // Settings > Spending > Show costs in lists: a row that is not working ends its meta with the session's cost.
+    val showCost = Pi.settings.spend.showInLists
     val title = ProjectRules.sessionTitle(s)
     if (live != null) {
         val state by live.state.collectAsStateWithLifecycle()
@@ -77,9 +81,9 @@ fun SessionRow(s: SessionSummary, live: SessionController?, unread: Boolean, now
                 }
             }
         }
-        SessionInsetRow(s, title, phase, unread = false, now, where, onClick, modifier, divider, lead = { SessionMark(live, size = IconSize.md) })
+        SessionInsetRow(s, title, phase, unread = false, now, where, onClick, modifier, divider, showCost && phase == SessionRowRules.Live.Open, lead = { SessionMark(live, size = IconSize.md) })
     } else {
-        SessionInsetRow(s, title, null, unread, now, where, onClick, modifier, divider, lead = { QuadSpinner(QuadMode.Think, size = IconSize.md, color = Pi.colors.ink4, animate = false) })
+        SessionInsetRow(s, title, null, unread, now, where, onClick, modifier, divider, showCost, lead = { QuadSpinner(QuadMode.Think, size = IconSize.md, color = Pi.colors.ink4, animate = false) })
     }
 }
 
@@ -94,14 +98,16 @@ private fun SessionInsetRow(
     onClick: () -> Unit,
     modifier: Modifier,
     divider: Boolean,
+    showCost: Boolean,
     lead: @Composable () -> Unit,
 ) {
-    val spoken = SessionRowRules.spoken(title, live, unread, where, ProjectRules.ago(s.updatedAt, now), s.messageCount)
+    val spoken = SessionRowRules.spoken(title, live, unread, where, ProjectRules.ago(s.updatedAt, now), s.messageCount) +
+        (Money.spoken(s.cost)?.takeIf { showCost }?.let { ", cost $it" } ?: "")
     InsetRow(
         title = title,
         onClick = onClick,
         modifier = modifier.semantics(mergeDescendants = true) { contentDescription = spoken },
-        meta = SessionRowRules.meta(live, where, ProjectRules.agoShort(s.updatedAt, now), s.messageCount),
+        meta = SpendText.withCost(SessionRowRules.meta(live, where, ProjectRules.agoShort(s.updatedAt, now), s.messageCount), s.cost, showCost),
         leading = { Box(Modifier.clearAndSetSemantics { }, contentAlignment = Alignment.Center) { lead() } },
         unread = unread,
         divider = divider,
