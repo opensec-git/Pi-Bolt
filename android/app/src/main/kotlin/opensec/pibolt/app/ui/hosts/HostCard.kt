@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -92,13 +93,14 @@ fun HostCard(host: Host, live: SessionController?, now: Long, onClick: () -> Uni
     Row(
         modifier
             .fillMaxWidth()
-            .height(Pi.dims.hostCard)
+            // A minimum, not a fixed height: the third line (transport) needs more room at large font scales.
+            .heightIn(min = Pi.dims.homeRow)
             .sharedHostBounds(SharedKeys.card(host.id), card = true)
             .pressable(onClick, shape = shape, onLongClick = { menu = true }, label = "Open computer")
             .semantics { customActions = listOf(CustomAccessibilityAction("Forget computer") { menu = true; true }) }
             .background(colors.surface1, shape)
             .border(1.dp, colors.line, shape)
-            .padding(start = 18.dp, end = 12.dp),
+            .padding(start = 18.dp, end = 12.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         // One live indicator: the Quad while a session is live, the status dot otherwise.

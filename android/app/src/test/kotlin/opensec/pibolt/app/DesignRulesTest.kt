@@ -46,7 +46,6 @@ class DesignRulesTest {
             "Quad, not Material progress",
             Regex("""(?<![\w.])(CircularProgressIndicator|LinearProgressIndicator)\("""),
             "use QuadSpinner, LoadingRow or ProgressLine",
-            setOf("terminal/PreviewScreen.kt"),
         ),
         Rule(
             "the app's snackbars",
@@ -69,7 +68,7 @@ class DesignRulesTest {
             "radii from the tokens",
             Regex("""RoundedCornerShape\(([3-9]|[1-9][0-9])(\.[0-9]+)?\.dp"""),
             "use Radius.xs / sm / md / lg / xl (0 to 2dp hairlines are fine)",
-            setOf("projects/ProjectCard.kt", "session/SessionSheets.kt", "session/SessionChrome.kt", "session/Composer.kt", "session/subagent/SubagentCard.kt"),
+            setOf("session/SessionSheets.kt", "session/SessionChrome.kt", "session/Composer.kt", "session/subagent/SubagentCard.kt"),
         ),
         Rule(
             "durations from PiMotion",

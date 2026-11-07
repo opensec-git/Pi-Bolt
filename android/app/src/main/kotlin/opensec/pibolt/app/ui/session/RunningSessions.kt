@@ -3,16 +3,18 @@ package opensec.pibolt.app.ui.session
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -49,9 +51,11 @@ import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.pressable
+import opensec.pibolt.app.ui.projects.SessionMark
 import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 
 /** The live on-device sessions that are working or waiting for an answer, in the order they were opened. */
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -97,32 +101,36 @@ private fun LiveMark(controller: SessionController, busy: Boolean) {
 }
 
 /**
- * A row of Home's "Running": one on-device session that is live (its engine stays up while others run), with what it
- * is doing. 56dp; a tap opens it without stopping any other.
+ * A card of Home's "Running" (Pi-Bolt Desktop's "Now" card): one on-device session that is live (its engine stays up
+ * while others run). surface1 with a lineStrong ring (warning at 40% while it waits for an answer), the project
+ * (body ink1), then its Quad (12dp) and what it does (meta ink2). A tap opens it without stopping any other.
  */
 @Composable
 fun RunningRow(live: LocalSessions.Live, meta: ProjectMeta?, onClick: () -> Unit, modifier: Modifier = Modifier) {
     val colors = Pi.colors
     val type = Pi.type
     val shape = RoundedCornerShape(Radius.md)
-    val (status, busy) = rememberStatus(live.controller)
+    val (status, _) = rememberStatus(live.controller)
+    val state = live.controller.state.collectAsStateWithLifecycle()
+    val waiting by remember { derivedStateOf { state.value.dialogs.isNotEmpty() } }
     val title = meta?.title ?: live.project.name
-    Row(
+    Column(
         modifier
             .fillMaxWidth()
-            .height(56.dp)
+            .heightIn(min = Pi.dims.homeRow)
             .pressable(onClick, shape = shape, label = "Open session")
             .semantics(mergeDescendants = true) { contentDescription = "$title, $status" }
             .background(colors.surface1, shape)
-            .border(1.dp, if (busy) colors.lineStrong else colors.line, shape)
-            .padding(horizontal = 16.dp),
-        verticalAlignment = Alignment.CenterVertically,
+            .border(1.dp, if (waiting) colors.warning.copy(alpha = 0.4f) else colors.lineStrong, shape)
+            .padding(horizontal = Space.lg, vertical = Space.sm + 2.dp),
+        verticalArrangement = Arrangement.Center,
     ) {
-        Box(Modifier.size(20.dp), contentAlignment = Alignment.Center) { LiveMark(live.controller, busy) }
-        Spacer(Modifier.width(14.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(status, style = type.meta, color = if (busy) colors.ink2 else colors.ink3, maxLines = 1)
+        Text(title, style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(2.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            SessionMark(live.controller, size = 12.dp)
+            Spacer(Modifier.width(Space.sm))
+            Text(status, style = type.meta, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

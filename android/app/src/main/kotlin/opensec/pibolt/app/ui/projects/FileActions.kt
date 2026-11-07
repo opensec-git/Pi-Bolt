@@ -107,7 +107,8 @@ fun FilesBar(
     Row(modifier.fillMaxWidth().height(48.dp), verticalAlignment = Alignment.CenterVertically) {
         Row(Modifier.weight(1f).horizontalScroll(scroll).padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
             crumbs.forEachIndexed { i, (label, target) ->
-                if (i > 0) Text("/", style = type.monoSmall, color = colors.ink4, modifier = Modifier.padding(horizontal = 2.dp))
+                // ink3, not ink4: no text below ink3 (DESIGN.md "Contrast").
+                if (i > 0) Text("/", style = type.monoSmall, color = colors.ink3, modifier = Modifier.padding(horizontal = 2.dp))
                 val last = i == crumbs.lastIndex
                 Box(
                     Modifier

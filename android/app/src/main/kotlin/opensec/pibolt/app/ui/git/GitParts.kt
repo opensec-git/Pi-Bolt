@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -24,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -53,27 +55,27 @@ fun GitCard(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -
     )
 }
 
-/** The change letter in a 20dp tile: added and untracked in success, deleted and conflicts in danger, others ink2. */
+/**
+ * The change letter in a 20dp slot, as Pi-Bolt Desktop's `.gx-st`: mono SemiBold with no tile; added and untracked
+ * success, deleted and conflicts danger, modified warning, renamed and copied ink2. TalkBack reads the word.
+ */
 @Composable
 fun ChangeBadge(change: Change?) {
-    val colors = Pi.colors
     val c = change ?: Change.Modified
-    val fg = changeColor(c, colors)
-    Box(
-        Modifier
-            .size(20.dp)
-            .background(colors.surface2, RoundedCornerShape(Radius.xs))
-            .clearAndSetSemantics { contentDescription = c.label },
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(if (c == Change.Untracked) "U" else c.letter.toString(), style = Pi.type.micro, color = fg, textAlign = TextAlign.Center)
+    Box(Modifier.size(20.dp).clearAndSetSemantics { contentDescription = c.label }, contentAlignment = Alignment.Center) {
+        Text(
+            if (c == Change.Untracked) "U" else c.letter.toString(),
+            style = Pi.type.monoMeta.copy(fontWeight = FontWeight.SemiBold),
+            color = changeColor(c, Pi.colors),
+            textAlign = TextAlign.Center,
+        )
     }
 }
 
 fun changeColor(c: Change, colors: PiColors): Color = when (c) {
     Change.Added, Change.Untracked -> colors.success
     Change.Deleted, Change.Conflicted -> colors.danger
-    Change.Renamed, Change.Copied -> colors.warning
+    Change.Modified -> colors.warning
     else -> colors.ink2
 }
 
@@ -86,15 +88,30 @@ fun Counts(added: Int, removed: Int) {
     if (removed > 0) Text("−$removed", style = Pi.type.monoMeta, color = colors.danger)
 }
 
-/** Full-screen overlay top bar: back, a title over a mono subtitle, then [actions]. */
+/**
+ * Full-screen overlay top bar: the leading action, a title over a mono subtitle, then [actions]. One rule across the
+ * workspace (file viewer, diff, history): a view that covers the project closes with ✕ ("Close"); a step inside one
+ * (a commit opened from the history) goes back with ← ([back] true, labelled [backLabel]).
+ */
 @Composable
-fun OverlayBar(title: String, subtitle: String?, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) {
+fun OverlayBar(
+    title: String,
+    subtitle: String?,
+    onBack: () -> Unit,
+    back: Boolean = false,
+    backLabel: String = "Back",
+    actions: @Composable RowScope.() -> Unit = {},
+) {
     val colors = Pi.colors
     Row(
         Modifier.fillMaxWidth().background(colors.canvas).statusBarsPadding().height(56.dp).padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        IconAction(Icons.AutoMirrored.Rounded.ArrowBack, "Back", onClick = onBack, tint = colors.ink1)
+        if (back) {
+            IconAction(Icons.AutoMirrored.Rounded.ArrowBack, backLabel, onClick = onBack, tint = colors.ink1)
+        } else {
+            IconAction(Icons.Rounded.Close, "Close", onClick = onBack, tint = colors.ink1)
+        }
         Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
             Text(title, style = Pi.type.subhead, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (!subtitle.isNullOrBlank()) Text(subtitle, style = Pi.type.monoMeta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.MiddleEllipsis)
