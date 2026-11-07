@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CoroutineScope
@@ -85,7 +86,7 @@ class SessionService : Service() {
                 if (list.isEmpty()) {
                     flowOf(emptyList())
                 } else {
-                    combine(list.map { c -> combine(c.state, c.link, c.hostName, c.shellRuns) { _, _, _, _ -> c } }) { it.toList() }
+                    combine(list.map { c -> combine(c.state, c.link, c.hostName, c.shellRuns, c.actions) { _, _, _, _, _ -> c } }) { it.toList() }
                 }
             }.collect { sessions -> onSessions(app, sessions) }
         }
@@ -126,8 +127,6 @@ class SessionService : Service() {
 
     private fun stoppable(live: List<SessionController>): Boolean = live.any { it.isLocal && it.state.value.isRunning }
 
-    private fun subagents(s: SessionState): Boolean = SUBAGENTS_STATUS in s.statuses || s.subagents.values.any { it.background && it.isActive }
-
     /** A session as the notification sees it; [live]: every live session, to tell two of one project apart. */
     private fun entry(c: SessionController, live: List<SessionController>): RunningSummary.Entry {
         val s = c.state.value
@@ -136,25 +135,28 @@ class SessionService : Service() {
         return RunningSummary.Entry(
             name = RunningSummary.name(c.hostName.value, asked, shared),
             local = c.isLocal,
-            running = s.isRunning,
+            running = runs(c),
             waiting = s.dialogs.isNotEmpty(),
             compacting = s.isCompacting,
             connected = c.link.value is LinkState.Connected,
-            subagents = subagents(s),
+            subagents = KeepAlive.subagents(s),
             shell = c.shellRuns.value > 0,
             jobs = BackgroundJobs.STATUS_KEY in s.statuses,
         )
     }
+
+    /** A turn runs, or a prompt or compaction the user just sent is on its way to one ([SessionController.actions]). */
+    private fun runs(c: SessionController): Boolean = c.state.value.isRunning || c.actions.value > 0
 
     /** A session as the wake lock policy sees it. */
     private fun work(c: SessionController): WakePolicy.Work {
         val s = c.state.value
         return WakePolicy.Work(
             local = c.isLocal,
-            running = s.isRunning,
+            running = runs(c),
             waiting = s.dialogs.isNotEmpty(),
             compacting = s.isCompacting,
-            subagents = subagents(s) || BackgroundJobs.STATUS_KEY in s.statuses,
+            subagents = KeepAlive.subagents(s) || BackgroundJobs.STATUS_KEY in s.statuses,
             shell = c.shellRuns.value > 0,
         )
     }
@@ -177,16 +179,24 @@ class SessionService : Service() {
     }
 
     companion object {
-        /** Status key of the bundled subagents extension, set while background agents run (SessionController). */
-        private const val SUBAGENTS_STATUS = "subagents"
+        private const val TAG = "PiBolt"
 
         private val running = AtomicBoolean(false)
 
+        /**
+         * Starts the service unless it runs. Callers start it at the user's tap where they can ([KeepAlive]): from the
+         * background Android refuses (ForegroundServiceStartNotAllowedException), and the app then loses its network
+         * seconds later. PiBoltApp tries again when an activity starts.
+         */
         fun ensureRunning(context: Context) {
             if (!running.compareAndSet(false, true)) return
-            // From the background Android may refuse to start it; the connection then lives as long as the process.
-            val ok = runCatching { ContextCompat.startForegroundService(context, Intent(context, SessionService::class.java)) }.isSuccess
-            if (!ok) running.set(false)
+            val refused = runCatching { ContextCompat.startForegroundService(context, Intent(context, SessionService::class.java)) }.exceptionOrNull()
+            if (refused != null) {
+                running.set(false)
+                Log.w(TAG, "the background service could not start; work continues only while the app is open", refused)
+                // Android's battery restrictions are the usual reason: the run-in-background sheet asks to lift them.
+                BackgroundSetup.noteBackgroundRun(context)
+            }
         }
     }
 }
