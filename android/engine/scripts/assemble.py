@@ -10,6 +10,7 @@ Writes /out/jniLibs/arm64-v8a (every ELF and executable script, named lib*.so) a
 
 import base64
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -34,6 +35,12 @@ EXTENSION_PINS = "/extensions.txt"  # the repo's extensions.txt (name, version, 
 # OpenSec's extensions bundled with the engine (Bun builds without runtime dependencies), at the versions extensions.txt
 # pins. Not opensec-pi-fff.
 BUNDLED_EXTENSIONS = ["opensec-pi-subagents", "opensec-pi-todo"]
+# Third-party extensions with their runtime dependencies (web search, ask_user_question): npm/extensions.txt and the
+# lockfiles beside it, assembled by npm_extensions.py.
+NPM_DIR = "/engine/npm"
+_spec = importlib.util.spec_from_file_location("npm_extensions", "/engine/scripts/npm_extensions.py")
+NPM_EXTENSIONS = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(NPM_EXTENSIONS)
 
 # Engine side files PI_PACKAGE_DIR must hold (theme/, export-html/, assets/, package.json per the contract), plus the
 # docs the system prompt points the model at and photon's wasm. Not shipped: CHANGELOG.md (interactive "what's new"
@@ -326,7 +333,9 @@ def write_licenses(extensions):
         f"Pi-Bolt engine {V['ENGINE_VERSION']} ({V['ENGINE_URL']}, sha256 {V['ENGINE_SHA256']})",
         f"glibc {V['GLIBC_VERSION']} + termux-pacman/glibc-packages {V['TERMUX_GLIBC_COMMIT']}",
     ]
-    lines += [f"{e['name']} {e['version']} (npm, {e['integrity']})" for e in extensions]
+    for e in extensions:
+        lines.append(f"{e.get('package', e['name'])} {e['version']} (npm, {e['integrity']})")
+        lines += [f"  {dep}" for dep in e.get("dependencies", [])]
     if not ENGINE_ONLY:
         lines += [f"curl {V['CURL_VERSION']}", f"git {V['GIT_VERSION']}"]
         lines += [f"Node.js {V['NODE_VERSION']} ({V['NODE_URL']}, sha256 {V['NODE_SHA256']})",
@@ -531,6 +540,7 @@ def main():
         os.chmod(f"{JNI}/{name}", 0o755)
 
     extensions = copy_extensions()
+    extensions += NPM_EXTENSIONS.assemble(NPM_DIR, "/dl", ASSETS, f"{ASSETS}/licenses")
     write_licenses(extensions)
 
     env = {
@@ -557,7 +567,9 @@ def main():
         "links": [{"path": p, "target": links[p]} for p in sorted(links)],
         "files": [{"path": p, "asset": files[p]} for p in sorted(files)],
         "package": package,
-        "extensions": [{"name": e["name"], "version": e["version"], "files": e["files"]} for e in extensions],
+        "extensions": [
+            {k: e[k] for k in ["name", "package", "version", "files", "modules"] if k in e} for e in extensions
+        ],
         "trees": trees,
         "runtimes": runtimes_info(links, files, trees, engine_needed),
         "env": env,

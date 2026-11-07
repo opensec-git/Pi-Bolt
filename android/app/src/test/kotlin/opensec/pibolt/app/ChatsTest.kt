@@ -54,28 +54,91 @@ class ChatsTest {
     private fun assistant(text: String) = """{"type":"message","id":"a${text.length}","message":{"role":"assistant","content":[{"type":"text","text":"$text"}]}}"""
 
     @Test
-    fun aChatEngineRunsWithoutToolsInTheChatsFolderAndSessionFolder() {
+    fun aChatEngineGetsOnlyTheWebAndQuestionToolsInTheChatsFolderAndSessionFolder() {
         val chats = ChatSpace.dir(home)
         assertEquals(File(home, ".pibolt/chats"), chats)
         assertFalse(chats.path.startsWith(projects.path), "the chats' folder is never a project")
         val args = ChatSpace.engineArgs(SessionTarget.Fresh, chats.path, home, agentDir)
         assertEquals(listOf("--mode", "rpc"), args.take(2))
-        assertTrue("--no-tools" in args)
+        assertFalse("--no-tools" in args)
+        assertEquals("web_search,fetch_content,get_search_content,ask_user_question", args[args.indexOf("--tools") + 1])
+        // An allowlist keeps MCP tools: chats connect no MCP server.
+        assertTrue("--no-mcp" in args)
         assertEquals(File(agentDir, "chats").path, args[args.indexOf("--session-dir") + 1])
-        assertEquals(ChatSpace.SYSTEM_PROMPT, args[args.indexOf("--system-prompt") + 1])
-        // A saved chat opens by its file, still without tools.
+        val prompt = args[args.indexOf("--system-prompt") + 1]
+        assertEquals(ChatSpace.systemPrompt(webSearch = true), prompt)
+        assertTrue("search the web" in prompt && "ask_user_question" in prompt && "no shell" in prompt && "no files" in prompt, prompt)
+        // A saved chat opens by its file, with the same tools.
         val resume = ChatSpace.engineArgs(SessionTarget.Resume("/s/chat.jsonl"), chats.path + "/", home, agentDir)
         assertEquals("/s/chat.jsonl", resume[resume.indexOf("--session") + 1])
-        assertTrue("--no-tools" in resume)
+        assertEquals(args[args.indexOf("--tools") + 1], resume[resume.indexOf("--tools") + 1])
     }
 
     @Test
-    fun aProjectEngineKeepsItsTools() {
-        val args = ChatSpace.engineArgs(SessionTarget.Continue, File(projects, "chats").path, home, agentDir)
-        assertEquals(listOf("--mode", "rpc", "--continue"), args)
+    fun webSearchOffLeavesAChatOnlyTheQuestionTool() {
+        val args = ChatSpace.engineArgs(SessionTarget.Fresh, ChatSpace.dir(home).path, home, agentDir, webSearch = false)
+        assertEquals("ask_user_question", args[args.indexOf("--tools") + 1])
+        val prompt = args[args.indexOf("--system-prompt") + 1]
+        assertTrue("no internet access" in prompt && "web_search" !in prompt, prompt)
+        assertFalse("--exclude-tools" in args)
+    }
+
+    @Test
+    fun aProjectEngineKeepsItsToolsAndDropsTheWebToolsWhenWebSearchIsOff() {
+        val dir = File(projects, "chats").path
+        assertEquals(listOf("--mode", "rpc", "--continue"), ChatSpace.engineArgs(SessionTarget.Continue, dir, home, agentDir))
+        assertEquals(
+            listOf("--mode", "rpc", "--continue", "--exclude-tools", "web_search,fetch_content,get_search_content,source_check"),
+            ChatSpace.engineArgs(SessionTarget.Continue, dir, home, agentDir, webSearch = false),
+        )
         assertFalse(ChatSpace.isChat(File(projects, "chats").path, home))
         assertFalse(ChatSpace.isChat(home.path, home))
         assertTrue(ChatSpace.isChat(File(home, ".pibolt/./chats").path, home))
+    }
+
+    @Test
+    fun turningWebSearchOffRestartsEverySessionNotInATurn() {
+        // Xiaomi round: an open chat kept its web tools. A lasting extension status (background subagents), an open
+        // dialog or a reconnecting link made the session not "idle", so it was skipped; only a turn keeps the engine now.
+        val quiet = opensec.pibolt.protocol.session.SessionState(hello = true)
+        assertTrue(opensec.pibolt.app.engine.LivePolicy.restartsForSettings(quiet))
+        assertTrue(opensec.pibolt.app.engine.LivePolicy.restartsForSettings(quiet.copy(statuses = mapOf("subagents" to "1 agent running", "web" to "Exa"))))
+        assertTrue(opensec.pibolt.app.engine.LivePolicy.restartsForSettings(quiet.copy(dialogs = listOf(opensec.pibolt.protocol.session.DialogRequest("d", opensec.pibolt.protocol.session.DialogKind.Confirm, "Trust?")))))
+        assertFalse(opensec.pibolt.app.engine.LivePolicy.restartsForSettings(quiet.copy(isRunning = true)))
+        assertFalse(opensec.pibolt.app.engine.LivePolicy.restartsForSettings(quiet.copy(isCompacting = true)))
+    }
+
+    @Test
+    fun anEngineStartedWithOtherWebSearchIsStale() {
+        // PR #266 review: an engine busy while Web search changed must not be reused, parked or handed a new session.
+        val policy = opensec.pibolt.app.engine.LivePolicy
+        assertTrue(policy.staleEngine(launchedWith = true, current = false))
+        assertTrue(policy.staleEngine(launchedWith = false, current = true))
+        assertFalse(policy.staleEngine(launchedWith = true, current = true))
+        assertFalse(policy.staleEngine(launchedWith = null, current = false))
+        // Replaced once its turn ends, not during it.
+        val turn = opensec.pibolt.protocol.session.SessionState(hello = true, isRunning = true)
+        assertFalse(policy.restartsForSettings(turn))
+        assertTrue(policy.restartsForSettings(turn.copy(isRunning = false)))
+    }
+
+    /**
+     * What the engine registered with these flags: the tool lists the model saw in real runs of Pi-Bolt 1.1.2 with the
+     * bundled extensions (test/resources/fixtures/engine, recorded with android/e2e's fake model).
+     */
+    @Test
+    fun theRecordedEnginesRegisteredExactlyTheseTools() {
+        val chat = EngineFixture.header("chat-web-ask")
+        assertEquals(ChatSpace.chatTools(webSearch = true), chat.tools("modelTools"))
+        assertEquals(ChatSpace.chatTools(webSearch = true).joinToString(","), chat.tools("args").let { it[it.indexOf("--tools") + 1] })
+        val ours = ChatSpace.chatArgs(agentDir)
+        assertEquals(ours.filter { it.startsWith("--") }, chat.tools("args").drop(2).filter { it.startsWith("--") })
+        for (builtin in listOf("bash", "read", "edit", "write", "grep", "find")) assertFalse(builtin in chat.tools("modelTools"), builtin)
+        val project = EngineFixture.header("project-web-ask").tools("modelTools")
+        assertTrue(project.containsAll(listOf("bash", "read", "edit", "write") + ChatSpace.PROJECT_WEB_TOOLS + ChatSpace.ASK_TOOL), project.toString())
+        val off = EngineFixture.header("project-web-off")
+        assertEquals(ChatSpace.projectArgs(webSearch = false), off.tools("args").drop(2))
+        assertTrue(off.tools("modelTools").none { it in ChatSpace.PROJECT_WEB_TOOLS } && ChatSpace.ASK_TOOL in off.tools("modelTools") && "bash" in off.tools("modelTools"))
     }
 
     @Test

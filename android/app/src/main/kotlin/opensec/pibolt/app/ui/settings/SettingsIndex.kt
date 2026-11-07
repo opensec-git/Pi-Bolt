@@ -25,6 +25,7 @@ object SettingsIndex {
         SettingEntry("accent", SettingsGroup.Appearance, "Accent", "colour color iris glacier ink"),
         SettingEntry("text-size", SettingsGroup.Appearance, "Text size", "font larger smaller zoom"),
         SettingEntry("density", SettingsGroup.Appearance, "Density", "compact comfortable spacing"),
+        SettingEntry("web-search", SettingsGroup.Agent, "Web search", "internet web search browse fetch pages exa sources online"),
         SettingEntry("steering", SettingsGroup.Agent, "Steering messages", "queue steer while working"),
         SettingEntry("follow-up", SettingsGroup.Agent, "Follow-up messages", "queue after finishes"),
         SettingEntry("compaction", SettingsGroup.Agent, "Auto-compact", "context summarise summary full compaction"),

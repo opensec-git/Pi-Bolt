@@ -48,8 +48,12 @@ data class EngineManifest(
     /** `PREFIX/<path>` is a copy of the APK asset [asset]. */
     data class Asset(val path: String, val asset: String)
 
-    /** A bundled Pi extension: assets `engine/extensions/<name>/<files>`. */
-    data class Extension(val name: String, val version: String, val files: List<String>)
+    /**
+     * A bundled Pi extension: assets `engine/extensions/<name>/<files>`, plus for one with runtime dependencies (the
+     * third-party ones, android/engine/npm) its node_modules tree as the zip asset [modules], unpacked into
+     * `<name>/node_modules`. [name] is a directory name; [packageName] the npm name ("@scope/pkg" ships as "scope-pkg").
+     */
+    data class Extension(val name: String, val version: String, val files: List<String>, val modules: String? = null, val packageName: String = name)
 
     /** `PREFIX/<path>` is the zip asset [asset] unpacked; [executables] (relative to it) get the execute bit. */
     data class Tree(val path: String, val asset: String, val executables: List<String>)
@@ -108,6 +112,8 @@ data class EngineManifest(
                         name = safeName(o.need("name")),
                         version = o.need("version"),
                         files = o.arr("files").orEmpty().map { safeRelative((it as JsonPrimitive).content) },
+                        modules = o.obj("modules")?.need("asset"),
+                        packageName = o.str("package") ?: o.need("name"),
                     )
                 },
             )
@@ -234,6 +240,8 @@ class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSour
             for (file in extension.files) {
                 assets.open("$EXTENSIONS_ASSETS/${extension.name}/$file").use { copyAtomically(it, File(dir, file)) }
             }
+            // Its runtime dependencies (the extensions dir was emptied above, so nothing older is left in it).
+            extension.modules?.let { unzip(it, File(dir, "node_modules")) }
         }
         // Not fatal: without the entries Pi just runs without the extensions (the next pack update tries again).
         BundledExtensions.register(paths.agentDir, manifest.extensions.map { File(paths.extensionsDir, it.name).path }, paths.extensionsDir.path)
@@ -267,15 +275,24 @@ class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSour
         val dir = File(paths.prefix, tree.path)
         val temp = File(dir.parentFile, ".${dir.name}.unpack")
         SafeFiles.deleteTree(temp)
-        temp.mkdirs()
-        assets.open(tree.asset).use { raw ->
+        unzip(tree.asset, temp)
+        for (rel in tree.executables) File(temp, rel).setExecutable(true, true)
+        if (!SafeFiles.deleteTree(dir)) throw IOException("cannot remove the old ${tree.path}")
+        dir.parentFile?.mkdirs()
+        Files.move(temp.toPath(), dir.toPath(), StandardCopyOption.ATOMIC_MOVE)
+    }
+
+    /** Unpacks the zip asset [asset] into [into]. */
+    private fun unzip(asset: String, into: File) {
+        into.mkdirs()
+        assets.open(asset).use { raw ->
             ZipInputStream(raw.buffered(64 * 1024)).use { zip ->
                 val buffer = ByteArray(64 * 1024)
                 while (true) {
                     val entry = zip.nextEntry ?: break
                     // Entries are paths inside the tree (no `..`, not absolute): a bad pack cannot write elsewhere.
                     val name = EngineManifest.safeRelative(entry.name.trimEnd('/'))
-                    val out = File(temp, name)
+                    val out = File(into, name)
                     if (entry.isDirectory) {
                         out.mkdirs()
                         continue
@@ -291,10 +308,6 @@ class EnginePrefix(private val paths: EnginePaths, private val assets: AssetSour
                 }
             }
         }
-        for (rel in tree.executables) File(temp, rel).setExecutable(true, true)
-        if (!SafeFiles.deleteTree(dir)) throw IOException("cannot remove the old ${tree.path}")
-        dir.parentFile?.mkdirs()
-        Files.move(temp.toPath(), dir.toPath(), StandardCopyOption.ATOMIC_MOVE)
     }
 
     private fun copyTree(asset: String, to: File) {

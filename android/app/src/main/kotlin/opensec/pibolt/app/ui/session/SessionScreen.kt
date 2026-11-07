@@ -46,6 +46,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import opensec.pibolt.app.engine.SessionSummary
 import opensec.pibolt.app.session.ForkPoint
+import opensec.pibolt.app.ui.session.ask.AskQuestions
+import opensec.pibolt.app.ui.session.ask.QuestionSheet
 import opensec.pibolt.app.ui.session.features.Builtin
 import opensec.pibolt.app.ui.session.review.LocalTurnReview
 import opensec.pibolt.app.ui.session.review.TurnReviewOverlay
@@ -1212,7 +1214,21 @@ internal fun SessionContent(
     }
 
     // Pi's dialogs: one at a time. Swiping away hides the sheet; only an explicit answer or Cancel responds.
-    firstDialog?.let { dialog ->
+    // ask_user_question's dialogs are one question card instead (ui/session/ask): its answers go out on Submit.
+    val askOwner = firstDialog?.let { dialog -> remember(dialog.id) { AskQuestions.owner(state.value, dialog) } }
+    if (askOwner != null && firstDialog != null) {
+        val (call, questions) = askOwner
+        if (!controller.askSubmitting(call.toolCallId)) {
+            key(call.toolCallId) {
+                QuestionSheet(
+                    toolCallId = call.toolCallId,
+                    questions = questions,
+                    first = AskQuestions.stepOf(firstDialog!!, questions)?.question ?: 0,
+                    onSubmit = { controller.submitAsk(it) },
+                )
+            }
+        }
+    } else firstDialog?.let { dialog ->
         val shownAt = remember(dialog.id) { memory.dialogShownAt.getOrPut(dialog.id) { SystemClock.uptimeMillis() } }
         if (memory.hiddenDialog.value != dialog.id) {
             key(dialog.id) {

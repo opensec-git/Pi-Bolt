@@ -51,6 +51,8 @@ import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.util.TimeZone
 import java.util.UUID
+import java.util.WeakHashMap
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -102,8 +104,8 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     private val idle = IdlePool<LocalBackend>(maxParked = 1) { it.sessionFile }
 
     /**
-     * The last chat's engine, parked for the next chat open. Kept apart from [idle]: a chat engine runs without tools
-     * and must never serve a project, nor a project's engine a chat.
+     * The last chat's engine, parked for the next chat open. Kept apart from [idle]: a chat engine runs with the chats'
+     * tools only (no shell, no files) and must never serve a project, nor a project's engine a chat.
      */
     private val chatIdle = IdlePool<LocalBackend>(maxParked = 1) { it.sessionFile }
 
@@ -145,13 +147,14 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     override fun open(project: File, sessionFile: String?, fresh: Boolean): SessionController {
         val started = SystemClock.elapsedRealtime()
         val dir = engineForm(project)
-        // The chats' directory is no project: its engines run without tools.
+        // The chats' directory is no project: its engines run with the chats' tools only.
         if (isChat(dir.path)) return openChat(sessionFile.takeUnless { fresh })
         val target = when {
             sessionFile != null -> SessionTarget.Resume(sessionFile)
             fresh -> SessionTarget.Fresh
             else -> SessionTarget.Continue
         }
+        retireStale(dir)
         val live = liveIn(dir)
         if (live != null && (target == SessionTarget.Continue || (target is SessionTarget.Resume && target.sessionFile == live.sessionFile))) {
             app.focus(live)
@@ -176,7 +179,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         // for this: Pi ends its turn in order).
         val taken = (if (live == null || live.isIdle) idle.take(want, exactOnly = live != null) else null)?.let { t ->
             // Secrets are in an engine's environment from its start: one from another project is not moved here.
-            if (SecretStore.get(app).engineFits(t.engine.engineCwd, dir)) return@let t
+            if (SecretStore.get(app).engineFits(t.engine.engineCwd, dir) && !stale(t.engine)) return@let t
             forget(t.engine)
             t.engine.close()
             null
@@ -225,6 +228,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
             is SessionTarget.Resume -> IdlePool.Want.Session(target.sessionFile)
             else -> IdlePool.Want.New(dir.path)
         }
+        retireStale(dir)
         val live = liveIn(dir)
         if (live != null) {
             val same = target is SessionTarget.Resume && target.sessionFile == live.sessionFile
@@ -243,7 +247,12 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         }
         // As for a project: an idle live chat gives way to a parked engine that already has the wanted chat; otherwise
         // the live engine moves over RPC.
-        val taken = if (live == null || live.isIdle) chatIdle.take(want, exactOnly = live != null) else null
+        val taken = (if (live == null || live.isIdle) chatIdle.take(want, exactOnly = live != null) else null)?.let { t ->
+            if (!stale(t.engine)) return@let t
+            forget(t.engine)
+            t.engine.close()
+            null
+        }
         if (live != null && taken == null) {
             when (target) {
                 is SessionTarget.Resume -> live.switchSession(target.sessionFile)
@@ -358,6 +367,19 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         val stopped = idle.drain() + chatIdle.drain()
         stopped.forEach(::stopIdle)
         if (stopped.isNotEmpty()) Log.i(TAG, "stopping ${stopped.size} idle engines ($reason)")
+    }
+
+    /**
+     * A setting that engines read at their start changed ("Web search": their tool flags, ChatSpace): the idle engines
+     * stop, and so does every live on-device session that is not running a turn ([LivePolicy.restartsForSettings]),
+     * so the next open, or New chat in an open chat, starts an engine with the new flags. A session in the middle of a
+     * turn keeps its engine until it ends.
+     */
+    fun restartForSettings(reason: String) {
+        stopIdleEngines(reason)
+        val stopped = localSessions().filter { LivePolicy.restartsForSettings(it.state.value) }
+        for (session in stopped) session.stop(keepEngine = false)
+        Log.i(TAG, "stopped ${stopped.size} live sessions not in a turn ($reason)")
     }
 
     private fun stopIdle(backend: LocalBackend) {
@@ -505,7 +527,9 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
      * one); a busy one is stopped.
      */
     private fun release(backend: LocalBackend, wasIdle: Boolean) {
-        if (wasIdle && backend.isAlive && manifest != null) {
+        // An engine started with other settings ("Web search" changed during its turn) is not parked: it would serve a
+        // later open with the old tools.
+        if (wasIdle && backend.isAlive && manifest != null && !stale(backend)) {
             backend.park()
             val pool = if (isChat(backend.config.cwd)) chatIdle else idle
             for (old in pool.park(backend, backend.engineCwd ?: backend.config.cwd)) {
@@ -526,28 +550,51 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     private fun configFor(project: File) = LocalConfig(name = project.name, version = manifest?.engine.orEmpty(), cwd = project.path)
 
     private fun newBackend(config: LocalConfig, target: SessionTarget): LocalBackend {
+        val webSearch = app.settings.settings.value.webSearch
         val backend = LocalBackend(
             config = config,
             target = target,
-            launcher = launcher,
+            // The flags read at start ("Web search") are fixed per engine, relaunches included; [launchedWith] keeps them.
+            launcher = EngineLauncher { t, cwd -> launch(t, cwd, webSearch) },
             newestSession = { cwd -> sessions(File(cwd)).firstOrNull()?.file },
             freshSessionFile = ::emptySession,
             killer = reaper,
             onStderr = { Log.i(ENGINE_TAG, it) },
         )
+        launchedWith[backend] = webSearch
         watch(backend)
         return backend
     }
 
-    private val launcher = EngineLauncher { target, cwd ->
+    /** The "Web search" setting each engine started with (its tool flags, ChatSpace). */
+    private val launchedWith: MutableMap<LocalBackend, Boolean> = Collections.synchronizedMap(WeakHashMap())
+
+    /** [backend] started with another "Web search" than the current one: it is replaced instead of reused or parked. */
+    private fun stale(backend: LocalBackend): Boolean = LivePolicy.staleEngine(launchedWith[backend], app.settings.settings.value.webSearch)
+
+    /**
+     * The live session in [dir] stops when its engine is stale and it is not in a turn, so this open starts or takes a
+     * current engine (a turn in progress keeps its engine; the next open after it ends replaces it).
+     */
+    private fun retireStale(dir: File) {
+        val live = liveIn(dir) ?: return
+        val backend = live.localBackend ?: return
+        if (stale(backend) && LivePolicy.restartsForSettings(live.state.value)) {
+            Log.i(TAG, "replacing the engine of ${dir.name}: started with other settings")
+            live.stop(keepEngine = false)
+        }
+    }
+
+    private suspend fun launch(target: SessionTarget, cwd: String, webSearch: Boolean): java.lang.Process {
         val m = ensureSetup() ?: throw EngineStartException(unavailable ?: (_status.value as? EngineStatus.Failed)?.message ?: "The engine is not available")
         val project = File(cwd)
         project.mkdirs()
         if (!project.isDirectory) throw EngineStartException("Cannot create the project folder $cwd")
-        // In the chats' directory: no tools, the chats' session folder and prompt (ChatSpace).
-        val command = listOf(paths.engine.path) + ChatSpace.engineArgs(target, cwd, paths.home, paths.agentDir)
+        // In the chats' directory: the chats' tools, session folder and prompt; the web tools only while [webSearch] (the
+        // setting when this engine was made, [launchedWith]) is on (ChatSpace).
+        val command = listOf(paths.engine.path) + ChatSpace.engineArgs(target, cwd, paths.home, paths.agentDir, webSearch)
         Log.i(TAG, "starting engine ${m.engine} in ${project.name} ${target.cliArgs().joinToString(" ")}${if (isChat(cwd)) " (chat)" else ""}")
-        ProcessBuilder(command).directory(project).apply {
+        return ProcessBuilder(command).directory(project).apply {
             val env = environment()
             val wanted = engineEnvironment(paths, env.toMap(), TimeZone.getDefault().id, m.env, app.github.gitEnvironment())
             env.clear()
