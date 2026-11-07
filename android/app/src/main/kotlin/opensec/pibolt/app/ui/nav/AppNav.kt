@@ -93,7 +93,7 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit) {
     var linkError by remember { mutableStateOf<String?>(null) }
     // A link from outside the app (a browser, a chat) pairs only after the user confirms it in the app.
     var linkToConfirm by remember { mutableStateOf<PairingPayload?>(null) }
-    val liveSession by app.session.collectAsState()
+    val liveSession by app.remote.collectAsState()
 
     fun usePairing(text: String): String? {
         val payload = try {

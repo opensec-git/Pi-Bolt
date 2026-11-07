@@ -126,7 +126,7 @@ fun HomeScreen(
     val meta by store.state.collectAsStateWithLifecycle()
     val metaLoaded by store.loaded.collectAsStateWithLifecycle()
     val hosts by app.hosts.hosts.collectAsStateWithLifecycle()
-    val remote by app.session.collectAsStateWithLifecycle()
+    val remote by app.remote.collectAsStateWithLifecycle()
     val local by LocalSessions.current.collectAsStateWithLifecycle()
     val update by app.updates.state.collectAsStateWithLifecycle()
     val showUpdate = update.job != UpdateJob.Idle || (update.decision as? UpdateRules.Decision.Available)?.snoozed == false

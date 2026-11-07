@@ -5,6 +5,7 @@ import android.app.Application
 import android.content.ComponentCallbacks2
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +22,8 @@ import opensec.pibolt.app.data.SettingsStore
 import opensec.pibolt.app.engine.EngineApi
 import opensec.pibolt.app.engine.LocalEngine
 import opensec.pibolt.app.session.Notifications
+import opensec.pibolt.app.session.LiveRegistry
+import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import opensec.pibolt.app.update.UpdateManager
@@ -50,10 +53,28 @@ class PiBoltApp : Application() {
     /** Work that outlives any screen, on the main thread (UI-side bookkeeping such as turn durations). */
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    private val _session = MutableStateFlow<SessionController?>(null)
+    private val live = LiveRegistry<SessionController>(SystemClock::elapsedRealtime)
 
-    /** The one live session, if any. */
-    val session: StateFlow<SessionController?> = _session.asStateFlow()
+    /**
+     * Every live session: up to [opensec.pibolt.app.engine.LivePolicy.MAX_LIVE] on this phone's engine (one per
+     * project), each with its own engine process, and at most one with a computer. They run side by side: opening or
+     * switching to one stops none of the others.
+     */
+    val sessions: StateFlow<List<SessionController>> = live.all
+
+    /** The session last opened or shown (remote or local), if it is still live. */
+    val session: StateFlow<SessionController?> = live.focused
+
+    private val _remote = MutableStateFlow<SessionController?>(null)
+
+    /** The live remote-control session, if any. */
+    val remote: StateFlow<SessionController?> = _remote.asStateFlow()
+
+    /** The user is looking at [controller]: it gets the focus (notifications, memory rules keep it last). */
+    fun focus(controller: SessionController) = live.focus(controller)
+
+    /** When [controller] was last opened or shown (elapsedRealtime), 0 when not live. */
+    fun lastUsed(controller: SessionController): Long = live.lastUsed(controller)
 
     @Volatile
     private var startedActivities = 0
@@ -74,6 +95,7 @@ class PiBoltApp : Application() {
         identity = DeviceIdentity(this)
         updates = UpdateManager(this)
         Notifications.createChannels(this)
+        LocalSessions.follow(this)
         SessionAlerts.watchBackgroundAgents(this)
         UpdateNotifications.createChannel(this)
         localEngine.prefetch()
@@ -98,8 +120,13 @@ class PiBoltApp : Application() {
 
     /** Connect to a paired computer (or return the live session with it). */
     fun open(host: Host): SessionController {
-        _session.value?.let { if (it.hostId == host.id && !it.stopped) return it }
-        return replace(SessionController(this, host.id, host.name, host.endpoints, pairSecret = null))
+        _remote.value?.let {
+            if (it.hostId == host.id && !it.stopped) {
+                live.focus(it)
+                return it
+            }
+        }
+        return replaceRemote(SessionController(this, host.id, host.name, host.endpoints, pairSecret = null))
     }
 
     /**
@@ -117,17 +144,17 @@ class PiBoltApp : Application() {
         } else {
             SessionController(this, payload.hostKeyId, payload.hostName, payload.endpoints, pairSecret = payload.secret)
         }
-        return replace(controller)
+        return replaceRemote(controller)
     }
 
+    /** Ends the remote-control session. Sessions on this phone keep running. */
     fun closeSession() {
-        _session.value?.stop()
-        _session.value = null
+        _remote.value?.stop()
     }
 
     /** Forget a computer on this phone. The computer still lists the phone until revoked in /remote-control devices. */
     fun forget(hostId: String) {
-        if (_session.value?.hostId == hostId) closeSession()
+        if (_remote.value?.hostId == hostId) closeSession()
         hosts.remove(hostId)
         recents.forget(hostId)
     }
@@ -156,8 +183,9 @@ class PiBoltApp : Application() {
         // the next open after a quick look at another app a cold start. It stops a minute later unless the app is back.
         @Suppress("DEPRECATION")
         when {
-            level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL ->
-                localEngine.trimMemory("trim level $level")
+            level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL ->
+                localEngine.trimMemory("trim level $level", critical = true)
+            level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE -> localEngine.trimMemory("trim level $level")
             level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> localEngine.trimSoon("trim level $level")
         }
     }
@@ -166,16 +194,33 @@ class PiBoltApp : Application() {
     override fun onLowMemory() {
         @Suppress("DEPRECATION")
         super.onLowMemory()
-        localEngine.trimMemory("low memory")
+        localEngine.trimMemory("low memory", critical = true)
     }
 
-    /** Make [controller] the live session, stopping the previous one. */
-    internal fun replaceSession(controller: SessionController): SessionController = replace(controller)
-
-    private fun replace(controller: SessionController): SessionController {
-        _session.value?.stop()
-        _session.value = controller
+    /**
+     * Adds a session on this phone's engine and focuses it, in place of [replacing] (the project's previous session,
+     * which stops). Other sessions keep running.
+     */
+    internal fun addLocalSession(controller: SessionController, replacing: SessionController?): SessionController {
+        live.add(controller, replacing)
+        replacing?.stop()
         controller.start()
         return controller
+    }
+
+    /** The remote-control session: one at a time, so it replaces the previous one. Local sessions keep running. */
+    private fun replaceRemote(controller: SessionController): SessionController {
+        val previous = _remote.value
+        _remote.value = controller
+        live.add(controller, previous)
+        previous?.stop()
+        controller.start()
+        return controller
+    }
+
+    /** [controller] stopped (SessionController.stop): it leaves the live sessions. */
+    internal fun sessionStopped(controller: SessionController) {
+        live.remove(controller)
+        if (_remote.value === controller) _remote.value = null
     }
 }

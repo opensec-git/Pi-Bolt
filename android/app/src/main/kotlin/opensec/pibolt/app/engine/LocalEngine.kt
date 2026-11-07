@@ -137,13 +137,24 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
             fresh -> SessionTarget.Fresh
             else -> SessionTarget.Continue
         }
-        val live = app.session.value?.takeIf { it.isLocal && it.project == dir && !it.stopped }
-        if (live != null && (target == SessionTarget.Continue || (target is SessionTarget.Resume && target.sessionFile == live.sessionFile))) return live
+        val live = liveIn(dir)
+        if (live != null && (target == SessionTarget.Continue || (target is SessionTarget.Resume && target.sessionFile == live.sessionFile))) {
+            app.focus(live)
+            return live
+        }
         // "Continue" is the project's newest saved session (subagents' sessions skipped), or a new one.
         val resolved = if (target == SessionTarget.Continue) sessions(dir).firstOrNull()?.let { SessionTarget.Resume(it.file) } ?: SessionTarget.Fresh else target
         val want = when (resolved) {
             is SessionTarget.Resume -> IdlePool.Want.Session(resolved.sessionFile)
             else -> IdlePool.Want.New(dir.path)
+        }
+        // A project without a live session: at the cap, an idle session makes room (never a busy one).
+        if (live == null) {
+            when (val room = LivePolicy.roomFor(liveRules())) {
+                LivePolicy.Room.Free -> Unit
+                is LivePolicy.Room.Stop -> localSessions().firstOrNull { it.project?.path == room.key }?.stop()
+                is LivePolicy.Room.Full -> throw IllegalStateException(room.message)
+            }
         }
         // The live session is in this project: when it is idle, an idle engine that already has the wanted session takes
         // over (the live one is parked for the way back); else the live engine moves over RPC (a busy one is never stopped
@@ -154,12 +165,13 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
                 is SessionTarget.Resume -> live.switchSession(resolved.sessionFile)
                 else -> live.newSession()
             }
+            app.focus(live)
             return live
         }
         val config = configFor(dir)
         val backend = taken?.engine?.also { it.assign(config, resolved) } ?: newBackend(config, resolved)
         val controller = SessionController.local(app, dir, backend, ::release)
-        app.replaceSession(controller)
+        app.addLocalSession(controller, replacing = live)
         opening.incrementAndGet()
         scope.launch {
             prefs.edit { putString(KEY_LAST_PROJECT, dir.path) }
@@ -219,15 +231,32 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         return if (path == userForm || path.startsWith("$userForm/")) File(paths.dataDir.path + path.removePrefix(userForm)) else File(path)
     }
 
-    /** Stop the idle engines (memory pressure, or long in the background). */
-    fun trimMemory(reason: String) {
+    /**
+     * Memory pressure, or long in the background: stop the idle engines, then idle live sessions off screen
+     * ([LivePolicy.trim]; all of them when [critical]). A busy session is never stopped.
+     */
+    fun trimMemory(reason: String, critical: Boolean = false) {
         val stopped = idle.drain()
-        if (stopped.isEmpty()) return
-        Log.i(TAG, "stopping the spare engine ($reason): ${stopped.size} idle")
-        for (backend in stopped) {
-            forget(backend)
-            backend.close()
-        }
+        stopped.forEach(::stopIdle)
+        val sessions = localSessions()
+        val victims = LivePolicy.trim(liveRules(), critical, SystemClock.elapsedRealtime()).mapNotNull { key -> sessions.firstOrNull { it.project?.path == key } }
+        for (session in victims) session.stop(keepEngine = false)
+        if (stopped.isNotEmpty() || victims.isNotEmpty()) Log.i(TAG, "memory ($reason): stopped ${stopped.size} idle engines and ${victims.size} idle sessions")
+    }
+
+    private fun stopIdle(backend: LocalBackend) {
+        forget(backend)
+        backend.close()
+    }
+
+    private fun localSessions(): List<SessionController> = app.sessions.value.filter { it.isLocal && !it.stopped }
+
+    private fun liveIn(dir: File): SessionController? = localSessions().firstOrNull { it.project == dir }
+
+    /** The live sessions on this phone as [LivePolicy] sees them. */
+    private fun liveRules(): List<LivePolicy.Live> {
+        val shown = app.session.value.takeIf { app.isForeground }
+        return localSessions().map { LivePolicy.Live(it.project?.path.orEmpty(), it.isBusy, it === shown, app.lastUsed(it)) }
     }
 
     /** No activity is visible. The spare stops after a while unless the app comes back. */
@@ -434,7 +463,7 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     private fun deleteUnusedEmptySessions() {
         val inUse = buildSet {
             for (backend in idle.engines()) backend.sessionFile?.let(::add)
-            app.session.value?.sessionFile?.let(::add)
+            for (session in app.sessions.value) session.sessionFile?.let(::add)
         }
         for (path in emptySessions.toList()) {
             if (path in inUse) continue

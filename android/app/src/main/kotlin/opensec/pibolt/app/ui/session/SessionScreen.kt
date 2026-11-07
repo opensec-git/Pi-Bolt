@@ -166,12 +166,13 @@ fun SessionScreen(app: PiBoltApp, onBack: () -> Unit, onForgotten: () -> Unit, l
         LocalSessionScreen(app, local, onBack)
         return
     }
-    val controller by app.session.collectAsStateWithLifecycle()
+    val controller by app.remote.collectAsStateWithLifecycle()
     val c = controller
     if (c == null) {
         LaunchedEffect(Unit) { onBack() }
         return
     }
+    LaunchedEffect(c) { app.focus(c) }
     SessionContent(
         app = app,
         controller = c,
@@ -190,12 +191,14 @@ fun SessionScreen(app: PiBoltApp, onBack: () -> Unit, onForgotten: () -> Unit, l
 
 @Composable
 private fun LocalSessionScreen(app: PiBoltApp, project: String, onBack: () -> Unit) {
-    val current by LocalSessions.current.collectAsStateWithLifecycle()
-    val live = current?.takeIf { it.project.name == project }
+    // Each project's screen shows its own live session; the others keep running meanwhile.
+    val all by LocalSessions.all.collectAsStateWithLifecycle()
+    val live = all[project]
     if (live == null) {
         LaunchedEffect(Unit) { onBack() }
         return
     }
+    LaunchedEffect(live.controller) { app.focus(live.controller) }
     val store = remember { ProjectStore.get(app) }
     val meta by store.state.collectAsStateWithLifecycle()
     val title = meta.projects[project]?.title ?: project

@@ -58,7 +58,6 @@ import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.rememberSheetCloser
-import opensec.pibolt.app.ui.projects.LocalSessions
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
 import opensec.pibolt.app.update.NetworkKind
@@ -209,9 +208,8 @@ fun updateStatus(state: UpdateState): Pair<String, String?> {
 
 /** True while a turn runs in a session on this phone, or on a computer this phone is connected to. */
 private fun piWorking(app: PiBoltApp): String? {
-    val local = LocalSessions.current.value?.controller?.takeIf { !it.stopped }
-    if (local?.state?.value?.isRunning == true) return "Pi is working; updating stops it."
-    val remote = app.session.value?.takeIf { !it.stopped }
+    if (app.sessions.value.any { it.isLocal && !it.stopped && it.state.value.isRunning }) return "Pi is working; updating stops it."
+    val remote = app.remote.value?.takeIf { !it.stopped }
     if (remote?.state?.value?.isRunning == true) return "Pi is working on ${remote.hostName.value}; updating disconnects this phone, the computer keeps going."
     return null
 }

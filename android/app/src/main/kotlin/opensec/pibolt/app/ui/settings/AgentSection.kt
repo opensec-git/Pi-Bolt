@@ -58,7 +58,7 @@ internal fun AgentSection(app: PiBoltApp, show: (String) -> Boolean) {
         defaults = next
         scope.launch {
             runCatching { file.write(next) }
-            LocalSessions.current.value?.controller?.takeIf { !it.stopped }?.applyAgentDefaults(next)
+            for (live in LocalSessions.all.value.values) live.controller.takeIf { !it.stopped }?.applyAgentDefaults(next)
         }
     }
     // The model list comes from a running on-device session (Pi lists only models it can authenticate).
