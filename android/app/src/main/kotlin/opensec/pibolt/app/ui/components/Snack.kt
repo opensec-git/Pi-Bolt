@@ -1,7 +1,5 @@
 package opensec.pibolt.app.ui.components
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 
 enum class SnackKind { Info, Success, Warning, Error }
 
@@ -52,7 +51,10 @@ fun snackKindOf(notifyType: String): SnackKind = when (notifyType.lowercase()) {
     else -> SnackKind.Info
 }
 
-/** Snackbars: the menu layer (surface2) with a lineStrong ring, radius md, a kind-coloured icon. */
+/**
+ * Snackbars, in the redesign's glass: a floating capsule ([Radius.pill], glass fill and ring) 20dp from the window's
+ * sides, a 20dp kind glyph, the message in rowMeta ink1 (four lines at most) and an ink1 text action.
+ */
 @Composable
 fun PiSnackHost(state: SnackbarHostState, modifier: Modifier = Modifier) {
     SnackbarHost(state, modifier) { data -> PiSnack(data) }
@@ -68,20 +70,19 @@ private fun PiSnack(data: SnackbarData) {
         SnackKind.Warning -> Icons.Rounded.WarningAmber to colors.warning
         SnackKind.Error -> Icons.Rounded.ErrorOutline to colors.danger
     }
-    val shape = RoundedCornerShape(Radius.md)
+    val shape = RoundedCornerShape(Radius.pill)
     Row(
         Modifier
-            .padding(horizontal = 16.dp, vertical = 8.dp)
+            .padding(horizontal = Space.page, vertical = Space.sm)
             .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .background(colors.surface2, shape)
-            .border(1.dp, colors.lineStrong, shape)
-            .padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
+            .heightIn(min = 52.dp)
+            .glass(shape, colors)
+            .padding(start = Space.lg + Space.xxs, end = Space.sm, top = Space.md - Space.xxs, bottom = Space.md - Space.xxs),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(IconSize.md))
-        Spacer(Modifier.width(12.dp))
-        Text(data.visuals.message, style = Pi.type.body, color = colors.ink1, modifier = Modifier.weight(1f).padding(end = 8.dp), maxLines = 4, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.width(Space.md))
+        Text(data.visuals.message, style = Pi.type.rowMeta, color = colors.ink1, modifier = Modifier.weight(1f).padding(end = Space.sm), maxLines = 4, overflow = TextOverflow.Ellipsis)
         data.visuals.actionLabel?.let { TextAction(it, onClick = { data.performAction() }, color = colors.ink1) }
     }
 }

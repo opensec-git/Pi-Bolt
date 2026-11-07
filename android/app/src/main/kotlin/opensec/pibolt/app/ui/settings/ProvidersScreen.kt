@@ -1,16 +1,8 @@
 package opensec.pibolt.app.ui.settings
 
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.DeleteOutline
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -19,12 +11,6 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -33,21 +19,27 @@ import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.engine.CustomProvider
 import opensec.pibolt.app.engine.ModelsFile
 import opensec.pibolt.app.ui.components.ConfirmSheet
+import opensec.pibolt.app.ui.components.GroupEnd
+import opensec.pibolt.app.ui.components.GroupRow
 import opensec.pibolt.app.ui.components.IconAction
-import opensec.pibolt.app.ui.components.SecondaryButton
-import opensec.pibolt.app.ui.providers.ProviderBadge
+import opensec.pibolt.app.ui.components.LargeTitlePage
+import opensec.pibolt.app.ui.providers.LogoMark
+import opensec.pibolt.app.ui.theme.IconSize
 import opensec.pibolt.app.ui.providers.ProviderCatalog
 import opensec.pibolt.app.ui.providers.ProviderSheet
 import opensec.pibolt.app.ui.theme.Pi
 
 /**
- * Settings > Model providers: the providers with a stored credential, by their human name and mark.
- * Custom endpoints (models.json) show their host and model; removing one also removes its models.json entry.
+ * Settings > Models & keys > Providers, a large-title page: the providers with a stored credential, by their human
+ * name and mark on a glyph tile, each with a remove action, then Add provider. Custom endpoints (models.json) show
+ * their host and model; removing one also removes its models.json entry (confirmed first).
  */
 @Composable
-fun ProvidersSection(app: PiBoltApp) {
+fun ProvidersScreen(app: PiBoltApp, onBack: () -> Unit) = LargeTitlePage("Providers", onBack = onBack) { ProvidersList(app) }
+
+@Composable
+private fun ProvidersList(app: PiBoltApp) {
     val colors = Pi.colors
-    val type = Pi.type
     val auth = app.engine.auth
     val agentDir = app.engine.agentDir
     val configured by auth.configured.collectAsStateWithLifecycle()
@@ -62,39 +54,29 @@ fun ProvidersSection(app: PiBoltApp) {
     }
     val ids = remember(configured, custom) { configured.sortedBy { ProviderCatalog.name(it).lowercase() } }
 
-    if (ids.isEmpty()) {
-        Text(
-            "No provider yet. Add an API key so Pi can call a model from this phone.",
-            style = type.body,
-            color = colors.ink2,
-            modifier = Modifier.padding(top = 8.dp, bottom = 12.dp),
-        )
-    } else {
-        Column(Modifier.padding(bottom = 8.dp)) {
-            for (id in ids) {
+    val rows = buildList<SettingsRow> {
+        for (id in ids) {
+            add { d ->
                 val name = ProviderCatalog.name(id)
                 val endpoint = custom[id]
                 val subtitle = when {
                     endpoint != null -> listOfNotNull(ProviderCatalog.hostOf(endpoint.baseUrl), endpoint.models.firstOrNull()).joinToString(" · ")
-                    ProviderCatalog.get(id) != null -> "Key stored on this phone"
-                    else -> "Credential stored on this phone"
+                    ProviderCatalog.get(id) != null -> "Key on this phone"
+                    else -> "Credential on this phone"
                 }
-                Row(
-                    Modifier.fillMaxWidth().height(56.dp).semantics(mergeDescendants = true) { contentDescription = "$name, $subtitle" },
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ProviderBadge(ProviderCatalog.brand(id))
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(name, style = type.body, color = colors.ink1, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                        Text(subtitle, style = type.meta, color = colors.ink3, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    }
-                    IconAction(Icons.Rounded.DeleteOutline, "Remove $name", onClick = { removing = id }, tint = colors.ink3, size = 20.dp)
-                }
+                GroupRow(
+                    name,
+                    leading = { LogoMark(ProviderCatalog.brand(id), size = IconSize.sm, tint = colors.ink1) },
+                    meta = subtitle,
+                    metaMaxLines = 1,
+                    divider = d,
+                    trailing = { IconAction(Icons.Rounded.DeleteOutline, "Remove $name", onClick = { removing = id }, tint = colors.ink3, size = IconSize.md) },
+                )
             }
         }
+        add { d -> GroupRow("Add provider", icon = Icons.Rounded.Add, iconTint = colors.tint0, onClick = { adding = true }, end = GroupEnd.None, divider = d) }
     }
-    SecondaryButton("Add provider", onClick = { adding = true }, icon = Icons.Rounded.Add, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
+    SettingsBlock(rows, header = if (ids.isEmpty()) "No provider yet" else "On this phone", footer = "Keys stay on this phone.")
 
     if (adding) {
         ProviderSheet(auth = auth, configured = configured, firstRun = false, onSaved = {

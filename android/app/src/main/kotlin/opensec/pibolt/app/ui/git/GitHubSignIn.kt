@@ -18,7 +18,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.OpenInNew
+import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.AccountCircle
+import androidx.compose.material.icons.rounded.Code
 import androidx.compose.material.icons.rounded.Key
+import opensec.pibolt.app.ui.components.GroupEnd
+import opensec.pibolt.app.ui.components.GroupRow
+import opensec.pibolt.app.ui.components.InsetGroup
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -55,19 +61,18 @@ import opensec.pibolt.app.ui.components.QuadMode
 import opensec.pibolt.app.ui.components.QuadSpinner
 import opensec.pibolt.app.ui.components.SecondaryButton
 import opensec.pibolt.app.ui.components.SheetHeader
-import opensec.pibolt.app.ui.components.TextAction
 import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.Radius
 
 /**
- * Settings > GitHub. Signed out: "Sign in with GitHub" (device flow, when this build has an OAuth client id) and "Use a
- * personal access token". Signed in: the account, its scopes and Sign out. The token itself is never shown again.
+ * Settings > GitHub, as a group. Signed out: "Sign in with GitHub" (device flow, when this build has an OAuth client
+ * id) and "Use a personal access token". Signed in: the account with how and which scopes, and Sign out (confirmed).
+ * The token itself is never shown again.
  */
 @Composable
-fun GitHubSection(app: PiBoltApp) {
+fun GitHubSection(app: PiBoltApp, header: String = "GitHub") {
     val colors = Pi.colors
-    val type = Pi.type
     val github = app.github
     val state by github.state.collectAsStateWithLifecycle()
     var sheet by remember { mutableStateOf<TokenKind?>(null) }
@@ -75,32 +80,17 @@ fun GitHubSection(app: PiBoltApp) {
     when (val s = state) {
         is GitHubState.SignedIn -> {
             val a = s.account
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 8.dp).semantics(mergeDescendants = true) {}, verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(a.name?.let { "$it (@${a.login})" } ?: "@${a.login}", style = type.bodyStrong, color = colors.ink1)
-                    val how = if (a.kind == TokenKind.Device) "Signed in with GitHub" else "Personal access token"
-                    val scopes = if (a.scopes.isEmpty()) "fine-grained or no scopes" else a.scopes.joinToString(", ")
-                    Text("$how · $scopes", style = type.meta, color = colors.ink3)
-                }
+            val how = if (a.kind == TokenKind.Device) "Signed in with GitHub" else "Personal access token"
+            val scopes = if (a.scopes.isEmpty()) "fine-grained or no scopes" else a.scopes.joinToString(", ")
+            InsetGroup(header = header) {
+                GroupRow(a.name?.let { "$it (@${a.login})" } ?: "@${a.login}", icon = Icons.Rounded.AccountCircle, meta = "$how · $scopes")
+                GroupRow("Sign out", icon = Icons.AutoMirrored.Rounded.Logout, iconTint = colors.danger, titleColor = colors.danger, onClick = { signingOut = true }, end = GroupEnd.None, divider = false)
             }
-            Text(
-                "git push, pull and clone to github.com use this account, in the Changes tab and in Pi's own git commands (new sessions).",
-                style = type.meta,
-                color = colors.ink3,
-                modifier = Modifier.padding(bottom = 12.dp),
-            )
-            SecondaryButton("Sign out", onClick = { signingOut = true }, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
         }
         GitHubState.SignedOut -> {
-            Text(
-                "Sign in to clone private repositories, push, pull and open pull requests from this phone.",
-                style = type.body,
-                color = colors.ink2,
-                modifier = Modifier.padding(top = 8.dp, bottom = 12.dp),
-            )
-            Column(Modifier.padding(bottom = 8.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (github.deviceFlowAvailable) PrimaryButton("Sign in with GitHub", onClick = { sheet = TokenKind.Device }, modifier = Modifier.fillMaxWidth())
-                SecondaryButton("Use a personal access token", onClick = { sheet = TokenKind.Personal }, icon = Icons.Rounded.Key, modifier = Modifier.fillMaxWidth())
+            InsetGroup(header = header) {
+                if (github.deviceFlowAvailable) GroupRow("Sign in with GitHub", icon = Icons.Rounded.Code, onClick = { sheet = TokenKind.Device })
+                GroupRow("Use a personal access token", icon = Icons.Rounded.Key, onClick = { sheet = TokenKind.Personal }, divider = false)
             }
         }
     }
@@ -121,6 +111,12 @@ fun GitHubSection(app: PiBoltApp) {
             onDismiss = { signingOut = false },
         )
     }
+}
+
+/** The sign-in sheet of Settings' account card: the device flow when this build has it, else the token sheet. */
+@Composable
+fun GitHubSignInSheet(app: PiBoltApp, onDismiss: () -> Unit) {
+    if (app.github.deviceFlowAvailable) DeviceSignInSheet(app, onDismiss) else TokenSheet(app, onDismiss)
 }
 
 /** After sign-in: commits get the account's name and no-reply email unless git already has an identity. */
@@ -163,7 +159,7 @@ private fun DeviceSignInSheet(app: PiBoltApp, onDismiss: () -> Unit) {
     }
     PiSheet(onDismiss = onDismiss, state = sheetState) {
         SheetHeader("Sign in with GitHub")
-        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             when (val s = step) {
                 DeviceFlowState.Requesting, is DeviceFlowState.Authorized -> Row(Modifier.padding(vertical = 24.dp), verticalAlignment = Alignment.CenterVertically) {
                     QuadSpinner(QuadMode.Connect, size = 20.dp, color = colors.ink2)
@@ -171,15 +167,17 @@ private fun DeviceSignInSheet(app: PiBoltApp, onDismiss: () -> Unit) {
                     Text("Asking GitHub for a code…", style = type.body, color = colors.ink2)
                 }
                 is DeviceFlowState.ShowCode -> {
-                    Text("Open the GitHub page and enter this code:", style = type.body, color = colors.ink2, textAlign = TextAlign.Center)
+                    Text("Enter this code on GitHub.", style = type.body, color = colors.ink2, textAlign = TextAlign.Center)
                     Spacer(Modifier.height(16.dp))
-                    val shape = RoundedCornerShape(Radius.md)
+                    val shape = RoundedCornerShape(Radius.tile)
                     Box(
                         Modifier
-                            .background(colors.surface1, shape)
-                            .border(1.dp, colors.lineStrong, shape)
-                            .padding(horizontal = 24.dp, vertical = 14.dp)
+                            .fillMaxWidth()
+                            .background(colors.surface2, shape)
+                            .border(1.dp, colors.line, shape)
+                            .padding(horizontal = 24.dp, vertical = 20.dp)
                             .semantics { contentDescription = "Code ${s.userCode.toCharArray().joinToString(" ")}" },
+                        contentAlignment = Alignment.Center,
                     ) {
                         Text(s.userCode, style = type.display.merge(Pi.type.mono.copy(fontSize = type.display.fontSize)), color = colors.ink1)
                     }
@@ -194,7 +192,7 @@ private fun DeviceSignInSheet(app: PiBoltApp, onDismiss: () -> Unit) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         QuadSpinner(QuadMode.Wait, size = 16.dp, color = colors.ink3)
                         Spacer(Modifier.width(10.dp))
-                        Text("Waiting for you to approve on GitHub", style = type.meta, color = colors.ink3)
+                        Text("Waiting for your approval", style = type.meta, color = colors.ink3)
                     }
                 }
                 is DeviceFlowState.Failed -> {
@@ -203,7 +201,6 @@ private fun DeviceSignInSheet(app: PiBoltApp, onDismiss: () -> Unit) {
                 }
             }
             Spacer(Modifier.height(8.dp))
-            TextAction("Cancel", onClick = { close(onDismiss) }, color = colors.ink2, modifier = Modifier.height(48.dp))
         }
     }
 }

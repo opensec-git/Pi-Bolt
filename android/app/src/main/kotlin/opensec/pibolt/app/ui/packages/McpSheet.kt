@@ -101,7 +101,7 @@ fun McpSheet(engine: EngineApi, onReload: (() -> Unit)?, onMessage: (String) -> 
     }
 
     PiSheet(onDismiss = onDismiss, state = state) {
-        SheetHeader("MCP servers", subtitle = "Tools from Model Context Protocol servers, for every session on this phone.")
+        SheetHeader("MCP servers", subtitle = "Tools for every session on this phone.")
         Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).verticalScroll(rememberScrollState())) {
             if (changed && onReload != null) {
                 F2Well {

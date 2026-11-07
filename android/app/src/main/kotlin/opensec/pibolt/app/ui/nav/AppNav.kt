@@ -5,7 +5,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import opensec.pibolt.app.ui.components.ButtonRow
 import opensec.pibolt.app.ui.components.Notice
 import opensec.pibolt.app.ui.components.PiCard
-import opensec.pibolt.app.ui.components.SectionLabel
 import opensec.pibolt.app.ui.components.SheetHeader
 import opensec.pibolt.app.ui.components.SnackKind
 import androidx.compose.animation.AnimatedContentTransitionScope
@@ -68,10 +67,13 @@ import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import opensec.pibolt.app.ui.session.subagent.LocalSubagentNav
 import opensec.pibolt.app.ui.session.subagent.SubagentNav
 import opensec.pibolt.app.ui.session.subagent.SubagentOverlay
+import opensec.pibolt.app.ui.settings.ProvidersScreen
 import opensec.pibolt.app.ui.settings.RuntimesScreen
 import opensec.pibolt.app.ui.settings.SettingsScreen
 import opensec.pibolt.app.ui.theme.Pi
 import opensec.pibolt.app.ui.theme.PiMotion
+import opensec.pibolt.app.ui.theme.Radius
+import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.app.ui.terminal.PreviewScreen
 import opensec.pibolt.app.ui.terminal.TerminalScreen
 import opensec.pibolt.app.ui.update.UpdateSheets
@@ -89,6 +91,7 @@ object Routes {
     const val SECRETS = "secrets/{name}"
     const val PREVIEW = "preview/{port}"
     const val RUNTIMES = "runtimes"
+    const val PROVIDERS = "providers"
 
     fun project(name: String) = "project/" + Uri.encode(name)
 
@@ -289,13 +292,28 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendin
                     }
                     composable(Routes.SETTINGS) {
                         CompositionLocalProvider(LocalNavScope provides this) {
-                            SettingsScreen(app = app, onBack = { nav.popBackStack() }, onRuntimes = { nav.navigate(Routes.RUNTIMES) { launchSingleTop = true } })
+                            SettingsScreen(
+                                app = app,
+                                onBack = { nav.popBackStack() },
+                                onRuntimes = { nav.navigate(Routes.RUNTIMES) { launchSingleTop = true } },
+                                onProviders = { nav.navigate(Routes.PROVIDERS) { launchSingleTop = true } },
+                                onScan = { nav.navigate(Routes.SCAN) { launchSingleTop = true } },
+                                onOpenHost = { host ->
+                                    app.open(host)
+                                    nav.navigate(Routes.SESSION) { launchSingleTop = true }
+                                },
+                                onResumeHost = { nav.navigate(Routes.SESSION) { launchSingleTop = true } },
+                                onPairingText = { usePairing(it) },
+                            )
                         }
                     }
                     composable(Routes.RUNTIMES) {
                         CompositionLocalProvider(LocalNavScope provides this) {
                             RuntimesScreen(app = app, onBack = { nav.popBackStack() })
                         }
+                    }
+                    composable(Routes.PROVIDERS) {
+                        ProvidersScreen(app = app, onBack = { nav.popBackStack() })
                     }
                 }
             }
@@ -335,29 +353,28 @@ private fun PairConfirmSheet(payload: PairingPayload, known: Boolean, endsSessio
     PiSheet(onDismiss = onCancel, state = state) {
         SheetHeader(
             if (known) "Connect to ${payload.hostName}?" else "Pair with ${payload.hostName}?",
-            subtitle = "A link opened Pi-Bolt to " + (if (known) "connect to a paired computer." else "pair this phone with a computer.") +
-                " Only continue if you just ran /\u2060remote-control on this computer.",
+            subtitle = "Only continue if you just ran /\u2060remote-control on this computer.",
+            closable = false,
         )
-        Column(Modifier.padding(horizontal = 16.dp)) {
-            Spacer(Modifier.height(8.dp))
-            SectionLabel(if (payload.endpoints.size == 1) "Address" else "Addresses")
-            Spacer(Modifier.height(6.dp))
-            PiCard(padding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)) {
+        Column(Modifier.padding(horizontal = Space.lg)) {
+            Spacer(Modifier.height(Space.sm))
+            Text(if (payload.endpoints.size == 1) "Address" else "Addresses", style = type.rowMeta, color = colors.ink3, modifier = Modifier.padding(start = Space.lg, bottom = Space.sm))
+            PiCard(radius = Radius.tile, fill = colors.surface2, padding = PaddingValues(horizontal = Space.lg, vertical = Space.md)) {
                 for (endpoint in payload.endpoints) Text(endpoint, style = type.monoMeta, color = colors.ink2, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(vertical = 2.dp))
             }
             if (endsSession != null) {
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(Space.md))
                 Notice("This ends the current session with $endsSession.", kind = SnackKind.Warning)
             }
-            Spacer(Modifier.height(20.dp))
-            ButtonRow(Modifier.padding(horizontal = 4.dp)) {
+            Spacer(Modifier.height(Space.xl))
+            ButtonRow(Modifier.padding(horizontal = Space.xs)) {
                 SecondaryButton("Cancel", onClick = { close(onCancel) })
                 PrimaryButton(if (known) "Connect" else "Pair", onClick = {
                     haptics.confirm()
                     close(onConfirm)
                 })
             }
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(Space.sm))
         }
     }
 }
