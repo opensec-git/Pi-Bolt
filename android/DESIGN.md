@@ -417,9 +417,9 @@ between groups), `GroupRow` (a 30dp `GlyphTile`, the title in rowTitle, an optio
 rowMeta ink3 at the end, trailing content, a chevron or open-in-new; at least 52dp; a hairline from the text start),
 `GroupSwitchRow` (the same row with `PiSwitch`, so every switch sits on one end column), `GroupControl` (a block for a
 control inside a group) and `PillSearchField` (a 48dp surface1 pill with the search glyph and a clear button).
-`GlyphTile` is the iOS-settings icon chip, kept quiet: a 30dp radius sm + 2 tile, the section's tint (one of the
-theme's five agent tints) at 16% with the glyph in the tint, or surface3 with an ink1 glyph for neutral sections and
-logos. `ChoiceSheet` picks one of a few values (a sheet of `InsetRow`s, an accent check on the current one; a pick
+`GlyphTile` is the icon chip, monochrome: a 30dp radius sm + 2 surface3 tile with an ink2 glyph (or a logo). Only a
+status colour (danger, success, warning) colours the glyph, and only where the row reports that state (Reset device key,
+a connected computer); sections are never colour-coded (`GlyphTone`). `ChoiceSheet` picks one of a few values (a sheet of `InsetRow`s, an accent check on the current one; a pick
 applies and closes). `PiMenu` / `PiMenuItem` are the popup menu: surface3, radius tile, a lineStrong ring, rowMeta
 items with 20dp glyphs.
 
@@ -1111,7 +1111,7 @@ otherwise. With no query an account card leads: the GitHub identity (a 48dp avat
 GitHub", or "Sign in with GitHub", which opens the sign-in sheet) over the default model ("Default model" with the
 model and provider beneath, led by its mark; it opens the model picker of the open on-device session, or Providers
 when there is no key, or says to open a session). Then the groups, in order, as `InsetGroup`s of `GroupRow`s with
-tinted glyph tiles (one theme tint per section; neutral for GitHub, Advanced and About), values in ink3 and chevrons;
+monochrome glyph tiles (surface3, ink2 glyphs; colour only for a state), values in ink3 and chevrons;
 switches on one end column; no explanatory paragraphs:
 - Models & keys (apricot): Providers (count; opens the Providers page), Thinking level (a choice sheet). While
   searching, Default model is a row here too.
