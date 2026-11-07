@@ -1,0 +1,229 @@
+package opensec.pibolt.app.session
+
+import android.Manifest
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.RemoteInput
+import androidx.core.content.ContextCompat
+import opensec.pibolt.app.MainActivity
+import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.R
+import opensec.pibolt.app.background.SessionActionReceiver
+import opensec.pibolt.app.background.SessionActions
+import opensec.pibolt.app.ui.session.features2.SessionAlerts
+import opensec.pibolt.protocol.session.DialogRequest
+
+object Notifications {
+    const val ONGOING_ID = 1
+    private const val CHANNEL_SESSION = "session"
+    private const val CHANNEL_ALERTS = "alerts"
+
+    fun createChannels(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_SESSION, context.getString(R.string.channel_session), NotificationManager.IMPORTANCE_LOW)
+                .apply {
+                    description = context.getString(R.string.channel_session_desc)
+                    lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+                },
+        )
+        manager.createNotificationChannel(
+            NotificationChannel(CHANNEL_ALERTS, context.getString(R.string.channel_alerts), NotificationManager.IMPORTANCE_HIGH)
+                .apply {
+                    description = context.getString(R.string.channel_alerts_desc)
+                    lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+                },
+        )
+    }
+
+    /**
+     * A new process has no live session: a "needs an answer" left by a killed one is about a dialog that is gone, and a
+     * session notification of the old service must not linger (most builds remove it with the process; some do not).
+     * Finished alerts stay: their tap resumes the session from its file. Call once, before any session starts.
+     */
+    fun clearStale(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        val active = runCatching { manager.activeNotifications }.getOrNull() ?: return
+        for (n in active) {
+            val id = n.id
+            if (id == ONGOING_ID || RunningSummary.isKind(id, RunningSummary.ANSWER)) manager.cancel(n.tag, id)
+        }
+    }
+
+    private fun openApp(context: Context, project: String? = null, sessionFile: String? = null, requestCode: Int = 0): PendingIntent = PendingIntent.getActivity(
+        context,
+        requestCode,
+        // Carries the session, so a tap opens that exact one (features2.SessionAlerts); without one, the session in focus.
+        if (project != null) {
+            Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .putExtra(SessionAlerts.EXTRA_PROJECT, project)
+                .apply { sessionFile?.let { putExtra(SessionAlerts.EXTRA_SESSION, it) } }
+        } else {
+            SessionAlerts.openIntent(context)
+        },
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+    )
+
+    /**
+     * A broadcast to [SessionActionReceiver] carrying [request]. [slot] tells a notification's actions apart; [typed]
+     * actions are mutable, so the system can add the inline reply.
+     */
+    private fun action(context: Context, notificationId: Int, slot: Int, request: SessionActions.Request, typed: Boolean = false): PendingIntent {
+        val (name, extras) = SessionActions.encode(request)
+        val intent = Intent(context, SessionActionReceiver::class.java).setAction(name).putExtra(SessionActionReceiver.EXTRA_NOTIFICATION, notificationId)
+        extras.forEach { (k, v) -> intent.putExtra(k, v) }
+        val mutability = if (typed && Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else PendingIntent.FLAG_IMMUTABLE
+        return PendingIntent.getBroadcast(context, SessionActions.requestCode(notificationId, slot), intent, mutability or PendingIntent.FLAG_UPDATE_CURRENT)
+    }
+
+    /** A button; on a locked phone it asks for the unlock first (an answer may allow a command). */
+    private fun button(title: String, intent: PendingIntent): NotificationCompat.Action =
+        NotificationCompat.Action.Builder(0, title, intent).setAuthenticationRequired(true).build()
+
+    private fun reply(title: String, label: String, intent: PendingIntent, choices: List<String> = emptyList()): NotificationCompat.Action {
+        val input = RemoteInput.Builder(SessionActions.REPLY_KEY).setLabel(label)
+            .apply { if (choices.isNotEmpty()) setChoices(choices.map { it.take(40) }.toTypedArray()) }
+            .build()
+        return NotificationCompat.Action.Builder(0, title, intent)
+            .addRemoteInput(input)
+            .setAllowGeneratedReplies(false)
+            .setSemanticAction(NotificationCompat.Action.SEMANTIC_ACTION_REPLY)
+            .setShowsUserInterface(false)
+            .setAuthenticationRequired(true)
+            .build()
+    }
+
+    /** The session notification. [stoppable]: a run on this phone works, so Stop is offered. */
+    fun ongoing(context: Context, host: String, text: String, lines: List<String> = emptyList(), stoppable: Boolean = false): Notification =
+        NotificationCompat.Builder(context, CHANNEL_SESSION)
+            .setSmallIcon(R.drawable.ic_stat_bolt)
+            .setContentTitle(host)
+            .setContentText(text)
+            .apply { if (lines.isNotEmpty()) setStyle(NotificationCompat.InboxStyle().also { style -> lines.forEach(style::addLine) }) }
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
+            .setContentIntent(openApp(context))
+            .apply { if (stoppable) addAction(button("Stop", action(context, ONGOING_ID, 0, SessionActions.Request.StopAll))) }
+            .addAction(NotificationCompat.Action.Builder(0, "Open", openApp(context, requestCode = ONGOING_ID)).build())
+            .privateOnLockScreen(context, "Pi is working")
+            .build()
+
+    private fun sessionFile(context: Context, key: String): String? =
+        (context.applicationContext as? PiBoltApp)?.sessions?.value?.firstOrNull { it.hostId == key }?.sessionFile
+
+    /** A session finished while the app was away. [key]: its hostId (one notification per session); [project]: its project. */
+    fun settled(context: Context, key: String, project: String?, host: String, lastText: String, aborted: Boolean) {
+        val id = RunningSummary.notificationId(key, RunningSummary.SETTLED)
+        val title = if (aborted) "Pi stopped on $host" else "Pi finished on $host"
+        val text = lastText.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(200) ?: "Tap to see the result"
+        post(
+            context,
+            id,
+            NotificationCompat.Builder(context, CHANNEL_ALERTS)
+                .setSmallIcon(R.drawable.ic_stat_bolt)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(lastText.take(1000).ifBlank { text }))
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setAutoCancel(true)
+                .setContentIntent(openApp(context, project, sessionFile(context, key), id))
+                .addAction(reply("Reply", "Message Pi", action(context, id, 0, SessionActions.Request.Reply(key), typed = true)))
+                .privateOnLockScreen(context, if (aborted) "Pi stopped" else "Pi finished")
+                .build(),
+        )
+    }
+
+    /**
+     * Session [key] waits for [dialog]: a heads-up with the answer in it (option buttons, Yes and No, or an inline
+     * reply). [why]: the last reply was not usable, said in place of the message.
+     */
+    fun needsAnswer(context: Context, key: String, project: String?, host: String, dialog: DialogRequest, why: String? = null) {
+        val id = RunningSummary.notificationId(key, RunningSummary.ANSWER)
+        val text = why ?: dialog.title.ifBlank { "Tap to answer" }
+        val detail = listOfNotNull(why, dialog.title.takeIf { it.isNotBlank() }, dialog.message?.takeIf { it.isNotBlank() }).joinToString("\n")
+        val builder = NotificationCompat.Builder(context, CHANNEL_ALERTS)
+            .setSmallIcon(R.drawable.ic_stat_bolt)
+            .setContentTitle("Pi needs an answer on $host")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(detail.take(1000).ifBlank { text }))
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setOnlyAlertOnce(why != null)
+            .setAutoCancel(true)
+            .setContentIntent(openApp(context, project, sessionFile(context, key), id))
+            .privateOnLockScreen(context, "Pi needs an answer")
+        when (val answering = SessionActions.answering(dialog)) {
+            SessionActions.Answering.YesNo -> {
+                builder.addAction(button("Yes", action(context, id, 0, SessionActions.Request.Confirm(key, dialog.id, yes = true))))
+                builder.addAction(button("No", action(context, id, 1, SessionActions.Request.Confirm(key, dialog.id, yes = false))))
+            }
+            is SessionActions.Answering.Options -> answering.options.forEachIndexed { i, option ->
+                builder.addAction(button(option, action(context, id, i, SessionActions.Request.Answer(key, dialog.id, option))))
+            }
+            is SessionActions.Answering.Typed ->
+                builder.addAction(reply("Answer", answering.label, action(context, id, 0, SessionActions.Request.Answer(key, dialog.id), typed = true), answering.choices))
+        }
+        post(context, id, builder.build())
+    }
+
+    /** A reply reached a session that is no longer live (the app restarted, or the session closed). */
+    fun sessionClosed(context: Context, notificationId: Int) {
+        post(
+            context,
+            notificationId,
+            NotificationCompat.Builder(context, CHANNEL_ALERTS)
+                .setSmallIcon(R.drawable.ic_stat_bolt)
+                .setContentTitle("Session closed")
+                .setContentText("Open it to continue")
+                .setOnlyAlertOnce(true)
+                .setAutoCancel(true)
+                .setContentIntent(openApp(context, requestCode = notificationId))
+                .build(),
+        )
+    }
+
+    /**
+     * Agent output, dialog titles and host names stay off the lock screen: a locked phone shows only [publicTitle],
+     * whatever the user's "sensitive notifications" setting.
+     */
+    private fun NotificationCompat.Builder.privateOnLockScreen(context: Context, publicTitle: String) = apply {
+        setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+        setPublicVersion(
+            NotificationCompat.Builder(context, CHANNEL_ALERTS)
+                .setSmallIcon(R.drawable.ic_stat_bolt)
+                .setContentTitle(publicTitle)
+                .setContentText("Unlock to see it")
+                .build(),
+        )
+    }
+
+    fun clearNeedsAnswer(context: Context, key: String) {
+        NotificationManagerCompat.from(context).cancel(RunningSummary.notificationId(key, RunningSummary.ANSWER))
+    }
+
+    fun cancel(context: Context, id: Int) {
+        NotificationManagerCompat.from(context).cancel(id)
+    }
+
+    fun update(context: Context, id: Int, notification: Notification) = post(context, id, notification)
+
+    private fun post(context: Context, id: Int, notification: Notification) {
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+        NotificationManagerCompat.from(context).notify(id, notification)
+    }
+}

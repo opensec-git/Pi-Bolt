@@ -120,6 +120,8 @@ class PiBoltApp : Application() {
         identity = DeviceIdentity(this)
         updates = UpdateManager(this)
         Notifications.createChannels(this)
+        // No session lives yet: a "needs an answer" or session notification from a killed process is stale.
+        Notifications.clearStale(this)
         LocalSessions.follow(this)
         SessionAlerts.watchBackgroundAgents(this)
         UpdateNotifications.createChannel(this)

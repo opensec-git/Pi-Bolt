@@ -426,7 +426,7 @@ class SessionController private constructor(
                 "notify" -> _effects.tryEmit(SessionEffect.Notify(event.str("message").orEmpty(), event.str("notifyType") ?: "info"))
                 "set_editor_text" -> _effects.tryEmit(SessionEffect.EditorText(event.str("text").orEmpty()))
                 "select", "confirm", "input", "editor" -> if (!app.isForeground) {
-                    Notifications.needsAnswer(app, hostId, project?.name, _hostName.value, event.str("title").orEmpty())
+                    SessionReducer.dialogFrom(event)?.let { Notifications.needsAnswer(app, hostId, project?.name, _hostName.value, it) }
                 }
             }
             "agent_settled" -> {

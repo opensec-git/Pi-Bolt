@@ -6,14 +6,29 @@ package opensec.pibolt.app.session
  */
 object RunningSummary {
     /** One live session as the notification sees it. */
-    data class Entry(val name: String, val local: Boolean, val running: Boolean, val waiting: Boolean, val compacting: Boolean, val connected: Boolean) {
-        val busy: Boolean get() = running || waiting
+    data class Entry(
+        val name: String,
+        val local: Boolean,
+        val running: Boolean,
+        val waiting: Boolean,
+        val compacting: Boolean,
+        val connected: Boolean,
+        /** Background subagents run (after the turn that started them, too). */
+        val subagents: Boolean = false,
+        /** A `!` command runs. */
+        val shell: Boolean = false,
+    ) {
+        /** Keeps the service (and so the process and its engines) up. */
+        val busy: Boolean get() = running || waiting || compacting || subagents || shell
 
         val status: String
             get() = when {
                 !connected -> if (local) "Restarting the engine…" else "Reconnecting…"
                 waiting -> "Waiting for your answer"
                 compacting -> "Compacting context"
+                running -> "Working"
+                subagents -> "Background agents working"
+                shell -> "Running a command"
                 else -> "Working"
             }
     }
@@ -29,6 +44,9 @@ object RunningSummary {
      * notifications stand side by side. Clear of the app's fixed ids (below 100).
      */
     fun notificationId(key: String, kind: Int): Int = 100 + (key.hashCode() and 0x0FFFFFFF) % 1_000_000 * 2 + kind
+
+    /** True when [id] is a per-session notification of [kind] ([notificationId]). */
+    fun isKind(id: Int, kind: Int): Boolean = id in 100 until 100 + 2_000_000 && (id - 100) % 2 == kind
 
     /** Null when nothing is busy (the service stops). */
     fun of(entries: List<Entry>, appName: String): Summary? {
