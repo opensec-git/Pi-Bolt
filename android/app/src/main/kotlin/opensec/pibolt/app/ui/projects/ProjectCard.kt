@@ -56,7 +56,7 @@ sealed interface ProjectAction {
 
 /**
  * A project on Home, one [InsetRow] of "Projects": the live session's Quad while one is open, else a still ink4 Quad
- * (the app's dot-matrix bullet, never a folder glyph or a letter tile); the title; "3 sessions · 2 h ago" (or "Open"
+ * (the app's dot-matrix bullet, never a folder glyph or a letter tile); the title; "3 sessions · 2h" (or "Open"
  * with a session open) under it; a 14dp pin when pinned; the chevron. Long press (and a TalkBack action) opens Pin,
  * Rename and Delete.
  */

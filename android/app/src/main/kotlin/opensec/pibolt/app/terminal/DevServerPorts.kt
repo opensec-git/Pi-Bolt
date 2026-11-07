@@ -28,11 +28,21 @@ class DevServerPorts(
     private val mentionedPorts: () -> Collection<Int> = { emptyList() },
     private val probe: (Int) -> Boolean = ::loopbackAccepts,
 ) {
+    /**
+     * Neither table could be read. SELinux decides that once for the process (and logs a denial for every try), so they
+     * are not read again.
+     */
+    @Volatile
+    private var tablesDenied = false
+
     /** Listening ports now, sorted. Blocking (file reads, connects): call off the main thread. */
     fun scan(): List<Int> {
-        val tcp = readTable("/proc/net/tcp")
-        val tcp6 = readTable("/proc/net/tcp6")
-        if (tcp != null || tcp6 != null) return ProcNetTcp.portsOf(uid, tcp.orEmpty(), tcp6.orEmpty())
+        if (!tablesDenied) {
+            val tcp = readTable("/proc/net/tcp")
+            val tcp6 = readTable("/proc/net/tcp6")
+            if (tcp != null || tcp6 != null) return ProcNetTcp.portsOf(uid, tcp.orEmpty(), tcp6.orEmpty())
+            tablesDenied = true
+        }
         if (!hasChildProcesses()) return emptyList()
         return (mentionedPorts() + COMMON_DEV_PORTS).distinct().filter(probe).sorted()
     }
