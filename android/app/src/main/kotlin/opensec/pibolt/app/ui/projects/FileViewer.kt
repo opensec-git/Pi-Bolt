@@ -1,5 +1,9 @@
 package opensec.pibolt.app.ui.projects
 
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import android.content.ClipData
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.BackHandler
@@ -170,6 +174,7 @@ private const val MAX_LINE = 2_000
  * read-only. "Ask Pi" hands the file, or the selected lines, to [onAsk] for the project's composer. Hardware keys:
  * [EditorShortcuts]. Images show zoomable; binary files say so and offer Share. [onChanged] runs after a save.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FileViewer(
     root: File,
@@ -454,8 +459,9 @@ fun FileViewer(
                 }
                 if (editing) {
                     TextAction(if (saving) "Saving…" else "Save", onClick = ::save, color = colors.accent, enabled = tab.dirty && !saving)
-                } else if (text != null && !showRendered) {
-                    IconAction(Icons.AutoMirrored.Rounded.WrapText, if (wrap) "Do not wrap lines" else "Wrap lines", onClick = { wrap = !wrap }, tint = if (wrap) colors.accent else colors.ink2)
+                } else if (canEdit) {
+                    // Editing is the main thing to do with a file: one tap, not a menu entry.
+                    IconAction(Icons.Rounded.Edit, "Edit", onClick = { startEdit() })
                 }
                 Box {
                     IconAction(Icons.Rounded.MoreVert, "More", onClick = { menu = true })
@@ -463,11 +469,10 @@ fun FileViewer(
                         expanded = menu,
                         onDismiss = { menu = false },
                         items = buildList {
-                            if (canEdit && !editing) add(MenuEntry("Edit", Icons.Rounded.Edit) { startEdit() })
                             if (editing && !tab.value.selection.collapsed) add(MenuEntry("Ask Pi about the selection", Icons.Rounded.AutoAwesome) { ask(selection = true) })
                             add(MenuEntry("Ask Pi about this file", Icons.Rounded.AutoAwesome) { ask(selection = false) })
                             if (text != null && !showRendered) add(MenuEntry("Go to line", Icons.Rounded.VerticalAlignCenter) { goTo = true })
-                            if (editing) add(MenuEntry(if (wrap) "Do not wrap lines" else "Wrap lines", Icons.AutoMirrored.Rounded.WrapText) { wrap = !wrap })
+                            if (text != null && !showRendered) add(MenuEntry(if (wrap) "Do not wrap lines" else "Wrap lines", Icons.AutoMirrored.Rounded.WrapText) { wrap = !wrap })
                             add(MenuEntry("Copy path", Icons.Rounded.ContentCopy) { copy("Path", rel, "Path copied") })
                             if (text != null && !editing) add(MenuEntry("Copy text", Icons.Rounded.ContentCopy) { copy(name, text.text, "Text copied") })
                             add(MenuEntry("Share", Icons.Rounded.Share) { share() })
@@ -475,7 +480,10 @@ fun FileViewer(
                     )
                 }
             }
-            if (tabs.tabs.size > 1) TabStrip(tabs, rel, onSelect = onSelect, onClose = ::closeTab)
+            // Landscape with the keyboard up: the strip gives its 48dp to the text (tabs come back with the keyboard down).
+            if (tabs.tabs.size > 1 && ProjectNavRules.showChrome(WindowInsets.isImeVisible, LocalConfiguration.current.screenHeightDp)) {
+                TabStrip(tabs, rel, onSelect = onSelect, onClose = ::closeTab)
+            }
             if (kind == FileKind.Markdown && text != null && !editing) {
                 Segmented(
                     options = listOf(true to "Rendered", false to "Source"),
