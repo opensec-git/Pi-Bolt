@@ -361,8 +361,9 @@ alpha). No overshoot except sheet drag release.
 - `GlassIconButton`: a 44dp glass circle in a 48dp target, a 22dp ink1 glyph (back, more, search, +); press 0.96.
 - `GlassPill`: a floating glass pill, 40dp (48dp target), 16dp sides ("View changes +2 −2").
 - `StatusTile`: one tile of a 2x2 grid; radius tile (16), surface1 + 1dp line (lineStrong when active), 104dp; a 20dp
-  glyph top-left in its own colour, the label (rowMeta ink1) and its count (rowMeta ink3, tnum) bottom-left; read as
-  "label, count".
+  glyph top-left in its own colour, the label (rowMeta ink1, two lines before an ellipsis at a large font scale) and its
+  count (rowMeta ink3, tnum, on the label's last line) bottom-left; read as "label, count". A row of tiles shares one
+  height.
 - `InsetRow`: the plain list row: no card, 14dp vertical padding, at least 56dp; an optional 24dp leading slot (outline
   glyph ink2, a Quad), the title (rowTitle ink1), an optional meta line (rowMeta ink3), then count (ink3), unread dot
   (8dp accent) and chevron (ink3); a 1dp hairline under it inset from the text start to the 20dp gutter; `current` sets
@@ -383,7 +384,11 @@ alpha). No overshoot except sheet drag release.
   `PageTitle` (largeTitle ink1, a heading, 20dp in, an optional rowMeta ink3 meta line), `InsetSectionHead` (the quiet
   head of an inset list: rowMeta ink3, a tabular count, an optional text action, 44dp, 16dp above), `GlassChip` (a glass
   capsule action, 40dp in a 48dp target, a 16dp glyph and the label; 40% when disabled) and `LineCounts` ("+12 −3",
-  success / danger, rowMeta tnum).
+  success / danger, rowMeta tnum). Every row of glass top-bar buttons (`GlassBar`, `LargeTitlePage`, Home, Chats,
+  the session, Scan) pads its sides by `GlassBarInset` (18dp), so each 44dp circle's edge sits on the 20dp gutter,
+  in line with the page title. Full-screen overlays (the output viewer, a turn's Changes, a subagent, a diagram) are
+  `GlassBar`s too: a glass ✕ or back, glass actions, and `GlassCopyButton` (the copy glyph that flips to a success
+  check for 1.5 s) where the bar copies.
 - Tokens: type `largeTitle`, `rowTitle`, `rowMeta`; `Space.page` 20; `Radius.tile`, `bubble`, `pill`, `media` (12,
   images and preview cards in the transcript); `SOFT_PRESS`
   0.96; `PiMotion.stagger(step)` (120 ms + 70 ms per step, 8 steps at most) for staggered entrances. `DesignRulesTest` checks the rules below on the
@@ -460,8 +465,9 @@ kind glyph, rowMeta ink1 text (four lines at most) and an ink1 action; a host si
 (bodyStrong), text ink1 (ink2 under a title) and text actions under it; info and success on surface1 with a line,
 warning and danger on their soft fill with a 40% line. Text is never in the status colour. No Toasts.
 
-**Empty, loading, error.** `EmptyState`: a surface1 card with an optional 56dp surface2 disc and 26dp glyph, the title
-(bodyStrong), one or two lines (body ink2) and at most one action, centred; never a lone grey sentence. `LoadingRow`:
+**Empty, loading, error.** `EmptyState`: unboxed, as the workspace's empty views: an optional 48dp glass circle with a
+22dp ink2 glyph, the title (rowTitle ink1, a heading), one or two lines (rowMeta ink2) and at most one action, centred;
+never a lone grey sentence. `LoadingRow`:
 a 16dp Quad Think and the label (body ink3), polite live region; never a Material spinner. `ErrorState`: a danger
 `Notice` with the reason and "Try again" when it may help; an error never looks like an empty list.
 `ProgressLine`: 2dp, surface3 track, accent fill, determinate only.
@@ -504,7 +510,7 @@ explanatory lines. Top to bottom, on the 20dp page gutter:
   session's name or first prompt, "calc-parser · 3h", an accent dot when something new happened, the open session on
   the soft current highlight). Up to 3 projects' sessions; a running project is not repeated.
 - "Projects  3": `ProjectCard` rows (the live Quad or the still bullet, never a folder glyph or letter tile; the title;
-  "6 sessions · 4 h ago" or "Open · 6 sessions"; a 14dp pin when pinned; chevron). Long press: Pin, Rename, Delete.
+  "6 sessions · 4h" or "Open · 6 sessions"; ages on Home's rows are all the short form, as in Recents and Chats; a 14dp pin when pinned; chevron). Long press: Pin, Rename, Delete.
 - "Computers  N", a head with Add (opens `AddComputerSheet`: "Run /remote-control on it, then scan its code.", Scan a
   pairing code, Paste a pairing link) and a chevron that folds the section (folded once there are projects, open when
   there are none, when the engine is unavailable or a computer session is live). `HostCard` rows: status dot or live
@@ -679,7 +685,8 @@ glass Find (accent while open), Edit (pencil; files that can be edited) or Save 
 text, Share). Open files are tabs once there are two: a 48dp strip of `WorkspaceTab`s (as the terminal's: glass
 capsules when shown), a 7dp warning dot when unsaved, the name (monoSmall, at most 160dp) and a ✕ (48dp target).
 With the keyboard up in a window under 480dp tall the strip steps aside. Menus in the workspace (project, files,
-viewer, terminal) are one `WorkspaceMenu`: surface3, radius md, lineStrong border, 48dp rows with a 20dp glyph slot. Find bar: the query
+viewer, terminal) are one `WorkspaceMenu`, the kit's `PiMenu` (as every popup menu: the session's ⋯, the running
+sessions switcher), with 48dp rows and a 20dp glyph slot. Find bar: the query
 (mono), "3 of 12" (meta, live region), ↑ ↓ ✕, then 48dp text toggles "Aa" (match case), "ab" underlined (whole
 word), ".*" (regex) in accent with a 18% accent fill when on (TalkBack: switches), and ⇄ for Replace: a second row
 with the replacement and "Replace" / "All" (accent text actions); a bad regex or group shows in danger meta below.
@@ -882,8 +889,8 @@ opens the app's system page and the camera starts on return.
   window's sides:
   - The pill: glass, radius pill (28), 56dp at least: a + `ComposerCircle` (opens the attach sheet), the field
     (rowTitle 17/24 ink1, its placeholder in the same style in ink3, one line, ellipsized; accent cursor and
-    selection; grows to 6 lines, 4 in a short window, then scrolls), the mic (`VoiceMic`, a 36dp surface3 circle with
-    an ink2 MicNone; accent with an onAccent Mic while it dictates in place) and the primary circle in one slot:
+    selection; grows to 6 lines, 4 in a short window, then scrolls), the mic (`VoiceMic`, a 36dp circle on the selected overlay with
+    an ink1 MicNone, the same circle as +; accent with an onAccent Mic while it dictates in place) and the primary circle in one slot:
     `ComposerPrimary` (white in the default) with a waveform that opens voice input while the field is empty and an
     arrow that sends once there is text or an image (18% and disabled while an image encodes); Stop in the same slot
     while Pi works and nothing is typed (a 36dp surface3 circle, 1dp lineStrong ring, ink1 Stop glyph), and beside the

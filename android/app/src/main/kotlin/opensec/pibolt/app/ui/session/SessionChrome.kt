@@ -27,7 +27,6 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -60,7 +59,9 @@ import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LinkOff
 import androidx.compose.material.icons.rounded.MoreHoriz
+import opensec.pibolt.app.ui.components.GlassBarInset
 import opensec.pibolt.app.ui.components.GlassIconButton
+import opensec.pibolt.app.ui.components.PiMenu
 import opensec.pibolt.app.ui.components.InsetRow
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.History
@@ -73,7 +74,6 @@ import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.runtime.key
 import androidx.compose.ui.draw.clip
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MenuDefaults
@@ -175,7 +175,7 @@ fun SessionTopBar(
             .fillMaxWidth()
             .statusBarsPadding()
             .height(64.dp)
-            .padding(start = Space.md, end = Space.md),
+            .padding(horizontal = GlassBarInset),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         GlassIconButton(Icons.AutoMirrored.Rounded.ArrowBack, if (chat) "Back" else if (local) "Project" else "Computers", onClick = onBack)
@@ -244,15 +244,7 @@ fun SessionTopBar(
         }
         Box {
             GlassIconButton(Icons.Rounded.MoreHoriz, "More", onClick = { menu = true })
-            DropdownMenu(
-                expanded = menu,
-                onDismissRequest = { menu = false },
-                containerColor = colors.surface3,
-                shape = RoundedCornerShape(Radius.md),
-                tonalElevation = 0.dp,
-                shadowElevation = 8.dp,
-                border = BorderStroke(1.dp, colors.lineStrong),
-            ) {
+            PiMenu(expanded = menu, onDismiss = { menu = false }) {
                 @Composable
                 fun Item(text: String, icon: ImageVector, action: () -> Unit) = MenuRow(text, icon, colors.ink1) {
                     menu = false

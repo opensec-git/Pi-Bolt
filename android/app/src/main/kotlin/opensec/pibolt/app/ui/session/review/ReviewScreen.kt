@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
@@ -58,6 +57,8 @@ import opensec.pibolt.app.checkpoints.RestorePlan
 import opensec.pibolt.app.checkpoints.TurnRecord
 import opensec.pibolt.app.ui.components.DiffGutter
 import opensec.pibolt.app.ui.components.DiffRow
+import opensec.pibolt.app.ui.components.GlassBar
+import opensec.pibolt.app.ui.components.GlassIconButton
 import opensec.pibolt.app.ui.components.IconAction
 import opensec.pibolt.app.ui.components.PiSheet
 import opensec.pibolt.app.ui.components.PrimaryButton
@@ -96,7 +97,6 @@ private const val MAX_ROWS = 1500
 fun TurnReviewScreen(review: TurnReview, turnId: String, onClose: () -> Unit) {
     val checkpoints = review.checkpoints ?: return
     val colors = Pi.colors
-    val type = Pi.type
     val turns by checkpoints.turns.collectAsState()
     val record = turns.firstOrNull { it.id == turnId }
     LaunchedEffect(record == null) { if (record == null) onClose() }
@@ -136,17 +136,13 @@ fun TurnReviewScreen(review: TurnReview, turnId: String, onClose: () -> Unit) {
                 shape = RoundedCornerShape(Radius.xl * progress)
                 clip = progress > 0f
             }
-            .background(colors.canvas)
-            .statusBarsPadding(),
+            .background(colors.canvas),
     ) {
-        Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconAction(Icons.Rounded.Close, "Close", onClick = onClose, tint = colors.ink1)
-            Column(Modifier.weight(1f).padding(horizontal = 4.dp)) {
-                Text("Changes", style = type.subhead, color = colors.ink1, maxLines = 1)
-                Text(summary(record), style = type.meta.copy(fontFeatureSettings = Tnum), color = colors.ink3, maxLines = 1)
-            }
-        }
-        Box(Modifier.fillMaxWidth().height(1.dp).background(colors.line))
+        GlassBar(
+            title = "Changes",
+            subtitle = summary(record),
+            leading = { GlassIconButton(Icons.Rounded.Close, "Close", onClick = onClose) },
+        )
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), contentPadding = PaddingValues(bottom = 24.dp)) {
             if (record.prompt.isNotBlank() || record.lastUndo != null) item(key = "head") { TurnHeader(review, record, locked) }
             val list = changes
