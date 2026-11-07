@@ -176,6 +176,7 @@ export class RemoteControlController {
 				version: this.host.version,
 				port,
 				bindAddress: this.host.bindAddress,
+				readSecretFiles: () => this.host.settingsManager.getRemoteControlSettings().readSecretFiles === true,
 				onEvent: (event) => this.onServerEvent(event),
 			});
 			if (claim.kind === "service") {

@@ -356,6 +356,7 @@ export class ServiceHost {
 			openSession: () => this.openSession(),
 			serviceCommands: this.commands,
 			hostInfo: { service: true, parallelSessions: true },
+			readSecretFiles: () => this.options.settings.readSecretFiles === true,
 			hostName: this.hostName,
 			version: this.options.version ?? VERSION,
 			port: this.port,
