@@ -139,6 +139,21 @@ class GitHubAuthTest {
     }
 
     @Test
+    fun signInWithAnAnswerThatIsNotAnAccountIsAGitHubErrorAndStoresNothing() = runBlocking {
+        // A captive portal or proxy answering 200 with other JSON: the device-flow sheet shows an error (it catches
+        // GitHubException), not a crash, and no account with an empty login is stored.
+        server.start()
+        val kv = Recording()
+        val gh = GitHub(TokenStore(kv, box()), http, clientId = "", webBase = server.url("/").toString(), apiBase = server.url("/").toString())
+        server.enqueue(json("[]"))
+        assertFailsWith<GitHubException> { gh.signIn(token, TokenKind.Device) }
+        server.enqueue(json("""{"message":"ok"}"""))
+        assertFailsWith<GitHubException> { gh.signIn(token, TokenKind.Device) }
+        assertIs<GitHubState.SignedOut>(gh.state.value)
+        assertTrue(kv.writes.isEmpty())
+    }
+
+    @Test
     fun tokenIsStoredSealedAndNeverInTextOrLogs() = runBlocking {
         server.start()
         val kv = Recording()

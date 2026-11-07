@@ -13,6 +13,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 import okhttp3.OkHttpClient
 import opensec.pibolt.app.cost.SpendStore
 import opensec.pibolt.app.data.DeviceIdentity
@@ -22,6 +23,7 @@ import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.data.SettingsStore
 import opensec.pibolt.app.engine.EngineApi
 import opensec.pibolt.app.engine.LocalEngine
+import opensec.pibolt.app.engine.ModelsFile
 import opensec.pibolt.app.git.GitRunner
 import opensec.pibolt.app.git.ProcessGitRunner
 import opensec.pibolt.app.git.github.GitCredentialBroker
@@ -38,6 +40,7 @@ import opensec.pibolt.app.terminal.Terminals
 import opensec.pibolt.app.session.LiveRegistry
 import opensec.pibolt.app.ui.chats.Chats
 import opensec.pibolt.app.ui.projects.LocalSessions
+import opensec.pibolt.app.ui.providers.ProviderCatalog
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.ui.session.features2.SessionAlerts
 import opensec.pibolt.app.update.UpdateManager
@@ -160,6 +163,8 @@ class PiBoltApp : Application() {
         localEngine.prefetch()
         // Ready the engine (prefix check, spare process) before any screen asks for it. All of it runs on Dispatchers.IO.
         localEngine.prepare()
+        // Custom endpoints' names and marks (models.json), for the model picker and Settings before Providers opens.
+        appScope.launch(Dispatchers.IO) { ProviderCatalog.registerCustom(ModelsFile.custom(localEngine.agentDir)) }
         registerActivityLifecycleCallbacks(object : ActivityLifecycleCallbacks {
             override fun onActivityStarted(activity: Activity) {
                 if (startedActivities++ == 0) localEngine.onForeground()

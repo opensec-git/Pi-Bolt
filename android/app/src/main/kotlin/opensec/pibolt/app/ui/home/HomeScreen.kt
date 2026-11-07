@@ -156,6 +156,7 @@ import opensec.pibolt.app.ui.projects.ProjectAction
 import opensec.pibolt.app.ui.projects.ProjectActionSheets
 import opensec.pibolt.app.ui.projects.ContinueRow
 import androidx.compose.foundation.layout.height
+import opensec.pibolt.app.secrets.SecretStore
 import opensec.pibolt.app.session.SessionController
 import opensec.pibolt.app.ui.projects.HomeHead
 import androidx.compose.material.icons.rounded.Add
@@ -197,7 +198,7 @@ fun HomeScreen(
 ) {
     val engine = app.engine
     val store = remember { ProjectStore.get(app) }
-    val projects = remember(engine) { Projects(engine, store) }
+    val projects = remember(engine) { Projects(engine, store, SecretStore.get(app)) }
     val colors = Pi.colors
     val type = Pi.type
     val scope = rememberCoroutineScope()

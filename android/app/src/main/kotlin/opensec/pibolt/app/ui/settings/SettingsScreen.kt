@@ -172,9 +172,14 @@ fun SettingsScreen(
     val prefs = rememberAgentPrefs(app)
     val configured by app.engine.auth.configured.collectAsStateWithLifecycle()
     val github by app.github.state.collectAsStateWithLifecycle()
+    // No provider: the open session lists no model, and the picker would wait for one for ever.
     fun pickModel() = when {
-        prefs?.controller != null -> picking = true
         configured.isEmpty() -> onProviders()
+        prefs?.controller != null -> {
+            // Listed afresh, as the session's own picker does: a provider added or removed since then changes the list.
+            prefs.controller.loadModels()
+            picking = true
+        }
         else -> message("Open a session on this phone to choose its models")
     }
 
