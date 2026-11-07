@@ -109,7 +109,8 @@ fun MdBlockView(block: MdBlock, streaming: Boolean, onOpenCode: (code: String, l
     val prose = proseInk ?: ink
     when (block) {
         is MdBlock.Heading -> {
-            val style = if (title) type.subhead else when (block.level) {
+            // The turn's title takes subhead, but an h1 keeps its larger size, so an h2 under it still reads as lower.
+            val style = if (title && block.level > 1) type.subhead else when (block.level) {
                 1 -> type.headline
                 2 -> type.subhead
                 3 -> type.prose.copy(fontWeight = FontWeight.SemiBold)

@@ -246,7 +246,7 @@ fun TextRowView(row: TextRow, previous: MdBlock?, onOpenCode: (String, String) -
         row.title -> 2.dp
         row.first -> 4.dp
         row.block is MdBlock.Heading -> 20.dp
-        row.block is MdBlock.ListItem && previous is MdBlock.ListItem -> 4.dp
+        row.block is MdBlock.ListItem && previous is MdBlock.ListItem && !row.block.startsList -> 4.dp
         previous is MdBlock.Heading -> 8.dp
         else -> 12.dp
     }
