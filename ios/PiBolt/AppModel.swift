@@ -28,6 +28,7 @@ final class AppModel {
     let appVersion: String
 
     @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    @ObservationIgnored private var refreshScheduled = false
     @ObservationIgnored private let watchFile: URL
 
     init(identity: DeviceIdentity = DeviceIdentity(), hosts: HostStore? = nil, recents: RecentStore? = nil, notifier: Notifier? = nil, watchFile: URL? = nil) {
@@ -150,24 +151,30 @@ final class AppModel {
 
     func appEnteredBackground() {
         isForeground = false
+        refreshScheduled = false
         let watch = live.flatMap { $0.stopped ? nil : $0.alertWatch }
         saveWatch(watch)
-        guard watch != nil else { return }
+        if watch != nil { keepWatching() }
+    }
+
+    /// The session changed while the app was away: a run that starts (its `agent_start` or snapshot came after the
+    /// app left) is watched from now on; one that ended with nothing left to answer needs no more time.
+    func sessionChangedInBackground(_ controller: SessionController) {
+        guard !isForeground, controller === live else { return }
+        let watch = controller.alertWatch
+        saveWatch(watch)
+        if watch == nil { endBackgroundTask() } else { keepWatching() }
+    }
+
+    /// Background time while the link is up, and a refresh asked for once per stay in the background.
+    private func keepWatching() {
         if backgroundTask == .invalid {
             // The expiration handler runs on the main thread, and the task must end before it returns.
             backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "pibolt.session") { [weak self] in
                 MainActor.assumeIsolated { self?.endBackgroundTask() }
             }
         }
-        scheduleRefresh()
-    }
-
-    /// The session changed while the app was away: a run that ended with nothing left to answer needs no more time.
-    func sessionChangedInBackground(_ controller: SessionController) {
-        guard !isForeground, controller === live else { return }
-        let watch = controller.alertWatch
-        saveWatch(watch)
-        if watch == nil { endBackgroundTask() }
+        if !refreshScheduled { scheduleRefresh() }
     }
 
     private func endBackgroundTask() {
@@ -180,12 +187,14 @@ final class AppModel {
     private func scheduleRefresh() {
         let request = BGAppRefreshTaskRequest(identifier: Self.refreshTask)
         request.earliestBeginDate = Date().addingTimeInterval(15 * 60)
-        try? BGTaskScheduler.shared.submit(request)
+        refreshScheduled = (try? BGTaskScheduler.shared.submit(request)) != nil
     }
 
     /// Background App Refresh: reconnect to the watched session, post what changed, and ask for another refresh while
     /// it still works or waits for an answer. Bounded well inside the time iOS gives a refresh.
     func backgroundRefresh() async {
+        // This refresh was the one asked for.
+        refreshScheduled = false
         guard let watch = loadWatch() else { return }
         var next: AlertWatch?
         if let live, live.hostId == watch.hostId, !live.stopped {

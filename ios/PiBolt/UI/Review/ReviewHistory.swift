@@ -105,7 +105,7 @@ private struct CommitRow: View {
                 Text(commit.short).font(Pi.monoSmall).foregroundStyle(Pi.ink2)
                 Text(meta).font(.system(size: 13)).foregroundStyle(Pi.ink3).lineLimit(1)
             }
-            if !commit.refs.isEmpty { RefChips(refs: commit.refs) }
+            if !commit.refs.isEmpty { RefChips(refs: commit.refs, total: commit.refCount) }
         }
         .padding(.vertical, 11)
         .contentShape(Rectangle())
@@ -123,21 +123,25 @@ private struct CommitRow: View {
 /// `HEAD -> main`, `origin/main`, `tag: v1.0` as small capsules.
 private struct RefChips: View {
     var refs: [String]
+    var total: Int
 
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(refs, id: \.self) { ref in
-                    Text(ref)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundStyle(Pi.ink2)
-                        .lineLimit(1)
-                        .padding(.horizontal, 8).padding(.vertical, 3)
-                        .background(Capsule().fill(Pi.surface2))
-                        .overlay(Capsule().strokeBorder(Pi.line, lineWidth: 1))
-                }
+                ForEach(refs, id: \.self) { ref in chip(ref) }
+                if total > refs.count { chip("+\(total - refs.count)") }
             }
         }
+    }
+
+    private func chip(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Pi.ink2)
+            .lineLimit(1)
+            .padding(.horizontal, 8).padding(.vertical, 3)
+            .background(Capsule().fill(Pi.surface2))
+            .overlay(Capsule().strokeBorder(Pi.line, lineWidth: 1))
     }
 }
 
@@ -183,7 +187,7 @@ struct CommitScreen: View {
             }
             Text(authorLine(commit)).font(.system(size: 13)).foregroundStyle(Pi.ink3)
             Text(commit.hash).font(Pi.monoSmall).foregroundStyle(Pi.ink4).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-            if !commit.refs.isEmpty { RefChips(refs: commit.refs) }
+            if !commit.refs.isEmpty { RefChips(refs: commit.refs, total: commit.refCount) }
         }
     }
 

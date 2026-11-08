@@ -173,9 +173,14 @@ public struct RemoteCommit: Equatable, Sendable, Identifiable {
     public var time: Int64
     public var subject: String
     public var body: String
+    /// The first `maxRefs` names pointing at it; `refCount` counts them all.
     public var refs: [String]
+    public var refCount: Int
 
     public var id: String { hash }
+
+    /// Refs kept per commit: the repository decides how many point at one commit, and each is a chip on the screen.
+    public static let maxRefs = 8
 
     /// 4 to 64 lowercase hex characters: never a ref or an option.
     static func isHash(_ s: String) -> Bool {
@@ -194,7 +199,8 @@ public struct RemoteCommit: Equatable, Sendable, Identifiable {
             time: o.long("time") ?? 0,
             subject: o.str("subject") ?? "",
             body: o.str("body") ?? "",
-            refs: stringList(o, "refs")
+            refs: Array(stringList(o, "refs").prefix(maxRefs)),
+            refCount: o.arr("refs")?.count ?? 0
         )
     }
 }

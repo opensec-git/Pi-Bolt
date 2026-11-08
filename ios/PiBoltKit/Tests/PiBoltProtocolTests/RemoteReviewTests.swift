@@ -104,6 +104,10 @@ struct RemoteReviewTests {
         #expect(first.parents == ["89abcdef"])
         #expect(first.time == 1_700_000_000)
         #expect(first.refs == ["HEAD -> main", "tag: v1"])
+        // A repository decides how many refs point at a commit: the phone keeps the first few and the count.
+        let many = RemoteCommit.from(.object(["hash": "abcd1234", "refs": .array((0 ..< 50_000).map { .string("tag: t\($0)") })]))
+        #expect(many?.refs.count == RemoteCommit.maxRefs)
+        #expect(many?.refCount == 50_000)
         #expect(log.commits[1].short == "abcdef1")
     }
 
