@@ -94,6 +94,8 @@ export type {
 	ExtensionToolContext,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUIHost,
+	ExtensionViewUI,
 	ExtensionVirtualModel,
 	ExtensionWidgetOptions,
 	FindToolCallEvent,

@@ -89,6 +89,7 @@ import type {
 	ExtensionRunner,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUIHost,
 	ExtensionWidgetOptions,
 	MarkdownTransformer,
 	ProjectTrustContext,
@@ -101,6 +102,7 @@ import { IdleCollector, processHeapBytes, runtimeFullCollection } from "../../co
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import type { McpHttpServerConfig } from "../../core/mcp-servers.ts";
 import { createCompactionSummaryMessage, createCustomMessage } from "../../core/messages.ts";
+import type { ViewChannel } from "../../core/mobile-ui/host.ts";
 import {
 	defaultModelPerProvider,
 	findExactModelReferenceMatch,
@@ -507,6 +509,8 @@ export class InteractiveMode {
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
 	/** Set by the first /remote-control. */
 	private remoteControl: RemoteControlController | undefined = undefined;
+	/** Inline views of the mobile UI kit in the chat, by view key. */
+	private readonly inlineViews = new Map<string, Text>();
 	private activeWorkingIndicatorEmbedded = false;
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
@@ -2163,6 +2167,7 @@ export class InteractiveMode {
 		await this.session.bindExtensions({
 			uiContext,
 			mode: "tui",
+			viewChannel: this.viewChannel(),
 			abortHandler: () => {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			},
@@ -2438,7 +2443,7 @@ export class InteractiveMode {
 
 		// Create a context for shortcut handlers
 		const createContext = (): ExtensionContext => ({
-			ui: this.createExtensionUIContext(),
+			ui: this.shortcutUIContext(extensionRunner),
 			mode: "tui",
 			hasUI: true,
 			cwd: this.sessionManager.getCwd(),
@@ -2822,7 +2827,57 @@ export class InteractiveMode {
 		};
 	}
 
-	private createExtensionUIContext(): ExtensionUIContext {
+	/**
+	 * Where the mobile UI kit's views go besides the terminal's text form (docs/mobile-ui.md): the phones of
+	 * `/remote-control` that render views. The terminal keeps showing the text form: panels as widgets, inline views in
+	 * the chat, sheets as dialogs that race the phones'.
+	 */
+	private viewChannel(): ViewChannel {
+		return {
+			hasNative: () => this.remoteControl?.hasViewClients() === true,
+			keepText: true,
+			send: (request) => this.remoteControl?.sendView(request),
+			sheet: (request, signal) =>
+				this.remoteControl
+					? this.remoteControl.viewSheet(request, signal)
+					: new Promise((resolve) => signal.addEventListener("abort", () => resolve(undefined), { once: true })),
+			inlineText: (key, lines) => this.setInlineViewText(key, lines),
+			textStyle: () => ({
+				title: (text) => liveTheme.bold(text),
+				muted: (text) => liveTheme.fg("muted", text),
+				success: (text) => liveTheme.fg("success", text),
+				warning: (text) => liveTheme.fg("warning", text),
+				danger: (text) => liveTheme.fg("error", text),
+				accent: (text) => liveTheme.fg("accent", text),
+			}),
+		};
+	}
+
+	/** An inline view's text in the chat, updated in place; undefined removes it. A redrawn chat drops it. */
+	private setInlineViewText(key: string, lines: string[] | undefined): void {
+		const existing = this.inlineViews.get(key);
+		if (lines === undefined) {
+			if (existing) {
+				this.chatContainer.removeChild(existing);
+				this.inlineViews.delete(key);
+			}
+		} else if (existing && this.chatContainer.children.includes(existing)) {
+			existing.setText(lines.join("\n"));
+		} else {
+			const text = new Text(lines.join("\n"), 1, 0);
+			this.inlineViews.set(key, text);
+			this.chatContainer.addChild(text);
+		}
+		this.ui.requestRender();
+	}
+
+	/** A shortcut handler's UI: the terminal's, with the session's views (the mobile UI kit) from the runner. */
+	private shortcutUIContext(extensionRunner: ExtensionRunner): ExtensionUIContext {
+		const { setView, updateView, showView, getView } = extensionRunner.getUIContext();
+		return Object.assign(this.createExtensionUIContext(), { setView, updateView, showView, getView });
+	}
+
+	private createExtensionUIContext(): ExtensionUIHost {
 		return {
 			select: (title, options, opts) =>
 				this.remoteControl

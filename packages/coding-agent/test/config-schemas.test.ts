@@ -30,13 +30,14 @@ function schemaUrl(name: "models" | "settings" | "keybindings" | "theme"): strin
 }
 
 describe("generated configuration schemas", () => {
-	it("matches the four committed artifacts", () => {
+	it("matches the committed artifacts", () => {
 		const rendered = renderConfigSchemas();
 		expect([...rendered.keys()]).toEqual([
 			"schemas/models.schema.json",
 			"schemas/settings.schema.json",
 			"schemas/keybindings.schema.json",
 			"schemas/theme.schema.json",
+			"schemas/mobile-ui.schema.json",
 		]);
 		for (const [relativePath, expected] of rendered) {
 			expect(

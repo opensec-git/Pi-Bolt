@@ -1,0 +1,34 @@
+{
+  "v": 1,
+  "title": "CI",
+  "subtitle": "opensec-git/Pi-Bolt",
+  "icon": "build",
+  "body": [
+    {
+      "type": "grid",
+      "columns": 2,
+      "children": [
+        { "type": "tile", "id": "passed", "label": "Passed", "value": "41", "icon": "check", "tone": "success", "action": "filter" },
+        { "type": "tile", "id": "failed", "label": "Failed", "value": "1", "icon": "error", "tone": "danger", "action": "filter" }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Recent builds",
+      "children": [
+        {
+          "type": "list",
+          "id": "jobs",
+          "empty": "No builds yet",
+          "children": [
+            { "type": "item", "id": "job-42", "title": "Build #42", "subtitle": "main · now", "chip": { "label": "Running", "tone": "running" }, "progress": 0.3, "action": "open", "chevron": true },
+            { "type": "item", "id": "job-41", "title": "Build #41", "subtitle": "fix/compaction · 12 min ago", "chip": { "label": "Failed", "tone": "danger" }, "action": "open", "chevron": true },
+            { "type": "item", "id": "job-40", "title": "Build #40", "subtitle": "main · 1 h ago", "chip": { "label": "Passed", "tone": "success" }, "action": "open", "chevron": true }
+          ]
+        }
+      ]
+    },
+    { "type": "toggle", "id": "notify", "label": "Notify me when a build fails", "value": true }
+  ],
+  "actions": [{ "type": "button", "id": "run", "label": "Run build", "style": "primary", "icon": "play" }]
+}

@@ -13,6 +13,7 @@ import {
 } from "@earendil-works/pi-ai/providers/model-schema";
 import type { TSchema } from "typebox";
 import { KeybindingsSchema, KeybindingValueSchema } from "../src/core/keybindings-schema.ts";
+import { MOBILE_VIEW_SCHEMA } from "../src/core/mobile-ui/schema.ts";
 import { buildModelsConfigSchemas } from "../src/core/model-config-schema.ts";
 import { SettingsSchema } from "../src/core/settings-schema.ts";
 import { getThemeSchemas } from "../src/modes/interactive/theme/theme-schema.ts";
@@ -58,6 +59,7 @@ const schemaArtifacts: readonly SchemaArtifact[] = [
 		schema: ThemeJsonSchema,
 		definitions: { ColorValue: ColorValueSchema },
 	},
+	{ filename: "mobile-ui.schema.json", schema: MOBILE_VIEW_SCHEMA },
 ];
 
 const schemaAnnotationKeys = new Set([

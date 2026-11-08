@@ -16,6 +16,8 @@ import { PIBOLT } from "../../pi-bolt.ts";
 import type { CacheWarmingAction } from "../cache-warmer.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
 import type { KeybindingsConfig } from "../keybindings.ts";
+import { type ViewChannel, type ViewClientEvent, ViewHost, type ViewSnapshot } from "../mobile-ui/host.ts";
+import { assertView } from "../mobile-ui/validate.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
 import type { SessionManager } from "../session-manager.ts";
@@ -60,6 +62,8 @@ import type {
 	ExtensionShortcut,
 	ExtensionToolContext,
 	ExtensionUIContext,
+	ExtensionUIDialogOptions,
+	ExtensionUIHost,
 	InputEvent,
 	InputEventResult,
 	InputSource,
@@ -384,6 +388,16 @@ const noOpUIContext: ExtensionUIContext = {
 	setTheme: (_theme: string | Theme) => ({ success: false, error: "UI not available" }),
 	getToolsExpanded: () => false,
 	setToolsExpanded: () => {},
+	// No UI shows views; they are still checked, so a mistake shows in print mode too.
+	setView: (key, view) => {
+		if (view !== undefined) assertView(view, JSON.stringify(key));
+	},
+	updateView: () => {},
+	showView: async (view) => {
+		assertView(view, "sheet");
+		return undefined;
+	},
+	getView: () => undefined,
 };
 
 export class ExtensionRunner {
@@ -421,6 +435,8 @@ export class ExtensionRunner {
 	private shortcutDiagnostics: ResourceDiagnostic[] = [];
 	private commandDiagnostics: ResourceDiagnostic[] = [];
 	private staleMessage: string | undefined;
+	/** The mobile UI kit's views of this session (docs/mobile-ui.md), made when a mode binds its UI. */
+	private views: ViewHost | undefined;
 	private uiPromptDepth = 0;
 	private activeUIPrompt: { kind: UIPromptKind; title?: string } | undefined;
 
@@ -594,18 +610,36 @@ export class ExtensionRunner {
 		this.reloadHandler = async () => {};
 	}
 
-	setUIContext(uiContext?: ExtensionUIContext, mode: ExtensionMode = "print"): void {
-		this.uiContext = uiContext ? this.wrapUIPromptContext(uiContext) : noOpUIContext;
+	setUIContext(uiContext?: ExtensionUIHost, mode: ExtensionMode = "print", viewChannel?: ViewChannel): void {
+		this.uiContext = uiContext ? this.wrapUIPromptContext(uiContext, viewChannel) : noOpUIContext;
 		this.mode = mode;
 	}
 
-	private wrapUIPromptContext(ui: ExtensionUIContext): ExtensionUIContext {
+	private wrapUIPromptContext(ui: ExtensionUIHost, viewChannel: ViewChannel | undefined): ExtensionUIContext {
+		const dialogs = {
+			select: (title: string, options: string[], opts?: ExtensionUIDialogOptions) =>
+				this.withUIPrompt("select", title, () => ui.select(title, options, opts)),
+			confirm: (title: string, message: string, opts?: ExtensionUIDialogOptions) =>
+				this.withUIPrompt("confirm", title, () => ui.confirm(title, message, opts)),
+			input: (title: string, placeholder?: string, opts?: ExtensionUIDialogOptions) =>
+				this.withUIPrompt("input", title, () => ui.input(title, placeholder, opts)),
+		};
+		const viewUI = {
+			select: ui.select,
+			confirm: ui.confirm,
+			input: ui.input,
+			setWidget: (key: string, lines: string[] | undefined) => ui.setWidget(key, lines),
+		};
+		if (this.views) this.views.rebind(viewUI, viewUI, viewChannel);
+		else this.views = new ViewHost({ ui: viewUI, channel: viewChannel, emit: (event) => void this.emit(event) });
+		const views = this.views;
 		return {
 			...ui,
-			select: (title, options, opts) => this.withUIPrompt("select", title, () => ui.select(title, options, opts)),
-			confirm: (title, message, opts) => this.withUIPrompt("confirm", title, () => ui.confirm(title, message, opts)),
-			input: (title, placeholder, opts) =>
-				this.withUIPrompt("input", title, () => ui.input(title, placeholder, opts)),
+			...dialogs,
+			setView: (key, view, options) => views.set(key, view, options),
+			updateView: (key, ops) => views.update(key, ops),
+			showView: (view, options) => this.withUIPrompt("view", view.title, () => views.show(view, options)),
+			getView: (key) => views.get(key),
 			editor: (title, prefill) => this.withUIPrompt("editor", title, () => ui.editor(title, prefill)),
 			custom: (factory, options) => this.withUIPrompt("custom", undefined, () => ui.custom(factory, options)),
 			// Pi-Bolt without the JIT: an extension's own notice of "bun:ffi requires the JIT" says which extension needs the JIT
@@ -673,6 +707,21 @@ export class ExtensionRunner {
 
 	getUIContext(): ExtensionUIContext {
 		return this.uiContext;
+	}
+
+	/** Every view now, for a client that connects (remote control's `remote_hello`). */
+	viewSnapshot(): ViewSnapshot[] {
+		return this.views?.snapshot() ?? [];
+	}
+
+	/** A client started rendering views (`set_client_features`): it gets them all. */
+	resyncViews(): void {
+		this.views?.resync();
+	}
+
+	/** A client's `extension_ui_event`: emitted as a `view_event` when it fits the view, else dropped (false). */
+	handleViewEvent(event: ViewClientEvent): boolean {
+		return this.views?.handleEvent(event) ?? false;
 	}
 
 	hasUI(): boolean {
@@ -782,6 +831,8 @@ export class ExtensionRunner {
 		if (!this.staleMessage) {
 			this.staleMessage = message;
 			this.runtime.invalidate(message);
+			// The session's views go with it; the next runner starts without any.
+			this.views?.dispose();
 		}
 	}
 

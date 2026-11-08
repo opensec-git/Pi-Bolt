@@ -45,7 +45,7 @@ _spec.loader.exec_module(NPM_EXTENSIONS)
 # Engine side files PI_PACKAGE_DIR must hold (theme/, export-html/, assets/, package.json per the contract), plus the
 # docs the system prompt points the model at and photon's wasm. Not shipped: CHANGELOG.md (interactive "what's new"
 # only), native/ (an X11 addon), the doom example's prebuilt game.
-PACKAGE_KEEP = ["theme", "export-html", "assets", "package.json", "README.md", "docs", "examples", "photon_rs_bg.wasm"]
+PACKAGE_KEEP = ["theme", "export-html", "assets", "package.json", "README.md", "docs", "examples", "skills", "photon_rs_bg.wasm"]
 PACKAGE_SKIP = ["examples/extensions/doom-overlay/doom/build"]
 
 

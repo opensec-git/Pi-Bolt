@@ -9,6 +9,8 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { Duplex } from "node:stream";
 import { type WebSocket, WebSocketServer } from "ws";
 import type { AgentSession } from "../core/agent-session.ts";
+import type { ViewClientEvent, ViewRequest, ViewSheetAnswer, ViewShowRequest } from "../core/mobile-ui/host.ts";
+import { VIEWS_FEATURE } from "../core/mobile-ui/types.ts";
 import { SUBAGENT_STREAM_FEATURE, SubagentStreams, type SubagentStreamsOptions } from "../core/subagent-stream.ts";
 import { toJsonEvent } from "../modes/json-event.ts";
 import type {
@@ -82,11 +84,13 @@ const REMOTE_COMMANDS = new Set<RpcCommand["type"]>([
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
 
-/** A dialog as sent to phones, without the id and type the server adds. */
-export type RemoteDialogRequest = DistributiveOmit<
-	Extract<RpcExtensionUIRequest, { method: "select" | "confirm" | "input" | "editor" }>,
-	"id" | "type"
->;
+/** A dialog as sent to phones, without the id and type the server adds: a dialog method or a sheet (`showView`). */
+export type RemoteDialogRequest =
+	| DistributiveOmit<
+			Extract<RpcExtensionUIRequest, { method: "select" | "confirm" | "input" | "editor" }>,
+			"id" | "type"
+	  >
+	| ViewShowRequest;
 
 export interface RemoteClientInfo {
 	id: string;
@@ -178,6 +182,8 @@ class RemoteConnection {
 	private readonly server: RemoteControlServer;
 	/** Subagent runs this phone follows (`subagent_subscribe`), made on the first. */
 	private subagentStreams: SubagentStreams | undefined;
+	/** Optional protocol parts this phone implements (`set_client_features`), such as "views". */
+	features: ReadonlySet<string> = new Set();
 
 	constructor(socket: WebSocket, address: string, server: RemoteControlServer) {
 		this.socket = socket;
@@ -719,7 +725,9 @@ export class RemoteControlServer {
 			dialogs: [...this.dialogs.values()].map((dialog) => dialog.request),
 			commands: this.commands(session),
 			omittedMessages: 0,
-			features: [SUBAGENT_STREAM_FEATURE],
+			features: [SUBAGENT_STREAM_FEATURE, VIEWS_FEATURE],
+			// The mobile UI kit's views of the session now (docs/mobile-ui.md); clients without it ignore them.
+			views: session.extensionRunner.viewSnapshot(),
 		};
 		// Newest messages first, while they fit; a client would refuse the whole snapshot otherwise.
 		let budget = (this.options.helloBudgetBytes ?? HELLO_BUDGET_BYTES) - Buffer.byteLength(JSON.stringify(hello));
@@ -772,6 +780,25 @@ export class RemoteControlServer {
 		this.broadcast({ type: "extension_ui_request", id: randomUUID(), method: "notify", message, notifyType });
 	}
 
+	/** A sheet (`showView`) on the phones, as a dialog: the first phone's answer, or undefined once `signal` aborts. */
+	async requestViewSheet(request: ViewShowRequest, signal?: AbortSignal): Promise<ViewSheetAnswer | undefined> {
+		const response = await this.requestDialog(request, signal);
+		return response && ("nodeId" in response || "cancelled" in response) ? response : undefined;
+	}
+
+	/** A connected phone renders views (it declared "views"). */
+	hasViewClients(): boolean {
+		return [...this.connections].some((connection) => connection.isOpen && connection.features.has(VIEWS_FEATURE));
+	}
+
+	/** A view change, to the phones that render views. */
+	sendView(request: ViewRequest): void {
+		const message = { type: "extension_ui_request", id: randomUUID(), ...request };
+		for (const connection of this.connections) {
+			if (connection.isOpen && connection.features.has(VIEWS_FEATURE)) connection.send(message);
+		}
+	}
+
 	async handleClientMessage(connection: RemoteConnection, message: unknown): Promise<void> {
 		// A revoked device (here, or by another Pi on this machine editing devices.json) runs nothing more.
 		const device = connection.device;
@@ -794,7 +821,18 @@ export class RemoteControlServer {
 			}
 			return;
 		}
+		if (typed.type === "extension_ui_event") {
+			this.options.getSession()?.extensionRunner.handleViewEvent(message as ViewClientEvent);
+			return;
+		}
 		const id = typeof typed.id === "string" ? typed.id : undefined;
+		if (typed.type === "set_client_features") {
+			const requested = (message as { features?: unknown }).features;
+			const accepted = Array.isArray(requested) && requested.includes(VIEWS_FEATURE) ? [VIEWS_FEATURE] : [];
+			connection.features = new Set(accepted);
+			connection.send({ id, type: "response", command: typed.type, success: true, data: { features: accepted } });
+			return;
+		}
 		if (typed.type === "subagent_subscribe" || typed.type === "subagent_unsubscribe") {
 			const runId = (message as { runId?: unknown }).runId;
 			try {

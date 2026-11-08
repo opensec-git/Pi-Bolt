@@ -3,12 +3,12 @@
  * client, and what needs Pi's terminal does nothing.
  */
 
-import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../core/extensions/index.ts";
+import type { ExtensionUIDialogOptions, ExtensionUIHost } from "../core/extensions/index.ts";
 import { theme } from "../modes/interactive/theme/theme.ts";
 
-export type ClientDialogs = Pick<ExtensionUIContext, "select" | "confirm" | "input" | "editor" | "notify">;
+export type ClientDialogs = Pick<ExtensionUIHost, "select" | "confirm" | "input" | "editor" | "notify">;
 
-export function clientUIContext(dialogs: ClientDialogs): ExtensionUIContext {
+export function clientUIContext(dialogs: ClientDialogs): ExtensionUIHost {
 	return {
 		...dialogs,
 		onTerminalInput: () => () => {},

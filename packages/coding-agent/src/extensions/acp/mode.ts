@@ -27,7 +27,7 @@ import {
 	createAgentSessionRuntime,
 } from "../../core/agent-session-runtime.ts";
 import { formatNoApiKeyFoundMessage } from "../../core/auth-guidance.ts";
-import type { ExtensionUIContext, ExtensionUIDialogOptions, SessionStartEvent } from "../../core/extensions/index.ts";
+import type { ExtensionUIDialogOptions, ExtensionUIHost, SessionStartEvent } from "../../core/extensions/index.ts";
 import { findExactModelReferenceMatch } from "../../core/model-resolver.ts";
 import {
 	flushRawStdout,
@@ -1142,7 +1142,7 @@ class AcpSession {
 		return typeof value === "string" ? value : undefined;
 	}
 
-	private createUIContext(): ExtensionUIContext {
+	private createUIContext(): ExtensionUIHost {
 		return clientUIContext({
 			select: async (title, options, opts) => {
 				const permissionOptions: PermissionOption[] = options.map((option, index) => ({

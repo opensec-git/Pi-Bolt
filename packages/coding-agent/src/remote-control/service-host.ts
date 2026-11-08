@@ -23,11 +23,12 @@ import { VERSION } from "../config.ts";
 import type { AgentSessionRuntime, CreateAgentSessionRuntimeFactory } from "../core/agent-session-runtime.ts";
 import { createAgentSessionRuntime } from "../core/agent-session-runtime.ts";
 import type {
-	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUIHost,
 	ProjectTrustContext,
 	SessionStartEvent,
 } from "../core/extensions/index.ts";
+import type { ViewChannel } from "../core/mobile-ui/host.ts";
 import { type SessionInfo, SessionManager } from "../core/session-manager.ts";
 import { SettingsManager } from "../core/settings-manager.ts";
 import type { RemoteControlSettings } from "../core/settings-schema.ts";
@@ -758,6 +759,7 @@ export class ServiceHost {
 		await session.bindExtensions({
 			uiContext: this.uiContext(),
 			mode: "rpc",
+			viewChannel: this.viewChannel(runtime),
 			commandContextActions: {
 				waitForIdle: () => session.waitForIdle(),
 				newSession: (options) => runtime.newSession(options),
@@ -824,8 +826,27 @@ export class ServiceHost {
 		});
 	}
 
+	/**
+	 * The mobile UI kit's views go to the phones that render them, for the session phones see; a background session's
+	 * views wait for its `remote_hello`, and its sheets become dialogs, which reach the phones.
+	 */
+	private viewChannel(runtime: AgentSessionRuntime): ViewChannel {
+		const shown = () => runtime === this.runtime && this.server?.running === true;
+		return {
+			hasNative: () => shown() && this.server?.hasViewClients() === true,
+			keepText: false,
+			send: (request) => {
+				if (shown()) this.server?.sendView(request);
+			},
+			sheet: (request, signal) =>
+				this.server
+					? this.server.requestViewSheet(request, signal)
+					: new Promise((resolve) => signal.addEventListener("abort", () => resolve(undefined), { once: true })),
+		};
+	}
+
 	/** Dialogs of extensions go to the phones (and to phones that connect while one is open). */
-	private uiContext(): ExtensionUIContext {
+	private uiContext(): ExtensionUIHost {
 		const value = (response: RpcExtensionUIResponse) => ("value" in response ? response.value : undefined);
 		return clientUIContext({
 			select: (title, options, opts) =>

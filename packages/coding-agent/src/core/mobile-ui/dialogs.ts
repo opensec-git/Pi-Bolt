@@ -1,0 +1,157 @@
+/**
+ * A sheet (`showView`) as a sequence of the dialogs every mode has, for the terminal and clients without the kit
+ * (docs/mobile-ui.md#fallback): the action to take when there is a choice, then the chosen form's fields.
+ */
+
+import type { ExtensionUIContext, ExtensionUIDialogOptions } from "../extensions/types.ts";
+import { cleanText, viewToLines } from "./text.ts";
+import type {
+	MobileView,
+	MobileViewButton,
+	MobileViewField,
+	MobileViewForm,
+	MobileViewNode,
+	MobileViewResult,
+	MobileViewValue,
+} from "./types.ts";
+import { forEachNode, isFieldType, optionValues } from "./validate.ts";
+
+export type ViewDialogs = Pick<ExtensionUIContext, "select" | "confirm" | "input">;
+
+const SUMMARY_LINES = 12;
+/** A required or malformed answer is asked again this many times before the sheet counts as cancelled. */
+const ATTEMPTS = 3;
+
+/** The current value of every field of `view`, by field id. Password fields included: the result goes to the extension. */
+export function fieldValues(view: MobileView): Record<string, MobileViewValue> {
+	const values: Record<string, MobileViewValue> = {};
+	forEachNode(view, (node) => {
+		if (!node.id || !isFieldType(node.type)) return undefined;
+		const field = node as MobileViewField;
+		if (field.type === "input") values[node.id] = field.value ?? "";
+		else if (field.type === "select") values[node.id] = field.value ?? optionValues(field.options)[0] ?? "";
+		else values[node.id] = field.value;
+		return undefined;
+	});
+	return values;
+}
+
+function closers(view: MobileView): Array<MobileViewForm | MobileViewButton> {
+	const found: Array<MobileViewForm | MobileViewButton> = [];
+	forEachNode(view, (node) => {
+		if (node.type === "form" && !node.hidden && !node.disabled) found.push(node);
+		return undefined;
+	});
+	for (const action of view.actions ?? []) {
+		if (!action.hidden && !action.disabled && action.url === undefined) found.push(action);
+	}
+	return found;
+}
+
+function closerLabel(closer: MobileViewForm | MobileViewButton): string {
+	return cleanText(closer.type === "form" ? closer.submit.label : closer.label);
+}
+
+async function askField(
+	dialogs: ViewDialogs,
+	field: MobileViewField,
+	opts: ExtensionUIDialogOptions,
+): Promise<{ value: MobileViewValue } | undefined> {
+	const label = cleanText(field.label);
+	switch (field.type) {
+		case "toggle": {
+			const choice = await dialogs.select(label, field.value ? ["On", "Off"] : ["Off", "On"], opts);
+			return choice === undefined ? undefined : { value: choice === "On" };
+		}
+		case "select": {
+			const values = optionValues(field.options);
+			const labels = field.options.map((option) => cleanText(typeof option === "string" ? option : option.label));
+			const choice = await dialogs.select(label, labels, opts);
+			const index = choice === undefined ? -1 : labels.indexOf(choice);
+			return index < 0 ? undefined : { value: values[index] };
+		}
+		case "slider": {
+			const range = `${label} (${field.min} to ${field.max})`;
+			for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+				const text = await dialogs.input(range, String(field.value), opts);
+				if (text === undefined) return undefined;
+				if (text.trim() === "") return { value: field.value };
+				const value = Number(text);
+				if (Number.isFinite(value) && value >= field.min && value <= field.max) return { value };
+			}
+			return undefined;
+		}
+		case "input": {
+			const max = field.maxLength ?? 2000;
+			const title = field.required ? `${label} (required)` : label;
+			const placeholder = field.kind === "password" ? field.placeholder : (field.value ?? field.placeholder);
+			for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+				const text = await dialogs.input(title, placeholder ? cleanText(placeholder) : undefined, opts);
+				if (text === undefined) return undefined;
+				// Enter on an empty field keeps what it held.
+				const value = text === "" ? (field.value ?? "") : text;
+				if (field.required && value.trim() === "") continue;
+				if (field.kind === "number" && value !== "" && !Number.isFinite(Number(value))) continue;
+				if (value.length <= max) return { value };
+			}
+			return undefined;
+		}
+	}
+}
+
+/**
+ * Runs `view` as dialogs: picks the action (a form's submit or an `actions` button) when there is more than one, asks
+ * the chosen form's fields, and confirms a button that has `confirm`. Undefined when any dialog is cancelled, times out
+ * or `signal` aborts.
+ */
+export async function runViewDialogs(
+	view: MobileView,
+	dialogs: ViewDialogs,
+	signal?: AbortSignal,
+): Promise<MobileViewResult | undefined> {
+	const opts: ExtensionUIDialogOptions = signal ? { signal } : {};
+	const values = fieldValues(view);
+	const choices = closers(view);
+	// What the sheet says besides its choices: the forms are asked field by field, the actions are the options.
+	const content = view.body.filter((node) => node.type !== "form");
+	const summary = viewToLines({ ...view, body: content, actions: undefined })
+		.slice(0, SUMMARY_LINES)
+		.join("\n");
+	const title = summary || cleanText(view.title ?? "");
+	if (choices.length === 0) {
+		await dialogs.select(title, ["Close"], opts);
+		return undefined;
+	}
+	let chosen = choices[0];
+	if (choices.length > 1 || chosen.type === "button") {
+		const labels = choices.map((choice, index) => {
+			const label = closerLabel(choice);
+			return choices.some((other, j) => j < index && closerLabel(other) === label)
+				? `${label} (${index + 1})`
+				: label;
+		});
+		const picked = await dialogs.select(title, labels, opts);
+		const index = picked === undefined ? -1 : labels.indexOf(picked);
+		if (index < 0) return undefined;
+		chosen = choices[index];
+	}
+	if (signal?.aborted || !chosen.id) return undefined;
+	if (chosen.type === "button") {
+		if (chosen.confirm) {
+			const ok = await dialogs.confirm(
+				cleanText(chosen.confirm.title),
+				cleanText(chosen.confirm.message ?? ""),
+				opts,
+			);
+			if (!ok) return undefined;
+		}
+		return { id: chosen.id, action: chosen.action ?? chosen.id, values };
+	}
+	for (const child of chosen.children as MobileViewNode[]) {
+		if (!isFieldType(child.type) || child.hidden || !child.id) continue;
+		const answer = await askField(dialogs, child as MobileViewField, opts);
+		if (!answer || signal?.aborted) return undefined;
+		values[child.id] = answer.value;
+	}
+	return { id: chosen.id, action: chosen.submit.action ?? chosen.id, values };
+}

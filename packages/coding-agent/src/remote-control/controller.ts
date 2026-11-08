@@ -7,6 +7,7 @@
 import { hostname, networkInterfaces } from "node:os";
 import type { AgentSession } from "../core/agent-session.ts";
 import type { ExtensionUIDialogOptions } from "../core/extensions/index.ts";
+import type { ViewRequest, ViewSheetAnswer, ViewShowRequest } from "../core/mobile-ui/host.ts";
 import type { SettingsManager } from "../core/settings-manager.ts";
 import type { RpcExtensionUIResponse } from "../modes/rpc/rpc-types.ts";
 import { WEBSOCKET_PATH } from "./protocol.ts";
@@ -405,6 +406,25 @@ export class RemoteControlController {
 
 	notify(message: string, type?: "info" | "warning" | "error"): void {
 		this.server?.notify(message, type);
+	}
+
+	/** A connected phone renders views (the mobile UI kit). */
+	hasViewClients(): boolean {
+		return this.server?.running === true && this.server.hasViewClients();
+	}
+
+	sendView(request: ViewRequest): void {
+		this.server?.sendView(request);
+	}
+
+	/**
+	 * A sheet on the phones while remote control runs (and on phones that connect while it is open): the first answer,
+	 * or undefined once `signal` aborts.
+	 */
+	viewSheet(request: ViewShowRequest, signal: AbortSignal): Promise<ViewSheetAnswer | undefined> {
+		const server = this.server;
+		if (server?.running) return server.requestViewSheet(request, signal);
+		return new Promise((resolve) => signal.addEventListener("abort", () => resolve(undefined), { once: true }));
 	}
 
 	/**

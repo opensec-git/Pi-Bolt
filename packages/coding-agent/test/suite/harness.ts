@@ -18,7 +18,7 @@ import type {
 import { registerFauxProvider, streamSimple } from "@earendil-works/pi-ai/compat";
 import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-session.ts";
 import { AuthStorage } from "../../src/core/auth-storage.ts";
-import type { ExtensionRunner, ExtensionUIContext } from "../../src/core/extensions/index.ts";
+import type { ExtensionRunner, ExtensionUIHost } from "../../src/core/extensions/index.ts";
 import { convertToLlm } from "../../src/core/messages.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import type { Settings } from "../../src/core/settings-manager.ts";
@@ -72,7 +72,7 @@ export function getToolResult(harness: Harness, toolName: string): ToolResultMes
 }
 
 /** An extension UI context that does nothing, with `overrides` applied. */
-export function createTestUiContext(overrides: Partial<ExtensionUIContext> = {}): ExtensionUIContext {
+export function createTestUiContext(overrides: Partial<ExtensionUIHost> = {}): ExtensionUIHost {
 	return {
 		select: async () => undefined,
 		confirm: async () => false,

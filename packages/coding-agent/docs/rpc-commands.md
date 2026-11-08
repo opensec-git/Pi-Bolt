@@ -850,6 +850,22 @@ does not have. Until unsubscribed (or the session is replaced), stdout carries `
 messages, from the start, then as they are appended) and `subagent_events` (its streaming message and tool starts and
 ends). The shapes are in [Subagent streams](remote-control.md#subagent-streams).
 
+## Client features
+
+### set_client_features
+
+Declare the optional parts of the protocol the client implements. Today: `"views"`, the [mobile UI kit](mobile-ui.md).
+
+```json
+{"type": "set_client_features", "features": ["views"]}
+```
+
+Response: `{"type": "response", "command": "set_client_features", "success": true, "data": {"features": ["views"]}}`,
+listing what Pi accepted (unknown names are left out). With `"views"`, extension views arrive as `setView`,
+`updateView` and `showView` [extension UI requests](mobile-ui.md#protocol) instead of their text form, starting with every
+current view. Sending it again (after the client rebuilt its screen, say) replays them; sending it without `"views"`
+switches back to text for new changes.
+
 ## Model object
 
 Model commands return the complete configured model definition. Costs are in US dollars per million tokens.
