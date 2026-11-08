@@ -127,6 +127,8 @@ fun RegistrySection(store: RegistryStore, onMessage: (String) -> Unit, onChanged
             )
             FieldHint(scopeProblem ?: "With a scope, only @scope/ packages come from this registry; without one, every package does.", isError = scopeProblem != null)
             FieldLabel("Token")
+            val urlChanged = saved != null && Npmrc.normalizeUrl(url) != null && Npmrc.normalizeUrl(url) != saved?.url
+            if (hasToken && urlChanged) FieldHint("Saving a new address removes the saved token: it belongs to the old registry.")
             if (hasToken) {
                 Row(Modifier.fillMaxWidth().padding(vertical = Space.xs), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Rounded.Key, contentDescription = null, tint = colors.success, modifier = Modifier.padding(end = Space.sm).size(IconSize.md))

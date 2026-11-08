@@ -122,7 +122,22 @@ class PrivateRegistryTest {
     }
 
     @Test
+    fun aNewRegistryDropsTheOldToken() {
+        val store = RegistryStore(MapKv(), box())
+        store.save(RegistryConfig("https://npm.company.com/", "@company"))
+        store.saveToken(token)
+        store.save(RegistryConfig("https://npm.company.com/", "@other"))
+        assertEquals(token, store.token())
+        store.save(RegistryConfig("https://mirror.example.org/", "@company"))
+        assertNull(store.token())
+        assertFalse(store.hasToken)
+    }
+
+    @Test
     fun urlsAreCanonical() {
+        assertNotNull(Npmrc.urlProblem("https://npm.example.com:99999/"))
+        assertNotNull(Npmrc.urlProblem("https://npm.example.com:0/"))
+        assertNull(Npmrc.urlProblem("https://npm.example.com:8443/"))
         assertEquals("https://npm.example.com/api/", Npmrc.normalizeUrl(" HTTPS://NPM.Example.com/api "))
         assertEquals("http://127.0.0.1:4873/", Npmrc.normalizeUrl("http://127.0.0.1:4873"))
     }

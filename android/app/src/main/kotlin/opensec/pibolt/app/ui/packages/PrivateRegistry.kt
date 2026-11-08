@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import opensec.pibolt.app.engine.CliResult
 import opensec.pibolt.app.engine.EngineApi
@@ -62,6 +63,8 @@ object Npmrc {
         val uri = runCatching { URI(t) }.getOrNull() ?: return "Not a registry URL"
         val host = uri.host?.lowercase() ?: return "Not a registry URL"
         if (uri.rawQuery != null || uri.rawFragment != null || uri.rawUserInfo != null) return "Use the registry's address only (no ?, # or user)"
+        // The same parser the catalog uses: a port out of range or a host it refuses is caught here, not after Save.
+        if (uri.port != -1 && uri.port !in 1..65535 || t.toHttpUrlOrNull() == null) return "Not a registry URL"
         return when (uri.scheme?.lowercase()) {
             "https" -> null
             "http" -> if (host in LOCAL_HOSTS) null else "Use https: the token must not travel in the clear"
@@ -128,7 +131,10 @@ class RegistryStore(private val kv: KeyValue, private val box: SecretBox) {
         return RegistryConfig(url, kv.get(KEY_SCOPE)?.takeIf { Npmrc.scopeProblem(it) == null })
     }
 
+    /** Saves [config]; a token saved for another registry is removed (it must never go to a different server). */
     fun save(config: RegistryConfig) {
+        val before = kv.get(KEY_URL)?.let(Npmrc::normalizeUrl)
+        if (before != null && before != Npmrc.normalizeUrl(config.url)) kv.put(KEY_TOKEN, null)
         kv.put(KEY_URL, config.url)
         kv.put(KEY_SCOPE, config.scope)
     }
@@ -205,7 +211,7 @@ object PrivateRegistries {
     /** The private registry's catalog (its config and a catalog that sends the token to it), or null. Blocking: IO. */
     fun catalog(store: RegistryStore, http: OkHttpClient): Pair<RegistryConfig, PackageCatalog>? {
         val config = store.config() ?: return null
-        return config to PackageCatalog(http, registry = config.url.trimEnd('/'), authToken = store.token(), private = true)
+        return runCatching { config to PackageCatalog(http, registry = config.url.trimEnd('/'), authToken = store.token(), private = true) }.getOrNull()
     }
 }
 
