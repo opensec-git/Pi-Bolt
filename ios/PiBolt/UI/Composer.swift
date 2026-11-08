@@ -107,6 +107,12 @@ struct Composer: View {
         .accessibilityLabel(dictation.isListening ? "Stop dictation" : "Dictate")
     }
 
+    /// Every way of sending ends a dictation first, so its late words never land in the cleared composer.
+    private func submit(_ behavior: StreamingBehavior) {
+        dictation.stop()
+        send(behavior)
+    }
+
     @ViewBuilder private var primaryButton: some View {
         if running && !hasContent {
             Button(action: stop) {
@@ -121,10 +127,7 @@ struct Composer: View {
             .accessibilityLabel("Stop")
             .disabled(!connected)
         } else {
-            Button {
-                dictation.stop()
-                send(.steer)
-            } label: {
+            Button { submit(.steer) } label: {
                 ZStack {
                     Circle().fill(Pi.accent)
                     Image(systemName: "arrow.up").font(.system(size: 15, weight: .bold)).foregroundStyle(Pi.onAccent)
@@ -137,8 +140,8 @@ struct Composer: View {
             .accessibilityLabel(running ? "Steer" : "Send")
             .contextMenu {
                 if running {
-                    Button { send(.steer) } label: { Label("Steer now", systemImage: "arrow.turn.down.right") }
-                    Button { send(.followUp) } label: { Label("Queue as follow-up", systemImage: "text.append") }
+                    Button { submit(.steer) } label: { Label("Steer now", systemImage: "arrow.turn.down.right") }
+                    Button { submit(.followUp) } label: { Label("Queue as follow-up", systemImage: "text.append") }
                 }
             }
         }
