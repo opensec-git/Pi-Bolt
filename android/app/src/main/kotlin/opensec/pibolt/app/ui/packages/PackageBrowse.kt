@@ -480,6 +480,7 @@ fun InstallLinkHost(app: PiBoltApp, pending: String?, onConsumed: () -> Unit) {
         val source = pending ?: return@LaunchedEffect
         // Taken into this host's own state before it is consumed: consuming changes this effect's key.
         installed = false
+        if (last?.status !is InstallStatus.Running) last = null
         shown = source
         onConsumed()
     }

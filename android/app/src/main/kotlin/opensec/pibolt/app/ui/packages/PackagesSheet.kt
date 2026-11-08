@@ -145,6 +145,8 @@ fun PackagesSheet(engine: EngineApi, http: OkHttpClient, controller: SessionCont
                 working?.let { F2Loading(it) }
                 ReloadWell(changed, onReload, close)
                 BrowseTab(catalog, installed = PackageFormat.installedNames(view?.packages.orEmpty().filter { it.scope == PackageScope.User }.map { it.source }), onOpen = {
+                    // A finished result is for that visit only; a running install stays visible.
+                    if (browseStatus?.status !is InstallStatus.Running) browseStatus = null
                     browsing = it
                 })
                 return@Column
