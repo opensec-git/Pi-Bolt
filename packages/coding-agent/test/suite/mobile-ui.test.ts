@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
@@ -574,6 +574,21 @@ describe("mobile UI kit in a session", () => {
 			values: { text: "From the page" },
 		});
 		await until(() => ui.getView("board:page")?.subtitle === "4 tasks");
+
+		// A board larger than a table can hold still opens: its page lists the newest 200 tasks.
+		await runner.closePage("board:page");
+		const big = JSON.parse(readFileSync(join(dir, "board.json"), "utf8")) as { tasks: unknown[]; nextId: number };
+		const tasks = Array.from({ length: 520 }, (_, i) => ({
+			id: i + 1,
+			text: `Task ${i + 1}`,
+			done: false,
+			added: "2026-11-01",
+		}));
+		writeFileSync(join(dir, "board.json"), JSON.stringify({ ...big, tasks, nextId: 521 }));
+		await runner.openPage("board:page");
+		const page = ui.getView("board:page");
+		expect(validateView(page)).toEqual([]);
+		expect(JSON.stringify(page)).toContain("The newest 200 of 520 tasks");
 	});
 
 	describe("over remote control", () => {

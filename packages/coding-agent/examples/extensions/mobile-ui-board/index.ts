@@ -50,6 +50,8 @@ const PAGE = "board:page";
 const TILE = "board:tile";
 /** Open tasks the panel lists; the page lists all. */
 const PANEL_TASKS = 4;
+/** Tasks the page's table lists (the newest); the kit's tables hold at most 500 rows. */
+const TABLE_TASKS = 200;
 /** Days the chart and the sparkline cover. */
 const DAYS = 7;
 /** How long a change waits for another Pi's change of the board, and when a lock is taken as left behind. */
@@ -228,7 +230,8 @@ export function boardExtension(options: { file?: string } = {}) {
 									{ id: "state", label: "State", sortable: true },
 									{ id: "added", label: "Added", kind: "date", sortable: true },
 								],
-								rows: board.tasks.map((task) => ({
+								// The newest tasks only: a table holds at most 500 rows, a board any number.
+								rows: board.tasks.slice(-TABLE_TASKS).map((task) => ({
 									id: `task-${task.id}`,
 									cells: {
 										id: task.id,
@@ -239,6 +242,15 @@ export function boardExtension(options: { file?: string } = {}) {
 									action: "toggle",
 								})),
 							},
+							...(board.tasks.length > TABLE_TASKS
+								? [
+										{
+											type: "text",
+											text: `The newest ${TABLE_TASKS} of ${board.tasks.length} tasks; /board lists all`,
+											style: "meta",
+										} as const,
+									]
+								: []),
 						],
 					},
 					{
