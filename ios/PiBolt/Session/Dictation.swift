@@ -11,6 +11,8 @@ import Speech
 final class Dictation {
     enum State: Equatable {
         case idle
+        /// Asking for permissions and starting the microphone.
+        case starting
         case listening
         case failed(String)
     }
@@ -24,24 +26,34 @@ final class Dictation {
     @ObservationIgnored private var task: SFSpeechRecognitionTask?
     @ObservationIgnored private var limit: Task<Void, Never>?
     @ObservationIgnored private var onText: ((String) -> Void)?
+    @ObservationIgnored private var startup: Task<Void, Never>?
+    @ObservationIgnored private var tapInstalled = false
 
-    var isListening: Bool { state == .listening }
+    /// Starting or listening: the microphone button stops it.
+    var isListening: Bool { state == .listening || state == .starting }
 
     /// Starts listening; `onText` gets the whole transcription each time it grows.
     func start(onText: @escaping (String) -> Void) {
-        guard state != .listening else { return }
+        guard state != .listening, state != .starting else { return }
         self.onText = onText
         heard = ""
-        Task { await begin() }
+        state = .starting
+        startup = Task { await begin() }
     }
 
     func stop() {
-        guard state == .listening || task != nil else { return }
+        // A start still waiting for permissions does not go on to record.
+        startup?.cancel()
+        startup = nil
+        if state == .starting { state = .idle }
+        guard state == .listening || task != nil || tapInstalled else { return }
         limit?.cancel()
         limit = nil
-        if engine.isRunning {
-            engine.stop()
+        if engine.isRunning { engine.stop() }
+        // Also after a failed start: a second tap on the same bus would trap.
+        if tapInstalled {
             engine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
         }
         request?.endAudio()
         task?.finish()
@@ -52,11 +64,15 @@ final class Dictation {
     }
 
     private func begin() async {
-        guard await Self.speechAllowed() else {
+        let speech = await Self.speechAllowed()
+        guard !Task.isCancelled, state == .starting else { return }
+        guard speech else {
             state = .failed("Speech recognition is off for Pi-Bolt. Turn it on in Settings, Privacy & Security, Speech Recognition.")
             return
         }
-        guard await AVAudioApplication.requestRecordPermission() else {
+        let microphone = await AVAudioApplication.requestRecordPermission()
+        guard !Task.isCancelled, state == .starting else { return }
+        guard microphone else {
             state = .failed("The microphone is off for Pi-Bolt. Turn it on in Settings, Privacy & Security, Microphone.")
             return
         }
@@ -85,6 +101,7 @@ final class Dictation {
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak request] buffer, _ in
                 request?.append(buffer)
             }
+            tapInstalled = true
             engine.prepare()
             try engine.start()
             state = .listening

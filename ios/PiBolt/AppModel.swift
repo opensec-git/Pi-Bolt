@@ -36,6 +36,8 @@ final class AppModel {
         self.recents = recents ?? RecentStore()
         self.notifier = notifier ?? Notifier()
         self.watchFile = watchFile ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("watch.json")
+        // A Background App Refresh launch starts in the background, with no scene transition to say so.
+        isForeground = UIApplication.shared.applicationState != .background
         deviceName = UIDevice.current.name
         appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.0.0"
         self.notifier.onOpen = { [weak self] hostId, sessionId in self?.openFromNotification(hostId: hostId, sessionId: sessionId) }
@@ -195,7 +197,8 @@ final class AppModel {
             notifier.post(result.alerts)
             next = result.next
         }
-        guard !isForeground else { return }
+        // The user opened the app meanwhile: it reconnects and shows everything itself.
+        guard UIApplication.shared.applicationState != .active else { return }
         saveWatch(next)
         if next != nil { scheduleRefresh() }
     }
