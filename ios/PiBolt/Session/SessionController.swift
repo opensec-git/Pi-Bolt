@@ -31,9 +31,17 @@ final class SessionController {
     private(set) var state = SessionState()
     private(set) var link: LinkState = .connecting
     private(set) var models: [ModelInfo] = []
+    /// The thinking levels the session's model offers (`get_available_thinking_levels`); empty until asked.
+    private(set) var thinkingLevels: [String] = []
     var toast: Toast?
     /// Text the composer should take back (a failed send, a cleared queue).
     var composerRestore: String?
+    /// Images the composer should take back with a failed send.
+    var composerRestoreImages: [ImageAttachment] = []
+    /// A sheet or the review screen to open, asked for from outside the screen (the debug autopilot of CI's
+    /// screenshots).
+    var requestedSheet: SessionSheet?
+    var requestedReview = false
     /// True while this controller pairs with a new computer (its secret goes in the first handshake only).
     let pairing: Bool
 
@@ -49,6 +57,17 @@ final class SessionController {
     @ObservationIgnored private var retryWaiter: CheckedContinuation<Void, Never>?
     @ObservationIgnored private var pathMonitor: NWPathMonitor?
     @ObservationIgnored private(set) var stopped = false
+    /// Runs whose screen is open: the computer streams their conversation while they are watched
+    /// (`subagent_subscribe`), and is asked again after every `remote_hello` (a new connection or session forgets them).
+    @ObservationIgnored private var watchedSubagents: Set<String> = []
+    /// The session a Recents row asked for: opened with `switch_session` once connected, unless it is the one shown.
+    @ObservationIgnored private var switchTarget: RecentSession?
+    /// The last entry given to Recents, so one is written only when what it shows changes.
+    @ObservationIgnored private var recorded: RecentSession?
+    /// `get_commands` was asked since the last `remote_hello`.
+    @ObservationIgnored private var commandsFresh = false
+    /// Snapshots received, so a background refresh can wait for a new one.
+    @ObservationIgnored private var helloCount = 0
 
     /// One frame: a burst of token deltas becomes one state change and one redraw.
     private static let frameNanos: UInt64 = 16_000_000
@@ -280,6 +299,34 @@ final class SessionController {
         }
         if let h = held { s = apply(s, h) }
         state = s
+        afterPublish()
+    }
+
+    /// Recents and a pending switch, after the state changed.
+    private func afterPublish() {
+        guard let app, state.hello else { return }
+        if !app.isForeground { app.sessionChangedInBackground(self) }
+        if let entry = RecentSession.of(state, hostId: hostId, hostName: hostName),
+           recorded?.id != entry.id || recorded?.title != entry.title || recorded?.sessionFile != entry.sessionFile
+        {
+            recorded = entry
+            app.recents.record(entry)
+        }
+        if let target = switchTarget, link.isConnected {
+            switchTarget = nil
+            guard target.sessionId != state.sessionId, let file = target.sessionFile, state.host?.service == true else { return }
+            guard canSwitchNow else {
+                toast = Toast(text: "Pi is working here. Stop it first to open that session.", kind: .warning)
+                return
+            }
+            Task { [weak self] in _ = await self?.switchSession(file) }
+        }
+    }
+
+    /// Open `recent` once connected (a Recents row), when it is not the session the computer shows.
+    func openWhenConnected(_ recent: RecentSession) {
+        switchTarget = recent
+        afterPublish()
     }
 
     private func apply(_ before: SessionState, _ event: JSON) -> SessionState {
@@ -297,11 +344,28 @@ final class SessionController {
                 default: .info
                 }
                 toast = Toast(text: event.str("message") ?? "", kind: kind)
+            } else {
+                alert(before, event)
             }
+        case "extension_ui_dismissed":
+            if before.dialogs.count <= 1 { app?.notifier.clearAnswer(hostId: hostId) }
         case "agent_settled":
+            alert(before, event)
+            // Recents show when a session last worked.
+            recorded = nil
             Task { [weak self] in await self?.refreshState() }
         case "remote_hello":
+            helloCount += 1
             models = []
+            thinkingLevels = []
+            commandsFresh = false
+            // The computer forgot this phone's subagent streams (a new connection or session): ask again.
+            let streams = (event.arr("features") ?? []).contains { $0.primitiveText == subagentStreamFeature }
+            for key in watchedSubagents { subscribeSubagent(key, streams: streams) }
+            // A reconnect after the run ended or a dialog opened: the alerts the drop swallowed.
+            if app?.isForeground == false, let app {
+                app.notifier.post(SessionAlerts.missed(before: before, hello: event, hostId: hostId, hostName: hostName))
+            }
             let host = event.obj("host")
             app?.hosts.update(hostId) {
                 $0.cwd = host?.str("cwd") ?? $0.cwd
@@ -322,6 +386,12 @@ final class SessionController {
         app?.hosts.update(hostId) { $0.endpoints = endpoints }
     }
 
+    /// A local notification for `event`, while the app is not in front.
+    private func alert(_ before: SessionState, _ event: JSON) {
+        guard let app, !app.isForeground else { return }
+        app.notifier.post(SessionAlerts.alerts(before: before, event: event, hostId: hostId, hostName: hostName))
+    }
+
     private func refreshState() async {
         let response = await rpc.getState()
         if response.success { mutate { SessionReducer.applyRpcState($0, response.data) } }
@@ -330,14 +400,16 @@ final class SessionController {
     // MARK: Commands
 
     /// Send a prompt. While the agent runs, `behavior` says whether it steers or waits as a follow-up.
-    func send(_ text: String, behavior: StreamingBehavior = .steer) {
+    func send(_ text: String, images: [ImageAttachment] = [], behavior: StreamingBehavior = .steer) {
         let running = state.isRunning
+        app?.notifier.requestPermissionOnce()
         Task { [weak self] in
             guard let self else { return }
             // An extension command answers only when it finishes, after its dialogs: nothing waits on this.
-            let response = await self.rpc.prompt(text, streamingBehavior: running ? behavior : nil)
+            let response = await self.rpc.prompt(text, images: images, streamingBehavior: running ? behavior : nil)
             if !response.success, !self.stopped {
                 self.composerRestore = text
+                self.composerRestoreImages = images
                 self.toast = Toast(text: response.error ?? "Not sent", kind: .error)
             }
         }
@@ -364,10 +436,10 @@ final class SessionController {
         }
     }
 
-    func compact() {
+    func compact(instructions: String? = nil) {
         Task { [weak self] in
             guard let self else { return }
-            let response = await self.rpc.compact()
+            let response = await self.rpc.compact(instructions: instructions)
             if !response.success { self.toast = Toast(text: response.error ?? "Compaction failed", kind: .error) }
         }
     }
@@ -391,10 +463,118 @@ final class SessionController {
                     s.model = ModelInfo.from(response.data) ?? model
                     return s
                 }
+                // Another model may offer other thinking levels, and Pi may have clamped the level.
+                self.thinkingLevels = []
+                await self.refreshState()
             } else {
                 self.toast = Toast(text: response.error ?? "Could not switch the model", kind: .error)
             }
         }
+    }
+
+    /// One command to the computer, for screens with their own commands (review). Waits up to `timeout` seconds.
+    func request(_ type: String, timeout: TimeInterval? = 30, _ fields: [String: JSON] = [:]) async -> RpcResponse {
+        await rpc.request(type, timeout: timeout, fields)
+    }
+
+    func rename(_ name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        Task { [weak self] in
+            guard let self else { return }
+            let response = await self.rpc.setSessionName(trimmed)
+            if response.success {
+                self.mutate {
+                    var s = $0
+                    s.sessionName = trimmed.isEmpty ? nil : trimmed
+                    return s
+                }
+            } else {
+                self.toast = Toast(text: response.error ?? "Rename failed", kind: .error)
+            }
+        }
+    }
+
+    func loadThinkingLevels() {
+        Task { [weak self] in
+            guard let self else { return }
+            let response = await self.rpc.getAvailableThinkingLevels()
+            if response.success { self.thinkingLevels = PiBoltProtocol.thinkingLevels(from: response) }
+            else { self.toast = Toast(text: response.error ?? "Could not list thinking levels", kind: .error) }
+        }
+    }
+
+    func setThinkingLevel(_ level: String) {
+        Task { [weak self] in
+            guard let self else { return }
+            let response = await self.rpc.setThinkingLevel(level)
+            if response.success {
+                self.mutate {
+                    var s = $0
+                    s.thinkingLevel = level
+                    return s
+                }
+                // Pi clamps a level the model lacks: show the level it set.
+                await self.refreshState()
+            } else {
+                self.toast = Toast(text: response.error ?? "Could not change the thinking level", kind: .error)
+            }
+        }
+    }
+
+    /// The host's `/` commands, read again once per snapshot (an extension may have added some since).
+    func refreshCommands() {
+        guard !commandsFresh, link.isConnected else { return }
+        commandsFresh = true
+        Task { [weak self] in
+            guard let self else { return }
+            let response = await self.rpc.getCommands()
+            if response.success {
+                let commands = SessionReducer.commandsFrom(response.data)
+                self.mutate {
+                    var s = $0
+                    s.commands = commands
+                    return s
+                }
+            } else {
+                self.commandsFresh = false
+            }
+        }
+    }
+
+    // MARK: Subagents
+
+    /// Run `key`'s screen opened (`on`) or closed: a computer with `subagent_stream` streams its own conversation while
+    /// it is open.
+    func watchSubagent(_ key: String, _ on: Bool) {
+        let was = watchedSubagents.contains(key)
+        if on { watchedSubagents.insert(key) } else { watchedSubagents.remove(key) }
+        guard was != on else { return }
+        if on { subscribeSubagent(key, streams: state.host?.streamsSubagents == true) } else { unsubscribeSubagent(key) }
+    }
+
+    private static let subscribeTries = 5
+    private static let subscribeRetryNanos: UInt64 = 1_500_000_000
+
+    private func subscribeSubagent(_ key: String, streams: Bool) {
+        guard streams else { return }
+        let client = rpc
+        Task { [weak self] in
+            // A call still being written is not a run yet on the computer: asked again a few times while it is
+            // watched. Not an error the reader sees: the screen keeps the prompt and progress it has.
+            for _ in 0 ..< SessionController.subscribeTries {
+                let response = await client.subagentSubscribe(key)
+                if response.success { return }
+                guard response.error?.hasPrefix("No subagent run") == true else { return }
+                try? await Task.sleep(nanoseconds: SessionController.subscribeRetryNanos)
+                guard let self, self.watchedSubagents.contains(key), client === self.rpc else { return }
+            }
+        }
+    }
+
+    private func unsubscribeSubagent(_ key: String) {
+        guard state.host?.streamsSubagents == true else { return }
+        let client = rpc
+        Task { _ = await client.subagentUnsubscribe(key) }
     }
 
     // MARK: Sessions (the background service)
@@ -456,6 +636,26 @@ final class SessionController {
             var s = $0
             s.dialogs.removeAll { $0.id == dialog.id }
             return s
+        }
+        if state.dialogs.isEmpty { app?.notifier.clearAnswer(hostId: hostId) }
+    }
+
+    // MARK: Background
+
+    /// What a background refresh should check later, or nil when nothing could change worth an alert.
+    var alertWatch: AlertWatch? { AlertWatch.of(state, hostId: hostId, hostName: hostName) }
+
+    /// A background refresh woke the app: reconnect if the link died while suspended, and wait (at most `timeout`
+    /// seconds) for a fresh snapshot. Its `remote_hello` raises the alerts of whatever happened meanwhile.
+    func checkInBackground(timeout: TimeInterval) async {
+        let before = helloCount
+        switch link {
+        case .connected: backend.dropConnection()
+        default: retryNow()
+        }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline, !stopped, helloCount == before {
+            try? await Task.sleep(nanoseconds: 200_000_000)
         }
     }
 }

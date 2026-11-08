@@ -56,9 +56,17 @@ targets:
           - UIInterfaceOrientationPortraitUpsideDown
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
-        UIUserInterfaceStyle: Dark
-        NSCameraUsageDescription: Pi-Bolt scans the pairing QR code that /remote-control shows on your computer.
+        # Light or dark follows the system (the Paper and Pi-Bolt themes).
+        NSCameraUsageDescription: Pi-Bolt scans the pairing QR code that /remote-control shows on your computer, and takes photos you attach to a prompt.
         NSLocalNetworkUsageDescription: Pi-Bolt connects to Pi-Bolt on your computer over the local network.
+        NSMicrophoneUsageDescription: Pi-Bolt listens while you dictate a prompt.
+        NSSpeechRecognitionUsageDescription: Pi-Bolt turns your dictation into the prompt's text, on this iPhone when it can.
+        # Background App Refresh: iOS wakes the app now and then (when, it decides) to check a session that was
+        # working when the app left the screen, and posts a local notification if it ended or asks something.
+        UIBackgroundModes:
+          - fetch
+        BGTaskSchedulerPermittedIdentifiers:
+          - in.opensec.pibolt.ios.refresh
         # Remote control speaks ws:// to LAN and Tailscale addresses; every byte is Noise-encrypted end to end
         # (docs/remote-control.md), so the transport needs no TLS of its own.
         NSAppTransportSecurity:
