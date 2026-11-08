@@ -410,6 +410,12 @@ tests/aot/run.sh                    # engine tests
   </picture>
 </a>
 
+## Written about Pi-Bolt
+
+- [Pi-Bolt: A Compiled Coding Agent That Can Afford Guardrails](https://blog.arihantdeva.com/blog/pi-bolt-compiled-coding-agent-guardrails)
+  by Arihant Deva, an independent write-up with its own measurements
+  ([#253](https://github.com/opensec-git/Pi-Bolt/issues/253)).
+
 ## License
 
 MIT. Release executables include Bun (MIT), JavaScriptCore (LGPL-2.0 and BSD), ICU (Unicode License) and Pi (MIT); see
