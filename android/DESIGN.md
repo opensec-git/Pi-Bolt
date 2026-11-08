@@ -701,7 +701,28 @@ fill runs under the navigation bar with its keys above it, and sits on the keybo
 Pi-Bolt" with "2 images" / "1 file" / "Text"; a segmented choice when there is more than one (Attach to chat |
 Import files, New project | Import files, Import files | Add to chat), the projects as 52dp radio rows (folder glyph,
 title, accent check), then the primary action. Attach and Add to chat open the project's session with the images in
-the tray or the text in the composer.
+the tray or the text in the composer. Text that is a Pi package link (a pi.dev, npm or GitHub URL, or a copied
+`pi install <source>`) says "A Pi package link" and defaults to Install package | Add to chat; Review package opens the
+package's install sheet (below), so a share never installs anything by itself.
+
+**Packages sheet.** "Packages", then a 48dp segmented Installed | Browse. Installed is the list as before (the source
+field and Install, the packages with on/off tags, the built-ins). Browse: a `PillSearchField` ("Search Pi packages",
+debounced 350 ms), then "Most downloaded" or "N found" (F2Section) and one `F2Row` per package (Inventory2 glyph, the
+name on one line, "v1.2.0 · 19k weekly · description" in meta, a success "installed" tag), "Show more" (secondary) for
+the next 20, and a meta footer naming the source (the npm registry's `pi-package` keyword, as pi.dev lists). Loading
+is a `LoadingRow`, offline or a registry error an `ErrorState` with Try again, no results an `EmptyState`. Only plain
+HTTPS GETs: registry.npmjs.org, api.npmjs.org, data.jsdelivr.com (file lists), raw.githubusercontent.com.
+
+**Package install sheet** (a Browse result, a `pibolt://install?source=` link, a shared link): the name and
+description in the header; a well with the source (monoSmall), version, weekly downloads and licence; "Compatibility":
+one `Notice` per finding (danger: `os`/`cpu`/`libc` exclude linux-arm64 glibc, Install becomes a disabled "Not for this
+phone"; warning: native code built at install, prebuilt binaries or platform packages without linux-arm64 glibc,
+`.node` files, native dependencies; info: install scripts, with their commands), or one success notice when nothing
+was found; "What it adds" (an `F2Row` per extension, skill, prompt and theme: Extension, AutoAwesome,
+ChatBubbleOutline, Palette); "Links" (Repository, pi.dev; an open glyph trails); with a project in context, "Install
+for" All projects | This project (48dp; this project needs the project trusted, else a meta line says to trust it
+first); the trust warning, or the install's progress (`LoadingRow`), success notice or error log; then Cancel and
+Install (Done once installed). Nothing installs before Install is tapped.
 
 **Provider sheet (first run and Add provider).** Opens by itself once, 450 ms after the first frame of Home, when no
 provider has a key. First run: the bolt on a 56dp glass disc, then "Connect a model" (largeTitle) and one line ("Pi-Bolt

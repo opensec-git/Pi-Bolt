@@ -78,6 +78,23 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="pibolt" android:host="pair" />
             </intent-filter>
+            <!-- Package links (pibolt://install?source=npm:<name>) open the package's install confirmation; nothing
+                 installs without the user's tap (ui/packages/PackageLinks). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="pibolt" android:host="install" />
+            </intent-filter>
+            <!-- pi.dev package pages. Not verified (no assetlinks.json on pi.dev), so Android opens them in the
+                 browser unless the user adds the link in the app's "Open by default" settings; sharing the page to
+                 Pi-Bolt works everywhere (the share filter below). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="pi.dev" android:pathPrefix="/packages/" />
+            </intent-filter>
             <!-- Files, images and text shared from other apps: imported into a project or put in its composer. -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />

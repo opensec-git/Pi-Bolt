@@ -387,7 +387,7 @@ fun SettingsScreen(
     }
     val closeEngine = { engineSheet = null }
     when (engineSheet) {
-        EngineSheet.Packages -> PackagesSheet(app.engine, p?.anyLive, null, message, closeEngine)
+        EngineSheet.Packages -> PackagesSheet(app.engine, app.http, p?.anyLive, null, message, closeEngine)
         EngineSheet.Mcp -> McpSheet(app.engine, null, message, closeEngine)
         EngineSheet.Tuning -> TuningSheet(app.engine.agentDir, null, message, closeEngine)
         null -> Unit

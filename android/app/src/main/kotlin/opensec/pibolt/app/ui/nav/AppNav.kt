@@ -60,6 +60,7 @@ import opensec.pibolt.app.ui.components.rememberSheetCloser
 import opensec.pibolt.app.ui.chats.ChatSessionScreen
 import opensec.pibolt.app.ui.chats.ChatsScreen
 import opensec.pibolt.app.ui.home.HomeScreen
+import opensec.pibolt.app.ui.packages.InstallLinkHost
 import opensec.pibolt.app.ui.projects.transfer.ShareInHost
 import opensec.pibolt.app.ui.projects.transfer.SharedContent
 import opensec.pibolt.app.ui.projects.ProjectScreen
@@ -115,8 +116,18 @@ private typealias Enter = AnimatedContentTransitionScope<NavBackStackEntry>.() -
 private typealias Exit = AnimatedContentTransitionScope<NavBackStackEntry>.() -> ExitTransition
 
 @Composable
-fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendingShare: SharedContent? = null, consumeShare: () -> Unit = {}) {
+fun AppNav(
+    app: PiBoltApp,
+    pendingLink: String?,
+    consumeLink: () -> Unit,
+    pendingShare: SharedContent? = null,
+    consumeShare: () -> Unit = {},
+    pendingInstall: String? = null,
+    consumeInstall: () -> Unit = {},
+) {
     val nav = rememberNavController()
+    // A package link shared into the app (the share sheet's "Install package"), like [pendingInstall].
+    var sharedInstall by remember { mutableStateOf<String?>(null) }
     var linkError by remember { mutableStateOf<String?>(null) }
     // A link from outside the app (a browser, a chat) pairs only after the user confirms it in the app.
     var linkToConfirm by remember { mutableStateOf<PairingPayload?>(null) }
@@ -371,7 +382,13 @@ fun AppNav(app: PiBoltApp, pendingLink: String?, consumeLink: () -> Unit, pendin
         onConsumed = consumeShare,
         onProject = { nav.navigate(Routes.project(it)) { launchSingleTop = true } },
         onSession = { nav.navigate(Routes.localSession(it)) { launchSingleTop = true } },
+        onInstallPackage = { sharedInstall = it },
     )
+    // A package link (pibolt://install, pi.dev, or shared): its details and Install, never installed without the tap.
+    InstallLinkHost(app, pendingInstall ?: sharedInstall, onConsumed = {
+        consumeInstall()
+        sharedInstall = null
+    })
 
     UpdateSheets(app)
     BackgroundRunPrompt()
