@@ -789,11 +789,11 @@ private fun ViewField(field: VField, fields: ViewFields, actions: ViewActions, l
                 FieldLabel(field.label, Modifier.weight(1f))
                 Text(formatNumber(value.toDouble()) + (field.unit?.let { " $it" } ?: ""), style = type.meta, color = colors.ink3)
             }
-            val steps = field.step?.let { (((field.max - field.min) / it).toInt() - 1).coerceIn(0, 200) } ?: 0
+            // Ticks only when there are few; the value always snaps to the declared step either way.
+            val steps = field.step?.let { (((field.max - field.min) / it).toInt() - 1).takeIf { n -> n in 0..200 } } ?: 0
             Slider(
                 value = value,
-                // A Float back to Double can land just outside fractional bounds (0.3 -> 0.30000001): Pi would refuse it.
-                onValueChange = { set(JsonPrimitive(it.toDouble().coerceIn(field.min, field.max)), commit = false) },
+                onValueChange = { set(JsonPrimitive(snap(it.toDouble(), field)), commit = false) },
                 onValueChangeFinished = { if (live) actions.change(id, fields.value(field)) },
                 valueRange = field.min.toFloat()..field.max.toFloat(),
                 steps = steps,
@@ -808,6 +808,13 @@ private fun ViewField(field: VField, fields: ViewFields, actions: ViewActions, l
             )
         }
     }
+}
+
+/** [value] on [field]'s step from its min, within its bounds (a Float back to Double can land just outside them). */
+private fun snap(value: Double, field: VSlider): Double {
+    val step = field.step
+    val snapped = if (step == null) value else field.min + Math.round((value - field.min) / step) * step
+    return snapped.coerceIn(field.min, field.max)
 }
 
 private fun formatNumber(value: Double): String = if (value == Math.floor(value)) value.toLong().toString() else String.format("%.2f", value)
