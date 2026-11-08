@@ -164,6 +164,9 @@ object SessionActions {
 
         data object YesNo : Answering
 
+        /** Answered in the app only (a sheet of the mobile UI kit): the notification opens the session. */
+        data object OpenApp : Answering
+
         /** An inline reply; [choices] are offered as suggestions. */
         data class Typed(val label: String, val choices: List<String> = emptyList()) : Answering
     }
@@ -180,6 +183,6 @@ object SessionActions {
             if (dialog.options.size in 1..OPTION_BUTTONS && dialog.options.all { it.length <= 24 }) Answering.Options(dialog.options)
             else Answering.Typed("Option name or number", dialog.options.take(5).map(::choice))
         DialogKind.Input, DialogKind.Editor -> Answering.Typed(dialog.placeholder?.takeIf { it.isNotBlank() } ?: "Answer")
-        DialogKind.View -> Answering.Typed("Open Pi-Bolt to answer")
+        DialogKind.View -> Answering.OpenApp
     }
 }

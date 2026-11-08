@@ -136,12 +136,18 @@ function checkKey(key: unknown): asserts key is string {
 	}
 }
 
-/** The fields of `nodes` (a form's children, or the whole view), by id. */
-function fieldsOf(visit: (cb: (node: MobileViewNode) => void) => void): Map<string, MobileViewField> {
+/** The fields shown in `nodes`, by id: hidden nodes and everything inside them are left out, as the app leaves them. */
+function fieldsOf(nodes: readonly MobileViewNode[]): Map<string, MobileViewField> {
 	const fields = new Map<string, MobileViewField>();
-	visit((node) => {
-		if (node.id && isFieldType(node.type) && !node.hidden) fields.set(node.id, node as MobileViewField);
-	});
+	const walk = (list: readonly MobileViewNode[]) => {
+		for (const node of list) {
+			if (node.hidden) continue;
+			if (node.id && isFieldType(node.type)) fields.set(node.id, node as MobileViewField);
+			const children = (node as { children?: MobileViewNode[] }).children;
+			if (Array.isArray(children)) walk(children);
+		}
+	};
+	walk(nodes);
 	return fields;
 }
 
@@ -454,7 +460,7 @@ export class ViewHost {
 		) {
 			return undefined;
 		}
-		const fields = fieldsOf((visit) => forEachNode(view, (n) => void visit(n)));
+		const fields = fieldsOf(view.body);
 		const values = checkValues(fields, answer.values);
 		if (!values) return undefined;
 		const action =
@@ -508,7 +514,7 @@ export class ViewHost {
 			}
 			case "submit": {
 				if (node.type !== "form" || node.disabled || node.busy) return false;
-				const fields = fieldsOf((visit) => node.children.forEach(visit));
+				const fields = fieldsOf(node.children);
 				const values = checkValues(fields, event.values);
 				if (!values) return false;
 				storeValues(fields, values);

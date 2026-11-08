@@ -557,6 +557,29 @@ describe("mobile UI host", () => {
 		await expect(host.show(SHEET)).resolves.toMatchObject({ id: "cancel", action: "cancel" });
 	});
 
+	it("leaves fields inside hidden containers out of a sheet's answer", async () => {
+		const channel = fakeChannel(true);
+		const { host } = hostWith(channel);
+		const sheet: MobileView = {
+			v: 1,
+			body: [
+				{
+					type: "section",
+					hidden: true,
+					children: [{ type: "input", id: "secret", label: "Secret", required: true }],
+				},
+				{
+					type: "form",
+					id: "f",
+					children: [{ type: "input", id: "name", label: "Name", required: true }],
+					submit: { label: "Go" },
+				},
+			],
+		};
+		channel.answer = async () => ({ nodeId: "f", values: { name: "bob" } });
+		await expect(host.show(sheet)).resolves.toEqual({ id: "f", action: "f", values: { name: "bob" } });
+	});
+
 	it("runs a sheet as dialogs without native clients, and races both with a terminal", async () => {
 		const text = hostWith(fakeChannel(false), scriptedDialogs(["Cancel", true]));
 		await expect(text.host.show(SHEET)).resolves.toMatchObject({ id: "cancel" });

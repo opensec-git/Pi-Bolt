@@ -576,7 +576,7 @@ class SessionController private constructor(
             "extension_ui_request" -> when (event.str("method")) {
                 "notify" -> _effects.tryEmit(SessionEffect.Notify(event.str("message").orEmpty(), event.str("notifyType") ?: "info"))
                 "set_editor_text" -> _effects.tryEmit(SessionEffect.EditorText(event.str("text").orEmpty()))
-                "select", "confirm", "input", "editor" -> if (!app.isForeground) {
+                "select", "confirm", "input", "editor", "showView" -> if (!app.isForeground) {
                     SessionReducer.dialogFrom(event)?.let { Notifications.needsAnswer(app, this, it) }
                 }
             }

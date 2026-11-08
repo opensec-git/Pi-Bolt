@@ -764,7 +764,8 @@ private fun ViewField(field: VField, fields: ViewFields, actions: ViewActions, l
             val steps = field.step?.let { (((field.max - field.min) / it).toInt() - 1).coerceIn(0, 200) } ?: 0
             Slider(
                 value = value,
-                onValueChange = { set(JsonPrimitive(it.toDouble()), commit = false) },
+                // A Float back to Double can land just outside fractional bounds (0.3 -> 0.30000001): Pi would refuse it.
+                onValueChange = { set(JsonPrimitive(it.toDouble().coerceIn(field.min, field.max)), commit = false) },
                 onValueChangeFinished = { if (live) actions.change(id, fields.value(field)) },
                 valueRange = field.min.toFloat()..field.max.toFloat(),
                 steps = steps,
