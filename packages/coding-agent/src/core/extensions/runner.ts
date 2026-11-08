@@ -849,12 +849,14 @@ export class ExtensionRunner {
 	/** A client closed a registered page or tile: its view goes and its `close()` runs (after any open in progress). */
 	async closePage(key: string): Promise<void> {
 		if (!this.openPages.has(key) && !this.pageQueues.has(key)) return;
+		// Read now, while the runner is live: the close may run after an open in progress, when the session has ended.
+		const ctx = this.cleanupContext();
 		await this.queuePage(key, async () => {
 			if (!this.openPages.delete(key)) return;
 			const page = this.getRegisteredPages().find((candidate) => candidate.key === key);
 			this.views?.set(key, undefined);
 			this.views?.allowTile(key, false);
-			await this.runPageClose(page);
+			await this.runPageClose(page, ctx);
 		});
 	}
 

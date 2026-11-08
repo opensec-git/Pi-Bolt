@@ -421,6 +421,40 @@ describe("mobile UI kit in a session", () => {
 		expect(runner.getUIContext().getView("dup:page")).toBeUndefined();
 	});
 
+	it("gives a close queued behind a pending open a working context, even when the session ends first", async () => {
+		let finish: (view: MobileView) => void = () => {};
+		const cleaned: string[] = [];
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi: ExtensionAPI) =>
+					pi.registerPage("slow:page", {
+						title: "Slow",
+						open: () =>
+							new Promise<MobileView>((resolve) => {
+								finish = resolve;
+							}),
+						close: (ctx) => void cleaned.push(ctx.cwd),
+					}),
+			],
+		});
+		cleanups.push(() => harness.cleanup());
+		await harness.session.bindExtensions({
+			uiContext: createTestUiContext(),
+			mode: "rpc",
+			viewChannel: fakeChannel(true),
+		});
+		const runner = harness.session.extensionRunner;
+		const opening = runner.openPage("slow:page");
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		const closing = runner.closePage("slow:page");
+		runner.invalidate();
+		finish({ v: 1, title: "Slow", body: [] });
+		await opening;
+		await closing;
+		await until(() => cleaned.length === 1);
+		expect(cleaned).toEqual([harness.tempDir]);
+	});
+
 	it("waits for a page's running close() before opening it again", async () => {
 		const order: string[] = [];
 		let finishClose: () => void = () => {};
