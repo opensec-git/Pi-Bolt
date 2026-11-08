@@ -23,6 +23,7 @@ import opensec.pibolt.protocol.session.PageInfo
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Inventory2
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -306,7 +307,17 @@ private fun PackagePagesSection(pkg: PiPackage, dir: String?, onOpen: (PageInfo)
     if (list == null) {
         if (status is PageEngine.Status.LowMemory) return
         F2Section("Pages")
-        F2Loading("Reading the package's pages")
+        when (val s = status) {
+            // The engine could not start or read them: say why, and let a tap try again.
+            is PageEngine.Status.Failed -> F2Row(
+                "Could not read the package's pages",
+                "${s.message}. Tap to try again",
+                Icons.Rounded.Refresh,
+                onClick = { app.pages.refreshPages(force = true) },
+                iconTint = Pi.colors.danger,
+            )
+            else -> F2Loading("Reading the package's pages")
+        }
         return
     }
     val mine = PageCatalog.ofPackage(list, pkg.source, dir)
