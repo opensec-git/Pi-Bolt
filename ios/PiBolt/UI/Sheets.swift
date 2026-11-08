@@ -250,3 +250,93 @@ struct DialogSheet: View {
         .onAppear { value = dialog.prefill ?? "" }
     }
 }
+
+/// The thinking levels the session's model offers (`get_available_thinking_levels`); the current one is checked.
+struct ThinkingSheet: View {
+    var controller: SessionController
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Thinking").font(.system(size: 22, weight: .semibold)).foregroundStyle(Pi.ink1)
+                Spacer()
+                GlassButton(systemName: "xmark", label: "Close") { dismiss() }
+            }
+            .padding(.horizontal, Pi.gutter)
+            .padding(.top, 12)
+            Text("How much the model reasons before it answers. More is slower and costs more.")
+                .font(.system(size: 14)).foregroundStyle(Pi.ink3)
+                .padding(.horizontal, Pi.gutter)
+                .padding(.bottom, 8)
+            if controller.thinkingLevels.isEmpty {
+                HStack { QuadSpinner(size: 16, color: Pi.ink2); Text("Loading…").foregroundStyle(Pi.ink3) }.padding(Pi.gutter)
+                Spacer()
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(controller.thinkingLevels, id: \.self) { level in
+                            Button {
+                                controller.setThinkingLevel(level)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Text(level.prefix(1).uppercased() + level.dropFirst()).font(.system(size: 17)).foregroundStyle(Pi.ink1)
+                                    Spacer()
+                                    if controller.state.thinkingLevel == level {
+                                        Image(systemName: "checkmark").foregroundStyle(Pi.ink1)
+                                    }
+                                }
+                                .padding(.vertical, 12)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            Rectangle().fill(Pi.line).frame(height: 1)
+                        }
+                    }
+                    .padding(.horizontal, Pi.gutter)
+                }
+            }
+        }
+        .task { controller.loadThinkingLevels() }
+    }
+}
+
+/// The session's name on the computer (`set_session_name`); empty clears it.
+struct RenameSheet: View {
+    var current: String
+    var save: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Rename session").font(.system(size: 22, weight: .semibold)).foregroundStyle(Pi.ink1)
+            TextField("Name", text: $name)
+                .font(.system(size: 17))
+                .foregroundStyle(Pi.ink1)
+                .focused($focused)
+                .submitLabel(.done)
+                .onSubmit(commit)
+                .padding(14)
+                .background(RoundedRectangle(cornerRadius: 14).fill(Pi.surface2))
+                .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Pi.lineStrong, lineWidth: 1))
+            HStack(spacing: 12) {
+                Button("Cancel") { dismiss() }.buttonStyle(SecondaryButtonStyle())
+                Button("Save", action: commit).buttonStyle(PrimaryButtonStyle())
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(Pi.gutter)
+        .onAppear {
+            name = current
+            focused = true
+        }
+    }
+
+    private func commit() {
+        save(name)
+        dismiss()
+    }
+}

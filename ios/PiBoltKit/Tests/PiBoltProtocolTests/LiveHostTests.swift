@@ -328,6 +328,160 @@ struct LiveHostTests {
         rpc.stop()
     }
 
+    @Test func helloAdvertisesSubagentStreamsAndReview() async throws {
+        let host = try await SharedFixture.shared.get()
+        let (backend, rpc, log) = try await connected(host)
+        let hello = try await log.waitFor { $0.type == "remote_hello" }
+        #expect(hello.strings("features").contains("subagent_stream"))
+        #expect(hello.obj("host")?.bool("review") == true)
+        backend.close()
+        rpc.stop()
+    }
+
+    /// The `Agent` call's own conversation (docs/remote-control.md, "Subagent streams"): the fixture runs a child session
+    /// as the subagents extension does, saved next to the parent's file.
+    @Test func streamsASubagentRun() async throws {
+        let host = try await SharedFixture.shared.get()
+        let (backend, rpc, log) = try await connected(host)
+        let unknown = await rpc.request("subagent_subscribe", ["runId": "no-such-run"])
+        #expect(!unknown.success)
+
+        let mark = log.all.count
+        let prompt = Task { await rpc.prompt("run a subagent") }
+        let start = try await log.waitFor(after: mark) { $0.type == "tool_execution_start" && $0.str("toolName") == "Agent" }
+        let runId = try #require(start.str("toolCallId"))
+        let subscribed = await rpc.request("subagent_subscribe", ["runId": .string(runId)])
+        #expect(subscribed.success, "\(subscribed.error ?? "")")
+
+        func entries() -> [JSON] { log.all.dropFirst(mark).filter { $0.type == "subagent_entries" && $0.str("runId") == runId } }
+        func text(_ message: JSON) -> String {
+            (message.arr("content") ?? []).filter { $0.type == "text" }.compactMap { $0.str("text") }.joined()
+        }
+        _ = try await log.waitFor(timeout: 20, after: mark) { $0.type == "subagent_entries" && $0.str("runId") == runId }
+        #expect(entries().first?.bool("reset") == true)
+        _ = try await log.waitFor(timeout: 20, after: mark) { event in
+            event.type == "subagent_entries" && event.str("runId") == runId
+                && (event.arr("messages") ?? []).contains { $0.str("role") == "assistant" && text($0).contains("Subagent found two files.") }
+        }
+        let messages = entries().flatMap { $0.arr("messages") ?? [] }
+        #expect(messages.first?.str("role") == "user")
+        #expect(messages.contains { $0.str("role") == "toolResult" && $0.str("toolName") == "shout" })
+        let live = log.all.dropFirst(mark).filter { $0.type == "subagent_events" && $0.str("runId") == runId }
+        #expect(!live.isEmpty, "the child's streaming message arrives as subagent_events")
+        #expect(live.flatMap { $0.arr("events") ?? [] }.contains { $0.type == "message_update" })
+
+        _ = try await log.waitFor(timeout: 20, after: mark) { $0.type == "agent_settled" }
+        _ = await prompt.value
+        let end = log.all.dropFirst(mark).first { $0.type == "tool_execution_end" && $0.str("toolCallId") == runId }
+        #expect(end?.obj("result")?.obj("details")?.str("status") == "completed")
+        // Contains, not last: a follow-up an earlier test queued in this session may run after this turn.
+        #expect(log.state.items.compactMap(\.assistantText).contains { $0.text == "The subagent said: Subagent found two files." })
+        // The reducer builds the run and its streamed conversation from what the host sent.
+        let run = try #require(log.state.subagents[runId])
+        #expect(run.status == .done)
+        #expect(run.type == "general-purpose")
+        #expect(run.description == "List files")
+        #expect(run.result == "Subagent found two files.")
+        let transcript = try #require(run.transcript)
+        if case .user = transcript.items.first {} else { Issue.record("the transcript starts with the prompt") }
+        #expect(transcript.items.contains { $0.tool?.name == "shout" && $0.tool?.status == .done })
+        #expect(transcript.items.last?.assistantText?.text == "Subagent found two files.")
+        #expect(transcript.live.isEmpty)
+        let unsubscribed = await rpc.request("subagent_unsubscribe", ["runId": .string(runId)])
+        #expect(unsubscribed.success)
+        backend.close()
+        rpc.stop()
+    }
+
+    /// The read-only review commands (docs/remote-control.md, "Review") on the fixture's repository: one commit, then
+    /// README.md modified, notes.txt untracked and a .env.
+    @Test func reviewsTheWorkingTree() async throws {
+        let host = try await SharedFixture.shared.get()
+        let (backend, rpc, _) = try await connected(host)
+
+        let status = await rpc.request("rc_git_status")
+        #expect(status.success, "\(status.error ?? "")")
+        #expect(status.data?.bool("repo") == true)
+        #expect(status.data?.obj("branch")?.str("head") == "main")
+        let entries = status.data?.arr("entries") ?? []
+        #expect(entries.contains { $0.str("path") == "README.md" && $0.str("worktree") == "M" })
+        #expect(entries.contains { $0.str("path") == "notes.txt" && $0.str("worktree") == "?" })
+
+        let diff = await rpc.request("rc_git_diff", ["path": "README.md", "staged": false])
+        #expect(diff.success, "\(diff.error ?? "")")
+        #expect((diff.data?.str("diff") ?? "").split(separator: "\n").contains { $0.hasPrefix("+") && !$0.hasPrefix("+++") })
+
+        let log = await rpc.request("rc_git_log", ["limit": 10, "skip": 0])
+        #expect(log.success)
+        let commits = log.data?.arr("commits") ?? []
+        #expect(commits.count >= 1)
+        let hash = try #require(commits.first?.str("hash"))
+        #expect(hash.count == 40 && hash.allSatisfy(\.isHexDigit))
+        #expect(commits.first?.str("subject") == "Initial commit")
+        let show = await rpc.request("rc_git_show", ["hash": .string(hash)])
+        #expect(show.success, "\(show.error ?? "")")
+        #expect(show.data?.obj("commit")?.str("hash") == hash)
+        #expect((show.data?.str("diff") ?? "").contains("src/app.ts"))
+
+        let listing = await rpc.request("rc_list_dir", ["path": ""])
+        #expect(listing.success)
+        let names = (listing.data?.arr("entries") ?? []).compactMap { $0.str("name") }
+        #expect(names.contains("README.md"))
+        #expect((listing.data?.arr("entries") ?? []).contains { $0.str("name") == "src" && $0.str("kind") == "dir" })
+
+        let file = await rpc.request("rc_read_file", ["path": "README.md"])
+        #expect(file.success)
+        #expect(file.data?.str("content")?.contains("A new line.") == true)
+        #expect(file.data?.bool("binary") == false)
+
+        let secret = await rpc.request("rc_read_file", ["path": ".env"])
+        #expect(!secret.success)
+        let outside = await rpc.request("rc_read_file", ["path": "../outside.txt"])
+        #expect(!outside.success)
+        backend.close()
+        rpc.stop()
+    }
+
+    /// A 1.1.6 computer's mobile UI kit (docs/mobile-ui.md). This app does not declare "views" (its renderer is for
+    /// 0.2.0), so it gets no views; what reaches every phone anyway (a sheet, `views` and the open sheet in
+    /// `remote_hello`) shows nothing, raises no alert and breaks nothing.
+    @Test func ignoresTheMobileUIKitItDoesNotDeclare() async throws {
+        let host = try await SharedFixture.shared.get()
+        let (plainBackend, plain, plainLog) = try await connected(host)
+        let (viewsBackend, views, viewsLog) = try await connected(host)
+        let declared = await views.request("set_client_features", ["features": ["views"]])
+        #expect(declared.success, "\(declared.error ?? "")")
+        let hello = try #require(plainLog.all.first { $0.type == "remote_hello" })
+        #expect(hello.strings("features").contains("views"))
+        #expect(hello.arr("views") != nil)
+
+        let mark = plainLog.all.count
+        let viewsMark = viewsLog.all.count
+        #expect(await plain.prompt("/panel").success)
+        _ = try await viewsLog.waitFor(after: viewsMark) { $0.str("method") == "setView" && $0.str("viewKey") == "deploy" }
+        #expect(!plainLog.all.dropFirst(mark).contains { ["setView", "updateView"].contains($0.str("method") ?? "") })
+
+        let sheetDone = Task { await plain.prompt("/sheet") }
+        let sheet = try await plainLog.waitFor(after: mark) { $0.str("method") == "showView" }
+        #expect(plainLog.state.dialogs.isEmpty)
+        #expect(SessionAlerts.alerts(before: plainLog.state, event: sheet, hostId: "h", hostName: "fixture").isEmpty)
+        // A phone that connects now gets the open sheet among its dialogs: still nothing to show or to announce.
+        let (lateBackend, late, lateLog) = try await connected(host)
+        let lateHello = try #require(lateLog.all.first { $0.type == "remote_hello" })
+        #expect((lateHello.arr("dialogs") ?? []).contains { $0.str("method") == "showView" })
+        #expect(SessionReducer.fromHello(lateHello).dialogs.isEmpty)
+        #expect(SessionReducer.missedWhileAway(plainLog.state, lateHello).isEmpty)
+        // The sheet closes by itself; the session goes on.
+        _ = try await plainLog.waitFor(after: mark) { $0.type == "extension_ui_dismissed" && $0.str("id") == sheet.str("id") }
+        _ = await sheetDone.value
+        #expect(plainLog.state.dialogs.isEmpty)
+        #expect(await plain.getState().success)
+        for (backend, rpc) in [(plainBackend, plain), (viewsBackend, views), (lateBackend, late)] {
+            backend.close()
+            rpc.stop()
+        }
+    }
+
     /// Last: it restarts the host's listener. URLSession reports the 1012 close as 1005 (no status: it knows only the
     /// close codes it names, and 4000-4999), so on iOS a handoff reads as a dropped connection. Both reconnect at once,
     /// which is what a handoff needs; only the Android app's "terminal took over" notice is missing.

@@ -11,7 +11,6 @@ struct PiBoltApp: App {
         WindowGroup {
             RootView()
                 .environment(model)
-                .preferredColorScheme(.dark)
                 .tint(Pi.accent)
                 // Every link a view opens goes through the allowlist too, whatever made it a link.
                 .environment(\.openURL, OpenURLAction { SafeLinks.isAllowed($0) ? .systemAction : .discarded })
@@ -19,22 +18,29 @@ struct PiBoltApp: App {
                 .onOpenURL { model.receive(link: $0.absoluteString) }
         }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { model.appBecameActive() }
+            switch phase {
+            case .active: model.appBecameActive()
+            case .background: model.appEnteredBackground()
+            default: break
+            }
+        }
+        // Background App Refresh (`AppModel.backgroundRefresh`): iOS runs it when it decides, if at all.
+        .backgroundTask(.appRefresh(AppModel.refreshTask)) {
+            await model.backgroundRefresh()
         }
     }
 }
 
 struct RootView: View {
     @Environment(AppModel.self) private var model
-    @State private var showSession = false
 
     var body: some View {
         @Bindable var model = model
         NavigationStack {
-            HomeView(openSession: { showSession = true })
-                .navigationDestination(isPresented: $showSession) {
+            HomeView(openSession: { model.sessionShown = true })
+                .navigationDestination(isPresented: $model.sessionShown) {
                     if let live = model.live {
-                        SessionView(controller: live, close: { showSession = false })
+                        SessionView(controller: live, close: { model.sessionShown = false })
                             .toolbar(.hidden, for: .navigationBar)
                     }
                 }
@@ -45,7 +51,7 @@ struct RootView: View {
             PairConfirmSheet(payload: payload, known: model.hosts.get(payload.hostKeyId) != nil) {
                 model.pendingLink = nil
                 model.pair(payload)
-                showSession = true
+                model.sessionShown = true
             } cancel: {
                 model.pendingLink = nil
             }
@@ -70,18 +76,33 @@ struct RootView: View {
     }
 
     #if DEBUG
-        /// CI screenshots (`.github/workflows/ios.yml`): `PIBOLT_AUTOPAIR` pairs with that link and opens the session,
-        /// `PIBOLT_AUTOPROMPT` then sends a prompt. Debug builds only.
+        /// CI screenshots (`.github/workflows/ios.yml`): `PIBOLT_AUTOPAIR` pairs with that link (or reconnects to the
+        /// known computer) and opens the session, `PIBOLT_AUTOPROMPT` then sends a prompt, and `PIBOLT_AUTOOPEN`
+        /// opens a screen: `subagent` (the first run, once there is one) or `review`. Debug builds only.
         private func autopilot() async {
             let env = ProcessInfo.processInfo.environment
             guard let link = env["PIBOLT_AUTOPAIR"], let payload = try? PairingPayload.parse(link) else { return }
+            // No permission prompt over the screenshots.
+            model.notifier.asksPermission = false
             let controller = model.pair(payload)
-            showSession = true
-            guard let prompt = env["PIBOLT_AUTOPROMPT"] else { return }
+            model.sessionShown = true
             for _ in 0 ..< 200 where !(controller.link.isConnected && controller.state.hello) {
                 try? await Task.sleep(nanoseconds: 100_000_000)
             }
-            controller.send(prompt)
+            let runs = controller.state.subagents.count
+            if let prompt = env["PIBOLT_AUTOPROMPT"] { controller.send(prompt) }
+            switch env["PIBOLT_AUTOOPEN"] {
+            case "subagent":
+                // The run this prompt starts (the session may hold older ones).
+                for _ in 0 ..< 200 where controller.state.subagents.count <= runs {
+                    try? await Task.sleep(nanoseconds: 100_000_000)
+                }
+                if let key = controller.state.subagents.values.last?.key { controller.requestedSheet = .subagent(key) }
+            case "review":
+                controller.requestedReview = true
+            default:
+                break
+            }
         }
     #endif
 }

@@ -5,8 +5,9 @@ name: ios
 # - kit: the Swift package's tests (ios/PiBoltKit: Noise, pairing, framing, reducer, markdown), including the live
 #   tests against Pi-Bolt's own remote control server (ios/fixtures/rc-host.ts, run with Node from this checkout).
 # - app: generates the Xcode project with XcodeGen, runs the app's unit tests in the iOS Simulator (with that same host
-#   running on the runner, so the app pairs, prompts and reconnects for real), takes screenshots of the debug build
-#   driving that host, then builds an unsigned IPA.
+#   running on the runner, so the app pairs, prompts, follows a subagent's stream, reviews the host's working tree and
+#   reconnects for real), takes screenshots of the debug build driving that host (dark and light), then builds an
+#   unsigned IPA.
 # - release: an `ios-vX.Y.Z` tag on a pi-bolt commit publishes that IPA and its SHA-256 as a GitHub release of its own,
 #   never marked latest (the Pi-Bolt installers read the latest release). The IPA is unsigned: AltStore, SideStore or
 #   Sideloadly sign it with the user's own Apple ID on install (ios/README.md).
@@ -113,14 +114,23 @@ jobs:
           echo "SIMULATOR=$udid" >> "$GITHUB_ENV"
       - name: Unit tests in the Simulator
         working-directory: ios
-        env:
-          # xcodebuild hands TEST_RUNNER_* variables to the tests without the prefix.
-          TEST_RUNNER_PIBOLT_PAIRING_URI: ${{ env.PIBOLT_PAIRING_URI }}
         run: |
           set -o pipefail
-          xcodebuild test -project PiBolt.xcodeproj -scheme PiBolt -destination "id=$SIMULATOR" \
-            -derivedDataPath "$RUNNER_TEMP/dd-sim" CODE_SIGNING_ALLOWED=NO | tee "$RUNNER_TEMP/test.log" | grep -E '(error|warning: .*\.swift|Test (Suite|Case|run)|✔|✘|passed|failed|\*\*)' || true
-          grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/test.log"
+          xcodebuild build-for-testing -project PiBolt.xcodeproj -scheme PiBolt -destination "id=$SIMULATOR" \
+            -derivedDataPath "$RUNNER_TEMP/dd-sim" CODE_SIGNING_ALLOWED=NO | tee "$RUNNER_TEMP/build.log" | grep -E '(error|warning: .*\.swift|\*\*)' || true
+          grep -q '\*\* TEST BUILD SUCCEEDED \*\*' "$RUNNER_TEMP/build.log"
+          # A pairing code lasts 10 minutes and the build can take that long: a fresh one for the tests.
+          echo pair >> "$RUNNER_TEMP/host.cmd"
+          for _ in $(seq 1 30); do
+            grep -q '"event":"pair"' "$RUNNER_TEMP/host.log" && break
+            sleep 1
+          done
+          uri=$(grep '"event":"pair"' "$RUNNER_TEMP/host.log" | tail -n 1 | python3 -c 'import json,sys; print(json.loads(sys.stdin.readline())["uri"])')
+          # xcodebuild hands TEST_RUNNER_* variables to the tests without the prefix.
+          TEST_RUNNER_PIBOLT_PAIRING_URI="$uri" xcodebuild test-without-building -project PiBolt.xcodeproj -scheme PiBolt \
+            -destination "id=$SIMULATOR" -derivedDataPath "$RUNNER_TEMP/dd-sim" CODE_SIGNING_ALLOWED=NO \
+            | tee "$RUNNER_TEMP/test.log" | grep -E '(error|Test (Suite|Case|run)|✔|✘|passed|failed|\*\*)' || true
+          grep -Eq '\*\* TEST (EXECUTE )?SUCCEEDED \*\*' "$RUNNER_TEMP/test.log"
       - name: Screenshots
         run: |
           app="$RUNNER_TEMP/dd-sim/Build/Products/Debug-iphonesimulator/PiBolt.app"
@@ -130,20 +140,28 @@ jobs:
           xcrun simctl boot "$SIMULATOR" 2>/dev/null || true
           xcrun simctl bootstatus "$SIMULATOR" -b > /dev/null
           xcrun simctl status_bar "$SIMULATOR" override --time 9:41 --batteryState charged --batteryLevel 100 || true
+          # The runner's Simulator starts in light mode: the default theme first, set explicitly.
+          xcrun simctl ui "$SIMULATOR" appearance dark || true
           xcrun simctl uninstall "$SIMULATOR" "$id" || true
           xcrun simctl install "$SIMULATOR" "$app"
           xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
           sleep 5
           xcrun simctl io "$SIMULATOR" screenshot "$shots/1-home-empty.png"
           xcrun simctl terminate "$SIMULATOR" "$id" || true
-          # A fresh pairing link (the tests used the first one), then the debug build's autopilot pairs and prompts.
-          echo pair >> "$RUNNER_TEMP/host.cmd"
-          for _ in $(seq 1 30); do
-            grep -q '"event":"pair"' "$RUNNER_TEMP/host.log" && break
-            sleep 1
-          done
-          uri=$(grep '"event":"pair"' "$RUNNER_TEMP/host.log" | tail -n 1 | python3 -c 'import json,sys; print(json.loads(sys.stdin.readline())["uri"])')
-          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$uri" SIMCTL_CHILD_PIBOLT_AUTOPROMPT="demo: fix the flaky connect test" \
+          # A fresh pairing link for every launch that connects: this unsigned Simulator build has no Keychain
+          # entitlement, so its device key does not outlive the process and each launch pairs again (the app uses a
+          # known computer's new code to pair again when the computer refuses its key).
+          fresh() {
+            before=$(grep -c '"event":"pair"' "$RUNNER_TEMP/host.log" || true)
+            echo pair >> "$RUNNER_TEMP/host.cmd"
+            for _ in $(seq 1 30); do
+              [ "$(grep -c '"event":"pair"' "$RUNNER_TEMP/host.log" || true)" -gt "$before" ] && break
+              sleep 1
+            done
+            grep '"event":"pair"' "$RUNNER_TEMP/host.log" | tail -n 1 | python3 -c 'import json,sys; print(json.loads(sys.stdin.readline())["uri"])'
+          }
+          # The debug build's autopilot pairs, prompts and opens screens.
+          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$(fresh)" SIMCTL_CHILD_PIBOLT_AUTOPROMPT="demo: fix the flaky connect test" \
             xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
           sleep 15
           xcrun simctl io "$SIMULATOR" screenshot "$shots/2-session.png"
@@ -151,6 +169,26 @@ jobs:
           xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
           sleep 5
           xcrun simctl io "$SIMULATOR" screenshot "$shots/3-home.png"
+          xcrun simctl terminate "$SIMULATOR" "$id" || true
+          # A subagent run's own conversation as the host streams it, then the review screen.
+          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$(fresh)" SIMCTL_CHILD_PIBOLT_AUTOPROMPT="run a subagent" SIMCTL_CHILD_PIBOLT_AUTOOPEN=subagent \
+            xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 15
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/4-subagent.png"
+          xcrun simctl terminate "$SIMULATOR" "$id" || true
+          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$(fresh)" SIMCTL_CHILD_PIBOLT_AUTOOPEN=review xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 10
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/5-review.png"
+          xcrun simctl terminate "$SIMULATOR" "$id" || true
+          # The light theme follows the system.
+          xcrun simctl ui "$SIMULATOR" appearance light || true
+          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$(fresh)" xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 8
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/6-session-light.png"
+          xcrun simctl terminate "$SIMULATOR" "$id" || true
+          xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 5
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/7-home-light.png"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-screenshots
