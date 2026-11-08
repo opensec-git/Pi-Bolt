@@ -858,6 +858,12 @@ describe("mobile UI charts, tables and places", () => {
 			"body[0]: series: [0]: values: expected numbers or null",
 		]);
 		expect(validateView(chart({ min: 5, max: 5 }))).toEqual(["body[0]: max: must be greater than min"]);
+		expect(validateView(chart({ series: [{ name: "a", values: [1, 1.7e308] }] }))).toEqual([
+			"body[0]: series: [0]: values: expected numbers of at most 1000000000000000 in size",
+		]);
+		expect(validateView(chart({ max: 1e16 }))).toEqual([
+			"body[0]: max: expected -1000000000000000 to 1000000000000000",
+		]);
 		expect(validateView(chart({ series: [{ name: "a", values: new Array(201).fill(1) }] }))).toEqual([
 			"body[0]: series: [0]: values: more than 200 values",
 		]);

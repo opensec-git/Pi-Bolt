@@ -167,7 +167,9 @@ const chartSeries: FieldCheck = (value, node) => {
 							? `more than ${LIMITS.chartValues} values`
 							: values.some((v) => v !== null && (typeof v !== "number" || !Number.isFinite(v)))
 								? "expected numbers or null"
-								: undefined,
+								: values.some((v) => typeof v === "number" && Math.abs(v) > LIMITS.chartMagnitude)
+									? `expected numbers of at most ${LIMITS.chartMagnitude} in size`
+									: undefined,
 			},
 			["name", "values"],
 		);
@@ -333,8 +335,8 @@ const SPECS: Record<MobileViewNodeType, NodeSpec> = {
 			labels: stringList(LIMITS.chartValues),
 			unit: str(20),
 			title: str(),
-			min: num(),
-			max: num(),
+			min: num(-LIMITS.chartMagnitude, LIMITS.chartMagnitude),
+			max: num(-LIMITS.chartMagnitude, LIMITS.chartMagnitude),
 			summary: str(LIMITS.text),
 		},
 		required: ["kind", "series"],

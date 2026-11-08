@@ -132,7 +132,15 @@ const defs: Record<string, Json> = {
 					type: "object",
 					properties: {
 						name: str(),
-						values: list({ anyOf: [{ type: "number" }, { type: "null" }] }, LIMITS.chartValues),
+						values: list(
+							{
+								anyOf: [
+									{ type: "number", minimum: -LIMITS.chartMagnitude, maximum: LIMITS.chartMagnitude },
+									{ type: "null" },
+								],
+							},
+							LIMITS.chartValues,
+						),
 					},
 					required: ["name", "values"],
 					additionalProperties: false,
@@ -142,8 +150,8 @@ const defs: Record<string, Json> = {
 			labels: list(str(), LIMITS.chartValues),
 			unit: str(20),
 			title: str(),
-			min: { type: "number" },
-			max: { type: "number" },
+			min: { type: "number", minimum: -LIMITS.chartMagnitude, maximum: LIMITS.chartMagnitude },
+			max: { type: "number", minimum: -LIMITS.chartMagnitude, maximum: LIMITS.chartMagnitude },
 			summary: str(LIMITS.text, "What screen readers say; derived from the data when absent."),
 		},
 		["kind", "series"],

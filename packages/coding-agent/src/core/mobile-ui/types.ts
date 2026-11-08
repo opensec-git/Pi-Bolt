@@ -425,6 +425,8 @@ export const MOBILE_VIEW_LIMITS = {
 	sendIntervalMs: 100,
 	eventsPerSecond: 20,
 	chartSeries: 4,
+	/** The largest chart reading, and min or max, by magnitude: bounds can be padded and scaled without overflowing. */
+	chartMagnitude: 1e15,
 	chartValues: 200,
 	tableColumns: 12,
 	tableRows: 500,

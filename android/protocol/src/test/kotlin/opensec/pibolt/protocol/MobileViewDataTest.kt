@@ -107,6 +107,13 @@ class MobileViewDataTest {
         assertEquals("1000000000000000000", ChartData.format(1e18, null))
         assertEquals("-0.01%", ChartData.format(-0.0149, "%"))
         assertEquals("0", ChartData.format(0.0, null))
+        assertEquals("–", ChartData.format(Double.POSITIVE_INFINITY, null))
+        // Readings past 1e15 (Pi refuses them) are gaps, and a min or max past it is ignored: no bound can overflow.
+        val chart = assertIs<VChart>(node("""{"type":"chart","kind":"line","max":1.7e308,"series":[{"name":"a","values":[1.7e308,1.7e308,5]}]}"""))
+        assertEquals(listOf(null, null, 5.0), chart.series[0].values)
+        assertNull(chart.max)
+        val range = ChartData.range(chart)
+        assertTrue(range.low.isFinite() && range.high.isFinite() && range.high > range.low)
     }
 
     @Test

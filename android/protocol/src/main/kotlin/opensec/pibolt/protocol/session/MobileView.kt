@@ -133,6 +133,12 @@ data class VSlider(
 data class VSeries(val name: String, val values: List<Double?>)
 
 /** A chart (`line`, `bar`, `area`, `sparkline`), drawn natively in the theme's chart colours, one per series in order. */
+/** The largest chart reading (and min/max) by magnitude, as Pi checks it; a larger one is a gap here. */
+const val CHART_MAGNITUDE = 1e15
+
+/** A reading a chart can scale and pad without overflowing. */
+fun chartReading(value: Double): Boolean = value.isFinite() && kotlin.math.abs(value) <= CHART_MAGNITUDE
+
 data class VChart(
     override val id: String?,
     override val hidden: Boolean,
@@ -359,13 +365,13 @@ object MobileViews {
         val kind = json.str("kind")?.takeIf { it in CHART_KINDS } ?: "line"
         val series = json.arr("series").orEmpty().mapNotNull { element ->
             val s = element as? JsonObject ?: return@mapNotNull null
-            val values = s.arr("values").orEmpty().map { v -> (v as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull?.takeIf { it.isFinite() } }
+            val values = s.arr("values").orEmpty().map { v -> (v as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull?.takeIf(::chartReading) }
             VSeries(s.str("name").orEmpty(), values)
         }.let { if (kind == "sparkline") it.take(1) else it.take(4) }
         val labels = json.arr("labels").orEmpty().map { (it as? JsonPrimitive)?.content.orEmpty() }
         val title = json.str("title")
         if (series.isEmpty()) return VUnknown(id, hidden, title)
-        return VChart(id, hidden, kind, title, series, labels, json.str("unit"), json.double("min"), json.double("max"), json.str("summary"))
+        return VChart(id, hidden, kind, title, series, labels, json.str("unit"), json.double("min")?.takeIf(::chartReading), json.double("max")?.takeIf(::chartReading), json.str("summary"))
     }
 
     private fun table(id: String?, hidden: Boolean, json: JsonObject): VNode {

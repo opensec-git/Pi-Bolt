@@ -138,7 +138,7 @@ unique within the view). Any node may set `hidden: true`.
 
 `chart`:
 
-- `values` are numbers or `null` (a gap). Every series has the same number of values, and `labels` (the x axis, such as
+- `values` are numbers of at most 10^15 in size, or `null` (a gap); so are `min` and `max`. Every series has the same number of values, and `labels` (the x axis, such as
   dates) has that many too when it is given.
 - `unit` is shown after numbers (`"ms"`, `"%"`, `" builds"`). `min` and `max` fix the y range; otherwise it is the data's
   range, which for `bar` and `area` always includes 0.
@@ -512,7 +512,7 @@ Over remote control the same records travel in the encrypted channel. `remote_he
 | `text`, `hint`, notice text | 4,000 characters |
 | `markdown` | 32,000 characters |
 | `code` | 64,000 characters |
-| `chart` series, values per series | 4 (`sparkline`: 1), 200 |
+| `chart` series, values per series, a value's size | 4 (`sparkline`: 1), 200, 10^15 |
 | `table` columns, rows; one cell | 12, 500; 200 characters |
 | Tile | 24 nodes, 8 KiB, 1 change sent per second |
 | Registered pages and tiles | 16 per session, together |

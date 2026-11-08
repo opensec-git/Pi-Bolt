@@ -600,7 +600,9 @@
                 "items": {
                   "anyOf": [
                     {
-                      "type": "number"
+                      "type": "number",
+                      "minimum": -1000000000000000,
+                      "maximum": 1000000000000000
                     },
                     {
                       "type": "null"
@@ -635,10 +637,14 @@
           "maxLength": 200
         },
         "min": {
-          "type": "number"
+          "type": "number",
+          "minimum": -1000000000000000,
+          "maximum": 1000000000000000
         },
         "max": {
-          "type": "number"
+          "type": "number",
+          "minimum": -1000000000000000,
+          "maximum": 1000000000000000
         },
         "summary": {
           "type": "string",

@@ -41,8 +41,8 @@ object ChartData {
 
     /** A number as the chart shows it: up to two decimals, no trailing zeros, then the unit. */
     fun format(value: Double, unit: String?): String {
-        // Two decimals at most, rounded in decimal (no Long on the way, so huge readings stay exact).
-        val text = BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
+        // Two decimals at most, rounded in decimal (no Long on the way, so huge readings stay exact). Never throws.
+        val text = if (!value.isFinite()) "–" else BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
         return when {
             unit.isNullOrEmpty() -> text
             unit.first().isLetter() -> "$text $unit"
