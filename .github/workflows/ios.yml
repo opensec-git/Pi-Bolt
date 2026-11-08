@@ -1,0 +1,234 @@
+name: ios
+
+# The iOS app (ios/): a remote-control client for Pi-Bolt on a computer. On GitHub-hosted macOS runners only (no Xcode
+# is needed locally):
+# - kit: the Swift package's tests (ios/PiBoltKit: Noise, pairing, framing, reducer, markdown), including the live
+#   tests against Pi-Bolt's own remote control server (ios/fixtures/rc-host.ts, run with Node from this checkout).
+# - app: generates the Xcode project with XcodeGen, runs the app's unit tests in the iOS Simulator (with that same host
+#   running on the runner, so the app pairs, prompts and reconnects for real), takes screenshots of the debug build
+#   driving that host, then builds an unsigned IPA.
+# - release: an `ios-vX.Y.Z` tag on a pi-bolt commit publishes that IPA and its SHA-256 as a GitHub release of its own,
+#   never marked latest (the Pi-Bolt installers read the latest release). The IPA is unsigned: AltStore, SideStore or
+#   Sideloadly sign it with the user's own Apple ID on install (ios/README.md).
+on:
+  push:
+    branches: [pi-bolt]
+    tags: ["ios-v*"]
+    paths:
+      - "ios/**"
+      - "packages/coding-agent/src/remote-control/**"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    paths:
+      - "ios/**"
+      - "packages/coding-agent/src/remote-control/**"
+      - ".github/workflows/ios.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  kit:
+    name: Swift package tests
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Dependencies for the fixture host
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run generate:catalog-modules
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: swift test
+        working-directory: ios/PiBoltKit
+        env:
+          # The live host tests must run here, not be skipped.
+          PIBOLT_LIVE_HOST: "1"
+        run: swift test
+
+  app:
+    name: App (Simulator tests, unsigned IPA)
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Dependencies
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run generate:catalog-modules
+          brew install xcodegen
+      - name: Generate the Xcode project
+        working-directory: ios
+        run: xcodegen generate
+      - name: Start the fixture host
+        run: |
+          # Its stdin follows host.cmd (later steps append commands such as `pair`), so it stays open; the host's first
+          # line carries the pairing link.
+          touch "$RUNNER_TEMP/host.cmd"
+          (tail -f "$RUNNER_TEMP/host.cmd" | node --import ./ios/fixtures/workspace-hooks.mjs ios/fixtures/rc-host.ts > "$RUNNER_TEMP/host.log" 2>&1 &)
+          for _ in $(seq 1 120); do
+            grep -q '"event":"ready"' "$RUNNER_TEMP/host.log" 2>/dev/null && break
+            sleep 1
+          done
+          uri=$(grep '"event":"ready"' "$RUNNER_TEMP/host.log" | head -n 1 | python3 -c 'import json,sys; print(json.loads(sys.stdin.readline())["uri"])')
+          [ -n "$uri" ] || { cat "$RUNNER_TEMP/host.log"; exit 1; }
+          echo "PIBOLT_PAIRING_URI=$uri" >> "$GITHUB_ENV"
+      - name: Pick a Simulator
+        run: |
+          udid=$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)["devices"]
+          best = None
+          for runtime, devices in data.items():
+              if "iOS" not in runtime:
+                  continue
+              version = tuple(int(p) for p in runtime.rsplit("iOS-", 1)[-1].split("-"))
+              for d in devices:
+                  if d["name"].startswith("iPhone") and version >= (17,):
+                      if best is None or version > best[0]:
+                          best = (version, d["udid"], d["name"])
+          print(best[1] if best else "")
+          ')
+          [ -n "$udid" ] || { xcrun simctl list devices available; exit 1; }
+          echo "SIMULATOR=$udid" >> "$GITHUB_ENV"
+      - name: Unit tests in the Simulator
+        working-directory: ios
+        env:
+          # xcodebuild hands TEST_RUNNER_* variables to the tests without the prefix.
+          TEST_RUNNER_PIBOLT_PAIRING_URI: ${{ env.PIBOLT_PAIRING_URI }}
+        run: |
+          set -o pipefail
+          xcodebuild test -project PiBolt.xcodeproj -scheme PiBolt -destination "id=$SIMULATOR" \
+            -derivedDataPath "$RUNNER_TEMP/dd-sim" CODE_SIGNING_ALLOWED=NO | tee "$RUNNER_TEMP/test.log" | grep -E '(error|warning: .*\.swift|Test (Suite|Case|run)|✔|✘|passed|failed|\*\*)' || true
+          grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/test.log"
+      - name: Screenshots
+        run: |
+          app="$RUNNER_TEMP/dd-sim/Build/Products/Debug-iphonesimulator/PiBolt.app"
+          id=in.opensec.pibolt.ios
+          shots="$RUNNER_TEMP/shots"
+          mkdir -p "$shots"
+          xcrun simctl boot "$SIMULATOR" 2>/dev/null || true
+          xcrun simctl bootstatus "$SIMULATOR" -b > /dev/null
+          xcrun simctl status_bar "$SIMULATOR" override --time 9:41 --batteryState charged --batteryLevel 100 || true
+          xcrun simctl uninstall "$SIMULATOR" "$id" || true
+          xcrun simctl install "$SIMULATOR" "$app"
+          xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 5
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/1-home-empty.png"
+          xcrun simctl terminate "$SIMULATOR" "$id" || true
+          # A fresh pairing link (the tests used the first one), then the debug build's autopilot pairs and prompts.
+          echo pair >> "$RUNNER_TEMP/host.cmd"
+          for _ in $(seq 1 30); do
+            grep -q '"event":"pair"' "$RUNNER_TEMP/host.log" && break
+            sleep 1
+          done
+          uri=$(grep '"event":"pair"' "$RUNNER_TEMP/host.log" | tail -n 1 | python3 -c 'import json,sys; print(json.loads(sys.stdin.readline())["uri"])')
+          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$uri" SIMCTL_CHILD_PIBOLT_AUTOPROMPT="demo: fix the flaky connect test" \
+            xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 15
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/2-session.png"
+          xcrun simctl terminate "$SIMULATOR" "$id" || true
+          xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 5
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/3-home.png"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-screenshots
+          path: ${{ runner.temp }}/shots/*.png
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Fixture host log
+        if: ${{ failure() }}
+        run: cat "$RUNNER_TEMP/host.log"
+      - name: Unsigned IPA
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild build -project PiBolt.xcodeproj -scheme PiBolt -configuration Release -destination generic/platform=iOS \
+            -derivedDataPath "$RUNNER_TEMP/dd-device" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" | tail -n 20
+          app="$RUNNER_TEMP/dd-device/Build/Products/Release-iphoneos/PiBolt.app"
+          [ -d "$app" ] || { echo "::error::no PiBolt.app"; exit 1; }
+          rm -rf "$RUNNER_TEMP/ipa" && mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$app" "$RUNNER_TEMP/ipa/Payload/"
+          version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Info.plist")
+          (cd "$RUNNER_TEMP/ipa" && zip -qry "pi-bolt-ios-$version-unsigned.ipa" Payload && shasum -a 256 "pi-bolt-ios-$version-unsigned.ipa" > "pi-bolt-ios-$version-unsigned.ipa.sha256")
+          cat "$RUNNER_TEMP/ipa/pi-bolt-ios-$version-unsigned.ipa.sha256"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ios-ipa
+          path: |
+            ${{ runner.temp }}/ipa/*.ipa
+            ${{ runner.temp }}/ipa/*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish the unsigned IPA
+    needs: [kit, app]
+    if: ${{ startsWith(github.ref, 'refs/tags/ios-v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: The tag is on pi-bolt
+        run: |
+          git fetch --no-tags origin +refs/heads/pi-bolt:refs/remotes/origin/pi-bolt
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/pi-bolt || {
+            echo "::error::$GITHUB_REF_NAME points at $GITHUB_SHA, which is not on pi-bolt; only commits on pi-bolt are released"
+            exit 1
+          }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ios-ipa
+          path: ${{ runner.temp }}/ipa
+      - name: The IPA matches the tag
+        run: |
+          version="${GITHUB_REF_NAME#ios-v}"
+          ipa="$RUNNER_TEMP/ipa/pi-bolt-ios-$version-unsigned.ipa"
+          [ -f "$ipa" ] || { echo "::error::no $ipa (MARKETING_VERSION in ios/project.yml must be $version)"; ls "$RUNNER_TEMP/ipa"; exit 1; }
+          (cd "$RUNNER_TEMP/ipa" && sha256sum -c "pi-bolt-ios-$version-unsigned.ipa.sha256")
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${GITHUB_REF_NAME#ios-v}"
+          name="pi-bolt-ios-$version-unsigned.ipa"
+          {
+            echo "Pi-Bolt for iOS $version: remote control for Pi-Bolt on your computer (/remote-control or pi-bolt service)."
+            echo
+            echo "The IPA is unsigned. Install it with AltStore, SideStore or Sideloadly, which sign it with your own Apple ID,"
+            echo "or with TrollStore where your iOS version supports it. Steps: ios/README.md in this repository."
+            echo
+            echo "SHA-256:"
+            echo '```'
+            cat "$RUNNER_TEMP/ipa/$name.sha256"
+            echo '```'
+          } > "$RUNNER_TEMP/notes.md"
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false \
+            --title "Pi-Bolt iOS $version" --notes-file "$RUNNER_TEMP/notes.md" \
+            "$RUNNER_TEMP/ipa/$name" "$RUNNER_TEMP/ipa/$name.sha256"

@@ -32,6 +32,8 @@
 			"packages/ai/catalog/**/*.ts",
 			"packages/coding-agent/examples/**/*.ts",
 			"packages/agent/examples/**/*.ts",
+			"ios/fixtures/**/*.ts",
+			"ios/fixtures/**/*.mjs",
 			"!**/node_modules/**/*",
 			"!**/test-sessions.ts",
 			"!**/models.generated.ts",
