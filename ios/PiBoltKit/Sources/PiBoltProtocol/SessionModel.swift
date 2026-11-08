@@ -82,6 +82,15 @@ public struct NoticeItem: Equatable, Sendable {
     public var text: String = ""
 }
 
+/// Background subagents ended (the subagents extension's `subagent-notification`): their `agentIds`, the runs they
+/// ended (`runKeys`, keys of `SessionState.subagents`; a later resume of the same agent is another run) and the message.
+public struct SubagentNoticeItem: Equatable, Sendable {
+    public var key: String
+    public var agentIds: [String]
+    public var text: String
+    public var runKeys: [String] = []
+}
+
 /// One row of the conversation as the app shows it. `key` is stable across updates of the same row.
 public enum ChatItem: Equatable, Sendable, Identifiable {
     case user(UserItem)
@@ -89,6 +98,7 @@ public enum ChatItem: Equatable, Sendable, Identifiable {
     case thinking(ThinkingItem)
     case tool(ToolItem)
     case notice(NoticeItem)
+    case subagentNotice(SubagentNoticeItem)
 
     public var key: String {
         switch self {
@@ -97,6 +107,7 @@ public enum ChatItem: Equatable, Sendable, Identifiable {
         case let .thinking(i): i.key
         case let .tool(i): i.key
         case let .notice(i): i.key
+        case let .subagentNotice(i): i.key
         }
     }
 
@@ -111,6 +122,11 @@ public enum ChatItem: Equatable, Sendable, Identifiable {
         if case let .assistant(t) = self { return t }
         return nil
     }
+
+    public var thinking: ThinkingItem? {
+        if case let .thinking(t) = self { return t }
+        return nil
+    }
 }
 
 /// `service`: the computer's background service answers (`host.service`), so it can list and open its projects'
@@ -121,9 +137,16 @@ public struct HostInfo: Equatable, Sendable {
     public var cwd: String
     public var service: Bool = false
     public var parallelSessions: Bool = false
+    /// The host answers the read-only review commands (`host.review`: `rc_git_*`, `rc_list_dir`, `rc_read_file`).
     public var review: Bool = false
+    /// Optional protocol parts the computer answers (`remote_hello.features`), such as `subagentStreamFeature`.
     public var features: Set<String> = []
+
+    /// The computer streams a subagent's own conversation on request (`subagent_subscribe`, Pi-Bolt 1.1.5 and later).
+    public var streamsSubagents: Bool { features.contains(subagentStreamFeature) }
 }
+
+public let subagentStreamFeature = "subagent_stream"
 
 /// A command from `get_commands`.
 public struct SlashCommand: Equatable, Sendable {
@@ -197,6 +220,8 @@ public struct SessionState: Equatable, Sendable {
     public var thinkingLevel: String?
     public var sessionName: String?
     public var sessionId: String?
+    /// The session's file on the computer: what the background service's `switch_session` takes.
+    public var sessionFile: String?
     public var queue = QueueState()
     public var dialogs: [DialogRequest] = []
     public var commands: [SlashCommand] = []
@@ -204,6 +229,10 @@ public struct SessionState: Equatable, Sendable {
     public var widgets: [String: [String]] = [:]
     public var retry: RetryInfo?
     public var lastUsage: Usage?
+    /// The todo extension's list, built from its `todo` tool results.
+    public var todos = TodoState()
+    /// Subagent runs (opensec-pi-subagents) by the id of the `Agent` call that started them, oldest first.
+    public var subagents = SubagentRuns()
     public var stream: StreamingMessage?
     public var seq: Int64 = 0
 

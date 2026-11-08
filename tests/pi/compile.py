@@ -196,7 +196,9 @@ with tempfile.TemporaryDirectory(prefix="pibolt-compile-") as tmp:
             for line in r.stdout.splitlines():
                 message = json.loads(line) if line.startswith("{") else {}
                 if message.get("command") == "get_commands":
-                    return sorted(c["name"] for c in message["data"]["commands"] if c["source"] in ("skill", "prompt"))
+                    # Only the probe's own: Pi-Bolt registers bundled skills (pibolt-mobile-ui) at every start too.
+                    return sorted(c["name"] for c in message["data"]["commands"]
+                                  if c["source"] in ("skill", "prompt") and "probe" in c["name"])
             return f"no answer: {r.stderr[-300:]}"
 
         r, loaded = session()

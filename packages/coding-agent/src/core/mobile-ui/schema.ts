@@ -58,6 +58,9 @@ const defs: Record<string, Json> = {
 		"progress",
 		"chip",
 		"tile",
+		"chart",
+		"table",
+		"location",
 		"button",
 		"card",
 		"section",
@@ -118,6 +121,96 @@ const defs: Record<string, Json> = {
 		"A status tile; tappable with action. Put tiles in a grid.",
 		{ label: str(), value: str(), icon: ref("icon"), tone: ref("tone"), action: ref("id") },
 		["label", "value"],
+	),
+	chart: node(
+		"chart",
+		"A line, bar or area chart, or a sparkline, in the app's chart colours. Every series has as many values as labels.",
+		{
+			kind: { enum: ["line", "bar", "area", "sparkline"] },
+			series: list(
+				{
+					type: "object",
+					properties: {
+						name: str(),
+						values: list(
+							{
+								anyOf: [
+									{ type: "number", minimum: -LIMITS.chartMagnitude, maximum: LIMITS.chartMagnitude },
+									{ type: "null" },
+								],
+							},
+							LIMITS.chartValues,
+						),
+					},
+					required: ["name", "values"],
+					additionalProperties: false,
+				},
+				LIMITS.chartSeries,
+			),
+			labels: list(str(), LIMITS.chartValues),
+			unit: str(20),
+			title: str(),
+			min: { type: "number", minimum: -LIMITS.chartMagnitude, maximum: LIMITS.chartMagnitude },
+			max: { type: "number", minimum: -LIMITS.chartMagnitude, maximum: LIMITS.chartMagnitude },
+			summary: str(LIMITS.text, "What screen readers say; derived from the data when absent."),
+		},
+		["kind", "series"],
+	),
+	table: node(
+		"table",
+		"Rows under typed columns; sorting and filtering happen in the app. A row with action sends a tap with its id as value.",
+		{
+			columns: list(
+				{
+					type: "object",
+					properties: {
+						id: ref("id"),
+						label: str(),
+						kind: { enum: ["text", "number", "date", "mono"] },
+						sortable: bool(),
+					},
+					required: ["id", "label"],
+					additionalProperties: false,
+				},
+				LIMITS.tableColumns,
+			),
+			rows: list(
+				{
+					type: "object",
+					properties: {
+						id: ref("id"),
+						cells: {
+							type: "object",
+							additionalProperties: { anyOf: [str(), { type: "number" }, { type: "null" }] },
+						},
+						action: ref("id"),
+					},
+					required: ["id", "cells"],
+					additionalProperties: false,
+				},
+				LIMITS.tableRows,
+			),
+			sort: {
+				type: "object",
+				properties: { column: str(64), desc: bool() },
+				required: ["column"],
+				additionalProperties: false,
+			},
+			filter: bool("A search box over the rows."),
+			empty: str(),
+		},
+		["columns", "rows"],
+	),
+	location: node(
+		"location",
+		"A place; a tap opens the phone's maps app. Needs lat and lon together, or address.",
+		{
+			name: str(),
+			address: str(),
+			lat: { type: "number", minimum: -90, maximum: 90 },
+			lon: { type: "number", minimum: -180, maximum: 180 },
+		},
+		["name"],
 	),
 	button: node(
 		"button",

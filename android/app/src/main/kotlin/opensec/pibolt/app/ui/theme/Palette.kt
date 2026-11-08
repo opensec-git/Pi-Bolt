@@ -65,12 +65,23 @@ data class PiColors(
     val tint2: Color = Tints[2],
     val tint3: Color = Tints[3],
     val tint4: Color = Tints[4],
+    /**
+     * Chart series colours, one per series in order (the mobile UI kit's `chart`): Okabe–Ito's colour-blind-safe blue,
+     * orange, reddish purple and bluish green, deepened on Paper. Data only, never state, never an agent. See [charts].
+     */
+    val chart0: Color = Charts[0],
+    val chart1: Color = Charts[1],
+    val chart2: Color = Charts[2],
+    val chart3: Color = Charts[3],
 ) {
     /** A light theme (Paper): Material's light scheme and dark system bar icons. */
     val isLight: Boolean get() = canvas.luminance() > 0.5f
 
     /** [tint0]…[tint4] in order: agent n takes `tints[n % 5]`. */
     val tints: List<Color> get() = listOf(tint0, tint1, tint2, tint3, tint4)
+
+    /** [chart0]…[chart3] in order: series n takes `charts[n % 4]`. */
+    val charts: List<Color> get() = listOf(chart0, chart1, chart2, chart3)
 
     companion object {
         val Brand = Color(0xFFFFD84D)
@@ -84,6 +95,16 @@ data class PiColors(
 
         /** The default theme's tints for light themes: same hues, lightness 0.50 (seafoam 0.47) so an initial reads. */
         val LightTints = listOf(Color(0xFF994A00), Color(0xFFA33460), Color(0xFF8E3B94), Color(0xFF6F4BAC), Color(0xFF006B61))
+
+        /**
+         * The chart colours on dark grounds: Okabe–Ito sky blue, orange, reddish purple and bluish green, as published.
+         * 3:1 on every dark surface; every pair stays apart (CIELAB ΔE at least 15) for normal vision and under
+         * simulated protanopia, deuteranopia and tritanopia (ContrastTest).
+         */
+        val Charts = listOf(Color(0xFF56B4E9), Color(0xFFE69F00), Color(0xFFCC79A7), Color(0xFF009E73))
+
+        /** The chart colours on Paper: the same hues deepened to 3:1 on its greys and kept apart for colour-blind eyes. */
+        val LightCharts = listOf(Color(0xFF005E93), Color(0xFF665A05), Color(0xFF964966), Color(0xFF089656))
 
         fun of(theme: ThemeId, accent: AccentId): PiColors {
             val base = when (theme) {
@@ -151,6 +172,7 @@ data class PiColors(
             syntax: SyntaxColors,
             ansi: List<Long>,
             tints: List<Color> = Tints,
+            charts: List<Color> = Charts,
         ): PiColors {
             val success = Color(status[0])
             val warning = Color(status[1])
@@ -196,6 +218,10 @@ data class PiColors(
                 tint2 = tints[2],
                 tint3 = tints[3],
                 tint4 = tints[4],
+                chart0 = charts[0],
+                chart1 = charts[1],
+                chart2 = charts[2],
+                chart3 = charts[3],
             )
         }
 
@@ -231,6 +257,7 @@ data class PiColors(
             syntax = SyntaxColors.Paper,
             ansi = listOf(0xFF4D4D4D, 0xFF8C3A73, 0xFF39605F),
             tints = LightTints,
+            charts = LightCharts,
         )
 
         /**

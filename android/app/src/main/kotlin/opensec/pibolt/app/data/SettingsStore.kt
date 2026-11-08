@@ -4,7 +4,9 @@ import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import opensec.pibolt.protocol.ProtocolJson
@@ -73,12 +75,17 @@ data class AppSettings(
     val voiceLabel: String? = null,
     /** Settings > Agent > Spending: limits per session, day and month, and costs on list rows. */
     val spend: SpendLimits = SpendLimits(),
+    /** Packages' Home tiles the user turned on (registered tile keys); none by default. */
+    val homeTiles: Set<String> = emptySet(),
 ) {
     companion object {
         val VOICE_RATE_CHOICES = listOf(75, 100, 125, 150, 200)
         val TOOL_PREVIEW_CHOICES = listOf(6, 12, 24)
         const val TEXT_SIZE_MIN = -1
         const val TEXT_SIZE_MAX = 2
+
+        /** Home shows at most this many package tiles. */
+        const val MAX_HOME_TILES = 8
     }
 }
 
@@ -105,6 +112,7 @@ object SettingsCodec {
         s.spend.day?.let { put("spendDay", it) }
         s.spend.month?.let { put("spendMonth", it) }
         put("spendInLists", s.spend.showInLists)
+        if (s.homeTiles.isNotEmpty()) put("homeTiles", JsonArray(s.homeTiles.sorted().map(::JsonPrimitive)))
     }.toString()
 
     fun decode(text: String?): AppSettings {
@@ -132,6 +140,7 @@ object SettingsCodec {
                 month = limit(json.double("spendMonth")),
                 showInLists = json.bool("spendInLists") ?: d.spend.showInLists,
             ),
+            homeTiles = (json["homeTiles"] as? JsonArray).orEmpty().mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }.take(AppSettings.MAX_HOME_TILES).toSet(),
         )
     }
 

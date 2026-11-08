@@ -13,9 +13,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import opensec.pibolt.app.PiBoltApp
+import opensec.pibolt.app.data.AppSettings
+import opensec.pibolt.app.engine.PageCatalog
+import opensec.pibolt.app.engine.PageEngine
+import opensec.pibolt.app.ui.session.views.iconFor
+import opensec.pibolt.protocol.session.PageInfo
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Inventory2
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -284,6 +292,50 @@ private suspend fun load(engine: EngineApi, settingsFile: File, project: File?):
     return PackagesView(packages, PackageList.disabledBuiltins(settings), if (cli.ok) null else cli.stderr.trim().takeIf { it.isNotEmpty() }, trusted)
 }
 
+/**
+ * A package's pages and Home tiles (docs/mobile-ui.md#package-pages-and-home-tiles): a page opens without a session
+ * (on the page engine); a tile is shown on Home only once turned on here (off by default).
+ */
+@Composable
+private fun PackagePagesSection(pkg: PiPackage, dir: String?, onOpen: (PageInfo) -> Unit) {
+    val app = LocalContext.current.applicationContext as PiBoltApp
+    val all by app.pages.pages.collectAsStateWithLifecycle()
+    val status by app.pages.status.collectAsStateWithLifecycle()
+    val settings by app.settings.settings.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { app.pages.refreshPages() }
+    val list = all
+    if (list == null) {
+        if (status is PageEngine.Status.LowMemory) return
+        F2Section("Pages")
+        when (val s = status) {
+            // The engine could not start or read them: say why, and let a tap try again.
+            is PageEngine.Status.Failed -> F2Row(
+                "Could not read the package's pages",
+                "${s.message}. Tap to try again",
+                Icons.Rounded.Refresh,
+                onClick = { app.pages.refreshPages(force = true) },
+                iconTint = Pi.colors.danger,
+            )
+            else -> F2Loading("Reading the package's pages")
+        }
+        return
+    }
+    val mine = PageCatalog.ofPackage(list, pkg.source, dir)
+    if (mine.isEmpty()) return
+    F2Section("Pages")
+    for (page in mine.filterNot { it.isTile }) {
+        F2Row(page.title, page.description, iconFor(page.icon) ?: Icons.Rounded.Extension, onClick = { onOpen(page) })
+    }
+    // Only tiles that still exist count toward Home's limit; turning one on or off drops the others' stale keys.
+    val shown = PageCatalog.shownTiles(list, settings.homeTiles).size
+    for (tile in mine.filter { it.isTile }) {
+        val on = tile.key in settings.homeTiles
+        F2Toggle("Show ${tile.title} on Home", tile.description ?: "A live tile on Home", checked = on, enabled = on || shown < AppSettings.MAX_HOME_TILES) { checked ->
+            app.settings.update { s -> s.copy(homeTiles = PageCatalog.toggleTile(list, s.homeTiles, tile.key, checked)) }
+        }
+    }
+}
+
 /** A failed `pi` command's output for the user: the end of stderr (else stdout), or its exit code. */
 internal fun cliFailure(result: CliResult): String =
     (result.stderr.ifBlank { result.stdout }).trim().ifBlank { "Failed (exit code ${result.code})" }.takeLast(2000)
@@ -313,6 +365,7 @@ private fun PackageDetailSheet(
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
     var confirmRemove by remember { mutableStateOf(false) }
+    var openPage by remember { mutableStateOf<PageInfo?>(null) }
     var provided by remember { mutableStateOf<List<Provided>?>(null) }
     val dir = pkg.installedPath ?: pkg.source.takeIf { it.startsWith("/") }
     LaunchedEffect(pkg) {
@@ -335,6 +388,7 @@ private fun PackageDetailSheet(
                 }
             }
             F2Toggle("Load this package", if (pkg.disabled) "Not loaded" else "Loads in every session", checked = !pkg.disabled) { onEnabled(it) }
+            if (!pkg.disabled) PackagePagesSection(pkg, dir, onOpen = { openPage = it })
             F2Section("Commands and tools")
             val list = provided
             when {
@@ -355,6 +409,10 @@ private fun PackageDetailSheet(
             }
             Spacer(Modifier.height(8.dp))
         }
+    }
+    openPage?.let { page ->
+        val app = LocalContext.current.applicationContext as PiBoltApp
+        PackagePageSheet(app.pages, page.key, page.title, onClose = { openPage = null })
     }
     if (confirmRemove) {
         ConfirmSheet(

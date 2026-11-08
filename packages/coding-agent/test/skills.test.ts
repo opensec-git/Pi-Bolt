@@ -1,4 +1,5 @@
-import { homedir } from "os";
+import { mkdtempSync, rmSync, symlinkSync } from "fs";
+import { homedir, tmpdir } from "os";
 import { join, resolve } from "path";
 import { describe, expect, it } from "vitest";
 import type { ResourceDiagnostic } from "../src/core/diagnostics.ts";
@@ -427,6 +428,27 @@ describe("skills", () => {
 			expect(skillMap.get("calendar")?.sourceInfo.source).toBe("first");
 			expect(collisionWarnings).toHaveLength(1);
 			expect(collisionWarnings[0].message).toContain("name collision");
+		});
+
+		it("loads a skill reached through a symlink once, after the first skill", () => {
+			const dir = mkdtempSync(join(tmpdir(), "pi-skills-symlink-"));
+			try {
+				const first = join(collisionFixturesDir, "first", "calendar");
+				symlinkSync(first, join(dir, "calendar-link"), "dir");
+				const result = loadSkills({
+					cwd: dir,
+					agentDir: dir,
+					skillPaths: [first, join(dir, "calendar-link"), join(collisionFixturesDir, "second", "calendar")],
+					includeDefaults: false,
+				});
+				expect(result.skills.map((skill) => skill.filePath)).toEqual([join(first, "SKILL.md")]);
+				// (The symlink is the same file, so it is skipped silently; the second calendar is another file of that name.)
+				expect(result.diagnostics.filter((d) => d.type === "collision").map((d) => d.path)).toEqual([
+					join(collisionFixturesDir, "second", "calendar", "SKILL.md"),
+				]);
+			} finally {
+				rmSync(dir, { recursive: true, force: true });
+			}
 		});
 	});
 });

@@ -144,6 +144,7 @@ export type {
 	ReadToolResultEvent,
 	// Commands
 	RegisteredCommand,
+	RegisteredPage,
 	RegisteredTool,
 	ReplacedSessionContext,
 	ResolvedCommand,

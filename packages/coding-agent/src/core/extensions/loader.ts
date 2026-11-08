@@ -18,6 +18,12 @@ import { createEventBus, type EventBus } from "../event-bus.ts";
 import type { ExecOptions } from "../exec.ts";
 import { execCommand } from "../exec.ts";
 import { type McpServerConfig, McpServerRegistry, mcpNamespace, validateMcpServerConfig } from "../mcp-servers.ts";
+import {
+	MOBILE_VIEW_ICONS,
+	MOBILE_VIEW_ID_PATTERN,
+	type MobilePageDefinition,
+	type MobileTileDefinition,
+} from "../mobile-ui/types.ts";
 import { readPiManifest } from "../pi-manifest.ts";
 import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } from "../source-info.ts";
 import { time } from "../timings.ts";
@@ -30,6 +36,7 @@ import type {
 	EntryRenderer,
 	Extension,
 	ExtensionAPI,
+	ExtensionContext,
 	ExtensionFactory,
 	ExtensionRuntime,
 	ExtensionVirtualModel,
@@ -357,6 +364,16 @@ function createExtensionAPI(
 			});
 		},
 
+		registerPage(key: string, page: MobilePageDefinition<ExtensionContext>): void {
+			assertActive();
+			registerPage(extension, key, "page", page);
+		},
+
+		registerTile(key: string, tile: MobileTileDefinition<ExtensionContext>): void {
+			assertActive();
+			registerPage(extension, key, "tile", tile);
+		},
+
 		registerShortcut(
 			shortcut: KeyId,
 			options: {
@@ -642,6 +659,48 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 		extensionCache.set(extensionPath, factory);
 	}
 	return factory;
+}
+
+/** Checks and stores a `registerPage` / `registerTile`. */
+function registerPage(
+	extension: Extension,
+	key: string,
+	kind: "page" | "tile",
+	definition: MobileTileDefinition<ExtensionContext>,
+): void {
+	const what = kind === "page" ? "Page" : "Tile";
+	if (typeof key !== "string" || !MOBILE_VIEW_ID_PATTERN.test(key)) {
+		throw new Error(
+			`${what} registered by extension "${extension.path}" needs a key of 1 to 64 of A-Z a-z 0-9 _ . : -`,
+		);
+	}
+	if (typeof definition?.title !== "string" || definition.title.trim() === "" || definition.title.length > 200) {
+		throw new Error(
+			`${what} "${key}" registered by extension "${extension.path}" needs a title of at most 200 characters`,
+		);
+	}
+	if (typeof definition.open !== "function") {
+		throw new Error(`${what} "${key}" registered by extension "${extension.path}" must define open()`);
+	}
+	if (definition.icon !== undefined && !(MOBILE_VIEW_ICONS as readonly string[]).includes(definition.icon)) {
+		throw new Error(
+			`${what} "${key}" registered by extension "${extension.path}": unknown icon "${definition.icon}"`,
+		);
+	}
+	if (
+		definition.description !== undefined &&
+		(typeof definition.description !== "string" || definition.description.length > 200)
+	) {
+		throw new Error(
+			`${what} "${key}" registered by extension "${extension.path}": description: at most 200 characters`,
+		);
+	}
+	const page = (definition as { page?: unknown }).page;
+	if (kind === "tile" && page !== undefined && (typeof page !== "string" || !MOBILE_VIEW_ID_PATTERN.test(page))) {
+		throw new Error(`Tile "${key}" registered by extension "${extension.path}": page: expected a page key`);
+	}
+	extension.pages ??= new Map();
+	extension.pages.set(key, { key, kind, definition, sourceInfo: extension.sourceInfo });
 }
 
 /**

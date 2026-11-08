@@ -53,6 +53,7 @@ import {
 } from "./core/agent-session-services.ts";
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
 import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
+import { BUNDLED_SKILLS } from "./core/bundled-skills.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import { type CompiledExtension, setCompiledExtensions } from "./core/extensions/compiled.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
@@ -844,11 +845,14 @@ export async function main(args: string[], options?: MainOptions) {
 	const projectTrustByCwd = new Map<string, boolean>();
 
 	const resolvedExtensionPaths = resolveCliPaths(cwd, parsed.extensions);
-	// Pi-Bolt's own skills (pibolt-mobile-ui: write a package's mobile UI), unless skills are off.
-	const bundledSkill = join(getBundledSkillsDir(), "pibolt-mobile-ui");
+	// Pi-Bolt's own skills (pibolt-mobile-ui: write a package's mobile UI), unless skills are off. Registered from their known
+	// frontmatter (bundled-skills.ts): no file is read until the model uses one.
+	const bundledSkills =
+		PIBOLT && !parsed.noSkills
+			? BUNDLED_SKILLS.map((skill) => join(getBundledSkillsDir(), skill.dir)).filter((dir) => existsSync(dir))
+			: [];
 	const cliSkillPaths = resolveCliPaths(cwd, parsed.skills);
-	const resolvedSkillPaths =
-		PIBOLT && !parsed.noSkills && existsSync(bundledSkill) ? [...(cliSkillPaths ?? []), bundledSkill] : cliSkillPaths;
+	const resolvedSkillPaths = bundledSkills.length > 0 ? [...(cliSkillPaths ?? []), ...bundledSkills] : cliSkillPaths;
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
 	// Loaded only for `--acp` and `--mcp`: other modes never load their code.

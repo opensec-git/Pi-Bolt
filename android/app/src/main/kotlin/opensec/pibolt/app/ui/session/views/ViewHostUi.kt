@@ -53,7 +53,7 @@ class ViewHostUi(
     fun fields(key: String): ViewFields = fields.getOrPut(key) { ViewFields() }
 
     fun actions(key: String): ViewActions = object : ViewActions {
-        override fun tap(nodeId: String) = send(key, nodeId, "tap", null, null)
+        override fun tap(nodeId: String, value: JsonPrimitive?) = send(key, nodeId, "tap", value, null)
         override fun change(nodeId: String, value: JsonPrimitive) = send(key, nodeId, "change", value, null)
         override fun submit(formId: String, values: JsonObject) = send(key, formId, "submit", null, values)
     }
@@ -134,8 +134,8 @@ fun ViewSheet(
     val formIds = remember(view) { formIds(view.body) }
     val actionIds = view.actions.mapNotNull { it.id }.toSet()
     val actions = object : ViewActions {
-        override fun tap(nodeId: String) {
-            if (nodeId in actionIds) answer(nodeId) else onEvent(key, nodeId, "tap", null, null)
+        override fun tap(nodeId: String, value: JsonPrimitive?) {
+            if (nodeId in actionIds) answer(nodeId) else onEvent(key, nodeId, "tap", value, null)
         }
 
         override fun change(nodeId: String, value: JsonPrimitive) = onEvent(key, nodeId, "change", value, null)

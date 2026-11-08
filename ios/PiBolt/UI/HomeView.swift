@@ -11,7 +11,7 @@ struct HomeView: View {
     @State private var showDevice = false
 
     var body: some View {
-        HomeList(store: model.hosts, openSession: openSession, scanning: $scanning, pasting: $pasting, showDevice: $showDevice)
+        HomeList(store: model.hosts, recents: model.recents, openSession: openSession, scanning: $scanning, pasting: $pasting, showDevice: $showDevice)
             .background(Pi.canvas.ignoresSafeArea())
             .fullScreenCover(isPresented: $scanning) {
                 ScanView { text in
@@ -40,6 +40,7 @@ struct HomeView: View {
 private struct HomeList: View {
     @Environment(AppModel.self) private var model
     @ObservedObject var store: HostStore
+    @ObservedObject var recents: RecentStore
     var openSession: () -> Void
     @Binding var scanning: Bool
     @Binding var pasting: Bool
@@ -62,6 +63,7 @@ private struct HomeList: View {
                         .padding(.top, 36)
                 } else {
                     tiles.padding(.top, 24)
+                    if !recents.sessions.isEmpty { recentSection }
                     Text("Computers")
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(Pi.ink3)
@@ -111,6 +113,34 @@ private struct HomeList: View {
             .accessibilityLabel("Pair a computer")
         }
         .padding(.top, 8)
+    }
+
+    /// The sessions this phone showed last, on any paired computer. A tap opens that computer and, with its
+    /// background service, that very session.
+    @ViewBuilder private var recentSection: some View {
+        Text("Recents")
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(Pi.ink3)
+            .padding(.top, 32)
+            .padding(.bottom, 6)
+        let shown = Array(recents.sessions.filter { store.get($0.hostId) != nil }.prefix(5))
+        ForEach(shown) { recent in
+            RecentRow(recent: recent, live: liveFor(recent)) {
+                model.openRecent(recent)
+            }
+            .contextMenu {
+                Button(role: .destructive) { recents.remove(recent) } label: { Label("Remove from Recents", systemImage: "minus.circle") }
+            }
+            if recent.id != shown.last?.id {
+                Rectangle().fill(Pi.line).frame(height: 1).padding(.leading, 48)
+            }
+        }
+    }
+
+    /// The live session when it shows `recent`.
+    private func liveFor(_ recent: RecentSession) -> SessionController? {
+        guard let live = model.live, live.hostId == recent.hostId, live.state.sessionId == recent.sessionId else { return nil }
+        return live
     }
 
     private var tiles: some View {
@@ -195,6 +225,43 @@ private struct HostRow: View {
         parts.append(contentsOf: host.connections)
         if host.service { parts.append("Service") }
         if let last = host.lastConnectedAt, live == nil { parts.append(relativeShort(last)) }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct RecentRow: View {
+    var recent: RecentSession
+    var live: SessionController?
+    var open: () -> Void
+
+    var body: some View {
+        Button(action: open) {
+            HStack(spacing: 16) {
+                if live?.state.isRunning == true {
+                    QuadSpinner(size: 16).frame(width: 32)
+                } else if live?.state.dialogs.isEmpty == false {
+                    Image(systemName: "hand.raised.fill").font(.system(size: 15)).foregroundStyle(Pi.warning).frame(width: 32)
+                } else {
+                    Image(systemName: "text.bubble").font(.system(size: 17)).foregroundStyle(Pi.ink3).frame(width: 32)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(recent.title).font(.system(size: 17, weight: .medium)).foregroundStyle(Pi.ink1).lineLimit(1)
+                    Text(subtitle).font(.system(size: 14)).foregroundStyle(Pi.ink3).lineLimit(1)
+                }
+                Spacer()
+                Image(systemName: "chevron.right").font(.system(size: 13, weight: .semibold)).foregroundStyle(Pi.ink4)
+            }
+            .padding(.vertical, 13)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressScale())
+        .accessibilityLabel("\(recent.title), on \(recent.hostName)")
+    }
+
+    private var subtitle: String {
+        var parts = [recent.hostName]
+        if !recent.folder.isEmpty { parts.append(recent.folder) }
+        if live?.state.isRunning == true { parts.append("Working") } else { parts.append(relativeShort(recent.updatedAt)) }
         return parts.joined(separator: " · ")
     }
 }

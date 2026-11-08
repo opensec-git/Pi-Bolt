@@ -25,7 +25,7 @@ import {
 	type ViewEvent,
 	type ViewEventKind,
 } from "./types.ts";
-import { assertView, findShownNode, forEachNode, isFieldType, optionValues } from "./validate.ts";
+import { assertView, findShownNode, forEachNode, isFieldType, optionValues, validateTile } from "./validate.ts";
 
 export interface ViewSetRequest {
 	method: "setView";
@@ -123,6 +123,11 @@ interface ViewRecord {
 	/** Events accepted in the current second. */
 	eventWindow: number;
 	events: number;
+}
+
+function assertTile(view: MobileView, key: string): void {
+	const errors = validateTile(view);
+	if (errors.length > 0) throw new Error(`Invalid tile ${JSON.stringify(key)}: ${errors.join("; ")}`);
 }
 
 /** The text widget key of a view. */
@@ -229,6 +234,8 @@ export class ViewHost {
 	/** Open sheets by key: their views take updates and events while open. */
 	private readonly sheets = new Map<string, ViewRecord>();
 	private readonly sheetAborts = new Set<AbortController>();
+	/** Keys of registered tiles that are open: the only keys the `tile` slot takes. */
+	private readonly tileKeys = new Set<string>();
 	private disposed = false;
 
 	constructor(options: {
@@ -261,8 +268,16 @@ export class ViewHost {
 		return !this.native || this.channel?.keepText === true;
 	}
 
+	/** Lets the `tile` slot take `key` (a registered tile was opened), or stops it (closed). */
+	allowTile(key: string, allowed: boolean): void {
+		if (allowed) this.tileKeys.add(key);
+		else this.tileKeys.delete(key);
+	}
+
 	set(key: string, view: MobileView | undefined, options: MobileViewOptions = {}): void {
 		checkKey(key);
+		// The session ended: nothing is shown any more (a late write from an async open, say).
+		if (this.disposed) return;
 		const existing = this.views.get(key);
 		if (view === undefined) {
 			if (existing) this.remove(key, existing);
@@ -270,8 +285,13 @@ export class ViewHost {
 		}
 		assertView(view, JSON.stringify(key));
 		const slot = options.slot ?? "panel";
-		if (slot !== "panel" && slot !== "inline" && slot !== "page")
+		if (slot !== "panel" && slot !== "inline" && slot !== "page" && slot !== "tile")
 			throw new Error(`Invalid view slot ${JSON.stringify(slot)}`);
+		if (slot === "tile") {
+			if (!this.tileKeys.has(key))
+				throw new Error(`View ${JSON.stringify(key)}: the tile slot is only for an open registered tile`);
+			assertTile(view, key);
+		}
 		if (
 			options.toolCallId !== undefined &&
 			(typeof options.toolCallId !== "string" || options.toolCallId.length > 200)
@@ -311,6 +331,7 @@ export class ViewHost {
 		if (!record) throw new Error(`No view ${JSON.stringify(key)}`);
 		const next = applyViewOps(record.view, ops);
 		assertView(next, JSON.stringify(key));
+		if (record.slot === "tile") assertTile(next, key);
 		record.view = next;
 		record.rev++;
 		// An open sheet's changes go to its clients as they come (its text form is the dialogs already open).
@@ -345,6 +366,14 @@ export class ViewHost {
 		};
 	}
 
+	/** Sends the view `key` again as it is now (a client opened a page that is open already). */
+	resend(key: string): void {
+		const record = this.views.get(key);
+		if (!record || !this.native) return;
+		this.channel?.send(this.setRequest(key, record));
+		record.lastSent = Date.now();
+	}
+
 	/**
 	 * A client now renders views (RPC's `set_client_features`): it gets every view, and the text form leaves unless the
 	 * mode keeps it.
@@ -362,7 +391,8 @@ export class ViewHost {
 	/** Sends a change at once, or merges it into one full send at the end of the 100 ms window. */
 	private changed(key: string, record: ViewRecord, ops?: MobileViewOp[]): void {
 		const now = Date.now();
-		if (record.timer === undefined && now - record.lastSent >= LIMITS.sendIntervalMs) {
+		const interval = record.slot === "tile" ? LIMITS.tileSendIntervalMs : LIMITS.sendIntervalMs;
+		if (record.timer === undefined && now - record.lastSent >= interval) {
 			record.lastSent = now;
 			if (this.native) {
 				this.channel?.send(
@@ -383,7 +413,7 @@ export class ViewHost {
 				if (this.native) this.channel?.send(this.setRequest(key, record));
 				if (this.views.get(key) === record && this.text) this.renderText(key, record, true);
 			},
-			LIMITS.sendIntervalMs - (now - record.lastSent),
+			interval - (now - record.lastSent),
 		);
 		record.timer.unref?.();
 	}
@@ -396,7 +426,7 @@ export class ViewHost {
 	}
 
 	private renderText(key: string, record: ViewRecord, show: boolean): void {
-		if (record.slot === "page") return;
+		if (record.slot === "page" || record.slot === "tile") return;
 		const lines = show ? viewToLines(record.view, this.channel?.textStyle?.()) : undefined;
 		if (record.slot === "inline" && this.channel?.inlineText) this.channel.inlineText(key, lines);
 		else this.ui.setWidget(viewWidgetKey(key), lines);
@@ -526,6 +556,12 @@ export class ViewHost {
 					emitted.action = node.action ?? nodeId;
 				} else if ((node.type === "item" || node.type === "tile") && node.action !== undefined) {
 					emitted.action = node.action;
+				} else if (node.type === "table") {
+					// A row tap: the table's id, the row's action, and the row's id as the value.
+					const row = node.rows.find((candidate) => candidate.id === event.value);
+					if (row?.action === undefined) return false;
+					emitted.action = row.action;
+					emitted.value = row.id;
 				} else {
 					return false;
 				}

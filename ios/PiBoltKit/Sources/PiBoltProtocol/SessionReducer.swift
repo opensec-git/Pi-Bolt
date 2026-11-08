@@ -1,7 +1,7 @@
 import Foundation
 
 /// Pure reducer: `remote_hello` snapshot + session events -> `SessionState`. Unknown types and fields are ignored.
-/// A port of the Android app's `SessionReducer.kt` (android/protocol), without the todo panel and subagent runs.
+/// A port of the Android app's `SessionReducer.kt` (android/protocol).
 /// See docs/json.md (event stream) and docs/remote-control.md (`remote_hello`).
 public enum SessionReducer {
     /// More content blocks than any real message has; a larger contentIndex from the wire is ignored.
@@ -10,12 +10,14 @@ public enum SessionReducer {
     public static func reduce(_ state: SessionState, _ event: JSON) -> SessionState {
         switch event.type {
         case "remote_hello":
-            return fromHello(event)
+            return SubagentReducer.keep(state, keepTodos(state, fromHello(event)))
         case "agent_start":
-            // A retried request starts a run: its backoff is over.
+            // A retried request starts a run: its backoff is over. The completed rows of the previous run leave the
+            // todo panel.
             var s = state
             s.isRunning = true
             s.retry = nil
+            s.todos = hideCompleted(state.todos)
             return s
         case "agent_settled":
             return settle(state)
@@ -76,6 +78,10 @@ public enum SessionReducer {
             return notice(state, .error, "Extension error", event.str("error") ?? "")
         case "bash_execution_update":
             return shellOutput(state, event.str("delta") ?? "")
+        case SubagentReducer.entriesEvent:
+            return SubagentReducer.transcript(state, event)
+        case SubagentReducer.eventsEvent:
+            return SubagentReducer.events(state, event)
         default:
             return state
         }
@@ -91,6 +97,7 @@ public enum SessionReducer {
         s.isCompacting = rpc.bool("isCompacting") ?? state.isCompacting
         s.sessionName = rpc.str("sessionName")
         s.sessionId = rpc.str("sessionId") ?? state.sessionId
+        s.sessionFile = rpc.str("sessionFile") ?? state.sessionFile
         return s
     }
 
@@ -114,12 +121,18 @@ public enum SessionReducer {
             state = notice(state, .info, "Earlier messages are on the computer", "\(omitted) older \(omitted == 1 ? "message is" : "messages are") not shown here.")
         }
         for message in hello.arr("messages") ?? [] where message.isObject {
+            // Each prompt in the history started a run, which hid the completed todos of the run before.
+            if message.str("role") == "user" { state.todos = hideCompleted(state.todos) }
             state = commitMessage(state, message, key: nil)
         }
         if let streaming = hello.obj("streamingMessage"), streaming.str("role") == "assistant" {
             state = startStream(state, streaming)
         }
-        if !state.isRunning { state = closeDanglingTools(state) }
+        if !state.isRunning {
+            state = closeDanglingTools(state)
+            state.todos = hideFinished(state.todos)
+            state = SubagentReducer.settled(state)
+        }
         state.dialogs = (hello.arr("dialogs") ?? []).compactMap(dialogFrom)
         state.commands = (hello.arr("commands") ?? []).compactMap(commandFrom)
         return state
@@ -265,6 +278,7 @@ public enum SessionReducer {
             for (i, block) in (message.arr("content") ?? []).enumerated() {
                 guard let item = blockItem(k, i, block, streaming: false) else { continue }
                 if case let .tool(tool) = item {
+                    s = SubagentReducer.called(s, tool.toolCallId, tool.name, tool.args)
                     // A tool call already known (from execution events) keeps its progress.
                     if let existing = items.lastIndex(where: { $0.tool?.toolCallId == tool.toolCallId }), var old = items[existing].tool {
                         old.name = tool.name
@@ -295,7 +309,10 @@ public enum SessionReducer {
                 ? [text, "[\(images) image\(images > 1 ? "s" : "")]"].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: "\n")
                 : text
             let isError = message.bool("isError") ?? false
-            return updateTool(s, id, message.str("toolName")) {
+            let toolName = message.str("toolName")
+            if toolName == todoTool, !isError { s.todos = applyTodo(s.todos, message.obj("details")) }
+            s = SubagentReducer.ended(s, id, toolName, text, message.obj("details"), isError, at: message.long("timestamp"))
+            return updateTool(s, id, toolName) {
                 var t = $0
                 t.status = isError ? .error : .done
                 t.result = result
@@ -318,9 +335,17 @@ public enum SessionReducer {
             )))
             return s
         case "custom":
+            let customType = message.str("customType")
+            s = SubagentReducer.custom(s, customType, message.obj("details"), at: message.long("timestamp"))
             if message.bool("display") == false { return s }
             let (text, _) = contentText(message["content"])
-            s.items.append(.notice(NoticeItem(key: k, kind: .custom, title: message.str("customType") ?? "Message", text: text)))
+            if customType == SubagentReducer.notification {
+                let ids = SubagentReducer.notifiedIds(message.obj("details"))
+                let runs = ids.compactMap { SubagentReducer.byAgentId(s, $0)?.key }
+                s.items.append(.subagentNotice(SubagentNoticeItem(key: k, agentIds: ids, text: text, runKeys: runs)))
+            } else {
+                s.items.append(.notice(NoticeItem(key: k, kind: .custom, title: customType ?? "Message", text: text)))
+            }
             return s
         case "compactionSummary":
             s.items.append(.notice(NoticeItem(key: k, kind: .compaction, title: compactedTitle(message.long("tokensBefore"), nil), text: message.str("summary") ?? "")))
@@ -356,7 +381,8 @@ public enum SessionReducer {
 
     private static func toolStart(_ state: SessionState, _ event: JSON) -> SessionState {
         guard let id = event.str("toolCallId") else { return state }
-        return updateTool(state, id, event.str("toolName")) {
+        let withRun = SubagentReducer.called(state, id, event.str("toolName"), event.obj("args"), started: true)
+        return updateTool(withRun, id, event.str("toolName")) {
             var t = $0
             t.status = .running
             t.args = event.obj("args") ?? t.args
@@ -367,8 +393,10 @@ public enum SessionReducer {
     private static func toolUpdate(_ state: SessionState, _ event: JSON) -> SessionState {
         guard let id = event.str("toolCallId") else { return state }
         let (text, _) = contentText(event.obj("partialResult")?["content"])
+        // The partial details too: a subagent reports what it is doing there.
         let details = event.obj("partialResult")?.obj("details")
-        return updateTool(state, id, event.str("toolName")) {
+        let withRun = SubagentReducer.progress(state, id, event.str("toolName"), details)
+        return updateTool(withRun, id, event.str("toolName")) {
             var t = $0
             t.status = .running
             t.output = text
@@ -382,7 +410,11 @@ public enum SessionReducer {
         let result = event.obj("result")
         let (text, _) = contentText(result?["content"])
         let isError = event.bool("isError") ?? false
-        return updateTool(state, id, event.str("toolName")) {
+        let name = event.str("toolName") ?? state.allItems.last(where: { $0.tool?.toolCallId == id })?.tool?.name
+        var s = state
+        if name == todoTool, !isError { s.todos = applyTodo(s.todos, result?.obj("details")) }
+        s = SubagentReducer.ended(s, id, name, text, result?.obj("details"), isError, at: nil)
+        return updateTool(s, id, event.str("toolName")) {
             var t = $0
             t.status = isError ? .error : .done
             t.result = text
@@ -417,6 +449,7 @@ public enum SessionReducer {
         s.retry = nil
         s.isCompacting = false
         s.compactionReason = nil
+        s.todos = hideFinished(state.todos)
         if let stream = s.stream {
             // A stream without message_end (aborted mid-flight): keep what arrived.
             let blocks: [ChatItem] = stream.blocks.compactMap { $0 }.map {
@@ -435,7 +468,7 @@ public enum SessionReducer {
             s.stream = nil
             s.streaming = []
         }
-        return closeDanglingTools(s)
+        return SubagentReducer.settled(closeDanglingTools(s))
     }
 
     private static func closeDanglingTools(_ state: SessionState) -> SessionState {
@@ -465,6 +498,52 @@ public enum SessionReducer {
         var s = state
         t.output = String((t.output + delta).suffix(maxShellOutput))
         s.items[index] = .tool(t)
+        return s
+    }
+
+    // MARK: Todos
+
+    /// The todo extension's tool (opensec-pi-todo, rpiv-todo). Its result's `details.tasks` is the whole list after
+    /// the call.
+    public static let todoTool = "todo"
+
+    /// The list from a `todo` result's details; ids completed and already hidden stay hidden.
+    private static func applyTodo(_ todos: TodoState, _ details: JSON?) -> TodoState {
+        guard let details, let list = details.arr("tasks") else { return todos }
+        let tasks = list.compactMap(todoTask)
+        let nextId = details.int("nextId") ?? todos.nextId
+        // A cleared list numbers its tasks from 1 again: the hidden ids meant other tasks.
+        let hidden = nextId < todos.nextId ? [] : todos.hidden
+        let completed = Set(tasks.filter { $0.status == .completed }.map(\.id))
+        return TodoState(tasks: tasks, hidden: hidden.intersection(completed), nextId: nextId)
+    }
+
+    /// One task, or nil for a deleted or malformed one.
+    private static func todoTask(_ json: JSON) -> TodoTask? {
+        guard json.isObject, let id = json.int("id"), let status = json.str("status").flatMap(TodoStatus.init(rawValue:)) else { return nil }
+        let active = json.str("activeForm").flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
+        return TodoTask(id: id, subject: json.str("subject") ?? "", status: status, activeForm: active)
+    }
+
+    private static func hideCompleted(_ todos: TodoState) -> TodoState {
+        let completed = todos.tasks.filter { $0.status == .completed }.map(\.id)
+        if todos.hidden.isSuperset(of: completed) { return todos }
+        var t = todos
+        t.hidden.formUnion(completed)
+        return t
+    }
+
+    /// A run that ends with every task done closes the panel.
+    private static func hideFinished(_ todos: TodoState) -> TodoState {
+        !todos.tasks.isEmpty && todos.tasks.allSatisfy { $0.status == .completed } ? hideCompleted(todos) : todos
+    }
+
+    /// A snapshot of the session it already shows (a reconnect) without any todo result, as after a compaction dropped
+    /// them from the messages, keeps the list it had.
+    private static func keepTodos(_ before: SessionState, _ after: SessionState) -> SessionState {
+        guard after.todos == TodoState(), before.todos != TodoState(), let id = after.sessionId, id == before.sessionId else { return after }
+        var s = after
+        s.todos = after.isRunning ? before.todos : hideFinished(before.todos)
         return s
     }
 

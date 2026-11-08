@@ -68,6 +68,8 @@ import type { KeybindingsManager } from "../keybindings.ts";
 import type { McpServerConfig, McpServerRegistry, RegisteredMcpServer } from "../mcp-servers.ts";
 import type { CustomMessage } from "../messages.ts";
 import type {
+	MobilePageDefinition,
+	MobileTileDefinition,
 	MobileView,
 	MobileViewOp,
 	MobileViewOptions,
@@ -1625,6 +1627,14 @@ export interface RegisteredCommand {
 	handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
 }
 
+/** A page or Home tile a package registered (docs/mobile-ui.md#package-pages-and-home-tiles). */
+export interface RegisteredPage {
+	key: string;
+	kind: "page" | "tile";
+	definition: MobileTileDefinition<ExtensionContext>;
+	sourceInfo: SourceInfo;
+}
+
 export interface ResolvedCommand extends RegisteredCommand {
 	invocationName: string;
 }
@@ -1731,6 +1741,15 @@ export interface ExtensionAPI {
 
 	/** Register a custom command. */
 	registerCommand(name: string, options: Omit<RegisteredCommand, "name" | "sourceInfo">): void;
+
+	/**
+	 * Register a page of the mobile UI kit: opened from the session's menu in the Pi-Bolt app, and from Settings ->
+	 * Packages without a session. `open` builds its view; the view's key is `key` (docs/mobile-ui.md).
+	 */
+	registerPage(key: string, page: MobilePageDefinition<ExtensionContext>): void;
+
+	/** Register a Home tile of the mobile UI kit: a small live view the user can turn on for the package. */
+	registerTile(key: string, tile: MobileTileDefinition<ExtensionContext>): void;
 
 	/** Register a keyboard shortcut. */
 	registerShortcut(
@@ -2332,6 +2351,8 @@ export interface Extension {
 	markdownTransformer?: MarkdownTransformer;
 	entryRenderers?: Map<string, EntryRenderer>;
 	commands: Map<string, RegisteredCommand>;
+	/** Pages and Home tiles of the mobile UI kit, by key. */
+	pages?: Map<string, RegisteredPage>;
 	flags: Map<string, ExtensionFlag>;
 	shortcuts: Map<KeyId, ExtensionShortcut>;
 }
