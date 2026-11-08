@@ -48,8 +48,11 @@ object Npmrc {
     /** [input] as a registry URL ending in `/`, or null when it is not one ([urlProblem] says why). */
     fun normalizeUrl(input: String): String? {
         if (urlProblem(input) != null) return null
-        val t = input.trim()
-        return if (t.endsWith("/")) t else "$t/"
+        val u = URI(input.trim())
+        // Scheme and host are case-insensitive: lowercased, so every later comparison sees one form.
+        val port = if (u.port == -1) "" else ":${u.port}"
+        val path = (u.rawPath ?: "").ifEmpty { "/" }.let { if (it.endsWith("/")) it else "$it/" }
+        return "${u.scheme.lowercase()}://${u.host.lowercase()}$port$path"
     }
 
     fun urlProblem(input: String): String? {

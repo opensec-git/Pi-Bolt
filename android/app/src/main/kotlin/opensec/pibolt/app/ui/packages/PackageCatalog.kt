@@ -3,10 +3,12 @@ package opensec.pibolt.app.ui.packages
 import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runInterruptible
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -30,17 +32,27 @@ data class CatalogEntry(
 )
 
 @Immutable
-data class CatalogPage(val entries: List<CatalogEntry>, val total: Int)
+data class CatalogPage(
+    val entries: List<CatalogEntry>,
+    /** The registry's total for the query (before any scope filter). */
+    val total: Int,
+    /** Where the next page starts in the registry's results (they can be more than [entries] after a filter). */
+    val nextFrom: Int = entries.size,
+) {
+    val hasMore: Boolean get() = nextFrom < total
+}
 
 /** The resources a package declares under `pi` in its package.json (docs/packages.md). */
 @Immutable
 data class PiManifest(
-    val extensions: List<String> = emptyList(),
-    val skills: List<String> = emptyList(),
-    val prompts: List<String> = emptyList(),
-    val themes: List<String> = emptyList(),
+    /** Null when the field is absent; `[]` is present and loads none (package-manager.ts hasManifestResourceFields). */
+    val extensions: List<String>? = null,
+    val skills: List<String>? = null,
+    val prompts: List<String>? = null,
+    val themes: List<String>? = null,
 ) {
-    val isEmpty: Boolean get() = extensions.isEmpty() && skills.isEmpty() && prompts.isEmpty() && themes.isEmpty()
+    /** No resource field at all: Pi then discovers the conventional directories. */
+    val isEmpty: Boolean get() = extensions == null && skills == null && prompts == null && themes == null
 }
 
 /** What the app reads of a package's package.json: what it adds and what decides whether it runs on this phone. */
@@ -91,14 +103,15 @@ object CatalogJson {
                 keywords = strings(pkg["keywords"]),
             )
         }
-        return CatalogPage(entries, root.long("total")?.toInt() ?: entries.size)
+        val objects = (root["objects"] as? JsonArray)?.size ?: 0
+        return CatalogPage(entries, root.long("total")?.toInt() ?: entries.size, nextFrom = objects)
     }
 
     fun parseManifest(text: String): PackageManifest {
         val o = parse(text) ?: throw CatalogException("The package registry sent an unexpected answer.")
         val name = o.str("name") ?: throw CatalogException("The package has no name.")
         val pi = o.obj("pi")?.let {
-            PiManifest(strings(it["extensions"]), strings(it["skills"]), strings(it["prompts"]), strings(it["themes"]))
+            PiManifest(it["extensions"]?.let(::strings), it["skills"]?.let(::strings), it["prompts"]?.let(::strings), it["themes"]?.let(::strings))
         }
         val scripts = (o.obj("scripts")).orEmpty().mapNotNull { (k, v) -> (v as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { k to it } }.toMap()
         return PackageManifest(
@@ -168,7 +181,8 @@ object CatalogJson {
         if (files == null) {
             pi ?: return emptyList()
             fun declared(kind: String, entries: List<String>) = entries.filterNot(::isOverride).map { AddedResource(kind, it.removePrefix("./")) }
-            return declared("extension", pi.extensions) + declared("skill", pi.skills) + declared("prompt", pi.prompts) + declared("theme", pi.themes)
+            return declared("extension", pi.extensions.orEmpty()) + declared("skill", pi.skills.orEmpty()) +
+                declared("prompt", pi.prompts.orEmpty()) + declared("theme", pi.themes.orEmpty())
         }
         val out = ArrayList<AddedResource>()
         val budget = Budget()
@@ -183,19 +197,19 @@ object CatalogJson {
             val found = LinkedHashSet<String>()
             val bounded = entries.take(MAX_ENTRIES)
             for (entry in bounded) {
-                if (isOverride(entry)) continue
+                if (isOverride(entry) || entry.length > MAX_GLOB) continue
                 val e = entry.removePrefix("./").trimEnd('/')
                 when {
                     budget.spent -> break
-                    '*' in e || '?' in e -> {
+                    isGlob(e) -> {
                         tree.files.filterTo(found) { kind.accepts(it) && visible(it) && globMatches(e, it, budget) }
                         for (dir in tree.dirs) if (visible(dir) && globMatches(e, dir, budget)) found += kind.discover(tree, dir)
                     }
                     e in tree.fileSet -> found += e
-                    e in tree.dirs || e.isEmpty() -> found += kind.discover(tree, e)
+                    e in tree.dirs || e.isEmpty() -> kind.discover(tree, e).let { list -> if (budget.spend(list.size.toLong() + 1)) found += list }
                 }
             }
-            val enabled = applyOverrides(found.toList(), bounded.filter(::isOverride), budget)
+            val enabled = applyOverrides(found.toList(), bounded.filter { isOverride(it) && it.length <= MAX_GLOB }, budget)
             enabled.map { kind.label(it) }.distinct().mapTo(out) { AddedResource(kind.id, it) }
         }
         return out
@@ -318,6 +332,8 @@ object CatalogJson {
      */
     internal fun globMatches(pattern: String, path: String, budget: Budget = Budget()): Boolean {
         if (pattern.length > MAX_GLOB || path.length > MAX_PATH) return false
+        // `{a,b}` alternatives (Node's globSync expands them): each one is matched, at most MAX_BRACES of them.
+        if ('{' in pattern) return expandBraces(pattern)?.any { globMatches(it, path, budget) } ?: false
         val p = pattern.split('/')
         val s = path.split('/')
         if (p.size > MAX_GLOB_SEGMENTS || s.size > MAX_SEGMENTS) return false
@@ -348,7 +364,86 @@ object CatalogJson {
         }
     }
 
-    private fun segmentMatches(p: String, s: String, budget: Budget): Boolean {
+    /** An entry Pi expands with globSync (package-manager.ts hasGlobPattern): one with `*` or `?`; others are paths. */
+    internal fun isGlob(entry: String): Boolean = entry.any { it == '*' || it == '?' }
+
+    /**
+     * [pattern] with its `{a,b}` groups expanded (nested groups too), or null when it would make more than [MAX_BRACES]
+     * patterns or a brace is unbalanced (then nothing matches, as the bounded preview cannot say).
+     */
+    internal fun expandBraces(pattern: String): List<String>? {
+        val open = pattern.indexOf('{')
+        if (open < 0) return listOf(pattern)
+        var depth = 0
+        var close = -1
+        val cuts = ArrayList<Int>()
+        for (i in open until pattern.length) {
+            when (pattern[i]) {
+                '{' -> depth++
+                '}' -> if (--depth == 0) { close = i; break }
+                ',' -> if (depth == 1) cuts += i
+            }
+        }
+        if (close < 0) return null
+        val bounds = listOf(open) + cuts + listOf(close)
+        val out = ArrayList<String>()
+        for (k in 0 until bounds.size - 1) {
+            val alt = pattern.substring(bounds[k] + 1, bounds[k + 1])
+            val rest = expandBraces(pattern.substring(0, open) + alt + pattern.substring(close + 1)) ?: return null
+            out += rest
+            if (out.size > MAX_BRACES) return null
+        }
+        return out
+    }
+
+    /** One pattern element within a segment: a literal, `?`, `*` or a `[...]` class. */
+    private sealed interface Tok {
+        data class Lit(val c: Char) : Tok
+
+        data object One : Tok
+
+        data object Star : Tok
+
+        data class Cls(val negated: Boolean, val ranges: List<CharRange>) : Tok
+    }
+
+    private fun tokens(p: String): List<Tok> {
+        val out = ArrayList<Tok>()
+        var i = 0
+        while (i < p.length) {
+            val c = p[i]
+            when {
+                c == '*' -> if (out.lastOrNull() != Tok.Star) out += Tok.Star
+                c == '?' -> out += Tok.One
+                c == '[' && p.indexOf(']', i + 2) > i -> {
+                    val end = p.indexOf(']', i + 2)
+                    var body = p.substring(i + 1, end)
+                    val negated = body.startsWith("!") || body.startsWith("^")
+                    if (negated) body = body.drop(1)
+                    val ranges = ArrayList<CharRange>()
+                    var k = 0
+                    while (k < body.length) {
+                        if (k + 2 < body.length && body[k + 1] == '-') { ranges += body[k]..body[k + 2]; k += 3 } else { ranges += body[k]..body[k]; k++ }
+                    }
+                    out += Tok.Cls(negated, ranges)
+                    i = end
+                }
+                else -> out += Tok.Lit(c)
+            }
+            i++
+        }
+        return out
+    }
+
+    private fun Tok.matches(c: Char): Boolean = when (this) {
+        is Tok.Lit -> this.c == c
+        Tok.One -> true
+        Tok.Star -> false
+        is Tok.Cls -> ranges.any { c in it } != negated
+    }
+
+    private fun segmentMatches(pattern: String, s: String, budget: Budget): Boolean {
+        val p = tokens(pattern)
         var i = 0
         var j = 0
         var star = -1
@@ -356,17 +451,18 @@ object CatalogJson {
         while (j < s.length) {
             if (!budget.spend(1)) return false
             when {
-                i < p.length && (p[i] == '?' || p[i] == s[j]) -> { i++; j++ }
-                i < p.length && p[i] == '*' -> { star = i; mark = j; i++ }
+                i < p.size && p[i] != Tok.Star && p[i].matches(s[j]) -> { i++; j++ }
+                i < p.size && p[i] == Tok.Star -> { star = i; mark = j; i++ }
                 star >= 0 -> { i = star + 1; mark++; j = mark }
                 else -> return false
             }
         }
-        while (i < p.length && p[i] == '*') i++
-        return i == p.length
+        while (i < p.size && p[i] == Tok.Star) i++
+        return i == p.size
     }
 
     private const val MAX_GLOB = 300
+    private const val MAX_BRACES = 32
     private const val MAX_PATH = 1000
     private const val MAX_SEGMENTS = 64
 
@@ -433,10 +529,10 @@ class PackageCatalog(
         } catch (e: CatalogException) {
             if (private && e.status in setOf(400, 405, 501)) throw CatalogException(NO_SEARCH, e.status) else throw e
         } ?: throw CatalogException(if (private) NO_SEARCH else "No packages found.", 404)
-        val page = CatalogJson.parseSearch(text)
+        val page = withContext(Dispatchers.Default) { CatalogJson.parseSearch(text) }.let { it.copy(nextFrom = from + it.nextFrom) }
         if (!private || scope == null) return page
-        val mine = page.entries.filter { it.name.startsWith("$scope/") }
-        return CatalogPage(mine, if (mine.size == page.entries.size) page.total else mine.size)
+        // Other scopes are dropped, but the paging goes on from the registry's own offset.
+        return page.copy(entries = page.entries.filter { it.name.startsWith("$scope/") })
     }
 
     /** [name]'s package.json at [version] (the latest when null). */
@@ -444,25 +540,27 @@ class PackageCatalog(
         // The registry takes the scoped name as one segment (`@scope%2Fname`) and an exact version or a dist-tag.
         val url = registry.toHttpUrl().newBuilder().addPathSegment(name).addPathSegment(version ?: "latest").build()
         val text = get(url.toString()) ?: throw CatalogException(if (version == null) "$name is not on npm." else "$name@$version is not on npm.")
-        return CatalogJson.parseManifest(text)
+        return withContext(Dispatchers.Default) { CatalogJson.parseManifest(text) }
     }
 
-    suspend fun weeklyDownloads(name: String): Long? = runCatching { get("$downloadsApi/downloads/point/last-week/$name")?.let(CatalogJson::parseDownloads) }.getOrNull()
+    suspend fun weeklyDownloads(name: String): Long? =
+        runCatching { get("$downloadsApi/downloads/point/last-week/$name")?.let { withContext(Dispatchers.Default) { CatalogJson.parseDownloads(it) } } }.getOrNull()
 
     /** The files of [name]@[version] as published, or null when the list is not available. */
     suspend fun files(name: String, version: String): List<String>? =
-        runCatching { get("$filesApi/v1/packages/npm/$name@$version?structure=flat")?.let(CatalogJson::parseFiles) }.getOrNull()
+        runCatching { get("$filesApi/v1/packages/npm/$name@$version?structure=flat")?.let { withContext(Dispatchers.Default) { CatalogJson.parseFiles(it) } } }.getOrNull()
 
     /** The package.json at the root of a GitHub repository ([ref], else its default branch). */
     suspend fun githubManifest(owner: String, repo: String, ref: String?): PackageManifest {
         val text = get("$githubRaw/$owner/$repo/${ref ?: "HEAD"}/package.json") ?: throw CatalogException("The repository has no package.json.")
-        return CatalogJson.parseManifest(text)
+        return withContext(Dispatchers.Default) { CatalogJson.parseManifest(text) }
     }
 
     /** The body of a 200 answer, null for 404, a [CatalogException] for anything else or no network. */
     private suspend fun get(url: String): String? {
-        val builder = Request.Builder().url(url).header("Accept", "application/json").get()
-        if (authToken != null && url.startsWith("${registry.trimEnd('/')}/")) builder.header("Authorization", "Bearer $authToken")
+        val target = url.toHttpUrl()
+        val builder = Request.Builder().url(target).header("Accept", "application/json").get()
+        if (authToken != null && inRegistry(target)) builder.header("Authorization", "Bearer $authToken")
         val request = builder.build()
         return runInterruptible(Dispatchers.IO) {
             val response = try {
@@ -481,6 +579,15 @@ class PackageCatalog(
                 }
             }
         }
+    }
+
+    private val registryUrl = registry.trimEnd('/').toHttpUrl()
+
+    /** [url] is the registry's (same scheme, host and port, and under its path), compared parsed, not as text. */
+    private fun inRegistry(url: HttpUrl): Boolean {
+        if (url.scheme != registryUrl.scheme || url.host != registryUrl.host || url.port != registryUrl.port) return false
+        val base = registryUrl.encodedPath.trimEnd('/')
+        return base.isEmpty() || url.encodedPath == base || url.encodedPath.startsWith("$base/")
     }
 
     companion object {

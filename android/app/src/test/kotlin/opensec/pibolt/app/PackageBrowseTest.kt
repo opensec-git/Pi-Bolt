@@ -258,6 +258,25 @@ class PackageBrowseTest {
     }
 
     @Test
+    fun globsTakeBracesAndClassesAndEmptyFieldsLoadNone() {
+        assertEquals(listOf("src/*.ts", "src/*.js"), CatalogJson.expandBraces("src/*.{ts,js}"))
+        assertEquals(listOf("a/x1", "a/x2", "a/y"), CatalogJson.expandBraces("a/{x{1,2},y}"))
+        assertNull(CatalogJson.expandBraces("a/{x,y"))
+        assertNull(CatalogJson.expandBraces("{a,b}{c,d}{e,f}{g,h}{i,j}{k,l}"))
+        assertTrue(CatalogJson.globMatches("prompts/*[0-9].md", "prompts/fix2.md"))
+        assertFalse(CatalogJson.globMatches("prompts/*[0-9].md", "prompts/fix.md"))
+        assertTrue(CatalogJson.globMatches("p/[!a]*.md", "p/b.md"))
+        assertFalse(CatalogJson.globMatches("p/[!a]*.md", "p/a.md"))
+        val m = manifest("""{"name":"p","pi":{"extensions":["./src/*.{ts,js}"],"prompts":["./prompts/*[0-9].md"],"skills":[]}}""")
+        val files = listOf("src/a.ts", "src/b.js", "src/c.css", "prompts/p1.md", "prompts/p.md", "skills/s/SKILL.md", "themes/t.json")
+        // skills: [] and an absent themes field load none, though the conventional directories exist.
+        assertEquals(
+            listOf(AddedResource("extension", "a.ts"), AddedResource("extension", "b.js"), AddedResource("prompt", "p1")),
+            CatalogJson.resources(m, files),
+        )
+    }
+
+    @Test
     fun globsMatchBySegment() {
         assertTrue(CatalogJson.globMatches("res/prompts/*.md", "res/prompts/fix.md"))
         assertFalse(CatalogJson.globMatches("res/prompts/*.md", "res/prompts/sub/fix.md"))

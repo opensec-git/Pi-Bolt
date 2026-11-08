@@ -265,7 +265,13 @@ fun BrowseTab(catalog: PackageCatalog, private: Pair<RegistryConfig, PackageCata
             if (s.page.entries.isEmpty()) {
                 F2Empty(if (query.isBlank()) "No packages" else "No packages match \"${query.trim()}\". Try another word.", if (query.isBlank()) Icons.Rounded.CloudOff else Icons.Rounded.SearchOff)
             } else {
-                F2Section(if (query.isBlank()) "Most downloaded" else "${s.page.total} found")
+                F2Section(
+                    when {
+                        scopeFilter != null -> "$scopeFilter packages"
+                        query.isBlank() -> "Most downloaded"
+                        else -> "${s.page.total} found"
+                    },
+                )
             }
             for (e in s.page.entries) {
                 F2Row(title = e.name, meta = PackageFormat.meta(e), icon = Icons.Rounded.Inventory2, onClick = { onOpen(e) }, titleMaxLines = 1) {
@@ -273,7 +279,7 @@ fun BrowseTab(catalog: PackageCatalog, private: Pair<RegistryConfig, PackageCata
                 }
             }
             s.moreError?.let { Notice(it, kind = SnackKind.Error, modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.sm)) }
-            if (s.page.entries.size < s.page.total && s.page.entries.isNotEmpty()) {
+            if (s.page.hasMore && (s.page.entries.isNotEmpty() || scopeFilter != null)) {
                 if (s.loadingMore) {
                     F2Loading("Loading more")
                 } else {
@@ -282,9 +288,9 @@ fun BrowseTab(catalog: PackageCatalog, private: Pair<RegistryConfig, PackageCata
                         val forQuery = query
                         more = scope.launch {
                             val result = try {
-                                val next = searching.search(forQuery, from = s.page.entries.size, scope = scopeFilter)
+                                val next = searching.search(forQuery, from = s.page.nextFrom, scope = scopeFilter)
                                 val names = s.page.entries.map { it.name }.toSet()
-                                BrowseState.Results(CatalogPage(s.page.entries + next.entries.filter { it.name !in names }, next.total))
+                                BrowseState.Results(CatalogPage(s.page.entries + next.entries.filter { it.name !in names }, next.total, next.nextFrom))
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: Exception) {

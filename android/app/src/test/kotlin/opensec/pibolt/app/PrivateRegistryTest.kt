@@ -122,6 +122,37 @@ class PrivateRegistryTest {
     }
 
     @Test
+    fun urlsAreCanonical() {
+        assertEquals("https://npm.example.com/api/", Npmrc.normalizeUrl(" HTTPS://NPM.Example.com/api "))
+        assertEquals("http://127.0.0.1:4873/", Npmrc.normalizeUrl("http://127.0.0.1:4873"))
+    }
+
+    @Test
+    fun privateSearchPagesPastFilteredResults() = runBlocking {
+        val server = MockWebServer()
+        // Page one: 1 of ours among 3; the registry has 5 in all, so Show more continues from its offset 3.
+        server.enqueue(MockResponse.Builder().body("""{"objects":[{"package":{"name":"@co/a","version":"1"}},{"package":{"name":"@x/b","version":"1"}},{"package":{"name":"@x/c","version":"1"}}],"total":5}""").build())
+        server.enqueue(MockResponse.Builder().body("""{"objects":[{"package":{"name":"@co/d","version":"1"}},{"package":{"name":"@x/e","version":"1"}}],"total":5}""").build())
+        server.start()
+        try {
+            // An upper-case host in the saved URL still gets the token (requests are compared parsed).
+            val base = server.url("/").toString().trimEnd('/').replace("localhost", "LOCALHOST")
+            val private = PackageCatalog(OkHttpClient(), registry = base, authToken = token, private = true)
+            val first = private.search("", scope = "@co")
+            assertEquals(listOf("@co/a"), first.entries.map { it.name })
+            assertEquals(3, first.nextFrom)
+            assertTrue(first.hasMore)
+            val second = private.search("", from = first.nextFrom, scope = "@co")
+            assertEquals(listOf("@co/d"), second.entries.map { it.name })
+            assertFalse(second.hasMore)
+            assertEquals("Bearer $token", server.takeRequest().headers["Authorization"])
+            assertEquals("3", server.takeRequest().url.queryParameter("from"))
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test
     fun configServesItsScope() {
         val scoped = RegistryConfig("https://npm.example.com/", "@company")
         assertTrue(scoped.serves("@company/pi-x"))
