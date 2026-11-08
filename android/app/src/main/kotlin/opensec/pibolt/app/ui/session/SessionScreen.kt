@@ -1,7 +1,6 @@
 package opensec.pibolt.app.ui.session
 
 import opensec.pibolt.protocol.session.DialogKind
-import androidx.compose.runtime.SideEffect
 import opensec.pibolt.app.ui.session.views.LocalViewHost
 import opensec.pibolt.app.ui.session.views.ViewHostUi
 import opensec.pibolt.app.ui.session.views.ViewPanels
@@ -586,17 +585,22 @@ internal fun SessionContent(
     val todos by remember { derivedStateOf { state.value.todos } }
     val firstDialog by remember { derivedStateOf { state.value.dialogs.firstOrNull() } }
     // The mobile UI kit: extensions' views, drawn natively (views/ViewUi.kt). Their events go to Pi as they happen.
-    val viewHost = remember(controller) { ViewHostUi { key, node, kind, value, values -> controller.viewEvent(key, node, kind, value, values) } }
-    val views by remember { derivedStateOf { state.value.views } }
-    SideEffect {
-        if (viewHost.views !== views) {
-            viewHost.views = views
-            viewHost.prune()
-        }
+    // The host reads the session's views where they are drawn, so an update of one view redraws it, whichever slot it is
+    // in (an inline view's update changes nothing this screen reads itself).
+    val viewHost = remember(controller) {
+        ViewHostUi({ state.value.views }) { key, node, kind, value, values -> controller.viewEvent(key, node, kind, value, values) }
     }
+    val views by remember { derivedStateOf { state.value.views } }
+    LaunchedEffect(viewHost) { snapshotFlow { state.value.views.keys }.collect { viewHost.prune() } }
     val panels by remember { derivedStateOf { views.values.filter { it.slot == MobileViews.SLOT_PANEL } } }
     val pages by remember { derivedStateOf { views.values.filter { it.slot == MobileViews.SLOT_PAGE } } }
     var openPage by remember { mutableStateOf<String?>(null) }
+    // Pages packages registered (`get_pages`): built by Pi when opened from the menu, closed with their sheet.
+    val registeredPages by controller.registeredPages.collectAsStateWithLifecycle()
+    val menuPages = remember(pages, registeredPages) {
+        pages.map { it.key to (it.view.title ?: it.key) } + registeredPages.filter { r -> pages.none { it.key == r.key } }.map { it.key to it.title }
+    }
+    val sessionScope = rememberCoroutineScope()
     val empty by remember(memory) { derivedStateOf { state.value.hello && state.value.items.isEmpty() && state.value.streaming.isEmpty() && !state.value.isRunning && memory.pending.value == null } }
 
     val modelReadsImages by remember { derivedStateOf { state.value.model?.acceptsImages } }
@@ -1093,8 +1097,14 @@ internal fun SessionContent(
                 onRename = { sheet = Sheet.Rename },
                 onSearch = { searching = true },
                 onExport = { sheet = Sheet.Export },
-                pages = pages.map { it.key to (it.view.title ?: it.key) },
-                onPage = { openPage = it },
+                pages = menuPages,
+                onPage = { key ->
+                    if (registeredPages.any { it.key == key } && views[key] == null) {
+                        sessionScope.launch { if (controller.openPage(key)) openPage = key }
+                    } else {
+                        openPage = key
+                    }
+                },
                 onResume = ::openResume,
                 onFork = ::openFork,
                 onClone = controller::cloneSession,
@@ -1371,7 +1381,14 @@ internal fun SessionContent(
 
     openPage?.let { key ->
         val entry = views[key]
-        if (entry == null) openPage = null else ViewPageSheet(viewHost, entry, onClose = { openPage = null })
+        if (entry == null) {
+            openPage = null
+        } else {
+            ViewPageSheet(viewHost, entry, onClose = {
+                openPage = null
+                if (registeredPages.any { it.key == key }) controller.closePage(key)
+            })
+        }
     }
 
     VoiceRationale(voice)

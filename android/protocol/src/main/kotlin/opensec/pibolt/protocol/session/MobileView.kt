@@ -129,6 +129,49 @@ data class VSlider(
     val unit: String?,
 ) : VField
 
+/** One series of a [VChart]: its values in x order; null is a gap. */
+data class VSeries(val name: String, val values: List<Double?>)
+
+/** A chart (`line`, `bar`, `area`, `sparkline`), drawn natively in the theme's chart colours, one per series in order. */
+data class VChart(
+    override val id: String?,
+    override val hidden: Boolean,
+    val kind: String,
+    val title: String?,
+    val series: List<VSeries>,
+    val labels: List<String>,
+    val unit: String?,
+    val min: Double?,
+    val max: Double?,
+    val summary: String?,
+) : VNode
+
+/** A column of a [VTable]: [kind] is `text`, `number`, `date` or `mono`. */
+data class VColumn(val id: String, val label: String, val kind: String, val sortable: Boolean)
+
+/** A cell: text, a number or empty. */
+sealed interface VCell {
+    data class Text(val text: String) : VCell
+    data class Number(val value: Double) : VCell
+    data object Empty : VCell
+}
+
+data class VTableRow(val id: String, val cells: Map<String, VCell>, val action: String?)
+
+data class VTable(
+    override val id: String?,
+    override val hidden: Boolean,
+    val columns: List<VColumn>,
+    val rows: List<VTableRow>,
+    val sortColumn: String?,
+    val sortDesc: Boolean,
+    val filter: Boolean,
+    val empty: String?,
+) : VNode
+
+/** A place: opens the phone's maps app on a tap. Never drawn on a map (no map tiles are loaded). */
+data class VLocation(override val id: String?, override val hidden: Boolean, val name: String, val address: String?, val lat: Double?, val lon: Double?) : VNode
+
 /** A node type of a newer kit: shown as its [text], if it has any. */
 data class VUnknown(override val id: String?, override val hidden: Boolean, val text: String?) : VNode
 
@@ -155,10 +198,32 @@ data class ViewEntry(
     val turn: Long? = null,
 )
 
+/**
+ * A page or Home tile a package registered (`get_pages`, docs/mobile-ui.md#package-pages-and-home-tiles). [source] and
+ * [path] come from its `sourceInfo`: which package it belongs to. A tile opens [page] on a tap.
+ */
+data class PageInfo(
+    val key: String,
+    val kind: String,
+    val title: String,
+    val icon: String?,
+    val description: String?,
+    val page: String?,
+    val source: String?,
+    val path: String?,
+) {
+    val isTile: Boolean get() = kind == MobileViews.SLOT_TILE
+}
+
 object MobileViews {
     const val SLOT_PANEL = "panel"
     const val SLOT_INLINE = "inline"
     const val SLOT_PAGE = "page"
+    const val SLOT_TILE = "tile"
+
+    /** Chart kinds this app draws; another kind is shown as a line. */
+    val CHART_KINDS = setOf("line", "bar", "area", "sparkline")
+    private val COLUMN_KINDS = setOf("text", "number", "date", "mono")
 
     fun parse(json: JsonObject): VView = VView(
         title = json.str("title"),
@@ -283,9 +348,90 @@ object MobileViews {
                 val max = (json.double("max") ?: 1.0).let { if (it > min) it else min + 1 }
                 VSlider(id, hidden, json.str("label").orEmpty(), min, max, json.double("step")?.takeIf { it > 0 }, (json.double("value") ?: min).coerceIn(min, max), json.str("unit"))
             }
+            "chart" -> chart(id, hidden, json)
+            "table" -> table(id, hidden, json)
+            "location" -> location(id, hidden, json)
             else -> VUnknown(id, hidden, json.str("title") ?: json.str("label") ?: json.str("text"))
         }
     }
+
+    private fun chart(id: String?, hidden: Boolean, json: JsonObject): VNode {
+        val kind = json.str("kind")?.takeIf { it in CHART_KINDS } ?: "line"
+        val series = json.arr("series").orEmpty().mapNotNull { element ->
+            val s = element as? JsonObject ?: return@mapNotNull null
+            val values = s.arr("values").orEmpty().map { v -> (v as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull?.takeIf { it.isFinite() } }
+            VSeries(s.str("name").orEmpty(), values)
+        }.let { if (kind == "sparkline") it.take(1) else it.take(4) }
+        val labels = json.arr("labels").orEmpty().map { (it as? JsonPrimitive)?.content.orEmpty() }
+        val title = json.str("title")
+        if (series.isEmpty()) return VUnknown(id, hidden, title)
+        return VChart(id, hidden, kind, title, series, labels, json.str("unit"), json.double("min"), json.double("max"), json.str("summary"))
+    }
+
+    private fun table(id: String?, hidden: Boolean, json: JsonObject): VNode {
+        val columns = json.arr("columns").orEmpty().mapNotNull { element ->
+            val c = element as? JsonObject ?: return@mapNotNull null
+            val cid = c.str("id") ?: return@mapNotNull null
+            VColumn(cid, c.str("label") ?: cid, c.str("kind")?.takeIf { it in COLUMN_KINDS } ?: "text", c.bool("sortable") == true)
+        }
+        if (columns.isEmpty()) return VUnknown(id, hidden, null)
+        val rows = json.arr("rows").orEmpty().mapNotNull { element ->
+            val r = element as? JsonObject ?: return@mapNotNull null
+            val rid = r.str("id") ?: return@mapNotNull null
+            val cells = r.obj("cells").orEmpty().mapValues { (_, v) ->
+                val p = v as? JsonPrimitive
+                when {
+                    p == null || p is JsonNull -> VCell.Empty
+                    p.isString -> VCell.Text(p.content)
+                    p.doubleOrNull != null -> VCell.Number(p.doubleOrNull!!)
+                    else -> VCell.Text(p.content)
+                }
+            }
+            VTableRow(rid, cells, r.str("action"))
+        }
+        val sort = json.obj("sort")
+        val sortColumn = sort?.str("column")?.takeIf { c -> columns.any { it.id == c } }
+        return VTable(id, hidden, columns, rows, sortColumn, sort?.bool("desc") == true, json.bool("filter") == true, json.str("empty"))
+    }
+
+    private fun location(id: String?, hidden: Boolean, json: JsonObject): VNode {
+        val lat = json.double("lat")?.takeIf { it in -90.0..90.0 }
+        val lon = json.double("lon")?.takeIf { it in -180.0..180.0 }
+        val pair = lat != null && lon != null
+        return VLocation(id, hidden, json.str("name").orEmpty(), json.str("address")?.takeIf { it.isNotBlank() }, lat.takeIf { pair }, lon.takeIf { pair })
+    }
+
+    /**
+     * The `geo:` link a [VLocation] opens: at its coordinates labelled with its name, else a search for its address.
+     * Null when it has neither.
+     */
+    fun geoUri(place: VLocation): String? {
+        val lat = place.lat
+        val lon = place.lon
+        if (lat != null && lon != null) {
+            val at = "${plain(lat)},${plain(lon)}"
+            val label = place.name.replace(Regex("[()\\n\\r]"), " ").trim()
+            val q = if (label.isEmpty()) at else "$at($label)"
+            return "geo:$at?q=${encode(q)}"
+        }
+        val address = place.address ?: return null
+        return "geo:0,0?q=${encode(address)}"
+    }
+
+    private fun plain(value: Double): String = java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString()
+
+    /** Percent-encoding for a URI query value (spaces as %20, as Android's geo: handlers expect). */
+    private fun encode(text: String): String = java.net.URLEncoder.encode(text, "UTF-8").replace("+", "%20")
+
+    /** `get_pages`' answer; entries without a key or title, or of another kind, are left out. */
+    fun pages(data: JsonObject?): List<PageInfo> = data?.arr("pages").orEmpty().mapNotNull { element ->
+        val p = element as? JsonObject ?: return@mapNotNull null
+        val key = p.str("key") ?: return@mapNotNull null
+        val kind = p.str("kind")?.takeIf { it == SLOT_PAGE || it == SLOT_TILE } ?: return@mapNotNull null
+        val title = p.str("title")?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        val info = p.obj("sourceInfo")
+        PageInfo(key, kind, title, p.str("icon"), p.str("description"), p.str("page"), info?.str("source"), info?.str("baseDir") ?: info?.str("path"))
+    }.distinctBy { it.key }
 
     /** `https:`, `http:` or `mailto:`: the app's link rules. */
     fun isAllowedLink(url: String): Boolean {
