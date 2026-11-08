@@ -380,6 +380,49 @@ describe("mobile UI kit in a session", () => {
 		expect(runner.getUIContext().getView("slow:page")?.title).toBe("Second");
 	});
 
+	it("waits for a page's running close() before opening it again", async () => {
+		const order: string[] = [];
+		let finishClose: () => void = () => {};
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi: ExtensionAPI) =>
+					pi.registerPage("watch:page", {
+						title: "Watch",
+						open: () => {
+							order.push("open");
+							return { v: 1, title: "Watch", body: [] };
+						},
+						close: () =>
+							new Promise<void>((resolve) => {
+								order.push("close start");
+								finishClose = () => {
+									order.push("close end");
+									resolve();
+								};
+							}),
+					}),
+			],
+		});
+		cleanups.push(() => harness.cleanup());
+		await harness.session.bindExtensions({
+			uiContext: createTestUiContext(),
+			mode: "rpc",
+			viewChannel: fakeChannel(true),
+		});
+		const runner = harness.session.extensionRunner;
+		await runner.openPage("watch:page");
+		const closing = runner.closePage("watch:page");
+		await until(() => order.includes("close start"));
+		const reopening = runner.openPage("watch:page");
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(order).toEqual(["open", "close start"]);
+		finishClose();
+		await closing;
+		await reopening;
+		expect(order).toEqual(["open", "close start", "close end", "open"]);
+		expect(runner.getUIContext().getView("watch:page")?.title).toBe("Watch");
+	});
+
 	it("runs close() when a page's view cannot be shown", async () => {
 		const closed: string[] = [];
 		const harness = await createHarness({

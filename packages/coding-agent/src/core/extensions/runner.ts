@@ -447,6 +447,8 @@ export class ExtensionRunner {
 	private views: ViewHost | undefined;
 	/** Registered pages and tiles that a client opened (`open_page`), with the open in progress or done. */
 	private readonly openPages = new Map<string, { done: Promise<void> }>();
+	/** Pages whose `close()` is running: an open of the same key waits for it. */
+	private readonly closingPages = new Map<string, { done: Promise<void> }>();
 	private uiPromptDepth = 0;
 	private activeUIPrompt: { kind: UIPromptKind; title?: string } | undefined;
 
@@ -786,6 +788,13 @@ export class ExtensionRunner {
 		if (!views) throw new Error("No client shows views");
 		const page = this.getRegisteredPages().find((candidate) => candidate.key === key);
 		if (!page) throw new Error(`No page ${JSON.stringify(key)}`);
+		// A close of this page still cleaning up finishes first, so it cannot stop what this open starts. (Awaited only
+		// then: without one, the open registers at once, before any later close or invalidation.)
+		const closing = this.closingPages.get(key);
+		if (closing) {
+			await closing.done;
+			if (this.staleMessage) return;
+		}
 		const opening = this.openPages.get(key);
 		if (opening) {
 			await opening.done;
@@ -849,7 +858,13 @@ export class ExtensionRunner {
 		const page = this.getRegisteredPages().find((candidate) => candidate.key === key);
 		this.views?.set(key, undefined);
 		this.views?.allowTile(key, false);
-		await this.runPageClose(page);
+		const closing = { done: this.runPageClose(page) };
+		this.closingPages.set(key, closing);
+		try {
+			await closing.done;
+		} finally {
+			if (this.closingPages.get(key) === closing) this.closingPages.delete(key);
+		}
 	}
 
 	/** Runs a page's `close()`; `ctx` defaults to a live context. */
