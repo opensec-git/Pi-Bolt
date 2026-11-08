@@ -13,7 +13,6 @@ import opensec.pibolt.protocol.session.AssistantTextItem
 import opensec.pibolt.protocol.session.ChatItem
 import opensec.pibolt.protocol.session.NoticeItem
 import opensec.pibolt.protocol.session.SubagentNoticeItem
-import opensec.pibolt.protocol.session.ViewItem
 import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.ToolStatus
@@ -70,8 +69,6 @@ object SessionMarkdown {
                     append("\n> ").append(item.text.trim()).append('\n')
                     lastRole = null
                 }
-                // A live view of an extension: not part of the conversation.
-                is ViewItem -> {}
                 is NoticeItem -> {
                     append("\n> **").append(item.title).append("**")
                     if (item.text.isNotBlank()) append("\n>\n").append(item.text.trim().lines().joinToString("\n") { "> $it" })

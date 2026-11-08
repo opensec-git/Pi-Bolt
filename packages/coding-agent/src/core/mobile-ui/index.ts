@@ -1,5 +1,6 @@
 export { fieldValues, runViewDialogs } from "./dialogs.ts";
 export {
+	type ViewAnchor,
 	type ViewChannel,
 	type ViewClientEvent,
 	ViewHost,

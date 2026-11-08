@@ -192,15 +192,21 @@ Where a view appears is its slot, chosen when it is set:
 | Slot | API | App | Terminal |
 |---|---|---|---|
 | `panel` (default) | `setView(key, view)` | A card above the composer. Its header (icon, title, the first chip) folds and unfolds it; several panels stack and the area scrolls. | A widget above the editor. |
-| `inline` | `setView(key, view, { slot: "inline" })` | A card in the transcript, where it was first set; after the app reconnects or rebuilds the transcript, at its end. It stays live; it is not saved in the session. | Lines in the chat, updated in place. |
+| `inline` | `setView(key, view, { slot: "inline" })` | A card in the transcript, pinned where it was first set (below). It stays live; it is not saved in the session. | Lines in the chat, updated in place. |
 | `page` | `setView(key, view, { slot: "page" })` | A tall sheet, opened from the session's menu (•••), one entry per page, named by its title. | Not shown. |
 | `sheet` | `await showView(view)` | A modal bottom sheet with the title, the body and `actions` as its button row. | Dialogs, see [Fallback](#fallback). |
 
 Inline views are live UI, not transcript content. To keep a record in the session, send a message as well (for example
 `pi.sendMessage` with the final state).
 
-Pass `{ toolCallId }` (the id a tool's `execute` receives) to tie an inline view to that tool call. Pi sends it on;
-the Android app 0.7.0 still places the view by time, not under the tool's row.
+An inline view is pinned when it is first set, so it keeps its place after a reconnect or a rebuilt transcript:
+
+- with `{ toolCallId }` (the id a tool's `execute` receives): under that tool call's row;
+- set while a turn is at a tool call (from a tool, say): under that call's row;
+- otherwise: at the end of the latest turn (an extension command run between turns lands there).
+
+A folded turn shows its views at its end. A view whose turn is not in the transcript (an older part a reconnect left
+out) is shown at the end.
 
 ## Updates
 
@@ -343,7 +349,7 @@ All requests from Pi are `extension_ui_request`s, as in [RPC Extension UI](rpc-e
 
 | `method` | Fields | Response |
 |---|---|---|
-| `setView` | `viewKey`, `slot`, `view` (absent: remove), `rev`, `toolCallId?` | none |
+| `setView` | `viewKey`, `slot`, `view` (absent: remove), `rev`; inline views: `toolCallId?` or `turn?` (the `timestamp` of the turn's user message) | none |
 | `updateView` | `viewKey`, `ops`, `rev` (after the ops) | none |
 | `showView` | `viewKey`, `view`, `timeout?` | `extension_ui_response` with `nodeId` and `values`, or `cancelled: true` |
 
@@ -365,7 +371,7 @@ From the client:
 `nodeId` of a sheet answer is the submitted form or the pressed `actions` button. Events get no response.
 
 Over remote control the same records travel in the encrypted channel. `remote_hello` carries `views`
-(`[{ viewKey, slot, view, rev, toolCallId? }]`, the current state) and open sheets among its `dialogs`.
+(`[{ viewKey, slot, view, rev, toolCallId?, turn? }]`, the current state) and open sheets among its `dialogs`.
 
 ## Limits
 

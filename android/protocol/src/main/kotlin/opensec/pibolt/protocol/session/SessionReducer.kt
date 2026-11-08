@@ -110,7 +110,7 @@ object SessionReducer {
             dialogs = hello.arr("dialogs").orEmpty().mapNotNull { (it as? JsonObject)?.let(::dialogFrom) },
             commands = hello.arr("commands").orEmpty().mapNotNull { (it as? JsonObject)?.let(::commandFrom) },
         )
-        // The views now; inline ones follow the transcript (where they were first set is not in the snapshot).
+        // The views now; inline ones are placed by their anchors (tool call or turn) as the transcript is drawn.
         for (view in hello.arr("views").orEmpty()) state = setView(state, view as? JsonObject ?: continue)
         return state
     }
@@ -561,21 +561,10 @@ object SessionReducer {
     /** `setView` (and a `remote_hello` view): show, replace or (without `view`) remove the view `viewKey`. */
     private fun setView(state: SessionState, event: JsonObject): SessionState {
         val key = event.str("viewKey") ?: return state
-        val json = event.obj("view")
-        val marker = "view:$key"
-        if (json == null) {
-            return state.copy(views = state.views - key, items = state.items.filterNot { it is ViewItem && it.viewKey == key })
-        }
+        val json = event.obj("view") ?: return state.copy(views = state.views - key)
         val slot = event.str("slot") ?: MobileViews.SLOT_PANEL
-        val entry = ViewEntry(key, slot, json, MobileViews.parse(json), event.long("rev") ?: 0, event.str("toolCallId"))
-        val inline = slot == MobileViews.SLOT_INLINE
-        val placed = state.items.any { it is ViewItem && it.viewKey == key }
-        val items = when {
-            inline && !placed -> state.items + ViewItem(marker, key)
-            !inline && placed -> state.items.filterNot { it is ViewItem && it.viewKey == key }
-            else -> state.items
-        }
-        return state.copy(views = state.views + (key to entry), items = items)
+        val entry = ViewEntry(key, slot, json, MobileViews.parse(json), event.long("rev") ?: 0, event.str("toolCallId"), event.long("turn"))
+        return state.copy(views = state.views + (key to entry))
     }
 
     /**

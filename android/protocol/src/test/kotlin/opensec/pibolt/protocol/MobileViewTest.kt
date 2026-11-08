@@ -17,7 +17,6 @@ import opensec.pibolt.protocol.session.VProgress
 import opensec.pibolt.protocol.session.VSelect
 import opensec.pibolt.protocol.session.VTone
 import opensec.pibolt.protocol.session.VUnknown
-import opensec.pibolt.protocol.session.ViewItem
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -76,14 +75,15 @@ class MobileViewTest {
     }
 
     @Test
-    fun `places an inline view in the transcript and removes it with its view`() {
-        val state = run(SessionState(), setView(1, slot = "inline"))
-        assertEquals(listOf("deploy"), state.items.filterIsInstance<ViewItem>().map { it.viewKey })
-        val replaced = run(state, setView(2, slot = "inline"))
-        assertEquals(1, replaced.items.count { it is ViewItem })
-        val removed = run(replaced, """{"type":"extension_ui_request","id":"r","method":"setView","viewKey":"deploy","slot":"inline","rev":3}""")
-        assertTrue(removed.views.isEmpty())
-        assertTrue(removed.items.none { it is ViewItem })
+    fun `keeps an inline view's anchor and never touches the transcript`() {
+        val tool = """{"type":"extension_ui_request","id":"u1","method":"setView","viewKey":"deploy","slot":"inline","rev":1,"toolCallId":"c1","view":$deploy}"""
+        val turn = """{"type":"extension_ui_request","id":"u2","method":"setView","viewKey":"log","slot":"inline","rev":1,"turn":1762590000123,"view":$deploy}"""
+        val state = run(SessionState(), tool, turn)
+        assertEquals("c1", state.views.getValue("deploy").toolCallId)
+        assertEquals(1762590000123, state.views.getValue("log").turn)
+        assertTrue(state.items.isEmpty())
+        val removed = run(state, """{"type":"extension_ui_request","id":"r","method":"setView","viewKey":"deploy","slot":"inline","rev":2}""")
+        assertEquals(listOf("log"), removed.views.keys.toList())
     }
 
     @Test
@@ -117,7 +117,7 @@ class MobileViewTest {
         assertEquals(listOf("deploy", "log"), state.views.keys.toList())
         assertEquals(4, state.views.getValue("deploy").rev)
         assertEquals("Log", assertIs<VCard>(state.views.getValue("log").view.body[0]).title)
-        assertEquals(listOf("log"), state.items.filterIsInstance<ViewItem>().map { it.viewKey })
+        assertEquals(MobileViews.SLOT_INLINE, state.views.getValue("log").slot)
     }
 
     @Test

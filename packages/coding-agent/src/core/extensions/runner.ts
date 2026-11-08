@@ -16,7 +16,13 @@ import { PIBOLT } from "../../pi-bolt.ts";
 import type { CacheWarmingAction } from "../cache-warmer.ts";
 import type { ResourceDiagnostic } from "../diagnostics.ts";
 import type { KeybindingsConfig } from "../keybindings.ts";
-import { type ViewChannel, type ViewClientEvent, ViewHost, type ViewSnapshot } from "../mobile-ui/host.ts";
+import {
+	type ViewAnchor,
+	type ViewChannel,
+	type ViewClientEvent,
+	ViewHost,
+	type ViewSnapshot,
+} from "../mobile-ui/host.ts";
 import { assertView } from "../mobile-ui/validate.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
@@ -631,7 +637,14 @@ export class ExtensionRunner {
 			setWidget: (key: string, lines: string[] | undefined) => ui.setWidget(key, lines),
 		};
 		if (this.views) this.views.rebind(viewUI, viewUI, viewChannel);
-		else this.views = new ViewHost({ ui: viewUI, channel: viewChannel, emit: (event) => void this.emit(event) });
+		else {
+			this.views = new ViewHost({
+				ui: viewUI,
+				channel: viewChannel,
+				emit: (event) => void this.emit(event),
+				anchor: () => this.viewAnchor(),
+			});
+		}
 		const views = this.views;
 		return {
 			...ui,
@@ -707,6 +720,35 @@ export class ExtensionRunner {
 
 	getUIContext(): ExtensionUIContext {
 		return this.uiContext;
+	}
+
+	/**
+	 * Where an inline view set now belongs (docs/mobile-ui.md#slots): under the latest tool call while the turn is at
+	 * one, else at the end of the latest turn (its user message's timestamp).
+	 */
+	private viewAnchor(): ViewAnchor | undefined {
+		const branch = this.sessionManager.getBranch();
+		let finished = false;
+		for (let i = branch.length - 1; i >= 0; i--) {
+			const entry = branch[i];
+			if (entry.type !== "message") continue;
+			const message = entry.message as { role?: string; content?: unknown; toolCallId?: string; timestamp?: number };
+			if (message.role === "user")
+				return typeof message.timestamp === "number" ? { turn: message.timestamp } : undefined;
+			if (finished) continue;
+			if (message.role === "toolResult" && message.toolCallId) return { toolCallId: message.toolCallId };
+			if (message.role === "assistant") {
+				const calls = Array.isArray(message.content)
+					? message.content.filter(
+							(block: { type?: string; id?: string }) => block.type === "toolCall" && block.id,
+						)
+					: [];
+				if (calls.length > 0) return { toolCallId: (calls.at(-1) as { id: string }).id };
+				// The turn ended with an answer: the view goes at the end of the turn.
+				finished = true;
+			}
+		}
+		return undefined;
 	}
 
 	/** Every view now, for a client that connects (remote control's `remote_hello`). */

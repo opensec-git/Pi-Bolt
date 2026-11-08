@@ -140,7 +140,11 @@ data class VView(
     val actions: List<VButton>,
 )
 
-/** A view of the session: [key], where it shows ([slot]: `panel`, `inline`, `page`), its JSON as Pi sent it and [rev]. */
+/**
+ * A view of the session: [key], where it shows ([slot]: `panel`, `inline`, `page`), its JSON as Pi sent it and [rev].
+ * An inline view is pinned under the tool call [toolCallId], or else at the end of the turn whose user message has the
+ * timestamp [turn]; with neither (or when its turn is not in the transcript), at the end.
+ */
 data class ViewEntry(
     val key: String,
     val slot: String,
@@ -148,10 +152,8 @@ data class ViewEntry(
     val view: VView,
     val rev: Long,
     val toolCallId: String? = null,
+    val turn: Long? = null,
 )
-
-/** Where an inline view sits in the transcript: the row after which it was set. */
-data class ViewItem(override val key: String, val viewKey: String) : ChatItem
 
 object MobileViews {
     const val SLOT_PANEL = "panel"

@@ -75,8 +75,8 @@ view; labels on every control; `alt` on images; at most 3 `actions`; 256 KiB per
 
 - `panel` (default): a card above the phone's composer; a widget in the terminal. Keep it glanceable: a chip, a
   progress line, one or two buttons.
-- `inline`: a live card in the transcript where it was set (at the end after the app reconnects). Not saved in the
-  session; send a message too if the result should stay.
+- `inline`: a live card in the transcript, pinned under the tool call that set it (or `toolCallId`), else at the end
+  of the latest turn. Not saved in the session; send a message too if the result should stay.
 - `page`: a tall sheet opened from the session's menu, named by its title. Detail, settings, history. Not shown in the
   terminal.
 - sheet (`showView`): modal. A form submit or an `actions` button closes it and resolves; dismiss resolves `undefined`.

@@ -1,6 +1,8 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import boardExtension from "../../examples/extensions/mobile-ui-board/index.ts";
 import type { ExtensionAPI, ExtensionContext } from "../../src/core/extensions/types.ts";
@@ -170,6 +172,47 @@ describe("mobile UI kit in a session", () => {
 		expect(channel.sent.at(-1)).toMatchObject({ method: "setView", viewKey: "deploy", slot: "panel" });
 		expect(channel.sent.at(-1)).not.toHaveProperty("view");
 		expect(harness.session.extensionRunner.viewSnapshot()).toEqual([]);
+	});
+
+	it("pins an inline view to the tool call that set it, or to the end of the latest turn", async () => {
+		const card: MobileView = { v: 1, body: [{ type: "text", text: "Indexed" }] };
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi: ExtensionAPI) => {
+					pi.registerTool({
+						name: "probe",
+						label: "Probe",
+						description: "Shows a card",
+						parameters: Type.Object({}),
+						async execute(_id, _params, _signal, _onUpdate, ctx) {
+							ctx.ui.setView("probe", card, { slot: "inline" });
+							return { content: [{ type: "text", text: "ok" }], details: {} };
+						},
+					});
+					pi.registerCommand("later", {
+						description: "Shows a card after the turn",
+						handler: async (_args, ctx) => ctx.ui.setView("later", card, { slot: "inline" }),
+					});
+				},
+			],
+		});
+		cleanups.push(() => harness.cleanup());
+		await harness.session.bindExtensions({
+			uiContext: createTestUiContext(),
+			mode: "rpc",
+			viewChannel: fakeChannel(true),
+		});
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("probe", {}, { id: "call-probe" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage("Done."),
+		]);
+		await harness.session.prompt("index it");
+		await harness.session.prompt("/later");
+		const user = harness.session.messages.find((m) => m.role === "user") as { timestamp: number };
+		const snapshot = harness.session.extensionRunner.viewSnapshot();
+		expect(snapshot.find((v) => v.viewKey === "probe")).toMatchObject({ slot: "inline", toolCallId: "call-probe" });
+		expect(snapshot.find((v) => v.viewKey === "later")).toMatchObject({ slot: "inline", turn: user.timestamp });
+		expect(snapshot.find((v) => v.viewKey === "later")).not.toHaveProperty("toolCallId");
 	});
 
 	it("runs the example board package: panel and page, a tap completes a task, the sheet adds one", async () => {

@@ -34,7 +34,16 @@ export interface ViewSetRequest {
 	/** Absent: the view was removed. */
 	view?: MobileView;
 	rev: number;
+	/** Inline views: shown under this tool call's row. */
 	toolCallId?: string;
+	/** Inline views without a tool call: shown at the end of the turn of the user message with this `timestamp`. */
+	turn?: number;
+}
+
+/** Where an inline view sits in the transcript, fixed when it is first set. */
+export interface ViewAnchor {
+	toolCallId?: string;
+	turn?: number;
 }
 
 export interface ViewUpdateRequest {
@@ -102,7 +111,7 @@ interface ViewRecord {
 	slot: MobileViewSlot;
 	view: MobileView;
 	rev: number;
-	toolCallId?: string;
+	anchor?: ViewAnchor;
 	/** Sends throttled: the last send, a timer for the merged one, and whether a change waits for it. */
 	lastSent: number;
 	timer?: ReturnType<typeof setTimeout>;
@@ -188,6 +197,7 @@ export class ViewHost {
 	private dialogs: ViewDialogs;
 	private channel: ViewChannel | undefined;
 	private readonly emit: (event: ViewEvent) => void;
+	private readonly anchor: () => ViewAnchor | undefined;
 	private readonly views = new Map<string, ViewRecord>();
 	/** Open sheets by key: their views take updates and events while open. */
 	private readonly sheets = new Map<string, ViewRecord>();
@@ -199,11 +209,14 @@ export class ViewHost {
 		dialogs?: ViewDialogs;
 		channel?: ViewChannel;
 		emit: (event: ViewEvent) => void;
+		/** Where an inline view set now belongs: the latest tool call of the session, or its latest turn. */
+		anchor?: () => ViewAnchor | undefined;
 	}) {
 		this.ui = options.ui;
 		this.dialogs = options.dialogs ?? options.ui;
 		this.channel = options.channel;
 		this.emit = options.emit;
+		this.anchor = options.anchor ?? (() => undefined);
 	}
 
 	/** The mode bound new UI (a rebind of the same session). Views stay. */
@@ -254,9 +267,12 @@ export class ViewHost {
 			eventWindow: 0,
 			events: 0,
 		};
+		// An inline view keeps the place it got when it was first set there (or the tool call it names).
+		if (slot !== "inline") record.anchor = undefined;
+		else if (options.toolCallId !== undefined) record.anchor = { toolCallId: options.toolCallId };
+		else if (!existing || existing.slot !== "inline" || !record.anchor) record.anchor = this.anchor();
 		record.slot = slot;
 		record.view = copy;
-		record.toolCallId = options.toolCallId;
 		record.rev++;
 		this.views.set(key, record);
 		this.changed(key, record);
@@ -296,7 +312,8 @@ export class ViewHost {
 			slot: record.slot,
 			view: record.view,
 			rev: record.rev,
-			...(record.toolCallId ? { toolCallId: record.toolCallId } : {}),
+			...(record.anchor?.toolCallId ? { toolCallId: record.anchor.toolCallId } : {}),
+			...(record.anchor?.turn !== undefined && !record.anchor.toolCallId ? { turn: record.anchor.turn } : {}),
 		};
 	}
 
