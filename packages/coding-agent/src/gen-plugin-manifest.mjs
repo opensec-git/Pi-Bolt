@@ -945,7 +945,8 @@ export function rewriteCopy(source, file) {
 				new RegExp(
 					[
 						`\\b(?:const|let|var|function|class)\\s+${name}\\b`,
-						`(?<![.\\w$])${name}\\s*=(?![=>])`,
+						// (Not a property or a private name: `this.#require = ...` declares nothing the module calls.)
+						`(?<![.#\\w$])${name}\\s*=(?![=>])`,
 						`\\bimport\\s*(?:\\*\\s*as\\s+)?${name}\\b`,
 						`\\bimport\\s*\\{[^}]*\\b${name}\\b`,
 						`[(,]\\s*${name}\\s*(?:[,=][^()]*)?\\)\\s*(?::[^=;{]*)?(?:=>|\\{)`,
