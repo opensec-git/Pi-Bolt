@@ -166,6 +166,7 @@ object CatalogJson {
             return declared("extension", pi.extensions) + declared("skill", pi.skills) + declared("prompt", pi.prompts) + declared("theme", pi.themes)
         }
         val out = ArrayList<AddedResource>()
+        val budget = Budget()
         for (kind in Kind.entries) {
             val entries = when (kind) {
                 Kind.Extension -> pi?.extensions
@@ -178,7 +179,8 @@ object CatalogJson {
                 if (entry.startsWith("!") || entry.startsWith("-")) continue
                 val e = entry.removePrefix("+").removePrefix("./").trimEnd('/')
                 when {
-                    '*' in e || '?' in e -> files.filterTo(found) { kind.accepts(it) && globMatches(e, it) }
+                    budget.spent -> break
+                    '*' in e || '?' in e -> files.filterTo(found) { kind.accepts(it) && globMatches(e, it, budget) }
                     e in files -> found += e
                     else -> files.filterTo(found) { it.startsWith("$e/") && kind.discovers(it.removePrefix("$e/")) }
                 }
@@ -229,35 +231,49 @@ object CatalogJson {
 
     /**
      * Whether [path] matches a package glob: `*` and `?` within one path segment, a `**` segment across any number of
-     * segments. The manifest and file list are untrusted, so this is no regex: memoised over segments (at most 64 of
-     * each) and a two-pointer match within a segment, so its cost stays polynomial in the (bounded) lengths.
+     * segments. The manifest and file list are untrusted, so this is no regex: a lazily memoised walk over segments
+     * (the pattern at most [MAX_GLOB_SEGMENTS] deep) and a two-pointer match within a segment. Every step is charged to
+     * [budget]; once it is spent, nothing more matches, so one `resources` call does a bounded amount of work.
      */
-    internal fun globMatches(pattern: String, path: String): Boolean {
+    internal fun globMatches(pattern: String, path: String, budget: Budget = Budget()): Boolean {
         if (pattern.length > MAX_GLOB || path.length > MAX_PATH) return false
         val p = pattern.split('/')
         val s = path.split('/')
-        if (p.size > MAX_SEGMENTS || s.size > MAX_SEGMENTS) return false
-        val memo = Array(p.size + 1) { arrayOfNulls<Boolean>(s.size + 1) }
+        if (p.size > MAX_GLOB_SEGMENTS || s.size > MAX_SEGMENTS) return false
+        val memo = HashMap<Int, Boolean>()
         fun match(i: Int, j: Int): Boolean {
-            memo[i][j]?.let { return it }
+            val key = i * (s.size + 1) + j
+            memo[key]?.let { return it }
+            if (!budget.spend(1)) return false
             val result = when {
                 i == p.size -> j == s.size
                 p[i] == "**" -> match(i + 1, j) || (j < s.size && match(i, j + 1))
                 j == s.size -> false
-                else -> segmentMatches(p[i], s[j]) && match(i + 1, j + 1)
+                else -> segmentMatches(p[i], s[j], budget) && match(i + 1, j + 1)
             }
-            memo[i][j] = result
+            memo[key] = result
             return result
         }
         return match(0, 0)
     }
 
-    private fun segmentMatches(p: String, s: String): Boolean {
+    /** The work one `resources` call may do (glob steps); a hostile package cannot make it longer. */
+    class Budget(private var left: Long = GLOB_BUDGET) {
+        val spent: Boolean get() = left <= 0
+
+        fun spend(n: Long): Boolean {
+            left -= n
+            return left > 0
+        }
+    }
+
+    private fun segmentMatches(p: String, s: String, budget: Budget): Boolean {
         var i = 0
         var j = 0
         var star = -1
         var mark = 0
         while (j < s.length) {
+            if (!budget.spend(1)) return false
             when {
                 i < p.length && (p[i] == '?' || p[i] == s[j]) -> { i++; j++ }
                 i < p.length && p[i] == '*' -> { star = i; mark = j; i++ }
@@ -273,9 +289,13 @@ object CatalogJson {
     private const val MAX_PATH = 1000
     private const val MAX_SEGMENTS = 64
 
+    /** Real package globs (a directory and a file pattern) are one to three segments deep. */
+    private const val MAX_GLOB_SEGMENTS = 8
+    private const val GLOB_BUDGET = 2_000_000L
+
     /** At most this many declared entries per resource type and files are considered. */
-    private const val MAX_ENTRIES = 100
-    private const val MAX_FILES = 20_000
+    private const val MAX_ENTRIES = 32
+    private const val MAX_FILES = 10_000
 
     private fun parse(text: String): JsonObject? = runCatching { ProtocolJson.parseToJsonElement(text) as? JsonObject }.getOrNull()
 

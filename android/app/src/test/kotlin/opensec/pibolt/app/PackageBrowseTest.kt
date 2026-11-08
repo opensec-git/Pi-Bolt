@@ -365,6 +365,30 @@ class PackageBrowseTest {
     }
 
     @Test
+    fun installedComparesTheRequestedVersion() {
+        val sources = listOf("npm:foo@1.0.0", "npm:@s/bar", "git:github.com/o/r")
+        assertTrue(PackageFormat.isInstalled("npm:foo", sources))
+        assertTrue(PackageFormat.isInstalled("npm:foo@1.0.0", sources))
+        assertFalse(PackageFormat.isInstalled("npm:foo@2.0.0", sources))
+        assertTrue(PackageFormat.isInstalled("npm:@s/bar", sources))
+        assertTrue(PackageFormat.isInstalled("git:github.com/o/r", sources))
+        assertFalse(PackageFormat.isInstalled("git:github.com/o/r@v2", sources))
+        assertFalse(PackageFormat.isInstalled("npm:baz", sources))
+    }
+
+    @Test(timeout = 5_000)
+    fun hostileManifestWorkIsBounded() {
+        // Many deep globs against the largest file list the catalog keeps: the budget ends the work.
+        val globs = List(200) { i -> "**/".repeat(7) + "*a".repeat(30) + "$i.md" }.joinToString(",") { "\"$it\"" }
+        val m = manifest("""{"name":"p","pi":{"prompts":[$globs],"skills":[$globs]}}""")
+        val files = List(20_000) { i -> (1..60).joinToString("/") { "a".repeat(15) } + "/x$i.md" }
+        assertEquals(emptyList<AddedResource>(), CatalogJson.resources(m, files))
+        // Deeper than 8 segments is refused outright.
+        assertFalse(CatalogJson.globMatches("a/b/c/d/e/f/g/h/*.md", "a/b/c/d/e/f/g/h/x.md"))
+        assertTrue(CatalogJson.globMatches("a/b/c/d/e/f/g/*.md", "a/b/c/d/e/f/g/x.md"))
+    }
+
+    @Test
     fun installArguments() {
         assertEquals(listOf("install", "npm:x"), PackageFormat.installArgs("npm:x", local = false))
         assertEquals(listOf("install", "-l", "npm:x"), PackageFormat.installArgs("npm:x", local = true))

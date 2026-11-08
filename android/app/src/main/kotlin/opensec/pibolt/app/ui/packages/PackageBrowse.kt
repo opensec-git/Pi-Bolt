@@ -129,6 +129,16 @@ object PackageFormat {
     /** The `pi install` arguments for [source], for every project or [local]ly (`-l`, run in the project). */
     fun installArgs(source: String, local: Boolean): List<String> = if (local) listOf("install", "-l", source) else listOf("install", source)
 
+    /**
+     * [source] is configured already among [sources]: the same source, or for an npm source without a version the
+     * same package at any version. A link for another version of an installed package can still install it.
+     */
+    fun isInstalled(source: String, sources: Collection<String>): Boolean {
+        if (source in sources) return true
+        val (name, version) = PackageLinks.npmParts(source) ?: return false
+        return version == null && sources.any { PackageLinks.npmParts(it)?.first == name }
+    }
+
     /** The npm names among installed [sources] (versions dropped), to mark search results. */
     fun installedNames(sources: Collection<String>): Set<String> = sources.mapNotNull { PackageLinks.npmParts(it)?.first }.toSet()
 }
@@ -463,8 +473,7 @@ fun InstallLinkHost(app: PiBoltApp, pending: String?, onConsumed: () -> Unit) {
         val source = shown ?: return@LaunchedEffect
         installed = withContext(Dispatchers.IO) {
             val settings = PiJsonFile.read(File(engine.agentDir, "settings.json")) ?: JsonObject(emptyMap())
-            val name = PackageLinks.npmParts(source)?.first
-            PackageList.fromSettings(settings, PackageScope.User).any { it.source == source || name != null && PackageLinks.npmParts(it.source)?.first == name }
+            PackageFormat.isInstalled(source, PackageList.fromSettings(settings, PackageScope.User).map { it.source })
         }
     }
     shown?.let { source ->
