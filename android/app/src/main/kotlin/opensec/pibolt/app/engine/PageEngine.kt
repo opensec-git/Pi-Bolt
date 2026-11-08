@@ -3,10 +3,12 @@ package opensec.pibolt.app.engine
 import android.app.ActivityManager
 import android.content.Context
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -260,8 +262,13 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
         }
     }
 
-    /** Starts the engine if needed; true when it is connected and renders views. */
-    private suspend fun ensureRunning(): Boolean = mutex.withLock {
+    /**
+     * Starts the engine if needed; true when it is connected and renders views. The start runs in the engine's own
+     * scope: a caller that goes away meanwhile (a sheet dismissed during a cold start) does not cut it off half way.
+     */
+    private suspend fun ensureRunning(): Boolean = scope.async { startIfNeeded() }.await()
+
+    private suspend fun startIfNeeded(): Boolean = mutex.withLock {
         val holds = synchronized(holders) { holders.size }
         val key = currentKey()
         val decision = PageRules.decide(holds, backend?.isAlive == true, lowMemory())
@@ -288,7 +295,19 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
         backend = b
         rpc = client
         pump = scope.launch { client.events.collect(::onEvent) }
-        if (!b.connect()) {
+        val connected = try {
+            b.connect()
+        } catch (e: CancellationException) {
+            stopLocked()
+            throw e
+        } catch (e: Exception) {
+            // A start that throws leaves nothing half made: the next open starts afresh.
+            Log.w(TAG, "page engine start failed", e)
+            stopLocked()
+            _status.value = Status.Failed(e.message ?: "The page engine could not start")
+            return@withLock false
+        }
+        if (!connected) {
             _status.value = Status.Failed(b.stderr.text(3).ifBlank { "The page engine could not start" })
             stopLocked()
             return@withLock false
