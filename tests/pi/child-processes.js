@@ -2,7 +2,7 @@
 // they are started through pi-spawn (scripts/lib/darwin-spawn.h): each start must load them at a new address, unlike Pi's
 // own executable, and otherwise as if Pi had started them itself. PIBOLT_TEST_PROBE: a program that prints where its code and stack are.
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -62,8 +62,15 @@ async function run() {
 	// (The end of the pipe, not the program's "exit": what a program wrote can arrive after it has exited.)
 	await Promise.all([exited(fd3), new Promise((resolve) => fd3.stdio[3].on("end", resolve).on("close", resolve))]);
 	check("a fourth descriptor", fd3Text === "on fd 3\n", fd3Text);
-	const ownPgid = execFileSync("/bin/ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim();
-	const childPgid = execFileSync("/bin/sh", ["-c", "/bin/ps -o pgid= -p $$"], { encoding: "utf8" }).trim();
+	// (From /proc where there is one: BusyBox's ps, as on Alpine, has no -p. The process group is the third field after the name.)
+	const pgidOf = (stat) => stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2];
+	const procfs = existsSync(`/proc/${process.pid}/stat`);
+	const ownPgid = procfs
+		? pgidOf(readFileSync(`/proc/${process.pid}/stat`, "utf8"))
+		: execFileSync("/bin/ps", ["-o", "pgid=", "-p", String(process.pid)], { encoding: "utf8" }).trim();
+	const childPgid = procfs
+		? pgidOf(execFileSync("/bin/sh", ["-c", "cat /proc/$$/stat"], { encoding: "utf8" }))
+		: execFileSync("/bin/sh", ["-c", "/bin/ps -o pgid= -p $$"], { encoding: "utf8" }).trim();
 	check("process group", ownPgid === childPgid, `${ownPgid} ${childPgid}`);
 
 	const self = spawn("/bin/sh", ["-c", "echo $$"]);
