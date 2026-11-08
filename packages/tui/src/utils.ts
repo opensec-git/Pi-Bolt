@@ -1198,6 +1198,27 @@ export function scanPrintableAsciiForTest(
  * whole, and a cached line kept as such a tree retains several times its own size. Converting a string to a number
  * reads it whole, so V8 flattens it in place; the strings' values do not change.
  */
+/** internLine()'s lines, by their text. */
+const internedLines = new Map<string, string>();
+/** Lines whose text before padding is at most this long are drawn alike often enough to be interned (internLine()). */
+export const INTERNED_LINE_LENGTH = 32;
+/** How many lines internLine() keeps before it starts again. */
+const INTERNED_LINES_KEPT = 1024;
+
+/**
+ * The line drawn for `line` that is kept for lines of the same text: for the short lines many components draw alike (a
+ * blank line of a width, a line of background only, a code fence), so that a long transcript keeps one copy of each instead
+ * of one per line (2,292 entries: about 12,000 such lines, 3 MB). Bounded: it starts again once it holds
+ * INTERNED_LINES_KEPT lines. The text is the same: only which string holds it differs.
+ */
+export function internLine(line: string): string {
+	const known = internedLines.get(line);
+	if (known !== undefined) return known;
+	if (internedLines.size >= INTERNED_LINES_KEPT) internedLines.clear();
+	internedLines.set(line, line);
+	return line;
+}
+
 export function flattenLines(lines: readonly string[]): void {
 	for (const line of lines) Number(line);
 }
