@@ -53,9 +53,16 @@ interface EngineApi {
 
     /**
      * Runs the engine as Pi's command line (`pi list`, `pi install …`, `pi mcp list --json`) in [cwd] (HOME when
-     * null) and returns its exit code and output. Not available where the engine is not.
+     * null) and returns its exit code and output. [env] adds variables for this run only, from [CLI_ENV] (the private
+     * registry's `.npmrc`, ui/packages/PrivateRegistry); others are ignored. Not available where the engine is not.
      */
-    suspend fun cli(args: List<String>, cwd: File? = null, timeoutMs: Long = 180_000): CliResult = CliResult(-1, "", "The engine is not available on this phone")
+    suspend fun cli(args: List<String>, cwd: File? = null, timeoutMs: Long = 180_000, env: Map<String, String> = emptyMap()): CliResult =
+        CliResult(-1, "", "The engine is not available on this phone")
+
+    companion object {
+        /** The variables [cli] lets a caller set. */
+        val CLI_ENV = setOf("npm_config_globalconfig")
+    }
 
     /** The language runtimes this build ships and the space npm and pip use. Blocking file I/O: call off the main thread. */
     fun runtimes(): RuntimesReport

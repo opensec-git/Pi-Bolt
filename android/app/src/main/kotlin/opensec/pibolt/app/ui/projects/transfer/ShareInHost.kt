@@ -31,10 +31,11 @@ import java.io.File
  * Content shared into Pi-Bolt from another app ([pending], from MainActivity): the [ShareInSheet], then the choice.
  * Images and text go to the composer of the project's session (the live one, else its latest, else a new one) and
  * that session opens ([onSession]); files are copied into the project's root, a zip becomes a new project, and the
- * project opens ([onProject]). Copies stream with a [TransferBar] and can be cancelled.
+ * project opens ([onProject]). A package link goes to its install confirmation ([onInstallPackage]). Copies stream
+ * with a [TransferBar] and can be cancelled.
  */
 @Composable
-fun ShareInHost(app: PiBoltApp, pending: SharedContent?, onConsumed: () -> Unit, onProject: (String) -> Unit, onSession: (String) -> Unit) {
+fun ShareInHost(app: PiBoltApp, pending: SharedContent?, onConsumed: () -> Unit, onProject: (String) -> Unit, onSession: (String) -> Unit, onInstallPackage: (String) -> Unit) {
     val context = LocalContext.current
     val engine = app.engine
     val store = remember { ProjectStore.get(app) }
@@ -75,6 +76,7 @@ fun ShareInHost(app: PiBoltApp, pending: SharedContent?, onConsumed: () -> Unit,
                     onSession(live.key)
                 }
             }
+            ShareAction.InstallPackage -> ShareRouting.packageSource(content)?.let(onInstallPackage)
             ShareAction.ImportFiles -> {
                 val name = choice.project ?: return
                 runner.run(

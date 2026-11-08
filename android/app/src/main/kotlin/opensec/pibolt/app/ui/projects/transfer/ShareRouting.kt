@@ -1,5 +1,7 @@
 package opensec.pibolt.app.ui.projects.transfer
 
+import opensec.pibolt.app.ui.packages.PackageLinks
+
 /** One thing shared into Pi-Bolt: its content URI (as a string), MIME type and display name when known. */
 data class SharedItem(val uri: String, val mime: String?, val name: String? = null)
 
@@ -21,19 +23,23 @@ enum class ShareAction {
 
     /** Shared text goes into a project's composer. */
     InsertText,
+
+    /** A shared Pi package link (pi.dev, npm, GitHub) opens the install confirmation ([PackageLinks]). */
+    InstallPackage,
 }
 
 /** The actions offered, the first being the default, and whether a project must be picked (every action needs one but a new project). */
 data class ShareRoute(val actions: List<ShareAction>, val images: Int, val files: Int) {
     val default: ShareAction? get() = actions.firstOrNull()
 
-    fun needsProject(action: ShareAction): Boolean = action != ShareAction.NewProjectFromZip
+    fun needsProject(action: ShareAction): Boolean = action != ShareAction.NewProjectFromZip && action != ShareAction.InstallPackage
 }
 
 /**
  * Where content shared from another app goes (pure, unit-tested). Images default to the composer (up to
  * [maxImages]; more than that can only be imported); a single zip defaults to a new project; any other files import
- * into a project; text alone goes into the composer. Mixed images and files import, since only images can be attached.
+ * into a project; text alone goes into the composer, or, when it is a Pi package link, defaults to installing that
+ * package (after its confirmation sheet). Mixed images and files import, since only images can be attached.
  */
 object ShareRouting {
     /** MIME types accepted as composer images (what the image encoder decodes). */
@@ -52,7 +58,10 @@ object ShareRouting {
         val files = content.items.size
         val actions = buildList {
             when {
-                files == 0 -> if (!content.text.isNullOrBlank()) add(ShareAction.InsertText)
+                files == 0 -> if (!content.text.isNullOrBlank()) {
+                    if (packageSource(content) != null) add(ShareAction.InstallPackage)
+                    add(ShareAction.InsertText)
+                }
                 images == files && images <= maxImages -> {
                     add(ShareAction.AttachImages)
                     add(ShareAction.ImportFiles)
@@ -68,6 +77,9 @@ object ShareRouting {
         }
         return ShareRoute(actions, images, files)
     }
+
+    /** The `pi install` source a shared package link proposes (the text, else the subject), or null. */
+    fun packageSource(content: SharedContent): String? = PackageLinks.fromSharedText(content.text) ?: PackageLinks.fromSharedText(content.subject)
 
     /** The text to put in the composer: the subject (when it adds something) and the text. */
     fun composerText(content: SharedContent): String {
