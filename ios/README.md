@@ -55,21 +55,56 @@ Tailscale, or through the computer's Cloudflare tunnel, in that order, and it le
 it changes (`remote_endpoints`). `/remote-control devices` on the computer lists and revokes phones; the app's
 identity circle on Home shows this phone's key id.
 
-## What works (milestone 1)
+## What works
 
-- Pairing by QR code (AVFoundation) or pasted link; paired computers on Home with their status.
+- Pairing by QR code (AVFoundation) or pasted link; paired computers on Home with their status, and **Recents**: the
+  sessions this phone showed last, on any computer. A tap opens that computer and, with its background service, that
+  very session.
 - The session: streaming text and thinking, one-line tool rows that open to arguments and output, markdown (headings,
   lists, tables, code blocks with copy), notices for errors, aborts and compactions.
 - The pill composer: send, steer while Pi works (hold Send to queue a follow-up instead), stop, clear the queue.
+  - **Images**: `+` attaches up to 4 from the photo library, the camera or the clipboard. Each is scaled to 2000 px on
+    its long edge and encoded again as JPEG (or a small transparent PNG), so no location or camera metadata leaves the
+    phone. A model that does not read images is said so before anything is sent.
+  - **Voice**: the microphone dictates into the composer (the Speech framework, on the iPhone when it supports that,
+    otherwise Apple's servers, as the keyboard's dictation does). Nothing is sent until you send.
+  - **`/` commands**: typing `/` lists the computer's commands (`get_commands`: extensions, prompt templates, skills)
+    and the app's own `/compact [instructions]`, `/name <name>`, `/model`, `/thinking [level]` and `/copy`, with each
+    command's usage while its arguments are typed.
+- **Todo panel**: the todo extension's list over the composer, folded to the task in progress.
+- **Subagents**: an `Agent` call shows as a card with its task, what it does now and its metrics; background runs and
+  their notifications too. A run's screen shows its own conversation live from Pi-Bolt 1.1.5 on (`subagent_subscribe`,
+  `features: ["subagent_stream"]`); with an older Pi-Bolt it says so and shows the task, progress and answer.
+- **Review** (`host.review`): the computer's working tree, read-only. Changes (git status, staged and unstaged, each
+  file's diff), History (the log, each commit's patch) and Files (folders and text files). The computer refuses files
+  that look like secrets ([docs/remote-control.md](../packages/coding-agent/docs/remote-control.md#review)).
 - Sessions on a computer running the background service: list projects and sessions, open one, start a new one.
-- Models: list and switch. Compaction. Extension dialogs (confirm, select, input, editor).
+- Models: list and switch. Thinking level. Rename the session. Compaction. Extension dialogs (confirm, select, input,
+  editor).
+- Light and dark themes, following the system.
 - Reconnects at once after a drop and then backs off (1 s to 30 s), retries as soon as a network comes back, re-checks
   the link when the app returns to the foreground, and pairs again with a scanned code's secret when a known computer
   no longer knows the phone.
 
-Not yet (milestone 2): notifications when a run ends or a dialog waits while the app is in the background, image
-attachments and voice input, the todo panel and subagent runs, `/` command completion, the review screens (`host.review`:
-git diff, files), session rename, thinking level, and a light theme.
+## Notifications and the background
+
+The app posts a local notification when a run finishes or stops, or when Pi waits for an answer, while the app is not
+on the screen. A tap opens that session. There is no push server, so this works only while iOS lets the app run:
+
+- **Right after you leave the app**, iOS gives it about 30 seconds. The connection stays up meanwhile, so a short run
+  that ends or asks something then is announced at once.
+- **After that**, iOS suspends the app and the connection with it. With Background App Refresh on (Settings, General,
+  Background App Refresh), iOS wakes the app now and then to reconnect briefly and post what changed. iOS decides when:
+  often after 15 minutes or more, less often when the app is rarely used, and never in Low Power Mode.
+- **When you come back**, the app reconnects at once and shows everything that happened.
+
+So a long run that ends while the phone sits in a pocket may be announced late, or only when you open the app. The
+computer's terminal is never affected: the run goes on there either way.
+
+The milestone 1 not-yet list is done. The mobile UI kit ([docs/mobile-ui.md](../packages/coding-agent/docs/mobile-ui.md),
+Pi-Bolt 1.1.6) comes in 0.2.0. Until then the app does not declare `views`, so the computer sends it no views; the
+sheets and snapshot fields that reach every phone are ignored, and sheets fall back to dialogs when no phone renders
+views.
 
 One platform difference: `URLSessionWebSocketTask` reports the 1012 close (the background service handing its port to a
 terminal) as 1005, so the app treats a handoff as a dropped connection. Both reconnect at once; only the Android app's
@@ -79,10 +114,10 @@ terminal) as 1005, so the app treats a handoff as a dropped connection. Both rec
 
 | Path | What |
 |---|---|
-| `PiBoltKit/` | Swift package, no UIKit: `PiBoltProtocol` (Noise_IK_25519_AESGCM_SHA256 on CryptoKit, pairing, framing, `RemoteBackend` on `URLSessionWebSocketTask`, `RpcClient`, the session reducer) and `PiBoltMarkdown` (the block parser the transcript renders). Ported from the Android app's `android/protocol`, with its tests. |
-| `PiBolt/` | The SwiftUI app: `AppModel`, `SessionController` (reconnects, frame-batched reduction), the screens in `UI/`. |
+| `PiBoltKit/` | Swift package, no UIKit: `PiBoltProtocol` (Noise_IK_25519_AESGCM_SHA256 on CryptoKit, pairing, framing, `RemoteBackend` on `URLSessionWebSocketTask`, `RpcClient`, the session reducer with todos and subagent runs, the review commands' parsers and a diff parser, the `/` command list, image encoding, the alert rules and Recents) and `PiBoltMarkdown` (the block parser the transcript renders). Ported from the Android app's `android/protocol` and its app-side rules, with their tests. |
+| `PiBolt/` | The SwiftUI app: `AppModel` (also the background refresh), `SessionController` (reconnects, frame-batched reduction, subagent streams), `Notifier`, `Dictation`, the screens in `UI/` (review in `UI/Review/`). |
 | `PiBoltTests/` | The app's unit tests, plus a live session test that runs when CI hands it a pairing link. |
-| `fixtures/rc-host.ts` | A real Pi-Bolt host for tests: Pi-Bolt's `RemoteControlServer` in front of sessions on the test suite's faux model (no provider, no key). `workspace-hooks.mjs` lets Node run it from source. |
+| `fixtures/rc-host.ts` | A real Pi-Bolt host for tests: Pi-Bolt's `RemoteControlServer` in front of sessions on the test suite's faux model (no provider, no key), in a small git repository (for review), with an `Agent` tool that runs a child session as the subagents extension does (for subagent streams). `workspace-hooks.mjs` lets Node run it from source. |
 | `project.yml` | The Xcode project, for [XcodeGen](https://github.com/yonaskolb/XcodeGen). `PiBolt.xcodeproj` is generated and not committed. |
 
 ## Develop
@@ -96,6 +131,10 @@ ios/PiBoltKit/test.sh                                         # swift test, with
 
 `test.sh` runs the live tests against `fixtures/rc-host.ts` when the repository's `node_modules` is there
 (`PIBOLT_LIVE_HOST=0` skips them, `=1` makes them mandatory, as in CI).
+
+`ios/typecheck.sh` typechecks the app and its tests with the command-line tools too, against the macOS SDK's Mac
+Catalyst variant (UIKit and the iOS SwiftUI). It catches most compile errors before CI; the iOS build there stays the
+reference.
 
 The app needs Xcode (16 or later) for the iOS SDK and the Simulator:
 

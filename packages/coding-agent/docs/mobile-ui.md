@@ -128,6 +128,55 @@ unique within the view). Any node may set `hidden: true`.
 { "type": "kv", "items": [ { "key": "Branch", "value": "main" }, { "key": "Commit", "value": "1a2b3c4", "mono": true, "copy": true } ] }
 ```
 
+### Charts, tables and places
+
+| `type` | Fields | App rendering |
+|---|---|---|
+| `chart` | `kind`: `"line"`, `"bar"`, `"area"`, `"sparkline"`; `series`: `{ name, values }[]`; `labels?`, `unit?`, `title?`, `min?`, `max?`, `summary?` | Drawn natively in the theme's chart colours, one per series in order (authors never pick colours). `line`, `bar` and `area` are 160dp tall with the axis range, the first and last label and a legend when there are two or more series; `sparkline` is a 32dp line without axes, for a row or a tile. |
+| `table` | `columns`: `{ id, label, kind?, sortable? }[]`; `rows`: `{ id, cells, action? }[]`; `sort?`: `{ column, desc? }`; `filter?`, `empty?` | A header that stays on top while the rows scroll (at most 12 rows tall, then the table scrolls), horizontal scroll when the columns do not fit, a tap on a sortable header sorts by it (again: the other way), and with `filter: true` a search box over the rows. Sorting and filtering happen in the app and send nothing. |
+| `location` | `name`, `address?`, `lat?`, `lon?` | A card with a place glyph, the name, the address and the coordinates. A tap opens the phone's maps app (an Android `geo:` link). No map is drawn: the app never loads map tiles (see [Security](#security)). |
+
+`chart`:
+
+- `values` are numbers of at most 10^15 in size, or `null` (a gap); so are `min` and `max`. Every series has the same number of values, and `labels` (the x axis, such as
+  dates) has that many too when it is given.
+- `unit` is shown after numbers (`"ms"`, `"%"`, `" builds"`). `min` and `max` fix the y range; otherwise it is the data's
+  range, which for `bar` and `area` always includes 0.
+- `summary` is what TalkBack reads. Without it the app says the kind, the title and per series its last, lowest and
+  highest value (`"Line chart, Build time: last 41 s, low 38 s, high 52 s"`).
+- A `sparkline` has one series.
+
+```json
+{ "type": "chart", "id": "builds", "kind": "bar", "title": "Builds per day", "labels": ["Mon", "Tue", "Wed", "Thu", "Fri"], "series": [ { "name": "Passed", "values": [8, 11, 7, 12, 9] }, { "name": "Failed", "values": [1, 0, 2, 1, 0] } ] }
+```
+
+`table`:
+
+- A column's `kind` says how its cells look and sort: `"text"` (default), `"number"` (right-aligned, sorted by value),
+  `"date"` (an ISO 8601 date or time, shown in the phone's format and sorted by time), `"mono"` (hashes, paths).
+- `cells` maps column ids to a string, a number or `null` (empty). Cells of unknown columns are refused.
+- A row with `action` is tappable; its event is a `tap` whose `id` is the table's and whose `value` is the row's `id`
+  (row ids are unique within the table).
+- `sort` is the order the rows are shown in at first; without it they keep their order.
+
+```json
+{
+  "type": "table", "id": "deps", "filter": true, "sort": { "column": "size", "desc": true },
+  "columns": [ { "id": "name", "label": "Package", "sortable": true }, { "id": "size", "label": "Size (kB)", "kind": "number", "sortable": true }, { "id": "updated", "label": "Updated", "kind": "date", "sortable": true } ],
+  "rows": [
+    { "id": "r1", "cells": { "name": "undici", "size": 1532, "updated": "2026-10-30" }, "action": "open" },
+    { "id": "r2", "cells": { "name": "chalk", "size": 44, "updated": "2026-09-12" }, "action": "open" }
+  ]
+}
+```
+
+`location` needs `lat` and `lon` together, or an `address`, or both. With coordinates the maps app opens at them,
+labelled with the name; with only an address it searches for it.
+
+```json
+{ "type": "location", "name": "Office", "address": "1 Market St, San Francisco", "lat": 37.7936, "lon": -122.3958 }
+```
+
 ### Layout
 
 | `type` | Fields | App rendering |
@@ -193,7 +242,8 @@ Where a view appears is its slot, chosen when it is set:
 |---|---|---|---|
 | `panel` (default) | `setView(key, view)` | A card above the composer. Its header (icon, title, the first chip) folds and unfolds it; several panels stack and the area scrolls. | A widget above the editor. |
 | `inline` | `setView(key, view, { slot: "inline" })` | A card in the transcript, pinned where it was first set (below). It stays live; it is not saved in the session. | Lines in the chat, updated in place. |
-| `page` | `setView(key, view, { slot: "page" })` | A tall sheet, opened from the session's menu (•••), one entry per page, named by its title. | Not shown. |
+| `page` | `setView(key, view, { slot: "page" })`, or [`pi.registerPage`](#package-pages-and-home-tiles) | A tall sheet, opened from the session's menu (•••), one entry per page, named by its title. Registered pages also open from Settings → Packages, without a session. | Not shown. |
+| `tile` | [`pi.registerTile`](#package-pages-and-home-tiles) | A small live tile on Home, when the user turned it on for the package. | Not shown. |
 | `sheet` | `await showView(view)` | A modal bottom sheet with the title, the body and `actions` as its button row. | Dialogs, see [Fallback](#fallback). |
 
 Inline views are live UI, not transcript content. To keep a record in the session, send a message as well (for example
@@ -207,6 +257,74 @@ An inline view is pinned when it is first set, so it keeps its place after a rec
 
 A folded turn shows its views at its end. A view whose turn is not in the transcript (an older part a reconnect left
 out) is shown at the end.
+
+## Package pages and Home tiles
+
+A package can offer UI that is not tied to a chat: a **page** (a board, a dashboard, settings) and a **tile** on the
+app's Home (a glanceable number or sparkline). Both are views; the package registers how to build them, and Pi builds
+them when a client opens them.
+
+```typescript
+pi.registerPage("board:page", {
+  title: "Board",
+  icon: "check",
+  description: "Open tasks",
+  open: (ctx) => boardView(),                 // the page's view; then updateView("board:page", ...) as usual
+  close: () => stopRefreshing(),              // optional: the page closed
+});
+
+pi.registerTile("board:tile", {
+  title: "Board",
+  page: "board:page",                         // a tap on the tile opens this page
+  open: (ctx) => ({ v: 1, title: "Board", body: [{ type: "text", text: "3 open" }] }),
+});
+```
+
+- `open(ctx)` returns the view (or a promise of it). Pi sets it under the registered key, in the slot `page` or `tile`.
+  From then on the extension changes it with `ctx.ui.updateView(key, ops)` or `ctx.ui.setView(key, view, { slot })`
+  (the same slot), and its taps arrive as `view_event`s with that key.
+- `close(ctx)` runs when the client closes it, and when the session ends while it is open. Stop timers there.
+- A page or tile opened twice is built once; the second client gets the current view.
+
+**Where pages show.** In a session, a registered page is an entry of the session's menu (•••) next to the pages the
+session set. In Settings → Packages, a package's pages are rows under the package; one opens without a session (below).
+Over remote control a phone lists and opens the pages of the computer's session the same way (`get_pages`,
+`open_page`), from the session's menu.
+
+**Tiles.** The user turns a package's tile on in Settings → Packages (off by default). Home then shows it, live, in a
+row of tiles under the status tiles. A tile is small on purpose:
+
+- Its `title` is required; its `body` may hold only `text`, `chip`, `row` (of chips and meta text), `progress`, `kv`
+  (at most 4 items) and `chart`. No buttons, fields, images, `actions` or `fallback`.
+- At most 24 nodes and 8 KiB.
+- Pi sends a tile's changes at most once a second (merged, as for other views at 10 a second).
+- The whole tile is one tap target: it opens the registered `page`. A tile without `page` cannot be tapped.
+
+**Without a session.** To open a package page or show tiles on Home, the app starts a *page engine*: Pi in RPC mode
+without a session (`--no-session`) in the app's own folder. It loads the user's packages as a session would, but no
+model runs in it. The app asks it for `get_pages`, opens what is on screen with `open_page`, sends the events, and
+closes what leaves the screen with `close_page`. At most one page engine runs. The app starts it only when the phone
+is not low on memory, and stops it 30 seconds after the last page closed and Home left the screen (tiles run only while
+Home is in front). The list of pages is kept between starts and read again when packages change.
+
+**Protocol.**
+
+| Command | Fields | Response `data` |
+|---|---|---|
+| `get_pages` | | `{ pages: [{ key, kind: "page" \| "tile", title, icon?, description?, page?, sourceInfo }] }` |
+| `open_page` | `key` | `{ viewKey }`, after the view was sent with `setView` |
+| `close_page` | `key` | none; the view is removed (`setView` without `view`) |
+
+```json
+{"id":"p1","type":"get_pages"}
+{"id":"p1","type":"response","command":"get_pages","success":true,"data":{"pages":[{"key":"board:page","kind":"page","title":"Board","icon":"check","sourceInfo":{"source":"npm:mobile-ui-board"}}]}}
+{"id":"p2","type":"open_page","key":"board:tile"}
+{"type":"extension_ui_request","id":"u9","method":"setView","viewKey":"board:tile","slot":"tile","rev":1,"view":{"v":1,"title":"Board","body":[]}}
+{"id":"p2","type":"response","command":"open_page","success":true,"data":{"viewKey":"board:tile"}}
+```
+
+The client must have sent `set_client_features` with `"views"` first; `open_page` fails otherwise. `sourceInfo.source`
+names the package (`npm:...`, `git:...`, a path), which is how the app puts a page under its package.
 
 ## Updates
 
@@ -237,6 +355,8 @@ ctx.ui.updateView("ci", [
 - Field values the user commits (`change` and `submit` events) are written into Pi's copy too, so a client that
   connects later shows them. A `set` of a field's `value` from the extension wins over what the user typed.
 - Views belong to the session. Switching or reloading the session removes them.
+- The slot `tile` is only for the key of a registered tile that is open (see
+  [Package pages and Home tiles](#package-pages-and-home-tiles)); `setView` refuses it otherwise.
 
 ## Events
 
@@ -255,8 +375,8 @@ pi.on("view_event", async (event, ctx) => {
 | `key` | The view's key. |
 | `id` | The node's `id`. |
 | `action` | The node's `action`, or its `id` when it has none. Rows that share an action ("open") differ by `id`. |
-| `kind` | `"tap"` (button, item, tile), `"change"` (a field outside a form), `"submit"` (a form). |
-| `value` | The field's new value (`change`): string, boolean or number. |
+| `kind` | `"tap"` (button, item, tile, table row), `"change"` (a field outside a form), `"submit"` (a form). |
+| `value` | The field's new value (`change`): string, boolean or number; the row's `id` for a tap on a `table` row. |
 | `values` | The form's field values by field `id` (`submit`). |
 
 View keys are shared by all extensions, like widget keys: prefix them with the package name (`"ci-board:jobs"`).
@@ -307,13 +427,16 @@ Every client shows something. Pi derives a text form from the view unless the vi
 | `item` | `• Build #42 — main · now  Running` |
 | `tile` | `Builds: 42` |
 | `notice` | `! Migration pending: Run it before deploying.` |
+| `chart` | `Builds per day` then per series `Passed  ▃▆▂█▅  last 9 · low 7 · high 12` (the last 40 values) |
+| `table` | the columns aligned under a header, the first 50 rows in the `sort` order, then `… 3 more rows` |
+| `location` | `⌖ Office — 1 Market St, San Francisco (37.7936, -122.3958)` |
 | `button`, `actions` | `[ Retry ]  [ Logs ]` |
 | fields | `Branch: main`, `Run migrations: on`, `Region: eu` |
 
 Where it goes:
 
 - **Terminal.** `panel` views are widgets above the editor and `inline` views are lines in the chat, both updated in
-  place; `page` views are not shown. Buttons cannot be pressed there: offer the same actions as commands. A sheet becomes
+  place; `page` and `tile` views are not shown. Buttons cannot be pressed there: offer the same actions as commands. A sheet becomes
   a sequence of dialogs: each field (`input` for text and numbers, `select` for options and toggles), then a `select`
   of the actions when there is more than one (with a `confirm` for a button that has `confirm`). Cancelling any dialog
   resolves `undefined`.
@@ -389,7 +512,11 @@ Over remote control the same records travel in the encrypted channel. `remote_he
 | `text`, `hint`, notice text | 4,000 characters |
 | `markdown` | 32,000 characters |
 | `code` | 64,000 characters |
-| Views per session | 16 |
+| `chart` series, values per series, a value's size | 4 (`sparkline`: 1), 200, 10^15 |
+| `table` columns, rows; one cell | 12, 500; 200 characters |
+| Tile | 24 nodes, 8 KiB, 1 change sent per second |
+| Registered pages and tiles | 16 per session, together |
+| Views per session | 16 (pages and tiles opened count) |
 | Changes sent per view | 10 per second (merged) |
 | Events accepted per view | 20 per second (the rest dropped) |
 
@@ -404,6 +531,9 @@ A view over a limit is refused with an error that names the node (`body[2].child
 - **Images.** `data:image/png`, `jpeg`, `webp` or `gif` (first frame) inline. `https:` images on public host names (no
   IP addresses, `localhost` or LAN names) are never fetched by themselves: the app shows a "Tap to load" card, as for
   Markdown images, and loads at most 12 MB, decoded to at most 2048 px. Other sources are refused.
+- **Places.** A `location` is never drawn on a map: the app loads no map tiles, so a view cannot make the phone contact
+  a map server. A tap hands a `geo:` link to the maps app the user chose. `lat` must be in -90 to 90 and `lon` in -180
+  to 180.
 - **Text is text.** Control characters and terminal escape sequences are removed before the terminal shows a view.
 - **Input.** Events are checked against the view before an extension sees them (see [Events](#events)); a client
   cannot invoke an action the view does not show. `password` fields are not stored in the app's saved state, are never
@@ -417,6 +547,8 @@ The kit requires what the app needs to be accessible, and Pi refuses views witho
 
 - Every button, field and tappable item or tile has a text label; icon-only controls do not exist. An `image` needs
   `alt` unless it is `decorative: true`.
+- A `chart` is read as its `summary`, or the derived one (kind, title, last, low and high per series); series differ by
+  line style and legend as well as by colour. A `table` is read row by row with the column labels.
 - Tones are never the only signal: chips, tiles and notices carry a label and a glyph per tone.
 
 The app then provides: titles, card and section titles as headings; 48dp touch targets; text that follows the system
@@ -437,13 +569,22 @@ its own feature name (`"views2"`), and Pi would keep serving version 1 to client
 ```typescript
 interface ExtensionUIContext {
   /** Shows, replaces (same key) or removes (undefined) a view. Throws when the view is invalid. */
-  setView(key: string, view: MobileView | undefined, options?: { slot?: "panel" | "inline" | "page"; toolCallId?: string }): void;
+  setView(key: string, view: MobileView | undefined, options?: { slot?: "panel" | "inline" | "page" | "tile"; toolCallId?: string }): void;
   /** Applies ops to the view in place, atomically. Throws when an op fails. */
   updateView(key: string, ops: MobileViewOp[]): void;
   /** Opens a modal sheet; resolves with the submitted form or pressed action, or undefined. */
   showView(view: MobileView, options?: { key?: string; timeout?: number; signal?: AbortSignal }): Promise<MobileViewResult | undefined>;
   /** The view as Pi holds it now (with the user's committed values), or undefined. */
   getView(key: string): MobileView | undefined;
+}
+```
+
+```typescript
+interface ExtensionAPI {
+  /** A page openable from the session's menu and from Settings → Packages (without a session). */
+  registerPage(key: string, page: { title: string; icon?: MobileViewIcon; description?: string; open(ctx: ExtensionContext): MobileView | Promise<MobileView>; close?(ctx: ExtensionContext): void | Promise<void> }): void;
+  /** A Home tile; `page` is opened by a tap on it. */
+  registerTile(key: string, tile: { title: string; icon?: MobileViewIcon; description?: string; page?: string; open(ctx: ExtensionContext): MobileView | Promise<MobileView>; close?(ctx: ExtensionContext): void | Promise<void> }): void;
 }
 ```
 

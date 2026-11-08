@@ -1060,10 +1060,13 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	private mergePaths(primary: string[], additional: string[]): string[] {
+		const paths = [...primary, ...additional];
+		// (One path has nothing to be a duplicate of: no realpath for it, about 0.17 M instructions.)
+		if (paths.length === 1) return [this.resolveResourcePath(paths[0])];
 		const merged: string[] = [];
 		const seen = new Set<string>();
 
-		for (const p of [...primary, ...additional]) {
+		for (const p of paths) {
 			const resolved = this.resolveResourcePath(p);
 			const pathKey = getResourcePathKey(resolved);
 			if (seen.has(pathKey)) continue;

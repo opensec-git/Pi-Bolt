@@ -32,9 +32,7 @@ struct HostStoreTests {
 
 @MainActor
 struct PairingLinkTests {
-    private func model() -> AppModel {
-        AppModel(identity: DeviceIdentity(service: "in.opensec.pibolt.ios.tests.\(UUID().uuidString)"), hosts: HostStore(file: FileManager.default.temporaryDirectory.appendingPathComponent("hosts-\(UUID().uuidString).json")))
-    }
+    private func model() -> AppModel { testModel() }
 
     private func link(expiresAt: Int64) -> String {
         PairingPayload(version: 1, hostName: "studio", hostKey: KeyPair.generate().publicKey, secret: Data(repeating: 7, count: 32), endpoints: ["ws://127.0.0.1:1/rc"], expiresAt: expiresAt).encode()
@@ -82,7 +80,7 @@ struct LiveSessionTests {
 
     @Test func pairsSendsAPromptAndShowsTheStreamedReply() async throws {
         let uri = try #require(ProcessInfo.processInfo.environment["PIBOLT_PAIRING_URI"])
-        let app = AppModel(identity: DeviceIdentity(service: "in.opensec.pibolt.ios.tests.\(UUID().uuidString)"), hosts: HostStore(file: FileManager.default.temporaryDirectory.appendingPathComponent("hosts-\(UUID().uuidString).json")))
+        let app = testModel()
         app.receive(link: uri)
         let payload = try #require(app.pendingLink)
         let controller = app.pair(payload)
@@ -99,11 +97,71 @@ struct LiveSessionTests {
         controller.send("use the tool")
         #expect(await waitUntil { !controller.state.isRunning && controller.state.items.contains { $0.tool?.result == "HELLO" } })
 
+        // A subagent run: its card's run, then its own conversation streamed while its screen is open
+        // (`subagent_subscribe`, the fixture host's `Agent` tool runs a child session as the subagents extension does).
+        #expect(controller.state.host?.streamsSubagents == true)
+        controller.send("run a subagent")
+        #expect(await waitUntil { !controller.state.subagents.isEmpty })
+        let key = try #require(controller.state.subagents.values.first?.key)
+        controller.watchSubagent(key, true)
+        #expect(await waitUntil(30) {
+            controller.state.subagents[key]?.transcript?.items.contains { $0.assistantText?.text == "Subagent found two files." } == true
+        }, "\(String(describing: controller.state.subagents[key]))")
+        #expect(await waitUntil { !controller.state.isRunning && controller.state.subagents[key]?.status == .done })
+        let run = try #require(controller.state.subagents[key])
+        #expect(run.type == "general-purpose")
+        #expect(run.result == "Subagent found two files.")
+        #expect(run.transcript?.items.contains { $0.tool?.name == "shout" && $0.tool?.status == .done } == true)
+        controller.watchSubagent(key, false)
+
+        // Review: the working tree of the session's folder (a git repository on the fixture host), read-only.
+        #expect(controller.state.host?.review == true)
+        let status = try RemoteGitStatus.from(await controller.request(ReviewRequest.status().type, ReviewRequest.status().fields))
+        #expect(status.repo)
+        #expect(status.entries.contains { $0.path == "README.md" && $0.worktree == "M" })
+        let diffRequest = ReviewRequest.diff("README.md", staged: false)
+        let diff = try RemoteDiff.from(await controller.request(diffRequest.type, diffRequest.fields))
+        #expect(diff.diff.split(separator: "\n").contains { $0.hasPrefix("+") && !$0.hasPrefix("+++") })
+        let secret = ReviewRequest.readFile(".env")
+        let refused = await controller.request(secret.type, secret.fields)
+        #expect(throws: ReviewError.self) { try RemoteFile.from(refused) }
+
+        // Each session shown is in Recents.
+        #expect(app.recents.sessions.first?.hostId == payload.hostKeyId)
+
         // Reopening the stored computer reconnects without the secret.
         app.closeSession()
         let again = app.open(try #require(app.hosts.get(payload.hostKeyId)))
         #expect(await waitUntil { again.link.isConnected && again.state.items.count >= 4 })
         app.closeSession()
+    }
+}
+
+/// An app model on temporary files, posting no notifications.
+@MainActor
+func testModel() -> AppModel {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("pibolt-tests-\(UUID().uuidString)")
+    return AppModel(
+        identity: DeviceIdentity(service: "in.opensec.pibolt.ios.tests.\(UUID().uuidString)"),
+        hosts: HostStore(file: dir.appendingPathComponent("hosts.json")),
+        recents: RecentStore(file: dir.appendingPathComponent("recents.json")),
+        notifier: Notifier(center: nil),
+        watchFile: dir.appendingPathComponent("watch.json")
+    )
+}
+
+@MainActor
+struct RecentStoreTests {
+    @Test func keepsRecentsAcrossLaunchesAndForgetsAComputer() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("recents-\(UUID().uuidString).json")
+        let store = RecentStore(file: file)
+        let entry = RecentSession(hostId: "a", hostName: "studio", sessionId: "s1", sessionFile: "/f.jsonl", title: "Fix it", cwd: "/w/app", updatedAt: Date(timeIntervalSince1970: 1_800_000_000), service: true)
+        store.record(entry)
+        store.record(RecentSession(hostId: "b", hostName: "laptop", sessionId: "s2", sessionFile: nil, title: "Other", cwd: "/w", updatedAt: Date(), service: false))
+        #expect(RecentStore(file: file).sessions.map(\.sessionId) == ["s2", "s1"])
+        #expect(RecentStore(file: file).sessions.last == entry)
+        store.removeHost("b")
+        #expect(RecentStore(file: file).sessions.map(\.sessionId) == ["s1"])
     }
 }
 

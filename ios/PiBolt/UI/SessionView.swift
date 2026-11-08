@@ -1,53 +1,132 @@
+import PhotosUI
 import PiBoltProtocol
 import SwiftUI
 
-/// A session on the computer: glass back and more buttons, the transcript, the link state, and the pill composer.
+/// The session's sheets, one at a time.
+enum SessionSheet: Identifiable, Equatable {
+    case sessions, models, thinking, rename, subagents
+    case subagent(String)
+
+    var id: String {
+        switch self {
+        case .sessions: "sessions"
+        case .models: "models"
+        case .thinking: "thinking"
+        case .rename: "rename"
+        case .subagents: "subagents"
+        case let .subagent(key): "subagent:\(key)"
+        }
+    }
+}
+
+/// A session on the computer: glass back and more buttons, the transcript, the link state, the todo panel and the
+/// pill composer.
 struct SessionView: View {
     @Bindable var controller: SessionController
     var close: () -> Void
     @State private var draft = ""
-    @State private var showSessions = false
-    @State private var showModels = false
+    @State private var sheet: SessionSheet?
+    @State private var reviewing = false
     @State private var atBottom = true
+    @State private var attachments = Attachments()
+    @State private var dictation = Dictation()
+    @State private var pickingPhotos = false
+    @State private var photoItems: [PhotosPickerItem] = []
+    @State private var camera = false
 
     var body: some View {
         VStack(spacing: 0) {
             header
             LinkBanner(controller: controller)
             transcript
+                .environment(\.subagents, SubagentContext(runs: controller.state.subagents, open: { sheet = .subagent($0) }))
             if !controller.state.queue.isEmpty { queueBar }
+            if !controller.state.todos.visible.isEmpty { TodoPanel(todos: controller.state.todos) }
             Composer(
                 text: $draft,
+                attachments: attachments,
+                dictation: dictation,
                 running: controller.state.isRunning,
                 connected: controller.link.isConnected,
                 placeholder: placeholder,
-                send: { behavior in
-                    let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    guard !text.isEmpty else { return }
-                    draft = ""
-                    controller.send(text, behavior: behavior)
-                },
+                suggestions: attachments.images.isEmpty ? CommandPalette.filter(draft, palette) : [],
+                hint: CommandPalette.hintFor(draft, palette),
+                send: submit,
                 stop: { controller.abort() },
-                menu: { AnyView(moreMenuItems) }
+                pick: { draft = $0.insert },
+                attachMenu: { AnyView(attachMenuItems) }
             )
         }
         .background(Pi.canvas.ignoresSafeArea())
+        .onChange(of: draft) { _, text in
+            if text.hasPrefix("/") { controller.refreshCommands() }
+        }
         .onChange(of: controller.composerRestore) { _, restored in
             guard let restored else { return }
             draft = draft.isEmpty ? restored : restored + "\n\n" + draft
             controller.composerRestore = nil
         }
-        .sheet(isPresented: $showSessions) {
-            SessionsSheet(controller: controller)
-                .presentationDetents([.large])
-                .presentationBackground(Pi.surface1)
+        .onChange(of: controller.composerRestoreImages) { _, restored in
+            guard !restored.isEmpty else { return }
+            attachments.restore(restored)
+            controller.composerRestoreImages = []
         }
-        .sheet(isPresented: $showModels) {
-            ModelSheet(controller: controller)
-                .presentationDetents([.medium, .large])
-                .presentationBackground(Pi.surface1)
+        .onChange(of: attachments.error) { _, error in
+            guard let error else { return }
+            controller.toast = Toast(text: error, kind: .error)
+            attachments.error = nil
         }
-        .sheet(item: Binding(get: { controller.state.dialogs.first }, set: { _ in })) { dialog in
+        .onChange(of: controller.requestedSheet, initial: true) { _, requested in
+            guard let requested else { return }
+            sheet = requested
+            controller.requestedSheet = nil
+        }
+        .onChange(of: controller.requestedReview, initial: true) { _, requested in
+            guard requested else { return }
+            reviewing = true
+            controller.requestedReview = false
+        }
+        .onChange(of: photoItems) { _, items in
+            guard !items.isEmpty else { return }
+            attachments.load(items)
+            photoItems = []
+        }
+        .photosPicker(isPresented: $pickingPhotos, selection: $photoItems, maxSelectionCount: max(attachments.slotsLeft, 1), matching: .images)
+        .fullScreenCover(isPresented: $camera) {
+            CameraPicker { attachments.add($0) }.ignoresSafeArea()
+        }
+        .fullScreenCover(isPresented: $reviewing) {
+            ReviewView(controller: controller)
+        }
+        .sheet(item: $sheet) { which in
+            switch which {
+            case .sessions:
+                SessionsSheet(controller: controller)
+                    .presentationDetents([.large])
+                    .presentationBackground(Pi.surface1)
+            case .models:
+                ModelSheet(controller: controller)
+                    .presentationDetents([.medium, .large])
+                    .presentationBackground(Pi.surface1)
+            case .thinking:
+                ThinkingSheet(controller: controller)
+                    .presentationDetents([.medium])
+                    .presentationBackground(Pi.surface1)
+            case .rename:
+                RenameSheet(current: controller.state.sessionName ?? "") { controller.rename($0) }
+                    .presentationDetents([.height(260)])
+                    .presentationBackground(Pi.surface1)
+            case .subagents:
+                SubagentsSheet(controller: controller) { sheet = .subagent($0) }
+                    .presentationDetents([.medium, .large])
+                    .presentationBackground(Pi.surface1)
+            case let .subagent(key):
+                SubagentScreen(controller: controller, key: key)
+                    .presentationDetents([.large])
+                    .presentationBackground(Pi.canvas)
+            }
+        }
+        .sheet(item: Binding(get: { sheet == nil ? controller.state.dialogs.first : nil }, set: { _ in })) { dialog in
             DialogSheet(dialog: dialog, controller: controller)
                 .presentationDetents([.medium, .large])
                 .presentationBackground(Pi.surface1)
@@ -62,6 +141,47 @@ struct SessionView: View {
                         try? await Task.sleep(nanoseconds: 3_500_000_000)
                         if controller.toast?.id == toast.id { controller.toast = nil }
                     }
+            }
+        }
+    }
+
+    private var palette: [PaletteEntry] { CommandPalette.entries(controller.state.commands) }
+
+    /// Send what the composer holds: one of the app's own commands runs here; anything else goes to Pi.
+    private func submit(_ behavior: StreamingBehavior) {
+        let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let images = attachments.ready
+        guard !text.isEmpty || !images.isEmpty, !attachments.encoding else { return }
+        if images.isEmpty, let call = CommandPalette.parse(text, controller.state.commands) {
+            draft = ""
+            run(call)
+            return
+        }
+        if !images.isEmpty, controller.state.model?.acceptsImages == false {
+            controller.toast = Toast(text: "\(controller.state.model?.label ?? "This model") does not read images. Choose another model or remove them.", kind: .warning)
+            return
+        }
+        draft = ""
+        attachments.clear()
+        controller.send(text, images: images, behavior: behavior)
+    }
+
+    private func run(_ call: BuiltinCall) {
+        switch call.builtin {
+        case .compact:
+            controller.compact(instructions: call.args.isEmpty ? nil : call.args)
+        case .name:
+            if call.args.isEmpty { sheet = .rename } else { controller.rename(call.args) }
+        case .model:
+            sheet = .models
+        case .thinking:
+            if call.args.isEmpty { sheet = .thinking } else { controller.setThinkingLevel(call.args.lowercased()) }
+        case .copy:
+            if let last = controller.state.allItems.last(where: { $0.assistantText != nil })?.assistantText?.text, !last.isEmpty {
+                UIPasteboard.general.string = last
+                controller.toast = Toast(text: "Copied the last reply")
+            } else {
+                controller.toast = Toast(text: "No reply to copy yet", kind: .warning)
             }
         }
     }
@@ -89,9 +209,36 @@ struct SessionView: View {
         .padding(.bottom, 6)
     }
 
+    @ViewBuilder private var attachMenuItems: some View {
+        Section {
+            Button { pickingPhotos = true } label: { Label("Photo library", systemImage: "photo.on.rectangle") }
+                .disabled(attachments.slotsLeft == 0)
+            if CameraPicker.available {
+                Button { camera = true } label: { Label("Take photo", systemImage: "camera") }
+                    .disabled(attachments.slotsLeft == 0)
+            }
+            Button { attachments.paste() } label: { Label("Paste image", systemImage: "doc.on.clipboard") }
+                .disabled(attachments.slotsLeft == 0)
+        }
+        Section { moreMenuItems }
+    }
+
     @ViewBuilder private var moreMenuItems: some View {
-        Button { showSessions = true } label: { Label("Sessions", systemImage: "list.bullet") }
-        Button { showModels = true } label: { Label("Model", systemImage: "cpu") }
+        Button { sheet = .sessions } label: { Label("Sessions", systemImage: "list.bullet") }
+        Button { sheet = .rename } label: { Label("Rename", systemImage: "pencil") }
+            .disabled(!controller.link.isConnected)
+        Button { sheet = .models } label: { Label("Model", systemImage: "cpu") }
+        if controller.state.model?.reasoning != false {
+            Button { sheet = .thinking } label: { Label("Thinking: \(controller.state.thinkingLevel ?? "default")", systemImage: "brain") }
+                .disabled(!controller.link.isConnected)
+        }
+        if controller.state.host?.review == true {
+            Button { reviewing = true } label: { Label("Review changes and files", systemImage: "doc.text.magnifyingglass") }
+                .disabled(!controller.link.isConnected)
+        }
+        if !controller.state.subagents.isEmpty {
+            Button { sheet = .subagents } label: { Label("Subagents (\(controller.state.subagents.count))", systemImage: "person.2") }
+        }
         Button { controller.compact() } label: { Label("Compact context", systemImage: "arrow.down.right.and.arrow.up.left") }
             .disabled(!controller.link.isConnected || controller.state.isRunning)
         if !controller.state.queue.isEmpty {

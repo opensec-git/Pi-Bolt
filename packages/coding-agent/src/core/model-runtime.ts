@@ -627,6 +627,19 @@ export class ModelRuntime implements Models {
 		return this.nativeExtensionProviders.get(providerId);
 	}
 
+	/**
+	 * Where a provider comes from: Pi's built-in catalog (also when an extension or models.json changes it), an
+	 * extension, models.json, or only virtual models. Undefined for an unknown id.
+	 */
+	getProviderOrigin(providerId: string): "builtin" | "extension" | "models_json" | "virtual" | undefined {
+		if (this.defaultBuiltins.has(providerId)) return "builtin";
+		if (this.nativeExtensionProviders.has(providerId) || this.extensionProviders.has(providerId)) return "extension";
+		// A radius gateway in models.json is composed as a built-in provider.
+		if (this.config.getProvider(providerId) || this.builtins.has(providerId)) return "models_json";
+		if (this.virtualModels.has(providerId)) return "virtual";
+		return undefined;
+	}
+
 	/** @internal Compatibility fallback for ModelRegistry when provider auth is unconfigured. */
 	getCompatibilityRequestConfig(model: Model<Api>): CompatibilityRequestConfig {
 		return resolveCompatibilityRequestConfig(

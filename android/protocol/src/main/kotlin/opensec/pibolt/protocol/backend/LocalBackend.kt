@@ -52,11 +52,15 @@ sealed interface SessionTarget {
     /** A new session. */
     data object Fresh : SessionTarget
 
+    /** No session file at all (`--no-session`): the page engine, which serves package pages and Home tiles, no chat. */
+    data object NoSession : SessionTarget
+
     /** Pi CLI arguments that open this target when the engine starts (packages/coding-agent/src/cli/args.ts). */
     fun cliArgs(): List<String> = when (this) {
         Continue -> listOf("--continue")
         is Resume -> listOf("--session", sessionFile)
         Fresh -> emptyList()
+        NoSession -> listOf("--no-session")
     }
 }
 
@@ -297,6 +301,7 @@ class LocalBackend(
         }
         val e = Engine(process)
         e.cwd = cwd
+        e.ephemeral = t == SessionTarget.NoSession
         engine = e
         e.begin()
         val hello = withTimeoutOrNull(config.helloTimeoutMs) { e.buildHello() }
@@ -349,12 +354,13 @@ class LocalBackend(
             }
             is SessionTarget.Resume -> if (wanted.sessionFile != e.sessionFile) open(wanted.sessionFile)
             SessionTarget.Fresh -> fresh()
+            SessionTarget.NoSession -> Unit
         }
         val snapshot = hello ?: e.buildHello() ?: throw EngineStartException("The engine stopped")
         e.held = null
         lease++
         e.deliver(snapshot, dropUnread = true)
-        target = SessionTarget.Continue
+        if (wanted != SessionTarget.NoSession) target = SessionTarget.Continue
     }
 
     private fun onExit(e: Engine, code: Int) {
@@ -367,8 +373,9 @@ class LocalBackend(
             while (exitTimes.isNotEmpty() && now - exitTimes.first() > config.crashWindowMs) exitTimes.removeFirst()
             exitTimes.size
         }
-        // Respawn into the same session; a session that never reached disk had nothing to keep.
-        target = e.sessionFile?.takeIf { File(it).isFile }?.let { SessionTarget.Resume(it) } ?: SessionTarget.Fresh
+        // Respawn into the same session; a session that never reached disk had nothing to keep. A page engine stays
+        // without one.
+        target = if (e.ephemeral) SessionTarget.NoSession else e.sessionFile?.takeIf { File(it).isFile }?.let { SessionTarget.Resume(it) } ?: SessionTarget.Fresh
         _state.value = if (quick >= config.maxQuickExits) {
             ConnectionState.Disconnected(DisconnectReason.EngineFailed, "The engine keeps stopping (${describeExit(code)})")
         } else {
@@ -385,6 +392,10 @@ class LocalBackend(
         /** The directory Pi works in for the current session (a switch to another project's session changes it). */
         @Volatile
         var cwd: String = ""
+
+        /** Started with `--no-session` (the page engine): a respawn starts without one again. */
+        @Volatile
+        var ephemeral = false
 
         private val ids = AtomicLong()
         private val lock = Any()

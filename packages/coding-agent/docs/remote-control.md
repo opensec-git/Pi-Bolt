@@ -296,7 +296,9 @@ Client to host: `remote_ready` once, first; then RPC commands with an `id` for c
 to that phone's connection only. Accepted commands: `set_client_features`, `prompt`,
 `steer`, `follow_up`, `abort`, `clear_queue`, `get_state`, `get_messages`, `get_available_models`, `set_model`,
 `cycle_model`, `get_available_thinking_levels`, `set_thinking_level`, `cycle_thinking_level`, `compact`, `abort_retry`,
-`get_session_stats`, `get_commands`, `get_last_assistant_text`, `set_session_name`, and the [review commands](#review)
+`get_session_stats`, `get_commands`, `get_last_assistant_text`, `set_session_name`, `get_pages`, `open_page`,
+`close_page` (the session's [package pages](mobile-ui.md#package-pages-and-home-tiles); `open_page` needs `"views"`), and
+the [review commands](#review)
 when `host.review` is true. Any other type gets
 `{ type: "response", success: false, error: "Not available over remote control" }`.
 

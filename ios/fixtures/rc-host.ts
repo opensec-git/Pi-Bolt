@@ -17,8 +17,23 @@
 //
 // Prompts the faux model understands: a prompt containing "tool" gets a `shout` tool call, then a reply that quotes
 // its result; "demo" the same call, then a markdown reply with every kind of block; "wait" gets a `wait` tool call
-// that runs until it is aborted; anything else gets thinking and an echo.
-import { mkdtempSync, rmSync } from "node:fs";
+// that runs until it is aborted; "subagent" gets an `Agent` call (below), then a reply that quotes its answer;
+// anything else gets thinking and an echo.
+//
+// Subagents: the `Agent` tool runs a child session the way the subagents extension does (opensec-pi-subagents), so the
+// server's `subagent_subscribe` streams it (`features: ["subagent_stream"]`): saved next to the parent's file, naming it
+// as `parentSession`, named `general-purpose#<first 8 of the agent id>`, its first prompt "CHILD: list the files". The
+// child thinks and calls `shout` after about 1.5 s, then answers "Subagent found two files." after another 1.5 s. The
+// call reports progress (`details.activity`) while it runs and ends with `details: { agentId, status: "completed" }`.
+//
+// Review (`host.review`): every session's cwd is one git repository, `main` with one commit (README.md, src/app.ts),
+// then README.md modified, `notes.txt` untracked and a `.env` (a secret: rc_read_file refuses it).
+//
+// Mobile UI kit (Pi-Bolt 1.1.6): the extension commands `/panel` (a panel view, then an update) and `/sheet` (a sheet
+// that closes by itself after 3 s), with the view channel bound as the background service binds it.
+import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,10 +48,13 @@ import {
 } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { WebSocketServer } from "ws";
+import type { ExtensionAPI } from "../../packages/coding-agent/src/core/extensions/types.ts";
+import type { MobileView } from "../../packages/coding-agent/src/core/mobile-ui/types.ts";
+import { SessionManager } from "../../packages/coding-agent/src/core/session-manager.ts";
 import { CloseCode } from "../../packages/coding-agent/src/remote-control/protocol.ts";
 import { RemoteControlServer } from "../../packages/coding-agent/src/remote-control/server.ts";
 import { RemoteControlStore } from "../../packages/coding-agent/src/remote-control/store.ts";
-import { createHarness, type Harness } from "../../packages/coding-agent/test/suite/harness.ts";
+import { createHarness, createTestUiContext, type Harness } from "../../packages/coding-agent/test/suite/harness.ts";
 
 function emit(event: Record<string, unknown>): void {
 	process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -119,6 +137,8 @@ function reply(context: { messages: Array<{ role: string; content: unknown }> })
 	const last = context.messages[context.messages.length - 1];
 	const prompt = textOf([...context.messages].reverse().find((message) => message.role === "user")?.content);
 	if (last?.role === "toolResult") {
+		if ((last as { toolName?: string }).toolName === "Agent")
+			return fauxAssistantMessage(`The subagent said: ${textOf(last.content)}`);
 		if (/\bdemo\b/i.test(prompt))
 			return fauxAssistantMessage([fauxThinking("The test passes now."), fauxText(DEMO_REPLY)]);
 		return fauxAssistantMessage(`The tool said ${textOf(last.content)}.`);
@@ -127,6 +147,15 @@ function reply(context: { messages: Array<{ role: string; content: unknown }> })
 	if (/\b(tool|demo)\b/i.test(text))
 		return fauxAssistantMessage(fauxToolCall("shout", { text: "hello" }), { stopReason: "toolUse" });
 	if (/\bwait\b/i.test(text)) return fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" });
+	if (/\bsubagent\b/i.test(text))
+		return fauxAssistantMessage(
+			fauxToolCall("Agent", {
+				prompt: CHILD_PROMPT,
+				description: "List files",
+				subagent_type: "general-purpose",
+			}),
+			{ stopReason: "toolUse" },
+		);
 	return fauxAssistantMessage([
 		fauxThinking("Reading the prompt."),
 		fauxText(`Echo: ${text}. Some **bold** and \`code\`.`),
@@ -141,10 +170,173 @@ interface FixtureSession {
 
 const dirs: string[] = [];
 const sessions: FixtureSession[] = [];
+const children: Harness[] = [];
+
+/** The review commands' working tree: one commit, then a modified, an untracked and a secret file. */
+function makeRepo(): string {
+	const dir = mkdtempSync(join(tmpdir(), "pibolt-ios-repo-"));
+	dirs.push(dir);
+	const git = (...args: string[]) => execFileSync("git", args, { cwd: dir, stdio: "ignore" });
+	git("init", "-q", "-b", "main");
+	git("config", "user.name", "Fixture");
+	git("config", "user.email", "fixture@example.com");
+	git("config", "commit.gpgsign", "false");
+	mkdirSync(join(dir, "src"));
+	writeFileSync(join(dir, "README.md"), "# Fixture\n\nA repository for the review commands.\n");
+	writeFileSync(join(dir, "src", "app.ts"), 'export const greeting = "hello";\n');
+	git("add", "README.md", "src/app.ts");
+	git("commit", "-q", "-m", "Initial commit", "-m", "README and the app.");
+	writeFileSync(join(dir, "README.md"), "# Fixture\n\nA repository for the review commands.\n\nA new line.\n");
+	writeFileSync(join(dir, "notes.txt"), "untracked notes\n");
+	writeFileSync(join(dir, ".env"), "API_KEY=not-a-real-key\n");
+	return dir;
+}
+
+const repoDir = makeRepo();
+const sessionDir = mkdtempSync(join(tmpdir(), "pibolt-ios-sessions-"));
+dirs.push(sessionDir);
+const CHILD_PROMPT = "CHILD: list the files";
+const CHILD_ANSWER = "Subagent found two files.";
+
+function sleep(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Runs a child session as the subagents extension does, for the parent [owner]. */
+function agentTool(owner: () => Harness | undefined): AgentTool {
+	return {
+		name: "Agent",
+		label: "Agent",
+		description: "Runs a subagent",
+		parameters: Type.Object({
+			prompt: Type.String(),
+			description: Type.String(),
+			subagent_type: Type.Optional(Type.String()),
+		}),
+		execute: async (_id, params, _signal, onUpdate) => {
+			const { prompt, description } = params as { prompt: string; description: string };
+			const agentId = randomBytes(8).toString("hex");
+			const sessionManager = SessionManager.create(repoDir, sessionDir, {
+				parentSession: owner()?.session.sessionFile,
+			});
+			const child = await createHarness({
+				provider: `faux-child-${children.length + 1}`,
+				sessionManager,
+				tools: [shoutTool],
+			});
+			children.push(child);
+			child.session.setSessionName(`general-purpose#${agentId.slice(0, 8)}`);
+			child.setResponses([
+				async () => {
+					await sleep(1500);
+					return fauxAssistantMessage(
+						[fauxThinking("Listing the files."), fauxToolCall("shout", { text: "files" })],
+						{
+							stopReason: "toolUse",
+						},
+					);
+				},
+				async () => {
+					await sleep(1500);
+					return fauxAssistantMessage(CHILD_ANSWER);
+				},
+			]);
+			let toolUses = 0;
+			let turns = 0;
+			const progress = (activity: string) =>
+				onUpdate?.({
+					content: [{ type: "text", text: activity }],
+					details: { activity, toolUses, turnCount: turns, description, subagentType: "general-purpose" },
+				});
+			const unsubscribe = child.session.subscribe((event) => {
+				if (event.type === "turn_start") turns++;
+				if (event.type === "tool_execution_start") progress("running shout…");
+				if (event.type === "tool_execution_end") {
+					toolUses++;
+					progress("thinking…");
+				}
+			});
+			progress("starting…");
+			try {
+				await child.session.prompt(prompt);
+			} finally {
+				unsubscribe();
+			}
+			return {
+				content: [{ type: "text", text: CHILD_ANSWER }],
+				details: {
+					agentId,
+					status: "completed",
+					description,
+					subagentType: "general-purpose",
+					toolUses,
+					turnCount: turns,
+				},
+			};
+		},
+	};
+}
+
+/**
+ * The mobile UI kit (docs/mobile-ui.md, Pi-Bolt 1.1.6): `/panel` sets a panel view and updates it, `/sheet` opens a sheet
+ * that closes by itself after 3 s. Phones that declare "views" get the views; the iOS app does not (until 0.2.0), so its
+ * tests check it ignores what still reaches it (the sheet, broadcast to every phone; `views` in `remote_hello`).
+ */
+const PANEL: MobileView = {
+	v: 1,
+	title: "Deploy",
+	body: [{ type: "progress", id: "bar", value: 0, label: "Uploading" }],
+	actions: [{ type: "button", id: "cancel", label: "Cancel" }],
+};
+const SHEET: MobileView = {
+	v: 1,
+	title: "Deploy settings",
+	body: [
+		{
+			type: "form",
+			id: "f",
+			children: [{ type: "input", id: "branch", label: "Branch", value: "main" }],
+			submit: { label: "Deploy" },
+		},
+	],
+};
+
+function viewsExtension(pi: ExtensionAPI): void {
+	pi.registerCommand("panel", {
+		description: "Show a panel view",
+		handler: async (_args, ctx) => {
+			ctx.ui.setView("deploy", PANEL);
+			ctx.ui.updateView("deploy", [{ op: "set", id: "bar", props: { value: 0.5 } }]);
+		},
+	});
+	pi.registerCommand("sheet", {
+		description: "Open a sheet view",
+		handler: async (_args, ctx) => {
+			await ctx.ui.showView(SHEET, { key: "settings", timeout: 3000 });
+		},
+	});
+}
 
 async function newSession(): Promise<FixtureSession> {
-	const harness = await createHarness({ tools: [shoutTool, waitTool] });
+	let harness: Harness | undefined;
+	harness = await createHarness({
+		tools: [shoutTool, waitTool, agentTool(() => harness)],
+		sessionManager: SessionManager.create(repoDir, sessionDir),
+		extensionFactories: [viewsExtension],
+	});
 	harness.setResponses(Array.from({ length: 500 }, () => reply));
+	// As the background service binds a session: views to the phones that render them, sheets as their dialogs.
+	await harness.session.bindExtensions({
+		uiContext: createTestUiContext(),
+		mode: "rpc",
+		viewChannel: {
+			hasNative: () => server.hasViewClients(),
+			keepText: false,
+			send: (request) => server.sendView(request),
+			sheet: (request, signal) => server.requestViewSheet(request, signal),
+			sheetChanged: (viewKey, view, rev) => server.updateViewSheet(viewKey, view, rev),
+		},
+	});
 	const session = { path: `fixture://session/${sessions.length + 1}`, harness, updatedAt: new Date().toISOString() };
 	sessions.push(session);
 	return session;
@@ -167,7 +359,7 @@ const server: RemoteControlServer = new RemoteControlServer({
 	serviceCommands: {
 		types: new Set(["list_projects", "list_sessions", "switch_session", "new_session"]),
 		async run(command) {
-			const cwd = current.harness.tempDir;
+			const cwd = repoDir;
 			switch (command.type) {
 				case "list_projects":
 					return { projects: [{ cwd, name: "fixture", sessions: sessions.length, updatedAt: current.updatedAt }] };
@@ -241,6 +433,7 @@ input.on("close", async () => {
 	flood.close();
 	silent.close();
 	for (const s of sessions) s.harness.cleanup();
+	for (const child of children) child.cleanup();
 	for (const dir of dirs) rmSync(dir, { recursive: true, force: true });
 	process.exit(0);
 });

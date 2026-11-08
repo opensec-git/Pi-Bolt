@@ -156,6 +156,7 @@ import opensec.pibolt.protocol.session.MobileViews
 import opensec.pibolt.protocol.session.VButton
 import opensec.pibolt.protocol.session.VButtonStyle
 import opensec.pibolt.protocol.session.VCard
+import opensec.pibolt.protocol.session.VChart
 import opensec.pibolt.protocol.session.VChip
 import opensec.pibolt.protocol.session.VChipNode
 import opensec.pibolt.protocol.session.VCode
@@ -168,6 +169,7 @@ import opensec.pibolt.protocol.session.VInput
 import opensec.pibolt.protocol.session.VItem
 import opensec.pibolt.protocol.session.VKv
 import opensec.pibolt.protocol.session.VList
+import opensec.pibolt.protocol.session.VLocation
 import opensec.pibolt.protocol.session.VMarkdown
 import opensec.pibolt.protocol.session.VNode
 import opensec.pibolt.protocol.session.VNotice
@@ -177,6 +179,7 @@ import opensec.pibolt.protocol.session.VRow
 import opensec.pibolt.protocol.session.VSection
 import opensec.pibolt.protocol.session.VSelect
 import opensec.pibolt.protocol.session.VSlider
+import opensec.pibolt.protocol.session.VTable
 import opensec.pibolt.protocol.session.VText
 import opensec.pibolt.protocol.session.VTile
 import opensec.pibolt.protocol.session.VToggle
@@ -192,7 +195,8 @@ import opensec.pibolt.protocol.session.VView
 
 /** What the user did in a view, for the session to send (`extension_ui_event`) or, in a sheet, to close it. */
 interface ViewActions {
-    fun tap(nodeId: String)
+    /** A tap on [nodeId]; [value] is the row id for a table row's tap. */
+    fun tap(nodeId: String, value: JsonPrimitive? = null)
     fun change(nodeId: String, value: JsonPrimitive)
     fun submit(formId: String, values: JsonObject)
 }
@@ -509,6 +513,9 @@ private fun ViewNode(node: VNode, fields: ViewFields, actions: ViewActions, inFo
         }
         is VForm -> ViewForm(node, fields, actions)
         is VField -> ViewField(node, fields, actions, live = !inForm)
+        is VChart -> ViewChart(node)
+        is VTable -> ViewTable(node, actions)
+        is VLocation -> ViewLocation(node)
         is VUnknown -> node.text?.let { Text(it, style = type.body, color = colors.ink2) }
     }
 }

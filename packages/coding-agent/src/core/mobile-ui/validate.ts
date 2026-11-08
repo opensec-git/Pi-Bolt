@@ -7,6 +7,7 @@ import {
 	MOBILE_VIEW_LIMITS as LIMITS,
 	MOBILE_VIEW_ICONS,
 	MOBILE_VIEW_ID_PATTERN,
+	MOBILE_VIEW_TILE_TYPES,
 	type MobileView,
 	type MobileViewNode,
 	type MobileViewNodeType,
@@ -148,6 +149,116 @@ const selectOptions: FieldCheck = (value) => {
 	return undefined;
 };
 
+const chartSeries: FieldCheck = (value, node) => {
+	if (!Array.isArray(value) || value.length === 0) return "expected a list of series";
+	const max = node.kind === "sparkline" ? 1 : LIMITS.chartSeries;
+	if (value.length > max) return `more than ${max} series${node.kind === "sparkline" ? " in a sparkline" : ""}`;
+	let length: number | undefined;
+	for (const [index, series] of value.entries()) {
+		if (!isRecord(series)) return `[${index}]: expected { name, values }`;
+		const error = checkObject(
+			series,
+			{
+				name: str(),
+				values: (values) =>
+					!Array.isArray(values) || values.length === 0
+						? "expected a list of numbers"
+						: values.length > LIMITS.chartValues
+							? `more than ${LIMITS.chartValues} values`
+							: values.some((v) => v !== null && (typeof v !== "number" || !Number.isFinite(v)))
+								? "expected numbers or null"
+								: values.some((v) => typeof v === "number" && Math.abs(v) > LIMITS.chartMagnitude)
+									? `expected numbers of at most ${LIMITS.chartMagnitude} in size`
+									: undefined,
+			},
+			["name", "values"],
+		);
+		if (error) return `[${index}]: ${error}`;
+		const count = (series.values as unknown[]).length;
+		if (length !== undefined && count !== length)
+			return `[${index}]: ${count} values, the first series has ${length}`;
+		length = count;
+	}
+	return undefined;
+};
+
+const stringList =
+	(max: number): FieldCheck =>
+	(value) =>
+		!Array.isArray(value)
+			? "expected a list of strings"
+			: value.length > max
+				? `more than ${max}`
+				: value.some((item) => typeof item !== "string" || item.length > LIMITS.short)
+					? `expected strings of at most ${LIMITS.short} characters`
+					: undefined;
+
+const tableColumns: FieldCheck = (value) => {
+	if (!Array.isArray(value) || value.length === 0) return "expected a list of columns";
+	if (value.length > LIMITS.tableColumns) return `more than ${LIMITS.tableColumns} columns`;
+	const seen = new Set<string>();
+	for (const [index, column] of value.entries()) {
+		const error = isRecord(column)
+			? checkObject(column, { id, label: str(), kind: oneOf(["text", "number", "date", "mono"]), sortable: bool }, [
+					"id",
+					"label",
+				])
+			: "expected { id, label }";
+		if (error) return `[${index}]: ${error}`;
+		const columnId = (column as Record_).id as string;
+		if (seen.has(columnId)) return `[${index}]: column ${JSON.stringify(columnId)} twice`;
+		seen.add(columnId);
+	}
+	return undefined;
+};
+
+function columnIds(node: Record_): Set<string> {
+	return new Set(
+		Array.isArray(node.columns) ? node.columns.map((column) => (isRecord(column) ? String(column.id) : "")) : [],
+	);
+}
+
+const tableRows: FieldCheck = (value, node) => {
+	if (!Array.isArray(value)) return "expected a list of rows";
+	if (value.length > LIMITS.tableRows) return `more than ${LIMITS.tableRows} rows`;
+	const columns = columnIds(node);
+	const seen = new Set<string>();
+	for (const [index, row] of value.entries()) {
+		if (!isRecord(row)) return `[${index}]: expected { id, cells }`;
+		const error = checkObject(
+			row,
+			{
+				id,
+				action: id,
+				cells: (cells) => {
+					if (!isRecord(cells)) return "expected an object of column ids to values";
+					for (const [column, cell] of Object.entries(cells)) {
+						if (!columns.has(column)) return `${column}: no such column`;
+						if (cell === null) continue;
+						if (typeof cell === "number" ? !Number.isFinite(cell) : typeof cell !== "string")
+							return `${column}: expected a string, a number or null`;
+						if (typeof cell === "string" && cell.length > LIMITS.short)
+							return `${column}: longer than ${LIMITS.short} characters`;
+					}
+					return undefined;
+				},
+			},
+			["id", "cells"],
+		);
+		if (error) return `[${index}]: ${error}`;
+		if (seen.has(row.id as string)) return `[${index}]: row ${JSON.stringify(row.id)} twice`;
+		seen.add(row.id as string);
+	}
+	return undefined;
+};
+
+const tableSort: FieldCheck = (value, node) => {
+	if (!isRecord(value)) return "expected { column, desc? }";
+	const error = checkObject(value, { column: str(64), desc: bool }, ["column"]);
+	if (error) return error;
+	return columnIds(node).has(value.column as string) ? undefined : `column: no column ${JSON.stringify(value.column)}`;
+};
+
 /** The values of a select's options. */
 export function optionValues(options: unknown): string[] {
 	if (!Array.isArray(options)) return [];
@@ -214,6 +325,53 @@ const SPECS: Record<MobileViewNodeType, NodeSpec> = {
 		fields: { ...common, type: str(), label: str(), value: str(), icon, tone: oneOf(TONES), action: id },
 		required: ["label", "value"],
 		interactive: (node) => node.action !== undefined,
+	},
+	chart: {
+		fields: {
+			...common,
+			type: str(),
+			kind: oneOf(["line", "bar", "area", "sparkline"]),
+			series: chartSeries,
+			labels: stringList(LIMITS.chartValues),
+			unit: str(20),
+			title: str(),
+			min: num(-LIMITS.chartMagnitude, LIMITS.chartMagnitude),
+			max: num(-LIMITS.chartMagnitude, LIMITS.chartMagnitude),
+			summary: str(LIMITS.text),
+		},
+		required: ["kind", "series"],
+		extra: (node) => {
+			const series = node.series as Array<{ values: unknown[] }>;
+			if (Array.isArray(node.labels) && node.labels.length !== series[0].values.length)
+				return `labels: ${node.labels.length} labels for ${series[0].values.length} values`;
+			if (typeof node.min === "number" && typeof node.max === "number" && !(node.min < node.max))
+				return "max: must be greater than min";
+			return undefined;
+		},
+	},
+	table: {
+		fields: {
+			...common,
+			type: str(),
+			columns: tableColumns,
+			rows: tableRows,
+			sort: tableSort,
+			filter: bool,
+			empty: str(),
+		},
+		required: ["columns", "rows"],
+		interactive: (node) =>
+			Array.isArray(node.rows) && node.rows.some((row) => isRecord(row) && row.action !== undefined),
+	},
+	location: {
+		fields: { ...common, type: str(), name: str(), address: str(), lat: num(-90, 90), lon: num(-180, 180) },
+		required: ["name"],
+		extra: (node) =>
+			(node.lat === undefined) !== (node.lon === undefined)
+				? "lat, lon: give both or neither"
+				: node.lat === undefined && node.address === undefined
+					? "address: needed without lat and lon"
+					: undefined,
 	},
 	button: {
 		fields: {
@@ -444,6 +602,34 @@ export function validateView(value: unknown): string[] {
 		if (bytes > LIMITS.viewBytes) push(ctx, `view: ${bytes} bytes, more than ${LIMITS.viewBytes}`);
 	}
 	return ctx.errors;
+}
+
+/**
+ * The problems of `view` (already a valid view) as a Home tile: a title, only the tile's node types, at most 4 `kv`
+ * items, no actions or fallback, and the tile's size limits.
+ */
+export function validateTile(view: MobileView): string[] {
+	const errors: string[] = [];
+	if (typeof view.title !== "string" || view.title.trim() === "") errors.push("title: a tile needs one");
+	if (view.actions !== undefined) errors.push("actions: a tile has no buttons");
+	if (view.fallback !== undefined) errors.push("fallback: a tile has no text form");
+	let nodes = 0;
+	const walk = (list: readonly MobileViewNode[], path: string): void => {
+		for (const [index, node] of list.entries()) {
+			const at = `${path}[${index}]`;
+			nodes++;
+			if (!MOBILE_VIEW_TILE_TYPES.has(node.type))
+				errors.push(`${at}: a tile cannot hold ${JSON.stringify(node.type)}`);
+			else if (node.type === "kv" && node.items.length > LIMITS.tileKvItems)
+				errors.push(`${at}: more than ${LIMITS.tileKvItems} items in a tile`);
+			else if (node.type === "row") walk(node.children, `${at}.children`);
+		}
+	};
+	walk(view.body, "body");
+	if (nodes > LIMITS.tileNodes) errors.push(`body: more than ${LIMITS.tileNodes} nodes in a tile`);
+	const bytes = Buffer.byteLength(JSON.stringify(view), "utf8");
+	if (bytes > LIMITS.tileBytes) errors.push(`view: ${bytes} bytes, more than ${LIMITS.tileBytes} for a tile`);
+	return errors.slice(0, MAX_ERRORS);
 }
 
 /** Throws an Error that lists the problems when `value` is not a valid view. */

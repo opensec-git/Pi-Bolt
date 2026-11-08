@@ -1,0 +1,13 @@
+{
+  "tiles": [
+    {
+      "v": 1,
+      "title": "Builds",
+      "icon": "build",
+      "body": [
+        { "type": "row", "children": [ { "type": "chip", "id": "state", "label": "Passing", "tone": "success" }, { "type": "text", "text": "12 today", "style": "meta" } ] },
+        { "type": "chart", "id": "trend", "kind": "sparkline", "summary": "Builds per day this week: 8, 11, 7, 12, 9, 2, 12", "series": [ { "name": "Builds", "values": [8, 11, 7, 12, 9, 2, 12] } ] }
+      ]
+    }
+  ]
+}

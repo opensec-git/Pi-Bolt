@@ -13,13 +13,14 @@ import type { ViewClientEvent, ViewRequest, ViewSheetAnswer, ViewShowRequest } f
 import { VIEWS_FEATURE } from "../core/mobile-ui/types.ts";
 import { SUBAGENT_STREAM_FEATURE, SubagentStreams, type SubagentStreamsOptions } from "../core/subagent-stream.ts";
 import { toJsonEvent } from "../modes/json-event.ts";
-import type {
-	RpcCommand,
-	RpcExtensionUIRequest,
-	RpcExtensionUIResponse,
-	RpcResponse,
-	RpcSessionState,
-	RpcSlashCommand,
+import {
+	type RpcCommand,
+	type RpcExtensionUIRequest,
+	type RpcExtensionUIResponse,
+	type RpcResponse,
+	type RpcSessionState,
+	type RpcSlashCommand,
+	rpcPages,
 } from "../modes/rpc/rpc-types.ts";
 import { IkResponder, type KeyPair, type TransportKeys } from "./noise.ts";
 import {
@@ -80,6 +81,9 @@ const REMOTE_COMMANDS = new Set<RpcCommand["type"]>([
 	"get_commands",
 	"get_last_assistant_text",
 	"set_session_name",
+	"get_pages",
+	"open_page",
+	"close_page",
 ]);
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -895,6 +899,16 @@ export class RemoteControlServer {
 			});
 			return;
 		}
+		if (typed.type === "open_page" && !connection.features.has(VIEWS_FEATURE)) {
+			connection.send({
+				id,
+				type: "response",
+				command: typed.type,
+				success: false,
+				error: 'Send set_client_features with "views" first',
+			});
+			return;
+		}
 		try {
 			const response = await this.runCommand(message as RpcCommand, (reply) => connection.send(reply));
 			if (response) connection.send(response);
@@ -993,6 +1007,14 @@ export class RemoteControlServer {
 				session.setSessionName(name);
 				return ok();
 			}
+			case "get_pages":
+				return ok({ pages: rpcPages(session.extensionRunner.getRegisteredPages()) });
+			case "open_page":
+				await session.extensionRunner.openPage(command.key);
+				return ok({ viewKey: command.key });
+			case "close_page":
+				await session.extensionRunner.closePage(command.key);
+				return ok();
 			default:
 				return fail("Not available over remote control");
 		}

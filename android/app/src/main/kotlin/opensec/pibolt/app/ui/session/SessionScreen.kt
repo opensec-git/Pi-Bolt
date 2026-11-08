@@ -595,6 +595,34 @@ internal fun SessionContent(
     val panels by remember { derivedStateOf { views.values.filter { it.slot == MobileViews.SLOT_PANEL } } }
     val pages by remember { derivedStateOf { views.values.filter { it.slot == MobileViews.SLOT_PAGE } } }
     var openPage by remember { mutableStateOf<String?>(null) }
+    // Pages packages registered (`get_pages`): built by Pi when opened from the menu, closed with their sheet.
+    val registeredPages by controller.registeredPages.collectAsStateWithLifecycle()
+    // A registered page asked for and not drawn yet: its sheet opens when its view reaches the session's state (the
+    // open_page response can come before it), or the page is closed again if it never does.
+    var pendingPage by remember { mutableStateOf<String?>(null) }
+    // The screen goes (navigation, or Android recreating the activity): registered pages it showed or waited for are
+    // closed, so their extensions stop what they run for them.
+    val shownPage by rememberUpdatedState(openPage)
+    val waitingPage by rememberUpdatedState(pendingPage)
+    val registeredNow by rememberUpdatedState(registeredPages)
+    DisposableEffect(controller) {
+        onDispose {
+            listOfNotNull(shownPage, waitingPage).distinct()
+                .filter { key -> registeredNow.any { it.key == key } }
+                .forEach { controller.closePage(it) }
+        }
+    }
+    LaunchedEffect(pendingPage) {
+        val key = pendingPage ?: return@LaunchedEffect
+        val arrived = withTimeoutOrNull(PAGE_VIEW_WAIT_MS) { snapshotFlow { state.value.views[key] }.first { it != null } }
+        if (pendingPage != key) return@LaunchedEffect
+        pendingPage = null
+        if (arrived != null) openPage = key else controller.closePage(key)
+    }
+    val menuPages = remember(pages, registeredPages) {
+        pages.map { it.key to (it.view.title ?: it.key) } + registeredPages.filter { r -> pages.none { it.key == r.key } }.map { it.key to it.title }
+    }
+    val sessionScope = rememberCoroutineScope()
     val empty by remember(memory) { derivedStateOf { state.value.hello && state.value.items.isEmpty() && state.value.streaming.isEmpty() && !state.value.isRunning && memory.pending.value == null } }
 
     val modelReadsImages by remember { derivedStateOf { state.value.model?.acceptsImages } }
@@ -1091,8 +1119,17 @@ internal fun SessionContent(
                 onRename = { sheet = Sheet.Rename },
                 onSearch = { searching = true },
                 onExport = { sheet = Sheet.Export },
-                pages = pages.map { it.key to (it.view.title ?: it.key) },
-                onPage = { openPage = it },
+                pages = menuPages,
+                onPage = { key ->
+                    if (registeredPages.any { it.key == key } && views[key] == null) {
+                        // Another page still waiting for its view is given up: closed, so it does not stay open unseen.
+                        pendingPage?.let { previous -> if (previous != key) controller.closePage(previous) }
+                        pendingPage = key
+                        sessionScope.launch { if (!controller.openPage(key) && pendingPage == key) pendingPage = null }
+                    } else {
+                        openPage = key
+                    }
+                },
                 onResume = ::openResume,
                 onFork = ::openFork,
                 onClone = controller::cloneSession,
@@ -1369,7 +1406,14 @@ internal fun SessionContent(
 
     openPage?.let { key ->
         val entry = views[key]
-        if (entry == null) openPage = null else ViewPageSheet(viewHost, entry, onClose = { openPage = null })
+        if (entry == null) {
+            openPage = null
+        } else {
+            ViewPageSheet(viewHost, entry, onClose = {
+                openPage = null
+                if (registeredPages.any { it.key == key }) controller.closePage(key)
+            })
+        }
     }
 
     VoiceRationale(voice)
@@ -1624,6 +1668,9 @@ internal fun SessionContent(
 
 /** How long Regenerate waits for the fork's session before it sends anyway. */
 private const val FORK_SWITCH_MS = 5_000L
+
+/** How long a registered page's view may take to arrive after open_page before the open is given up. */
+private const val PAGE_VIEW_WAIT_MS = 15_000L
 
 /** What "Continue once" sends after a spending limit stopped a run. */
 private const val CONTINUE_PROMPT = "Continue."
