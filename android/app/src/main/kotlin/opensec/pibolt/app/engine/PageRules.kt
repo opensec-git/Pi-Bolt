@@ -127,4 +127,13 @@ object PageCatalog {
 
     /** Opted-in tile keys that still exist, in the order [pages] lists them. */
     fun shownTiles(pages: List<PageInfo>, optedIn: Set<String>): List<PageInfo> = pages.filter { it.isTile && it.key in optedIn }
+
+    /**
+     * The opted-in tiles after turning [key] on or off, keeping only tiles [pages] still has: tiles of removed packages
+     * drop out instead of holding Home's slots.
+     */
+    fun toggleTile(pages: List<PageInfo>, optedIn: Set<String>, key: String, on: Boolean): Set<String> {
+        val kept = shownTiles(pages, optedIn).map { it.key }.toSet()
+        return if (on) kept + key else kept - key
+    }
 }

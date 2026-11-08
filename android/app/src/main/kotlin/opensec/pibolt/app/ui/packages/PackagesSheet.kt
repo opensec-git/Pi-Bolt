@@ -315,10 +315,12 @@ private fun PackagePagesSection(pkg: PiPackage, dir: String?, onOpen: (PageInfo)
     for (page in mine.filterNot { it.isTile }) {
         F2Row(page.title, page.description, iconFor(page.icon) ?: Icons.Rounded.Extension, onClick = { onOpen(page) })
     }
+    // Only tiles that still exist count toward Home's limit; turning one on or off drops the others' stale keys.
+    val shown = PageCatalog.shownTiles(list, settings.homeTiles).size
     for (tile in mine.filter { it.isTile }) {
         val on = tile.key in settings.homeTiles
-        F2Toggle("Show ${tile.title} on Home", tile.description ?: "A live tile on Home", checked = on, enabled = on || settings.homeTiles.size < AppSettings.MAX_HOME_TILES) { checked ->
-            app.settings.update { s -> s.copy(homeTiles = if (checked) s.homeTiles + tile.key else s.homeTiles - tile.key) }
+        F2Toggle("Show ${tile.title} on Home", tile.description ?: "A live tile on Home", checked = on, enabled = on || shown < AppSettings.MAX_HOME_TILES) { checked ->
+            app.settings.update { s -> s.copy(homeTiles = PageCatalog.toggleTile(list, s.homeTiles, tile.key, checked)) }
         }
     }
 }

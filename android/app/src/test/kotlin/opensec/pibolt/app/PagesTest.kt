@@ -83,6 +83,9 @@ class PagesTest {
     fun `Home shows only the tiles turned on that still exist`() {
         assertEquals(emptyList(), PageCatalog.shownTiles(pages, emptySet()))
         assertEquals(listOf("ci:tile"), PageCatalog.shownTiles(pages, setOf("ci:tile", "gone:tile", "board:page")).map { it.key })
+        // Toggling drops tiles of removed packages, so they do not hold Home's slots.
+        assertEquals(setOf("ci:tile", "board:tile"), PageCatalog.toggleTile(pages, setOf("ci:tile", "gone:tile"), "board:tile", on = true))
+        assertEquals(emptySet(), PageCatalog.toggleTile(pages, setOf("ci:tile", "gone:tile"), "ci:tile", on = false))
     }
 
     @Test
