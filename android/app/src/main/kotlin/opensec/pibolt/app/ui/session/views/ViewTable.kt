@@ -31,9 +31,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -59,12 +61,14 @@ private val ROW_HEIGHT = 44.dp
 /** At most this many rows tall; then the rows scroll under the header. */
 private const val VISIBLE_ROWS = 12
 
-private fun columnWidth(column: VColumn): Dp = when (column.kind) {
-    "number" -> 96.dp
-    "date" -> 128.dp
-    "mono" -> 140.dp
-    else -> 160.dp
-}
+/** Rows measured for a column's width: enough for the widest value of a long table without measuring all of it. */
+private const val MEASURED_ROWS = 200
+
+/** The widest a column grows: free text wraps past it (two lines), the one-line kinds end in an ellipsis. */
+private fun maxColumnWidth(column: VColumn): Dp = if (column.kind == "text") 240.dp else 280.dp
+
+/** Numbers, dates and mono values stay on one line; only free text wraps. */
+private fun oneLine(column: VColumn): Boolean = column.kind != "text"
 
 /**
  * The kit's `table` (docs/mobile-ui.md#charts-tables-and-places): a header that stays while the rows scroll (at most
@@ -93,8 +97,23 @@ fun ViewTable(table: VTable, actions: ViewActions, modifier: Modifier = Modifier
             )
         }
         BoxWithConstraints(Modifier.fillMaxWidth().clip(shape).background(colors.surface1, shape).border(1.dp, colors.line, shape)) {
-            // Columns at their natural widths, stretched to fill the card when they are narrower than it.
-            val natural = table.columns.map(::columnWidth)
+            // Columns as wide as their widest value and header at the current font scale (so a date never breaks
+            // mid-value), capped, then stretched to fill the card when they are narrower than it.
+            val measurer = rememberTextMeasurer()
+            val density = LocalDensity.current
+            val natural = remember(table, type, density) {
+                table.columns.map { column ->
+                    val style = if (column.kind == "mono") type.monoSmall else type.rowMeta
+                    val widest = table.rows.take(MEASURED_ROWS).maxOfOrNull { row ->
+                        measurer.measure(cellText(row.cells[column.id], column), style, softWrap = false, maxLines = 1).size.width
+                    } ?: 0
+                    val header = measurer.measure(column.label, type.label, softWrap = false, maxLines = 1).size.width
+                    with(density) {
+                        val content = maxOf(widest.toDp(), header.toDp() + 4.dp + IconSize.xs)
+                        (content + Space.md * 2 + 2.dp).coerceIn(64.dp, maxColumnWidth(column))
+                    }
+                }
+            }
             val total = natural.fold(0.dp) { a, b -> a + b }
             val widths = if (total < maxWidth) natural.map { it * (maxWidth / total) } else natural
             Column(Modifier.horizontalScroll(rememberScrollState())) {
@@ -131,7 +150,8 @@ fun ViewTable(table: VTable, actions: ViewActions, modifier: Modifier = Modifier
                                     text,
                                     style = if (column.kind == "mono") type.monoSmall else type.rowMeta,
                                     color = colors.ink1,
-                                    maxLines = 2,
+                                    maxLines = if (oneLine(column)) 1 else 2,
+                                    softWrap = !oneLine(column),
                                     overflow = TextOverflow.Ellipsis,
                                     textAlign = if (column.kind == "number") TextAlign.End else TextAlign.Start,
                                     modifier = Modifier.width(widths[i]).padding(horizontal = Space.md, vertical = Space.sm),
