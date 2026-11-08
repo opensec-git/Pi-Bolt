@@ -1159,6 +1159,30 @@ export function splitIntoTokensWithAnsiForTest(text: string, widths?: number[]):
 }
 
 /**
+ * For tests: the tokens scanPrintableAscii() finds in a line of printable ASCII and escape sequences, each with its width
+ * and whether it is spaces and has escape sequences; undefined for any other line.
+ */
+export function scanPrintableAsciiForTest(
+	text: string,
+): { width: number; tokens: { text: string; width: number; spaces: boolean; codes: boolean }[] } | undefined {
+	const width = scanPrintableAscii(text);
+	if (width === -1) return undefined;
+	const tokens: { text: string; width: number; spaces: boolean; codes: boolean }[] = [];
+	let start = 0;
+	for (let index = 0; index < scannedCount; index++) {
+		const info = scannedInfo[index]!;
+		tokens.push({
+			text: text.slice(start, scannedEnds[index]),
+			width: info >> 2,
+			spaces: (info & 1) !== 0,
+			codes: (info & 2) !== 0,
+		});
+		start = scannedEnds[index]!;
+	}
+	return { width, tokens };
+}
+
+/**
  * Wrap text with ANSI codes preserved.
  *
  * ONLY does word wrapping - NO padding, NO background colors.
@@ -1209,12 +1233,174 @@ export function wrapTextWithAnsi(text: string, width: number): string[] {
 	return result.length > 0 ? result : [""];
 }
 
+/**
+ * The tokens of the line scanPrintableAscii() read last: where each ends, and its width with what it holds (bit 0: it is
+ * spaces, bit 1: it has escape sequences). Kept from line to line; only wrapSingleLine() reads them, before scanning again.
+ */
+let scannedEnds = new Int32Array(64);
+let scannedInfo = new Int32Array(64);
+let scannedCount = 0;
+
+function addScannedToken(end: number, width: number, spaces: boolean, codes: boolean): void {
+	if (scannedCount === scannedEnds.length) {
+		const ends = new Int32Array(scannedCount * 2);
+		ends.set(scannedEnds);
+		scannedEnds = ends;
+		const info = new Int32Array(scannedCount * 2);
+		info.set(scannedInfo);
+		scannedInfo = info;
+	}
+	scannedEnds[scannedCount] = end;
+	scannedInfo[scannedCount] = (width << 2) | (codes ? 2 : 0) | (spaces ? 1 : 0);
+	scannedCount++;
+}
+
+/**
+ * The visible width of a line of printable ASCII and escape sequences, with its tokens (those splitIntoTokensWithAnsi()
+ * gives it) left in scannedEnds and scannedInfo; -1 for any other line. Each token is a piece of the line, cut where a run
+ * of spaces meets a run of other characters: codes between a word and the space after it end the word, codes between a
+ * space and the word after it start the word, and codes between two runs of the same kind stay inside the token. One
+ * pass measures the line and finds its tokens, where wrapping it took a pass to measure, one to split the line into
+ * strings built a run at a time, and an array entry for each token.
+ */
+function scanPrintableAscii(text: string): number {
+	scannedCount = 0;
+	let total = 0;
+	let tokenStart = 0;
+	let tokenWidth = 0;
+	let tokenCodes = false;
+	// The kind of the token being read: 0 before any visible character, 1 spaces, 2 other characters.
+	let kind = 0;
+	let i = 0;
+	while (i < text.length) {
+		const code = text.charCodeAt(i);
+		if (code === 0x1b) {
+			const codesStart = i;
+			do {
+				const length = ansiCodeLength(text, i);
+				if (length === 0) return -1;
+				i += length;
+			} while (i < text.length && text.charCodeAt(i) === 0x1b);
+			if (i < text.length) {
+				const nextKind = text.charCodeAt(i) === 0x20 ? 1 : 2;
+				if (kind !== 0 && kind !== nextKind) {
+					if (kind === 2) {
+						// Codes between a word and the space after it end the word.
+						addScannedToken(i, tokenWidth, false, true);
+						tokenStart = i;
+						tokenCodes = false;
+					} else {
+						// Codes between a space and the word after it start the word.
+						addScannedToken(codesStart, tokenWidth, true, tokenCodes);
+						tokenStart = codesStart;
+						tokenCodes = true;
+					}
+					tokenWidth = 0;
+					kind = nextKind;
+					continue;
+				}
+			}
+			tokenCodes = true;
+			continue;
+		}
+		if (code < 0x20 || code > 0x7e) return -1;
+		const charKind = code === 0x20 ? 1 : 2;
+		if (kind !== charKind) {
+			if (kind !== 0) {
+				addScannedToken(i, tokenWidth, kind === 1, tokenCodes);
+				tokenStart = i;
+				tokenWidth = 0;
+				tokenCodes = false;
+			}
+			kind = charKind;
+		}
+		tokenWidth++;
+		total++;
+		i++;
+	}
+	if (tokenStart < text.length) addScannedToken(text.length, tokenWidth, kind !== 2, tokenCodes);
+	return total;
+}
+
+/**
+ * wrapSingleLine() of a line scanPrintableAscii() has just read, from its tokens: the same lines, without the passes
+ * over code-free tokens that only look for codes. Undefined when a token is wider than the line, which the general path
+ * breaks up.
+ */
+function wrapScannedLine(line: string, width: number): string[] | undefined {
+	const wrapped: string[] = [];
+	const tracker = new AnsiCodeTracker();
+	// (A tracker that has seen no codes has none to give.)
+	let tracked = false;
+	let currentLine = "";
+	let currentVisibleLength = 0;
+	let start = 0;
+	for (let index = 0; index < scannedCount; index++) {
+		const end = scannedEnds[index]!;
+		const info = scannedInfo[index]!;
+		const token = line.slice(start, end);
+		start = end;
+		const tokenVisibleLength = info >> 2;
+		const isWhitespace = (info & 1) !== 0;
+		const hasCodes = (info & 2) !== 0;
+		if (tokenVisibleLength > width && !isWhitespace) return undefined;
+
+		const totalNeeded = currentVisibleLength + tokenVisibleLength;
+		if (totalNeeded > width && currentVisibleLength > 0) {
+			let lineToWrap = currentLine.trimEnd();
+			if (isWhitespace && hasCodes) {
+				lineToWrap += extractAnsiCodes(token);
+				updateTrackerFromText(token, tracker);
+				tracked = true;
+			}
+			if (tracked) {
+				const lineEndReset = tracker.getLineEndReset();
+				if (lineEndReset) {
+					lineToWrap += lineEndReset;
+				}
+			}
+			wrapped.push(lineToWrap);
+			if (isWhitespace) {
+				currentLine = tracked ? tracker.getActiveCodes() : "";
+				currentVisibleLength = 0;
+				continue;
+			}
+			currentLine = tracked ? tracker.getActiveCodes() + token : token;
+			currentVisibleLength = tokenVisibleLength;
+		} else if (isWhitespace && totalNeeded > width && hasCodes) {
+			currentLine += extractAnsiCodes(token);
+		} else {
+			currentLine += token;
+			currentVisibleLength += tokenVisibleLength;
+		}
+
+		if (hasCodes) {
+			updateTrackerFromText(token, tracker);
+			tracked = true;
+		}
+	}
+
+	if (currentLine) {
+		wrapped.push(currentLine);
+	}
+	return wrapped.length > 0 ? wrapped.map((wrappedLine) => wrappedLine.trimEnd()) : [""];
+}
+
 function wrapSingleLine(line: string, width: number): string[] {
 	if (!line) {
 		return [""];
 	}
 
-	const visibleLength = visibleWidth(line);
+	const scannedWidth = scanPrintableAscii(line);
+	if (scannedWidth !== -1) {
+		if (scannedWidth <= width) {
+			return [line];
+		}
+		const scannedLines = wrapScannedLine(line, width);
+		if (scannedLines) return scannedLines;
+	}
+
+	const visibleLength = scannedWidth !== -1 ? scannedWidth : visibleWidth(line);
 	if (visibleLength <= width) {
 		return [line];
 	}
