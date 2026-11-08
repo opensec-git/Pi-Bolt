@@ -151,6 +151,21 @@ function fieldsOf(nodes: readonly MobileViewNode[]): Map<string, MobileViewField
 	return fields;
 }
 
+/** The ids of the shown fields of `nodes` outside forms. */
+function standaloneFieldIds(nodes: readonly MobileViewNode[]): string[] {
+	const ids: string[] = [];
+	const walk = (list: readonly MobileViewNode[]) => {
+		for (const node of list) {
+			if (node.hidden || node.type === "form") continue;
+			if (node.id && isFieldType(node.type)) ids.push(node.id);
+			const children = (node as { children?: MobileViewNode[] }).children;
+			if (Array.isArray(children)) walk(children);
+		}
+	};
+	walk(nodes);
+	return ids;
+}
+
 /** `value` checked for `field`, or undefined when it does not fit. */
 function checkValue(field: MobileViewField, value: unknown): MobileViewValue | undefined {
 	switch (field.type) {
@@ -175,6 +190,8 @@ function checkValue(field: MobileViewField, value: unknown): MobileViewValue | u
 function checkValues(
 	fields: Map<string, MobileViewField>,
 	values: unknown,
+	/** The fields whose `required` counts (those that go with the answer); default all. */
+	required: (id: string) => boolean = () => true,
 ): Record<string, MobileViewValue> | undefined {
 	if (values !== undefined && (typeof values !== "object" || values === null || Array.isArray(values)))
 		return undefined;
@@ -187,7 +204,7 @@ function checkValues(
 				? checkValue(field, given[name])
 				: (field.value ?? (field.type === "select" ? optionValues(field.options)[0] : ""));
 		if (value === undefined) return undefined;
-		if (field.type === "input" && field.required && String(value).trim() === "") return undefined;
+		if (field.type === "input" && field.required && required(name) && String(value).trim() === "") return undefined;
 		result[name] = value;
 	}
 	return result;
@@ -469,7 +486,10 @@ export class ViewHost {
 			return undefined;
 		}
 		const fields = fieldsOf(view.body);
-		const values = checkValues(fields, answer.values);
+		// Required fields count when they go with the answer: those outside forms, and the submitted form's own.
+		const scope = new Set(standaloneFieldIds(view.body));
+		if (node.type === "form") for (const id of fieldsOf(node.children).keys()) scope.add(id);
+		const values = checkValues(fields, answer.values, (id) => scope.has(id));
 		if (!values) return undefined;
 		const action =
 			node.type === "form"

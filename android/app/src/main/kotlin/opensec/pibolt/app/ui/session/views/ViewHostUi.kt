@@ -33,6 +33,7 @@ import opensec.pibolt.app.ui.theme.Space
 import opensec.pibolt.protocol.session.DialogRequest
 import opensec.pibolt.protocol.session.MobileViews
 import opensec.pibolt.protocol.session.VCard
+import opensec.pibolt.protocol.session.VField
 import opensec.pibolt.protocol.session.VForm
 import opensec.pibolt.protocol.session.VNode
 import opensec.pibolt.protocol.session.VSection
@@ -123,7 +124,8 @@ fun ViewSheet(
     val closing = remember(dialog.id) { mutableListOf<Boolean>() }
     fun answer(nodeId: String) {
         if (closing.isNotEmpty()) return
-        if (!fields.check(all)) return
+        // Required fields count for those that go with the answer: outside forms, and the submitted form's own.
+        if (!fields.check(answerFields(view.body, nodeId))) return
         closing += true
         haptics.confirm()
         val values = fields.values(all)
@@ -179,6 +181,25 @@ fun ViewPageSheet(host: ViewHostUi, entry: ViewEntry, onClose: () -> Unit) {
         }
         Spacer(Modifier.height(Space.lg))
     }
+}
+
+/** The shown fields outside forms, then those of the form [nodeId] when it is one. */
+fun answerFields(nodes: List<VNode>, nodeId: String): List<VField> {
+    val out = ArrayList<VField>()
+    fun walk(list: List<VNode>) {
+        for (node in list) {
+            if (node.hidden) continue
+            when (node) {
+                is VField -> if (node.id != null) out += node
+                is VCard -> walk(node.children)
+                is VSection -> walk(node.children)
+                is VForm -> if (node.id == nodeId) out += fieldsOf(node.children)
+                else -> {}
+            }
+        }
+    }
+    walk(nodes)
+    return out
 }
 
 private fun formIds(nodes: List<VNode>): Set<String> {

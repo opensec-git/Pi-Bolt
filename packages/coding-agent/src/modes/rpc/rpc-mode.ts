@@ -93,10 +93,32 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		hasNative: () => clientViews,
 		keepText: false,
 		send: (request) => output({ type: "extension_ui_request", id: crypto.randomUUID(), ...request }),
-		sheet: (request, signal) =>
-			createDialogPromise<ViewSheetAnswer | undefined>({ signal }, undefined, { ...request }, (response) =>
-				"nodeId" in response || "cancelled" in response ? response : undefined,
-			),
+		// A sheet the host closes first (its timeout, an abort, the session ending) is closed on the client too.
+		sheet: (request, signal) => {
+			const id = crypto.randomUUID();
+			return new Promise<ViewSheetAnswer | undefined>((resolve) => {
+				if (signal.aborted) {
+					resolve(undefined);
+					return;
+				}
+				const done = (answer: ViewSheetAnswer | undefined) => {
+					signal.removeEventListener("abort", onAbort);
+					pendingExtensionRequests.delete(id);
+					resolve(answer);
+				};
+				const onAbort = () => {
+					if (pendingExtensionRequests.has(id)) output({ type: "extension_ui_dismissed", id });
+					done(undefined);
+				};
+				signal.addEventListener("abort", onAbort, { once: true });
+				pendingExtensionRequests.set(id, {
+					resolve: (response: RpcExtensionUIResponse) =>
+						done("nodeId" in response || "cancelled" in response ? response : undefined),
+					reject: () => done(undefined),
+				});
+				output({ type: "extension_ui_request", id, ...request });
+			});
+		},
 	};
 
 	// Shutdown request flag

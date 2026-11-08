@@ -285,7 +285,8 @@ if (result?.action === "deploy") deploy(result.values.branch as string, result.v
 ```
 
 - A form submit or a button in `actions` closes the sheet; the promise resolves with `{ id, action, values }`, where
-  `values` holds every field of the sheet.
+  `values` holds every shown field of the sheet. Required fields count for the fields that go with the answer: those
+  outside forms, and the submitted form's own.
 - Dismissing it (swipe, Back, the close button), the `timeout` or the `signal` resolves `undefined`.
 - Buttons and items in the body send `view_event`s and keep the sheet open. Give the sheet a `key`
   (`showView(view, { key })`) to update it while it is open with `updateView(key, ops)`.
@@ -368,7 +369,9 @@ From the client:
 {"type":"extension_ui_response","id":"u3","nodeId":"f","values":{"branch":"main","migrate":false}}
 ```
 
-`nodeId` of a sheet answer is the submitted form or the pressed `actions` button. Events get no response.
+`nodeId` of a sheet answer is the submitted form or the pressed `actions` button. Events get no response. When Pi
+closes a sheet first (its timeout, an abort, the session ending), it sends `{"type":"extension_ui_dismissed","id":...}`
+and the client closes it.
 
 Over remote control the same records travel in the encrypted channel. `remote_hello` carries `views`
 (`[{ viewKey, slot, view, rev, toolCallId?, turn? }]`, the current state) and open sheets among its `dialogs`.

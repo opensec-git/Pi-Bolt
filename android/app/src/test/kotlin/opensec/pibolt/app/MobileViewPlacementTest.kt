@@ -75,4 +75,13 @@ class MobileViewPlacementTest {
         assertEquals(JsonPrimitive("us"), fields.value(select("eu", "us")))
         assertEquals(JsonPrimitive("eu"), fields.value(select("eu", "ap")))
     }
+
+    @Test
+    fun aSheetAnswerTakesTheRequiredFieldsOfItsOwnFormAndThoseOutsideForms() {
+        val name = opensec.pibolt.protocol.session.VInput("name", false, "Name", "", null, null, null, "text", true, 100)
+        fun form(id: String, field: String) = opensec.pibolt.protocol.session.VForm(id, false, listOf(name.copy(id = field)), "Go", false, false)
+        val nodes = listOf(name, form("a", "x"), form("b", "y"))
+        assertEquals(listOf("name", "x"), opensec.pibolt.app.ui.session.views.answerFields(nodes, "a").map { it.id })
+        assertEquals(listOf("name"), opensec.pibolt.app.ui.session.views.answerFields(nodes, "save").map { it.id })
+    }
 }

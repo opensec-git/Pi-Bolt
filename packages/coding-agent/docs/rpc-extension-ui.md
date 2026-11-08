@@ -6,7 +6,7 @@ There are two categories of extension UI methods:
 
 - **Dialog methods** (`select`, `confirm`, `input`, `editor`): emit an `extension_ui_request` on stdout and block until the client sends back an `extension_ui_response` on stdin with the matching `id`.
 - **Fire-and-forget methods** (`notify`, `setStatus`, `setWidget`, `setTitle`, `set_editor_text`): emit an `extension_ui_request` on stdout but do not expect a response. The client can display the information or ignore it.
-- **Views** (`setView`, `updateView`, `showView`): the [mobile UI kit](mobile-ui.md), only for clients that sent [`set_client_features`](rpc-commands.md#set_client_features) with `"views"`. Other clients get each view's text form as a `setWidget` (key `view:<key>`) and its sheets as dialogs. Taps and form submits go back as `extension_ui_event`; see [Protocol](mobile-ui.md#protocol).
+- **Views** (`setView`, `updateView`, `showView`): the [mobile UI kit](mobile-ui.md), only for clients that sent [`set_client_features`](rpc-commands.md#set_client_features) with `"views"`. Other clients get each view's text form as a `setWidget` (key `view:<key>`) and its sheets as dialogs. Taps and form submits go back as `extension_ui_event`; see [Protocol](mobile-ui.md#protocol). A `showView` that Pi closes first (its timeout, an abort, the session ending) is followed by `{"type": "extension_ui_dismissed", "id": ...}`, and the client closes the sheet.
 
 If a dialog method includes a `timeout` field, the agent-side will auto-resolve with a default value when the timeout expires. The client does not need to track timeouts.
 

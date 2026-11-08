@@ -663,6 +663,32 @@ describe("mobile UI host", () => {
 		await expect(host.show(SHEET)).resolves.toMatchObject({ id: "cancel", action: "cancel" });
 	});
 
+	it("holds a sheet's answer to the required fields that go with it", async () => {
+		const channel = fakeChannel(true);
+		const { host } = hostWith(channel);
+		const two: MobileView = {
+			v: 1,
+			body: [
+				{
+					type: "form",
+					id: "a",
+					children: [{ type: "input", id: "x", label: "X", required: true }],
+					submit: { label: "A" },
+				},
+				{
+					type: "form",
+					id: "b",
+					children: [{ type: "input", id: "y", label: "Y", required: true }],
+					submit: { label: "B" },
+				},
+			],
+		};
+		channel.answer = async () => ({ nodeId: "a", values: { x: "1" } });
+		await expect(host.show(two)).resolves.toEqual({ id: "a", action: "a", values: { x: "1", y: "" } });
+		channel.answer = async () => ({ nodeId: "a", values: { y: "2" } });
+		await expect(host.show(two)).resolves.toBeUndefined();
+	});
+
 	it("leaves fields inside hidden containers out of a sheet's answer", async () => {
 		const channel = fakeChannel(true);
 		const { host } = hostWith(channel);
