@@ -25,14 +25,26 @@ final class Attachments {
     var ready: [ImageAttachment] { images.compactMap(\.attachment) }
 
     func add(_ data: Data) {
+        guard let id = reserve() else { return }
+        fill(id, data)
+    }
+
+    /// A placeholder taken before an image's data is there (a photo still loading from iCloud), so the composer waits
+    /// for it and a send or `clear()` drops it. Nil when no slot is left.
+    private func reserve() -> UUID? {
         guard slotsLeft > 0 else {
             error = "At most \(ImageSizing.maxImages) images per message."
-            return
+            return nil
         }
-        let thumb = ImageEncoder.thumbnail(data).map { UIImage(cgImage: $0) }
-        let pending = PendingImage(thumbnail: thumb)
+        let pending = PendingImage()
         images.append(pending)
-        let id = pending.id
+        return pending.id
+    }
+
+    /// The data of placeholder `id`, unless it was removed meanwhile.
+    private func fill(_ id: UUID, _ data: Data) {
+        guard let index = images.firstIndex(where: { $0.id == id }) else { return }
+        images[index].thumbnail = ImageEncoder.thumbnail(data).map { UIImage(cgImage: $0) }
         Task.detached(priority: .userInitiated) { [weak self] in
             let result = ImageEncoder.encode(data)
             await self?.finish(id, result)
@@ -49,10 +61,12 @@ final class Attachments {
 
     func load(_ items: [PhotosPickerItem]) {
         for item in items.prefix(slotsLeft) {
+            guard let id = reserve() else { return }
             Task {
                 if let data = try? await item.loadTransferable(type: Data.self) {
-                    add(data)
-                } else {
+                    fill(id, data)
+                } else if images.contains(where: { $0.id == id }) {
+                    remove(id)
                     error = "Could not load that photo."
                 }
             }

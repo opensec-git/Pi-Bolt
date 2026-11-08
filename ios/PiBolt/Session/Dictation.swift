@@ -28,6 +28,8 @@ final class Dictation {
     @ObservationIgnored private var onText: ((String) -> Void)?
     @ObservationIgnored private var startup: Task<Void, Never>?
     @ObservationIgnored private var tapInstalled = false
+    /// Counts dictations: a recognition callback of a stopped one (queued, or its final result) is ignored.
+    @ObservationIgnored private var generation = 0
 
     /// Starting or listening: the microphone button stops it.
     var isListening: Bool { state == .listening || state == .starting }
@@ -35,6 +37,7 @@ final class Dictation {
     /// Starts listening; `onText` gets the whole transcription each time it grows.
     func start(onText: @escaping (String) -> Void) {
         guard state != .listening, state != .starting else { return }
+        generation += 1
         self.onText = onText
         heard = ""
         state = .starting
@@ -45,6 +48,8 @@ final class Dictation {
         // A start still waiting for permissions does not go on to record.
         startup?.cancel()
         startup = nil
+        generation += 1
+        onText = nil
         if state == .starting { state = .idle }
         guard state == .listening || task != nil || tapInstalled else { return }
         limit?.cancel()
@@ -105,11 +110,12 @@ final class Dictation {
             engine.prepare()
             try engine.start()
             state = .listening
+            let current = generation
             task = recognizer.recognitionTask(with: request) { [weak self] result, error in
                 let text = result?.bestTranscription.formattedString
                 let final = result?.isFinal == true
                 Task { @MainActor [weak self] in
-                    guard let self else { return }
+                    guard let self, self.generation == current else { return }
                     if let text {
                         self.heard = text
                         self.onText?(text)
@@ -120,8 +126,8 @@ final class Dictation {
             // Recognition on Apple's server stops after about a minute: end cleanly before it does.
             limit = Task { [weak self] in
                 try? await Task.sleep(nanoseconds: 55_000_000_000)
-                guard !Task.isCancelled else { return }
-                self?.stop()
+                guard !Task.isCancelled, let self, self.generation == current else { return }
+                self.stop()
             }
         } catch {
             stop()
