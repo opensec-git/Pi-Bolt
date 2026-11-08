@@ -134,7 +134,9 @@ const selectOptions: FieldCheck = (value) => {
 	for (const [index, option] of value.entries()) {
 		const error =
 			typeof option === "string"
-				? str()(option, {})
+				? option.length > LIMITS.short
+					? `longer than ${LIMITS.short} characters`
+					: undefined
 				: isRecord(option)
 					? checkObject(option, { value: str(), label: str() }, ["value", "label"])
 					: "expected a string or { value, label }";
