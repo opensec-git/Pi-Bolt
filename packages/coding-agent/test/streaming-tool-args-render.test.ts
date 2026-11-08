@@ -101,6 +101,7 @@ interface StreamingHost {
 	ui: TUI;
 	sessionManager: { getCwd(): string };
 	getRegisteredToolDefinition(name: string): ReturnType<typeof createWriteToolDefinition>;
+	toolRowsCompactable(name: string): boolean;
 }
 
 const handleEvent = Reflect.get(InteractiveMode.prototype, "handleEvent") as (
@@ -133,6 +134,8 @@ function createHost(expanded: boolean): { host: StreamingHost; renderRequests: (
 		} as unknown as TUI,
 		sessionManager: { getCwd: () => process.cwd() },
 		getRegisteredToolDefinition: () => createWriteToolDefinition(process.cwd()),
+		// (A write row never compacts: it keeps what it drew while its arguments streamed in.)
+		toolRowsCompactable: () => false,
 	};
 	return { host, renderRequests: () => requests };
 }
