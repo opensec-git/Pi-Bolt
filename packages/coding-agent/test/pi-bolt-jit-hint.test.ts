@@ -14,7 +14,13 @@ import { loadExtensions } from "../src/core/extensions/loader.ts";
 import { ExtensionRunner } from "../src/core/extensions/runner.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import type * as PiBoltModule from "../src/pi-bolt.ts";
-import { type PiBoltBuild, parsePiBoltBuild, piBoltJitSwitchCommand, piBoltJitVariant } from "../src/pi-bolt.ts";
+import {
+	type PiBoltBuild,
+	parsePiBoltBuild,
+	piBoltJitSwitchCommand,
+	piBoltJitVariant,
+	piBoltReleasePlatform,
+} from "../src/pi-bolt.ts";
 import { createInMemoryModelRegistry } from "./model-runtime-test-utils.ts";
 
 // The build these tests run as: Pi-Bolt without the JIT, unless a test says otherwise. (In source runs PIBOLT is undefined.)
@@ -68,6 +74,18 @@ describe("the JIT build to switch to", () => {
 		expect(piBoltJitVariant("x64-baseline")).toBe("x64-jit");
 		expect(piBoltJitVariant("arm64")).toBe("arm64-jit");
 		expect(piBoltJitVariant("arm64-jit")).toBe("arm64-jit");
+		// The musl builds (#280) keep their libc: a glibc build does not run on Alpine.
+		expect(piBoltJitVariant("x64-musl")).toBe("x64-musl-jit");
+		expect(piBoltJitVariant("x64-musl-baseline")).toBe("x64-musl-jit");
+		expect(piBoltJitVariant("x64-musl-jit")).toBe("x64-musl-jit");
+	});
+
+	it("names the musl builds' release files with their libc (#280)", () => {
+		const arch = process.arch;
+		expect(piBoltReleasePlatform("x64-musl")).toBe(`${process.platform}-${arch}-musl`);
+		expect(piBoltReleasePlatform("x64-musl-baseline")).toBe(`${process.platform}-${arch}-musl`);
+		expect(piBoltReleasePlatform("x64-baseline")).toBe(`${process.platform}-${arch}`);
+		expect(piBoltReleasePlatform("arm64-jit")).toBe(`${process.platform}-${arch}`);
 	});
 
 	it("is installed as this one was installed", () => {

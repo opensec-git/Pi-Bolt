@@ -14,9 +14,11 @@ import {
 	sanitizeTerminalText,
 	startsWithText,
 	Text,
+	type TuiMouseEvent,
 } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { freshCopy } from "./fresh-copy.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -174,6 +176,13 @@ export class AssistantMessageComponent extends Container {
 	private built?: { key: string; theme: unknown };
 	/** The text and thinking blocks of the message, by index (BlockText). */
 	private blockTexts: Array<BlockText | undefined> = [];
+	/**
+	 * What renderLive() and renderShared() returned last, at which width, and whether nothing that changes the lines happened
+	 * since (`current`): what compact() keeps.
+	 */
+	private lastRendered?: { width: number; live?: LiveLines; shared?: string[]; current: boolean };
+	/** The lines compact() kept, without the components they were rendered from: what a render at `width` returns. */
+	private compacted?: { width: number; live: LiveLines; shared?: string[] };
 
 	constructor(
 		message?: AssistantMessage,
@@ -205,6 +214,7 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override invalidate(): void {
+		this.compacted = undefined;
 		super.invalidate();
 		this.built = undefined;
 		if (this.lastMessage) {
@@ -251,9 +261,19 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	override renderShared(width: number): string[] {
+		const compacted = this.compacted;
+		if (compacted !== undefined) {
+			if (compacted.width === width) {
+				this.noteRendered();
+				compacted.shared ??= compacted.live.lines.slice();
+				return compacted.shared;
+			}
+			this.thaw();
+		}
 		if (this.contentIsStale && this.lastMessage) this.buildContent(this.lastMessage);
 		const lines = super.renderShared(width);
 		if (this.hasToolCalls || lines.length === 0) {
+			this.noteLines(width, undefined, lines);
 			return lines;
 		}
 		// The marked lines are kept with the lines they were made from: same lines, same array (renderShared()).
@@ -264,6 +284,7 @@ export class AssistantMessageComponent extends Container {
 			this.markedFrom = lines;
 			this.markedLines = marked;
 		}
+		this.noteLines(width, undefined, this.markedLines);
 		return this.markedLines;
 	}
 
@@ -272,17 +293,29 @@ export class AssistantMessageComponent extends Container {
 	 * changed from the first line the children's lines changed from (and the line that was last before).
 	 */
 	renderLive(width: number): LiveLines {
+		const compacted = this.compacted;
+		if (compacted !== undefined) {
+			if (compacted.width === width) {
+				this.noteRendered();
+				return compacted.live;
+			}
+			this.thaw();
+		}
 		if (this.contentIsStale && this.lastMessage) this.buildContent(this.lastMessage);
 		const children = this.renderLiveChildren(width);
 		const count = children.lines.length;
 		if (this.hasToolCalls || count === 0) {
+			this.noteLines(width, children, undefined);
 			return children;
 		}
 		let marked = this.markedLive;
 		let start = 0;
 		if (marked?.from === children) {
 			const changed = children.changedSince(marked.revision);
-			if (changed === Number.POSITIVE_INFINITY) return marked.lines;
+			if (changed === Number.POSITIVE_INFINITY) {
+				this.noteLines(width, marked.lines, undefined);
+				return marked.lines;
+			}
 			// (The line that was last loses its end marker, and the line now last gets it.)
 			start = Math.min(changed, marked.length - 1, count - 1);
 		} else {
@@ -299,10 +332,100 @@ export class AssistantMessageComponent extends Container {
 		}
 		marked.revision = children.revision;
 		marked.length = count;
+		this.noteLines(width, marked.lines, undefined);
 		return marked.lines;
 	}
 
+	/** Records what a render returned (lastRendered): the lines of the same render, or of one after a change. */
+	private noteLines(width: number, live: LiveLines | undefined, shared: string[] | undefined): void {
+		const last = this.lastRendered;
+		if (last?.current && last.width === width) {
+			if (live !== undefined) last.live = live;
+			if (shared !== undefined) last.shared = shared;
+		} else {
+			this.lastRendered = { width, live, shared, current: true };
+		}
+	}
+
+	/**
+	 * For a settled message (not streaming in), rendered since it last changed: keeps the lines it rendered last and lets go of
+	 * the components it rendered them from (its Markdown components and what they keep), which in a long transcript are most
+	 * of the memory the transcript takes. A render at the same width returns those lines, the same arrays; anything that
+	 * would change them (another width, invalidate(), the setters, updateContent(), a click) makes the components again first
+	 * (thaw()), from the message and the settings kept. Returns whether it compacted.
+	 */
+	compact(): boolean {
+		const last = this.lastRendered;
+		if (
+			this.compacted !== undefined ||
+			this.isStreaming ||
+			this.contentIsStale ||
+			this.lastMessage === undefined ||
+			last?.live === undefined ||
+			!last.current
+		) {
+			return false;
+		}
+		this.compacted = { width: last.width, live: last.live, shared: last.shared };
+		this.lastRendered = undefined;
+		this.contentContainer = new Container();
+		this.clear();
+		this.addChild(this.contentContainer);
+		this.forgetRendered();
+		this.markdownBlocks = [];
+		this.blockTexts = [];
+		this.markedFrom = undefined;
+		this.markedLines = [];
+		this.markedLive = undefined;
+		this.built = undefined;
+		return true;
+	}
+
+	/** Whether compact() let go of the components (for tests). */
+	isCompacted(): boolean {
+		return this.compacted !== undefined;
+	}
+
+	/**
+	 * After compact(): a copy to put in this message's place (freshCopy()), with a content container of its own and its lines
+	 * in arrays of its own (the containers it is in take them as changed once, and join them again).
+	 */
+	compactedCopy(): AssistantMessageComponent {
+		const copy = freshCopy(this);
+		const compacted = this.compacted;
+		if (compacted !== undefined) {
+			const live = new LiveLineArray();
+			live.edit(0);
+			for (const line of compacted.live.lines) live.lines.push(line);
+			copy.compacted = { width: compacted.width, live };
+		}
+		copy.contentContainer = new Container();
+		copy.clear();
+		copy.addChild(copy.contentContainer);
+		copy.forgetRendered();
+		return copy;
+	}
+
+	/** Makes again the components compact() let go of; the containers this is in render it again. */
+	private thaw(): void {
+		if (this.compacted === undefined) return;
+		this.compacted = undefined;
+		if (this.lastMessage) this.buildContent(this.lastMessage);
+		reportRenderChange(this);
+	}
+
+	override handleMouse(event: TuiMouseEvent): ReturnType<Container["handleMouse"]> {
+		if (this.compacted !== undefined) {
+			// Only a left click does anything here (on a thinking block: its MouseRegion); any other event finds no handler.
+			if (event.type !== "click" || event.button !== "left") return undefined;
+			this.thaw();
+		}
+		return super.handleMouse(event);
+	}
+
 	updateContent(message: AssistantMessage, isStreaming = this.isStreaming): void {
+		this.compacted = undefined;
+		if (this.lastRendered !== undefined) this.lastRendered.current = false;
 		this.lastMessage = message;
 		this.isStreaming = isStreaming;
 		this.followTexts(message);
@@ -467,6 +590,8 @@ export class AssistantMessageComponent extends Container {
 	}
 
 	private buildContent(message: AssistantMessage): void {
+		this.compacted = undefined;
+		if (this.lastRendered !== undefined) this.lastRendered.current = false;
 		this.contentIsStale = false;
 		const parts = this.planContent(message);
 		const key = this.planKey(parts);

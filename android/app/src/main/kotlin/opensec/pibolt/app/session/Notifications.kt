@@ -222,6 +222,7 @@ object Notifications {
             is SessionActions.Answering.Options -> answering.options.forEachIndexed { i, option ->
                 builder.addAction(button(option, action(context, id, i, SessionActions.Request.Answer(key, dialog.id, option))))
             }
+            SessionActions.Answering.OpenApp -> {}
             is SessionActions.Answering.Typed ->
                 builder.addAction(reply("Answer", answering.label, action(context, id, 0, SessionActions.Request.Answer(key, dialog.id), typed = true), answering.choices))
         }

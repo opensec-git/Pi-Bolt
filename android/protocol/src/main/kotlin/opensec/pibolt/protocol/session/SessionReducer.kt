@@ -110,6 +110,8 @@ object SessionReducer {
             dialogs = hello.arr("dialogs").orEmpty().mapNotNull { (it as? JsonObject)?.let(::dialogFrom) },
             commands = hello.arr("commands").orEmpty().mapNotNull { (it as? JsonObject)?.let(::commandFrom) },
         )
+        // The views now; inline ones are placed by their anchors (tool call or turn) as the transcript is drawn.
+        for (view in hello.arr("views").orEmpty()) state = setView(state, view as? JsonObject ?: continue)
         return state
     }
 
@@ -527,7 +529,7 @@ object SessionReducer {
     // Extension UI
 
     private fun extensionRequest(state: SessionState, event: JsonObject): SessionState = when (event.str("method")) {
-        "select", "confirm", "input", "editor" -> {
+        "select", "confirm", "input", "editor", "showView" -> {
             val dialog = dialogFrom(event)
             if (dialog == null || state.dialogs.any { it.id == dialog.id }) state else state.copy(dialogs = state.dialogs + dialog)
         }
@@ -540,6 +542,8 @@ object SessionReducer {
                 else -> state.copy(statuses = state.statuses + (key to text))
             }
         }
+        "setView" -> setView(state, event)
+        "updateView" -> updateView(state, event)
         "setWidget" -> {
             val key = event.str("widgetKey")
             val lines = event.arr("widgetLines")?.mapNotNull { (it as? JsonPrimitive)?.content }
@@ -552,8 +556,44 @@ object SessionReducer {
         else -> state
     }
 
+    // The mobile UI kit (docs/mobile-ui.md#protocol)
+
+    /** `setView` (and a `remote_hello` view): show, replace or (without `view`) remove the view `viewKey`. */
+    private fun setView(state: SessionState, event: JsonObject): SessionState {
+        val key = event.str("viewKey") ?: return state
+        val json = event.obj("view") ?: return state.copy(views = state.views - key)
+        val slot = event.str("slot") ?: MobileViews.SLOT_PANEL
+        val entry = ViewEntry(key, slot, json, MobileViews.parse(json), event.long("rev") ?: 0, event.str("toolCallId"), event.long("turn"))
+        return state.copy(views = state.views + (key to entry))
+    }
+
+    /**
+     * `updateView`: the ops on top of the rev before them, to a view or an open sheet. A view at another rev (an update
+     * missed) waits for the next full `setView`, which Pi sends within 100 ms of a merged burst.
+     */
+    private fun updateView(state: SessionState, event: JsonObject): SessionState {
+        val key = event.str("viewKey") ?: return state
+        val ops = event.arr("ops") ?: return state
+        val rev = event.long("rev") ?: return state
+        fun next(entry: ViewEntry): ViewEntry? {
+            if (rev != entry.rev + 1) return null
+            val json = MobileViews.applyOps(entry.json, ops) ?: return null
+            return entry.copy(json = json, view = MobileViews.parse(json), rev = rev)
+        }
+        state.views[key]?.let { entry -> return next(entry)?.let { state.copy(views = state.views + (key to it)) } ?: state }
+        val sheet = state.dialogs.firstOrNull { it.viewKey == key && it.view != null } ?: return state
+        val updated = next(sheet.view!!) ?: return state
+        return state.copy(dialogs = state.dialogs.map { if (it === sheet) it.copy(view = updated) else it })
+    }
+
     fun dialogFrom(event: JsonObject): DialogRequest? {
         val id = event.str("id") ?: return null
+        if (event.str("method") == "showView") {
+            val key = event.str("viewKey") ?: return null
+            val json = event.obj("view") ?: return null
+            val entry = ViewEntry(key, "sheet", json, MobileViews.parse(json), event.long("rev") ?: 1)
+            return DialogRequest(id, DialogKind.View, json.str("title").orEmpty(), timeoutMs = event.long("timeout"), viewKey = key, view = entry)
+        }
         val kind = when (event.str("method")) {
             "select" -> DialogKind.Select
             "confirm" -> DialogKind.Confirm

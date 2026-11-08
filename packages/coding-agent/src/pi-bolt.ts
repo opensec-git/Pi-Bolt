@@ -324,10 +324,19 @@ export function piBoltUpdateEnvironment(version: string): NodeJS.ProcessEnv {
 	};
 }
 
-/** The JIT build for the CPU of `variant`: x64-jit for x64 and x64-baseline, arm64-jit for arm64. */
+/** The JIT build for the CPU of `variant`: x64-jit for x64 and x64-baseline, x64-musl-jit for the musl builds, arm64-jit for arm64. */
 export function piBoltJitVariant(variant: string = PIBOLT?.variant ?? "x64"): string {
 	if (variant.endsWith("-jit")) return variant;
+	if (variant.startsWith("x64-musl")) return "x64-musl-jit";
 	return variant.startsWith("arm64") ? "arm64-jit" : "x64-jit";
+}
+
+/**
+ * The platform as release files name it: linux-x64, darwin-arm64, and linux-x64-musl for a build for musl (Alpine), whose
+ * variants are x64-musl, x64-musl-baseline and x64-musl-jit.
+ */
+export function piBoltReleasePlatform(variant: string = PIBOLT?.variant ?? "x64"): string {
+	return `${process.platform}-${process.arch}${variant.startsWith("x64-musl") ? "-musl" : ""}`;
 }
 
 /**

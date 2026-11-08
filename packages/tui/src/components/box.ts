@@ -12,7 +12,7 @@ import {
 	type TuiMouseDispatchResult,
 	type TuiMouseEvent,
 } from "../tui.ts";
-import { applyBackgroundAround, flattenLines, visibleWidth } from "../utils.ts";
+import { applyBackgroundAround, flattenLines, INTERNED_LINE_LENGTH, internLine, visibleWidth } from "../utils.ts";
 
 type RenderCache = {
 	childLines: string[];
@@ -226,7 +226,9 @@ export class Box implements Component {
 		const padNeeded = Math.max(0, width - visLen);
 		const padded = line + " ".repeat(padNeeded);
 		// Already padded to width, so apply the background directly instead of measuring the line again.
-		return this.bgFn ? applyBackgroundAround(padded, this.bgFn) : padded;
+		const result = this.bgFn ? applyBackgroundAround(padded, this.bgFn) : padded;
+		// (Padding and blank lines are drawn alike in every box: one copy of each, internLine().)
+		return line.length <= INTERNED_LINE_LENGTH ? internLine(result) : result;
 	}
 }
 

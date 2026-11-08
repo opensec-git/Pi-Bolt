@@ -10,6 +10,8 @@ import type { ImageContent, Model } from "@earendil-works/pi-ai";
 import type { PromptDisposition, QueuedInputDisposition, SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { ViewSetRequest, ViewShowRequest, ViewUpdateRequest } from "../../core/mobile-ui/host.ts";
+import type { MobileViewValue, ViewEventKind } from "../../core/mobile-ui/types.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 
@@ -75,7 +77,10 @@ export type RpcCommand =
 
 	// Subagents: follow one run's own session (read-only)
 	| { id?: string; type: "subagent_subscribe"; runId: string }
-	| { id?: string; type: "subagent_unsubscribe"; runId: string };
+	| { id?: string; type: "subagent_unsubscribe"; runId: string }
+
+	// Client features: optional parts of the protocol the client implements (docs/mobile-ui.md#capability-negotiation)
+	| { id?: string; type: "set_client_features"; features: string[] };
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -249,6 +254,15 @@ export type RpcResponse =
 	| { id?: string; type: "response"; command: "subagent_subscribe"; success: true }
 	| { id?: string; type: "response"; command: "subagent_unsubscribe"; success: true }
 
+	// Client features
+	| {
+			id?: string;
+			type: "response";
+			command: "set_client_features";
+			success: true;
+			data: { features: string[] };
+	  }
+
 	// Error response (any command can fail)
 	| { id?: string; type: "response"; command: string; success: false; error: string };
 
@@ -292,7 +306,11 @@ export type RpcExtensionUIRequest =
 			widgetPlacement?: "aboveEditor" | "belowEditor";
 	  }
 	| { type: "extension_ui_request"; id: string; method: "setTitle"; title: string }
-	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string };
+	| { type: "extension_ui_request"; id: string; method: "set_editor_text"; text: string }
+	// The mobile UI kit (docs/mobile-ui.md#protocol), to clients that declared "views"
+	| ({ type: "extension_ui_request"; id: string } & ViewSetRequest)
+	| ({ type: "extension_ui_request"; id: string } & ViewUpdateRequest)
+	| ({ type: "extension_ui_request"; id: string } & ViewShowRequest);
 
 // ============================================================================
 // Extension UI Commands (stdin)
@@ -302,7 +320,19 @@ export type RpcExtensionUIRequest =
 export type RpcExtensionUIResponse =
 	| { type: "extension_ui_response"; id: string; value: string }
 	| { type: "extension_ui_response"; id: string; confirmed: boolean }
-	| { type: "extension_ui_response"; id: string; cancelled: true };
+	| { type: "extension_ui_response"; id: string; cancelled: true }
+	// A sheet (showView): the submitted form or pressed action, with the sheet's field values
+	| { type: "extension_ui_response"; id: string; nodeId: string; values?: Record<string, MobileViewValue> };
+
+/** A tap, committed field value or form submit in a view (docs/mobile-ui.md#events). No response. */
+export interface RpcExtensionUIEvent {
+	type: "extension_ui_event";
+	viewKey: string;
+	nodeId: string;
+	kind: ViewEventKind;
+	value?: MobileViewValue;
+	values?: Record<string, MobileViewValue>;
+}
 
 // ============================================================================
 // Helper type for extracting command types

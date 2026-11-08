@@ -79,6 +79,7 @@ private fun ShareAction.label(): String = when (this) {
     ShareAction.ImportFiles -> "Import files"
     ShareAction.NewProjectFromZip -> "New project"
     ShareAction.InsertText -> "Add to chat"
+    ShareAction.InstallPackage -> "Install package"
 }
 
 /**
@@ -101,7 +102,7 @@ fun ShareInSheet(content: SharedContent, maxImages: Int, projects: suspend () ->
     val needsProject = route.needsProject(chosen)
     PiSheet(onDismiss = onDismiss, state = state) {
         val what = when {
-            route.files == 0 -> "Text"
+            route.files == 0 -> if (ShareAction.InstallPackage in route.actions) "A Pi package link" else "Text"
             route.images == route.files -> if (route.images == 1) "1 image" else "${route.images} images"
             else -> if (route.files == 1) "1 file" else "${route.files} files"
         }
@@ -157,6 +158,7 @@ fun ShareInSheet(content: SharedContent, maxImages: Int, projects: suspend () ->
                 ShareAction.ImportFiles -> "Import"
                 ShareAction.NewProjectFromZip -> "Create project"
                 ShareAction.InsertText -> "Add to chat"
+                ShareAction.InstallPackage -> "Review package"
             },
             onClick = { if (ready) close { onChoose(ShareChoice(chosen, if (needsProject) project else null)) } },
             enabled = ready,

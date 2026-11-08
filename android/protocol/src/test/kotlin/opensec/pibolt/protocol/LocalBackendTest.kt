@@ -332,6 +332,24 @@ class LocalBackendTest {
     }
 
     @Test
+    fun anOpenSheetIsInTheSnapshotAsItIsNow() = runBlocking {
+        val b = backend()
+        val inbox = records(b)
+        assertTrue(b.connect())
+        inbox.next("remote_hello")
+        b.send(buildJsonObject { put("id", "p1"); put("type", "prompt"); put("message", "sheet") })
+        assertEquals("s1", inbox.next("extension_ui_request").str("id"))
+        assertEquals("updateView", inbox.next("extension_ui_request").str("method"))
+        b.park()
+        assertTrue(b.connect())
+        val sheet = inbox.next("remote_hello").arr("dialogs")?.single() as JsonObject
+        assertEquals("showView", sheet.str("method"))
+        assertEquals(2, sheet.long("rev"))
+        val field = sheet.obj("view")?.arr("body")?.single() as JsonObject
+        assertEquals("next", field.str("value"))
+    }
+
+    @Test
     fun closeStopsTheProcess() = runBlocking {
         val b = backend()
         val inbox = records(b)

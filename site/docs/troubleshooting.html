@@ -102,7 +102,10 @@
   Windows, open a new terminal after installing, or run the installer again and let it add Pi-Bolt to your PATH.</p>
 
 <h3 id="glibc-2-xx-not-found-or-no-such-file-or-directory-on-linux"><code>GLIBC_2.xx not found</code>, or <code>No such file or directory</code> on Linux<a class="anchor" href="#glibc-2-xx-not-found-or-no-such-file-or-directory-on-linux" aria-label="Link to this section">#</a></h3>
-<p>The system uses musl (Alpine) or a glibc older than 2.17. Pi-Bolt needs glibc 2.17 or later.</p>
+<p>The system has a glibc older than 2.17, or a glibc build is on a musl system (Alpine). Pi-Bolt needs glibc 2.17 or later,
+  or on musl its musl builds (<code>PIBOLT_VARIANT</code> <code>x64-musl</code>, <code>x64-musl-baseline</code> or
+  <code>x64-musl-jit</code>, which the installer picks there by itself) and <code>libstdc++</code>. Alpine on ARM64 is not
+  supported.</p>
 
 <h3 id="illegal-instruction"><code>Illegal instruction</code><a class="anchor" href="#illegal-instruction" aria-label="Link to this section">#</a></h3>
 <p>The CPU has no SSE4.2 (older than Intel Nehalem, 2008, or AMD Bulldozer, 2011). No Pi-Bolt build runs on it.</p>

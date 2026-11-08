@@ -18622,3 +18622,404 @@ index eac0b00f..f792da08 100644
 -- 
 2.54.0 (Apple Git-157)
 
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: OpenSec <contactus@opensec.in>
+Date: Sun, 8 Nov 2026 09:27:17 +0530
+Subject: [PATCH] fetch: free the request body once it is sent and the response
+ head arrived
+
+Backport of oven-sh/bun#47790 (open upstream), adapted to the Blob-parts body (#44507's
+`HTTPRequestBody::Parts`): fetch kept its copy of the request body until the response
+ended, so while a model streams its answer the process holds one request's size more.
+Measured on the Pi-Bolt runtime (an 8 MB POST of a Blob made of string parts, as Pi
+sends, to a server that streams for 3 s): own memory 24 MB during the stream, 16 MB
+after it ended, with the script still holding the Blob.
+
+Once the response head is reported (no redirect or retry sends the body again past that
+point), the client drops its view of the body (and, for a `Parts` body, the copy it was
+joined into and the staging buffer), and reports `request_body_released`; the JS thread
+then drops `request_body_parts` and detaches the body outside the lock. A streamed
+(ReadableStream) body is its producer's to end and is left alone.
+---
+ src/http/HTTPRequestBody.rs               |   3 +-
+ src/http/InternalState.rs                 |   8 ++
+ src/http/h2_client/encode.rs              |   1 +
+ src/http/h3_client/encode.rs              |   1 +
+ src/http/lib.rs                           |  27 ++++-
+ src/runtime/webcore/fetch/FetchTasklet.rs |  29 ++++-
+ test/js/web/fetch/fetch-leak.test.ts      | 133 +++++++++++++++++++++-
+ 7 files changed, 197 insertions(+), 5 deletions(-)
+
+diff --git a/src/http/HTTPRequestBody.rs b/src/http/HTTPRequestBody.rs
+index a924e3ee..2bef4573 100644
+--- a/src/http/HTTPRequestBody.rs
++++ b/src/http/HTTPRequestBody.rs
+@@ -14,7 +14,8 @@ use crate::fold_transfer_encoding;
+ // `core::ptr::read` in `start_queued_task`, so every arm must be
+ // trivially-droppable.
+ pub enum HTTPRequestBody<'a> {
+-    /// Borrowed bytes — caller guarantees they outlive the request.
++    /// Borrowed bytes — caller guarantees they outlive the request, or the
++    /// result that reports `HTTPClientResult::request_body_released`.
+     Bytes(&'a [u8]),
+     Sendfile(SendFile),
+     Stream(Stream),
+diff --git a/src/http/InternalState.rs b/src/http/InternalState.rs
+index edfe2e65..54cc3cf9 100644
+--- a/src/http/InternalState.rs
++++ b/src/http/InternalState.rs
+@@ -102,6 +102,9 @@ pub struct InternalStateFlags {
+     pub(crate) body_compressed: bool,
+     /// Held input or buffered decoder output remains for `HTTPClient::drain_response_body`.
+     pub(crate) decompress_output_pending: bool,
++    /// This attempt was started with a non-empty body; `original_request_body`
++    /// no longer tells once `HTTPClient::release_sent_request_body` emptied it.
++    pub(crate) has_request_body: bool,
+ }
+ 
+ impl InternalStateFlags {
+@@ -118,6 +121,7 @@ impl InternalStateFlags {
+             receive_paused: false,
+             body_compressed: false,
+             decompress_output_pending: false,
++            has_request_body: false,
+         }
+     }
+ }
+@@ -159,6 +163,10 @@ impl<'a> InternalState<'a> {
+     pub(crate) fn init(body: HTTPRequestBody<'a>) -> InternalState<'a> {
+         let request_body = bun_ptr::RawSlice::new(body.slice());
+         InternalState {
++            flags: InternalStateFlags {
++                has_request_body: body.len() > 0,
++                ..InternalStateFlags::new()
++            },
+             original_request_body: body,
+             request_body,
+             compressed_body: MutableString::init_empty(),
+diff --git a/src/http/h2_client/encode.rs b/src/http/h2_client/encode.rs
+index c13998b9..351bf049 100644
+--- a/src/http/h2_client/encode.rs
++++ b/src/http/h2_client/encode.rs
+@@ -320,6 +320,7 @@ pub(crate) fn drain_send_body(session: &mut ClientSession, stream: &mut Stream,
+             // pending_body[sent..] is a suffix of the original slice.
+             stream.pending_body = bun_ptr::RawSlice::new(&pending.slice()[sent..]);
+             if stream.pending_body.is_empty() {
++                stream.pending_body = bun_ptr::RawSlice::EMPTY;
+                 stream.sent_end_stream();
+                 client.state.request_stage = HTTPStage::Done;
+             }
+diff --git a/src/http/h3_client/encode.rs b/src/http/h3_client/encode.rs
+index 3bad80ab..9df32563 100644
+--- a/src/http/h3_client/encode.rs
++++ b/src/http/h3_client/encode.rs
+@@ -208,6 +208,7 @@ pub(crate) fn drain_send_body(stream: &mut Stream, qs: &mut quic::Stream) {
+     }
+     stream.pending_body = remaining;
+     if remaining.is_empty() {
++        stream.pending_body = bun_ptr::RawSlice::EMPTY;
+         stream.request_body_done = true;
+         qs.shutdown();
+         client.state.request_stage = HTTPStage::Done;
+diff --git a/src/http/lib.rs b/src/http/lib.rs
+index c52bfdaa..c68a597d 100644
+--- a/src/http/lib.rs
++++ b/src/http/lib.rs
+@@ -470,6 +470,9 @@ pub struct HTTPClientResult<'a> {
+     /// Set once ALPN selected h2 so the JS side writes raw bytes into the
+     /// streaming-body buffer instead of chunked-encoding them.
+     pub is_http2: bool,
++    /// The client is done with the `Bytes` / `Sendfile` request body it was
++    /// started with, so its owner may free it. Set at most once, with `metadata`.
++    pub request_body_released: bool,
+ 
+     pub fail: Option<crate::Error>,
+     /// Raw `getaddrinfo(3)` return code when `fail` is `DNSResolveFailed`;
+@@ -579,6 +582,7 @@ impl<'a> HTTPClientResult<'a> {
+             redirected: self.redirected,
+             can_stream: self.can_stream,
+             is_http2: self.is_http2,
++            request_body_released: self.request_body_released,
+             fail: self.fail,
+             dns_error: self.dns_error,
+             dns_hostname: self.dns_hostname,
+@@ -1648,6 +1652,24 @@ impl<'a> HTTPClient<'a> {
+         self.state.request_stage == RequestStage::Done
+     }
+ 
++    /// Lets go of a fully written body as the response head is reported: past
++    /// that point no redirect or retry sends it again. A `Stream` is its
++    /// producer's to end.
++    fn release_sent_request_body(&mut self) -> bool {
++        if !self.is_request_fully_sent()
++            || matches!(self.state.original_request_body, HTTPRequestBody::Stream(_))
++        {
++            return false;
++        }
++        self.state.original_request_body = HTTPRequestBody::Bytes(b"");
++        self.state.request_body = bun_ptr::RawSlice::EMPTY;
++        self.compressed_request_body = Vec::new();
++        // (A `Parts` body: the copy it was joined into, and the small parts copied together for a write.)
++        self.joined_request_body = Vec::new();
++        self.request_body_staging = Vec::new();
++        true
++    }
++
+     #[inline]
+     fn request_body(&self) -> &[u8] {
+         // `request_body` is a `RawSlice` into `original_request_body` (sibling
+@@ -3797,7 +3819,7 @@ impl<'a> HTTPClient<'a> {
+         socket: HttpSocket<IS_SSL>,
+     ) {
+         bun_core::scoped_log!(fetch, "closeAndFail: {:?}", err);
+-        if cfg!(target_os = "macos") && self.state.original_request_body.len() > 0 {
++        if cfg!(target_os = "macos") && self.state.flags.has_request_body {
+             GenHttpContext::<IS_SSL>::fail_socket(socket);
+         } else {
+             GenHttpContext::<IS_SSL>::terminate_socket(socket);
+@@ -4747,6 +4769,7 @@ impl<'a> HTTPClient<'a> {
+         let certificate_info = self.state.certificate_info.take();
+         if certificate_info.is_none() {
+             if let Some(metadata) = self.state.cloned_metadata.take() {
++                let request_body_released = self.release_sent_request_body();
+                 // transfer ownership of the metadata here
+                 return HTTPClientResult {
+                     metadata: Some(metadata),
+@@ -4766,6 +4789,7 @@ impl<'a> HTTPClient<'a> {
+                         || self.state.request_stage == RequestStage::ProxyBody)
+                         && self.flags.is_streaming_request_body,
+                     is_http2: self.flags.protocol != Protocol::Http1_1,
++                    request_body_released,
+                 };
+             }
+         }
+@@ -4790,6 +4814,7 @@ impl<'a> HTTPClient<'a> {
+                 || self.state.request_stage == RequestStage::ProxyBody)
+                 && self.flags.is_streaming_request_body,
+             is_http2: self.flags.protocol != Protocol::Http1_1,
++            request_body_released: false,
+         }
+     }
+ 
+diff --git a/src/runtime/webcore/fetch/FetchTasklet.rs b/src/runtime/webcore/fetch/FetchTasklet.rs
+index 3def9847..0ed0e1c9 100644
+--- a/src/runtime/webcore/fetch/FetchTasklet.rs
++++ b/src/runtime/webcore/fetch/FetchTasklet.rs
+@@ -507,6 +507,24 @@ impl FetchTasklet {
+         }
+     }
+ 
++    /// The HTTP thread reported `request_body_released`: a response that is
++    /// still streaming must not keep the request's bytes (or file) alive. The
++    /// caller holds `mutex` and `detach()`es the returned body once it does not.
++    fn take_released_request_body(&mut self) -> Option<HTTPRequestBody> {
++        if !core::mem::take(&mut self.result.request_body_released)
++            // A redirect dropped it; `abort_listener` may still have to cancel it.
++            || matches!(self.request_body, HTTPRequestBody::ReadableStream(_))
++        {
++            return None;
++        }
++        if let Some(http_) = self.http.as_mut() {
++            // Borrows `request_body` (a `Parts` body: through `request_body_parts`).
++            http_.request_body = http::HTTPRequestBody::Bytes(b"");
++        }
++        self.request_body_parts = Vec::new();
++        Some(core::mem::take(&mut self.request_body))
++    }
++
+     fn clear_data(&mut self) {
+         bun_output::scoped_log!(FetchTasklet, "clearData ");
+         // `http.client` borrows `url_proxy_buffer` / `unix_socket_path` / `request_headers`.
+@@ -957,10 +975,15 @@ impl FetchTasklet {
+             return Ok(());
+         }
+ 
++        let released_request_body = self.take_released_request_body();
+         let global_this = self.global_this;
+         // explicit cleanup at each return (a closure keeps borrowck happy)
+-        let cleanup = |this: &mut FetchTasklet| {
++        let cleanup = move |this: &mut FetchTasklet| {
+             this.mutex.unlock();
++            // Freeing a large body under the lock would stall the HTTP thread in `callback`.
++            if let Some(mut body) = released_request_body {
++                body.detach();
++            }
+             // if we are not done we wait until the next call
+             if is_done {
+                 // The HTTP response has been fully received. If the request body
+@@ -2050,7 +2073,7 @@ impl FetchTasklet {
+         // shallow alias, no post-queue detach), so the RefPtr<Store> already carries
+         // the caller's +1 — bumping it again here leaked one ref per
+         // Blob-backed body (issue: fetch-leak fixture #5 RSS growth).
+-        // `clear_data() → request_body.detach()` releases it.
++        // `take_released_request_body()`'s caller or `clear_data()` releases it.
+ 
+         let url = fetch_options.url;
+         let env = cx.vm().as_mut().transpiler.env_mut();
+@@ -2596,6 +2619,7 @@ impl FetchTasklet {
+         let prev_metadata = task_ref.result.metadata.take();
+         let prev_cert_info = task_ref.result.certificate_info.take();
+         let prev_can_stream = task_ref.result.can_stream;
++        let prev_request_body_released = task_ref.result.request_body_released;
+         // `result.body` borrows the HTTP thread's scratch buffer on non-terminal
+         // callbacks; the terminal callback carries the bytes in `body_owned`
+         // instead. Capture both before `detach_lifetime` clears them in the
+@@ -2608,6 +2632,7 @@ impl FetchTasklet {
+         // can_stream is a one-shot signal to start the request body stream; don't let a
+         // later coalesced result clobber it before the JS thread sees it.
+         task_ref.result.can_stream = task_ref.result.can_stream || prev_can_stream;
++        task_ref.result.request_body_released |= prev_request_body_released;
+ 
+         // Preserve pending certificate info if it was preovided in the previous update.
+         if task_ref.result.certificate_info.is_none() {
+diff --git a/test/js/web/fetch/fetch-leak.test.ts b/test/js/web/fetch/fetch-leak.test.ts
+index 7a72a775..e210d4ef 100644
+--- a/test/js/web/fetch/fetch-leak.test.ts
++++ b/test/js/web/fetch/fetch-leak.test.ts
+@@ -1,6 +1,18 @@
+ import { describe, expect, test } from "bun:test";
+-import { bunEnv, bunExe, tls as COMMON_CERT, gc, isASAN, isCI, isDebug } from "harness";
++import {
++  bunEnv,
++  bunExe,
++  tls as COMMON_CERT,
++  expectRssDeltaBelow,
++  gc,
++  isASAN,
++  isCI,
++  isDebug,
++  isLinux,
++  tempDir,
++} from "harness";
+ import { once } from "node:events";
++import { readdirSync, readlinkSync, realpathSync } from "node:fs";
+ import { createServer } from "node:http";
+ import net from "node:net";
+ import { join } from "node:path";
+@@ -1100,3 +1112,122 @@ test("fetch().arrayBuffer() of a large Content-Length body peaks at ~1x the payl
+     server.close();
+   }
+ }, 60000);
++
++describe("fetch() frees a sent request body while the response is still streaming", () => {
++  // Reads the whole request, then answers with a body that never ends.
++  const serve = () =>
++    Bun.serve({
++      port: 0,
++      idleTimeout: 0,
++      async fetch(req) {
++        await req.arrayBuffer();
++        if (new URL(req.url).pathname === "/303") return Response.redirect("/", 303);
++        return new Response(
++          new ReadableStream({
++            start(controller) {
++              controller.enqueue("data: 1\n\n");
++            },
++          }),
++          { headers: { "Content-Type": "text/event-stream" } },
++        );
++      },
++    });
++
++  const bodies = {
++    // Copied per fetch().
++    "typed array": `const body = () => ascii;`,
++    // Transcoded to UTF-8 per fetch().
++    "non-ASCII string": `const shared = ascii.latin1Slice() + "\\u00e9"; const body = () => shared;`,
++    // fetch() shares these with the JS value, so each fetch() needs a value that only it keeps.
++    "ASCII string": `const body = () => ascii.latin1Slice();`,
++    "Blob": `const body = () => new Blob([ascii]);`,
++    "typed array that a 303 redirect drops": `const body = () => ascii; path = "/303";`,
++    "typed array and its compressed copy": `const body = () => random; init.compress = { encoding: "zstd", level: 1 };`,
++  };
++  test.concurrent.each(Object.keys(bodies) as (keyof typeof bodies)[])("%s", async kind => {
++    using server = serve();
++    const code = /* js */ `
++      const ascii = Buffer.alloc(4 * 1024 * 1024, "a");
++      const random = new Uint8Array(ascii.length);
++      for (let i = 0; i < random.length; i += 65536) crypto.getRandomValues(random.subarray(i, i + 65536));
++      const init = { method: "POST" };
++      let path = "/";
++      ${bodies[kind]}
++      const responses = [];
++      async function run(count) {
++        for (let i = 0; i < count; i++) {
++          responses.push(await fetch(new URL(path, ${JSON.stringify(server.url.href)}), { ...init, body: body() }));
++        }
++        Bun.gc(true);
++        return process.memoryUsage.rss();
++      }
++      const before = await run(2);
++      const after = await run(24);
++      console.log(JSON.stringify({ deltaMiB: (after - before) / 1024 / 1024 }));
++      process.exit(0);
++    `;
++    // Unfixed: 96 MiB, the 24 bodies of 4 MiB. Fixed: about 0, but 24 to 32 MiB for the values that
++    // the GC frees on a debug build, where a loop that only makes them measures the same.
++    await expectRssDeltaBelow(["--smol", "-e", code], { release: 32, debug: 60 });
++  });
++
++  test.skipIf(!isLinux)("file sent with sendfile()", async () => {
++    using server = serve();
++    using dir = tempDir("fetch-sendfile-body", { "body.bin": Buffer.alloc(64 * 1024, "a") });
++    const path = join(realpathSync(String(dir)), "body.bin");
++    const response = await fetch(server.url, { method: "POST", body: Bun.file(path) });
++    const open = readdirSync("/proc/self/fd").filter(fd => {
++      try {
++        return readlinkSync(`/proc/self/fd/${fd}`) === path;
++      } catch {
++        return false;
++      }
++    });
++    expect(open).toEqual([]);
++    await response.body!.cancel();
++  });
++
++  // Passes without the early free too; fails if the free does not wait for the send.
++  test("but not one that is still being sent", async () => {
++    const body = Buffer.alloc(16 * 1024 * 1024, "a");
++    const head = Promise.withResolvers<void>();
++    const sockets: net.Socket[] = [];
++    const server = net.createServer(socket => {
++      sockets.push(socket);
++      let header = Buffer.alloc(0);
++      let received = -1;
++      let valid = true;
++      socket.on("error", head.reject);
++      socket.on("data", chunk => {
++        if (received === -1) {
++          header = Buffer.concat([header, chunk]);
++          const end = header.indexOf("\r\n\r\n");
++          if (end === -1) return;
++          chunk = header.subarray(end + 4);
++          received = 0;
++          // Answer with most of the body unread, and read on once fetch() has resolved.
++          socket.write("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n");
++          socket.pause();
++          head.promise.then(() => socket.resume());
++        }
++        received += chunk.length;
++        valid &&= chunk.equals(body.subarray(0, chunk.length));
++        if (received >= body.length) {
++          const result = JSON.stringify({ received, valid });
++          socket.end(`${result.length.toString(16)}\r\n${result}\r\n0\r\n\r\n`);
++        }
++      });
++    });
++    await once(server.listen(0, "127.0.0.1"), "listening");
++    try {
++      const { port } = server.address() as net.AddressInfo;
++      const response = await fetch(`http://127.0.0.1:${port}/`, { method: "POST", body });
++      Bun.gc(true);
++      head.resolve();
++      expect(await response.json()).toEqual({ received: body.length, valid: true });
++    } finally {
++      for (const socket of sockets) socket.destroy();
++      server.close();
++    }
++  });
++});
+-- 
+2.54.0 (Apple Git-157)
+
+

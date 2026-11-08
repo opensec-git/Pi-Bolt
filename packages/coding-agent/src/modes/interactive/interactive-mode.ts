@@ -89,6 +89,7 @@ import type {
 	ExtensionRunner,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUIHost,
 	ExtensionWidgetOptions,
 	MarkdownTransformer,
 	ProjectTrustContext,
@@ -97,10 +98,11 @@ import type {
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
-import { IdleCollector, processHeapBytes, runtimeFullCollection } from "../../core/idle-gc.ts";
+import { IDLE_GC_DELAY_MS, IdleCollector, processHeapBytes, runtimeFullCollection } from "../../core/idle-gc.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import type { McpHttpServerConfig } from "../../core/mcp-servers.ts";
 import { createCompactionSummaryMessage, createCustomMessage } from "../../core/messages.ts";
+import type { ViewChannel } from "../../core/mobile-ui/host.ts";
 import {
 	defaultModelPerProvider,
 	findExactModelReferenceMatch,
@@ -474,6 +476,9 @@ interface ExtensionChangelogUpdate {
 	markdown: string;
 }
 
+/** How many transcript entries compacting at once makes a full collection before their copies are made worth it. */
+const COMPACTED_COLLECT_FIRST = 256;
+
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private renderer: TuiMainScreen | TuiAltScreen;
@@ -507,6 +512,8 @@ export class InteractiveMode {
 	private activeStatusIndicator: StatusIndicator | undefined = undefined;
 	/** Set by the first /remote-control. */
 	private remoteControl: RemoteControlController | undefined = undefined;
+	/** Inline views of the mobile UI kit in the chat, by view key. */
+	private readonly inlineViews = new Map<string, Text>();
 	private activeWorkingIndicatorEmbedded = false;
 	private readonly idleStatus = new IdleStatus();
 	private workingMessage: string | undefined = undefined;
@@ -556,6 +563,8 @@ export class InteractiveMode {
 	private unsubscribeCapabilityChanges?: () => void;
 	/** Bun only: a full collection when idle after a run (see idle-gc.ts). */
 	private idleCollector: IdleCollector | undefined;
+	/** scheduleTranscriptCompaction()'s timer. */
+	private transcriptCompactionTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Bun only: opens the model connection while the user types after an idle period (see connection-warmer.ts). */
 	private connectionWarmer: ConnectionWarmer | undefined;
 	private signalCleanupHandlers: Array<() => void> = [];
@@ -1114,6 +1123,7 @@ export class InteractiveMode {
 		// Flush the completed startup state before loading the remaining syntax grammars.
 		this.ui.renderNow();
 		ttiTrace("startup.done");
+		this.scheduleTranscriptCompaction();
 		loadAllHighlightLanguagesOnDemand((languages) => {
 			if (!this.isInitialized) return;
 			// Transcript entries that cannot show code in those languages stay as they are drawn.
@@ -1127,6 +1137,7 @@ export class InteractiveMode {
 				() => this.ui.invalidate(),
 			);
 			this.ui.requestRender();
+			this.scheduleTranscriptCompaction();
 		});
 	}
 
@@ -2163,6 +2174,7 @@ export class InteractiveMode {
 		await this.session.bindExtensions({
 			uiContext,
 			mode: "tui",
+			viewChannel: this.viewChannel(),
 			abortHandler: () => {
 				this.restoreQueuedMessagesToEditor({ abort: true });
 			},
@@ -2413,6 +2425,62 @@ export class InteractiveMode {
 	}
 
 	/**
+	 * Whether a row of `toolName` may let go of its components once settled (ToolExecutionComponent.compact()): its renderers
+	 * are Pi's own (one of Pi's tools, or a tool that brings none; and no extension's renderer resolver gives others) and
+	 * draw a settled result from it alone (not edit and write, which keep what they drew while the call streamed in).
+	 */
+	private toolRowsCompactable(toolName: string): boolean {
+		if (toolName === "edit" || toolName === "write") return false;
+		const definition = this.session.getToolDefinition(toolName);
+		if (
+			this.session.getToolSourceInfo(toolName)?.source !== "builtin" &&
+			(definition?.renderCall !== undefined ||
+				definition?.renderResult !== undefined ||
+				definition?.renderShell !== undefined)
+		) {
+			return false;
+		}
+		const own = withBuiltInRenderers(toolName, definition);
+		return this.session.extensionRunner.resolveToolRenderers(toolName, () => own) === own;
+	}
+
+	/**
+	 * Once Pi has been idle for a moment, the settled entries of the transcript let go of the components their lines were
+	 * rendered from (AssistantMessageComponent.compact(), ToolExecutionComponent.compact()): in a long session those are
+	 * most of the memory the transcript takes. Each is then put back as a fresh copy (compactedCopy()), so that what
+	 * is left of it was not allocated among what rendering the transcript left behind. What has not been rendered since it last
+	 * changed stays as it is. Each call starts the wait again.
+	 */
+	private scheduleTranscriptCompaction(): void {
+		if (this.transcriptCompactionTimer) clearTimeout(this.transcriptCompactionTimer);
+		this.transcriptCompactionTimer = setTimeout(() => {
+			this.transcriptCompactionTimer = undefined;
+			if (this.session.isStreaming || this.session.isCompacting) return;
+			const pending = new Set<Component>(this.pendingTools.values());
+			const children = this.chatContainer.children;
+			const compacted: number[] = [];
+			for (let i = 0; i < children.length; i++) {
+				const child = children[i]!;
+				if (pending.has(child) || child === this.streamingComponent) continue;
+				if (child instanceof AssistantMessageComponent || child instanceof ToolExecutionComponent) {
+					if (child.compact()) compacted.push(i);
+				}
+			}
+			if (compacted.length === 0) return;
+			// Many at once (a resumed session): collect first, so that the copies take the room what rendering the
+			// transcript left behind gives back, instead of adding to the heap's highest point.
+			if (compacted.length >= COMPACTED_COLLECT_FIRST) runtimeFullCollection()?.();
+			// (A copy in each one's place: what is left of an entry was allocated while the transcript was rendered.)
+			for (const i of compacted) {
+				children[i] = (children[i] as AssistantMessageComponent | ToolExecutionComponent).compactedCopy();
+			}
+			// The frame after lays the copies out in place of the entries, which nothing holds then; it draws the same lines.
+			this.ui.requestRender();
+		}, IDLE_GC_DELAY_MS);
+		this.transcriptCompactionTimer.unref?.();
+	}
+
+	/**
 	 * Get a registered tool definition by name (for custom rendering).
 	 */
 	/**
@@ -2438,7 +2506,7 @@ export class InteractiveMode {
 
 		// Create a context for shortcut handlers
 		const createContext = (): ExtensionContext => ({
-			ui: this.createExtensionUIContext(),
+			ui: this.shortcutUIContext(extensionRunner),
 			mode: "tui",
 			hasUI: true,
 			cwd: this.sessionManager.getCwd(),
@@ -2822,7 +2890,58 @@ export class InteractiveMode {
 		};
 	}
 
-	private createExtensionUIContext(): ExtensionUIContext {
+	/**
+	 * Where the mobile UI kit's views go besides the terminal's text form (docs/mobile-ui.md): the phones of
+	 * `/remote-control` that render views. The terminal keeps showing the text form: panels as widgets, inline views in
+	 * the chat, sheets as dialogs that race the phones'.
+	 */
+	private viewChannel(): ViewChannel {
+		return {
+			hasNative: () => this.remoteControl?.hasViewClients() === true,
+			keepText: true,
+			send: (request) => this.remoteControl?.sendView(request),
+			sheetChanged: (viewKey, view, rev) => this.remoteControl?.updateViewSheet(viewKey, view, rev),
+			sheet: (request, signal) =>
+				this.remoteControl
+					? this.remoteControl.viewSheet(request, signal)
+					: new Promise((resolve) => signal.addEventListener("abort", () => resolve(undefined), { once: true })),
+			inlineText: (key, lines) => this.setInlineViewText(key, lines),
+			textStyle: () => ({
+				title: (text) => liveTheme.bold(text),
+				muted: (text) => liveTheme.fg("muted", text),
+				success: (text) => liveTheme.fg("success", text),
+				warning: (text) => liveTheme.fg("warning", text),
+				danger: (text) => liveTheme.fg("error", text),
+				accent: (text) => liveTheme.fg("accent", text),
+			}),
+		};
+	}
+
+	/** An inline view's text in the chat, updated in place; undefined removes it. A redrawn chat drops it. */
+	private setInlineViewText(key: string, lines: string[] | undefined): void {
+		const existing = this.inlineViews.get(key);
+		if (lines === undefined) {
+			if (existing) {
+				this.chatContainer.removeChild(existing);
+				this.inlineViews.delete(key);
+			}
+		} else if (existing && this.chatContainer.children.includes(existing)) {
+			existing.setText(lines.join("\n"));
+		} else {
+			const text = new Text(lines.join("\n"), 1, 0);
+			this.inlineViews.set(key, text);
+			this.chatContainer.addChild(text);
+		}
+		this.ui.requestRender();
+	}
+
+	/** A shortcut handler's UI: the terminal's, with the session's views (the mobile UI kit) from the runner. */
+	private shortcutUIContext(extensionRunner: ExtensionRunner): ExtensionUIContext {
+		const { setView, updateView, showView, getView } = extensionRunner.getUIContext();
+		return Object.assign(this.createExtensionUIContext(), { setView, updateView, showView, getView });
+	}
+
+	private createExtensionUIContext(): ExtensionUIHost {
 		return {
 			select: (title, options, opts) =>
 				this.remoteControl
@@ -3748,6 +3867,7 @@ export class InteractiveMode {
 										showImages: this.settingsManager.getShowImages(),
 										imageWidthCells: this.settingsManager.getImageWidthCells(),
 										outputPad: this.outputPad,
+										compactable: this.toolRowsCompactable(content.name),
 									},
 									this.getRegisteredToolDefinition(content.name),
 									this.ui,
@@ -3827,6 +3947,7 @@ export class InteractiveMode {
 							showImages: this.settingsManager.getShowImages(),
 							imageWidthCells: this.settingsManager.getImageWidthCells(),
 							outputPad: this.outputPad,
+							compactable: this.toolRowsCompactable(event.toolName),
 						},
 						this.getRegisteredToolDefinition(event.toolName),
 						this.ui,
@@ -3882,6 +4003,7 @@ export class InteractiveMode {
 
 				this.ui.requestRender();
 				this.idleCollector?.schedule();
+				this.scheduleTranscriptCompaction();
 				break;
 
 			case "agent_settled":
@@ -4235,6 +4357,16 @@ export class InteractiveMode {
 	): void {
 		this.pendingTools.clear();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
+		// (By tool name, for this transcript: a resumed session has a row per call.)
+		const compactableRows = new Map<string, boolean>();
+		const rowsCompactable = (toolName: string) => {
+			let compactable = compactableRows.get(toolName);
+			if (compactable === undefined) {
+				compactable = this.toolRowsCompactable(toolName);
+				compactableRows.set(toolName, compactable);
+			}
+			return compactable;
+		};
 		// Cache misses are not persisted, unlike successful cache-warming usage.
 		// Re-derive them and inject them after the assistant messages that paid for them.
 		const cacheMisses = this.settingsManager.getShowCacheMissNotices()
@@ -4279,6 +4411,7 @@ export class InteractiveMode {
 								showImages: this.settingsManager.getShowImages(),
 								imageWidthCells: this.settingsManager.getImageWidthCells(),
 								outputPad: this.outputPad,
+								compactable: rowsCompactable(content.name),
 							},
 							this.getRegisteredToolDefinition(content.name),
 							this.ui,
@@ -7460,6 +7593,7 @@ export class InteractiveMode {
 		this.unsubscribeCapabilityChanges?.();
 		this.unsubscribeCapabilityChanges = undefined;
 		this.idleCollector?.dispose();
+		if (this.transcriptCompactionTimer) clearTimeout(this.transcriptCompactionTimer);
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}

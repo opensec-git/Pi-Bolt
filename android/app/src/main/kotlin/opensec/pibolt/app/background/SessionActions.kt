@@ -131,6 +131,8 @@ object SessionActions {
 
     private fun answer(key: String, dialog: DialogRequest, given: String): Route {
         val value = given.trim()
+        // A sheet of the mobile UI kit has fields and buttons: it is answered in the app only.
+        if (dialog.kind == DialogKind.View) return Route.Again(key, dialog.id, "Open Pi-Bolt to answer")
         if (dialog.kind != DialogKind.Select) {
             if (dialog.kind == DialogKind.Confirm) {
                 return when (value.lowercase()) {
@@ -162,6 +164,9 @@ object SessionActions {
 
         data object YesNo : Answering
 
+        /** Answered in the app only (a sheet of the mobile UI kit): the notification opens the session. */
+        data object OpenApp : Answering
+
         /** An inline reply; [choices] are offered as suggestions. */
         data class Typed(val label: String, val choices: List<String> = emptyList()) : Answering
     }
@@ -178,5 +183,6 @@ object SessionActions {
             if (dialog.options.size in 1..OPTION_BUTTONS && dialog.options.all { it.length <= 24 }) Answering.Options(dialog.options)
             else Answering.Typed("Option name or number", dialog.options.take(5).map(::choice))
         DialogKind.Input, DialogKind.Editor -> Answering.Typed(dialog.placeholder?.takeIf { it.isNotBlank() } ?: "Answer")
+        DialogKind.View -> Answering.OpenApp
     }
 }

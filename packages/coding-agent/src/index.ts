@@ -111,6 +111,8 @@ export type {
 	ExtensionToolContext,
 	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUIHost,
+	ExtensionViewUI,
 	ExtensionVirtualModel,
 	ExtensionWidgetOptions,
 	FindToolCallEvent,
@@ -221,6 +223,25 @@ export {
 export type { ReadonlyFooterDataProvider } from "./core/footer-data-provider.ts";
 export type { RegisteredMcpServer } from "./core/mcp-servers.ts";
 export { convertToLlm } from "./core/messages.ts";
+export { viewToLines } from "./core/mobile-ui/text.ts";
+// The mobile UI kit (docs/mobile-ui.md)
+export type {
+	MobileView,
+	MobileViewButton,
+	MobileViewField,
+	MobileViewIcon,
+	MobileViewNode,
+	MobileViewOp,
+	MobileViewOptions,
+	MobileViewResult,
+	MobileViewSlot,
+	MobileViewTone,
+	MobileViewValue,
+	ShowViewOptions,
+	ViewEvent,
+	ViewEventKind,
+} from "./core/mobile-ui/types.ts";
+export { validateView } from "./core/mobile-ui/validate.ts";
 export { ModelRegistry } from "./core/model-registry.ts";
 export {
 	type ModelScopeDiagnostic,

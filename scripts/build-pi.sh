@@ -89,8 +89,9 @@ for package in "$(dirname "$AGENT")"/*/; do
 	[ -z "$stale" ] || die "Pi's sources changed since it was built ($stale): build it again (scripts/prepare-pi.sh, or npm run build:offline in $(dirname "$(dirname "$AGENT")"))"
 done
 PIBOLT_VERSION="$(cat "$PIBOLT_ROOT/VERSION")"
-# (Named as the archives are: on ARM64, baseline is the build.)
-CPU_VARIANT=$PIBOLT_ARCH; [ "$CPU" = baseline ] && [ "$PIBOLT_ARCH" = x64 ] && CPU_VARIANT=$PIBOLT_ARCH-baseline; [ "$JIT" = on ] && CPU_VARIANT=$PIBOLT_ARCH-jit
+# (Named as the archives are: on ARM64, baseline is the build. With musl: x64-musl, x64-musl-baseline, x64-musl-jit.)
+ARCH_VARIANT=$PIBOLT_ARCH${PIBOLT_LIBC:+-$PIBOLT_LIBC}
+CPU_VARIANT=$ARCH_VARIANT; [ "$CPU" = baseline ] && [ "$PIBOLT_ARCH" = x64 ] && CPU_VARIANT=$ARCH_VARIANT-baseline; [ "$JIT" = on ] && CPU_VARIANT=$ARCH_VARIANT-jit
 OUT="$(abspath "${OUT:-$PIBOLT_ROOT/out/pi-bolt}")"
 PROFILE="$(abspath "${PROFILE:-$PIBOLT_ROOT/profiles/pi-$VERSION}")"
 
@@ -127,6 +128,8 @@ stage_assets() {
 	# Pi's documentation and example extensions: Pi points the model (its system prompt) and the user (the first run, /login) at
 	# them, next to the README.
 	cp -R "$AGENT/docs" "$AGENT/examples" "$dir/"
+	# The skills Pi-Bolt ships (pibolt-mobile-ui), registered at startup (main.ts, getBundledSkillsDir).
+	cp -R "$AGENT/skills" "$dir/"
 	# Not the documentation's pictures (2.5 MB of PNG, about 4% of the download): the model reads the text, and a terminal
 	# shows none of them (the one the docs show has its alt text).
 	rm -rf "$dir/docs/images"
@@ -245,6 +248,6 @@ n = int(argv[0]); args = argv[1:1 + n]; entries = argv[1 + n:]
 json.dump({"env": dict(e.split("=", 1) for e in env), "args": args, "entries": entries}, open(sys.argv[1], "w"), indent=1)' \
 		"$record" "${#BUILD_ENV[@]}" "${BUILD_ENV[@]}" "${#BUILD_ARGS[@]}" "${BUILD_ARGS[@]}" "${ENTRIES[@]}"
 	"$BUN" "$PIBOLT_ROOT/scripts/make-kit.mjs" --bun "$BUN" --pi "$(realpath "$PI_DIR")" --agent "$AGENT" --record "$record" \
-		--profile "$PROFILE" --platform "$PIBOLT_PLATFORM" --version "$PIBOLT_VERSION" --out "$(abspath "$KIT")"
+		--profile "$PROFILE" --platform "$PIBOLT_RELEASE_PLATFORM" --version "$PIBOLT_VERSION" --out "$(abspath "$KIT")"
 	rm -f "$record"
 fi

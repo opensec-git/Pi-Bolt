@@ -12,7 +12,8 @@ name: publish
 # A draft signed by hand (scripts/sign-release.sh) is published as signed.
 #
 # npm: with trusted publishing (npm's OpenID Connect link to this workflow and its "npm" environment; no token stored here). Set it up once for each of
-# pi-bolt, pi-bolt-linux-x64, pi-bolt-linux-x64-baseline, pi-bolt-linux-x64-jit, pi-bolt-linux-arm64, pi-bolt-linux-arm64-jit,
+# pi-bolt, pi-bolt-linux-x64, pi-bolt-linux-x64-baseline, pi-bolt-linux-x64-jit, pi-bolt-linux-x64-musl, pi-bolt-linux-x64-musl-baseline,
+# pi-bolt-linux-x64-musl-jit, pi-bolt-linux-arm64, pi-bolt-linux-arm64-jit,
 # pi-bolt-darwin-arm64, pi-bolt-darwin-arm64-jit, @kushalkhemka/pi-bolt-win32-x64 and @kushalkhemka/pi-bolt-win32-x64-jit (docs/RELEASING.md), then set the repository variable NPM_TRUSTED_PUBLISHING to true. Until then the
 # npm job is skipped and the packages are published from the maintainer's machine.
 #

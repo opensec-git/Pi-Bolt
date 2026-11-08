@@ -14,11 +14,13 @@
 import * as crypto from "node:crypto";
 import type { AgentSessionRuntime } from "../../core/agent-session-runtime.ts";
 import type {
-	ExtensionUIContext,
 	ExtensionUIDialogOptions,
+	ExtensionUIHost,
 	ExtensionWidgetOptions,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
+import type { ViewChannel, ViewClientEvent, ViewSheetAnswer } from "../../core/mobile-ui/host.ts";
+import { VIEWS_FEATURE } from "../../core/mobile-ui/types.ts";
 import {
 	flushRawStdout,
 	takeOverStdout,
@@ -85,6 +87,40 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		{ resolve: (value: any) => void; reject: (error: Error) => void }
 	>();
 
+	// The client renders views (the mobile UI kit): it sent `set_client_features` with "views".
+	let clientViews = false;
+	const viewChannel: ViewChannel = {
+		hasNative: () => clientViews,
+		keepText: false,
+		send: (request) => output({ type: "extension_ui_request", id: crypto.randomUUID(), ...request }),
+		// A sheet the host closes first (its timeout, an abort, the session ending) is closed on the client too.
+		sheet: (request, signal) => {
+			const id = crypto.randomUUID();
+			return new Promise<ViewSheetAnswer | undefined>((resolve) => {
+				if (signal.aborted) {
+					resolve(undefined);
+					return;
+				}
+				const done = (answer: ViewSheetAnswer | undefined) => {
+					signal.removeEventListener("abort", onAbort);
+					pendingExtensionRequests.delete(id);
+					resolve(answer);
+				};
+				const onAbort = () => {
+					if (pendingExtensionRequests.has(id)) output({ type: "extension_ui_dismissed", id });
+					done(undefined);
+				};
+				signal.addEventListener("abort", onAbort, { once: true });
+				pendingExtensionRequests.set(id, {
+					resolve: (response: RpcExtensionUIResponse) =>
+						done("nodeId" in response || "cancelled" in response ? response : undefined),
+					reject: () => done(undefined),
+				});
+				output({ type: "extension_ui_request", id, ...request });
+			});
+		},
+	};
+
 	// Shutdown request flag
 	let shutdownRequested = false;
 	let shuttingDown = false;
@@ -136,7 +172,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 	/**
 	 * Create an extension UI context that uses the RPC protocol.
 	 */
-	const createExtensionUIContext = (): ExtensionUIContext => ({
+	const createExtensionUIContext = (): ExtensionUIHost => ({
 		select: (title, options, opts) =>
 			createDialogPromise(opts, undefined, { method: "select", title, options, timeout: opts?.timeout }, (r) =>
 				"cancelled" in r && r.cancelled ? undefined : "value" in r ? r.value : undefined,
@@ -323,6 +359,7 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		await session.bindExtensions({
 			uiContext: createExtensionUIContext(),
 			mode: "rpc",
+			viewChannel,
 			commandContextActions: {
 				waitForIdle: () => session.waitForIdle(),
 				newSession: async (options) => runtimeHost.newSession(options),
@@ -727,6 +764,18 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				return success(id, "subagent_unsubscribe");
 			}
 
+			// =================================================================
+			// Client features
+			// =================================================================
+
+			case "set_client_features": {
+				const features = Array.isArray(command.features) ? command.features : [];
+				clientViews = features.includes(VIEWS_FEATURE);
+				// Views set before (at session start, say) reach the client now; their text widgets go.
+				if (clientViews) session.extensionRunner.resyncViews();
+				return success(id, "set_client_features", { features: clientViews ? [VIEWS_FEATURE] : [] });
+			}
+
 			default: {
 				const unknownCommand = command as { type: string };
 				return error(id, unknownCommand.type, `Unknown command: ${unknownCommand.type}`);
@@ -794,6 +843,12 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				pendingExtensionRequests.delete(response.id);
 				pending.resolve(response);
 			}
+			return;
+		}
+
+		// A view's tap, change or submit: checked against the view, then a `view_event` for extensions. No response.
+		if (typeof parsed === "object" && parsed !== null && "type" in parsed && parsed.type === "extension_ui_event") {
+			session.extensionRunner.handleViewEvent(parsed as ViewClientEvent);
 			return;
 		}
 

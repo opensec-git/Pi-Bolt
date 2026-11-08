@@ -254,7 +254,7 @@ fun Features2Sheets(f2: Features2State, host: Features2Host, state: State<Sessio
         F2Sheet.Sessions -> controller.project?.let { project ->
             SessionBrowserSheet(app.engine, project, controller, onOpen = { close(); host.openSession(it) }, onMessage = host.message, onDismiss = close)
         } ?: close()
-        F2Sheet.Packages -> PackagesSheet(app.engine, controller.takeIf { host.isLocal }, reload, host.message, close)
+        F2Sheet.Packages -> PackagesSheet(app.engine, app.http, controller.takeIf { host.isLocal }, reload, host.message, close)
         F2Sheet.Mcp -> McpSheet(app.engine, reload, host.message, close)
         F2Sheet.Skills -> SkillsSheet(controller, onInsert = host.insert, onView = host.view, onDismiss = close)
         F2Sheet.Trust -> controller.project?.let { TrustSheet(app.engine.agentDir, it, reload, host.message, close) } ?: close()

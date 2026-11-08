@@ -45,8 +45,10 @@ _spec.loader.exec_module(NPM_EXTENSIONS)
 # Engine side files PI_PACKAGE_DIR must hold (theme/, export-html/, assets/, package.json per the contract), plus the
 # docs the system prompt points the model at and photon's wasm. Not shipped: CHANGELOG.md (interactive "what's new"
 # only), native/ (an X11 addon), the doom example's prebuilt game.
-PACKAGE_KEEP = ["theme", "export-html", "assets", "package.json", "README.md", "docs", "examples", "photon_rs_bg.wasm"]
+PACKAGE_KEEP = ["theme", "export-html", "assets", "package.json", "README.md", "docs", "examples", "skills", "photon_rs_bg.wasm"]
 PACKAGE_SKIP = ["examples/extensions/doom-overlay/doom/build"]
+# Kept when the tarball has them: releases before Pi-Bolt shipped skills (pibolt-mobile-ui) have none.
+PACKAGE_OPTIONAL = {"skills"}
 
 
 def read_env(path):
@@ -185,7 +187,7 @@ def copy_package(src_root):
                     listed.append(os.path.join(rel_dir, fn))
         elif os.path.isfile(src):
             listed.append(item)
-        else:
+        elif item not in PACKAGE_OPTIONAL:
             sys.exit(f"engine tarball lacks {item}")
     for rel in listed:
         os.makedirs(os.path.dirname(f"{dst_root}/{rel}"), exist_ok=True)

@@ -16,6 +16,8 @@ import {
 	applyBackgroundToLine,
 	cjkPunctuationRegex,
 	flattenLines,
+	INTERNED_LINE_LENGTH,
+	internLine,
 	isWebLink,
 	type SanitizedTerminalText,
 	sanitizeTerminalText,
@@ -1079,14 +1081,17 @@ export class Markdown implements Component {
 				return;
 			}
 			const lineWithMargins = leftMargin + line + rightMargin;
+			let drawn: string;
 			if (bgFn) {
-				lines.push(applyBackgroundToLine(lineWithMargins, width, bgFn));
+				drawn = applyBackgroundToLine(lineWithMargins, width, bgFn);
 			} else {
 				// No background - just pad to width
 				const visibleLen = visibleWidth(lineWithMargins);
 				const paddingNeeded = Math.max(0, width - visibleLen);
-				lines.push(lineWithMargins + " ".repeat(paddingNeeded));
+				drawn = lineWithMargins + " ".repeat(paddingNeeded);
 			}
+			// (Blank lines and code fences are drawn alike in every message: one copy of each, internLine().)
+			lines.push(line.length <= INTERNED_LINE_LENGTH ? internLine(drawn) : drawn);
 		};
 		for (const line of this.renderToken(token, contentWidth, nextTokenType)) {
 			// Wrap lines (NO padding, NO background yet)
@@ -1230,7 +1235,7 @@ export class Markdown implements Component {
 		const emptyLines: string[] = [];
 		for (let i = 0; i < this.paddingY; i++) {
 			const line = bgFn ? applyBackgroundToLine(emptyLine, width, bgFn) : emptyLine;
-			emptyLines.push(line);
+			emptyLines.push(internLine(line));
 		}
 		// (The lines of the blocks are flat already: renderBlock().)
 		flattenLines(emptyLines);

@@ -289,8 +289,11 @@ Host to client:
 | `response` | Answer to a client command, as in [RPC Commands](rpc-commands.md). |
 | `extension_ui_request` | A dialog (`select`, `confirm`, `input`, `editor`) or `notify`, as in [RPC Extension UI](rpc-extension-ui.md). The same dialog is open in the terminal; whichever side answers first wins. |
 | `extension_ui_dismissed` | `{ id }`: the dialog was answered in the terminal, timed out or was cancelled; the client closes it. |
+| `extension_ui_request` (views) | `setView`, `updateView` and `showView` of the [mobile UI kit](mobile-ui.md#protocol), to phones that sent `set_client_features` with `"views"`. `remote_hello` carries the current views as `views` (`[{ viewKey, slot, view, rev, toolCallId?, turn? }]`) to every phone, and `"views"` in `features`; open sheets are among its `dialogs`. |
 
-Client to host: `remote_ready` once, first; then RPC commands with an `id` for correlation, and `extension_ui_response`. Accepted commands: `prompt`,
+Client to host: `remote_ready` once, first; then RPC commands with an `id` for correlation, `extension_ui_response`, and
+`extension_ui_event` (a view's tap, change or submit, [mobile UI kit](mobile-ui.md#events)). `set_client_features` applies
+to that phone's connection only. Accepted commands: `set_client_features`, `prompt`,
 `steer`, `follow_up`, `abort`, `clear_queue`, `get_state`, `get_messages`, `get_available_models`, `set_model`,
 `cycle_model`, `get_available_thinking_levels`, `set_thinking_level`, `cycle_thinking_level`, `compact`, `abort_retry`,
 `get_session_stats`, `get_commands`, `get_last_assistant_text`, `set_session_name`, and the [review commands](#review)

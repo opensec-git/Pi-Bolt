@@ -19,7 +19,7 @@ need curl
 REPO="https://github.com/opensec-git/Pi-Bolt"
 if [ "$TAG" = latest ]; then BASE="$REPO/releases/latest/download"; else BASE="$REPO/releases/download/$TAG"; fi
 BASE="${PIBOLT_DOWNLOAD_BASE:-$BASE}"
-NAME=pi-bolt-runtime-$PIBOLT_PLATFORM.tar.gz
+NAME=pi-bolt-runtime-$PIBOLT_RELEASE_PLATFORM.tar.gz
 
 # verify_signature FILE SIG KEY: dies unless SIG is KEY's signature of FILE.
 verify_signature() {
@@ -49,9 +49,12 @@ verify_signature "$TMP/SHA256SUMS" "$TMP/SHA256SUMS.sig" "$PIBOLT_ROOT/keys/rele
 check_sum "$TMP" "$NAME" || die "checksum mismatch for $NAME"
 tar -C "$TMP" -xzf "$TMP/$NAME"
 mkdir -p "$PIBOLT_WORK/runtime"
-install -m 755 "$TMP/pi-bolt-runtime-$PIBOLT_PLATFORM/bun" "$PIBOLT_WORK/runtime/bun"
-# Which engine it is, as the release's signed checksums give it (scripts/build-pi.sh records it, for `pi-bolt doctor`).
-if curl -fsSL -o "$TMP/RUNTIME_STAMP" "$BASE/RUNTIME_STAMP" 2>/dev/null && check_sum "$TMP" RUNTIME_STAMP; then
+install -m 755 "$TMP/pi-bolt-runtime-$PIBOLT_RELEASE_PLATFORM/bun" "$PIBOLT_WORK/runtime/bun"
+# Which engine it is, as the release's signed checksums give it (scripts/build-pi.sh records it, for `pi-bolt doctor`): the musl
+# runtime's archive has its own stamp (scripts/runtime-stamp.sh musl), checked with the archive.
+if [ -n "$PIBOLT_LIBC" ]; then
+	cp "$TMP/pi-bolt-runtime-$PIBOLT_RELEASE_PLATFORM/RUNTIME_STAMP" "$PIBOLT_WORK/runtime/RUNTIME_STAMP" 2>/dev/null || rm -f "$PIBOLT_WORK/runtime/RUNTIME_STAMP"
+elif curl -fsSL -o "$TMP/RUNTIME_STAMP" "$BASE/RUNTIME_STAMP" 2>/dev/null && check_sum "$TMP" RUNTIME_STAMP; then
 	cp "$TMP/RUNTIME_STAMP" "$PIBOLT_WORK/runtime/RUNTIME_STAMP"
 else
 	rm -f "$PIBOLT_WORK/runtime/RUNTIME_STAMP"

@@ -55,6 +55,7 @@ import opensec.pibolt.protocol.rpc.thinkingLevels
 import opensec.pibolt.protocol.session.AssistantTextItem
 import opensec.pibolt.protocol.session.SUBAGENT_STREAM_FEATURE
 import opensec.pibolt.protocol.session.SessionReducer
+import opensec.pibolt.protocol.session.VIEWS_FEATURE
 import opensec.pibolt.protocol.session.SubagentReducer
 import opensec.pibolt.app.ui.session.ask.AskReply
 import opensec.pibolt.app.ui.session.ask.AskResponder
@@ -575,7 +576,7 @@ class SessionController private constructor(
             "extension_ui_request" -> when (event.str("method")) {
                 "notify" -> _effects.tryEmit(SessionEffect.Notify(event.str("message").orEmpty(), event.str("notifyType") ?: "info"))
                 "set_editor_text" -> _effects.tryEmit(SessionEffect.EditorText(event.str("text").orEmpty()))
-                "select", "confirm", "input", "editor" -> if (!app.isForeground) {
+                "select", "confirm", "input", "editor", "showView" -> if (!app.isForeground) {
                     SessionReducer.dialogFrom(event)?.let { Notifications.needsAnswer(app, this, it) }
                 }
             }
@@ -588,6 +589,9 @@ class SessionController private constructor(
                 scope.launch { refreshState() }
             }
             "remote_hello" -> {
+                // Extensions' views (the mobile UI kit) drawn natively: Pi sends them all again after this, as the
+                // snapshot of a rebuilt transcript lacks them. A computer before the kit refuses, and keeps text.
+                scope.launch { rpc.setClientFeatures(listOf(VIEWS_FEATURE)) }
                 // The computer forgot this phone's subagent streams (a new connection or session): ask again.
                 val watched = watchedSubagents.value
                 if (watched.isNotEmpty()) {
@@ -1055,6 +1059,14 @@ class SessionController private constructor(
     fun confirm(id: String, confirmed: Boolean) = answered(id, rpc.respondConfirm(id, confirmed))
 
     fun cancelDialog(id: String) = answered(id, rpc.respondCancel(id))
+
+    /** Closes a sheet of the mobile UI kit with its submitted form or pressed action [nodeId] and its field [values]. */
+    fun answerView(id: String, nodeId: String, values: JsonObject) = answered(id, rpc.respondView(id, nodeId, values))
+
+    /** A view's tap, committed field value or form submit, for the extension (docs/mobile-ui.md#events). */
+    fun viewEvent(viewKey: String, nodeId: String, kind: String, value: JsonPrimitive? = null, values: JsonObject? = null) {
+        if (!rpc.viewEvent(viewKey, nodeId, kind, value, values)) _effects.tryEmit(SessionEffect.Error("Not connected"))
+    }
 
     private fun answered(id: String, sent: Boolean) {
         if (sent) mutate { s -> s.copy(dialogs = s.dialogs.filterNot { it.id == id }) }

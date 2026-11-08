@@ -67,6 +67,14 @@ import type { ReadonlyFooterDataProvider } from "../footer-data-provider.ts";
 import type { KeybindingsManager } from "../keybindings.ts";
 import type { McpServerConfig, McpServerRegistry, RegisteredMcpServer } from "../mcp-servers.ts";
 import type { CustomMessage } from "../messages.ts";
+import type {
+	MobileView,
+	MobileViewOp,
+	MobileViewOptions,
+	MobileViewResult,
+	ShowViewOptions,
+	ViewEvent,
+} from "../mobile-ui/types.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
 import type {
@@ -161,7 +169,8 @@ export interface KeybindingHints {
  * UI context for extensions to request interactive UI.
  * Each mode (interactive, RPC, print) provides its own implementation.
  */
-export interface ExtensionUIContext {
+/** The UI a mode gives extensions (`ExtensionUIContext` without the mobile UI kit, which Pi adds for every mode). */
+export interface ExtensionUIHost {
 	/** Show a selector and return the user's choice. */
 	select(title: string, options: string[], opts?: ExtensionUIDialogOptions): Promise<string | undefined>;
 
@@ -318,6 +327,23 @@ export interface ExtensionUIContext {
 	/** Set tool output expansion state. */
 	setToolsExpanded(expanded: boolean): void;
 }
+
+/** The mobile UI kit (docs/mobile-ui.md): native views in the Pi-Bolt app, text in the terminal. */
+export interface ExtensionViewUI {
+	/**
+	 * Shows, replaces (same key) or removes (undefined) a view in a slot: `panel` (default, above the composer),
+	 * `inline` (in the transcript) or `page`. Throws when the view is invalid.
+	 */
+	setView(key: string, view: MobileView | undefined, options?: MobileViewOptions): void;
+	/** Applies ops to the view `key` (or an open sheet's), atomically. Throws when an op fails. */
+	updateView(key: string, ops: MobileViewOp[]): void;
+	/** Opens a modal sheet; resolves with the submitted form or pressed action, or undefined when dismissed. */
+	showView(view: MobileView, options?: ShowViewOptions): Promise<MobileViewResult | undefined>;
+	/** The view `key` as Pi holds it now, with the user's committed field values. */
+	getView(key: string): MobileView | undefined;
+}
+
+export interface ExtensionUIContext extends ExtensionUIHost, ExtensionViewUI {}
 
 // ============================================================================
 // Extension Context
@@ -1056,7 +1082,7 @@ export interface AgentSettledEvent {
 	aborted: boolean;
 }
 
-export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom";
+export type UIPromptKind = "select" | "confirm" | "input" | "editor" | "custom" | "view";
 
 /** Fired when Pi starts waiting on a blocking user-facing extension UI prompt. */
 export interface UIPromptStartEvent {
@@ -1441,6 +1467,7 @@ export type ExtensionEvent =
 	| AgentSettledEvent
 	| UIPromptStartEvent
 	| UIPromptEndEvent
+	| ViewEvent
 	| TurnStartEvent
 	| TurnEndEvent
 	| MessageStartEvent
@@ -1672,6 +1699,8 @@ export interface ExtensionAPI {
 	on(event: "agent_settled", handler: ExtensionHandler<AgentSettledEvent>): () => void;
 	on(event: "ui_prompt_start", handler: ExtensionHandler<UIPromptStartEvent>): () => void;
 	on(event: "ui_prompt_end", handler: ExtensionHandler<UIPromptEndEvent>): () => void;
+	/** A tap, committed field value or form submit in a view (docs/mobile-ui.md#events). */
+	on(event: "view_event", handler: ExtensionHandler<ViewEvent>): () => void;
 	on(event: "turn_start", handler: ExtensionHandler<TurnStartEvent>): () => void;
 	on(event: "turn_end", handler: ExtensionHandler<TurnEndEvent, TurnEndEventResult>): () => void;
 	on(event: "message_start", handler: ExtensionHandler<MessageStartEvent>): () => void;

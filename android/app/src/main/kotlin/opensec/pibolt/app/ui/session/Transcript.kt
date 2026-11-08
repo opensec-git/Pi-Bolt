@@ -1,5 +1,7 @@
 package opensec.pibolt.app.ui.session
 
+import opensec.pibolt.app.ui.session.views.InlineViewRow
+import opensec.pibolt.protocol.session.MobileViews
 import androidx.compose.runtime.Immutable
 import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
@@ -148,7 +150,10 @@ fun Transcript(
             // With thinking off, an empty reasoning block gets no "Thinking" row.
             val (all, errors) = ErrorNotices.collapse(s.allItems, s.retry)
             val items = ThinkingRules.visible(all, ThinkingRules.on(s.thinkingLevel, s.model?.reasoning))
-            val list = TranscriptModel.rows(items, liveTurn, open, memory.turnDurations, md, groups, memory.pending.value, memory.aliases, s.subagents).let { list ->
+            val list = TranscriptModel.rows(
+                items, liveTurn, open, memory.turnDurations, md, groups, memory.pending.value, memory.aliases, s.subagents,
+                inline = s.views.values.filter { it.slot == MobileViews.SLOT_INLINE },
+            ).let { list ->
                 if (!recent || liveTurn) list else markLastTurnLive(list)
             }
             RowsState(list, uniqueCache.unique(list), errors)
@@ -605,5 +610,6 @@ private fun LazyItemScope.RowView(
             modifier = base.padding(top = Pi.dims.stepGap + 2.dp, bottom = 2.dp).riseIn(row.key, row.live, memory, 6.dp),
         )
         is SubagentNoticeRow -> SubagentNoticeRowView(row, modifier = base.riseIn(row.key, row.live, memory, 6.dp))
+        is ViewRow -> InlineViewRow(row.viewKey, modifier = base.padding(top = Pi.dims.stepGap + 2.dp, bottom = 2.dp).riseIn(row.key, row.live, memory, 6.dp))
     }
 }

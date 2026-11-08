@@ -70,6 +70,8 @@ export {
 	ExtensionRunner,
 	type ExtensionShortcut,
 	type ExtensionUIContext,
+	type ExtensionUIHost,
+	type ExtensionViewUI,
 	type InlineExtension,
 	type LoadExtensionsResult,
 	type MessageRenderer,

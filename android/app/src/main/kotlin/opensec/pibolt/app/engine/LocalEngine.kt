@@ -342,15 +342,15 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         for (dir in dirs) SafeFiles.deleteTree(dir)
     }
 
-    override suspend fun cli(args: List<String>, cwd: File?, timeoutMs: Long): CliResult = withContext(Dispatchers.IO) {
+    override suspend fun cli(args: List<String>, cwd: File?, timeoutMs: Long, env: Map<String, String>): CliResult = withContext(Dispatchers.IO) {
         val m = ensureSetup() ?: return@withContext CliResult(-1, "", unavailable ?: "The engine is not available")
         val dir = cwd?.let(::engineForm) ?: paths.home
         val process = runCatching {
             ProcessBuilder(listOf(paths.engine.path) + args).directory(dir).apply {
-                val env = environment()
-                val wanted = engineEnvironment(paths, env.toMap(), timeZone(), m.env) + ("NO_COLOR" to "1")
-                env.clear()
-                env.putAll(wanted)
+                val current = environment()
+                val wanted = engineEnvironment(paths, current.toMap(), timeZone(), m.env) + ("NO_COLOR" to "1") + env.filterKeys { it in EngineApi.CLI_ENV }
+                current.clear()
+                current.putAll(wanted)
             }.redirectInput(ProcessBuilder.Redirect.from(File("/dev/null"))).start()
         }.getOrElse { return@withContext CliResult(-1, "", it.message ?: "Could not start the engine") }
         val out = async { process.inputStream.bufferedReader().readText() }
