@@ -23,6 +23,7 @@ import opensec.pibolt.app.data.RecentPrompts
 import opensec.pibolt.app.data.SettingsStore
 import opensec.pibolt.app.engine.EngineApi
 import opensec.pibolt.app.engine.LocalEngine
+import opensec.pibolt.app.engine.PageEngine
 import opensec.pibolt.app.engine.ModelsFile
 import opensec.pibolt.app.git.GitRunner
 import opensec.pibolt.app.git.ProcessGitRunner
@@ -110,6 +111,9 @@ class PiBoltApp : Application() {
 
     /** The engine on this phone: projects, local sessions, provider keys. */
     val engine: EngineApi get() = localEngine
+
+    /** Packages' pages and Home tiles without a session (docs/mobile-ui.md#package-pages-and-home-tiles). */
+    val pages: PageEngine by lazy { PageEngine(this, localEngine) }
 
     /** Work that outlives any screen, on the main thread (UI-side bookkeeping such as turn durations). */
     val appScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -259,9 +263,14 @@ class PiBoltApp : Application() {
         // the next open after a quick look at another app a cold start. It stops a minute later unless the app is back.
         @Suppress("DEPRECATION")
         when {
-            level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL ->
+            level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
                 localEngine.trimMemory("trim level $level", critical = true)
-            level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE -> localEngine.trimMemory("trim level $level")
+                pages.trim(critical = true)
+            }
+            level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE -> {
+                localEngine.trimMemory("trim level $level")
+                pages.trim(critical = false)
+            }
             level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> localEngine.trimSoon("trim level $level")
         }
     }
@@ -271,6 +280,7 @@ class PiBoltApp : Application() {
         @Suppress("DEPRECATION")
         super.onLowMemory()
         localEngine.trimMemory("low memory", critical = true)
+        pages.trim(critical = true)
     }
 
     /**

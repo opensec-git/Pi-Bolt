@@ -177,6 +177,15 @@
           "$ref": "#/$defs/tile"
         },
         {
+          "$ref": "#/$defs/chart"
+        },
+        {
+          "$ref": "#/$defs/table"
+        },
+        {
+          "$ref": "#/$defs/location"
+        },
+        {
           "$ref": "#/$defs/button"
         },
         {
@@ -552,6 +561,255 @@
         "type",
         "label",
         "value"
+      ],
+      "additionalProperties": false
+    },
+    "chart": {
+      "type": "object",
+      "description": "A line, bar or area chart, or a sparkline, in the app's chart colours. Every series has as many values as labels.",
+      "properties": {
+        "type": {
+          "const": "chart"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "kind": {
+          "enum": [
+            "line",
+            "bar",
+            "area",
+            "sparkline"
+          ]
+        },
+        "series": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "number",
+                      "minimum": -1000000000000000,
+                      "maximum": 1000000000000000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "maxItems": 200
+              }
+            },
+            "required": [
+              "name",
+              "values"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 4
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "maxItems": 200
+        },
+        "unit": {
+          "type": "string",
+          "maxLength": 20
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "min": {
+          "type": "number",
+          "minimum": -1000000000000000,
+          "maximum": 1000000000000000
+        },
+        "max": {
+          "type": "number",
+          "minimum": -1000000000000000,
+          "maximum": 1000000000000000
+        },
+        "summary": {
+          "type": "string",
+          "maxLength": 4000,
+          "description": "What screen readers say; derived from the data when absent."
+        }
+      },
+      "required": [
+        "type",
+        "kind",
+        "series"
+      ],
+      "additionalProperties": false
+    },
+    "table": {
+      "type": "object",
+      "description": "Rows under typed columns; sorting and filtering happen in the app. A row with action sends a tap with its id as value.",
+      "properties": {
+        "type": {
+          "const": "table"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "columns": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/id"
+              },
+              "label": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "kind": {
+                "enum": [
+                  "text",
+                  "number",
+                  "date",
+                  "mono"
+                ]
+              },
+              "sortable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 12
+        },
+        "rows": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/id"
+              },
+              "cells": {
+                "type": "object",
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 200
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "action": {
+                "$ref": "#/$defs/id"
+              }
+            },
+            "required": [
+              "id",
+              "cells"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 500
+        },
+        "sort": {
+          "type": "object",
+          "properties": {
+            "column": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "desc": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "column"
+          ],
+          "additionalProperties": false
+        },
+        "filter": {
+          "type": "boolean",
+          "description": "A search box over the rows."
+        },
+        "empty": {
+          "type": "string",
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "type",
+        "columns",
+        "rows"
+      ],
+      "additionalProperties": false
+    },
+    "location": {
+      "type": "object",
+      "description": "A place; a tap opens the phone's maps app. Needs lat and lon together, or address.",
+      "properties": {
+        "type": {
+          "const": "location"
+        },
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "hidden": {
+          "type": "boolean",
+          "description": "Not shown while true."
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "lat": {
+          "type": "number",
+          "minimum": -90,
+          "maximum": 90
+        },
+        "lon": {
+          "type": "number",
+          "minimum": -180,
+          "maximum": 180
+        }
+      },
+      "required": [
+        "type",
+        "name"
       ],
       "additionalProperties": false
     },

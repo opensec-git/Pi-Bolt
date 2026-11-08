@@ -221,6 +221,14 @@ class RpcClient(private val backend: SessionBackend, scope: CoroutineScope) {
         put("features", JsonArray(features.map(::JsonPrimitive)))
     }
 
+    /** The pages and Home tiles packages registered (docs/mobile-ui.md#package-pages-and-home-tiles). */
+    suspend fun getPages() = request("get_pages")
+
+    /** Builds the registered page or tile [key]; its view arrives as a `setView` before the response. */
+    suspend fun openPage(key: String) = request("open_page", timeoutMs = 60_000) { put("key", key) }
+
+    suspend fun closePage(key: String) = request("close_page") { put("key", key) }
+
     /** A view's tap, committed field value (`change`) or form submit (docs/mobile-ui.md#events). No response. */
     fun viewEvent(viewKey: String, nodeId: String, kind: String, value: JsonPrimitive? = null, values: JsonObject? = null): Boolean =
         backend.send(buildJsonObject {

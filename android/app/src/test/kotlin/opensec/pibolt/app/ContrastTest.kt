@@ -330,6 +330,60 @@ class ContrastTest {
     }
 
     @Test
+    fun chartColoursReadAndStayApartInEveryTheme() {
+        // The chart palette (PiColors.charts): each series colour is a line or a bar, so 3:1 (WCAG 1.4.11) on every
+        // surface of every theme; it is its own set (no accent, tint or status colour); and every pair stays apart
+        // (CIELAB ΔE at least 15) for normal vision and under simulated protanopia, deuteranopia and tritanopia.
+        val failures = ArrayList<String>()
+        for (theme in ThemeId.entries) {
+            val c = PiColors.of(theme, AccentId.Theme)
+            assertEquals(4, c.charts.toSet().size, "$theme chart colours")
+            val reserved = c.tints + listOf(c.accent, c.success, c.warning, c.danger)
+            c.charts.forEachIndexed { i, colour ->
+                if (colour in reserved) failures += "$theme chart$i reuses a tint, the accent or a status colour"
+                for ((name, bg) in surfaces(c)) {
+                    val r = contrast(colour, bg)
+                    if (r < 3.0) failures += "$theme chart$i on $name: ${"%.2f".format(r)}"
+                }
+            }
+            for ((vision, matrix) in listOf<Pair<String, Array<DoubleArray>?>>("normal" to null) + CVD) {
+                val labs = c.charts.map { lab(linear(it).let { v -> if (matrix == null) v else simulate(v, matrix) }) }
+                for (a in labs.indices) for (b in a + 1 until labs.size) {
+                    val d = deltaE(labs[a], labs[b])
+                    if (d < 15.0) failures += "$theme chart$a / chart$b under $vision: ΔE ${"%.1f".format(d)}"
+                }
+            }
+        }
+        assertTrue(failures.isEmpty(), failures.joinToString("\n"))
+    }
+
+    private fun linear(c: Color): DoubleArray = listOf(c.red, c.green, c.blue).map { v ->
+        val x = v.toDouble()
+        if (x <= 0.04045) x / 12.92 else Math.pow((x + 0.055) / 1.055, 2.4)
+    }.toDoubleArray()
+
+    private fun simulate(v: DoubleArray, m: Array<DoubleArray>): DoubleArray =
+        DoubleArray(3) { i -> (m[i][0] * v[0] + m[i][1] * v[1] + m[i][2] * v[2]).coerceIn(0.0, 1.0) }
+
+    /** CIELAB (D65) of a linear sRGB colour. */
+    private fun lab(v: DoubleArray): DoubleArray {
+        val x = (0.4124 * v[0] + 0.3576 * v[1] + 0.1805 * v[2]) / 0.95047
+        val y = 0.2126 * v[0] + 0.7152 * v[1] + 0.0722 * v[2]
+        val z = (0.0193 * v[0] + 0.1192 * v[1] + 0.9505 * v[2]) / 1.08883
+        fun f(t: Double) = if (t > 0.008856) Math.cbrt(t) else 7.787 * t + 16.0 / 116.0
+        return doubleArrayOf(116 * f(y) - 16, 500 * (f(x) - f(y)), 200 * (f(y) - f(z)))
+    }
+
+    private fun deltaE(a: DoubleArray, b: DoubleArray): Double = Math.sqrt((0..2).sumOf { (a[it] - b[it]) * (a[it] - b[it]) })
+
+    /** Machado, Oliveira and Fernandes (2009), severity 1, on linear sRGB. */
+    private val CVD = listOf(
+        "protanopia" to arrayOf(doubleArrayOf(0.152286, 1.052583, -0.204868), doubleArrayOf(0.114503, 0.786281, 0.099216), doubleArrayOf(-0.003882, -0.048116, 1.051998)),
+        "deuteranopia" to arrayOf(doubleArrayOf(0.367322, 0.860646, -0.227968), doubleArrayOf(0.280085, 0.672501, 0.047413), doubleArrayOf(-0.011820, 0.042940, 0.968881)),
+        "tritanopia" to arrayOf(doubleArrayOf(1.255528, -0.076749, -0.178779), doubleArrayOf(-0.078411, 0.930809, 0.147602), doubleArrayOf(0.004733, 0.691367, 0.303900)),
+    )
+
+    @Test
     fun subagentTintsReadInEveryTheme() {
         // Five tints (apricot, rose, orchid, violet, seafoam) for parallel agents: a tinted Quad needs 3:1 on every
         // surface, and the avatar initial (the tint on the tint at 16%) AA on the canvas and on cards (surface1), where

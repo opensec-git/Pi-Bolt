@@ -575,6 +575,26 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         }
     }
 
+    /** The page engine's folder: no project, no chats; Pi works here without a session ([PageEngine]). */
+    val pagesDir: File get() = File(paths.home, ".pages")
+
+    /**
+     * A backend for the page engine ([PageEngine]): Pi in RPC mode without a session (`--no-session`) in [pagesDir],
+     * started with the same launch as a session's engine (prefix, environment, the user's packages). Not pooled: the
+     * page engine owns and stops it. Null when the engine is not available on this phone.
+     */
+    suspend fun pageBackend(): LocalBackend? {
+        ensureSetup() ?: return null
+        val dir = pagesDir.apply { mkdirs() }
+        return newBackend(LocalConfig(name = "Pages", version = manifest?.engine.orEmpty(), cwd = dir.path), SessionTarget.NoSession)
+    }
+
+    /** The page engine's backend stopped: its status no longer follows it. */
+    fun releasePageBackend(backend: LocalBackend) {
+        forget(backend)
+        backend.close()
+    }
+
     private fun configFor(project: File) = LocalConfig(name = project.name, version = manifest?.engine.orEmpty(), cwd = project.path)
 
     private fun newBackend(config: LocalConfig, target: SessionTarget): LocalBackend {

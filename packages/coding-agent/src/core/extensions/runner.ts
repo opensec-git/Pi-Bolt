@@ -23,6 +23,7 @@ import {
 	ViewHost,
 	type ViewSnapshot,
 } from "../mobile-ui/host.ts";
+import { MOBILE_VIEW_LIMITS, type MobileView } from "../mobile-ui/types.ts";
 import { assertView } from "../mobile-ui/validate.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
@@ -83,6 +84,7 @@ import type {
 	ProjectTrustEventResult,
 	ProviderConfig,
 	RegisteredCommand,
+	RegisteredPage,
 	RegisteredTool,
 	ReplacedSessionContext,
 	ResolvedCommand,
@@ -443,6 +445,13 @@ export class ExtensionRunner {
 	private staleMessage: string | undefined;
 	/** The mobile UI kit's views of this session (docs/mobile-ui.md), made when a mode binds its UI. */
 	private views: ViewHost | undefined;
+	/** Registered pages and tiles whose `open()` returned and that are not closed yet. */
+	private readonly openPages = new Set<string>();
+	/**
+	 * Per page key, the tail of its queue: opens, closes and the session-end cleanup of one key run one after the
+	 * other, in the order they were asked for, so none of them sees another half done.
+	 */
+	private readonly pageQueues = new Map<string, Promise<void>>();
 	private uiPromptDepth = 0;
 	private activeUIPrompt: { kind: UIPromptKind; title?: string } | undefined;
 
@@ -761,6 +770,111 @@ export class ExtensionRunner {
 		this.views?.resync();
 	}
 
+	/** The registered pages and tiles (first registration per key wins), at most 16. */
+	getRegisteredPages(): RegisteredPage[] {
+		const pages = new Map<string, RegisteredPage>();
+		for (const extension of this.extensions) {
+			for (const [key, page] of extension.pages ?? []) {
+				if (!pages.has(key) && pages.size < MOBILE_VIEW_LIMITS.registeredPages) pages.set(key, page);
+			}
+		}
+		return [...pages.values()];
+	}
+
+	/** Runs `op` after every earlier page operation of `key` settled; resolves or rejects with it. */
+	private queuePage(key: string, op: () => Promise<void>): Promise<void> {
+		const previous = this.pageQueues.get(key) ?? Promise.resolve();
+		const result = previous.then(op);
+		const tail = result.catch(() => {});
+		this.pageQueues.set(key, tail);
+		void tail.then(() => {
+			if (this.pageQueues.get(key) === tail) this.pageQueues.delete(key);
+		});
+		return result;
+	}
+
+	/**
+	 * A client opens a registered page or tile: its `open()` builds the view, set under its key in its slot. A page that
+	 * is open already is sent again as it is now (or built again if the extension removed its view).
+	 */
+	async openPage(key: string): Promise<void> {
+		this.assertActive();
+		const views = this.views;
+		if (!views) throw new Error("No client shows views");
+		const page = this.getRegisteredPages().find((candidate) => candidate.key === key);
+		if (!page) throw new Error(`No page ${JSON.stringify(key)}`);
+		await this.queuePage(key, async () => {
+			if (this.staleMessage) return;
+			if (this.openPages.has(key) && views.get(key)) {
+				views.resend(key);
+				return;
+			}
+			if (page.kind === "tile") views.allowTile(key, true);
+			let view: MobileView;
+			try {
+				view = await page.definition.open(this.createContext());
+			} catch (error) {
+				if (!this.openPages.has(key)) views.allowTile(key, false);
+				throw error;
+			}
+			// From here the page holds what open() started: a close, or the session's end, runs its close().
+			this.openPages.add(key);
+			if (this.staleMessage) return;
+			try {
+				views.set(key, view, { slot: page.kind });
+			} catch (error) {
+				// Not shown (an invalid view, the session's view limit): what open() started is cleaned up.
+				this.openPages.delete(key);
+				views.allowTile(key, false);
+				await this.runPageClose(page);
+				throw error;
+			}
+		});
+	}
+
+	/** A context with every value read now: it keeps working after the runner goes stale (a page's cleanup). */
+	private cleanupContext(): ExtensionContext {
+		const live = this.createContext() as unknown as Record<string, unknown>;
+		const values: Record<string, unknown> = {};
+		for (const name of Object.keys(Object.getOwnPropertyDescriptors(live))) {
+			try {
+				values[name] = live[name];
+			} catch {
+				// A value this runner cannot give (no session yet, say) stays absent.
+			}
+		}
+		return values as unknown as ExtensionContext;
+	}
+
+	/** A client closed a registered page or tile: its view goes and its `close()` runs (after any open in progress). */
+	async closePage(key: string): Promise<void> {
+		if (!this.openPages.has(key) && !this.pageQueues.has(key)) return;
+		// Read now, while the runner is live: the close may run after an open in progress, when the session has ended.
+		const ctx = this.cleanupContext();
+		await this.queuePage(key, async () => {
+			if (!this.openPages.delete(key)) return;
+			const page = this.getRegisteredPages().find((candidate) => candidate.key === key);
+			this.views?.set(key, undefined);
+			this.views?.allowTile(key, false);
+			await this.runPageClose(page, ctx);
+		});
+	}
+
+	/** Runs a page's `close()`; `ctx` defaults to a live context. */
+	private async runPageClose(page: RegisteredPage | undefined, ctx?: ExtensionContext): Promise<void> {
+		if (!page?.definition.close) return;
+		try {
+			await page.definition.close(ctx ?? this.createContext());
+		} catch (error) {
+			this.emitError({
+				extensionPath: page.sourceInfo.path,
+				event: "page_close",
+				error: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
+			});
+		}
+	}
+
 	/** A client's `extension_ui_event`: emitted as a `view_event` when it fits the view, else dropped (false). */
 	handleViewEvent(event: ViewClientEvent): boolean {
 		return this.views?.handleEvent(event) ?? false;
@@ -871,6 +985,15 @@ export class ExtensionRunner {
 		message = "This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 	): void {
 		if (!this.staleMessage) {
+			// Open pages and tiles close with the session: queued behind their operations in progress (so close() cleans
+			// up what a late open() started), with a context whose values were read now, before the runner went stale.
+			for (const page of this.getRegisteredPages()) {
+				if (!this.openPages.has(page.key) && !this.pageQueues.has(page.key)) continue;
+				const ctx = this.cleanupContext();
+				void this.queuePage(page.key, async () => {
+					if (this.openPages.delete(page.key)) await this.runPageClose(page, ctx);
+				});
+			}
 			this.staleMessage = message;
 			this.runtime.invalidate(message);
 			// The session's views go with it; the next runner starts without any.
