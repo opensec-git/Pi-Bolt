@@ -1,8 +1,34 @@
+import { Console } from "node:console";
+import { format } from "node:util";
+
 interface StdoutTakeoverState {
 	rawStdoutWrite: (chunk: string, callback?: (error?: Error | null) => void) => boolean;
 	rawStderrWrite: (chunk: string, callback?: (error?: Error | null) => void) => boolean;
 	originalStdoutWrite: typeof process.stdout.write;
+	/** Console methods replaced while stdout is taken over, to put back at the end. */
+	originalConsoleMethods: Map<string, unknown>;
 }
+
+/**
+ * The console methods that print to stdout on Bun without calling `process.stdout.write`
+ * (https://github.com/oven-sh/bun/issues/47982). Node's console calls the replaced `process.stdout.write`, so its
+ * output goes to stderr; on Bun it went straight to fd 1, into the JSON stream. `trace` and Bun's `write` print to fd 1
+ * too and are replaced separately. Bun's time* methods already print to stderr; count/countReset and the group methods
+ * are replaced together so their state stays in one console.
+ */
+const BUN_STDOUT_CONSOLE_METHODS = [
+	"log",
+	"info",
+	"debug",
+	"dir",
+	"dirxml",
+	"table",
+	"count",
+	"countReset",
+	"group",
+	"groupCollapsed",
+	"groupEnd",
+] as const;
 
 let stdoutTakeoverState: StdoutTakeoverState | undefined;
 
@@ -80,7 +106,47 @@ export function takeOverStdout(): void {
 		rawStdoutWrite,
 		rawStderrWrite,
 		originalStdoutWrite,
+		originalConsoleMethods: process.versions.bun ? routeBunConsoleThroughStdoutWrite() : new Map(),
 	};
+}
+
+/**
+ * Point Bun's stdout console methods at a `Console` over `process.stdout`, which calls the replaced write as Node's
+ * console does, so the output and its formatting match Node. Bun's `console.write` (raw, no newline) goes the same way.
+ */
+function routeBunConsoleThroughStdoutWrite(): Map<string, unknown> {
+	const target = console as unknown as Record<string, unknown>;
+	const originals = new Map<string, unknown>();
+	const nodeConsole = new Console({ stdout: process.stdout, stderr: process.stderr });
+	for (const name of BUN_STDOUT_CONSOLE_METHODS) {
+		originals.set(name, target[name]);
+		target[name] = nodeConsole[name].bind(nodeConsole);
+	}
+	// Bun's Console prints a trace's stack without its "Trace: <message>" line; Node prints it to stderr with the line.
+	const trace = (...data: unknown[]): void => {
+		const error = new Error(format(...data));
+		error.name = "Trace";
+		Error.captureStackTrace(error, trace);
+		nodeConsole.error(error.stack);
+	};
+	originals.set("trace", target.trace);
+	target.trace = trace;
+	if (typeof target.write === "function") {
+		originals.set("write", target.write);
+		target.write = (...data: Array<string | ArrayBufferView>): number => {
+			let bytes = 0;
+			for (const chunk of data) {
+				const buffer =
+					typeof chunk === "string"
+						? Buffer.from(chunk)
+						: Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength);
+				process.stdout.write(buffer.toString());
+				bytes += buffer.byteLength;
+			}
+			return bytes;
+		};
+	}
+	return originals;
 }
 
 export function restoreStdout(): void {
@@ -89,6 +155,10 @@ export function restoreStdout(): void {
 	}
 
 	process.stdout.write = stdoutTakeoverState.originalStdoutWrite;
+	const target = console as unknown as Record<string, unknown>;
+	for (const [name, method] of stdoutTakeoverState.originalConsoleMethods) {
+		target[name] = method;
+	}
 	stdoutTakeoverState = undefined;
 }
 

@@ -163,8 +163,9 @@ export default function () {
 	});
 }
 '@)
+	# Its console.log goes to stderr: in -p mode stdout is the answer's (as on Node).
 	$r = Invoke-Pi @('-ne', '-e', $ext, '--no-session', '-p', 'hi')
-	Result "an extension (Node's modules, a program, workers, collections)" ($r.Out -match 'selftest-extension: ok') "exit $(Hex $r.Code) $($r.Out.Trim()) $($r.Err.Trim())"
+	Result "an extension (Node's modules, a program, workers, collections)" ($r.Err -match 'selftest-extension: ok') "exit $(Hex $r.Code) $($r.Out.Trim()) $($r.Err.Trim())"
 
 	# The interactive interface starts in this console (its first frame), and ends on Ctrl+C... cannot be driven from here
 	# without a terminal of its own: `--help` stands for it.

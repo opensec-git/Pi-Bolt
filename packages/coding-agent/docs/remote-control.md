@@ -127,7 +127,8 @@ that terminal lets go. Two copies of the service for one agent directory do not 
 - Pi-Bolt's static key lives in `~/.pi/agent/remote-control/host-key` (mode 0600). The QR code carries its public key, so
   the app talks only to this computer.
 - Pairing needs a one-time 32-byte secret from the QR code. It travels only inside the encrypted first handshake message
-  (readable only with Pi-Bolt's private key), is single use, and expires after 10 minutes.
+  (readable only with Pi-Bolt's private key), is single use, and expires after 10 minutes. It is spent when a phone
+  completes the handshake, so a phone that timed out halfway can retry with the same QR code.
 - Paired phones are listed in `~/.pi/agent/remote-control/devices.json` by their public key. Only listed phones get past
   the handshake. `/remote-control devices` revokes a phone; it is disconnected at once.
 - A paired phone can do what you can do by typing into Pi: Pi's tools run with your permissions. Revoke phones you lose.
@@ -255,14 +256,18 @@ The fragment (`#...`) is never sent anywhere; the app parses it locally.
      `{ "device": "Pixel 9", "app": "0.1.0", "pair": "<pairing secret>" }`. `pair` is present only when the client
      is not paired with this host yet.
    - The host accepts if the client static key is a paired device, or if `pair` equals the current unexpired, unused
-     secret (the device is then stored and the secret consumed). Otherwise it closes with code 4403 and sends nothing.
+     secret. Otherwise it closes with code 4403 and sends nothing. Accepting the secret here does not spend it: a client
+     that gives up before frame 3 (a timeout, a permission prompt) can retry with the same QR code.
    - Frame 2, host to client: handshake message 2 (`e, ee, se`). Payload JSON:
      `{ "host": "macbook", "version": "1.1.1", "paired": true }` (`paired` is true when this connection paired the device).
    - Frame 3, client to host: the first transport message (step 3), `{ "type": "remote_ready" }`. It proves the
      client holds the session keys: anyone who recorded frame 1 can send it again, but cannot read frame 2. Until it
      arrives the host sends nothing more, runs no command, does not list the client as connected, and stores a newly
-     paired device only now. Without it within 3 seconds of frame 2 the host closes with 4408; any other first
-     message closes with 4400.
+     paired device only now. Storing the device spends the secret, in one step: the secret pairs the first client to
+     send `remote_ready`. Another client that offered it (frame 2 said `paired: true`) is closed with 4403 on its
+     `remote_ready`, as is one whose secret expired or was replaced by a new QR code meanwhile; the same device on a
+     second connection gets in as paired. Without `remote_ready` within 3 seconds of frame 2 the host closes with 4408;
+     any other first message closes with 4400.
 3. Transport: each later binary frame is one Noise transport message (AES-256-GCM, nonce = per-direction counter
    starting at 0, as in the Noise spec). The plaintext is `flag || data`: flag `0x00` marks the last chunk of a
    message, `0x01` a chunk with more to follow. Chunks carry at most 65000 data bytes. The concatenated data of a
