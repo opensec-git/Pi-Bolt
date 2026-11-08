@@ -492,8 +492,7 @@ private fun LazyItemScope.DetailRow(
 ) {
     val reduced = Pi.reduceMotion
     val animated = if (row.live && !reduced) {
-        // The fade-in is riseIn's (without an offscreen buffer).
-        Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = PiMotion.leave(PiMotion.STANDARD))
+        Modifier.animateItem(fadeInSpec = PiMotion.enter(PiMotion.STANDARD), placementSpec = null, fadeOutSpec = PiMotion.leave(PiMotion.STANDARD))
     } else {
         Modifier
     }
