@@ -341,33 +341,50 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
     override fun login(provider: String, method: String): ProviderLogin? {
         if (unavailable != null) return null
         val login = ProviderLogin(provider)
-        scope.launch {
+        val job = scope.launch {
             if (ensureSetup() == null) return@launch login.finish(unavailable ?: "The engine is not available")
+            if (login.cancelled) return@launch
             // The spare runs it (no engine start on the tap), else a new engine; it goes back to the pool afterwards.
             val spare = idle.takeFresh()?.takeIf { it.engine.isAlive }
             val backend = spare?.engine ?: newBackend(configFor(paths.projects), SessionTarget.Fresh)
             val cwd = spare?.cwd ?: paths.projects.path
-            login.attach(send = backend::send, stop = backend::close)
+            // Only an engine whose helper command came to its end goes back to the pool: one that timed out may still
+            // be in the flow (an open dialog, a callback server), and is stopped instead.
+            var ended = false
             try {
-                if (!backend.connect()) return@launch login.finish("The engine could not start")
+                login.attach(send = backend::send)
+                if (login.cancelled || !backend.connect() || login.cancelled) {
+                    return@launch login.finish(if (login.cancelled) ProviderLogin.CANCELLED else "The engine could not start")
+                }
                 coroutineScope {
                     val messages = launch { backend.incoming.collect(login::on) }
                     val args = "$provider $method ${File(paths.agentDir, "auth.json").path}"
-                    val result = AppExtension.runWith(File(app.cacheDir, "pibolt-app"), "login", args) { message -> helperPrompt(backend, message, LOGIN_TIMEOUT_MS) }
+                    val result = AppExtension.runWith(File(app.cacheDir, "pibolt-app"), "login", args) { message ->
+                        val response = backend.query("prompt", LOGIN_TIMEOUT_MS) { put("message", message) }
+                        ended = response != null
+                        when {
+                            response == null -> if (login.cancelled) ProviderLogin.CANCELLED else "The sign-in did not finish in time"
+                            response.bool("success") != true -> response.str("error") ?: "The engine refused the sign-in"
+                            else -> null
+                        }
+                    }
                     messages.cancel()
                     login.finish(if (login.cancelled) ProviderLogin.CANCELLED else result.exceptionOrNull()?.message)
                 }
             } finally {
-                val reuse = !login.cancelled && backend.isAlive && backend.messageCount == 0 && !stale(backend)
+                val reuse = ended && !login.cancelled && backend.isAlive && backend.messageCount == 0 && !stale(backend)
                 if (reuse) backend.park()
                 if (!reuse || !idle.addFresh(backend, cwd)) {
                     forget(backend)
                     backend.close()
                 }
                 auth.refresh()
-                ensureSpare()
+                scope.launch { ensureSpare() }
             }
         }
+        // Cancelling stops this job wherever it is (setup, the engine's start, the command): its engine is then closed,
+        // and a flow cancelled while it starts never sends its command.
+        login.attach(stop = { job.cancel() })
         return login
     }
 

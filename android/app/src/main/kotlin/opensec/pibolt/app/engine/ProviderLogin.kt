@@ -60,10 +60,10 @@ class ProviderLogin(val provider: String) {
     var cancelled = false
         private set
 
-    /** Wires the flow to its engine: [send] answers dialogs, [stop] ends the engine (cancel while no prompt is open). */
-    fun attach(send: (JsonObject) -> Boolean, stop: () -> Unit) {
-        this.send = send
-        this.stop = stop
+    /** Wires the flow to its engine: [send] answers dialogs, [stop] ends the flow and its engine (cancel). */
+    fun attach(send: ((JsonObject) -> Boolean)? = null, stop: (() -> Unit)? = null) {
+        send?.let { this.send = it }
+        stop?.let { this.stop = it }
     }
 
     /** A message from the engine. */
