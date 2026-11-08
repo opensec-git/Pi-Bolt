@@ -200,6 +200,15 @@ class ViewFields {
     val edits: SnapshotStateMap<String, JsonPrimitive> = mutableStateMapOf()
     val errors: SnapshotStateMap<String, String> = mutableStateMapOf()
 
+    /** The extension's value each field showed last: a field that comes back into view with the same keeps the edit. */
+    private val hostValues = HashMap<String, JsonPrimitive>()
+
+    /** The extension set [value] for field [id]: the user's edit goes only when it differs from what it set before. */
+    fun hostValue(id: String, value: JsonPrimitive) {
+        val before = hostValues.put(id, value)
+        if (before != null && before != value) edits.remove(id)
+    }
+
     fun value(field: VField): JsonPrimitive = field.id?.let { edits[it] } ?: MobileViews.initialValue(field)
 
     /** The fields' values, for a submit or a sheet's answer. */
@@ -667,8 +676,8 @@ private fun ViewField(field: VField, fields: ViewFields, actions: ViewActions, l
     val colors = Pi.colors
     val type = Pi.type
     val initial = MobileViews.initialValue(field)
-    // The extension set a new value: it wins over what the user had changed.
-    LaunchedEffect(initial) { fields.edits.remove(id) }
+    // The extension set a new value: it wins over what the user had changed (folding a panel or scrolling keeps edits).
+    LaunchedEffect(initial) { fields.hostValue(id, initial) }
     val current = fields.value(field)
     fun set(value: JsonPrimitive, commit: Boolean) {
         fields.edits[id] = value

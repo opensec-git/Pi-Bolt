@@ -1,6 +1,8 @@
 package opensec.pibolt.app
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import opensec.pibolt.app.ui.session.views.ViewFields
 import opensec.pibolt.app.ui.session.ActionsRow
 import opensec.pibolt.app.ui.session.MdCache
 import opensec.pibolt.app.ui.session.ToolRow
@@ -51,5 +53,17 @@ class MobileViewPlacementTest {
         assertEquals(true, keys.indexOf("view:later") in 0 until secondTurn)
         val lost = keys.indexOf("view:lost")
         assertEquals(true, lost > secondTurn && rows.drop(lost + 1).all { it is ActionsRow })
+    }
+
+    @Test
+    fun aFieldKeepsTheUsersEditUntilTheExtensionSetsAnotherValue() {
+        val fields = ViewFields()
+        fields.hostValue("branch", JsonPrimitive("main"))
+        fields.edits["branch"] = JsonPrimitive("dev")
+        // The field left composition (a folded panel, a closed page) and came back: same value from the extension.
+        fields.hostValue("branch", JsonPrimitive("main"))
+        assertEquals(JsonPrimitive("dev"), fields.edits["branch"])
+        fields.hostValue("branch", JsonPrimitive("release"))
+        assertEquals(null, fields.edits["branch"])
     }
 }

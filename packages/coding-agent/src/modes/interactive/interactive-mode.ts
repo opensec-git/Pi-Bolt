@@ -2837,6 +2837,7 @@ export class InteractiveMode {
 			hasNative: () => this.remoteControl?.hasViewClients() === true,
 			keepText: true,
 			send: (request) => this.remoteControl?.sendView(request),
+			sheetChanged: (viewKey, view, rev) => this.remoteControl?.updateViewSheet(viewKey, view, rev),
 			sheet: (request, signal) =>
 				this.remoteControl
 					? this.remoteControl.viewSheet(request, signal)

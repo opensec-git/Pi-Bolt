@@ -838,6 +838,7 @@ export class ServiceHost {
 			send: (request) => {
 				if (shown()) this.server?.sendView(request);
 			},
+			sheetChanged: (viewKey, view, rev) => this.server?.updateViewSheet(viewKey, view, rev),
 			sheet: (request, signal) =>
 				this.server
 					? this.server.requestViewSheet(request, signal)

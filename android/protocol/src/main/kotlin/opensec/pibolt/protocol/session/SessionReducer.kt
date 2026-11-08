@@ -591,7 +591,7 @@ object SessionReducer {
         if (event.str("method") == "showView") {
             val key = event.str("viewKey") ?: return null
             val json = event.obj("view") ?: return null
-            val entry = ViewEntry(key, "sheet", json, MobileViews.parse(json), 1)
+            val entry = ViewEntry(key, "sheet", json, MobileViews.parse(json), event.long("rev") ?: 1)
             return DialogRequest(id, DialogKind.View, json.str("title").orEmpty(), timeoutMs = event.long("timeout"), viewKey = key, view = entry)
         }
         val kind = when (event.str("method")) {

@@ -104,6 +104,13 @@ class MobileViewTest {
         assertEquals("Unknown branch", assertIs<VInput>(form.children[0]).error)
         assertEquals(listOf("eu", "us"), assertIs<VSelect>(form.children[1]).options.map { it.value })
         assertEquals(listOf("branch", "region"), MobileViews.fields(dialog.view.view).map { it.id })
+        // A sheet replayed after updates (a reconnect's remote_hello) carries its rev: the next update applies on top.
+        val replayed = run(
+            SessionState(),
+            """{"type":"extension_ui_request","id":"s2","method":"showView","viewKey":"later","rev":5,"view":$sheet}""",
+            """{"type":"extension_ui_request","id":"x","method":"updateView","viewKey":"later","rev":6,"ops":[{"op":"set","id":"branch","props":{"value":"dev"}}]}""",
+        )
+        assertEquals(6, replayed.dialogs.single().view!!.rev)
         val closed = run(state, """{"type":"extension_ui_dismissed","id":"s1"}""")
         assertTrue(closed.dialogs.isEmpty())
     }

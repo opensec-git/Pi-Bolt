@@ -279,6 +279,7 @@ describe("mobile UI kit in a session", () => {
 					keepText: false,
 					send: (request) => server.sendView(request),
 					sheet: (request, signal) => server.requestViewSheet(request, signal),
+					sheetChanged: (viewKey, view, rev) => server.updateViewSheet(viewKey, view, rev),
 				},
 			});
 			const uri = () => server.pairingUri([`ws://127.0.0.1:${port}/rc`]);
@@ -313,6 +314,34 @@ describe("mobile UI kit in a session", () => {
 			withViews.send({ type: "extension_ui_event", viewKey: "deploy", nodeId: "cancel", kind: "tap" });
 			await until(() => record.events.length === 1);
 			await withViews.waitFor((m) => m.viewKey === "deploy" && JSON.stringify(m).includes("Cancelled"));
+		});
+
+		it("sends a phone that turns views on late every view as it is now", async () => {
+			const { harness, uri } = await remoteSetup();
+			const client = await phone(uri(), false);
+			await harness.session.prompt("/deploy");
+			await until(() => harness.session.extensionRunner.viewSnapshot()[0]?.rev === 2);
+			expect(client.received.some((m) => m.method === "setView")).toBe(false);
+			await client.request({ type: "set_client_features", features: ["views"] });
+			const view = await client.waitFor((m) => m.method === "setView" && m.viewKey === "deploy");
+			expect(view).toMatchObject({ rev: 2, view: { body: [{}, { value: 0.5 }] } });
+		});
+
+		it("gives a phone that connects to an open, updated sheet its current state", async () => {
+			const { harness, uri } = await remoteSetup();
+			const first = await phone(uri(), true);
+			const done = harness.session.prompt("/settings");
+			const request = await first.waitFor((m) => m.method === "showView");
+			harness.session.extensionRunner
+				.getUIContext()
+				.updateView("settings", [{ op: "set", id: "branch", props: { value: "next" } }]);
+			const late = await connectTestClient(uri(), generateKeyPair());
+			cleanups.push(() => late.close());
+			const hello = await late.waitFor((m) => m.type === "remote_hello");
+			const sheet = (hello.dialogs as Array<Record<string, unknown>>).find((d) => d.method === "showView");
+			expect(sheet).toMatchObject({ rev: 2, view: { body: [{ children: [{ value: "next" }, {}] }] } });
+			first.send({ type: "extension_ui_response", id: request.id, cancelled: true });
+			await done;
 		});
 
 		it("opens a sheet on a phone that renders views and returns its answer", async () => {

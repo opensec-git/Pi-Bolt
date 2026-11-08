@@ -58,6 +58,8 @@ export interface ViewShowRequest {
 	method: "showView";
 	viewKey: string;
 	view: MobileView;
+	/** Raised by each `updateView` of the open sheet. */
+	rev: number;
 	timeout?: number;
 }
 
@@ -96,6 +98,8 @@ export interface ViewChannel {
 	 * first answer, or undefined when `signal` aborts first.
 	 */
 	sheet(request: ViewShowRequest, signal: AbortSignal): Promise<ViewSheetAnswer | undefined>;
+	/** An open sheet changed: clients that connect from now on get it as it is now (remote control's `dialogs`). */
+	sheetChanged?(viewKey: string, view: MobileView, rev: number): void;
 	/** The text form of an inline view; default: a widget, as for panels. */
 	inlineText?(key: string, lines: string[] | undefined): void;
 	/** Styling of the text form; plain without. */
@@ -290,6 +294,7 @@ export class ViewHost {
 		if (this.sheets.get(key) === record) {
 			if (this.native)
 				this.channel?.send({ method: "updateView", viewKey: key, ops: structuredClone(ops), rev: record.rev });
+			this.channel?.sheetChanged?.(key, structuredClone(record.view), record.rev);
 			return;
 		}
 		this.changed(key, record, structuredClone(ops));
@@ -408,7 +413,8 @@ export class ViewHost {
 				const request: ViewShowRequest = {
 					method: "showView",
 					viewKey: key,
-					view: record.view,
+					view: structuredClone(record.view),
+					rev: record.rev,
 					...(options.timeout ? { timeout: options.timeout } : {}),
 				};
 				racers.push(

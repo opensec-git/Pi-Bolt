@@ -786,6 +786,17 @@ export class RemoteControlServer {
 		return response && ("nodeId" in response || "cancelled" in response) ? response : undefined;
 	}
 
+	/** An open sheet changed: phones that connect from now on get it as it is now, in `remote_hello.dialogs`. */
+	updateViewSheet(viewKey: string, view: unknown, rev: number): void {
+		for (const dialog of this.dialogs.values()) {
+			const request = dialog.request as { method?: string; viewKey?: string; view?: unknown; rev?: number };
+			if (request.method === "showView" && request.viewKey === viewKey) {
+				request.view = view;
+				request.rev = rev;
+			}
+		}
+	}
+
 	/** A connected phone renders views (it declared "views"). */
 	hasViewClients(): boolean {
 		return [...this.connections].some((connection) => connection.isOpen && connection.features.has(VIEWS_FEATURE));
@@ -829,8 +840,15 @@ export class RemoteControlServer {
 		if (typed.type === "set_client_features") {
 			const requested = (message as { features?: unknown }).features;
 			const accepted = Array.isArray(requested) && requested.includes(VIEWS_FEATURE) ? [VIEWS_FEATURE] : [];
+			const enabled = accepted.length > 0 && !connection.features.has(VIEWS_FEATURE);
 			connection.features = new Set(accepted);
 			connection.send({ id, type: "response", command: typed.type, success: true, data: { features: accepted } });
+			// Changes since its remote_hello skipped this phone: it gets every view as it is now.
+			if (enabled) {
+				for (const view of this.options.getSession()?.extensionRunner.viewSnapshot() ?? []) {
+					connection.send({ type: "extension_ui_request", id: randomUUID(), ...view, method: "setView" });
+				}
+			}
 			return;
 		}
 		if (typed.type === "subagent_subscribe" || typed.type === "subagent_unsubscribe") {

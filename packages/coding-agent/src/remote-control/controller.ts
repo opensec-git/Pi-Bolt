@@ -417,6 +417,10 @@ export class RemoteControlController {
 		this.server?.sendView(request);
 	}
 
+	updateViewSheet(viewKey: string, view: unknown, rev: number): void {
+		this.server?.updateViewSheet(viewKey, view, rev);
+	}
+
 	/**
 	 * A sheet on the phones while remote control runs (and on phones that connect while it is open): the first answer,
 	 * or undefined once `signal` aborts.

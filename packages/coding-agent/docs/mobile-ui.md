@@ -351,7 +351,7 @@ All requests from Pi are `extension_ui_request`s, as in [RPC Extension UI](rpc-e
 |---|---|---|
 | `setView` | `viewKey`, `slot`, `view` (absent: remove), `rev`; inline views: `toolCallId?` or `turn?` (the `timestamp` of the turn's user message) | none |
 | `updateView` | `viewKey`, `ops`, `rev` (after the ops) | none |
-| `showView` | `viewKey`, `view`, `timeout?` | `extension_ui_response` with `nodeId` and `values`, or `cancelled: true` |
+| `showView` | `viewKey`, `view`, `rev`, `timeout?` | `extension_ui_response` with `nodeId` and `values`, or `cancelled: true` |
 
 ```json
 {"type":"extension_ui_request","id":"u1","method":"setView","viewKey":"deploy","slot":"panel","rev":1,"view":{"v":1,"title":"Deploy","body":[]}}
