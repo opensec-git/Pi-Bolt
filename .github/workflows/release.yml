@@ -1,8 +1,8 @@
 name: release
 
 # A bolt-vX.Y.Z tag (pushed, or created by the tag workflow, which runs this one) builds the release on GitHub's runners: the
-# Linux x86-64 archives (x64, baseline, jit), the Linux ARM64 ones (arm64, jit), the macOS ones (arm64, jit) and the Windows ones
-# (x64, jit), each tested, then a
+# Linux x86-64 archives (x64, baseline, jit), the Linux x86-64 musl ones (x64-musl, x64-musl-baseline, x64-musl-jit: in an Alpine
+# container), the Linux ARM64 ones (arm64, jit), the macOS ones (arm64, jit) and the Windows ones (x64, jit), each tested, then a
 # draft GitHub release with every archive, extensions.txt, SHA256SUMS and RUNTIME_STAMP. Nothing is signed or published here:
 # with the repository variable AUTO_RELEASE set to true, the draft is handed to the publish workflow, which signs and publishes
 # it; otherwise publish is run by hand (docs/RELEASING.md).
@@ -12,6 +12,11 @@ name: release
 # before this runs (gh workflow run runtime.yml -f tag=bolt-vX.Y.Z). Either way the prepare job checks each runtime's build
 # provenance attestation and stops the release when one does not verify (docs/RELEASING.md, "Provenance"). Each build job
 # attests the archives it makes.
+#
+# The musl runtime has a stamp of its own (scripts/runtime-stamp.sh musl, in its archive), which changes with the engine and
+# with what only it is built with (scripts/build-runtime-musl.sh): it is the draft's when one is uploaded to it (runtime.yml
+# -f platforms=linux-x64-musl), else the previous release's while its archive says the same stamp. So a change to the musl
+# build alone needs only the musl runtime built, and the others are used again as they are.
 on:
   push:
     tags: ["bolt-v*"]
@@ -56,6 +61,9 @@ jobs:
       runtime_sha_linux_arm64: ${{ steps.check.outputs.runtime_sha_linux_arm64 }}
       runtime_sha_darwin: ${{ steps.check.outputs.runtime_sha_darwin }}
       runtime_sha_win32: ${{ steps.check.outputs.runtime_sha_win32 }}
+      musl_stamp: ${{ steps.check.outputs.musl_stamp }}
+      musl_from: ${{ steps.check.outputs.musl_from }}
+      runtime_sha_linux_musl: ${{ steps.check.outputs.runtime_sha_linux_musl }}
     steps:
       - name: The tag
         run: |
@@ -109,7 +117,31 @@ jobs:
             echo "::error title=Runtime needed::The engine changed since $previous (runtime stamp ${released:-not signed}, now $stamp). Build the runtimes with the runtime workflow from pi-bolt (gh workflow run runtime.yml -R $GITHUB_REPOSITORY -f tag=$TAG), which attaches them to a draft release of $TAG, and run this workflow again."
             exit 1
           fi
-          { echo "version=$version"; echo "stamp=$stamp"; echo "runtime_from=$runtime_from"; } >> "$GITHUB_OUTPUT"
+          # The musl runtime: the draft's if one is uploaded to it, else the previous release's if it is still this engine (the
+          # stamp in its archive, which the release's signed checksums list).
+          musl_stamp=$(scripts/runtime-stamp.sh musl)
+          musl_name="pi-bolt-runtime-linux-x64-musl.tar.gz"
+          musl_from=""
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx "$musl_name"; then
+            mkdir -p .work/draft
+            [ -f ".work/draft/$musl_name" ] || gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir .work/draft --pattern "$musl_name"
+            found=$(tar -xzOf ".work/draft/$musl_name" pi-bolt-runtime-linux-x64-musl/RUNTIME_STAMP 2>/dev/null || true)
+            [ "$found" = "$musl_stamp" ] || { echo "::error title=Musl runtime::The musl runtime uploaded to the draft of $TAG is engine ${found:-unknown}, not $musl_stamp: build it again (gh workflow run runtime.yml -R $GITHUB_REPOSITORY -f tag=$TAG -f platforms=linux-x64-musl)."; exit 1; }
+            musl_from=$TAG
+            sum=$(sha256sum ".work/draft/$musl_name" | cut -c1-64)
+            echo "runtime_sha_linux_musl=$sum" >> "$GITHUB_OUTPUT"
+            echo "$musl_name: $sum (the draft's)" | tee -a "$GITHUB_STEP_SUMMARY"
+          # (In a folder of its own: the provenance step below downloads the previous release's other runtimes into .work/previous.)
+          elif [ -n "$released" ] && gh release download "$previous" --repo "$GITHUB_REPOSITORY" --dir .work/musl --pattern "$musl_name" 2>/dev/null &&
+               (cd .work/musl && grep " $musl_name\$" ../previous/SHA256SUMS | sha256sum -c --strict --quiet -) &&
+               [ "$(tar -xzOf ".work/musl/$musl_name" pi-bolt-runtime-linux-x64-musl/RUNTIME_STAMP 2>/dev/null || true)" = "$musl_stamp" ]; then
+            musl_from=$previous
+            echo "the musl runtime is $previous's: used again"
+          else
+            echo "::error title=Musl runtime needed::No musl runtime of engine $musl_stamp: neither the draft of $TAG nor $previous has one. Build it with the runtime workflow from pi-bolt (gh workflow run runtime.yml -R $GITHUB_REPOSITORY -f tag=$TAG -f platforms=linux-x64-musl), and run this workflow again."
+            exit 1
+          fi
+          { echo "version=$version"; echo "stamp=$stamp"; echo "runtime_from=$runtime_from"; echo "musl_stamp=$musl_stamp"; echo "musl_from=$musl_from"; } >> "$GITHUB_OUTPUT"
         env:
           GH_TOKEN: ${{ github.token }}
       # Where each runtime the build jobs will use was built, as its build provenance attestation says (docs/RELEASING.md,
@@ -123,6 +155,8 @@ jobs:
           RUNTIME_FROM: ${{ steps.check.outputs.runtime_from }}
           # (Set only when the runtimes are the draft's, as in the build jobs.)
           FROM_DRAFT: ${{ steps.check.outputs.runtime_sha_linux }}
+          MUSL_FROM: ${{ steps.check.outputs.musl_from }}
+          MUSL_FROM_DRAFT: ${{ steps.check.outputs.runtime_sha_linux_musl }}
         run: |
           # The exception: runtimes released before attestations existed, accepted without one, each with a warning. Only what
           # a release can reuse is listed: 1.0.1's runtimes, whose bun executables are 1.0.0's, byte for byte those the runtime
@@ -176,6 +210,35 @@ jobs:
               failed=1
             fi
           done
+          # The musl runtime, which has a source of its own: one uploaded to the draft is attested by the runtime workflow from
+          # pi-bolt; the previous release's (its signed checksums, checked above) by that release's run of this workflow.
+          name="pi-bolt-runtime-linux-x64-musl.tar.gz"
+          if [ -n "$MUSL_FROM_DRAFT" ]; then
+            file=.work/draft/$name
+            signers="runtime.yml@refs/heads/pi-bolt"
+          else
+            file=.work/musl/$name
+            signers="release.yml@refs/heads/pi-bolt release.yml@refs/tags/$MUSL_FROM runtime.yml@refs/heads/pi-bolt"
+          fi
+          sum=$(sha256sum "$file" | cut -c1-64)
+          verified=""
+          : > "$RUNNER_TEMP/attestation.log"
+          for signer in $signers; do
+            if gh attestation verify "$file" --repo "$GITHUB_REPOSITORY" \
+                 --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/${signer%%@*}" --source-ref "${signer#*@}" \
+                 >> "$RUNNER_TEMP/attestation.log" 2>&1; then
+              verified=$signer
+              break
+            fi
+          done
+          if [ -n "$verified" ]; then
+            echo "- $name \`$sum\`: attested by ${verified%%@*} from ${verified#*@}" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            cat "$RUNNER_TEMP/attestation.log"
+            echo "::error title=Runtime not attested::$name ($sum, from $MUSL_FROM) has no attestation by ${signers// / or }."
+            echo "- $name \`$sum\`: **not attested**" >> "$GITHUB_STEP_SUMMARY"
+            failed=1
+          fi
           exit "$failed"
 
   build:
@@ -292,6 +355,88 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.platform }}
+          path: |
+            dist/${{ env.VERSION }}/*.tar.gz
+            dist/${{ env.VERSION }}/*.tar.xz
+          if-no-files-found: error
+          retention-days: 14
+
+  # Linux x86-64 with musl (Alpine), in an Alpine container on the Ubuntu runner (GitHub's actions need glibc: they run outside
+  # it), as the build job above: the three archives, each tested as unpacked, with the release's kit and runtime. Based on the
+  # patch set by @nthrow in #280.
+  build-musl:
+    name: Build and test on Linux x86-64 (musl)
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write # (To download the runtime from this tag's draft release.)
+      id-token: write # (To attest the archives.)
+      attestations: write
+    env:
+      VERSION: ${{ needs.prepare.outputs.version }}
+      MUSL_FROM: ${{ needs.prepare.outputs.musl_from }}
+      RUNTIME_SHA: ${{ needs.prepare.outputs.runtime_sha_linux_musl }}
+      PIBOLT_RUNTIME_STAMP: ${{ needs.prepare.outputs.musl_stamp }}
+      # (As runtime.yml builds the musl runtime with.)
+      ALPINE: alpine:3.23@sha256:f3d55900449227ae9e237ede521e7b665d53a253b42065ba90b9db9275e198ad
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refs/tags/${{ env.TAG }}
+          persist-credentials: false
+      - name: Runtime
+        run: |
+          # (Outside the container, the one step with a token: as the build job above.)
+          for flag in avx2 bmi1 abm; do grep -qw "$flag" /proc/cpuinfo || { echo "this runner's CPU has no $flag"; exit 1; }; done
+          mkdir -p .work/rt
+          if [ -n "$RUNTIME_SHA" ]; then
+            gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern pi-bolt-runtime-linux-x64-musl.tar.gz --dir .work/rt
+            echo "$RUNTIME_SHA  .work/rt/pi-bolt-runtime-linux-x64-musl.tar.gz" | sha256sum -c -
+          else
+            # The previous release's: its checksums, signed by the release key and saying they are that release's.
+            gh release download "$MUSL_FROM" --repo "$GITHUB_REPOSITORY" --dir .work/rt \
+              --pattern pi-bolt-runtime-linux-x64-musl.tar.gz --pattern SHA256SUMS --pattern SHA256SUMS.sig
+            openssl pkeyutl -verify -pubin -inkey keys/release.pub -rawin -in .work/rt/SHA256SUMS -sigfile .work/rt/SHA256SUMS.sig
+            [ "$(head -n 1 .work/rt/SHA256SUMS)" = "# pi-bolt ${MUSL_FROM#bolt-v}" ]
+            (cd .work/rt && grep ' pi-bolt-runtime-linux-x64-musl.tar.gz$' SHA256SUMS | sha256sum -c --strict -)
+          fi
+          tar -C .work/rt -xzf .work/rt/pi-bolt-runtime-linux-x64-musl.tar.gz
+          mkdir -p .work/runtime
+          install -m 755 .work/rt/pi-bolt-runtime-linux-x64-musl/bun .work/runtime/bun
+          cp .work/rt/pi-bolt-runtime-linux-x64-musl/RUNTIME_STAMP .work/runtime/RUNTIME_STAMP
+          rm -rf .work/rt
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Build, package and test, in Alpine
+        run: |
+          docker run --rm -e VERSION -e PIBOLT_RUNTIME_STAMP -e CI -v "$PWD:$PWD" -w "$PWD" "$ALPINE" sh -ec "$(cat <<'EOF'
+          scripts/alpine-tools.sh
+          export PATH="$HOME/.bun/bin:$PATH"
+          .work/runtime/bun --version
+          scripts/prepare-pi.sh
+          scripts/package-release.sh
+          mkdir -p .work/unpacked
+          for archive in "dist/$VERSION/pi-bolt-linux-x64-musl"*.tar.xz; do
+            tar -C .work/unpacked -xf "$archive"
+            dir=.work/unpacked/$(basename "$archive" .tar.xz)
+            "$dir/pi" --version | tee /dev/stderr | grep -q "Pi-Bolt $VERSION"
+            tests/pi/run.sh "$PWD/$dir/pi"
+          done
+          python3 tests/pi/compile.py .work/unpacked/pi-bolt-linux-x64-musl/pi "dist/$VERSION/pi-bolt-kit-linux-x64-musl.tar.gz" .work/runtime/bun
+          tests/aot/run.sh
+          tests/runtime/run.sh
+          chmod -R a+rX dist
+          EOF
+          )"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/${{ env.VERSION }}/*.tar.gz
+            dist/${{ env.VERSION }}/*.tar.xz
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-x64-musl
           path: |
             dist/${{ env.VERSION }}/*.tar.gz
             dist/${{ env.VERSION }}/*.tar.xz
@@ -424,7 +569,7 @@ jobs:
 
   draft:
     name: Draft release
-    needs: [prepare, build, build-windows]
+    needs: [prepare, build, build-musl, build-windows]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30

@@ -32,6 +32,13 @@ arm64 | aarch64) PIBOLT_ARCH=arm64 ;;
 esac
 # shellcheck disable=SC2034 # for the scripts that source this
 PIBOLT_PLATFORM="$PIBOLT_OS-$PIBOLT_ARCH"
+# The C library on Linux: musl (Alpine) or glibc (empty). A musl build's release files and variants say so (linux-x64-musl,
+# x64-musl-baseline: PIBOLT_RELEASE_PLATFORM), so that a musl system never gets a glibc build. Bun's --target and the native
+# prebuilds stay PIBOLT_PLATFORM: a musl Bun's target is musl unless it is told otherwise.
+PIBOLT_LIBC=""
+if [ "$PIBOLT_OS" = linux ]; then case "$(ldd --version 2>&1 || true)" in *musl*) PIBOLT_LIBC=musl ;; esac; fi
+# shellcheck disable=SC2034 # for the scripts that source this
+PIBOLT_RELEASE_PLATFORM="$PIBOLT_PLATFORM${PIBOLT_LIBC:+-$PIBOLT_LIBC}"
 
 # abspath PATH: PATH made absolute with symbolic links resolved, whether or not it exists (GNU realpath -m; macOS has no -m).
 abspath() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }

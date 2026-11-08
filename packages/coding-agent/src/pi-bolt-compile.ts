@@ -51,6 +51,7 @@ import {
 	piBoltInstallDir,
 	piBoltInstallMethod,
 	piBoltPackageManager,
+	piBoltReleasePlatform,
 } from "./pi-bolt.ts";
 
 /** What `pi-bolt compile` was asked for, kept in <install>/compile.json for the next update. */
@@ -296,9 +297,9 @@ function parseList(value: string | undefined, flag: string): string[] {
 		.filter(Boolean);
 }
 
-/** The platform as release files name it: linux-x64, darwin-arm64. */
+/** The platform as release files name it: linux-x64, linux-x64-musl, darwin-arm64. */
 function platformName(): string {
-	return `${process.platform}-${process.arch}`;
+	return piBoltReleasePlatform();
 }
 
 /** Where this installation is: <install> and the build's folder in it. */
@@ -627,8 +628,9 @@ function buildEnvironment(kit: Kit, kitDir: string, maximumBytecodeSize: number 
 	delete env.BUN_AOT_JIT;
 	delete env.BUN_AOT_CPU;
 	if (!build.jit) env.BUN_AOT_JIT = "0";
-	// (As build-pi.sh: x64-baseline is the build for any x86-64 CPU, and every Linux ARM64 build is the one for any ARMv8.0 CPU.)
-	if (build.variant === "x64-baseline" || (process.platform === "linux" && build.variant.startsWith("arm64"))) {
+	// (As build-pi.sh: x64-baseline and x64-musl-baseline are the builds for any x86-64 CPU, and every Linux ARM64 build is the
+	// one for any ARMv8.0 CPU.)
+	if (build.variant.endsWith("-baseline") || (process.platform === "linux" && build.variant.startsWith("arm64"))) {
 		env.BUN_AOT_CPU = "baseline";
 	}
 	// (Nothing from a Pi-Bolt that started this one: the build is a Bun of its own.)
