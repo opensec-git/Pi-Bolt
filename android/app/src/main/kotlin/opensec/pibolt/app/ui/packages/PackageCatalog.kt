@@ -16,6 +16,7 @@ import opensec.pibolt.protocol.long
 import opensec.pibolt.protocol.obj
 import opensec.pibolt.protocol.str
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 /** One package in a catalog search (the npm registry's search, keyword `pi-package`: what pi.dev/packages lists). */
 @Immutable
@@ -316,12 +317,20 @@ object CatalogJson {
  * resources and the compatibility checks). A GitHub source's package.json comes from raw.githubusercontent.com.
  */
 class PackageCatalog(
-    private val http: OkHttpClient,
+    client: OkHttpClient,
     private val registry: String = "https://registry.npmjs.org",
     private val downloadsApi: String = "https://api.npmjs.org",
     private val filesApi: String = "https://data.jsdelivr.com",
     private val githubRaw: String = "https://raw.githubusercontent.com",
+    readTimeoutMs: Long = 20_000,
 ) {
+    // The app's shared client has no read timeout (remote sessions stream); a stalled registry must reach an error.
+    private val http: OkHttpClient = client.newBuilder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(readTimeoutMs, TimeUnit.MILLISECONDS)
+        .callTimeout(45, TimeUnit.SECONDS)
+        .build()
+
     /** Packages matching [query] (all of them, most downloaded first, when blank). */
     suspend fun search(query: String, from: Int = 0, size: Int = PAGE): CatalogPage {
         val words = query.trim().split(Regex("\\s+")).filter { it.isNotEmpty() && !it.contains(':') }.take(8)

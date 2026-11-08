@@ -388,6 +388,21 @@ class PackageBrowseTest {
         assertTrue(CatalogJson.globMatches("a/b/c/d/e/f/g/*.md", "a/b/c/d/e/f/g/x.md"))
     }
 
+    @Test(timeout = 20_000)
+    fun stalledRegistryTimesOut() = runBlocking {
+        // The app's client has no read timeout; the catalog's own does, so a server that never answers is an error.
+        val server = MockWebServer()
+        server.enqueue(MockResponse.Builder().body("{}").headersDelay(120, java.util.concurrent.TimeUnit.SECONDS).build())
+        server.start()
+        try {
+            val catalog = PackageCatalog(OkHttpClient.Builder().readTimeout(0, java.util.concurrent.TimeUnit.SECONDS).build(), registry = server.url("/").toString().trimEnd('/'), readTimeoutMs = 500)
+            val e = assertThrows(CatalogException::class.java) { runBlocking { catalog.search("") } }
+            assertTrue(e.message!!.startsWith("Could not reach"))
+        } finally {
+            server.close()
+        }
+    }
+
     @Test
     fun installArguments() {
         assertEquals(listOf("install", "npm:x"), PackageFormat.installArgs("npm:x", local = false))
