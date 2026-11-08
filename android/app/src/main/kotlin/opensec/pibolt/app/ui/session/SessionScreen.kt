@@ -1110,6 +1110,8 @@ internal fun SessionContent(
                 pages = menuPages,
                 onPage = { key ->
                     if (registeredPages.any { it.key == key } && views[key] == null) {
+                        // Another page still waiting for its view is given up: closed, so it does not stay open unseen.
+                        pendingPage?.let { previous -> if (previous != key) controller.closePage(previous) }
                         pendingPage = key
                         sessionScope.launch { if (!controller.openPage(key) && pendingPage == key) pendingPage = null }
                     } else {

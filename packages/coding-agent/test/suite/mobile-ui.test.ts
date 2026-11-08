@@ -380,8 +380,9 @@ describe("mobile UI kit in a session", () => {
 		expect(runner.getUIContext().getView("slow:page")?.title).toBe("Second");
 	});
 
-	it("drops a page whose open() finishes after the session ended", async () => {
+	it("drops a page whose open() finishes after the session ended, and cleans up after that open", async () => {
 		let finish: (view: MobileView) => void = () => {};
+		const order: string[] = [];
 		const harness = await createHarness({
 			extensionFactories: [
 				(pi: ExtensionAPI) =>
@@ -389,8 +390,12 @@ describe("mobile UI kit in a session", () => {
 						title: "Slow",
 						open: () =>
 							new Promise<MobileView>((resolve) => {
-								finish = resolve;
+								finish = (view) => {
+									order.push("open done");
+									resolve(view);
+								};
 							}),
+						close: () => void order.push("close"),
 					}),
 			],
 		});
@@ -399,8 +404,11 @@ describe("mobile UI kit in a session", () => {
 		await harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "rpc", viewChannel: channel });
 		const opening = harness.session.extensionRunner.openPage("slow:page");
 		harness.session.extensionRunner.invalidate();
+		expect(order).toEqual([]);
 		finish({ v: 1, title: "Slow", body: [] });
 		await opening;
+		await until(() => order.length === 2);
+		expect(order).toEqual(["open done", "close"]);
 		expect(channel.sent).toEqual([]);
 	});
 

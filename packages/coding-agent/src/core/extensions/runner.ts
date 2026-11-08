@@ -971,11 +971,18 @@ export class ExtensionRunner {
 		message = "This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 	): void {
 		if (!this.staleMessage) {
-			// Open pages and tiles close with the session. Their close() starts before the runner goes stale and gets
-			// a context whose values were read now, so cleanup that awaits still has them.
-			const pages = this.getRegisteredPages().filter((page) => this.openPages.has(page.key));
+			// Open pages and tiles close with the session. Each close() runs once its open() settled (so it cleans up
+			// what open() started), with a context whose values were read now, before the runner went stale.
+			for (const page of this.getRegisteredPages()) {
+				const entry = this.openPages.get(page.key);
+				if (!entry) continue;
+				const ctx = this.cleanupContext();
+				void entry.done.then(
+					() => this.runPageClose(page, ctx),
+					() => this.runPageClose(page, ctx),
+				);
+			}
 			this.openPages.clear();
-			for (const page of pages) void this.runPageClose(page, this.cleanupContext());
 			this.staleMessage = message;
 			this.runtime.invalidate(message);
 			// The session's views go with it; the next runner starts without any.
