@@ -427,6 +427,10 @@ describe("mobile UI sheets as dialogs", () => {
 				},
 			],
 		};
+		const busy: MobileView = { v: 1, body: [], actions: [{ type: "button", id: "go", label: "Deploy", busy: true }] };
+		const busyDialogs = scriptedDialogs(["Close"]);
+		await expect(runViewDialogs(busy, busyDialogs)).resolves.toBeUndefined();
+		expect(busyDialogs.asked).toEqual(["select  [Close]"]);
 		const closeOnly = scriptedDialogs(["Close"]);
 		await expect(runViewDialogs(hidden, closeOnly)).resolves.toBeUndefined();
 		expect(closeOnly.asked).toEqual(["select  [Close]"]);

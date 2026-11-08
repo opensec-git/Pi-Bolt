@@ -4,6 +4,10 @@ import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.Image
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.runtime.produceState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -220,8 +224,13 @@ class ViewFields {
         var ok = true
         for (field in fields) {
             val id = field.id ?: continue
-            if (field is VInput && field.required && value(field).content.isBlank()) {
+            val text = value(field).content
+            if (field is VInput && field.required && text.isBlank()) {
                 errors[id] = "Required"
+                ok = false
+            } else if (field is VInput && field.kind == "number" && text.isNotBlank() && text.trim().toDoubleOrNull()?.isFinite() != true) {
+                // Pi refuses a number field that holds no number: say so here instead of losing the sheet.
+                errors[id] = "Enter a number"
                 ok = false
             } else {
                 errors.remove(id)
@@ -617,12 +626,9 @@ private fun ViewImage(image: VImage) {
     val colors = Pi.colors
     val src = image.src
     if (src.startsWith("data:")) {
-        val bitmap = remember(src) {
-            runCatching {
-                val bytes = Base64.decode(src.substringAfter("base64,"), Base64.DEFAULT)
-                BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-            }.getOrNull()
-        }
+        // Off the main thread and at most 2048 px on its long edge: a small PNG can still be a huge bitmap.
+        val decoded by produceState<ImageBitmap?>(null, src) { value = withContext(Dispatchers.Default) { decodeDataImage(src) } }
+        val bitmap = decoded
         if (bitmap != null) {
             Image(
                 bitmap,
@@ -640,6 +646,19 @@ private fun ViewImage(image: VImage) {
         MdImage(image.alt ?: "Image", src)
     }
 }
+
+private const val IMAGE_MAX_EDGE = 2048
+
+/** A `data:` image decoded with its long edge at most [IMAGE_MAX_EDGE] (a bounds pass picks the sample size). */
+private fun decodeDataImage(src: String): ImageBitmap? = runCatching {
+    val bytes = Base64.decode(src.substringAfter("base64,"), Base64.DEFAULT)
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching null
+    var sample = 1
+    while (maxOf(bounds.outWidth, bounds.outHeight) / sample > IMAGE_MAX_EDGE) sample *= 2
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
+}.getOrNull()
 
 /** An https host the app may fetch from on a tap: a dotted public name, no IP address, localhost or LAN name. */
 fun isPublicHost(url: String): Boolean {

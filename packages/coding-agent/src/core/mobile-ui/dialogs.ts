@@ -43,7 +43,7 @@ function closers(view: MobileView): Array<MobileViewForm | MobileViewButton> {
 		for (const node of nodes) {
 			if (node.hidden) continue;
 			if (node.type === "form") {
-				if (!node.disabled) found.push(node);
+				if (!node.disabled && !node.busy) found.push(node);
 				continue;
 			}
 			const children = (node as { children?: MobileViewNode[] }).children;
@@ -52,7 +52,7 @@ function closers(view: MobileView): Array<MobileViewForm | MobileViewButton> {
 	};
 	walk(view.body);
 	for (const action of view.actions ?? []) {
-		if (!action.hidden && !action.disabled && action.url === undefined) found.push(action);
+		if (!action.hidden && !action.disabled && !action.busy && action.url === undefined) found.push(action);
 	}
 	return found;
 }
