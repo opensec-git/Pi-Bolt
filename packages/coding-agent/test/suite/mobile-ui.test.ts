@@ -380,6 +380,39 @@ describe("mobile UI kit in a session", () => {
 		expect(runner.getUIContext().getView("slow:page")?.title).toBe("Second");
 	});
 
+	it("does not bring back a page closed while a duplicate open waited", async () => {
+		let finish: (view: MobileView) => void = () => {};
+		const calls: string[] = [];
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi: ExtensionAPI) =>
+					pi.registerPage("dup:page", {
+						title: "Dup",
+						open: () =>
+							new Promise<MobileView>((resolve) => {
+								calls.push("open");
+								finish = resolve;
+							}),
+						close: () => void calls.push("close"),
+					}),
+			],
+		});
+		cleanups.push(() => harness.cleanup());
+		await harness.session.bindExtensions({
+			uiContext: createTestUiContext(),
+			mode: "rpc",
+			viewChannel: fakeChannel(true),
+		});
+		const runner = harness.session.extensionRunner;
+		const first = runner.openPage("dup:page");
+		const second = runner.openPage("dup:page");
+		const closing = runner.closePage("dup:page");
+		finish({ v: 1, title: "Dup", body: [] });
+		await Promise.all([first, second, closing]);
+		expect(calls).toEqual(["open", "close"]);
+		expect(runner.getUIContext().getView("dup:page")).toBeUndefined();
+	});
+
 	it("waits for a page's running close() before opening it again", async () => {
 		const order: string[] = [];
 		let finishClose: () => void = () => {};

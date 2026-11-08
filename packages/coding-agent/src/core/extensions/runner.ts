@@ -798,6 +798,8 @@ export class ExtensionRunner {
 		const opening = this.openPages.get(key);
 		if (opening) {
 			await opening.done;
+			// Closed (or opened anew) while this request waited: a duplicate request does not bring it back.
+			if (this.openPages.get(key) !== opening) return;
 			if (views.get(key)) {
 				views.resend(key);
 				return;

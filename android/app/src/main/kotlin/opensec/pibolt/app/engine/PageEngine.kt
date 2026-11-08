@@ -248,10 +248,13 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
     }
 
     private fun release(reason: String) {
-        val holds = synchronized(holders) {
-            holders -= reason
-            holders.size
-        }
+        synchronized(holders) { holders -= reason }
+        stopLaterIfIdle()
+    }
+
+    /** Nothing holds the running engine: it stops after the delay unless something holds it again. */
+    private fun stopLaterIfIdle() {
+        val holds = synchronized(holders) { holders.size }
         if (PageRules.decide(holds, backend != null, lowMemory = false) != PageRules.Decision.StopLater) return
         stopJob?.cancel()
         stopJob = scope.launch {
@@ -324,6 +327,8 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
         val again = synchronized(opened) { opened.toList() }
         synchronized(opened) { opened.clear() }
         for (key in again) if (client.openPage(key).success) synchronized(opened) { opened += key }
+        // Whoever asked for it may have gone while it started (a sheet dismissed): it stops after the delay then.
+        stopLaterIfIdle()
         true
     }
 
