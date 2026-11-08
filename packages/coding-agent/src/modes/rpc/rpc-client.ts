@@ -13,7 +13,7 @@ import type { CompactionResult } from "../../core/compaction/index.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { JsonAgentSessionEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
-import type { RpcCommand, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.ts";
+import type { RpcCommand, RpcProviderInfo, RpcResponse, RpcSessionState, RpcSlashCommand } from "./rpc-types.ts";
 
 // ============================================================================
 // Types
@@ -279,6 +279,14 @@ export class RpcClient {
 	async getAvailableModels(): Promise<ModelInfo[]> {
 		const response = await this.send({ type: "get_available_models" });
 		return this.getData<{ models: ModelInfo[] }>(response).models;
+	}
+
+	/**
+	 * Get every provider with its auth kind and which of its models work now.
+	 */
+	async getProviders(): Promise<RpcProviderInfo[]> {
+		const response = await this.send({ type: "get_providers" });
+		return this.getData<{ providers: RpcProviderInfo[] }>(response).providers;
 	}
 
 	/**

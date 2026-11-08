@@ -269,6 +269,47 @@ Response contains an array of full [Model](#model-object) objects:
 }
 ```
 
+### get_providers
+
+List every provider Pi knows: built-in ones, those [extensions register](custom-provider.md) and those in `models.json`. Pi checks credentials again first, so `configured` and `available` reflect keys stored since startup. Credential values are never included.
+
+```json
+{"type": "get_providers"}
+```
+
+Response:
+```json
+{
+  "type": "response",
+  "command": "get_providers",
+  "success": true,
+  "data": {
+    "providers": [
+      {
+        "id": "acme",
+        "name": "Acme AI",
+        "origin": "extension",
+        "extension": true,
+        "configured": true,
+        "credential": "api_key",
+        "authSource": "stored",
+        "apiKey": {"name": "API key", "env": ["ACME_API_KEY"]},
+        "models": [{"id": "acme-chat", "name": "Acme Chat", "reasoning": false, "input": ["text"], "contextWindow": 128000}],
+        "available": ["acme-chat"]
+      }
+    ]
+  }
+}
+```
+
+- `origin`: `"builtin"` (also when an extension or `models.json` changes a built-in provider), `"extension"`, `"models_json"` or `"virtual"` (only virtual models).
+- `extension`: an extension registered the provider or changes it.
+- `configured`: its auth works now; `available` lists the ids of its usable chat models.
+- `credential`: the kind of credential stored in `auth.json` under the provider id (`"api_key"` or `"oauth"`), when there is one.
+- `apiKey`: present when the provider takes an API key. A key stored in `auth.json` as `{"type": "api_key", "key": "..."}` under the provider id is used first. `env` names the variables a provider extension reads instead, when it declares them as `$NAME`.
+- `oauth`: present when the provider has a login flow (`name`, optional `loginLabel`, `subscription`).
+- `models`: every chat model the provider lists.
+
 ## Thinking
 
 ### set_thinking_level
