@@ -124,7 +124,7 @@ object CatalogJson {
 
     /** The paths (without the leading slash) in jsDelivr's flat file list (`?structure=flat`). */
     fun parseFiles(text: String): List<String> =
-        (parse(text)?.get("files") as? JsonArray).orEmpty().mapNotNull { (it as? JsonObject)?.str("name")?.removePrefix("/") }
+        (parse(text)?.get("files") as? JsonArray).orEmpty().asSequence().take(MAX_FILES).mapNotNull { (it as? JsonObject)?.str("name")?.removePrefix("/") }.toList()
 
     /**
      * A repository as a browsable https URL: `git+https://github.com/o/r.git`, `git://`, `git@github.com:o/r.git`,
@@ -174,11 +174,11 @@ object CatalogJson {
                 Kind.Theme -> pi?.themes
             } ?: if (pi == null) listOf(kind.dir) else emptyList()
             val found = LinkedHashSet<String>()
-            for (entry in entries) {
+            for (entry in entries.take(MAX_ENTRIES)) {
                 if (entry.startsWith("!") || entry.startsWith("-")) continue
                 val e = entry.removePrefix("+").removePrefix("./").trimEnd('/')
                 when {
-                    '*' in e || '?' in e -> glob(e).let { rx -> files.filterTo(found) { rx.matches(it) && kind.accepts(it) } }
+                    '*' in e || '?' in e -> files.filterTo(found) { kind.accepts(it) && globMatches(e, it) }
                     e in files -> found += e
                     else -> files.filterTo(found) { it.startsWith("$e/") && kind.discovers(it.removePrefix("$e/")) }
                 }
@@ -227,26 +227,55 @@ object CatalogJson {
     private const val ROOT_LABEL = "(package root)"
     private val CODE = Regex(""".*\.(ts|js|mjs|cjs|mts|cts)$""")
 
-    /** A package glob (`*` within a path segment, `**` across them) as a regex over whole paths. */
-    internal fun glob(pattern: String): Regex {
-        val sb = StringBuilder()
-        var i = 0
-        while (i < pattern.length) {
-            val c = pattern[i]
-            when {
-                c == '*' && pattern.getOrNull(i + 1) == '*' -> {
-                    sb.append(".*")
-                    i++
-                    if (pattern.getOrNull(i + 1) == '/') i++
-                }
-                c == '*' -> sb.append("[^/]*")
-                c == '?' -> sb.append("[^/]")
-                else -> sb.append(Regex.escape(c.toString()))
+    /**
+     * Whether [path] matches a package glob: `*` and `?` within one path segment, a `**` segment across any number of
+     * segments. The manifest and file list are untrusted, so this is no regex: memoised over segments (at most 64 of
+     * each) and a two-pointer match within a segment, so its cost stays polynomial in the (bounded) lengths.
+     */
+    internal fun globMatches(pattern: String, path: String): Boolean {
+        if (pattern.length > MAX_GLOB || path.length > MAX_PATH) return false
+        val p = pattern.split('/')
+        val s = path.split('/')
+        if (p.size > MAX_SEGMENTS || s.size > MAX_SEGMENTS) return false
+        val memo = Array(p.size + 1) { arrayOfNulls<Boolean>(s.size + 1) }
+        fun match(i: Int, j: Int): Boolean {
+            memo[i][j]?.let { return it }
+            val result = when {
+                i == p.size -> j == s.size
+                p[i] == "**" -> match(i + 1, j) || (j < s.size && match(i, j + 1))
+                j == s.size -> false
+                else -> segmentMatches(p[i], s[j]) && match(i + 1, j + 1)
             }
-            i++
+            memo[i][j] = result
+            return result
         }
-        return Regex(sb.toString())
+        return match(0, 0)
     }
+
+    private fun segmentMatches(p: String, s: String): Boolean {
+        var i = 0
+        var j = 0
+        var star = -1
+        var mark = 0
+        while (j < s.length) {
+            when {
+                i < p.length && (p[i] == '?' || p[i] == s[j]) -> { i++; j++ }
+                i < p.length && p[i] == '*' -> { star = i; mark = j; i++ }
+                star >= 0 -> { i = star + 1; mark++; j = mark }
+                else -> return false
+            }
+        }
+        while (i < p.length && p[i] == '*') i++
+        return i == p.length
+    }
+
+    private const val MAX_GLOB = 300
+    private const val MAX_PATH = 1000
+    private const val MAX_SEGMENTS = 64
+
+    /** At most this many declared entries per resource type and files are considered. */
+    private const val MAX_ENTRIES = 100
+    private const val MAX_FILES = 20_000
 
     private fun parse(text: String): JsonObject? = runCatching { ProtocolJson.parseToJsonElement(text) as? JsonObject }.getOrNull()
 
@@ -286,7 +315,9 @@ class PackageCatalog(
 
     /** [name]'s package.json at [version] (the latest when null). */
     suspend fun manifest(name: String, version: String? = null): PackageManifest {
-        val text = get("$registry/${name.replace("/", "%2F")}/${version ?: "latest"}") ?: throw CatalogException("$name is not on npm.")
+        // The registry takes the scoped name as one segment (`@scope%2Fname`) and an exact version or a dist-tag.
+        val url = registry.toHttpUrl().newBuilder().addPathSegment(name).addPathSegment(version ?: "latest").build()
+        val text = get(url.toString()) ?: throw CatalogException(if (version == null) "$name is not on npm." else "$name@$version is not on npm.")
         return CatalogJson.parseManifest(text)
     }
 
@@ -313,7 +344,8 @@ class PackageCatalog(
             }
             response.use { r ->
                 when {
-                    r.isSuccessful -> r.body.string().takeIf { it.length <= MAX_BODY }
+                    // At most MAX_BODY bytes are read; a longer answer is cut and then fails to parse.
+                    r.isSuccessful -> r.peekBody(MAX_BODY).string()
                     r.code == 404 -> null
                     r.code == 429 -> throw CatalogException("The package registry is busy. Try again in a minute.")
                     else -> throw CatalogException("The package registry answered ${r.code}.")
@@ -324,6 +356,6 @@ class PackageCatalog(
 
     companion object {
         const val PAGE = 20
-        private const val MAX_BODY = 8 * 1024 * 1024
+        private const val MAX_BODY = 8L * 1024 * 1024
     }
 }

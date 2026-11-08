@@ -209,6 +209,28 @@ class PackageBrowseTest {
     }
 
     @Test
+    fun globsMatchBySegment() {
+        assertTrue(CatalogJson.globMatches("res/prompts/*.md", "res/prompts/fix.md"))
+        assertFalse(CatalogJson.globMatches("res/prompts/*.md", "res/prompts/sub/fix.md"))
+        assertTrue(CatalogJson.globMatches("res/**/*.md", "res/prompts/sub/fix.md"))
+        assertTrue(CatalogJson.globMatches("res/**/*.md", "res/fix.md"))
+        assertTrue(CatalogJson.globMatches("t/?ark.json", "t/dark.json"))
+        assertFalse(CatalogJson.globMatches("t/*.json", "t/dark.jsonx"))
+        assertTrue(CatalogJson.globMatches("**", "a/b/c"))
+    }
+
+    @Test(timeout = 5_000)
+    fun hostileGlobsStayFast() {
+        // An author-controlled manifest and file list: nested ** and many stars against long non-matching paths.
+        val pattern = (1..30).joinToString("/") { "**" } + "/" + "*a".repeat(60) + "b"
+        val path = (1..60).joinToString("/") { "a".repeat(15) }
+        assertFalse(CatalogJson.globMatches(pattern, path))
+        val m = manifest("""{"name":"p","pi":{"prompts":["${"**/".repeat(40)}${"*a".repeat(100)}.md"]}}""")
+        val files = List(2_000) { i -> (1..20).joinToString("/") { "a".repeat(20) } + "/x$i.md" }
+        assertEquals(emptyList<AddedResource>(), CatalogJson.resources(m, files))
+    }
+
+    @Test
     fun resourcesFromConventionalDirectories() {
         val m = manifest("""{"name":"p"}""")
         val files = listOf("extensions/a.ts", "extensions/b/index.ts", "extensions/b/lib.ts", "skills/s1/SKILL.md", "prompts/p.md", "themes/t.json", "lib/x.ts")

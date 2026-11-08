@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
@@ -146,11 +147,14 @@ suspend fun loadDetail(catalog: PackageCatalog, source: String, known: CatalogEn
                 val downloads = async { known?.weeklyDownloads ?: catalog.weeklyDownloads(name) }
                 val manifest = catalog.manifest(name, version)
                 val files = manifest.version?.let { catalog.files(name, it) }
-                PackageDetail(manifest, downloads.await(), files, CatalogJson.resources(manifest, files), PackageCompat.check(manifest, files), null)
+                // The manifest and file list come from the package's author: off the main thread.
+                val (resources, notes) = withContext(Dispatchers.Default) { CatalogJson.resources(manifest, files) to PackageCompat.check(manifest, files) }
+                PackageDetail(manifest, downloads.await(), files, resources, notes, null)
             }
             gh != null -> {
                 val manifest = catalog.githubManifest(gh.first, gh.second, gh.third)
-                PackageDetail(manifest, null, null, CatalogJson.resources(manifest, null), PackageCompat.check(manifest, null), null)
+                val (resources, notes) = withContext(Dispatchers.Default) { CatalogJson.resources(manifest, null) to PackageCompat.check(manifest, null) }
+                PackageDetail(manifest, null, null, resources, notes, null)
             }
             else -> PackageDetail(null, null, null, emptyList(), emptyList(), "Details are not available for this source.")
         }
@@ -180,8 +184,12 @@ fun BrowseTab(catalog: PackageCatalog, installed: Set<String>, onOpen: (CatalogE
     var state by remember { mutableStateOf<BrowseState>(BrowseState.Loading) }
     var attempt by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
+    var more by remember { mutableStateOf<Job?>(null) }
     LaunchedEffect(query, attempt) {
-        // Typing restarts this effect: the request goes out once the query has rested.
+        // Typing restarts this effect: the request goes out once the query has rested. A "Show more" for the old
+        // query is cancelled so its page never lands on the new results.
+        more?.cancel()
+        more = null
         if (state !is BrowseState.Loading) state = BrowseState.Loading
         delay(if (query.isBlank() && attempt == 0) 0 else DEBOUNCE_MS)
         state = try {
@@ -221,9 +229,10 @@ fun BrowseTab(catalog: PackageCatalog, installed: Set<String>, onOpen: (CatalogE
                 } else {
                     SecondaryButton("Show more", onClick = {
                         state = s.copy(loadingMore = true, moreError = null)
-                        scope.launch {
-                            state = try {
-                                val next = catalog.search(query, from = s.page.entries.size)
+                        val forQuery = query
+                        more = scope.launch {
+                            val result = try {
+                                val next = catalog.search(forQuery, from = s.page.entries.size)
                                 val names = s.page.entries.map { it.name }.toSet()
                                 BrowseState.Results(CatalogPage(s.page.entries + next.entries.filter { it.name !in names }, next.total))
                             } catch (e: CancellationException) {
@@ -231,6 +240,7 @@ fun BrowseTab(catalog: PackageCatalog, installed: Set<String>, onOpen: (CatalogE
                             } catch (e: Exception) {
                                 s.copy(loadingMore = false, moreError = e.message ?: "Could not load more.")
                             }
+                            if (query == forQuery) state = result
                         }
                     }, modifier = Modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.sm))
                 }
@@ -441,15 +451,21 @@ fun InstallLinkHost(app: PiBoltApp, pending: String?, onConsumed: () -> Unit) {
     var installed by remember { mutableStateOf(false) }
     LaunchedEffect(pending) {
         val source = pending ?: return@LaunchedEffect
+        // Taken into this host's own state before it is consumed: consuming changes this effect's key.
+        if (status !is InstallStatus.Running) {
+            status = InstallStatus.Idle
+            installed = false
+            shown = source
+        }
         onConsumed()
-        if (status is InstallStatus.Running) return@LaunchedEffect
-        status = InstallStatus.Idle
+    }
+    LaunchedEffect(shown) {
+        val source = shown ?: return@LaunchedEffect
         installed = withContext(Dispatchers.IO) {
             val settings = PiJsonFile.read(File(engine.agentDir, "settings.json")) ?: JsonObject(emptyMap())
             val name = PackageLinks.npmParts(source)?.first
             PackageList.fromSettings(settings, PackageScope.User).any { it.source == source || name != null && PackageLinks.npmParts(it.source)?.first == name }
         }
-        shown = source
     }
     shown?.let { source ->
         PackageInfoSheet(
