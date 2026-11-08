@@ -25,7 +25,7 @@ import {
 	type ViewEvent,
 	type ViewEventKind,
 } from "./types.ts";
-import { assertView, findNode, forEachNode, isFieldType, optionValues } from "./validate.ts";
+import { assertView, findShownNode, forEachNode, isFieldType, optionValues } from "./validate.ts";
 
 export interface ViewSetRequest {
 	method: "setView";
@@ -450,7 +450,7 @@ export class ViewHost {
 	private sheetResult(record: ViewRecord, answer: ViewSheetAnswer): MobileViewResult | undefined {
 		const view = record.view;
 		if (typeof answer.nodeId !== "string") return undefined;
-		const node = findNode(view, answer.nodeId);
+		const node = findShownNode(view, answer.nodeId);
 		const isAction = view.actions?.some((action) => action.id === answer.nodeId) === true;
 		if (!node || node.hidden) return undefined;
 		if (
@@ -484,7 +484,7 @@ export class ViewHost {
 			record.events = 0;
 		}
 		if (++record.events > LIMITS.eventsPerSecond) return false;
-		const node = findNode(record.view, nodeId);
+		const node = findShownNode(record.view, nodeId);
 		if (!node || node.hidden) return false;
 		const kind = event.kind as ViewEventKind;
 		const emitted: ViewEvent = { type: "view_event", key, id: nodeId, action: nodeId, kind };

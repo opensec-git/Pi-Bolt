@@ -394,6 +394,28 @@ describe("mobile UI sheets as dialogs", () => {
 		]);
 	});
 
+	it("asks a sheet's fields outside forms before a form's own", async () => {
+		const sheet: MobileView = {
+			v: 1,
+			body: [
+				{ type: "input", id: "name", label: "Name", required: true },
+				{
+					type: "form",
+					id: "f",
+					children: [{ type: "input", id: "branch", label: "Branch" }],
+					submit: { label: "Go" },
+				},
+			],
+		};
+		const dialogs = scriptedDialogs(["Bolt", "main"]);
+		await expect(runViewDialogs(sheet, dialogs)).resolves.toEqual({
+			id: "f",
+			action: "f",
+			values: { name: "Bolt", branch: "main" },
+		});
+		expect(dialogs.asked).toEqual(["input Name (required)", "input Branch"]);
+	});
+
 	it("confirms a button with confirm, and cancels when any dialog is dismissed", async () => {
 		await expect(runViewDialogs(SHEET, scriptedDialogs(["Cancel", true]))).resolves.toMatchObject({ id: "cancel" });
 		await expect(runViewDialogs(SHEET, scriptedDialogs(["Cancel", false]))).resolves.toBeUndefined();
@@ -551,6 +573,25 @@ describe("mobile UI host", () => {
 			expect(host.handleEvent(bad), JSON.stringify(bad)).toBe(false);
 		}
 		expect(events).toHaveLength(4);
+	});
+
+	it("drops events for nodes inside a hidden container", () => {
+		const { host, events } = hostWith(fakeChannel(true));
+		host.set("deploy", {
+			v: 1,
+			body: [
+				{
+					type: "section",
+					id: "more",
+					hidden: true,
+					children: [{ type: "button", id: "nuke", label: "Delete all" }],
+				},
+			],
+		});
+		expect(host.handleEvent({ viewKey: "deploy", nodeId: "nuke", kind: "tap" })).toBe(false);
+		host.update("deploy", [{ op: "set", id: "more", props: { hidden: null } }]);
+		expect(host.handleEvent({ viewKey: "deploy", nodeId: "nuke", kind: "tap" })).toBe(true);
+		expect(events).toHaveLength(1);
 	});
 
 	it("drops events beyond 20 per second per view", () => {

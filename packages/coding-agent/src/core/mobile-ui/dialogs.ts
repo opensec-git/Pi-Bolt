@@ -151,13 +151,13 @@ export async function runViewDialogs(
 		chosen = choices[index];
 	}
 	if (signal?.aborted || !chosen.id) return undefined;
+	// The sheet's fields outside its forms go with any answer, as the app sends them: ask them first.
+	for (const field of standaloneFields(view.body)) {
+		const answer = await askField(dialogs, field, opts);
+		if (!answer || signal?.aborted || !field.id) return undefined;
+		values[field.id] = answer.value;
+	}
 	if (chosen.type === "button") {
-		// The sheet's fields outside its forms go with the action, as the app sends them: ask them first.
-		for (const field of standaloneFields(view.body)) {
-			const answer = await askField(dialogs, field, opts);
-			if (!answer || signal?.aborted || !field.id) return undefined;
-			values[field.id] = answer.value;
-		}
 		if (chosen.confirm) {
 			const ok = await dialogs.confirm(
 				cleanText(chosen.confirm.title),

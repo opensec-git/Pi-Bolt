@@ -480,6 +480,21 @@ export function findNode(view: MobileView, nodeId: string): MobileViewNode | und
 	return found;
 }
 
+/** The node with `id` in `view` when it is shown: neither it nor a node it sits in is hidden. */
+export function findShownNode(view: MobileView, nodeId: string): MobileViewNode | undefined {
+	const walk = (nodes: readonly MobileViewNode[] | undefined): MobileViewNode | undefined => {
+		for (const node of nodes ?? []) {
+			if (node.hidden) continue;
+			if (node.id === nodeId) return node;
+			const record = node as unknown as { actions?: MobileViewNode[]; children?: MobileViewNode[] };
+			const found = walk(record.actions) ?? walk(record.children);
+			if (found) return found;
+		}
+		return undefined;
+	};
+	return walk(view.body) ?? walk(view.actions);
+}
+
 export function isFieldType(type: string): boolean {
 	return FIELD_TYPES.has(type);
 }
