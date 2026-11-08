@@ -145,7 +145,7 @@ interface OpenDialog {
 	resolve: (response: RpcExtensionUIResponse | undefined) => void;
 }
 
-interface Pairing {
+export interface Pairing {
 	secret: Buffer;
 	expiresAt: number;
 	used: boolean;
@@ -168,8 +168,11 @@ class RemoteConnection {
 	private alive = true;
 	/** Set once the client proved it holds the session keys (`remote_ready`). */
 	device: PairedDevice | undefined;
-	/** The client after handshake message 1, until it confirms. */
-	private candidate: { publicKey: Buffer; name: string; paired: boolean } | undefined;
+	/**
+	 * The client after handshake message 1, until it confirms. `pairing` is the secret it offered; it is spent only
+	 * when this client confirms.
+	 */
+	private candidate: { publicKey: Buffer; name: string; pairing: Pairing | undefined } | undefined;
 	readonly socket: WebSocket;
 	readonly address: string;
 	private readonly server: RemoteControlServer;
@@ -308,15 +311,22 @@ class RemoteConnection {
 			this.close(CloseCode.BadMessage);
 			return;
 		}
-		// Revoked while confirming.
-		if (!candidate.paired && !this.server.store.findDevice(candidate.publicKey)) {
+		// Spends the secret and stores the device in one step. It fails when another phone paired with the secret first
+		// or a new QR code replaced it; this same device winning on another connection still gets in, as known.
+		const paired = candidate.pairing
+			? this.server.pairDevice(candidate.pairing, candidate.publicKey, candidate.name)
+			: undefined;
+		const device = paired ?? this.server.store.findDevice(candidate.publicKey);
+		// Revoked while confirming, or the secret is gone.
+		if (!device) {
+			if (candidate.pairing) this.server.recordFailure(this.address, "pairing secret already used");
 			this.close(CloseCode.NotAuthorized);
 			return;
 		}
 		clearTimeout(this.handshakeTimer);
-		this.device = this.server.store.upsertDevice(candidate.publicKey, candidate.name);
+		this.device = paired ?? this.server.store.upsertDevice(candidate.publicKey, candidate.name);
 		this.candidate = undefined;
-		void this.server.connectionOpened(this, candidate.paired);
+		void this.server.connectionOpened(this, paired !== undefined);
 	}
 
 	private handshake(frame: Buffer): void {
@@ -347,12 +357,13 @@ class RemoteConnection {
 			this.close(CloseCode.NotAuthorized);
 			return;
 		}
-		this.candidate = { publicKey: remoteStaticKey, name, paired: authorization === "paired" };
+		const pairing = authorization === "known" ? undefined : authorization;
+		this.candidate = { publicKey: remoteStaticKey, name, pairing };
 		const reply = Buffer.from(
 			JSON.stringify({
 				host: this.server.hostName,
 				version: this.server.version,
-				paired: authorization === "paired",
+				paired: pairing !== undefined,
 			}),
 			"utf8",
 		);
@@ -502,15 +513,29 @@ export class RemoteControlServer {
 		});
 	}
 
-	/** "known" for a paired device, "paired" when the secret pairs it now, undefined to refuse. */
-	authorize(publicKey: Buffer, secret: string | undefined): "known" | "paired" | undefined {
+	/**
+	 * At handshake message 1: "known" for a paired device, the pairing whose secret it offered, undefined to refuse.
+	 * Checking the secret does not spend it: a client that times out before `remote_ready` (a slow network, a permission
+	 * prompt) can retry with the same QR code. [pairDevice] spends it.
+	 */
+	authorize(publicKey: Buffer, secret: string | undefined): "known" | Pairing | undefined {
 		if (this.store.findDevice(publicKey)) return "known";
 		const pairing = this.pairing;
 		if (!secret || !pairing || pairing.used || pairing.expiresAt <= Date.now()) return undefined;
 		const offered = Buffer.from(secret, "base64url");
 		if (offered.length !== pairing.secret.length || !timingSafeEqual(offered, pairing.secret)) return undefined;
+		return pairing;
+	}
+
+	/**
+	 * At `remote_ready`: stores the device and spends `pairing`, unless another client spent it first, a new QR code
+	 * replaced it, or it expired. Synchronous, so two clients confirming with one secret cannot both pair.
+	 */
+	pairDevice(pairing: Pairing, publicKey: Buffer, name: string): PairedDevice | undefined {
+		if (pairing !== this.pairing || pairing.used || pairing.expiresAt <= Date.now()) return undefined;
+		const device = this.store.upsertDevice(publicKey, name);
 		pairing.used = true;
-		return "paired";
+		return device;
 	}
 
 	/** Disconnects and forgets a device. */

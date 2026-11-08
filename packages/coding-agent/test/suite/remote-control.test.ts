@@ -111,6 +111,99 @@ describe("remote control", () => {
 		await expect(connectTestClient(code, generateKeyPair())).rejects.toThrow(`closed ${CloseCode.NotAuthorized}`);
 	});
 
+	it("keeps the secret when a phone abandons the handshake, so its retry with the same QR code pairs", async () => {
+		const { server, store, endpoint, uri } = await setup({ firstFrameTimeoutMs: 300 });
+		const code = uri();
+		const phone = generateKeyPair();
+		let recorded: Buffer | undefined;
+		// The phone's 3-second timeout fires after message 1 (a slow network, iOS's Local Network prompt).
+		const stalled = await connectTestClient(code, phone, {
+			ready: false,
+			onMessage1: (frame) => {
+				recorded = frame;
+			},
+		});
+		expect(stalled.welcome.paired).toBe(true);
+		stalled.close();
+		await stalled.closed;
+		// A replay of its message 1 cannot send remote_ready either: the host times it out.
+		const replay = await openIdle(endpoint);
+		const replayClosed = new Promise<number>((resolve) => replay.on("close", resolve));
+		replay.send(recorded as Buffer);
+		expect(await replayClosed).toBe(CloseCode.HandshakeTimeout);
+		expect(store.devices()).toEqual([]);
+		expect(server.clients()).toEqual([]);
+
+		const retry = track(await connectTestClient(code, phone, { device: "iPhone" }));
+		expect(retry.welcome.paired).toBe(true);
+		expect(store.devices().map((device) => device.name)).toEqual(["iPhone"]);
+	});
+
+	it("pairs exactly one of two phones that confirm with the same secret", async () => {
+		const { server, store, uri } = await setup();
+		const code = uri();
+		// Both are past message 2 before either confirms.
+		const [first, second] = await Promise.all([
+			connectTestClient(code, generateKeyPair(), { ready: false, device: "A" }),
+			connectTestClient(code, generateKeyPair(), { ready: false, device: "B" }),
+		]);
+		track(first);
+		track(second);
+		expect(first.welcome.paired && second.welcome.paired).toBe(true);
+		const outcome = (client: TestClient) =>
+			Promise.race([
+				client.waitFor((message) => message.type === "remote_hello").then(() => "paired"),
+				client.closed,
+			]);
+		first.send({ type: "remote_ready" });
+		second.send({ type: "remote_ready" });
+		const results = await Promise.all([outcome(first), outcome(second)]);
+		expect(results.sort()).toEqual([CloseCode.NotAuthorized, "paired"].sort());
+		expect(store.devices()).toHaveLength(1);
+		expect(server.clients()).toHaveLength(1);
+		// Phones that each run a whole handshake in parallel: one pairs, the other is refused.
+		const fresh = uri();
+		const raced = await Promise.allSettled([
+			connectTestClient(fresh, generateKeyPair()),
+			connectTestClient(fresh, generateKeyPair()),
+		]);
+		for (const result of raced) if (result.status === "fulfilled") track(result.value);
+		expect(raced.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+		expect(store.devices()).toHaveLength(2);
+	});
+
+	it("lets the same phone in on both connections when it pairs on two at once", async () => {
+		const { store, uri } = await setup();
+		const code = uri();
+		const phone = generateKeyPair();
+		const [lan, tunnel] = await Promise.all([
+			connectTestClient(code, phone, { ready: false }),
+			connectTestClient(code, phone, { ready: false }),
+		]);
+		track(lan);
+		track(tunnel);
+		lan.send({ type: "remote_ready" });
+		await lan.waitFor((message) => message.type === "remote_hello");
+		// The secret is spent, but this device is paired now: the second connection replaces the first.
+		tunnel.send({ type: "remote_ready" });
+		await tunnel.waitFor((message) => message.type === "remote_hello");
+		expect(await lan.closed).toBe(CloseCode.Replaced);
+		expect(store.devices()).toHaveLength(1);
+	});
+
+	it("refuses a secret reused after its pairing completed, or replaced by a new QR code mid-handshake", async () => {
+		const { server, store, uri } = await setup();
+		const code = uri();
+		track(await connectTestClient(code, generateKeyPair()));
+		await expect(connectTestClient(code, generateKeyPair())).rejects.toThrow(`closed ${CloseCode.NotAuthorized}`);
+
+		const pending = track(await connectTestClient(uri(), generateKeyPair(), { ready: false }));
+		server.newPairing();
+		pending.send({ type: "remote_ready" });
+		expect(await pending.closed).toBe(CloseCode.NotAuthorized);
+		expect(store.devices()).toHaveLength(1);
+	});
+
 	it("strips control characters from the device name it shows", async () => {
 		const { store, uri } = await setup();
 		const phone = track(await connectTestClient(uri(), generateKeyPair(), { device: "\u001b[31mEvil\u0007 phone" }));
