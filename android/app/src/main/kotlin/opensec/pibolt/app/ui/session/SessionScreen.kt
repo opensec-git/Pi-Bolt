@@ -1,7 +1,6 @@
 package opensec.pibolt.app.ui.session
 
 import opensec.pibolt.protocol.session.DialogKind
-import androidx.compose.runtime.SideEffect
 import opensec.pibolt.app.ui.session.views.LocalViewHost
 import opensec.pibolt.app.ui.session.views.ViewHostUi
 import opensec.pibolt.app.ui.session.views.ViewPanels
@@ -586,14 +585,13 @@ internal fun SessionContent(
     val todos by remember { derivedStateOf { state.value.todos } }
     val firstDialog by remember { derivedStateOf { state.value.dialogs.firstOrNull() } }
     // The mobile UI kit: extensions' views, drawn natively (views/ViewUi.kt). Their events go to Pi as they happen.
-    val viewHost = remember(controller) { ViewHostUi { key, node, kind, value, values -> controller.viewEvent(key, node, kind, value, values) } }
-    val views by remember { derivedStateOf { state.value.views } }
-    SideEffect {
-        if (viewHost.views !== views) {
-            viewHost.views = views
-            viewHost.prune()
-        }
+    // The host reads the session's views where they are drawn, so an update of one view redraws it, whichever slot it is
+    // in (an inline view's update changes nothing this screen reads itself).
+    val viewHost = remember(controller) {
+        ViewHostUi({ state.value.views }) { key, node, kind, value, values -> controller.viewEvent(key, node, kind, value, values) }
     }
+    val views by remember { derivedStateOf { state.value.views } }
+    LaunchedEffect(viewHost) { snapshotFlow { state.value.views.keys }.collect { viewHost.prune() } }
     val panels by remember { derivedStateOf { views.values.filter { it.slot == MobileViews.SLOT_PANEL } } }
     val pages by remember { derivedStateOf { views.values.filter { it.slot == MobileViews.SLOT_PAGE } } }
     var openPage by remember { mutableStateOf<String?>(null) }

@@ -14,10 +14,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.compositionLocalOf
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
@@ -45,9 +42,11 @@ import opensec.pibolt.protocol.session.ViewEntry
  */
 @Stable
 class ViewHostUi(
+    /** The session's views now; read where a view is drawn, so its updates redraw it. */
+    private val source: () -> Map<String, ViewEntry>,
     private val send: (viewKey: String, nodeId: String, kind: String, value: JsonPrimitive?, values: JsonObject?) -> Unit,
 ) {
-    var views: Map<String, ViewEntry> by mutableStateOf(emptyMap())
+    val views: Map<String, ViewEntry> get() = source()
     private val fields = HashMap<String, ViewFields>()
     val folded = mutableStateMapOf<String, Boolean>()
 
