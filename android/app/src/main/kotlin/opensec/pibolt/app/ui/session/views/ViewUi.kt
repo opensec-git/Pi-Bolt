@@ -216,7 +216,14 @@ class ViewFields {
 
     fun value(field: VField): JsonPrimitive {
         // An option the extension took away since the user picked it no longer counts.
-        val edit = field.id?.let { edits[it] }?.takeIf { field !is VSelect || field.options.any { o -> o.value == it.content } }
+        // So does a slider value outside bounds the extension changed since.
+        val edit = field.id?.let { edits[it] }?.takeIf {
+            when (field) {
+                is VSelect -> field.options.any { o -> o.value == it.content }
+                is VSlider -> it.doubleOrNull?.let { v -> v >= field.min && v <= field.max } == true
+                else -> true
+            }
+        }
         return edit ?: MobileViews.initialValue(field)
     }
 

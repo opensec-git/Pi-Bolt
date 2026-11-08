@@ -435,7 +435,13 @@ export class ViewHost {
 				);
 			}
 			if (text) {
-				racers.push(runViewDialogs(record.view, this.dialogs, abort.signal));
+				// Checked against the sheet as it is when answered: an update meanwhile may have disabled or removed the
+				// chosen action, as it would for a native answer.
+				racers.push(
+					runViewDialogs(record.view, this.dialogs, abort.signal).then((result) =>
+						result ? this.sheetResult(record, { nodeId: result.id, values: result.values }) : undefined,
+					),
+				);
 			}
 			return await Promise.race(racers);
 		} finally {

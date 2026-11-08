@@ -712,6 +712,32 @@ describe("mobile UI host", () => {
 		await expect(host.show(SHEET)).resolves.toBeUndefined();
 	});
 
+	it("checks a sheet answered as dialogs against the sheet as it is then", async () => {
+		let pick: (value: string) => void = () => {};
+		const dialogs: ViewDialogs = {
+			select: () =>
+				new Promise((resolve) => {
+					pick = resolve as (value: string) => void;
+				}),
+			confirm: async () => true,
+			input: async () => "",
+		};
+		const { host } = hostWith(fakeChannel(false), dialogs as ReturnType<typeof scriptedDialogs>);
+		const sheet: MobileView = {
+			v: 1,
+			body: [],
+			actions: [
+				{ type: "button", id: "go", label: "Deploy" },
+				{ type: "button", id: "no", label: "Cancel" },
+			],
+		};
+		const result = host.show(sheet, { key: "s" });
+		await Promise.resolve();
+		host.update("s", [{ op: "set", id: "go", props: { disabled: true } }]);
+		pick("Deploy");
+		await expect(result).resolves.toBeUndefined();
+	});
+
 	it("ends a sheet on its timeout", async () => {
 		const { host } = hostWith(fakeChannel(true));
 		await expect(host.show(SHEET, { timeout: 10 })).resolves.toBeUndefined();

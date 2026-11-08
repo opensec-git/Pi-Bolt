@@ -14,7 +14,7 @@ import type {
 	MobileViewResult,
 	MobileViewValue,
 } from "./types.ts";
-import { forEachNode, isFieldType, optionValues } from "./validate.ts";
+import { isFieldType, optionValues } from "./validate.ts";
 
 export type ViewDialogs = Pick<ExtensionUIContext, "select" | "confirm" | "input">;
 
@@ -22,17 +22,26 @@ const SUMMARY_LINES = 12;
 /** A required or malformed answer is asked again this many times before the sheet counts as cancelled. */
 const ATTEMPTS = 3;
 
-/** The current value of every field of `view`, by field id. Password fields included: the result goes to the extension. */
+/**
+ * The current value of every shown field of `view` (hidden nodes and their insides left out), by field id. Password
+ * fields included: the result goes to the extension.
+ */
 export function fieldValues(view: MobileView): Record<string, MobileViewValue> {
 	const values: Record<string, MobileViewValue> = {};
-	forEachNode(view, (node) => {
-		if (!node.id || !isFieldType(node.type)) return undefined;
-		const field = node as MobileViewField;
-		if (field.type === "input") values[node.id] = field.value ?? "";
-		else if (field.type === "select") values[node.id] = field.value ?? optionValues(field.options)[0] ?? "";
-		else values[node.id] = field.value;
-		return undefined;
-	});
+	const walk = (nodes: readonly MobileViewNode[]) => {
+		for (const node of nodes) {
+			if (node.hidden) continue;
+			if (node.id && isFieldType(node.type)) {
+				const field = node as MobileViewField;
+				if (field.type === "input") values[node.id] = field.value ?? "";
+				else if (field.type === "select") values[node.id] = field.value ?? optionValues(field.options)[0] ?? "";
+				else values[node.id] = field.value;
+			}
+			const children = (node as { children?: MobileViewNode[] }).children;
+			if (Array.isArray(children)) walk(children);
+		}
+	};
+	walk(view.body);
 	return values;
 }
 
