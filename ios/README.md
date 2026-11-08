@@ -101,8 +101,10 @@ on the screen. A tap opens that session. There is no push server, so this works 
 So a long run that ends while the phone sits in a pocket may be announced late, or only when you open the app. The
 computer's terminal is never affected: the run goes on there either way.
 
-The milestone 1 not-yet list is done. The mobile UI kit (extension views, PR #295) waits for 0.2.0: its protocol is
-still a draft.
+The milestone 1 not-yet list is done. The mobile UI kit ([docs/mobile-ui.md](../packages/coding-agent/docs/mobile-ui.md),
+Pi-Bolt 1.1.6) comes in 0.2.0. Until then the app does not declare `views`, so the computer sends it no views; the
+sheets and snapshot fields that reach every phone are ignored, and sheets fall back to dialogs when no phone renders
+views.
 
 One platform difference: `URLSessionWebSocketTask` reports the 1012 close (the background service handing its port to a
 terminal) as 1005, so the app treats a handoff as a dropped connection. Both reconnect at once; only the Android app's

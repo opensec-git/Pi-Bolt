@@ -442,6 +442,46 @@ struct LiveHostTests {
         rpc.stop()
     }
 
+    /// A 1.1.6 computer's mobile UI kit (docs/mobile-ui.md). This app does not declare "views" (its renderer is for
+    /// 0.2.0), so it gets no views; what reaches every phone anyway (a sheet, `views` and the open sheet in
+    /// `remote_hello`) shows nothing, raises no alert and breaks nothing.
+    @Test func ignoresTheMobileUIKitItDoesNotDeclare() async throws {
+        let host = try await SharedFixture.shared.get()
+        let (plainBackend, plain, plainLog) = try await connected(host)
+        let (viewsBackend, views, viewsLog) = try await connected(host)
+        let declared = await views.request("set_client_features", ["features": ["views"]])
+        #expect(declared.success, "\(declared.error ?? "")")
+        let hello = try #require(plainLog.all.first { $0.type == "remote_hello" })
+        #expect(hello.strings("features").contains("views"))
+        #expect(hello.arr("views") != nil)
+
+        let mark = plainLog.all.count
+        let viewsMark = viewsLog.all.count
+        #expect(await plain.prompt("/panel").success)
+        _ = try await viewsLog.waitFor(after: viewsMark) { $0.str("method") == "setView" && $0.str("viewKey") == "deploy" }
+        #expect(!plainLog.all.dropFirst(mark).contains { ["setView", "updateView"].contains($0.str("method") ?? "") })
+
+        let sheetDone = Task { await plain.prompt("/sheet") }
+        let sheet = try await plainLog.waitFor(after: mark) { $0.str("method") == "showView" }
+        #expect(plainLog.state.dialogs.isEmpty)
+        #expect(SessionAlerts.alerts(before: plainLog.state, event: sheet, hostId: "h", hostName: "fixture").isEmpty)
+        // A phone that connects now gets the open sheet among its dialogs: still nothing to show or to announce.
+        let (lateBackend, late, lateLog) = try await connected(host)
+        let lateHello = try #require(lateLog.all.first { $0.type == "remote_hello" })
+        #expect((lateHello.arr("dialogs") ?? []).contains { $0.str("method") == "showView" })
+        #expect(SessionReducer.fromHello(lateHello).dialogs.isEmpty)
+        #expect(SessionReducer.missedWhileAway(plainLog.state, lateHello).isEmpty)
+        // The sheet closes by itself; the session goes on.
+        _ = try await plainLog.waitFor(after: mark) { $0.type == "extension_ui_dismissed" && $0.str("id") == sheet.str("id") }
+        _ = await sheetDone.value
+        #expect(plainLog.state.dialogs.isEmpty)
+        #expect(await plain.getState().success)
+        for (backend, rpc) in [(plainBackend, plain), (viewsBackend, views), (lateBackend, late)] {
+            backend.close()
+            rpc.stop()
+        }
+    }
+
     /// Last: it restarts the host's listener. URLSession reports the 1012 close as 1005 (no status: it knows only the
     /// close codes it names, and 4000-4999), so on iOS a handoff reads as a dropped connection. Both reconnect at once,
     /// which is what a handoff needs; only the Android app's "terminal took over" notice is missing.

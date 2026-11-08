@@ -28,6 +28,9 @@
 //
 // Review (`host.review`): every session's cwd is one git repository, `main` with one commit (README.md, src/app.ts),
 // then README.md modified, `notes.txt` untracked and a `.env` (a secret: rc_read_file refuses it).
+//
+// Mobile UI kit (Pi-Bolt 1.1.6): the extension commands `/panel` (a panel view, then an update) and `/sheet` (a sheet
+// that closes by itself after 3 s), with the view channel bound as the background service binds it.
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -45,11 +48,13 @@ import {
 } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { WebSocketServer } from "ws";
+import type { ExtensionAPI } from "../../packages/coding-agent/src/core/extensions/types.ts";
+import type { MobileView } from "../../packages/coding-agent/src/core/mobile-ui/types.ts";
 import { SessionManager } from "../../packages/coding-agent/src/core/session-manager.ts";
 import { CloseCode } from "../../packages/coding-agent/src/remote-control/protocol.ts";
 import { RemoteControlServer } from "../../packages/coding-agent/src/remote-control/server.ts";
 import { RemoteControlStore } from "../../packages/coding-agent/src/remote-control/store.ts";
-import { createHarness, type Harness } from "../../packages/coding-agent/test/suite/harness.ts";
+import { createHarness, createTestUiContext, type Harness } from "../../packages/coding-agent/test/suite/harness.ts";
 
 function emit(event: Record<string, unknown>): void {
 	process.stdout.write(`${JSON.stringify(event)}\n`);
@@ -272,13 +277,66 @@ function agentTool(owner: () => Harness | undefined): AgentTool {
 	};
 }
 
+/**
+ * The mobile UI kit (docs/mobile-ui.md, Pi-Bolt 1.1.6): `/panel` sets a panel view and updates it, `/sheet` opens a sheet
+ * that closes by itself after 3 s. Phones that declare "views" get the views; the iOS app does not (until 0.2.0), so its
+ * tests check it ignores what still reaches it (the sheet, broadcast to every phone; `views` in `remote_hello`).
+ */
+const PANEL: MobileView = {
+	v: 1,
+	title: "Deploy",
+	body: [{ type: "progress", id: "bar", value: 0, label: "Uploading" }],
+	actions: [{ type: "button", id: "cancel", label: "Cancel" }],
+};
+const SHEET: MobileView = {
+	v: 1,
+	title: "Deploy settings",
+	body: [
+		{
+			type: "form",
+			id: "f",
+			children: [{ type: "input", id: "branch", label: "Branch", value: "main" }],
+			submit: { label: "Deploy" },
+		},
+	],
+};
+
+function viewsExtension(pi: ExtensionAPI): void {
+	pi.registerCommand("panel", {
+		description: "Show a panel view",
+		handler: async (_args, ctx) => {
+			ctx.ui.setView("deploy", PANEL);
+			ctx.ui.updateView("deploy", [{ op: "set", id: "bar", props: { value: 0.5 } }]);
+		},
+	});
+	pi.registerCommand("sheet", {
+		description: "Open a sheet view",
+		handler: async (_args, ctx) => {
+			await ctx.ui.showView(SHEET, { key: "settings", timeout: 3000 });
+		},
+	});
+}
+
 async function newSession(): Promise<FixtureSession> {
 	let harness: Harness | undefined;
 	harness = await createHarness({
 		tools: [shoutTool, waitTool, agentTool(() => harness)],
 		sessionManager: SessionManager.create(repoDir, sessionDir),
+		extensionFactories: [viewsExtension],
 	});
 	harness.setResponses(Array.from({ length: 500 }, () => reply));
+	// As the background service binds a session: views to the phones that render them, sheets as their dialogs.
+	await harness.session.bindExtensions({
+		uiContext: createTestUiContext(),
+		mode: "rpc",
+		viewChannel: {
+			hasNative: () => server.hasViewClients(),
+			keepText: false,
+			send: (request) => server.sendView(request),
+			sheet: (request, signal) => server.requestViewSheet(request, signal),
+			sheetChanged: (viewKey, view, rev) => server.updateViewSheet(viewKey, view, rev),
+		},
+	});
 	const session = { path: `fixture://session/${sessions.length + 1}`, harness, updatedAt: new Date().toISOString() };
 	sessions.push(session);
 	return session;

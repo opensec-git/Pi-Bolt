@@ -192,6 +192,28 @@ struct SessionAlertTests {
         #expect(AlertWatch.of(run(SessionState(), hello(running: false)), hostId: "h", hostName: "studio") == nil)
     }
 
+    /// A 1.1.6 computer's mobile UI kit (docs/mobile-ui.md): this app does not render views before 0.2.0, so views,
+    /// view updates and sheets change nothing and raise no alert.
+    @Test func mobileUIKitTrafficIsIgnored() {
+        let viewHello = #"{"type":"remote_hello","host":{"name":"mac","version":"1.1.6","cwd":"/w"},"features":["subagent_stream","views"],"views":[{"viewKey":"deploy","slot":"panel","rev":1,"view":{"v":1,"title":"Deploy","body":[]}}],"state":{"isStreaming":true,"sessionId":"s1"},"messages":[],"dialogs":[{"type":"extension_ui_request","id":"u3","method":"showView","viewKey":"sheet:1","rev":1,"view":{"v":1,"title":"Settings","body":[]}}]}"#
+        let base = run(SessionState(), hello(running: true))
+        let s = run(base, viewHello)
+        #expect(s.dialogs.isEmpty)
+        #expect(s.host?.features.contains("views") == true)
+        #expect(SessionReducer.missedWhileAway(base, SessionReducer.parse(viewHello)).isEmpty)
+        let traffic = [
+            #"{"type":"extension_ui_request","id":"u1","method":"setView","viewKey":"deploy","slot":"panel","rev":2,"view":{"v":1,"title":"Deploy","body":[]}}"#,
+            #"{"type":"extension_ui_request","id":"u2","method":"updateView","viewKey":"deploy","rev":3,"ops":[{"op":"set","id":"bar","props":{"value":0.5}}]}"#,
+            #"{"type":"extension_ui_request","id":"u4","method":"showView","viewKey":"sheet:2","rev":1,"view":{"v":1,"title":"More","body":[]}}"#,
+            #"{"type":"extension_ui_dismissed","id":"u4"}"#,
+        ]
+        for line in traffic {
+            let event = SessionReducer.parse(line)
+            #expect(SessionReducer.reduce(s, event) == s, "\(line)")
+            #expect(SessionAlerts.alerts(before: s, event: event, hostId: "h", hostName: "mac").isEmpty)
+        }
+    }
+
     @Test func aWatchSurvivesTheDisk() throws {
         let watch = AlertWatch(hostId: "h", hostName: "studio", sessionId: "s1", running: true, dialogIds: ["d1"], savedAt: Date(timeIntervalSince1970: 1_800_000_000))
         let data = try JSONEncoder().encode(watch)

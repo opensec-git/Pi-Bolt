@@ -75,6 +75,13 @@ final class Dictation {
             self.request = request
             let input = engine.inputNode
             let format = input.outputFormat(forBus: 0)
+            // No input (a Simulator without a microphone): a tap with this format would trap.
+            guard format.sampleRate > 0, format.channelCount > 0 else {
+                self.request = nil
+                try? session.setActive(false, options: .notifyOthersOnDeactivation)
+                state = .failed("No microphone is available.")
+                return
+            }
             input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak request] buffer, _ in
                 request?.append(buffer)
             }
