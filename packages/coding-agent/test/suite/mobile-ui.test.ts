@@ -311,6 +311,42 @@ describe("mobile UI kit in a session", () => {
 		expect(harness.session.extensionRunner.viewSnapshot()).toEqual([]);
 	});
 
+	it("keeps a page opened again while an earlier close waited for its open()", async () => {
+		const finishes: Array<(view: MobileView) => void> = [];
+		const closed: number[] = [];
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi: ExtensionAPI) =>
+					pi.registerPage("slow:page", {
+						title: "Slow",
+						open: () =>
+							new Promise<MobileView>((resolve) => {
+								finishes.push(resolve);
+							}),
+						close: () => void closed.push(finishes.length),
+					}),
+			],
+		});
+		cleanups.push(() => harness.cleanup());
+		await harness.session.bindExtensions({
+			uiContext: createTestUiContext(),
+			mode: "rpc",
+			viewChannel: fakeChannel(true),
+		});
+		const runner = harness.session.extensionRunner;
+		const first = runner.openPage("slow:page");
+		const closing = runner.closePage("slow:page");
+		const second = runner.openPage("slow:page");
+		await until(() => finishes.length === 2);
+		finishes[0]({ v: 1, title: "First", body: [] });
+		await first;
+		await closing;
+		finishes[1]({ v: 1, title: "Second", body: [] });
+		await second;
+		expect(runner.getUIContext().getView("slow:page")?.title).toBe("Second");
+		expect(closed).toEqual([]);
+	});
+
 	it("drops a page whose open() finishes after the session ended", async () => {
 		let finish: (view: MobileView) => void = () => {};
 		const harness = await createHarness({
@@ -349,6 +385,9 @@ describe("mobile UI kit in a session", () => {
 		await harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "rpc", viewChannel: channel });
 		await harness.session.prompt("/board add Write the spec");
 		await harness.session.prompt("/board add Ship it");
+		// A toggle by command is kept (the board file is not read back over it).
+		await harness.session.prompt("/board done 2");
+		await harness.session.prompt("/board done 2");
 		const runner = harness.session.extensionRunner;
 		const ui = runner.getUIContext();
 		expect(runner.viewSnapshot().map((v) => [v.viewKey, v.slot])).toEqual([["board:panel", "panel"]]);

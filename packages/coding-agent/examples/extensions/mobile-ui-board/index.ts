@@ -362,9 +362,9 @@ export function boardExtension(options: { file?: string } = {}) {
 				const [verb, ...rest] = (args ?? "").trim().split(/\s+/);
 				if (verb === "add" && rest.length > 0) add(rest.join(" "));
 				else if (verb === "add") return addFromSheet(ctx);
-				else if (verb === "done" && toggle(Number(rest[0])) === undefined)
-					ctx.ui.notify(`No task #${rest[0]}`, "warning");
-				else load();
+				else if (verb === "done") {
+					if (toggle(Number(rest[0])) === undefined) ctx.ui.notify(`No task #${rest[0]}`, "warning");
+				} else load();
 				show(ctx);
 			},
 		});

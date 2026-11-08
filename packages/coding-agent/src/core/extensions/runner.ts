@@ -835,6 +835,8 @@ export class ExtensionRunner {
 		if (!opening) return;
 		this.openPages.delete(key);
 		await opening.catch(() => {});
+		// Opened again while this close waited: the new open owns the view and the page's state now.
+		if (this.openPages.has(key)) return;
 		const page = this.getRegisteredPages().find((candidate) => candidate.key === key);
 		this.views?.set(key, undefined);
 		this.views?.allowTile(key, false);
