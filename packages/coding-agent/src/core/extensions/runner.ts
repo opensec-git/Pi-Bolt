@@ -796,9 +796,13 @@ export class ExtensionRunner {
 			// The extension removed its view meanwhile: build it again.
 			this.openPages.delete(key);
 		}
-		const open = (async () => {
+		// Read after the await below, when it is set: a later open or close replaces or removes it.
+		let open: Promise<void> | undefined;
+		open = (async () => {
 			if (page.kind === "tile") views.allowTile(key, true);
 			const view = await page.definition.open(this.createContext());
+			// The session ended (or the client closed it) while open() ran: the view is not shown any more.
+			if (this.staleMessage || this.openPages.get(key) !== open) return;
 			views.set(key, view, { slot: page.kind });
 		})();
 		this.openPages.set(key, open);
@@ -809,6 +813,20 @@ export class ExtensionRunner {
 			views.allowTile(key, false);
 			throw error;
 		}
+	}
+
+	/** A context with every value read now: it keeps working after the runner goes stale (a page's cleanup). */
+	private cleanupContext(): ExtensionContext {
+		const live = this.createContext() as unknown as Record<string, unknown>;
+		const values: Record<string, unknown> = {};
+		for (const name of Object.keys(Object.getOwnPropertyDescriptors(live))) {
+			try {
+				values[name] = live[name];
+			} catch {
+				// A value this runner cannot give (no session yet, say) stays absent.
+			}
+		}
+		return values as unknown as ExtensionContext;
 	}
 
 	/** A client closed a registered page or tile: its view goes and its `close()` runs. */
@@ -823,10 +841,11 @@ export class ExtensionRunner {
 		await this.runPageClose(page);
 	}
 
-	private async runPageClose(page: RegisteredPage | undefined): Promise<void> {
+	/** Runs a page's `close()`; `ctx` defaults to a live context. */
+	private async runPageClose(page: RegisteredPage | undefined, ctx?: ExtensionContext): Promise<void> {
 		if (!page?.definition.close) return;
 		try {
-			await page.definition.close(this.createContext());
+			await page.definition.close(ctx ?? this.createContext());
 		} catch (error) {
 			this.emitError({
 				extensionPath: page.sourceInfo.path,
@@ -947,12 +966,13 @@ export class ExtensionRunner {
 		message = "This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 	): void {
 		if (!this.staleMessage) {
-			this.staleMessage = message;
-			this.runtime.invalidate(message);
-			// Open pages and tiles close with the session (their close() runs while the ctx still works).
+			// Open pages and tiles close with the session. Their close() starts before the runner goes stale and gets
+			// a context whose values were read now, so cleanup that awaits still has them.
 			const pages = this.getRegisteredPages().filter((page) => this.openPages.has(page.key));
 			this.openPages.clear();
-			for (const page of pages) void this.runPageClose(page);
+			for (const page of pages) void this.runPageClose(page, this.cleanupContext());
+			this.staleMessage = message;
+			this.runtime.invalidate(message);
 			// The session's views go with it; the next runner starts without any.
 			this.views?.dispose();
 		}

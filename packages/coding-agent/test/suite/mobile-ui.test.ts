@@ -75,7 +75,7 @@ const STATS_TILE: MobileView = {
 };
 
 /** A package with a registered page (a chart and a table) and a Home tile that opens it. */
-function statsExtension(record: { events: ViewEvent[]; closed: string[] }) {
+function statsExtension(record: { events: ViewEvent[]; closed: string[]; closeCwds: string[] }) {
 	return (pi: ExtensionAPI) => {
 		pi.registerPage("stats:page", {
 			title: "Stats",
@@ -94,7 +94,11 @@ function statsExtension(record: { events: ViewEvent[]; closed: string[] }) {
 					},
 				],
 			}),
-			close: () => void record.closed.push("stats:page"),
+			close: async (ctx) => {
+				await new Promise((resolve) => setTimeout(resolve, 1));
+				record.closeCwds.push(ctx.cwd);
+				record.closed.push("stats:page");
+			},
 		});
 		pi.registerTile("stats:tile", { title: "Stats", page: "stats:page", open: () => STATS_TILE });
 		pi.on("view_event", (event: ViewEvent) => {
@@ -132,6 +136,7 @@ describe("mobile UI kit in a session", () => {
 			events: [] as ViewEvent[],
 			results: [] as Array<MobileViewResult | undefined>,
 			closed: [] as string[],
+			closeCwds: [] as string[],
 		};
 		const harness: Harness = await createHarness({
 			extensionFactories: [deployExtension(record), statsExtension(record)],
@@ -298,11 +303,36 @@ describe("mobile UI kit in a session", () => {
 		expect(record.closed).toEqual(["stats:page"]);
 		await expect(runner.openPage("nope")).rejects.toThrow('No page "nope"');
 
-		// A page open when the session reloads closes with it.
+		// A page open when the session reloads closes with it, and its close() still has a working context.
 		await runner.openPage("stats:page");
 		await harness.session.reload();
 		await until(() => record.closed.length === 2);
+		expect(record.closeCwds.at(-1)).toBe(harness.tempDir);
 		expect(harness.session.extensionRunner.viewSnapshot()).toEqual([]);
+	});
+
+	it("drops a page whose open() finishes after the session ended", async () => {
+		let finish: (view: MobileView) => void = () => {};
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi: ExtensionAPI) =>
+					pi.registerPage("slow:page", {
+						title: "Slow",
+						open: () =>
+							new Promise<MobileView>((resolve) => {
+								finish = resolve;
+							}),
+					}),
+			],
+		});
+		cleanups.push(() => harness.cleanup());
+		const channel = fakeChannel(true);
+		await harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "rpc", viewChannel: channel });
+		const opening = harness.session.extensionRunner.openPage("slow:page");
+		harness.session.extensionRunner.invalidate();
+		finish({ v: 1, title: "Slow", body: [] });
+		await opening;
+		expect(channel.sent).toEqual([]);
 	});
 
 	it("runs the example board package: panel, page, tile, a tap completes a task, the sheet adds one", async () => {

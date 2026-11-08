@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.app.ui.session.features2.PiJsonFile
@@ -53,6 +54,9 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
     private var backend: LocalBackend? = null
     private var rpc: RpcClient? = null
     private var pump: Job? = null
+
+    /** The packages the running engine loaded ([packagesKey] when it started): its page list is for these. */
+    private var launchedKey: String? = null
     private var stopJob: Job? = null
     private val holders = LinkedHashSet<String>()
 
@@ -79,6 +83,8 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
     }
 
     private fun packagesKey(): String = PageCatalog.key(PiJsonFile.read(File(engine.agentDir, "settings.json")), engineVersion())
+
+    private suspend fun currentKey(): String = withContext(Dispatchers.IO) { packagesKey() }
 
     private fun engineVersion(): String = (engine.status.value as? EngineStatus.Ready)?.engineVersion.orEmpty()
 
@@ -114,7 +120,9 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
         }
         val pages = MobileViews.pages(response.dataObject)
         _pages.value = pages
-        val text = PageCatalog.encode(PageCatalog.Cached(packagesKey(), pages))
+        // Cached for the packages the engine loaded, not those of now: a change since then misses the cache.
+        val key = launchedKey ?: return
+        val text = PageCatalog.encode(PageCatalog.Cached(key, pages))
         runCatching { cacheFile.writeText(text) }
     }
 
@@ -218,17 +226,22 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
     /** Starts the engine if needed; true when it is connected and renders views. */
     private suspend fun ensureRunning(): Boolean = mutex.withLock {
         val holds = synchronized(holders) { holders.size }
-        when (PageRules.decide(holds, backend?.isAlive == true, lowMemory())) {
-            PageRules.Decision.Keep -> return@withLock true
-            PageRules.Decision.Refuse -> {
+        val key = currentKey()
+        val decision = PageRules.decide(holds, backend?.isAlive == true, lowMemory())
+        // Packages installed, removed or turned off since the engine started: it starts again to load them.
+        val stale = decision == PageRules.Decision.Keep && launchedKey != key
+        when {
+            decision == PageRules.Decision.Keep && !stale -> return@withLock true
+            decision == PageRules.Decision.Refuse || (stale && lowMemory()) -> {
                 _status.value = Status.LowMemory
                 return@withLock false
             }
-            PageRules.Decision.Start -> Unit
+            decision == PageRules.Decision.Start || stale -> Unit
             else -> return@withLock false
         }
         stopLocked()
         _status.value = Status.Starting
+        launchedKey = key
         val b = engine.pageBackend()
         if (b == null) {
             _status.value = Status.Failed("The engine is not available on this phone")
@@ -271,6 +284,7 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
     private fun stopLocked() {
         val b = backend ?: return
         backend = null
+        launchedKey = null
         pump?.cancel()
         pump = null
         rpc?.stop()

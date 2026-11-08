@@ -276,6 +276,8 @@ export class ViewHost {
 
 	set(key: string, view: MobileView | undefined, options: MobileViewOptions = {}): void {
 		checkKey(key);
+		// The session ended: nothing is shown any more (a late write from an async open, say).
+		if (this.disposed) return;
 		const existing = this.views.get(key);
 		if (view === undefined) {
 			if (existing) this.remove(key, existing);
