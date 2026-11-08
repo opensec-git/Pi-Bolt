@@ -16,6 +16,7 @@
 ### Fixed
 
 - The background service no longer aborts a running turn when a phone opens another session or starts a new one. It keeps up to 3 sessions open, each with its own runtime: a session in a turn keeps running in the background, and opening it again shows it as it is. With all 3 running, the phone is told to stop one or wait. `remote_hello.host.parallelSessions` says the service does this, and `list_sessions` marks sessions as `open` and `running`
+- Remote control spends a pairing secret only when the phone completes the handshake (`remote_ready`), not when its first handshake message arrives. A phone whose connection timed out mid-handshake (the apps give each address 3 seconds; iOS's first connect can wait on the Local Network prompt) had used up its QR code, so its retry was refused and pairing needed a new code. The secret still pairs one phone: of two phones racing with it, the first to finish pairs and the other is refused
 
 ## [1.5.0] - 2026-11-02
 
