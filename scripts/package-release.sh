@@ -14,6 +14,8 @@
 #   pi-bolt-linux-arm64.tar.gz         on Linux ARM64: JIT off, code for any ARMv8.0 CPU
 #   pi-bolt-linux-arm64-jit.tar.gz     on Linux ARM64: JIT on
 #   pi-bolt-runtime-linux-arm64.tar.gz
+#   pi-bolt-linux-x64-musl.tar.gz      on Linux x86-64 with musl (Alpine): as the three above, -musl, -musl-baseline and
+#                                      -musl-jit, and pi-bolt-runtime-linux-x64-musl.tar.gz (with the stamp of its engine)
 #   pi-bolt-darwin-arm64.tar.gz        on macOS: JIT off, for Apple silicon (M1 and later)
 #   pi-bolt-darwin-arm64-jit.tar.gz    on macOS: JIT on
 #   pi-bolt-runtime-darwin-arm64.tar.gz
@@ -40,18 +42,19 @@ NPM_VERSION="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["
 grep -q "^VERSION=$VERSION\$" "$PIBOLT_ROOT/npm/bin/pi-bolt" || die "npm/bin/pi-bolt does not download version $VERSION"
 DIST="$PIBOLT_ROOT/dist/$VERSION"
 PI_ROOT="$(realpath "$PI_DIR")"
-case "$PIBOLT_PLATFORM" in
+case "$PIBOLT_RELEASE_PLATFORM" in
+linux-x64-musl) TARGETS=("linux-x64-musl:pi-bolt:" "linux-x64-musl-baseline:pi-bolt-baseline:--cpu baseline" "linux-x64-musl-jit:pi-bolt-jit:--jit on") ;;
 linux-x64) TARGETS=("linux-x64:pi-bolt:" "linux-x64-baseline:pi-bolt-baseline:--cpu baseline" "linux-x64-jit:pi-bolt-jit:--jit on") ;;
 linux-arm64) TARGETS=("linux-arm64:pi-bolt:" "linux-arm64-jit:pi-bolt-jit:--jit on") ;;
 darwin-arm64) TARGETS=("darwin-arm64:pi-bolt:" "darwin-arm64-jit:pi-bolt-jit:--jit on") ;;
-*) die "no release is built on $PIBOLT_PLATFORM" ;;
+*) die "no release is built on $PIBOLT_RELEASE_PLATFORM" ;;
 esac
 # Archives whose files belong to nobody in particular, and on macOS without AppleDouble (._*) files of extended attributes.
 TAR=(tar --owner=0 --group=0 --numeric-owner)
 [ "$PIBOLT_OS" = darwin ] && TAR=(env COPYFILE_DISABLE=1 tar --uid 0 --gid 0 --numeric-owner --no-xattrs --no-mac-metadata)
 
 # The compile kit comes with the first (the default) build: what it read, and how it was compiled.
-KIT="$PIBOLT_ROOT/out/pi-bolt-kit-$PIBOLT_PLATFORM"
+KIT="$PIBOLT_ROOT/out/pi-bolt-kit-$PIBOLT_RELEASE_PLATFORM"
 if [ -n "$BUILD" ]; then
 	kit=(--kit "$KIT")
 	for target in "${TARGETS[@]}"; do
@@ -91,15 +94,22 @@ done
 
 if [ -z "$RUNTIME_ONLY" ]; then
 	[ -f "$KIT/kit.json" ] || die "$KIT not found: build, or run without --no-build"
-	log "pi-bolt-kit-$PIBOLT_PLATFORM.tar.gz"
-	"${TAR[@]}" -C "$(dirname "$KIT")" -czf "$DIST/pi-bolt-kit-$PIBOLT_PLATFORM.tar.gz" "$(basename "$KIT")"
+	log "pi-bolt-kit-$PIBOLT_RELEASE_PLATFORM.tar.gz"
+	"${TAR[@]}" -C "$(dirname "$KIT")" -czf "$DIST/pi-bolt-kit-$PIBOLT_RELEASE_PLATFORM.tar.gz" "$(basename "$KIT")"
 fi
 
 runtime="$(runtime_bun)"
-dir="$STAGE/pi-bolt-runtime-$PIBOLT_PLATFORM"
+dir="$STAGE/pi-bolt-runtime-$PIBOLT_RELEASE_PLATFORM"
 mkdir -p "$dir" && cp "$runtime" "$dir/bun" && notices "$dir"
-log "pi-bolt-runtime-$PIBOLT_PLATFORM.tar.gz (Bun $("$runtime" --version))"
-"${TAR[@]}" -C "$STAGE" -czf "$DIST/pi-bolt-runtime-$PIBOLT_PLATFORM.tar.gz" "pi-bolt-runtime-$PIBOLT_PLATFORM"
+# The musl runtime says which engine it is (scripts/runtime-stamp.sh musl): its stamp is not the release's RUNTIME_STAMP, and a
+# later release reuses it only if it is still that engine.
+if [ -n "$PIBOLT_LIBC" ]; then
+	stamp=$(cat "$(dirname "$runtime")/RUNTIME_STAMP" 2>/dev/null || true)
+	[[ "$stamp" =~ ^[0-9a-f]{16}$ ]] || die "no RUNTIME_STAMP beside $runtime: the musl runtime's archive says which engine it is"
+	echo "$stamp" >"$dir/RUNTIME_STAMP"
+fi
+log "pi-bolt-runtime-$PIBOLT_RELEASE_PLATFORM.tar.gz (Bun $("$runtime" --version))"
+"${TAR[@]}" -C "$STAGE" -czf "$DIST/pi-bolt-runtime-$PIBOLT_RELEASE_PLATFORM.tar.gz" "pi-bolt-runtime-$PIBOLT_RELEASE_PLATFORM"
 [ -z "$RUNTIME_ONLY" ] || exit 0
 
 # The extensions the installers offer, pinned; and checksums whose first line says which release they are (install.ps1 refuses

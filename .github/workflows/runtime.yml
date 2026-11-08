@@ -1,12 +1,13 @@
 name: runtime
 
 # Builds the Pi-Bolt runtime (patched WebKit and Bun: scripts/build-runtime.sh, scripts\build-runtime.ps1) of every platform on
-# GitHub's runners, each on its own: Linux x86-64 and ARM64, macOS on Apple silicon, Windows x64. It is what a release needs when
+# GitHub's runners, each on its own: Linux x86-64 and ARM64, Linux x86-64 with musl (in an Alpine container), macOS on Apple
+# silicon, Windows x64. It is what a release needs when
 # the engine changed (docs/RELEASING.md, "When the engine changed"): run it from pi-bolt with the release's tag, and it attaches
 # pi-bolt-runtime-<platform>.tar.gz (Windows: .zip) to that tag's draft release, which the release workflow then uses once it has
 # checked their attestations (the attest job below: only a run from pi-bolt counts for a release). A push to
-# a branch runtime/<name> builds its commit's runtimes as workflow artifacts only: all four, or the one the name is
-# (runtime/win32-x64).
+# a branch runtime/<name> builds its commit's runtimes as workflow artifacts only: all five, or the one the name is
+# (runtime/win32-x64, runtime/linux-x64-musl).
 #
 #   gh workflow run runtime.yml -R opensec-git/Pi-Bolt -f tag=bolt-vX.Y.Z [-f ref=<the commit the release is tagged on>]
 #
@@ -26,7 +27,11 @@ on:
       platforms:
         description: "Which runtimes (comma separated)"
         required: false
-        default: "linux-x64,linux-arm64,darwin-arm64,win32-x64"
+        default: "linux-x64,linux-arm64,linux-x64-musl,darwin-arm64,win32-x64"
+      lto:
+        description: "Link-time optimization of the musl runtime (on, off: a faster build, to try a change)"
+        required: false
+        default: "on"
   push:
     branches: ["runtime/**"]
 
@@ -38,7 +43,9 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  PLATFORMS: ${{ github.event.inputs.platforms || (contains(fromJSON('["runtime/linux-x64","runtime/linux-arm64","runtime/darwin-arm64","runtime/win32-x64"]'), github.ref_name) && github.ref_name) || 'linux-x64,linux-arm64,darwin-arm64,win32-x64' }}
+  # Alpine 3.23 (the musl runtime's build: the executable needs a libstdc++ at least as new as the one it was built with).
+  ALPINE: alpine:3.23@sha256:f3d55900449227ae9e237ede521e7b665d53a253b42065ba90b9db9275e198ad
+  PLATFORMS: ${{ github.event.inputs.platforms || (contains(fromJSON('["runtime/linux-x64","runtime/linux-arm64","runtime/linux-x64-musl","runtime/darwin-arm64","runtime/win32-x64"]'), github.ref_name) && github.ref_name) || 'linux-x64,linux-arm64,linux-x64-musl,darwin-arm64,win32-x64' }}
 
 jobs:
   unix:
@@ -136,6 +143,69 @@ jobs:
         run: |
           tests/aot/run.sh
           tests/runtime/run.sh
+
+  # Linux x86-64 with musl, built natively in Alpine 3.23 (a container on the Ubuntu runner: GitHub's actions need glibc, so they
+  # run outside it, and the build inside): scripts/build-runtime-musl.sh, with ICU built from source as the glibc sysroot's, and
+  # LLVM 23 from Alpine's edge, as Bun's own Alpine images take it. Based on the patch set by @nthrow in #280.
+  musl:
+    name: Runtime for linux-x64-musl
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - name: Wanted
+        id: wanted
+        run: case ",${PLATFORMS#runtime/}," in *",linux-x64-musl,"*) echo "yes=true" >>"$GITHUB_OUTPUT" ;; esac
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.wanted.outputs.yes
+        with:
+          ref: ${{ github.event.inputs.ref || github.sha }}
+          persist-credentials: false
+      - name: Room
+        if: steps.wanted.outputs.yes
+        run: |
+          # Disk for the sources and the build (about 40 GB), and swap for the link: the runner has 16 GB of memory.
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL || true
+          sudo swapoff -a || true
+          sudo fallocate -l 16G /swapfile.pibolt && sudo chmod 600 /swapfile.pibolt && sudo mkswap /swapfile.pibolt >/dev/null && sudo swapon /swapfile.pibolt
+          df -h / && free -g
+      # (One container for the build, the archive and the tests: the tools installed at its start are what all three use.)
+      - name: Runtime, archive and tests, in Alpine
+        if: steps.wanted.outputs.yes
+        env:
+          LTO: ${{ github.event.inputs.lto || 'on' }}
+        run: |
+          docker run --rm -e LTO -e CI -v "$PWD:$PWD" -w "$PWD" "$ALPINE" sh -ec "$(cat <<'EOF'
+          scripts/alpine-tools.sh --build
+          export PATH="/usr/lib/llvm23/bin:$HOME/.cargo/bin:$HOME/.bun/bin:$PATH"
+          scripts/fetch-sources.sh
+          # The Rust toolchain Bun's build pins (only its own target: rust-toolchain.toml would add a dozen).
+          channel=$(sed -n 's/^channel = "\(.*\)"/\1/p' .work/bun/rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal -c rust-src -c llvm-tools
+          export RUSTUP_TOOLCHAIN="$channel"
+          scripts/build-runtime-musl.sh --icu --lto "$LTO" -j4
+          .work/runtime/bun --version
+          scripts/package-release.sh --runtime-only
+          mkdir -p .work/out && mv dist/*/pi-bolt-runtime-*.tar.gz .work/out/
+          # (Tests after the archive is out: it is uploaded even when one fails, for a look at it; the job still fails.)
+          status=0
+          tests/aot/run.sh || status=1
+          tests/runtime/run.sh || status=1
+          chmod -R a+rX .work/out
+          exit "$status"
+          EOF
+          )" || status=$?
+          sha256sum .work/out/* | tee -a "$GITHUB_STEP_SUMMARY" || true
+          echo "status=${status:-0}" >>"$GITHUB_ENV"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: steps.wanted.outputs.yes
+        with:
+          name: runtime-linux-x64-musl
+          path: .work/out/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Tests passed
+        if: steps.wanted.outputs.yes
+        run: '[ "$status" = 0 ]'
 
   windows:
     name: Runtime for win32-x64
@@ -235,7 +305,7 @@ jobs:
   # (docs/RELEASING.md, "Provenance"). In a job of its own: the build jobs run the engine's build tools and get no OIDC token.
   attest:
     name: Attest the runtimes
-    needs: [unix, windows]
+    needs: [unix, musl, windows]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -254,7 +324,7 @@ jobs:
 
   draft:
     name: Attach to the draft of ${{ github.event.inputs.tag }}
-    needs: [unix, windows, attest]
+    needs: [unix, musl, windows, attest]
     if: ${{ github.event.inputs.tag != '' && github.ref == 'refs/heads/pi-bolt' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
