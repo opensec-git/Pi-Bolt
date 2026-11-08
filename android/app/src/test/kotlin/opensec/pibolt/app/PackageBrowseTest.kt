@@ -307,6 +307,17 @@ class PackageBrowseTest {
     }
 
     @Test
+    fun authorStringsAndArraysAreCapped() {
+        val many = (1..100_000).joinToString(",") { "\"./e$it.ts\"" }
+        val m = manifest("""{"name":"p","description":"${"x".repeat(100_000)}","license":"${"L".repeat(5_000)}","keywords":[$many],"pi":{"extensions":[$many]}}""")
+        assertEquals(500, m.description!!.length)
+        assertEquals(300, m.license!!.length)
+        assertEquals(64, m.keywords.size)
+        assertEquals(64, m.pi!!.extensions!!.size)
+        assertEquals(32, CatalogJson.resources(m, null).size)
+    }
+
+    @Test
     fun resourcesFromConventionalDirectories() {
         val m = manifest("""{"name":"p"}""")
         val files = listOf("extensions/a.ts", "extensions/b/index.ts", "extensions/b/lib.ts", "skills/s1/SKILL.md", "prompts/p.md", "themes/t.json", "lib/x.ts")

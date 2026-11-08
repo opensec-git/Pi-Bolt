@@ -97,7 +97,7 @@ object CatalogJson {
             CatalogEntry(
                 name = name,
                 version = pkg.str("version").orEmpty(),
-                description = pkg.str("description")?.trim()?.takeIf { it.isNotEmpty() },
+                description = text(pkg.str("description")),
                 weeklyDownloads = obj.obj("downloads")?.long("weekly"),
                 repository = repositoryUrl(pkg.obj("links")?.get("repository")),
                 keywords = strings(pkg["keywords"]),
@@ -113,12 +113,13 @@ object CatalogJson {
         val pi = o.obj("pi")?.let {
             PiManifest(it["extensions"]?.let(::strings), it["skills"]?.let(::strings), it["prompts"]?.let(::strings), it["themes"]?.let(::strings))
         }
-        val scripts = (o.obj("scripts")).orEmpty().mapNotNull { (k, v) -> (v as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { k to it } }.toMap()
+        val scripts = o.obj("scripts").orEmpty().entries.asSequence().take(MAX_MAP)
+            .mapNotNull { (k, v) -> (v as? JsonPrimitive)?.takeIf { it.isString }?.content?.let { k.take(MAX_SHORT) to it.take(MAX_SHORT) } }.toMap()
         return PackageManifest(
             name = name,
             version = o.str("version"),
-            description = o.str("description")?.trim()?.takeIf { it.isNotEmpty() },
-            license = o.str("license") ?: o.obj("license")?.str("type"),
+            description = text(o.str("description")),
+            license = text(o.str("license") ?: o.obj("license")?.str("type"), MAX_SHORT),
             repository = repositoryUrl(o["repository"]),
             homepage = o.str("homepage")?.takeIf { it.startsWith("https://") },
             keywords = strings(o["keywords"]),
@@ -180,7 +181,8 @@ object CatalogJson {
         val pi = manifest.pi?.takeIf { !it.isEmpty }
         if (files == null) {
             pi ?: return emptyList()
-            fun declared(kind: String, entries: List<String>) = entries.filterNot(::isOverride).map { AddedResource(kind, it.removePrefix("./")) }
+            fun declared(kind: String, entries: List<String>) =
+                entries.take(MAX_ENTRIES).filterNot { isOverride(it) || it.length > MAX_GLOB }.map { AddedResource(kind, it.removePrefix("./")) }
             return declared("extension", pi.extensions.orEmpty()) + declared("skill", pi.skills.orEmpty()) +
                 declared("prompt", pi.prompts.orEmpty()) + declared("theme", pi.themes.orEmpty())
         }
@@ -492,14 +494,26 @@ object CatalogJson {
 
     private fun parse(text: String): JsonObject? = runCatching { ProtocolJson.parseToJsonElement(text) as? JsonObject }.getOrNull()
 
+    /**
+     * Author-written arrays (`pi.*`, keywords, os/cpu/libc) and maps (scripts, dependencies) are capped where they are
+     * read, so a huge one is never copied: [MAX_LIST] strings, [MAX_MAP] entries, [MAX_SHORT] characters a value.
+     */
     private fun strings(e: JsonElement?): List<String> = when (e) {
-        is JsonArray -> e.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
-        is JsonPrimitive -> listOfNotNull(e.takeIf { it.isString }?.content)
+        is JsonArray -> e.asSequence().take(MAX_LIST).mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content?.take(MAX_SHORT) }.toList()
+        is JsonPrimitive -> listOfNotNull(e.takeIf { it.isString }?.content?.take(MAX_SHORT))
         else -> emptyList()
     }
 
     private fun deps(o: JsonObject?): Map<String, String> =
-        o.orEmpty().mapNotNull { (k, v) -> (v as? JsonPrimitive)?.content?.let { k to it } }.toMap()
+        o.orEmpty().entries.asSequence().take(MAX_MAP).mapNotNull { (k, v) -> (v as? JsonPrimitive)?.content?.let { k.take(MAX_SHORT) to it.take(MAX_SHORT) } }.toMap()
+
+    /** A display string from a package: trimmed, at most [max] characters, null when empty. */
+    private fun text(s: String?, max: Int = MAX_TEXT): String? = s?.trim()?.take(max)?.takeIf { it.isNotEmpty() }
+
+    private const val MAX_LIST = 64
+    private const val MAX_MAP = 500
+    private const val MAX_SHORT = 300
+    private const val MAX_TEXT = 500
 }
 
 /**
@@ -609,6 +623,6 @@ class PackageCatalog(
     companion object {
         const val PAGE = 20
         const val NO_SEARCH = "This registry has no search. Install its packages by name under Installed."
-        private const val MAX_BODY = 8L * 1024 * 1024
+        private const val MAX_BODY = 4L * 1024 * 1024
     }
 }
