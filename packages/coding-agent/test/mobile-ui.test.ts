@@ -705,6 +705,13 @@ describe("mobile UI host", () => {
 		await expect(result).resolves.toMatchObject({ values: { branch: "next" } });
 	});
 
+	it("dismisses a sheet whose channel closed it when no dialogs race it", async () => {
+		const channel = fakeChannel(true);
+		channel.answer = async () => undefined;
+		const { host } = hostWith(channel);
+		await expect(host.show(SHEET)).resolves.toBeUndefined();
+	});
+
 	it("ends a sheet on its timeout", async () => {
 		const { host } = hostWith(fakeChannel(true));
 		await expect(host.show(SHEET, { timeout: 10 })).resolves.toBeUndefined();

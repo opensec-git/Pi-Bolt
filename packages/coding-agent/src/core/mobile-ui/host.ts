@@ -415,6 +415,7 @@ export class ViewHost {
 			const racers: Array<Promise<MobileViewResult | undefined>> = [closed];
 			const channel = this.channel;
 			const native = channel !== undefined && (channel.keepText || channel.hasNative());
+			const text = !native || channel.keepText || !channel.hasNative();
 			if (native) {
 				const request: ViewShowRequest = {
 					method: "showView",
@@ -425,14 +426,15 @@ export class ViewHost {
 				};
 				racers.push(
 					channel.sheet(request, abort.signal).then((answer) => {
-						if (!answer) return never;
+						// The channel closed it (remote control stopped, say): with no dialogs racing, that dismisses it.
+						if (!answer) return text ? never : undefined;
 						if (answer.cancelled === true) return undefined;
 						// An answer that does not fit the sheet closes it as dismissed: the client's sheet is gone.
 						return this.sheetResult(record, answer);
 					}),
 				);
 			}
-			if (!native || channel.keepText || !channel.hasNative()) {
+			if (text) {
 				racers.push(runViewDialogs(record.view, this.dialogs, abort.signal));
 			}
 			return await Promise.race(racers);

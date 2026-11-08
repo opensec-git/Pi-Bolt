@@ -214,7 +214,11 @@ class ViewFields {
         if (before != null && before != value) edits.remove(id)
     }
 
-    fun value(field: VField): JsonPrimitive = field.id?.let { edits[it] } ?: MobileViews.initialValue(field)
+    fun value(field: VField): JsonPrimitive {
+        // An option the extension took away since the user picked it no longer counts.
+        val edit = field.id?.let { edits[it] }?.takeIf { field !is VSelect || field.options.any { o -> o.value == it.content } }
+        return edit ?: MobileViews.initialValue(field)
+    }
 
     /** The fields' values, for a submit or a sheet's answer. */
     fun values(fields: List<VField>): JsonObject = JsonObject(fields.mapNotNull { f -> f.id?.let { it to value(f) } }.toMap())

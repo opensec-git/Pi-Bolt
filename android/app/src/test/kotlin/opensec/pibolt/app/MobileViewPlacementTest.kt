@@ -66,4 +66,13 @@ class MobileViewPlacementTest {
         fields.hostValue("branch", JsonPrimitive("release"))
         assertEquals(null, fields.edits["branch"])
     }
+
+    @Test
+    fun aPickedOptionTheExtensionTookAwayNoLongerCounts() {
+        val fields = ViewFields()
+        fun select(vararg options: String) = opensec.pibolt.protocol.session.VSelect("r", false, "Region", options.map { opensec.pibolt.protocol.session.VOption(it, it) }, "eu")
+        fields.edits["r"] = JsonPrimitive("us")
+        assertEquals(JsonPrimitive("us"), fields.value(select("eu", "us")))
+        assertEquals(JsonPrimitive("eu"), fields.value(select("eu", "ap")))
+    }
 }
