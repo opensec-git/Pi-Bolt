@@ -4,7 +4,16 @@
  * reference. The page has no scripts.
  */
 
-import type { MobileView, MobileViewButton, MobileViewChipProps, MobileViewNode, MobileViewTone } from "./types.ts";
+import { chartRange, chartSummary, formatNumber, sortedRows } from "./text.ts";
+import type {
+	MobileView,
+	MobileViewButton,
+	MobileViewChart,
+	MobileViewChipProps,
+	MobileViewNode,
+	MobileViewTable,
+	MobileViewTone,
+} from "./types.ts";
 import { optionValues } from "./validate.ts";
 
 const ICON_GLYPHS: Record<string, string> = {
@@ -47,6 +56,7 @@ const ICON_GLYPHS: Record<string, string> = {
 	copy: "⧉",
 	key: "⚿",
 	bell: "♪",
+	chart: "▥",
 };
 
 const TONE_GLYPHS: Record<MobileViewTone, string> = {
@@ -97,6 +107,81 @@ function buttons(list: MobileViewButton[] | undefined): string {
 	return shown.length > 0 ? `<div class="buttons">${shown.map((b) => button(b)).join("")}</div>` : "";
 }
 
+const CHART_WIDTH = 358;
+
+/** An SVG chart: series in the chart colours (--c1 to --c4), a dashed line for the second series and on. */
+function chartSvg(chart: MobileViewChart): string {
+	const spark = chart.kind === "sparkline";
+	const height = spark ? 32 : 160;
+	const { min, max } = chartRange(chart);
+	const count = chart.series[0].values.length;
+	const x = (i: number) => (count <= 1 ? CHART_WIDTH / 2 : (i / (count - 1)) * (CHART_WIDTH - 8) + 4);
+	const y = (v: number) => height - 4 - ((Math.min(max, Math.max(min, v)) - min) / (max - min)) * (height - 8);
+	const marks = chart.series
+		.map((series, index) => {
+			const colour = `var(--c${index + 1})`;
+			if (chart.kind === "bar") {
+				const slot = (CHART_WIDTH - 8) / count;
+				const width = Math.max(2, (slot * 0.7) / chart.series.length);
+				return series.values
+					.map((v, i) =>
+						v === null
+							? ""
+							: `<rect x="${(4 + i * slot + slot * 0.15 + index * width).toFixed(1)}" y="${Math.min(y(v), y(Math.max(min, 0))).toFixed(1)}" width="${width.toFixed(1)}" height="${Math.abs(y(Math.max(min, 0)) - y(v)).toFixed(1)}" rx="2" fill="${colour}"/>`,
+					)
+					.join("");
+			}
+			const segments: string[][] = [[]];
+			series.values.forEach((v, i) => {
+				if (v === null) segments.push([]);
+				else segments[segments.length - 1].push(`${x(i).toFixed(1)},${y(v).toFixed(1)}`);
+			});
+			return segments
+				.filter((points) => points.length > 0)
+				.map((points) => {
+					const line = `<polyline points="${points.join(" ")}" fill="none" stroke="${colour}" stroke-width="2"${index > 0 ? ' stroke-dasharray="6 4"' : ""}/>`;
+					if (chart.kind !== "area") return line;
+					const base = y(Math.max(min, 0)).toFixed(1);
+					const first = points[0].split(",")[0];
+					const last = points[points.length - 1].split(",")[0];
+					return `<polygon points="${first},${base} ${points.join(" ")} ${last},${base}" fill="${colour}" opacity=".18"/>${line}`;
+				})
+				.join("");
+		})
+		.join("");
+	const svg = `<svg class="chart-svg" viewBox="0 0 ${CHART_WIDTH} ${height}" width="100%" height="${height}" role="img" aria-label="${esc(chartSummary(chart))}">${marks}</svg>`;
+	if (spark) return `<div class="chart spark">${svg}</div>`;
+	const legend =
+		chart.series.length > 1
+			? `<div class="legend">${chart.series.map((series, index) => `<span><i style="background:var(--c${index + 1})"></i>${esc(series.name)}</span>`).join("")}</div>`
+			: "";
+	const labels = chart.labels?.length
+		? `<div class="axis meta"><span>${esc(chart.labels[0])}</span><span>${esc(chart.labels[chart.labels.length - 1])}</span></div>`
+		: "";
+	// The y range: the top value over the plot, the bottom value under it.
+	return `<div class="chart">${chart.title ? `<div class="card-title">${esc(chart.title)}</div>` : ""}<div class="meta">${esc(formatNumber(max, chart.unit))}</div>${svg}<div class="meta">${esc(formatNumber(min, chart.unit))}</div>${labels}${legend}</div>`;
+}
+
+function tableHtml(table: MobileViewTable): string {
+	const rows = sortedRows(table);
+	const head = table.columns
+		.map((column) => {
+			const arrow = table.sort?.column === column.id ? (table.sort.desc ? " ↓" : " ↑") : "";
+			return `<th class="${column.kind ?? "text"}">${esc(column.label)}${arrow}</th>`;
+		})
+		.join("");
+	const body =
+		rows.length === 0
+			? `<tr><td class="meta" colspan="${table.columns.length}">${esc(table.empty ?? "No rows")}</td></tr>`
+			: rows
+					.map(
+						(row) =>
+							`<tr${row.action ? ' class="tappable"' : ""}>${table.columns.map((column) => `<td class="${column.kind ?? "text"}">${esc(String(row.cells[column.id] ?? ""))}</td>`).join("")}</tr>`,
+					)
+					.join("");
+	return `<div class="table">${table.filter ? '<div class="input filter"><span class="meta">⌕ Filter</span></div>' : ""}<div class="table-scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div></div>`;
+}
+
 function renderNode(node: MobileViewNode): string {
 	if (node.hidden) return "";
 	switch (node.type) {
@@ -125,6 +210,14 @@ function renderNode(node: MobileViewNode): string {
 			return chip(node);
 		case "tile":
 			return `<div class="tile${node.action ? " tappable" : ""}">${node.icon ? icon(node.icon) : node.tone ? `<span class="${node.tone}">${TONE_GLYPHS[node.tone]}</span>` : ""}<div class="tile-label">${esc(node.label)}</div><div class="tile-value">${esc(node.value)}</div></div>`;
+		case "chart":
+			return chartSvg(node);
+		case "table":
+			return tableHtml(node);
+		case "location": {
+			const coords = node.lat !== undefined && node.lon !== undefined ? `${node.lat}, ${node.lon}` : "";
+			return `<div class="item location tappable"><span class="icon" aria-hidden="true">⌖</span><div class="grow"><div class="item-title">${esc(node.name)}</div>${node.address ? `<div class="meta">${esc(node.address)}</div>` : ""}${coords ? `<div class="meta mono">${coords}</div>` : ""}</div><span class="meta" aria-hidden="true">↗</span></div>`;
+		}
 		case "button":
 			return `<div class="buttons">${button(node, " wide")}</div>`;
 		case "card":
@@ -183,8 +276,8 @@ body { margin: 0; padding: 24px 16px; font: 15px/22px Inter, system-ui, -apple-s
 h1 { font-size: 14px; font-weight: 500; color: #9C9A94; margin: 0 0 16px; }
 .columns { display: flex; flex-wrap: wrap; gap: 24px; }
 .phone { width: 390px; max-width: 100%; border-radius: 28px; overflow: hidden; padding: 12px 0 16px; }
-.dark { --canvas:#1C1B19; --s1:#232220; --s2:#2A2926; --s3:#32312E; --ink1:#ECEBE8; --ink2:#B3B1AB; --ink3:#9C9A94; --ink4:#5E5C57; --line:rgba(255,255,255,.07); --lineStrong:rgba(255,255,255,.12); --accent:#ECEBE8; --onAccent:#1C1B19; --success:#4CC38A; --warning:#D4A64A; --danger:#F4817D; }
-.light { --canvas:#FFFFFF; --s1:#F7F7F7; --s2:#F0F0F0; --s3:#E8E8E8; --ink1:#171717; --ink2:#525252; --ink3:#666666; --ink4:#949494; --line:rgba(0,0,0,.08); --lineStrong:rgba(0,0,0,.14); --accent:#0A0A0A; --onAccent:#FFFFFF; --success:#11733F; --warning:#8A6410; --danger:#B83430; }
+.dark { --c1:#ECEBE8; --c2:#7FB2E5; --c3:#D4A64A; --c4:#B48EE0; --canvas:#1C1B19; --s1:#232220; --s2:#2A2926; --s3:#32312E; --ink1:#ECEBE8; --ink2:#B3B1AB; --ink3:#9C9A94; --ink4:#5E5C57; --line:rgba(255,255,255,.07); --lineStrong:rgba(255,255,255,.12); --accent:#ECEBE8; --onAccent:#1C1B19; --success:#4CC38A; --warning:#D4A64A; --danger:#F4817D; }
+.light { --c1:#171717; --c2:#2563A8; --c3:#8A6410; --c4:#6B46A8; --canvas:#FFFFFF; --s1:#F7F7F7; --s2:#F0F0F0; --s3:#E8E8E8; --ink1:#171717; --ink2:#525252; --ink3:#666666; --ink4:#949494; --line:rgba(0,0,0,.08); --lineStrong:rgba(0,0,0,.14); --accent:#0A0A0A; --onAccent:#FFFFFF; --success:#11733F; --warning:#8A6410; --danger:#B83430; }
 .phone { background: var(--canvas); color: var(--ink1); }
 .label { font-size: 12.5px; color: var(--ink3); padding: 0 20px 8px; }
 .sheet { background: var(--s1); border: 1px solid var(--lineStrong); border-radius: 28px 28px 0 0; padding: 10px 0 20px; margin: 0 0 0; }
@@ -254,18 +347,33 @@ h1 { font-size: 14px; font-weight: 500; color: #9C9A94; margin: 0 0 16px; }
 .segmented span { flex: 1; text-align: center; min-height: 44px; display: grid; place-items: center; border-radius: 8px; color: var(--ink3); font-size: 14px; font-weight: 500; }
 .segmented span.on { background: var(--s3); border: 1px solid var(--lineStrong); color: var(--ink1); }
 .tappable { cursor: pointer; }
+.home-tile { margin: 0 16px; width: 180px; min-height: 120px; border-radius: 16px; background: var(--s1); border: 1px solid var(--line); padding: 14px; display: flex; flex-direction: column; gap: 8px; font-size: 14px; }
+.home-tile .tile-title { font-size: 15px; font-weight: 500; } .home-tile .kv-row { min-height: 28px; }
+.chart { display: flex; flex-direction: column; gap: 6px; padding: 0 4px; } .chart.spark { padding: 0; }
+.chart-svg { display: block; } .axis { display: flex; justify-content: space-between; }
+.legend { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12.5px; color: var(--ink2); } .legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+.table { display: flex; flex-direction: column; gap: 8px; } .table-scroll { overflow: auto; max-height: 540px; border: 1px solid var(--line); border-radius: 12px; background: var(--s1); }
+.table table { border-collapse: collapse; width: 100%; font-size: 14px; } .table th { position: sticky; top: 0; background: var(--s2); color: var(--ink2); font-weight: 500; text-align: start; }
+.table th, .table td { padding: 10px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; } .table .number { text-align: end; font-variant-numeric: tabular-nums; } .table td.mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 13px; }
+.location { background: var(--s1); border: 1px solid var(--line); border-radius: 12px; }
 `;
 
-/** A standalone HTML page that draws each view dark and light. */
-export function viewsToHtml(views: Array<{ name: string; view: MobileView }>): string {
+/** A Home tile: a small card with the title and the body, the whole card one tap target. */
+function renderTile(view: MobileView): string {
+	return `<div class="home-tile">${view.title ? `<div class="card-head">${icon(view.icon)}<div class="grow"><div class="tile-title">${esc(view.title)}</div>${view.subtitle ? `<div class="meta">${esc(view.subtitle)}</div>` : ""}</div></div>` : ""}${view.body.map(renderNode).join("")}</div>`;
+}
+
+/** A standalone HTML page that draws each view (or Home tile) dark and light. */
+export function viewsToHtml(views: Array<{ name: string; view: MobileView; tile?: boolean }>): string {
 	const sections = views
-		.map(
-			({ name, view }) => `<h1>${esc(name)}</h1>
+		.map(({ name, view, tile }) => {
+			const draw = tile ? renderTile : renderView;
+			return `<h1>${esc(name)}</h1>
 <div class="columns">
-<div class="phone dark"><div class="label">Pi-Bolt, dark</div>${renderView(view)}</div>
-<div class="phone light"><div class="label">Paper, light</div>${renderView(view)}</div>
-</div>`,
-		)
+<div class="phone dark"><div class="label">Pi-Bolt, dark${tile ? " · Home tile" : ""}</div>${draw(view)}</div>
+<div class="phone light"><div class="label">Paper, light${tile ? " · Home tile" : ""}</div>${draw(view)}</div>
+</div>`;
+		})
 		.join('\n<div style="height:32px"></div>\n');
 	return `<!doctype html>
 <html lang="en">

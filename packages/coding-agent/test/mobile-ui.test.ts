@@ -4,9 +4,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runViewDialogs, type ViewDialogs } from "../src/core/mobile-ui/dialogs.ts";
 import { type ViewChannel, ViewHost, type ViewRequest, type ViewShowRequest } from "../src/core/mobile-ui/host.ts";
 import { applyViewOps } from "../src/core/mobile-ui/ops.ts";
-import { cleanText, viewToLines } from "../src/core/mobile-ui/text.ts";
-import type { MobileView, ViewEvent } from "../src/core/mobile-ui/types.ts";
-import { validateView } from "../src/core/mobile-ui/validate.ts";
+import { chartSummary, cleanText, sortedRows, viewToLines } from "../src/core/mobile-ui/text.ts";
+import type { MobileView, MobileViewChart, MobileViewTable, ViewEvent } from "../src/core/mobile-ui/types.ts";
+import { validateTile, validateView } from "../src/core/mobile-ui/validate.ts";
 
 /** Every component of kit version 1 once. */
 const EVERY_COMPONENT: MobileView = {
@@ -22,6 +22,35 @@ const EVERY_COMPONENT: MobileView = {
 		{ type: "image", src: "https://example.com/a.png", decorative: true },
 		{ type: "divider" },
 		{ type: "notice", tone: "warning", title: "Migration pending", text: "Run it first." },
+		{
+			type: "chart",
+			id: "build-time",
+			kind: "line",
+			title: "Build time",
+			unit: "s",
+			labels: ["Mon", "Tue", "Wed"],
+			series: [
+				{ name: "main", values: [41, null, 38] },
+				{ name: "dev", values: [52, 47, 45] },
+			],
+		},
+		{ type: "chart", kind: "sparkline", series: [{ name: "Load", values: [1, 3, 2] }], summary: "Load is steady" },
+		{
+			type: "table",
+			id: "deps",
+			filter: true,
+			sort: { column: "size", desc: true },
+			columns: [
+				{ id: "name", label: "Package", sortable: true },
+				{ id: "size", label: "Size", kind: "number", sortable: true },
+				{ id: "updated", label: "Updated", kind: "date" },
+			],
+			rows: [
+				{ id: "r1", cells: { name: "undici", size: 1532, updated: "2026-10-30" }, action: "open" },
+				{ id: "r2", cells: { name: "chalk", size: null } },
+			],
+		},
+		{ type: "location", name: "Office", address: "1 Market St", lat: 37.79, lon: -122.39 },
 		{
 			type: "kv",
 			items: [
@@ -111,8 +140,15 @@ describe("mobile UI validation", () => {
 		const dir = new URL("../skills/pibolt-mobile-ui/examples/", import.meta.url);
 		const files = readdirSync(dir).filter((name) => name.endsWith(".json"));
 		expect(files.length).toBeGreaterThan(0);
-		for (const name of files)
-			expect(validateView(JSON.parse(readFileSync(new URL(name, dir), "utf8"))), name).toEqual([]);
+		for (const name of files) {
+			const parsed = JSON.parse(readFileSync(new URL(name, dir), "utf8"));
+			const views: unknown[] = parsed.views ?? (parsed.tiles ? [] : [parsed]);
+			for (const value of views) expect(validateView(value), name).toEqual([]);
+			for (const tile of parsed.tiles ?? []) {
+				expect(validateView(tile), name).toEqual([]);
+				expect(validateTile(tile), name).toEqual([]);
+			}
+		}
 	});
 
 	it("names each problem with its place", () => {
@@ -788,5 +824,245 @@ describe("mobile UI host", () => {
 			{ method: "setView", viewKey: "a", slot: "panel", rev: 2 },
 			{ method: "setView", viewKey: "b", slot: "inline", rev: 2 },
 		]);
+	});
+});
+
+describe("mobile UI charts, tables and places", () => {
+	it("refuses charts whose series do not fit", () => {
+		const chart = (props: Record<string, unknown>) =>
+			view([{ type: "chart", kind: "line", series: [{ name: "a", values: [1, 2] }], ...props }]);
+		expect(validateView(chart({}))).toEqual([]);
+		expect(
+			validateView(
+				chart({
+					series: [
+						{ name: "a", values: [1, 2] },
+						{ name: "b", values: [1] },
+					],
+				}),
+			),
+		).toEqual(["body[0]: series: [1]: 1 values, the first series has 2"]);
+		expect(
+			validateView(
+				chart({
+					kind: "sparkline",
+					series: [
+						{ name: "a", values: [1] },
+						{ name: "b", values: [1] },
+					],
+				}),
+			),
+		).toEqual(["body[0]: series: more than 1 series in a sparkline"]);
+		expect(validateView(chart({ labels: ["Mon"] }))).toEqual(["body[0]: labels: 1 labels for 2 values"]);
+		expect(validateView(chart({ series: [{ name: "a", values: [1, "2"] }] }))).toEqual([
+			"body[0]: series: [0]: values: expected numbers or null",
+		]);
+		expect(validateView(chart({ min: 5, max: 5 }))).toEqual(["body[0]: max: must be greater than min"]);
+		expect(validateView(chart({ series: [{ name: "a", values: new Array(201).fill(1) }] }))).toEqual([
+			"body[0]: series: [0]: values: more than 200 values",
+		]);
+	});
+
+	it("refuses tables whose rows do not fit their columns, and asks an id of a table with tappable rows", () => {
+		const table = (props: Record<string, unknown>) =>
+			view([
+				{
+					type: "table",
+					id: "t",
+					columns: [{ id: "a", label: "A" }],
+					rows: [{ id: "r1", cells: { a: "x" } }],
+					...props,
+				},
+			]);
+		expect(validateView(table({}))).toEqual([]);
+		expect(validateView(table({ rows: [{ id: "r1", cells: { b: "x" } }] }))).toEqual([
+			"body[0]: rows: [0]: cells: b: no such column",
+		]);
+		expect(
+			validateView(
+				table({
+					rows: [
+						{ id: "r1", cells: {} },
+						{ id: "r1", cells: {} },
+					],
+				}),
+			),
+		).toEqual(['body[0]: rows: [1]: row "r1" twice']);
+		expect(validateView(table({ sort: { column: "z" } }))).toEqual(['body[0]: sort: column: no column "z"']);
+		expect(
+			validateView(
+				table({
+					columns: [
+						{ id: "a", label: "A" },
+						{ id: "a", label: "B" },
+					],
+				}),
+			),
+		).toEqual(['body[0]: columns: [1]: column "a" twice']);
+		expect(
+			validateView(
+				view([
+					{ type: "table", columns: [{ id: "a", label: "A" }], rows: [{ id: "r", cells: {}, action: "open" }] },
+				]),
+			),
+		).toEqual(["body[0]: id: needed, the table sends events"]);
+	});
+
+	it("needs a place's coordinates together, or its address", () => {
+		const place = (props: Record<string, unknown>) => view([{ type: "location", name: "Office", ...props }]);
+		expect(validateView(place({ address: "1 Market St" }))).toEqual([]);
+		expect(validateView(place({ lat: 1, lon: 2 }))).toEqual([]);
+		expect(validateView(place({}))).toEqual(["body[0]: address: needed without lat and lon"]);
+		expect(validateView(place({ lat: 1 }))).toEqual(["body[0]: lat, lon: give both or neither"]);
+		expect(validateView(place({ lat: 91, lon: 0 }))).toEqual(["body[0]: lat: expected -90 to 90"]);
+	});
+
+	it("renders charts as sparklines with their last, low and high, tables aligned, and places as one line", () => {
+		const lines = viewToLines({
+			v: 1,
+			body: [
+				{
+					type: "chart",
+					kind: "bar",
+					title: "Builds",
+					series: [
+						{ name: "Passed", values: [0, 4, 8] },
+						{ name: "Failed", values: [2, null, 0] },
+					],
+				},
+				{
+					type: "table",
+					columns: [
+						{ id: "name", label: "Package" },
+						{ id: "size", label: "Size", kind: "number" },
+					],
+					sort: { column: "size", desc: true },
+					rows: [
+						{ id: "a", cells: { name: "chalk", size: 44 } },
+						{ id: "b", cells: { name: "undici", size: 1532 } },
+						{ id: "c", cells: { name: "none", size: null } },
+					],
+				},
+				{ type: "location", name: "Office", address: "1 Market St", lat: 37.79, lon: -122.39 },
+			],
+		});
+		expect(lines).toEqual([
+			"Builds",
+			"Passed  ▁▅█  last 8 · low 0 · high 8",
+			"Failed  ▃ ▁  last 0 · low 0 · high 2",
+			"Package  Size",
+			"undici   1532",
+			"chalk      44",
+			"none",
+			"⌖ Office — 1 Market St (37.79, -122.39)",
+		]);
+		const rows = Array.from({ length: 53 }, (_, i) => ({ id: `r${i}`, cells: { n: i } }));
+		const long = viewToLines({ v: 1, body: [{ type: "table", columns: [{ id: "n", label: "N" }], rows }] });
+		expect(long).toHaveLength(52);
+		expect(long.at(-1)).toBe("… 3 more rows");
+	});
+
+	it("says what a chart shows for screen readers, and sorts table rows by their column's kind", () => {
+		const chart: MobileViewChart = {
+			type: "chart",
+			kind: "line",
+			title: "Build time",
+			unit: "s",
+			series: [{ name: "main", values: [52, 41, null] }],
+		};
+		expect(chartSummary(chart)).toBe("Line chart, Build time: last 41 s, low 41 s, high 52 s");
+		expect(chartSummary({ ...chart, summary: "Faster" })).toBe("Faster");
+		const table: MobileViewTable = {
+			type: "table",
+			columns: [{ id: "d", label: "Date", kind: "date" }],
+			sort: { column: "d" },
+			rows: [
+				{ id: "a", cells: { d: "2026-10-30" } },
+				{ id: "b", cells: { d: null } },
+				{ id: "c", cells: { d: "2026-01-02" } },
+			],
+		};
+		expect(sortedRows(table).map((row) => row.id)).toEqual(["c", "a", "b"]);
+		expect(sortedRows({ ...table, sort: { column: "d", desc: true } }).map((row) => row.id)).toEqual(["a", "c", "b"]);
+	});
+});
+
+describe("mobile UI Home tiles", () => {
+	const TILE: MobileView = {
+		v: 1,
+		title: "Board",
+		icon: "flag",
+		body: [
+			{ type: "text", text: "3 open" },
+			{ type: "chart", kind: "sparkline", series: [{ name: "Done", values: [1, 0, 2] }] },
+		],
+	};
+
+	it("holds a tile to its title, node types and size", () => {
+		expect(validateTile(TILE)).toEqual([]);
+		expect(validateTile({ ...TILE, title: undefined })).toEqual(["title: a tile needs one"]);
+		expect(
+			validateTile({
+				...TILE,
+				actions: [{ type: "button", id: "x", label: "X" }],
+				body: [
+					{ type: "row", children: [{ type: "button", id: "b", label: "Go" }] },
+					{ type: "kv", items: Array.from({ length: 5 }, (_, i) => ({ key: `k${i}`, value: "v" })) },
+				],
+			}),
+		).toEqual([
+			"actions: a tile has no buttons",
+			'body[0].children[0]: a tile cannot hold "button"',
+			"body[1]: more than 4 items in a tile",
+		]);
+		expect(validateTile({ ...TILE, body: Array.from({ length: 25 }, () => ({ type: "text", text: "x" })) })).toEqual([
+			"body: more than 24 nodes in a tile",
+		]);
+	});
+
+	it("takes the tile slot only for an open registered tile, and sends its changes at most once a second", () => {
+		vi.useFakeTimers();
+		const channel = fakeChannel(true);
+		const { host, widgets } = hostWith(channel);
+		expect(() => host.set("board:tile", TILE, { slot: "tile" })).toThrow(/only for an open registered tile/);
+		host.allowTile("board:tile", true);
+		expect(() => host.set("board:tile", { ...TILE, body: [{ type: "divider" }] }, { slot: "tile" })).toThrow(
+			/a tile cannot hold "divider"/,
+		);
+		host.set("board:tile", TILE, { slot: "tile" });
+		expect(() => host.update("board:tile", [{ op: "insert", node: { type: "divider" } }])).toThrow(/Invalid tile/);
+		vi.advanceTimersByTime(1000);
+		for (let i = 0; i < 5; i++) host.update("board:tile", [{ op: "insert", node: { type: "text", text: `${i}` } }]);
+		expect(channel.sent).toHaveLength(2);
+		vi.advanceTimersByTime(500);
+		expect(channel.sent).toHaveLength(2);
+		vi.advanceTimersByTime(500);
+		expect(channel.sent).toHaveLength(3);
+		expect(channel.sent[1]).toMatchObject({ method: "updateView", rev: 2 });
+		expect(channel.sent[2]).toMatchObject({ method: "setView", slot: "tile", rev: 6 });
+		// Tiles have no text form.
+		expect(widgets.size).toBe(0);
+	});
+
+	it("emits a table row tap with the row's id as the value, and drops taps on rows without an action", () => {
+		const { host, events } = hostWith(fakeChannel(true));
+		host.set("deps", {
+			v: 1,
+			body: [
+				{
+					type: "table",
+					id: "t",
+					columns: [{ id: "a", label: "A" }],
+					rows: [
+						{ id: "r1", cells: { a: "x" }, action: "open" },
+						{ id: "r2", cells: { a: "y" } },
+					],
+				},
+			],
+		});
+		expect(host.handleEvent({ viewKey: "deps", nodeId: "t", kind: "tap", value: "r1" })).toBe(true);
+		expect(host.handleEvent({ viewKey: "deps", nodeId: "t", kind: "tap", value: "r2" })).toBe(false);
+		expect(host.handleEvent({ viewKey: "deps", nodeId: "t", kind: "tap", value: "r9" })).toBe(false);
+		expect(events).toEqual([{ type: "view_event", key: "deps", id: "t", action: "open", kind: "tap", value: "r1" }]);
 	});
 });

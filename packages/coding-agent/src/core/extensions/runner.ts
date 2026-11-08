@@ -23,6 +23,7 @@ import {
 	ViewHost,
 	type ViewSnapshot,
 } from "../mobile-ui/host.ts";
+import { MOBILE_VIEW_LIMITS } from "../mobile-ui/types.ts";
 import { assertView } from "../mobile-ui/validate.ts";
 import type { ModelRegistry } from "../model-registry.ts";
 import type { ScopedModel } from "../model-resolver.ts";
@@ -83,6 +84,7 @@ import type {
 	ProjectTrustEventResult,
 	ProviderConfig,
 	RegisteredCommand,
+	RegisteredPage,
 	RegisteredTool,
 	ReplacedSessionContext,
 	ResolvedCommand,
@@ -443,6 +445,8 @@ export class ExtensionRunner {
 	private staleMessage: string | undefined;
 	/** The mobile UI kit's views of this session (docs/mobile-ui.md), made when a mode binds its UI. */
 	private views: ViewHost | undefined;
+	/** Registered pages and tiles that a client opened (`open_page`), with the open in progress or done. */
+	private readonly openPages = new Map<string, Promise<void>>();
 	private uiPromptDepth = 0;
 	private activeUIPrompt: { kind: UIPromptKind; title?: string } | undefined;
 
@@ -761,6 +765,78 @@ export class ExtensionRunner {
 		this.views?.resync();
 	}
 
+	/** The registered pages and tiles (first registration per key wins), at most 16. */
+	getRegisteredPages(): RegisteredPage[] {
+		const pages = new Map<string, RegisteredPage>();
+		for (const extension of this.extensions) {
+			for (const [key, page] of extension.pages ?? []) {
+				if (!pages.has(key) && pages.size < MOBILE_VIEW_LIMITS.registeredPages) pages.set(key, page);
+			}
+		}
+		return [...pages.values()];
+	}
+
+	/**
+	 * A client opens a registered page or tile: its `open()` builds the view, set under its key in its slot. A page that
+	 * is open already is sent again as it is now.
+	 */
+	async openPage(key: string): Promise<void> {
+		this.assertActive();
+		const views = this.views;
+		if (!views) throw new Error("No client shows views");
+		const page = this.getRegisteredPages().find((candidate) => candidate.key === key);
+		if (!page) throw new Error(`No page ${JSON.stringify(key)}`);
+		const opening = this.openPages.get(key);
+		if (opening) {
+			await opening;
+			if (views.get(key)) {
+				views.resend(key);
+				return;
+			}
+			// The extension removed its view meanwhile: build it again.
+			this.openPages.delete(key);
+		}
+		const open = (async () => {
+			if (page.kind === "tile") views.allowTile(key, true);
+			const view = await page.definition.open(this.createContext());
+			views.set(key, view, { slot: page.kind });
+		})();
+		this.openPages.set(key, open);
+		try {
+			await open;
+		} catch (error) {
+			this.openPages.delete(key);
+			views.allowTile(key, false);
+			throw error;
+		}
+	}
+
+	/** A client closed a registered page or tile: its view goes and its `close()` runs. */
+	async closePage(key: string): Promise<void> {
+		const opening = this.openPages.get(key);
+		if (!opening) return;
+		this.openPages.delete(key);
+		await opening.catch(() => {});
+		const page = this.getRegisteredPages().find((candidate) => candidate.key === key);
+		this.views?.set(key, undefined);
+		this.views?.allowTile(key, false);
+		await this.runPageClose(page);
+	}
+
+	private async runPageClose(page: RegisteredPage | undefined): Promise<void> {
+		if (!page?.definition.close) return;
+		try {
+			await page.definition.close(this.createContext());
+		} catch (error) {
+			this.emitError({
+				extensionPath: page.sourceInfo.path,
+				event: "page_close",
+				error: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
+			});
+		}
+	}
+
 	/** A client's `extension_ui_event`: emitted as a `view_event` when it fits the view, else dropped (false). */
 	handleViewEvent(event: ViewClientEvent): boolean {
 		return this.views?.handleEvent(event) ?? false;
@@ -873,6 +949,10 @@ export class ExtensionRunner {
 		if (!this.staleMessage) {
 			this.staleMessage = message;
 			this.runtime.invalidate(message);
+			// Open pages and tiles close with the session (their close() runs while the ctx still works).
+			const pages = this.getRegisteredPages().filter((page) => this.openPages.has(page.key));
+			this.openPages.clear();
+			for (const page of pages) void this.runPageClose(page);
 			// The session's views go with it; the next runner starts without any.
 			this.views?.dispose();
 		}

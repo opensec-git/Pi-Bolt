@@ -32,13 +32,14 @@ import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { toJsonEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
-import type {
-	RpcCommand,
-	RpcExtensionUIRequest,
-	RpcExtensionUIResponse,
-	RpcResponse,
-	RpcSessionState,
-	RpcSlashCommand,
+import {
+	type RpcCommand,
+	type RpcExtensionUIRequest,
+	type RpcExtensionUIResponse,
+	type RpcResponse,
+	type RpcSessionState,
+	type RpcSlashCommand,
+	rpcPages,
 } from "./rpc-types.ts";
 
 // Re-export types for consumers
@@ -774,6 +775,25 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 				// Views set before (at session start, say) reach the client now; their text widgets go.
 				if (clientViews) session.extensionRunner.resyncViews();
 				return success(id, "set_client_features", { features: clientViews ? [VIEWS_FEATURE] : [] });
+			}
+
+			// =================================================================
+			// Package pages and Home tiles
+			// =================================================================
+
+			case "get_pages": {
+				return success(id, "get_pages", { pages: rpcPages(session.extensionRunner.getRegisteredPages()) });
+			}
+
+			case "open_page": {
+				if (!clientViews) return error(id, "open_page", 'Send set_client_features with "views" first');
+				await session.extensionRunner.openPage(command.key);
+				return success(id, "open_page", { viewKey: command.key });
+			}
+
+			case "close_page": {
+				await session.extensionRunner.closePage(command.key);
+				return success(id, "close_page");
 			}
 
 			default: {

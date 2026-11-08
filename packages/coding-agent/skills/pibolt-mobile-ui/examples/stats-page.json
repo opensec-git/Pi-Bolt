@@ -1,0 +1,58 @@
+{
+  "v": 1,
+  "title": "Build stats",
+  "subtitle": "main, last 7 days",
+  "icon": "chart",
+  "body": [
+    {
+      "type": "chart",
+      "id": "duration",
+      "kind": "line",
+      "title": "Build time",
+      "unit": "s",
+      "labels": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+      "series": [
+        { "name": "main", "values": [52, 49, 50, 47, null, 44, 41] },
+        { "name": "release", "values": [61, 60, 58, 58, 57, 55, 55] }
+      ],
+      "summary": "Build time on main fell from 52 s to 41 s; release builds from 61 s to 55 s"
+    },
+    {
+      "type": "chart",
+      "id": "builds",
+      "kind": "bar",
+      "title": "Builds per day",
+      "labels": ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"],
+      "series": [
+        { "name": "Passed", "values": [8, 11, 7, 12, 9, 2, 1] },
+        { "name": "Failed", "values": [1, 0, 2, 1, 0, 0, 0] }
+      ]
+    },
+    {
+      "type": "section",
+      "title": "Slowest steps",
+      "children": [
+        {
+          "type": "table",
+          "id": "steps",
+          "filter": true,
+          "sort": { "column": "time", "desc": true },
+          "columns": [
+            { "id": "step", "label": "Step", "sortable": true },
+            { "id": "time", "label": "Time (s)", "kind": "number", "sortable": true },
+            { "id": "since", "label": "Since", "kind": "date", "sortable": true },
+            { "id": "commit", "label": "Commit", "kind": "mono" }
+          ],
+          "rows": [
+            { "id": "s1", "cells": { "step": "Type check", "time": 14.2, "since": "2026-11-02", "commit": "1a2b3c4" }, "action": "open-step" },
+            { "id": "s2", "cells": { "step": "Unit tests", "time": 11.8, "since": "2026-10-28", "commit": "9f8e7d6" }, "action": "open-step" },
+            { "id": "s3", "cells": { "step": "Bundle", "time": 6.1, "since": "2026-11-05", "commit": "5c4b3a2" }, "action": "open-step" },
+            { "id": "s4", "cells": { "step": "Lint", "time": 3.4, "since": null, "commit": null } }
+          ]
+        }
+      ]
+    },
+    { "type": "location", "id": "runner", "name": "Build runner", "address": "Frankfurt data centre", "lat": 50.1109, "lon": 8.6821 }
+  ],
+  "actions": [{ "type": "button", "id": "refresh", "label": "Refresh", "icon": "refresh" }]
+}

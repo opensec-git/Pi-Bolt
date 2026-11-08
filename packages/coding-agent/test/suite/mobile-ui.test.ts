@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
-import boardExtension from "../../examples/extensions/mobile-ui-board/index.ts";
+import { boardExtension } from "../../examples/extensions/mobile-ui-board/index.ts";
 import type { ExtensionAPI, ExtensionContext } from "../../src/core/extensions/types.ts";
 import type { ViewChannel, ViewRequest } from "../../src/core/mobile-ui/host.ts";
 import type { MobileView, MobileViewResult, ViewEvent } from "../../src/core/mobile-ui/types.ts";
@@ -68,6 +68,41 @@ function deployExtension(record: { events: ViewEvent[]; results: Array<MobileVie
 	};
 }
 
+const STATS_TILE: MobileView = {
+	v: 1,
+	title: "Stats",
+	body: [{ type: "chart", id: "spark", kind: "sparkline", series: [{ name: "Runs", values: [1, 2, 3] }] }],
+};
+
+/** A package with a registered page (a chart and a table) and a Home tile that opens it. */
+function statsExtension(record: { events: ViewEvent[]; closed: string[] }) {
+	return (pi: ExtensionAPI) => {
+		pi.registerPage("stats:page", {
+			title: "Stats",
+			icon: "chart",
+			description: "Runs per day",
+			open: async () => ({
+				v: 1,
+				title: "Stats",
+				body: [
+					{ type: "chart", kind: "line", series: [{ name: "Runs", values: [1, 2, 3] }] },
+					{
+						type: "table",
+						id: "runs",
+						columns: [{ id: "n", label: "Run", kind: "number" }],
+						rows: [{ id: "run-1", cells: { n: 1 }, action: "open-run" }],
+					},
+				],
+			}),
+			close: () => void record.closed.push("stats:page"),
+		});
+		pi.registerTile("stats:tile", { title: "Stats", page: "stats:page", open: () => STATS_TILE });
+		pi.on("view_event", (event: ViewEvent) => {
+			if (event.key === "stats:page") record.events.push(event);
+		});
+	};
+}
+
 function fakeChannel(native: boolean): ViewChannel & { sent: ViewRequest[] } {
 	const sent: ViewRequest[] = [];
 	return {
@@ -93,8 +128,14 @@ describe("mobile UI kit in a session", () => {
 	});
 
 	async function setup() {
-		const record = { events: [] as ViewEvent[], results: [] as Array<MobileViewResult | undefined> };
-		const harness: Harness = await createHarness({ extensionFactories: [deployExtension(record)] });
+		const record = {
+			events: [] as ViewEvent[],
+			results: [] as Array<MobileViewResult | undefined>,
+			closed: [] as string[],
+		};
+		const harness: Harness = await createHarness({
+			extensionFactories: [deployExtension(record), statsExtension(record)],
+		});
 		cleanups.push(() => harness.cleanup());
 		return { harness, record };
 	}
@@ -215,8 +256,59 @@ describe("mobile UI kit in a session", () => {
 		expect(snapshot.find((v) => v.viewKey === "later")).not.toHaveProperty("toolCallId");
 	});
 
-	it("runs the example board package: panel and page, a tap completes a task, the sheet adds one", async () => {
-		const harness = await createHarness({ extensionFactories: [boardExtension] });
+	it("opens registered pages and tiles for a client, sends them again on a second open, and closes them", async () => {
+		const { harness, record } = await setup();
+		const channel = fakeChannel(true);
+		await harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "rpc", viewChannel: channel });
+		const runner = harness.session.extensionRunner;
+		expect(runner.getRegisteredPages().map((page) => [page.key, page.kind, page.definition.title])).toEqual([
+			["stats:page", "page", "Stats"],
+			["stats:tile", "tile", "Stats"],
+		]);
+		// Nothing is shown until a client opens it.
+		expect(channel.sent).toEqual([]);
+
+		await runner.openPage("stats:tile");
+		expect(channel.sent).toMatchObject([{ method: "setView", viewKey: "stats:tile", slot: "tile", rev: 1 }]);
+		await runner.openPage("stats:tile");
+		expect(channel.sent).toHaveLength(2);
+		expect(channel.sent[1]).toMatchObject({ viewKey: "stats:tile", rev: 1, view: STATS_TILE });
+		// The extension updates its tile like any view; an update that breaks the tile rules is refused.
+		const ui = runner.getUIContext();
+		ui.updateView("stats:tile", [{ op: "set", id: "spark", props: { series: [{ name: "Runs", values: [4] }] } }]);
+		expect(() => ui.updateView("stats:tile", [{ op: "insert", node: { type: "divider" } }])).toThrow(/Invalid tile/);
+		expect(() => ui.setView("other", STATS_TILE, { slot: "tile" })).toThrow(/only for an open registered tile/);
+
+		await runner.openPage("stats:page");
+		expect(runner.viewSnapshot().map((v) => [v.viewKey, v.slot])).toEqual([
+			["stats:tile", "tile"],
+			["stats:page", "page"],
+		]);
+		expect(runner.handleViewEvent({ viewKey: "stats:page", nodeId: "runs", kind: "tap", value: "run-1" })).toBe(true);
+		await until(() => record.events.length === 1);
+		expect(record.events[0]).toMatchObject({ id: "runs", action: "open-run", value: "run-1" });
+
+		// An extension that removed its open page gets it built again on the next open.
+		ui.setView("stats:page", undefined);
+		await runner.openPage("stats:page");
+		expect(ui.getView("stats:page")?.title).toBe("Stats");
+		await runner.closePage("stats:page");
+		expect(channel.sent.at(-1)).toMatchObject({ method: "setView", viewKey: "stats:page" });
+		expect(channel.sent.at(-1)).not.toHaveProperty("view");
+		expect(record.closed).toEqual(["stats:page"]);
+		await expect(runner.openPage("nope")).rejects.toThrow('No page "nope"');
+
+		// A page open when the session reloads closes with it.
+		await runner.openPage("stats:page");
+		await harness.session.reload();
+		await until(() => record.closed.length === 2);
+		expect(harness.session.extensionRunner.viewSnapshot()).toEqual([]);
+	});
+
+	it("runs the example board package: panel, page, tile, a tap completes a task, the sheet adds one", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-board-"));
+		cleanups.push(() => rmSync(dir, { recursive: true, force: true }));
+		const harness = await createHarness({ extensionFactories: [boardExtension({ file: join(dir, "board.json") })] });
 		cleanups.push(() => harness.cleanup());
 		const channel = fakeChannel(true);
 		let sheetAnswer: unknown;
@@ -229,19 +321,28 @@ describe("mobile UI kit in a session", () => {
 		await harness.session.prompt("/board add Ship it");
 		const runner = harness.session.extensionRunner;
 		const ui = runner.getUIContext();
+		expect(runner.viewSnapshot().map((v) => [v.viewKey, v.slot])).toEqual([["board:panel", "panel"]]);
+		await runner.openPage("board:page");
+		await runner.openPage("board:tile");
 		expect(runner.viewSnapshot().map((v) => [v.viewKey, v.slot])).toEqual([
 			["board:panel", "panel"],
 			["board:page", "page"],
+			["board:tile", "tile"],
 		]);
 		for (const view of runner.viewSnapshot()) expect(validateView(view.view)).toEqual([]);
+		expect(ui.getView("board:tile")?.body[0]).toMatchObject({ text: "2 open · 0 done" });
 		expect(ui.getView("board:panel")?.subtitle).toBe("2 open · 0 done");
 
 		runner.handleViewEvent({ viewKey: "board:panel", nodeId: "task-1", kind: "tap" });
 		await until(() => ui.getView("board:panel")?.subtitle === "1 open · 1 done");
+		expect(ui.getView("board:tile")?.body[0]).toMatchObject({ text: "1 open · 1 done" });
+		// A tap on the page's table row toggles that task too.
+		runner.handleViewEvent({ viewKey: "board:page", nodeId: "tasks", kind: "tap", value: "task-2" });
+		await until(() => ui.getView("board:panel")?.subtitle === "0 open · 2 done");
 
 		sheetAnswer = { nodeId: "new", values: { text: "Celebrate" } };
 		runner.handleViewEvent({ viewKey: "board:panel", nodeId: "add", kind: "tap" });
-		await until(() => ui.getView("board:panel")?.subtitle === "2 open · 1 done");
+		await until(() => ui.getView("board:panel")?.subtitle === "1 open · 2 done");
 
 		runner.handleViewEvent({
 			viewKey: "board:page",
@@ -314,6 +415,29 @@ describe("mobile UI kit in a session", () => {
 			withViews.send({ type: "extension_ui_event", viewKey: "deploy", nodeId: "cancel", kind: "tap" });
 			await until(() => record.events.length === 1);
 			await withViews.waitFor((m) => m.viewKey === "deploy" && JSON.stringify(m).includes("Cancelled"));
+		});
+
+		it("lists and opens the session's registered pages for a phone that renders views", async () => {
+			const { uri } = await remoteSetup();
+			const without = await phone(uri(), false);
+			const listed = await without.request({ type: "get_pages" });
+			expect(listed).toMatchObject({
+				success: true,
+				data: {
+					pages: [
+						{ key: "stats:page", kind: "page", title: "Stats", icon: "chart" },
+						{ key: "stats:tile", kind: "tile", page: "stats:page" },
+					],
+				},
+			});
+			expect(await without.request({ type: "open_page", key: "stats:page" })).toMatchObject({ success: false });
+
+			const client = await phone(uri(), true);
+			const opened = await client.request({ type: "open_page", key: "stats:page" });
+			expect(opened).toMatchObject({ success: true, data: { viewKey: "stats:page" } });
+			await client.waitFor((m) => m.method === "setView" && m.viewKey === "stats:page" && m.slot === "page");
+			expect(await client.request({ type: "close_page", key: "stats:page" })).toMatchObject({ success: true });
+			await client.waitFor((m) => m.method === "setView" && m.viewKey === "stats:page" && m.view === undefined);
 		});
 
 		it("sends a phone that turns views on late every view as it is now", async () => {

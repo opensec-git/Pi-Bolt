@@ -866,6 +866,38 @@ listing what Pi accepted (unknown names are left out). With `"views"`, extension
 current view. Sending it again (after the client rebuilt its screen, say) replays them; sending it without `"views"`
 switches back to text for new changes.
 
+## Package pages and Home tiles
+
+Pages and tiles that extensions registered with `pi.registerPage` and `pi.registerTile`
+([mobile UI kit](mobile-ui.md#package-pages-and-home-tiles)). Opening one needs `"views"` declared first.
+
+### get_pages
+
+```json
+{"type": "get_pages"}
+```
+
+Response `data`: `{"pages": [{"key", "kind": "page" | "tile", "title", "icon"?, "description"?, "page"?, "sourceInfo"}]}`.
+A tile's `page` is the page a tap on it opens; `sourceInfo.source` names the package.
+
+### open_page
+
+```json
+{"type": "open_page", "key": "board:page"}
+```
+
+Builds the view with the extension's `open()` and sends it as a `setView` in the slot `page` or `tile`, then responds
+with `data: {"viewKey": "board:page"}`. A page that is open already is sent again as it is. Fails for an unknown key
+and before `set_client_features` with `"views"`.
+
+### close_page
+
+```json
+{"type": "close_page", "key": "board:page"}
+```
+
+Removes the view (a `setView` without `view`) and runs the extension's `close()`. A key that is not open is a no-op.
+
 ## Model object
 
 Model commands return the complete configured model definition. Costs are in US dollars per million tokens.

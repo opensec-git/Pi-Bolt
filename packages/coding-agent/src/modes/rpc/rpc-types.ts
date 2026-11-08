@@ -10,8 +10,9 @@ import type { ImageContent, Model } from "@earendil-works/pi-ai";
 import type { PromptDisposition, QueuedInputDisposition, SessionStats } from "../../core/agent-session.ts";
 import type { BashResult } from "../../core/bash-executor.ts";
 import type { CompactionResult } from "../../core/compaction/index.ts";
+import type { RegisteredPage } from "../../core/extensions/types.ts";
 import type { ViewSetRequest, ViewShowRequest, ViewUpdateRequest } from "../../core/mobile-ui/host.ts";
-import type { MobileViewValue, ViewEventKind } from "../../core/mobile-ui/types.ts";
+import type { MobileViewIcon, MobileViewValue, ViewEventKind } from "../../core/mobile-ui/types.ts";
 import type { SessionEntry, SessionTreeNode } from "../../core/session-manager.ts";
 import type { SourceInfo } from "../../core/source-info.ts";
 
@@ -80,7 +81,41 @@ export type RpcCommand =
 	| { id?: string; type: "subagent_unsubscribe"; runId: string }
 
 	// Client features: optional parts of the protocol the client implements (docs/mobile-ui.md#capability-negotiation)
-	| { id?: string; type: "set_client_features"; features: string[] };
+	| { id?: string; type: "set_client_features"; features: string[] }
+
+	// Package pages and Home tiles (docs/mobile-ui.md#package-pages-and-home-tiles)
+	| { id?: string; type: "get_pages" }
+	| { id?: string; type: "open_page"; key: string }
+	| { id?: string; type: "close_page"; key: string };
+
+// ============================================================================
+// RPC Page (for get_pages response)
+// ============================================================================
+
+/** A page or Home tile a package registered. */
+export interface RpcPageInfo {
+	key: string;
+	kind: "page" | "tile";
+	title: string;
+	icon?: MobileViewIcon;
+	description?: string;
+	/** Tiles: the page a tap opens. */
+	page?: string;
+	sourceInfo: SourceInfo;
+}
+
+/** The `get_pages` list of a runner's registered pages and tiles. */
+export function rpcPages(pages: readonly RegisteredPage[]): RpcPageInfo[] {
+	return pages.map(({ key, kind, definition, sourceInfo }) => ({
+		key,
+		kind,
+		title: definition.title,
+		...(definition.icon ? { icon: definition.icon } : {}),
+		...(definition.description ? { description: definition.description } : {}),
+		...(kind === "tile" && definition.page ? { page: definition.page } : {}),
+		sourceInfo,
+	}));
+}
 
 // ============================================================================
 // RPC Slash Command (for get_commands response)
@@ -249,6 +284,11 @@ export type RpcResponse =
 			success: true;
 			data: { commands: RpcSlashCommand[] };
 	  }
+
+	// Pages
+	| { id?: string; type: "response"; command: "get_pages"; success: true; data: { pages: RpcPageInfo[] } }
+	| { id?: string; type: "response"; command: "open_page"; success: true; data: { viewKey: string } }
+	| { id?: string; type: "response"; command: "close_page"; success: true }
 
 	// Subagents
 	| { id?: string; type: "response"; command: "subagent_subscribe"; success: true }
