@@ -75,7 +75,8 @@ const val SUBAGENT_STREAM_FEATURE = "subagent_stream"
 /** A command from `get_commands`. [argumentHint] is shown while typing its arguments (hosts that send one). */
 data class SlashCommand(val name: String, val description: String?, val source: String, val argumentHint: String? = null)
 
-enum class DialogKind { Select, Confirm, Input, Editor }
+/** [View]: a sheet of the mobile UI kit (`showView`), drawn from [DialogRequest.view]. */
+enum class DialogKind { Select, Confirm, Input, Editor, View }
 
 data class DialogRequest(
     val id: String,
@@ -86,6 +87,9 @@ data class DialogRequest(
     val placeholder: String? = null,
     val prefill: String? = null,
     val timeoutMs: Long? = null,
+    /** A sheet's view key and view ([DialogKind.View]); updates apply to it while it is open. */
+    val viewKey: String? = null,
+    val view: ViewEntry? = null,
 )
 
 data class QueueState(val steering: List<String> = emptyList(), val followUp: List<String> = emptyList()) {
@@ -121,6 +125,8 @@ data class SessionState(
     val commands: List<SlashCommand> = emptyList(),
     val statuses: Map<String, String> = emptyMap(),
     val widgets: Map<String, List<String>> = emptyMap(),
+    /** The mobile UI kit's views by key, in the order they were first set (docs/mobile-ui.md). */
+    val views: Map<String, ViewEntry> = emptyMap(),
     val retry: RetryInfo? = null,
     val lastUsage: Usage? = null,
     /** The todo extension's list, built from its `todo` tool results. */

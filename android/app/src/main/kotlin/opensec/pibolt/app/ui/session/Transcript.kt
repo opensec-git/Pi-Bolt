@@ -1,5 +1,6 @@
 package opensec.pibolt.app.ui.session
 
+import opensec.pibolt.app.ui.session.views.InlineViewRow
 import androidx.compose.runtime.Immutable
 import android.os.SystemClock
 import androidx.compose.animation.AnimatedVisibility
@@ -605,5 +606,6 @@ private fun LazyItemScope.RowView(
             modifier = base.padding(top = Pi.dims.stepGap + 2.dp, bottom = 2.dp).riseIn(row.key, row.live, memory, 6.dp),
         )
         is SubagentNoticeRow -> SubagentNoticeRowView(row, modifier = base.riseIn(row.key, row.live, memory, 6.dp))
+        is ViewRow -> InlineViewRow(row.viewKey, modifier = base.padding(top = Pi.dims.stepGap + 2.dp, bottom = 2.dp).riseIn(row.key, row.live, memory, 6.dp))
     }
 }

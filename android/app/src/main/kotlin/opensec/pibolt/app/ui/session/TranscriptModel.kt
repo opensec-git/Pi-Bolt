@@ -19,6 +19,7 @@ import opensec.pibolt.protocol.session.SessionReducer
 import opensec.pibolt.app.ui.session.subagent.SubagentFormat
 import opensec.pibolt.protocol.session.Subagent
 import opensec.pibolt.protocol.session.SubagentNoticeItem
+import opensec.pibolt.protocol.session.ViewItem
 import opensec.pibolt.protocol.session.SubagentReducer
 import opensec.pibolt.protocol.session.SubagentStatus
 import opensec.pibolt.protocol.session.ThinkingItem
@@ -54,6 +55,7 @@ sealed interface TRow {
         is SubagentNoticeRow -> 12
         is TurnMetaRow -> 13
         is SourcesRow -> 14
+        is ViewRow -> 15
     }
 }
 
@@ -129,6 +131,10 @@ data class SourcesRow(
     override val live: Boolean,
     val rail: Rail? = null,
 ) : TRow
+
+/** An inline view of the mobile UI kit (docs/mobile-ui.md), drawn from the session's views by [viewKey]. */
+@Immutable
+data class ViewRow(override val key: String, val viewKey: String, override val live: Boolean) : TRow
 
 @Immutable
 
@@ -434,7 +440,7 @@ object TranscriptModel {
                         i = agents.emit(out, items, i, end, live) { agents.card(it) }
                         continue
                     }
-                    if (i > lastStep || item is NoticeItem || item is SubagentNoticeItem) addItem(out, item, live, md, agents)
+                    if (i > lastStep || item is NoticeItem || item is SubagentNoticeItem || item is ViewItem) addItem(out, item, live, md, agents)
                     i++
                 }
                 val web = items.subList(bodyStart, end).filterIsInstance<ToolItem>().filter(WebTools::isSourceTool)
@@ -677,6 +683,7 @@ object TranscriptModel {
             is ThinkingItem -> out += ThinkingRow(item, live)
             is ToolItem -> out += if (agents != null && agents.card(item)) SubagentRow(item.key, agents.run(item), live, agents.slot(item.toolCallId)) else ToolRow(item, live)
             is NoticeItem -> out += NoticeRow(item, live)
+            is ViewItem -> out += ViewRow(item.key, item.viewKey, live)
             is SubagentNoticeItem -> {
                 val known = if (agents == null) emptyList() else item.runKeys.mapNotNull { key -> agents.runs[key]?.let(agents::strip) }
                 out += SubagentNoticeRow(item, known, live, known.map { agents?.slot(it.key) ?: 0 })

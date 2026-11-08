@@ -2,8 +2,8 @@
  * A task board with a native UI in the Pi-Bolt app (the mobile UI kit, docs/mobile-ui.md) and the same board as text
  * in the terminal.
  *
- * - App: a panel above the composer (progress, the open tasks, Add task), a full page under the session's Packages
- *   list (open and done tasks, an add form), and a sheet to add a task. Tapping a task completes or reopens it.
+ * - App: a panel above the composer (progress, the open tasks, Add task), a page from the session's menu (open and
+ *   done tasks, an add form), and a sheet to add a task. Tapping a task completes or reopens it.
  * - Terminal: the panel is a widget; `/board`, `/board add <text>`, `/board done <n>` do what the buttons do, and
  *   Add task runs as an input dialog.
  * - The model: a `board` tool (list, add, toggle), so "put X on my board" works too.

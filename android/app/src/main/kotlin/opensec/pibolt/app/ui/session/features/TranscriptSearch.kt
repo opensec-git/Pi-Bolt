@@ -14,6 +14,7 @@ import opensec.pibolt.protocol.session.AssistantTextItem
 import opensec.pibolt.protocol.session.ChatItem
 import opensec.pibolt.protocol.session.NoticeItem
 import opensec.pibolt.protocol.session.SubagentNoticeItem
+import opensec.pibolt.protocol.session.ViewItem
 import opensec.pibolt.protocol.session.ThinkingItem
 import opensec.pibolt.protocol.session.ToolItem
 import opensec.pibolt.protocol.session.UserItem
@@ -59,6 +60,7 @@ object TranscriptSearch {
         is ThinkingItem -> item.text
         is NoticeItem -> item.title + "\n" + item.text
         is SubagentNoticeItem -> item.text
+        is ViewItem -> ""
         is ToolItem -> buildString {
             append(item.name)
             item.args?.values?.forEach { append('\n').append(it.toString().trim('"')) }

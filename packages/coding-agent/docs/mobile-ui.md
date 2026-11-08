@@ -192,15 +192,15 @@ Where a view appears is its slot, chosen when it is set:
 | Slot | API | App | Terminal |
 |---|---|---|---|
 | `panel` (default) | `setView(key, view)` | A card above the composer. Its header (icon, title, the first chip) folds and unfolds it; several panels stack and the area scrolls. | A widget above the editor. |
-| `inline` | `setView(key, view, { slot: "inline" })` | A card in the transcript, where it was first set (under its tool call with `toolCallId`). It stays live; it is not saved in the session. | Lines in the chat, updated in place. |
-| `page` | `setView(key, view, { slot: "page" })` | A full screen, opened from the session's Packages list (session menu). | Not shown. |
+| `inline` | `setView(key, view, { slot: "inline" })` | A card in the transcript, where it was first set; after the app reconnects or rebuilds the transcript, at its end. It stays live; it is not saved in the session. | Lines in the chat, updated in place. |
+| `page` | `setView(key, view, { slot: "page" })` | A tall sheet, opened from the session's menu (•••), one entry per page, named by its title. | Not shown. |
 | `sheet` | `await showView(view)` | A modal bottom sheet with the title, the body and `actions` as its button row. | Dialogs, see [Fallback](#fallback). |
 
 Inline views are live UI, not transcript content. To keep a record in the session, send a message as well (for example
 `pi.sendMessage` with the final state).
 
-Set an inline view from a tool with `{ slot: "inline", toolCallId }` (the `toolCallId` its `execute` receives) to show
-it under that tool's row.
+Pass `{ toolCallId }` (the id a tool's `execute` receives) to tie an inline view to that tool call. Pi sends it on;
+the Android app 0.7.0 still places the view by time, not under the tool's row.
 
 ## Updates
 

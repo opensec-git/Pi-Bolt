@@ -58,6 +58,7 @@ import androidx.compose.material.icons.rounded.FolderOpen
 import androidx.compose.material.icons.rounded.Forum
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.LinkOff
+import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.MoreHoriz
 import opensec.pibolt.app.ui.components.GlassBarInset
 import opensec.pibolt.app.ui.components.GlassIconButton
@@ -170,6 +171,9 @@ fun SessionTopBar(
     cost: String? = null,
     costSpoken: String? = null,
     onCost: () -> Unit = {},
+    /** Extensions' pages (the mobile UI kit's `page` slot) as (key, title): the menu opens them with [onPage]. */
+    pages: List<Pair<String, String>> = emptyList(),
+    onPage: (String) -> Unit = {},
 ) {
     val colors = Pi.colors
     val type = Pi.type
@@ -267,6 +271,7 @@ fun SessionTopBar(
                     menu = false
                     action()
                 }
+                for ((key, label) in pages) Item(label, Icons.Rounded.Extension) { onPage(key) }
                 if (chat) {
                     Item("New chat", Icons.Rounded.Add, onNewSession)
                     onChats?.let { Item("All chats", Icons.Rounded.Forum, it) }
