@@ -131,9 +131,10 @@ jobs:
             sum=$(sha256sum ".work/draft/$musl_name" | cut -c1-64)
             echo "runtime_sha_linux_musl=$sum" >> "$GITHUB_OUTPUT"
             echo "$musl_name: $sum (the draft's)" | tee -a "$GITHUB_STEP_SUMMARY"
-          elif [ -n "$released" ] && gh release download "$previous" --repo "$GITHUB_REPOSITORY" --dir .work/previous --pattern "$musl_name" 2>/dev/null &&
-               (cd .work/previous && grep " $musl_name\$" SHA256SUMS | sha256sum -c --strict --quiet -) &&
-               [ "$(tar -xzOf ".work/previous/$musl_name" pi-bolt-runtime-linux-x64-musl/RUNTIME_STAMP 2>/dev/null || true)" = "$musl_stamp" ]; then
+          # (In a folder of its own: the provenance step below downloads the previous release's other runtimes into .work/previous.)
+          elif [ -n "$released" ] && gh release download "$previous" --repo "$GITHUB_REPOSITORY" --dir .work/musl --pattern "$musl_name" 2>/dev/null &&
+               (cd .work/musl && grep " $musl_name\$" ../previous/SHA256SUMS | sha256sum -c --strict --quiet -) &&
+               [ "$(tar -xzOf ".work/musl/$musl_name" pi-bolt-runtime-linux-x64-musl/RUNTIME_STAMP 2>/dev/null || true)" = "$musl_stamp" ]; then
             musl_from=$previous
             echo "the musl runtime is $previous's: used again"
           else
@@ -216,7 +217,7 @@ jobs:
             file=.work/draft/$name
             signers="runtime.yml@refs/heads/pi-bolt"
           else
-            file=.work/previous/$name
+            file=.work/musl/$name
             signers="release.yml@refs/heads/pi-bolt release.yml@refs/tags/$MUSL_FROM runtime.yml@refs/heads/pi-bolt"
           fi
           sum=$(sha256sum "$file" | cut -c1-64)
