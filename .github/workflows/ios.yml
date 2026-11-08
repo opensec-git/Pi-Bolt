@@ -131,20 +131,28 @@ jobs:
           xcrun simctl boot "$SIMULATOR" 2>/dev/null || true
           xcrun simctl bootstatus "$SIMULATOR" -b > /dev/null
           xcrun simctl status_bar "$SIMULATOR" override --time 9:41 --batteryState charged --batteryLevel 100 || true
+          # The runner's Simulator starts in light mode: the default theme first, set explicitly.
+          xcrun simctl ui "$SIMULATOR" appearance dark || true
           xcrun simctl uninstall "$SIMULATOR" "$id" || true
           xcrun simctl install "$SIMULATOR" "$app"
           xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
           sleep 5
           xcrun simctl io "$SIMULATOR" screenshot "$shots/1-home-empty.png"
           xcrun simctl terminate "$SIMULATOR" "$id" || true
-          # A fresh pairing link (the tests used the first one), then the debug build's autopilot pairs and prompts.
-          echo pair >> "$RUNNER_TEMP/host.cmd"
-          for _ in $(seq 1 30); do
-            grep -q '"event":"pair"' "$RUNNER_TEMP/host.log" && break
-            sleep 1
-          done
-          uri=$(grep '"event":"pair"' "$RUNNER_TEMP/host.log" | tail -n 1 | python3 -c 'import json,sys; print(json.loads(sys.stdin.readline())["uri"])')
-          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$uri" SIMCTL_CHILD_PIBOLT_AUTOPROMPT="demo: fix the flaky connect test" \
+          # A fresh pairing link for every launch that connects: this unsigned Simulator build has no Keychain
+          # entitlement, so its device key does not outlive the process and each launch pairs again (the app uses a
+          # known computer's new code to pair again when the computer refuses its key).
+          fresh() {
+            before=$(grep -c '"event":"pair"' "$RUNNER_TEMP/host.log" || true)
+            echo pair >> "$RUNNER_TEMP/host.cmd"
+            for _ in $(seq 1 30); do
+              [ "$(grep -c '"event":"pair"' "$RUNNER_TEMP/host.log" || true)" -gt "$before" ] && break
+              sleep 1
+            done
+            grep '"event":"pair"' "$RUNNER_TEMP/host.log" | tail -n 1 | python3 -c 'import json,sys; print(json.loads(sys.stdin.readline())["uri"])'
+          }
+          # The debug build's autopilot pairs, prompts and opens screens.
+          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$(fresh)" SIMCTL_CHILD_PIBOLT_AUTOPROMPT="demo: fix the flaky connect test" \
             xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
           sleep 15
           xcrun simctl io "$SIMULATOR" screenshot "$shots/2-session.png"
@@ -153,27 +161,25 @@ jobs:
           sleep 5
           xcrun simctl io "$SIMULATOR" screenshot "$shots/3-home.png"
           xcrun simctl terminate "$SIMULATOR" "$id" || true
-          # A subagent run's own conversation as the host streams it, then the review screen (the phone knows the
-          # computer now: the same link reconnects without its spent secret).
-          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$uri" SIMCTL_CHILD_PIBOLT_AUTOPROMPT="run a subagent" SIMCTL_CHILD_PIBOLT_AUTOOPEN=subagent \
+          # A subagent run's own conversation as the host streams it, then the review screen.
+          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$(fresh)" SIMCTL_CHILD_PIBOLT_AUTOPROMPT="run a subagent" SIMCTL_CHILD_PIBOLT_AUTOOPEN=subagent \
             xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
           sleep 15
           xcrun simctl io "$SIMULATOR" screenshot "$shots/4-subagent.png"
           xcrun simctl terminate "$SIMULATOR" "$id" || true
-          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$uri" SIMCTL_CHILD_PIBOLT_AUTOOPEN=review xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$(fresh)" SIMCTL_CHILD_PIBOLT_AUTOOPEN=review xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
           sleep 10
           xcrun simctl io "$SIMULATOR" screenshot "$shots/5-review.png"
           xcrun simctl terminate "$SIMULATOR" "$id" || true
           # The light theme follows the system.
           xcrun simctl ui "$SIMULATOR" appearance light || true
-          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$uri" xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$(fresh)" xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
           sleep 8
           xcrun simctl io "$SIMULATOR" screenshot "$shots/6-session-light.png"
           xcrun simctl terminate "$SIMULATOR" "$id" || true
           xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
           sleep 5
           xcrun simctl io "$SIMULATOR" screenshot "$shots/7-home-light.png"
-          xcrun simctl ui "$SIMULATOR" appearance dark || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-screenshots
