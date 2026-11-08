@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -21,6 +22,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import opensec.pibolt.app.ui.session.features2.PiJsonFile
+import opensec.pibolt.protocol.backend.ConnectionState
 import opensec.pibolt.protocol.backend.LocalBackend
 import opensec.pibolt.protocol.rpc.RpcClient
 import opensec.pibolt.protocol.session.DialogKind
@@ -61,6 +63,9 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
     private var launchedKey: String? = null
     private var stopJob: Job? = null
     private val holders = LinkedHashSet<String>()
+
+    /** Exits of the engine soon after it started, in a row: past [MAX_QUICK_EXITS] it is not restarted by itself. */
+    private var quickExits = 0
 
     /** Page closes still running, by key: a reopen waits for its close. */
     private val closing = HashMap<String, Job>()
@@ -323,6 +328,7 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
         }
         _status.value = Status.Ready
         Log.i(TAG, "page engine ready (pid ${b.pid})")
+        watchExit(b, System.currentTimeMillis())
         // A restart (the engine stopped while held): what was open opens again.
         val again = synchronized(opened) { opened.toList() }
         synchronized(opened) { opened.clear() }
@@ -330,6 +336,26 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
         // Whoever asked for it may have gone while it started (a sheet dismissed): it stops after the delay then.
         stopLaterIfIdle()
         true
+    }
+
+    /**
+     * The engine process ended by itself (not stopped here): its views go, and while pages or tiles still hold it, it
+     * starts again and reopens them. One that keeps exiting soon after starting is left stopped, with the reason shown.
+     */
+    private fun watchExit(b: LocalBackend, startedAt: Long) {
+        scope.launch {
+            val end = b.state.first { it is ConnectionState.Disconnected } as ConnectionState.Disconnected
+            val restart = mutex.withLock {
+                if (backend !== b) return@launch
+                Log.w(TAG, "page engine exited: ${end.reason} ${end.detail.orEmpty()}")
+                stopLocked()
+                quickExits = if (System.currentTimeMillis() - startedAt < QUICK_EXIT_MS) quickExits + 1 else 0
+                val again = quickExits < MAX_QUICK_EXITS && synchronized(holders) { holders.isNotEmpty() }
+                if (!again) _status.value = Status.Failed(end.detail ?: "The page engine stopped")
+                again
+            }
+            if (restart) ensureRunning()
+        }
     }
 
     private fun onEvent(event: JsonObject) {
@@ -358,5 +384,7 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
 
     companion object {
         private const val TAG = "PiBoltPages"
+        private const val QUICK_EXIT_MS = 30_000L
+        private const val MAX_QUICK_EXITS = 3
     }
 }
