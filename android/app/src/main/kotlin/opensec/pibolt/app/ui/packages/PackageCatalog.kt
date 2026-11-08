@@ -153,10 +153,12 @@ object CatalogJson {
 
     /**
      * What the package adds, by type, from its `pi` manifest and, when known, its published [files]
-     * (docs/packages.md, extensions.md, skills.md): declared files and globs as they are, declared directories (or,
-     * without a manifest, the conventional `extensions/`, `skills/`, `prompts/` and `themes/`) by Pi's discovery rules:
-     * `.ts`/`.js` files and folders with an `index.ts` as extensions, `SKILL.md` folders at any depth, `.md` prompts,
-     * `.json` themes. Then the manifest's overrides, as Pi's package manager applies them (`addManifestEntries`):
+     * (docs/packages.md), the way Pi's package manager collects them (package-manager.ts): declared files as they
+     * are; declared directories, directories a glob matches, or without a manifest the conventional `extensions/`,
+     * `skills/`, `prompts/` and `themes/`, by `collectResourceFiles`: extensions are the directory's own `index.ts`
+     * (or `index.js`), else its `.ts`/`.js` files and its folders with an index; skills are a folder's `SKILL.md`
+     * (not looking deeper) or `.md` files at the directory's top, at any depth; prompts and themes are every `.md` /
+     * `.json` below it. Dot folders and `node_modules` are skipped. Then the manifest's overrides, as Pi's package manager applies them (`addManifestEntries`):
      * `!pattern` excludes by glob (the path, its name, or a skill's folder), `+path` puts an excluded path back and
      * `-path` removes one, both exact. Without the file list, the declared paths themselves.
      */
@@ -169,6 +171,7 @@ object CatalogJson {
         }
         val out = ArrayList<AddedResource>()
         val budget = Budget()
+        val tree = Tree(files)
         for (kind in Kind.entries) {
             val entries = when (kind) {
                 Kind.Extension -> pi?.extensions
@@ -183,9 +186,12 @@ object CatalogJson {
                 val e = entry.removePrefix("./").trimEnd('/')
                 when {
                     budget.spent -> break
-                    '*' in e || '?' in e -> files.filterTo(found) { kind.accepts(it) && globMatches(e, it, budget) }
-                    e in files -> found += e
-                    else -> files.filterTo(found) { it.startsWith("$e/") && kind.discovers(it.removePrefix("$e/")) }
+                    '*' in e || '?' in e -> {
+                        tree.files.filterTo(found) { kind.accepts(it) && visible(it) && globMatches(e, it, budget) }
+                        for (dir in tree.dirs) if (visible(dir) && globMatches(e, dir, budget)) found += kind.discover(tree, dir)
+                    }
+                    e in tree.fileSet -> found += e
+                    e in tree.dirs || e.isEmpty() -> found += kind.discover(tree, e)
                 }
             }
             val enabled = applyOverrides(found.toList(), bounded.filter(::isOverride), budget)
@@ -219,6 +225,40 @@ object CatalogJson {
         }
     }
 
+    /** No segment hidden (Pi's globs and directory walks skip dot paths). */
+    private fun visible(path: String): Boolean = path.split('/').none { it.startsWith(".") }
+
+    /** The published files as directories: each directory's own files and subdirectories ("" is the root). */
+    private class Tree(published: List<String>) {
+        val files: List<String> = published.filter { it.length <= MAX_PATH && it.count { c -> c == '/' } < MAX_SEGMENTS }
+        val fileSet: Set<String> = files.toHashSet()
+        val dirs = LinkedHashSet<String>()
+        val filesIn = HashMap<String, MutableList<String>>()
+        val dirsIn = HashMap<String, MutableList<String>>()
+
+        init {
+            for (f in files) {
+                val parent = f.substringBeforeLast('/', "")
+                filesIn.getOrPut(parent) { ArrayList() } += f
+                var d = parent
+                while (d.isNotEmpty() && dirs.add(d)) {
+                    val up = d.substringBeforeLast('/', "")
+                    dirsIn.getOrPut(up) { ArrayList() } += d
+                    d = up
+                }
+            }
+        }
+
+        fun name(path: String) = path.substringAfterLast('/')
+
+        /** Subdirectories Pi walks into: not hidden, not node_modules. */
+        fun walkable(dir: String): List<String> = dirsIn[dir].orEmpty().filter { name(it) != "node_modules" && !name(it).startsWith(".") }
+
+        fun own(dir: String): List<String> = filesIn[dir].orEmpty().filter { !name(it).startsWith(".") }
+
+        fun below(dir: String): List<String> = own(dir) + walkable(dir).flatMap { below(it) }
+    }
+
     private enum class Kind(val id: String, val dir: String) {
         Extension("extension", "extensions"),
         Skill("skill", "skills"),
@@ -232,15 +272,26 @@ object CatalogJson {
             Theme -> path.endsWith(".json")
         }
 
-        /** [rel] (a path inside a declared or conventional directory) is a resource Pi discovers there. */
-        fun discovers(rel: String): Boolean {
-            val parts = rel.split('/')
-            return when (this) {
-                Extension -> accepts(rel) && (parts.size == 1 || parts.size == 2 && parts[1].substringBeforeLast('.') == "index")
-                Skill -> parts.last() == "SKILL.md"
-                Prompt -> parts.size == 1 && accepts(rel)
-                Theme -> parts.size == 1 && accepts(rel)
-            }
+        /** What Pi collects from the directory [dir] for this type (package-manager.ts `collectResourceFiles`). */
+        fun discover(tree: Tree, dir: String): List<String> = when (this) {
+            Extension -> index(tree, dir)?.let(::listOf) ?: (
+                tree.own(dir).filter { it.endsWith(".ts") || it.endsWith(".js") }.filter { accepts(it) } +
+                    tree.walkable(dir).mapNotNull { index(tree, it) }
+                )
+            Skill -> skills(tree, dir, root = true)
+            Prompt, Theme -> tree.below(dir).filter { accepts(it) }
+        }
+
+        private fun index(tree: Tree, dir: String): String? {
+            val prefix = if (dir.isEmpty()) "" else "$dir/"
+            return listOf("${prefix}index.ts", "${prefix}index.js").firstOrNull { it in tree.fileSet }
+        }
+
+        private fun skills(tree: Tree, dir: String, root: Boolean): List<String> {
+            val prefix = if (dir.isEmpty()) "" else "$dir/"
+            if ("${prefix}SKILL.md" in tree.fileSet) return listOf("${prefix}SKILL.md")
+            val loose = if (root) tree.own(dir).filter { it.endsWith(".md") } else emptyList()
+            return loose + tree.walkable(dir).flatMap { skills(tree, it, root = false) }
         }
 
         /** A directory extension and a skill go by their folder; other resources by their file name. */

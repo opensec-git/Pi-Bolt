@@ -233,6 +233,31 @@ class PackageBrowseTest {
     }
 
     @Test
+    fun discoveryFollowsPiDirectoryRules() {
+        val m = manifest("""{"name":"p","pi":{"skills":["./skills/*","./more"],"prompts":["./prompts"],"themes":["./themes"],"extensions":["./ext","./single"]}}""")
+        val files = listOf(
+            // A glob matching directories discovers inside them.
+            "skills/review/SKILL.md", "skills/review/deeper/SKILL.md", "skills/plain/notes.md",
+            // A declared skills directory: top-level .md files are skills, SKILL.md folders at any depth.
+            "more/quick.md", "more/a/b/SKILL.md", "more/.hidden/SKILL.md", "more/node_modules/x/SKILL.md",
+            // Prompts and themes are recursive.
+            "prompts/top.md", "prompts/review/security.md", "prompts/.drafts/x.md", "themes/dark/custom.json",
+            // An extension directory with subfolders; a directory with its own index is one extension.
+            "ext/a.js", "ext/tool/index.js", "ext/tool/index.ts", "ext/lib/util.ts", "single/index.ts", "single/helper.ts",
+        )
+        assertEquals(
+            listOf(
+                AddedResource("extension", "a.js"), AddedResource("extension", "tool"), AddedResource("extension", "single"),
+                // skills/plain is a matched directory, so its top-level notes.md is a skill there, as in Pi.
+                AddedResource("skill", "review"), AddedResource("skill", "notes"), AddedResource("skill", "quick"), AddedResource("skill", "b"),
+                AddedResource("prompt", "top"), AddedResource("prompt", "security"),
+                AddedResource("theme", "custom"),
+            ),
+            CatalogJson.resources(m, files),
+        )
+    }
+
+    @Test
     fun globsMatchBySegment() {
         assertTrue(CatalogJson.globMatches("res/prompts/*.md", "res/prompts/fix.md"))
         assertFalse(CatalogJson.globMatches("res/prompts/*.md", "res/prompts/sub/fix.md"))
