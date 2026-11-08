@@ -122,6 +122,29 @@ fun main(args: Array<String>) {
                             put("title", "Sure?")
                         }
                     }
+                    // A sheet of the mobile UI kit, then an update of it.
+                    "sheet" -> {
+                        respond(id, type, buildJsonObject { put("disposition", "handled") })
+                        event("extension_ui_request") {
+                            put("id", "s1")
+                            put("method", "showView")
+                            put("viewKey", "settings")
+                            put("rev", 1)
+                            putJsonObject("view") {
+                                put("v", 1)
+                                putJsonArray("body") { add(buildJsonObject { put("type", "input"); put("id", "branch"); put("label", "Branch"); put("value", "main") }) }
+                            }
+                        }
+                        event("extension_ui_request") {
+                            put("id", "u1")
+                            put("method", "updateView")
+                            put("viewKey", "settings")
+                            put("rev", 2)
+                            putJsonArray("ops") {
+                                add(buildJsonObject { put("op", "set"); put("id", "branch"); putJsonObject("props") { put("value", "next") } })
+                            }
+                        }
+                    }
                     "slow" -> Thread {
                         Thread.sleep(800)
                         respond(id, type, buildJsonObject { put("disposition", "late") })

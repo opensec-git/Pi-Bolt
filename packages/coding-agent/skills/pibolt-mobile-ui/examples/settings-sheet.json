@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "title": "Deploy settings",
+  "subtitle": "Applies to the next deploy",
+  "body": [
+    { "type": "notice", "tone": "warning", "title": "Migration pending", "text": "Turn on migrations or the deploy fails its health check." },
+    {
+      "type": "form",
+      "id": "settings",
+      "children": [
+        { "type": "input", "id": "branch", "label": "Branch", "value": "main", "required": true, "hint": "Any branch or tag" },
+        { "type": "select", "id": "region", "label": "Region", "options": [{ "value": "eu", "label": "Europe" }, { "value": "us", "label": "US" }, { "value": "ap", "label": "Asia" }], "value": "eu" },
+        { "type": "slider", "id": "replicas", "label": "Replicas", "min": 1, "max": 8, "step": 1, "value": 2 },
+        { "type": "toggle", "id": "migrate", "label": "Run migrations", "value": false },
+        { "type": "input", "id": "token", "label": "Deploy token", "kind": "password", "placeholder": "Only if it changed" }
+      ],
+      "submit": { "label": "Deploy", "action": "deploy" }
+    }
+  ],
+  "actions": [{ "type": "button", "id": "cancel", "label": "Cancel" }]
+}

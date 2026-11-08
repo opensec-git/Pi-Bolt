@@ -397,6 +397,8 @@ fun DialogSheet(
                         close { onConfirm(true) }
                     }, modifier = Modifier.weight(1f))
                 }
+                // A sheet of the mobile UI kit is a ViewSheet (views/ViewHostUi.kt), never this.
+                DialogKind.View -> {}
                 DialogKind.Input, DialogKind.Editor -> {
                     val editor = dialog.kind == DialogKind.Editor
                     var text by remember(dialog.id) { mutableStateOf(dialog.prefill.orEmpty()) }

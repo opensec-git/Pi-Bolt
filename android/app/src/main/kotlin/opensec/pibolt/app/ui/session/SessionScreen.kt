@@ -1,5 +1,13 @@
 package opensec.pibolt.app.ui.session
 
+import opensec.pibolt.protocol.session.DialogKind
+import androidx.compose.runtime.SideEffect
+import opensec.pibolt.app.ui.session.views.LocalViewHost
+import opensec.pibolt.app.ui.session.views.ViewHostUi
+import opensec.pibolt.app.ui.session.views.ViewPanels
+import opensec.pibolt.app.ui.session.views.ViewPageSheet
+import opensec.pibolt.app.ui.session.views.ViewSheet
+import opensec.pibolt.protocol.session.MobileViews
 import kotlinx.coroutines.flow.update
 import android.Manifest
 import android.net.Uri
@@ -577,6 +585,18 @@ internal fun SessionContent(
     // Changes only when a todo result or a run boundary changes the list.
     val todos by remember { derivedStateOf { state.value.todos } }
     val firstDialog by remember { derivedStateOf { state.value.dialogs.firstOrNull() } }
+    // The mobile UI kit: extensions' views, drawn natively (views/ViewUi.kt). Their events go to Pi as they happen.
+    val viewHost = remember(controller) { ViewHostUi { key, node, kind, value, values -> controller.viewEvent(key, node, kind, value, values) } }
+    val views by remember { derivedStateOf { state.value.views } }
+    SideEffect {
+        if (viewHost.views !== views) {
+            viewHost.views = views
+            viewHost.prune()
+        }
+    }
+    val panels by remember { derivedStateOf { views.values.filter { it.slot == MobileViews.SLOT_PANEL } } }
+    val pages by remember { derivedStateOf { views.values.filter { it.slot == MobileViews.SLOT_PAGE } } }
+    var openPage by remember { mutableStateOf<String?>(null) }
     val empty by remember(memory) { derivedStateOf { state.value.hello && state.value.items.isEmpty() && state.value.streaming.isEmpty() && !state.value.isRunning && memory.pending.value == null } }
 
     val modelReadsImages by remember { derivedStateOf { state.value.model?.acceptsImages } }
@@ -1073,6 +1093,8 @@ internal fun SessionContent(
                 onRename = { sheet = Sheet.Rename },
                 onSearch = { searching = true },
                 onExport = { sheet = Sheet.Export },
+                pages = pages.map { it.key to (it.view.title ?: it.key) },
+                onPage = { openPage = it },
                 onResume = ::openResume,
                 onFork = ::openFork,
                 onClone = controller::cloneSession,
@@ -1100,7 +1122,7 @@ internal fun SessionContent(
                 if (!hello) {
                     LoadingState(title, linkState.value, local = local != null, onRetry = local?.onRestart ?: controller::retryNow, chat = chat)
                 } else {
-                    CompositionLocalProvider(LocalTurnReview provides review, LocalPlainChat provides chat) {
+                    CompositionLocalProvider(LocalTurnReview provides review, LocalPlainChat provides chat, LocalViewHost provides viewHost) {
                         Transcript(
                             state = state,
                             memory = memory,
@@ -1159,7 +1181,7 @@ internal fun SessionContent(
                             todoNow = now?.let { todoText(it, running) },
                             queued = queue.size,
                             asking = askingTitle,
-                            extras = extras.size,
+                            extras = extras.size + panels.size,
                             onExpand = {
                                 if (askingTitle != null && !imeVisible) {
                                     memory.hiddenDialog.value = null
@@ -1170,6 +1192,7 @@ internal fun SessionContent(
                             },
                         )
                     } else {
+                        ViewPanels(viewHost, panels, maxHeight = windowHeight * 0.4f)
                         StatusExtras(extras)
                         TodoPanel(todos, running, autoCollapse = !running || windowHeight < 560.dp, quiet = status.value.visible && statusOnScreen)
                         if (local != null && parts.preview) PreviewChipRow(local.onPreview, Modifier.padding(horizontal = Space.page))
@@ -1320,7 +1343,16 @@ internal fun SessionContent(
                 )
             }
         }
-    } else firstDialog?.let { dialog ->
+    } else firstDialog?.takeIf { it.kind == DialogKind.View }?.let { dialog ->
+        key(dialog.id) {
+            ViewSheet(
+                dialog = dialog,
+                onAnswer = { node, values -> controller.answerView(dialog.id, node, values) },
+                onCancel = { controller.cancelDialog(dialog.id) },
+                onEvent = { key, node, kind, value, values -> controller.viewEvent(key, node, kind, value, values) },
+            )
+        }
+    } ?: firstDialog?.let { dialog ->
         val shownAt = remember(dialog.id) { memory.dialogShownAt.getOrPut(dialog.id) { SystemClock.uptimeMillis() } }
         if (memory.hiddenDialog.value != dialog.id) {
             key(dialog.id) {
@@ -1335,6 +1367,11 @@ internal fun SessionContent(
                 )
             }
         }
+    }
+
+    openPage?.let { key ->
+        val entry = views[key]
+        if (entry == null) openPage = null else ViewPageSheet(viewHost, entry, onClose = { openPage = null })
     }
 
     VoiceRationale(voice)

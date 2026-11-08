@@ -19,6 +19,7 @@ import opensec.pibolt.protocol.session.SessionReducer
 import opensec.pibolt.app.ui.session.subagent.SubagentFormat
 import opensec.pibolt.protocol.session.Subagent
 import opensec.pibolt.protocol.session.SubagentNoticeItem
+import opensec.pibolt.protocol.session.ViewEntry
 import opensec.pibolt.protocol.session.SubagentReducer
 import opensec.pibolt.protocol.session.SubagentStatus
 import opensec.pibolt.protocol.session.ThinkingItem
@@ -54,6 +55,7 @@ sealed interface TRow {
         is SubagentNoticeRow -> 12
         is TurnMetaRow -> 13
         is SourcesRow -> 14
+        is ViewRow -> 15
     }
 }
 
@@ -129,6 +131,10 @@ data class SourcesRow(
     override val live: Boolean,
     val rail: Rail? = null,
 ) : TRow
+
+/** An inline view of the mobile UI kit (docs/mobile-ui.md), drawn from the session's views by [viewKey]. */
+@Immutable
+data class ViewRow(override val key: String, val viewKey: String, override val live: Boolean) : TRow
 
 @Immutable
 
@@ -370,6 +376,8 @@ object TranscriptModel {
         subagents: Map<String, Subagent> = emptyMap(),
         /** False: `Agent` calls stay plain tool rows (inside a subagent's own transcript). */
         agentCards: Boolean = true,
+        /** Inline views of the mobile UI kit, placed by their anchors ([placeViews]). */
+        inline: List<ViewEntry> = emptyList(),
     ): List<TRow> {
         val agents = Agents(subagents, agentCards, openGroups)
         val out = ArrayList<TRow>(items.size + 8)
@@ -377,6 +385,7 @@ object TranscriptModel {
         val starts = ArrayList<Int>()
         starts += 0
         for (i in items.indices) if (items[i] is UserItem && i > 0) starts += i
+        val viewTurns = viewTurns(items, starts, inline)
         for ((t, start) in starts.withIndex()) {
             val end = if (t + 1 < starts.size) starts[t + 1] else items.size
             if (start >= end) continue
@@ -444,6 +453,7 @@ object TranscriptModel {
                 }
             }
             markTitle(out, turnRowsFrom)
+            viewTurns[t]?.let { placeViews(out, turnRowsFrom, it, liveTurn && isLast) }
             if (isLast && !live && pending == null) {
                 val reply = (lastStep + 1 until end).mapNotNull { (items[it] as? AssistantTextItem)?.text?.trim()?.takeIf(String::isNotEmpty) }
                 if (reply.isNotEmpty()) {
@@ -452,6 +462,8 @@ object TranscriptModel {
                 }
             }
         }
+        // Views whose anchor is not in the transcript (an older part, or none): at its end.
+        viewTurns[-1]?.forEach { out += ViewRow("view:${it.key}", it.key, liveTurn) }
         if (pending != null) {
             if (out.isNotEmpty()) out += GapRow("pending:${pending.id}")
             out += PendingUserRow(pending)
@@ -681,6 +693,35 @@ object TranscriptModel {
                 val known = if (agents == null) emptyList() else item.runKeys.mapNotNull { key -> agents.runs[key]?.let(agents::strip) }
                 out += SubagentNoticeRow(item, known, live, known.map { agents?.slot(it.key) ?: 0 })
             }
+        }
+    }
+
+    /**
+     * The turn (index into [starts]) of each inline view: the turn holding its tool call, or the one whose user message
+     * has its [ViewEntry.turn] timestamp; -1 when neither is in [items].
+     */
+    private fun viewTurns(items: List<ChatItem>, starts: List<Int>, inline: List<ViewEntry>): Map<Int, List<ViewEntry>> {
+        if (inline.isEmpty()) return emptyMap()
+        fun turnOf(index: Int): Int = starts.indexOfLast { it <= index }
+        return inline.groupBy { view ->
+            val at = when {
+                view.toolCallId != null -> items.indexOfFirst { it is ToolItem && it.toolCallId == view.toolCallId }
+                view.turn != null -> items.indexOfFirst { it is UserItem && it.timestamp == view.turn }
+                else -> -1
+            }
+            if (at < 0) -1 else turnOf(at)
+        }
+    }
+
+    /**
+     * Puts a turn's inline views among its rows (from [from]): under the row of the tool call they name, when the turn
+     * shows it; else at the end of the turn, where folded turns keep them visible too.
+     */
+    private fun placeViews(out: MutableList<TRow>, from: Int, views: List<ViewEntry>, live: Boolean) {
+        for (view in views) {
+            val row = ViewRow("view:${view.key}", view.key, live)
+            val tool = view.toolCallId?.let { id -> (from until out.size).lastOrNull { (out[it] as? ToolRow)?.item?.toolCallId == id } }
+            if (tool != null) out.add(tool + 1, row) else out += row
         }
     }
 

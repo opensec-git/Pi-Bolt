@@ -5,6 +5,8 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
 import { setCapabilityOverrides, ttiTrace } from "@earendil-works/pi-tui";
 import chalk from "chalk";
@@ -30,10 +32,19 @@ import { loadDoctor } from "./cli/doctor.lazy.ts";
 import { processFileArguments } from "./cli/file-processor.ts";
 import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
+import { loadMobileUiCommand } from "./cli/mobile-ui.lazy.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
-import { COMMAND_NAME, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
+import {
+	COMMAND_NAME,
+	ENV_SESSION_DIR,
+	expandTildePath,
+	getAgentDir,
+	getBundledSkillsDir,
+	getPackageDir,
+	VERSION,
+} from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
@@ -658,6 +669,11 @@ export async function main(args: string[], options?: MainOptions) {
 		process.exit(await runDoctor(args.slice(1), { cwd, agentDir, extensionFactories }));
 	}
 
+	if (args[0] === "mobile-ui") {
+		const { runMobileUiCommand } = await loadMobileUiCommand();
+		process.exit(await runMobileUiCommand(args.slice(1)));
+	}
+
 	if (args[0] === "mcp") {
 		const { runMcpCommand } = await loadMcpCommand();
 		process.exitCode = await runMcpCommand(args.slice(1), { cwd, agentDir });
@@ -828,7 +844,11 @@ export async function main(args: string[], options?: MainOptions) {
 	const projectTrustByCwd = new Map<string, boolean>();
 
 	const resolvedExtensionPaths = resolveCliPaths(cwd, parsed.extensions);
-	const resolvedSkillPaths = resolveCliPaths(cwd, parsed.skills);
+	// Pi-Bolt's own skills (pibolt-mobile-ui: write a package's mobile UI), unless skills are off.
+	const bundledSkill = join(getBundledSkillsDir(), "pibolt-mobile-ui");
+	const cliSkillPaths = resolveCliPaths(cwd, parsed.skills);
+	const resolvedSkillPaths =
+		PIBOLT && !parsed.noSkills && existsSync(bundledSkill) ? [...(cliSkillPaths ?? []), bundledSkill] : cliSkillPaths;
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
 	// Loaded only for `--acp` and `--mcp`: other modes never load their code.

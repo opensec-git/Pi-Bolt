@@ -696,19 +696,29 @@ If the run is aborted while `agent_before_settle` handlers are running, valid re
 
 #### ui_prompt_start / ui_prompt_end
 
-Notification-only lifecycle events for blocking user-facing extension UI prompts. They fire around `ctx.ui.select()`, `ctx.ui.confirm()`, `ctx.ui.input()`, `ctx.ui.editor()`, and `ctx.ui.custom()` so host/status integrations can report "waiting for user" instead of just "running".
+Notification-only lifecycle events for blocking user-facing extension UI prompts. They fire around `ctx.ui.select()`, `ctx.ui.confirm()`, `ctx.ui.input()`, `ctx.ui.editor()`, `ctx.ui.custom()`, and `ctx.ui.showView()` so host/status integrations can report "waiting for user" instead of just "running".
 
 Nested or overlapping prompts are coalesced into one outer waiting span. Handlers are invoked best-effort and are not awaited before showing or closing the prompt.
 
 ```typescript
 pi.on("ui_prompt_start", async (event, ctx) => {
   // event.reason === "ui_prompt"
-  // event.kind: "select" | "confirm" | "input" | "editor" | "custom"
+  // event.kind: "select" | "confirm" | "input" | "editor" | "custom" | "view"
   // event.title: prompt title when available
 });
 
 pi.on("ui_prompt_end", async (event, ctx) => {
   // Pi is no longer waiting on that UI prompt span.
+});
+```
+
+#### view_event
+
+A tap, committed field value or form submit in a [view](mobile-ui.md), after Pi checked it against the view.
+
+```typescript
+pi.on("view_event", async (event, ctx) => {
+  // event.key, event.id (node), event.action, event.kind: "tap" | "change" | "submit", event.value, event.values
 });
 ```
 
@@ -2796,6 +2806,10 @@ The built-in MCP support connects registered servers. When nothing does, because
 
 Extensions can interact with users via `ctx.ui` methods and customize how messages/tools render.
 
+For a UI in the Pi-Bolt app (cards, lists, progress, buttons, forms that look native on the phone and show as text in
+the terminal), use views: `ctx.ui.setView()`, `updateView()`, `showView()` and the `view_event` event. See
+[Mobile UI Kit](mobile-ui.md).
+
 For custom components, focus, overlays, themes, and rendering performance, see [Terminal UI](tui.md). The examples it lists show selection lists, settings toggles, cancellable loaders, footers, and widgets.
 
 ### Dialogs
@@ -3242,7 +3256,7 @@ const highlighted = highlightCode(code, lang);
 | Mode | `ctx.mode` | `ctx.hasUI` | Notes |
 |------|------------|-------------|-------|
 | Interactive | `"tui"` | `true` | Full TUI with terminal rendering |
-| RPC (`--mode rpc`) | `"rpc"` | `true` | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`, component factories are ignored. See [RPC Extension UI](rpc-extension-ui.md) |
+| RPC (`--mode rpc`) | `"rpc"` | `true` | Dialogs and notifications via JSON protocol; `custom()` returns `undefined`, component factories are ignored; [views](mobile-ui.md) render natively in clients with the kit. See [RPC Extension UI](rpc-extension-ui.md) |
 | JSON (`--mode json`) | `"json"` | `false` | Event stream to stdout; UI methods are no-ops |
 | Print (`-p`) | `"print"` | `false` | Extensions run but can't prompt |
 
@@ -3306,6 +3320,7 @@ All examples in [examples/extensions/](../examples/extensions/).
 | `modal-editor.ts` | Vim-style modal editor | `setEditorComponent`, `CustomEditor` |
 | `rainbow-editor.ts` | Custom editor styling | `setEditorComponent` |
 | `widget-placement.ts` | Widget above/below editor | `setWidget` |
+| `mobile-ui-board/` | Task board with a native UI in the Pi-Bolt app and text in the terminal | `setView`, `updateView`, `showView`, `view_event` |
 | `overlay-test.ts` | Overlay components | `ui.custom` with overlay options |
 | `overlay-qa-tests.ts` | Comprehensive overlay tests | `ui.custom`, all overlay options |
 | `notify.ts` | Native terminal notification when the agent is done | `on("agent_settled")` |

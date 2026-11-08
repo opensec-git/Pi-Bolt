@@ -139,7 +139,7 @@ describe("remote control subagent streams", () => {
 		const { connect } = await setup();
 		const phone = await connect();
 		const hello = await phone.waitFor((message) => message.type === "remote_hello");
-		expect(hello.features).toEqual([SUBAGENT_STREAM_FEATURE]);
+		expect(hello.features).toContain(SUBAGENT_STREAM_FEATURE);
 	});
 
 	it("streams a running subagent: its saved messages, then its thinking and text as they stream", async () => {

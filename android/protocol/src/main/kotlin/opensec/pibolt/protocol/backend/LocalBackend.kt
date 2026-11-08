@@ -1,5 +1,6 @@
 package opensec.pibolt.protocol.backend
 
+import opensec.pibolt.protocol.session.MobileViews
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -445,6 +446,16 @@ class LocalBackend(
             synchronized(lock) { dialogs.remove(id) }
         }
 
+        /** Applies [update] (`updateView`) to the open sheet it names, if any. Called under [lock]. */
+        private fun updateSheet(update: JsonObject) {
+            val key = update.str("viewKey") ?: return
+            val (id, sheet) = dialogs.entries.firstOrNull { it.value.str("method") == "showView" && it.value.str("viewKey") == key } ?: return
+            val view = sheet.obj("view") ?: return
+            val applied = MobileViews.applyOps(view, update.arr("ops") ?: return) ?: return
+            val rev = update["rev"] ?: return
+            dialogs[id] = JsonObject(sheet + mapOf("view" to applied, "rev" to rev))
+        }
+
         fun park() {
             synchronized(lock) { holding = true }
             delivered = false
@@ -564,8 +575,10 @@ class LocalBackend(
                 }
             }
             when (message.type) {
-                "extension_ui_request" -> if (message.str("method") in DIALOG_METHODS) {
-                    message.str("id")?.let { synchronized(lock) { dialogs[it] = message } }
+                "extension_ui_request" -> when (message.str("method")) {
+                    in DIALOG_METHODS -> message.str("id")?.let { synchronized(lock) { dialogs[it] = message } }
+                    // An open sheet's update: the snapshot of a reopened session shows it as it is now.
+                    "updateView" -> synchronized(lock) { updateSheet(message) }
                 }
                 "extension_ui_dismissed" -> message.str("id")?.let(::dialogClosed)
             }
@@ -682,7 +695,7 @@ class LocalBackend(
         private fun processId(process: Process): Long? =
             runCatching { process.javaClass.getMethod("pid").invoke(process) as Long }.getOrNull()
                 ?: runCatching { process.javaClass.getDeclaredField("pid").apply { isAccessible = true }.getInt(process).toLong() }.getOrNull()
-        private val DIALOG_METHODS = setOf("select", "confirm", "input", "editor")
+        private val DIALOG_METHODS = setOf("select", "confirm", "input", "editor", "showView")
         private val KEEP_WHILE_HOLDING = setOf("response", "extension_ui_request", "extension_ui_dismissed")
         private const val REQUEST_TIMEOUT_MS = 30_000L
 
