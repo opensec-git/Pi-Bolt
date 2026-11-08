@@ -38,7 +38,7 @@ if [ -n "$ICU" ]; then
 	[ -n "$ICU_VERSION" ] && [ -n "$ICU_SHA256" ] || die "no ICU_VERSION and ICU_SHA256 in $sysroot_script"
 	work=$(mktemp -d)
 	log "ICU $ICU_VERSION, static, into /usr"
-	curl -fsSL "https://github.com/unicode-org/icu/releases/download/release-${ICU_VERSION}/icu4c-${ICU_VERSION}-sources.tgz" -o "$work/icu.tgz"
+	curl -fsSL --retry 5 --retry-all-errors "https://github.com/unicode-org/icu/releases/download/release-${ICU_VERSION}/icu4c-${ICU_VERSION}-sources.tgz" -o "$work/icu.tgz"
 	echo "$ICU_SHA256  $work/icu.tgz" | sha256sum -c - >/dev/null
 	tar -xzf "$work/icu.tgz" -C "$work"
 	# (-march=nehalem: Bun's and WebKit's floor on x86-64, as in the sysroot.)
