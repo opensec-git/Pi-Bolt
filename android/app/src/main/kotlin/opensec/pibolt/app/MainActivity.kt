@@ -25,7 +25,7 @@ class MainActivity : ComponentActivity() {
     /** A pairing link from a deep link, waiting for the UI to pick it up. */
     private var pendingLink by mutableStateOf<String?>(null)
 
-    /** A package to review and install (`pibolt://install?source=…`, a pi.dev package page), waiting for its sheet. */
+    /** A package to review and install (a `pibolt://install?source=…` link), waiting for its sheet. */
     private var pendingInstall by mutableStateOf<String?>(null)
 
     /** Files, images or text shared from another app, waiting for the share sheet. */

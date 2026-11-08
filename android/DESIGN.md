@@ -722,7 +722,8 @@ was found; "What it adds" (an `F2Row` per extension, skill, prompt and theme: Ex
 ChatBubbleOutline, Palette); "Links" (Repository, pi.dev; an open glyph trails); with a project in context, "Install
 for" All projects | This project (48dp; this project needs the project trusted, else a meta line says to trust it
 first); the trust warning, or the install's progress (`LoadingRow`), success notice or error log; then Cancel and
-Install (Done once installed). Nothing installs before Install is tapped.
+Install (Done once installed). Nothing installs before Install is tapped. pi.dev pages are not an app link (pi.dev
+cannot be verified for Pi-Bolt), so they open in the browser; sharing one to Pi-Bolt is the way in.
 
 **Provider sheet (first run and Add provider).** Opens by itself once, 450 ms after the first frame of Home, when no
 provider has a key. First run: the bolt on a 56dp glass disc, then "Connect a model" (largeTitle) and one line ("Pi-Bolt
