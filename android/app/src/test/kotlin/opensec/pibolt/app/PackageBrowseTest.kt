@@ -211,6 +211,28 @@ class PackageBrowseTest {
     }
 
     @Test
+    fun manifestOverridesApplyLikePi() {
+        val m = manifest(
+            """{"name":"p","pi":{"prompts":["./prompts","!./prompts/internal.md","!draft-*.md","+prompts/draft-keep.md"],
+               "skills":["./skills","!old","-skills/gone"],"extensions":["./ext","-ext/b.ts"]}}""",
+        )
+        val files = listOf(
+            "prompts/fix.md", "prompts/internal.md", "prompts/draft-a.md", "prompts/draft-keep.md",
+            "skills/review/SKILL.md", "skills/old/SKILL.md", "skills/gone/SKILL.md",
+            "ext/a.ts", "ext/b.ts",
+        )
+        assertEquals(
+            listOf(AddedResource("extension", "a.ts"), AddedResource("skill", "review"), AddedResource("prompt", "fix"), AddedResource("prompt", "draft-keep")),
+            CatalogJson.resources(m, files),
+        )
+        // Without the file list, only the source entries are listed.
+        assertEquals(
+            listOf(AddedResource("extension", "ext"), AddedResource("skill", "skills"), AddedResource("prompt", "prompts")),
+            CatalogJson.resources(m, null),
+        )
+    }
+
+    @Test
     fun globsMatchBySegment() {
         assertTrue(CatalogJson.globMatches("res/prompts/*.md", "res/prompts/fix.md"))
         assertFalse(CatalogJson.globMatches("res/prompts/*.md", "res/prompts/sub/fix.md"))

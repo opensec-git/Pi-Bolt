@@ -156,14 +156,15 @@ object CatalogJson {
      * (docs/packages.md, extensions.md, skills.md): declared files and globs as they are, declared directories (or,
      * without a manifest, the conventional `extensions/`, `skills/`, `prompts/` and `themes/`) by Pi's discovery rules:
      * `.ts`/`.js` files and folders with an `index.ts` as extensions, `SKILL.md` folders at any depth, `.md` prompts,
-     * `.json` themes. Without the file list, the declared paths themselves.
+     * `.json` themes. Then the manifest's overrides, as Pi's package manager applies them (`addManifestEntries`):
+     * `!pattern` excludes by glob (the path, its name, or a skill's folder), `+path` puts an excluded path back and
+     * `-path` removes one, both exact. Without the file list, the declared paths themselves.
      */
     fun resources(manifest: PackageManifest, files: List<String>?): List<AddedResource> {
         val pi = manifest.pi?.takeIf { !it.isEmpty }
         if (files == null) {
             pi ?: return emptyList()
-            fun declared(kind: String, entries: List<String>) = entries.filter { !it.startsWith("!") && !it.startsWith("-") }
-                .map { AddedResource(kind, it.removePrefix("+").removePrefix("./")) }
+            fun declared(kind: String, entries: List<String>) = entries.filterNot(::isOverride).map { AddedResource(kind, it.removePrefix("./")) }
             return declared("extension", pi.extensions) + declared("skill", pi.skills) + declared("prompt", pi.prompts) + declared("theme", pi.themes)
         }
         val out = ArrayList<AddedResource>()
@@ -176,9 +177,10 @@ object CatalogJson {
                 Kind.Theme -> pi?.themes
             } ?: if (pi == null) listOf(kind.dir) else emptyList()
             val found = LinkedHashSet<String>()
-            for (entry in entries.take(MAX_ENTRIES)) {
-                if (entry.startsWith("!") || entry.startsWith("-")) continue
-                val e = entry.removePrefix("+").removePrefix("./").trimEnd('/')
+            val bounded = entries.take(MAX_ENTRIES)
+            for (entry in bounded) {
+                if (isOverride(entry)) continue
+                val e = entry.removePrefix("./").trimEnd('/')
                 when {
                     budget.spent -> break
                     '*' in e || '?' in e -> files.filterTo(found) { kind.accepts(it) && globMatches(e, it, budget) }
@@ -186,9 +188,35 @@ object CatalogJson {
                     else -> files.filterTo(found) { it.startsWith("$e/") && kind.discovers(it.removePrefix("$e/")) }
                 }
             }
-            found.map { kind.label(it) }.distinct().mapTo(out) { AddedResource(kind.id, it) }
+            val enabled = applyOverrides(found.toList(), bounded.filter(::isOverride), budget)
+            enabled.map { kind.label(it) }.distinct().mapTo(out) { AddedResource(kind.id, it) }
         }
         return out
+    }
+
+    private fun isOverride(entry: String): Boolean = entry.startsWith("!") || entry.startsWith("+") || entry.startsWith("-")
+
+    /** [paths] after `!glob` exclusions, `+path` re-inclusions and `-path` exclusions (package-manager.ts applyPatterns). */
+    private fun applyOverrides(paths: List<String>, overrides: List<String>, budget: Budget): List<String> {
+        if (overrides.isEmpty()) return paths
+        fun norm(p: String) = p.removePrefix("./").trimEnd('/')
+        val excludes = overrides.filter { it.startsWith("!") }.map { norm(it.drop(1)) }
+        val forceIn = overrides.filter { it.startsWith("+") }.map { norm(it.drop(1)) }.toSet()
+        val forceOut = overrides.filter { it.startsWith("-") }.map { norm(it.drop(1)) }.toSet()
+        // A skill is also matched by its folder (its path and its name).
+        fun names(path: String): List<String> {
+            val own = listOf(path, path.substringAfterLast('/'))
+            if (path.substringAfterLast('/') != "SKILL.md" || '/' !in path) return own
+            val dir = path.substringBeforeLast('/')
+            return own + listOf(dir, dir.substringAfterLast('/'))
+        }
+        fun exact(path: String, set: Set<String>) = path in set || path.substringAfterLast('/') == "SKILL.md" && path.substringBeforeLast('/', "") in set
+        return paths.filter { path ->
+            var on = excludes.none { pattern -> names(path).any { globMatches(pattern, it, budget) } }
+            if (exact(path, forceIn)) on = true
+            if (exact(path, forceOut)) on = false
+            on
+        }
     }
 
     private enum class Kind(val id: String, val dir: String) {
