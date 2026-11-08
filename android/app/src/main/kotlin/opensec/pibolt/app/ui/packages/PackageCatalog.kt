@@ -187,6 +187,8 @@ object CatalogJson {
         val out = ArrayList<AddedResource>()
         val budget = Budget()
         val tree = Tree(files)
+        // A file tree too large to index (a hostile or huge package): show the declared paths instead.
+        if (tree.overflow) return resources(manifest, null)
         for (kind in Kind.entries) {
             val entries = when (kind) {
                 Kind.Extension -> pi?.extensions
@@ -251,12 +253,24 @@ object CatalogJson {
         val filesIn = HashMap<String, MutableList<String>>()
         val dirsIn = HashMap<String, MutableList<String>>()
 
+        /** More directories (or characters of them) than [MAX_DIRS] / [MAX_DIR_CHARS]: the index stopped, no preview. */
+        var overflow = false
+            private set
+
         init {
+            var chars = 0L
             for (f in files) {
+                if (overflow) break
                 val parent = f.substringBeforeLast('/', "")
                 filesIn.getOrPut(parent) { ArrayList() } += f
                 var d = parent
-                while (d.isNotEmpty() && dirs.add(d)) {
+                while (d.isNotEmpty() && d !in dirs) {
+                    chars += d.length
+                    if (dirs.size >= MAX_DIRS || chars > MAX_DIR_CHARS) {
+                        overflow = true
+                        break
+                    }
+                    dirs.add(d)
                     val up = d.substringBeforeLast('/', "")
                     dirsIn.getOrPut(up) { ArrayList() } += d
                     d = up
@@ -463,6 +477,8 @@ object CatalogJson {
 
     private const val MAX_GLOB = 300
     private const val MAX_BRACES = 32
+    private const val MAX_DIRS = 5_000
+    private const val MAX_DIR_CHARS = 1_000_000L
     private const val MAX_PATH = 1000
     private const val MAX_SEGMENTS = 64
 

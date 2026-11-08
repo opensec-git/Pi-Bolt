@@ -298,6 +298,14 @@ class PackageBrowseTest {
         assertEquals(emptyList<AddedResource>(), CatalogJson.resources(m, files))
     }
 
+    @Test(timeout = 10_000)
+    fun aHugeFileTreeFallsBackToTheDeclaredPaths() {
+        // 10k files under distinct 61-level chains would be ~600k directories: the index stops and lists the manifest.
+        val m = manifest("""{"name":"p","pi":{"themes":["./themes"]}}""")
+        val files = List(10_000) { i -> (1..60).joinToString("/") { "d$i" } + "/f.json" }
+        assertEquals(listOf(AddedResource("theme", "themes")), CatalogJson.resources(m, files))
+    }
+
     @Test
     fun resourcesFromConventionalDirectories() {
         val m = manifest("""{"name":"p"}""")
