@@ -16,6 +16,6 @@ export const BUNDLED_SKILLS: readonly BundledSkill[] = [
 		dir: "pibolt-mobile-ui",
 		name: "pibolt-mobile-ui",
 		description:
-			"Give a Pi package or extension a native-looking UI in the Pi-Bolt mobile app (cards, lists, progress, buttons, forms) with the mobile UI kit, keeping a text fallback for the terminal. Use when asked to add a mobile or app UI, a panel, a status card or a settings sheet to an extension.",
+			"Give a Pi package or extension a native-looking UI in the Pi-Bolt mobile app (cards, lists, progress, buttons, forms, charts, tables, places, package pages and Home tiles) with the mobile UI kit, keeping a text fallback for the terminal. Use when asked to add a mobile or app UI, a panel, a status card, a chart or dashboard, a settings sheet or a Home widget to an extension.",
 	},
 ];
