@@ -5,6 +5,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { AgentSessionRuntime } from "../../../src/core/agent-session-runtime.ts";
 import { restoreStdout } from "../../../src/core/output-guard.ts";
+import type * as Jsonl from "../../../src/modes/rpc/jsonl.ts";
 import { runRpcMode } from "../../../src/modes/rpc/rpc-mode.ts";
 import { createHarness, type Harness } from "../harness.ts";
 
@@ -14,7 +15,7 @@ import { createHarness, type Harness } from "../harness.ts";
 const rpcInput = vi.hoisted(() => ({ lineHandler: undefined as ((line: string) => void) | undefined }));
 
 vi.mock("../../../src/modes/rpc/jsonl.js", async (importOriginal) => ({
-	...(await importOriginal<typeof import("../../../src/modes/rpc/jsonl.ts")>()),
+	...(await importOriginal<typeof Jsonl>()),
 	attachJsonlLineReader: vi.fn((_stream: NodeJS.ReadableStream, onLine: (line: string) => void) => {
 		rpcInput.lineHandler = onLine;
 		return () => {
