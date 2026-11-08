@@ -141,7 +141,7 @@ unique within the view). Any node may set `hidden: true`.
 - `values` are numbers or `null` (a gap). Every series has the same number of values, and `labels` (the x axis, such as
   dates) has that many too when it is given.
 - `unit` is shown after numbers (`"ms"`, `"%"`, `" builds"`). `min` and `max` fix the y range; otherwise it is the data's
-  range, from 0 for `bar` and `area` unless a value is negative.
+  range, which for `bar` and `area` always includes 0.
 - `summary` is what TalkBack reads. Without it the app says the kind, the title and per series its last, lowest and
   highest value (`"Line chart, Build time: last 41 s, low 38 s, high 52 s"`).
 - A `sparkline` has one series.

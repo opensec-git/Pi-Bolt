@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runViewDialogs, type ViewDialogs } from "../src/core/mobile-ui/dialogs.ts";
 import { type ViewChannel, ViewHost, type ViewRequest, type ViewShowRequest } from "../src/core/mobile-ui/host.ts";
 import { applyViewOps } from "../src/core/mobile-ui/ops.ts";
-import { chartSummary, cleanText, sortedRows, viewToLines } from "../src/core/mobile-ui/text.ts";
+import { chartRange, chartSummary, cleanText, sortedRows, viewToLines } from "../src/core/mobile-ui/text.ts";
 import type { MobileView, MobileViewChart, MobileViewTable, ViewEvent } from "../src/core/mobile-ui/types.ts";
 import { validateTile, validateView } from "../src/core/mobile-ui/validate.ts";
 
@@ -971,6 +971,14 @@ describe("mobile UI charts, tables and places", () => {
 			series: [{ name: "main", values: [52, 41, null] }],
 		};
 		expect(chartSummary(chart)).toBe("Line chart, Build time: last 41 s, low 41 s, high 52 s");
+		expect(chartRange({ type: "chart", kind: "bar", series: [{ name: "a", values: [-5, -2] }] })).toEqual({
+			min: -5,
+			max: 0,
+		});
+		expect(chartRange({ type: "chart", kind: "line", series: [{ name: "a", values: [-5, -2] }] })).toEqual({
+			min: -5,
+			max: -2,
+		});
 		expect(chartSummary({ ...chart, summary: "Faster" })).toBe("Faster");
 		const table: MobileViewTable = {
 			type: "table",

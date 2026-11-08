@@ -100,12 +100,16 @@ export function formatNumber(value: number, unit: string | undefined): string {
 	return unit ? `${text}${/^[%\s]/.test(unit) ? "" : " "}${cleanText(unit)}` : text;
 }
 
-/** The y range of a chart: `min`/`max` when given, else the data's (from 0 for bar and area unless negative). */
+/** The y range of a chart: `min`/`max` when given, else the data's (including 0 for bar and area). */
 export function chartRange(chart: MobileViewChart): { min: number; max: number } {
 	const values = chart.series.flatMap((series) => series.values.filter((v): v is number => v !== null));
 	let min = chart.min ?? (values.length > 0 ? Math.min(...values) : 0);
 	let max = chart.max ?? (values.length > 0 ? Math.max(...values) : 1);
-	if (chart.min === undefined && (chart.kind === "bar" || chart.kind === "area")) min = Math.min(0, min);
+	// Bars and areas grow from zero: the range always includes it (above all-negative data too).
+	if (chart.kind === "bar" || chart.kind === "area") {
+		if (chart.min === undefined) min = Math.min(0, min);
+		if (chart.max === undefined) max = Math.max(0, max);
+	}
 	if (max <= min) max = min + 1;
 	return { min, max };
 }

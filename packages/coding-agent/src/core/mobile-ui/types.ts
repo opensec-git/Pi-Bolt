@@ -168,7 +168,7 @@ export interface MobileViewChart extends NodeBase {
 	labels?: string[];
 	unit?: string;
 	title?: string;
-	/** Fix the y range; otherwise the data's range (from 0 for bar and area). */
+	/** Fix the y range; otherwise the data's range (including 0 for bar and area). */
 	min?: number;
 	max?: number;
 	/** What screen readers say; derived from the data when absent. */
