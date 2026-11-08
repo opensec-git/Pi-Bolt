@@ -32,6 +32,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import opensec.pibolt.app.MainActivity
 import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.engine.EngineProvider
@@ -79,11 +82,14 @@ fun ProviderLoginSheet(provider: EngineProvider, method: String = "oauth", onDon
             openCustomTab(context, url)
         }
     }
-    LaunchedEffect(state.finished) {
-        if (state.succeeded) {
+    // Watched apart from [state], which stops while the browser tab is in front: the end of the flow brings the app
+    // back from there.
+    LaunchedEffect(login) {
+        val end = withContext(Dispatchers.Default) {
+            login.state.first { it.finished }.also { if (it.succeeded && opened != null) bringToFront(context) }
+        }
+        if (end.succeeded) {
             app.providers.refresh()
-            // The browser tab is above the app in its task: bring the app back.
-            if (opened != null) bringToFront(context)
             onDone()
         }
     }
@@ -188,7 +194,10 @@ private fun openCustomTab(context: Context, url: String) {
     }
 }
 
-/** MainActivity is singleTask: starting it clears the browser tab above it in its task. */
+/**
+ * MainActivity is singleTask: starting it clears the browser tab above it in its task. Allowed from the background:
+ * the app's own task is the one in front.
+ */
 private fun bringToFront(context: Context) {
     runCatching {
         context.startActivity(Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP))
