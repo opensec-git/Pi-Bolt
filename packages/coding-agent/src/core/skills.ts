@@ -424,9 +424,23 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 	const allDiagnostics: ResourceDiagnostic[] = [];
 	const collisionDiagnostics: ResourceDiagnostic[] = [];
 
+	// The first skill's real path, resolved only once a second skill needs it: a realpath costs about 0.17 M instructions,
+	// and a single skill (such as the bundled one alone) has nothing to be a duplicate of.
+	let unresolvedFirst: Skill | undefined;
+
 	function addSkills(result: LoadSkillsResult) {
 		allDiagnostics.push(...result.diagnostics);
 		for (const skill of result.skills) {
+			if (skillMap.size === 0) {
+				skillMap.set(skill.name, skill);
+				unresolvedFirst = skill;
+				continue;
+			}
+			if (unresolvedFirst) {
+				realPathSet.add(getResourcePathKey(unresolvedFirst.filePath));
+				unresolvedFirst = undefined;
+			}
+
 			// Resolve symlinks to detect duplicate files
 			const realPath = getResourcePathKey(skill.filePath);
 
