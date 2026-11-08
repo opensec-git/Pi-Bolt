@@ -11,11 +11,13 @@ import opensec.pibolt.app.ui.packages.CatalogEntry
 import opensec.pibolt.app.ui.packages.CatalogException
 import opensec.pibolt.app.ui.packages.CatalogJson
 import opensec.pibolt.app.ui.packages.CompatNote
+import opensec.pibolt.app.ui.packages.InstallStatus
 import opensec.pibolt.app.ui.packages.PackageCatalog
 import opensec.pibolt.app.ui.packages.PackageCompat
 import opensec.pibolt.app.ui.packages.PackageFormat
 import opensec.pibolt.app.ui.packages.PackageLinks
 import opensec.pibolt.app.ui.packages.PackageManifest
+import opensec.pibolt.app.ui.packages.SourceStatus
 import opensec.pibolt.app.ui.packages.loadDetail
 import opensec.pibolt.app.ui.projects.transfer.ShareAction
 import opensec.pibolt.app.ui.projects.transfer.ShareRouting
@@ -402,6 +404,18 @@ class PackageBrowseTest {
         } finally {
             server.close()
         }
+    }
+
+    @Test
+    fun installStatusBelongsToItsPackage() {
+        val running = InstallStatus.Running("Installing a")
+        val done = InstallStatus.Done("Installed a")
+        assertEquals(InstallStatus.Idle, SourceStatus.of("npm:a", null))
+        assertEquals(running, SourceStatus.of("npm:a", SourceStatus("npm:a", running)))
+        // Another package's install keeps this one waiting, but its result never shows here.
+        assertEquals(running, SourceStatus.of("npm:b", SourceStatus("npm:a", running)))
+        assertEquals(InstallStatus.Idle, SourceStatus.of("npm:b", SourceStatus("npm:a", done)))
+        assertEquals(done, SourceStatus.of("npm:a", SourceStatus("npm:a", done)))
     }
 
     @Test

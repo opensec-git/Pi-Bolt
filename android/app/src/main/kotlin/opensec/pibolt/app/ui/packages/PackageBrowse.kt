@@ -97,6 +97,23 @@ sealed interface InstallStatus {
     data class Failed(val log: String) : InstallStatus
 }
 
+/** The last install started from a sheet, for [source]. */
+@Immutable
+data class SourceStatus(val source: String, val status: InstallStatus) {
+    companion object {
+        /**
+         * What the sheet of [source] shows given the last install [current]: its own status; another package's running
+         * install (so Install waits, one install at a time); otherwise idle. A result never shows on another package.
+         */
+        fun of(source: String, current: SourceStatus?): InstallStatus = when {
+            current == null -> InstallStatus.Idle
+            current.source == source -> current.status
+            current.status is InstallStatus.Running -> current.status
+            else -> InstallStatus.Idle
+        }
+    }
+}
+
 /** What the detail sheet knows about a source once loaded. */
 @Immutable
 data class PackageDetail(
@@ -457,16 +474,13 @@ fun InstallLinkHost(app: PiBoltApp, pending: String?, onConsumed: () -> Unit) {
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var shown by remember { mutableStateOf<String?>(null) }
-    var status by remember { mutableStateOf<InstallStatus>(InstallStatus.Idle) }
+    var last by remember { mutableStateOf<SourceStatus?>(null) }
     var installed by remember { mutableStateOf(false) }
     LaunchedEffect(pending) {
         val source = pending ?: return@LaunchedEffect
         // Taken into this host's own state before it is consumed: consuming changes this effect's key.
-        if (status !is InstallStatus.Running) {
-            status = InstallStatus.Idle
-            installed = false
-            shown = source
-        }
+        installed = false
+        shown = source
         onConsumed()
     }
     LaunchedEffect(shown) {
@@ -483,15 +497,15 @@ fun InstallLinkHost(app: PiBoltApp, pending: String?, onConsumed: () -> Unit) {
             known = null,
             project = null,
             installed = installed,
-            status = status,
+            status = SourceStatus.of(source, last),
             onInstall = { args, _, title ->
-                if (status is InstallStatus.Running) return@PackageInfoSheet
-                status = InstallStatus.Running("Installing $title")
+                if (last?.status is InstallStatus.Running) return@PackageInfoSheet
+                last = SourceStatus(source, InstallStatus.Running("Installing $title"))
                 app.appScope.launch {
                     val result = engine.cli(args, timeoutMs = 600_000)
                     val next = if (result.ok) InstallStatus.Done("Installed $title. Start or reload a session to use it.") else InstallStatus.Failed(cliFailure(result))
-                    status = next
-                    if (shown == null) scope.launch { snackbar.show(if (result.ok) "Installed $title" else "Could not install $title", if (result.ok) SnackKind.Success else SnackKind.Error) }
+                    last = SourceStatus(source, next)
+                    if (shown != source) scope.launch { snackbar.show(if (result.ok) "Installed $title" else "Could not install $title", if (result.ok) SnackKind.Success else SnackKind.Error) }
                 }
             },
             onDismiss = { shown = null },

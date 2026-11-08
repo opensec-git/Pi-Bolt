@@ -95,7 +95,7 @@ fun PackagesSheet(engine: EngineApi, http: OkHttpClient, controller: SessionCont
     var tab by remember { mutableStateOf(PackagesTab.Installed) }
     val catalog = remember(http) { PackageCatalog(http) }
     var browsing by remember { mutableStateOf<CatalogEntry?>(null) }
-    var browseStatus by remember { mutableStateOf<InstallStatus>(InstallStatus.Idle) }
+    var browseStatus by remember { mutableStateOf<SourceStatus?>(null) }
 
     LaunchedEffect(reload) {
         view = withContext(Dispatchers.IO) { load(engine, settingsFile, project) }
@@ -145,7 +145,6 @@ fun PackagesSheet(engine: EngineApi, http: OkHttpClient, controller: SessionCont
                 working?.let { F2Loading(it) }
                 ReloadWell(changed, onReload, close)
                 BrowseTab(catalog, installed = PackageFormat.installedNames(view?.packages.orEmpty().filter { it.scope == PackageScope.User }.map { it.source }), onOpen = {
-                    browseStatus = InstallStatus.Idle
                     browsing = it
                 })
                 return@Column
@@ -228,9 +227,9 @@ fun PackagesSheet(engine: EngineApi, http: OkHttpClient, controller: SessionCont
             known = entry,
             project = project?.let { ProjectTarget(it, v?.projectTrusted == true) },
             installed = v?.packages.orEmpty().any { it.scope == PackageScope.User && PackageLinks.npmParts(it.source)?.first == entry.name },
-            status = browseStatus,
+            status = SourceStatus.of(source, browseStatus),
             onInstall = { args, local, title ->
-                runCli("Installing $title", args, if (local) "Installed $title for ${project?.name}" else "Installed $title", onResult = { browseStatus = it })
+                runCli("Installing $title", args, if (local) "Installed $title for ${project?.name}" else "Installed $title", onResult = { browseStatus = SourceStatus(source, it) })
             },
             onDismiss = { browsing = null },
         )
