@@ -111,6 +111,11 @@ public struct RemoteSessionInfo: Equatable, Sendable, Identifiable {
     }
 }
 
+/// The levels of a `get_available_thinking_levels` answer, in the order sent.
+public func thinkingLevels(from response: RpcResponse) -> [String] {
+    (response.data?.arr("levels") ?? []).compactMap(\.primitiveText)
+}
+
 /// An ISO-8601 instant (`Date.toISOString()`), or nil when it is missing or unreadable.
 public func isoDate(_ text: String) -> Date? {
     let f = ISO8601DateFormatter()
@@ -218,9 +223,19 @@ public final class RpcClient: @unchecked Sendable {
         return await request("prompt", timeout: nil, fields)
     }
 
-    public func steer(_ message: String) async -> RpcResponse { await request("steer", ["message": .string(message)]) }
+    public func steer(_ message: String, images: [ImageAttachment] = []) async -> RpcResponse {
+        await request("steer", Self.messageFields(message, images))
+    }
 
-    public func followUp(_ message: String) async -> RpcResponse { await request("follow_up", ["message": .string(message)]) }
+    public func followUp(_ message: String, images: [ImageAttachment] = []) async -> RpcResponse {
+        await request("follow_up", Self.messageFields(message, images))
+    }
+
+    private static func messageFields(_ message: String, _ images: [ImageAttachment]) -> [String: JSON] {
+        var fields: [String: JSON] = ["message": .string(message)]
+        if !images.isEmpty { fields["images"] = imagesJSON(images) }
+        return fields
+    }
 
     /// Abort waits until the session is idle, which can take a while.
     public func abort() async -> RpcResponse { await request("abort", timeout: 120) }
@@ -231,7 +246,12 @@ public final class RpcClient: @unchecked Sendable {
 
     public func getMessages() async -> RpcResponse { await request("get_messages", timeout: 60) }
 
+    public func getCommands() async -> RpcResponse { await request("get_commands") }
+
     public func getAvailableModels() async -> RpcResponse { await request("get_available_models") }
+
+    /// `data.levels`: the thinking levels the session's model offers (see `thinkingLevels(from:)`).
+    public func getAvailableThinkingLevels() async -> RpcResponse { await request("get_available_thinking_levels") }
 
     public func setModel(provider: String, modelId: String) async -> RpcResponse {
         await request("set_model", ["provider": .string(provider), "modelId": .string(modelId)])
@@ -242,7 +262,11 @@ public final class RpcClient: @unchecked Sendable {
     public func setSessionName(_ name: String) async -> RpcResponse { await request("set_session_name", ["name": .string(name)]) }
 
     /// Compaction runs a model call: give it time.
-    public func compact() async -> RpcResponse { await request("compact", timeout: 600) }
+    public func compact(instructions: String? = nil) async -> RpcResponse {
+        var fields: [String: JSON] = [:]
+        if let instructions, !instructions.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { fields["customInstructions"] = .string(instructions) }
+        return await request("compact", timeout: 600, fields)
+    }
 
     // MARK: Sessions (the background service, `host.service`)
 
@@ -259,6 +283,18 @@ public final class RpcClient: @unchecked Sendable {
 
     public func newSession(cwd: String? = nil) async -> RpcResponse {
         await request("new_session", timeout: 60, cwd.map { ["cwd": .string($0)] } ?? [:])
+    }
+
+    // MARK: Subagent streams (`subagent_stream`, Pi-Bolt 1.1.5)
+
+    /// Asks the computer to stream run `runId`'s own conversation (`subagent_entries`, `subagent_events`) until
+    /// `subagentUnsubscribe`, a disconnect or a new `remote_hello`.
+    public func subagentSubscribe(_ runId: String) async -> RpcResponse {
+        await request("subagent_subscribe", timeout: 15, ["runId": .string(runId)])
+    }
+
+    public func subagentUnsubscribe(_ runId: String) async -> RpcResponse {
+        await request("subagent_unsubscribe", timeout: 15, ["runId": .string(runId)])
     }
 
     // MARK: Extension UI

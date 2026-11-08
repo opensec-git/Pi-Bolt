@@ -5,8 +5,9 @@ name: ios
 # - kit: the Swift package's tests (ios/PiBoltKit: Noise, pairing, framing, reducer, markdown), including the live
 #   tests against Pi-Bolt's own remote control server (ios/fixtures/rc-host.ts, run with Node from this checkout).
 # - app: generates the Xcode project with XcodeGen, runs the app's unit tests in the iOS Simulator (with that same host
-#   running on the runner, so the app pairs, prompts and reconnects for real), takes screenshots of the debug build
-#   driving that host, then builds an unsigned IPA.
+#   running on the runner, so the app pairs, prompts, follows a subagent's stream, reviews the host's working tree and
+#   reconnects for real), takes screenshots of the debug build driving that host (dark and light), then builds an
+#   unsigned IPA.
 # - release: an `ios-vX.Y.Z` tag on a pi-bolt commit publishes that IPA and its SHA-256 as a GitHub release of its own,
 #   never marked latest (the Pi-Bolt installers read the latest release). The IPA is unsigned: AltStore, SideStore or
 #   Sideloadly sign it with the user's own Apple ID on install (ios/README.md).
@@ -151,6 +152,28 @@ jobs:
           xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
           sleep 5
           xcrun simctl io "$SIMULATOR" screenshot "$shots/3-home.png"
+          xcrun simctl terminate "$SIMULATOR" "$id" || true
+          # A subagent run's own conversation as the host streams it, then the review screen (the phone knows the
+          # computer now: the same link reconnects without its spent secret).
+          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$uri" SIMCTL_CHILD_PIBOLT_AUTOPROMPT="run a subagent" SIMCTL_CHILD_PIBOLT_AUTOOPEN=subagent \
+            xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 15
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/4-subagent.png"
+          xcrun simctl terminate "$SIMULATOR" "$id" || true
+          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$uri" SIMCTL_CHILD_PIBOLT_AUTOOPEN=review xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 10
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/5-review.png"
+          xcrun simctl terminate "$SIMULATOR" "$id" || true
+          # The light theme follows the system.
+          xcrun simctl ui "$SIMULATOR" appearance light || true
+          SIMCTL_CHILD_PIBOLT_AUTOPAIR="$uri" xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 8
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/6-session-light.png"
+          xcrun simctl terminate "$SIMULATOR" "$id" || true
+          xcrun simctl launch "$SIMULATOR" "$id" > /dev/null
+          sleep 5
+          xcrun simctl io "$SIMULATOR" screenshot "$shots/7-home-light.png"
+          xcrun simctl ui "$SIMULATOR" appearance dark || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-screenshots

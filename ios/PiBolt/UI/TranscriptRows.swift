@@ -4,14 +4,23 @@ import SwiftUI
 /// One transcript row.
 struct ChatRow: View {
     var item: ChatItem
+    @Environment(\.subagents) private var subagents
 
     var body: some View {
         switch item {
         case let .user(user): UserBubble(item: user)
         case let .assistant(text): MarkdownView(text: text.text)
         case let .thinking(thinking): ThinkingRow(item: thinking)
-        case let .tool(tool): ToolRow(item: tool)
+        case let .tool(tool):
+            // An `Agent` call is a subagent run: its card, once the run is known (the main transcript; a subagent's own
+            // transcript has no runs of its own here).
+            if SubagentReducer.isAgentCall(tool.name), let run = subagents.runs[tool.toolCallId] {
+                SubagentCard(run: run) { subagents.open(run.key) }
+            } else {
+                ToolRow(item: tool)
+            }
         case let .notice(notice): NoticeRow(item: notice)
+        case let .subagentNotice(notice): SubagentNoticeRow(item: notice)
         }
     }
 }
