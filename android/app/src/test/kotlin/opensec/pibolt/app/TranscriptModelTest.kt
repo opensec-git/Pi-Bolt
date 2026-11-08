@@ -3,6 +3,7 @@ package opensec.pibolt.app
 import opensec.pibolt.app.ui.session.FoldRow
 import opensec.pibolt.app.ui.session.MdCache
 import opensec.pibolt.app.ui.session.NoticeRow
+import opensec.pibolt.app.ui.session.ActionsRow
 import opensec.pibolt.app.ui.session.TextRow
 import opensec.pibolt.app.ui.session.ToolRow
 import opensec.pibolt.app.ui.session.TranscriptModel
@@ -135,6 +136,14 @@ class TranscriptModelTest {
         assertTrue(rows.last().live)
         assertTrue((rows.last() as TextRow).tail)
         assertFalse(rows.first().live)
+    }
+
+    @Test
+    fun theActionsOfAReplyWithoutStepsCopyOnlyThatReply() {
+        // The last turn has no tool or thinking step: its answer is its own text, not every earlier turn's as well.
+        val two = turn + listOf(UserItem("m4", "again"), AssistantTextItem("m5.0", "ok", streaming = false))
+        val actions = TranscriptModel.rows(two, liveTurn = false, expanded = emptySet(), durations = emptyMap(), md = MdCache()).last() as ActionsRow
+        assertEquals("ok", actions.reply)
     }
 
     @Test

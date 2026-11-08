@@ -390,7 +390,8 @@ object TranscriptModel {
                 out += UserRow(first, live, aliases[first.key])
                 bodyStart = start + 1
             }
-            var lastStep = -1
+            // Before the turn's body while it has no step: the answer is then all of the body, never earlier turns.
+            var lastStep = bodyStart - 1
             var steps = 0
             var tools = 0
             var failedSteps = 0

@@ -258,8 +258,8 @@ object Chats {
                 if (firstPrompt != null) carryModel(controller, carry, leaving) else scope?.launch { carryModel(controller, carry, leaving) }
             }
             LocalSessions.Live(engine.chatDir, controller, file).also {
-                it.firstPrompt = firstPrompt
                 _current.value = it
+                it.queueFirstPrompt(firstPrompt, _current.map { live -> live === it })
                 refresh()
             }
         }

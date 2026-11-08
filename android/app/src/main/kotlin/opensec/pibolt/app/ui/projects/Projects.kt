@@ -1,12 +1,18 @@
 package opensec.pibolt.app.ui.projects
 
 import android.net.Uri
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -19,7 +25,10 @@ import opensec.pibolt.app.git.GitProgress
 import opensec.pibolt.app.git.GitRepo
 import opensec.pibolt.app.git.GitRunner
 import opensec.pibolt.app.secrets.ProjectSecrets
+import opensec.pibolt.app.session.LinkState
 import opensec.pibolt.app.session.SessionController
+import opensec.pibolt.protocol.rpc.StreamingBehavior
+import java.util.concurrent.atomic.AtomicReference
 import java.io.File
 
 /** Project folders on this phone. Every call touches the disk, so every call runs on [Dispatchers.IO]. */
@@ -101,9 +110,38 @@ object LocalSessions {
         var key: String = key
             internal set
 
-        /** A prompt to send once the session can take it ("Clone from git"). Read and cleared by the session screen. */
-        @Volatile
-        var firstPrompt: String? = null
+        private val first = AtomicReference<String?>(null)
+
+        /** Session screens showing this session now: while one does, it sends the first prompt itself. */
+        val screens = MutableStateFlow(0)
+
+        /** The prompt waiting for the session to take it ([queueFirstPrompt]), once: null after that. */
+        fun takeFirstPrompt(): String? = first.getAndSet(null)
+
+        /**
+         * A prompt to send once the session can take it (the Home composer, "Clone from git"). Its session screen sends
+         * it when the session connects; when the screen has been left before that (the user went back), it is sent
+         * from here, so it does not wait for the screen to open again. [kept] is true while the app still holds this
+         * session; once it is not (closed, replaced), the prompt is dropped.
+         */
+        fun queueFirstPrompt(text: String?, kept: Flow<Boolean>) {
+            text ?: return
+            first.set(text)
+            deliveries.launch {
+                // The screen opened for this session sends it (with its "Sending" row and the notification prompt);
+                // this only takes over once that screen has shown and gone.
+                combine(screens, kept) { shown, held -> shown > 0 || !held }.first { it }
+                // True: send now; false: the session is gone. Null: keep waiting.
+                val send = combine(controller.link, controller.state, screens, kept) { link, state, shown, held ->
+                    when {
+                        !held || controller.stopped -> false
+                        link is LinkState.Connected && state.hello && shown == 0 -> true
+                        else -> null
+                    }
+                }.filterNotNull().first()
+                if (send) takeFirstPrompt()?.let { controller.send(it, StreamingBehavior.Steer) }
+            }
+        }
 
         /**
          * Text and images for the composer ("Ask Pi" in the editor, content shared from another app), waiting for the
@@ -125,6 +163,9 @@ object LocalSessions {
 
     private val _current = MutableStateFlow<Live?>(null)
     val current: StateFlow<Live?> = _current.asStateFlow()
+
+    /** Sends first prompts no screen took ([Live.queueFirstPrompt]). */
+    private val deliveries = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
     private val _all = MutableStateFlow<Map<String, Live>>(emptyMap())
 
@@ -171,7 +212,7 @@ object LocalSessions {
                 val keys = _all.value.mapValues { (_, live) -> Placed(live.project.name, live.controller.stopped) }
                 val existing = _all.value.entries.firstOrNull { it.value.controller === controller }?.key
                 val (key, moved) = place(keys, project.name, existing)
-                val live = Live(project, controller, sessionFile, key).also { it.firstPrompt = firstPrompt }
+                val live = Live(project, controller, sessionFile, key)
                 var next = _all.value
                 if (moved != null) {
                     val aside = next.getValue(key)
@@ -181,7 +222,7 @@ object LocalSessions {
                 _all.value = next - key + (key to live)
                 _current.value = live
                 live
-            }
+            }.also { live -> live.queueFirstPrompt(firstPrompt, all.map { m -> m.values.any { it === live } }) }
         }
     }
 

@@ -1,5 +1,7 @@
 package opensec.pibolt.app.ui.chats
 
+import kotlinx.coroutines.flow.update
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Balance
@@ -64,6 +66,11 @@ fun ChatSessionScreen(app: PiBoltApp, onBack: () -> Unit, onOpenSession: (String
                 ChatSpace.title(s.sessionName, (s.items.firstOrNull { it is UserItem } as? UserItem)?.text)
             }
         }
+        // While this screen shows the chat, it sends a queued first prompt itself (LocalSessions.Live.queueFirstPrompt).
+        DisposableEffect(live) {
+            live.screens.update { it + 1 }
+            onDispose { live.screens.update { it - 1 } }
+        }
         SessionContent(
             app = app,
             controller = live.controller,
@@ -78,7 +85,7 @@ fun ChatSessionScreen(app: PiBoltApp, onBack: () -> Unit, onOpenSession: (String
                     engine.prepare()
                     live.controller.retryNow()
                 },
-                takeFirstPrompt = { live.firstPrompt.also { live.firstPrompt = null } },
+                takeFirstPrompt = live::takeFirstPrompt,
                 composerDrop = live.composerDrop,
                 chat = true,
                 welcome = welcome,
