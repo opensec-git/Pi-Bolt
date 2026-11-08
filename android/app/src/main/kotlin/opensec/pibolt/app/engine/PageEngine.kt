@@ -60,6 +60,9 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
     private var stopJob: Job? = null
     private val holders = LinkedHashSet<String>()
 
+    /** Page closes still running, by key: a reopen waits for its close. */
+    private val closing = HashMap<String, Job>()
+
     /** The tiles Home wants now (the latest [showTiles]); [tileMutex] runs one reconcile at a time. */
     @Volatile
     private var wantedTiles: Set<String> = emptySet()
@@ -133,6 +136,8 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
 
     /** Opens the registered page or tile [key] (holding the engine while it is open). False when it could not. */
     suspend fun open(key: String): Boolean {
+        // A close of this page still running finishes first: its release must not drop the hold taken below.
+        synchronized(closing) { closing[key] }?.join()
         hold(PageRules.HOLD_PAGE + key)
         if (!ensureRunning()) {
             release(PageRules.HOLD_PAGE + key)
@@ -151,7 +156,9 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
     /** Closes [key] on the engine and lets the engine stop when nothing else holds it. */
     fun close(key: String) {
         synchronized(opened) { opened -= key }
-        scope.launch { closeNow(key) }
+        val job = scope.launch { closeNow(key) }
+        synchronized(closing) { closing[key] = job }
+        job.invokeOnCompletion { synchronized(closing) { if (closing[key] === job) closing.remove(key) } }
     }
 
     private suspend fun closeNow(key: String) {

@@ -380,6 +380,32 @@ describe("mobile UI kit in a session", () => {
 		expect(runner.getUIContext().getView("slow:page")?.title).toBe("Second");
 	});
 
+	it("runs close() when a page's view cannot be shown", async () => {
+		const closed: string[] = [];
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi: ExtensionAPI) =>
+					pi.registerPage("bad:page", {
+						title: "Bad",
+						open: () => ({ v: 1, body: [{ type: "rwo" }] }) as unknown as MobileView,
+						close: () => void closed.push("bad:page"),
+					}),
+			],
+		});
+		cleanups.push(() => harness.cleanup());
+		await harness.session.bindExtensions({
+			uiContext: createTestUiContext(),
+			mode: "rpc",
+			viewChannel: fakeChannel(true),
+		});
+		const runner = harness.session.extensionRunner;
+		await expect(runner.openPage("bad:page")).rejects.toThrow(/unknown type/);
+		expect(closed).toEqual(["bad:page"]);
+		// Nothing stays open: a close finds nothing to do.
+		await runner.closePage("bad:page");
+		expect(closed).toEqual(["bad:page"]);
+	});
+
 	it("drops a page whose open() finishes after the session ended, and cleans up after that open", async () => {
 		let finish: (view: MobileView) => void = () => {};
 		const order: string[] = [];

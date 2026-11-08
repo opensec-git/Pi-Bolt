@@ -804,7 +804,13 @@ export class ExtensionRunner {
 			const view = await page.definition.open(this.createContext());
 			// The session ended (or the client closed it) while open() ran: the view is not shown any more.
 			if (this.staleMessage || this.openPages.get(key) !== entry) return;
-			views.set(key, view, { slot: page.kind });
+			try {
+				views.set(key, view, { slot: page.kind });
+			} catch (error) {
+				// Not shown (an invalid view, the session's view limit): what open() started is cleaned up.
+				await this.runPageClose(page);
+				throw error;
+			}
 		})();
 		try {
 			await entry.done;
