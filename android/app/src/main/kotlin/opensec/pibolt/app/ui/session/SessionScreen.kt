@@ -600,6 +600,18 @@ internal fun SessionContent(
     // A registered page asked for and not drawn yet: its sheet opens when its view reaches the session's state (the
     // open_page response can come before it), or the page is closed again if it never does.
     var pendingPage by remember { mutableStateOf<String?>(null) }
+    // The screen goes (navigation, or Android recreating the activity): registered pages it showed or waited for are
+    // closed, so their extensions stop what they run for them.
+    val shownPage by rememberUpdatedState(openPage)
+    val waitingPage by rememberUpdatedState(pendingPage)
+    val registeredNow by rememberUpdatedState(registeredPages)
+    DisposableEffect(controller) {
+        onDispose {
+            listOfNotNull(shownPage, waitingPage).distinct()
+                .filter { key -> registeredNow.any { it.key == key } }
+                .forEach { controller.closePage(it) }
+        }
+    }
     LaunchedEffect(pendingPage) {
         val key = pendingPage ?: return@LaunchedEffect
         val arrived = withTimeoutOrNull(PAGE_VIEW_WAIT_MS) { snapshotFlow { state.value.views[key] }.first { it != null } }

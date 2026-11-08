@@ -1,5 +1,6 @@
 package opensec.pibolt.protocol.session
 
+import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -115,10 +116,13 @@ object TableData {
             ?: runCatching { LocalDate.parse(text).atStartOfDay(zone).toInstant() }.getOrNull()
     }
 
-    /** A cell as plain text (numbers without a needless ".0"); the app formats dates for display itself. */
+    /**
+     * A cell as plain text: numbers exactly as given, without a needless ".0" or exponent (0.001, 123.4567, 1500); the
+     * app formats dates for display itself.
+     */
     fun text(cell: VCell?, column: VColumn): String = when (cell) {
         is VCell.Text -> cell.text
-        is VCell.Number -> ChartData.format(cell.value, null)
+        is VCell.Number -> BigDecimal.valueOf(cell.value).stripTrailingZeros().toPlainString()
         else -> ""
     }
 }

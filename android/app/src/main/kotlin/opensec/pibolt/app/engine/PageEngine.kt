@@ -146,6 +146,9 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
         val response = rpc?.openPage(key)
         if (response?.success != true) {
             Log.w(TAG, "open_page $key: ${response?.error}")
+            // A timed-out open may still finish on the engine: closed first, so no late view shows without a hold.
+            rpc?.closePage(key)
+            _state.update { it.copy(views = it.views - key) }
             release(PageRules.HOLD_PAGE + key)
             return false
         }
@@ -199,7 +202,13 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
         for (key in wanted - open) {
             if (key !in wantedTiles) continue
             val response = rpc?.openPage(key)
-            if (response?.success == true) synchronized(opened) { opened += key } else Log.w(TAG, "open_page $key: ${response?.error}")
+            if (response?.success == true) {
+                synchronized(opened) { opened += key }
+            } else {
+                Log.w(TAG, "open_page $key: ${response?.error}")
+                rpc?.closePage(key)
+                _state.update { it.copy(views = it.views - key) }
+            }
         }
         // Home changed while these opened: a call is queued behind this one and closes what is no longer wanted.
     }

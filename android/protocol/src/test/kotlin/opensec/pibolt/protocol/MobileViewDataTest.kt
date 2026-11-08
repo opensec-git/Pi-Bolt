@@ -10,6 +10,7 @@ import opensec.pibolt.protocol.session.VCell
 import opensec.pibolt.protocol.session.VChart
 import opensec.pibolt.protocol.session.VLocation
 import opensec.pibolt.protocol.session.VTable
+import opensec.pibolt.protocol.session.VColumn
 import opensec.pibolt.protocol.session.VUnknown
 import java.time.ZoneOffset
 import kotlin.test.Test
@@ -98,6 +99,15 @@ class MobileViewDataTest {
         assertEquals("name" to false, TableData.nextSort("size", true, "name"))
         assertEquals(java.time.Instant.parse("2026-10-30T00:00:00Z"), TableData.instant(VCell.Text("2026-10-30"), ZoneOffset.UTC))
         assertNull(TableData.instant(VCell.Text("yesterday")))
+    }
+
+    @Test
+    fun `table numbers keep their precision, as shown and as filtered`() {
+        val column = VColumn("n", "N", "number", sortable = false)
+        assertEquals("0.001", TableData.text(VCell.Number(0.001), column))
+        assertEquals("123.4567", TableData.text(VCell.Number(123.4567), column))
+        assertEquals("1500", TableData.text(VCell.Number(1500.0), column))
+        assertEquals("-2.5", TableData.text(VCell.Number(-2.5), column))
     }
 
     @Test
