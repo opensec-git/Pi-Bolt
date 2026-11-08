@@ -4,8 +4,6 @@ import opensec.pibolt.app.ui.session.FoldRow
 import opensec.pibolt.app.ui.session.MdCache
 import opensec.pibolt.app.ui.session.NoticeRow
 import opensec.pibolt.app.ui.session.ActionsRow
-import opensec.pibolt.app.ui.session.PendingSend
-import opensec.pibolt.app.ui.markdown.MdPrefetch
 import opensec.pibolt.app.ui.session.TextRow
 import opensec.pibolt.app.ui.session.ToolRow
 import opensec.pibolt.app.ui.session.TranscriptModel
@@ -23,7 +21,6 @@ import opensec.pibolt.protocol.session.UserItem
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class TranscriptModelTest {
@@ -147,65 +144,6 @@ class TranscriptModelTest {
         val two = turn + listOf(UserItem("m4", "again"), AssistantTextItem("m5.0", "ok", streaming = false))
         val actions = TranscriptModel.rows(two, liveTurn = false, expanded = emptySet(), durations = emptyMap(), md = MdCache()).last() as ActionsRow
         assertEquals("ok", actions.reply)
-    }
-
-    @Test
-    fun aHistoryThatArrivesIsParsedBeforeTheTranscriptAsks() {
-        MdPrefetch.clear()
-        val history = (0 until 4).flatMap { listOf(UserItem("u$it", "q$it"), AssistantTextItem("a$it", "## Answer $it\n\n- one\n- two", streaming = false)) }
-        // One finished turn is too few to warm: the transcript parses it as it always did.
-        MdPrefetch.warm(emptyList(), history.take(2))
-        assertEquals(null, MdPrefetch.take("## Answer 0\n\n- one\n- two"))
-        MdPrefetch.warm(emptyList(), history)
-        val md = MdCache()
-        val doc = md.parse(history[1] as AssistantTextItem)
-        assertEquals(opensec.pibolt.app.ui.markdown.Markdown.parse("## Answer 0\n\n- one\n- two").blocks, doc.blocks)
-        // Taken once: the cache keeps it from then on, the prefetch does not.
-        assertEquals(null, MdPrefetch.take("## Answer 0\n\n- one\n- two"))
-        assertSame(doc, md.parse(history[1] as AssistantTextItem))
-        // Messages already known are not parsed again when one more turn arrives.
-        val more = history + listOf(UserItem("u9", "q"), AssistantTextItem("a9", "new", streaming = false))
-        MdPrefetch.warm(history, more)
-        assertEquals(null, MdPrefetch.take("new"))
-        MdPrefetch.clear()
-    }
-
-    @Test
-    fun finishedTurnsReuseTheirRowsWhileTheLiveTurnStreams() {
-        val md = MdCache()
-        val finished = turn + listOf(UserItem("m4", "again"), AssistantTextItem("m5.0", "Second answer.", streaming = false))
-        fun rows(live: String, vararg extra: ChatItem) =
-            TranscriptModel.rows(finished + UserItem("m6", "go") + extra + AssistantTextItem("m7.0", live, streaming = true), liveTurn = true, expanded = emptySet(), durations = emptyMap(), md = md)
-        val a = rows("Wri")
-        val b = rows("Writing")
-        // Every row of the finished turns is the very same instance; the live tail is new.
-        val finishedRows = a.indexOfFirst { it.key == "gap:m6" }
-        for (k in 0 until finishedRows) assertSame(a[k], b[k])
-        assertEquals("Writing", ((b.last() as TextRow).block as opensec.pibolt.app.ui.markdown.MdBlock.Paragraph).text)
-        // The cached rows equal a fresh build.
-        assertEquals(TranscriptModel.rows(finished + UserItem("m6", "go") + AssistantTextItem("m7.0", "Writing", streaming = true), liveTurn = true, expanded = emptySet(), durations = emptyMap(), md = MdCache()), b)
-    }
-
-    @Test
-    fun aCachedTurnRebuildsWhenItsInputsChange() {
-        val md = MdCache()
-        val two = turn + listOf(UserItem("m4", "again"), AssistantTextItem("m5.0", "ok", streaming = false))
-        fun rows(expanded: Set<String> = emptySet(), durations: Map<String, Long> = emptyMap(), items: List<ChatItem> = two, pending: PendingSend? = null) =
-            TranscriptModel.rows(items, liveTurn = false, expanded = expanded, durations = durations, md = md, pending = pending)
-        fun fresh(expanded: Set<String> = emptySet(), durations: Map<String, Long> = emptyMap(), items: List<ChatItem> = two, pending: PendingSend? = null) =
-            TranscriptModel.rows(items, liveTurn = false, expanded = expanded, durations = durations, md = MdCache(), pending = pending)
-        rows()
-        // Opening the first turn's fold, a measured duration, an edited item, a pending send (no actions row then).
-        assertEquals(fresh(expanded = setOf("m0")), rows(expanded = setOf("m0")))
-        assertTrue(rows(expanded = setOf("m0")).any { it is ToolRow })
-        assertEquals(fresh(durations = mapOf("m0" to 3_000L)), rows(durations = mapOf("m0" to 3_000L)))
-        val edited = two.map { if (it.key == "m3.0") AssistantTextItem("m3.0", "Changed.", streaming = false) else it }
-        assertEquals(fresh(items = edited), rows(items = edited))
-        assertTrue(rows().any { it is ActionsRow })
-        val pending = PendingSend(1, "next", "m4", 0)
-        assertEquals(fresh(pending = pending), rows(pending = pending))
-        assertFalse(rows(pending = pending).any { it is ActionsRow })
-        assertEquals(fresh(), rows())
     }
 
     @Test

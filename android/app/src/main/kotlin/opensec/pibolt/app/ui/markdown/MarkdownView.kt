@@ -314,8 +314,6 @@ private fun ProseText(
     var chips by remember { mutableStateOf(NO_CHIPS) }
     val codeRanges = remember(annotated) { codeRanges(annotated) }
     val reveal = rememberReveal(annotated.length, streaming)
-    // Only while streaming: the reveal covers new text with rectangles, unless right-to-left text needs exact paths.
-    val rtl = streaming && remember(annotated) { hasRtl(annotated.text) }
     val pulse = if (streaming && !Pi.reduceMotion) {
         rememberInfiniteTransition(label = "caret").animateFloat(0.3f, 1f, infiniteRepeatable(tween(450, easing = LinearEasing), RepeatMode.Reverse), label = "caret")
     } else {
@@ -339,12 +337,12 @@ private fun ProseText(
                 val now = reveal.now.longValue
                 if (streaming && reveal.active) {
                     if (reveal.length in 0 until annotated.length) {
-                        coverRange(l, reveal.length, annotated.length, colors.canvas, 1f, rtl)
+                        drawPath(l.getPathForRange(reveal.length, annotated.length), colors.canvas)
                     }
                     for (segment in reveal.segments) {
                         val a = 1f - ((now - segment.at) / 120f).coerceIn(0f, 1f)
                         if (a <= 0f || segment.start >= annotated.length) continue
-                        coverRange(l, segment.start, minOf(segment.end, annotated.length), colors.canvas, a, rtl)
+                        drawPath(l.getPathForRange(segment.start, minOf(segment.end, annotated.length)), colors.canvas, alpha = a)
                     }
                 }
                 if (streaming && annotated.isNotEmpty()) {
@@ -374,44 +372,6 @@ private fun ProseText(
                 }
             },
     )
-}
-
-/**
- * Covers the glyphs of [start] until [end] with [color]: one rectangle per line, from the range's first glyph to its
- * last (to the line's end where the range goes on), line top to bottom. A selection path ([TextLayoutResult.getPathForRange])
- * covers the same boxes in left-to-right text, but a path is rasterised again on the render thread every frame while
- * rectangles are not; [rtl] text, where a range can be several boxes on one line, keeps the path.
- */
-private fun DrawScope.coverRange(l: TextLayoutResult, start: Int, end: Int, color: Color, alpha: Float, rtl: Boolean) {
-    if (rtl) {
-        drawPath(l.getPathForRange(start, end), color, alpha = alpha)
-        return
-    }
-    val first = l.getLineForOffset(start)
-    val last = l.getLineForOffset(maxOf(start, end - 1))
-    for (line in first..last) {
-        val lineStart = l.getLineStart(line)
-        val lineEnd = l.getLineEnd(line)
-        val s = maxOf(start, lineStart)
-        val e = minOf(end, lineEnd)
-        if (e <= s) continue
-        val left = if (s == lineStart) l.getLineLeft(line) else l.getHorizontalPosition(s, usePrimaryDirection = true)
-        val right = if (e == lineEnd) l.getLineRight(line) else l.getHorizontalPosition(e, usePrimaryDirection = true)
-        if (right <= left) continue
-        val top = l.getLineTop(line)
-        drawRect(color, Offset(left, top), Size(right - left, l.getLineBottom(line) - top), alpha = alpha)
-    }
-}
-
-/** True when [text] has a right-to-left character (Hebrew, Arabic, …) or a right-to-left mark. */
-private fun hasRtl(text: String): Boolean = text.any {
-    when (Character.getDirectionality(it)) {
-        Character.DIRECTIONALITY_RIGHT_TO_LEFT, Character.DIRECTIONALITY_RIGHT_TO_LEFT_ARABIC,
-        Character.DIRECTIONALITY_RIGHT_TO_LEFT_EMBEDDING, Character.DIRECTIONALITY_RIGHT_TO_LEFT_OVERRIDE,
-        Character.DIRECTIONALITY_RIGHT_TO_LEFT_ISOLATE,
-        -> true
-        else -> false
-    }
 }
 
 private class Segment(val start: Int, var end: Int, val at: Long)
