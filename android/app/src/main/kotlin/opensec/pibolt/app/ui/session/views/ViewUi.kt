@@ -239,6 +239,10 @@ class ViewFields {
             if (field is VInput && field.required && text.isBlank()) {
                 errors[id] = "Required"
                 ok = false
+            } else if (field is VInput && text.length > field.maxLength) {
+                // The extension lowered the limit since the user typed: say so instead of losing the sheet.
+                errors[id] = "At most ${field.maxLength} characters"
+                ok = false
             } else if (field is VInput && field.kind == "number" && text.isNotBlank() && text.trim().toDoubleOrNull()?.isFinite() != true) {
                 // Pi refuses a number field that holds no number: say so here instead of losing the sheet.
                 errors[id] = "Enter a number"

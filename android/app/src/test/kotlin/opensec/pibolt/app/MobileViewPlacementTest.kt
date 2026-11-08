@@ -84,4 +84,13 @@ class MobileViewPlacementTest {
         assertEquals(listOf("name", "x"), opensec.pibolt.app.ui.session.views.answerFields(nodes, "a").map { it.id })
         assertEquals(listOf("name"), opensec.pibolt.app.ui.session.views.answerFields(nodes, "save").map { it.id })
     }
+
+    @Test
+    fun aTextLongerThanALoweredLimitFailsTheCheckWithAReason() {
+        val fields = ViewFields()
+        val input = opensec.pibolt.protocol.session.VInput("code", false, "Code", "", null, null, null, "text", false, 3)
+        fields.edits["code"] = JsonPrimitive("abcdefghij")
+        assertEquals(false, fields.check(listOf(input)))
+        assertEquals("At most 3 characters", fields.errors["code"])
+    }
 }
