@@ -1425,6 +1425,18 @@ describe("import.meta in the copies", () => {
 		assert.equal(rewriteCopy(source, FILE), source);
 	});
 
+	it("leaves a class's private names that match the rewritten ones: #require(), #import(), #__dirname", () => {
+		const source = [
+			"class Store {",
+			"	#__dirname = 1;",
+			"	#require(id) { return id; }",
+			"	#import(id) { return id; }",
+			"	get(id) { return [this.#require(id), this.#import(id), this.#__dirname]; }",
+			"}",
+		].join("\n");
+		assert.equal(rewriteCopy(source, FILE), source);
+	});
+
 	it("replaces inside a template literal's expressions, and tells a division from a regular expression", () => {
 		assert.equal(
 			rewriteCopy("`at ${import.meta.url} in ${ { f: import.meta.file }.f }`", FILE),

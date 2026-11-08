@@ -1144,8 +1144,8 @@ export function rewriteCopy(source, file) {
 			const start = i;
 			for (i++; i < length && isWordChar(source[i]); i++);
 			const word = source.slice(start, i);
-			// (Not after a `.`: `x.import` is a property, not the keyword.)
-			const property = previous.kind === "punctuator" && previous.text === ".";
+			// (Not after a `.` or a `#`: `x.import` is a property and `this.#require` a private name, not the keyword.)
+			const property = previous.kind === "punctuator" && (previous.text === "." || previous.text === "#");
 			/** Replaces `source` from `start` to `end` with `code`, and goes on after it, `previous` being a value. */
 			const replace = (end, code) => {
 				// (Followed by the line breaks it spanned, if any, so that line numbers stay as they were.)
