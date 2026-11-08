@@ -231,12 +231,16 @@ class ViewFields {
     fun values(fields: List<VField>): JsonObject = JsonObject(fields.mapNotNull { f -> f.id?.let { it to value(f) } }.toMap())
 
     /** False (and an error under each) when a required text field is empty. */
-    fun check(fields: List<VField>): Boolean {
+    /**
+     * False (and an error under each) when a field of [fields] holds what Pi would refuse: a text over its limit or a
+     * number field without a number; and, for the fields in [required] (default all), an empty required text.
+     */
+    fun check(fields: List<VField>, required: Set<String>? = null): Boolean {
         var ok = true
         for (field in fields) {
             val id = field.id ?: continue
             val text = value(field).content
-            if (field is VInput && field.required && text.isBlank()) {
+            if (field is VInput && field.required && (required == null || id in required) && text.isBlank()) {
                 errors[id] = "Required"
                 ok = false
             } else if (field is VInput && text.length > field.maxLength) {

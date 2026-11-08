@@ -125,7 +125,8 @@ fun ViewSheet(
     fun answer(nodeId: String) {
         if (closing.isNotEmpty()) return
         // Required fields count for those that go with the answer: outside forms, and the submitted form's own.
-        if (!fields.check(answerFields(view.body, nodeId))) return
+        // Every field sent must fit (numbers, lengths), so Pi takes the answer and the sheet's other entries are not lost.
+        if (!fields.check(all, required = answerFields(view.body, nodeId).mapNotNull { it.id }.toSet())) return
         closing += true
         haptics.confirm()
         val values = fields.values(all)

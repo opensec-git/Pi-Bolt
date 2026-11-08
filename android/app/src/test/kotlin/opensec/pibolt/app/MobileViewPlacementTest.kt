@@ -93,4 +93,16 @@ class MobileViewPlacementTest {
         assertEquals(false, fields.check(listOf(input)))
         assertEquals("At most 3 characters", fields.errors["code"])
     }
+
+    @Test
+    fun everyFieldSentMustFitWhileRequiredCountsOnlyForTheAnswersOwn() {
+        val fields = ViewFields()
+        val a = opensec.pibolt.protocol.session.VInput("a", false, "A", "", null, null, null, "text", true, 100)
+        val b = opensec.pibolt.protocol.session.VInput("b", false, "B", "", null, null, null, "number", true, 100)
+        fields.edits["a"] = JsonPrimitive("x")
+        assertEquals(true, fields.check(listOf(a, b), required = setOf("a")))
+        fields.edits["b"] = JsonPrimitive(".")
+        assertEquals(false, fields.check(listOf(a, b), required = setOf("a")))
+        assertEquals("Enter a number", fields.errors["b"])
+    }
 }
