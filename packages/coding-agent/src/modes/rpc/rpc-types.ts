@@ -36,6 +36,7 @@ export type RpcCommand =
 	| { id?: string; type: "set_model"; provider: string; modelId: string }
 	| { id?: string; type: "cycle_model" }
 	| { id?: string; type: "get_available_models" }
+	| { id?: string; type: "get_providers" }
 
 	// Thinking
 	| { id?: string; type: "set_thinking_level"; level: ThinkingLevel }
@@ -134,6 +135,44 @@ export interface RpcSlashCommand {
 }
 
 // ============================================================================
+// RPC Providers (for get_providers response)
+// ============================================================================
+
+/** A chat model of a provider, as `get_providers` lists it */
+export interface RpcProviderModel {
+	id: string;
+	name: string;
+	reasoning: boolean;
+	input: ("text" | "image")[];
+	contextWindow: number;
+}
+
+/** A provider the session's model runtime knows. Never carries credential values. */
+export interface RpcProviderInfo {
+	id: string;
+	/** Display name */
+	name: string;
+	/** Pi's built-in catalog (also when changed by an extension or models.json), an extension, models.json, or only virtual models */
+	origin: "builtin" | "extension" | "models_json" | "virtual";
+	/** An extension registered this provider or changes it */
+	extension: boolean;
+	/** Its auth works now, so its available models can be used */
+	configured: boolean;
+	/** The kind of credential stored in auth.json for it, if any */
+	credential?: "api_key" | "oauth";
+	/** Where configured auth comes from ("stored", "environment", ...) */
+	authSource?: string;
+	/** It takes an API key (stored in auth.json under the provider id). `env`: variables it reads instead, when known */
+	apiKey?: { name: string; env: string[] };
+	/** It has an OAuth login flow */
+	oauth?: { name: string; loginLabel?: string; subscription?: boolean };
+	/** Every chat model it lists */
+	models: RpcProviderModel[];
+	/** Ids of the models that work now */
+	available: string[];
+}
+
+// ============================================================================
 // RPC State
 // ============================================================================
 
@@ -202,6 +241,13 @@ export type RpcResponse =
 			command: "get_available_models";
 			success: true;
 			data: { models: Model<any>[] };
+	  }
+	| {
+			id?: string;
+			type: "response";
+			command: "get_providers";
+			success: true;
+			data: { providers: RpcProviderInfo[] };
 	  }
 
 	// Thinking

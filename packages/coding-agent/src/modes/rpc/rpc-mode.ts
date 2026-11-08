@@ -32,6 +32,7 @@ import { killTrackedDetachedChildren } from "../../utils/shell.ts";
 import { type Theme, theme } from "../interactive/theme/theme.ts";
 import { toJsonEvent } from "../json-event.ts";
 import { attachJsonlLineReader, serializeJsonLine } from "./jsonl.ts";
+import { describeProviders } from "./rpc-providers.ts";
 import {
 	type RpcCommand,
 	type RpcExtensionUIRequest,
@@ -528,6 +529,11 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 			case "get_available_models": {
 				const models = session.modelRuntime.getAvailableSnapshot();
 				return success(id, "get_available_models", { models });
+			}
+
+			case "get_providers": {
+				const providers = await describeProviders(session.modelRuntime, AbortSignal.timeout(15_000));
+				return success(id, "get_providers", { providers });
 			}
 
 			// =================================================================
