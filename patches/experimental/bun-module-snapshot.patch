@@ -1,0 +1,2697 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: pi-bolt <pi-bolt@localhost>
+Date: Sun, 8 Nov 2026 12:31:58 +0530
+Subject: [PATCH] Pi-Bolt: module-state snapshot prototype: audit, record and
+ replay of bundled modules' top-level state
+
+BUN_MODULE_SNAPSHOT_WRAP=1 at build time wraps every bundled ES module (__esm) and hooks the runtime's __esm and __commonJS
+helpers into bun:pibolt-snapshot (PiBoltSnapshot.cpp). BUN_MODULE_SNAPSHOT_AUDIT=file records, per module, its own
+instructions, the cells it made, the chunk variables it set, what it read of the environment and whatever it changed that
+it did not make. BUN_MODULE_SNAPSHOT_OUT=file with BUN_MODULE_SNAPSHOT_MODULES=list writes the listed modules' state as
+operations; <executable>.msnap is replayed when such a module would run (BUN_MODULE_SNAPSHOT=0: never;
+BUN_MODULE_SNAPSHOT_CHECK=1: each replay written again and compared). Research prototype: replay is not cheaper than the
+modules' ahead-of-time compiled code, and wrapping costs more than it saves. Nothing changes without the variables.
+---
+ scripts/build/unified.ts                      |    2 +
+ src/bundler/ParseTask.rs                      |   56 +-
+ .../linker_context/scanImportsAndExports.rs   |   29 +
+ src/js/bun/pibolt-snapshot.ts                 |  101 +
+ src/jsc/bindings/InternalModuleRegistry.cpp   |    3 +
+ src/jsc/bindings/PiBoltSnapshot.cpp           | 2350 +++++++++++++++++
+ src/jsc/bindings/PiBoltSnapshot.h             |   15 +
+ src/resolve_builtins/HardcodedModule.rs       |    4 +
+ 8 files changed, 2559 insertions(+), 1 deletion(-)
+ create mode 100644 src/js/bun/pibolt-snapshot.ts
+ create mode 100644 src/jsc/bindings/PiBoltSnapshot.cpp
+ create mode 100644 src/jsc/bindings/PiBoltSnapshot.h
+
+diff --git a/scripts/build/unified.ts b/scripts/build/unified.ts
+index 18eb4abcef..eb058a2d60 100644
+--- a/scripts/build/unified.ts
++++ b/scripts/build/unified.ts
+@@ -51,6 +51,8 @@ const noUnify: readonly string[] = [
+   // Heavy single-file TUs that already saturate a core. Bundling them with
+   // siblings would serialize work that should run in parallel.
+   "src/jsc/bindings/ZigGlobalObject.cpp",
++  // Pi-Bolt: on its own, so that working on it rebuilds only it.
++  "src/jsc/bindings/PiBoltSnapshot.cpp",
+   "src/jsc/bindings/BunObject.cpp",
+   "src/jsc/bindings/bindings.cpp",
+   "src/jsc/bindings/BunProcess.cpp",
+diff --git a/src/bundler/ParseTask.rs b/src/bundler/ParseTask.rs
+index 823ebfc005..35cbbe7b32 100644
+--- a/src/bundler/ParseTask.rs
++++ b/src/bundler/ParseTask.rs
+@@ -408,6 +408,49 @@ pub(crate) struct RuntimeSource {
+ // context.
+ const RUNTIME_REQUIRE_BUN: &str = "export var __require = import.meta.require;";
+ 
++// The helpers that BUN_MODULE_SNAPSHOT_WRAP=1 replaces (runtime.js), and what replaces them.
++const RUNTIME_COMMONJS: &str = "export var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);";
++const RUNTIME_COMMONJS_SNAPSHOT: &str = "\
++export var __commonJS = (cb, mod) => __pbSnap.made(cb, () => {
++  if (!mod && !(mod = __pbSnap.enter(cb, 1))) {
++    try {
++      cb((mod = { exports: {} }).exports, mod);
++    } finally {
++      __pbSnap.leave(mod);
++    }
++  }
++  return mod.exports;
++});";
++const RUNTIME_ESM: &str = "\
++export var __esm = (fn, res, err) => () => {
++  if (fn)
++    try {
++      res = fn((fn = 0));
++    } catch (e) {
++      err = [e];
++    }
++  if (err) throw err[0];
++  return res;
++};";
++const RUNTIME_ESM_SNAPSHOT: &str = "\
++export var __esm = (fn, res, err) => __pbSnap.made(fn, () => {
++  if (fn) {
++    if (__pbSnap.enter(fn, 0)) fn = 0;
++    else {
++      try {
++        res = fn((fn = 0));
++      } catch (e) {
++        err = [e];
++      }
++      __pbSnap.leave();
++    }
++  }
++  if (err) throw err[0];
++  return res;
++});";
++const RUNTIME_SNAPSHOT_HOOKS: &str = "\nvar __pbSnap = import.meta.require(\"bun:pibolt-snapshot\");\n";
++
++
+ const RUNTIME_REQUIRE_NODE: &str = "\
+ import { createRequire } from \"node:module\";
+ export var __require = /* @__PURE__ */ createRequire(import.meta.url);
+@@ -589,7 +632,18 @@ pub mod parse_worker {
+                     RUNTIME_PRELOAD_BROWSER,
+                 ),
+             };
+-            [include_str!("../runtime.js"), require, using, preload]
++            let mut body = String::from(include_str!("../runtime.js"));
++            // BUN_MODULE_SNAPSHOT_WRAP=1 (Pi-Bolt's module-state snapshot): a wrapped module's top-level code runs between
++            // two calls into the runtime, which records what it made when a snapshot is being taken, or gives the module's
++            // state from the snapshot instead of running it (bun:pibolt-snapshot).
++            if bun_core::getenv_z(bun_core::zstr!("BUN_MODULE_SNAPSHOT_WRAP")) == Some(&b"1"[..]) {
++                assert!(body.contains(RUNTIME_COMMONJS) && body.contains(RUNTIME_ESM), "runtime.js: the helpers to wrap changed");
++                body = body
++                    .replacen(RUNTIME_COMMONJS, RUNTIME_COMMONJS_SNAPSHOT, 1)
++                    .replacen(RUNTIME_ESM, RUNTIME_ESM_SNAPSHOT, 1);
++                body.push_str(RUNTIME_SNAPSHOT_HOOKS);
++            }
++            [body.as_str(), require, using, preload]
+                 .concat()
+                 .into_bytes()
+                 .into_boxed_slice()
+diff --git a/src/bundler/linker_context/scanImportsAndExports.rs b/src/bundler/linker_context/scanImportsAndExports.rs
+index 101b1afe9d..54f722b6b4 100644
+--- a/src/bundler/linker_context/scanImportsAndExports.rs
++++ b/src/bundler/linker_context/scanImportsAndExports.rs
+@@ -427,6 +427,35 @@ pub(crate) fn scan_imports_and_exports(
+             }
+         }
+ 
++        // BUN_MODULE_SNAPSHOT_WRAP=1 (Pi-Bolt's module-state snapshot): every ES module that is not an entry point is wrapped
++        // (`var init_x = __esm(() => { ... })`), so that its top-level code is a function of its own that runs once, in the
++        // order the module graph gives, and can be told apart from the rest of its chunk.
++        if bun_core::getenv_z(bun_core::zstr!("BUN_MODULE_SNAPSHOT_WRAP")) == Some(&b"1"[..]) {
++            // BUN_MODULE_SNAPSHOT_WRAP_ONLY=FILE: only the modules it names, one path per line as the chunks' `// path`
++            // comments write them (those in the snapshot; what they import is wrapped with them).
++            let only: Option<std::collections::HashSet<Vec<u8>>> = bun_core::getenv_z(bun_core::zstr!("BUN_MODULE_SNAPSHOT_WRAP_ONLY"))
++                .and_then(|path| std::fs::read(std::str::from_utf8(path).ok()?).ok())
++                .map(|text| text.split(|b| *b == b'\n').filter(|l| !l.is_empty()).map(|l| l.to_vec()).collect());
++            for source_index_ in &reachable {
++                let id = source_index_.get() as usize;
++                if id == Index::RUNTIME.get() as usize || !(id < col_ref!(import_records_list).len()) {
++                    continue;
++                }
++                if col_ref!(entry_point_kinds)[id].is_entry_point() || col_ref!(exports_kind)[id] == ExportsKind::Cjs {
++                    continue;
++                }
++                if let Some(only) = &only {
++                    let source = this.get_source(id as u32);
++                    if !only.contains(source.path.pretty.as_ref() as &[u8]) {
++                        continue;
++                    }
++                }
++                if col_ref!(flags)[id].wrap == WrapKind::None {
++                    col!(flags)[id].wrap = WrapKind::Esm;
++                }
++            }
++        }
++
+         // Step 2: Propagate dynamic export status for export star statements that
+         // are re-exports from a module whose exports are not statically analyzable.
+         // In this case the export star must be evaluated at run time instead of at
+diff --git a/src/js/bun/pibolt-snapshot.ts b/src/js/bun/pibolt-snapshot.ts
+new file mode 100644
+index 0000000000..8b87112088
+--- /dev/null
++++ b/src/js/bun/pibolt-snapshot.ts
+@@ -0,0 +1,101 @@
++// Hardcoded module "bun:pibolt-snapshot"
++// Pi-Bolt's module-state snapshot: the runtime helpers of a bundle built with BUN_MODULE_SNAPSHOT_WRAP=1 call `enter()` and
++// `leave()` around each bundled module's top-level code (PiBoltSnapshot.cpp).
++const hooks = $cpp("PiBoltSnapshot.cpp", "createPiBoltSnapshotHooks");
++
++// While auditing (BUN_MODULE_SNAPSHOT_AUDIT): what a module's top-level code reads of the environment is noted for the module
++// that is running. Only then: these wrappers are not there otherwise.
++if (hooks.auditing) {
++  const note = hooks.note;
++  // The global object's, process's and Bun's lazily made properties are made now: otherwise the first module to read one
++  // would look as if it had changed them.
++  const reified = new Set();
++  const reify = (target, depth) => {
++    if ((typeof target !== "object" && typeof target !== "function") || target === null || reified.has(target)) return;
++    reified.add(target);
++    for (const key of Reflect.ownKeys(target)) {
++      if (target === process && (key === "stdin" || key === "stdout" || key === "stderr" || key === "env")) continue;
++      // (A descriptor, not a get: that makes a lazily made property without calling a getter.)
++      let descriptor;
++      try {
++        descriptor = Object.getOwnPropertyDescriptor(target, key);
++      } catch {}
++      if (depth > 0 && descriptor && "value" in descriptor) reify(descriptor.value, depth - 1);
++    }
++    if (depth > 0) {
++      try {
++        reify(Object.getPrototypeOf(target), depth - 1);
++      } catch {}
++    }
++  };
++  // (Two steps deep: the constructors, their prototypes and namespaces such as Intl, with their own lazily made properties.)
++  for (const target of [globalThis, process, Bun]) reify(target, 2);
++  const env = process.env;
++  const proxy = new Proxy(env, {
++    get(target, key) {
++      if (typeof key === "string") note("env", key, target[key]);
++      return Reflect.get(target, key);
++    },
++    has(target, key) {
++      if (typeof key === "string") note("env?", key, target[key]);
++      return Reflect.has(target, key);
++    },
++    ownKeys(target) {
++      note("env*");
++      return Reflect.ownKeys(target);
++    },
++    getOwnPropertyDescriptor(target, key) {
++      if (typeof key === "string") note("env", key, target[key]);
++      return Reflect.getOwnPropertyDescriptor(target, key);
++    },
++    set(target, key, value) {
++      if (typeof key === "string") note("env=", key, value);
++      return Reflect.set(target, key, value);
++    },
++    deleteProperty(target, key) {
++      if (typeof key === "string") note("env-", key);
++      return Reflect.deleteProperty(target, key);
++    },
++  });
++  Object.defineProperty(process, "env", { value: proxy, writable: true, enumerable: true, configurable: true });
++  for (const name of ["cwd", "chdir", "hrtime", "uptime", "memoryUsage", "cpuUsage", "umask", "on", "once", "addListener", "prependListener", "emitWarning", "nextTick", "exit", "kill"]) {
++    const original = process[name];
++    if (typeof original !== "function") continue;
++    const wrapped = function (...args) {
++      note("process." + name);
++      return original.$apply(this, args);
++    };
++    for (const key of Object.keys(original)) wrapped[key] = original[key];
++    process[name] = wrapped;
++  }
++  for (const name of ["argv", "execArgv", "pid", "ppid", "title", "stdout", "stderr", "stdin", "exitCode"]) {
++    const descriptor = Object.getOwnPropertyDescriptor(process, name);
++    if (!descriptor || !descriptor.configurable) continue;
++    let value = descriptor.get ? undefined : descriptor.value;
++    Object.defineProperty(process, name, {
++      get() {
++        note("process." + name);
++        return descriptor.get ? descriptor.get.$call(process) : value;
++      },
++      set(v) {
++        note("process." + name + "=");
++        if (descriptor.set) descriptor.set.$call(process, v);
++        else value = v;
++      },
++      enumerable: descriptor.enumerable,
++      configurable: true,
++    });
++  }
++  for (const name of ["setTimeout", "setInterval", "setImmediate", "queueMicrotask", "fetch"]) {
++    const original = globalThis[name];
++    if (typeof original !== "function") continue;
++    const wrapped = function (...args) {
++      note(name);
++      return original.$apply(this, args);
++    };
++    for (const key of Object.keys(original)) wrapped[key] = original[key];
++    globalThis[name] = wrapped;
++  }
++}
++
++export default hooks;
+diff --git a/src/jsc/bindings/InternalModuleRegistry.cpp b/src/jsc/bindings/InternalModuleRegistry.cpp
+index 92abcf667e..5134631b8e 100644
+--- a/src/jsc/bindings/InternalModuleRegistry.cpp
++++ b/src/jsc/bindings/InternalModuleRegistry.cpp
+@@ -17,6 +17,7 @@
+ #include "wtf/Forward.h"
+ 
+ #include "NativeModuleImpl.h"
++#include "PiBoltSnapshot.h"
+ #include "BunBuiltinNames.h"
+ #include "JSBuffer.h"
+ #include <JavaScriptCore/ObjectConstructor.h>
+@@ -144,12 +145,14 @@ JSC::JSValue generateInternalModule(JSC::JSGlobalObject* globalObject, JSC::VM&
+     // makes (an http Agent, say) is not the Bun.ModuleGraph's that happened to need it first.
+     Bun::ModuleGraphContextScope realmContext(*defaultGlobalObject(globalObject)->scriptExecutionContext());
+     JSC::MarkedArgumentBuffer argList;
++    piBoltSnapshotWillEvaluateBuiltin(vm, moduleName);
+     JSValue result = JSC::profiledCall(
+         globalObject,
+         ProfilingReason::Other,
+         func,
+         JSC::getCallData(func),
+         globalObject, JSC::MarkedArgumentBuffer());
++    piBoltSnapshotDidEvaluateBuiltin(vm);
+ 
+     RETURN_IF_EXCEPTION(throwScope, {});
+     ASSERT(
+diff --git a/src/jsc/bindings/PiBoltSnapshot.cpp b/src/jsc/bindings/PiBoltSnapshot.cpp
+new file mode 100644
+index 0000000000..c176bc7ddd
+--- /dev/null
++++ b/src/jsc/bindings/PiBoltSnapshot.cpp
+@@ -0,0 +1,2350 @@
++// Pi-Bolt's module-state snapshot: what a bundled module's top-level code makes, recorded when the program is built and
++// given back when it runs, instead of running that code again.
++//
++// With BUN_MODULE_SNAPSHOT_WRAP=1 at build time every bundled module's top-level code is a function of its own (`__esm`,
++// `__commonJS`), and the runtime's helpers call `enter(body, kind)` before running it and `leave()` after
++// (bundler/ParseTask.rs). This file is what they call (bun:pibolt-snapshot).
++//
++// BUN_MODULE_SNAPSHOT_AUDIT=FILE: for every module, one JSON line in FILE when its top-level code has run: the module's name
++// (its `// path` marker in the chunk), the instructions it took (its own, and with the modules it started), the cells it
++// made by class, the variables of its chunk it set, and what it read of the environment (`note()`, from the
++// JavaScript side: bun/pibolt-snapshot.ts).
++#include "root.h"
++
++#include "ZigGlobalObject.h"
++#include "InternalModuleRegistry.h"
++#include "BunProcess.h"
++#include <JavaScriptCore/HeapIterationScope.h>
++#include <JavaScriptCore/JSAsyncFunction.h>
++#include <JavaScriptCore/JSAsyncGeneratorFunction.h>
++#include <JavaScriptCore/JSBigInt.h>
++#include <JavaScriptCore/JSBoundFunction.h>
++#include <JavaScriptCore/JSGeneratorFunction.h>
++#include <JavaScriptCore/JSMap.h>
++#include <JavaScriptCore/JSMapInlines.h>
++#include <JavaScriptCore/JSLexicalEnvironmentInlines.h>
++#include <JavaScriptCore/JSMapIterator.h>
++#include <JavaScriptCore/JSSet.h>
++#include <JavaScriptCore/JSSetIterator.h>
++#include <JavaScriptCore/JSWeakMap.h>
++#include <JavaScriptCore/JSWeakMapInlines.h>
++#include <JavaScriptCore/JSWeakSet.h>
++#include <JavaScriptCore/WeakMapImplInlines.h>
++#include <JavaScriptCore/RegExpObject.h>
++#include <JavaScriptCore/RegExpPrototype.h>
++#include <JavaScriptCore/FunctionPrototype.h>
++#include <JavaScriptCore/StaticHeap.h>
++#include <JavaScriptCore/Strong.h>
++#include <JavaScriptCore/StrongInlines.h>
++#include <JavaScriptCore/GetterSetter.h>
++#include <JavaScriptCore/JSCInlines.h>
++#include <JavaScriptCore/JSFunction.h>
++#include <JavaScriptCore/JSLexicalEnvironment.h>
++#include <JavaScriptCore/JSModuleEnvironment.h>
++#include <JavaScriptCore/JSModuleLoader.h>
++#include <JavaScriptCore/ModuleRegistryEntry.h>
++#include <JavaScriptCore/AbstractModuleRecord.h>
++#include <JavaScriptCore/MarkedSpaceInlines.h>
++#include <JavaScriptCore/ObjectConstructor.h>
++#include <JavaScriptCore/SymbolTableInlines.h>
++#include <wtf/HashMap.h>
++#include <wtf/HashSet.h>
++#include <wtf/text/StringBuilder.h>
++#include <wtf/text/StringToIntegerConversion.h>
++#if OS(DARWIN)
++#include <mach-o/dyld.h>
++#include <libproc.h>
++#include <sys/resource.h>
++#endif
++
++namespace Bun {
++using namespace JSC;
++
++namespace PiBoltSnapshot {
++
++static uint64_t instructions()
++{
++#if OS(DARWIN)
++    rusage_info_v4 info;
++    if (!proc_pid_rusage(getpid(), RUSAGE_INFO_V4, reinterpret_cast<rusage_info_t*>(&info)))
++        return info.ri_instructions;
++#endif
++    return 0;
++}
++
++struct Frame {
++    JSFunction* body { nullptr };
++    unsigned kind { 0 }; // 0: ES module, 1: CommonJS
++    JSLexicalEnvironment* environment { nullptr };
++    Vector<JSValue> before; // The environment's variables when the module started.
++    HashSet<unsigned> setByOthers; // Variables that the modules it started set.
++    uint64_t instructionsAtStart { 0 };
++    uint64_t instructionsOfOthers { 0 };
++    uint64_t overheadAtStart { 0 };
++    Vector<String> notes;
++    String builtin; // A pseudo-frame for one of Bun's builtin modules (its cells are its, not the module's that loaded it).
++    HashMap<JSCell*, uint64_t> digests; // Of the cells that existed when it started (see digestOf()).
++    unsigned microtasksAtStart { 0 };
++    int moduleIndex { -1 };
++    Vector<uint64_t> children; // The bodies of the modules it started, in order (their executables).
++    // Environment variables that it, or a module it started, read and found unset: the snapshot of it holds while they are.
++    HashSet<String> unsetVariables;
++    Vector<JSCell*> weakAdditions; // WeakMaps and WeakSets made before it, to which it added entries with keys of its own.
++};
++
++struct Audit {
++    FILE* file { nullptr };
++    Vector<Frame> frames;
++    HashSet<JSCell*> seen; // Every cell that existed when a module ended.
++    HashMap<JSLexicalEnvironment*, Vector<String>> namesOfVariables; // By scope offset.
++    HashMap<std::pair<JSLexicalEnvironment*, unsigned>, String> ownerOfVariable; // The module that first set it.
++    uint64_t overhead { 0 }; // Instructions the audit itself took, which no module is charged with.
++    HashMap<JSCell*, int> owner; // Which module's top-level code made a cell (its moduleIndex), or -2: a builtin module's.
++    int numberOfModules { 0 };
++    bool started { false };
++};
++static Audit* s_audit;
++
++// What a program can see of a cell, for telling whether a module changed something it did not make: of an object, its
++// structure (which properties it has), the values of its properties and elements, and the variables of a scope; of a few
++// classes whose state is not in properties (Map, Set, WeakMap, WeakSet, FinalizationRegistry, Promise), their bytes; of
++// auxiliary storage (a Map's table), its bytes. Not what only the engine keeps (structures, code, executables, strings, which
++// never change for a program to see), nor the C++ state of the global object and other host objects (lazily made
++// structures), nor the variables of a chunk's module environment (whose variables are whose: see Audit::ownerOfVariable).
++static inline uint64_t mix(uint64_t hash, uint64_t value) { return (hash ^ value) * 0x100000001b3ULL; }
++
++static uint64_t digestOfBytes(const void* data, size_t size, bool skipCellState)
++{
++    const uint8_t* bytes = static_cast<const uint8_t*>(data);
++    uint64_t hash = 0xcbf29ce484222325ULL;
++    for (size_t i = 0; i < size; ++i) {
++        // (A cell's header: StructureID, indexing type, type, flags, then the collector's state, which is left out.)
++        if (skipCellState && i == 7)
++            continue;
++        hash = (hash ^ bytes[i]) * 0x100000001b3ULL;
++    }
++    return hash;
++}
++
++static bool isScopeOfWrapper(JSLexicalEnvironment* scope)
++{
++    SymbolTable* table = scope->symbolTable();
++    unsigned size = table->scopeSize();
++    if (!size || size > 3)
++        return false;
++    ConcurrentJSLocker locker(table->m_lock);
++    unsigned esm = 0, commonJS = 0, all = 0;
++    for (auto entry = table->begin(locker); entry != table->end(locker); ++entry) {
++        StringView name = StringView(entry->key.get());
++        all++;
++        if (name == "fn"_s || name == "res"_s || name == "err"_s)
++            esm++;
++        if (name == "cb"_s || name == "mod"_s)
++            commonJS++;
++    }
++    return all && (esm == all || commonJS == all);
++}
++
++// A WeakMap's or WeakSet's entries (in any order), leaving out those whose key `except` says to.
++static uint64_t digestOfWeakEntries(JSCell* cell, const HashSet<JSCell*>* seen)
++{
++    MarkedArgumentBuffer entries;
++    bool isMap = cell->inherits<JSWeakMap>();
++    if (isMap)
++        uncheckedDowncast<JSWeakMap>(cell)->takeSnapshot(entries);
++    else
++        uncheckedDowncast<JSWeakSet>(cell)->takeSnapshot(entries);
++    uint64_t sum = 0;
++    unsigned stride = isMap ? 2 : 1;
++    for (unsigned i = 0; i + stride <= entries.size(); i += stride) {
++        JSValue key = entries.at(i);
++        // (With `seen`: only keys that existed before the module started; a key it made is its own entry.)
++        if (seen && key.isCell() && !seen->contains(key.asCell()))
++            continue;
++        sum += mix(mix(0xcbf29ce484222325ULL, JSValue::encode(key)), isMap ? JSValue::encode(entries.at(i + 1)) : 0);
++    }
++    return sum;
++}
++
++static std::optional<uint64_t> digestOf(HeapCell* heapCell, HeapCell::Kind kind, const HashSet<JSCell*>* seenKeys = nullptr)
++{
++    if (!isJSCellKind(kind))
++        return digestOfBytes(heapCell, heapCell->cellSize(), false);
++    auto* cell = static_cast<JSCell*>(heapCell);
++    if (cell->type() == JSCellButterflyType)
++        return digestOfBytes(cell, cell->cellSize(), true);
++    if (!cell->isObject() || cell->type() == ModuleEnvironmentType)
++        return std::nullopt;
++    StringView className = cell->classInfo()->className;
++    if (className == "InternalModuleRegistry"_s || className == "ImportMeta"_s || className == "ModuleRecord"_s || className == "JSModuleLoader"_s || className == "ModuleLoader"_s)
++        return std::nullopt;
++    JSObject* object = uncheckedDowncast<JSObject>(cell);
++    Structure* structure = object->structure();
++    uint64_t hash = 0xcbf29ce484222325ULL;
++    hash = mix(hash, object->indexingType() & IndexingShapeMask ? 1 : 0);
++    hash = mix(hash, JSValue::encode(structure->storedPrototype(object)));
++    hash = mix(hash, structure->isStructureExtensible());
++    // Its properties by name, without a function's own name, length and prototype, which are made when first read.
++    bool isFunction = cell->inherits<JSFunction>();
++    VM& vm = cell->vm();
++    uint64_t properties = 0;
++    structure->forEachProperty(vm, [&](const PropertyTableEntry& entry) -> bool {
++        UniquedStringImpl* key = entry.key();
++        if (isFunction && (key == vm.propertyNames->name.impl() || key == vm.propertyNames->length.impl() || key == vm.propertyNames->prototype.impl()))
++            return true;
++        uint64_t one = mix(mix(mix(0xcbf29ce484222325ULL, std::bit_cast<uintptr_t>(key)), entry.attributes()), JSValue::encode(object->getDirect(entry.offset())));
++        properties += one; // (Whatever order the structure keeps them in.)
++        return true;
++    });
++    hash = mix(hash, properties);
++    if (Butterfly* butterfly = object->butterfly()) {
++        if (hasIndexedProperties(object->indexingType())) {
++            if (hasAnyArrayStorage(object->indexingType())) {
++                ArrayStorage* storage = butterfly->arrayStorage();
++                hash = mix(hash, storage->length());
++                hash = mix(hash, storage->m_sparseMap ? 1 : 0);
++                for (unsigned i = 0; i < storage->vectorLength(); ++i)
++                    hash = mix(hash, JSValue::encode(storage->m_vector[i].get()));
++            } else {
++                hash = mix(hash, butterfly->publicLength());
++                auto* words = reinterpret_cast<const uint64_t*>(butterfly->contiguous().data());
++                for (unsigned i = 0; i < butterfly->publicLength(); ++i)
++                    hash = mix(hash, words[i]);
++            }
++        }
++    }
++    if (auto* scope = dynamicDowncast<JSLexicalEnvironment>(object)) {
++        // (The scope of the runtime's `__esm` or `__commonJS` closure, which says whether the module ran: the runtime's own.)
++        if (isScopeOfWrapper(scope))
++            return std::nullopt;
++        unsigned size = scope->symbolTable()->scopeSize();
++        for (unsigned i = 0; i < size; ++i)
++            hash = mix(hash, JSValue::encode(scope->variableAt(ScopeOffset(i)).get()));
++    }
++    if (cell->inherits<JSWeakMap>() || cell->inherits<JSWeakSet>())
++        hash = mix(hash, digestOfWeakEntries(cell, seenKeys));
++    else if (className == "Map"_s || className == "Set"_s || className == "FinalizationRegistry"_s || className == "Promise"_s)
++        hash = mix(hash, digestOfBytes(cell, cell->cellSize(), true));
++    return hash;
++}
++
++static void takeDigests(VM& vm, HashMap<JSCell*, uint64_t>& digests)
++{
++    HeapIterationScope scope(vm.heap);
++    vm.heap.objectSpace().forEachLiveCell(scope, [&](HeapCell* cell, HeapCell::Kind kind) {
++        if (auto digest = digestOf(cell, kind))
++            digests.add(static_cast<JSCell*>(cell), *digest);
++        return IterationStatus::Continue;
++    });
++}
++
++static String nameOfModule(JSFunction* body)
++{
++    auto* executable = body->jsExecutable();
++    if (!executable)
++        return "?"_s;
++    const SourceCode& source = executable->source();
++    SourceProvider* provider = source.provider();
++    if (!provider)
++        return "?"_s;
++    StringView text = provider->source();
++    unsigned at = std::min<unsigned>(source.startOffset(), text.length());
++    // The `// path` line above the wrapper: the last line before the body that starts with "// " and has no space after.
++    while (at > 0) {
++        size_t lineStart = text.reverseFind('\n', at - 1);
++        unsigned start = lineStart == notFound ? 0 : lineStart + 1;
++        StringView line = text.substring(start, at - start);
++        if (line.startsWith("// "_s) && line.find(' ', 3) == notFound) {
++            size_t end = line.find('\n');
++            return line.substring(3, end == notFound ? line.length() - 3 : end - 3).toString();
++        }
++        if (!start)
++            break;
++        at = start - 1;
++    }
++    return makeString("@"_s, provider->sourceURL(), ":"_s, source.startOffset());
++}
++
++static const Vector<String>& namesOf(JSLexicalEnvironment* environment)
++{
++    auto result = s_audit->namesOfVariables.add(environment, Vector<String>());
++    if (result.isNewEntry) {
++        SymbolTable* table = environment->symbolTable();
++        Vector<String>& names = result.iterator->value;
++        names.resize(table->scopeSize());
++        ConcurrentJSLocker locker(table->m_lock);
++        for (auto entry = table->begin(locker); entry != table->end(locker); ++entry) {
++            ScopeOffset offset = entry->value.scopeOffset();
++            if (!!offset && offset.offset() < names.size())
++                names[offset.offset()] = String(entry->key.get());
++        }
++    }
++    return result.iterator->value;
++}
++
++static void appendJSONString(StringBuilder& out, StringView text)
++{
++    out.append('"');
++    for (auto character : text.codeUnits()) {
++        if (character == '"' || character == '\\') {
++            out.append('\\');
++            out.append(static_cast<char16_t>(character));
++        } else if (character < 0x20) {
++            out.append("\\u00"_s);
++            out.append("0123456789abcdef"[character >> 4]);
++            out.append("0123456789abcdef"[character & 15]);
++        } else
++            out.append(static_cast<char16_t>(character));
++    }
++    out.append('"');
++}
++
++// Cells made since the last look: by the module that is running (a parent, before it started a dependency), or by the code
++// of a chunk around its modules (-3: what the chunk's top level makes, which runs again when the program starts).
++static void claimNewCells(VM& vm, int owner)
++{
++    HeapIterationScope scope(vm.heap);
++    vm.heap.objectSpace().forEachLiveCell(scope, [&](HeapCell* heapCell, HeapCell::Kind) {
++        auto* cell = static_cast<JSCell*>(heapCell);
++        if (s_audit->seen.add(cell).isNewEntry)
++            s_audit->owner.set(cell, owner);
++        return IterationStatus::Continue;
++    });
++}
++
++static void enterForAudit(VM& vm, JSFunction* body, unsigned kind)
++{
++    uint64_t entered = instructions();
++    if (!s_audit->started) {
++        s_audit->started = true;
++        // (Nothing is collected while modules run: what is new when one ends is what it made, and the values below stay alive.)
++        alignas(DeferGC) static char deferral[sizeof(DeferGC)];
++        ::new (static_cast<void*>(deferral)) DeferGC(vm);
++        HeapIterationScope scope(vm.heap);
++        vm.heap.objectSpace().forEachLiveCell(scope, [&](HeapCell* cell, HeapCell::Kind) {
++            s_audit->seen.add(static_cast<JSCell*>(cell));
++            return IterationStatus::Continue;
++        });
++    }
++    claimNewCells(vm, s_audit->frames.isEmpty() ? -3 : s_audit->frames.last().moduleIndex);
++    if (!s_audit->frames.isEmpty() && s_audit->frames.last().body)
++        s_audit->frames.last().children.append(std::bit_cast<uint64_t>(body->jsExecutable()));
++    Frame frame;
++    frame.body = body;
++    frame.kind = kind;
++    frame.moduleIndex = s_audit->numberOfModules++;
++    frame.environment = dynamicDowncast<JSLexicalEnvironment>(body->scope());
++    if (frame.environment) {
++        unsigned size = frame.environment->symbolTable()->scopeSize();
++        frame.before.reserveInitialCapacity(size);
++        for (unsigned i = 0; i < size; ++i)
++            frame.before.append(frame.environment->variableAt(ScopeOffset(i)).get());
++    }
++    takeDigests(vm, frame.digests);
++    frame.instructionsAtStart = instructions();
++    s_audit->overhead += frame.instructionsAtStart - entered;
++    frame.overheadAtStart = s_audit->overhead;
++    s_audit->frames.append(WTF::move(frame));
++}
++
++struct SnapshotWriter;
++static SnapshotWriter* s_writer;
++static bool isPlainFunction(JSCell*);
++static uint8_t kindOfFunction(JSFunction*);
++static bool isSelected(const String&);
++static String serializeModule(VM&, JSGlobalObject*, const Frame&, const Vector<unsigned>& variables, JSValue moduleObject);
++static void writeSnapshot();
++
++// "env:NAME=undefined" (or "env?:"): what a module read of an environment variable that was not set.
++static std::optional<String> unsetVariableOf(const String& note)
++{
++    for (auto prefix : { "env:"_s, "env?:"_s }) {
++        if (note.startsWith(prefix) && note.endsWith("=undefined"_s))
++            return note.substring(prefix.length(), note.length() - prefix.length() - 10);
++    }
++    return std::nullopt;
++}
++
++static void leaveForAudit(VM& vm, JSGlobalObject* globalObject, JSValue moduleObject)
++{
++    if (s_audit->frames.isEmpty())
++        return;
++    uint64_t now = instructions();
++    Frame frame = s_audit->frames.takeLast();
++    uint64_t inclusive = now - frame.instructionsAtStart - (s_audit->overhead - frame.overheadAtStart);
++    HashMap<String, unsigned> changed;
++    {
++        HeapIterationScope scope(vm.heap);
++        vm.heap.objectSpace().forEachLiveCell(scope, [&](HeapCell* heapCell, HeapCell::Kind kind) {
++            auto* cell = static_cast<JSCell*>(heapCell);
++            auto before = frame.digests.find(cell);
++            if (before == frame.digests.end())
++                return IterationStatus::Continue;
++            auto digest = digestOf(heapCell, kind);
++            if (digest && *digest != before->value && isJSCellKind(kind) && (cell->inherits<JSWeakMap>() || cell->inherits<JSWeakSet>())) {
++                // Entries whose keys the module made are its own (they go in its snapshot: Op::WeakSet); without them, the
++                // WeakMap or WeakSet must be as it was.
++                auto without = digestOf(heapCell, kind, &s_audit->seen);
++                if (without && *without == before->value) {
++                    frame.weakAdditions.append(cell);
++                    return IterationStatus::Continue;
++                }
++            }
++            if (digest && *digest != before->value) {
++                StringBuilder what;
++                what.append(isJSCellKind(kind) ? StringView(cell->classInfo()->className) : "(auxiliary)"_s);
++                auto owner = s_audit->owner.find(cell);
++                what.append('@', owner == s_audit->owner.end() ? "before"_s : owner->value == -2 ? "builtin"_s : makeString(owner->value));
++                if (auto* scope = isJSCellKind(kind) ? dynamicDowncast<JSLexicalEnvironment>(cell) : nullptr) {
++                    SymbolTable* table = scope->symbolTable();
++                    ConcurrentJSLocker locker(table->m_lock);
++                    unsigned count = 0;
++                    for (auto entry = table->begin(locker); entry != table->end(locker) && count < 4; ++entry, ++count)
++                        what.append(count ? ',' : '[', StringView(entry->key.get()));
++                    if (count)
++                        what.append(']');
++                } else if (isJSCellKind(kind) && cell->isObject()) {
++                    unsigned count = 0;
++                    uncheckedDowncast<JSObject>(cell)->structure()->forEachProperty(vm, [&](const PropertyTableEntry& entry) -> bool {
++                        what.append(count ? ',' : '{', StringView(entry.key()));
++                        return ++count < 3;
++                    });
++                    if (count)
++                        what.append('}');
++                }
++                changed.add(what.toString(), 0).iterator->value++;
++            }
++            return IterationStatus::Continue;
++        });
++    }
++    for (auto& entry : changed)
++        frame.notes.append(makeString("changed:"_s, entry.key, '=', entry.value));
++    HashMap<String, unsigned> classes;
++    unsigned cells = 0;
++    {
++        HeapIterationScope scope(vm.heap);
++        vm.heap.objectSpace().forEachLiveCell(scope, [&](HeapCell* heapCell, HeapCell::Kind kind) {
++            auto* cell = static_cast<JSCell*>(heapCell);
++            if (!s_audit->seen.add(cell).isNewEntry)
++                return IterationStatus::Continue;
++            s_audit->owner.set(cell, frame.body ? frame.moduleIndex : -2);
++            cells++;
++            if (isJSCellKind(kind))
++                classes.add(String(cell->classInfo()->className), 0).iterator->value++;
++            else
++                classes.add("(auxiliary)"_s, 0).iterator->value++;
++            return IterationStatus::Continue;
++        });
++    }
++    StringBuilder out;
++    out.append("{\"m\":"_s);
++    appendJSONString(out, frame.body ? nameOfModule(frame.body) : makeString("builtin:"_s, frame.builtin));
++    out.append(",\"i\":"_s, frame.moduleIndex, ",\"kind\":"_s, frame.kind, ",\"depth\":"_s, s_audit->frames.size(), ",\"self\":"_s, inclusive - frame.instructionsOfOthers, ",\"incl\":"_s, inclusive, ",\"cells\":"_s, cells, ",\"classes\":{"_s);
++    bool first = true;
++    for (auto& entry : classes) {
++        if (!first)
++            out.append(',');
++        first = false;
++        appendJSONString(out, entry.key);
++        out.append(':', entry.value);
++    }
++    out.append("},\"set\":["_s);
++    HashSet<unsigned> setHere;
++    Vector<unsigned> ownVariables;
++    if (frame.environment) {
++        const auto& names = namesOf(frame.environment);
++        first = true;
++        for (unsigned i = 0; i < frame.before.size(); ++i) {
++            JSValue now = frame.environment->variableAt(ScopeOffset(i)).get();
++            if (now == frame.before[i])
++                continue;
++            // Not the module's variables: an import binding or a lazily made function declaration, filled when first read.
++            if (!frame.before[i])
++                continue;
++            if (auto* moduleEnvironment = dynamicDowncast<JSModuleEnvironment>(frame.environment); moduleEnvironment && moduleEnvironment->isFunctionDeclarationSlot(ScopeOffset(i)))
++                continue;
++            setHere.add(i);
++            if (frame.setByOthers.contains(i))
++                continue;
++            String self = nameOfModule(frame.body);
++            auto owner = s_audit->ownerOfVariable.add({ frame.environment, i }, self);
++            if (!owner.isNewEntry && owner.iterator->value != self)
++                frame.notes.append(makeString("sets-variable-of:"_s, owner.iterator->value, ':', i < names.size() ? StringView(names[i]) : "?"_s));
++            ownVariables.append(i);
++            if (!first)
++                out.append(',');
++            first = false;
++            appendJSONString(out, i < names.size() ? StringView(names[i]) : "?"_s);
++        }
++    }
++    out.append("],\"notes\":["_s);
++    first = true;
++    for (auto& note : frame.notes) {
++        if (!first)
++            out.append(',');
++        first = false;
++        appendJSONString(out, note);
++    }
++    out.append("]}\n"_s);
++    CString line = out.toString().utf8();
++    fwrite(line.data(), 1, line.length(), s_audit->file);
++    for (auto& note : frame.notes) {
++        if (auto name = unsetVariableOf(note))
++            frame.unsetVariables.add(*name);
++    }
++    if (!s_audit->frames.isEmpty()) {
++        Frame& parent = s_audit->frames.last();
++        parent.instructionsOfOthers += inclusive;
++        for (auto& name : frame.unsetVariables)
++            parent.unsetVariables.add(name);
++        // What a builtin module changed as it was evaluated is not the parent's doing.
++        if (!frame.builtin.isNull()) {
++            HeapIterationScope scope(vm.heap);
++            vm.heap.objectSpace().forEachLiveCell(scope, [&](HeapCell* heapCell, HeapCell::Kind kind) {
++                auto entry = parent.digests.find(static_cast<JSCell*>(heapCell));
++                if (entry != parent.digests.end()) {
++                    if (auto digest = digestOf(heapCell, kind))
++                        entry->value = *digest;
++                }
++                return IterationStatus::Continue;
++            });
++        }
++        if (parent.environment == frame.environment) {
++            for (unsigned i : setHere)
++                parent.setByOthers.add(i);
++        }
++    }
++    if (frame.body && s_writer) {
++        String name = nameOfModule(frame.body);
++        if (isSelected(name)) {
++            String why;
++            for (auto& note : frame.notes) {
++                if (!unsetVariableOf(note))
++                    why = makeString("notes: "_s, note);
++            }
++            if (!why.isNull()) { }
++            else if (!isPlainFunction(frame.body) || kindOfFunction(frame.body))
++                why = "its body is not an ordinary function"_s;
++            else if (!frame.environment)
++                why = "no environment"_s;
++            else
++                why = serializeModule(vm, globalObject, frame, ownVariables, moduleObject);
++            StringBuilder note;
++            note.append("{\"snapshot\":"_s);
++            appendJSONString(note, name);
++            note.append(",\"ok\":"_s, why.isNull() ? "true"_s : "false"_s, ",\"why\":"_s);
++            appendJSONString(note, why.isNull() ? ""_s : StringView(why));
++            note.append("}\n"_s);
++            CString line = note.toString().utf8();
++            fwrite(line.data(), 1, line.length(), s_audit->file);
++        }
++    }
++    if (s_audit->frames.isEmpty()) {
++        fflush(s_audit->file);
++        writeSnapshot();
++    }
++    s_audit->overhead += instructions() - now;
++}
++
++// ---- The snapshot: what a module's top-level code left, as operations that make it again.
++//
++// A record per module, found by the address of its body's FunctionExecutable (in the static heap: the same in every process
++// of the executable). Its operations make the objects the module made, in the order they were first reached, then give them
++// their properties, then set the module's variables (an ES module) or give its module object (CommonJS). Values are tagged:
++// primitives and strings inline; an object of this module by its number; one of a module replayed before it by both numbers;
++// a cell of the static heap by its address; anything else by a path (an external): from the global object, an intrinsic, or
++// the module's own chunk environment, through own data properties and prototypes. Whatever cannot be written that way keeps the
++// module out of the snapshot (it then runs as before).
++enum class Op : uint8_t {
++    End = 0,
++    NewObject, // id, prototype
++    NewArray, // id, length
++    NewFunction, // id, kind, executable, scope
++    NewScope, // id, symbol table, parent
++    NewRegExp, // id, pattern, flags
++    NewMap, // id
++    NewSet, // id
++    NewSymbol, // id, kind, description
++    NewBound, // id, target, this, count, arguments
++    NewBigInt, // id, decimal digits
++    Define, // object, key, value, attributes
++    DefineAccessor, // object, key, getter, setter, attributes
++    SetIndex, // object, index, value
++    SetLength, // array, length
++    SetScope, // scope, offset, value
++    MapSet, // map, key, value
++    SetAdd, // set, value
++    SetLastIndex, // regexp, value
++    PreventExtensions, // object
++    SetVariable, // name, value: into the module's chunk environment
++    Result, // value: a CommonJS module's module object
++    WeakAdd, // a WeakMap or WeakSet made before the module, key, value (Empty for a WeakSet)
++};
++
++enum class Tag : uint8_t {
++    Undefined,
++    Null,
++    True,
++    False,
++    Int32,
++    Double,
++    String,
++    Ref, // id
++    ModuleRef, // record, id
++    Static, // address
++    External, // index
++    Empty,
++};
++
++enum class Root : uint8_t {
++    GlobalObject,
++    OwnEnvironment, // then the variable's name
++    GlobalLexicalEnvironment,
++    Builtin, // the exports of one of Bun's builtin modules, by its number (InternalModuleRegistry), in decimal
++    ChunkEnvironment, // the module environment of another chunk, by its module key; then a variable's name, if any
++};
++
++enum class Step : uint8_t {
++    Property, // a string key
++    SymbolProperty, // a well-known symbol, by its description
++    Prototype,
++};
++
++class Writer {
++public:
++    void u8(uint8_t value) { m_bytes.append(value); }
++    void u32(uint32_t value) { m_bytes.append(std::span { reinterpret_cast<const uint8_t*>(&value), sizeof(value) }); }
++    void u64(uint64_t value) { m_bytes.append(std::span { reinterpret_cast<const uint8_t*>(&value), sizeof(value) }); }
++    void string(StringView text)
++    {
++        if (text.is8Bit()) {
++            u32(text.length() << 1);
++            m_bytes.append(std::span { reinterpret_cast<const uint8_t*>(text.span8().data()), text.length() });
++        } else {
++            u32(text.length() << 1 | 1);
++            m_bytes.append(std::span { reinterpret_cast<const uint8_t*>(text.span16().data()), text.length() * 2 });
++        }
++    }
++    void append(const Writer& other) { m_bytes.appendVector(other.m_bytes); }
++    void append(const Vector<uint8_t>& bytes) { m_bytes.appendVector(bytes); }
++    const Vector<uint8_t>& bytes() const { return m_bytes; }
++    size_t size() const { return m_bytes.size(); }
++
++private:
++    Vector<uint8_t> m_bytes;
++};
++
++struct Path {
++    Root root;
++    String rootName;
++    Vector<std::pair<Step, String>> steps;
++};
++
++struct Serializer {
++    VM& vm;
++    JSGlobalObject* globalObject;
++    int moduleIndex;
++    JSLexicalEnvironment* ownEnvironment;
++    Writer ops;
++    HashMap<JSCell*, uint32_t> ids;
++    Vector<std::pair<JSCell*, unsigned>> pending; // (cell, what to write of it)
++    Vector<Path> externals;
++    HashMap<JSCell*, uint32_t> externalIndex;
++    String failure;
++    uint32_t nextId { 0 };
++    // Which cells are the module's, and those of modules already written: from the audit (when the snapshot is taken), or
++    // what replaying made (when it is checked).
++    const HashSet<JSCell*>* ownCells { nullptr };
++    HashSet<String> ownVariables; // What the module sets: not a way to find what it refers to.
++    bool relearned { false };
++    const HashMap<JSCell*, std::pair<uint32_t, uint32_t>>* earlierIds { nullptr };
++
++    bool failed() const { return !failure.isNull(); }
++    void fail(const String& why)
++    {
++        if (!failed())
++            failure = why;
++    }
++
++    void value(Writer&, JSValue);
++    void key(Writer&, UniquedStringImpl*);
++    std::optional<uint32_t> make(JSCell*);
++    void contents(JSCell*);
++    bool external(Writer&, JSCell*);
++    void run();
++};
++
++struct SerializedRecord {
++    uint64_t key;
++    uint8_t kind;
++    Vector<uint8_t> bytes;
++};
++
++// What a record says of the body it is for, checked before it is replayed: its chunk (whose name has a hash of its text in
++// it) and where the body starts there.
++static void writeIdentity(Writer& out, JSFunction* body)
++{
++    const SourceCode& source = body->jsExecutable()->source();
++    out.string(source.provider()->sourceURL());
++    out.u32(source.startOffset());
++    out.u32(source.endOffset());
++}
++
++struct SnapshotWriter {
++    FILE* file { nullptr };
++    FILE* log { nullptr };
++    HashSet<String> selected;
++    HashMap<JSCell*, std::pair<uint32_t, uint32_t>> ids; // Cells of modules in the snapshot: (record, id).
++    HashMap<int, uint32_t> recordOfModule; // moduleIndex -> record
++    Vector<SerializedRecord> records;
++};
++// Where a cell made before the modules ran, or by one that is not in the snapshot, can be found from (see Serializer).
++static HashMap<JSCell*, Path>* s_knownPaths;
++static bool isSelected(const String& name) { return s_writer && s_writer->selected.contains(name); }
++
++static void learnPaths(VM& vm, JSGlobalObject* globalObject)
++{
++    // Breadth first from the global object, through own data properties (string keys and the well-known symbols' descriptions)
++    // and prototypes, three steps deep: what the bundle's modules can reach without running code.
++    s_knownPaths = new HashMap<JSCell*, Path>;
++    auto& known = *s_knownPaths;
++    Vector<std::pair<JSObject*, Path>> queue;
++    Path root { Root::GlobalObject, String(), { } };
++    known.add(globalObject, root);
++    queue.append({ globalObject, root });
++    // Bun's builtin modules that have been loaded, which a bundled module reaches through its imports of them.
++    if (auto* zigGlobalObject = dynamicDowncast<Zig::GlobalObject>(globalObject)) {
++        auto* registry = zigGlobalObject->internalModuleRegistry();
++        for (unsigned i = 0; i < BUN_INTERNAL_MODULE_COUNT; ++i) {
++            JSValue exports = registry->internalField(static_cast<InternalModuleRegistry::Field>(i)).get();
++            if (!exports.isObject() || known.contains(exports.asCell()))
++                continue;
++            Path path { Root::Builtin, String::number(i), { } };
++            known.add(exports.asCell(), path);
++            queue.append({ asObject(exports), path });
++        }
++    }
++    for (size_t at = 0; at < queue.size(); ++at) {
++        auto [object, path] = queue[at];
++        if (path.steps.size() >= 3)
++            continue;
++        auto visit = [&](JSValue value, Step step, const String& name) {
++            if (!value.isCell())
++                return;
++            JSCell* cell = value.asCell();
++            if (known.contains(cell))
++                return;
++            Path next = path;
++            next.steps.append({ step, name });
++            known.add(cell, next);
++            if (JSObject* child = dynamicDowncast<JSObject>(cell))
++                queue.append({ child, next });
++        };
++        JSValue prototype = object->getPrototypeDirect();
++        if (prototype.isObject())
++            visit(prototype, Step::Prototype, String());
++        Structure* structure = object->structure();
++        if (structure->isDictionary() && structure->hasBeenFlattenedBefore())
++            continue;
++        structure->forEachProperty(vm, [&](const PropertyTableEntry& entry) -> bool {
++            if (entry.attributes() & (PropertyAttribute::Accessor | PropertyAttribute::CustomAccessorOrValue))
++                return true;
++            UniquedStringImpl* name = entry.key();
++            JSValue value = object->getDirect(entry.offset());
++            if (name->isSymbol()) {
++                if (static_cast<SymbolImpl*>(name)->isPrivate())
++                    return true;
++                return true; // (Only well-known symbols are named, below.)
++            }
++            visit(value, Step::Property, String(name));
++            return true;
++        });
++    }
++    // The well-known symbols: Symbol.iterator and the like, by the Symbol constructor's properties.
++
++}
++
++bool Serializer::external(Writer& out, JSCell* cell)
++{
++    auto index = externalIndex.find(cell);
++    if (index != externalIndex.end()) {
++        out.u8(static_cast<uint8_t>(Tag::External));
++        out.u32(index->value);
++        return true;
++    }
++    std::optional<Path> path;
++    if (cell == ownEnvironment)
++        path = Path { Root::OwnEnvironment, String(), { } };
++    else if (cell == globalObject->globalLexicalEnvironment())
++        path = Path { Root::GlobalLexicalEnvironment, String(), { } };
++    else if (ownEnvironment) {
++        // A variable of the module's chunk, made before this module ran (a function declaration, say).
++        SymbolTable* table = ownEnvironment->symbolTable();
++        ConcurrentJSLocker locker(table->m_lock);
++        for (auto entry = table->begin(locker); entry != table->end(locker); ++entry) {
++            ScopeOffset offset = entry->value.scopeOffset();
++            if (!offset || offset.offset() >= table->scopeSize() || ownVariables.contains(String(entry->key.get())))
++                continue;
++            auto* moduleEnvironment = dynamicDowncast<JSModuleEnvironment>(ownEnvironment);
++            JSValue value = moduleEnvironment ? moduleEnvironment->readVariable(vm, offset) : ownEnvironment->variableAt(offset).get();
++            if (value.isCell() && value.asCell() == cell) {
++                path = Path { Root::OwnEnvironment, String(entry->key.get()), { } };
++                break;
++            }
++        }
++    }
++    if (!path && s_audit) {
++        // Another chunk's environment, or one of its variables (made before this module ran: they were there at its time).
++        for (auto& entry : s_audit->namesOfVariables) {
++            auto* environment = dynamicDowncast<JSModuleEnvironment>(entry.key);
++            if (!environment || environment == ownEnvironment || !environment->moduleRecord())
++                continue;
++            String key = environment->moduleRecord()->moduleKey().string();
++            if (environment == cell) {
++                path = Path { Root::ChunkEnvironment, makeString(key, '\n'), { } };
++                break;
++            }
++            const auto& names = entry.value;
++            for (unsigned i = 0; i < names.size() && !path; ++i) {
++                if (names[i].isNull())
++                    continue;
++                JSValue value = environment->readVariable(vm, ScopeOffset(i));
++                if (value.isCell() && value.asCell() == cell)
++                    path = Path { Root::ChunkEnvironment, makeString(key, '\n', names[i]), { } };
++            }
++            if (path)
++                break;
++        }
++    }
++    if (!path) {
++        if (!s_knownPaths)
++            learnPaths(vm, globalObject);
++        auto known = s_knownPaths->find(cell);
++        if (known == s_knownPaths->end() && !relearned) {
++            // (What has been loaded since: builtin modules, the global object's properties.)
++            relearned = true;
++            delete s_knownPaths;
++            learnPaths(vm, globalObject);
++            known = s_knownPaths->find(cell);
++        }
++        if (known != s_knownPaths->end())
++            path = known->value;
++    }
++    if (!path)
++        return false;
++    uint32_t number = externals.size();
++    externals.append(*path);
++    externalIndex.add(cell, number);
++    out.u8(static_cast<uint8_t>(Tag::External));
++    out.u32(number);
++    return true;
++}
++
++void Serializer::value(Writer& out, JSValue value)
++{
++    if (failed())
++        return;
++    if (!value) {
++        out.u8(static_cast<uint8_t>(Tag::Empty));
++        return;
++    }
++    if (value.isUndefined()) {
++        out.u8(static_cast<uint8_t>(Tag::Undefined));
++        return;
++    }
++    if (value.isNull()) {
++        out.u8(static_cast<uint8_t>(Tag::Null));
++        return;
++    }
++    if (value.isBoolean()) {
++        out.u8(static_cast<uint8_t>(value.asBoolean() ? Tag::True : Tag::False));
++        return;
++    }
++    if (value.isInt32()) {
++        out.u8(static_cast<uint8_t>(Tag::Int32));
++        out.u32(static_cast<uint32_t>(value.asInt32()));
++        return;
++    }
++    if (value.isDouble()) {
++        out.u8(static_cast<uint8_t>(Tag::Double));
++        out.u64(std::bit_cast<uint64_t>(value.asDouble()));
++        return;
++    }
++#if USE(BIGINT32)
++    if (value.isBigInt32()) {
++        fail("bigint32"_s);
++        return;
++    }
++#endif
++    JSCell* cell = value.asCell();
++    if (cell->isString()) {
++        if (StaticHeap::contains(cell)) {
++            out.u8(static_cast<uint8_t>(Tag::Static));
++            out.u64(std::bit_cast<uint64_t>(cell));
++            return;
++        }
++        auto string = asString(cell)->value(globalObject);
++        out.u8(static_cast<uint8_t>(Tag::String));
++        out.string(string.data);
++        return;
++    }
++    auto id = ids.find(cell);
++    if (id != ids.end()) {
++        out.u8(static_cast<uint8_t>(Tag::Ref));
++        out.u32(id->value);
++        return;
++    }
++    auto earlier = earlierIds->find(cell);
++    if (earlier != earlierIds->end()) {
++        out.u8(static_cast<uint8_t>(Tag::ModuleRef));
++        out.u32(earlier->value.first);
++        out.u32(earlier->value.second);
++        return;
++    }
++    bool isOwn;
++    String whose;
++    if (ownCells)
++        isOwn = ownCells->contains(cell);
++    else {
++        auto owner = s_audit->owner.find(cell);
++        isOwn = owner != s_audit->owner.end() && owner->value == moduleIndex;
++        whose = owner == s_audit->owner.end() ? " made before the modules ran"_s : owner->value == -2 ? " of a builtin module"_s : " of another module"_s;
++    }
++    // A BigInt is a value, whoever made it.
++    if (isOwn || cell->type() == HeapBigIntType) {
++        auto made = make(cell);
++        if (!made)
++            return;
++        out.u8(static_cast<uint8_t>(Tag::Ref));
++        out.u32(*made);
++        return;
++    }
++    if (external(out, cell))
++        return;
++    fail(makeString("not this module's, and not found: a "_s, cell->classInfo()->className, whose));
++}
++
++// A name: an atom of the static heap by its address (nothing to look up when it is read), or its characters.
++static void writeName(Writer& out, StringImpl* name)
++{
++    if (name && name->isAtom() && StaticHeap::contains(name)) {
++        out.u8(2);
++        out.u64(std::bit_cast<uint64_t>(name));
++        return;
++    }
++    out.u8(0);
++    out.string(name ? StringView(name) : StringView());
++}
++
++void Serializer::key(Writer& out, UniquedStringImpl* name)
++{
++    if (!name->isSymbol()) {
++        writeName(out, name);
++        return;
++    }
++    out.u8(1);
++    value(out, Symbol::create(vm, *static_cast<SymbolImpl*>(name)));
++}
++
++static bool isPlainFunction(JSCell* cell)
++{
++    if (cell->type() != JSFunctionType || cell->inherits<JSBoundFunction>())
++        return false;
++    auto* function = uncheckedDowncast<JSFunction>(cell);
++    return !function->isHostOrBuiltinFunction();
++}
++
++// 0: an ordinary function, 1: async, 2: a generator, 3: an async generator.
++static uint8_t kindOfFunction(JSFunction* function)
++{
++    SourceParseMode mode = function->jsExecutable()->parseMode();
++    if (isAsyncGeneratorWrapperParseMode(mode))
++        return 3;
++    if (isGeneratorWrapperParseMode(mode))
++        return 2;
++    if (isAsyncFunctionWrapperParseMode(mode))
++        return 1;
++    return 0;
++}
++
++std::optional<uint32_t> Serializer::make(JSCell* cell)
++{
++    // What the operation that makes the cell needs is written first (a prototype, a scope), so that it exists.
++    Writer operands;
++    Op op;
++    unsigned what = 0; // 0: properties (an object), 1: an array, 2: a scope, 3: a map, 4: a set, 5: a regexp, 6: nothing
++    const ClassInfo* info = cell->classInfo();
++    if (cell->type() == HeapBigIntType) {
++        op = Op::NewBigInt;
++        operands.string(uncheckedDowncast<JSBigInt>(cell)->toString(globalObject, 10));
++        what = 6;
++    } else if (cell->type() == SymbolType) {
++        auto* symbol = uncheckedDowncast<Symbol>(cell);
++        SymbolImpl& uid = symbol->privateName().uid();
++        op = Op::NewSymbol;
++        operands.u8(uid.isPrivate() ? 1 : uid.isRegistered() ? 2 : uid.isNullSymbol() ? 3 : 0);
++        operands.string(StringView(uid));
++        what = 6;
++    } else if (cell->inherits<JSBoundFunction>()) {
++        auto* bound = uncheckedDowncast<JSBoundFunction>(cell);
++        op = Op::NewBound;
++        value(operands, bound->targetFunction());
++        value(operands, bound->boundThis());
++        JSArray* arguments = bound->boundArgsCopy(globalObject);
++        operands.u32(arguments->length());
++        for (unsigned i = 0; i < arguments->length(); ++i)
++            value(operands, arguments->getIndexQuickly(i));
++    } else if (isPlainFunction(cell)) {
++        auto* function = uncheckedDowncast<JSFunction>(cell);
++        if (function->isHostOrBuiltinFunction()) {
++            fail("a host or builtin function"_s);
++            return std::nullopt;
++        }
++        FunctionExecutable* executable = function->jsExecutable();
++        if (!StaticHeap::contains(executable)) {
++            fail("a function whose executable is not in the static heap"_s);
++            return std::nullopt;
++        }
++        op = Op::NewFunction;
++        operands.u8(kindOfFunction(function));
++        operands.u64(std::bit_cast<uint64_t>(executable));
++        value(operands, function->scope());
++    } else if (cell->type() == LexicalEnvironmentType) {
++        auto* scope = uncheckedDowncast<JSLexicalEnvironment>(cell);
++        if (!StaticHeap::contains(scope->symbolTable())) {
++            fail("a scope whose symbol table is not in the static heap"_s);
++            return std::nullopt;
++        }
++        op = Op::NewScope;
++        operands.u64(std::bit_cast<uint64_t>(scope->symbolTable()));
++        value(operands, scope->next());
++        what = 2;
++    } else if (cell->type() == FinalObjectType) {
++        op = Op::NewObject;
++        value(operands, uncheckedDowncast<JSObject>(cell)->getPrototypeDirect());
++    } else if (cell->type() == ArrayType) {
++        auto* array = uncheckedDowncast<JSArray>(cell);
++        if (array->getPrototypeDirect() != globalObject->arrayPrototype()) {
++            fail("an array with another prototype"_s);
++            return std::nullopt;
++        }
++        op = Op::NewArray;
++        operands.u32(array->length());
++        what = 1;
++    } else if (cell->type() == RegExpObjectType) {
++        auto* object = uncheckedDowncast<RegExpObject>(cell);
++        if (object->getPrototypeDirect() != JSValue(globalObject->regExpPrototype())) {
++            fail("a regexp with another prototype"_s);
++            return std::nullopt;
++        }
++        op = Op::NewRegExp;
++        RegExp* regExp = object->regExp();
++        if (StaticHeap::contains(regExp)) {
++            operands.u8(1);
++            operands.u64(std::bit_cast<uint64_t>(regExp));
++        } else {
++            // (What it takes to make it again without parsing the pattern: RegExp::createFromCache().)
++            operands.u8(0);
++            operands.string(regExp->pattern());
++            operands.u32(regExp->flags().toRaw());
++            operands.u32(regExp->numSubpatterns());
++            operands.string(regExp->atom().isNull() ? StringView() : StringView(regExp->atom()));
++            operands.u8(regExp->atom().isNull());
++            operands.u8(static_cast<uint8_t>(regExp->specificPattern()));
++        }
++        what = 5;
++    } else if (cell->type() == JSMapType) {
++        op = Op::NewMap;
++        what = 3;
++    } else if (cell->type() == JSSetType) {
++        op = Op::NewSet;
++        what = 4;
++    } else {
++        fail(makeString("a "_s, info->className));
++        return std::nullopt;
++    }
++    if (failed())
++        return std::nullopt;
++    uint32_t id = nextId++;
++    ids.add(cell, id);
++    ops.u8(static_cast<uint8_t>(op));
++    ops.u32(id);
++    ops.append(operands);
++    if (what != 6)
++        pending.append({ cell, what });
++    return id;
++}
++
++void Serializer::contents(JSCell* cell)
++{
++    uint32_t id = ids.get(cell);
++    auto ref = [&](Writer& out) {
++        out.u8(static_cast<uint8_t>(Tag::Ref));
++        out.u32(id);
++    };
++    JSObject* object = uncheckedDowncast<JSObject>(cell);
++    Structure* structure = object->structure();
++    if (structure->isUncacheableDictionary()) {
++        fail("a dictionary object with deleted properties"_s);
++        return;
++    }
++    if (cell->type() == LexicalEnvironmentType) {
++        auto* scope = uncheckedDowncast<JSLexicalEnvironment>(cell);
++        unsigned size = scope->symbolTable()->scopeSize();
++        for (unsigned i = 0; i < size && !failed(); ++i) {
++            Writer operands;
++            ref(operands);
++            operands.u32(i);
++            value(operands, scope->variableAt(ScopeOffset(i)).get());
++            ops.u8(static_cast<uint8_t>(Op::SetScope));
++            ops.append(operands);
++        }
++        return;
++    }
++    // Own properties, in the order the structure has them.
++    structure->forEachProperty(vm, [&](const PropertyTableEntry& entry) -> bool {
++        unsigned attributes = entry.attributes();
++        if (attributes & PropertyAttribute::CustomAccessorOrValue) {
++            fail("a custom accessor"_s);
++            return false;
++        }
++        JSValue property = object->getDirect(entry.offset());
++        Writer operands;
++        ref(operands);
++        key(operands, entry.key());
++        if (attributes & PropertyAttribute::Accessor) {
++            auto* accessor = dynamicDowncast<GetterSetter>(property.asCell());
++            if (!accessor) {
++                fail("an accessor that is not a GetterSetter"_s);
++                return false;
++            }
++            value(operands, accessor->getter() ? JSValue(accessor->getter()) : jsUndefined());
++            value(operands, accessor->setter() ? JSValue(accessor->setter()) : jsUndefined());
++            operands.u32(attributes);
++            if (failed())
++                return false;
++            ops.u8(static_cast<uint8_t>(Op::DefineAccessor));
++        } else {
++            value(operands, property);
++            operands.u32(attributes);
++            if (failed())
++                return false;
++            ops.u8(static_cast<uint8_t>(Op::Define));
++        }
++        ops.append(operands);
++        return true;
++    });
++    if (failed())
++        return;
++    IndexingType indexing = object->indexingType();
++    if (hasIndexedProperties(indexing)) {
++        if (hasAnyArrayStorage(indexing)) {
++            fail("array storage"_s);
++            return;
++        }
++        Butterfly* butterfly = object->butterfly();
++        unsigned length = butterfly->publicLength();
++        for (unsigned i = 0; i < length && !failed(); ++i) {
++            JSValue element;
++            if (hasDouble(indexing)) {
++                double number = butterfly->contiguousDouble().at(object, i);
++                if (number == number)
++                    element = jsDoubleNumber(number);
++            } else
++                element = butterfly->contiguous().at(object, i).get();
++            if (!element)
++                continue;
++            Writer operands;
++            ref(operands);
++            operands.u32(i);
++            value(operands, element);
++            ops.u8(static_cast<uint8_t>(Op::SetIndex));
++            ops.append(operands);
++        }
++    }
++    if (auto* array = dynamicDowncast<JSArray>(object)) {
++        Writer operands;
++        ref(operands);
++        operands.u32(array->length());
++        ops.u8(static_cast<uint8_t>(Op::SetLength));
++        ops.append(operands);
++    }
++    if (auto* regExp = dynamicDowncast<RegExpObject>(object)) {
++        Writer operands;
++        ref(operands);
++        value(operands, regExp->getLastIndex());
++        ops.u8(static_cast<uint8_t>(Op::SetLastIndex));
++        ops.append(operands);
++    }
++    if (auto* map = dynamicDowncast<JSMap>(object)) {
++        auto* iterator = JSMapIterator::create(vm, globalObject->mapIteratorStructure(), map, IterationKind::Entries);
++        JSValue entryKey, entryValue;
++        while (!failed() && iterator->nextKeyValue(globalObject, entryKey, entryValue)) {
++            Writer operands;
++            ref(operands);
++            value(operands, entryKey);
++            value(operands, entryValue);
++            ops.u8(static_cast<uint8_t>(Op::MapSet));
++            ops.append(operands);
++        }
++    }
++    if (auto* set = dynamicDowncast<JSSet>(object)) {
++        auto* iterator = JSSetIterator::create(vm, globalObject->setIteratorStructure(), set, IterationKind::Keys);
++        JSValue element;
++        while (!failed() && iterator->next(globalObject, element)) {
++            Writer operands;
++            ref(operands);
++            value(operands, element);
++            ops.u8(static_cast<uint8_t>(Op::SetAdd));
++            ops.append(operands);
++        }
++    }
++    if (!structure->isStructureExtensible()) {
++        Writer operands;
++        ref(operands);
++        ops.u8(static_cast<uint8_t>(Op::PreventExtensions));
++        ops.append(operands);
++    }
++}
++
++void Serializer::run()
++{
++    for (size_t i = 0; i < pending.size() && !failed(); ++i)
++        contents(pending[i].first);
++}
++
++// The entries a module added, with keys of its own, to WeakMaps and WeakSets that are not its own.
++static void writeWeakAdditions(Serializer& serializer, Writer& out, const Vector<JSCell*>& targets)
++{
++    for (JSCell* target : targets) {
++        MarkedArgumentBuffer entries;
++        bool isMap = target->inherits<JSWeakMap>();
++        if (isMap)
++            uncheckedDowncast<JSWeakMap>(target)->takeSnapshot(entries);
++        else
++            uncheckedDowncast<JSWeakSet>(target)->takeSnapshot(entries);
++        // (In the order of the keys' numbers: a WeakMap's own order is its table's.)
++        Vector<std::pair<uint32_t, unsigned>> own;
++        unsigned stride = isMap ? 2 : 1;
++        for (unsigned i = 0; i + stride <= entries.size(); i += stride) {
++            JSValue key = entries.at(i);
++            if (!key.isCell())
++                continue;
++            bool isOwn = serializer.ownCells ? serializer.ownCells->contains(key.asCell()) : [&] {
++                auto owner = s_audit->owner.find(key.asCell());
++                return owner != s_audit->owner.end() && owner->value == serializer.moduleIndex;
++            }();
++            if (!isOwn)
++                continue;
++            Writer probe;
++            serializer.value(probe, key); // (Made if it was not yet: it is the module's.)
++            auto id = serializer.ids.find(key.asCell());
++            if (id == serializer.ids.end())
++                continue;
++            own.append({ id->value, i });
++        }
++        std::sort(own.begin(), own.end());
++        for (auto [id, at] : own) {
++            Writer operands;
++            serializer.value(operands, target);
++            serializer.value(operands, entries.at(at));
++            serializer.value(operands, isMap ? entries.at(at + 1) : JSValue());
++            out.u8(static_cast<uint8_t>(Op::WeakAdd));
++            out.append(operands);
++        }
++    }
++}
++
++static void writeExternals(Writer& out, const Vector<Path>& externals)
++{
++    out.u32(externals.size());
++    for (auto& path : externals) {
++        out.u8(static_cast<uint8_t>(path.root));
++        out.string(path.rootName.isNull() ? StringView() : StringView(path.rootName));
++        out.u32(path.steps.size());
++        for (auto& [step, name] : path.steps) {
++            out.u8(static_cast<uint8_t>(step));
++            out.string(name.isNull() ? StringView() : StringView(name));
++        }
++    }
++}
++
++// The module that just ran, if it is one to keep: returns why not, or a null string once it is in the snapshot.
++static String serializeModule(VM& vm, JSGlobalObject* globalObject, const Frame& frame, const Vector<unsigned>& variables, JSValue moduleObject)
++{
++    auto& names = namesOf(frame.environment);
++    Serializer serializer { vm, globalObject, frame.moduleIndex, frame.environment };
++    serializer.earlierIds = &s_writer->ids;
++    for (unsigned offset : variables) {
++        if (offset < names.size() && !names[offset].isNull())
++            serializer.ownVariables.add(names[offset]);
++    }
++    Writer tail;
++    if (frame.kind == 1) {
++        Writer operands;
++        serializer.value(operands, moduleObject);
++        tail.u8(static_cast<uint8_t>(Op::Result));
++        tail.append(operands);
++    } else {
++        for (unsigned offset : variables) {
++            if (offset >= names.size() || names[offset].isNull())
++                return "a variable without a name"_s;
++            Writer operands;
++            writeName(operands, names[offset].impl());
++            serializer.value(operands, frame.environment->variableAt(ScopeOffset(offset)).get());
++            tail.u8(static_cast<uint8_t>(Op::SetVariable));
++            tail.append(operands);
++        }
++    }
++    serializer.run();
++    Writer weak;
++    writeWeakAdditions(serializer, weak, frame.weakAdditions);
++    serializer.run();
++    if (serializer.failed())
++        return serializer.failure;
++    Writer record;
++    writeIdentity(record, frame.body);
++    record.u32(frame.children.size());
++    for (uint64_t child : frame.children)
++        record.u64(child);
++    record.u32(frame.unsetVariables.size());
++    for (auto& name : frame.unsetVariables)
++        record.string(name);
++    writeExternals(record, serializer.externals);
++    record.append(serializer.ops);
++    record.append(weak);
++    record.append(tail);
++    record.u8(static_cast<uint8_t>(Op::End));
++    uint32_t number = s_writer->records.size();
++    for (auto& [cell, id] : serializer.ids)
++        s_writer->ids.add(cell, std::pair { number, id });
++    s_writer->recordOfModule.add(frame.moduleIndex, number);
++    s_writer->records.append({ std::bit_cast<uint64_t>(frame.body->jsExecutable()), static_cast<uint8_t>(frame.kind), record.bytes() });
++    return String();
++}
++
++static constexpr uint64_t snapshotMagic = 0x31504e534d424950ULL; // "PIBMSNP1"
++
++// The file is written again whenever no module is running, so that it is whole when the program ends however it ends.
++static void writeSnapshot()
++{
++    if (!s_writer || !s_writer->file)
++        return;
++    Writer out;
++    out.u64(snapshotMagic);
++    out.u32(s_writer->records.size());
++    for (auto& record : s_writer->records) {
++        out.u64(record.key);
++        out.u8(record.kind);
++        out.u32(record.bytes.size());
++    }
++    for (auto& record : s_writer->records)
++        out.append(record.bytes);
++    rewind(s_writer->file);
++    fwrite(out.bytes().span().data(), 1, out.size(), s_writer->file);
++    fflush(s_writer->file);
++    ftruncate(fileno(s_writer->file), out.size());
++}
++
++// ---- Replay.
++
++class Reader {
++public:
++    Reader(std::span<const uint8_t> bytes)
++        : m_start(bytes.data())
++        , m_at(bytes.data())
++        , m_end(bytes.data() + bytes.size())
++    {
++    }
++    bool bad() const { return m_bad; }
++    size_t offset() const { return m_at - m_start; }
++    uint8_t u8()
++    {
++        if (m_at + 1 > m_end) {
++            m_bad = true;
++            return 0;
++        }
++        return *m_at++;
++    }
++    uint32_t u32()
++    {
++        uint32_t value = 0;
++        if (m_at + 4 > m_end) {
++            m_bad = true;
++            return 0;
++        }
++        memcpy(&value, m_at, 4);
++        m_at += 4;
++        return value;
++    }
++    uint64_t u64()
++    {
++        uint64_t value = 0;
++        if (m_at + 8 > m_end) {
++            m_bad = true;
++            return 0;
++        }
++        memcpy(&value, m_at, 8);
++        m_at += 8;
++        return value;
++    }
++    String string()
++    {
++        uint32_t header = u32();
++        size_t length = header >> 1;
++        size_t size = header & 1 ? length * 2 : length;
++        if (m_bad || m_at + size > m_end) {
++            m_bad = true;
++            return String();
++        }
++        String result;
++        if (header & 1) {
++            std::span<char16_t> characters;
++            result = String::createUninitialized(length, characters);
++            memcpy(characters.data(), m_at, size);
++        } else
++            result = String(std::span { reinterpret_cast<const Latin1Character*>(m_at), length });
++        m_at += size;
++        return result;
++    }
++
++private:
++    const uint8_t* m_start;
++    const uint8_t* m_at;
++    const uint8_t* m_end;
++    bool m_bad { false };
++};
++
++struct Snapshot {
++    Vector<uint8_t> data;
++    struct Record {
++        uint64_t key;
++        uint8_t kind;
++        size_t offset;
++        size_t size;
++        bool tried { false };
++        Strong<JSArray> objects;
++    };
++    Vector<Record> records;
++    HashMap<uint64_t, uint32_t> recordOfKey;
++    HashMap<uint64_t, Strong<JSObject>> wrappers; // The runtime's closure that runs a module, by its body's executable.
++    unsigned replayed { 0 };
++    unsigned failed { 0 };
++    uint64_t instructionsOfReplays { 0 };
++    uint64_t instructionsOfMade { 0 };
++    // BUN_MODULE_SNAPSHOT_CHECK=1: what each replay made is written again, as when the snapshot was taken, and must be the same.
++    bool check { false };
++    unsigned checked { 0 };
++    unsigned mismatched { 0 };
++    HashMap<JSCell*, std::pair<uint32_t, uint32_t>> idsOfReplayed;
++};
++static Snapshot* s_snapshot;
++
++static void checkReplay(VM&, JSGlobalObject*, uint32_t recordNumber, JSFunction* body, size_t startOfContents, const Vector<String>& variableNames, JSValue result, const Vector<JSCell*>& weakTargets);
++
++static std::optional<JSValue> resolve(VM& vm, JSGlobalObject* globalObject, JSLexicalEnvironment* environment, Reader& in)
++{
++    auto root = static_cast<Root>(in.u8());
++    String rootName = in.string();
++    JSValue current;
++    switch (root) {
++    case Root::GlobalObject:
++        current = globalObject;
++        break;
++    case Root::GlobalLexicalEnvironment:
++        current = globalObject->globalLexicalEnvironment();
++        break;
++    case Root::Builtin: {
++        auto* zigGlobalObject = dynamicDowncast<Zig::GlobalObject>(globalObject);
++        auto id = parseInteger<uint32_t>(rootName);
++        if (!zigGlobalObject || !id || *id >= BUN_INTERNAL_MODULE_COUNT)
++            return std::nullopt;
++        auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
++        current = zigGlobalObject->internalModuleRegistry()->requireId(globalObject, vm, static_cast<InternalModuleRegistry::Field>(*id));
++        if (scope.exception()) {
++            scope.clearException();
++            return std::nullopt;
++        }
++        break;
++    }
++    case Root::ChunkEnvironment: {
++        size_t newline = rootName.find('\n');
++        if (newline == notFound)
++            return std::nullopt;
++        auto* entry = globalObject->moduleLoader()->getRegisteredMayBeNull(Identifier::fromString(vm, rootName.left(newline)), ScriptFetchParameters::Type::JavaScript);
++        auto* record = entry ? entry->record() : nullptr;
++        auto* other = record ? record->moduleEnvironmentMayBeNull() : nullptr;
++        if (!other)
++            return std::nullopt;
++        String name = rootName.substring(newline + 1);
++        if (name.isEmpty()) {
++            current = other;
++            break;
++        }
++        SymbolTable* table = other->symbolTable();
++        ScopeOffset offset;
++        {
++            ConcurrentJSLocker locker(table->m_lock);
++            auto symbol = table->get(locker, Identifier::fromString(vm, name).impl());
++            if (symbol.isNull())
++                return std::nullopt;
++            offset = symbol.scopeOffset();
++        }
++        if (!offset)
++            return std::nullopt;
++        current = other->readVariable(vm, offset);
++        if (!current)
++            return std::nullopt;
++        break;
++    }
++    case Root::OwnEnvironment: {
++        if (!environment)
++            return std::nullopt;
++        if (rootName.isEmpty()) {
++            current = environment;
++            break;
++        }
++        Identifier name = Identifier::fromString(vm, rootName);
++        SymbolTable* table = environment->symbolTable();
++        ScopeOffset offset;
++        {
++            ConcurrentJSLocker locker(table->m_lock);
++            auto entry = table->get(locker, name.impl());
++            if (entry.isNull())
++                return std::nullopt;
++            offset = entry.scopeOffset();
++        }
++        if (!offset)
++            return std::nullopt;
++        auto* moduleEnvironment = dynamicDowncast<JSModuleEnvironment>(environment);
++        current = moduleEnvironment ? moduleEnvironment->readVariable(vm, offset) : environment->variableAt(offset).get();
++        break;
++    }
++    default:
++        return std::nullopt;
++    }
++    uint32_t steps = in.u32();
++    auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
++    for (uint32_t i = 0; i < steps && !in.bad(); ++i) {
++        auto step = static_cast<Step>(in.u8());
++        String name = in.string();
++        JSObject* object = current.getObject();
++        if (!object)
++            return std::nullopt;
++        if (step == Step::Prototype)
++            current = object->getPrototypeDirect();
++        else if (step == Step::Property) {
++            Identifier identifier = Identifier::fromString(vm, name);
++            PropertySlot slot(object, PropertySlot::InternalMethodType::GetOwnProperty);
++            if (!object->getOwnPropertySlot(object, globalObject, identifier, slot) || !slot.isValue()) {
++                scope.clearException();
++                return std::nullopt;
++            }
++            current = slot.getValue(globalObject, identifier);
++        } else
++            return std::nullopt;
++        if (scope.exception()) {
++            scope.clearException();
++            return std::nullopt;
++        }
++    }
++    if (in.bad() || !current)
++        return std::nullopt;
++    return current;
++}
++
++// Makes what the record says, then sets the module's variables (or gives its module object). Nothing it does can be seen
++// before that last step, and nothing runs code of the program: if anything is not as it was when the snapshot was taken,
++// it stops there and the module runs as before.
++static std::optional<JSValue> replay(VM& vm, JSGlobalObject* globalObject, uint32_t recordNumber, JSFunction* body)
++{
++    auto& record = s_snapshot->records[recordNumber];
++    record.tried = true;
++    auto scope = DECLARE_TOP_EXCEPTION_SCOPE(vm);
++    Reader in({ s_snapshot->data.span().data() + record.offset, record.size });
++    auto* environment = dynamicDowncast<JSLexicalEnvironment>(body->scope());
++    {
++        const SourceCode& source = body->jsExecutable()->source();
++        String url = in.string();
++        uint32_t start = in.u32();
++        uint32_t end = in.u32();
++        if (in.bad() || url != source.provider()->sourceURL() || start != source.startOffset() || end != source.endOffset())
++            return std::nullopt;
++    }
++    // The modules its top-level code started first, started now (each made from the snapshot too, or run).
++    uint32_t numberOfChildren = in.u32();
++    Vector<uint64_t> children;
++    for (uint32_t i = 0; i < numberOfChildren && !in.bad(); ++i)
++        children.append(in.u64());
++    // What it read of the environment was not set when the snapshot was taken: nor must it be now, as the program sees it.
++    uint32_t numberOfUnset = in.u32();
++    if (numberOfUnset) {
++        auto* zigGlobalObject = dynamicDowncast<Zig::GlobalObject>(globalObject);
++        if (!zigGlobalObject)
++            return std::nullopt;
++        JSValue env = zigGlobalObject->processObject()->get(globalObject, Identifier::fromString(vm, "env"_s));
++        if (scope.exception() || !env.isObject()) {
++            scope.clearException();
++            return std::nullopt;
++        }
++        for (uint32_t i = 0; i < numberOfUnset; ++i) {
++            String name = in.string();
++            JSValue value = asObject(env)->get(globalObject, Identifier::fromString(vm, name));
++            if (scope.exception() || !value.isUndefined()) {
++                scope.clearException();
++                return std::nullopt;
++            }
++        }
++    }
++    for (uint64_t child : children) {
++        auto wrapper = s_snapshot->wrappers.find(child);
++        if (wrapper == s_snapshot->wrappers.end())
++            return std::nullopt;
++        JSObject* closure = wrapper->value.get();
++        JSC::call(globalObject, closure, JSC::getCallData(closure), jsUndefined(), ArgList());
++        if (scope.exception()) {
++            scope.clearException();
++            return std::nullopt;
++        }
++    }
++    size_t startOfContents = in.offset();
++    MarkedArgumentBuffer externals;
++    uint32_t numberOfExternals = in.u32();
++    for (uint32_t i = 0; i < numberOfExternals; ++i) {
++        auto value = resolve(vm, globalObject, environment, in);
++        if (!value)
++            return std::nullopt;
++        externals.append(*value);
++    }
++    JSArray* objects = constructEmptyArray(globalObject, nullptr);
++    if (!objects || scope.exception()) {
++        scope.clearException();
++        return std::nullopt;
++    }
++    bool ok = true;
++    auto readValue = [&]() -> JSValue {
++        switch (static_cast<Tag>(in.u8())) {
++        case Tag::Undefined:
++            return jsUndefined();
++        case Tag::Null:
++            return jsNull();
++        case Tag::True:
++            return jsBoolean(true);
++        case Tag::False:
++            return jsBoolean(false);
++        case Tag::Int32:
++            return jsNumber(static_cast<int32_t>(in.u32()));
++        case Tag::Double:
++            return jsDoubleNumber(std::bit_cast<double>(in.u64()));
++        case Tag::String:
++            return jsString(vm, in.string());
++        case Tag::Empty:
++            return JSValue();
++        case Tag::Ref: {
++            uint32_t id = in.u32();
++            if (id >= objects->length()) {
++                ok = false;
++                return jsUndefined();
++            }
++            return objects->getIndexQuickly(id);
++        }
++        case Tag::ModuleRef: {
++            uint32_t other = in.u32();
++            uint32_t id = in.u32();
++            if (other >= s_snapshot->records.size() || !s_snapshot->records[other].objects || id >= s_snapshot->records[other].objects->length()) {
++                ok = false;
++                return jsUndefined();
++            }
++            return s_snapshot->records[other].objects->getIndexQuickly(id);
++        }
++        case Tag::Static: {
++            auto* cell = std::bit_cast<JSCell*>(static_cast<uintptr_t>(in.u64()));
++            if (!StaticHeap::contains(cell) || !cell->isString()) {
++                ok = false;
++                return jsUndefined();
++            }
++            return cell;
++        }
++        case Tag::External: {
++            uint32_t index = in.u32();
++            if (index >= externals.size()) {
++                ok = false;
++                return jsUndefined();
++            }
++            return externals.at(index);
++        }
++        }
++        ok = false;
++        return jsUndefined();
++    };
++    auto made = [&](uint32_t id, JSValue value) {
++        if (id != objects->length()) {
++            ok = false;
++            return;
++        }
++        objects->push(globalObject, value);
++    };
++    auto readKey = [&]() -> std::optional<Identifier> {
++        uint8_t kind = in.u8();
++        if (kind == 2) {
++            auto* impl = std::bit_cast<StringImpl*>(static_cast<uintptr_t>(in.u64()));
++            if (!StaticHeap::contains(impl) || !impl->isAtom()) {
++                ok = false;
++                return std::nullopt;
++            }
++            return Identifier::fromUid(vm, static_cast<UniquedStringImpl*>(impl));
++        }
++        if (!kind)
++            return Identifier::fromString(vm, in.string());
++        JSValue symbol = readValue();
++        if (!symbol.isSymbol())
++            return std::nullopt;
++        return Identifier::fromUid(asSymbol(symbol)->privateName());
++    };
++    auto objectOf = [&](JSValue value) -> JSObject* {
++        JSObject* object = value.getObject();
++        if (!object)
++            ok = false;
++        return object;
++    };
++    std::optional<JSValue> result;
++    Vector<String> variableNames;
++    MarkedArgumentBuffer variableValues;
++    // (Like the variables, kept until the end: added to WeakMaps and WeakSets that others can see.)
++    struct WeakAdd {
++        JSCell* target;
++        JSValue key;
++        JSValue value;
++    };
++    Vector<WeakAdd> weakAdds;
++    MarkedArgumentBuffer weakAddsAlive;
++    Vector<JSCell*> weakTargets;
++    while (ok && !in.bad()) {
++        auto op = static_cast<Op>(in.u8());
++        if (op == Op::End)
++            break;
++        switch (op) {
++        case Op::NewObject: {
++            uint32_t id = in.u32();
++            JSValue prototype = readValue();
++            JSObject* object = nullptr;
++            if (prototype.isNull())
++                object = constructEmptyObject(vm, globalObject->nullPrototypeObjectStructure());
++            else if (prototype.isObject())
++                object = prototype == globalObject->objectPrototype() ? constructEmptyObject(globalObject) : constructEmptyObject(globalObject, asObject(prototype));
++            else
++                ok = false;
++            if (object)
++                made(id, object);
++            break;
++        }
++        case Op::NewArray: {
++            uint32_t id = in.u32();
++            uint32_t length = in.u32();
++            UNUSED_PARAM(length);
++            made(id, constructEmptyArray(globalObject, nullptr));
++            break;
++        }
++        case Op::NewFunction: {
++            uint32_t id = in.u32();
++            uint8_t kind = in.u8();
++            auto* executable = std::bit_cast<JSCell*>(static_cast<uintptr_t>(in.u64()));
++            JSValue scopeValue = readValue();
++            auto* functionScope = dynamicDowncast<JSScope>(scopeValue.isCell() ? scopeValue.asCell() : nullptr);
++            if (!StaticHeap::contains(executable) || executable->type() != FunctionExecutableType || !functionScope) {
++                ok = false;
++                break;
++            }
++            auto* functionExecutable = uncheckedDowncast<FunctionExecutable>(executable);
++            JSFunction* function = nullptr;
++            switch (kind) {
++            case 0:
++                function = JSFunction::create(vm, globalObject, functionExecutable, functionScope);
++                break;
++            case 1:
++                function = JSAsyncFunction::create(vm, globalObject, functionExecutable, functionScope);
++                break;
++            case 2:
++                function = JSGeneratorFunction::create(vm, globalObject, functionExecutable, functionScope);
++                break;
++            default:
++                function = JSAsyncGeneratorFunction::create(vm, globalObject, functionExecutable, functionScope);
++                break;
++            }
++            made(id, function);
++            break;
++        }
++        case Op::NewScope: {
++            uint32_t id = in.u32();
++            auto* table = std::bit_cast<JSCell*>(static_cast<uintptr_t>(in.u64()));
++            JSValue parentValue = readValue();
++            auto* parent = dynamicDowncast<JSScope>(parentValue.isCell() ? parentValue.asCell() : nullptr);
++            if (!StaticHeap::contains(table) || table->classInfo() != SymbolTable::info() || !parent) {
++                ok = false;
++                break;
++            }
++            made(id, JSLexicalEnvironment::create(vm, globalObject, parent, uncheckedDowncast<SymbolTable>(table), jsUndefined()));
++            break;
++        }
++        case Op::NewRegExp: {
++            uint32_t id = in.u32();
++            RegExp* regExp = nullptr;
++            if (in.u8()) {
++                auto* cell = std::bit_cast<JSCell*>(static_cast<uintptr_t>(in.u64()));
++                if (StaticHeap::contains(cell) && cell->inherits<RegExp>())
++                    regExp = uncheckedDowncast<RegExp>(cell);
++            } else {
++                String pattern = in.string();
++                auto flags = OptionSet<Yarr::Flags>::fromRaw(in.u32());
++                unsigned numSubpatterns = in.u32();
++                String atom = in.string();
++                if (in.u8())
++                    atom = String();
++                auto specificPattern = static_cast<Yarr::SpecificPattern>(in.u8());
++                regExp = RegExp::createFromCache(vm, pattern, flags, numSubpatterns, WTF::move(atom), specificPattern);
++            }
++            if (!regExp) {
++                ok = false;
++                break;
++            }
++            made(id, RegExpObject::create(vm, globalObject->regExpStructure(), regExp));
++            break;
++        }
++        case Op::NewMap:
++            made(in.u32(), JSMap::create(vm, globalObject->mapStructure()));
++            break;
++        case Op::NewSet:
++            made(in.u32(), JSSet::create(vm, globalObject->setStructure()));
++            break;
++        case Op::NewSymbol: {
++            uint32_t id = in.u32();
++            uint8_t kind = in.u8();
++            String description = in.string();
++            Symbol* symbol = nullptr;
++            if (kind == 2)
++                symbol = Symbol::create(vm, vm.symbolRegistry().symbolForKey(description));
++            else if (kind == 1)
++                symbol = Symbol::create(vm, PrivateSymbolImpl::create(*description.impl()));
++            else if (kind == 3)
++                symbol = Symbol::create(vm, SymbolImpl::createNullSymbol());
++            else
++                symbol = Symbol::create(vm, SymbolImpl::create(*description.impl()));
++            made(id, symbol);
++            break;
++        }
++        case Op::NewBound: {
++            uint32_t id = in.u32();
++            JSValue target = readValue();
++            JSValue boundThis = readValue();
++            uint32_t count = in.u32();
++            MarkedArgumentBuffer arguments;
++            for (uint32_t i = 0; i < count; ++i)
++                arguments.append(readValue());
++            JSObject* targetObject = target.getObject();
++            if (!targetObject || !targetObject->isCallable()) {
++                ok = false;
++                break;
++            }
++            // As Function.prototype.bind() makes it: its length and name come from the target.
++            JSFunction* bind = dynamicDowncast<JSFunction>(JSValue(globalObject->functionPrototype()).get(globalObject, vm.propertyNames->bind));
++            if (!bind) {
++                ok = false;
++                break;
++            }
++            MarkedArgumentBuffer bindArguments;
++            bindArguments.append(boundThis);
++            for (unsigned i = 0; i < arguments.size(); ++i)
++                bindArguments.append(arguments.at(i));
++            JSValue bound = JSC::call(globalObject, bind, JSC::getCallData(bind), target, bindArguments);
++            if (scope.exception() || !bound.isObject()) {
++                scope.clearException();
++                ok = false;
++                break;
++            }
++            made(id, bound);
++            break;
++        }
++        case Op::NewBigInt: {
++            uint32_t id = in.u32();
++            String digits = in.string();
++            JSValue bigInt = JSBigInt::stringToBigInt(globalObject, digits);
++            if (scope.exception() || !bigInt) {
++                scope.clearException();
++                ok = false;
++                break;
++            }
++            made(id, bigInt);
++            break;
++        }
++        case Op::Define: {
++            JSObject* object = objectOf(readValue());
++            auto name = readKey();
++            JSValue value = readValue();
++            unsigned attributes = in.u32();
++            if (!ok || !object || !name) {
++                ok = false;
++                break;
++            }
++            if (isPlainFunction(object) && (*name == vm.propertyNames->name || *name == vm.propertyNames->length)) {
++                // (The function's own, made lazily otherwise: given as defineProperty() would.)
++                PropertyDescriptor descriptor(value, attributes);
++                object->methodTable()->defineOwnProperty(object, globalObject, *name, descriptor, false);
++            } else if (std::optional<uint32_t> index = parseIndex(*name))
++                object->putDirectIndex(globalObject, *index, value, attributes, PutDirectIndexLikePutDirect);
++            else
++                object->putDirect(vm, *name, value, attributes);
++            break;
++        }
++        case Op::DefineAccessor: {
++            JSObject* object = objectOf(readValue());
++            auto name = readKey();
++            JSValue getter = readValue();
++            JSValue setter = readValue();
++            unsigned attributes = in.u32();
++            if (!ok || !object || !name) {
++                ok = false;
++                break;
++            }
++            object->putDirectAccessor(globalObject, *name, GetterSetter::create(vm, globalObject, getter, setter), attributes);
++            break;
++        }
++        case Op::SetIndex: {
++            JSObject* object = objectOf(readValue());
++            uint32_t index = in.u32();
++            JSValue value = readValue();
++            if (ok && object)
++                object->putDirectIndex(globalObject, index, value);
++            break;
++        }
++        case Op::SetLength: {
++            JSObject* object = objectOf(readValue());
++            uint32_t length = in.u32();
++            auto* array = dynamicDowncast<JSArray>(object);
++            if (ok && array && array->length() != length)
++                array->setLength(globalObject, length, false);
++            break;
++        }
++        case Op::SetScope: {
++            JSValue scopeValue = readValue();
++            uint32_t offset = in.u32();
++            JSValue value = readValue();
++            auto* lexical = dynamicDowncast<JSLexicalEnvironment>(scopeValue.isCell() ? scopeValue.asCell() : nullptr);
++            if (!ok || !lexical || offset >= lexical->symbolTable()->scopeSize()) {
++                ok = false;
++                break;
++            }
++            lexical->variableAt(ScopeOffset(offset)).set(vm, lexical, value);
++            break;
++        }
++        case Op::MapSet: {
++            JSValue map = readValue();
++            JSValue key = readValue();
++            JSValue value = readValue();
++            auto* target = dynamicDowncast<JSMap>(map.isCell() ? map.asCell() : nullptr);
++            if (!ok || !target) {
++                ok = false;
++                break;
++            }
++            target->set(globalObject, key, value);
++            break;
++        }
++        case Op::SetAdd: {
++            JSValue set = readValue();
++            JSValue value = readValue();
++            auto* target = dynamicDowncast<JSSet>(set.isCell() ? set.asCell() : nullptr);
++            if (!ok || !target) {
++                ok = false;
++                break;
++            }
++            target->add(globalObject, value);
++            break;
++        }
++        case Op::SetLastIndex: {
++            JSValue regExp = readValue();
++            JSValue value = readValue();
++            auto* target = dynamicDowncast<RegExpObject>(regExp.isCell() ? regExp.asCell() : nullptr);
++            if (!ok || !target) {
++                ok = false;
++                break;
++            }
++            target->setLastIndex(globalObject, value, false);
++            break;
++        }
++        case Op::PreventExtensions: {
++            JSObject* object = objectOf(readValue());
++            if (ok && object)
++                object->preventExtensions(object, globalObject);
++            break;
++        }
++        case Op::SetVariable: {
++            auto identifier = readKey();
++            if (!identifier) {
++                ok = false;
++                break;
++            }
++            String name = identifier->string();
++            JSValue value = readValue();
++            if (!ok || !environment) {
++                ok = false;
++                break;
++            }
++            // (Kept until the end: a module whose replay stops has set nothing.)
++            variableNames.append(name);
++            variableValues.append(value);
++            break;
++        }
++        case Op::Result:
++            result = readValue();
++            break;
++        case Op::WeakAdd: {
++            JSValue target = readValue();
++            JSValue key = readValue();
++            JSValue value = readValue();
++            if (!ok || !key.isObject() || !target.isCell()) {
++                ok = false;
++                break;
++            }
++            weakAddsAlive.append(value);
++            if (auto* map = dynamicDowncast<JSWeakMap>(target.asCell()))
++                weakAdds.append({ map, key, value });
++            else if (auto* set = dynamicDowncast<JSWeakSet>(target.asCell()))
++                weakAdds.append({ set, key, JSValue() });
++            else
++                ok = false;
++            break;
++        }
++        default:
++            ok = false;
++            break;
++        }
++        if (scope.exception()) {
++            scope.clearException();
++            ok = false;
++        }
++    }
++    if (!ok || in.bad())
++        return std::nullopt;
++    for (auto& add : weakAdds) {
++        if (!weakTargets.contains(add.target))
++            weakTargets.append(add.target);
++        if (auto* map = dynamicDowncast<JSWeakMap>(add.target))
++            map->set(vm, add.key.asCell(), add.value);
++        else
++            uncheckedDowncast<JSWeakSet>(add.target)->add(vm, add.key.asCell());
++    }
++    for (unsigned i = 0; i < variableNames.size(); ++i) {
++        bool putResult = false;
++        symbolTablePutTouchWatchpointSet(environment, globalObject, Identifier::fromString(vm, variableNames[i]), variableValues.at(i), false, true, putResult);
++        if (scope.exception()) {
++            // (Cannot happen to a variable the module itself set; if it does, the program sees what it would have.)
++            scope.clearException();
++        }
++    }
++    record.objects.set(vm, objects);
++    s_snapshot->replayed++;
++    if (s_snapshot->check)
++        checkReplay(vm, globalObject, recordNumber, body, startOfContents, variableNames, result ? *result : jsUndefined(), weakTargets);
++    return result ? *result : jsUndefined();
++}
++
++
++static void checkReplay(VM& vm, JSGlobalObject* globalObject, uint32_t recordNumber, JSFunction* body, size_t startOfContents, const Vector<String>& variableNames, JSValue result, const Vector<JSCell*>& weakTargets)
++{
++    auto& record = s_snapshot->records[recordNumber];
++    HashSet<JSCell*> own;
++    JSArray* objects = record.objects.get();
++    for (unsigned i = 0; i < objects->length(); ++i) {
++        JSValue value = objects->getIndexQuickly(i);
++        if (value.isCell())
++            own.add(value.asCell());
++    }
++    auto* environment = dynamicDowncast<JSLexicalEnvironment>(body->scope());
++    Serializer serializer { vm, globalObject, -1, environment };
++    serializer.ownCells = &own;
++    serializer.earlierIds = &s_snapshot->idsOfReplayed;
++    for (auto& name : variableNames)
++        serializer.ownVariables.add(name);
++    Writer tail;
++    if (record.kind == 1) {
++        Writer operands;
++        serializer.value(operands, result);
++        tail.u8(static_cast<uint8_t>(Op::Result));
++        tail.append(operands);
++    } else {
++        for (auto& name : variableNames) {
++            Writer operands;
++            writeName(operands, Identifier::fromString(vm, name).impl());
++            JSValue value;
++            {
++                SymbolTable* table = environment->symbolTable();
++                ConcurrentJSLocker locker(table->m_lock);
++                auto entry = table->get(locker, Identifier::fromString(vm, name).impl());
++                if (!entry.isNull())
++                    value = environment->variableAt(entry.scopeOffset()).get();
++            }
++            serializer.value(operands, value);
++            tail.u8(static_cast<uint8_t>(Op::SetVariable));
++            tail.append(operands);
++        }
++    }
++    serializer.run();
++    Writer weak;
++    writeWeakAdditions(serializer, weak, weakTargets);
++    serializer.run();
++    Writer again;
++    writeExternals(again, serializer.externals);
++    again.append(serializer.ops);
++    again.append(weak);
++    again.append(tail);
++    again.u8(static_cast<uint8_t>(Op::End));
++    auto stored = s_snapshot->data.span().subspan(record.offset + startOfContents, record.size - startOfContents);
++    s_snapshot->checked++;
++    bool same = !serializer.failed() && again.size() == stored.size() && !memcmp(again.bytes().span().data(), stored.data(), stored.size());
++    if (!same) {
++        s_snapshot->mismatched++;
++        size_t at = 0;
++        while (at < std::min(again.size(), stored.size()) && again.bytes()[at] == stored[at])
++            at++;
++        fprintf(stderr, "[module snapshot] CHECK FAILED: %s (%s; %zu bytes again, %zu stored, first difference at %zu)\n", nameOfModule(body).utf8().data(), serializer.failed() ? serializer.failure.utf8().data() : "differs", again.size(), stored.size(), at);
++    }
++    for (unsigned i = 0; i < objects->length(); ++i) {
++        JSValue value = objects->getIndexQuickly(i);
++        if (value.isCell())
++            s_snapshot->idsOfReplayed.add(value.asCell(), std::pair { recordNumber, i });
++    }
++}
++} // namespace PiBoltSnapshot
++
++static unsigned s_replayDepth = 0;
++void piBoltSnapshotWillEvaluateBuiltin(JSC::VM& vm, const WTF::String& name)
++{
++    if (PiBoltSnapshot::s_snapshot && s_replayDepth && getenv("BUN_MODULE_SNAPSHOT_VERBOSE"))
++        fprintf(stderr, "[module snapshot] a replay loads builtin %s\n", name.utf8().data());
++    if (!PiBoltSnapshot::s_audit || !PiBoltSnapshot::s_audit->started)
++        return;
++    uint64_t entered = PiBoltSnapshot::instructions();
++    PiBoltSnapshot::Frame frame;
++    frame.builtin = name;
++    PiBoltSnapshot::takeDigests(vm, frame.digests);
++    frame.instructionsAtStart = PiBoltSnapshot::instructions();
++    PiBoltSnapshot::s_audit->overhead += frame.instructionsAtStart - entered;
++    frame.overheadAtStart = PiBoltSnapshot::s_audit->overhead;
++    PiBoltSnapshot::s_audit->frames.append(WTF::move(frame));
++}
++
++void piBoltSnapshotDidEvaluateBuiltin(JSC::VM& vm)
++{
++    if (!PiBoltSnapshot::s_audit || !PiBoltSnapshot::s_audit->started)
++        return;
++    PiBoltSnapshot::leaveForAudit(vm, nullptr, JSValue());
++}
++
++// enter(body, kind): before a bundled module's top-level code runs. Returns false: run it; for an ES module, true: its state
++// was made from the snapshot; for a CommonJS module, its module object, made from the snapshot.
++JSC_DEFINE_HOST_FUNCTION(jsPiBoltSnapshotEnter, (JSGlobalObject * globalObject, CallFrame* callFrame))
++{
++    auto* body = dynamicDowncast<JSFunction>(callFrame->argument(0));
++    if (!body)
++        return JSValue::encode(jsBoolean(false));
++    unsigned kind = callFrame->argument(1).isInt32() ? callFrame->argument(1).asInt32() : 0;
++    if (PiBoltSnapshot::s_audit) {
++        PiBoltSnapshot::enterForAudit(globalObject->vm(), body, kind);
++        return JSValue::encode(jsBoolean(false));
++    }
++    auto* snapshot = PiBoltSnapshot::s_snapshot;
++    if (!snapshot || body->isHostOrBuiltinFunction())
++        return JSValue::encode(jsBoolean(false));
++    auto record = snapshot->recordOfKey.find(std::bit_cast<uint64_t>(body->jsExecutable()));
++    if (record == snapshot->recordOfKey.end() || snapshot->records[record->value].tried || snapshot->records[record->value].kind != kind)
++        return JSValue::encode(jsBoolean(false));
++    static bool verbose = !!getenv("BUN_MODULE_SNAPSHOT_VERBOSE");
++    uint64_t before = verbose && !s_replayDepth ? PiBoltSnapshot::instructions() : 0;
++    s_replayDepth++;
++    auto result = PiBoltSnapshot::replay(globalObject->vm(), globalObject, record->value, body);
++    s_replayDepth--;
++    if (before)
++        snapshot->instructionsOfReplays += PiBoltSnapshot::instructions() - before;
++    if (!result) {
++        snapshot->failed++;
++        if (getenv("BUN_MODULE_SNAPSHOT_VERBOSE"))
++            fprintf(stderr, "[module snapshot] not replayed: %s\n", PiBoltSnapshot::nameOfModule(body).utf8().data());
++        return JSValue::encode(jsBoolean(false));
++    }
++    if (kind == 1)
++        return JSValue::encode(*result);
++    return JSValue::encode(jsBoolean(true));
++}
++
++// made(body, wrapper): the runtime made the closure that runs a module (its `init_x` or `require_x`). Returns it.
++JSC_DEFINE_HOST_FUNCTION(jsPiBoltSnapshotMade, (JSGlobalObject * globalObject, CallFrame* callFrame))
++{
++    JSValue wrapper = callFrame->argument(1);
++    if (auto* snapshot = PiBoltSnapshot::s_snapshot) {
++        auto* body = dynamicDowncast<JSFunction>(callFrame->argument(0));
++        if (body && !body->isHostOrBuiltinFunction() && wrapper.isObject())
++            snapshot->wrappers.set(std::bit_cast<uint64_t>(body->jsExecutable()), Strong<JSObject>(globalObject->vm(), asObject(wrapper)));
++    }
++    return JSValue::encode(wrapper);
++}
++
++// leave(moduleObject): after it ran (CommonJS: with its module object).
++JSC_DEFINE_HOST_FUNCTION(jsPiBoltSnapshotLeave, (JSGlobalObject * globalObject, CallFrame* callFrame))
++{
++    if (PiBoltSnapshot::s_audit)
++        PiBoltSnapshot::leaveForAudit(globalObject->vm(), globalObject, callFrame->argument(0));
++    return JSValue::encode(jsUndefined());
++}
++
++// note(what, detail...): what the module that is running read of the environment.
++JSC_DEFINE_HOST_FUNCTION(jsPiBoltSnapshotNote, (JSGlobalObject * globalObject, CallFrame* callFrame))
++{
++    if (!PiBoltSnapshot::s_audit)
++        return JSValue::encode(jsUndefined());
++    StringBuilder note;
++    for (unsigned i = 0; i < callFrame->argumentCount(); ++i) {
++        if (i)
++            note.append(i == 1 ? ':' : '=');
++        JSValue value = callFrame->argument(i);
++        if (value.isString())
++            note.append(asString(value)->value(globalObject).data);
++        else if (value.isUndefined())
++            note.append("undefined"_s);
++        else if (value.isSymbol())
++            note.append("(symbol)"_s);
++        else
++            note.append(value.toWTFString(globalObject));
++    }
++    String text = note.toString();
++    if (PiBoltSnapshot::s_audit->frames.isEmpty()) {
++        StringBuilder out;
++        out.append("{\"m\":null,\"notes\":["_s);
++        PiBoltSnapshot::appendJSONString(out, text);
++        out.append("]}\n"_s);
++        CString line = out.toString().utf8();
++        fwrite(line.data(), 1, line.length(), PiBoltSnapshot::s_audit->file);
++    } else if (PiBoltSnapshot::s_audit->frames.last().notes.size() < 64)
++        PiBoltSnapshot::s_audit->frames.last().notes.append(text);
++    return JSValue::encode(jsUndefined());
++}
++
++static void loadSnapshot()
++{
++    const char* path = getenv("BUN_MODULE_SNAPSHOT");
++    if (path && !strcmp(path, "0"))
++        return;
++    CString defaultPath;
++    if (!path || !*path) {
++#if OS(DARWIN)
++        char executable[PATH_MAX];
++        uint32_t size = sizeof(executable);
++        if (_NSGetExecutablePath(executable, &size))
++            return;
++        defaultPath = makeString(String::fromUTF8(executable), ".msnap"_s).utf8();
++        path = defaultPath.data();
++#else
++        return;
++#endif
++    }
++    FILE* file = fopen(path, "rb");
++    if (!file)
++        return;
++    auto* snapshot = new PiBoltSnapshot::Snapshot;
++    char buffer[65536];
++    size_t got;
++    while ((got = fread(buffer, 1, sizeof(buffer), file)) > 0)
++        snapshot->data.append(std::span { reinterpret_cast<const uint8_t*>(buffer), got });
++    fclose(file);
++    PiBoltSnapshot::Reader in(snapshot->data.span());
++    if (in.u64() != PiBoltSnapshot::snapshotMagic || !JSC::StaticHeap::isMapped()) {
++        delete snapshot;
++        return;
++    }
++    uint32_t count = in.u32();
++    size_t at = 8 + 4 + count * (8 + 1 + 4);
++    for (uint32_t i = 0; i < count && !in.bad(); ++i) {
++        PiBoltSnapshot::Snapshot::Record record;
++        record.key = in.u64();
++        record.kind = in.u8();
++        record.size = in.u32();
++        record.offset = at;
++        at += record.size;
++        if (at > snapshot->data.size()) {
++            delete snapshot;
++            return;
++        }
++        snapshot->recordOfKey.add(record.key, snapshot->records.size());
++        snapshot->records.append(WTF::move(record));
++    }
++    if (in.bad()) {
++        delete snapshot;
++        return;
++    }
++    if (const char* check = getenv("BUN_MODULE_SNAPSHOT_CHECK"); check && *check == '1')
++        snapshot->check = true;
++    PiBoltSnapshot::s_snapshot = snapshot;
++    if (getenv("BUN_MODULE_SNAPSHOT_VERBOSE") || snapshot->check) {
++        atexit([] {
++            auto* snapshot = PiBoltSnapshot::s_snapshot;
++            fprintf(stderr, "[module snapshot] %u records, %u replayed, %u not replayed, %u checked, %u mismatched; replays took %.2f M instructions (with the modules they started)\n", static_cast<unsigned>(snapshot->records.size()), snapshot->replayed, snapshot->failed, snapshot->checked, snapshot->mismatched, snapshot->instructionsOfReplays / 1e6);
++        });
++    }
++}
++
++static void startWriting()
++{
++    const char* out = getenv("BUN_MODULE_SNAPSHOT_OUT");
++    if (!out || !*out)
++        return;
++    auto* writer = new PiBoltSnapshot::SnapshotWriter;
++    writer->file = fopen(out, "wb");
++    if (!writer->file) {
++        delete writer;
++        return;
++    }
++    if (const char* list = getenv("BUN_MODULE_SNAPSHOT_MODULES")) {
++        if (FILE* file = fopen(list, "r")) {
++            char line[4096];
++            while (fgets(line, sizeof(line), file)) {
++                size_t length = strlen(line);
++                while (length && (line[length - 1] == '\n' || line[length - 1] == '\r'))
++                    line[--length] = 0;
++                if (length)
++                    writer->selected.add(String::fromUTF8(line));
++            }
++            fclose(file);
++        }
++    }
++    PiBoltSnapshot::s_writer = writer;
++    unsetenv("BUN_MODULE_SNAPSHOT_OUT");
++    unsetenv("BUN_MODULE_SNAPSHOT_MODULES");
++}
++
++JSValue createPiBoltSnapshotHooks(Zig::GlobalObject* globalObject)
++{
++    VM& vm = globalObject->vm();
++    if (!PiBoltSnapshot::s_audit) {
++        startWriting();
++        const char* path = getenv("BUN_MODULE_SNAPSHOT_AUDIT");
++        CString writerAudit;
++        if ((!path || !*path) && PiBoltSnapshot::s_writer)
++            path = "/dev/null";
++        if (path && *path) {
++            if (FILE* file = fopen(path, "w")) {
++                PiBoltSnapshot::s_audit = new PiBoltSnapshot::Audit;
++                PiBoltSnapshot::s_audit->file = file;
++            }
++            unsetenv("BUN_MODULE_SNAPSHOT_AUDIT"); // (Not for the programs it starts.)
++        }
++        if (!PiBoltSnapshot::s_audit && !PiBoltSnapshot::s_snapshot)
++            loadSnapshot();
++    }
++    JSObject* hooks = constructEmptyObject(globalObject);
++    hooks->putDirect(vm, Identifier::fromString(vm, "enter"_s), JSFunction::create(vm, globalObject, 2, "enter"_s, jsPiBoltSnapshotEnter, ImplementationVisibility::Public));
++    hooks->putDirect(vm, Identifier::fromString(vm, "made"_s), JSFunction::create(vm, globalObject, 2, "made"_s, jsPiBoltSnapshotMade, ImplementationVisibility::Public));
++    hooks->putDirect(vm, Identifier::fromString(vm, "leave"_s), JSFunction::create(vm, globalObject, 1, "leave"_s, jsPiBoltSnapshotLeave, ImplementationVisibility::Public));
++    hooks->putDirect(vm, Identifier::fromString(vm, "note"_s), JSFunction::create(vm, globalObject, 2, "note"_s, jsPiBoltSnapshotNote, ImplementationVisibility::Public));
++    hooks->putDirect(vm, Identifier::fromString(vm, "auditing"_s), jsBoolean(!!PiBoltSnapshot::s_audit));
++    return hooks;
++}
++
++} // namespace Bun
+diff --git a/src/jsc/bindings/PiBoltSnapshot.h b/src/jsc/bindings/PiBoltSnapshot.h
+new file mode 100644
+index 0000000000..6af351a710
+--- /dev/null
++++ b/src/jsc/bindings/PiBoltSnapshot.h
+@@ -0,0 +1,15 @@
++#pragma once
++// Pi-Bolt's module-state snapshot (PiBoltSnapshot.cpp).
++#include "root.h"
++
++namespace Zig {
++class GlobalObject;
++}
++
++namespace Bun {
++JSC::JSValue createPiBoltSnapshotHooks(Zig::GlobalObject*);
++// Around the evaluation of one of Bun's builtin modules (InternalModuleRegistry), while auditing: what it makes and changes is
++// its own, not the bundled module's that loaded it.
++void piBoltSnapshotWillEvaluateBuiltin(JSC::VM&, const WTF::String& name);
++void piBoltSnapshotDidEvaluateBuiltin(JSC::VM&);
++}
+diff --git a/src/resolve_builtins/HardcodedModule.rs b/src/resolve_builtins/HardcodedModule.rs
+index 0034aee4c5..caf4fd5476 100644
+--- a/src/resolve_builtins/HardcodedModule.rs
++++ b/src/resolve_builtins/HardcodedModule.rs
+@@ -23,6 +23,8 @@ pub enum HardcodedModule {
+     BunWrap,
+     #[strum(serialize = "bun:sqlite")]
+     BunSqlite,
++    #[strum(serialize = "bun:pibolt-snapshot")]
++    BunPiboltSnapshot,
+     #[strum(serialize = "node:assert")]
+     NodeAssert,
+     #[strum(serialize = "node:assert/strict")]
+@@ -213,6 +215,7 @@ bun_core::comptime_string_map! {
+         b"bun:main" => HardcodedModule::BunMain,
+         b"bun:test" => HardcodedModule::BunTest,
+         b"bun:sqlite" => HardcodedModule::BunSqlite,
++        b"bun:pibolt-snapshot" => HardcodedModule::BunPiboltSnapshot,
+         b"bun:wrap" => HardcodedModule::BunWrap,
+         b"bun:internal-for-testing" => HardcodedModule::BunInternalForTesting,
+         b"internal:cluster/RoundRobinHandle" => HardcodedModule::InternalClusterRoundRobinHandle,
+@@ -715,6 +718,7 @@ const BUN_EXTRA_ALIAS_KVS: &[AliasKv] = &[
+     entry!("bun:jsc"),
+     entry!("bun:main"),
+     entry!("bun:sqlite"),
++    entry!("bun:pibolt-snapshot"),
+     entry!("bun:wrap"),
+     entry!("bun:internal-for-testing"),
+     (
+-- 
+2.54.0 (Apple Git-157)
+
