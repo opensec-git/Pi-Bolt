@@ -60,6 +60,11 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
     private var stopJob: Job? = null
     private val holders = LinkedHashSet<String>()
 
+    /** The tiles Home wants now (the latest [showTiles]); [tileMutex] runs one reconcile at a time. */
+    @Volatile
+    private var wantedTiles: Set<String> = emptySet()
+    private val tileMutex = Mutex()
+
     /** Keys opened on the running engine: opened again after a restart. */
     private val opened = LinkedHashSet<String>()
 
@@ -158,22 +163,31 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
      * the others, and holds the engine while any is shown.
      */
     fun showTiles(keys: Set<String>) {
-        scope.launch {
-            val tiles = _pages.value.orEmpty().filter { it.isTile }.map { it.key }.toSet()
-            val wanted = keys intersect tiles
-            val open = synchronized(opened) { opened.filter { it in tiles }.toSet() }
-            for (key in open - wanted) close(key)
-            if (wanted.isEmpty()) {
-                release(PageRules.HOLD_HOME)
-                return@launch
-            }
-            hold(PageRules.HOLD_HOME)
-            if (!ensureRunning()) return@launch
-            for (key in wanted - open) {
-                val response = rpc?.openPage(key)
-                if (response?.success == true) synchronized(opened) { opened += key } else Log.w(TAG, "open_page $key: ${response?.error}")
-            }
+        wantedTiles = keys
+        scope.launch { tileMutex.withLock { reconcileTiles() } }
+    }
+
+    /**
+     * Brings the open tiles to the latest [wantedTiles], one call at a time: a call that runs late still uses the latest
+     * set, and a tile opened while Home changed is closed by the call queued behind it.
+     */
+    private suspend fun reconcileTiles() {
+        val tiles = _pages.value.orEmpty().filter { it.isTile }.map { it.key }.toSet()
+        val wanted = wantedTiles intersect tiles
+        val open = synchronized(opened) { opened.filter { it in tiles }.toSet() }
+        for (key in open - wanted) close(key)
+        if (wanted.isEmpty()) {
+            release(PageRules.HOLD_HOME)
+            return
         }
+        hold(PageRules.HOLD_HOME)
+        if (!ensureRunning()) return
+        for (key in wanted - open) {
+            if (key !in wantedTiles) continue
+            val response = rpc?.openPage(key)
+            if (response?.success == true) synchronized(opened) { opened += key } else Log.w(TAG, "open_page $key: ${response?.error}")
+        }
+        // Home changed while these opened: a call is queued behind this one and closes what is no longer wanted.
     }
 
     /** A view's event, for the extension. */

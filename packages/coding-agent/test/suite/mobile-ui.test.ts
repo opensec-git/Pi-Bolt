@@ -347,6 +347,39 @@ describe("mobile UI kit in a session", () => {
 		expect(closed).toEqual([]);
 	});
 
+	it("keeps a reopened page when the earlier open rejects after it", async () => {
+		const pending: Array<{ resolve: (view: MobileView) => void; reject: (error: Error) => void }> = [];
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi: ExtensionAPI) =>
+					pi.registerPage("slow:page", {
+						title: "Slow",
+						open: () =>
+							new Promise<MobileView>((resolve, reject) => {
+								pending.push({ resolve, reject });
+							}),
+					}),
+			],
+		});
+		cleanups.push(() => harness.cleanup());
+		await harness.session.bindExtensions({
+			uiContext: createTestUiContext(),
+			mode: "rpc",
+			viewChannel: fakeChannel(true),
+		});
+		const runner = harness.session.extensionRunner;
+		const first = runner.openPage("slow:page").catch((error: Error) => error.message);
+		const closing = runner.closePage("slow:page");
+		const second = runner.openPage("slow:page");
+		await until(() => pending.length === 2);
+		pending[1].resolve({ v: 1, title: "Second", body: [] });
+		await second;
+		pending[0].reject(new Error("first failed"));
+		expect(await first).toBe("first failed");
+		await closing;
+		expect(runner.getUIContext().getView("slow:page")?.title).toBe("Second");
+	});
+
 	it("drops a page whose open() finishes after the session ended", async () => {
 		let finish: (view: MobileView) => void = () => {};
 		const harness = await createHarness({

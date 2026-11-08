@@ -809,8 +809,11 @@ export class ExtensionRunner {
 		try {
 			await open;
 		} catch (error) {
-			this.openPages.delete(key);
-			views.allowTile(key, false);
+			// Only while this open still owns the key: a close and a newer open may have replaced it meanwhile.
+			if (this.openPages.get(key) === open) {
+				this.openPages.delete(key);
+				views.allowTile(key, false);
+			}
 			throw error;
 		}
 	}
