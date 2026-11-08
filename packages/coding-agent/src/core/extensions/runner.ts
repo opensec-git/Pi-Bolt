@@ -446,7 +446,7 @@ export class ExtensionRunner {
 	/** The mobile UI kit's views of this session (docs/mobile-ui.md), made when a mode binds its UI. */
 	private views: ViewHost | undefined;
 	/** Registered pages and tiles that a client opened (`open_page`), with the open in progress or done. */
-	private readonly openPages = new Map<string, Promise<void>>();
+	private readonly openPages = new Map<string, { done: Promise<void> }>();
 	private uiPromptDepth = 0;
 	private activeUIPrompt: { kind: UIPromptKind; title?: string } | undefined;
 
@@ -788,7 +788,7 @@ export class ExtensionRunner {
 		if (!page) throw new Error(`No page ${JSON.stringify(key)}`);
 		const opening = this.openPages.get(key);
 		if (opening) {
-			await opening;
+			await opening.done;
 			if (views.get(key)) {
 				views.resend(key);
 				return;
@@ -796,21 +796,21 @@ export class ExtensionRunner {
 			// The extension removed its view meanwhile: build it again.
 			this.openPages.delete(key);
 		}
-		// Read after the await below, when it is set: a later open or close replaces or removes it.
-		let open: Promise<void> | undefined;
-		open = (async () => {
+		// This open owns the key while the map holds this entry: a later close removes it, a later open replaces it.
+		const entry: { done: Promise<void> } = { done: Promise.resolve() };
+		this.openPages.set(key, entry);
+		entry.done = (async () => {
 			if (page.kind === "tile") views.allowTile(key, true);
 			const view = await page.definition.open(this.createContext());
 			// The session ended (or the client closed it) while open() ran: the view is not shown any more.
-			if (this.staleMessage || this.openPages.get(key) !== open) return;
+			if (this.staleMessage || this.openPages.get(key) !== entry) return;
 			views.set(key, view, { slot: page.kind });
 		})();
-		this.openPages.set(key, open);
 		try {
-			await open;
+			await entry.done;
 		} catch (error) {
 			// Only while this open still owns the key: a close and a newer open may have replaced it meanwhile.
-			if (this.openPages.get(key) === open) {
+			if (this.openPages.get(key) === entry) {
 				this.openPages.delete(key);
 				views.allowTile(key, false);
 			}
@@ -837,7 +837,7 @@ export class ExtensionRunner {
 		const opening = this.openPages.get(key);
 		if (!opening) return;
 		this.openPages.delete(key);
-		await opening.catch(() => {});
+		await opening.done.catch(() => {});
 		// Opened again while this close waited: the new open owns the view and the page's state now.
 		if (this.openPages.has(key)) return;
 		const page = this.getRegisteredPages().find((candidate) => candidate.key === key);

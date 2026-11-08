@@ -597,6 +597,16 @@ internal fun SessionContent(
     var openPage by remember { mutableStateOf<String?>(null) }
     // Pages packages registered (`get_pages`): built by Pi when opened from the menu, closed with their sheet.
     val registeredPages by controller.registeredPages.collectAsStateWithLifecycle()
+    // A registered page asked for and not drawn yet: its sheet opens when its view reaches the session's state (the
+    // open_page response can come before it), or the page is closed again if it never does.
+    var pendingPage by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(pendingPage) {
+        val key = pendingPage ?: return@LaunchedEffect
+        val arrived = withTimeoutOrNull(PAGE_VIEW_WAIT_MS) { snapshotFlow { state.value.views[key] }.first { it != null } }
+        if (pendingPage != key) return@LaunchedEffect
+        pendingPage = null
+        if (arrived != null) openPage = key else controller.closePage(key)
+    }
     val menuPages = remember(pages, registeredPages) {
         pages.map { it.key to (it.view.title ?: it.key) } + registeredPages.filter { r -> pages.none { it.key == r.key } }.map { it.key to it.title }
     }
@@ -1100,7 +1110,8 @@ internal fun SessionContent(
                 pages = menuPages,
                 onPage = { key ->
                     if (registeredPages.any { it.key == key } && views[key] == null) {
-                        sessionScope.launch { if (controller.openPage(key)) openPage = key }
+                        pendingPage = key
+                        sessionScope.launch { if (!controller.openPage(key) && pendingPage == key) pendingPage = null }
                     } else {
                         openPage = key
                     }
@@ -1643,6 +1654,9 @@ internal fun SessionContent(
 
 /** How long Regenerate waits for the fork's session before it sends anyway. */
 private const val FORK_SWITCH_MS = 5_000L
+
+/** How long a registered page's view may take to arrive after open_page before the open is given up. */
+private const val PAGE_VIEW_WAIT_MS = 15_000L
 
 /** What "Continue once" sends after a spending limit stopped a run. */
 private const val CONTINUE_PROMPT = "Continue."

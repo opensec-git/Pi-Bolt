@@ -151,11 +151,14 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
     /** Closes [key] on the engine and lets the engine stop when nothing else holds it. */
     fun close(key: String) {
         synchronized(opened) { opened -= key }
-        scope.launch {
-            rpc?.closePage(key)
-            _state.update { it.copy(views = it.views - key) }
-            release(PageRules.HOLD_PAGE + key)
-        }
+        scope.launch { closeNow(key) }
+    }
+
+    private suspend fun closeNow(key: String) {
+        rpc?.closePage(key)
+        // Opened again while this close ran: the newer open owns the view.
+        if (synchronized(opened) { key !in opened }) _state.update { it.copy(views = it.views - key) }
+        release(PageRules.HOLD_PAGE + key)
     }
 
     /**
@@ -175,7 +178,11 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
         val tiles = _pages.value.orEmpty().filter { it.isTile }.map { it.key }.toSet()
         val wanted = wantedTiles intersect tiles
         val open = synchronized(opened) { opened.filter { it in tiles }.toSet() }
-        for (key in open - wanted) close(key)
+        // Closed here, not launched: a reopen queued behind this reconcile comes after the close.
+        for (key in open - wanted) {
+            synchronized(opened) { opened -= key }
+            closeNow(key)
+        }
         if (wanted.isEmpty()) {
             release(PageRules.HOLD_HOME)
             return
