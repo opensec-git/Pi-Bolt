@@ -185,7 +185,8 @@ and `hosts` to `$PREFIX/glibc/etc`, where Termux's glibc reads them.
 <summary><a id="requirements"></a><b>Requirements</b></summary>
 
 - **Linux** x86-64 or ARM64 with glibc 2.17 or later (Ubuntu 20.04+, Debian 11+, RHEL/Rocky 8+, Amazon Linux 2, Raspberry Pi
-  OS 64-bit). musl is not supported.
+  OS 64-bit), or x86-64 with musl (Alpine 3.23 or later, with `libstdc++`: `apk add libstdc++`). The installer and the npm
+  package pick the musl builds there by themselves.
 - **Android** 7 or later on 64-bit ARM, in Termux.
 - **macOS** 13 or later on Apple silicon. Install with the installer, Homebrew, mise or npm
   ([Troubleshooting](docs/TROUBLESHOOTING.md#macos)).

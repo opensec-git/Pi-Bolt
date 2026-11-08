@@ -14,7 +14,10 @@ if [ -z "$VARIANT" ]; then
 	else
 		case "$(uname -m)" in
 		aarch64 | arm64) VARIANT=arm64 ;;
-		*) if grep -qw avx2 /proc/cpuinfo 2>/dev/null; then VARIANT=x64; else VARIANT=x64-baseline; fi ;;
+		*)
+			# "-musl" on a musl-based Linux such as Alpine (its own builds, as install.sh names them).
+			musl=""; case "$(ldd --version 2>&1 || true)" in *musl*) musl=-musl ;; esac
+			if grep -qw avx2 /proc/cpuinfo 2>/dev/null; then VARIANT=x64$musl; else VARIANT=x64$musl-baseline; fi ;;
 		esac
 	fi
 fi
@@ -29,8 +32,9 @@ if [ ! -x "$DIR/pi" ]; then
 		sh "$here/../install.sh" 1>&2
 	printf '\n' >&2
 	# The versions installed before this one are not run again, except by sessions still running: those keep their folder (on
-	# macOS a session starts its programs through pi-spawn there). Without a list of processes, nothing is removed.
-	if running=$(ps -A -ww -o args= 2>/dev/null); then
+	# macOS a session starts its programs through pi-spawn there). Without a list of processes, nothing is removed. (BusyBox's
+	# ps, as on Alpine, has neither -A nor -ww, and lists every process with their whole command line as it is.)
+	if running=$(ps -A -ww -o args= 2>/dev/null || ps -o args 2>/dev/null); then
 		for old in "$HOME_DIR"/npm/*; do
 			case "${old##*/}" in "$VERSION") continue ;; [0-9]*.[0-9]*.[0-9]*) ;; *) continue ;; esac
 			case "$running" in *"$old/"*) ;; *) rm -rf "$old" 2>/dev/null || true ;; esac

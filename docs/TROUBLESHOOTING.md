@@ -82,8 +82,10 @@ To rule a compiler optimization in or out of a problem, build with it off (each 
 **`pi-bolt: command not found` after installing.** `~/.local/bin` is not on your `PATH`. Add
 `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.
 
-**`GLIBC_2.xx not found` or `No such file or directory` when starting.** The system is musl-based (Alpine), or older than
-glibc 2.17. Pi-Bolt needs glibc 2.17 or later (CentOS 7, Debian 8, Ubuntu 14.04 and anything newer).
+**`GLIBC_2.xx not found` or `No such file or directory` when starting.** The system is older than glibc 2.17, or a glibc
+build is on a musl system (Alpine). Pi-Bolt needs glibc 2.17 or later (CentOS 7, Debian 8, Ubuntu 14.04 and anything newer),
+or on musl its musl builds (`PIBOLT_VARIANT` x64-musl, x64-musl-baseline or x64-musl-jit, which the installer picks there by
+itself) and `libstdc++` (`apk add libstdc++`). Alpine on ARM64 is not supported.
 
 **`Illegal instruction` when starting.** The CPU has no SSE4.2 (older than Intel Nehalem, 2008, or AMD Bulldozer, 2011). No
 build runs on it; the installer says so.

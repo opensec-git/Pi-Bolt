@@ -569,6 +569,51 @@ test("the launcher's first run of a version removes the versions installed befor
 	assert.deepEqual(readdirSync(join(home, "npm")).sort(), ["0.7.3", VERSION, "notes"]);
 });
 
+// #280: on a musl system (Alpine) the launcher runs the musl build, which install.sh names so.
+test("the launcher runs the musl build on a musl system", { skip: (!findSh() || process.platform === "win32") && "no sh" }, (t) => {
+	const pkgDir = makePackage(t);
+	const home = join(pkgDir, "home");
+	const bin = fakeUname(pkgDir, "Linux");
+	writeFileSync(join(bin, "ldd"), "#!/bin/sh\necho 'musl libc (x86_64)' >&2\nexit 1\n", { mode: 0o755 });
+	for (const variant of ["x64", "x64-baseline", "x64-musl", "x64-musl-baseline"]) {
+		const dir = join(home, "npm", VERSION, `pi-bolt-linux-${variant}`);
+		mkdirSync(dir, { recursive: true });
+		writeFileSync(join(dir, "pi"), `#!/bin/sh\necho "${variant}"\n`, { mode: 0o755 });
+	}
+	const env = { ...process.env, PIBOLT_HOME: home, PATH: `${bin}:${process.env.PATH}` };
+	delete env.PIBOLT_VARIANT;
+	const result = spawnSync("sh", [join(pkgDir, "bin", "pi-bolt")], { encoding: "utf8", env });
+	assert.equal(result.status, 0, result.stderr);
+	assert.match(result.stdout, /^x64-musl(-baseline)?\n$/);
+});
+
+// #280: BusyBox's ps (Alpine) has neither -A nor -ww; the launcher then lists the processes with `ps -o args`, so that a session
+// still running keeps its folder there too.
+test("the launcher's first run lists the processes with BusyBox's ps", { skip: (!findSh() || process.platform === "win32") && "no sh" }, (t) => {
+	const pkgDir = makePackage(t);
+	const home = join(pkgDir, "home");
+	writeFileSync(
+		join(pkgDir, "install.sh"),
+		'mkdir -p "$PIBOLT_INSTALL/pi-bolt-linux-x64" && printf \'#!/bin/sh\\necho "the build"\\n\' > "$PIBOLT_INSTALL/pi-bolt-linux-x64/pi" && chmod 755 "$PIBOLT_INSTALL/pi-bolt-linux-x64/pi"\n',
+	);
+	const running = join(home, "npm", "0.7.3", "pi-bolt-linux-x64");
+	mkdirSync(running, { recursive: true });
+	mkdirSync(join(home, "npm", "0.7.4", "pi-bolt-linux-x64"), { recursive: true });
+	const bin = fakeUname(pkgDir, "Linux");
+	// (As BusyBox's: an unknown option is an error, and `-o args` lists every process.)
+	writeFileSync(
+		join(bin, "ps"),
+		`#!/bin/sh\ncase "$1" in -A) echo "ps: unrecognized option: A" >&2; exit 1 ;; esac\nprintf 'COMMAND\\n${running}/pi\\n'\n`,
+		{ mode: 0o755 },
+	);
+	const result = spawnSync("sh", [join(pkgDir, "bin", "pi-bolt")], {
+		encoding: "utf8",
+		env: { ...process.env, PIBOLT_HOME: home, PIBOLT_VARIANT: "x64", PATH: `${bin}:${process.env.PATH}` },
+	});
+	assert.equal(result.status, 0, result.stderr);
+	assert.deepEqual(readdirSync(join(home, "npm")).sort(), ["0.7.3", VERSION]);
+});
+
 // The first run is not asked for by the user: an opt-in to installing without a signature check, left in their environment, is
 // not passed on to the installer (which ignores it in the first run as well).
 test("the launcher's first run does not pass PIBOLT_UNVERIFIED on to the installer", { skip: (!findSh() || process.platform === "win32") && "no sh" }, (t) => {
