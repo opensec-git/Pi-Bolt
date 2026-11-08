@@ -39,7 +39,7 @@ if [ -n "$ICU" ]; then
 	work=$(mktemp -d)
 	log "ICU $ICU_VERSION, static, into /usr"
 	curl -fsSL "https://github.com/unicode-org/icu/releases/download/release-${ICU_VERSION}/icu4c-${ICU_VERSION}-sources.tgz" -o "$work/icu.tgz"
-	echo "$ICU_SHA256  $work/icu.tgz" | sha256sum -c --quiet -
+	echo "$ICU_SHA256  $work/icu.tgz" | sha256sum -c - >/dev/null
 	tar -xzf "$work/icu.tgz" -C "$work"
 	# (-march=nehalem: Bun's and WebKit's floor on x86-64, as in the sysroot.)
 	(cd "$work/icu/source" &&

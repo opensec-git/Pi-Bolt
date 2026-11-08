@@ -22,7 +22,7 @@ if [ "${1:-}" = --build ]; then
 fi
 tmp=$(mktemp -d)
 curl -fsSL -o "$tmp/bun.zip" "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64-musl.zip"
-echo "$BUN_SHA256  $tmp/bun.zip" | sha256sum -c -s
+echo "$BUN_SHA256  $tmp/bun.zip" | sha256sum -c - >/dev/null
 unzip -q "$tmp/bun.zip" -d "$tmp"
 install -D -m 755 "$tmp/bun-linux-x64-musl/bun" "$HOME/.bun/bin/bun"
 rm -rf "$tmp"
