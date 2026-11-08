@@ -12,7 +12,7 @@ BUN_SHA256=4835eca59d6da70f4674f5642f6e459dcadab773695b2ed9922d131057989742 # bu
 packages="bash ca-certificates coreutils curl findutils git gzip libgcc libstdc++ nodejs npm perl python3 rsync tar tmux unzip xz"
 if [ "${1:-}" = --build ]; then
 	echo "@edge https://dl-cdn.alpinelinux.org/alpine/edge/main" >>/etc/apk/repositories
-	packages="$packages build-base cmake go linux-headers nasm ruby samurai llvm23@edge clang23@edge lld23@edge"
+	packages="$packages build-base cmake go linux-headers nasm ninja-is-really-ninja ruby llvm23@edge clang23@edge lld23@edge"
 fi
 # shellcheck disable=SC2086 # a list of names
 apk add --no-cache --no-progress $packages >/dev/null
