@@ -65,6 +65,9 @@ object PageCatalog {
             append('\n')
             append(settings?.get("extensions")?.toString().orEmpty())
             append('\n')
+            // Pi-Bolt's own package list, merged into what the engine loads (SettingsManager.resolvePackages).
+            append((settings?.get("piBolt") as? JsonObject)?.get("packages")?.toString().orEmpty())
+            append('\n')
             append(engineVersion)
         }
         return MessageDigest.getInstance("SHA-256").digest(text.toByteArray()).joinToString("") { "%02x".format(it) }.take(32)

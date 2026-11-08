@@ -49,6 +49,9 @@ class PagesTest {
         assertNotEquals(a, PageCatalog.key(settings("""{"packages":[{"source":"npm:a","extensions":[]}]}"""), "1.1.6"))
         assertNotEquals(a, PageCatalog.key(settings("""{"packages":["npm:a"],"extensions":["-builtin:mcp"]}"""), "1.1.6"))
         assertNotEquals(a, PageCatalog.key(settings("""{"packages":["npm:a"]}"""), "1.1.7"))
+        // Pi-Bolt's own package list is merged into what the engine loads.
+        assertNotEquals(a, PageCatalog.key(settings("""{"packages":["npm:a"],"piBolt":{"packages":["npm:m"]}}"""), "1.1.6"))
+        assertEquals(a, PageCatalog.key(settings("""{"packages":["npm:a"],"piBolt":{"theme":"x"}}"""), "1.1.6"))
         assertEquals(PageCatalog.key(null, ""), PageCatalog.key(settings("{}"), ""))
     }
 

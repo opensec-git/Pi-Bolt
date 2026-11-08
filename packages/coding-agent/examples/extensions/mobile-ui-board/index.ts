@@ -17,7 +17,7 @@
  * Install: `pi install ./examples/extensions/mobile-ui-board`, or try it with `pi -e ./examples/extensions/mobile-ui-board`.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
@@ -52,6 +52,9 @@ const TILE = "board:tile";
 const PANEL_TASKS = 4;
 /** Days the chart and the sparkline cover. */
 const DAYS = 7;
+/** How long a change waits for another Pi's change of the board, and when a lock is taken as left behind. */
+const LOCK_WAIT_MS = 5000;
+const LOCK_STALE_MS = 10_000;
 
 /** The board extension; `file` is where the board is kept (default: `mobile-ui-board.json` in the agent folder). */
 export function boardExtension(options: { file?: string } = {}) {
@@ -69,9 +72,44 @@ export function boardExtension(options: { file?: string } = {}) {
 		}
 
 		function save(): void {
+			// A temp file per process, so two Pis never rename each other's half-written copy.
+			const temp = `${file}.${process.pid}.tmp`;
+			writeFileSync(temp, JSON.stringify(board));
+			renameSync(temp, file);
+		}
+
+		/**
+		 * Reads the board, applies `mutate` and saves it, holding a lock directory next to the file: a session and the app's
+		 * page engine never overwrite each other's change. A lock left by a process that died is taken over after 10 s.
+		 */
+		function change<T>(mutate: () => T): T {
 			mkdirSync(dirname(file), { recursive: true });
-			writeFileSync(`${file}.tmp`, JSON.stringify(board));
-			renameSync(`${file}.tmp`, file);
+			const lock = `${file}.lock`;
+			const started = Date.now();
+			for (;;) {
+				try {
+					mkdirSync(lock);
+					break;
+				} catch (error) {
+					if ((error as { code?: string }).code !== "EEXIST") throw error;
+					try {
+						if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS)
+							rmSync(lock, { recursive: true, force: true });
+					} catch {
+						// Released meanwhile: try again.
+					}
+					if (Date.now() - started > LOCK_WAIT_MS) throw new Error("The board is busy; try again");
+					Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+				}
+			}
+			try {
+				load();
+				const result = mutate();
+				save();
+				return result;
+			} finally {
+				rmSync(lock, { recursive: true, force: true });
+			}
 		}
 
 		const open = () => board.tasks.filter((task) => !task.done);
@@ -250,9 +288,8 @@ export function boardExtension(options: { file?: string } = {}) {
 			};
 		}
 
-		/** Saves the board and redraws every view of it that is shown. */
+		/** Redraws every view of the board that is shown. */
 		function show(ctx: ExtensionContext): void {
-			save();
 			if (!ctx.ui.setView) {
 				// Pi before the mobile UI kit: text only.
 				ctx.ui.setWidget(PANEL, [`Board: ${open().length} open`]);
@@ -265,25 +302,27 @@ export function boardExtension(options: { file?: string } = {}) {
 		}
 
 		function add(text: string): Task {
-			load();
-			const task = {
-				id: board.nextId++,
-				text: text.trim().slice(0, 200),
-				done: false,
-				added: new Date().toISOString(),
-			};
-			board.tasks.push(task);
-			return task;
+			return change(() => {
+				const task = {
+					id: board.nextId++,
+					text: text.trim().slice(0, 200),
+					done: false,
+					added: new Date().toISOString(),
+				};
+				board.tasks.push(task);
+				return task;
+			});
 		}
 
 		function toggle(id: number): Task | undefined {
-			load();
-			const task = board.tasks.find((t) => t.id === id);
-			if (task) {
-				task.done = !task.done;
-				task.doneAt = task.done ? new Date().toISOString() : undefined;
-			}
-			return task;
+			return change(() => {
+				const task = board.tasks.find((t) => t.id === id);
+				if (task) {
+					task.done = !task.done;
+					task.doneAt = task.done ? new Date().toISOString() : undefined;
+				}
+				return task;
+			});
 		}
 
 		async function addFromSheet(ctx: ExtensionContext): Promise<void> {
@@ -350,8 +389,9 @@ export function boardExtension(options: { file?: string } = {}) {
 			} else if (event.action === "add") return addFromSheet(ctx);
 			else if (event.action === "add-task" && typeof event.values?.text === "string") add(event.values.text);
 			else if (event.action === "clear-done") {
-				load();
-				board.tasks = board.tasks.filter((task) => !task.done);
+				change(() => {
+					board.tasks = board.tasks.filter((task) => !task.done);
+				});
 			} else return;
 			show(ctx);
 		});

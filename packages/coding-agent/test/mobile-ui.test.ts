@@ -979,6 +979,15 @@ describe("mobile UI charts, tables and places", () => {
 			min: -5,
 			max: -2,
 		});
+		// A flat series keeps a span relative to its size.
+		expect(chartRange({ type: "chart", kind: "line", series: [{ name: "a", values: [1e18, 1e18] }] })).toEqual({
+			min: 0.9e18,
+			max: 1.1e18,
+		});
+		expect(chartRange({ type: "chart", kind: "sparkline", series: [{ name: "a", values: [0, 0] }] })).toEqual({
+			min: -1,
+			max: 1,
+		});
 		expect(chartSummary({ ...chart, summary: "Faster" })).toBe("Faster");
 		const table: MobileViewTable = {
 			type: "table",

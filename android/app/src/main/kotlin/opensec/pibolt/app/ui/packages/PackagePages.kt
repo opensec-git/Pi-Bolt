@@ -50,6 +50,8 @@ fun PackagePageSheet(pages: PageEngine, key: String, title: String, onClose: () 
     LaunchedEffect(key) { failed = !pages.open(key) }
     DisposableEffect(key) { onDispose { pages.close(key) } }
     val entry = state.views[key]
+    // The open failed, or the engine stopped for good after it opened (it kept exiting): the reason is shown either way.
+    val down = failed || status is PageEngine.Status.Failed
     PiSheet(onDismiss = onClose) {
         val view = entry?.view
         SheetHeader(view?.title ?: title, subtitle = view?.subtitle)
@@ -59,7 +61,7 @@ fun PackagePageSheet(pages: PageEngine, key: String, title: String, onClose: () 
         ) {
             when {
                 view != null -> ViewNodes(view.body, host.fields(key), host.actions(key))
-                failed -> ErrorState(
+                down -> ErrorState(
                     "Could not open the page",
                     message = when (val s = status) {
                         is PageEngine.Status.LowMemory -> "The phone is low on memory. Close other apps and try again."
@@ -75,7 +77,7 @@ fun PackagePageSheet(pages: PageEngine, key: String, title: String, onClose: () 
             Spacer(Modifier.height(Space.md))
             ViewButtons(view.actions, host.actions(key), Modifier.padding(horizontal = Space.page), size = ButtonSize.Large)
         }
-        if (view == null && !failed) Text("Starting the package without a session", style = Pi.type.meta, color = Pi.colors.ink3, modifier = Modifier.padding(horizontal = 20.dp))
+        if (view == null && !down) Text("Starting the package without a session", style = Pi.type.meta, color = Pi.colors.ink3, modifier = Modifier.padding(horizontal = 20.dp))
         Spacer(Modifier.height(Space.lg))
     }
     state.dialogs.firstOrNull { it.kind == DialogKind.View }?.let { dialog ->

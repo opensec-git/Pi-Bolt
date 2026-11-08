@@ -110,7 +110,11 @@ export function chartRange(chart: MobileViewChart): { min: number; max: number }
 		if (chart.min === undefined) min = Math.min(0, min);
 		if (chart.max === undefined) max = Math.max(0, max);
 	}
-	if (max <= min) max = min + 1;
+	// A flat series is centred, with room relative to its size (1 would vanish next to 1e18).
+	if (max <= min) {
+		const pad = min === 0 ? 1 : Math.abs(min) * 0.1;
+		return { min: min - pad, max: min + pad };
+	}
 	return { min, max };
 }
 
