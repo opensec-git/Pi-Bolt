@@ -109,7 +109,7 @@ function buttons(list: MobileViewButton[] | undefined): string {
 
 const CHART_WIDTH = 358;
 
-/** An SVG chart: series in the chart colours (--c1 to --c4), a dashed line for the second series and on. */
+/** An SVG chart: series in the app's chart colours (--c1 to --c4, DESIGN.md), a dashed line for the second series and on. */
 function chartSvg(chart: MobileViewChart): string {
 	const spark = chart.kind === "sparkline";
 	const height = spark ? 32 : 160;
@@ -276,8 +276,8 @@ body { margin: 0; padding: 24px 16px; font: 15px/22px Inter, system-ui, -apple-s
 h1 { font-size: 14px; font-weight: 500; color: #9C9A94; margin: 0 0 16px; }
 .columns { display: flex; flex-wrap: wrap; gap: 24px; }
 .phone { width: 390px; max-width: 100%; border-radius: 28px; overflow: hidden; padding: 12px 0 16px; }
-.dark { --c1:#ECEBE8; --c2:#7FB2E5; --c3:#D4A64A; --c4:#B48EE0; --canvas:#1C1B19; --s1:#232220; --s2:#2A2926; --s3:#32312E; --ink1:#ECEBE8; --ink2:#B3B1AB; --ink3:#9C9A94; --ink4:#5E5C57; --line:rgba(255,255,255,.07); --lineStrong:rgba(255,255,255,.12); --accent:#ECEBE8; --onAccent:#1C1B19; --success:#4CC38A; --warning:#D4A64A; --danger:#F4817D; }
-.light { --c1:#171717; --c2:#2563A8; --c3:#8A6410; --c4:#6B46A8; --canvas:#FFFFFF; --s1:#F7F7F7; --s2:#F0F0F0; --s3:#E8E8E8; --ink1:#171717; --ink2:#525252; --ink3:#666666; --ink4:#949494; --line:rgba(0,0,0,.08); --lineStrong:rgba(0,0,0,.14); --accent:#0A0A0A; --onAccent:#FFFFFF; --success:#11733F; --warning:#8A6410; --danger:#B83430; }
+.dark { --c1:#56B4E9; --c2:#E69F00; --c3:#CC79A7; --c4:#009E73; --canvas:#1C1B19; --s1:#232220; --s2:#2A2926; --s3:#32312E; --ink1:#ECEBE8; --ink2:#B3B1AB; --ink3:#9C9A94; --ink4:#5E5C57; --line:rgba(255,255,255,.07); --lineStrong:rgba(255,255,255,.12); --accent:#ECEBE8; --onAccent:#1C1B19; --success:#4CC38A; --warning:#D4A64A; --danger:#F4817D; }
+.light { --c1:#005E93; --c2:#665A05; --c3:#964966; --c4:#089656; --canvas:#FFFFFF; --s1:#F7F7F7; --s2:#F0F0F0; --s3:#E8E8E8; --ink1:#171717; --ink2:#525252; --ink3:#666666; --ink4:#949494; --line:rgba(0,0,0,.08); --lineStrong:rgba(0,0,0,.14); --accent:#0A0A0A; --onAccent:#FFFFFF; --success:#11733F; --warning:#8A6410; --danger:#B83430; }
 .phone { background: var(--canvas); color: var(--ink1); }
 .label { font-size: 12.5px; color: var(--ink3); padding: 0 20px 8px; }
 .sheet { background: var(--s1); border: 1px solid var(--lineStrong); border-radius: 28px 28px 0 0; padding: 10px 0 20px; margin: 0 0 0; }

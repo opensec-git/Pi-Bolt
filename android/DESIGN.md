@@ -28,7 +28,7 @@ Claude, Codex, Vercel and GitHub are palettes in the spirit of those products' d
 choice loads as Pi-Bolt (`SettingsCodec` falls back on unknown names).
 
 The app's own themes besides the default, each built in full by `Palette.kt`'s `full()` (surfaces, inks, lines and
-overlays, accent, status, diff, syntax, ANSI, tints), and each held to the role checks below:
+overlays, accent, status, diff, syntax, ANSI, tints, chart colours), and each held to the role checks below:
 
 | Role | Paper (light) | Contrast (high contrast) | Lime (soft dark) | Moss (forest dark) |
 |---|---|---|---|---|
@@ -42,6 +42,7 @@ overlays, accent, status, diff, syntax, ANSI, tints), and each held to the role 
 | diff fg (bg) | `#116B40` / `#A2302C` (8%) | `#B4F5D2` / `#FFC2BF` (16%) | `#9BE6BF` / `#F7A9A5` (11%) | `#9BE6BF` / `#F7A9A5` (11%) |
 | ANSI blue / magenta / cyan | `#4D4D4D` / `#8C3A73` / `#39605F` | `#E0E0E0` / `#F0B8E0` / `#C8E8E8` | `#C4C9D4` / `#D7A6C8` / `#A6DCC3` | `#8FB3C7` / `#C9A3C8` / `#8FC7B0` |
 | tints | the light set (below) | the shared set | the shared set | the shared set |
+| chart colours | the light set (below) | the shared set | the shared set | the shared set |
 
 - **Paper** is the desktop's light mode (`tokens.css` light tokens and its light highlight.js colours). Surfaces step
   down from white, because white is the top. Status, type and the tints are deepened until they read as text on its
@@ -100,6 +101,24 @@ passes 3:1 as a glyph on every surface, and AA as an initial on its own 16% fill
 
 Paper uses `LightTints`: the same hues at lightness 0.50 (seafoam 0.47, chroma 0.09), which are `#994A00`,
 `#A33460`, `#8E3B94`, `#6F4BAC` and `#006B61`. The desktop's light tints (L 0.54 to 0.60) are 3.1 to 4.3:1 as an initial.
+
+**Chart colours** (`PiColors.chart0` to `chart3`, `charts[n % 4]`) draw the series of the mobile UI kit's `chart`, one
+per series in order; authors never choose them. They are their own set: never the accent, a tint (tints are agents
+only) or a status colour, and a series colour never stands for state. The set is Okabe–Ito's colour-blind-safe blue,
+orange, reddish purple and bluish green, and series also differ by dash (solid, dashed, dotted, dash-dot) and the
+legend, so colour is never the only cue. Each one passes 3:1 as a line or bar on every surface of every theme, and
+every pair stays apart (CIELAB ΔE at least 15) for normal vision and under simulated protanopia, deuteranopia and
+tritanopia (Machado 2009; `chartColoursReadAndStayApartInEveryTheme`).
+
+| Token | Name | Dark themes | Paper (`LightCharts`) |
+|---|---|---|---|
+| chart0 | blue | `#56B4E9` | `#005E93` |
+| chart1 | orange | `#E69F00` | `#665A05` |
+| chart2 | reddish purple | `#CC79A7` | `#964966` |
+| chart3 | bluish green | `#009E73` | `#089656` |
+
+Paper deepens each hue until it passes 3:1 on its greys; the orange becomes an ochre there because a deeper orange
+falls too close to the purple for protanopes. Axis labels, the legend's text and the TalkBack summary stay in the inks.
 
 Overlays: press = ink1 @ 7%, selected = ink1 @ 11%, focus line = ink1 @ 40% (Pi-Bolt: white @ 8.5%, 10%, 32%).
 
@@ -175,7 +194,7 @@ Contrast (WCAG 2.1, checked by `ContrastTest` for every theme and accent):
   plain, pressed and selected; ink3 at least 3:1 as a glyph on all of those; the accent's label AA on it, its fill 3:1
   against the surface (a button's shape) and AA as link text; ink1 AA on the text selection. `defaultThemeHasNoBlueCast`
   keeps the default's greys and everything drawn from them free of a cool cast, `defaultThemeIsTheWarmCharcoal` pins
-  its values, `subagentTintsReadInEveryTheme` checks the tints, `elevationStepsStayDistinct` keeps each surface a step further
+  its values, `subagentTintsReadInEveryTheme` checks the tints, `chartColoursReadAndStayApartInEveryTheme` the chart colours, `elevationStepsStayDistinct` keeps each surface a step further
   from the canvas in every theme (lighter on dark themes, darker on Paper; each step of the own themes at least
   1.05:1), `onlyPaperIsLight` pins the one light theme, `contrastThemeIsAaa` holds Contrast to 7:1, and the window
   colour must be the default canvas. Paper, Contrast and Lime greys carry no tint either.

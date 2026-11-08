@@ -37,15 +37,12 @@ import opensec.pibolt.protocol.session.ChartData
 import opensec.pibolt.protocol.session.VChart
 
 /**
- * The kit's `chart` (docs/mobile-ui.md#charts-tables-and-places), drawn on a Canvas: the accent and then the
- * subagent tints, one per series in order (authors never pick colours). Series differ by line style and the legend
- * too, never by colour alone. TalkBack reads the chart as one summary ([ChartData.summary]).
+ * The kit's `chart` (docs/mobile-ui.md#charts-tables-and-places), drawn on a Canvas in the theme's chart colours
+ * ([opensec.pibolt.app.ui.theme.PiColors.charts]), one per series in order (authors never pick colours). Series differ by
+ * line style and the legend too, never by colour alone. TalkBack reads the chart as one summary ([ChartData.summary]).
  */
 @Composable
-fun chartColors(): List<Color> {
-    val colors = Pi.colors
-    return listOf(colors.accent, colors.tint4, colors.tint0, colors.tint3)
-}
+fun chartColors(): List<Color> = Pi.colors.charts
 
 /** Series n's dash: solid, dashed, dotted, dash-dot. */
 private fun dash(index: Int, unit: Float): PathEffect? = when (index % 4) {
