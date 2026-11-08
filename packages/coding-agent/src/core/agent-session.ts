@@ -1687,6 +1687,11 @@ export class AgentSession {
 		return this._toolDefinitions.get(name)?.definition;
 	}
 
+	/** Where the tool `name` comes from: Pi's own tools have the source "builtin". */
+	getToolSourceInfo(name: string): SourceInfo | undefined {
+		return this._toolDefinitions.get(name)?.sourceInfo;
+	}
+
 	/**
 	 * Set active tools by name.
 	 * Only tools in the registry can be enabled. Unknown and hidden tool names are ignored.

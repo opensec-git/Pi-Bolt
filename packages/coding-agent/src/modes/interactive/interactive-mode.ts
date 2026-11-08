@@ -97,7 +97,7 @@ import type {
 } from "../../core/extensions/index.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
-import { IdleCollector, processHeapBytes, runtimeFullCollection } from "../../core/idle-gc.ts";
+import { IDLE_GC_DELAY_MS, IdleCollector, processHeapBytes, runtimeFullCollection } from "../../core/idle-gc.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
 import type { McpHttpServerConfig } from "../../core/mcp-servers.ts";
 import { createCompactionSummaryMessage, createCustomMessage } from "../../core/messages.ts";
@@ -474,6 +474,9 @@ interface ExtensionChangelogUpdate {
 	markdown: string;
 }
 
+/** How many transcript entries compacting at once makes a full collection before their copies are made worth it. */
+const COMPACTED_COLLECT_FIRST = 256;
+
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private renderer: TuiMainScreen | TuiAltScreen;
@@ -556,6 +559,8 @@ export class InteractiveMode {
 	private unsubscribeCapabilityChanges?: () => void;
 	/** Bun only: a full collection when idle after a run (see idle-gc.ts). */
 	private idleCollector: IdleCollector | undefined;
+	/** scheduleTranscriptCompaction()'s timer. */
+	private transcriptCompactionTimer: ReturnType<typeof setTimeout> | undefined;
 	/** Bun only: opens the model connection while the user types after an idle period (see connection-warmer.ts). */
 	private connectionWarmer: ConnectionWarmer | undefined;
 	private signalCleanupHandlers: Array<() => void> = [];
@@ -1114,6 +1119,7 @@ export class InteractiveMode {
 		// Flush the completed startup state before loading the remaining syntax grammars.
 		this.ui.renderNow();
 		ttiTrace("startup.done");
+		this.scheduleTranscriptCompaction();
 		loadAllHighlightLanguagesOnDemand((languages) => {
 			if (!this.isInitialized) return;
 			// Transcript entries that cannot show code in those languages stay as they are drawn.
@@ -1127,6 +1133,7 @@ export class InteractiveMode {
 				() => this.ui.invalidate(),
 			);
 			this.ui.requestRender();
+			this.scheduleTranscriptCompaction();
 		});
 	}
 
@@ -2410,6 +2417,62 @@ export class InteractiveMode {
 		this.streamingMessage = undefined;
 		this.pendingTools.clear();
 		this.renderInitialMessages();
+	}
+
+	/**
+	 * Whether a row of `toolName` may let go of its components once settled (ToolExecutionComponent.compact()): its renderers
+	 * are Pi's own (one of Pi's tools, or a tool that brings none; and no extension's renderer resolver gives others) and
+	 * draw a settled result from it alone (not edit and write, which keep what they drew while the call streamed in).
+	 */
+	private toolRowsCompactable(toolName: string): boolean {
+		if (toolName === "edit" || toolName === "write") return false;
+		const definition = this.session.getToolDefinition(toolName);
+		if (
+			this.session.getToolSourceInfo(toolName)?.source !== "builtin" &&
+			(definition?.renderCall !== undefined ||
+				definition?.renderResult !== undefined ||
+				definition?.renderShell !== undefined)
+		) {
+			return false;
+		}
+		const own = withBuiltInRenderers(toolName, definition);
+		return this.session.extensionRunner.resolveToolRenderers(toolName, () => own) === own;
+	}
+
+	/**
+	 * Once Pi has been idle for a moment, the settled entries of the transcript let go of the components their lines were
+	 * rendered from (AssistantMessageComponent.compact(), ToolExecutionComponent.compact()): in a long session those are
+	 * most of the memory the transcript takes. Each is then put back as a fresh copy (compactedCopy()), so that what
+	 * is left of it was not allocated among what rendering the transcript left behind. What has not been rendered since it last
+	 * changed stays as it is. Each call starts the wait again.
+	 */
+	private scheduleTranscriptCompaction(): void {
+		if (this.transcriptCompactionTimer) clearTimeout(this.transcriptCompactionTimer);
+		this.transcriptCompactionTimer = setTimeout(() => {
+			this.transcriptCompactionTimer = undefined;
+			if (this.session.isStreaming || this.session.isCompacting) return;
+			const pending = new Set<Component>(this.pendingTools.values());
+			const children = this.chatContainer.children;
+			const compacted: number[] = [];
+			for (let i = 0; i < children.length; i++) {
+				const child = children[i]!;
+				if (pending.has(child) || child === this.streamingComponent) continue;
+				if (child instanceof AssistantMessageComponent || child instanceof ToolExecutionComponent) {
+					if (child.compact()) compacted.push(i);
+				}
+			}
+			if (compacted.length === 0) return;
+			// Many at once (a resumed session): collect first, so that the copies take the room what rendering the
+			// transcript left behind gives back, instead of adding to the heap's highest point.
+			if (compacted.length >= COMPACTED_COLLECT_FIRST) runtimeFullCollection()?.();
+			// (A copy in each one's place: what is left of an entry was allocated while the transcript was rendered.)
+			for (const i of compacted) {
+				children[i] = (children[i] as AssistantMessageComponent | ToolExecutionComponent).compactedCopy();
+			}
+			// The frame after lays the copies out in place of the entries, which nothing holds then; it draws the same lines.
+			this.ui.requestRender();
+		}, IDLE_GC_DELAY_MS);
+		this.transcriptCompactionTimer.unref?.();
 	}
 
 	/**
@@ -3748,6 +3811,7 @@ export class InteractiveMode {
 										showImages: this.settingsManager.getShowImages(),
 										imageWidthCells: this.settingsManager.getImageWidthCells(),
 										outputPad: this.outputPad,
+										compactable: this.toolRowsCompactable(content.name),
 									},
 									this.getRegisteredToolDefinition(content.name),
 									this.ui,
@@ -3827,6 +3891,7 @@ export class InteractiveMode {
 							showImages: this.settingsManager.getShowImages(),
 							imageWidthCells: this.settingsManager.getImageWidthCells(),
 							outputPad: this.outputPad,
+							compactable: this.toolRowsCompactable(event.toolName),
 						},
 						this.getRegisteredToolDefinition(event.toolName),
 						this.ui,
@@ -3882,6 +3947,7 @@ export class InteractiveMode {
 
 				this.ui.requestRender();
 				this.idleCollector?.schedule();
+				this.scheduleTranscriptCompaction();
 				break;
 
 			case "agent_settled":
@@ -4235,6 +4301,16 @@ export class InteractiveMode {
 	): void {
 		this.pendingTools.clear();
 		const renderedPendingTools = new Map<string, ToolExecutionComponent>();
+		// (By tool name, for this transcript: a resumed session has a row per call.)
+		const compactableRows = new Map<string, boolean>();
+		const rowsCompactable = (toolName: string) => {
+			let compactable = compactableRows.get(toolName);
+			if (compactable === undefined) {
+				compactable = this.toolRowsCompactable(toolName);
+				compactableRows.set(toolName, compactable);
+			}
+			return compactable;
+		};
 		// Cache misses are not persisted, unlike successful cache-warming usage.
 		// Re-derive them and inject them after the assistant messages that paid for them.
 		const cacheMisses = this.settingsManager.getShowCacheMissNotices()
@@ -4279,6 +4355,7 @@ export class InteractiveMode {
 								showImages: this.settingsManager.getShowImages(),
 								imageWidthCells: this.settingsManager.getImageWidthCells(),
 								outputPad: this.outputPad,
+								compactable: rowsCompactable(content.name),
 							},
 							this.getRegisteredToolDefinition(content.name),
 							this.ui,
@@ -7460,6 +7537,7 @@ export class InteractiveMode {
 		this.unsubscribeCapabilityChanges?.();
 		this.unsubscribeCapabilityChanges = undefined;
 		this.idleCollector?.dispose();
+		if (this.transcriptCompactionTimer) clearTimeout(this.transcriptCompactionTimer);
 		if (this.unsubscribe) {
 			this.unsubscribe();
 		}

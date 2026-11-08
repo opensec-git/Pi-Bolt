@@ -856,6 +856,18 @@ export class Container implements Component {
 		this.changeReported = false;
 	}
 
+	/**
+	 * Forgets what the children rendered to, telling neither them nor the containers this is in: for a subclass that keeps
+	 * the lines it last rendered and lets go of the components they were rendered from. The next render of the children
+	 * renders them as from nothing.
+	 */
+	protected forgetRendered(): void {
+		this.rendered = undefined;
+		this.sharedLines = undefined;
+		this.changedChildren = [];
+		this.changesUnlisted = false;
+	}
+
 	/** A child reported a change (reportRenderChange()). */
 	[CHILD_CHANGED](child: Component): void {
 		if (this.rendered !== undefined && !this.changesUnlisted) {
