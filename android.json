@@ -1,8 +1,8 @@
 {
-  "version": "0.6.1",
-  "apk": "https://github.com/opensec-git/Pi-Bolt/releases/download/android-v0.6.1/pi-bolt-android-0.6.1.apk",
-  "page": "https://github.com/opensec-git/Pi-Bolt/releases/tag/android-v0.6.1",
-  "size": 189278131,
-  "sha256": "f041d46a930a4c1a56dc6595f4a16a40f7612d4ea5ee7d8d13ee2d72d0fea9d2",
+  "version": "0.7.0",
+  "apk": "https://github.com/opensec-git/Pi-Bolt/releases/download/android-v0.7.0/pi-bolt-android-0.7.0.apk",
+  "page": "https://github.com/opensec-git/Pi-Bolt/releases/tag/android-v0.7.0",
+  "size": 189704880,
+  "sha256": "5457afd045894fdf65ce566b600b77314836edd0b08ca85b8fecb51e1e56f3d4",
   "certSha256": "f752464c8b6d5906d7fd467346b89316518e3ddfe77843f66b1fa673818a2c90"
 }
