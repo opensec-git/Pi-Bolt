@@ -170,7 +170,8 @@ fun SettingsScreen(
     val message: (String) -> Unit = { text -> scope.launch { snackbar.show(text) } }
     fun update(change: (AppSettings) -> AppSettings) = app.settings.update(change)
     val prefs = rememberAgentPrefs(app)
-    val configured by app.engine.auth.configured.collectAsStateWithLifecycle()
+    // Providers with a working model: keys, custom endpoints and the providers Pi packages register.
+    val configured by app.providers.connected.collectAsStateWithLifecycle()
     val github by app.github.state.collectAsStateWithLifecycle()
     // No provider: the open session lists no model, and the picker would wait for one for ever.
     fun pickModel() = when {
@@ -180,7 +181,15 @@ fun SettingsScreen(
             prefs.controller.loadModels()
             picking = true
         }
-        else -> message("Open a session on this phone to choose its models")
+        // No session open: the engine's own list of the models that work (extension providers' too).
+        prefs != null && prefs.models.isNotEmpty() -> {
+            app.providers.refresh()
+            picking = true
+        }
+        else -> {
+            app.providers.refresh()
+            message("Open a session on this phone to choose its models")
+        }
     }
 
     LargeTitlePage(
@@ -379,7 +388,7 @@ fun SettingsScreen(
     }
     if (spendLimits) SpendLimitsSheet(app, onDismiss = { spendLimits = false })
     val p = prefs
-    if (picking && p?.controller != null) {
+    if (picking && p != null && (p.controller != null || p.models.isNotEmpty())) {
         ModelSheet(p.models, p.match, onPick = { m ->
             picking = false
             p.update { it.copy(defaultModel = "${m.provider}/${m.id}") }

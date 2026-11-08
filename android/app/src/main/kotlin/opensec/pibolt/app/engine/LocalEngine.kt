@@ -23,6 +23,10 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.coroutineScope
+import opensec.pibolt.protocol.bool
+import opensec.pibolt.protocol.obj
+import opensec.pibolt.protocol.str
 import opensec.pibolt.app.ui.session.features2.AppExtension
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -295,6 +299,82 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
             ensureSpare()
         }
         return controller
+    }
+
+    override suspend fun providers(): ProviderReport? = withContext(Dispatchers.IO) {
+        ensureSetup() ?: return@withContext null
+        val backend = probeEngine() ?: return@withContext null
+        val rpc = backend.query("get_providers")
+        if (rpc != null && rpc.bool("success") == true) return@withContext ProviderReport.from(rpc.obj("data"), complete = true)
+        // Engines before 1.1.7 have no get_providers: the helper extension describes them.
+        AppExtension.runWith(File(app.cacheDir, "pibolt-app"), "providers") { message -> helperPrompt(backend, message, HELPER_TIMEOUT_MS) }
+            .onFailure { Log.i(TAG, "providers: ${it.message}") }
+            .getOrNull()
+            ?.let { ProviderReport.from(it, complete = false) }
+    }
+
+    /**
+     * An idle engine to ask about providers: the spare, else a parked one; started (the spare) when there is none.
+     * Never a live session's engine.
+     */
+    private suspend fun probeEngine(): LocalBackend? {
+        fun idleEngine() = idle.fresh()?.engine?.takeIf { it.isAlive } ?: idle.engines().firstOrNull { it.isAlive }
+        idleEngine()?.let { return it }
+        ensureSpare()
+        // Another caller may be starting the spare: wait for it.
+        return withTimeoutOrNull(PROBE_WAIT_MS) {
+            var found = idleEngine()
+            while (found == null) {
+                delay(250)
+                found = idleEngine()
+            }
+            found
+        }
+    }
+
+    /** Sends the helper's [message] as a prompt to [backend]; null once answered, else why it was not. */
+    private suspend fun helperPrompt(backend: LocalBackend, message: String, timeoutMs: Long): String? {
+        val response = backend.query("prompt", timeoutMs) { put("message", message) } ?: return "The engine stopped or did not answer"
+        return if (response.bool("success") == true) null else response.str("error") ?: "The engine refused the command"
+    }
+
+    override fun login(provider: String, method: String): ProviderLogin? {
+        if (unavailable != null) return null
+        val login = ProviderLogin(provider)
+        scope.launch {
+            if (ensureSetup() == null) return@launch login.finish(unavailable ?: "The engine is not available")
+            // The spare runs it (no engine start on the tap), else a new engine; it goes back to the pool afterwards.
+            val spare = idle.takeFresh()?.takeIf { it.engine.isAlive }
+            val backend = spare?.engine ?: newBackend(configFor(paths.projects), SessionTarget.Fresh)
+            val cwd = spare?.cwd ?: paths.projects.path
+            login.attach(send = backend::send, stop = backend::close)
+            try {
+                if (!backend.connect()) return@launch login.finish("The engine could not start")
+                coroutineScope {
+                    val messages = launch { backend.incoming.collect(login::on) }
+                    val args = "$provider $method ${File(paths.agentDir, "auth.json").path}"
+                    val result = AppExtension.runWith(File(app.cacheDir, "pibolt-app"), "login", args) { message -> helperPrompt(backend, message, LOGIN_TIMEOUT_MS) }
+                    messages.cancel()
+                    login.finish(if (login.cancelled) ProviderLogin.CANCELLED else result.exceptionOrNull()?.message)
+                }
+            } finally {
+                val reuse = !login.cancelled && backend.isAlive && backend.messageCount == 0 && !stale(backend)
+                if (reuse) backend.park()
+                if (!reuse || !idle.addFresh(backend, cwd)) {
+                    forget(backend)
+                    backend.close()
+                }
+                auth.refresh()
+                ensureSpare()
+            }
+        }
+        return login
+    }
+
+    override fun packagesChanged() {
+        // The idle engines loaded the old packages: the next session, chat and provider list need new ones.
+        stopIdleEngines("packages changed")
+        scope.launch { ensureSpare() }
     }
 
     /** The engine's git (`PREFIX/bin/git`) once the prefix is set up; null where the engine cannot run. */
@@ -725,6 +805,15 @@ class LocalEngine(private val app: PiBoltApp) : EngineApi {
         private const val OPEN_TIMEOUT_MS = 180_000L
         private const val BACKGROUND_IDLE_MS = 5 * 60_000L
         private const val TRIM_GRACE_MS = 60_000L
+
+        /** How long a provider list waits for an idle engine to start. */
+        private const val PROBE_WAIT_MS = 90_000L
+
+        /** The helper's provider list (it checks every provider's credentials). */
+        private const val HELPER_TIMEOUT_MS = 60_000L
+
+        /** A login flow: the user signs in in the browser meanwhile. */
+        private const val LOGIN_TIMEOUT_MS = 10 * 60_000L
 
         /** `Date.toISOString()`: always milliseconds, always Z. */
         private val ISO_MILLIS: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC)

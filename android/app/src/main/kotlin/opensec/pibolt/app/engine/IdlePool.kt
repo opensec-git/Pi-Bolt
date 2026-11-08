@@ -61,6 +61,14 @@ class IdlePool<E : Any>(private val maxParked: Int = 1, private val sessionFileO
     @Synchronized
     fun hasFresh(): Boolean = entries.any { it.fresh }
 
+    /** The spare, left in the pool. */
+    @Synchronized
+    fun fresh(): Entry<E>? = entries.firstOrNull { it.fresh }
+
+    /** Takes the spare out of the pool. */
+    @Synchronized
+    fun takeFresh(): Entry<E>? = entries.firstOrNull { it.fresh }?.also { entries.remove(it) }
+
     /** Empties the pool; the caller stops what it returns. */
     @Synchronized
     fun drain(): List<E> = entries.map { it.engine }.also { entries.clear() }

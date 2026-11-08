@@ -132,7 +132,12 @@ fun PackagesSheet(engine: EngineApi, http: OkHttpClient, controller: SessionCont
     fun edit(change: (JsonObject) -> JsonObject?) {
         scope.launch {
             val ok = withContext(Dispatchers.IO) { PiJsonFile.update(settingsFile) { change(it) ?: it } }
-            if (ok) changed = true else onMessage("Could not change settings.json")
+            if (ok) {
+                changed = true
+                packagesChanged(engine, context)
+            } else {
+                onMessage("Could not change settings.json")
+            }
             reload++
         }
     }

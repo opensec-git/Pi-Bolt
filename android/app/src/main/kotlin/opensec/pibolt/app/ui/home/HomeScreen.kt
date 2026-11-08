@@ -205,8 +205,10 @@ fun HomeScreen(
     val snackbar = remember { SnackbarHostState() }
 
     val status by engine.status.collectAsStateWithLifecycle()
-    val configured by engine.auth.configured.collectAsStateWithLifecycle()
-    val authLoaded by engine.auth.loaded.collectAsStateWithLifecycle()
+    // Providers with a working model: a key, a custom endpoint, or a provider a Pi package registers (ProviderDirectory).
+    val configured by app.providers.connected.collectAsStateWithLifecycle()
+    val stored by engine.auth.configured.collectAsStateWithLifecycle()
+    val authLoaded by app.providers.loaded.collectAsStateWithLifecycle()
     val meta by store.state.collectAsStateWithLifecycle()
     val metaLoaded by store.loaded.collectAsStateWithLifecycle()
     val hosts by app.hosts.hosts.collectAsStateWithLifecycle()
@@ -239,6 +241,7 @@ fun HomeScreen(
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         reload++
         Chats.refresh()
+        app.providers.refreshIfOlder()
     }
     // Plain chats (ui/chats): the newest in Recents, all of them behind the Chats row.
     val chats by remember(engine) { Chats.list(engine) }.collectAsStateWithLifecycle(emptyList())
@@ -854,7 +857,7 @@ fun HomeScreen(
     if (onboarding || addProvider) {
         ProviderSheet(
             auth = engine.auth,
-            configured = configured,
+            configured = stored,
             firstRun = onboarding,
             onSaved = { p ->
                 onboarding = false
