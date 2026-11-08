@@ -52,6 +52,21 @@ function closerLabel(closer: MobileViewForm | MobileViewButton): string {
 	return cleanText(closer.type === "form" ? closer.submit.label : closer.label);
 }
 
+/** The shown fields of `nodes` outside forms (hidden nodes and their insides left out). */
+function standaloneFields(nodes: readonly MobileViewNode[]): MobileViewField[] {
+	const found: MobileViewField[] = [];
+	const walk = (list: readonly MobileViewNode[]) => {
+		for (const node of list) {
+			if (node.hidden || node.type === "form") continue;
+			if (node.id && isFieldType(node.type)) found.push(node as MobileViewField);
+			const children = (node as { children?: MobileViewNode[] }).children;
+			if (Array.isArray(children)) walk(children);
+		}
+	};
+	walk(nodes);
+	return found;
+}
+
 async function askField(
 	dialogs: ViewDialogs,
 	field: MobileViewField,
@@ -137,6 +152,12 @@ export async function runViewDialogs(
 	}
 	if (signal?.aborted || !chosen.id) return undefined;
 	if (chosen.type === "button") {
+		// The sheet's fields outside its forms go with the action, as the app sends them: ask them first.
+		for (const field of standaloneFields(view.body)) {
+			const answer = await askField(dialogs, field, opts);
+			if (!answer || signal?.aborted || !field.id) return undefined;
+			values[field.id] = answer.value;
+		}
 		if (chosen.confirm) {
 			const ok = await dialogs.confirm(
 				cleanText(chosen.confirm.title),

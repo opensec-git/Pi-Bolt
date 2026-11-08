@@ -373,6 +373,27 @@ describe("mobile UI sheets as dialogs", () => {
 		]);
 	});
 
+	it("asks a sheet's fields outside forms before an action button", async () => {
+		const sheet: MobileView = {
+			v: 1,
+			title: "Rename",
+			body: [{ type: "input", id: "name", label: "Name", required: true }],
+			actions: [{ type: "button", id: "save", label: "Save" }],
+		};
+		const dialogs = scriptedDialogs(["Save", "", "", "Bolt"]);
+		await expect(runViewDialogs(sheet, dialogs)).resolves.toEqual({
+			id: "save",
+			action: "save",
+			values: { name: "Bolt" },
+		});
+		expect(dialogs.asked).toEqual([
+			"select Name:  [Save]",
+			"input Name (required)",
+			"input Name (required)",
+			"input Name (required)",
+		]);
+	});
+
 	it("confirms a button with confirm, and cancels when any dialog is dismissed", async () => {
 		await expect(runViewDialogs(SHEET, scriptedDialogs(["Cancel", true]))).resolves.toMatchObject({ id: "cancel" });
 		await expect(runViewDialogs(SHEET, scriptedDialogs(["Cancel", false]))).resolves.toBeUndefined();

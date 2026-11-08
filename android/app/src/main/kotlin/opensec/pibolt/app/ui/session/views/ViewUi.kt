@@ -93,6 +93,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -686,6 +687,7 @@ private fun ViewField(field: VField, fields: ViewFields, actions: ViewActions, l
     }
     when (field) {
         is VInput -> Column {
+            var focused by remember { mutableStateOf(false) }
             FieldLabel(field.label + if (field.required) " *" else "")
             val password = field.kind == "password"
             PiTextField(
@@ -709,7 +711,14 @@ private fun ViewField(field: VField, fields: ViewFields, actions: ViewActions, l
                 ),
                 keyboardActions = KeyboardActions(onDone = { if (live) actions.change(id, fields.value(field)) }),
                 visualTransformation = if (password) PasswordVisualTransformation() else VisualTransformation.None,
-                modifier = Modifier.fillMaxWidth(),
+                // Outside a form, leaving the field commits it too: a multiline field has no Done key.
+                modifier = Modifier.fillMaxWidth().onFocusChanged { state ->
+                    if (state.hasFocus) focused = true
+                    else if (focused) {
+                        focused = false
+                        if (live && fields.edits[id] != null) actions.change(id, fields.value(field))
+                    }
+                },
             )
             val error = fields.errors[id] ?: field.error
             when {
