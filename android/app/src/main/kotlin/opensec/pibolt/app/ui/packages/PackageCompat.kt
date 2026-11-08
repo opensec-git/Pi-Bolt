@@ -95,10 +95,11 @@ object PackageCompat {
 
     /**
      * The allowed values when [field] (npm's `os`/`cpu`/`libc`: a list, `!x` to exclude) leaves out [ours], as text;
-     * null when [ours] is allowed or the field is empty.
+     * null when [ours] is allowed, the field is empty or it is npm's `["any"]`.
      */
     internal fun excludes(field: List<String>, ours: String): String? {
-        if (field.isEmpty()) return null
+        // npm (npm-install-checks) takes a lone "any" as no restriction.
+        if (field.isEmpty() || field == listOf("any")) return null
         val negated = field.filter { it.startsWith("!") }.map { it.removePrefix("!") }
         val allowed = field.filterNot { it.startsWith("!") }
         return when {

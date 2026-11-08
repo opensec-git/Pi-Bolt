@@ -261,6 +261,7 @@ class PackageBrowseTest {
         assertTrue(PackageCompat.check(manifest("""{"name":"p","os":["!linux"]}"""), null).any { it.title == "Not for Linux" })
         assertEquals(emptyList<CompatNote>(), PackageCompat.check(manifest("""{"name":"p","os":["linux","darwin"],"cpu":["arm64","x64"],"libc":["glibc"]}"""), null))
         assertEquals(emptyList<CompatNote>(), PackageCompat.check(manifest("""{"name":"p","os":["!win32"],"cpu":["!x64"]}"""), null))
+        assertEquals(emptyList<CompatNote>(), PackageCompat.check(manifest("""{"name":"p","os":["any"],"cpu":["any"],"libc":["any"]}"""), null))
     }
 
     @Test
