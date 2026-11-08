@@ -8,6 +8,7 @@ import opensec.pibolt.protocol.ProtocolJson
 import opensec.pibolt.protocol.session.MobileViews
 import opensec.pibolt.protocol.session.PageInfo
 import opensec.pibolt.protocol.str
+import java.io.File
 import java.security.MessageDigest
 
 /**
@@ -59,8 +60,11 @@ object PageCatalog {
     data class Cached(val key: String, val pages: List<PageInfo>)
 
     /** The key of an installed package set. [settings] is Pi's settings.json (null when unreadable). */
-    fun key(settings: JsonObject?, engineVersion: String): String {
+    fun key(settings: JsonObject?, engineVersion: String, installed: String = ""): String {
         val text = buildString {
+            // What is installed now: an update in place changes no setting, only the installed files.
+            append(installed)
+            append('\n')
             append(settings?.get("packages")?.toString().orEmpty())
             append('\n')
             append(settings?.get("extensions")?.toString().orEmpty())
@@ -123,6 +127,21 @@ object PageCatalog {
             val path = p.path
             p.source == source || (root != null && path != null && (path == root || path.startsWith("$root/")))
         }
+    }
+
+    /**
+     * A stamp of the packages installed in [agentDir], as Pi's package manager lays them out: the npm root's lockfile
+     * (rewritten by every install and update) and each git checkout's index (rewritten when a pull changes its files).
+     */
+    fun installStamp(agentDir: File): String = buildString {
+        val lock = File(agentDir, "npm/package-lock.json")
+        if (lock.isFile) append("npm ${lock.lastModified()} ${lock.length()}\n")
+        File(agentDir, "git").walkTopDown().maxDepth(6).onEnter { it.name != "node_modules" }
+            .filter { it.isDirectory && it.name == ".git" }
+            .map { File(it, "index") }
+            .filter { it.isFile }
+            .sortedBy { it.path }
+            .forEach { append("git ${it.parentFile.parentFile.relativeTo(agentDir).path} ${it.lastModified()} ${it.length()}\n") }
     }
 
     /** Opted-in tile keys that still exist, in the order [pages] lists them. */

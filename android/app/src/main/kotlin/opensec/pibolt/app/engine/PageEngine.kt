@@ -97,7 +97,8 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
         return info.lowMemory
     }
 
-    private fun packagesKey(): String = PageCatalog.key(PiJsonFile.read(File(engine.agentDir, "settings.json")), engineVersion())
+    private fun packagesKey(): String =
+        PageCatalog.key(PiJsonFile.read(File(engine.agentDir, "settings.json")), engineVersion(), PageCatalog.installStamp(engine.agentDir))
 
     private suspend fun currentKey(): String = withContext(Dispatchers.IO) { packagesKey() }
 

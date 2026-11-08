@@ -12,6 +12,7 @@ import opensec.pibolt.protocol.session.MobileViews
 import opensec.pibolt.protocol.session.PageInfo
 import opensec.pibolt.protocol.session.VChart
 import opensec.pibolt.protocol.session.VKv
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -53,6 +54,26 @@ class PagesTest {
         assertNotEquals(a, PageCatalog.key(settings("""{"packages":["npm:a"],"piBolt":{"packages":["npm:m"]}}"""), "1.1.6"))
         assertEquals(a, PageCatalog.key(settings("""{"packages":["npm:a"],"piBolt":{"theme":"x"}}"""), "1.1.6"))
         assertEquals(PageCatalog.key(null, ""), PageCatalog.key(settings("{}"), ""))
+        // A package updated in place changes only what is installed.
+        assertNotEquals(a, PageCatalog.key(settings("""{"packages":["npm:a"],"theme":"dark"}"""), "1.1.6", "npm 2 10\n"))
+    }
+
+    @Test
+    fun `the install stamp follows the npm lockfile and git checkouts`() {
+        val dir = kotlin.io.path.createTempDirectory("pages").toFile()
+        try {
+            assertEquals("", PageCatalog.installStamp(dir))
+            File(dir, "npm").mkdirs()
+            File(dir, "npm/package-lock.json").apply { writeText("{}"); setLastModified(1_000_000L) }
+            val checkout = File(dir, "git/github.com/x/ci/.git").apply { mkdirs() }
+            File(checkout, "index").apply { writeText("a"); setLastModified(2_000_000L) }
+            val first = PageCatalog.installStamp(dir)
+            assertEquals("npm 1000000 2\ngit ${File("git/github.com/x/ci").path} 2000000 1\n", first)
+            File(checkout, "index").apply { writeText("ab"); setLastModified(3_000_000L) }
+            assertNotEquals(first, PageCatalog.installStamp(dir))
+        } finally {
+            dir.deleteRecursively()
+        }
     }
 
     private val pages = listOf(
