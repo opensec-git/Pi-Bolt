@@ -123,6 +123,8 @@ data class PackageDetail(
     val resources: List<AddedResource>,
     val notes: List<CompatNote>,
     val error: String?,
+    /** Read from the private registry (no public links, downloads or file checks). */
+    val fromPrivate: Boolean = false,
 ) {
     val blocked: Boolean get() = notes.any { it.level == CompatNote.Level.Blocks }
 }
@@ -164,11 +166,18 @@ object PackageFormat {
  * Loads [source]'s details: an npm source from the registry (package.json, last week's downloads, the published file
  * list), a GitHub source's package.json; other git hosts have none. Never throws; [PackageDetail.error] says why.
  */
-suspend fun loadDetail(catalog: PackageCatalog, source: String, known: CatalogEntry?): PackageDetail {
+suspend fun loadDetail(catalog: PackageCatalog, source: String, known: CatalogEntry?, private: Pair<RegistryConfig, PackageCatalog>? = null): PackageDetail {
     val npm = PackageLinks.npmParts(source)
     val gh = PackageLinks.githubParts(source)
     return try {
         when {
+            // A package of the private registry: its package.json from there only (the public download counter and
+            // file list would learn its name, and have nothing for it).
+            npm != null && private != null && private.first.serves(npm.first) -> {
+                val manifest = private.second.manifest(npm.first, npm.second)
+                val (resources, notes) = withContext(Dispatchers.Default) { CatalogJson.resources(manifest, null) to PackageCompat.check(manifest, null) }
+                PackageDetail(manifest, null, null, resources, notes, null, fromPrivate = true)
+            }
             npm != null -> coroutineScope {
                 val (name, version) = npm
                 val downloads = async { known?.weeklyDownloads ?: catalog.weeklyDownloads(name) }
@@ -206,13 +215,18 @@ private sealed interface BrowseState {
  * Install). [installed] marks packages already configured.
  */
 @Composable
-fun BrowseTab(catalog: PackageCatalog, installed: Set<String>, onOpen: (CatalogEntry) -> Unit) {
+fun BrowseTab(catalog: PackageCatalog, private: Pair<RegistryConfig, PackageCatalog>?, installed: Set<String>, onOpen: (CatalogEntry) -> Unit) {
     var query by remember { mutableStateOf("") }
+    // With a scoped private registry, Browse can search it instead of npm (when it has npm's search API).
+    var usePrivate by remember { mutableStateOf(false) }
+    val privateScope = private?.first?.scope
+    val searching = if (usePrivate && private != null && privateScope != null) private.second else catalog
+    val scopeFilter = privateScope.takeIf { searching.private }
     var state by remember { mutableStateOf<BrowseState>(BrowseState.Loading) }
     var attempt by remember { mutableIntStateOf(0) }
     val scope = rememberCoroutineScope()
     var more by remember { mutableStateOf<Job?>(null) }
-    LaunchedEffect(query, attempt) {
+    LaunchedEffect(query, attempt, searching) {
         // Typing restarts this effect: the request goes out once the query has rested. A "Show more" for the old
         // query is cancelled so its page never lands on the new results.
         more?.cancel()
@@ -220,17 +234,26 @@ fun BrowseTab(catalog: PackageCatalog, installed: Set<String>, onOpen: (CatalogE
         if (state !is BrowseState.Loading) state = BrowseState.Loading
         delay(if (query.isBlank() && attempt == 0) 0 else DEBOUNCE_MS)
         state = try {
-            BrowseState.Results(catalog.search(query))
+            BrowseState.Results(searching.search(query, scope = scopeFilter))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             BrowseState.Failed(e.message ?: "Could not search the packages.")
         }
     }
+    if (privateScope != null) {
+        Segmented(
+            options = listOf(false to "npm", true to privateScope),
+            selected = usePrivate,
+            onSelect = { usePrivate = it },
+            modifier = Modifier.fillMaxWidth().padding(horizontal = Space.lg, vertical = Space.xs),
+            height = 48.dp,
+        )
+    }
     PillSearchField(
         value = query,
         onValueChange = { query = it.take(100) },
-        placeholder = "Search Pi packages",
+        placeholder = if (scopeFilter != null) "Search $scopeFilter packages" else "Search Pi packages",
         modifier = Modifier.padding(horizontal = Space.lg, vertical = 6.dp),
     )
     when (val s = state) {
@@ -259,7 +282,7 @@ fun BrowseTab(catalog: PackageCatalog, installed: Set<String>, onOpen: (CatalogE
                         val forQuery = query
                         more = scope.launch {
                             val result = try {
-                                val next = catalog.search(forQuery, from = s.page.entries.size)
+                                val next = searching.search(forQuery, from = s.page.entries.size, scope = scopeFilter)
                                 val names = s.page.entries.map { it.name }.toSet()
                                 BrowseState.Results(CatalogPage(s.page.entries + next.entries.filter { it.name !in names }, next.total))
                             } catch (e: CancellationException) {
@@ -273,7 +296,7 @@ fun BrowseTab(catalog: PackageCatalog, installed: Set<String>, onOpen: (CatalogE
                 }
             }
             Text(
-                "From the npm registry (packages with the pi-package keyword, as on pi.dev).",
+                if (scopeFilter != null) "From your private registry ($scopeFilter packages)." else "From the npm registry (packages with the pi-package keyword, as on pi.dev).",
                 style = Pi.type.meta,
                 color = Pi.colors.ink3,
                 modifier = Modifier.padding(horizontal = Space.xl, vertical = Space.sm),
@@ -301,6 +324,7 @@ fun PackageInfoSheet(
     status: InstallStatus,
     onInstall: (args: List<String>, local: Boolean, label: String) -> Unit,
     onDismiss: () -> Unit,
+    private: suspend () -> Pair<RegistryConfig, PackageCatalog>? = { null },
 ) {
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
@@ -311,7 +335,7 @@ fun PackageInfoSheet(
     var local by remember { mutableStateOf(false) }
     LaunchedEffect(source, attempt) {
         detail = null
-        detail = loadDetail(catalog, source, known)
+        detail = loadDetail(catalog, source, known, private())
     }
     val title = detail?.manifest?.name ?: known?.name ?: PackageLinks.npmParts(source)?.first ?: source.substringAfterLast('/')
     val description = detail?.manifest?.description ?: known?.description
@@ -382,7 +406,7 @@ fun PackageInfoSheet(
                 }
             }
             val repo = d?.manifest?.repository ?: known?.repository
-            val npm = PackageLinks.npmParts(source)?.first
+            val npm = PackageLinks.npmParts(source)?.first?.takeIf { d?.fromPrivate != true }
             if (repo != null || npm != null) F2Section("Links")
             repo?.let { url -> F2Row("Repository", url, Icons.Rounded.Code, onClick = { open(url) }, titleMaxLines = 1) { OpenGlyph() } }
             npm?.let { name ->
@@ -476,15 +500,18 @@ fun InstallLinkHost(app: PiBoltApp, pending: String?, onConsumed: () -> Unit) {
     var shown by remember { mutableStateOf<String?>(null) }
     var last by remember { mutableStateOf<SourceStatus?>(null) }
     var installed by remember { mutableStateOf(false) }
+    // Bumped for every link, so the same package opened again is checked again.
+    var opened by remember { mutableIntStateOf(0) }
     LaunchedEffect(pending) {
         val source = pending ?: return@LaunchedEffect
         // Taken into this host's own state before it is consumed: consuming changes this effect's key.
         installed = false
         if (last?.status !is InstallStatus.Running) last = null
         shown = source
+        opened++
         onConsumed()
     }
-    LaunchedEffect(shown) {
+    LaunchedEffect(shown, opened) {
         val source = shown ?: return@LaunchedEffect
         installed = withContext(Dispatchers.IO) {
             val settings = PiJsonFile.read(File(engine.agentDir, "settings.json")) ?: JsonObject(emptyMap())
@@ -503,13 +530,14 @@ fun InstallLinkHost(app: PiBoltApp, pending: String?, onConsumed: () -> Unit) {
                 if (last?.status is InstallStatus.Running) return@PackageInfoSheet
                 last = SourceStatus(source, InstallStatus.Running("Installing $title"))
                 app.appScope.launch {
-                    val result = engine.cli(args, timeoutMs = 600_000)
+                    val result = packageCli(engine, app, args)
                     val next = if (result.ok) InstallStatus.Done("Installed $title. Start or reload a session to use it.") else InstallStatus.Failed(cliFailure(result))
                     last = SourceStatus(source, next)
                     if (shown != source) scope.launch { snackbar.show(if (result.ok) "Installed $title" else "Could not install $title", if (result.ok) SnackKind.Success else SnackKind.Error) }
                 }
             },
             onDismiss = { shown = null },
+            private = { withContext(Dispatchers.IO) { PrivateRegistries.catalog(PrivateRegistries.get(app), app.http) } },
         )
     }
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {

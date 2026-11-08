@@ -722,7 +722,17 @@ was found; "What it adds" (an `F2Row` per extension, skill, prompt and theme: Ex
 ChatBubbleOutline, Palette); "Links" (Repository, pi.dev; an open glyph trails); with a project in context, "Install
 for" All projects | This project (48dp; this project needs the project trusted, else a meta line says to trust it
 first); the trust warning, or the install's progress (`LoadingRow`), success notice or error log; then Cancel and
-Install (Done once installed). Nothing installs before Install is tapped. pi.dev pages are not an app link (pi.dev
+Install (Done once installed). Nothing installs before Install is tapped.
+
+**Private registry (packages sheet, Installed, "Advanced").** A collapsed `F2Row` ("Advanced", Tune glyph, the
+saved scope and URL or "Private registry" in meta, a chevron) opens: one meta line, "Registry URL" (`PiTextField`,
+default https://registry.npmjs.org/; https only, http just for 127.0.0.1/localhost), "Scope (optional)" (@company),
+and "Token" as a `SecretField`, or, once saved, a Key glyph with "Token saved" and a danger "Remove". Remove registry
+(secondary) and Save (primary). The token is sealed with the Android Keystore (prefs `npm-registry`, excluded from
+backup and transfer) and never shown again; it reaches npm only during an install, in a 0600 `.npmrc` under
+no_backup that npm reads as its global config and that is deleted afterwards. With a scope, Browse shows a 48dp
+segmented npm | @scope and searches the private registry (no keyword filter, the token sent only to it); a registry
+without npm's search API says to install by name. A private package's detail is read from that registry only. pi.dev pages are not an app link (pi.dev
 cannot be verified for Pi-Bolt), so they open in the browser; sharing one to Pi-Bolt is the way in.
 
 **Provider sheet (first run and Add provider).** Opens by itself once, 450 ms after the first frame of Home, when no

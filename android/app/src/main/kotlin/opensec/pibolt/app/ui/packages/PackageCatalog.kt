@@ -68,7 +68,8 @@ data class PackageManifest(
 /** A package resource, for the detail view: its type and its name. */
 data class AddedResource(val kind: String, val name: String)
 
-class CatalogException(message: String) : Exception(message)
+/** A catalog call that failed, with a message for the user; [status] is the HTTP code (0 without an answer). */
+class CatalogException(message: String, val status: Int = 0) : Exception(message)
 
 /**
  * The JSON answers the catalog reads (pure, unit-tested): npm's search (`/-/v1/search`), a version's package.json
@@ -394,10 +395,14 @@ object CatalogJson {
  * for the `pi-package` keyword (pi.dev/packages has no JSON API and lists the same packages), a version's package.json
  * from the registry, last week's downloads from api.npmjs.org and a version's file list from jsDelivr (for the
  * resources and the compatibility checks). A GitHub source's package.json comes from raw.githubusercontent.com.
+ * For a private registry ([registry] with [authToken]) the token goes, as a Bearer header, to that registry's URLs
+ * only; [private] catalogs search without the keyword filter and never ask the public services about their packages.
  */
 class PackageCatalog(
     client: OkHttpClient,
     private val registry: String = "https://registry.npmjs.org",
+    private val authToken: String? = null,
+    val private: Boolean = false,
     private val downloadsApi: String = "https://api.npmjs.org",
     private val filesApi: String = "https://data.jsdelivr.com",
     private val githubRaw: String = "https://raw.githubusercontent.com",
@@ -410,15 +415,28 @@ class PackageCatalog(
         .callTimeout(45, TimeUnit.SECONDS)
         .build()
 
-    /** Packages matching [query] (all of them, most downloaded first, when blank). */
-    suspend fun search(query: String, from: Int = 0, size: Int = PAGE): CatalogPage {
+    /**
+     * Packages matching [query] (all of them, most downloaded first, when blank). In a [private] catalog: every package
+     * of [scope] matching [query] (no keyword filter: private packages rarely carry it); a registry without npm's
+     * search API answers with [NO_SEARCH].
+     */
+    suspend fun search(query: String, from: Int = 0, size: Int = PAGE, scope: String? = null): CatalogPage {
         val words = query.trim().split(Regex("\\s+")).filter { it.isNotEmpty() && !it.contains(':') }.take(8)
+        val terms = if (private) words.ifEmpty { listOfNotNull(scope?.removePrefix("@")) } else listOf("keywords:pi-package") + words
         val url = "$registry/-/v1/search".toHttpUrl().newBuilder()
-            .addQueryParameter("text", (listOf("keywords:pi-package") + words).joinToString(" "))
+            .addQueryParameter("text", terms.joinToString(" "))
             .addQueryParameter("size", size.toString())
             .addQueryParameter("from", from.toString())
             .build()
-        return CatalogJson.parseSearch(get(url.toString()) ?: throw CatalogException("No packages found."))
+        val text = try {
+            get(url.toString())
+        } catch (e: CatalogException) {
+            if (private && e.status in setOf(400, 405, 501)) throw CatalogException(NO_SEARCH, e.status) else throw e
+        } ?: throw CatalogException(if (private) NO_SEARCH else "No packages found.", 404)
+        val page = CatalogJson.parseSearch(text)
+        if (!private || scope == null) return page
+        val mine = page.entries.filter { it.name.startsWith("$scope/") }
+        return CatalogPage(mine, if (mine.size == page.entries.size) page.total else mine.size)
     }
 
     /** [name]'s package.json at [version] (the latest when null). */
@@ -443,7 +461,9 @@ class PackageCatalog(
 
     /** The body of a 200 answer, null for 404, a [CatalogException] for anything else or no network. */
     private suspend fun get(url: String): String? {
-        val request = Request.Builder().url(url).header("Accept", "application/json").get().build()
+        val builder = Request.Builder().url(url).header("Accept", "application/json").get()
+        if (authToken != null && url.startsWith("${registry.trimEnd('/')}/")) builder.header("Authorization", "Bearer $authToken")
+        val request = builder.build()
         return runInterruptible(Dispatchers.IO) {
             val response = try {
                 http.newCall(request).execute()
@@ -455,8 +475,9 @@ class PackageCatalog(
                     // At most MAX_BODY bytes are read; a longer answer is cut and then fails to parse.
                     r.isSuccessful -> r.peekBody(MAX_BODY).string()
                     r.code == 404 -> null
-                    r.code == 429 -> throw CatalogException("The package registry is busy. Try again in a minute.")
-                    else -> throw CatalogException("The package registry answered ${r.code}.")
+                    r.code == 401 || r.code == 403 -> throw CatalogException("The registry refused the token (${r.code}). Check it under Advanced.", r.code)
+                    r.code == 429 -> throw CatalogException("The package registry is busy. Try again in a minute.", r.code)
+                    else -> throw CatalogException("The package registry answered ${r.code}.", r.code)
                 }
             }
         }
@@ -464,6 +485,7 @@ class PackageCatalog(
 
     companion object {
         const val PAGE = 20
+        const val NO_SEARCH = "This registry has no search. Install its packages by name under Installed."
         private const val MAX_BODY = 8L * 1024 * 1024
     }
 }

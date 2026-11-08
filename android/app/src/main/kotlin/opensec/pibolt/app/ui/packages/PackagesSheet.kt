@@ -96,6 +96,12 @@ fun PackagesSheet(engine: EngineApi, http: OkHttpClient, controller: SessionCont
     val catalog = remember(http) { PackageCatalog(http) }
     var browsing by remember { mutableStateOf<CatalogEntry?>(null) }
     var browseStatus by remember { mutableStateOf<SourceStatus?>(null) }
+    val registryStore = remember { PrivateRegistries.get(context) }
+    var registryVersion by remember { mutableIntStateOf(0) }
+    var privateCatalog by remember { mutableStateOf<Pair<RegistryConfig, PackageCatalog>?>(null) }
+    LaunchedEffect(registryVersion) {
+        privateCatalog = withContext(Dispatchers.IO) { PrivateRegistries.catalog(registryStore, http) }
+    }
 
     LaunchedEffect(reload) {
         view = withContext(Dispatchers.IO) { load(engine, settingsFile, project) }
@@ -107,7 +113,7 @@ fun PackagesSheet(engine: EngineApi, http: OkHttpClient, controller: SessionCont
         log = null
         onResult(InstallStatus.Running(label))
         scope.launch {
-            val result = engine.cli(args, cwd = project, timeoutMs = 600_000)
+            val result = packageCli(engine, context, args, cwd = project)
             working = null
             if (result.ok) {
                 changed = true
@@ -144,7 +150,8 @@ fun PackagesSheet(engine: EngineApi, http: OkHttpClient, controller: SessionCont
             if (tab == PackagesTab.Browse) {
                 working?.let { F2Loading(it) }
                 ReloadWell(changed, onReload, close)
-                BrowseTab(catalog, installed = PackageFormat.installedNames(view?.packages.orEmpty().filter { it.scope == PackageScope.User }.map { it.source }), onOpen = {
+                val users = view?.packages.orEmpty().filter { it.scope == PackageScope.User }
+                BrowseTab(catalog, privateCatalog, installed = PackageFormat.installedNames(users.map { it.source }) + users.mapNotNull { it.name }, onOpen = {
                     // A finished result is for that visit only; a running install stays visible.
                     if (browseStatus?.status !is InstallStatus.Running) browseStatus = null
                     browsing = it
@@ -214,6 +221,7 @@ fun PackagesSheet(engine: EngineApi, http: OkHttpClient, controller: SessionCont
                             edit { PackageList.setBuiltin(it, b.id, on) }
                         }
                     }
+                    RegistrySection(registryStore, onMessage = onMessage, onChanged = { registryVersion++ })
                     Spacer(Modifier.height(8.dp))
                 }
             }
@@ -228,12 +236,13 @@ fun PackagesSheet(engine: EngineApi, http: OkHttpClient, controller: SessionCont
             catalog = catalog,
             known = entry,
             project = project?.let { ProjectTarget(it, v?.projectTrusted == true) },
-            installed = v?.packages.orEmpty().any { it.scope == PackageScope.User && PackageLinks.npmParts(it.source)?.first == entry.name },
+            installed = PackageFormat.isInstalled(source, v?.packages.orEmpty().filter { it.scope == PackageScope.User }.map { it.source }),
             status = SourceStatus.of(source, browseStatus),
             onInstall = { args, local, title ->
                 runCli("Installing $title", args, if (local) "Installed $title for ${project?.name}" else "Installed $title", onResult = { browseStatus = SourceStatus(source, it) })
             },
             onDismiss = { browsing = null },
+            private = { privateCatalog },
         )
     }
 
