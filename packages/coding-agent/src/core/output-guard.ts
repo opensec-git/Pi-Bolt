@@ -1,6 +1,3 @@
-import { Console } from "node:console";
-import { format } from "node:util";
-
 interface StdoutTakeoverState {
 	rawStdoutWrite: (chunk: string, callback?: (error?: Error | null) => void) => boolean;
 	rawStderrWrite: (chunk: string, callback?: (error?: Error | null) => void) => boolean;
@@ -117,17 +114,26 @@ export function takeOverStdout(): void {
 function routeBunConsoleThroughStdoutWrite(): Map<string, unknown> {
 	const target = console as unknown as Record<string, unknown>;
 	const originals = new Map<string, unknown>();
-	const nodeConsole = new Console({ stdout: process.stdout, stderr: process.stderr });
+	// Made at the first call, not at the takeover: node:console and node:util cost a start ~3.5 M instructions to load
+	// (`pi -p` takes stdout over), and most runs never print through the console.
+	let nodeConsole: Console | undefined;
+	const getNodeConsole = (): Console => {
+		nodeConsole ??= new (process.getBuiltinModule("node:console").Console)({
+			stdout: process.stdout,
+			stderr: process.stderr,
+		});
+		return nodeConsole;
+	};
 	for (const name of BUN_STDOUT_CONSOLE_METHODS) {
 		originals.set(name, target[name]);
-		target[name] = nodeConsole[name].bind(nodeConsole);
+		target[name] = (...data: unknown[]): void => (getNodeConsole()[name] as (...data: unknown[]) => void)(...data);
 	}
 	// Bun's Console prints a trace's stack without its "Trace: <message>" line; Node prints it to stderr with the line.
 	const trace = (...data: unknown[]): void => {
-		const error = new Error(format(...data));
+		const error = new Error(process.getBuiltinModule("node:util").format(...data));
 		error.name = "Trace";
 		Error.captureStackTrace(error, trace);
-		nodeConsole.error(error.stack);
+		getNodeConsole().error(error.stack);
 	};
 	originals.set("trace", target.trace);
 	target.trace = trace;
