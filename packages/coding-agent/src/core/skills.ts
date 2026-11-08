@@ -1,9 +1,10 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import ignore from "ignore";
 import { basename, dirname, join, relative, resolve, sep } from "path";
-import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
+import { CONFIG_DIR_NAME, getAgentDir, getBundledSkillsDir } from "../config.ts";
 import { parseFrontmatter } from "../utils/frontmatter.ts";
 import { isPathWithin, resolvePath } from "../utils/paths.ts";
+import { BUNDLED_SKILLS } from "./bundled-skills.ts";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
 import { createSyntheticSourceInfo, getResourcePathKey, type SourceInfo } from "./source-info.ts";
 
@@ -474,6 +475,27 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 		const resolvedPath = resolvePath(rawPath, resolvedCwd, { trim: true });
 		if (!existsSync(resolvedPath)) {
 			allDiagnostics.push({ type: "warning", message: "skill path does not exist", path: resolvedPath });
+			continue;
+		}
+
+		// A skill Pi-Bolt ships: its frontmatter is known (bundled-skills.ts), so neither its folder nor its SKILL.md is read.
+		const bundledSkillsDir = getBundledSkillsDir();
+		const bundled = BUNDLED_SKILLS.find((skill) => join(bundledSkillsDir, skill.dir) === resolvedPath);
+		const skillFile = join(resolvedPath, "SKILL.md");
+		if (bundled && existsSync(skillFile)) {
+			addSkills({
+				skills: [
+					{
+						name: bundled.name,
+						description: bundled.description,
+						filePath: skillFile,
+						baseDir: resolvedPath,
+						sourceInfo: createSkillSourceInfo(skillFile, resolvedPath, getSource(resolvedPath)),
+						disableModelInvocation: false,
+					},
+				],
+				diagnostics: [],
+			});
 			continue;
 		}
 
