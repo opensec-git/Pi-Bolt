@@ -102,6 +102,14 @@ class MobileViewDataTest {
     }
 
     @Test
+    fun `chart readings round to two decimals without saturating`() {
+        assertEquals("41.5 s", ChartData.format(41.499, "s"))
+        assertEquals("1000000000000000000", ChartData.format(1e18, null))
+        assertEquals("-0.01%", ChartData.format(-0.0149, "%"))
+        assertEquals("0", ChartData.format(0.0, null))
+    }
+
+    @Test
     fun `table numbers keep their precision, as shown and as filtered`() {
         val column = VColumn("n", "N", "number", sortable = false)
         assertEquals("0.001", TableData.text(VCell.Number(0.001), column))

@@ -1,12 +1,12 @@
 package opensec.pibolt.protocol.session
 
 import java.math.BigDecimal
+import java.math.RoundingMode
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
-import java.util.Locale
 
 /**
  * The data side of the kit's `chart` and `table` (packages/coding-agent/docs/mobile-ui.md#charts-tables-and-places):
@@ -41,8 +41,8 @@ object ChartData {
 
     /** A number as the chart shows it: up to two decimals, no trailing zeros, then the unit. */
     fun format(value: Double, unit: String?): String {
-        val rounded = Math.round(value * 100.0) / 100.0
-        val text = if (rounded == Math.floor(rounded) && kotlin.math.abs(rounded) < 1e15) rounded.toLong().toString() else String.format(Locale.US, "%.2f", rounded).trimEnd('0').trimEnd('.')
+        // Two decimals at most, rounded in decimal (no Long on the way, so huge readings stay exact).
+        val text = BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP).stripTrailingZeros().toPlainString()
         return when {
             unit.isNullOrEmpty() -> text
             unit.first().isLetter() -> "$text $unit"
