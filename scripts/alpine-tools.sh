@@ -18,10 +18,10 @@ fi
 apk add --no-cache --no-progress $packages >/dev/null
 git config --global --add safe.directory '*'
 if [ "${1:-}" = --build ]; then
-	curl -fsSL --retry 5 --retry-all-errors https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path >/dev/null
+	curl -fsSL --retry 10 --retry-delay 30 --retry-all-errors https://sh.rustup.rs | sh -s -- -y --profile minimal --no-modify-path >/dev/null
 fi
 tmp=$(mktemp -d)
-curl -fsSL --retry 5 --retry-all-errors -o "$tmp/bun.zip" "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64-musl.zip"
+curl -fsSL --retry 10 --retry-delay 30 --retry-all-errors -o "$tmp/bun.zip" "https://github.com/oven-sh/bun/releases/download/bun-v$BUN_VERSION/bun-linux-x64-musl.zip"
 echo "$BUN_SHA256  $tmp/bun.zip" | sha256sum -c - >/dev/null
 unzip -q "$tmp/bun.zip" -d "$tmp"
 install -D -m 755 "$tmp/bun-linux-x64-musl/bun" "$HOME/.bun/bin/bun"
