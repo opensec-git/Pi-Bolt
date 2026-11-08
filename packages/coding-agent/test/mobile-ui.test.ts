@@ -416,6 +416,46 @@ describe("mobile UI sheets as dialogs", () => {
 		expect(dialogs.asked).toEqual(["input Name (required)", "input Branch"]);
 	});
 
+	it("offers no form of a hidden container, and keeps options that share a label apart", async () => {
+		const hidden: MobileView = {
+			v: 1,
+			body: [
+				{
+					type: "section",
+					hidden: true,
+					children: [{ type: "form", id: "f", children: [], submit: { label: "Go" } }],
+				},
+			],
+		};
+		const closeOnly = scriptedDialogs(["Close"]);
+		await expect(runViewDialogs(hidden, closeOnly)).resolves.toBeUndefined();
+		expect(closeOnly.asked).toEqual(["select  [Close]"]);
+		const regions: MobileView = {
+			v: 1,
+			body: [
+				{
+					type: "form",
+					id: "f",
+					children: [
+						{
+							type: "select",
+							id: "r",
+							label: "Region",
+							options: [
+								{ value: "east", label: "US" },
+								{ value: "west", label: "US" },
+							],
+						},
+					],
+					submit: { label: "Go" },
+				},
+			],
+		};
+		const dialogs = scriptedDialogs(["US (2)"]);
+		await expect(runViewDialogs(regions, dialogs)).resolves.toMatchObject({ values: { r: "west" } });
+		expect(dialogs.asked).toEqual(["select Region [US|US (2)]"]);
+	});
+
 	it("confirms a button with confirm, and cancels when any dialog is dismissed", async () => {
 		await expect(runViewDialogs(SHEET, scriptedDialogs(["Cancel", true]))).resolves.toMatchObject({ id: "cancel" });
 		await expect(runViewDialogs(SHEET, scriptedDialogs(["Cancel", false]))).resolves.toBeUndefined();

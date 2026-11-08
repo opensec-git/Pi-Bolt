@@ -38,10 +38,19 @@ export function fieldValues(view: MobileView): Record<string, MobileViewValue> {
 
 function closers(view: MobileView): Array<MobileViewForm | MobileViewButton> {
 	const found: Array<MobileViewForm | MobileViewButton> = [];
-	forEachNode(view, (node) => {
-		if (node.type === "form" && !node.hidden && !node.disabled) found.push(node);
-		return undefined;
-	});
+	// Forms that are shown: hidden nodes and everything inside them are left out, as the app leaves them out.
+	const walk = (nodes: readonly MobileViewNode[]) => {
+		for (const node of nodes) {
+			if (node.hidden) continue;
+			if (node.type === "form") {
+				if (!node.disabled) found.push(node);
+				continue;
+			}
+			const children = (node as { children?: MobileViewNode[] }).children;
+			if (Array.isArray(children)) walk(children);
+		}
+	};
+	walk(view.body);
 	for (const action of view.actions ?? []) {
 		if (!action.hidden && !action.disabled && action.url === undefined) found.push(action);
 	}
@@ -50,6 +59,11 @@ function closers(view: MobileView): Array<MobileViewForm | MobileViewButton> {
 
 function closerLabel(closer: MobileViewForm | MobileViewButton): string {
 	return cleanText(closer.type === "form" ? closer.submit.label : closer.label);
+}
+
+/** [labels] with repeats numbered ("US", "US (2)"), so a dialog's answer names one entry. */
+function uniqueLabels(labels: string[]): string[] {
+	return labels.map((label, index) => (labels.indexOf(label) < index ? `${label} (${index + 1})` : label));
 }
 
 /** The shown fields of `nodes` outside forms (hidden nodes and their insides left out). */
@@ -80,7 +94,10 @@ async function askField(
 		}
 		case "select": {
 			const values = optionValues(field.options);
-			const labels = field.options.map((option) => cleanText(typeof option === "string" ? option : option.label));
+			// Options can share a label: each choice gets a text of its own, so the pick maps back to its value.
+			const labels = uniqueLabels(
+				field.options.map((option) => cleanText(typeof option === "string" ? option : option.label)),
+			);
 			const choice = await dialogs.select(label, labels, opts);
 			const index = choice === undefined ? -1 : labels.indexOf(choice);
 			return index < 0 ? undefined : { value: values[index] };
@@ -139,12 +156,7 @@ export async function runViewDialogs(
 	}
 	let chosen = choices[0];
 	if (choices.length > 1 || chosen.type === "button") {
-		const labels = choices.map((choice, index) => {
-			const label = closerLabel(choice);
-			return choices.some((other, j) => j < index && closerLabel(other) === label)
-				? `${label} (${index + 1})`
-				: label;
-		});
+		const labels = uniqueLabels(choices.map(closerLabel));
 		const picked = await dialogs.select(title, labels, opts);
 		const index = picked === undefined ? -1 : labels.indexOf(picked);
 		if (index < 0) return undefined;
