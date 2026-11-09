@@ -18,7 +18,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import opensec.pibolt.app.engine.PageEngine
 import opensec.pibolt.app.ui.components.ButtonSize
@@ -49,9 +51,15 @@ fun PackagePageSheet(pages: PageEngine, key: String, title: String, onClose: () 
     val host = remember(pages) { ViewHostUi({ pages.state.value.views }) { k, node, kind, value, values -> pages.event(k, node, kind, value, values) } }
     LaunchedEffect(key) { failed = !pages.open(key) }
     DisposableEffect(key) { onDispose { pages.close(key) } }
+    LifecycleResumeEffect(key) {
+        pages.resume()
+        onPauseOrDispose { }
+    }
     val entry = state.views[key]
     // The open failed, or the engine stopped for good after it opened (it kept exiting): the reason is shown either way.
     val down = failed || status is PageEngine.Status.Failed
+    // A short screen (landscape): the buttons scroll with the page, so the chart and table get the sheet's height.
+    val short = LocalConfiguration.current.screenHeightDp < SHORT_SCREEN_DP
     PiSheet(onDismiss = onClose) {
         val view = entry?.view
         SheetHeader(view?.title ?: title, subtitle = view?.subtitle)
@@ -71,9 +79,10 @@ fun PackagePageSheet(pages: PageEngine, key: String, title: String, onClose: () 
                 )
                 else -> WorkingLine("Opening", mode = QuadMode.Run)
             }
+            if (short && view != null && view.actions.isNotEmpty()) ViewButtons(view.actions, host.actions(key), size = ButtonSize.Large)
             Spacer(Modifier.height(Space.sm))
         }
-        if (view != null && view.actions.isNotEmpty()) {
+        if (!short && view != null && view.actions.isNotEmpty()) {
             Spacer(Modifier.height(Space.md))
             ViewButtons(view.actions, host.actions(key), Modifier.padding(horizontal = Space.page), size = ButtonSize.Large)
         }
@@ -89,3 +98,6 @@ fun PackagePageSheet(pages: PageEngine, key: String, title: String, onClose: () 
         )
     }
 }
+
+/** Below this height (dp) a page sheet scrolls its buttons with the page. */
+private const val SHORT_SCREEN_DP = 480

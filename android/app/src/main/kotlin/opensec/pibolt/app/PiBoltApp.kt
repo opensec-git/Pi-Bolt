@@ -267,9 +267,15 @@ class PiBoltApp : Application() {
         // the next open after a quick look at another app a cold start. It stops a minute later unless the app is back.
         @Suppress("DEPRECATION")
         when {
-            level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE || level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
+            level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> {
                 localEngine.trimMemory("trim level $level", critical = true)
                 pages.trim(critical = true)
+            }
+            // Sent while the app is in front: a package page on screen keeps its engine (it stopped and the page hung
+            // on "Opening"); one that only serves Home tiles still stops.
+            level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL -> {
+                localEngine.trimMemory("trim level $level", critical = true)
+                pages.trim(critical = false)
             }
             level >= ComponentCallbacks2.TRIM_MEMORY_MODERATE -> {
                 localEngine.trimMemory("trim level $level")
