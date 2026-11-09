@@ -2,6 +2,7 @@ package opensec.pibolt.app.ui.providers
 
 import androidx.compose.runtime.Immutable
 import opensec.pibolt.app.engine.CustomProvider
+import opensec.pibolt.app.engine.EngineProvider
 import java.net.URI
 
 /** A provider that takes an API key. [id] is Pi's provider id (the key in auth.json). */
@@ -59,6 +60,16 @@ object ProviderCatalog {
 
     private val byId = all.associateBy { it.id }
 
+    /** The catalog's provider ids. */
+    val ids: Set<String> = byId.keys
+
+    /** Names and marks of the providers Pi packages register (the engine's report), registered when it arrives. */
+    @Volatile
+    private var extensionNames: Map<String, String> = emptyMap()
+
+    @Volatile
+    private var extensionBrands: Map<String, Brand> = emptyMap()
+
     /** Names of custom endpoints (models.json), registered when that file is read. */
     @Volatile
     private var customNames: Map<String, String> = emptyMap()
@@ -75,17 +86,30 @@ object ProviderCatalog {
         customBrands = providers.associate { p -> p.id to ProviderLogos.forEndpoint(p.id, p.name, p.baseUrl) }
     }
 
-    /** The mark for any provider id: a custom endpoint's from its server, else [ProviderLogos.forProvider]. */
-    fun brand(id: String?): Brand = id?.let { customBrands[it] } ?: ProviderLogos.forProvider(id)
+    /** Remembers the names and marks of the providers extensions register (not the catalog's own). */
+    fun registerExtensions(providers: List<EngineProvider>) {
+        val added = providers.filter { it.id !in byId }
+        extensionNames = added.associate { it.id to it.name }
+        // The id's mark ("acme-anthropic" is Anthropic), else one its name gives ("Acme Ollama"), else the generic glyph.
+        extensionBrands = added.associate { p ->
+            p.id to (ProviderLogos.forProvider(p.id).takeIf { it != Brand.Generic } ?: ProviderLogos.forProvider(p.name.lowercase().replace(" ", "-")))
+        }
+    }
+
+    /**
+     * The mark for any provider id: a custom endpoint's from its server, an extension provider's from its id or name,
+     * else [ProviderLogos.forProvider].
+     */
+    fun brand(id: String?): Brand = id?.let { customBrands[it] ?: extensionBrands[it] } ?: ProviderLogos.forProvider(id)
 
     /** The mark for a model: its maker, else its provider's ([ProviderLogos.forModel]). */
     fun modelBrand(modelId: String?, provider: String?): Brand = ProviderLogos.forModel(modelId, brand(provider))
 
     /**
      * Display name for any provider id, including ones set up outside this app: the catalog name, a custom endpoint's
-     * name, else the id in words ("amazon-bedrock" is "Amazon bedrock").
+     * name, an extension provider's own name, else the id in words ("amazon-bedrock" is "Amazon bedrock").
      */
-    fun name(id: String): String = byId[id]?.name ?: customNames[id] ?: humanize(id)
+    fun name(id: String): String = byId[id]?.name ?: customNames[id] ?: extensionNames[id] ?: humanize(id)
 
     /** "fake" is "Fake", "amazon-bedrock" is "Amazon bedrock". */
     fun humanize(id: String): String =

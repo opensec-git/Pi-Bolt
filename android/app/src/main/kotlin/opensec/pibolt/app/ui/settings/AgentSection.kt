@@ -23,14 +23,15 @@ import java.io.File
 
 /**
  * The on-device engine's settings (its agent/settings.json, as in the terminal's /settings) as Settings shows them:
- * the [current] values, the open on-device session's [models] (Pi lists only models it can authenticate), the
+ * the [current] values, the open on-device session's [models] (Pi lists only models it can authenticate; without a
+ * session, the models the engine last reported working), the
  * default model's [match] among them, and [update], which saves and also reaches every open on-device session at once
  * where Pi has an RPC command for it (the rest apply from the next session).
  */
 internal class AgentPrefs(
     val current: AgentDefaults,
     val update: ((AgentDefaults) -> AgentDefaults) -> Unit,
-    /** The open on-device session; null when none is open (the model picker then has nothing to list). */
+    /** The open on-device session; null when none is open (the model picker then lists the engine's [models]). */
     val controller: SessionController?,
     /** Any open session (for the package details' commands and tools). */
     val anyLive: SessionController?,
@@ -64,7 +65,10 @@ internal fun rememberAgentPrefs(app: PiBoltApp): AgentPrefs? {
     val live by LocalSessions.current.collectAsStateWithLifecycle()
     val anyLive = live?.controller?.takeIf { !it.stopped }
     val controller = anyLive?.takeIf { it.isLocal }
-    val models by (controller?.models ?: remember { MutableStateFlow(emptyList<ModelInfo>()) }).collectAsStateWithLifecycle()
+    val sessionModels by (controller?.models ?: remember { MutableStateFlow(emptyList<ModelInfo>()) }).collectAsStateWithLifecycle()
+    // Without a session on this phone: the models the engine reports working (ProviderDirectory).
+    val report by app.providers.report.collectAsStateWithLifecycle()
+    val models = if (controller != null) sessionModels else remember(report) { report?.availableModels.orEmpty() }
     LaunchedEffect(controller) { if (controller != null && controller.models.value.isEmpty()) controller.loadModels() }
     val current = defaults ?: loaded ?: return null
     return AgentPrefs(

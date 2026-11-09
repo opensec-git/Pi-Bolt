@@ -250,6 +250,18 @@ class LocalBackend(
         return e.enqueue(outgoing)
     }
 
+    /**
+     * Sends [type] to the running engine for the app's own use, whether it is warm, parked or connected: the answer
+     * never reaches a consumer. Null when no engine runs, or it did not answer within [timeoutMs].
+     */
+    suspend fun query(type: String, timeoutMs: Long = REQUEST_TIMEOUT_MS, fields: JsonObjectBuilder.() -> Unit = {}): JsonObject? {
+        val e = engine?.takeIf { it.alive } ?: return null
+        return e.request(type, timeoutMs, fields)
+    }
+
+    /** Messages the engine has in its current session, from the last `get_state` (0 for a new, empty one). */
+    val messageCount: Int get() = engine?.messageCount ?: 0
+
     /** Take the engine back from its consumer (it stays running) so a later [connect] can hand it to another. */
     fun park() {
         val e = engine ?: return
@@ -495,7 +507,7 @@ class LocalBackend(
          * dialog held during a session switch, say): callers hold connectMutex, so an unanswered request must not
          * block every later connect.
          */
-        suspend fun request(type: String, fields: JsonObjectBuilder.() -> Unit = {}): JsonObject? {
+        suspend fun request(type: String, timeoutMs: Long = REQUEST_TIMEOUT_MS, fields: JsonObjectBuilder.() -> Unit = {}): JsonObject? {
             val id = "i${ids.incrementAndGet()}-$type"
             val waiter = CompletableDeferred<JsonObject?>()
             internal[id] = waiter
@@ -503,12 +515,12 @@ class LocalBackend(
                 internal.remove(id)
                 return null
             }
-            return withTimeoutOrNull(REQUEST_TIMEOUT_MS) { waiter.await() }.also { if (it == null) internal.remove(id) }
+            return withTimeoutOrNull(timeoutMs) { waiter.await() }.also { if (it == null) internal.remove(id) }
         }
 
         /** Run a session-switching command for the engine's own purposes (not a consumer's). */
         suspend fun switchTo(type: String, fields: JsonObjectBuilder.() -> Unit = {}) {
-            val response = request(type, fields) ?: throw EngineStartException("The engine stopped or did not answer")
+            val response = request(type, fields = fields) ?: throw EngineStartException("The engine stopped or did not answer")
             if (response.bool("success") != true) {
                 throw EngineStartException(response.str("error") ?: "The engine could not open that session")
             }

@@ -57,7 +57,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import opensec.pibolt.app.PiBoltApp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import opensec.pibolt.app.engine.CustomEndpoint
+import opensec.pibolt.app.engine.EngineProvider
+import opensec.pibolt.app.engine.ProviderRules
 import opensec.pibolt.app.engine.ModelsFile
 import opensec.pibolt.app.engine.ProviderAuth
 import androidx.compose.foundation.Image
@@ -84,10 +87,15 @@ import opensec.pibolt.app.ui.theme.Radius
 
 /** Where the provider sheet is: the list, one provider's key, or a custom endpoint. */
 private sealed interface Step {
-    data class Key(val provider: ProviderInfo) : Step
+    /** [extension]: a provider a Pi package registers, which may also offer its own sign-in. */
+    data class Key(val provider: ProviderInfo, val extension: EngineProvider? = null) : Step
 
     data object Custom : Step
 }
+
+/** An extension provider as the key step shows it. */
+private fun EngineProvider.info(): ProviderInfo =
+    ProviderInfo(id, name, note = "From a Pi package", keyUrl = null)
 
 /**
  * Add a provider's API key: pick the provider (search), paste the key (obscured), save to Pi's auth.json through
@@ -97,13 +105,37 @@ private sealed interface Step {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProviderSheet(auth: ProviderAuth, configured: Set<String>, firstRun: Boolean, onSaved: (ProviderInfo) -> Unit, onDismiss: () -> Unit, initial: ProviderInfo? = null) {
+fun ProviderSheet(
+    auth: ProviderAuth,
+    configured: Set<String>,
+    firstRun: Boolean,
+    onSaved: (ProviderInfo) -> Unit,
+    onDismiss: () -> Unit,
+    initial: ProviderInfo? = null,
+    extension: EngineProvider? = null,
+) {
+    val app = LocalContext.current.applicationContext as PiBoltApp
+    val extensions by app.providers.extensions.collectAsStateWithLifecycle()
     val state = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val close = rememberSheetCloser(state)
-    var step by remember { mutableStateOf<Step?>(initial?.let { Step.Key(it) }) }
+    // An extension provider without a key field goes straight to its sign-in.
+    var signingIn by remember { mutableStateOf(extension?.takeIf { !it.acceptsKey && it.canLogin }) }
+    var step by remember { mutableStateOf<Step?>(initial?.let { Step.Key(it) } ?: extension?.takeIf { it.acceptsKey }?.let { Step.Key(it.info(), it) }) }
+    val fixed = initial != null || extension != null
+    val saved: (ProviderInfo) -> Unit = { info ->
+        app.providers.refresh()
+        onSaved(info)
+    }
+    signingIn?.let { p ->
+        ProviderLoginSheet(p, onDone = { saved(p.info()) }, onDismiss = onDismiss)
+        return
+    }
+    fun pick(p: EngineProvider) {
+        if (p.acceptsKey) step = Step.Key(p.info(), p) else if (p.canLogin) close { signingIn = p }
+    }
     val reduced = Pi.reduceMotion
     PiSheet(onDismiss = onDismiss, state = state) {
-        BackHandler(enabled = step != null && initial == null) { step = null }
+        BackHandler(enabled = step != null && !fixed) { step = null }
         AnimatedContent(
             targetState = step,
             transitionSpec = {
@@ -125,17 +157,27 @@ fun ProviderSheet(auth: ProviderAuth, configured: Set<String>, firstRun: Boolean
             label = "provider-step",
         ) { current ->
             when (current) {
-                null -> PickStep(configured, firstRun, onPick = { step = Step.Key(it) }, onCustom = { step = Step.Custom }, onLater = { close(onDismiss) })
+                null -> PickStep(
+                    configured,
+                    firstRun,
+                    extensions,
+                    onPick = { step = Step.Key(it) },
+                    onExtension = ::pick,
+                    onCustom = { step = Step.Custom },
+                    onLater = { close(onDismiss) },
+                )
                 is Step.Key -> KeyStep(
                     provider = current.provider,
                     auth = auth,
-                    onBack = if (initial == null) ({ step = null }) else null,
-                    onSaved = { close { onSaved(current.provider) } },
+                    onBack = if (!fixed) ({ step = null }) else null,
+                    onSaved = { close { saved(current.provider) } },
+                    signIn = current.extension?.takeIf { it.canLogin }?.let { p -> { close { signingIn = p } } },
+                    signInLabel = current.extension?.let { it.loginLabel ?: it.loginName?.let { n -> "Sign in with $n" } },
                 )
                 Step.Custom -> CustomStep(
                     auth = auth,
                     onBack = { step = null },
-                    onSaved = { info -> close { onSaved(info) } },
+                    onSaved = { info -> close { saved(info) } },
                 )
             }
         }
@@ -143,11 +185,23 @@ fun ProviderSheet(auth: ProviderAuth, configured: Set<String>, firstRun: Boolean
 }
 
 @Composable
-private fun PickStep(configured: Set<String>, firstRun: Boolean, onPick: (ProviderInfo) -> Unit, onCustom: () -> Unit, onLater: () -> Unit) {
+private fun PickStep(
+    configured: Set<String>,
+    firstRun: Boolean,
+    extensions: List<EngineProvider>,
+    onPick: (ProviderInfo) -> Unit,
+    onExtension: (EngineProvider) -> Unit,
+    onCustom: () -> Unit,
+    onLater: () -> Unit,
+) {
     val colors = Pi.colors
     val type = Pi.type
     var query by rememberSaveable { mutableStateOf("") }
     val shown = remember(query) { ProviderCatalog.search(query) }
+    val fromPackages = remember(query, extensions) {
+        val q = query.trim().lowercase()
+        if (q.isEmpty()) extensions else extensions.filter { q in it.name.lowercase() || q in it.id }
+    }
     Column {
         if (firstRun) {
             // The welcome: the bolt on a glass disc, calm and small, over the one question of this step.
@@ -165,10 +219,25 @@ private fun PickStep(configured: Set<String>, firstRun: Boolean, onPick: (Provid
         PillSearchField(
             value = query,
             onValueChange = { query = it },
-            placeholder = "Search ${ProviderCatalog.all.size} providers",
+            placeholder = "Search ${ProviderCatalog.all.size + extensions.size} providers",
             modifier = Modifier.padding(horizontal = Space.lg, vertical = Space.sm),
         )
         LazyColumn(Modifier.fillMaxWidth().heightIn(max = 420.dp)) {
+            // Providers that installed Pi packages register: first, they are why the user is here.
+            if (fromPackages.isNotEmpty()) {
+                item(key = "packages", contentType = "label") { ListHead("From your packages") }
+                items(fromPackages, key = { "ext:" + it.id }, contentType = { "provider" }) { p ->
+                    InsetRow(
+                        p.name,
+                        onClick = { onExtension(p) },
+                        meta = ProviderRules.extensionNote(p, stored = p.id in configured),
+                        leading = { LogoMark(ProviderCatalog.brand(p.id), size = IconSize.md) },
+                        label = if (p.usable) "${p.name}, ready" else p.name,
+                        trailing = { if (p.usable) Icon(Icons.Rounded.Check, contentDescription = null, tint = colors.success, modifier = Modifier.size(IconSize.md)) },
+                        chevron = !p.usable,
+                    )
+                }
+            }
             if (query.isBlank()) {
                 item(key = "popular", contentType = "label") { ListHead("Popular") }
                 items(ProviderCatalog.popular, key = { it.id }, contentType = { "provider" }) { p ->
@@ -184,10 +253,11 @@ private fun PickStep(configured: Set<String>, firstRun: Boolean, onPick: (Provid
                 }
             }
             item(key = "custom", contentType = "custom") {
+                val none = shown.isEmpty() && fromPackages.isEmpty()
                 InsetRow(
-                    if (shown.isEmpty()) "Use a custom endpoint" else "Custom endpoint",
+                    if (none) "Use a custom endpoint" else "Custom endpoint",
                     onClick = onCustom,
-                    meta = if (shown.isEmpty()) "No provider matches “${query.trim()}”" else "Ollama, LM Studio, vLLM or a proxy",
+                    meta = if (none) "No provider matches “${query.trim()}”" else "Ollama, LM Studio, vLLM or a proxy",
                     leading = { LogoMark(Brand.Generic, size = IconSize.md) },
                     chevron = true,
                     divider = false,
@@ -224,7 +294,14 @@ fun ProviderRow(p: ProviderInfo, added: Boolean, onClick: () -> Unit, trailing: 
 }
 
 @Composable
-private fun KeyStep(provider: ProviderInfo, auth: ProviderAuth, onBack: (() -> Unit)?, onSaved: () -> Unit) {
+private fun KeyStep(
+    provider: ProviderInfo,
+    auth: ProviderAuth,
+    onBack: (() -> Unit)?,
+    onSaved: () -> Unit,
+    signIn: (() -> Unit)? = null,
+    signInLabel: String? = null,
+) {
     val colors = Pi.colors
     val type = Pi.type
     val haptics = Pi.haptics
@@ -323,6 +400,12 @@ private fun KeyStep(provider: ProviderInfo, auth: ProviderAuth, onBack: (() -> U
         }
         Spacer(Modifier.height(Space.md))
         PrimaryButton(if (saving) "Saving…" else "Save key", onClick = ::save, enabled = key.isNotBlank() && !saving, modifier = Modifier.fillMaxWidth().padding(horizontal = Space.page))
+        if (signIn != null) {
+            GhostButton(signInLabel ?: "Sign in instead", onClick = {
+                key = ""
+                signIn()
+            }, modifier = Modifier.fillMaxWidth().padding(horizontal = Space.page, vertical = Space.xs))
+        }
         Spacer(Modifier.height(Space.sm))
     }
 }
