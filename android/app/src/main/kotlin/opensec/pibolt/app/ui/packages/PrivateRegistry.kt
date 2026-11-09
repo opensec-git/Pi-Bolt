@@ -6,6 +6,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
+import opensec.pibolt.app.PiBoltApp
 import opensec.pibolt.app.engine.CliResult
 import opensec.pibolt.app.engine.EngineApi
 import opensec.pibolt.app.git.github.KeyValue
@@ -224,5 +225,14 @@ suspend fun packageCli(engine: EngineApi, context: Context, args: List<String>, 
         val store = PrivateRegistries.get(context)
         val token = store.token()
         val result = NpmrcRun.with(context.noBackupFilesDir, store.entries()) { env -> engine.cli(args, cwd = cwd, timeoutMs = timeoutMs, env = env) }
+        if (result.ok && args.firstOrNull() in PACKAGE_CHANGES) packagesChanged(engine, context)
         result.copy(stdout = Npmrc.redact(result.stdout, token), stderr = Npmrc.redact(result.stderr, token))
     }
+
+private val PACKAGE_CHANGES = setOf("install", "remove", "uninstall", "update")
+
+/** The installed packages changed: idle engines restart with them, and the providers they register are listed again. */
+fun packagesChanged(engine: EngineApi, context: Context) {
+    engine.packagesChanged()
+    (context.applicationContext as? PiBoltApp)?.providers?.refresh()
+}

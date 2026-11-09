@@ -9,11 +9,14 @@
   faults      a 2 MB streamed answer, tool arguments a few bytes at a time, a connection cut mid-answer, HTTP 500 and 429,
               a stream that is not JSON: Pi must end on its own, without crashing.
   signals     SIGINT and SIGTERM while a tool runs, and stdout closed early: Pi must exit promptly, without crashing.
-  soak        one Pi process in RPC mode answering many prompts in a row; memory is sampled as it goes, and must level off.
+  soak        one Pi process in RPC mode answering many prompts in a row; memory is sampled after every prompt, and must
+              level off. One run's floor moves by about a megabyte with when the collector happens to run, so to compare
+              builds take the median of several runs (--soak-runs).
 
 A crash is: death by a signal Pi did not ask for, or a crash report ("panic", "has crashed", "Segmentation fault") in the output.
 
 Example: bench/stress.py --reference stable=./out/pi-stable/pi --build pi-bolt=./out/pi-bolt/pi --concurrency 32 --soak 300
+Memory of two builds: bench/stress.py --only soak --soak-runs 15 --build old=./old/pi --build new=./new/pi
 """
 
 import argparse
@@ -23,6 +26,7 @@ import queue
 import re
 import shutil
 import signal
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -184,9 +188,10 @@ def resident_mb(pid):
     return 0.0
 
 
-def soak(build, port, root, prompts):
-    print(f"[{build.name}] soak: {prompts} prompts in one RPC session", flush=True)
-    cwd = new_workdir(root, f"{build.name}-soak")
+def soak(build, port, root, prompts, run=0):
+    """Returns the floor of memory in the last quarter of the run (MB), or None."""
+    print(f"[{build.name}] soak: {prompts} prompts in one RPC session" + (f" (run {run + 1})" if run else ""), flush=True)
+    cwd = new_workdir(root, f"{build.name}-soak-{run}")
     with pi_home(port) as home:
         p = subprocess.Popen([*build.argv, "--mode", "rpc", "--no-session", *MODEL_ARGS], cwd=cwd, env=pi_env(home, {"TERM": "dumb"}),
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -229,8 +234,8 @@ def soak(build, port, root, prompts):
                     fail(build.name, f"soak prompt {i} did not finish (process exit {p.poll()}); last events: {recent!r}")
                     break
                 done += 1
-                if i % 10 == 0 or i == prompts - 1:
-                    samples.append((i, resident_mb(p.pid)))
+                # After every prompt: the floors below are the least of these, and sparser samples miss the low points.
+                samples.append((i, resident_mb(p.pid)))
                 if i % 50 == 0:
                     # A fresh conversation now and then, as people start new tasks; the context otherwise grows past the window.
                     p.stdin.write(json.dumps({"id": f"n{i}", "type": "new_session"}).encode() + b"\n")
@@ -256,20 +261,23 @@ def soak(build, port, root, prompts):
             fail(build.name, f"soak: crashed (exit {p.returncode}): {err[-400:]!r}")
     took = time.perf_counter() - start
     print(f"  {done}/{prompts} prompts in {took:.0f}s ({1000 * took / max(done, 1):.0f} ms each); exit {p.returncode}", flush=True)
-    print(f"  {'footprint' if MACOS else 'resident'} MB by prompt: " + ", ".join(f"{i}:{mb:.0f}" for i, mb in samples), flush=True)
-    if len(samples) >= 8:
-        # Memory rises and falls with each collection, so compare floors: the least in the last quarter of the run against the
-        # least in its second quarter (the first is warm-up). What is retained for good raises the floor.
-        quarter = len(samples) // 4
-        early = min(mb for _, mb in samples[quarter:2 * quarter])
-        late = min(mb for _, mb in samples[3 * quarter:])
-        span = samples[-1][0] - samples[quarter][0]
-        per100 = 100 * (late - early) / max(span, 1)
-        print(f"  floor of memory: {early:.0f} MB in the second quarter, {late:.0f} MB in the last ({per100:+.1f} MB per 100 prompts)", flush=True)
-        # (Memory stays up for some tens of prompts after each heavy one, every fiftieth: a quarter of a short run can lie
-        # wholly within that, and says nothing.)
-        if late - early > 50 and prompts >= 400:
-            fail(build.name, f"soak: memory keeps growing, its floor {early:.0f} -> {late:.0f} MB")
+    shown = [(i, mb) for n, (i, mb) in enumerate(samples) if i % 10 == 0 or n == len(samples) - 1]
+    print(f"  {'footprint' if MACOS else 'resident'} MB by prompt: " + ", ".join(f"{i}:{mb:.0f}" for i, mb in shown), flush=True)
+    if len(samples) < 8:
+        return None
+    # Memory rises and falls with each collection, so compare floors: the least in the last quarter of the run against the
+    # least in its second quarter (the first is warm-up). What is retained for good raises the floor.
+    quarter = len(samples) // 4
+    early = min(mb for _, mb in samples[quarter:2 * quarter])
+    late = min(mb for _, mb in samples[3 * quarter:])
+    span = samples[-1][0] - samples[quarter][0]
+    per100 = 100 * (late - early) / max(span, 1)
+    print(f"  floor of memory: {early:.1f} MB in the second quarter, {late:.1f} MB in the last ({per100:+.1f} MB per 100 prompts)", flush=True)
+    # (Memory stays up for some tens of prompts after each heavy one, every fiftieth: a quarter of a short run can lie
+    # wholly within that, and says nothing.)
+    if late - early > 50 and prompts >= 400:
+        fail(build.name, f"soak: memory keeps growing, its floor {early:.0f} -> {late:.0f} MB")
+    return late
 
 
 def main():
@@ -278,6 +286,8 @@ def main():
     ap.add_argument("--build", action="append", required=True, help="name=command to test (repeatable)")
     ap.add_argument("--concurrency", type=int, default=16)
     ap.add_argument("--soak", type=int, default=200, help="prompts in the soak test (0: none)")
+    ap.add_argument("--soak-runs", type=int, default=1, help="soak runs per build, each a new process; with more than one, the "
+                    "median of their floors is printed too")
     ap.add_argument("--only", default="concurrent,faults,signals,soak")
     ap.add_argument("--api", default="completions", choices=["completions", "anthropic", "responses"],
                     help="the API Pi talks to the model with: OpenAI chat completions (default), Anthropic messages, OpenAI responses")
@@ -303,7 +313,11 @@ def main():
             if "signals" in only:
                 signals(build, port, root)
             if "soak" in only and a.soak:
-                soak(build, port, root, a.soak)
+                floors = [f for f in (soak(build, port, root, a.soak, run) for run in range(a.soak_runs)) if f is not None]
+                if len(floors) > 1:
+                    floors.sort()
+                    print(f"[{build.name}] floor of memory in the last quarter, {len(floors)} runs: median {statistics.median(floors):.1f} MB "
+                          f"({floors[0]:.1f} to {floors[-1]:.1f})", flush=True)
     shutil.rmtree(root, ignore_errors=True)
     print("\n" + ("PASS" if not failures else f"FAIL ({len(failures)})\n  " + "\n  ".join(failures)))
     sys.exit(1 if failures else 0)
