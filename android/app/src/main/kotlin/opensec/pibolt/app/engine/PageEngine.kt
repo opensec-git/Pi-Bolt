@@ -247,6 +247,15 @@ class PageEngine(private val context: Context, private val engine: LocalEngine) 
         }
     }
 
+    /**
+     * A page sheet is on screen again: an engine stopped for memory while the app was away starts again and reopens
+     * the pages still held, instead of leaving the sheet on "Opening".
+     */
+    fun resume() {
+        if (synchronized(holders) { holders.none { it.startsWith(PageRules.HOLD_PAGE) } }) return
+        scope.launch { if (backend == null) ensureRunning() }
+    }
+
     private fun hold(reason: String) {
         synchronized(holders) { holders += reason }
         stopJob?.cancel()
