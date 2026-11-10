@@ -4,7 +4,6 @@
 
 import { existsSync } from "node:fs";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import chalk from "chalk";
 import {
 	COMMAND_NAME,
 	CONFIG_DIR_NAME,
@@ -16,6 +15,7 @@ import {
 import type { ExtensionFlag } from "../core/extensions/types.ts";
 import { getToolListError, type TuiMode } from "../core/settings-manager.ts";
 import { PIBOLT } from "../pi-bolt.ts";
+import { chalk } from "../utils/lazy-packages.ts";
 import { isLocalPath } from "../utils/paths.ts";
 
 export type Mode = "text" | "json" | "rpc" | "acp" | "mcp";
@@ -318,6 +318,7 @@ ${chalk.bold("Commands:")}
   ${COMMAND_NAME} auth <command>            Print credentials or check provider readiness
   ${COMMAND_NAME} mcp <command>             Manage MCP servers
   ${COMMAND_NAME} service <command>         Remote control for paired phones at login: install/uninstall/status/pair/logs
+  ${COMMAND_NAME} remote-control <command>  Turn remote control (the Pi-Bolt phone app) on or off: enable/disable/status
 ${PIBOLT ? `  ${COMMAND_NAME} doctor                    Print a report of this installation, to paste into an issue\n  ${COMMAND_NAME} compile [options]         Compile the installed extensions into ${PRODUCT_NAME}\n` : ""}  ${COMMAND_NAME} <command> --help          Show help for install/remove/uninstall/update/list/config/auth/mcp
 
 ${chalk.bold("Options:")}

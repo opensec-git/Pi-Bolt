@@ -86,6 +86,7 @@ export interface SettingsConfig {
 	shadedCodeBlocks: boolean;
 	collapseChangelog: boolean;
 	enableInstallTelemetry: boolean;
+	remoteControlEnabled: boolean;
 	doubleEscapeAction: "fork" | "tree" | "none";
 	treeFilterMode: "default" | "no-tools" | "user-only" | "labeled-only" | "all";
 	showHardwareCursor: boolean;
@@ -127,6 +128,7 @@ export interface SettingsCallbacks {
 	onShadedCodeBlocksChange: (shaded: boolean) => void;
 	onCollapseChangelogChange: (collapsed: boolean) => void;
 	onEnableInstallTelemetryChange: (enabled: boolean) => void;
+	onRemoteControlEnabledChange: (enabled: boolean) => void;
 	onDoubleEscapeActionChange: (action: "fork" | "tree" | "none") => void;
 	onTreeFilterModeChange: (mode: "default" | "no-tools" | "user-only" | "labeled-only" | "all") => void;
 	onShowHardwareCursorChange: (enabled: boolean) => void;
@@ -588,6 +590,14 @@ export class SettingsSelectorComponent extends Container {
 				values: ["true", "false"],
 			},
 			{
+				id: "remote-control",
+				label: "Remote control",
+				description:
+					"Control sessions from the Pi-Bolt phone app: /remote-control and the background service (global setting)",
+				currentValue: config.remoteControlEnabled ? "true" : "false",
+				values: ["true", "false"],
+			},
+			{
 				id: "default-project-trust",
 				label: "Default project trust",
 				description: "Fallback behavior when no extension or saved trust decision decides project trust",
@@ -953,6 +963,9 @@ export class SettingsSelectorComponent extends Container {
 						break;
 					case "install-telemetry":
 						callbacks.onEnableInstallTelemetryChange(newValue === "true");
+						break;
+					case "remote-control":
+						callbacks.onRemoteControlEnabledChange(newValue === "true");
 						break;
 					case "default-project-trust": {
 						const defaultProjectTrust = DEFAULT_PROJECT_TRUST_BY_LABEL.get(newValue);

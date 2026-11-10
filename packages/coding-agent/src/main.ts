@@ -5,11 +5,8 @@
  * createAgentSession() options. The SDK does the heavy lifting.
  */
 
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { type ImageContent, modelsAreEqual } from "@earendil-works/pi-ai";
 import { setCapabilityOverrides, ttiTrace } from "@earendil-works/pi-tui";
-import chalk from "chalk";
 import { type Args, type Mode, missingExtensionPaths, normalizeSessionName, parseArgs, printHelp } from "./cli/args.ts";
 import {
 	type AuthCheckResult,
@@ -34,17 +31,10 @@ import { buildInitialMessage } from "./cli/initial-message.ts";
 import { listModels } from "./cli/list-models.ts";
 import { loadMobileUiCommand } from "./cli/mobile-ui.lazy.ts";
 import { createProjectTrustContext } from "./cli/project-trust.ts";
+import { loadRemoteControlSettingCommand } from "./cli/remote-control-setting.lazy.ts";
 import { selectSession } from "./cli/session-picker.ts";
 import { shouldRunFirstTimeSetup, showFirstTimeSetup, showStartupSelector } from "./cli/startup-ui.ts";
-import {
-	COMMAND_NAME,
-	ENV_SESSION_DIR,
-	expandTildePath,
-	getAgentDir,
-	getBundledSkillsDir,
-	getPackageDir,
-	VERSION,
-} from "./config.ts";
+import { COMMAND_NAME, ENV_SESSION_DIR, expandTildePath, getAgentDir, getPackageDir, VERSION } from "./config.ts";
 import { type CreateAgentSessionRuntimeFactory, createAgentSessionRuntime } from "./core/agent-session-runtime.ts";
 import {
 	type AgentSessionRuntimeDiagnostic,
@@ -53,7 +43,6 @@ import {
 } from "./core/agent-session-services.ts";
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
 import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
-import { BUNDLED_SKILLS } from "./core/bundled-skills.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
 import { type CompiledExtension, setCompiledExtensions } from "./core/extensions/compiled.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
@@ -93,6 +82,7 @@ import {
 } from "./package-manager-cli.ts";
 import { PIBOLT } from "./pi-bolt.ts";
 import { loadRemoteControl } from "./remote-control/remote-control.lazy.ts";
+import { chalk } from "./utils/lazy-packages.ts";
 import { isLocalPath, normalizePath, resolvePath } from "./utils/paths.ts";
 import { createInterface } from "./utils/readline.ts";
 import { cleanupWindowsSelfUpdateQuarantine } from "./utils/windows-self-update.ts";
@@ -681,6 +671,11 @@ export async function main(args: string[], options?: MainOptions) {
 		return;
 	}
 
+	if (args[0] === "remote-control") {
+		const { runRemoteControlSettingCommand } = await loadRemoteControlSettingCommand();
+		process.exit(await runRemoteControlSettingCommand(args.slice(1), { agentDir, cwd }));
+	}
+
 	// `service run` is the background service itself (it needs the runtime factory below); the rest manage it.
 	const serviceHost = args[0] === "service" && args[1] === "run";
 	if (args[0] === "service" && !serviceHost) {
@@ -845,14 +840,7 @@ export async function main(args: string[], options?: MainOptions) {
 	const projectTrustByCwd = new Map<string, boolean>();
 
 	const resolvedExtensionPaths = resolveCliPaths(cwd, parsed.extensions);
-	// Pi-Bolt's own skills (pibolt-mobile-ui: write a package's mobile UI), unless skills are off. Registered from their known
-	// frontmatter (bundled-skills.ts): no file is read until the model uses one.
-	const bundledSkills =
-		PIBOLT && !parsed.noSkills
-			? BUNDLED_SKILLS.map((skill) => join(getBundledSkillsDir(), skill.dir)).filter((dir) => existsSync(dir))
-			: [];
-	const cliSkillPaths = resolveCliPaths(cwd, parsed.skills);
-	const resolvedSkillPaths = bundledSkills.length > 0 ? [...(cliSkillPaths ?? []), ...bundledSkills] : cliSkillPaths;
+	const resolvedSkillPaths = resolveCliPaths(cwd, parsed.skills);
 	const resolvedPromptTemplatePaths = resolveCliPaths(cwd, parsed.promptTemplates);
 	const resolvedThemePaths = resolveCliPaths(cwd, parsed.themes);
 	// Loaded only for `--acp` and `--mcp`: other modes never load their code.

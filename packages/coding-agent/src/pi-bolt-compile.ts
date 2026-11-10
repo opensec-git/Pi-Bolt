@@ -15,7 +15,6 @@
  * Each extension compiled in stands in for its installed copy while that is unchanged (core/extensions/compiled.ts).
  */
 import { spawn, spawnSync } from "node:child_process";
-import { createHash, verify } from "node:crypto";
 import {
 	chmodSync,
 	cpSync,
@@ -32,7 +31,6 @@ import {
 } from "node:fs";
 import { totalmem } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import chalk from "chalk";
 import { CONFIG_DIR_NAME, getAgentDir } from "./config.ts";
 import {
 	type CompiledExtensionSource,
@@ -53,6 +51,7 @@ import {
 	piBoltPackageManager,
 	piBoltReleasePlatform,
 } from "./pi-bolt.ts";
+import { chalk } from "./utils/lazy-packages.ts";
 
 /** What `pi-bolt compile` was asked for, kept in <install>/compile.json for the next update. */
 export interface CompileSelection {
@@ -314,7 +313,8 @@ function installation(): { installDir: string; buildDir: string } {
 }
 
 function sha256File(path: string): string {
-	return createHash("sha256").update(readFileSync(path)).digest("hex");
+	// (node:crypto looked up, not imported: evaluating it at every start costs about 2 M instructions.)
+	return process.getBuiltinModule("node:crypto").createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
 function run(command: string, args: string[], options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}) {
@@ -408,7 +408,7 @@ export function checkReleaseSums(
 ): Map<string, string> {
 	let signed = false;
 	try {
-		signed = verify(null, sums, key, signature);
+		signed = process.getBuiltinModule("node:crypto").verify(null, sums, key, signature);
 	} catch {
 		signed = false;
 	}
@@ -442,7 +442,7 @@ async function releaseFile(base: string, name: string, sha: Map<string, string>,
 		onSize: (bytes) =>
 			process.stderr.write(chalk.dim(`downloading ${name}${bytes ? ` (${megabytes(bytes)})` : ""}: ${url}\n`)),
 	});
-	if (createHash("sha256").update(data).digest("hex") !== sha.get(name)) {
+	if (process.getBuiltinModule("node:crypto").createHash("sha256").update(data).digest("hex") !== sha.get(name)) {
 		throw new CompileError(`checksum mismatch: the download of ${name} is corrupt or incomplete`);
 	}
 	mkdirSync(cacheDir, { recursive: true });
@@ -1659,10 +1659,8 @@ async function buildExecutable(
 			`the build stopped:\n${how}${buildFailureReason(output, explained.lines)}${advice.join("")}${logged ? `\n(all of what the compiler printed: ${log})` : ""}`,
 		);
 	}
-	// Everything else is this build's: the macOS launcher and pi-spawn, Pi's documentation, themes and native modules.
-	const own = new Set(darwin ? ["pi-bin", "pi-bin.hot"] : ["pi"]);
-	for (const name of readdirSync(buildDir)) {
-		if (!own.has(name)) cpSync(join(buildDir, name), join(stage, name), { recursive: true, verbatimSymlinks: true });
+	for (const name of buildFilesToCopy(readdirSync(buildDir), darwin)) {
+		cpSync(join(buildDir, name), join(stage, name), { recursive: true, verbatimSymlinks: true });
 	}
 	const about = existsSync(join(buildDir, "pi-bolt.txt"))
 		? readFileSync(join(buildDir, "pi-bolt.txt"), "utf8").split("\n")[0]
@@ -2239,4 +2237,14 @@ export async function runPiBoltCompile(args: string[], installAgain: () => Promi
 		);
 		return 1;
 	}
+}
+
+/**
+ * What a compiled build takes from the build it is made from: everything but the executables it replaces (the macOS
+ * launcher and pi-spawn, Pi's documentation, themes and native modules). Not `skills`: no build ships that folder, and one
+ * an install updated in place still holds from an earlier build is not carried into compiled builds.
+ */
+export function buildFilesToCopy(names: readonly string[], darwin: boolean): string[] {
+	const skip = new Set([...(darwin ? ["pi-bin", "pi-bin.hot"] : ["pi"]), "skills"]);
+	return names.filter((name) => !skip.has(name));
 }

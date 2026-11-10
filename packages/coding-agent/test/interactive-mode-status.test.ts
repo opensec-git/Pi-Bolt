@@ -6,6 +6,7 @@ import { type Component, Container, type Focusable, type TUI } from "../../tui/s
 import { TuiMainScreen } from "../../tui/src/tui-main-screen.ts";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
+import { expandPromptTemplate, type PromptTemplate } from "../src/core/prompt-templates.ts";
 import type { QuietStartup } from "../src/core/settings-manager.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
 import type { AuthSelectorProvider } from "../src/modes/interactive/components/oauth-selector.ts";
@@ -501,7 +502,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 				extensionRunner: { getRegisteredCommands: () => [] };
 				resourceLoader: { getSkills: () => { skills: [] } };
 			};
-			settingsManager: { getEnableSkillCommands: () => boolean };
+			settingsManager: { getEnableSkillCommands: () => boolean; getRemoteControlEnabled: () => boolean };
 			skillCommands: Map<string, string>;
 			sessionManager: { getCwd: () => string };
 			fdPath: null;
@@ -524,7 +525,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 				extensionRunner: { getRegisteredCommands: () => [] },
 				resourceLoader: { getSkills: () => ({ skills: [] }) },
 			},
-			settingsManager: { getEnableSkillCommands: () => false },
+			settingsManager: { getEnableSkillCommands: () => false, getRemoteControlEnabled: () => false },
 			skillCommands: new Map(),
 			sessionManager: { getCwd: () => "/tmp" },
 			fdPath: null,
@@ -551,7 +552,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 				extensionRunner: { getRegisteredCommands: () => [] };
 				resourceLoader: { getSkills: () => { skills: [] } };
 			};
-			settingsManager: { getEnableSkillCommands: () => boolean };
+			settingsManager: { getEnableSkillCommands: () => boolean; getRemoteControlEnabled: () => boolean };
 			skillCommands: Map<string, string>;
 			sessionManager: { getCwd: () => string };
 			fdPath: null;
@@ -571,7 +572,7 @@ describe("InteractiveMode.createBaseAutocompleteProvider", () => {
 				extensionRunner: { getRegisteredCommands: () => [] },
 				resourceLoader: { getSkills: () => ({ skills: [] }) },
 			},
-			settingsManager: { getEnableSkillCommands: () => false },
+			settingsManager: { getEnableSkillCommands: () => false, getRemoteControlEnabled: () => false },
 			skillCommands: new Map(),
 			sessionManager: { getCwd: () => "/tmp" },
 			fdPath: null,
@@ -1368,5 +1369,244 @@ describe("InteractiveMode.showLoadedResources", () => {
 		const output = renderAll(fakeThis.loadedResourcesContainer);
 		expect(output).toContain("[Skill warnings]");
 		expect(output).not.toContain("[Skills]");
+	});
+});
+
+describe("InteractiveMode prompt templates at startup", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+
+	const template = (name: string) => ({
+		name,
+		filePath: `/tmp/agent/prompts/${name}.md`,
+		sourceInfo: {
+			path: `/tmp/agent/prompts/${name}.md`,
+			source: "local",
+			scope: "user" as const,
+			origin: "top-level" as const,
+		},
+	});
+
+	function createAutocompleteThis(options: { deferPromptTemplates: boolean; loaded: boolean }) {
+		const promptTemplates = vi.fn(() => [{ ...template("review"), description: "Review", content: "Review $1" }]);
+		const fakeThis = {
+			deferPromptTemplates: options.deferPromptTemplates,
+			session: {
+				scopedModels: [],
+				modelRuntime: { getAvailableSnapshot: () => [] },
+				get promptTemplates() {
+					return promptTemplates();
+				},
+				extensionRunner: { getRegisteredCommands: () => [] },
+				resourceLoader: {
+					getSkills: () => ({ skills: [] }),
+					getPromptFiles: () => ({ prompts: [template("review")], diagnostics: [], loaded: options.loaded }),
+				},
+			},
+			settingsManager: { getEnableSkillCommands: () => false, getRemoteControlEnabled: () => false },
+			skillCommands: new Map(),
+			sessionManager: { getCwd: () => "/tmp" },
+			fdPath: null,
+			prefixAutocompleteDescription: (description: string) => description,
+		};
+		return { fakeThis, promptTemplates };
+	}
+
+	async function slashSuggestions(provider: AutocompleteProvider): Promise<string[]> {
+		const suggestions = await provider.getSuggestions(["/rev"], 0, 4, { signal: new AbortController().signal });
+		return suggestions?.items.map((item) => item.value) ?? [];
+	}
+
+	test("autocomplete leaves out templates that are not read yet until startup is done", async () => {
+		const createBaseAutocompleteProvider = (InteractiveMode as any).prototype.createBaseAutocompleteProvider;
+		const deferred = createAutocompleteThis({ deferPromptTemplates: true, loaded: false });
+		expect(await slashSuggestions(createBaseAutocompleteProvider.call(deferred.fakeThis))).not.toContain("review");
+		expect(deferred.promptTemplates).not.toHaveBeenCalled();
+
+		const afterStartup = createAutocompleteThis({ deferPromptTemplates: false, loaded: false });
+		expect(await slashSuggestions(createBaseAutocompleteProvider.call(afterStartup.fakeThis))).toContain("review");
+
+		const alreadyRead = createAutocompleteThis({ deferPromptTemplates: true, loaded: true });
+		expect(await slashSuggestions(createBaseAutocompleteProvider.call(alreadyRead.fakeThis))).toContain("review");
+	});
+
+	test("reads the templates after startup and draws the listing again only when it changed", () => {
+		const loadDeferredPromptTemplates = (InteractiveMode as any).prototype.loadDeferredPromptTemplates;
+		const run = (loadedPrompts: ReturnType<typeof template>[]) => {
+			const getPrompts = vi.fn(() => ({ prompts: loadedPrompts, diagnostics: [] }));
+			const listed = { prompts: [template("a"), template("b")], diagnostics: [], loaded: false };
+			const fakeThis = {
+				deferPromptTemplates: true,
+				// (As startup left them: autocomplete built without the templates, the listing drawn from their files.)
+				autocompleteOmitsTemplates: true,
+				promptListingFromFiles: listed,
+				session: {
+					resourceLoader: {
+						getPromptFiles: () => listed,
+						getPrompts,
+					},
+				},
+				setupAutocompleteProvider: vi.fn(),
+				showLoadedResources: vi.fn(),
+				ui: { requestRender: vi.fn() },
+			};
+			loadDeferredPromptTemplates.call(fakeThis);
+			expect(fakeThis.deferPromptTemplates).toBe(false);
+			expect(getPrompts).toHaveBeenCalled();
+			expect(fakeThis.setupAutocompleteProvider).toHaveBeenCalledTimes(1);
+			return fakeThis.showLoadedResources.mock.calls.length;
+		};
+		expect(run([template("a"), template("b")])).toBe(0);
+		// b's file could not be parsed: loading left it out, so the listing that showed it is drawn again.
+		expect(run([template("a")])).toBe(1);
+	});
+
+	// Anything that reads the templates before startup.done goes through session.promptTemplates (getPrompts()): a
+	// `/template` submitted while startup still runs (AgentSession.prompt), an extension's pi.getCommands() after
+	// session_start, a remote-control client's command list. Autocomplete and the listing were built without them, so they
+	// are built again after startup whether or not the templates are read by then.
+	const readers: Array<[string, (session: { promptTemplates: PromptTemplate[] }) => unknown]> = [
+		[
+			"a /template submitted before startup.done",
+			(session) => expandPromptTemplate("/review x", [...session.promptTemplates]),
+		],
+		["an extension's pi.getCommands() after session_start", (session) => session.promptTemplates.map((t) => t.name)],
+		[
+			"a remote-control command list",
+			(session) => session.promptTemplates.map((t) => ({ name: t.name, source: "prompt" })),
+		],
+	];
+	test.each(readers)(
+		"templates read early by %s still reach autocomplete and the listing",
+		async (_, readTemplates) => {
+			const proto = (InteractiveMode as any).prototype;
+			let loaded = false;
+			// "broken" is listed from its file but cannot be parsed: loading leaves it out with a warning.
+			const listing = { prompts: [template("review"), template("broken")], diagnostics: [] };
+			const loadedResult = {
+				prompts: [{ ...template("review"), description: "Review", content: "Review $1" }] as PromptTemplate[],
+				diagnostics: [
+					{ type: "warning" as const, message: "broken.md: cannot parse", path: "/tmp/agent/prompts/broken.md" },
+				],
+			};
+			const resourceLoader = {
+				getPromptFiles: () => (loaded ? { ...loadedResult, loaded: true } : { ...listing, loaded: false }),
+				getPrompts: () => {
+					loaded = true;
+					return loadedResult;
+				},
+				getAgentsFiles: () => ({ agentsFiles: [] }),
+				getSystemPromptSource: () => undefined,
+				getAppendSystemPromptSources: () => [],
+				getSkills: () => ({ skills: [], diagnostics: [] }),
+				getExtensions: () => ({ extensions: [], errors: [], runtime: {} }),
+				getThemes: () => ({ themes: [], diagnostics: [] }),
+			};
+			const session = {
+				scopedModels: [],
+				modelRuntime: { getAvailableSnapshot: () => [] },
+				get promptTemplates() {
+					return resourceLoader.getPrompts().prompts;
+				},
+				extensionRunner: {
+					getRegisteredCommands: () => [],
+					getCommandDiagnostics: () => [],
+					getShortcutDiagnostics: () => [],
+				},
+				resourceLoader,
+			};
+			const fakeThis: any = {
+				deferPromptTemplates: true,
+				autocompleteOmitsTemplates: false,
+				promptListingFromFiles: undefined,
+				session,
+				options: { verbose: false },
+				toolOutputExpanded: false,
+				loadedResourcesContainer: new Container(),
+				settingsManager: {
+					getQuietStartup: () => false,
+					getEnableSkillCommands: () => false,
+					getRemoteControlEnabled: () => false,
+				},
+				skillCommands: new Map(),
+				sessionManager: { getCwd: () => "/tmp/project" },
+				fdPath: null,
+				prefixAutocompleteDescription: (description: string) => description,
+				getStartupExpansionState: () => proto.getStartupExpansionState.call(fakeThis),
+				shouldShowStartupDetails: () => proto.shouldShowStartupDetails.call(fakeThis),
+				buildScopeGroups: (items: Array<{ path: string }>) => items.map((item) => item.path),
+				formatScopeGroups: (groups: string[]) => groups.join(", "),
+				formatDiagnostics: (diagnostics: Array<{ message: string }>) =>
+					diagnostics.map((d) => d.message).join("\n"),
+				getBuiltInCommandConflictDiagnostics: () => [],
+				provider: undefined as AutocompleteProvider | undefined,
+				setupAutocompleteProvider: vi.fn(() => {
+					fakeThis.provider = proto.createBaseAutocompleteProvider.call(fakeThis);
+				}),
+				showLoadedResources: vi.fn((options) => proto.showLoadedResources.call(fakeThis, options)),
+				ui: { requestRender: vi.fn() },
+			};
+
+			// Startup: autocomplete and the listing are built before the templates are read.
+			fakeThis.setupAutocompleteProvider();
+			fakeThis.showLoadedResources({ force: false, showDiagnosticsWhenQuiet: true });
+			expect(loaded).toBe(false);
+			expect(await slashSuggestions(fakeThis.provider)).not.toContain("review");
+			expect(renderAll(fakeThis.loadedResourcesContainer)).toContain("/broken");
+
+			readTemplates(session);
+			expect(loaded).toBe(true);
+
+			proto.loadDeferredPromptTemplates.call(fakeThis);
+			expect(await slashSuggestions(fakeThis.provider)).toContain("review");
+			const listingAfter = renderAll(fakeThis.loadedResourcesContainer);
+			expect(listingAfter).not.toContain("/broken");
+			expect(listingAfter).toContain("cannot parse");
+			expect(fakeThis.ui.requestRender).toHaveBeenCalled();
+
+			// Built once more is enough: a second call (nothing left out any more) changes nothing.
+			fakeThis.setupAutocompleteProvider.mockClear();
+			fakeThis.showLoadedResources.mockClear();
+			proto.loadDeferredPromptTemplates.call(fakeThis);
+			expect(fakeThis.setupAutocompleteProvider).not.toHaveBeenCalled();
+			expect(fakeThis.showLoadedResources).not.toHaveBeenCalled();
+		},
+	);
+
+	test("the startup listing shows templates that are not read yet", () => {
+		const getPrompts = vi.fn(() => ({ prompts: [], diagnostics: [] }));
+		const fakeThis: any = {
+			deferPromptTemplates: true,
+			options: { verbose: false },
+			toolOutputExpanded: false,
+			loadedResourcesContainer: new Container(),
+			settingsManager: { getQuietStartup: () => false },
+			sessionManager: { getCwd: () => "/tmp/project" },
+			session: {
+				extensionRunner: { getCommandDiagnostics: () => [], getShortcutDiagnostics: () => [] },
+				resourceLoader: {
+					getAgentsFiles: () => ({ agentsFiles: [] }),
+					getSystemPromptSource: () => undefined,
+					getAppendSystemPromptSources: () => [],
+					getSkills: () => ({ skills: [], diagnostics: [] }),
+					getPromptFiles: () => ({ prompts: [template("review")], diagnostics: [], loaded: false }),
+					getPrompts,
+					getExtensions: () => ({ extensions: [], errors: [], runtime: {} }),
+					getThemes: () => ({ themes: [], diagnostics: [] }),
+				},
+			},
+			getStartupExpansionState: () => (InteractiveMode as any).prototype.getStartupExpansionState.call(fakeThis),
+			shouldShowStartupDetails: () => (InteractiveMode as any).prototype.shouldShowStartupDetails.call(fakeThis),
+			buildScopeGroups: () => [],
+			formatScopeGroups: () => "resource-list",
+			formatDiagnostics: () => "diagnostics",
+			getBuiltInCommandConflictDiagnostics: () => [],
+		};
+
+		(InteractiveMode as any).prototype.showLoadedResources.call(fakeThis, { force: false });
+
+		expect(renderAll(fakeThis.loadedResourcesContainer)).toContain("/review");
+		expect(getPrompts).not.toHaveBeenCalled();
 	});
 });

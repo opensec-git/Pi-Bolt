@@ -14,7 +14,6 @@
  * SHA256SUMS before it runs (pi-bolt-installer.ts).
  */
 import { spawnSync } from "node:child_process";
-import { createHash, createPublicKey, verify } from "node:crypto";
 import {
 	copyFileSync,
 	cpSync,
@@ -31,8 +30,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { gunzipSync } from "node:zlib";
-import chalk from "chalk";
 import { PIBOLT_RELEASE_KEY } from "./pi-bolt.ts";
+import { chalk } from "./utils/lazy-packages.ts";
 
 const REPO = "https://github.com/opensec-git/Pi-Bolt";
 const ASIDE = /\.pibolt-(old|new)$/;
@@ -52,6 +51,8 @@ export function sumsSignatureValid(
 	publicKeyPem: string = PIBOLT_RELEASE_KEY,
 ): boolean {
 	try {
+		// (node:crypto looked up, not imported: evaluating it at every start costs about 2 M instructions.)
+		const { createPublicKey, verify } = process.getBuiltinModule("node:crypto");
 		return verify(null, sums, createPublicKey(publicKeyPem), signature);
 	} catch {
 		return false;
@@ -73,7 +74,7 @@ export function sumsEntry(sums: string, name: string): string | undefined {
 }
 
 export function sha256(data: Buffer): string {
-	return createHash("sha256").update(data).digest("hex");
+	return process.getBuiltinModule("node:crypto").createHash("sha256").update(data).digest("hex");
 }
 
 /**
@@ -181,6 +182,9 @@ export function installFiles(from: string, to: string, stamp: number = Date.now(
 			);
 		}
 	}
+	// No build ships the mobile UI skill: the copy an earlier build left in this folder goes.
+	if (!existsSync(join(from, "skills", "pibolt-mobile-ui")))
+		rmSync(join(to, "skills", "pibolt-mobile-ui"), { recursive: true, force: true });
 }
 
 /**
@@ -321,4 +325,6 @@ export async function updatePiBoltWindows(version: string, installDir: string, v
 	}
 	// Pi-Bolt keeps the packages only it runs out of Pi's list as it starts: once now, as install.ps1 does after an install.
 	spawnSync(join(dir, "pi-bolt.exe"), ["list"], { cwd: dir, stdio: "ignore" });
+	// A remote control service that runs is restarted, so it runs this version (as install.ps1 does); its result is ignored.
+	spawnSync(join(dir, "pi-bolt.exe"), ["service", "restart"], { cwd: dir, stdio: "ignore" });
 }

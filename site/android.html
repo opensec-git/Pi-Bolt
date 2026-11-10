@@ -194,7 +194,7 @@
       <li><b>01</b><h3>Download</h3><p>Tap <em>Download the APK</em> on your phone. Android may warn that the file can harm your device: it is an app from outside the Play Store, so tap <em>Download anyway</em>.</p></li>
       <li><b>02</b><h3>Install</h3><p>Open the file. The first time, Android asks to allow installs from your browser: allow it, go back, and tap <em>Install</em>.</p></li>
       <li><b>03</b><h3>Add a model key</h3><p>The first start asks for a key from a model provider (Anthropic, OpenAI, OpenRouter and others). It stays on the phone, in Pi's own <code>auth.json</code>.</p></li>
-      <li><b>04</b><h3>Start a project</h3><p>Make a new project or clone one from git, and ask Pi. To drive your computer's Pi-Bolt instead, run <code>/remote-control</code> there and scan its QR code from the app.</p></li>
+      <li><b>04</b><h3>Start a project</h3><p>Make a new project or clone one from git, and ask Pi. To drive your computer's Pi-Bolt instead, run <code>pi-bolt remote-control enable</code> there once, then <code>/remote-control</code>, and scan its QR code from the app.</p></li>
     </ol>
   </section>
 
@@ -206,7 +206,7 @@
       <div><span class="micro">APK SHA-256</span><div class="v" id="sha">In the release's .sha256 file</div></div>
       <div><span class="micro">Signing certificate SHA-256</span><div class="v" id="cert">f752464c8b6d5906d7fd467346b89316518e3ddfe77843f66b1fa673818a2c90</div>
         <p>Every update is signed with this certificate; Android refuses an update signed with any other.</p></div>
-      <div><span class="micro">Needs</span><p>Android 8.0 or later on a 64-bit ARM phone, about 400 MB free, and a key from a model provider. Remote control also needs a Pi-Bolt with the <code>/remote-control</code> command on the computer.</p></div>
+      <div><span class="micro">Needs</span><p>Android 8.0 or later on a 64-bit ARM phone, about 400 MB free, and a key from a model provider. Remote control also needs a Pi-Bolt with the <code>/remote-control</code> command on the computer, turned on with <code>pi-bolt remote-control enable</code>.</p></div>
       <div><span class="micro">Built by</span><p>GitHub Actions from the <a href="https://github.com/opensec-git/Pi-Bolt/tree/pi-bolt/android">android/</a> sources, release <a id="release" href="https://github.com/opensec-git/Pi-Bolt/releases/tag/android-v0.6.0">android-v0.6.0</a>. The engine pack and its licences: <a href="https://github.com/opensec-git/Pi-Bolt/tree/pi-bolt/android/engine">android/engine</a>; remote control: <a href="https://github.com/opensec-git/Pi-Bolt/blob/pi-bolt/packages/coding-agent/docs/remote-control.md">protocol and security</a>.</p></div>
     </div>
   </section>

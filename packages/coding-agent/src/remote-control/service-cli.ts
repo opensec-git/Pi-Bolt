@@ -1,6 +1,7 @@
 /**
  * `pi-bolt service`: remote control as a login item of this user, so paired phones reach the computer with no terminal
- * open (service-host.ts is what runs). Opt-in: nothing is installed until `pi-bolt service install`.
+ * open (service-host.ts is what runs). Opt-in: nothing is installed until `pi-bolt service install`, which (like `pair`)
+ * refuses while remote control is off (`remoteControl.enabled`); `uninstall`, `status` and `logs` work either way.
  *
  * - install: writes the service file (a LaunchAgent, a systemd user unit, or a Task Scheduler task) in the user's own
  *   directories, and starts it. Nothing needs administrator rights.
@@ -8,6 +9,8 @@
  * - status: whether it runs, its addresses and phones, and a QR code that gives a paired phone the current addresses.
  * - pair: a pairing code from the running service, for a new phone.
  * - logs: the service's log.
+ * - restart: restarts the installed service if it runs, so that it runs this version (the installers run it after an
+ *   update; with remote control off, the new code then exits). It never installs or starts one that does not run.
  */
 
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -15,6 +18,7 @@ import { homedir, userInfo } from "node:os";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { COMMAND_NAME, ENV_AGENT_DIR, ENV_SESSION_DIR, isBunBinary } from "../config.ts";
 import { SettingsManager } from "../core/settings-manager.ts";
+import { REMOTE_CONTROL_OFF_MESSAGE } from "../core/slash-commands.ts";
 import { PIBOLT, piBoltExecutableIn, piBoltInstallDir, piBoltInstallMethod } from "../pi-bolt.ts";
 import { findExecutableOnPath, spawnProcess } from "../utils/child-process.ts";
 import { createInterface } from "../utils/readline.ts";
@@ -71,6 +75,7 @@ const USAGE = [
 	`Usage: ${COMMAND_NAME} service <command>`,
 	"",
 	"Remote control for paired phones while no terminal runs Pi-Bolt: a login item of this user (opt-in).",
+	`Needs remote control on (${COMMAND_NAME} remote-control enable) to install it or pair a phone.`,
 	"",
 	"Commands:",
 	"  install [--no-tunnel]   Start it now and at every login (--no-tunnel: local network and Tailscale only)",
@@ -78,6 +83,7 @@ const USAGE = [
 	"  status                  Show whether it runs, its addresses and phones, and a QR code with the addresses",
 	"  pair [--link]           Pair a new phone with the running service (--link: also print the pairing link)",
 	"  logs [-n <lines>] [-f]  Show the service log (-f: keep following it)",
+	"  restart                 Restart it if it runs, so it runs this version (the installers do this after an update)",
 ];
 
 export async function runServiceCommand(args: string[], context: ServiceCommandContext): Promise<number> {
@@ -85,6 +91,10 @@ export async function runServiceCommand(args: string[], context: ServiceCommandC
 	const system: ServiceSystem = { ...defaultSystem(), ...context.system };
 	const [command, ...rest] = args;
 	try {
+		if ((command === "install" || command === "pair") && !remoteControlEnabled(system, context.agentDir)) {
+			out(REMOTE_CONTROL_OFF_MESSAGE);
+			return 1;
+		}
 		switch (command) {
 			case "install":
 				return await install(rest, context.agentDir, system, out);
@@ -96,6 +106,8 @@ export async function runServiceCommand(args: string[], context: ServiceCommandC
 				return await pair(rest, context.agentDir, out);
 			case "logs":
 				return await logs(rest, context.agentDir, system, out);
+			case "restart":
+				return await restart(context.agentDir, system, out);
 			case undefined:
 			case "help":
 			case "--help":
@@ -111,6 +123,11 @@ export async function runServiceCommand(args: string[], context: ServiceCommandC
 		out(`Error: ${error instanceof Error ? error.message : String(error)}`);
 		return 1;
 	}
+}
+
+/** `remoteControl.enabled`, from the global settings. */
+function remoteControlEnabled(system: ServiceSystem, agentDir: string): boolean {
+	return SettingsManager.create(system.home, agentDir, { projectTrusted: false }).getRemoteControlEnabled();
 }
 
 function defaultSystem(): ServiceSystem {
@@ -192,6 +209,8 @@ interface ServiceManager {
 	write(spec: ServiceSpec): void;
 	start(): Promise<void>;
 	stop(): Promise<void>;
+	/** Stops the running service and starts it again from its file (which names this version's executable). */
+	restart(): Promise<void>;
 	query(): Promise<{ loaded: boolean; running: boolean }>;
 }
 
@@ -231,6 +250,9 @@ function serviceManager(system: ServiceSystem, agentDir: string): ServiceManager
 			stop: async () => {
 				await system.run("launchctl", ["bootout", target]);
 			},
+			restart: async () => {
+				await must("launchctl", ["kickstart", "-k", target]);
+			},
 			query: async () => {
 				const result = await system.run("launchctl", ["print", target]);
 				return {
@@ -253,6 +275,10 @@ function serviceManager(system: ServiceSystem, agentDir: string): ServiceManager
 			},
 			stop: async () => {
 				await system.run("systemctl", ["--user", "disable", "--now", SYSTEMD_UNIT]);
+			},
+			// (try-restart: only a unit that runs; --no-block: an installer never waits for the old process to stop.)
+			restart: async () => {
+				await must("systemctl", ["--user", "--no-block", "try-restart", SYSTEMD_UNIT]);
 			},
 			query: async () => {
 				const enabled = await system.run("systemctl", ["--user", "is-enabled", SYSTEMD_UNIT]);
@@ -290,6 +316,10 @@ function serviceManager(system: ServiceSystem, agentDir: string): ServiceManager
 			stop: async () => {
 				await system.run("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]);
 				await system.run("schtasks", ["/Delete", "/TN", WINDOWS_TASK_NAME, "/F"]);
+			},
+			restart: async () => {
+				await system.run("schtasks", ["/End", "/TN", WINDOWS_TASK_NAME]);
+				await must("schtasks", ["/Run", "/TN", WINDOWS_TASK_NAME]);
 			},
 			query: async () => {
 				const result = await system.run("schtasks", ["/Query", "/TN", WINDOWS_TASK_NAME, "/FO", "LIST"]);
@@ -388,7 +418,30 @@ async function uninstall(agentDir: string, system: ServiceSystem, out: (line: st
 			: "The remote control service was not installed.",
 	);
 	for (const file of removed) out(`  ${file}`);
-	out("Paired phones stay paired (/remote-control devices revokes them); your settings are unchanged.");
+	out(
+		remoteControlEnabled(system, agentDir)
+			? "Paired phones stay paired (/remote-control devices revokes them); your settings are unchanged."
+			: `Paired phones stay paired; your settings are unchanged. To revoke a phone, turn remote control on (${COMMAND_NAME} remote-control enable), then run /remote-control devices.`,
+	);
+	return 0;
+}
+
+/**
+ * Restarts an installed service that runs, so the code of this version runs (and, with remote control off, exits). Nothing
+ * when it is not installed or does not run: it never installs or starts one.
+ */
+async function restart(agentDir: string, system: ServiceSystem, out: (line: string) => void) {
+	const manager = serviceManager(system, agentDir);
+	if (!existsSync(manager.file)) {
+		out("The remote control service is not installed: nothing to restart.");
+		return 0;
+	}
+	if (!(await manager.query()).running) {
+		out("The remote control service does not run: nothing to restart.");
+		return 0;
+	}
+	await manager.restart();
+	out(`Restarted the remote control service: ${manager.name}`);
 	return 0;
 }
 
@@ -448,11 +501,14 @@ function printStatus(reply: ControlMessage, out: (line: string) => void): void {
 }
 
 async function status(agentDir: string, system: ServiceSystem, out: (line: string) => void) {
+	const enabled = remoteControlEnabled(system, agentDir);
+	if (!enabled) out(REMOTE_CONTROL_OFF_MESSAGE);
 	const manager = serviceManager(system, agentDir);
 	const installed = existsSync(manager.file);
 	const query = installed ? await manager.query() : { loaded: false, running: false };
 	const reply = await requestStatus(agentDir);
-	if (!installed) out(`Not installed (${COMMAND_NAME} service install starts it at every login).`);
+	if (!installed && enabled) out(`Not installed (${COMMAND_NAME} service install starts it at every login).`);
+	else if (!installed) out("Not installed.");
 	else out(`Installed: ${manager.name}${query.loaded ? "" : " (not loaded)"}`);
 	if (!reply) {
 		if (installed) out(`Not running. See ${COMMAND_NAME} service logs.`);

@@ -86,6 +86,26 @@ describe("SettingsSelectorComponent", () => {
 		expect(onSessionShareDestinationChange.mock.calls.flat()).toEqual(["gist", "radius", "auto"]);
 	});
 
+	it("turns remote control on and off", () => {
+		const onRemoteControlEnabledChange = vi.fn();
+		const config = {
+			remoteControlEnabled: false,
+			warnings: {},
+			defaultModel: "not set",
+			availableDefaultModels: [],
+			availableThinkingLevels: [],
+			modelThinkingLevels: {},
+			availableThemes: [],
+		} as unknown as SettingsConfig;
+		const callbacks = { onRemoteControlEnabledChange } as unknown as SettingsCallbacks;
+		const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
+		list.selectItem("remote-control");
+
+		for (let i = 0; i < 2; i++) list.handleInput("\r");
+
+		expect(onRemoteControlEnabledChange.mock.calls.flat()).toEqual([true, false]);
+	});
+
 	it("keeps the configured fixed theme marked while browsing", () => {
 		const config = {
 			defaultModel: "not set",

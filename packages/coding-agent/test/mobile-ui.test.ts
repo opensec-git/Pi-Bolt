@@ -137,7 +137,7 @@ describe("mobile UI validation", () => {
 	});
 
 	it("accepts the skill's example views", () => {
-		const dir = new URL("../skills/pibolt-mobile-ui/examples/", import.meta.url);
+		const dir = new URL("../../../skills/pibolt-mobile-ui/examples/", import.meta.url);
 		const files = readdirSync(dir).filter((name) => name.endsWith(".json"));
 		expect(files.length).toBeGreaterThan(0);
 		for (const name of files) {

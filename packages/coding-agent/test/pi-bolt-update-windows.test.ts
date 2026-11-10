@@ -133,6 +133,20 @@ describe("installFiles", () => {
 		expect(readFileSync(join(to, "compiled.json"), "utf8")).toBe("kept");
 		expect(readdirSync(to).filter((name) => /pibolt-(old|new)$/.test(name))).toEqual([]);
 	});
+	test("removes the mobile UI skill an earlier build left, and keeps the rest of the folder", () => {
+		const from = join(dir, "new"),
+			to = join(dir, "pi-bolt-win32-x64");
+		mkdirSync(from, { recursive: true });
+		writeFileSync(join(from, "pi-bolt.exe"), "new exe");
+		mkdirSync(join(to, "skills", "pibolt-mobile-ui", "examples"), { recursive: true });
+		writeFileSync(join(to, "skills", "pibolt-mobile-ui", "SKILL.md"), "old skill");
+		writeFileSync(join(to, "skills", "pibolt-mobile-ui", "examples", "a.json"), "{}");
+		mkdirSync(join(to, "skills", "mine"), { recursive: true });
+		installFiles(from, to, 4);
+		expect(existsSync(join(to, "skills", "pibolt-mobile-ui"))).toBe(false);
+		expect(existsSync(join(to, "skills", "mine"))).toBe(true);
+		expect(readFileSync(join(to, "pi-bolt.exe"), "utf8")).toBe("new exe");
+	});
 	test("says which file it could not put in place", () => {
 		const from = join(dir, "new"),
 			to = join(dir, "pi-bolt-win32-x64");

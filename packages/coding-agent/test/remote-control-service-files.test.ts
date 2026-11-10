@@ -1,5 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -174,6 +183,9 @@ describe("pi-bolt service install and uninstall", () => {
 		const home = mkdtempSync(join(tmpdir(), "pi-service-home-"));
 		cleanups.push(() => rmSync(home, { recursive: true, force: true }));
 		const agentDir = join(home, ".pi", "agent");
+		// Remote control on (pi-bolt remote-control enable): install refuses otherwise.
+		mkdirSync(agentDir, { recursive: true });
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ remoteControl: { enabled: true } }));
 		const commands: string[] = [];
 		const lines: string[] = [];
 		const system: Partial<ServiceSystem> = {
@@ -222,7 +234,9 @@ describe("pi-bolt service install and uninstall", () => {
 		expect(await run(["uninstall"])).toBe(0);
 		expect(commands).toEqual([`launchctl bootout gui/501/${LAUNCH_AGENT_LABEL}`]);
 		expect(existsSync(plist)).toBe(false);
-		expect(filesUnder(home).filter((file) => !file.startsWith(".pi/agent/remote-control/"))).toEqual([]);
+		expect(filesUnder(home).filter((file) => !file.startsWith(".pi/agent/remote-control/"))).toEqual([
+			".pi/agent/settings.json",
+		]);
 	});
 
 	it("Linux: writes the user unit, enables and starts it with systemctl --user, and removes it again", async () => {
@@ -239,7 +253,9 @@ describe("pi-bolt service install and uninstall", () => {
 		expect(await run(["uninstall"])).toBe(0);
 		expect(commands).toEqual([`systemctl --user disable --now ${SYSTEMD_UNIT}`]);
 		expect(existsSync(unit)).toBe(false);
-		expect(filesUnder(home).filter((file) => !file.startsWith(".pi/agent/remote-control/"))).toEqual([]);
+		expect(filesUnder(home).filter((file) => !file.startsWith(".pi/agent/remote-control/"))).toEqual([
+			".pi/agent/settings.json",
+		]);
 	});
 
 	it("Windows: registers the task from its XML with schtasks (no administrator), and deletes it again", async () => {

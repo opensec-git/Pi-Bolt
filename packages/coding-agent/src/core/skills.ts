@@ -1,12 +1,12 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "fs";
 import ignore from "ignore";
 import { basename, dirname, join, relative, resolve, sep } from "path";
-import { CONFIG_DIR_NAME, getAgentDir, getBundledSkillsDir } from "../config.ts";
+import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { parseFrontmatter } from "../utils/frontmatter.ts";
 import { isPathWithin, resolvePath } from "../utils/paths.ts";
-import { BUNDLED_SKILLS } from "./bundled-skills.ts";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
-import { createSyntheticSourceInfo, getResourcePathKey, type SourceInfo } from "./source-info.ts";
+import { ResourcePathKeys } from "./resource-path-keys.ts";
+import { createSyntheticSourceInfo, type SourceInfo } from "./source-info.ts";
 
 /** Max name length per spec */
 const MAX_NAME_LENGTH = 64;
@@ -406,6 +406,8 @@ export interface LoadSkillsOptions {
 	skillPaths: string[];
 	/** Include default skills directories. */
 	includeDefaults: boolean;
+	/** Dedupe keys of the caller's load pass, so that a path whose real path it already has is not resolved again. */
+	pathKeys?: ResourcePathKeys;
 }
 
 /**
@@ -414,6 +416,7 @@ export interface LoadSkillsOptions {
  */
 export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 	const { agentDir, skillPaths, includeDefaults } = options;
+	const pathKeys = options.pathKeys ?? new ResourcePathKeys();
 
 	// Resolve agentDir - if not provided, use default from config
 	const resolvedCwd = resolvePath(options.cwd);
@@ -430,6 +433,9 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 
 	function addSkills(result: LoadSkillsResult) {
 		allDiagnostics.push(...result.diagnostics);
+		if (result.skills.length > 1) {
+			pathKeys.prepare(result.skills.map((skill) => skill.filePath));
+		}
 		for (const skill of result.skills) {
 			if (skillMap.size === 0) {
 				skillMap.set(skill.name, skill);
@@ -437,12 +443,12 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 				continue;
 			}
 			if (unresolvedFirst) {
-				realPathSet.add(getResourcePathKey(unresolvedFirst.filePath));
+				realPathSet.add(pathKeys.keyOf(unresolvedFirst.filePath));
 				unresolvedFirst = undefined;
 			}
 
 			// Resolve symlinks to detect duplicate files
-			const realPath = getResourcePathKey(skill.filePath);
+			const realPath = pathKeys.keyOf(skill.filePath);
 
 			// Skip silently if we've already loaded this exact file (via symlink)
 			if (realPathSet.has(realPath)) {
@@ -489,27 +495,6 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
 		const resolvedPath = resolvePath(rawPath, resolvedCwd, { trim: true });
 		if (!existsSync(resolvedPath)) {
 			allDiagnostics.push({ type: "warning", message: "skill path does not exist", path: resolvedPath });
-			continue;
-		}
-
-		// A skill Pi-Bolt ships: its frontmatter is known (bundled-skills.ts), so neither its folder nor its SKILL.md is read.
-		const bundledSkillsDir = getBundledSkillsDir();
-		const bundled = BUNDLED_SKILLS.find((skill) => join(bundledSkillsDir, skill.dir) === resolvedPath);
-		const skillFile = join(resolvedPath, "SKILL.md");
-		if (bundled && existsSync(skillFile)) {
-			addSkills({
-				skills: [
-					{
-						name: bundled.name,
-						description: bundled.description,
-						filePath: skillFile,
-						baseDir: resolvedPath,
-						sourceInfo: createSkillSourceInfo(skillFile, resolvedPath, getSource(resolvedPath)),
-						disableModelInvocation: false,
-					},
-				],
-				diagnostics: [],
-			});
 			continue;
 		}
 

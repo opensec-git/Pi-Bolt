@@ -42,7 +42,8 @@ change before it is released.
 
 ## Pair
 
-1. On the computer, in a Pi-Bolt terminal, run `/remote-control`. Or install the background service once
+1. On the computer, turn remote control on once with `pi-bolt remote-control enable` (it is off by default). Then, in a
+   Pi-Bolt terminal, run `/remote-control`. Or install the background service once
    (`pi-bolt service install`) and run `pi-bolt service pair`, so the iPhone reaches the computer with no terminal open
    and can list and open its sessions.
 2. In the app, tap `+` and scan the QR code. Without a camera (or in the Simulator): `/remote-control copy` (or
