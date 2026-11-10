@@ -3,6 +3,7 @@ import { homedir } from "os";
 import { join } from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS } from "../src/core/http-dispatcher.ts";
+import { SETTINGS_DEFAULTS } from "../src/core/settings-defaults.ts";
 import { type Settings, SettingsManager } from "../src/core/settings-manager.ts";
 
 describe("SettingsManager", () => {
@@ -424,17 +425,20 @@ describe("SettingsManager", () => {
 	});
 
 	describe("cacheWarming", () => {
-		it("defaults to idle and ignores project settings", () => {
-			expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMode()).toBe("idle");
-
-			writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ cacheWarming: "streaming" }));
-			expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMode()).toBe("idle");
-
-			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ cacheWarming: "streaming" }));
+		// Pi-Bolt keeps "streaming" as the default: "idle" re-sends the last request while the user is away, which spends
+		// their tokens without being asked, so it is opt-in (global settings only).
+		it("defaults to streaming, takes idle only from global settings, and ignores project settings", () => {
+			expect(SETTINGS_DEFAULTS.cacheWarming).toBe("streaming");
 			expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMode()).toBe("streaming");
 
-			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ cacheWarming: "bogus" }));
+			writeFileSync(join(projectDir, ".pi", "settings.json"), JSON.stringify({ cacheWarming: "idle" }));
+			expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMode()).toBe("streaming");
+
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ cacheWarming: "idle" }));
 			expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMode()).toBe("idle");
+
+			writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ cacheWarming: "bogus" }));
+			expect(SettingsManager.create(projectDir, agentDir).getCacheWarmingMode()).toBe("streaming");
 		});
 
 		it("persists the mode globally", async () => {
