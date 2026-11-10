@@ -4,7 +4,7 @@ Pi-Bolt compared with the same Pi release on stock Bun and on Node.js. Every fig
 [`bench/`](../bench), and the raw results are in [`bench/results/`](../bench/results). The charts are drawn from those files by
 [`bench/report.py`](../bench/report.py).
 
-**Versions.** [1.0.0 against PiG 0.5.1 and 0.9.9](#100-against-pig-051-and-099) is the latest: Pi-Bolt 1.0.0 against PiG 0.5.1 and Pi-Bolt 0.9.9, on GitHub's Linux and Windows runners and an M5 Mac. [0.9.7 against Pi as released](#097-against-pi-as-released) is the one before: Pi-Bolt 0.9.7 against Pi 1.3.0 as released on npm, run by stock Bun 1.4.2, Node 22 and Node 24, on GitHub's runners. [0.9.6 against PiG 0.5.1](#096-against-pig-051) is earlier: Pi-Bolt 0.9.6 against PiG 0.5.1, Pi-Bolt 0.9.5 and Pi 1.3.0 on Node 24, on GitHub's runners and an M5 Mac. [0.9.2 on GitHub's runners](#092-on-githubs-runners) is earlier: Pi-Bolt 0.9.2 (Pi 1.2.0) on GitHub's Linux
+**Versions.** [1.2.0 against 1.1.7](#120-against-117) is the latest: Pi-Bolt 1.2.0 against Pi-Bolt 1.1.7 on an M5 Mac. [1.0.0 against PiG 0.5.1 and 0.9.9](#100-against-pig-051-and-099) is the one before: Pi-Bolt 1.0.0 against PiG 0.5.1 and Pi-Bolt 0.9.9, on GitHub's Linux and Windows runners and an M5 Mac. [0.9.7 against Pi as released](#097-against-pi-as-released) is earlier: Pi-Bolt 0.9.7 against Pi 1.3.0 as released on npm, run by stock Bun 1.4.2, Node 22 and Node 24, on GitHub's runners. [0.9.6 against PiG 0.5.1](#096-against-pig-051) is earlier: Pi-Bolt 0.9.6 against PiG 0.5.1, Pi-Bolt 0.9.5 and Pi 1.3.0 on Node 24, on GitHub's runners and an M5 Mac. [0.9.2 on GitHub's runners](#092-on-githubs-runners) is earlier: Pi-Bolt 0.9.2 (Pi 1.2.0) on GitHub's Linux
 x86-64 and ARM64 runners. The sections after it are earlier measurements: Pi-Bolt 0.8.5 (Pi 1.1.0), against Pi 1.1.0 as released on stock Bun 1.4.2 and on Node, every build installed from
 its release archive; [against PiG and oh-my-pi](#against-pig-and-oh-my-pi) in the same runs. [With a real model](#with-a-real-model) is an earlier measurement, of Pi-Bolt 0.6.1.
 
@@ -14,6 +14,7 @@ carries over is the comparison, because every run interleaves the runtimes on th
 sooner than Pi on Bun and uses about a quarter of its CPU over an interactive session. The ratio varies by scenario: see
 each table.
 
+- [1.2.0 against 1.1.7](#120-against-117)
 - [1.0.0 against PiG 0.5.1 and 0.9.9](#100-against-pig-051-and-099)
 - [0.9.7 against Pi as released](#097-against-pi-as-released)
 - [0.9.6 against PiG 0.5.1](#096-against-pig-051)
@@ -35,6 +36,56 @@ each table.
   - [Why is a run-time plugin's loop slow on the default build?](#why-is-a-run-time-plugins-loop-slow-on-the-default-build)
 - [Reproduce](#reproduce)
 - [Correctness](#correctness)
+
+## 1.2.0 against 1.1.7
+
+What 1.2.0 changed, measured against 1.1.7 on an Apple M5 MacBook Air (macOS, not pinned, shared with other work), both
+built from their own trees with the same runtime, interleaved in every run. Instructions are retired instructions of the
+Pi process (M = millions, K = thousands); CPU and wall time move with the machine's load, instructions much less. Medians
+(min-max) of 11 runs unless a row says otherwise. Lower is better; 1.1.7 / **1.2.0**.
+
+Ready to type (instructions until the TUI's first frame is written and input is live, n=9) and `pi -p` (one prompt, 5
+model turns). The typical home is `bench/benchmark.py --home realistic` (43 prompt templates, 8 skills, a 118-model store,
+`AGENTS.md` files, a git project); "with extensions" adds `opensec-pi-subagents` and `opensec-pi-todo`
+(`--home-extensions`), two of the extensions the installers offer.
+
+| Home | Ready to type | `pi -p`, instructions | `pi -p`, CPU | `pi -p`, peak footprint |
+|---|---|---|---|---|
+| Blank | 161.6 / **143.1** M (-11%) | 206.3 / **187.5** M (-9%) | 18.7 / **17.4** ms | 21.8 / **20.2** MB |
+| Typical | 270.5 / **163.4** M (-40%) | 296.2 / **205.1** M (-31%) | 23.8 / **18.5** ms | 24.6 / **21.0** MB |
+| Typical with extensions | 501.3 / **390.0** M (-22%) | 586.3 / **487.2** M (-17%) | 53.4 / **47.9** ms | 35.6 / **33.8** MB |
+
+| Scenario | Metric | 1.1.7 | 1.2.0 |
+|---|---|---:|---:|
+| `pi --version` (n=31) | instructions / CPU / peak footprint | 55.5 M / 4.5 ms / 5.6 MB | 55.5 M / 4.6 ms / 5.6 MB |
+| Interactive, 5 prompts (n=21) | time in the 5 turns | 119.7 ms | **83.3 ms** |
+| | instructions / peak footprint | 575.5 M / 28.7 MB | **552.9 M / 27.0 MB** |
+| Long answer, 60,000 characters (n=5) | instructions per frame | 1.23 M | **1.20 M** |
+| Streaming a 300-item list (n=3) | instructions per frame / own memory | 16.6 M / 38 MB | **1.13 M / 21 MB** |
+| Streaming a 150-row table (n=3) | instructions per frame | 10.15 M | **1.41 M** |
+| Streaming a 150-line TypeScript block (n=3) | instructions per frame | 28.7 M | **2.32 M** |
+| Streaming a 400-line TypeScript block (n=3) | instructions per frame / own memory | 74.6 M / 32 MB | **2.54 M / 20 MB** |
+| Streaming a 150-line Python block (n=3) | instructions per frame | 12.2 M | **1.41 M** |
+| Generated answer of 20,000 characters, fast (5 ms a chunk, n=15, answer 2) | instructions per frame, fullscreen / regular | 1,588 K / 1,690 K | **1,564 K / 1,619 K** |
+| Resume a 2,292-entry session, fullscreen (n=5) | first frame / instructions to it | 295 ms / 6,073 M | **41 ms / 519 M** |
+| | everything drawn (instructions) / peak footprint | 6,352 M / 81.8 MB | **6,311 M / 79.2 MB** |
+| Resume a 2,292-entry session, regular (n=3) | first frame / peak footprint | 2,204 ms / 83.3 MB | 2,213 ms / 90.5 MB |
+| Codex, a request after a prompt in a 9 MB conversation (n=8) | instructions, default transport / SSE | 178.8 M / 164.1 M | **8.5 M / 111.6 M** |
+| Long session, 40 prompts (n=3) | CPU per prompt at prompt 40 / own memory | 14.6 ms / 39.3 MB | **14.1 ms / 38.7 MB** |
+| Files written in tmux (`write:50`, n=3) | Pi CPU | 4.12 s | **3.03 s** |
+| Idle at the prompt | CPU per second | 0.43 ms | 0.41 ms |
+
+- The list, table and code rows stream `bench/answers/` with `bench/long_answer.py`. Code blocks are followed as they grow
+  in TypeScript, JavaScript, Python, Bash, JSON, Rust, Go, C, C++, Java, HTML, CSS, YAML, diff and SQL, from 256
+  characters on; other languages and shorter blocks are highlighted in full, as in 1.1.7.
+- The fast generated answer has two modes in every build (about 1,550 K and 1,750 K per frame, depending on when the
+  collector runs): 1.2.0's median is lower in both display modes, and with two different answers too (fullscreen 1,688 /
+  1,662 K, regular 1,819 / 1,665 K).
+- Resuming in fullscreen draws the end of the transcript first: the first frame comes 250 ms sooner, and a key typed at
+  that frame is echoed within 5 ms while the rest is drawn. Regular mode draws the whole transcript first, as before; its
+  peak footprint at 2,292 entries is 5-7 MB higher (88.8-90.5 against 83.3-84.0 MB in two runs of 3), with fewer
+  instructions.
+- `pi-bin` is 1.4 MB larger (213.9 MB): generated settings and schema checks, and the code-block highlighter.
 
 ## 1.0.0 against PiG 0.5.1 and 0.9.9
 

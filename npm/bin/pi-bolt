@@ -1,13 +1,14 @@
 #!/bin/sh
 # pi-bolt launcher (npm and bun packages). The first run installs the Pi-Bolt release that matches this package's version
 # into ~/.pi-bolt/npm with the bundled installer (the same as install.sh: progress, checksum, checks). Every run then
-# replaces this script with the native executable (exec), so the launcher costs no startup time.
+# replaces this script with the native executable (exec), so the launcher costs only its shell's start.
 set -eu
 
-VERSION=1.1.7
+VERSION=1.2.0
 HOME_DIR="${PIBOLT_HOME:-$HOME/.pi-bolt}"
 
-if [ "$(uname -s)" = Darwin ]; then PLATFORM=darwin; else PLATFORM=linux; fi
+# macOS has this folder, Linux (Android too) does not: a test the shell makes itself, so no uname starts at every run.
+if [ -d /System/Library/CoreServices ]; then PLATFORM=darwin; else PLATFORM=linux; fi
 VARIANT="${PIBOLT_VARIANT:-}"
 if [ -z "$VARIANT" ]; then
 	if [ "$PLATFORM" = darwin ]; then VARIANT=arm64
