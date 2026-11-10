@@ -6,7 +6,7 @@ import {
 } from "./alt-screen-search.ts";
 import { AltScreenFlashContainer } from "./components/alt-screen-flash.ts";
 import { ScrollView } from "./components/scroll-view.ts";
-import { getKeybindings } from "./keybindings.ts";
+import { getKeybindings, type Keybinding } from "./keybindings.ts";
 import { isKeyRelease } from "./keys.ts";
 import {
 	getLayoutBoxesAt,
@@ -84,6 +84,23 @@ interface MovedRows {
 const OSC133_ZONE_PREFIX = /^(?:\x1b\]133;[ABC](?:\x07|\x1b\\))+/;
 const OSC133_PROMPT_START = /^\x1b\]133;A(?:\x07|\x1b\\)/;
 const PAGE_SCROLL_OVERLAP = 4;
+/** The keys that act on the viewport: what they do reads the document's lines or its height. */
+const VIEWPORT_KEYS: readonly Keybinding[] = [
+	"tui.altScreen.search",
+	"tui.altScreen.searchNext",
+	"tui.altScreen.searchPrevious",
+	"tui.altScreen.searchClose",
+	"tui.altScreen.pageUp",
+	"tui.altScreen.pageDown",
+	"tui.altScreen.halfPageUp",
+	"tui.altScreen.halfPageDown",
+	"tui.altScreen.lineUp",
+	"tui.altScreen.lineDown",
+	"tui.altScreen.previousPrompt",
+	"tui.altScreen.nextPrompt",
+	"tui.altScreen.top",
+	"tui.altScreen.bottom",
+];
 const ALT_WHEEL_SCROLL_MULTIPLIER = 5;
 const MAX_CACHED_OFFSCREEN_KITTY_IMAGES = 16;
 const MAX_CACHED_OFFSCREEN_KITTY_TRANSMISSION_BYTES = 32 * 1024 * 1024;
@@ -269,6 +286,13 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private readonly onRightClickPaste?: () => void;
 	private copyOnSelect: boolean;
 	private readonly copySelection?: (text: string) => Promise<boolean | string>;
+	/**
+	 * Called before the document is read in whole: before render(), and before a key or mouse event acts on the viewport
+	 * (scrolling, search, prompt jumps, selection, the scrollbar). True when the document changed since it was last laid
+	 * out: a frame is drawn first, so that the event acts on the document as it is. For a document that draws its end
+	 * before the rest of it (a resumed transcript).
+	 */
+	beforeDocumentRead: (() => boolean) | undefined;
 
 	constructor(
 		terminal: Terminal,
@@ -351,6 +375,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	override render(width: number): string[] {
+		this.beforeDocumentRead?.();
 		return this.layoutRoot?.render(width) ?? super.render(width);
 	}
 
@@ -735,6 +760,9 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			return { consume: true };
 		}
 		if (data === FOCUS_IN) return { consume: true };
+		if (this.beforeDocumentRead !== undefined && this.isViewportInput(data) && this.beforeDocumentRead()) {
+			this.renderNow();
+		}
 
 		const wheelEvent = this.parseWheelEvent(data);
 		if (wheelEvent) {
@@ -1670,6 +1698,13 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	private isMouseSequence(data: string): boolean {
 		return /^\x1b\[<\d+;\d+;\d+[Mm]$/.test(data) || (data.length === 6 && data.startsWith("\x1b[M"));
+	}
+
+	/** Whether `data` may act on the viewport: any mouse event, or a viewport key (VIEWPORT_KEYS). */
+	private isViewportInput(data: string): boolean {
+		if (this.isMouseSequence(data)) return true;
+		const keybindings = getKeybindings();
+		return VIEWPORT_KEYS.some((key) => keybindings.matches(data, key));
 	}
 
 	private compositeScrollToEndIndicator(screen: string[], layout: LayoutFrame, width: number): string[] {

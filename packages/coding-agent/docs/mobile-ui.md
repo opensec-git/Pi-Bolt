@@ -602,9 +602,6 @@ The file holds one view, or `{ "views": [...] }`. The preview draws the componen
 light and dark, at phone width, so a layout can be checked without a phone. It is an approximation; the app is the
 reference.
 
-The `pibolt-mobile-ui` skill teaches Pi the kit: ask Pi to "add a mobile UI to this package" and it reads the skill,
-writes the views and checks them with `pi-bolt mobile-ui check`.
-
 ## Design rules
 
 The app's design language applies to every view (Pi-Bolt's `android/DESIGN.md`). For authors this means:

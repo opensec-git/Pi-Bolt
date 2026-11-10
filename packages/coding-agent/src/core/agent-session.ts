@@ -2302,7 +2302,8 @@ export class AgentSession {
 		let expandedText = currentText;
 		if (expandPromptTemplates) {
 			expandedText = this._expandSkillCommand(expandedText);
-			expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+			// (Only text starting with "/" can name a template: other text does not load them.)
+			if (expandedText.startsWith("/")) expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 		}
 
 		// If streaming, queue via steer() or followUp() based on option
@@ -2425,7 +2426,7 @@ export class AgentSession {
 		if (!processedInput) return "handled";
 
 		let expandedText = this._expandSkillCommand(processedInput.text);
-		expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
+		if (expandedText.startsWith("/")) expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 
 		if (behavior === "steer") {
 			await this._queueSteer(expandedText, processedInput.images);

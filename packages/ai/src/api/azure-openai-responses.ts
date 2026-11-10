@@ -8,6 +8,7 @@ import { headersToRecord } from "../utils/headers.ts";
 import { getIdentityHeaders } from "../utils/identity.ts";
 import { getServerRetryDelayMs, retryProviderRequest } from "../utils/provider-retry.ts";
 import { cacheRequestBody } from "../utils/request-body.ts";
+import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
 import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
 import { type AzureEndpointOptions, resolveAzureConfig, resolveDeploymentName } from "./azure-openai-config.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
@@ -69,6 +70,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 			timestamp: Date.now(),
 		};
 
+		let cache: RequestCacheRun | undefined;
 		try {
 			// Create Azure OpenAI client
 			const apiKey = options?.apiKey;
@@ -80,12 +82,22 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 				getDeclaredTools(normalizedContext.messages),
 				model.compat?.supportsOpenAIGrammarTools ?? false,
 			);
-			let params = buildParams(model, normalizedContext, options, deploymentName, grammarToolInputProperties);
+			// Everything buildParams's conversion reads besides the messages: the model and its compat settings.
+			cache = beginRequestCache("azure-openai-responses", options, [
+				model.id,
+				model.provider,
+				model.api,
+				model.input,
+				model.reasoning,
+				model.compat,
+				grammarToolInputProperties,
+			]);
+			let params = buildParams(model, normalizedContext, options, deploymentName, grammarToolInputProperties, cache);
 			const nextParams = await options?.onPayload?.(params, model);
 			if (nextParams !== undefined) {
 				params = nextParams as ResponseCreateParamsStreaming;
 			}
-			cacheRequestBody(client, params.input, "input", options?.sessionId);
+			cacheRequestBody(client, params.input, "input", options?.sessionId, cache);
 			const requestOptions = {
 				...(options?.signal ? { signal: options.signal } : {}),
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
@@ -99,6 +111,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 					signal: options?.signal,
 				},
 			);
+			cache?.end();
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
 			stream.push({ type: "start", partial: output });
 
@@ -121,6 +134,7 @@ export const stream: StreamFunction<"azure-openai-responses", AzureOpenAIRespons
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
+			cache?.end();
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatAzureOpenAIError(error);
 			const retryAfterMs = getServerRetryDelayMs(error);
@@ -184,6 +198,7 @@ function buildParams(
 		getDeclaredTools(context.messages),
 		model.compat?.supportsOpenAIGrammarTools ?? false,
 	),
+	cache?: RequestCacheRun,
 ) {
 	const supportsAdditionalTools = model.compat?.supportsAdditionalTools ?? false;
 	const supportsToolSearch = model.compat?.supportsToolSearch ?? false;
@@ -204,6 +219,7 @@ function buildParams(
 			supportsStrictMode: model.compat?.supportsStrictMode ?? true,
 			supportsOpenAIGrammarTools: model.compat?.supportsOpenAIGrammarTools ?? false,
 		},
+		cache,
 	});
 
 	const params: ResponseCreateParamsStreaming = {

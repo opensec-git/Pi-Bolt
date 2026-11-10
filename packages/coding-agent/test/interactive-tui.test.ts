@@ -12,6 +12,7 @@ import {
 	type StatusIndicatorKind,
 	WorkingStatusIndicator,
 } from "../src/modes/interactive/components/status-indicator.ts";
+import { TranscriptContainer } from "../src/modes/interactive/components/transcript-container.ts";
 import {
 	createInteractiveTui,
 	createInteractiveTuiReference,
@@ -141,6 +142,7 @@ describe("createInteractiveTui", () => {
 			options: { tuiMode?: TuiMode };
 			themeController: { rebindTui: () => void };
 			extensionTerminalInputSubscriptions: Set<never>;
+			chatContainer: TranscriptContainer;
 		};
 		const context = Object.assign(Object.create(InteractiveMode.prototype), {
 			runtimeHost: {
@@ -154,6 +156,7 @@ describe("createInteractiveTui", () => {
 			options: { tuiMode: "regular" as TuiMode },
 			themeController: { rebindTui: () => {} },
 			extensionTerminalInputSubscriptions: new Set<never>(),
+			chatContainer: new TranscriptContainer(),
 		}) as SwitchContext;
 		stableUi = createInteractiveTuiReference(() => context.renderer);
 		context.ui = stableUi;

@@ -289,6 +289,12 @@ export const SettingsSchema = Type.Object(
 		remoteControl: Type.Optional(
 			Type.Object(
 				{
+					enabled: Type.Optional(
+						Type.Boolean({
+							description:
+								"Turn on /remote-control and the background service (pi-bolt service). Default false. Read from the global settings only: a project's settings cannot turn it on.",
+						}),
+					),
 					port: Type.Optional(
 						Type.Integer({
 							minimum: 0,

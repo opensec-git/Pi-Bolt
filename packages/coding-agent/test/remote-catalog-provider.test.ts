@@ -75,6 +75,25 @@ async function refreshProvider(
 	});
 }
 
+/** Offline refreshes of `provider` with `stored`, counting what it publishes. */
+async function restoreOffline(
+	provider: Provider,
+	stored: RefreshModelsContext["stored"],
+): Promise<ModelsPublication[]> {
+	const publications: ModelsPublication[] = [];
+	await provider.refreshModels?.({
+		stored,
+		publish: async (publication) => {
+			publications.push(publication);
+			publication.update?.();
+			return true;
+		},
+		allowNetwork: false,
+		signal: neverAbortedSignal,
+	});
+	return publications;
+}
+
 afterEach(() => vi.restoreAllMocks());
 
 describe("remote catalog provider", () => {
@@ -305,6 +324,23 @@ describe("remote catalog provider", () => {
 		expect((await store.read(provider.id))?.models.map((entry) => entry.id)).toEqual(["newer"]);
 	});
 
+	it("publishes nothing offline when there is nothing to restore or clear", async () => {
+		const localGeneratedAt = Date.parse("2026-07-23T10:00:00.000Z");
+		const provider = testProvider(localGeneratedAt);
+		const older = { models: [model("older")], lastModified: localGeneratedAt - 60_000, checkedAt: 1 };
+		const newer = { models: [model("newer")], lastModified: localGeneratedAt + 60_000, checkedAt: 1 };
+
+		expect(await restoreOffline(provider, undefined)).toHaveLength(0);
+		expect(await restoreOffline(provider, older)).toHaveLength(0);
+		expect(provider.getModels().map((entry) => entry.id)).toEqual(["static"]);
+
+		expect(await restoreOffline(provider, newer)).toHaveLength(1);
+		expect(provider.getModels().map((entry) => entry.id)).toEqual(["static", "newer"]);
+		// The restored overlay is cleared when the stored catalog is gone.
+		expect(await restoreOffline(provider, undefined)).toHaveLength(1);
+		expect(provider.getModels().map((entry) => entry.id)).toEqual(["static"]);
+	});
+
 	it("treats unimplemented pi.dev catalog routes as an unavailable overlay", async () => {
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("not implemented", { status: 501 }));
 		const provider = testProvider();
@@ -343,6 +379,19 @@ describe("personalized catalog provider", () => {
 		await expect(refreshProvider(provider, store)).rejects.toThrow("user models request failed");
 		expect(provider.getModels().map((entry) => entry.id)).toEqual(["allowed"]);
 		expect(await store.read(provider.id)).toEqual(saved);
+	});
+
+	it("publishes nothing offline when there is no saved list to restore or clear", async () => {
+		const personalize: PersonalizeCatalog = async () => {
+			throw new Error("not used offline");
+		};
+		const provider = withPersonalizedCatalog(builtinProvider(), personalize);
+
+		expect(await restoreOffline(provider, undefined)).toHaveLength(0);
+		expect(await restoreOffline(provider, { models: [model("allowed")], checkedAt: 1 })).toHaveLength(1);
+		expect(provider.getModels().map((entry) => entry.id)).toEqual(["allowed"]);
+		expect(await restoreOffline(provider, undefined)).toHaveLength(1);
+		expect(provider.getModels().map((entry) => entry.id)).toEqual(["static"]);
 	});
 
 	it("restores a saved list as is, and falls back to the built-in models only when it is empty", async () => {

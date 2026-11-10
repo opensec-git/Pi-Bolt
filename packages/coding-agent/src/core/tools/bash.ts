@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access as fsAccess } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
 import { spawn } from "child_process";
-import { type Static, Type } from "typebox";
+import type { Static } from "typebox";
 import { waitForChildProcess } from "../../utils/child-process.ts";
 import {
 	getDirectGitBash,
@@ -21,6 +20,7 @@ import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { OutputAccumulator } from "./output-accumulator.ts";
 import { BASH_UPDATE_THROTTLE_MS, createShellRenderers } from "./renderers/bash.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import { bashOutputSchema, bashSchema } from "./tool-schemas.generated.ts";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -47,11 +47,6 @@ function resolveTimeoutMs(timeout: number | undefined): number | undefined {
 	return timeoutMs;
 }
 
-const bashSchema = Type.Object({
-	command: Type.String({ description: "Shell command to execute" }),
-	timeout: Type.Optional(Type.Number({ description: "Timeout in seconds (optional, no default timeout)" })),
-});
-
 export const bashToolSystemPromptContribution = {
 	snippet: "Execute bash commands (ls, grep, find, etc.)",
 	guidelines: ["You can inspect PI_* environment variables for current model and session details."],
@@ -59,18 +54,7 @@ export const bashToolSystemPromptContribution = {
 
 export type BashToolInput = Static<typeof bashSchema>;
 
-/**
- * Result for programmatic callers such as codemode scripts. A non-zero exit code is an error result for the model, but scripts still resolve to this value.
- * `output` is not limited like the model-facing output: callers decide how much of it reaches the model.
- */
-const bashOutputSchema = Type.Object({
-	output: Type.String({ description: "Combined stdout and stderr, possibly truncated" }),
-	truncated: Type.Boolean(),
-	full_output_path: Type.Optional(Type.String({ description: "Full output, when truncated" })),
-	exit_code: Type.Number(),
-	wall_time_seconds: Type.Number(),
-});
-
+/** Result for programmatic callers such as codemode scripts (see bashOutputSchema in tool-schemas.ts). */
 export type BashToolOutput = Static<typeof bashOutputSchema>;
 
 export interface BashToolDetails {
@@ -122,7 +106,7 @@ export function createLocalShellOperations(shellName: string, resolveShellConfig
 			// Windows, Git Bash (or MSYS2, Cygwin): a variable of this command's own that its processes inherit, by which
 			// stopping it finds them all (getMsysBash, killProcessTree).
 			const msysBash = getMsysBash(shellConfig.shell);
-			const msys = msysBash ? { bash: msysBash, group: randomUUID() } : undefined;
+			const msys = msysBash ? { bash: msysBash, group: crypto.randomUUID() } : undefined;
 			// Windows, Git for Windows: its bash itself, without the launcher in front (see getDirectGitBash).
 			const direct = commandFromStdin ? undefined : getDirectGitBash(shellConfig.shell);
 			const shellExe = direct?.bash ?? shellConfig.shell;

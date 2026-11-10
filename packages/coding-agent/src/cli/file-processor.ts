@@ -4,10 +4,10 @@
 
 import { access, readFile, stat } from "node:fs/promises";
 import type { ImageContent } from "@earendil-works/pi-ai";
-import chalk from "chalk";
 import { resolve } from "path";
 import { resolveReadPath } from "../core/tools/path-utils.ts";
 import { processImage } from "../utils/image-process.ts";
+import { chalk } from "../utils/lazy-packages.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../utils/mime.ts";
 import { stripBom } from "../utils/text.ts";
 

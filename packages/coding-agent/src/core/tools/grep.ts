@@ -1,7 +1,7 @@
 import { readFile as fsReadFile, stat as fsStat } from "node:fs/promises";
 import { spawn } from "child_process";
 import path from "path";
-import { type Static, Type } from "typebox";
+import type { Static } from "typebox";
 import { PIBOLT } from "../../pi-bolt.ts";
 import { createInterface } from "../../utils/readline.ts";
 import { detachString } from "../../utils/text.ts";
@@ -11,6 +11,7 @@ import { nativeGrep } from "./native-search.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import { grepRenderers } from "./renderers/grep.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import { grepSchema } from "./tool-schemas.generated.ts";
 import {
 	DEFAULT_MAX_BYTES,
 	formatSize,
@@ -20,20 +21,6 @@ import {
 	truncateLine,
 	truncationDetails,
 } from "./truncate.ts";
-
-const grepSchema = Type.Object({
-	pattern: Type.String({ description: "Search pattern (regex or literal string)" }),
-	path: Type.Optional(Type.String({ description: "Directory or file to search (default: current directory)" })),
-	glob: Type.Optional(Type.String({ description: "Filter files by glob pattern, e.g. '*.ts' or '**/*.spec.ts'" })),
-	ignoreCase: Type.Optional(Type.Boolean({ description: "Case-insensitive search (default: false)" })),
-	literal: Type.Optional(
-		Type.Boolean({ description: "Treat pattern as literal string instead of regex (default: false)" }),
-	),
-	context: Type.Optional(
-		Type.Number({ description: "Number of lines to show before and after each match (default: 0)" }),
-	),
-	limit: Type.Optional(Type.Number({ description: "Maximum number of matches to return (default: 100)" })),
-});
 
 export const grepToolSystemPromptContribution = {
 	snippet: "Search file contents for patterns (respects .gitignore)",

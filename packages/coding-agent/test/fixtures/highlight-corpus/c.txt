@@ -1,0 +1,47 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include "local.h"
+
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define STR(x) #x
+
+/* A linked list
+ * node. */
+typedef struct node {
+    int value;
+    struct node *next;
+} node_t;
+
+static const char *names[] = { "zero", "one", "two" };
+
+unsigned long
+hash(const char *str)
+{
+    unsigned long h = 5381;
+    int c;
+    while ((c = *str++))
+        h = ((h << 5) + h) + c; /* h * 33 + c */
+    return h;
+}
+
+int main(int argc, char **argv) {
+    node_t *head = NULL;
+    for (int i = 0; i < argc; i++) {
+        node_t *n = malloc(sizeof *n);
+        if (!n) {
+            perror("malloc");
+            return EXIT_FAILURE;
+        }
+        n->value = (int)hash(argv[i]) % 100;
+        n->next = head;
+        head = n;
+    }
+    printf("%s: %d\n", names[1], MAX(1, 2));
+    char ch = '\n';
+    float f = 1.5e-3f;
+    long x = 0xFFL;
+#ifdef DEBUG
+    fprintf(stderr, "debug\n");
+#endif
+    return 0;
+}

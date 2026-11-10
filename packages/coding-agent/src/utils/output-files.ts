@@ -5,7 +5,6 @@
  * go to the OS temp directory.
  */
 
-import { randomBytes } from "node:crypto";
 import { closeSync, openSync, writeSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -22,7 +21,10 @@ export const MAX_OUTPUT_FILE_BYTES = 1024 * 1024 * 1024;
 
 /** A new, unused path: `<dir>/<prefix>-<random hex><extension>`. `extension` includes the dot. */
 function createOutputFilePath(prefix: string, extension: string): string {
-	return join(tmpdir(), `${prefix}-${randomBytes(8).toString("hex")}${extension}`);
+	return join(
+		tmpdir(),
+		`${prefix}-${Buffer.from(crypto.getRandomValues(new Uint8Array(8))).toString("hex")}${extension}`,
+	);
 }
 
 /** Write `data` to a new output file and return its path. */

@@ -80,6 +80,10 @@
     "remoteControl": {
       "type": "object",
       "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Turn on /remote-control and the background service (pi-bolt service). Default false. Read from the global settings only: a project's settings cannot turn it on."
+        },
         "port": {
           "type": "integer",
           "minimum": 0,

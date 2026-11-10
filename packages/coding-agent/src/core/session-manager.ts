@@ -11,7 +11,6 @@ import {
 	type UserMessage,
 	uuidv7,
 } from "@earendil-works/pi-ai";
-import { randomUUID } from "crypto";
 import {
 	appendFileSync,
 	closeSync,
@@ -277,11 +276,11 @@ export function assertValidSessionId(id: string): void {
 /** Generate a unique short ID (8 hex chars, collision-checked) */
 function generateId(byId: { has(id: string): boolean }): string {
 	for (let i = 0; i < 100; i++) {
-		const id = randomUUID().slice(0, 8);
+		const id = crypto.randomUUID().slice(0, 8);
 		if (!byId.has(id)) return id;
 	}
 	// Fallback to full UUID if somehow we have collisions
-	return randomUUID();
+	return crypto.randomUUID();
 }
 
 /** Migrate v1 → v2: add id/parentId tree structure. Mutates in place. */
@@ -1175,7 +1174,7 @@ class SessionInfoIndex {
 		if (!this.changed && this.next.size === this.previous.size) return;
 		const sessions: Record<string, SessionIndexEntry> = {};
 		for (const [file, entry] of this.next) sessions[file] = entry;
-		const tempPath = `${this.path}.${process.pid}.${randomUUID()}.tmp`;
+		const tempPath = `${this.path}.${process.pid}.${crypto.randomUUID()}.tmp`;
 		try {
 			// It holds the text of every listed session's messages.
 			await writeFile(tempPath, JSON.stringify({ version: SESSION_INDEX_VERSION, sessions }), {

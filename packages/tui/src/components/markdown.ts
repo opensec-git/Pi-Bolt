@@ -1,6 +1,6 @@
-import { Lexer, Marked, type Token, Tokenizer, type TokenizerExtension, type Tokens } from "marked";
-import markedCjkFriendly from "marked-cjk-friendly";
+import type { Lexer, Marked, Token, Tokenizer, TokenizerExtension, Tokens } from "marked";
 import { renderLatex } from "../latex.ts";
+import { marked, markedCjkFriendly } from "../marked-module.ts";
 import { invalidateRenderedMarkdown, renderedMarkdownGeneration } from "../rendered-markdown.ts";
 import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.ts";
 import {
@@ -80,35 +80,39 @@ function mayStartSetextHeading(src: string): boolean {
 	return false;
 }
 
-class MarkdownTokenizer extends Tokenizer {
-	override lheading(src: string): Tokens.Heading | undefined {
-		return !setextGuard || mayStartSetextHeading(src) ? super.lheading(src) : undefined;
-	}
-
-	override url(src: string): Tokens.Link | undefined {
-		const token = super.url(src);
-		if (!token) return undefined;
-
-		// Bare URLs stop at CJK punctuation; explicit links and angle autolinks
-		// use separate tokenizers and can still contain these characters.
-		const punctuationIndex = token.raw.search(cjkPunctuationRegex);
-		return punctuationIndex < 0 ? token : super.url(token.raw.slice(0, punctuationIndex));
-	}
-
-	override del(src: string): Tokens.Del | undefined {
-		const match = STRICT_STRIKETHROUGH_REGEX.exec(src);
-		if (!match) {
-			return undefined;
+/** Pi's tokenizer, made with the parser (getMarkdownParser()): its base class is marked's, evaluated then. */
+function createMarkdownTokenizer(): Tokenizer {
+	class MarkdownTokenizer extends marked().Tokenizer {
+		override lheading(src: string): Tokens.Heading | undefined {
+			return !setextGuard || mayStartSetextHeading(src) ? super.lheading(src) : undefined;
 		}
 
-		const text = match[2];
-		return {
-			type: "del",
-			raw: match[0],
-			text,
-			tokens: this.lexer.inlineTokens(text),
-		};
+		override url(src: string): Tokens.Link | undefined {
+			const token = super.url(src);
+			if (!token) return undefined;
+
+			// Bare URLs stop at CJK punctuation; explicit links and angle autolinks
+			// use separate tokenizers and can still contain these characters.
+			const punctuationIndex = token.raw.search(cjkPunctuationRegex);
+			return punctuationIndex < 0 ? token : super.url(token.raw.slice(0, punctuationIndex));
+		}
+
+		override del(src: string): Tokens.Del | undefined {
+			const match = STRICT_STRIKETHROUGH_REGEX.exec(src);
+			if (!match) {
+				return undefined;
+			}
+
+			const text = match[2];
+			return {
+				type: "del",
+				raw: match[0],
+				text,
+				tokens: this.lexer.inlineTokens(text),
+			};
+		}
 	}
+	return new MarkdownTokenizer();
 }
 
 interface LatexToken extends Tokens.Generic {
@@ -240,6 +244,10 @@ const LATEX_MARKDOWN_EXTENSIONS: readonly TokenizerExtension[] = [
 		name: "latex",
 		level: "inline",
 		start(source) {
+			// (marked calls this for each text token, with the rest of the text: searched again each time, a long paragraph
+			// would cost time in proportion to the square of its length. InlineMemoLexer knows where in the text it is.)
+			const known = this.lexer instanceof inlineMemoLexer() ? this.lexer.latexStart(source) : null;
+			if (known !== null) return known;
 			const indices = [source.indexOf("$"), source.indexOf("\\("), source.indexOf("\\[")].filter(
 				(index) => index >= 0,
 			);
@@ -280,9 +288,9 @@ let markdownParser: Marked | undefined;
 /** Pi's Markdown parser, set up on the first lex: a start that renders no Markdown (`pi -p`) does not build it. */
 function getMarkdownParser(): Marked {
 	if (!markdownParser) {
-		markdownParser = new Marked();
+		markdownParser = new (marked().Marked)();
 		markdownParser.setOptions({
-			tokenizer: new MarkdownTokenizer(),
+			tokenizer: createMarkdownTokenizer(),
 		});
 		markdownParser.use({
 			tokenizer: { emStrong: markedCjkFriendly().tokenizer?.emStrong },
@@ -321,61 +329,111 @@ function inlineFlags(state: Lexer["state"]): number {
  * The tokens are shared by the token lists they are in: nothing changes inline tokens after lexing (trimPartialClosingFences()
  * changes code blocks only).
  */
-class InlineMemoLexer extends Lexer {
-	private inlineDepth = 0;
+function defineInlineMemoLexer(Base: typeof Lexer) {
+	return class InlineMemoLexer extends Base {
+		private inlineDepth = 0;
+		/**
+		 * The texts inlineTokens() is lexing, the innermost last, each with where in it a "$", "\(" or "\[" begins (found when
+		 * first asked, latexStart()) and the index of the first of those at or after the position asked about last.
+		 */
+		private readonly inlineSources: Array<{ src: string; delimiters?: number[]; next: number }> = [];
 
-	override lex(src: string): ReturnType<Lexer["lex"]> {
-		try {
-			return super.lex(src);
-		} finally {
-			lexedInlines = nextLexedInlines;
-			nextLexedInlines = new Map();
-		}
-	}
-
-	override inlineTokens(src: string, tokens: Token[] = []): Token[] {
-		if (
-			this.inlineDepth > 0 ||
-			tokens.length > 0 ||
-			(src.includes("[") && Object.keys(this.tokens.links ?? {}).length > 0)
-		) {
-			this.inlineDepth++;
+		override lex(src: string): ReturnType<Lexer["lex"]> {
 			try {
-				return super.inlineTokens(src, tokens);
+				return super.lex(src);
 			} finally {
-				this.inlineDepth--;
+				lexedInlines = nextLexedInlines;
+				nextLexedInlines = new Map();
 			}
 		}
-		const state = this.state;
-		const flags = inlineFlags(state);
-		let next = nextLexedInlines.get(flags);
-		if (next === undefined) {
-			next = new Map();
-			nextLexedInlines.set(flags, next);
-		}
-		let lexed = next.get(src) ?? lexedInlines.get(flags)?.get(src);
-		if (lexed === undefined) {
-			this.inlineDepth++;
-			try {
-				super.inlineTokens(src, tokens);
-			} finally {
-				this.inlineDepth--;
+
+		/**
+		 * Where the first "$", "\(" or "\[" of `rest` begins (undefined: none), as the inline LaTeX extension's start() finds it,
+		 * for the `rest` of the text being lexed that marked asks about: what is left of it after the token being lexed begins.
+		 * marked's loop only takes tokens off the front of the text, so `rest` is the text from `src.length - rest.length` on.
+		 * Null when no text is being lexed that `rest` can be the end of.
+		 */
+		latexStart(rest: string): number | undefined | null {
+			const source = this.inlineSources[this.inlineSources.length - 1];
+			if (source === undefined || rest.length >= source.src.length) return null;
+			if (source.delimiters === undefined) {
+				const delimiters: number[] = [];
+				const delimiter = /\$|\\[([]/g;
+				for (let match = delimiter.exec(source.src); match !== null; match = delimiter.exec(source.src)) {
+					delimiters.push(match.index);
+				}
+				source.delimiters = delimiters;
 			}
-			lexed = {
-				tokens: tokens.slice(),
-				inLink: state.inLink,
-				inRawBlock: state.inRawBlock,
-				linkEmitted: state.linkEmitted,
-			};
-		} else {
-			for (const token of lexed.tokens) tokens.push(token);
-			state.inLink = lexed.inLink;
-			state.inRawBlock = lexed.inRawBlock;
-			state.linkEmitted = lexed.linkEmitted;
+			const offset = source.src.length - rest.length;
+			const delimiters = source.delimiters;
+			let next = source.next;
+			while (next > 0 && delimiters[next - 1]! >= offset) next--;
+			while (next < delimiters.length && delimiters[next]! < offset) next++;
+			source.next = next;
+			return next < delimiters.length ? delimiters[next]! - offset : undefined;
 		}
-		next.set(src, lexed);
-		return tokens;
-	}
+
+		override inlineTokens(src: string, tokens: Token[] = []): Token[] {
+			this.inlineSources.push({ src, next: 0 });
+			try {
+				return this.memoInlineTokens(src, tokens);
+			} finally {
+				this.inlineSources.pop();
+			}
+		}
+
+		private memoInlineTokens(src: string, tokens: Token[]): Token[] {
+			if (
+				this.inlineDepth > 0 ||
+				tokens.length > 0 ||
+				(src.includes("[") && Object.keys(this.tokens.links ?? {}).length > 0)
+			) {
+				this.inlineDepth++;
+				try {
+					return super.inlineTokens(src, tokens);
+				} finally {
+					this.inlineDepth--;
+				}
+			}
+			const state = this.state;
+			const flags = inlineFlags(state);
+			let next = nextLexedInlines.get(flags);
+			if (next === undefined) {
+				next = new Map();
+				nextLexedInlines.set(flags, next);
+			}
+			let lexed = next.get(src) ?? lexedInlines.get(flags)?.get(src);
+			if (lexed === undefined) {
+				this.inlineDepth++;
+				try {
+					super.inlineTokens(src, tokens);
+				} finally {
+					this.inlineDepth--;
+				}
+				lexed = {
+					tokens: tokens.slice(),
+					inLink: state.inLink,
+					inRawBlock: state.inRawBlock,
+					linkEmitted: state.linkEmitted,
+				};
+			} else {
+				for (const token of lexed.tokens) tokens.push(token);
+				state.inLink = lexed.inLink;
+				state.inRawBlock = lexed.inRawBlock;
+				state.linkEmitted = lexed.linkEmitted;
+			}
+			next.set(src, lexed);
+			return tokens;
+		}
+	};
+}
+
+let inlineMemoLexerClass: ReturnType<typeof defineInlineMemoLexer> | undefined;
+
+/** InlineMemoLexer, defined at the first lex: its base class is marked's Lexer, evaluated then. */
+function inlineMemoLexer(): ReturnType<typeof defineInlineMemoLexer> {
+	inlineMemoLexerClass ??= defineInlineMemoLexer(marked().Lexer);
+	return inlineMemoLexerClass;
 }
 
 let memos = true;
@@ -383,7 +441,7 @@ let memos = true;
 /** marked's lexer() for Pi's Markdown: InlineMemoLexer, or marked's own lexer with the memos off. */
 function lexTokens(source: string): Token[] {
 	return memos && markdownCaching
-		? new InlineMemoLexer(getMarkdownParser().defaults).lex(source)
+		? new (inlineMemoLexer())(getMarkdownParser().defaults).lex(source)
 		: getMarkdownParser().lexer(source);
 }
 
@@ -458,18 +516,262 @@ let fastPaths = true;
 /** Block types that marked tries before a paragraph or a setext heading: what they are is known from their first line. */
 const SELF_STARTING_BLOCKS = new Set(["code", "heading", "hr", "list", "blockquote", "table", "html"]);
 
+/** A line that can open a display-math block (`$$` or `\[`), as the LaTeX block tokenizer looks for it. */
+const DISPLAY_MATH_LINE = /(?:^|\n) {0,3}(?:\$\$|\\\[)/;
+
 /**
  * Whether the block at `before` ends where it does whatever text is added after the block at `last` (the last of
  * `tokens`, with only blank lines between the two): when `last` is past its first line that is not blank, that line is
  * known, and a block that starts as SELF_STARTING_BLOCKS do ends at the first line it cannot take. Not a paragraph: a
  * setext underline lines later can make a heading of it and of the lines after it that an extension's block (`$$`) took.
+ * But a paragraph followed by a blank line ends there whatever comes after it: neither it nor a setext heading goes on
+ * past a blank line, and that line is known once a block follows it. Except a paragraph with a line that opens display
+ * math (`$$`, `\[`): the math block can take it and the lines after it across blank lines once its closer arrives. And
+ * except one that leaves an inline `<a>` or raw block open (inlineStateKept()), whose state the next blocks are lexed in.
  */
 function lastBlockSettlesOneBefore(tokens: readonly Token[], before: number, last: number): boolean {
-	if (!fastPaths || before < 0 || !SELF_STARTING_BLOCKS.has(tokens[before]!.type)) return false;
+	if (!fastPaths || before < 0) return false;
+	const between = tokens[before + 1];
+	const block = tokens[before]!;
+	if (
+		block.type === "paragraph" &&
+		between?.type === "space" &&
+		before + 1 < last &&
+		between.raw.indexOf("\n") !== between.raw.lastIndexOf("\n") &&
+		!DISPLAY_MATH_LINE.test(block.raw) &&
+		inlineStateKept((block as Tokens.Paragraph).tokens)
+	) {
+		return true;
+	}
+	if (!SELF_STARTING_BLOCKS.has(tokens[before]!.type)) return false;
 	// (A block's raw text can begin with lines of spaces.)
 	const raw = tokens[last]!.raw;
 	const text = raw.search(/\S/);
 	return text >= 0 && raw.includes("\n", text);
+}
+
+/**
+ * The text of `source` from `start` on, as a string of its own. The text of a token is a part of the string that was lexed,
+ * and keeps all of that string in memory. Lexing the end of `source` as a part of it would leave every block of a long
+ * message holding the whole message as it was when the block was lexed, megabytes for each answer.
+ * (`added`: what `source` adds to `previous.source`, when that is known. The end is then taken from the end of the
+ * previous source kept with it and the added text: `source` is not read, which for a source made of the last one and the
+ * added text would copy all of it.)
+ */
+function sourceEnd(previous: LexedMarkdown, source: string, added: string | undefined, start: number): string {
+	const kept = previous.end;
+	return ownString(
+		added !== undefined && kept !== undefined && start >= kept.start
+			? kept.text.slice(start - kept.start) + added
+			: source.slice(start),
+	);
+}
+
+/**
+ * Where lexing a list or a table again can begin: after its first `shared` items or rows, the first `skip` characters of
+ * its raw text. `head` is lexed before the text from there: a table's header and delimiter rows.
+ */
+interface BlockResume {
+	shared: number;
+	skip: number;
+	head: string;
+}
+
+/**
+ * For a list or a table lexed from the items or rows of the one lexed before it (lexAddedToBlock()): that one, and how many
+ * items or rows the two have in common (the same objects). Held weakly, as lexedFrom.
+ */
+const resumedBlocks = new WeakMap<Token, { from: WeakRef<Token>; shared: number }>();
+
+/**
+ * For a list or a table: how many of its parts (a list's items; a table's header, then its rows), counted from the first,
+ * are known to lex alone as they lex after the parts before them (listItemStandsAlone(), inlineStateKept()).
+ */
+const standAloneParts = new WeakMap<Token, number>();
+
+/**
+ * Where a list or a table that text is added after can be lexed again from (lexAddedToBlock()), or undefined.
+ * A list item ends where a line after it begins another item (or a block that ends the item): once the last item is past
+ * its first line, that line is known and the items before it are settled; until then the one before it is not ("-"
+ * turning into "--" makes a setext underline of it). Each row of a table is a line of its own: all but the last, which may
+ * still grow, are settled.
+ * The items or rows kept must also lex alone as they lex with the others (standAloneParts): the ones after them are lexed
+ * without them.
+ */
+function blockResume(block: Token): BlockResume | undefined {
+	if (block.type === "list") {
+		const items = (block as Tokens.List).items;
+		const lastItem = items[items.length - 1];
+		if (lastItem === undefined) return undefined;
+		const shared = items.length - (lastItem.raw.includes("\n") ? 1 : 2);
+		if (shared < 1 || standAloneCount(block, items, shared, listItemStandsAlone) < shared) {
+			return undefined;
+		}
+		let skip = 0;
+		for (let i = 0; i < shared; i++) skip += items[i]!.raw.length;
+		return { shared, skip, head: "" };
+	}
+	if (block.type === "table") {
+		const table = block as Tokens.Table;
+		const shared = table.rows.length - 1;
+		if (shared < 1) return undefined;
+		// (The header is part 0: rows are lexed after it again.)
+		const parts = [table.header, ...table.rows];
+		const alone = (cells: Tokens.TableCell[]) => cells.every((cell) => inlineStateKept(cell.tokens));
+		if (standAloneCount(block, parts, shared + 1, alone) < shared + 1) {
+			return undefined;
+		}
+		const raw = table.raw;
+		const headerEnd = raw.indexOf("\n");
+		const delimiterEnd = headerEnd < 0 ? -1 : raw.indexOf("\n", headerEnd + 1);
+		if (delimiterEnd < 0) return undefined;
+		let skip = delimiterEnd + 1;
+		for (let i = 0; i < shared; i++) {
+			const lineEnd = raw.indexOf("\n", skip);
+			if (lineEnd < 0) return undefined;
+			skip = lineEnd + 1;
+		}
+		return { shared, skip, head: ownString(raw.slice(0, delimiterEnd + 1)) };
+	}
+	return undefined;
+}
+
+/** How many of `parts`, the first `wanted` at most, lex alone as they lex after the others (standAloneParts). */
+function standAloneCount<T>(block: Token, parts: readonly T[], wanted: number, alone: (part: T) => boolean): number {
+	let count = standAloneParts.get(block) ?? 0;
+	while (count < wanted && alone(parts[count]!)) count++;
+	standAloneParts.set(block, count);
+	return count;
+}
+
+/**
+ * Whether lexing a list item gave what it gives in a list with other items before or after it. Two things are carried
+ * from item to item: the inline lexer's state (inlineStateKept()), and the task markers taken off. For each task item,
+ * marked takes the marker off the last text queued for inline lexing that starts with one, which is the item's own first
+ * text unless some other text in the list starts with a marker (a heading "[ ] x" in an item, a second paragraph): then an
+ * item's marker can be taken off another item's text. With no such text in any item, each item's own is.
+ */
+function listItemStandsAlone(item: Tokens.ListItem): boolean {
+	return inlineStateKept(item.tokens) && !hasTaskLikeText(item.tokens);
+}
+
+/** marked's test for a task item's text (rules.other.listIsTask). */
+const TASK_TEXT = /^\[[ xX]\] +\S/;
+
+/**
+ * Whether any text in these tokens, or in the tokens in them, starts as a task item's does (TASK_TEXT): one whose marker
+ * was not taken off. (A task item's own first text has had its marker taken off.)
+ */
+function hasTaskLikeText(tokens: readonly Token[]): boolean {
+	for (const token of tokens) {
+		if ("text" in token && typeof token.text === "string" && TASK_TEXT.test(token.text)) return true;
+		if ("tokens" in token && Array.isArray(token.tokens) && hasTaskLikeText(token.tokens)) return true;
+		if (token.type === "list" && (token as Tokens.List).items.some((item) => hasTaskLikeText(item.tokens))) {
+			return true;
+		}
+		if (token.type === "table") {
+			const table = token as Tokens.Table;
+			for (const cells of [table.header, ...table.rows]) {
+				if (cells.some((cell) => TASK_TEXT.test(cell.text) || hasTaskLikeText(cell.tokens))) return true;
+			}
+		}
+	}
+	return false;
+}
+
+/**
+ * Whether lexing these tokens left marked's inline lexer in the state it found it in: no inline HTML tag in them opens a
+ * link (`<a>`) or a raw block (`<pre>`, `<script>`, `<style>`), which the lexer carries to the texts after them. (Links
+ * only ever end those.)
+ */
+function inlineStateKept(tokens: readonly Token[]): boolean {
+	for (const token of tokens) {
+		if (token.type === "html" && "inLink" in token && (token.inLink === true || token.inRawBlock === true))
+			return false;
+		if ("tokens" in token && Array.isArray(token.tokens) && !inlineStateKept(token.tokens)) return false;
+		if (token.type === "list" && !(token as Tokens.List).items.every((item) => inlineStateKept(item.tokens))) {
+			return false;
+		}
+		if (token.type === "table") {
+			const table = token as Tokens.Table;
+			for (const cells of [table.header, ...table.rows]) {
+				if (!cells.every((cell) => inlineStateKept(cell.tokens))) return false;
+			}
+		}
+	}
+	return true;
+}
+
+/**
+ * The tokens of `source` from where `block`, the list or table at `offset`, begins, lexed from after its first items or
+ * rows (blockResume()): those are taken from `block`, and the list or table lexed from the rest is joined to them. A list
+ * is loose when any of its items is, which changes all of them: when the rest is not as loose as `block` was, undefined,
+ * and so when what was lexed does not begin with a list or table that the rest of `block` can be.
+ * Why the rest lexes as it would after the items kept: an item ends at the first line that cannot be part of it, and the
+ * next item begins there with nothing carried over but whether the item before ended with a blank line, which makes the
+ * list loose (as it made `block` loose: every item kept was followed by another). A table's rows are a line each, cut into
+ * cells by themselves; the header and delimiter rows are lexed before them again.
+ */
+function lexAddedToBlock(
+	previous: LexedMarkdown,
+	source: string,
+	added: string | undefined,
+	offset: number,
+	block: Token,
+	resume: BlockResume,
+): Token[] | undefined {
+	const start = offset + resume.skip;
+	const end = sourceEnd(previous, source, added, start);
+	const lexed = lexTokens(resume.head + end);
+	const rest = lexed[0];
+	let joined: Token | undefined;
+	if (block.type === "list" && rest?.type === "list") {
+		const list = block as Tokens.List;
+		const restList = rest as Tokens.List;
+		if (
+			restList.ordered === list.ordered &&
+			restList.loose === list.loose &&
+			restList.items.every(listItemStandsAlone)
+		) {
+			const items = list.items.slice(0, resume.shared);
+			for (const item of restList.items) items.push(item);
+			const joinedList: Tokens.List = {
+				type: "list",
+				raw: list.raw.slice(0, resume.skip) + restList.raw,
+				ordered: list.ordered,
+				start: list.start,
+				loose: list.loose,
+				items,
+			};
+			joined = joinedList;
+		}
+	} else if (block.type === "table" && rest?.type === "table") {
+		const table = block as Tokens.Table;
+		const restTable = rest as Tokens.Table;
+		if (
+			restTable.raw.length >= resume.head.length &&
+			restTable.header.length === table.header.length &&
+			restTable.align.every((align, i) => align === table.align[i])
+		) {
+			const rows = table.rows.slice(0, resume.shared);
+			for (const row of restTable.rows) rows.push(row);
+			const joinedTable: Tokens.Table = {
+				type: "table",
+				raw: table.raw.slice(0, resume.skip) + restTable.raw.slice(resume.head.length),
+				header: table.header,
+				align: table.align,
+				rows,
+			};
+			joined = joinedTable;
+		}
+	}
+	if (joined === undefined) return undefined;
+	lexed[0] = joined;
+	resumedBlocks.set(joined, { from: new WeakRef(block), shared: resume.shared });
+	const parts = block.type === "table" ? resume.shared + 1 : resume.shared;
+	standAloneParts.set(joined, Math.min(standAloneParts.get(block) ?? 0, parts));
+	lastEnd = { start: offset, text: block.raw.slice(0, resume.skip) + end };
+	return lexed;
 }
 
 /**
@@ -501,20 +803,17 @@ function lexAddedMarkdown(previous: LexedMarkdown, source: string, added?: strin
 	for (let i = last; i < previous.tokens.length; i++) {
 		offset -= previous.tokens[i].raw.length;
 	}
-	// The text of a token is a part of the string that was lexed, and keeps all of that string in memory. Lexing the end
-	// of `source` as a part of it would leave every block of a long message holding the whole message as it was when
-	// the block was lexed, megabytes for each answer: the end is lexed as a string of its own.
-	// (`added`: what `source` adds to the previous source, when that is known. The end is then taken from the end of the
-	// previous source kept with it and the added text: `source` is not read, which for a source made of the last one and
-	// the added text would copy all of it.)
-	const kept = previous.end;
-	const end = ownString(
-		added !== undefined && kept !== undefined && offset >= kept.start
-			? kept.text.slice(offset - kept.start) + added
-			: source.slice(offset),
-	);
-	lastEnd = { start: offset, text: end };
-	const lexedEnd = lexTokens(end);
+	// A list or table that grows is lexed again from its last items or rows (lexAddedToBlock()), when that gives what lexing
+	// all of it gives; otherwise from its start.
+	const block = previous.tokens[last]!;
+	const resume = fastPaths ? blockResume(block) : undefined;
+	let lexedEnd = resume === undefined ? undefined : lexAddedToBlock(previous, source, added, offset, block, resume);
+	const resumed = lexedEnd !== undefined;
+	if (lexedEnd === undefined) {
+		const end = sourceEnd(previous, source, added, offset);
+		lastEnd = { start: offset, text: end };
+		lexedEnd = lexTokens(end);
+	}
 	if (hasLinkDefinitions(lexedEnd)) {
 		return undefined;
 	}
@@ -532,6 +831,7 @@ function lexAddedMarkdown(previous: LexedMarkdown, source: string, added?: strin
 		const before = previous.tokens[last + i];
 		if (
 			fastPaths &&
+			!resumed &&
 			shared === last + i &&
 			i < lexedEnd.length - 1 &&
 			before !== undefined &&
@@ -751,6 +1051,12 @@ interface RenderedBlock {
 	nextTokenType: string | undefined;
 	lines: string[];
 	/**
+	 * For a block rendered in parts (BlockParts): the number of lines up to and including each part, and for a table the
+	 * widths of its columns.
+	 */
+	partEnds?: number[];
+	columnWidths?: readonly number[];
+	/**
 	 * Highlighted lines of the block's code, by language and source (Markdown.highlightCode()): they survive a resize or new
 	 * spacing, until invalidate(). Held weakly, like the tokens.
 	 */
@@ -758,6 +1064,49 @@ interface RenderedBlock {
 }
 
 const renderedBlocks = new WeakMap<Token, RenderedBlock>();
+
+/** A code block in parts (Markdown.codeBlockParts()). */
+interface CodeBlockParts {
+	before: string[];
+	code: string[];
+	draw: (codeLine: string) => string[];
+	after: string[];
+	shade: ((text: string) => string) | undefined;
+	indent: string;
+}
+
+/** A block rendered in parts (Markdown.blockParts()). */
+interface BlockParts {
+	count: number;
+	/** The lines of a part, before they are wrapped, with margins and background (renderBlock()). */
+	render: (part: number) => string[];
+	/** For a table: the widths of its columns, which all its lines depend on. */
+	columnWidths?: readonly number[];
+	/** The rendered block whose first `parts` parts this block's are. */
+	reused?: { block: RenderedBlock; parts: number };
+}
+
+function sameWidths(a: readonly number[] | undefined, b: readonly number[] | undefined): boolean {
+	if (a === b) return true;
+	if (a === undefined || b === undefined || a.length !== b.length) return false;
+	for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+	return true;
+}
+
+/** What the cells of a table's header or row render to, and how wide they are (Markdown.measureCells()). */
+interface MeasuredCells {
+	settings: RenderSettings;
+	texts: string[];
+	/** The visible width of each text, and of its longest word (up to the width of the longest word kept unbroken). */
+	widths: number[];
+	wordWidths: number[];
+}
+
+/** The cells of a top-level table's header and rows, measured, by header or row (the array of its cells). */
+const measuredCells = new WeakMap<Tokens.TableCell[], MeasuredCells>();
+
+/** The width of the longest word a table's cell is not broken in, if it fits. */
+const MAX_UNBROKEN_WORD_WIDTH = 30;
 
 /**
  * The Markdown components that rendered blocks last, the most recent last: only these keep what speeds up rendering their
@@ -949,6 +1298,17 @@ export class Markdown implements Component {
 	 */
 	private blockHighlightedCode?: Map<string, string[]>;
 	private knownHighlightedCode?: Map<string, string[]>;
+	/**
+	 * The last code block drawn by renderCodeBlock(): its lines of code, highlighted, and what each was drawn to, with what
+	 * that depends on besides the line.
+	 */
+	private drawnCode?: {
+		settings: RenderSettings;
+		shade: ((text: string) => string) | undefined;
+		indent: string;
+		code: readonly string[];
+		drawn: (readonly string[])[];
+	};
 
 	constructor(
 		text: string,
@@ -1093,7 +1453,7 @@ export class Markdown implements Component {
 			// (Blank lines and code fences are drawn alike in every message: one copy of each, internLine().)
 			lines.push(line.length <= INTERNED_LINE_LENGTH ? internLine(drawn) : drawn);
 		};
-		for (const line of this.renderToken(token, contentWidth, nextTokenType)) {
+		const addRendered = (line: string) => {
 			// Wrap lines (NO padding, NO background yet)
 			if (isImageLine(line)) {
 				add(line);
@@ -1102,19 +1462,90 @@ export class Markdown implements Component {
 					add(wrappedLine);
 				}
 			}
+		};
+		const parts =
+			markdownCaching && fastPaths ? this.blockParts(token, nextTokenType, settings, contentWidth) : undefined;
+		// (Lines taken from the block's last rendering are flat already.)
+		let flatFrom = 0;
+		let partEnds: number[] | undefined;
+		if (parts === undefined && token.type === "code" && markdownCaching && memos) {
+			// (The lines before and of the code are flat: renderCodeBlock().)
+			const code = this.codeBlockParts(token as Tokens.Code, contentWidth, nextTokenType);
+			flatFrom = this.renderCodeBlock(code, settings, lines, addRendered);
+		} else if (parts === undefined) {
+			for (const line of this.renderToken(token, contentWidth, nextTokenType)) addRendered(line);
+		} else {
+			// The parts this block has in common with the one it was lexed from are those lines; the others are rendered.
+			const reused = parts.reused;
+			partEnds = reused === undefined ? [] : reused.block.partEnds!.slice(0, reused.parts);
+			if (reused !== undefined) {
+				const reusedLines = reused.block.lines;
+				for (let i = 0; i < partEnds[partEnds.length - 1]!; i++) lines.push(reusedLines[i]!);
+				// (The code highlighted for those, for a later rendering of this block: renderBlock()'s `known`.)
+				const reusedCode = reused.block.highlightedCode?.deref();
+				if (reusedCode !== undefined) for (const [key, value] of reusedCode) highlightedCode.set(key, value);
+			}
+			flatFrom = lines.length;
+			for (let part = partEnds.length; part < parts.count; part++) {
+				for (const line of parts.render(part)) addRendered(line);
+				partEnds.push(lines.length);
+			}
 		}
 		this.blockHighlightedCode = undefined;
 		this.knownHighlightedCode = undefined;
-		flattenLines(lines);
+		flattenLines(flatFrom === 0 ? lines : lines.slice(flatFrom));
 		if (markdownCaching) {
 			renderedBlocks.set(token, {
 				settings,
 				nextTokenType,
 				lines,
+				...(partEnds === undefined ? {} : { partEnds }),
+				...(parts?.columnWidths === undefined ? {} : { columnWidths: parts.columnWidths }),
 				...(highlightedCode.size > 0 ? { highlightedCode: new WeakRef(highlightedCode) } : {}),
 			});
 		}
 		return lines;
+	}
+
+	/**
+	 * A top-level list or table as parts rendered one by one (a list's items; a table's header, rows and bottom), and the
+	 * lines of the parts it has in common with the one it was lexed from (lexAddedToBlock()), when that was rendered so
+	 * with the same settings, and for a table with the same column widths: an item or row's lines depend on nothing else.
+	 * Undefined for other blocks, and for a table too narrow to be drawn as one.
+	 */
+	private blockParts(
+		token: Token,
+		nextTokenType: string | undefined,
+		settings: RenderSettings,
+		contentWidth: number,
+	): BlockParts | undefined {
+		let parts: BlockParts | undefined;
+		let shared = 0;
+		const resumed = resumedBlocks.get(token);
+		if (token.type === "list") {
+			const list = token as Tokens.List;
+			parts = { count: list.items.length, render: (item) => this.renderListItem(list, item, 0, contentWidth) };
+			// (The last item's lines differ from those it has when another follows it, in a loose list.)
+			shared = Math.min(resumed?.shared ?? 0, list.items.length - 1);
+		} else if (token.type === "table") {
+			const table = token as Tokens.Table;
+			parts = this.tableParts(table, contentWidth, nextTokenType, undefined, settings);
+			// (Part 0 is the header. The last row has no border below it, and a table can lose its last row: a line that
+			// grows into a list item ends the table instead.)
+			shared = Math.min(resumed?.shared ?? 0, table.rows.length - 1) + 1;
+		}
+		if (parts === undefined || shared <= 0) return parts;
+		const from = resumed?.from.deref();
+		const block = from === undefined ? undefined : renderedBlocks.get(from);
+		if (
+			block?.partEnds !== undefined &&
+			block.partEnds.length >= shared &&
+			sameSettings(block.settings, settings) &&
+			sameWidths(block.columnWidths, parts.columnWidths)
+		) {
+			parts.reused = { block, parts: shared };
+		}
+		return parts;
 	}
 
 	/**
@@ -1273,6 +1704,7 @@ export class Markdown implements Component {
 	private dropMemos(): void {
 		this.wraps = undefined;
 		this.highlightedCode = undefined;
+		this.drawnCode = undefined;
 		if (this.options.complete === true) {
 			this.live.tokens = undefined;
 			this.live.settings = undefined;
@@ -1385,22 +1817,31 @@ export class Markdown implements Component {
 			}
 			const padding = this.paddingLines(width);
 			const ends = live.ends;
+			// The lines from the first block rendered again on, and the change recorded from the first of them that is not
+			// the line it replaces: a list or table that grows is rendered again with the lines of its first items or rows
+			// (renderBlock()), and only what follows them is read again by those that read the lines.
+			const start = reused > 0 ? padding.length + ends[reused - 1]! : 0;
+			const fresh: string[] = [];
 			if (reused > 0) {
-				lines.edit(padding.length + ends[reused - 1]!);
 				ends.length = reused;
 			} else {
-				lines.edit(0);
 				ends.length = 0;
-				for (const line of padding) lines.lines.push(line);
+				for (const line of padding) fresh.push(line);
 			}
 			let contentLength = reused > 0 ? ends[reused - 1]! : 0;
 			for (let i = reused; i < tokens.length; i++) {
 				const blockLines = this.renderBlock(tokens[i], tokens[i + 1]?.type, settings, contentWidth);
-				for (const line of blockLines) lines.lines.push(line);
+				for (const line of blockLines) fresh.push(line);
 				contentLength += blockLines.length;
 				ends.push(contentLength);
 			}
-			for (const line of padding) lines.lines.push(line);
+			for (const line of padding) fresh.push(line);
+			const old = lines.lines;
+			const comparable = Math.min(fresh.length, old.length - start);
+			let same = 0;
+			while (same < comparable && fresh[same] === old[start + same]) same++;
+			lines.edit(start + same);
+			for (let i = same; i < fresh.length; i++) old.push(fresh[i]!);
 			this.keepWraps();
 		}
 		live.tokens = tokens;
@@ -1415,6 +1856,104 @@ export class Markdown implements Component {
 			reportRenderChange(this);
 		}
 		return lines;
+	}
+
+	/**
+	 * A code block as renderToken() draws it, in parts: the lines before its code (the fence or the language label), its
+	 * code highlighted (one entry per line of code), how one of those is drawn (before renderBlock() wraps the lines), and
+	 * the lines after it. `shade` and `indent`: what a line of code's drawing depends on besides the line and the width.
+	 */
+	private codeBlockParts(token: Tokens.Code, width: number, nextTokenType: string | undefined): CodeBlockParts {
+		const indent = this.theme.codeBlockIndent ?? "  ";
+		const code: string[] = this.theme.highlightCode
+			? this.highlightCode(this.theme.highlightCode, token.text, token.lang)
+			: token.text.split("\n").map((codeLine: string) => this.theme.codeBlock(codeLine));
+		const shade = this.theme.codeBlockBg;
+		const before: string[] = [];
+		const after: string[] = [];
+		let draw: (codeLine: string) => string[];
+		if (shade) {
+			// Each line is shaded to the full width, so the block is one rectangle (and keeps its shape while a reply
+			// streams in). Wrapped here, not by renderBlock(), so continuation lines keep the block's indent.
+			const fill = (line: string) => line + " ".repeat(Math.max(0, width - visibleWidth(line)));
+			if (token.lang) {
+				for (const label of this.wrapLine(this.theme.codeBlockBorder(token.lang), width)) {
+					before.push(shade(fill(label)));
+				}
+			}
+			const codeWidth = Math.max(1, width - visibleWidth(indent));
+			// (A reset inside a line, from the highlighter or the code itself, would end the shading there: the
+			// background is opened again after it. Not a block on the terminal's own background, SGR 49: that is what a
+			// reset leaves in effect, and an SGR 49 more would read as the end of the block in a panel.)
+			let shadeOpen: string | undefined;
+			draw = (codeLine) => {
+				const drawn: string[] = [];
+				for (const wrapped of this.wrapLine(codeLine, codeWidth)) {
+					let line = `${indent}${wrapped}`;
+					if (line.includes("\x1b[")) {
+						shadeOpen ??= shade("\0").split("\0")[0]!;
+						if (shadeOpen !== "\x1b[49m") {
+							const open = shadeOpen;
+							line = line.replace(SGR_SEQUENCE_ALL, (sequence: string, params: string) =>
+								endsBackground(params) ? sequence + open : sequence,
+							);
+						}
+					}
+					drawn.push(shade(fill(line)));
+				}
+				return drawn;
+			};
+		} else {
+			before.push(this.theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
+			draw = (codeLine) => [`${indent}${codeLine}`];
+			after.push(this.theme.codeBlockBorder("```"));
+		}
+		if (nextTokenType && nextTokenType !== "space") {
+			after.push(""); // Add spacing after code blocks (unless space token follows)
+		}
+		return { before, code, draw, after, shade, indent };
+	}
+
+	/**
+	 * The lines of a top-level code block, wrapped, with margins and background (`addRendered`, renderBlock()'s), into
+	 * `lines`. A line of code is drawn to what it was drawn to by the last block drawn so when it is the same line at the
+	 * same place: while a block streams in, all its lines but the last few are, and highlighting gives the same strings for
+	 * them (GrowingHighlighter), so drawing the block costs what its new lines cost.
+	 */
+	private renderCodeBlock(
+		code: CodeBlockParts,
+		settings: RenderSettings,
+		lines: string[],
+		addRendered: (line: string) => void,
+	): number {
+		for (const line of code.before) addRendered(line);
+		flattenLines(lines);
+		const last = this.drawnCode;
+		const reuse =
+			last !== undefined &&
+			last.shade === code.shade &&
+			last.indent === code.indent &&
+			sameSettings(last.settings, settings);
+		const codeLines = code.code;
+		const drawn: (readonly string[])[] = new Array(codeLines.length);
+		for (let i = 0; i < codeLines.length; i++) {
+			const codeLine = codeLines[i]!;
+			let lineDrawn = reuse && last.code[i] === codeLine ? last.drawn[i] : undefined;
+			if (lineDrawn === undefined) {
+				const start = lines.length;
+				for (const line of code.draw(codeLine)) addRendered(line);
+				lineDrawn = lines.slice(start);
+				flattenLines(lineDrawn);
+			} else {
+				// (Indexed: this runs for every line of a long block each time it is drawn.)
+				for (let j = 0; j < lineDrawn.length; j++) lines.push(lineDrawn[j]!);
+			}
+			drawn[i] = lineDrawn;
+		}
+		this.drawnCode = { settings, shade: code.shade, indent: code.indent, code: code.code, drawn };
+		const afterCode = lines.length;
+		for (const line of code.after) addRendered(line);
+		return afterCode;
 	}
 
 	/**
@@ -1571,50 +2110,12 @@ export class Markdown implements Component {
 			}
 
 			case "code": {
-				const indent = this.theme.codeBlockIndent ?? "  ";
-				const codeLines: string[] = this.theme.highlightCode
-					? this.highlightCode(this.theme.highlightCode, token.text, token.lang)
-					: token.text.split("\n").map((codeLine: string) => this.theme.codeBlock(codeLine));
-				const shade = this.theme.codeBlockBg;
-				if (shade) {
-					// Each line is shaded to the full width, so the block is one rectangle (and keeps its shape while a reply
-					// streams in). Wrapped here, not by renderBlock(), so continuation lines keep the block's indent.
-					const fill = (line: string) => line + " ".repeat(Math.max(0, width - visibleWidth(line)));
-					if (token.lang) {
-						for (const label of this.wrapLine(this.theme.codeBlockBorder(token.lang), width)) {
-							lines.push(shade(fill(label)));
-						}
-					}
-					const codeWidth = Math.max(1, width - visibleWidth(indent));
-					// (A reset inside a line, from the highlighter or the code itself, would end the shading there: the
-					// background is opened again after it. Not a block on the terminal's own background, SGR 49: that is what a
-					// reset leaves in effect, and an SGR 49 more would read as the end of the block in a panel.)
-					let shadeOpen: string | undefined;
-					for (const codeLine of codeLines) {
-						for (const wrapped of this.wrapLine(codeLine, codeWidth)) {
-							let line = `${indent}${wrapped}`;
-							if (line.includes("\x1b[")) {
-								shadeOpen ??= shade("\0").split("\0")[0]!;
-								if (shadeOpen !== "\x1b[49m") {
-									const open = shadeOpen;
-									line = line.replace(SGR_SEQUENCE_ALL, (sequence: string, params: string) =>
-										endsBackground(params) ? sequence + open : sequence,
-									);
-								}
-							}
-							lines.push(shade(fill(line)));
-						}
-					}
-				} else {
-					lines.push(this.theme.codeBlockBorder(`\`\`\`${token.lang || ""}`));
-					for (const codeLine of codeLines) {
-						lines.push(`${indent}${codeLine}`);
-					}
-					lines.push(this.theme.codeBlockBorder("```"));
+				const code = this.codeBlockParts(token as Tokens.Code, width, nextTokenType);
+				for (const line of code.before) lines.push(line);
+				for (const codeLine of code.code) {
+					for (const line of code.draw(codeLine)) lines.push(line);
 				}
-				if (nextTokenType && nextTokenType !== "space") {
-					lines.push(""); // Add spacing after code blocks (unless space token follows)
-				}
+				for (const line of code.after) lines.push(line);
 				break;
 			}
 
@@ -1854,53 +2355,64 @@ export class Markdown implements Component {
 	 */
 	private renderList(token: Tokens.List, depth: number, width: number, styleContext?: InlineStyleContext): string[] {
 		const lines: string[] = [];
+		for (let i = 0; i < token.items.length; i++) {
+			for (const line of this.renderListItem(token, i, depth, width, styleContext)) lines.push(line);
+		}
+		return lines;
+	}
+
+	/** The lines of item `index` of a list (renderList()). */
+	private renderListItem(
+		token: Tokens.List,
+		index: number,
+		depth: number,
+		width: number,
+		styleContext?: InlineStyleContext,
+	): string[] {
+		const lines: string[] = [];
 		const indent = "    ".repeat(depth);
 		// Use the list's start property (defaults to 1 for ordered lists)
 		const startNumber = typeof token.start === "number" ? token.start : 1;
+		const item = token.items[index]!;
+		const isLastItem = index === token.items.length - 1;
+		const bullet = token.ordered
+			? this.options.preserveOrderedListMarkers
+				? (this.getOrderedListMarker(item) ?? `${startNumber + index}. `)
+				: `${startNumber + index}. `
+			: this.options.preserveOrderedListMarkers
+				? (this.getUnorderedListMarker(item) ?? "- ")
+				: "- ";
+		const taskMarker = item.task ? `[${item.checked ? "x" : " "}] ` : "";
+		const marker = bullet + taskMarker;
+		const firstPrefix = indent + this.theme.listBullet(marker);
+		const continuationPrefix = indent + " ".repeat(visibleWidth(marker));
+		const itemWidth = Math.max(1, width - visibleWidth(firstPrefix));
+		let renderedAnyLine = false;
 
-		for (let i = 0; i < token.items.length; i++) {
-			const item = token.items[i];
-			const isLastItem = i === token.items.length - 1;
-			const bullet = token.ordered
-				? this.options.preserveOrderedListMarkers
-					? (this.getOrderedListMarker(item) ?? `${startNumber + i}. `)
-					: `${startNumber + i}. `
-				: this.options.preserveOrderedListMarkers
-					? (this.getUnorderedListMarker(item) ?? "- ")
-					: "- ";
-			const taskMarker = item.task ? `[${item.checked ? "x" : " "}] ` : "";
-			const marker = bullet + taskMarker;
-			const firstPrefix = indent + this.theme.listBullet(marker);
-			const continuationPrefix = indent + " ".repeat(visibleWidth(marker));
-			const itemWidth = Math.max(1, width - visibleWidth(firstPrefix));
-			let renderedAnyLine = false;
+		for (const itemToken of item.tokens) {
+			if (itemToken.type === "list") {
+				lines.push(...this.renderList(itemToken as Tokens.List, depth + 1, width, styleContext));
+				renderedAnyLine = true;
+				continue;
+			}
 
-			for (const itemToken of item.tokens) {
-				if (itemToken.type === "list") {
-					lines.push(...this.renderList(itemToken as Tokens.List, depth + 1, width, styleContext));
+			const itemLines = this.renderToken(itemToken, itemWidth, undefined, styleContext);
+			for (const line of itemLines) {
+				for (const wrappedLine of this.wrapLine(line, itemWidth)) {
+					const linePrefix = renderedAnyLine ? continuationPrefix : firstPrefix;
+					lines.push(linePrefix + wrappedLine);
 					renderedAnyLine = true;
-					continue;
 				}
-
-				const itemLines = this.renderToken(itemToken, itemWidth, undefined, styleContext);
-				for (const line of itemLines) {
-					for (const wrappedLine of this.wrapLine(line, itemWidth)) {
-						const linePrefix = renderedAnyLine ? continuationPrefix : firstPrefix;
-						lines.push(linePrefix + wrappedLine);
-						renderedAnyLine = true;
-					}
-				}
-			}
-
-			if (!renderedAnyLine) {
-				lines.push(firstPrefix);
-			}
-
-			if (token.loose && !isLastItem) {
-				lines.push("");
 			}
 		}
 
+		if (!renderedAnyLine) {
+			lines.push(firstPrefix);
+		}
+
+		if (token.loose && !isLastItem) {
+			lines.push("");
+		}
 		return lines;
 	}
 
@@ -1944,18 +2456,11 @@ export class Markdown implements Component {
 		nextTokenType?: string,
 		styleContext?: InlineStyleContext,
 	): string[] {
-		const lines: string[] = [];
-		const numCols = token.header.length;
-
-		if (numCols === 0) {
-			return lines;
-		}
-
-		// Calculate border overhead: "│ " + (n-1) * " │ " + " │"
-		// = 2 + (n-1) * 3 + 2 = 3n + 1
-		const borderOverhead = 3 * numCols + 1;
-		const availableForCells = availableWidth - borderOverhead;
-		if (availableForCells < numCols) {
+		const parts = this.tableParts(token, availableWidth, nextTokenType, styleContext);
+		if (parts === undefined) {
+			if (token.header.length === 0) {
+				return [];
+			}
 			// Too narrow to render a stable table. Fall back to raw markdown.
 			const fallbackLines = token.raw ? wrapTextWithAnsi(token.raw, availableWidth) : [];
 			if (nextTokenType && nextTokenType !== "space") {
@@ -1963,28 +2468,154 @@ export class Markdown implements Component {
 			}
 			return fallbackLines;
 		}
+		const lines: string[] = [];
+		for (let part = 0; part < parts.count; part++) {
+			for (const line of parts.render(part)) lines.push(line);
+		}
+		return lines;
+	}
 
-		const maxUnbrokenWordWidth = 30;
+	/**
+	 * A table as parts (BlockParts): its header with the borders above and below it, each row with the border below it
+	 * (but the last), and the bottom border. Undefined when it has no columns, or is too narrow to be drawn as a table.
+	 * `settings`, for a top-level table (no `styleContext`): what its cells render to is kept with its header and rows
+	 * (measureCells()).
+	 */
+	private tableParts(
+		token: Tokens.Table,
+		availableWidth: number,
+		nextTokenType: string | undefined,
+		styleContext: InlineStyleContext | undefined,
+		settings?: RenderSettings,
+	): BlockParts | undefined {
+		const numCols = token.header.length;
+
+		if (numCols === 0) {
+			return undefined;
+		}
+
+		// Calculate border overhead: "│ " + (n-1) * " │ " + " │"
+		// = 2 + (n-1) * 3 + 2 = 3n + 1
+		const borderOverhead = 3 * numCols + 1;
+		const availableForCells = availableWidth - borderOverhead;
+		if (availableForCells < numCols) {
+			return undefined;
+		}
 
 		// Calculate natural column widths (what each column needs without constraints)
+		const header = this.measureCells(token.header, styleContext, settings);
+		const rows = token.rows.map((row) => this.measureCells(row, styleContext, settings));
 		const naturalWidths: number[] = [];
 		const minWordWidths: number[] = [];
 		for (let i = 0; i < numCols; i++) {
-			const headerText = this.renderInlineTokens(token.header[i].tokens || [], styleContext);
-			naturalWidths[i] = visibleWidth(headerText);
-			minWordWidths[i] = Math.max(1, this.getLongestWordWidth(headerText, maxUnbrokenWordWidth));
+			naturalWidths[i] = header.widths[i]!;
+			minWordWidths[i] = Math.max(1, header.wordWidths[i]!);
 		}
-		for (const row of token.rows) {
-			for (let i = 0; i < row.length; i++) {
-				const cellText = this.renderInlineTokens(row[i].tokens || [], styleContext);
-				naturalWidths[i] = Math.max(naturalWidths[i] || 0, visibleWidth(cellText));
-				minWordWidths[i] = Math.max(
-					minWordWidths[i] || 1,
-					this.getLongestWordWidth(cellText, maxUnbrokenWordWidth),
-				);
+		for (const row of rows) {
+			for (let i = 0; i < row.texts.length; i++) {
+				naturalWidths[i] = Math.max(naturalWidths[i] || 0, row.widths[i]!);
+				minWordWidths[i] = Math.max(minWordWidths[i] || 1, row.wordWidths[i]!);
 			}
 		}
 
+		const columnWidths = this.tableColumnWidths(naturalWidths, minWordWidths, availableWidth, availableForCells);
+		const stylePrefix = styleContext?.stylePrefix;
+		const separatorLine = `├─${columnWidths.map((w) => "─".repeat(w)).join("─┼─")}─┤`;
+		const render = (part: number): string[] => {
+			const lines: string[] = [];
+			if (part === 0) {
+				// Render top border
+				const topBorderCells = columnWidths.map((w) => "─".repeat(w));
+				lines.push(`┌─${topBorderCells.join("─┬─")}─┐`);
+
+				// Render header with wrapping
+				const headerCellLines: string[][] = header.texts.map((text, i) =>
+					this.wrapCellText(text, columnWidths[i]!, stylePrefix),
+				);
+				const headerLineCount = Math.max(...headerCellLines.map((c) => c.length));
+
+				for (let lineIdx = 0; lineIdx < headerLineCount; lineIdx++) {
+					const rowParts = headerCellLines.map((cellLines, colIdx) => {
+						const text = cellLines[lineIdx] || "";
+						const padded = text + " ".repeat(Math.max(0, columnWidths[colIdx]! - visibleWidth(text)));
+						return this.theme.bold(padded);
+					});
+					lines.push(`│ ${rowParts.join(" │ ")} │`);
+				}
+
+				// Render separator
+				lines.push(separatorLine);
+				return lines;
+			}
+			const rowIndex = part - 1;
+			if (rowIndex === rows.length) {
+				// Render bottom border
+				const bottomBorderCells = columnWidths.map((w) => "─".repeat(w));
+				lines.push(`└─${bottomBorderCells.join("─┴─")}─┘`);
+
+				if (nextTokenType && nextTokenType !== "space") {
+					lines.push(""); // Add spacing after table
+				}
+				return lines;
+			}
+
+			// Render rows with wrapping
+			const rowCellLines: string[][] = rows[rowIndex]!.texts.map((text, i) =>
+				this.wrapCellText(text, columnWidths[i]!, stylePrefix),
+			);
+			const rowLineCount = Math.max(...rowCellLines.map((c) => c.length));
+
+			for (let lineIdx = 0; lineIdx < rowLineCount; lineIdx++) {
+				const rowParts = rowCellLines.map((cellLines, colIdx) => {
+					const text = cellLines[lineIdx] || "";
+					return text + " ".repeat(Math.max(0, columnWidths[colIdx]! - visibleWidth(text)));
+				});
+				lines.push(`│ ${rowParts.join(" │ ")} │`);
+			}
+
+			if (rowIndex < rows.length - 1) {
+				lines.push(separatorLine);
+			}
+			return lines;
+		};
+		return { count: rows.length + 2, render, columnWidths };
+	}
+
+	/**
+	 * What the cells of a table's header or row render to, and how wide each is. Kept with the cells for a top-level table
+	 * (`settings` given), for as long as the settings are the same: a table that streams in is rendered again for each row.
+	 */
+	private measureCells(
+		cells: Tokens.TableCell[],
+		styleContext: InlineStyleContext | undefined,
+		settings: RenderSettings | undefined,
+	): MeasuredCells | Omit<MeasuredCells, "settings"> {
+		const known = settings === undefined ? undefined : measuredCells.get(cells);
+		if (known !== undefined && settings !== undefined && sameSettings(known.settings, settings)) return known;
+		const texts: string[] = [];
+		const widths: number[] = [];
+		const wordWidths: number[] = [];
+		for (const cell of cells) {
+			const text = this.renderInlineTokens(cell.tokens || [], styleContext);
+			texts.push(text);
+			widths.push(visibleWidth(text));
+			wordWidths.push(this.getLongestWordWidth(text, MAX_UNBROKEN_WORD_WIDTH));
+		}
+		if (settings === undefined) return { texts, widths, wordWidths };
+		const measured = { settings, texts, widths, wordWidths };
+		measuredCells.set(cells, measured);
+		return measured;
+	}
+
+	/** The widths of a table's columns: as wide as their cells, or narrower in proportion when they do not fit. */
+	private tableColumnWidths(
+		naturalWidths: number[],
+		minWordWidths: number[],
+		availableWidth: number,
+		availableForCells: number,
+	): number[] {
+		const numCols = naturalWidths.length;
+		const borderOverhead = 3 * numCols + 1;
 		let minColumnWidths = minWordWidths;
 		let minCellsWidth = minColumnWidths.reduce((a, b) => a + b, 0);
 
@@ -2054,62 +2685,7 @@ export class Markdown implements Component {
 				}
 			}
 		}
-
-		// Render top border
-		const topBorderCells = columnWidths.map((w) => "─".repeat(w));
-		lines.push(`┌─${topBorderCells.join("─┬─")}─┐`);
-
-		// Render header with wrapping
-		const headerCellLines: string[][] = token.header.map((cell, i) => {
-			const text = this.renderInlineTokens(cell.tokens || [], styleContext);
-			return this.wrapCellText(text, columnWidths[i], styleContext?.stylePrefix);
-		});
-		const headerLineCount = Math.max(...headerCellLines.map((c) => c.length));
-
-		for (let lineIdx = 0; lineIdx < headerLineCount; lineIdx++) {
-			const rowParts = headerCellLines.map((cellLines, colIdx) => {
-				const text = cellLines[lineIdx] || "";
-				const padded = text + " ".repeat(Math.max(0, columnWidths[colIdx] - visibleWidth(text)));
-				return this.theme.bold(padded);
-			});
-			lines.push(`│ ${rowParts.join(" │ ")} │`);
-		}
-
-		// Render separator
-		const separatorCells = columnWidths.map((w) => "─".repeat(w));
-		const separatorLine = `├─${separatorCells.join("─┼─")}─┤`;
-		lines.push(separatorLine);
-
-		// Render rows with wrapping
-		for (let rowIndex = 0; rowIndex < token.rows.length; rowIndex++) {
-			const row = token.rows[rowIndex];
-			const rowCellLines: string[][] = row.map((cell, i) => {
-				const text = this.renderInlineTokens(cell.tokens || [], styleContext);
-				return this.wrapCellText(text, columnWidths[i], styleContext?.stylePrefix);
-			});
-			const rowLineCount = Math.max(...rowCellLines.map((c) => c.length));
-
-			for (let lineIdx = 0; lineIdx < rowLineCount; lineIdx++) {
-				const rowParts = rowCellLines.map((cellLines, colIdx) => {
-					const text = cellLines[lineIdx] || "";
-					return text + " ".repeat(Math.max(0, columnWidths[colIdx] - visibleWidth(text)));
-				});
-				lines.push(`│ ${rowParts.join(" │ ")} │`);
-			}
-
-			if (rowIndex < token.rows.length - 1) {
-				lines.push(separatorLine);
-			}
-		}
-
-		// Render bottom border
-		const bottomBorderCells = columnWidths.map((w) => "─".repeat(w));
-		lines.push(`└─${bottomBorderCells.join("─┴─")}─┘`);
-
-		if (nextTokenType && nextTokenType !== "space") {
-			lines.push(""); // Add spacing after table
-		}
-		return lines;
+		return columnWidths;
 	}
 }
 

@@ -29,8 +29,10 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { headersToRecord } from "../utils/headers.ts";
 import { getIdentityHeaders } from "../utils/identity.ts";
-import { cacheJsonSerialization } from "../utils/json-body.ts";
+import { cachedArrayToJSON, cacheJsonSerialization } from "../utils/json-body.ts";
 import { resolveHttpProxyUrlForTarget } from "../utils/node-http-proxy.ts";
+import { jsonBodyParts } from "../utils/request-body.ts";
+import { beginRequestCache, type RequestCacheRun } from "../utils/request-cache.ts";
 import { getSystemMessageText } from "../utils/text.ts";
 import {
 	getDeclaredTools,
@@ -217,16 +219,20 @@ function loadNodeZlib(): typeof NodeZlib | null {
 	return (process as ProcessWithBuiltinModule).getBuiltinModule?.("node:zlib") ?? null;
 }
 
+function canCompressRequestBodyZstd(): boolean {
+	return typeof loadNodeZlib()?.zstdCompressSync === "function";
+}
+
 // Returns the zstd-compressed body bytes, or null when compression is
 // unavailable (browser/Vite builds). Callers fall back to sending the
 // uncompressed JSON when this returns null.
-function compressRequestBodyZstd(bodyJson: string): Uint8Array<ArrayBuffer> | null {
+function compressRequestBodyZstd(bodyUtf8: Uint8Array): Uint8Array<ArrayBuffer> | null {
 	const zlib = loadNodeZlib();
 	if (!zlib || typeof zlib.zstdCompressSync !== "function") {
 		return null;
 	}
 	try {
-		const compressed = zlib.zstdCompressSync(bodyJson, {
+		const compressed = zlib.zstdCompressSync(bodyUtf8, {
 			params: { [zlib.constants.ZSTD_c_compressionLevel]: REQUEST_COMPRESSION_ZSTD_LEVEL },
 		});
 		// A copy owns a plain ArrayBuffer, which fetch accepts as a body under every lib.
@@ -234,6 +240,20 @@ function compressRequestBodyZstd(bodyJson: string): Uint8Array<ArrayBuffer> | nu
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * The UTF-8 bytes of JSON.stringify(body). The input items reuse the bytes they were sent as in the conversation's
+ * previous request (request-body.ts), and with `cache` the bytes of the items its run handed out, so only new or
+ * changed items are serialized again.
+ */
+function encodeRequestBody(
+	body: RequestBody,
+	conversation: string | undefined,
+	cache: RequestCacheRun | undefined,
+): Blob {
+	const parts = jsonBodyParts(body, "input", conversation ?? "", cachedArrayToJSON, cache?.sentValues());
+	return new Blob(parts ?? [JSON.stringify(body)]);
 }
 
 // ============================================================================
@@ -267,6 +287,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			timestamp: Date.now(),
 		};
 
+		let cache: RequestCacheRun | undefined;
 		try {
 			const apiKey = options?.apiKey;
 			if (!apiKey) {
@@ -280,7 +301,25 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			);
 			const cacheSessionId = options?.cacheRetention === "none" ? undefined : options?.sessionId;
 			const codexSessionId = clampOpenAIPromptCacheKey(cacheSessionId);
-			let body = buildRequestBody(model, normalizedContext, options, codexSessionId, grammarToolInputProperties);
+			// Everything buildRequestBody's conversion reads besides the messages: the model and its compat settings.
+			cache = beginRequestCache("openai-codex-responses", options, [
+				model.id,
+				model.provider,
+				model.api,
+				model.input,
+				model.reasoning,
+				model.compat,
+				grammarToolInputProperties,
+			]);
+			let body = buildRequestBody(
+				model,
+				normalizedContext,
+				options,
+				codexSessionId,
+				grammarToolInputProperties,
+				cache,
+			);
+			cache?.end();
 			const nextBody = await options?.onPayload?.(body, model);
 			if (nextBody !== undefined) {
 				body = nextBody as RequestBody;
@@ -305,7 +344,13 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 				apiKey,
 				websocketRequestId,
 			);
-			const bodyJson = JSON.stringify(body);
+			// The whole body as bytes is needed only on the SSE path and for a WebSocket failure's diagnostic: a
+			// WebSocket request sends its own serialization (only the new input, when it continues a response).
+			let bodyBytes: Blob | undefined;
+			const getBodyBytes = (): Blob => {
+				bodyBytes ??= encodeRequestBody(body, options?.sessionId, cache);
+				return bodyBytes;
+			};
 			const httpTimeoutMs = normalizeTimeoutMs(options?.timeoutMs);
 			const websocketConnectTimeoutMs = normalizeTimeoutMs(options?.websocketConnectTimeoutMs);
 			const transport = options?.transport || "auto";
@@ -378,7 +423,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 								...(websocketStarted ? {} : { fallbackTransport: "sse" }),
 								eventsEmitted: websocketStarted,
 								phase: websocketStarted ? "after_message_stream_start" : "before_message_stream_start",
-								requestBytes: new TextEncoder().encode(bodyJson).byteLength,
+								requestBytes: getBodyBytes().size,
 							}),
 						);
 						recordWebSocketFailure(cacheSessionId, error);
@@ -394,11 +439,13 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			// Compress the request body once for the SSE path. The Codex backend
 			// decodes Content-Encoding: zstd; the WebSocket transport above sends the
 			// uncompressed JSON frame, matching the official Codex client.
-			const compressedBody = compressRequestBodyZstd(bodyJson);
+			const compressedBody = canCompressRequestBodyZstd()
+				? compressRequestBodyZstd(new Uint8Array(await getBodyBytes().arrayBuffer()))
+				: null;
 			if (compressedBody) {
 				sseHeaders.set("content-encoding", "zstd");
 			}
-			const sseBody: Uint8Array<ArrayBuffer> | string = compressedBody ?? bodyJson;
+			const sseBody: Uint8Array<ArrayBuffer> | string = compressedBody ?? JSON.stringify(body);
 
 			// Fetch with retry logic for rate limits and transient errors
 			let response: Response | undefined;
@@ -500,6 +547,7 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 			stream.push({ type: "done", reason: output.stopReason, message: output });
 			stream.end();
 		} catch (error) {
+			cache?.end();
 			output.stopReason = options?.signal?.aborted ? "aborted" : "error";
 			output.errorMessage = formatProviderError(normalizeProviderError(error));
 			stream.push({ type: "error", reason: output.stopReason, error: output });
@@ -546,6 +594,7 @@ function buildRequestBody(
 		getDeclaredTools(context.messages),
 		model.compat?.supportsOpenAIGrammarTools ?? false,
 	),
+	cache?: RequestCacheRun,
 ): RequestBody {
 	const supportsStrictMode = model.compat?.supportsStrictMode ?? true;
 	const supportsOpenAIGrammarTools = model.compat?.supportsOpenAIGrammarTools ?? false;
@@ -566,6 +615,7 @@ function buildRequestBody(
 		supportsAdditionalTools,
 		supportsToolSearch,
 		toolOptions: { strict: null, supportsStrictMode, supportsOpenAIGrammarTools },
+		cache,
 	});
 
 	const initialSystemMessage = getInitialSystemMessage(context.messages);
@@ -1477,12 +1527,80 @@ function requestBodyWithoutInput(body: RequestBody): RequestBody {
 	return rest;
 }
 
+const { isRawJSON } = JSON as unknown as { isRawJSON?: (value: unknown) => boolean };
+
+function hasToJSON(value: unknown): boolean {
+	return typeof value === "object" && value !== null && typeof (value as { toJSON?: unknown }).toJSON === "function";
+}
+
+/** Deeper than this, sameJsonData leaves the answer to JSON.stringify (which also reports a cycle as before). */
+const SAME_JSON_MAX_DEPTH = 64;
+
+/**
+ * True when `a` and `b` are the same plain data, which JSON.stringify serializes to the same text: the same value, or
+ * plain objects (keys in the same order) and arrays whose values are the same plain data. False for anything else
+ * (a toJSON, a class instance, raw JSON, differing data), also when the two would still serialize alike.
+ */
+function sameJsonData(a: unknown, b: unknown, depth: number): boolean {
+	// JSON.stringify throws for a bigint: never called equal here.
+	if (a === b) return typeof a !== "bigint";
+	if (typeof a !== "object" || typeof b !== "object" || a === null || b === null || depth > SAME_JSON_MAX_DEPTH) {
+		return false;
+	}
+	if (hasToJSON(a) || hasToJSON(b)) return false;
+	if (Array.isArray(a)) {
+		if (!Array.isArray(b) || a.length !== b.length) return false;
+		for (let i = 0; i < a.length; i++) {
+			if (!sameJsonData(a[i], b[i], depth + 1)) return false;
+		}
+		return true;
+	}
+	if (Array.isArray(b) || !isPlainJsonRecord(a) || !isPlainJsonRecord(b)) return false;
+	const keysA = Object.keys(a);
+	const keysB = Object.keys(b);
+	if (keysA.length !== keysB.length) return false;
+	for (let i = 0; i < keysA.length; i++) {
+		const key = keysA[i];
+		if (key !== keysB[i]) return false;
+		if (!sameJsonData((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key], depth + 1)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+function isPlainJsonRecord(value: object): boolean {
+	const proto = Object.getPrototypeOf(value);
+	return proto === Object.prototype || (proto === null && !isRawJSON?.(value));
+}
+
+/**
+ * Whether JSON.stringify(a ?? []) === JSON.stringify(b ?? []), without serializing the items that are the same plain
+ * data (with the request cache, the previous request's items themselves). The JSON of an array is its items' JSON
+ * joined with commas, and two arrays' JSON can only be equal item by item, so the other items are compared alone.
+ */
 function responseInputsEqual(a: ResponseInput | undefined, b: ResponseInput | undefined): boolean {
-	return JSON.stringify(a ?? []) === JSON.stringify(b ?? []);
+	const left: readonly unknown[] = a ?? [];
+	const right: readonly unknown[] = b ?? [];
+	const wholeArrays = () => JSON.stringify(left) === JSON.stringify(right);
+	if (hasToJSON(left) || hasToJSON(right)) return wholeArrays();
+	if (left.length !== right.length) return false;
+	for (let i = 0; i < left.length; i++) {
+		const x = left[i];
+		const y = right[i];
+		if (sameJsonData(x, y, 0)) continue;
+		// In the array an item's own toJSON is given its index as the key; serialized alone it would get "".
+		if (hasToJSON(x) || hasToJSON(y)) return wholeArrays();
+		// An item that serializes to nothing (undefined, a function) is null in an array.
+		if ((JSON.stringify(x) ?? "null") !== (JSON.stringify(y) ?? "null")) return false;
+	}
+	return true;
 }
 
 function requestBodiesMatchExceptInput(a: RequestBody, b: RequestBody): boolean {
-	return JSON.stringify(requestBodyWithoutInput(a)) === JSON.stringify(requestBodyWithoutInput(b));
+	const left = requestBodyWithoutInput(a);
+	const right = requestBodyWithoutInput(b);
+	return sameJsonData(left, right, 0) || JSON.stringify(left) === JSON.stringify(right);
 }
 
 function getCachedWebSocketInputDelta(

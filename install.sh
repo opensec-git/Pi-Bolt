@@ -165,6 +165,8 @@ main() {
 	# Pi-Bolt keeps the packages only it runs (OpenSec's extensions) out of Pi's list, which it does as it starts: once now, so
 	# that Pi, if it is started before Pi-Bolt, does not find them (an earlier installer put them there).
 	(cd "$INSTALL" && "$INSTALL/$NAME/pi" list >/dev/null 2>&1) || true
+	# A remote control service that runs (an earlier version's) is restarted, so it runs this version; nothing when none runs.
+	(cd "$INSTALL" && "$INSTALL/$NAME/pi" service restart >/dev/null 2>&1) || true
 	if [ "$ACTION" = reinstall ] && [ -n "${installed:-}" ] && [ "${installed:-}" != "$SHOWN_VERSION" ]; then word=updated
 	elif [ "$ACTION" = reinstall ]; then word=reinstalled
 	else word=installed; fi

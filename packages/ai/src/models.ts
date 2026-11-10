@@ -381,6 +381,11 @@ export interface CreateModelsOptions {
 	identity?: ClientIdentity;
 }
 
+/** raceWithAbortSignal(), or the operation itself when there is no signal to race it against. */
+function raceIfAbortable<T>(operation: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+	return signal ? raceWithAbortSignal(operation, signal) : operation;
+}
+
 function mergeHeaders(
 	base: ProviderHeaders | undefined,
 	override: ProviderHeaders | undefined,
@@ -513,16 +518,17 @@ class ModelsImpl implements MutableModels {
 		return { generation, controller };
 	}
 
+	/** `signal` is undefined when nothing can abort the refresh publishing. */
 	private publishProviderModels(
 		providerId: string,
 		generation: number,
-		signal: AbortSignal,
+		signal: AbortSignal | undefined,
 		publication: ModelsPublication,
 	): Promise<boolean> {
 		const previous = this.publicationChains.get(providerId) ?? Promise.resolve();
 		const queued = (async () => {
 			await previous.catch(() => {});
-			if (signal.aborted || this.refreshGenerations.get(providerId) !== generation) return false;
+			if (signal?.aborted || this.refreshGenerations.get(providerId) !== generation) return false;
 
 			if (publication.persist === null) {
 				await this.modelsStore.delete(providerId, { signal });
@@ -530,7 +536,7 @@ class ModelsImpl implements MutableModels {
 				await this.modelsStore.write(providerId, structuredClone(publication.persist), { signal });
 			}
 
-			if (signal.aborted || this.refreshGenerations.get(providerId) !== generation) return false;
+			if (signal?.aborted || this.refreshGenerations.get(providerId) !== generation) return false;
 			publication.update?.();
 			return true;
 		})();
@@ -539,9 +545,10 @@ class ModelsImpl implements MutableModels {
 		void tail.then(() => {
 			if (this.publicationChains.get(providerId) === tail) this.publicationChains.delete(providerId);
 		});
-		return raceWithAbortSignal(queued, signal);
+		return raceIfAbortable(queued, signal);
 	}
 
+	/** `signal` is what the provider is given; `abortSignal` the same signal, or undefined when nothing can abort it. */
 	private async runProviderRefreshPhase(
 		provider: Provider & Required<Pick<Provider, "refreshModels">>,
 		credential: Credential | undefined,
@@ -549,12 +556,15 @@ class ModelsImpl implements MutableModels {
 		force: boolean | undefined,
 		generation: number,
 		signal: AbortSignal,
+		abortSignal: AbortSignal | undefined,
 	): Promise<void> {
-		const stored = await this.modelsStore.read(provider.id, { signal });
+		const stored = await this.modelsStore.read(provider.id, { signal: abortSignal });
 		await provider.refreshModels({
 			credential,
-			stored: stored ? withKnownModelTypes(structuredClone(stored)) : undefined,
-			publish: (publication) => this.publishProviderModels(provider.id, generation, signal, publication),
+			// Not copied: a store's read is a snapshot it does not change, and providers do not change `stored` either. Every
+			// start reads every provider's entry, and a provider keeps only the models it uses.
+			stored: stored ? withKnownModelTypes(stored) : undefined,
+			publish: (publication) => this.publishProviderModels(provider.id, generation, abortSignal, publication),
 			allowNetwork,
 			force: allowNetwork ? force : undefined,
 			signal,
@@ -575,8 +585,14 @@ class ModelsImpl implements MutableModels {
 
 		const refresh = Promise.all(
 			refreshable.map(async (provider) => {
-				const { generation, controller } = this.beginProviderRefresh(provider.id);
-				const signal = AbortSignal.any([callerSignal, controller.signal]);
+				// Offline, a refresh only restores the stored catalog: a superseding refresh stops it from publishing by its
+				// generation, with no signal of its own to abort (one for each provider at every start).
+				const { generation, controller } = allowNetwork
+					? this.beginProviderRefresh(provider.id)
+					: { generation: this.supersedeProviderRefresh(provider.id), controller: undefined };
+				// (Undefined when nothing can abort this provider's refresh: waiting for it is then not raced against one.)
+				const abortSignal = controller ? AbortSignal.any([callerSignal, controller.signal]) : options.signal;
+				const signal = abortSignal ?? callerSignal;
 				const operation = (async () => {
 					let storedCredential: Credential | undefined;
 					let credentialError: unknown;
@@ -587,19 +603,36 @@ class ModelsImpl implements MutableModels {
 					}
 
 					// Restore cached provider state before auth resolution or network access.
-					await this.runProviderRefreshPhase(provider, storedCredential, false, undefined, generation, signal);
+					await this.runProviderRefreshPhase(
+						provider,
+						storedCredential,
+						false,
+						undefined,
+						generation,
+						signal,
+						abortSignal,
+					);
 					if (credentialError !== undefined) throw credentialError;
 					if (!allowNetwork || signal.aborted) return;
 
 					const credential = await this.resolveRefreshCredential(provider, storedCredential, signal);
 					if (!credential) return;
-					await this.runProviderRefreshPhase(provider, credential, true, options.force, generation, signal);
+					await this.runProviderRefreshPhase(
+						provider,
+						credential,
+						true,
+						options.force,
+						generation,
+						signal,
+						abortSignal,
+					);
 				})();
 
 				try {
-					await raceWithAbortSignal(operation, signal);
+					await raceIfAbortable(operation, abortSignal);
 				} catch (error) {
-					if (!signal.aborted) {
+					// (Not when a later refresh superseded this one: before, that aborted it.)
+					if (!signal.aborted && this.refreshGenerations.get(provider.id) === generation) {
 						errors.set(
 							provider.id,
 							error instanceof Error
@@ -608,7 +641,7 @@ class ModelsImpl implements MutableModels {
 						);
 					}
 				} finally {
-					if (this.refreshControllers.get(provider.id) === controller) {
+					if (controller && this.refreshControllers.get(provider.id) === controller) {
 						this.refreshControllers.delete(provider.id);
 					}
 				}
@@ -616,7 +649,7 @@ class ModelsImpl implements MutableModels {
 		);
 
 		try {
-			await raceWithAbortSignal(refresh, callerSignal);
+			await raceIfAbortable(refresh, options.signal);
 		} catch (error) {
 			if (!callerSignal.aborted) throw error;
 		}
@@ -683,7 +716,18 @@ class ModelsImpl implements MutableModels {
 			}
 		}
 
-		const resolution = await resolveProviderAuth(provider, this.credentials, this.authContext, { signal });
+		// What resolveProviderAuth() does for an API key, with the credential already read rather than reading it again (an
+		// availability check asks this of every provider).
+		let resolution: AuthResult | undefined;
+		try {
+			resolution = await apiKey.resolve({
+				ctx: this.authContext,
+				credential: credential?.type === "api_key" ? credential : undefined,
+				signal,
+			});
+		} catch (error) {
+			throw new ModelsError("auth", `API key auth failed for provider ${provider.id}`, { cause: error });
+		}
 		return resolution ? { source: resolution.source, type: "api_key" } : undefined;
 	}
 
@@ -695,7 +739,8 @@ class ModelsImpl implements MutableModels {
 			if (!provider) return undefined;
 			return this.checkProviderAuth(provider, await this.readCredential(providerId, signal), signal);
 		})();
-		return raceWithAbortSignal(check, signal);
+		// (Raced only against a caller's signal: nothing can abort one made here. An availability check asks every provider.)
+		return options?.signal ? raceWithAbortSignal(check, signal) : check;
 	}
 
 	private async getAuthenticatedProviders(providerId: string | undefined, signal: AbortSignal) {

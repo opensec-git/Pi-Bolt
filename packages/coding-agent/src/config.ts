@@ -477,11 +477,6 @@ export function getDocsPath(): string {
 	return resolve(join(getPackageDir(), "docs"));
 }
 
-/** The skills Pi-Bolt ships (such as pibolt-mobile-ui): skills/ in the package, next to the binary's executable. */
-export function getBundledSkillsDir(): string {
-	return resolve(join(getPackageDir(), "skills"));
-}
-
 /** Get path to examples directory */
 export function getExamplesPath(): string {
 	return resolve(join(getPackageDir(), "examples"));

@@ -8,10 +8,11 @@ import {
 } from "@earendil-works/pi-tui";
 import { existsSync, readFileSync } from "fs";
 import { join } from "path";
-import { Compile } from "typebox/compile";
+import type { Static } from "typebox";
 import { getAgentDir } from "../config.ts";
 import { stripBom } from "../utils/text.ts";
-import { KeybindingValueSchema } from "./key-id-schema.ts";
+import { checkKeybindingValue } from "./config-checks.generated.ts";
+import type { KeybindingValueSchema } from "./key-id-schema.ts";
 
 export function useWindowsKeybindings(
 	platform: NodeJS.Platform = process.platform,
@@ -264,15 +265,12 @@ function isLegacyKeybindingName(key: string): key is keyof typeof KEYBINDING_NAM
 	return key in KEYBINDING_NAME_MIGRATIONS;
 }
 
-// Compiled on first use: Compile() generates the checker as source code, and only a keybindings.json needs it.
-let keybindingValueValidator: ReturnType<typeof Compile<typeof KeybindingValueSchema>> | undefined;
-
 function toKeybindingsConfig(value: Record<string, unknown>): KeybindingsConfig {
 	const config: KeybindingsConfig = {};
 	for (const [key, binding] of Object.entries(value)) {
 		if (key === "$schema") continue;
-		keybindingValueValidator ??= Compile(KeybindingValueSchema);
-		if (keybindingValueValidator.Check(binding)) config[key] = binding;
+		// (TypeBox's check of KeybindingValueSchema, generated at build time: a binding it accepts has that schema's type.)
+		if (checkKeybindingValue(binding)) config[key] = binding as Static<typeof KeybindingValueSchema>;
 	}
 	return config;
 }

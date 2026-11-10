@@ -529,7 +529,9 @@ describe("remote control", () => {
 			const lines: string[][] = [];
 			const statuses: Array<string | undefined> = [];
 			const warnings: string[] = [];
-			const settingsManager = SettingsManager.inMemory({ remoteControl: { port: 0, ...options.remoteControl } });
+			const settingsManager = SettingsManager.inMemory({
+				remoteControl: { enabled: true, port: 0, ...options.remoteControl },
+			});
 			const controller = new RemoteControlController(
 				{
 					getSession: () => harness.session,

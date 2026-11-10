@@ -1,0 +1,35 @@
+diff --git a/src/app.ts b/src/app.ts
+index 3b18e51..a9d2c4f 100644
+--- a/src/app.ts
++++ b/src/app.ts
+@@ -1,7 +1,8 @@
+ import { start } from "./server";
+-import { log } from "./log";
++import { log, warn } from "./log";
++import { config } from "./config";
+ 
+ export function main() {
+-  start(8080);
++  start(config.port);
++  warn("started");
+   log("ok");
+ }
+@@ -20,3 +21,4 @@ function other() {
+   return 1;
+ }
++// trailing comment
+diff --git a/README.md b/README.md
+new file mode 100644
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,2 @@
++# Readme
++Text.
+Only in b: extra
+*** a/old.txt
+--- b/new.txt
+***************
+*** 1,2 ****
+! changed
+--- 1,2 ----
+! modified

@@ -1,0 +1,43 @@
+@import url("reset.css");
+@charset "utf-8";
+
+/* Variables
+   and base */
+:root {
+  --accent: #3b82f6;
+  --gap: calc(1rem + 2px);
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font: 16px/1.5 -apple-system, "Segoe UI", sans-serif;
+}
+
+.card > .title::before,
+.card:hover .title {
+  content: "\2014 ";
+  color: var(--accent);
+  transition: color 0.2s ease-in-out;
+}
+
+#main[data-state="open"] ul li:nth-child(2n + 1) {
+  background: rgba(0, 0, 0, 0.05) url('bg.png') no-repeat;
+  margin: 0 auto !important;
+}
+
+@media (max-width: 600px) and (prefers-color-scheme: dark) {
+  .card {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+a:not(.plain):focus-visible {
+  outline: 2px solid currentColor;
+}

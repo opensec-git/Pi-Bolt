@@ -18,7 +18,10 @@ export interface ModelsStoreOperationOptions {
 	signal?: AbortSignal;
 }
 
-/** Persistent model catalogs keyed by provider ID. */
+/**
+ * Persistent model catalogs keyed by provider ID. An entry `read()` returns is a snapshot: the store does not change it
+ * afterwards, and callers must not change it.
+ */
 export interface ModelsStore {
 	read(providerId: string, options?: ModelsStoreOperationOptions): Promise<ModelsStoreEntry | undefined>;
 	write(providerId: string, entry: ModelsStoreEntry, options?: ModelsStoreOperationOptions): Promise<void>;

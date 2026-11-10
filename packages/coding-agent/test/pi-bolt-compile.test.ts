@@ -18,6 +18,7 @@ import { loadExtensions } from "../src/core/extensions/loader.ts";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
 import {
 	buildFailureReason,
+	buildFilesToCopy,
 	bundleErrorReason,
 	bundlePieces,
 	bundlerErrorAdvice,
@@ -1220,5 +1221,21 @@ describe("pi-bolt compile and Pi's other names for its modules (#174)", () => {
 			expect(code).toContain(`"${name}"`);
 		}
 		expect(code).not.toMatch(/@mariozechner|@sinclair|"@earendil-works\/pi-ai"/);
+	});
+});
+
+describe("buildFilesToCopy", () => {
+	test("takes the build's files but its executables, and never a skills folder an earlier build left", () => {
+		const names = ["pi", "pi-bin", "pi-bin.hot", "pi-spawn", "docs", "theme", "skills", "native", "pi-bolt.txt"];
+		expect(buildFilesToCopy(names, true)).toEqual(["pi", "pi-spawn", "docs", "theme", "native", "pi-bolt.txt"]);
+		expect(buildFilesToCopy(names, false)).toEqual([
+			"pi-bin",
+			"pi-bin.hot",
+			"pi-spawn",
+			"docs",
+			"theme",
+			"native",
+			"pi-bolt.txt",
+		]);
 	});
 });

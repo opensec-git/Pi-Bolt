@@ -1,7 +1,8 @@
 # Pi-Bolt for Android
 
 A remote control for Pi-Bolt: pair the phone with `/remote-control` on a computer, then watch and drive the session
-(prompts, steering, follow-ups, abort, model and thinking level, extension dialogs) from the phone. Protocol:
+(prompts, steering, follow-ups, abort, model and thinking level, extension dialogs) from the phone. Remote control is off
+on the computer until you run `pi-bolt remote-control enable` there. Protocol:
 [docs/remote-control.md](../packages/coding-agent/docs/remote-control.md).
 
 - `protocol/`: plain Kotlin/JVM. Noise IK (X25519 via BouncyCastle, AES-256-GCM, SHA-256), pairing codes, transport

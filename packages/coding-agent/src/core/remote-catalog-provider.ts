@@ -155,6 +155,9 @@ export function withRemoteCatalog(
 		refreshModels: async (context) => {
 			const stored = context.stored;
 			const restored = remoteModels(stored, localGeneratedAt).filter((model) => model.provider === provider.id);
+			// Offline with nothing to restore and nothing to clear (every provider without a newer stored catalog, at every
+			// start), publishing would change nothing.
+			if (!context.allowNetwork && restored.length === 0 && dynamicModels.length === 0) return;
 			if (
 				!(await context.publish({
 					update: () => {
@@ -246,6 +249,8 @@ export function withPersonalizedCatalog(
 		getAllModels,
 		refreshModels: async (context) => {
 			const restored = (context.stored?.models ?? []).filter((model) => model.provider === provider.id);
+			// (As in withRemoteCatalog: offline, nothing to restore or clear changes nothing.)
+			if (!context.allowNetwork && restored.length === 0 && personalModels.length === 0) return;
 			if (
 				!(await context.publish({
 					update: () => {

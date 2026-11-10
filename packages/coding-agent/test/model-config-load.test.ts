@@ -45,6 +45,35 @@ describe("ModelConfig.load", () => {
 		expect(fixed.getProviderIds()).toEqual(["one"]);
 	});
 
+	it("accepts and rejects files as TypeBox decides, and explains a rejected one with TypeBox's errors", async () => {
+		const model = { id: "m", contextWindow: 1000, maxTokens: 100, input: ["text"] };
+		const cases: [unknown, string | undefined][] = [
+			[{ providers: { one: { ...provider("One"), models: [model] } } }, undefined],
+			[{ providers: {} }, undefined],
+			[[], "  - root: must be object"],
+			[{}, "  - providers: must have required properties providers"],
+			[
+				{ providers: { one: { ...provider("One"), baseUrl: "" } } },
+				"  - providers.one.baseUrl: must not have fewer than 1 characters",
+			],
+			[
+				{ providers: { one: { ...provider("One"), models: [{ ...model, input: ["smell"] }] } } },
+				"  - providers.one.models.0.input.0: must be equal to one of the allowed values",
+			],
+			[
+				{ providers: { one: { modelOverrides: { m: { contextWindow: 0 } } } } },
+				"  - providers.one.modelOverrides.m.contextWindow: must be > 0",
+			],
+		];
+		for (const [document, error] of cases) {
+			writeFileSync(path, JSON.stringify(document));
+			const config = await ModelConfig.load(path);
+			expect(config.getError(), JSON.stringify(document)).toBe(
+				error === undefined ? undefined : `Invalid models.json schema:\n${error}\n\nFile: ${path}`,
+			);
+		}
+	});
+
 	it("reads a file that appears after a load found none", async () => {
 		expect((await ModelConfig.load(path)).getProviderIds()).toEqual([]);
 		writeFileSync(path, JSON.stringify({ providers: { one: provider("One") } }));

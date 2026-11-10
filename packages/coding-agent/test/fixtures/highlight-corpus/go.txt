@@ -1,0 +1,58 @@
+// Package server serves things.
+package server
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"time"
+)
+
+/* Config holds
+   the configuration. */
+type Config struct {
+	Addr    string        `json:"addr"`
+	Timeout time.Duration `json:"timeout,omitempty"`
+}
+
+type Handler interface {
+	ServeHTTP(w http.ResponseWriter, r *http.Request)
+}
+
+func New(cfg Config) (*Server, error) {
+	if cfg.Addr == "" {
+		return nil, fmt.Errorf("server: empty address %q", cfg.Addr)
+	}
+	return &Server{cfg: cfg, routes: map[string]Handler{}}, nil
+}
+
+func (s *Server) Run(ctx context.Context) error {
+	srv := &http.Server{Addr: s.cfg.Addr, ReadTimeout: 5 * time.Second}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Shutdown(context.Background())
+	}()
+	defer fmt.Println("stopped")
+	for i := 0; i < 3; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+	}
+	raw := `a raw
+string`
+	var n int64 = 0x1F + 0o17 + 1e3
+	_ = raw
+	_ = n
+	return srv.ListenAndServe()
+}
+
+func encode(v any) ([]byte, error) {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}

@@ -26,13 +26,14 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { CodemodeJsonSchema, CodemodeTool } from "@earendil-works/pi-codemode";
 import { renderToolOutputType, renderToolSample, toCodemodeIdentifier } from "@earendil-works/pi-codemode/declarations";
 import { CODEMODE_SOURCE_GRAMMAR } from "@earendil-works/pi-codemode/source";
-import { type Static, Type } from "typebox";
+import type { Static } from "typebox";
 import { getDocsPath } from "../../config.ts";
 import type { ToolDefinition, ToolLoadout, ToolLoadoutChanges, ToolNamespace } from "../../core/extensions/types.ts";
 import type { ModelRegistry } from "../../core/model-registry.ts";
 import { SETTINGS_DEFAULTS } from "../../core/settings-defaults.ts";
 import type { CodemodeMode } from "../../core/settings-manager.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "../../core/tools/tool-definition-wrapper.ts";
+import { codemodeSchema } from "../../core/tools/tool-schemas.generated.ts";
 import { loadCodemodeExecutor } from "./execute.lazy.ts";
 import { codemodeRenderers } from "./renderer.ts";
 
@@ -75,11 +76,7 @@ export interface CodemodeToolOptions {
 
 const TEXT_OUTPUT_SCHEMA: CodemodeJsonSchema = { type: "string" };
 
-export const codemodeSchema = Type.Object({
-	code: Type.String({
-		description: "Raw JavaScript source.",
-	}),
-});
+export { codemodeSchema };
 
 export type CodemodeToolInput = Static<typeof codemodeSchema>;
 

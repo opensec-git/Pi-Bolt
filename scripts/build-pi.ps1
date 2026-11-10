@@ -198,7 +198,7 @@ function Stage-Assets($dir) {
 	Copy-Item (Join-Path $Agent 'package.json'), (Join-Path $Agent 'README.md'), (Join-Path $Agent 'CHANGELOG.md') $dir
 	# Pi's documentation and example extensions: Pi points the model (its system prompt) and the user (the first run, /login) at
 	# them, next to the README.
-	Copy-Item -Recurse -Force (Join-Path $Agent 'docs'), (Join-Path $Agent 'examples'), (Join-Path $Agent 'skills') $dir
+	Copy-Item -Recurse -Force (Join-Path $Agent 'docs'), (Join-Path $Agent 'examples') $dir
 	# Not the documentation's pictures (2.5 MB of PNG): the model reads the text, and a terminal shows none of them.
 	Remove-Item -Recurse -Force (Join-Path $dir 'docs\images') -ErrorAction SilentlyContinue
 	# With Pi-Bolt's own that `pi-bolt doctor` points at (#63).

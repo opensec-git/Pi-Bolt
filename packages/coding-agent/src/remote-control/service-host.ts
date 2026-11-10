@@ -14,12 +14,16 @@
  *   never aborted. `remote_hello.host.parallelSessions` tells phones so.
  * - A terminal's `/remote-control` takes over: the service gives it the port and the tunnel, and listens again when the
  *   terminal lets go (service-control.ts).
+ * - While remote control is off (`remoteControl.enabled` in the global settings), it does not serve: started then, it logs
+ *   why and exits 0. Turned off later, in any state (serving, waiting for its port or for a terminal, or with the port
+ *   handed to a terminal), it stops within a poll and exits 0, and it never listens or starts a tunnel once it has seen
+ *   the setting off. The service manager does not start it again after a clean exit (service-files.ts).
  */
 
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename } from "node:path";
-import { VERSION } from "../config.ts";
+import { COMMAND_NAME, VERSION } from "../config.ts";
 import type { AgentSessionRuntime, CreateAgentSessionRuntimeFactory } from "../core/agent-session-runtime.ts";
 import { createAgentSessionRuntime } from "../core/agent-session-runtime.ts";
 import type {
@@ -32,6 +36,7 @@ import type { ViewChannel } from "../core/mobile-ui/host.ts";
 import { type SessionInfo, SessionManager } from "../core/session-manager.ts";
 import { SettingsManager } from "../core/settings-manager.ts";
 import type { RemoteControlSettings } from "../core/settings-schema.ts";
+import { REMOTE_CONTROL_OFF_MESSAGE } from "../core/slash-commands.ts";
 import { clientUIContext } from "../extensions/client-ui.ts";
 import type { RpcExtensionUIResponse } from "../modes/rpc/rpc-types.ts";
 import { PIBOLT } from "../pi-bolt.ts";
@@ -166,6 +171,12 @@ export interface ServiceHostOptions {
 	/** Sessions open at once; default [MAX_OPEN_SESSIONS]. */
 	maxOpenSessions?: number;
 	firstFrameTimeoutMs?: number;
+	/**
+	 * Asked at every poll in every state, and before the service listens or starts a tunnel: false once remote control was
+	 * turned off. [onTurnedOff] then runs once, and the host does not listen or start a tunnel again.
+	 */
+	isEnabled?: () => boolean;
+	onTurnedOff?: () => void;
 }
 
 const SERVICE_COMMANDS = new Set(["list_projects", "list_sessions", "new_session", "switch_session"]);
@@ -196,6 +207,10 @@ export class ServiceHost {
 	private tunnelFailures = 0;
 	private tunnelTimer: ReturnType<typeof setTimeout> | undefined;
 	private pollTimer: ReturnType<typeof setInterval> | undefined;
+	/** Asks [ServiceHostOptions.isEnabled] in every state, not only while serving. */
+	private enabledTimer: ReturnType<typeof setInterval> | undefined;
+	/** Remote control was seen turned off: [ServiceHostOptions.onTurnedOff] ran. */
+	private turnedOff = false;
 	private idleTimer: ReturnType<typeof setInterval> | undefined;
 	private readonly sleeps = new Set<() => void>();
 	/** The terminal that has the port. */
@@ -239,8 +254,12 @@ export class ServiceHost {
 		const idleCheckMs = this.options.idleCheckMs ?? 60_000;
 		this.idleTimer = setInterval(() => void this.closeIdleSession(), idleCheckMs);
 		this.idleTimer.unref?.();
+		clearInterval(this.enabledTimer);
+		this.enabledTimer = setInterval(() => this.stillEnabled(), this.options.pollMs ?? POLL_MS);
+		this.enabledTimer.unref?.();
 		this.setState("starting");
 		while (!this.stopping) {
+			if (!this.stillEnabled()) return;
 			const listener = await listenControl(this.paths, (request, connection) =>
 				this.onControl(request, connection),
 			).catch((error: unknown) => {
@@ -278,6 +297,7 @@ export class ServiceHost {
 		for (const wake of this.sleeps) wake();
 		clearInterval(this.idleTimer);
 		clearInterval(this.pollTimer);
+		clearInterval(this.enabledTimer);
 		this.closeTunnel();
 		for (const waiter of this.pairWaiters) waiter.close();
 		this.pairWaiters.clear();
@@ -333,6 +353,16 @@ export class ServiceHost {
 		this.stateValue = state;
 	}
 
+	/** Whether remote control is still on; the first time it is not, [ServiceHostOptions.onTurnedOff] runs. */
+	private stillEnabled(): boolean {
+		if (this.turnedOff) return false;
+		if (this.options.isEnabled?.() !== false) return true;
+		this.turnedOff = true;
+		clearInterval(this.enabledTimer);
+		this.options.onTurnedOff?.();
+		return false;
+	}
+
 	private sleep(ms: number): Promise<void> {
 		return new Promise((resolve) => {
 			const wake = () => {
@@ -349,7 +379,7 @@ export class ServiceHost {
 
 	/** Listens on the port (waiting while something else has it), then starts the tunnel. */
 	private async serve(): Promise<void> {
-		if (this.stopping || this.server) return;
+		if (this.stopping || this.server || !this.stillEnabled()) return;
 		this.setState("starting");
 		const server = new RemoteControlServer({
 			store: this.store,
@@ -368,6 +398,8 @@ export class ServiceHost {
 		this.server = server;
 		let warned = false;
 		while (!this.stopping && this.server === server) {
+			// (Asked before every attempt: turned off while the port was busy, it never listens.)
+			if (!this.stillEnabled()) break;
 			try {
 				await server.start();
 				break;
@@ -383,8 +415,9 @@ export class ServiceHost {
 				await this.sleep(this.retryMs);
 			}
 		}
-		// Stopped, or a terminal took over while the port was busy.
-		if (this.server !== server || this.stopping) {
+		// Stopped, turned off, or a terminal took over while the port was busy.
+		if (this.server !== server || this.stopping || this.turnedOff) {
+			if (this.server === server) this.server = undefined;
 			await server.stop();
 			return;
 		}
@@ -439,7 +472,7 @@ export class ServiceHost {
 	private async openTunnel(): Promise<void> {
 		clearTimeout(this.tunnelTimer);
 		const server = this.server;
-		if (this.tunnelSetting === "off" || !server?.running) return;
+		if (this.tunnelSetting === "off" || !server?.running || !this.stillEnabled()) return;
 		const generation = ++this.tunnelGeneration;
 		this.tunnelStatus = { state: "starting" };
 		const settings = { ...this.options.settings, tunnel: this.tunnelSetting };
@@ -574,7 +607,7 @@ export class ServiceHost {
 		void connection.closed.then(() => {
 			if (this.yieldedTo !== connection) return;
 			this.yieldedTo = undefined;
-			if (this.stopping) return;
+			if (this.stopping || !this.stillEnabled()) return;
 			this.log.info("The terminal let go of remote control; listening again");
 			void this.serve();
 		});
@@ -1007,8 +1040,14 @@ export interface RunServiceHostOptions {
 export async function runServiceHost(options: RunServiceHostOptions): Promise<never> {
 	const log = new ServiceLog(options.agentDir);
 	const settingsManager = SettingsManager.create(homedir(), options.agentDir, { projectTrusted: false });
-	const settings = settingsManager.getRemoteControlSettings();
 	const version = PIBOLT?.version ?? VERSION;
+	// Off: no listener, no tunnel, no session. Exit 0, so the service manager does not start it again until the next login.
+	const offMessage = `${REMOTE_CONTROL_OFF_MESSAGE}, then run ${COMMAND_NAME} service install again`;
+	if (!settingsManager.getRemoteControlEnabled()) {
+		log.info(`Pi-Bolt ${version} remote control service (pid ${process.pid}) does not serve: ${offMessage}`);
+		process.exit(0);
+	}
+	const settings = settingsManager.getRemoteControlSettings();
 	const host = new ServiceHost({
 		createRuntime: options.createRuntime,
 		agentDir: options.agentDir,
@@ -1017,6 +1056,12 @@ export async function runServiceHost(options: RunServiceHostOptions): Promise<ne
 		log,
 		version,
 		offline: options.offline,
+		isEnabled: () =>
+			SettingsManager.create(homedir(), options.agentDir, { projectTrusted: false }).getRemoteControlEnabled(),
+		onTurnedOff: () => {
+			log.info(`Turned off, so it stops serving: ${offMessage}`);
+			void shutdown(0);
+		},
 	});
 	let stopping = false;
 	const shutdown = async (code: number) => {

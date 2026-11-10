@@ -8,7 +8,7 @@
  * like any other tool change and survives `/tree`, resume, and fork on that branch.
  */
 
-import { type Static, Type } from "typebox";
+import type { Static } from "typebox";
 import type {
 	ExtensionAPI,
 	ToolDefinition,
@@ -16,6 +16,7 @@ import type {
 	ToolInfo,
 	ToolNamespace,
 } from "../../core/extensions/types.ts";
+import { toolSearchSchema } from "../../core/tools/tool-schemas.generated.ts";
 
 export const TOOL_SEARCH_TOOL_NAME = "tool_search";
 export const DEFAULT_TOOL_SEARCH_LIMIT = 8;
@@ -255,12 +256,7 @@ export class Bm25Ranker implements ToolRanker {
 	}
 }
 
-export const toolSearchSchema = Type.Object({
-	query: Type.String({ description: "Search query for deferred tools." }),
-	limit: Type.Optional(
-		Type.Number({ description: `Maximum number of tools to return. Defaults to ${DEFAULT_TOOL_SEARCH_LIMIT}.` }),
-	),
-});
+export { toolSearchSchema };
 
 export type ToolSearchInput = Static<typeof toolSearchSchema>;
 

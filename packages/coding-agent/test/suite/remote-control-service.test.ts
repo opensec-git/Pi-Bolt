@@ -3,7 +3,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fauxAssistantMessage, registerFauxProvider } from "@earendil-works/pi-ai/compat";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
 	type CreateAgentSessionRuntimeFactory,
 	createAgentSessionFromServices,
@@ -16,6 +16,7 @@ import type { ExtensionAPI } from "../../src/index.ts";
 import { RemoteControlController } from "../../src/remote-control/controller.ts";
 import { generateKeyPair, type KeyPair } from "../../src/remote-control/noise.ts";
 import { CloseCode, decodePairingUri, ENDPOINTS_MESSAGE } from "../../src/remote-control/protocol.ts";
+import { RemoteControlServer } from "../../src/remote-control/server.ts";
 import { runServiceCommand } from "../../src/remote-control/service-cli.ts";
 import { connectControl, controlPaths } from "../../src/remote-control/service-control.ts";
 import {
@@ -60,6 +61,11 @@ describe("remote control background service", () => {
 			if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`);
 			await new Promise((resolve) => setTimeout(resolve, 20));
 		}
+	}
+
+	/** Remote control on (pi-bolt remote-control enable): `pi-bolt service pair` refuses otherwise. */
+	function turnOn(agentDir: string): void {
+		writeFileSync(join(agentDir, "settings.json"), JSON.stringify({ remoteControl: { enabled: true } }));
 	}
 
 	/** The faux provider and the runtime factory main.ts would pass, without real providers or keys. */
@@ -128,6 +134,7 @@ describe("remote control background service", () => {
 		options: { settings?: RemoteControlSettings; host?: Partial<ServiceHostOptions>; start?: boolean } = {},
 	) {
 		const agentDir = tempDir("pi-svc-agent-");
+		turnOn(agentDir);
 		const sessionDir = join(agentDir, "sessions-test");
 		mkdirSync(sessionDir, { recursive: true });
 		const older = tempDir("pi-svc-older-");
@@ -455,7 +462,7 @@ describe("remote control background service", () => {
 			const controller = new RemoteControlController(
 				{
 					getSession: () => harness.session,
-					settingsManager: SettingsManager.inMemory({ remoteControl: { port: 0, ...settings } }),
+					settingsManager: SettingsManager.inMemory({ remoteControl: { enabled: true, port: 0, ...settings } }),
 					agentDir,
 					version: "9.9.9",
 					showStatus: () => {},
@@ -568,6 +575,119 @@ describe("remote control background service", () => {
 			await starting;
 			expect(host.state).toBe("serving");
 		});
+
+		describe("turned off while it does not serve: it never listens nor starts a tunnel again", () => {
+			/** A host whose setting the test turns off; counts its listens (after `watch()`) and its tunnels. */
+			async function offSetup(start: boolean) {
+				let enabled = true;
+				let tunnels = 0;
+				const turnedOff = vi.fn();
+				const { agentDir, host, port } = await setup({
+					start,
+					settings: { tunnel: "quick" },
+					host: {
+						pollMs: 20,
+						isEnabled: () => enabled,
+						onTurnedOff: turnedOff,
+						startTunnel: async () => {
+							tunnels++;
+							return { endpoint: `wss://t-${tunnels}.trycloudflare.com/rc`, stop: () => {} };
+						},
+					},
+				});
+				let listens: ReturnType<typeof vi.spyOn> | undefined;
+				cleanups.push(() => listens?.mockRestore());
+				return {
+					agentDir,
+					host,
+					port,
+					turnedOff,
+					tunnels: () => tunnels,
+					listens: () => listens?.mock.calls.length ?? 0,
+					watch: () => {
+						listens = vi.spyOn(RemoteControlServer.prototype, "start");
+					},
+					disable: () => {
+						enabled = false;
+					},
+					turnOff: async () => {
+						enabled = false;
+						await until(() => turnedOff.mock.calls.length > 0, "the host to see the setting off");
+					},
+				};
+			}
+
+			/** True when nothing listens on the port (the test can take it). */
+			function portFree(port: number): Promise<boolean> {
+				return new Promise((resolve) => {
+					const server = createServer();
+					server.once("error", () => resolve(false));
+					server.listen(port, "127.0.0.1", () => server.close(() => resolve(true)));
+				});
+			}
+
+			it("with its port handed to a terminal's /remote-control", async () => {
+				const off = await offSetup(true);
+				await until(() => off.host.status().tunnel.state === "up", "the service's tunnel");
+				const { controller } = await terminal(off.agentDir, { tunnel: "quick" });
+				await controller.handleCommand("");
+				expect(off.host.state).toBe("yielded");
+				off.watch();
+				await off.turnOff();
+				await controller.stop();
+				await new Promise((resolve) => setTimeout(resolve, 300));
+				expect(off.listens()).toBe(0);
+				expect(off.tunnels()).toBe(1);
+				expect(off.host.state).not.toBe("serving");
+				expect(await portFree(off.port)).toBe(true);
+				expect(off.turnedOff).toHaveBeenCalledOnce();
+			});
+
+			it("while it waits for a terminal that served when it started", async () => {
+				const off = await offSetup(false);
+				const { controller } = await terminal(off.agentDir, { tunnel: "off" });
+				await controller.handleCommand("");
+				off.watch();
+				const starting = off.host.start();
+				await until(() => off.host.state === "waiting", "the service to wait");
+				await off.turnOff();
+				await controller.stop();
+				await starting;
+				await new Promise((resolve) => setTimeout(resolve, 200));
+				expect(off.listens()).toBe(0);
+				expect(off.tunnels()).toBe(0);
+				expect(off.host.state).not.toBe("serving");
+				expect(await portFree(off.port)).toBe(true);
+			});
+
+			it("while its port is busy", async () => {
+				const off = await offSetup(false);
+				const blocker = createServer();
+				await new Promise<void>((resolve) => blocker.listen(off.port, "127.0.0.1", () => resolve()));
+				off.watch();
+				const starting = off.host.start();
+				await until(() => off.listens() >= 2, "the service to try the busy port");
+				await off.turnOff();
+				const tries = off.listens();
+				await new Promise<void>((resolve) => blocker.close(() => resolve()));
+				await starting;
+				await new Promise((resolve) => setTimeout(resolve, 200));
+				expect(off.listens()).toBe(tries);
+				expect(off.tunnels()).toBe(0);
+				expect(off.host.state).not.toBe("serving");
+				expect(await portFree(off.port)).toBe(true);
+			});
+
+			it("already off when it starts", async () => {
+				const off = await offSetup(false);
+				off.watch();
+				off.disable();
+				await off.host.start();
+				expect(off.listens()).toBe(0);
+				expect(off.tunnels()).toBe(0);
+				expect(off.turnedOff).toHaveBeenCalledOnce();
+			});
+		});
 	});
 
 	it("does not run twice for one agent directory", async () => {
@@ -667,6 +787,7 @@ describe("remote control background service", () => {
 
 		it("says the service is not running when nothing answers", async () => {
 			const agentDir = tempDir("pi-svc-none-");
+			turnOn(agentDir);
 			const lines: string[] = [];
 			expect(await runServiceCommand(["pair"], { agentDir, out: (line) => lines.push(line) })).toBe(1);
 			expect(lines[0]).toContain("The service is not running.");

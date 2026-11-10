@@ -1,0 +1,49 @@
+# CI configuration
+name: build
+on:
+  push:
+    branches: [main, "release/*"]
+  pull_request:
+
+env:
+  NODE_VERSION: 20
+  GREETING: 'hello: world'
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        node: [18, 20]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install
+        run: npm ci --ignore-scripts
+      - name: Test
+        run: |
+          npm test
+          echo "done: $?"
+      - name: Folded
+        run: >
+          a folded
+          scalar
+      - name: Anchors
+        with: &defaults
+          retries: 3
+          timeout: 1.5
+        other: *defaults
+anchors:
+  enabled: true
+  disabled: no
+  nothing: ~
+  date: 2026-11-10
+  multi: "a
+    string"
+list:
+  - one
+  - key: value
+    nested:
+      - deep
+---
+second: document

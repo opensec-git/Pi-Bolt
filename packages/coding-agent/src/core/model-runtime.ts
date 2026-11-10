@@ -209,6 +209,20 @@ function mergeHeaders(
 	return merged;
 }
 
+/**
+ * Whether two loads of models.json configure the same providers: the same load (ModelConfig.load() returns the previous
+ * one while the file is unchanged), or two that configure none and report no error (no models.json at all).
+ */
+function sameModelConfig(a: ModelConfig, b: ModelConfig): boolean {
+	if (a === b) return true;
+	return (
+		a.getProviderIds().length === 0 &&
+		b.getProviderIds().length === 0 &&
+		a.getError() === undefined &&
+		b.getError() === undefined
+	);
+}
+
 /** Configured pi-ai Models collection used by coding-agent and SDK consumers. */
 export class ModelRuntime implements Models {
 	private readonly models: MutableModels;
@@ -223,6 +237,8 @@ export class ModelRuntime implements Models {
 	private readonly modelsPath: string | undefined;
 	private readonly modelNetworkEnabled: boolean;
 	private config: ModelConfig;
+	/** The models.json load the providers were last all composed from (rebuildProviders()). */
+	private composedConfig: ModelConfig | undefined;
 	private snapshot: ModelRuntimeSnapshot = {
 		all: new ChatModelsSnapshot([]),
 		available: [],
@@ -371,10 +387,25 @@ export class ModelRuntime implements Models {
 	}
 
 	private rebuildProviders(): void {
+		this.composedConfig = this.config;
 		this.models.clearProviders();
 		this.compositionErrors.clear();
 		for (const providerId of this.providerIds()) this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
+	}
+
+	/**
+	 * Whether the providers are held in the order rebuildProviders() would give them (providerIds(), less the ids that
+	 * compose to no provider): a registration since the last rebuild adds its provider at the end.
+	 */
+	private providersInCompositionOrder(): boolean {
+		const held = this.models.getProviders();
+		let index = 0;
+		for (const providerId of this.providerIds()) {
+			if (held[index]?.id === providerId) index++;
+			else if (this.models.getProvider(providerId)) return false;
+		}
+		return index === held.length;
 	}
 
 	private updateModelSnapshot(): void {
@@ -386,14 +417,22 @@ export class ModelRuntime implements Models {
 		};
 	}
 
-	private async runAvailabilityRefresh(seq: number, errorSeq: number, signal: AbortSignal): Promise<void> {
+	/** `callerSignal`: the caller's own signal, if any (`signal` is made from it). */
+	private async runAvailabilityRefresh(
+		seq: number,
+		errorSeq: number,
+		signal: AbortSignal,
+		callerSignal: AbortSignal | undefined,
+	): Promise<void> {
 		const providers = this.models.getProviders();
+		// (Without a caller's signal, nothing can abort the checks: none is passed for them to wait on.)
+		const checkOptions = callerSignal ? { signal } : undefined;
 		const [checks, credentials] = await Promise.all([
 			Promise.all(
 				providers.map(
 					async (provider): Promise<[string, AuthCheck | undefined]> => [
 						provider.id,
-						await this.models.checkAuth(provider.id, { signal }),
+						await this.models.checkAuth(provider.id, checkOptions),
 					],
 				),
 			),
@@ -436,7 +475,7 @@ export class ModelRuntime implements Models {
 		}
 		const errorSeq = ++this.availabilityErrorSeq;
 		const effectiveSignal = operationSignal(signal);
-		return this.runAvailabilityRefresh(seq, errorSeq, effectiveSignal).catch((error) => {
+		return this.runAvailabilityRefresh(seq, errorSeq, effectiveSignal, signal).catch((error) => {
 			if (errorSeq === this.availabilityErrorSeq && !effectiveSignal.aborted) {
 				this.availabilityError = error instanceof Error ? error.message : String(error);
 			}
@@ -973,13 +1012,20 @@ export class ModelRuntime implements Models {
 
 	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
 		this.config = await ModelConfig.load(this.modelsPath);
-		this.configureRadiusProviders();
 		if (options.providers) {
+			this.configureRadiusProviders();
 			for (const providerId of new Set(options.providers)) this.recomposeProvider(providerId);
 			this.updateModelSnapshot();
-		} else {
+		} else if (
+			!this.composedConfig ||
+			!sameModelConfig(this.composedConfig, this.config) ||
+			!this.providersInCompositionOrder()
+		) {
+			this.configureRadiusProviders();
 			this.rebuildProviders();
 		}
+		// (Otherwise the providers are composed from this models.json already, in the order a rebuild gives them: every
+		// registration since recomposed its own.)
 		const refreshOptions = {
 			...options,
 			allowNetwork: options.allowNetwork ?? this.modelNetworkEnabled,

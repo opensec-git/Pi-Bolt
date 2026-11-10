@@ -1,17 +1,19 @@
 /**
  * Theme JSON validation, kept out of `theme.ts` on purpose.
  *
- * Validating user-authored theme files needs typebox, which costs ~17 MB of module graph to import.
- * Palette lookup does not, so a presentation that only uses built-in themes should never pay for it.
- * `main.ts` installs this validator before runtime resource loading; other consumers can opt in with
- * `setThemeJsonValidator()`. Built-in themes do not need validation.
+ * Validating user-authored theme files needs typebox, which costs ~17 MB of module graph and millions of instructions to
+ * evaluate. Palette lookup does not, so a presentation that only uses built-in themes should never pay for it: TypeBox is
+ * loaded on the first validation (typebox-lazy.ts), not with this module. `main.ts` installs this validator before
+ * runtime resource loading; other consumers can opt in with `setThemeJsonValidator()`. Built-in themes do not need
+ * validation.
  */
 
-import { type Static, type TProperties, Type } from "typebox";
-import { Value } from "typebox/value";
+import type { Static, TProperties } from "typebox";
+import { loadTypeBox, loadTypeBoxValue } from "../../../core/typebox-lazy.ts";
 import { THEME_TOKENS, type ThemeColorValues, type ThemeTokenDescriptors } from "./theme-tokens.ts";
 
 function colorValue(description?: string) {
+	const { Type } = loadTypeBox();
 	return Type.Union(
 		[
 			Type.String({
@@ -29,6 +31,7 @@ function colorValue(description?: string) {
 }
 
 function themeTokenProperties(tokens: ThemeTokenDescriptors): TProperties {
+	const { Type } = loadTypeBox();
 	const properties: TProperties = {};
 	for (const [name, descriptor] of Object.entries(tokens)) {
 		const schema = colorValue(descriptor.description);
@@ -43,6 +46,7 @@ function themeTokenProperties(tokens: ThemeTokenDescriptors): TProperties {
  * would generate a checker as source code first.
  */
 function buildThemeSchemas() {
+	const { Type } = loadTypeBox();
 	const ColorValueSchema = colorValue();
 	const ThemeColorsSchema = Type.Unsafe<ThemeColorValues<ThemeColorValue>>(
 		Type.Object(themeTokenProperties(THEME_TOKENS), {
@@ -121,6 +125,7 @@ export function validateThemeJson(label: string, json: unknown): ValidatedThemeJ
 	}
 
 	const { ThemeJsonSchema } = getThemeSchemas();
+	const { Value } = loadTypeBoxValue();
 	if (!Value.Check(ThemeJsonSchema, json)) {
 		const errors = Array.from(Value.Errors(ThemeJsonSchema, json));
 		const missingColors = new Set<string>();

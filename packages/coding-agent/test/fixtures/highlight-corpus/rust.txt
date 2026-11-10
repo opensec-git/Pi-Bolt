@@ -1,0 +1,64 @@
+//! Crate docs.
+use std::collections::HashMap;
+use std::fmt::{self, Display};
+
+/// A point.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Point<T> {
+    pub x: T,
+    pub y: T,
+}
+
+impl<T: Display> Display for Point<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "({}, {})", self.x, self.y)
+    }
+}
+
+pub enum Shape {
+    Circle { radius: f64 },
+    Rect(f64, f64),
+}
+
+fn area(shape: &Shape) -> f64 {
+    match shape {
+        Shape::Circle { radius } => std::f64::consts::PI * radius * radius,
+        Shape::Rect(w, h) => w * h,
+    }
+}
+
+pub fn count_words<'a>(text: &'a str) -> HashMap<&'a str, usize> {
+    let mut counts = HashMap::new();
+    for word in text.split_whitespace() {
+        *counts.entry(word).or_insert(0) += 1;
+    }
+    counts
+}
+
+const RAW: &str = r#"a raw "string"
+over two lines"#;
+static BYTES: &[u8] = b"bytes\n";
+let user = "user";
+let error = "error";
+let c = 'c';
+
+/* block
+   comment */
+macro_rules! square {
+    ($x:expr) => {
+        $x * $x
+    };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn it_works() -> Result<(), Box<dyn std::error::Error>> {
+        let n: i64 = 0x1f + 0b1010 + 1_000;
+        assert_eq!(square!(3), 9, "three squared");
+        Ok(())
+    }
+}
+async fn run() { let _ = tokio::spawn(async move { loop { break; } }).await; }
