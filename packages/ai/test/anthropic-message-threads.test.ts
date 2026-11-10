@@ -6,8 +6,6 @@ import type { AssistantMessage, Message, Model, Tool, ToolResultMessage } from "
 import { normalizeContext } from "../src/utils/transcript.ts";
 
 const THREADS_BETA = "message-threads-2026-08-12";
-const grammarError =
-	"The compiled grammar is too large, which would cause performance issues. Simplify your tool schemas or reduce the number of strict tools.";
 
 interface WireMessage {
 	role: string;
@@ -443,16 +441,17 @@ describe("Anthropic message threads", () => {
 		expect(threadOf(h.requests[2])).toEqual({ type: "create" });
 	});
 
-	it("leaves strict tool rejections to the strict tool fallback", async () => {
+	// Pi-Bolt sends "prefer" tools to Anthropic without strict (earendil-works/pi#10074), so a thread never meets a strict
+	// grammar rejection to leave to a fallback (upstream's test of that fallback is replaced by this one).
+	it("sends a prefer tool without strict when it starts a thread", async () => {
 		const model: Model<"anthropic-messages"> = { ...baseModel, compat: { supportsStrictTools: true } };
-		const strictTool: Tool = { ...tool("lookup"), constrainedSampling: { type: "json_schema", strict: "prefer" } };
+		const preferTool: Tool = { ...tool("lookup"), constrainedSampling: { type: "json_schema", strict: "prefer" } };
 		const h = harness();
-		h.queue.push(() => errorResponse(400, grammarError));
-		const result = await turn(h, [user("first")], { model, tools: [strictTool] });
+		const result = await turn(h, [user("first")], { model, tools: [preferTool] });
 		expect(result.stopReason).toBe("stop");
-		expect(h.requests).toHaveLength(2);
-		expect(h.requests.map((request) => threadOf(request)?.type)).toEqual(["create", "create"]);
-		expect(result.diagnostics?.map((diagnostic) => diagnostic.type)).toEqual(["anthropic_strict_tools_fallback"]);
+		expect(h.requests).toHaveLength(1);
+		expect(threadOf(h.requests[0]!)?.type).toBe("create");
+		expect((h.requests[0]!.body.tools?.[0] as { strict?: boolean }).strict).toBeUndefined();
 	});
 
 	it("starts a new thread when a retried continue finds the thread in flight", async () => {
