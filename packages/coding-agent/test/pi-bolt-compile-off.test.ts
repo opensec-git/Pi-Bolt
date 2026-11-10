@@ -35,5 +35,27 @@ describe.skipIf(process.platform === "win32")("pi-bolt compile --off", () => {
 	test("forgets it once the release is installed again", async () => {
 		expect(await runPiBoltCompile(["--off"], async () => true)).toBe(0);
 		expect(existsSync(join(install, "compile.json"))).toBe(false);
+		expect(existsSync(join(install, "compile.json.off"))).toBe(false);
+	});
+
+	test("the installer it runs finds no compile.json, so it does not say to compile the extensions in again", async () => {
+		// (install.sh prints "Extensions were compiled into the build this replaced: run pi-bolt compile ..." when it finds one.)
+		let seenByInstaller: boolean | undefined;
+		expect(
+			await runPiBoltCompile(["--off"], async () => {
+				seenByInstaller = existsSync(join(install, "compile.json"));
+				return true;
+			}),
+		).toBe(0);
+		expect(seenByInstaller).toBe(false);
+	});
+
+	test("puts compile.json back when the installer throws", async () => {
+		expect(
+			await runPiBoltCompile(["--off"], async () => {
+				throw new Error("the installer did not start");
+			}),
+		).toBe(1);
+		expect(existsSync(join(install, "compile.json"))).toBe(true);
 	});
 });

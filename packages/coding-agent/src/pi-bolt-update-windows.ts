@@ -31,6 +31,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { PIBOLT_RELEASE_KEY } from "./pi-bolt.ts";
+import { downloadWithRetry } from "./pi-bolt-download.ts";
 import { chalk } from "./utils/lazy-packages.ts";
 
 const REPO = "https://github.com/opensec-git/Pi-Bolt";
@@ -213,34 +214,40 @@ export function keepPrevious(dir: string, incoming: string, note: (text: string)
 	}
 }
 
-/** A file over HTTPS, or undefined if it could not be downloaded whole; with `what`, a progress line on a terminal. */
-export async function download(url: string, what: string | undefined): Promise<Buffer | undefined> {
-	let response: Response;
+/**
+ * A file over HTTPS, or undefined if it could not be downloaded whole; with `what`, a progress line on a terminal. A dropped
+ * connection, a timeout or a 5xx is tried again, from where it stopped when the server can, with a line that says so
+ * (pi-bolt-download.ts); a 404 is not.
+ */
+export async function download(
+	url: string,
+	what: string | undefined,
+	options: { retryDelayMs?: number } = {},
+): Promise<Buffer | undefined> {
+	let shown = 0;
+	const clear = () => {
+		if (what && process.stdout.isTTY) process.stdout.write("\r\x1b[K");
+	};
 	try {
-		response = await fetch(url, { headers: { "user-agent": "pi-bolt-updater" }, redirect: "follow" });
+		return await downloadWithRetry(url, {
+			headers: { "user-agent": "pi-bolt-updater" },
+			retryDelayMs: options.retryDelayMs,
+			onProgress: (got, total) => {
+				if (!what || !process.stdout.isTTY || Date.now() - shown < 100) return;
+				shown = Date.now();
+				const mb = (n: number) => (n / 1048576).toFixed(1);
+				process.stdout.write(`\r\x1b[K  ${chalk.dim(`${what} ${mb(got)}${total ? ` / ${mb(total)}` : ""} MB`)}`);
+			},
+			onRetry: (line) => {
+				clear();
+				console.log(chalk.yellow(`  ${url}: ${line}`));
+			},
+		});
 	} catch {
 		return undefined;
+	} finally {
+		clear();
 	}
-	if (!response.ok || !response.body) return undefined;
-	const total = Number(response.headers.get("content-length")) || 0;
-	const chunks: Buffer[] = [];
-	let got = 0;
-	let shown = 0;
-	const reader = response.body.getReader();
-	for (;;) {
-		const { done, value } = await reader.read();
-		if (done) break;
-		chunks.push(Buffer.from(value));
-		got += value.length;
-		if (what && process.stdout.isTTY && Date.now() - shown >= 100) {
-			shown = Date.now();
-			const mb = (n: number) => (n / 1048576).toFixed(1);
-			process.stdout.write(`\r\x1b[K  ${chalk.dim(`${what} ${mb(got)}${total ? ` / ${mb(total)}` : ""} MB`)}`);
-		}
-	}
-	if (what && process.stdout.isTTY) process.stdout.write("\r\x1b[K");
-	if (total && got !== total) return undefined;
-	return Buffer.concat(chunks);
 }
 
 /** Where release `version`'s files are downloaded from. */

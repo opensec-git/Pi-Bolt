@@ -51,6 +51,7 @@ import {
 	piBoltPackageManager,
 	piBoltReleasePlatform,
 } from "./pi-bolt.ts";
+import { downloadWithRetry, megabytes } from "./pi-bolt-download.ts";
 import { chalk } from "./utils/lazy-packages.ts";
 
 /** What `pi-bolt compile` was asked for, kept in <install>/compile.json for the next update. */
@@ -334,8 +335,8 @@ function untar(archive: string, into: string): void {
 }
 
 /**
- * How long a download may go without receiving anything, connecting included, before it is given up: a black-holed route
- * otherwise waits for the system's own timeout (75 s on macOS) with nothing printed.
+ * How long a download may go without receiving anything, connecting included, before the attempt is given up: a black-holed
+ * route otherwise waits for the system's own timeout (75 s on macOS) with nothing printed.
  */
 const DOWNLOAD_IDLE_SECONDS = 20;
 
@@ -343,56 +344,25 @@ const DOWNLOAD_IDLE_SECONDS = 20;
 const NETWORK_HINT =
 	"pi-bolt compile downloads this release's runtime and compile kit once (37-52 MB), then compiles offline from its cache. Check the connection or the proxy (HTTPS_PROXY), or give the files with --kit and --runtime (docs/PLUGINS.md#pi-bolt-compile).";
 
-function megabytes(bytes: number): string {
-	return `${(bytes / 1e6).toFixed(bytes < 1e7 ? 1 : 0)} MB`;
-}
-
 /**
- * Downloads `url`. A failure names the URL and why, and gives up after `idleSeconds` with nothing received. `onSize`: the size
- * the server gives, before the body comes.
+ * Downloads `url`, trying again after a dropped connection, a timeout or a 5xx, from where it stopped when the server can
+ * (pi-bolt-download.ts), and saying so. A failure names the URL and why. `idleSeconds`: how long an attempt waits with nothing
+ * received. `onSize`: the size the server gives, before the body comes.
  */
 export async function download(
 	url: string,
-	options: { idleSeconds?: number; onSize?: (bytes: number | undefined) => void } = {},
+	options: { idleSeconds?: number; onSize?: (bytes: number | undefined) => void; retryDelayMs?: number } = {},
 ): Promise<Buffer> {
-	const idleSeconds = options.idleSeconds ?? DOWNLOAD_IDLE_SECONDS;
-	const controller = new AbortController();
-	let timedOut = false;
-	let timer: ReturnType<typeof setTimeout> | undefined;
-	const wait = () => {
-		clearTimeout(timer);
-		timer = setTimeout(() => {
-			timedOut = true;
-			controller.abort();
-		}, idleSeconds * 1000);
-	};
-	wait();
 	try {
-		const response = await fetch(url, { redirect: "follow", signal: controller.signal });
-		if (!response.ok) {
-			throw new CompileError(`could not download ${url}: the server answered ${response.status}\n${NETWORK_HINT}`);
-		}
-		const length = Number(response.headers.get("content-length"));
-		options.onSize?.(Number.isFinite(length) && length > 0 ? length : undefined);
-		if (!response.body) return Buffer.from(await response.arrayBuffer());
-		const chunks: Uint8Array[] = [];
-		const reader = response.body.getReader();
-		for (;;) {
-			wait();
-			const { done, value } = await reader.read();
-			if (done) break;
-			chunks.push(value);
-		}
-		return Buffer.concat(chunks);
+		return await downloadWithRetry(url, {
+			idleSeconds: options.idleSeconds ?? DOWNLOAD_IDLE_SECONDS,
+			onSize: options.onSize,
+			retryDelayMs: options.retryDelayMs,
+			onRetry: (line) => process.stderr.write(chalk.yellow(`download of ${basename(url)} failed: ${line}\n`)),
+		});
 	} catch (error) {
-		if (error instanceof CompileError) throw error;
-		const cause = error instanceof Error && error.cause instanceof Error ? `: ${error.cause.message}` : "";
-		const reason = timedOut
-			? `nothing came for ${idleSeconds} s`
-			: `${error instanceof Error ? error.message : String(error)}${cause}`;
+		const reason = error instanceof Error ? error.message : String(error);
 		throw new CompileError(`could not download ${url}: ${reason}\n${NETWORK_HINT}`);
-	} finally {
-		clearTimeout(timer);
 	}
 }
 
@@ -2128,13 +2098,25 @@ function status(): void {
 /**
  * `pi-bolt compile --off`: the release's executable back (from the installer, which does not compile anything in for it), and no
  * extensions compiled in by later updates. The record goes only once the release is installed: a failed reinstall leaves the
- * compiled build running, and the next update compiling the same extensions into it.
+ * compiled build running, and the next update compiling the same extensions into it. While the installer runs, the record is
+ * set aside: an installer that finds it says to compile the extensions into the new build, which is not what --off is for.
  */
 async function off(installAgain: () => Promise<boolean>): Promise<boolean> {
 	const { installDir } = installation();
-	if (!(await installAgain())) return false;
-	rmSync(join(installDir, "compile.json"), { force: true });
-	return true;
+	const record = join(installDir, "compile.json");
+	const aside = `${record}.off`;
+	const had = existsSync(record);
+	if (had) renameSync(record, aside);
+	let installed = false;
+	try {
+		installed = await installAgain();
+	} finally {
+		if (had) {
+			if (installed) rmSync(aside, { force: true });
+			else renameSync(aside, record);
+		}
+	}
+	return installed;
 }
 
 /**
