@@ -53,6 +53,21 @@ describe("FileModelsStore", () => {
 		expect((await reloaded.read("two"))?.models.map((entry) => entry.id)).toEqual(["m2"]);
 	});
 
+	it("returns the entry as the file was parsed, which later writes replace rather than change", async () => {
+		const path = join(sharedTempDir, "snapshot-models-store.json");
+		const store = new FileModelsStore(path);
+		await store.write("one", { models: [model("one", "m1")], checkedAt: 100 });
+
+		const first = await store.read("one");
+		expect(await store.read("one")).toBe(first);
+
+		await store.write("one", { models: [model("one", "m2")], checkedAt: 200 });
+		const second = await store.read("one");
+		expect(second?.models.map((entry) => entry.id)).toEqual(["m2"]);
+		expect(first?.models.map((entry) => entry.id)).toEqual(["m1"]);
+		expect(first?.checkedAt).toBe(100);
+	});
+
 	it("leaves the file untouched when a write or delete changes nothing", async () => {
 		const path = join(sharedTempDir, "unchanged-models-store.json");
 		const store = new FileModelsStore(path);
