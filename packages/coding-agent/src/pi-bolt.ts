@@ -85,6 +85,8 @@ export function piBoltInstallerProcess(installerFile?: string): { command: strin
 		],
 	};
 }
+/** How an npm install of Pi-Bolt is updated: npm runs the package's install script only when allowed (README). */
+export const PIBOLT_NPM_UPDATE_COMMAND = "npm install -g --allow-scripts=pi-bolt pi-bolt@latest";
 export const PIBOLT_RELEASES_URL = "https://github.com/opensec-git/Pi-Bolt/releases";
 /** The key releases' SHA256SUMS are signed with (keys/release.pub; the installers carry it too). */
 export const PIBOLT_RELEASE_KEY = `-----BEGIN PUBLIC KEY-----

@@ -111,11 +111,10 @@ describe("pi-bolt compile works offline once the release's files are cached (#6,
 	test("another version's cached checksums are not this one's", async () => {
 		const cache = join(dir, "cache");
 		await releaseArchives(base, "0.9.0", "linux-x64", cache, key);
-		vi.stubGlobal("fetch", async () => {
-			throw new Error("offline");
-		});
+		// (A 404, which is not tried again: the checksums are asked for, not taken from the cache.)
+		vi.stubGlobal("fetch", async () => new Response("not found", { status: 404 }));
 		await expect(releaseArchives(base, "0.9.1", "linux-x64", cache, key)).rejects.toThrow(
-			`could not download ${base}/SHA256SUMS: offline`,
+			`could not download ${base}/SHA256SUMS: the server answered 404`,
 		);
 	});
 
@@ -132,7 +131,7 @@ describe("a download that fails says what it tried, and gives up instead of hang
 		vi.stubGlobal("fetch", async () => {
 			throw Object.assign(new TypeError("fetch failed"), { cause: new Error("connect ECONNREFUSED 127.0.0.1:9") });
 		});
-		await expect(download("http://127.0.0.1:9/SHA256SUMS")).rejects.toThrow(
+		await expect(download("http://127.0.0.1:9/SHA256SUMS", { retryDelayMs: 0 })).rejects.toThrow(
 			/could not download http:\/\/127\.0\.0\.1:9\/SHA256SUMS: fetch failed: connect ECONNREFUSED.*\n.*--kit and --runtime/,
 		);
 		vi.stubGlobal("fetch", async () => new Response("gone", { status: 404 }));
@@ -147,7 +146,7 @@ describe("a download that fails says what it tried, and gives up instead of hang
 			(_url: string, init: { signal: AbortSignal }) =>
 				new Promise((_, reject) => init.signal.addEventListener("abort", () => reject(new Error("aborted")))),
 		);
-		await expect(download("http://10.255.255.1/x", { idleSeconds: 0.05 })).rejects.toThrow(
+		await expect(download("http://10.255.255.1/x", { idleSeconds: 0.05, retryDelayMs: 0 })).rejects.toThrow(
 			"could not download http://10.255.255.1/x: nothing came for 0.05 s",
 		);
 	});

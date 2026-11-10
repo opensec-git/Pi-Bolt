@@ -8,7 +8,6 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import lockfile from "proper-lockfile";
@@ -44,6 +43,7 @@ import {
 	isPiBoltChannel,
 	PIBOLT,
 	PIBOLT_INSTALL_COMMAND,
+	PIBOLT_NPM_UPDATE_COMMAND,
 	type PiBoltChannel,
 	piBoltChannel,
 	piBoltExecutableIn,
@@ -53,7 +53,7 @@ import {
 	piBoltUpdateEnvironment,
 	setPiBoltChannel,
 } from "./pi-bolt.ts";
-import { piBoltCompileWanted, runPiBoltCompile } from "./pi-bolt-compile.ts";
+import { runPiBoltCompile } from "./pi-bolt-compile.ts";
 import { fetchReleaseInstaller, type ReleaseInstaller, runReleaseInstaller } from "./pi-bolt-installer.ts";
 import { rollbackPiBolt } from "./pi-bolt-rollback.ts";
 import { isInProfile, updatePiBoltWindows } from "./pi-bolt-update-windows.ts";
@@ -798,13 +798,14 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 	const fallback =
 		method === undefined
 			? ""
-			: ` You can update without it: ${method === "npm" ? "npm install -g pi-bolt@latest" : (piBoltPackageManager(method)?.update ?? PIBOLT_INSTALL_COMMAND)}`;
+			: ` You can update without it: ${method === "npm" ? PIBOLT_NPM_UPDATE_COMMAND : (piBoltPackageManager(method)?.update ?? PIBOLT_INSTALL_COMMAND)}`;
 	let latestRelease: Awaited<ReturnType<typeof getLatestPiRelease>>;
 	try {
 		latestRelease = await getLatestPiRelease(currentVersion, { retry: true });
 	} catch (error: unknown) {
 		throw new Error(
-			`Could not determine latest ${COMMAND_NAME} version: ${formatVersionCheckError(error)}.${fallback}`,
+			// (The reasons may end with a period already: "The operation timed out.")
+			`Could not determine latest ${COMMAND_NAME} version: ${formatVersionCheckError(error).replace(/\.+$/, "")}.${fallback}`,
 			{ cause: error },
 		);
 	}
@@ -837,16 +838,13 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
  * variant, same folder). One installed with the npm package, Homebrew, Scoop or mise is updated with the package manager
  * instead.
  */
-async function runPiBoltSelfUpdate(
-	version: string,
-	options: { reinstall?: boolean; recompile?: boolean } = {},
-): Promise<boolean> {
+async function runPiBoltSelfUpdate(version: string, options: { reinstall?: boolean } = {}): Promise<boolean> {
 	const method = piBoltInstallMethod();
 	if (method === "npm") {
 		console.log(
-			`This Pi-Bolt was installed with the npm package. Update it with the package manager that installed it:`,
+			`Pi-Bolt ${version} is out. This Pi-Bolt was installed with the npm package: update it with the package manager that installed it:`,
 		);
-		console.log(`  npm install -g pi-bolt@latest      (or: bun add -g pi-bolt@latest)`);
+		console.log(`  ${PIBOLT_NPM_UPDATE_COMMAND}      (or: bun add -g --trust pi-bolt@latest)`);
 		return false;
 	}
 	// (Homebrew, Scoop and mise own the folder: the installer would replace files they keep track of.)
@@ -905,23 +903,8 @@ async function runPiBoltSelfUpdate(
 				: `Updated Pi-Bolt from ${PIBOLT?.version} to ${version}`,
 		),
 	);
-	// Extensions `pi-bolt compile` compiled in before are compiled into this release too, by the release itself.
-	const installDir = piBoltUpdateEnvironment(version).PIBOLT_INSTALL;
-	if (options.recompile !== false && installDir && piBoltCompileWanted(installDir)) {
-		console.log(chalk.dim(`Compiling the extensions compiled in before into Pi-Bolt ${version}...`));
-		const compiled = spawnProcessSync(installed, ["compile", "--after-update"], {
-			cwd: homedir(),
-			encoding: "utf8",
-			stdio: "inherit",
-		});
-		if (compiled.status !== 0) {
-			console.error(
-				chalk.yellow(
-					`The extensions were not compiled into ${version}: they load from their files until \`pi-bolt compile\` compiles them in.`,
-				),
-			);
-		}
-	}
+	// (Extensions compiled into the build it replaced load from their files now: the installer said so, and how to compile
+	// them in again. An update compiles nothing.)
 	return true;
 }
 
@@ -929,7 +912,7 @@ async function runPiBoltSelfUpdate(
 async function runPiBoltWindowsUpdate(
 	version: string,
 	installDir: string,
-	options: { reinstall?: boolean; recompile?: boolean },
+	options: { reinstall?: boolean },
 ): Promise<boolean> {
 	console.log(chalk.dim(`Updating Pi-Bolt to ${version}...`));
 	try {
@@ -955,21 +938,7 @@ async function runPiBoltWindowsUpdate(
 				: `Updated Pi-Bolt from ${PIBOLT?.version} to ${version}`,
 		),
 	);
-	if (options.recompile !== false && piBoltCompileWanted(installDir)) {
-		console.log(chalk.dim(`Compiling the extensions compiled in before into Pi-Bolt ${version}...`));
-		const compiled = spawnProcessSync(installed, ["compile", "--after-update"], {
-			cwd: homedir(),
-			encoding: "utf8",
-			stdio: "inherit",
-		});
-		if (compiled.status !== 0) {
-			console.error(
-				chalk.yellow(
-					`The extensions were not compiled into ${version}: they load from their files until \`pi-bolt compile\` compiles them in.`,
-				),
-			);
-		}
-	}
+	// (Nothing is compiled: Windows builds have no extensions compiled in.)
 	return true;
 }
 
@@ -1215,7 +1184,7 @@ export async function handlePackageCommand(
 	if (PIBOLT && args[0] === "compile") {
 		const build = PIBOLT;
 		process.exitCode = await runPiBoltCompile(args.slice(1), () =>
-			runPiBoltSelfUpdate(build.version, { reinstall: true, recompile: false }),
+			runPiBoltSelfUpdate(build.version, { reinstall: true }),
 		);
 		return true;
 	}
