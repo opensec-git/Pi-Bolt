@@ -61,8 +61,8 @@ const SIMPLE_LINE = /^([A-Za-z_][A-Za-z0-9_-]*):(?:$| +(.*)$)/;
 // Keys that yaml reads as something other than their text (`null: x` gives the key ""), or that an object treats specially.
 const SPECIAL_KEYS = new Set(["null", "Null", "NULL", "true", "True", "TRUE", "false", "False", "FALSE", "__proto__"]);
 // Characters YAML prints as they are: no tab, no C0 or C1 control, no NEL, no U+2028/U+2029 (yaml reads those as line
-// breaks), no BOM, no U+FFFE/U+FFFF; surrogates only in pairs.
-const PRINTABLE = /^(?:[\x20-\x7E\xA0-\u2027\u202A-\uD7FF\uE000-\uFEFE\uFF00-\uFFFD]|[\uD800-\uDBFF][\uDC00-\uDFFF])*$/;
+// breaks), no BOM, no U+FFFE/U+FFFF; surrogates only in pairs (with the `u` flag a lone surrogate is in no range here).
+const PRINTABLE = /^[\x20-\x7E\xA0-\u2027\u202A-\uD7FF\uE000-\uFEFE\uFF00-\uFFFD\u{10000}-\u{10FFFF}]*$/u;
 // A plain scalar starting with one of these is an indicator, a number, or something this parser does not read.
 const UNSAFE_PLAIN_START = /^[-?:,[\]{}#&*!|>'"%@`+.0-9]/;
 const SINGLE_QUOTED = /^'((?:[^']|'')*)'$/;

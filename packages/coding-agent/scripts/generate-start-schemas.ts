@@ -10,6 +10,7 @@
 
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Build } from "typebox/schema";
@@ -173,9 +174,11 @@ function importPath(fromDirectory: string, to: string): string {
 // As `npm run check` leaves a file (biome check --write: formatted, imports sorted).
 function format(source: string, out: string): string {
 	const repositoryDirectory = resolve(packageDirectory, "../..");
-	const biome = resolve(repositoryDirectory, "node_modules/.bin/biome");
+	// Biome's launcher run by this Node, as scripts/biome-check.mjs runs it: node_modules/.bin/biome is a shell script,
+	// which Windows cannot start.
+	const biome = createRequire(import.meta.url).resolve("@biomejs/biome/bin/biome");
 	const path = resolve(packageDirectory, out);
-	const result = spawnSync(biome, ["check", "--write", `--stdin-file-path=${path}`], {
+	const result = spawnSync(process.execPath, [biome, "check", "--write", `--stdin-file-path=${path}`], {
 		cwd: repositoryDirectory,
 		input: source,
 		encoding: "utf-8",

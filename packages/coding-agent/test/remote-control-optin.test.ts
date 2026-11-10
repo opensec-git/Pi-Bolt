@@ -479,7 +479,7 @@ describe("pi service while remote control is off", () => {
 			);
 			const installPs1 = readFileSync(join(root, "install.ps1"), "utf8");
 			expect(installPs1).toMatch(
-				/try \{ & \$exe list \*> \$null \} catch \{ \} finally \{ Pop-Location \}\n.*\n\tPush-Location -LiteralPath \$state\.Dir\n\ttry \{ & \$exe service restart \*> \$null \} catch \{ \} finally \{ Pop-Location \}\n/,
+				/try \{ & \$exe list \*> \$null \} catch \{ \} finally \{ Pop-Location \}\r?\n.*\r?\n\tPush-Location -LiteralPath \$state\.Dir\r?\n\ttry \{ & \$exe service restart \*> \$null \} catch \{ \} finally \{ Pop-Location \}\r?\n/,
 			);
 			const windowsUpdate = readFileSync(join(root, "packages/coding-agent/src/pi-bolt-update-windows.ts"), "utf8");
 			expect(windowsUpdate).toContain(
