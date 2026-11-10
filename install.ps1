@@ -564,6 +564,8 @@ function Install-PiBoltRelease($state) {
 			}
 		}
 		Install-PiBoltFiles (Join-Path $unpacked $name) $state.Dir
+		# No build ships the mobile UI skill: the copy an earlier build left in this folder goes.
+		Remove-Item -LiteralPath (Join-Path $state.Dir 'skills\pibolt-mobile-ui') -Recurse -Force -ErrorAction SilentlyContinue
 		Clear-PiBoltProgress
 		$size = (Get-Item -LiteralPath $file).Length
 		Write-Host ("  $green" + 'ok' + "$reset install complete $dim($($state.Platform)-$($state.Variant), $(Format-MB $size) MB from $from$(if ($signed) { ', signature verified' }))$reset")
@@ -927,6 +929,9 @@ function Install-PiBolt {
 	# that Pi, if it is started before Pi-Bolt, does not find them (an earlier installer put them there).
 	Push-Location -LiteralPath $state.Dir
 	try { & $exe list *> $null } catch { } finally { Pop-Location }
+	# A remote control service that runs (an earlier version's) is restarted, so it runs this version; nothing when none runs.
+	Push-Location -LiteralPath $state.Dir
+	try { & $exe service restart *> $null } catch { } finally { Pop-Location }
 	$word = if ($action -eq 'reinstall' -and $state.Installed -and $state.Installed -ne $state.Shown) { 'updated' } elseif ($action -eq 'reinstall') { 'reinstalled' } else { 'installed' }
 	Write-Host "`nPi-Bolt $($state.Shown) was $word successfully $dim(Pi $(& $exe --version))$reset."
 	Add-PiBoltToPath $state.Dir ([bool]$state.Existed)

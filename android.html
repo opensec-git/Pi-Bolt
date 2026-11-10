@@ -155,16 +155,16 @@
 <main class="frame">
   <div class="hero">
     <div>
-      <span class="micro accent bracket" id="badge">Pi-Bolt for Android · 0.7.2</span>
+      <span class="micro accent bracket" id="badge">Pi-Bolt for Android · 0.6.0</span>
       <h1>Pi-Bolt,<br>in your <span class="pix">pocket.</span></h1>
       <p class="lede">The Pi coding agent runs on the phone itself: projects with their files, bash, git, ripgrep and fd,
         your own model provider keys, sessions you can resume and fork. No computer, no Termux. And when you are at your
         desk, the same app remote-controls Pi-Bolt on your computer, paired by QR code and end to end encrypted.</p>
       <div class="get">
-        <a class="btn primary big" id="download" href="https://github.com/opensec-git/Pi-Bolt/releases/download/android-v0.7.2/pi-bolt-android-0.7.2.apk"><span>Download the APK</span><i aria-hidden="true">↓</i></a>
+        <a class="btn primary big" id="download" href="https://github.com/opensec-git/Pi-Bolt/releases/download/android-v0.6.0/pi-bolt-android-0.6.0.apk"><span>Download the APK</span><i aria-hidden="true">↓</i></a>
         <a class="link" href="#install">How to install <span aria-hidden="true">→</span></a>
       </div>
-      <div class="meta" id="meta">Version 0.7.2 · about 181 MB · Android 8.0 or later, 64-bit ARM</div>
+      <div class="meta" id="meta">Version 0.6.0 · about 180 MB · Android 8.0 or later, 64-bit ARM</div>
       <p class="status" id="status" role="status" hidden></p>
       <div class="status inapp" id="inapp" hidden>
         <p>This app's built-in browser can't download files. Open this page in Chrome (or your browser) to get the APK.</p>
@@ -194,7 +194,7 @@
       <li><b>01</b><h3>Download</h3><p>Tap <em>Download the APK</em> on your phone. Android may warn that the file can harm your device: it is an app from outside the Play Store, so tap <em>Download anyway</em>.</p></li>
       <li><b>02</b><h3>Install</h3><p>Open the file. The first time, Android asks to allow installs from your browser: allow it, go back, and tap <em>Install</em>.</p></li>
       <li><b>03</b><h3>Add a model key</h3><p>The first start asks for a key from a model provider (Anthropic, OpenAI, OpenRouter and others). It stays on the phone, in Pi's own <code>auth.json</code>.</p></li>
-      <li><b>04</b><h3>Start a project</h3><p>Make a new project or clone one from git, and ask Pi. To drive your computer's Pi-Bolt instead, run <code>/remote-control</code> there and scan its QR code from the app.</p></li>
+      <li><b>04</b><h3>Start a project</h3><p>Make a new project or clone one from git, and ask Pi. To drive your computer's Pi-Bolt instead, run <code>pi-bolt remote-control enable</code> there once, then <code>/remote-control</code>, and scan its QR code from the app.</p></li>
     </ol>
   </section>
 
@@ -206,8 +206,8 @@
       <div><span class="micro">APK SHA-256</span><div class="v" id="sha">In the release's .sha256 file</div></div>
       <div><span class="micro">Signing certificate SHA-256</span><div class="v" id="cert">f752464c8b6d5906d7fd467346b89316518e3ddfe77843f66b1fa673818a2c90</div>
         <p>Every update is signed with this certificate; Android refuses an update signed with any other.</p></div>
-      <div><span class="micro">Needs</span><p>Android 8.0 or later on a 64-bit ARM phone, about 400 MB free, and a key from a model provider. Remote control also needs a Pi-Bolt with the <code>/remote-control</code> command on the computer.</p></div>
-      <div><span class="micro">Built by</span><p>GitHub Actions from the <a href="https://github.com/opensec-git/Pi-Bolt/tree/pi-bolt/android">android/</a> sources, release <a id="release" href="https://github.com/opensec-git/Pi-Bolt/releases/tag/android-v0.7.2">android-v0.7.2</a>. The engine pack and its licences: <a href="https://github.com/opensec-git/Pi-Bolt/tree/pi-bolt/android/engine">android/engine</a>; remote control: <a href="https://github.com/opensec-git/Pi-Bolt/blob/pi-bolt/packages/coding-agent/docs/remote-control.md">protocol and security</a>.</p></div>
+      <div><span class="micro">Needs</span><p>Android 8.0 or later on a 64-bit ARM phone, about 400 MB free, and a key from a model provider. Remote control also needs a Pi-Bolt with the <code>/remote-control</code> command on the computer, turned on with <code>pi-bolt remote-control enable</code>.</p></div>
+      <div><span class="micro">Built by</span><p>GitHub Actions from the <a href="https://github.com/opensec-git/Pi-Bolt/tree/pi-bolt/android">android/</a> sources, release <a id="release" href="https://github.com/opensec-git/Pi-Bolt/releases/tag/android-v0.6.0">android-v0.6.0</a>. The engine pack and its licences: <a href="https://github.com/opensec-git/Pi-Bolt/tree/pi-bolt/android/engine">android/engine</a>; remote control: <a href="https://github.com/opensec-git/Pi-Bolt/blob/pi-bolt/packages/coding-agent/docs/remote-control.md">protocol and security</a>.</p></div>
     </div>
   </section>
 
