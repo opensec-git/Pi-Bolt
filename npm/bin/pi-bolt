@@ -4,7 +4,7 @@
 # replaces this script with the native executable (exec), so the launcher costs only its shell's start.
 set -eu
 
-VERSION=1.2.0
+VERSION=1.2.1
 HOME_DIR="${PIBOLT_HOME:-$HOME/.pi-bolt}"
 
 # macOS has this folder, Linux (Android too) does not: a test the shell makes itself, so no uname starts at every run.
