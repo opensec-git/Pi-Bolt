@@ -1171,6 +1171,18 @@ function isHtmlCommentBlock(token: Token): boolean {
 	return token.type === "html" && stripHtmlComments(token.raw).trim() === "";
 }
 
+/**
+ * What a Markdown component knows of its text, kept as text is added to it: whether it has a character that is not white
+ * space, a tab, an HTML comment's start; and its last three characters (`end`), where a "<!--" that ends in added text begins.
+ */
+interface TextFacts {
+	text: string;
+	visible: boolean;
+	tabs: boolean;
+	comments: boolean;
+	end: string;
+}
+
 /** The tokens tokensFor() renders, by the lexed tokens they were made from (withoutHtmlCommentBlocks()). */
 const renderedWithoutComments = new WeakMap<Token[], Token[]>();
 
@@ -1324,7 +1336,7 @@ export class Markdown implements Component {
 	 * finds it for a text that is the one before with text added from the text added: a message streaming in is not read
 	 * in full for each chunk (startsWithText()).
 	 */
-	private facts?: { text: string; visible: boolean; tabs: boolean };
+	private facts?: TextFacts;
 	private paddingX: number; // Left/right padding
 	private paddingY: number; // Top/bottom padding
 	private defaultTextStyle?: DefaultTextStyle;
@@ -1415,14 +1427,19 @@ export class Markdown implements Component {
 		}
 		// (`added` is what the text adds to the text before: the result for the previous text, which `before` is.)
 		const facts = this.facts;
-		this.facts =
-			facts !== undefined && added !== undefined && facts.text === before
-				? {
-						text: this.text,
-						visible: facts.visible || /\S/.test(added),
-						tabs: facts.tabs || added.includes("\t"),
-					}
-				: undefined;
+		let grownFacts: TextFacts | undefined;
+		if (facts !== undefined && added !== undefined && facts.text === before) {
+			// (The end of the text before and what was added: a "<!--" can begin in the first and end in the second.)
+			const end = facts.end + added;
+			grownFacts = {
+				text: this.text,
+				visible: facts.visible || /\S/.test(added),
+				tabs: facts.tabs || added.includes("\t"),
+				comments: facts.comments || end.includes("<!--"),
+				end: end.slice(-3),
+			};
+		}
+		this.facts = grownFacts;
 		this.cachedText = undefined;
 		this.cachedWidth = undefined;
 		this.cachedLines = undefined;
@@ -1721,6 +1738,8 @@ export class Markdown implements Component {
 				: { from: this.text, added: "", ...(asIs && lexed !== undefined ? { lexed } : {}) };
 			this.cachedTokens = new WeakRef({ source: normalizedText, tokens });
 		}
+		// (Most texts have no HTML comment: their tokens are rendered as they are, with nothing looked at.)
+		if (!(facts?.comments ?? text.includes("<!--"))) return { tokens, contentWidth };
 		let shown = renderedWithoutComments.get(tokens);
 		if (!shown) {
 			shown = withoutHtmlCommentBlocks(tokens);
@@ -1731,12 +1750,18 @@ export class Markdown implements Component {
 		return { tokens: shown, contentWidth };
 	}
 
-	/** Whether the text has a character that is not white space, and a tab (facts). */
-	private textFacts(): { text: string; visible: boolean; tabs: boolean } {
+	/** What the component knows of its text (TextFacts), made again when the text was not grown by setText(). */
+	private textFacts(): TextFacts {
 		const text = this.text;
 		let facts = this.facts;
 		if (facts?.text !== text) {
-			facts = { text, visible: /\S/.test(text), tabs: text.includes("\t") };
+			facts = {
+				text,
+				visible: /\S/.test(text),
+				tabs: text.includes("\t"),
+				comments: text.includes("<!--"),
+				end: text.slice(-3),
+			};
 			this.facts = facts;
 		}
 		return facts;
