@@ -128,7 +128,11 @@ export const grepSchema: typeof Source.grepSchema = typeBoxShaped(
 				{ "~kind": "String", "~optional": true },
 			),
 			glob: typeBoxShaped(
-				{ type: "string", description: "Filter files by glob pattern, e.g. '*.ts' or '**/*.spec.ts'" },
+				{
+					type: "string",
+					description:
+						"Filter files by glob pattern, relative to path, e.g. '*.ts', 'src/**/*.ts' or '**/*.spec.ts'. A pattern without '/' matches file names at any depth",
+				},
 				{ "~kind": "String", "~optional": true },
 			),
 			ignoreCase: typeBoxShaped(

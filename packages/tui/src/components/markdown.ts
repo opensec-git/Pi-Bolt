@@ -1160,6 +1160,82 @@ export function lexMarkdownForTest(source: string, complete = false): Token[] {
 	return lexMarkdown(source, complete);
 }
 
+// An unclosed comment runs to the end of an HTML block, as in CommonMark, so streamed comments stay hidden.
+const HTML_COMMENT_REGEX = /<!--[\s\S]*?(?:-->|$)/g;
+
+function stripHtmlComments(html: string): string {
+	return html.replace(HTML_COMMENT_REGEX, "");
+}
+
+function isHtmlCommentBlock(token: Token): boolean {
+	return token.type === "html" && stripHtmlComments(token.raw).trim() === "";
+}
+
+/** The tokens tokensFor() renders, by the lexed tokens they were made from (withoutHtmlCommentBlocks()). */
+const renderedWithoutComments = new WeakMap<Token[], Token[]>();
+
+/** List and blockquote tokens without comment-only HTML blocks inside, by the token they were made from. */
+const withoutCommentsInside = new WeakMap<Token, Token>();
+
+/**
+ * `tokens` without the block HTML tokens that hold only comments, so they render no line; `tokens` itself when it has none
+ * (nearly always). A removed comment between two blank lines, or at the start or end, also drops a blank line, so it leaves
+ * no extra gap (earendil-works/pi#11710). Lexed tokens are never changed: lexMarkdown() lexes a growing text from the
+ * tokens of the text before, which must add up to it, so the rendered tokens are this copy instead.
+ */
+function withoutHtmlCommentBlocks(tokens: Token[]): Token[] {
+	let result: Token[] | undefined;
+	for (let i = tokens.length - 1; i >= 0; i--) {
+		const token = tokens[i];
+		let kept: Token | undefined = token;
+		if (token.type === "list") {
+			kept = withoutCommentsInList(token as Tokens.List);
+		} else if (token.type === "blockquote") {
+			kept = withoutCommentsInBlockquote(token as Tokens.Blockquote);
+		} else if (isHtmlCommentBlock(token)) {
+			kept = undefined;
+		}
+		if (kept === token) continue;
+		result ??= tokens.slice();
+		if (kept !== undefined) {
+			result[i] = kept;
+			continue;
+		}
+		result.splice(i, 1);
+		if (result[i]?.type === "space" && (i === 0 || result[i - 1]?.type === "space")) {
+			result.splice(i, 1);
+		} else if (i === result.length && result[i - 1]?.type === "space") {
+			result.splice(--i, 1);
+		}
+	}
+	return result ?? tokens;
+}
+
+function withoutCommentsInList(list: Tokens.List): Token {
+	const known = withoutCommentsInside.get(list);
+	if (known) return known;
+	let items: Tokens.ListItem[] | undefined;
+	for (let i = 0; i < list.items.length; i++) {
+		const item = list.items[i];
+		const tokens = withoutHtmlCommentBlocks(item.tokens);
+		if (tokens === item.tokens) continue;
+		items ??= list.items.slice();
+		items[i] = { ...item, tokens };
+	}
+	const result: Token = items ? { ...list, items } : list;
+	withoutCommentsInside.set(list, result);
+	return result;
+}
+
+function withoutCommentsInBlockquote(blockquote: Tokens.Blockquote): Token {
+	const known = withoutCommentsInside.get(blockquote);
+	if (known) return known;
+	const tokens = blockquote.tokens ? withoutHtmlCommentBlocks(blockquote.tokens) : undefined;
+	const result: Token = tokens !== blockquote.tokens ? { ...blockquote, tokens: tokens ?? [] } : blockquote;
+	withoutCommentsInside.set(blockquote, result);
+	return result;
+}
+
 /**
  * Default text styling for markdown content.
  * Applied to all text unless overridden by markdown formatting.
@@ -1645,7 +1721,12 @@ export class Markdown implements Component {
 				: { from: this.text, added: "", ...(asIs && lexed !== undefined ? { lexed } : {}) };
 			this.cachedTokens = new WeakRef({ source: normalizedText, tokens });
 		}
-		return { tokens, contentWidth };
+		let shown = renderedWithoutComments.get(tokens);
+		if (!shown) {
+			shown = withoutHtmlCommentBlocks(tokens);
+			renderedWithoutComments.set(tokens, shown);
+		}
+		return { tokens: shown, contentWidth };
 	}
 
 	/** Whether the text has a character that is not white space, and a tab (facts). */
@@ -2208,9 +2289,9 @@ export class Markdown implements Component {
 				break;
 
 			case "html":
-				// Render HTML as plain text (escaped for terminal)
+				// Render HTML as plain text (escaped for terminal), without its comments
 				if ("raw" in token && typeof token.raw === "string") {
-					lines.push(this.applyDefaultStyle(token.raw.trim()));
+					lines.push(this.applyDefaultStyle(stripHtmlComments(token.raw).trim()));
 				}
 				break;
 
@@ -2238,7 +2319,15 @@ export class Markdown implements Component {
 			return segments.map((segment: string) => applyText(segment)).join("\n");
 		};
 
-		for (const token of tokens) {
+		// After a skipped HTML comment, drop the next text's leading space if the text before ended with one,
+		// so "a <!-- c --> b" renders as "a b".
+		let dropLeadingSpace = false;
+		for (let i = 0; i < tokens.length; i++) {
+			let token = tokens[i];
+			if (dropLeadingSpace && token.type === "text" && !token.tokens?.length && /^[ \t]/.test(token.text)) {
+				token = { ...token, text: token.text.replace(/^[ \t]+/, "") };
+			}
+			dropLeadingSpace = false;
 			switch (token.type) {
 				case "latex": {
 					const latexToken = token as LatexToken;
@@ -2319,8 +2408,10 @@ export class Markdown implements Component {
 				}
 
 				case "html":
-					// Render inline HTML as plain text
-					if ("raw" in token && typeof token.raw === "string") {
+					// Render inline HTML as plain text; comments are hidden
+					if (token.raw.startsWith("<!--")) {
+						dropLeadingSpace = i === 0 || /[ \t]$/.test(tokens[i - 1].raw);
+					} else {
 						result += applyTextWithNewlines(token.raw);
 					}
 					break;

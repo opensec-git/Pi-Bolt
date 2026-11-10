@@ -1,6 +1,14 @@
-import { type Context, copyJson, type Draft, type JsonValue } from "@earendil-works/chord";
-import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import { type Change, type Op, type PendingOps, type Prepared, type Tracker, track } from "@earendil-works/chord/delta";
+import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
+import {
+	type Change,
+	type Draft,
+	type Op,
+	type PendingOps,
+	type Prepared,
+	type Tracker,
+	track,
+} from "@earendil-works/chord/delta";
+import { copyJson, type JsonValue } from "@earendil-works/chord/json";
 import type { TelemetryCarrier } from "@earendil-works/pi-telemetry";
 import {
 	type AnyDocDefinition,
@@ -330,7 +338,7 @@ export class Transaction implements Tx {
 		return this.#read("scanTasks", () => this.#host.storage.scanTasks(query, limit, cursor, this.#context));
 	}
 
-	/** Internal: committed submission record. */
+	/** Committed submission record. */
 	submission(id: SubmissionId): Promise<SubmissionRecord | undefined> {
 		return this.#read("submission", () => this.#host.storage.submission(id, this.#context));
 	}
