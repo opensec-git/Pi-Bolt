@@ -22,6 +22,21 @@
 - Remote control spends a pairing secret only when the phone completes the handshake (`remote_ready`), not when its first handshake message arrives. A phone whose connection timed out mid-handshake (the apps give each address 3 seconds; iOS's first connect can wait on the Local Network prompt) had used up its QR code, so its retry was refused and pairing needed a new code. The secret still pairs one phone: of two phones racing with it, the first to finish pairs and the other is refused
 - On the Bun runtime (Pi-Bolt), a `console.log` from an extension or a dependency in RPC, JSON, ACP or MCP mode (and `pi-bolt service`) no longer goes into the JSON stream on stdout, and in print mode (`-p`) no longer mixes with the answer. Bun's console methods (`log`, `info`, `debug`, `dir`, `dirxml`, `table`, `trace`, `count`, `group`, `write`) print to fd 1 without calling the replaced `process.stdout.write` ([oven-sh/bun#47982](https://github.com/oven-sh/bun/issues/47982)); while stdout is taken over they now print to stderr, formatted as on Node
 
+## [1.5.2] - 2026-11-10
+
+### New Features
+
+- **Fork sessions whose folder is gone**: when a session's original folder was moved or deleted, you can now fork it into the current folder instead of only continuing, so later resumes no longer ask. See [Continue or switch sessions](docs/sessions.md#continue-or-switch-sessions).
+
+### Changed
+
+- When a session's working directory no longer exists, for example after the project folder was renamed, interactive mode now offers `Continue`, `Fork`, or `Cancel` instead of only continuing. `Continue` runs the session in the current directory without storing the choice, as before; `Fork` copies it into the current directory as a new session with a new ID, like `--fork`, so the next resume no longer asks. This applies at startup (`--session`, `--resume`), to `/resume`, to `/import`, and to `ctx.switchSession()` from extensions ([#11975](https://github.com/earendil-works/pi/pull/11975) by [@petrroll](https://github.com/petrroll), fixes [#11060](https://github.com/earendil-works/pi/issues/11060))
+
+### Fixed
+
+- Fixed `/import` of a session whose working directory no longer exists leaving a copy in the session directory, and continuing it leaving a second copy with the same ID (`s.jsonl` and `s-1.jsonl`); the failed copy is now removed ([#11975](https://github.com/earendil-works/pi/pull/11975) by [@petrroll](https://github.com/petrroll), fixes [#11060](https://github.com/earendil-works/pi/issues/11060))
+- Fixed Anthropic OAuth requests reporting an outdated Claude Code version
+
 ## [1.5.1] - 2026-11-09
 
 ### New Features

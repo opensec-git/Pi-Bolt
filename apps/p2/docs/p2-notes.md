@@ -545,7 +545,7 @@ so restoring an archive still works without an extra Retry. Archiving stops the 
 suspended until a restore (`resume`) or their release, instead of starting a worker the archive refuses. Neither guests nor workers may read or dismiss notices, or invoke
 the worker retry control. Dev controls additionally publish their own reload/restart results.
 
-The owner-only `logs` plugin adds **Logs** to `sidebar-foot:logs`. Its sheet selects Server, session workers,
+The owner-only `logs` plugin adds **Logs** to the Settings window (`SettingsSections`). Its sheet selects Server, session workers,
 Terminal host or Dev supervisor, filters text, follows the tail and copies only the visible lines. A `logs` sheet
 locator is the source ID (`session:<id>` for a failed worker); opening it never starts or holds a worker. Source
 changes replace the route, so Back/reload retain the selected worker. Guests and workers cannot acquire `Logs`:
@@ -575,8 +575,6 @@ detached snapshots survive a server restart. The terminal log preload runs befor
 syntax/startup errors are retained too. Focused tests: `logs.test.ts`, `ui-logs.test.ts` and status cases in
 `test-host.test.ts`; the browser regression exercises the original `Unknown p2 plugin: settings` failure, sticky
 startup fencing, the list marker, owner notice, worker-filtered Show logs and recovery through Retry.
-Footer actions wrap so the additional Logs button cannot overflow the
-translated phone drawer and intercept chat taps.
 
 ## Decisions
 
@@ -1133,7 +1131,26 @@ translated phone drawer and intercept chat taps.
   picker) and `snapshot` (settings, providers, credential metadata, errors; never secrets). Workers run their own
   observer (`WorkerModels`). `startServer({ resources: { createModels } })` injects a fixture provider (tests).
   Edit `settings.json` as a file; valid changes hot-reload and in-flight requests keep their configuration.
-  Set the default model and thinking level with **Make default for new sessions** in the model picker; there is no Settings editor UI.
+  Set the default model and thinking level with **Make default for new sessions** in the model picker.
+- **Settings** (`plugins/settings`): the owner's Settings window, opened from the gear before the theme switch in the
+  sidebar's footer (the Drawer's `actions`, filled by the sessions plugin with `SlotList` `sidebar-actions:<name>`).
+  It replaced the footer's More menu. The window is the route's `settings` sheet layer (`ModalSheet`): a list of
+  sections beside a pane on wide screens (General when none is chosen; choosing replaces the step), on phones the
+  list and then a section (a new step; Back returns to the list). Its own sections (General, Models, Agent, Requests,
+  Compaction: the layer's locator) edit settings.json. The plugins' sections are their sheets: a plugin contributes
+  `SettingsSections` (`src/runtime/web-core.ts`) once, keyed by its sheet layer's name, with `label`, `title`,
+  `order` (the list sorts by it, then by key), `Sheet` (renders its sheet while the route opens it; the app's layout
+  keeps every one mounted, `SettingsSectionSheets` in `src/web/SettingsNav.tsx`) and optionally `Shown` (Voice: only
+  with a speech service). The section is that sheet's layer right above `settings`. While the window is open, every `Sheet` renders as a page in
+  its pane (`SettingsPane`, `src/web/settings-embed.ts`): its title and Back, no scrim or × of its own (the window's
+  close everything), `sheet-body` kept for the plugin's styles. The same sheets opened elsewhere (Sign in to a
+  provider, a session's logs or Discord link) stay sheets of their own.
+  Owner-only `Settings` shows `ModelConfig`'s settings and settings.json's load error; `update({ set, unset })`
+  validates `set` as a partial settings.json (closed schema), reloads the file, merges the change into it (top-level
+  keys, groups such as `stream` whole) and saves it through `ModelResources`, answering after the reload
+  (`settings.test.ts`, `ui-settings.test.ts`). Selects and switches save at once (`Switch`, `src/web/Switch.tsx`:
+  settings that apply at once are switches, checkboxes are for forms that submit); text and number fields on blur
+  or Enter; an empty field or "Default" removes the setting.
 - **Devices** (`plugins/devices`): `npm run owner-link [base-url]` signs in as the local owner, calls the local-owner
   `GET /owner-token` (same-origin or no Fetch Metadata only), then prints a private `/owner#<token>` link. At startup the
   server prints a one-time token for this machine, to paste into the sign-in page (added to the log redactor; only
@@ -1180,7 +1197,7 @@ translated phone drawer and intercept chat taps.
   callback URL. API keys and pasted codes pass through the tunnel/relay; use a trusted transport. Once no browser
   holds the sheet (no reference to its owner's `ProviderLogin` left, `host.references`), its unfinished login is
   cancelled. Tests use fake providers (login.test.ts and remote-login.test.ts).
-- **Web slots**: `SlotList({ prefix })` renders every `prefix:<name>` slot (e.g. `sidebar-foot:providers`); `Sheet` is
+- **Web slots**: `SlotList({ prefix })` renders every `prefix:<name>` slot (e.g. `sidebar-actions:settings`); `Sheet` is
   the shared modal with scroll memory (Escape and the scrim close the whole modal stack). Shell-level
   `workspace-panel` docks beside `main`; `workspace-terminal` is an optional terminals-plugin surface.
 - **send_file** (`plugins/send-file`): owns its native tool, reading through the conversation's
@@ -1188,6 +1205,13 @@ translated phone drawer and intercept chat taps.
   Directory sources and files over 25 MiB fail. The existing authorized `/download` route serves snapshots even
   after source deletion or plugin reload. `test/p2/send-file.test.ts` and the files integration tests cover it.
   The artifacts plugin supplies the shared viewer.
+- **Views** (`plugins/views`, `docs/views.md`): panes beside the transcript that the person and the agent share
+  (a workspace Markdown file, the working tree's changes, custom HTML views with JSON state and a `window.p2view`
+  bridge), laid out per device (tabs, splits, drag and drop; one pane at a time on phones), with an annotation layer
+  (comments, removals, drawings on any pane, the transcript included). Selections and annotations go with the person's
+  next message (send router `views`, entry kind `p2.view-input`); the agent's `view` tool reads and changes views;
+  the owner's library keeps saved views in `<data>/views/`. Core: `AppLayout` wraps `main` in the `workbench` slot,
+  the chat's top bar has `view-actions`.
 - **Artifacts and viewer** (`plugins/artifacts`): owns its native artifact tool; versions live in the session's
   files (space `artifacts`, path = the name, Files versions = artifact versions, never reused; title and type in
   `meta`; 2 MiB UTF-8). The `/artifact` route reads through the worker's `ArtifactSource` (server only). `ArtifactList` follows the conversation's latest-only `ArtifactDoc`, independently of

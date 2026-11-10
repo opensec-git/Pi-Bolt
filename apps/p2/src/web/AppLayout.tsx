@@ -4,6 +4,7 @@ import { useComposerState } from "./composer-state.tsx";
 import { useDragSize } from "./drag-size.ts";
 import { useDrawerSwipe } from "./drawer-swipe.ts";
 import { OwnerNotices } from "./OwnerNotices.tsx";
+import { SettingsSectionSheets } from "./SettingsNav.tsx";
 import { useSidebarCollapsed } from "./sidebar.ts";
 
 export function AppLayout() {
@@ -80,11 +81,16 @@ export function AppLayout() {
 				}}
 			>
 				{draggingFiles && <div className="drop-overlay">Drop files to attach</div>}
-				<OwnerNotices />
-				<Slot name="main" fallback={<div className="hero">No chat plugin</div>} />
+				{/* The chat (with the owner's notices below its top bar), as the workbench's first pane when a plugin lays
+				    out panes beside it (views). */}
+				<Slot name="workbench">
+					<OwnerNotices />
+					<Slot name="main" fallback={<div className="hero">No chat plugin</div>} />
+				</Slot>
 			</main>
 			<div id="side-dock" className="side-dock" />
 			<Slot name="workspace-panel" />
+			<SettingsSectionSheets />
 		</div>
 	);
 }

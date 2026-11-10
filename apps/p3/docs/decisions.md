@@ -103,3 +103,15 @@ and its working rules are in `handoff.md`.
   store refuses, replaces explicitly, or copies under a new id; delete retires them. The rule stays: anything needed
   while the worker is off lives on the server, the rest in the session's store, never both. No central metadata store,
   no `metadataOf`, no export callbacks.
+- **Efficiency is a requirement (owner, 2026-11-09):** p3 must be extremely efficient: dozens to hundreds of session
+  workers on one reasonably beefy machine, and a super snappy UI. Every design and build step states its memory per
+  worker, its startup cost and its bytes on the wire for common UI actions (switching sessions and conversations),
+  and measures them; findings of p2's perf work (session "fucked up perf", subagent `worker-mem`) feed p3's design.
+  Any Chord change made for performance (for example references sharing or keeping replicas) must keep Chord's
+  correctness guarantees and goes through the full review.
+- **Tests are isolated and deterministic (owner, 2026-11-09, after p2's subagents test race):** each test case gets its
+  own session (and its own subagents, conversations and stores); nothing a case leaves behind is visible to the next.
+  The fake model answers what the test scripted for each request, deterministically, never "whatever came last"; a
+  request it has no script for fails the test. A test waits for an effect it caused (an entry newer than its own input,
+  a result of its own call), never for a pattern that may already be there. A failure under load is a bug until its
+  root cause is known.
