@@ -39,6 +39,7 @@ import { formatProviderError, normalizeProviderError } from "../utils/error-body
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
+import { hostMatches, hostOf } from "../utils/host.ts";
 import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
 import {
 	applyOpenRouterReportedCost,
@@ -1656,20 +1657,6 @@ function mapStopReason(reason: ChatCompletionChunk.Choice["finish_reason"] | str
 				errorMessage: `Provider finish_reason: ${reason}`,
 			};
 	}
-}
-
-/** The host name of `baseUrl`, lower-cased; "" when it is not a URL. */
-function hostOf(baseUrl: string): string {
-	try {
-		return new URL(baseUrl).hostname.toLowerCase();
-	} catch {
-		return "";
-	}
-}
-
-/** Whether `host` is `domain` or a subdomain of it (not merely a URL that contains the name). */
-function hostMatches(host: string, domain: string): boolean {
-	return host === domain || host.endsWith(`.${domain}`);
 }
 
 /**

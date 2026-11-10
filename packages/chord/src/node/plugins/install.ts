@@ -112,7 +112,7 @@ function targetName(source: PluginSource): string {
 	if ("git" in source) {
 		option(source.git, "repository");
 		option(source.ref, "ref");
-		const name = basename(source.git.replace(/\/+$/, "")).replace(/\.git$/, "");
+		const name = basename(withoutTrailingSlashes(source.git)).replace(/\.git$/, "");
 		if (name === "" || name.startsWith(".") || name.startsWith("-")) {
 			throw new Error(`installPlugin: "${source.git}" names no repository directory`);
 		}
@@ -247,4 +247,11 @@ async function unpack(
 	await mkdir(dir);
 	const file = join(packed, basename(tarball.filename));
 	await run("tar", ["-xzf", file, "--strip-components=1", "-C", dir], packed, context, `extracting ${name}`);
+}
+
+/** `value` without the slashes it ends with. (A loop: a regular expression for it backtracks on long runs of slashes.) */
+function withoutTrailingSlashes(value: string): string {
+	let end = value.length;
+	while (end > 0 && value[end - 1] === "/") end--;
+	return value.slice(0, end);
 }

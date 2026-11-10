@@ -12,3 +12,5 @@ paths-ignore:
   - packages/*/scripts/**
   - packages/coding-agent/examples/**
   - examples/**
+  # Upstream Pi's own apps (p2, p3): not part of Pi or of Pi-Bolt, and in no build.
+  - apps/**

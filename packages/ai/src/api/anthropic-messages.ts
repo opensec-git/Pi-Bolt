@@ -41,6 +41,7 @@ import { withCauseDetail } from "../utils/error-body.ts";
 import { AssistantMessageEventStream } from "../utils/event-stream.ts";
 import { shortHash } from "../utils/hash.ts";
 import { headersToRecord } from "../utils/headers.ts";
+import { hostMatches, hostOf } from "../utils/host.ts";
 import { type ClientIdentity, getIdentityHeaders } from "../utils/identity.ts";
 import { parseJsonWithRepair } from "../utils/json-parse.ts";
 import {
@@ -246,7 +247,7 @@ function getAnthropicCompat(model: Model<"anthropic-messages">) {
 		// Widen or remove this restriction once proxies generally forward the `thread` field.
 		supportsMessageThreads:
 			model.compat?.supportsMessageThreads ??
-			(model.provider === "anthropic" && model.baseUrl.includes("api.anthropic.com")),
+			(model.provider === "anthropic" && hostMatches(hostOf(model.baseUrl), "api.anthropic.com")),
 	};
 }
 

@@ -58,13 +58,16 @@ const SOURCE_MAP = /\/\/# sourceMappingURL=data:application\/json;base64,([A-Za-
 export function mapStack(error: unknown): string {
 	const stack = error instanceof Error ? error.stack : undefined;
 	if (stack === undefined) return String(error);
-	return stack.replace(POSITION, (whole, filename: string, line: string, column: string) => {
+	return stack.replace(TOKEN, (token) => {
+		const position = parsePosition(token);
+		if (position === undefined) return token;
+		const { filename, line, column, end } = position;
 		const script = scripts.get(filename);
-		if (script === undefined) return whole;
+		if (script === undefined) return token;
 		const entry = mapOf(script)?.findEntry(Number(line) - 1, Number(column) - 1);
-		if (entry === undefined || !("originalSource" in entry)) return whole;
+		if (entry === undefined || !("originalSource" in entry)) return token;
 		const file = join(basename(script.dir), entry.originalSource).split("\\").join("/");
-		return `${file}:${entry.originalLine + 1}:${entry.originalColumn + 1}`;
+		return `${file}:${entry.originalLine + 1}:${entry.originalColumn + 1}${token.slice(end)}`;
 	});
 }
 
@@ -74,5 +77,28 @@ function mapOf(script: Registered): SourceMap | undefined {
 	return script.map.map;
 }
 
-/** A position in a stack line: `filename:line:column`, the filename being anything up to it (spaces included). */
-const POSITION = /([^\s()]+):(\d+):(\d+)/g;
+/** A run of a stack line that can hold a position (`filename:line:column`): no white space or parentheses. */
+const TOKEN = /[^\s()]+/g;
+
+const isDigit = (char: string | undefined) => char !== undefined && char >= "0" && char <= "9";
+
+/**
+ * The position in `token`: the last `:line:column` in it with a filename before it, and where it ends (what follows is kept as
+ * it is). The same match as `/([^\s()]+):(\d+):(\d+)/` with its greedy filename, found without backtracking.
+ */
+function parsePosition(token: string): { filename: string; line: string; column: string; end: number } | undefined {
+	for (let colon = token.lastIndexOf(":"); colon > 0; colon = token.lastIndexOf(":", colon - 1)) {
+		let at = colon + 1;
+		while (isDigit(token[at])) at++;
+		if (at === colon + 1 || token[at] !== ":" || !isDigit(token[at + 1])) continue;
+		let end = at + 1;
+		while (isDigit(token[end])) end++;
+		return {
+			filename: token.slice(0, colon),
+			line: token.slice(colon + 1, at),
+			column: token.slice(at + 1, end),
+			end,
+		};
+	}
+	return undefined;
+}
