@@ -130,7 +130,9 @@ export function rollbackPiBolt(): number {
 		console.error(
 			"This Pi-Bolt was installed with the npm package. Install the version you want with the package manager that installed it:",
 		);
-		console.error("  npm install -g pi-bolt@<version>      (the versions: npm view pi-bolt versions)");
+		console.error(
+			"  npm install -g --allow-scripts=pi-bolt pi-bolt@<version>      (the versions: npm view pi-bolt versions)",
+		);
 		return 1;
 	}
 	const manager = piBoltPackageManager(method);

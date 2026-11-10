@@ -908,6 +908,10 @@
       text-decoration: underline;
     }
 
+    .markdown-content .markdown-link-url {
+      color: var(--mdLinkUrl);
+    }
+
     .markdown-content code {
       background: rgba(128, 128, 128, 0.2);
       color: var(--mdCode);

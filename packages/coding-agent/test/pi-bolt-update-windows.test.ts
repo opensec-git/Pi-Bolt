@@ -147,6 +147,54 @@ describe("installFiles", () => {
 		expect(existsSync(join(to, "skills", "mine"))).toBe(true);
 		expect(readFileSync(join(to, "pi-bolt.exe"), "utf8")).toBe("new exe");
 	});
+	// #316: a .pibolt-old an earlier update left, which an older Pi-Bolt still has mapped, cannot be deleted (Windows allows a
+	// rename of a mapped file, not its deletion). It is left for a later install; the update goes on. A folder nothing may be
+	// written to stands in for the lock: what is in it cannot be deleted.
+	test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"a leftover that cannot be deleted is left for a later install, and the update goes on (#316)",
+		() => {
+			const from = join(dir, "new"),
+				to = join(dir, "pi-bolt-win32-x64");
+			const locked = join(to, "native", "win32", "prebuilds", "win32-x64");
+			mkdirSync(from, { recursive: true });
+			writeFileSync(join(from, "pi-bolt.exe"), "new exe");
+			mkdirSync(locked, { recursive: true });
+			writeFileSync(join(to, "pi-bolt.exe"), "old exe");
+			const leftover = join(locked, "win32-platform.node.1794212257087.pibolt-old");
+			writeFileSync(leftover, "mapped by a Pi-Bolt started days ago");
+			chmodSync(locked, 0o555);
+			try {
+				installFiles(from, to, 5);
+				expect(readFileSync(join(to, "pi-bolt.exe"), "utf8")).toBe("new exe");
+				expect(existsSync(leftover)).toBe(true);
+			} finally {
+				chmodSync(locked, 0o755);
+			}
+			// Once the process that held it is gone, the next install deletes it.
+			writeFileSync(join(from, "pi-bolt.exe"), "newer exe");
+			installFiles(from, to, 6);
+			expect(existsSync(leftover)).toBe(false);
+			expect(readFileSync(join(to, "pi-bolt.exe"), "utf8")).toBe("newer exe");
+		},
+	);
+	test.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+		"a mobile UI skill that cannot be removed yet does not fail an update whose files are in place (#316)",
+		() => {
+			const from = join(dir, "new"),
+				to = join(dir, "pi-bolt-win32-x64");
+			mkdirSync(from, { recursive: true });
+			writeFileSync(join(from, "pi-bolt.exe"), "new exe");
+			mkdirSync(join(to, "skills", "pibolt-mobile-ui"), { recursive: true });
+			writeFileSync(join(to, "skills", "pibolt-mobile-ui", "SKILL.md"), "old skill");
+			chmodSync(join(to, "skills"), 0o555);
+			try {
+				installFiles(from, to, 7);
+				expect(readFileSync(join(to, "pi-bolt.exe"), "utf8")).toBe("new exe");
+			} finally {
+				chmodSync(join(to, "skills"), 0o755);
+			}
+		},
+	);
 	test("says which file it could not put in place", () => {
 		const from = join(dir, "new"),
 			to = join(dir, "pi-bolt-win32-x64");

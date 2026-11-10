@@ -19,6 +19,7 @@ import {
 	INTERNED_LINE_LENGTH,
 	internLine,
 	isWebLink,
+	localFileLinkTarget,
 	type SanitizedTerminalText,
 	sanitizeTerminalText,
 	sanitizeTerminalTextFrom,
@@ -2403,24 +2404,27 @@ export class Markdown implements Component {
 				case "link": {
 					const linkText = this.renderInlineTokens(token.tokens || [], resolvedStyleContext);
 					const styledLink = this.theme.link(this.theme.underline(linkText));
-					if (getCapabilities().hyperlinks) {
-						// OSC 8: render as a clickable hyperlink. The URL is not printed inline,
-						// so we always show only the link text regardless of whether it matches href.
-						// Only a web or mail link is clickable: a click on a local path or another scheme (file:, an app's
-						// handler, or a target read as an option by `open`) could run a program instead of showing a page.
-						result += (isWebLink(token.href) ? hyperlink(styledLink, token.href) : styledLink) + stylePrefix;
-					} else {
-						// Fallback: print URL in parentheses when text differs from href.
-						// Compare raw token.text (not styled) against href for the equality check.
-						// For mailto: links strip the prefix (autolinked emails use text="foo@bar.com"
-						// but href="mailto:foo@bar.com").
-						const hrefForComparison = token.href.startsWith("mailto:") ? token.href.slice(7) : token.href;
-						if (token.text === token.href || token.text === hrefForComparison) {
-							result += styledLink + stylePrefix;
-						} else {
-							result += styledLink + this.theme.linkUrl(` (${token.href})`) + stylePrefix;
-						}
+					const hyperlinks = getCapabilities().hyperlinks;
+					if (hyperlinks && isWebLink(token.href)) {
+						// OSC 8: a web or mail link is drawn as its text only, a hyperlink that a browser or mail program opens.
+						result += hyperlink(styledLink, token.href) + stylePrefix;
+						break;
 					}
+					// Any other link, and every link without hyperlinks, shows its URL in parentheses after its text (unless
+					// the text is the URL), so where it goes is never hidden. Compare raw token.text (not styled) against href.
+					// For mailto: links strip the prefix (autolinked emails use text="foo@bar.com" but
+					// href="mailto:foo@bar.com").
+					const hrefForComparison = token.href.startsWith("mailto:") ? token.href.slice(7) : token.href;
+					const shown =
+						token.text === token.href || token.text === hrefForComparison
+							? styledLink
+							: styledLink + this.theme.linkUrl(` (${token.href})`);
+					// A local file (localFileLinkTarget()) is a hyperlink, text and URL together: a click opens what a click on
+					// the printed URL opens (in fullscreen mode, through TuiAltScreen's openUrl). Any other link is not: a click
+					// on a relative path or another scheme (an app's handler, a target `open` reads as an option) could run a
+					// program.
+					const target = hyperlinks ? localFileLinkTarget(token.href) : undefined;
+					result += (target === undefined ? shown : hyperlink(shown, target)) + stylePrefix;
 					break;
 				}
 
