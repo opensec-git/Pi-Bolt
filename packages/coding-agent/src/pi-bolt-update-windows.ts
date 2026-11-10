@@ -131,6 +131,19 @@ function filesIn(dir: string): string[] {
 	return files;
 }
 
+/**
+ * Deletes `path` if it can be. A file a running Pi-Bolt has mapped (its executable, a native module) can be renamed on Windows
+ * but not deleted until that process exits, which may be days: it stays for a later install to delete, and never stops this one
+ * (#316).
+ */
+function removeIfPossible(path: string, options: { recursive?: boolean } = {}): void {
+	try {
+		rmSync(path, { force: true, ...options });
+	} catch {
+		// Still in use: a later install deletes it.
+	}
+}
+
 /** Moves a file, copying it when it is on another drive (as %TEMP% may be). */
 function moveFile(from: string, to: string): void {
 	try {
@@ -138,7 +151,8 @@ function moveFile(from: string, to: string): void {
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EXDEV") throw error;
 		copyFileSync(from, to);
-		rmSync(from, { force: true });
+		// (The copy is in place; the temporary folder it came from is removed after the update.)
+		removeIfPossible(from);
 	}
 }
 
@@ -147,11 +161,12 @@ function moveFile(from: string, to: string): void {
  * its executable and DLLs open, and Windows lets those be renamed but not replaced or deleted. Each new file is first moved
  * next to its target, then the old one renamed aside, then the new one renamed into place (if that fails, the old one is put
  * back); pi-bolt.exe last, so that until it is in place the one that runs is the old one. What was renamed aside is deleted
- * now if it can be, or by the next install.
+ * now if it can be, or by the next install: what an earlier install left aside and an older Pi-Bolt still has open is left for
+ * a later one, and does not stop this install (#316). Only a file that cannot be put in place stops it.
  */
 export function installFiles(from: string, to: string, stamp: number = Date.now()): void {
 	if (existsSync(to)) {
-		for (const file of filesIn(to)) if (ASIDE.test(file)) rmSync(join(to, file), { force: true });
+		for (const file of filesIn(to)) if (ASIDE.test(file)) removeIfPossible(join(to, file));
 	}
 	mkdirSync(to, { recursive: true });
 	const files = filesIn(from).sort(
@@ -171,21 +186,20 @@ export function installFiles(from: string, to: string, stamp: number = Date.now(
 				if (existsSync(aside) && !existsSync(target)) renameSync(aside, target);
 				throw error;
 			}
-			try {
-				rmSync(aside, { force: true });
-			} catch {
-				// Still running (this executable): the next install deletes it.
-			}
+			// (Still running, this executable or an older Pi-Bolt: the next install deletes it.)
+			removeIfPossible(aside);
 		} catch (error) {
-			rmSync(staged, { force: true });
+			// (A .pibolt-new left behind is deleted by the next install: the error says which file could not be put in place.)
+			removeIfPossible(staged);
 			throw new Error(
 				`could not put ${target} in place (${(error as Error).message}). Close Pi-Bolt and anything that has its files open, then run \`pi-bolt update\` again.`,
 			);
 		}
 	}
-	// No build ships the mobile UI skill: the copy an earlier build left in this folder goes.
+	// No build ships the mobile UI skill: the copy an earlier build left in this folder goes (when a file of it is open, at a
+	// later install: the new build is in place by now).
 	if (!existsSync(join(from, "skills", "pibolt-mobile-ui")))
-		rmSync(join(to, "skills", "pibolt-mobile-ui"), { recursive: true, force: true });
+		removeIfPossible(join(to, "skills", "pibolt-mobile-ui"), { recursive: true });
 }
 
 /**
@@ -328,7 +342,8 @@ export async function updatePiBoltWindows(version: string, installDir: string, v
 			`  ${chalk.green("ok")} install complete ${chalk.dim(`(win32-${variant}, ${(statSync(zipFile).size / 1048576).toFixed(1)} MB from ${from}, signature verified)`)}`,
 		);
 	} finally {
-		rmSync(tmp, { recursive: true, force: true });
+		// (A temporary folder that cannot be removed yet, a file in it still being scanned, does not fail an update that is done.)
+		removeIfPossible(tmp, { recursive: true });
 	}
 	// Pi-Bolt keeps the packages only it runs out of Pi's list as it starts: once now, as install.ps1 does after an install.
 	spawnSync(join(dir, "pi-bolt.exe"), ["list"], { cwd: dir, stdio: "ignore" });
