@@ -11,7 +11,6 @@ import {
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
-import chalk from "chalk";
 import lockfile from "proper-lockfile";
 import { parseArgs } from "./cli/args.ts";
 import { selectConfig } from "./cli/config-selector.ts";
@@ -59,6 +58,7 @@ import { fetchReleaseInstaller, type ReleaseInstaller, runReleaseInstaller } fro
 import { rollbackPiBolt } from "./pi-bolt-rollback.ts";
 import { isInProfile, updatePiBoltWindows } from "./pi-bolt-update-windows.ts";
 import { spawnProcess, spawnProcessSync, waitForChildProcess } from "./utils/child-process.ts";
+import { chalk } from "./utils/lazy-packages.ts";
 import { canonicalizePath, getCwdRelativePath } from "./utils/paths.ts";
 import { getPiUserAgent } from "./utils/pi-user-agent.ts";
 import { stripBom } from "./utils/text.ts";

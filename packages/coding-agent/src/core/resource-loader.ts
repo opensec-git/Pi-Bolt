@@ -1,9 +1,9 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { detectCapabilities, getTerminalColorMode, type TerminalColorMode } from "@earendil-works/pi-tui";
-import chalk from "chalk";
 import { COMMAND_NAME, CONFIG_DIR_NAME } from "../config.ts";
 import { loadThemeFromPath, type Theme } from "../modes/interactive/theme/theme.ts";
+import { chalk } from "../utils/lazy-packages.ts";
 import type { ResourceDiagnostic } from "./diagnostics.ts";
 
 export type { ResourceCollision, ResourceDiagnostic } from "./diagnostics.ts";
@@ -32,8 +32,14 @@ import {
 	type PathMetadata,
 	type ResolvedResource,
 } from "./package-manager.ts";
-import type { PromptTemplate } from "./prompt-templates.ts";
-import { loadPromptTemplates } from "./prompt-templates.ts";
+import {
+	listPromptTemplates,
+	loadPromptTemplateFiles,
+	type PromptTemplate,
+	type PromptTemplateFile,
+	type PromptTemplateListing,
+} from "./prompt-templates.ts";
+import { ResourcePathKeys } from "./resource-path-keys.ts";
 import { SettingsManager } from "./settings-manager.ts";
 import type { Skill } from "./skills.ts";
 import { loadSkills } from "./skills.ts";
@@ -188,6 +194,12 @@ export interface ResourceLoader {
 	getExtensions(): LoadExtensionsResult;
 	getSkills(): { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
+	/**
+	 * The prompt templates' names, files and sources, for a listing drawn before anything needs their content: getPrompts'
+	 * result once it has loaded them (`loaded`), otherwise what loading them is expected to give without reading a file
+	 * (it differs only for a file that cannot be read or parsed).
+	 */
+	getPromptFiles?(): { prompts: PromptTemplateFile[]; diagnostics: ResourceDiagnostic[]; loaded: boolean };
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] };
 	getAgentsFiles(): { agentsFiles: Array<{ path: string; content: string }> };
 	getSystemPrompt(): string | undefined;
@@ -403,6 +415,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private extensionThemeSourceInfos: Map<string, SourceInfo>;
 	private resourceMetadataByPath: Map<string, PathMetadata>;
 	private lastPromptPaths: string[];
+	/** The prompt templates are read at their first use (getPrompts), not by reload or extendResources. */
+	private promptsPending: boolean;
+	/** What getPromptFiles listed while the templates were pending: loading reads these files. */
+	private promptListing?: PromptTemplateListing;
+	/** The last pass was reload's, which reports explicit prompt paths that do not exist. */
+	private reportMissingPromptPaths: boolean;
 	private lastThemePaths: string[];
 	private loaded: boolean;
 
@@ -456,6 +474,8 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.extensionThemeSourceInfos = new Map();
 		this.resourceMetadataByPath = new Map();
 		this.lastPromptPaths = [];
+		this.promptsPending = false;
+		this.reportMissingPromptPaths = false;
 		this.lastThemePaths = [];
 		this.loaded = false;
 	}
@@ -469,7 +489,30 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	getPrompts(): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] } {
+		this.loadPendingPrompts();
 		return { prompts: this.prompts, diagnostics: this.promptDiagnostics };
+	}
+
+	getPromptFiles(): { prompts: PromptTemplateFile[]; diagnostics: ResourceDiagnostic[]; loaded: boolean } {
+		// An override takes loaded templates, so its result cannot be known without loading them.
+		if (!this.promptsPending || this.promptsOverride) {
+			return { ...this.getPrompts(), loaded: true };
+		}
+		this.promptListing ??= this.listPrompts();
+		const files = this.promptListing.flatMap((item) => ("file" in item ? [item.file] : []));
+		const deduped = this.dedupePrompts(files);
+		const diagnostics = [
+			...this.promptListing.flatMap((item) => ("diagnostic" in item ? [item.diagnostic] : [])),
+			...deduped.diagnostics,
+		];
+		if (this.reportMissingPromptPaths) {
+			this.addMissingPromptPathDiagnostics(diagnostics);
+		}
+		return {
+			prompts: deduped.prompts.map((prompt) => this.withPromptSourceInfo(prompt, this.resourceMetadataByPath)),
+			diagnostics,
+			loaded: false,
+		};
 	}
 
 	getThemes(): { themes: Theme[]; diagnostics: ResourceDiagnostic[] } {
@@ -512,11 +555,13 @@ export class DefaultResourceLoader implements ResourceLoader {
 		}
 
 		if (skillPaths.length > 0) {
+			const pathKeys = new ResourcePathKeys();
 			this.lastSkillPaths = this.mergePaths(
 				this.lastSkillPaths,
 				skillPaths.map((entry) => entry.path),
+				pathKeys,
 			);
-			this.updateSkillsFromPaths(this.lastSkillPaths, this.resourceMetadataByPath);
+			this.updateSkillsFromPaths(this.lastSkillPaths, this.resourceMetadataByPath, pathKeys);
 		}
 
 		if (promptPaths.length > 0) {
@@ -524,7 +569,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 				this.lastPromptPaths,
 				promptPaths.map((entry) => entry.path),
 			);
-			this.updatePromptsFromPaths(this.lastPromptPaths, this.resourceMetadataByPath);
+			this.deferPrompts(false);
 		}
 
 		if (themePaths.length > 0) {
@@ -560,9 +605,12 @@ export class DefaultResourceLoader implements ResourceLoader {
 
 		// reload() preserves SettingsManager.projectTrusted and reloads settings for that trust state.
 		await this.settingsManager.reload();
-		const resolvedPaths = await this.packageManager.resolve();
+		// One realpath per resource at most for this pass (resource-path-keys.ts).
+		const pathKeys = new ResourcePathKeys();
+		const resolvedPaths = await this.packageManager.resolve(undefined, pathKeys);
 		const cliExtensionPaths = await this.packageManager.resolveExtensionSources(this.additionalExtensionPaths, {
 			temporary: true,
+			pathKeys,
 		});
 		const installWarnings = collectPackageInstallWarnings(
 			resolvedPaths.installFailures,
@@ -613,7 +661,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 		const cliEnabledThemes = getEnabledPaths(cliExtensionPaths.themes);
 
 		const extensionPaths = (
-			this.noExtensions ? cliEnabledExtensions : this.mergePaths(cliEnabledExtensions, enabledExtensions)
+			this.noExtensions ? cliEnabledExtensions : this.mergePaths(cliEnabledExtensions, enabledExtensions, pathKeys)
 		).filter(
 			(path) =>
 				!path.startsWith(BUILTIN_PATH_PREFIX) ||
@@ -635,11 +683,11 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.applyExtensionSourceInfo(this.extensionsResult.extensions, metadataByPath);
 
 		const skillPaths = this.noSkills
-			? this.mergePaths(cliEnabledSkills, this.additionalSkillPaths)
-			: this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths);
+			? this.mergePaths(cliEnabledSkills, this.additionalSkillPaths, pathKeys)
+			: this.mergePaths([...cliEnabledSkills, ...enabledSkills], this.additionalSkillPaths, pathKeys);
 
 		this.lastSkillPaths = skillPaths;
-		this.updateSkillsFromPaths(skillPaths, metadataByPath);
+		this.updateSkillsFromPaths(skillPaths, metadataByPath, pathKeys);
 		for (const p of this.additionalSkillPaths) {
 			if (isLocalPath(p)) {
 				const resolved = this.resolveResourcePath(p);
@@ -650,27 +698,16 @@ export class DefaultResourceLoader implements ResourceLoader {
 		}
 
 		const promptPaths = this.noPromptTemplates
-			? this.mergePaths(cliEnabledPrompts, this.additionalPromptTemplatePaths)
-			: this.mergePaths([...cliEnabledPrompts, ...enabledPrompts], this.additionalPromptTemplatePaths);
+			? this.mergePaths(cliEnabledPrompts, this.additionalPromptTemplatePaths, pathKeys)
+			: this.mergePaths([...cliEnabledPrompts, ...enabledPrompts], this.additionalPromptTemplatePaths, pathKeys);
 
 		this.lastPromptPaths = promptPaths;
-		this.updatePromptsFromPaths(promptPaths, metadataByPath);
-		for (const p of this.additionalPromptTemplatePaths) {
-			if (isLocalPath(p)) {
-				const resolved = this.resolveResourcePath(p);
-				if (!existsSync(resolved) && !this.promptDiagnostics.some((d) => d.path === resolved)) {
-					this.promptDiagnostics.push({
-						type: "error",
-						message: "Prompt template path does not exist",
-						path: resolved,
-					});
-				}
-			}
-		}
+		// Prompt templates are not part of the system prompt: they are read when something first asks for them.
+		this.deferPrompts(true);
 
 		const themePaths = this.noThemes
-			? this.mergePaths(cliEnabledThemes, this.additionalThemePaths)
-			: this.mergePaths([...cliEnabledThemes, ...enabledThemes], this.additionalThemePaths);
+			? this.mergePaths(cliEnabledThemes, this.additionalThemePaths, pathKeys)
+			: this.mergePaths([...cliEnabledThemes, ...enabledThemes], this.additionalThemePaths, pathKeys);
 
 		this.lastThemePaths = themePaths;
 		this.updateThemesFromPaths(themePaths, metadataByPath);
@@ -883,7 +920,11 @@ export class DefaultResourceLoader implements ResourceLoader {
 		});
 	}
 
-	private updateSkillsFromPaths(skillPaths: string[], metadataByPath?: Map<string, PathMetadata>): void {
+	private updateSkillsFromPaths(
+		skillPaths: string[],
+		metadataByPath: Map<string, PathMetadata>,
+		pathKeys: ResourcePathKeys,
+	): void {
 		let skillsResult: { skills: Skill[]; diagnostics: ResourceDiagnostic[] };
 		if (this.noSkills && skillPaths.length === 0) {
 			skillsResult = { skills: [], diagnostics: [] };
@@ -893,6 +934,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 				agentDir: this.agentDir,
 				skillPaths,
 				includeDefaults: false,
+				pathKeys,
 			});
 		}
 		const resolvedSkills = this.skillsOverride ? this.skillsOverride(skillsResult) : skillsResult;
@@ -906,32 +948,69 @@ export class DefaultResourceLoader implements ResourceLoader {
 		this.skillDiagnostics = resolvedSkills.diagnostics;
 	}
 
-	private updatePromptsFromPaths(promptPaths: string[], metadataByPath?: Map<string, PathMetadata>): void {
-		let promptsResult: { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] };
-		if (this.noPromptTemplates && promptPaths.length === 0) {
-			promptsResult = { prompts: [], diagnostics: [] };
-		} else {
-			const loaded = loadPromptTemplates({
-				cwd: this.cwd,
-				agentDir: this.agentDir,
-				promptPaths,
-				includeDefaults: false,
-			});
-			const deduped = this.dedupePrompts(loaded.templates);
-			promptsResult = {
-				prompts: deduped.prompts,
-				diagnostics: [...loaded.diagnostics, ...deduped.diagnostics],
-			};
-		}
+	/** Leaves the prompt templates of lastPromptPaths to be read at their first use. */
+	private deferPrompts(reportMissingPaths: boolean): void {
+		this.promptsPending = true;
+		this.promptListing = undefined;
+		this.reportMissingPromptPaths = reportMissingPaths;
+	}
+
+	private loadPendingPrompts(): void {
+		if (!this.promptsPending) return;
+		this.promptsPending = false;
+		const listing = this.promptListing ?? this.listPrompts();
+		this.promptListing = undefined;
+		const loaded = loadPromptTemplateFiles(listing);
+		const deduped = this.dedupePrompts(loaded.templates);
+		const promptsResult = {
+			prompts: deduped.prompts,
+			diagnostics: [...loaded.diagnostics, ...deduped.diagnostics],
+		};
 		const resolvedPrompts = this.promptsOverride ? this.promptsOverride(promptsResult) : promptsResult;
-		this.prompts = resolvedPrompts.prompts.map((prompt) => ({
+		this.prompts = resolvedPrompts.prompts.map((prompt) =>
+			this.withPromptSourceInfo(prompt, this.resourceMetadataByPath),
+		);
+		this.promptDiagnostics = resolvedPrompts.diagnostics;
+		if (this.reportMissingPromptPaths) {
+			this.addMissingPromptPathDiagnostics(this.promptDiagnostics);
+		}
+	}
+
+	private listPrompts(): PromptTemplateListing {
+		if (this.noPromptTemplates && this.lastPromptPaths.length === 0) {
+			return [];
+		}
+		return listPromptTemplates({
+			cwd: this.cwd,
+			agentDir: this.agentDir,
+			promptPaths: this.lastPromptPaths,
+			includeDefaults: false,
+		});
+	}
+
+	private withPromptSourceInfo<T extends PromptTemplateFile>(prompt: T, metadataByPath: Map<string, PathMetadata>): T {
+		return {
 			...prompt,
 			sourceInfo:
 				this.findSourceInfoForPath(prompt.filePath, this.extensionPromptSourceInfos, metadataByPath) ??
 				prompt.sourceInfo ??
 				this.getDefaultSourceInfoForPath(prompt.filePath),
-		}));
-		this.promptDiagnostics = resolvedPrompts.diagnostics;
+		};
+	}
+
+	private addMissingPromptPathDiagnostics(diagnostics: ResourceDiagnostic[]): void {
+		for (const p of this.additionalPromptTemplatePaths) {
+			if (isLocalPath(p)) {
+				const resolved = this.resolveResourcePath(p);
+				if (!existsSync(resolved) && !diagnostics.some((d) => d.path === resolved)) {
+					diagnostics.push({
+						type: "error",
+						message: "Prompt template path does not exist",
+						path: resolved,
+					});
+				}
+			}
+		}
 	}
 
 	private updateThemesFromPaths(themePaths: string[], metadataByPath?: Map<string, PathMetadata>): void {
@@ -1059,16 +1138,17 @@ export class DefaultResourceLoader implements ResourceLoader {
 		};
 	}
 
-	private mergePaths(primary: string[], additional: string[]): string[] {
+	private mergePaths(primary: string[], additional: string[], pathKeys = new ResourcePathKeys()): string[] {
 		const paths = [...primary, ...additional];
 		// (One path has nothing to be a duplicate of: no realpath for it, about 0.17 M instructions.)
 		if (paths.length === 1) return [this.resolveResourcePath(paths[0])];
 		const merged: string[] = [];
 		const seen = new Set<string>();
+		const resolvedPaths = paths.map((p) => this.resolveResourcePath(p));
+		pathKeys.prepare(resolvedPaths);
 
-		for (const p of paths) {
-			const resolved = this.resolveResourcePath(p);
-			const pathKey = getResourcePathKey(resolved);
+		for (const resolved of resolvedPaths) {
+			const pathKey = pathKeys.keyOf(resolved);
 			if (seen.has(pathKey)) continue;
 			seen.add(pathKey);
 			merged.push(resolved);
@@ -1198,8 +1278,10 @@ export class DefaultResourceLoader implements ResourceLoader {
 		return { extensions, errors };
 	}
 
-	private dedupePrompts(prompts: PromptTemplate[]): { prompts: PromptTemplate[]; diagnostics: ResourceDiagnostic[] } {
-		const seen = new Map<string, PromptTemplate>();
+	private dedupePrompts<T extends PromptTemplateFile>(
+		prompts: T[],
+	): { prompts: T[]; diagnostics: ResourceDiagnostic[] } {
+		const seen = new Map<string, T>();
 		const diagnostics: ResourceDiagnostic[] = [];
 
 		for (const prompt of prompts) {

@@ -1,4 +1,4 @@
-import chalk from "chalk";
+import { chalk } from "./lazy-packages.ts";
 
 const emittedDeprecationWarnings = new Set<string>();
 

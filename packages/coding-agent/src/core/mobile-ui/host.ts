@@ -4,7 +4,6 @@
  * they reach extensions. One per extension runner; the mode supplies the clients through a [ViewChannel].
  */
 
-import { randomUUID } from "node:crypto";
 import { runViewDialogs, type ViewDialogs } from "./dialogs.ts";
 import { applyViewOps } from "./ops.ts";
 import { type MobileViewTextStyle, viewToLines } from "./text.ts";
@@ -435,7 +434,7 @@ export class ViewHost {
 	/** Opens `view` as a sheet; resolves with the submitted form or pressed action, or undefined. */
 	async show(view: MobileView, options: ShowViewOptions = {}): Promise<MobileViewResult | undefined> {
 		assertView(view, "sheet");
-		const key = options.key ?? `sheet:${randomUUID().slice(0, 8)}`;
+		const key = options.key ?? `sheet:${crypto.randomUUID().slice(0, 8)}`;
 		checkKey(key);
 		if (this.sheets.has(key) || this.views.has(key)) throw new Error(`View key ${JSON.stringify(key)} is in use`);
 		if (options.signal?.aborted) return undefined;

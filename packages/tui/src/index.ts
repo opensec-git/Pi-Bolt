@@ -1,6 +1,6 @@
 // Core TUI interfaces and classes
 
-export { Marked, type Token, type Tokens } from "marked";
+export type { Token, Tokens } from "marked";
 // Autocomplete support
 export {
 	type AutocompleteItem,
@@ -109,6 +109,8 @@ export {
 } from "./keys.ts";
 // LaTeX rendering
 export { type RenderLatexOptions, renderLatex } from "./latex.ts";
+// marked's Marked class, evaluated at first use
+export { Marked } from "./marked-module.ts";
 // Native platform integration
 export { getNativeClipboard, type NativeClipboard } from "./native-platform.ts";
 export { oklabToOkhslLightness } from "./oklab.ts";

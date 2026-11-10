@@ -1,4 +1,3 @@
-import { compare, valid } from "semver";
 import {
 	PIBOLT,
 	PIBOLT_LATEST_RELEASE_API,
@@ -8,6 +7,7 @@ import {
 	piBoltChannel,
 	piBoltVersionOfTag,
 } from "../pi-bolt.ts";
+import { semver } from "./lazy-packages.ts";
 import { fetchWithRetry } from "./management-http.ts";
 import { getPiUserAgent } from "./pi-user-agent.ts";
 
@@ -41,12 +41,12 @@ export function formatVersionCheckError(error: unknown): string {
 }
 
 export function comparePackageVersions(leftVersion: string, rightVersion: string): number | undefined {
-	const left = valid(leftVersion.trim());
-	const right = valid(rightVersion.trim());
+	const left = semver().valid(leftVersion.trim());
+	const right = semver().valid(rightVersion.trim());
 	if (!left || !right) {
 		return undefined;
 	}
-	return compare(left, right);
+	return semver().compare(left, right);
 }
 
 export function isNewerPackageVersion(candidateVersion: string, currentVersion: string): boolean {
