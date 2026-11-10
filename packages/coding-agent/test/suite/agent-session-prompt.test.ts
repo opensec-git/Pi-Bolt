@@ -283,6 +283,20 @@ describe("AgentSession prompt characterization", () => {
 		expect(expandedPrompt).toBe("Review this code: src/index.ts");
 	});
 
+	it("asks for prompt templates only for text that starts with /", async () => {
+		// The resource loader reads template files at their first use: a prompt that cannot name one must not read them.
+		const getPrompts = vi.fn(() => ({ prompts: [], diagnostics: [] }));
+		const harness = await createHarness({ resourceLoader: { ...createTestResourceLoader(), getPrompts } });
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("ok"), fauxAssistantMessage("ok")]);
+
+		await harness.session.prompt("hello /review");
+		expect(getPrompts).not.toHaveBeenCalled();
+
+		await harness.session.prompt("/review src/index.ts");
+		expect(getPrompts).toHaveBeenCalled();
+	});
+
 	it("sendUserMessage can opt into prompt template expansion", async () => {
 		const template: PromptTemplate = {
 			name: "review",
