@@ -57,23 +57,26 @@ describe("CodeHighlighter", () => {
 		const row = new ToolExecutionComponent("write", "w", { path: "a.ts", content }, {}, writeRenderers, tui, "/");
 		row.updateArgs({ path: "a.ts", content: `${content} //` });
 		row.render(80);
-		const highlight = vi.spyOn(syntaxHighlight, "highlight");
+		// (Code that grows from code highlighted before is highlighted from its last final lines: GrowingHighlighter.)
+		const whole = vi.spyOn(syntaxHighlight, "highlight");
+		const growing = vi.spyOn(syntaxHighlight.GrowingHighlighter.prototype, "lines");
+		const highlight = { calls: () => whole.mock.calls.length + growing.mock.calls.length };
 		// Only the changed last line is highlighted again.
 		row.updateArgs({ path: "a.ts", content: `${content} // more` });
 		row.render(80);
-		expect(highlight).toHaveBeenCalledTimes(1);
+		expect(highlight.calls()).toBe(1);
 
 		// Pi-Bolt: a complete row reuses the lines highlighted while streaming, which here are the whole file, collapsed
 		// and expanded.
 		row.setArgsComplete();
 		row.render(80);
-		expect(highlight).toHaveBeenCalledTimes(1);
+		expect(highlight.calls()).toBe(1);
 		row.setExpanded(true);
 		row.render(80);
 		row.setExpanded(false);
 		row.render(80);
 		row.setExpanded(true);
 		row.render(80);
-		expect(highlight).toHaveBeenCalledTimes(1);
+		expect(highlight.calls()).toBe(1);
 	});
 });
