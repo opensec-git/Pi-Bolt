@@ -29,7 +29,7 @@ import {
 	statSync,
 	writeFileSync,
 } from "node:fs";
-import { totalmem } from "node:os";
+import { constants, totalmem } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { CONFIG_DIR_NAME, getAgentDir } from "./config.ts";
 import {
@@ -1662,9 +1662,26 @@ function install(stage: string, current: string, keepPrevious: boolean): void {
 	rmSync(replaced, { recursive: true, force: true });
 }
 
-function readRecord(installDir: string): CompileRecord | undefined {
+/** compile.json, and where `pi-bolt compile --off` sets it aside while the installer runs. */
+function recordPaths(installDir: string): { record: string; aside: string } {
+	const record = join(installDir, "compile.json");
+	return { record, aside: `${record}.off` };
+}
+
+/** Puts back the record an --off that was killed (SIGKILL, a crash) left set aside: --off removes it only once it is done. */
+function recoverRecord(installDir: string): void {
+	const { record, aside } = recordPaths(installDir);
 	try {
-		return JSON.parse(readFileSync(join(installDir, "compile.json"), "utf8")) as CompileRecord;
+		if (!existsSync(record) && existsSync(aside)) renameSync(aside, record);
+	} catch {
+		// (Another process put it back first.)
+	}
+}
+
+function readRecord(installDir: string): CompileRecord | undefined {
+	recoverRecord(installDir);
+	try {
+		return JSON.parse(readFileSync(recordPaths(installDir).record, "utf8")) as CompileRecord;
 	} catch {
 		return undefined;
 	}
@@ -1724,7 +1741,8 @@ export function chooseExtensions(
 
 /** Whether an update should compile extensions into the release it installed (`pi-bolt compile` was run here). */
 export function piBoltCompileWanted(installDir: string): boolean {
-	return existsSync(join(installDir, "compile.json"));
+	recoverRecord(installDir);
+	return existsSync(recordPaths(installDir).record);
 }
 
 /** A compile's work folder (mkdtemp's six characters), and the file in it that names the process using it. */
@@ -2100,20 +2118,30 @@ function status(): void {
  * extensions compiled in by later updates. The record goes only once the release is installed: a failed reinstall leaves the
  * compiled build running, and the next update compiling the same extensions into it. While the installer runs, the record is
  * set aside: an installer that finds it says to compile the extensions into the new build, which is not what --off is for.
+ * A stop signal (Ctrl-C while the release downloads) ends this process without running a `finally`, so the record is put back
+ * before it exits; one a SIGKILL left set aside is put back by the next compile that reads it (recoverRecord).
  */
 async function off(installAgain: () => Promise<boolean>): Promise<boolean> {
 	const { installDir } = installation();
-	const record = join(installDir, "compile.json");
-	const aside = `${record}.off`;
+	const { record, aside } = recordPaths(installDir);
 	const had = existsSync(record);
 	if (had) renameSync(record, aside);
+	const handlers = STOP_SIGNALS.map((signal) => {
+		const handler = () => {
+			recoverRecord(installDir);
+			process.exit(128 + (constants.signals[signal] ?? 0));
+		};
+		process.once(signal, handler);
+		return [signal, handler] as const;
+	});
 	let installed = false;
 	try {
 		installed = await installAgain();
 	} finally {
+		for (const [signal, handler] of handlers) process.off(signal, handler);
 		if (had) {
 			if (installed) rmSync(aside, { force: true });
-			else renameSync(aside, record);
+			else recoverRecord(installDir);
 		}
 	}
 	return installed;
