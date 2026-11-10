@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { ProcessTerminal } from "./terminal.ts";
 import { deleteKittyImage, isImageLine } from "./terminal-image.ts";
 import { type LiveLines, renderLiveLines, renderSharedLines, type TUI, TuiBase, type TuiStopOptions } from "./tui.ts";
 import { visibleWidth } from "./utils.ts";
@@ -10,6 +11,9 @@ const OSC133_ZONE_PREFIX = /^(?:\x1b\]133;[ABC](?:\x07|\x1b\\))+/;
 
 const KITTY_SEQUENCE_PREFIX = "\x1b_G";
 const MAX_RENDER_WRITE_CHARS = 1024 * 1024;
+/** What ProcessTerminal's showCursor() and hideCursor() write. */
+const CURSOR_SHOW = "\x1b[?25h";
+const CURSOR_HIDE = "\x1b[?25l";
 
 /**
  * Streams terminal output in 1 MiB chunks so a full render never forms one string large enough to exceed V8's limit.
@@ -572,7 +576,6 @@ export class TuiMainScreen extends TuiBase implements TUI {
 				output.append(line);
 			}
 			output.append("\x1b[?2026l"); // End synchronized output
-			output.flush();
 			this.cursorRow = Math.max(0, frameLength - 1);
 			this.hardwareCursorRow = this.cursorRow;
 			// Reset max lines when clearing, otherwise track growth
@@ -583,7 +586,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			}
 			const bufferLength = Math.max(height, frameLength);
 			this.previousViewportTop = Math.max(0, bufferLength - height);
-			this.positionHardwareCursor(cursorPos, frameLength);
+			this.positionHardwareCursor(cursorPos, frameLength, output);
 			this.noteShown(frameLength);
 			this.previousKittyImageIds = collectKittyImageIds(frame);
 			this.previousWidth = width;
@@ -678,7 +681,11 @@ export class TuiMainScreen extends TuiBase implements TUI {
 
 		// No changes - but still need to update hardware cursor position if it moved
 		if (firstChanged === -1) {
-			this.positionHardwareCursor(cursorPos, frameLength);
+			this.positionHardwareCursor(
+				cursorPos,
+				frameLength,
+				new BoundedTerminalWriter((data) => this.terminal.write(data)),
+			);
 			this.previousViewportTop = prevViewportTop;
 			this.previousHeight = height;
 			// (The lines shown are this frame's, line for line. Lines restored are kept: the rows past this frame's last that
@@ -689,8 +696,8 @@ export class TuiMainScreen extends TuiBase implements TUI {
 
 		// All changes are in deleted lines (nothing to render, just clear)
 		if (firstChanged >= frameLength) {
+			const output = new BoundedTerminalWriter((data) => this.terminal.write(data));
 			if (shownLength > frameLength) {
-				const output = new BoundedTerminalWriter((data) => this.terminal.write(data));
 				output.append("\x1b[?2026h");
 				output.append(this.deleteChangedKittyImages(firstChanged, lastChanged, shown));
 				// Move to end of new content (clamp to 0 for empty content)
@@ -724,11 +731,10 @@ export class TuiMainScreen extends TuiBase implements TUI {
 					output.append(`\x1b[${moveBack}A`);
 				}
 				output.append("\x1b[?2026l");
-				output.flush();
 				this.cursorRow = targetRow;
 				this.hardwareCursorRow = targetRow;
 			}
-			this.positionHardwareCursor(cursorPos, frameLength);
+			this.positionHardwareCursor(cursorPos, frameLength, output);
 			this.noteShown(frameLength);
 			this.previousKittyImageIds = collectKittyImageIds(frame);
 			this.previousWidth = width;
@@ -897,8 +903,6 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			fs.writeFileSync(debugPath, debugData);
 		}
 
-		output.flush();
-
 		// Track cursor position for next render
 		// cursorRow tracks end of content (for viewport calculation)
 		// hardwareCursorRow tracks actual terminal cursor position (for movement)
@@ -908,8 +912,8 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		this.maxLinesRendered = Math.max(this.maxLinesRendered, frameLength);
 		this.previousViewportTop = Math.max(prevViewportTop, finalCursorRow - height + 1);
 
-		// Position hardware cursor for IME
-		this.positionHardwareCursor(cursorPos, frameLength);
+		// Position hardware cursor for IME (and write the frame)
+		this.positionHardwareCursor(cursorPos, frameLength, output);
 
 		this.noteShown(frameLength);
 		this.previousKittyImageIds = collectKittyImageIds(frame);
@@ -918,13 +922,37 @@ export class TuiMainScreen extends TuiBase implements TUI {
 	}
 
 	/**
-	 * Position the hardware cursor for IME candidate window.
+	 * Position the hardware cursor for IME candidate window, and write `output`, the frame's bytes before it.
 	 * @param cursorPos The cursor position extracted from rendered output, or null
 	 * @param totalLines Total number of rendered lines
+	 * @param output What the frame writes before the cursor is placed: written by this, with the cursor's bytes after it in
+	 * the same write when the terminal is a ProcessTerminal (each write is a system call), before them otherwise.
 	 */
-	private positionHardwareCursor(cursorPos: { row: number; col: number } | null, totalLines: number): void {
+	private positionHardwareCursor(
+		cursorPos: { row: number; col: number } | null,
+		totalLines: number,
+		output: BoundedTerminalWriter,
+	): void {
+		const terminal = this.terminal;
+		// (ProcessTerminal's write(), showCursor() and hideCursor() all write to stdout: the same bytes in the same order
+		// as one write. Another terminal is given them as before, each by its own call.)
+		const together =
+			terminal.write === ProcessTerminal.prototype.write &&
+			terminal.showCursor === ProcessTerminal.prototype.showCursor &&
+			terminal.hideCursor === ProcessTerminal.prototype.hideCursor;
+		if (!together) output.flush();
+		const showCursor = (visible: boolean): void => {
+			if (!together) {
+				if (visible) terminal.showCursor();
+				else terminal.hideCursor();
+				return;
+			}
+			output.append(visible ? CURSOR_SHOW : CURSOR_HIDE);
+			output.flush();
+		};
+
 		if (!cursorPos || totalLines <= 0) {
-			this.terminal.hideCursor();
+			showCursor(false);
 			return;
 		}
 
@@ -944,14 +972,11 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		buffer += `\x1b[${targetCol + 1}G`;
 
 		if (buffer) {
-			this.terminal.write(buffer);
+			if (together) output.append(buffer);
+			else terminal.write(buffer);
 		}
 
 		this.hardwareCursorRow = targetRow;
-		if (this.getShowHardwareCursor()) {
-			this.terminal.showCursor();
-		} else {
-			this.terminal.hideCursor();
-		}
+		showCursor(this.getShowHardwareCursor());
 	}
 }
