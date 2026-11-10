@@ -462,7 +462,7 @@ describe("remote control background service", () => {
 			const controller = new RemoteControlController(
 				{
 					getSession: () => harness.session,
-					settingsManager: SettingsManager.inMemory({ remoteControl: { port: 0, ...settings } }),
+					settingsManager: SettingsManager.inMemory({ remoteControl: { enabled: true, port: 0, ...settings } }),
 					agentDir,
 					version: "9.9.9",
 					showStatus: () => {},

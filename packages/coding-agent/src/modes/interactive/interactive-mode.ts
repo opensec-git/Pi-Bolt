@@ -2376,11 +2376,12 @@ export class InteractiveMode {
 	}
 
 	/**
-	 * A running `/remote-control` stops once the session sees remote control off: at once for the `/settings` toggle, and
-	 * at `/reload` (which reads the settings again) for `pi-bolt remote-control disable` run in a shell.
+	 * A `/remote-control` that runs, or is still starting, stops once the session sees remote control off: at once for the
+	 * `/settings` toggle, and at `/reload` (which reads the settings again) for `pi-bolt remote-control disable` run in a
+	 * shell. A start under way then opens no listener and no tunnel (the controller checks the setting after each wait).
 	 */
 	private stopRemoteControlWhenOff(): void {
-		if (!this.remoteControl?.running || this.settingsManager.getRemoteControlEnabled()) return;
+		if (!this.remoteControl?.active || this.settingsManager.getRemoteControlEnabled()) return;
 		void this.remoteControl.stop();
 		// (A warning, not a status line: the next status, such as /reload's, would replace it.)
 		this.showWarning(REMOTE_CONTROL_STOPPED_MESSAGE);

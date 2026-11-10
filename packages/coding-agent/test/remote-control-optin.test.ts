@@ -25,6 +25,8 @@ import {
 	REMOTE_CONTROL_STOPPED_MESSAGE,
 } from "../src/core/slash-commands.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { RemoteControlController, type RemoteControlHost } from "../src/remote-control/controller.ts";
+import { RemoteControlServer } from "../src/remote-control/server.ts";
 import { runServiceCommand, type ServiceSystem } from "../src/remote-control/service-cli.ts";
 import {
 	LAUNCH_AGENT_LABEL,
@@ -263,13 +265,17 @@ describe("/remote-control in the terminal", () => {
 			showSettingsSelector(this: object): void;
 		};
 		/** `this` for those methods: the given fields, and `anything` for the rest. */
-		function fakeMode(enabled: boolean, running: boolean) {
-			const settingsManager = SettingsManager.inMemory({ remoteControl: { enabled } });
+		function fakeMode(
+			enabled: boolean,
+			active: boolean,
+			given?: { settingsManager: SettingsManager; remoteControl: RemoteControlController },
+		) {
+			const settingsManager = given?.settingsManager ?? SettingsManager.inMemory({ remoteControl: { enabled } });
 			const stop = vi.fn(async () => {});
 			const showWarning = vi.fn();
 			const fields: Record<string | symbol, unknown> = {
 				settingsManager,
-				remoteControl: { running, stop },
+				remoteControl: given?.remoteControl ?? { active, stop },
 				showWarning,
 				setupAutocompleteProvider: vi.fn(),
 				showSelector: (create: (done: () => void) => unknown) => create(() => {}),
@@ -309,6 +315,152 @@ describe("/remote-control in the terminal", () => {
 			settingsManager.setRemoteControlEnabled(false);
 			methods.applyRuntimeSettings.call(mode);
 			expect(stop).toHaveBeenCalledOnce();
+		});
+
+		describe("a start still waiting for its claim", () => {
+			/**
+			 * A real controller whose claim (the background service handoff) waits until the test resolves it, with listens
+			 * and tunnel starts counted.
+			 */
+			function startingController() {
+				const settingsManager = SettingsManager.inMemory({
+					remoteControl: { enabled: true, port: 0, tunnel: "quick" },
+				});
+				const pending: Array<() => void> = [];
+				let released = 0;
+				let tunnels = 0;
+				const warnings: string[] = [];
+				const listens = vi.spyOn(RemoteControlServer.prototype, "start");
+				cleanups.push(() => listens.mockRestore());
+				const controller = new RemoteControlController(
+					{
+						// (The listener subscribes to the session's events; nothing else of it is used here.)
+						getSession: () =>
+							({ subscribe: () => () => {} }) as unknown as ReturnType<RemoteControlHost["getSession"]>,
+						settingsManager,
+						agentDir: tempDir("pi-rc-start-"),
+						version: "9.9.9",
+						showStatus: () => {},
+						showWarning: (message) => warnings.push(message),
+						showError: (message) => {
+							throw new Error(message);
+						},
+						showLines: () => {},
+						setStatus: () => {},
+						select: async () => undefined,
+						copyToClipboard: async () => {},
+						columns: () => 200,
+						rows: () => 60,
+						bindAddress: "127.0.0.1",
+					},
+					{
+						claim: () =>
+							new Promise((resolve) =>
+								pending.push(() =>
+									resolve({
+										kind: "none",
+										release: () => {
+											released++;
+										},
+									}),
+								),
+							),
+						startTunnel: async () => {
+							tunnels++;
+							return { endpoint: `wss://t-${tunnels}.trycloudflare.com/rc`, stop: () => {} };
+						},
+						installCloudflared: async () => "not in tests",
+						platform: "darwin",
+					},
+				);
+				cleanups.push(() => controller.stop());
+				const waitForClaim = async () => {
+					while (pending.length === 0) await new Promise((done) => setTimeout(done, 5));
+				};
+				return {
+					controller,
+					settingsManager,
+					warnings,
+					waitForClaim,
+					resolveClaim: () => pending.shift()?.(),
+					released: () => released,
+					tunnels: () => tunnels,
+					listens: () => listens.mock.calls.length,
+				};
+			}
+
+			it("opens no listener and no tunnel when the setting goes off before the claim resolves", async () => {
+				const start = startingController();
+				const command = start.controller.handleCommand("");
+				await start.waitForClaim();
+				expect(start.controller.active).toBe(true);
+				start.settingsManager.setRemoteControlEnabled(false);
+				start.resolveClaim();
+				await command;
+				expect(start.listens()).toBe(0);
+				expect(start.tunnels()).toBe(0);
+				expect(start.released()).toBe(1);
+				expect(start.controller.active).toBe(false);
+				expect(start.warnings).toEqual([]);
+			});
+
+			it("the /settings toggle stops it: no listener, no tunnel", async () => {
+				const start = startingController();
+				const { mode, showWarning } = fakeMode(true, true, {
+					settingsManager: start.settingsManager,
+					remoteControl: start.controller,
+				});
+				const command = start.controller.handleCommand("");
+				await start.waitForClaim();
+				methods.showSettingsSelector.call(mode);
+				selectorCallbacks.last?.onRemoteControlEnabledChange(false);
+				expect(showWarning.mock.calls).toEqual([[REMOTE_CONTROL_STOPPED_MESSAGE]]);
+				start.resolveClaim();
+				await command;
+				expect(start.listens()).toBe(0);
+				expect(start.tunnels()).toBe(0);
+				expect(start.released()).toBe(1);
+				expect(start.controller.active).toBe(false);
+			});
+
+			it("/reload after the shell's remote-control disable stops it: no listener, no tunnel", async () => {
+				const start = startingController();
+				const { mode, showWarning } = fakeMode(true, true, {
+					settingsManager: start.settingsManager,
+					remoteControl: start.controller,
+				});
+				const command = start.controller.handleCommand("");
+				await start.waitForClaim();
+				// (What /reload does: the settings read again say off, then they are applied.)
+				start.settingsManager.setRemoteControlEnabled(false);
+				methods.applyRuntimeSettings.call(mode);
+				expect(showWarning.mock.calls).toEqual([[REMOTE_CONTROL_STOPPED_MESSAGE]]);
+				start.resolveClaim();
+				await command;
+				expect(start.listens()).toBe(0);
+				expect(start.tunnels()).toBe(0);
+				expect(start.released()).toBe(1);
+			});
+
+			it("turned on again, the next start listens and opens its tunnel as before", async () => {
+				const start = startingController();
+				const first = start.controller.handleCommand("");
+				await start.waitForClaim();
+				start.settingsManager.setRemoteControlEnabled(false);
+				await start.controller.stop();
+				start.resolveClaim();
+				await first;
+				expect(start.listens()).toBe(0);
+				start.settingsManager.setRemoteControlEnabled(true);
+				const second = start.controller.handleCommand("");
+				await start.waitForClaim();
+				start.resolveClaim();
+				await second;
+				expect(start.controller.running).toBe(true);
+				expect(start.listens()).toBe(1);
+				expect(start.tunnels()).toBe(1);
+				expect(start.released()).toBe(1);
+			});
 		});
 	});
 
