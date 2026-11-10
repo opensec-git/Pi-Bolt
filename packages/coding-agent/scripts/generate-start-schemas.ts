@@ -11,7 +11,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Build } from "typebox/schema";
 import { KeybindingValueSchema } from "../src/core/key-id-schema.ts";
@@ -166,8 +166,9 @@ function renderConfigChecks(): string {
 	);
 }
 
+// An import specifier, so with "/" on every platform (both arguments are package-relative paths written with "/").
 function importPath(fromDirectory: string, to: string): string {
-	const path = relative(fromDirectory, to);
+	const path = posix.relative(fromDirectory.replaceAll("\\", "/"), to);
 	return path.startsWith(".") ? path : `./${path}`;
 }
 
