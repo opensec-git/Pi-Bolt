@@ -1,16 +1,12 @@
 import { readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import nodePath from "path";
-import { type Static, Type } from "typebox";
+import type { Static } from "typebox";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { pathExists, resolveToCwd } from "./path-utils.ts";
 import { lsRenderers } from "./renderers/ls.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import { lsSchema } from "./tool-schemas.generated.ts";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead, truncationDetails } from "./truncate.ts";
-
-const lsSchema = Type.Object({
-	path: Type.Optional(Type.String({ description: "Directory to list (default: current directory)" })),
-	limit: Type.Optional(Type.Number({ description: "Maximum number of entries to return (default: 500)" })),
-});
 
 export const lsToolSystemPromptContribution = {
 	snippet: "List directory contents",

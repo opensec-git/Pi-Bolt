@@ -1,6 +1,6 @@
 import { constants } from "fs";
 import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
-import { type Static, Type } from "typebox";
+import type { Static } from "typebox";
 import { splitBom } from "../../utils/text.ts";
 import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import {
@@ -16,28 +16,7 @@ import { withFileMutationQueue } from "./file-mutation-queue.ts";
 import { resolveToCwd } from "./path-utils.ts";
 import { type EditRenderState, editRenderers } from "./renderers/edit.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
-
-const replaceEditSchema = Type.Object(
-	{
-		oldText: Type.String({
-			description:
-				"Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
-		}),
-		newText: Type.String({ description: "Replacement text for this targeted edit." }),
-	},
-	{},
-);
-
-const editSchema = Type.Object(
-	{
-		path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
-		edits: Type.Array(replaceEditSchema, {
-			description:
-				"One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
-		}),
-	},
-	{},
-);
+import { editSchema } from "./tool-schemas.generated.ts";
 
 export const editToolSystemPromptContribution = {
 	snippet: "Make precise file edits with exact text replacement, including multiple disjoint edits in one call",

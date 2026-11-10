@@ -85,4 +85,22 @@ describe("keybindings migration", () => {
 		expect(effective["tui.select.confirm"]).toBe("enter");
 		expect(effective["app.interrupt"]).toBe("ctrl+x");
 	});
+
+	it("keeps the bindings that are a key or a list of keys and drops the others", () => {
+		const agentDir = createAgentDir({
+			$schema: "https://pi.dev/schemas/keybindings.schema.json",
+			"app.model.select": "ctrl+k",
+			"app.tree.foldOrUp": ["alt+left", "ctrl+left"],
+			"app.exit": ["ctrl+d", "nope"],
+			"app.clear": 5,
+			"app.interrupt": "ctrl+ctrl+x",
+			"app.suspend": [],
+		});
+
+		expect(KeybindingsManager.create(agentDir).getUserBindings()).toEqual({
+			"app.model.select": "ctrl+k",
+			"app.tree.foldOrUp": ["alt+left", "ctrl+left"],
+			"app.suspend": [],
+		});
+	});
 });

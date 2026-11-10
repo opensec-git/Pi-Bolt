@@ -8,7 +8,7 @@ import {
 	readFile as fsReadFile,
 	stat as fsStat,
 } from "fs/promises";
-import { type Static, Type } from "typebox";
+import type { Static } from "typebox";
 import { markProcessedImageBlock, processImage } from "../../utils/image-process.ts";
 import { detectSupportedImageMimeTypeFromFile } from "../../utils/mime.ts";
 import { detachSharedString } from "../../utils/text.ts";
@@ -16,6 +16,7 @@ import type { ExtensionContext, ToolDefinition } from "../extensions/types.ts";
 import { resolveReadPathAsync } from "./path-utils.ts";
 import { readRenderers } from "./renderers/read.ts";
 import { type TypeBoxAgentTool, wrapToolDefinition } from "./tool-definition-wrapper.ts";
+import { readOutputSchema, readSchema } from "./tool-schemas.generated.ts";
 import {
 	DEFAULT_MAX_BYTES,
 	DEFAULT_MAX_LINES,
@@ -25,12 +26,6 @@ import {
 	truncationDetails,
 } from "./truncate.ts";
 
-const readSchema = Type.Object({
-	path: Type.String({ description: "Path to the file to read (relative or absolute)" }),
-	offset: Type.Optional(Type.Number({ description: "Line number to start reading from (1-indexed)" })),
-	limit: Type.Optional(Type.Number({ description: "Maximum number of lines to read" })),
-});
-
 export const readToolSystemPromptContribution = {
 	snippet: "Read file contents",
 	guidelines: ["Use read to examine files instead of cat or sed."],
@@ -38,17 +33,7 @@ export const readToolSystemPromptContribution = {
 
 export type ReadToolInput = Static<typeof readSchema>;
 
-/**
- * Result for programmatic callers such as codemode scripts: the text for text files, and an image
- * block for images that codemode's `image()` accepts. `note` is the text that goes with the image,
- * such as resize hints. Property descriptions are left out so the type stays on one line in tool
- * descriptions.
- */
-const readOutputSchema = Type.Union([
-	Type.String(),
-	Type.Object({ type: Type.Literal("image"), data: Type.String(), mimeType: Type.String(), note: Type.String() }),
-]);
-
+/** Result for programmatic callers such as codemode scripts (see readOutputSchema in tool-schemas.ts). */
 export type ReadToolOutput = Static<typeof readOutputSchema>;
 
 export interface ReadToolDetails {
