@@ -76,10 +76,10 @@ with them (`scripts\train-heap.ps1 -Plugins plugins\opensec\plugins.ts`), then r
 ## pi-bolt compile
 
 ```bash
-pi-bolt compile                             # the extensions installed here
+pi-bolt compile                             # the extensions installed here (what compile.json records, after a compile)
 pi-bolt compile --list                      # which those are, by name: nothing is downloaded or built
 pi-bolt compile --only pdf-reader,preset    # only these
-pi-bolt compile --exclude big-bundle        # all but these, and those excluded before, on later compiles and updates too
+pi-bolt compile --exclude big-bundle        # all but these, and those excluded before, on later compiles too
 pi-bolt compile --include big-bundle        # this one again, excluded before
 pi-bolt compile --no-exclude                # all, those excluded before too
 pi-bolt compile --status                    # what is compiled in
@@ -95,8 +95,7 @@ It needs no checkout of this repository and no tools.
 from GitHub, checks them against the release's signed `SHA256SUMS` as the installer does, and keeps them in `~/.pi-bolt/cache`
 with the `SHA256SUMS` and its signature. Later compiles of that version, `--out` ones included, check the cached files against
 the cached signed checksums again and need no network. A download that gets nothing for 20 seconds is given up, and the error
-names the URL. Offline from the start, give the two files with `--kit` and `--runtime`. `pi-bolt update` downloads the new
-release's two files when it compiles the extensions into it.
+names the URL. Offline from the start, give the two files with `--kit` and `--runtime`.
 
 **Time.** About 20 seconds on a fast machine for the default build, and about 40 seconds for a JIT build, plus the first
 download. It says what it is doing as it goes (checking the release, downloading, unpacking, finding the extensions, bundling,
@@ -106,17 +105,18 @@ compiling ahead of time) and how long the whole compile took.
 compiled in: what is compiled in is for every project, and Pi loads a project's extensions only in a trusted project. They load
 from their files as before. `pi-bolt compile` lists the ones of the folder it runs in, with that reason.
 
-**`--exclude`** leaves out the extensions it names, and compile.json records them: later compiles without `--only`, and
-`pi-bolt update`, leave them out too. A later `--exclude` adds to the recorded ones, `--include` takes one back, and
-`--no-exclude` compiles them all in again (with `--exclude`, only those it names are left out).
+**`--exclude`** leaves out the extensions it names, and compile.json records them: later compiles without `--only` leave them
+out too. A later `--exclude` adds to the recorded ones, `--include` takes one back, and `--no-exclude` compiles them all in again
+(with `--exclude`, only those it names are left out). `pi-bolt compile` without options compiles what compile.json records:
+the last compile's `--only`, exclusions and `--no-packages`.
 
 A compile works in a folder `.compile-*` beside the installation (beside the `--out` folder with `--out`), removed when it ends.
 One left by a compile that was killed is removed by the next one. A failed build leaves all the compiler printed in
 `compile.log` there (`<folder>.compile.log` beside an `--out` folder); the next successful compile removes it.
 
 The new executable takes the place of the installed one, and the one it replaces is kept: `pi-bolt update --rollback` puts it
-back. `pi-bolt update` compiles the same extensions into each release it installs; when that fails, the release is installed
-without them, and the update says so.
+back. `pi-bolt update` (and the installer) installs the release's build and compiles nothing: the extensions load from their
+files, the update says so, and compile.json is kept, so `pi-bolt compile` compiles the same extensions into the new build.
 
 An extension compiled in stands in for its installed copy while that copy is unchanged. Pi finds, orders and turns extensions on
 and off as always, and uses the compiled one instead of loading the files. "Unchanged" is by the files it was compiled from: each
@@ -142,8 +142,8 @@ are each left out, with a line that names it and says why, and load from their f
 again at each compile, not recorded.
 
 `pi-bolt compile --status` and `pi-bolt doctor` say which extensions are compiled in, which changed since and load from their
-files, and when the build has none of the extensions compile.json records: the installer, run again, or a switch to or from the
-JIT build installs the release's executable. Run `pi-bolt compile` to compile them in again.
+files, and when the build has none of the extensions compile.json records: an update, the installer run again, or a switch to or
+from the JIT build installs the release's executable. Run `pi-bolt compile` to compile them in again.
 
 One difference remains: a compiled-in extension's modules are loaded once per process. Pi loads an extension from its files
 again at `/reload`, with fresh module state; compiled in, `/reload` calls its factory again with the module state it had (a
