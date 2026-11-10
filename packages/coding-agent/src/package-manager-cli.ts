@@ -44,6 +44,7 @@ import {
 	isPiBoltChannel,
 	PIBOLT,
 	PIBOLT_INSTALL_COMMAND,
+	PIBOLT_NPM_UPDATE_COMMAND,
 	type PiBoltChannel,
 	piBoltChannel,
 	piBoltExecutableIn,
@@ -798,13 +799,14 @@ async function getSelfUpdatePlan(force: boolean): Promise<SelfUpdatePlan> {
 	const fallback =
 		method === undefined
 			? ""
-			: ` You can update without it: ${method === "npm" ? "npm install -g pi-bolt@latest" : (piBoltPackageManager(method)?.update ?? PIBOLT_INSTALL_COMMAND)}`;
+			: ` You can update without it: ${method === "npm" ? PIBOLT_NPM_UPDATE_COMMAND : (piBoltPackageManager(method)?.update ?? PIBOLT_INSTALL_COMMAND)}`;
 	let latestRelease: Awaited<ReturnType<typeof getLatestPiRelease>>;
 	try {
 		latestRelease = await getLatestPiRelease(currentVersion, { retry: true });
 	} catch (error: unknown) {
 		throw new Error(
-			`Could not determine latest ${COMMAND_NAME} version: ${formatVersionCheckError(error)}.${fallback}`,
+			// (The reasons may end with a period already: "The operation timed out.")
+			`Could not determine latest ${COMMAND_NAME} version: ${formatVersionCheckError(error).replace(/\.+$/, "")}.${fallback}`,
 			{ cause: error },
 		);
 	}
@@ -844,9 +846,9 @@ async function runPiBoltSelfUpdate(
 	const method = piBoltInstallMethod();
 	if (method === "npm") {
 		console.log(
-			`This Pi-Bolt was installed with the npm package. Update it with the package manager that installed it:`,
+			`Pi-Bolt ${version} is out. This Pi-Bolt was installed with the npm package: update it with the package manager that installed it:`,
 		);
-		console.log(`  npm install -g pi-bolt@latest      (or: bun add -g pi-bolt@latest)`);
+		console.log(`  ${PIBOLT_NPM_UPDATE_COMMAND}      (or: bun add -g --trust pi-bolt@latest)`);
 		return false;
 	}
 	// (Homebrew, Scoop and mise own the folder: the installer would replace files they keep track of.)
