@@ -260,12 +260,10 @@ describe("what a session shows", () => {
 			kind: "info",
 			text: "Pi-Bolt 1.0.3 is installed; it starts next time.",
 		});
-		expect(autoUpdateLine({ kind: "installed", version: "1.0.3", extensions: "compiled" }, "LOG")?.text).toContain(
-			"compiled into it in the background",
-		);
-		expect(
-			autoUpdateLine({ kind: "installed", version: "1.0.3", extensions: "not-compiled" }, "LOG")?.text,
-		).toContain("load from their files until `pi-bolt compile` compiles them in");
+		expect(autoUpdateLine({ kind: "installed", version: "1.0.3", extensionsFromFiles: true }, "LOG")).toEqual({
+			kind: "info",
+			text: "Pi-Bolt 1.0.3 is installed; it starts next time. Extensions were compiled into the build this replaced: they load from their files now; run `pi-bolt compile` to compile them into this one.",
+		});
 		expect(autoUpdateLine({ kind: "failed", reason: "download failed", version: "1.0.3" }, "LOG")).toEqual({
 			kind: "error",
 			text: "Pi-Bolt could not update itself to 1.0.3: download failed. Run `pi-bolt update` to update it yourself (LOG).",
@@ -314,21 +312,16 @@ describe("the update a session starts (pi-bolt update --background)", () => {
 	let requests: string[];
 	let releaseVersion: string;
 	let signWith: KeyObject;
-	let compileExit: number;
 	const realFetch = globalThis.fetch;
 
-	/** The installer the fake release serves: it puts a `pi` of `releaseVersion` in place, whose `compile` writes compile.json. */
+	/** The installer the fake release serves: it puts a `pi` of `releaseVersion` in place, whose `compile` leaves a mark. */
 	const installer = () => `#!/bin/sh
 set -e
 dir="$PIBOLT_INSTALL/pi-bolt-${process.platform}-$PIBOLT_VARIANT"
 mkdir -p "$dir"
 cat > "$dir/pi" <<'EOS'
 #!/bin/sh
-if [ "$1" = compile ]; then
-	[ ${compileExit} = 0 ] || exit ${compileExit}
-	printf '{"version":"${releaseVersion}","extensions":["a"]}\\n' > "$(dirname "$0")/../compile.json"
-	exit 0
-fi
+if [ "$1" = compile ]; then touch "$(dirname "$0")/../compiled"; exit 0; fi
 echo "1.5.0 (Pi-Bolt ${releaseVersion}, test, JIT off)"
 EOS
 chmod +x "$dir/pi"
@@ -338,7 +331,6 @@ chmod +x "$dir/pi"
 		requests = [];
 		releaseVersion = "1.0.3";
 		signWith = releaseKey;
-		compileExit = 0;
 		server = createServer((request, response) => {
 			const url = request.url ?? "";
 			requests.push(url);
@@ -393,23 +385,22 @@ chmod +x "$dir/pi"
 	);
 
 	it.skipIf(process.platform === "win32")(
-		"compiles the extensions compiled in before into it, in the background process, and says whether it could",
+		"compiles nothing, and says the extensions compiled into the build it replaced load from their files",
 		async () => {
-			writeFileSync(join(installDir, "compile.json"), JSON.stringify({ version: "1.0.2", extensions: ["a"] }));
+			const record = JSON.stringify({ version: "1.0.2", extensions: ["a"] });
+			writeFileSync(join(installDir, "compile.json"), record);
+			writeFileSync(
+				join(buildDir, "pi-bolt.txt"),
+				"Pi-Bolt 1.0.2\nExtensions compiled in (pi-bolt compile, 2026-11-10): a\n",
+			);
 			await handlePackageCommand(["update", "--background"]);
 			expect(readAutoUpdateRecord(installDir)?.result).toEqual({
 				kind: "installed",
 				version: "1.0.3",
-				extensions: "compiled",
+				extensionsFromFiles: true,
 			});
-			releaseVersion = "1.0.4";
-			compileExit = 1;
-			await handlePackageCommand(["update", "--background"]);
-			expect(readAutoUpdateRecord(installDir)?.result).toEqual({
-				kind: "installed",
-				version: "1.0.4",
-				extensions: "not-compiled",
-			});
+			expect(existsSync(join(installDir, "compiled"))).toBe(false);
+			expect(readFileSync(join(installDir, "compile.json"), "utf8")).toBe(record);
 		},
 	);
 

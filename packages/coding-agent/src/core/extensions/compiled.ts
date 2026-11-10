@@ -180,8 +180,8 @@ export function compiledExtensionFor(
 
 /**
  * What `pi-bolt compile --status` and `pi-bolt doctor` say of the extensions compiled in: one line each that is not used as
- * compiled in (changed or removed since), and, when compile.json records a compile but this build has none (the installer
- * replaced it, or a switch to or from the JIT build), how to compile them in again. `record`: compile.json's extensions.
+ * compiled in (changed or removed since), and, when compile.json records a compile but this build has none (an update or the
+ * installer replaced it, or a switch to or from the JIT build), how to compile them in again. `record`: compile.json's extensions.
  */
 export function compiledStateLines(
 	extensions: ReadonlyArray<Pick<CompiledExtension, "name" | "entry" | "scope" | "root" | "fingerprint">>,
@@ -191,7 +191,7 @@ export function compiledStateLines(
 		const recorded = Array.isArray(record?.extensions) ? record.extensions.join(", ") : "";
 		return record
 			? [
-					`compile.json records extensions compiled in (${recorded || "none"}), but this build has none: the installer, or a switch to or from the JIT build, replaced the build they were compiled into. Run \`pi-bolt compile\` to compile them in again.`,
+					`compile.json records extensions compiled in (${recorded || "none"}), but this build has none: an update, the installer, or a switch to or from the JIT build replaced the build they were compiled into, and they load from their files. Run \`pi-bolt compile\` to compile them in again.`,
 				]
 			: [];
 	}

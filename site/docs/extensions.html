@@ -141,8 +141,9 @@
 <span class="p">$ </span>pi-bolt compile --exclude big-bundle     <span class="c"># all but these (--only: just these)</span>
 <span class="p">$ </span>pi-bolt compile --off                    <span class="c"># the release's executable again</span></pre>
 <p>It downloads its release's runtime and compile kit, checks them against the release's signature, and builds in about 20
-  seconds. The build it replaces is kept (<code>pi-bolt update --rollback</code> puts it back), and <code>pi-bolt update</code>
-  compiles the same extensions into each new release. An extension compiled in is used while its installed copy is unchanged;
+  seconds. The build it replaces is kept (<code>pi-bolt update --rollback</code> puts it back). <code>pi-bolt update</code>
+  installs the release's build, where the extensions load from their files until <code>pi-bolt compile</code>, which compiles
+  the same ones again, compiles them in. An extension compiled in is used while its installed copy is unchanged;
   one changed since is loaded from its files, with a warning to compile it in again.</p>
 <p>To build with a manifest of your own (on Windows too), use a Pi-Bolt build environment (see
   <a href="https://github.com/opensec-git/Pi-Bolt/blob/pi-bolt/docs/BUILDING.md">Building</a>):</p>

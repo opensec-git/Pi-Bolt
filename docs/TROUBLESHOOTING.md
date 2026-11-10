@@ -121,9 +121,9 @@ from the other extensions, so the limit is one extension's. Below the compiler's
   message names the extension.
 
 Leave that extension out with `pi-bolt compile --exclude <name>`, by the name `pi-bolt compile` prints for it: it still loads
-from its files at run time, and later compiles and `pi-bolt update` leave it out too (`--include <name>` takes it back). Or compile
+from its files at run time, and later compiles leave it out too (`--include <name>` takes it back). Or compile
 it anyway with `BUN_JSC_maximumAOTCandidateBytecodeSize=<n> pi-bolt compile`, `<n>` being at least the size the message gives.
-compile.json keeps that limit: a later `pi-bolt compile` without the variable, and `pi-bolt update`, build with it too, and
+compile.json keeps that limit: a later `pi-bolt compile` without the variable builds with it too, and
 `BUN_JSC_maximumAOTCandidateBytecodeSize=262144 pi-bolt compile` takes it back. The compiler warns that a big function can take
 minutes and tens of GB; one of a few hundred KB has taken seconds. The message's third remedy,
 `BUN_JSC_omitBytecodeFromStaticHeap=0`, does not apply to `pi-bolt compile`: the build keeps the release's setting.

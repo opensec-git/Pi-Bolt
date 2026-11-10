@@ -2,9 +2,9 @@
  * Automatic updates (#208): with `piBolt.autoUpdate` on in the global settings, an interactive session of an installation the
  * installers manage starts `pi-bolt update --background` after its first frame, at most once a day. That process takes a lock,
  * looks up the latest release on the installation's channel, and runs the same signed update as `pi-bolt update` (the
- * signature of SHA256SUMS, the version on its first line, the installer's checksum; on Windows the in-process update); it
- * compiles the extensions `pi-bolt compile` compiled in before into the new release too, as `pi-bolt update` does. The session
- * goes on; the new release starts next time. It reports one line when it is done, or one with the reason when it fails, and
+ * signature of SHA256SUMS, the version on its first line, the installer's checksum; on Windows the in-process update). Like
+ * `pi-bolt update`, it compiles nothing: extensions `pi-bolt compile` compiled into the build it replaced load from their files
+ * until `pi-bolt compile` compiles them in again. The session goes on; the new release starts next time. It reports one line when it is done, or one with the reason when it fails, and
  * nothing when there is nothing to install.
  *
  * Off by default. PIBOLT_NO_AUTO_UPDATE=1 turns it off whatever the setting says, and it never runs where the version check
@@ -43,7 +43,7 @@ export const AUTO_UPDATE_ARGUMENT = "--background";
 /** What a background update ended with. */
 export type AutoUpdateResult =
 	| { kind: "current"; version: string }
-	| { kind: "installed"; version: string; extensions?: "compiled" | "not-compiled" }
+	| { kind: "installed"; version: string; extensionsFromFiles?: true }
 	| { kind: "failed"; reason: string; version?: string };
 
 /** <install>/auto-update.json: when the last update started, and how it ended. */
@@ -124,17 +124,16 @@ export interface AutoUpdateLine {
 	text: string;
 }
 
+/** What an update says when the build it replaced had extensions compiled in (install.sh's compiled_extensions_note too). */
+export const COMPILED_EXTENSIONS_NOTE =
+	"Extensions were compiled into the build this replaced: they load from their files now; run `pi-bolt compile` to compile them into this one.";
+
 /** The line for how an update ended; none when there was nothing to install. */
 export function autoUpdateLine(result: AutoUpdateResult | undefined, log: string): AutoUpdateLine | undefined {
 	if (!result || result.kind === "current") return undefined;
 	if (result.kind === "installed") {
-		const extensions =
-			result.extensions === "compiled"
-				? " The extensions compiled into this build were compiled into it in the background."
-				: result.extensions === "not-compiled"
-					? ` The extensions compiled into this build were not compiled into it (${log}): they load from their files until \`pi-bolt compile\` compiles them in.`
-					: "";
-		return { kind: "info", text: `Pi-Bolt ${result.version} is installed; it starts next time.${extensions}` };
+		const note = result.extensionsFromFiles ? ` ${COMPILED_EXTENSIONS_NOTE}` : "";
+		return { kind: "info", text: `Pi-Bolt ${result.version} is installed; it starts next time.${note}` };
 	}
 	return {
 		kind: "error",
