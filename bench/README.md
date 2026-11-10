@@ -6,11 +6,11 @@ throwaway Pi home, so runs are isolated from your Pi configuration and from each
 
 | Tool | What it does |
 |---|---|
-| `benchmark.py` | Startup (`--version`), headless (`-p`) and interactive (TUI on a pseudo-terminal) scenarios. Fresh processes, interleaved round-robin. Reports wall, CPU and peak memory. |
+| `benchmark.py` | Startup (`--version`), headless (`-p`) and interactive (TUI on a pseudo-terminal) scenarios. Fresh processes, interleaved round-robin. Reports wall, CPU and peak memory. `--home realistic` starts each run with a home and project as they are after daily use (43 prompt templates, 8 skills, a model store of 118 models, AGENTS.md files, a `.git` folder) instead of a blank one. `--home-extensions DIR[,DIR]` adds Pi package folders to that home (local-path entries of its `packages` setting), so every run loads those extensions; the warmup rounds fill the home's extension cache. |
 | `long_session.py` | One interactive process, many prompts (default 40; 75 makes a conversation of about 4.2M tokens). Reports time and CPU per prompt, memory and request size as the session grows. |
 | `early_tools.py` | A model that streams read-only tool calls (read, grep, find, ls) with more text after them, at a model's pace, on OpenAI chat completions or Anthropic messages: the time from the end of each message to the request with the tool results, and the whole prompt (`pi -p`). |
 | `large_write.py` | A file written through a tool call whose arguments stream in 16 characters at a time: wall and CPU of `pi -p`, for files of 50 and 200 KB. |
-| `long_answer.py` | The CPU it takes to stream Markdown answers of 5,000 to 60,000 characters in the TUI at the pace of a fast model: what a chunk costs must not grow with the length of the answer. |
+| `long_answer.py` | The CPU it takes to stream Markdown answers of 5,000 to 60,000 characters in the TUI at the pace of a fast model: what a chunk costs must not grow with the length of the answer. `--file` streams Markdown files instead, such as those in `answers/`. Reports frames and, on macOS, instructions per frame. |
 | `long_transcript.py` | Frame cost on a long transcript: Pi continues (`-c`) a session of 0 to 4,000 entries (thinking, Markdown, bash calls and their output, about 2.6 KB an entry; 2,292 is a session that ran for hours) and streams a Markdown answer, fullscreen and regular (`--mode`). Reports CPU, frames and, on macOS, instructions per frame: what a frame costs must not grow with the length of the transcript. `--keys` types while the answer streams and reports the echo latency. |
 | `tmux_check.py` | Pi in a real tmux pane against a model streaming at human pace: time to interactive, keystroke latency, paste, streaming CPU and frames, resize, Escape to abort, idle CPU, memory. On Windows it runs `conpty_check.py`. |
 | `conpty_check.py` | `tmux_check.py` for Windows, which has no tmux: the same steps and JSONL fields with Pi in a ConPTY (the pseudo-console behind Windows Terminal), plus the p99 frame time while streaming and peak memory. The bytes and frame times are what the console sends on: ConPTY keeps its own screen and sends the changes at most once a console frame. |
@@ -29,8 +29,9 @@ throwaway Pi home, so runs are isolated from your Pi configuration and from each
 | `run-suite.ps1` | The same on Windows: Pi-Bolt, Pi on stock Bun, Node 22 and Node 24; `conpty_check.py` for `tmux_check.py`, and `pauses.py` (frames and GC pauses), `long_answer.py` and `large_write.py` too. Writes `environment.txt` (CPU, Windows build, Defender, power) and `summary.md`. |
 | `report.py` | Draws the charts (light and dark SVG) and prints the tables, from a results folder. |
 | `fake_model.py`, `fake_model_tools.py`, `fake_model_stress.py` | The scripted OpenAI-compatible model servers the tools start. |
-| `harness.py` | Shared pieces: build parsing, model server, Pi home, pseudo-terminal, CPU and memory readings. |
+| `harness.py` | Shared pieces: build parsing, model server, Pi home (blank, or `realistic_home()`), pseudo-terminal, CPU and memory readings. |
 | `fixtures/` | Four Pi source files (MIT, from Pi) that the scripted model asks Pi to read. |
+| `answers/` | Synthetic Markdown answers for `long_answer.py --file`: prose, TypeScript blocks of 150 and 400 lines, a Python block, a 300-item list, long paragraphs, a 150-row table. |
 | `floor/floor.c` | The process floor (`benchmark.py --floor`): a minimal native program that takes Pi's arguments and answers each scenario as Pi does. |
 
 `results/` holds the published runs: the raw JSONL of each tool, with a note on what was compared.
