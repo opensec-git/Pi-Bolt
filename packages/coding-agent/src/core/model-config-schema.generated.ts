@@ -105,6 +105,16 @@ export function modelsConfigSchema(): object {
 										description:
 											"Whether a user message after tool results requires an assistant message in between. Default: auto-detected from URL.",
 									},
+									requiresNonNullAssistantContent: {
+										type: "boolean",
+										description:
+											'Whether replayed assistant messages with no text (e.g. tool-call-only messages) must send "" instead of null content. Default: false.',
+									},
+									requiresToolsWithToolHistory: {
+										type: "boolean",
+										description:
+											'Whether requests without tools must send "tools": [] when the conversation contains tool calls or tool results. Needed by some proxies in front of Anthropic, such as older LiteLLM versions. Default: false, the field is omitted.',
+									},
 									requiresThinkingAsText: {
 										type: "boolean",
 										description:
@@ -184,7 +194,6 @@ export function modelsConfigSchema(): object {
 													},
 													{
 														type: "object",
-														required: ["$var"],
 														properties: {
 															$var: {
 																anyOf: [
@@ -206,6 +215,7 @@ export function modelsConfigSchema(): object {
 																type: "boolean",
 															},
 														},
+														required: ["$var"],
 													},
 												],
 											},
@@ -232,7 +242,6 @@ export function modelsConfigSchema(): object {
 													},
 													{
 														type: "object",
-														required: ["$var"],
 														properties: {
 															$var: {
 																anyOf: [
@@ -254,6 +263,7 @@ export function modelsConfigSchema(): object {
 																type: "boolean",
 															},
 														},
+														required: ["$var"],
 													},
 												],
 											},
@@ -591,6 +601,24 @@ export function modelsConfigSchema(): object {
 										description:
 											"Session-affinity header format. Defaults are API-specific or auto-detected.",
 									},
+									promptCacheKeyMode: {
+										anyOf: [
+											{
+												type: "string",
+												const: "auto",
+											},
+											{
+												type: "string",
+												const: "enabled",
+											},
+											{
+												type: "string",
+												const: "disabled",
+											},
+										],
+										description:
+											"Controls the prompt_cache_key request field for openai-completions and openai-responses: auto keeps each API's default, enabled sends it whenever caching is active, disabled never sends it. Default: auto.",
+									},
 									supportsLongCacheRetention: {
 										type: "boolean",
 										description:
@@ -672,11 +700,15 @@ export function modelsConfigSchema(): object {
 											"Whether the exact model accepts mid-conversation tool_addition and tool_removal blocks. Requires supportsMidConvoSystemMessages.",
 										default: false,
 									},
+									supportsMessageThreads: {
+										type: "boolean",
+										description:
+											"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for provider anthropic with a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
+									},
 									allowedFallbackModels: {
 										type: "array",
 										items: {
 											type: "object",
-											required: ["provider", "model", "cost"],
 											properties: {
 												provider: {
 													type: "string",
@@ -688,7 +720,6 @@ export function modelsConfigSchema(): object {
 												},
 												cost: {
 													type: "object",
-													required: ["input", "output", "cacheRead", "cacheWrite"],
 													properties: {
 														input: {
 															type: "number",
@@ -710,13 +741,6 @@ export function modelsConfigSchema(): object {
 															type: "array",
 															items: {
 																type: "object",
-																required: [
-																	"inputTokensAbove",
-																	"input",
-																	"output",
-																	"cacheRead",
-																	"cacheWrite",
-																],
 																properties: {
 																	inputTokensAbove: {
 																		type: "number",
@@ -740,13 +764,22 @@ export function modelsConfigSchema(): object {
 																		description: "Cache-write cost in USD per million tokens.",
 																	},
 																},
+																required: [
+																	"inputTokensAbove",
+																	"input",
+																	"output",
+																	"cacheRead",
+																	"cacheWrite",
+																],
 															},
 															description:
 																"Request-wide pricing tiers. The highest matching input threshold applies to the full request.",
 														},
 													},
+													required: ["input", "output", "cacheRead", "cacheWrite"],
 												},
 											},
+											required: ["provider", "model", "cost"],
 											description:
 												"An Anthropic server-side refusal fallback model with local pricing metadata.",
 										},
@@ -953,7 +986,6 @@ export function modelsConfigSchema(): object {
 										},
 										cost: {
 											type: "object",
-											required: ["input", "output", "cacheRead", "cacheWrite"],
 											properties: {
 												input: {
 													type: "number",
@@ -975,7 +1007,6 @@ export function modelsConfigSchema(): object {
 													type: "array",
 													items: {
 														type: "object",
-														required: ["inputTokensAbove", "input", "output", "cacheRead", "cacheWrite"],
 														properties: {
 															inputTokensAbove: {
 																type: "number",
@@ -999,11 +1030,13 @@ export function modelsConfigSchema(): object {
 																description: "Cache-write cost in USD per million tokens.",
 															},
 														},
+														required: ["inputTokensAbove", "input", "output", "cacheRead", "cacheWrite"],
 													},
 													description:
 														"Request-wide pricing tiers. The highest matching input threshold applies to the full request.",
 												},
 											},
+											required: ["input", "output", "cacheRead", "cacheWrite"],
 										},
 										promptCache: {
 											type: "object",
@@ -1151,6 +1184,16 @@ export function modelsConfigSchema(): object {
 													description:
 														"Whether a user message after tool results requires an assistant message in between. Default: auto-detected from URL.",
 												},
+												requiresNonNullAssistantContent: {
+													type: "boolean",
+													description:
+														'Whether replayed assistant messages with no text (e.g. tool-call-only messages) must send "" instead of null content. Default: false.',
+												},
+												requiresToolsWithToolHistory: {
+													type: "boolean",
+													description:
+														'Whether requests without tools must send "tools": [] when the conversation contains tool calls or tool results. Needed by some proxies in front of Anthropic, such as older LiteLLM versions. Default: false, the field is omitted.',
+												},
 												requiresThinkingAsText: {
 													type: "boolean",
 													description:
@@ -1230,7 +1273,6 @@ export function modelsConfigSchema(): object {
 																},
 																{
 																	type: "object",
-																	required: ["$var"],
 																	properties: {
 																		$var: {
 																			anyOf: [
@@ -1252,6 +1294,7 @@ export function modelsConfigSchema(): object {
 																			type: "boolean",
 																		},
 																	},
+																	required: ["$var"],
 																},
 															],
 														},
@@ -1278,7 +1321,6 @@ export function modelsConfigSchema(): object {
 																},
 																{
 																	type: "object",
-																	required: ["$var"],
 																	properties: {
 																		$var: {
 																			anyOf: [
@@ -1300,6 +1342,7 @@ export function modelsConfigSchema(): object {
 																			type: "boolean",
 																		},
 																	},
+																	required: ["$var"],
 																},
 															],
 														},
@@ -1646,6 +1689,24 @@ export function modelsConfigSchema(): object {
 													description:
 														"Session-affinity header format. Defaults are API-specific or auto-detected.",
 												},
+												promptCacheKeyMode: {
+													anyOf: [
+														{
+															type: "string",
+															const: "auto",
+														},
+														{
+															type: "string",
+															const: "enabled",
+														},
+														{
+															type: "string",
+															const: "disabled",
+														},
+													],
+													description:
+														"Controls the prompt_cache_key request field for openai-completions and openai-responses: auto keeps each API's default, enabled sends it whenever caching is active, disabled never sends it. Default: auto.",
+												},
 												supportsLongCacheRetention: {
 													type: "boolean",
 													description:
@@ -1728,11 +1789,15 @@ export function modelsConfigSchema(): object {
 														"Whether the exact model accepts mid-conversation tool_addition and tool_removal blocks. Requires supportsMidConvoSystemMessages.",
 													default: false,
 												},
+												supportsMessageThreads: {
+													type: "boolean",
+													description:
+														"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for provider anthropic with a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
+												},
 												allowedFallbackModels: {
 													type: "array",
 													items: {
 														type: "object",
-														required: ["provider", "model", "cost"],
 														properties: {
 															provider: {
 																type: "string",
@@ -1744,7 +1809,6 @@ export function modelsConfigSchema(): object {
 															},
 															cost: {
 																type: "object",
-																required: ["input", "output", "cacheRead", "cacheWrite"],
 																properties: {
 																	input: {
 																		type: "number",
@@ -1766,13 +1830,6 @@ export function modelsConfigSchema(): object {
 																		type: "array",
 																		items: {
 																			type: "object",
-																			required: [
-																				"inputTokensAbove",
-																				"input",
-																				"output",
-																				"cacheRead",
-																				"cacheWrite",
-																			],
 																			properties: {
 																				inputTokensAbove: {
 																					type: "number",
@@ -1798,13 +1855,22 @@ export function modelsConfigSchema(): object {
 																						"Cache-write cost in USD per million tokens.",
 																				},
 																			},
+																			required: [
+																				"inputTokensAbove",
+																				"input",
+																				"output",
+																				"cacheRead",
+																				"cacheWrite",
+																			],
 																		},
 																		description:
 																			"Request-wide pricing tiers. The highest matching input threshold applies to the full request.",
 																	},
 																},
+																required: ["input", "output", "cacheRead", "cacheWrite"],
 															},
 														},
+														required: ["provider", "model", "cost"],
 														description:
 															"An Anthropic server-side refusal fallback model with local pricing metadata.",
 													},
@@ -2013,13 +2079,6 @@ export function modelsConfigSchema(): object {
 														type: "array",
 														items: {
 															type: "object",
-															required: [
-																"inputTokensAbove",
-																"input",
-																"output",
-																"cacheRead",
-																"cacheWrite",
-															],
 															properties: {
 																inputTokensAbove: {
 																	type: "number",
@@ -2043,6 +2102,13 @@ export function modelsConfigSchema(): object {
 																	description: "Cache-write cost in USD per million tokens.",
 																},
 															},
+															required: [
+																"inputTokensAbove",
+																"input",
+																"output",
+																"cacheRead",
+																"cacheWrite",
+															],
 														},
 														description:
 															"Request-wide pricing tiers. The highest matching input threshold applies to the full request.",
@@ -2193,6 +2259,16 @@ export function modelsConfigSchema(): object {
 														description:
 															"Whether a user message after tool results requires an assistant message in between. Default: auto-detected from URL.",
 													},
+													requiresNonNullAssistantContent: {
+														type: "boolean",
+														description:
+															'Whether replayed assistant messages with no text (e.g. tool-call-only messages) must send "" instead of null content. Default: false.',
+													},
+													requiresToolsWithToolHistory: {
+														type: "boolean",
+														description:
+															'Whether requests without tools must send "tools": [] when the conversation contains tool calls or tool results. Needed by some proxies in front of Anthropic, such as older LiteLLM versions. Default: false, the field is omitted.',
+													},
 													requiresThinkingAsText: {
 														type: "boolean",
 														description:
@@ -2272,7 +2348,6 @@ export function modelsConfigSchema(): object {
 																	},
 																	{
 																		type: "object",
-																		required: ["$var"],
 																		properties: {
 																			$var: {
 																				anyOf: [
@@ -2294,6 +2369,7 @@ export function modelsConfigSchema(): object {
 																				type: "boolean",
 																			},
 																		},
+																		required: ["$var"],
 																	},
 																],
 															},
@@ -2320,7 +2396,6 @@ export function modelsConfigSchema(): object {
 																	},
 																	{
 																		type: "object",
-																		required: ["$var"],
 																		properties: {
 																			$var: {
 																				anyOf: [
@@ -2342,6 +2417,7 @@ export function modelsConfigSchema(): object {
 																				type: "boolean",
 																			},
 																		},
+																		required: ["$var"],
 																	},
 																],
 															},
@@ -2689,6 +2765,24 @@ export function modelsConfigSchema(): object {
 														description:
 															"Session-affinity header format. Defaults are API-specific or auto-detected.",
 													},
+													promptCacheKeyMode: {
+														anyOf: [
+															{
+																type: "string",
+																const: "auto",
+															},
+															{
+																type: "string",
+																const: "enabled",
+															},
+															{
+																type: "string",
+																const: "disabled",
+															},
+														],
+														description:
+															"Controls the prompt_cache_key request field for openai-completions and openai-responses: auto keeps each API's default, enabled sends it whenever caching is active, disabled never sends it. Default: auto.",
+													},
 													supportsLongCacheRetention: {
 														type: "boolean",
 														description:
@@ -2771,11 +2865,15 @@ export function modelsConfigSchema(): object {
 															"Whether the exact model accepts mid-conversation tool_addition and tool_removal blocks. Requires supportsMidConvoSystemMessages.",
 														default: false,
 													},
+													supportsMessageThreads: {
+														type: "boolean",
+														description:
+															"Whether the endpoint supports Anthropic message threads, which let a request with a session id send only the new messages and continue from the previous reply. Default: true for provider anthropic with a baseUrl on api.anthropic.com, false otherwise. Set true for gateways that forward the thread request field.",
+													},
 													allowedFallbackModels: {
 														type: "array",
 														items: {
 															type: "object",
-															required: ["provider", "model", "cost"],
 															properties: {
 																provider: {
 																	type: "string",
@@ -2787,7 +2885,6 @@ export function modelsConfigSchema(): object {
 																},
 																cost: {
 																	type: "object",
-																	required: ["input", "output", "cacheRead", "cacheWrite"],
 																	properties: {
 																		input: {
 																			type: "number",
@@ -2809,13 +2906,6 @@ export function modelsConfigSchema(): object {
 																			type: "array",
 																			items: {
 																				type: "object",
-																				required: [
-																					"inputTokensAbove",
-																					"input",
-																					"output",
-																					"cacheRead",
-																					"cacheWrite",
-																				],
 																				properties: {
 																					inputTokensAbove: {
 																						type: "number",
@@ -2841,13 +2931,22 @@ export function modelsConfigSchema(): object {
 																							"Cache-write cost in USD per million tokens.",
 																					},
 																				},
+																				required: [
+																					"inputTokensAbove",
+																					"input",
+																					"output",
+																					"cacheRead",
+																					"cacheWrite",
+																				],
 																			},
 																			description:
 																				"Request-wide pricing tiers. The highest matching input threshold applies to the full request.",
 																		},
 																	},
+																	required: ["input", "output", "cacheRead", "cacheWrite"],
 																},
 															},
+															required: ["provider", "model", "cost"],
 															description:
 																"An Anthropic server-side refusal fallback model with local pricing metadata.",
 														},

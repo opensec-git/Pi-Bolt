@@ -1682,7 +1682,7 @@ export class Markdown implements Component {
 		return lines;
 	}
 
-	/** The tokens of the text at `width` (after the transform and tab replacement), or undefined when it has no text. */
+	/** The tokens of the text at `width` (after the transform and tab replacement), or undefined when it has nothing to show. */
 	private tokensFor(width: number): { tokens: Token[]; contentWidth: number } | undefined {
 		// Calculate available width for content (subtract horizontal padding)
 		const contentWidth = Math.max(1, width - this.paddingX * 2);
@@ -1726,6 +1726,8 @@ export class Markdown implements Component {
 			shown = withoutHtmlCommentBlocks(tokens);
 			renderedWithoutComments.set(tokens, shown);
 		}
+		// A text of comments only (a reply that so far is "<!-- ") renders as a text with nothing to show.
+		if (shown.length === 0) return undefined;
 		return { tokens: shown, contentWidth };
 	}
 
